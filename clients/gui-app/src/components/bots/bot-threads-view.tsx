@@ -87,8 +87,9 @@ const FOLDED_TAIL = 2;
  * one scroller; a card grows to its thread.
  *
  * While any followed thread has new replies, a pill at the top says how many
- * and goes to the first of them. A card's replies read while the person can
- * see it clear its new replies, as the thread's panel does.
+ * and goes to the first of them. Once a card's newest reply has stayed in
+ * the person's view, its new replies are read, as the thread's panel reads
+ * them.
  *
  * Where the tab draws no column, whose channel row is the way back, the header
  * goes back to the tab's channel itself: as the installed app's form says, and
@@ -321,7 +322,7 @@ function ThreadCard(props: {
     membersSupported,
   );
   const [card, setCard] = useState<HTMLElement | null>(null);
-  const { near, inView } = useCardViewport(card, scroller);
+  const near = useCardNear(card, scroller);
   const anchor = thread.anchor;
   const { showPost, openThread } = useCardLinks(
     bot.botId,
@@ -352,7 +353,7 @@ function ThreadCard(props: {
           originMessageId={anchor.messageId}
           members={directory.members}
           resolveMember={directory.resolve}
-          presented={inView}
+          scroller={scroller}
           onShowPost={showPost}
           onOpenThread={openThread}
         />
@@ -404,18 +405,17 @@ function useCardLinks(
 
 /**
  * Whether a card has come within a screen of the page's view, once and for
- * good (`near`), and whether it is in the view now (`inView`). Where nothing
- * can observe, every card is near and in view.
+ * good. Where nothing can observe, every card is near.
  */
-function useCardViewport(
+function useCardNear(
   card: HTMLElement | null,
   scroller: HTMLElement | null,
-): { readonly near: boolean; readonly inView: boolean } {
+): boolean {
   const observable = typeof IntersectionObserver !== "undefined";
   const [near, setNear] = useState(!observable);
-  const [inView, setInView] = useState(!observable);
   useEffect(() => {
     if (card === null || scroller === null || near || !observable) return;
+    // A margin's percentage takes the scroller's height above and below.
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries.some((entry) => entry.isIntersecting)) setNear(true);
@@ -425,19 +425,55 @@ function useCardViewport(
     observer.observe(card);
     return () => observer.disconnect();
   }, [card, near, observable, scroller]);
+  return near;
+}
+
+/** How long a card's newest reply stays in view before its replies are read. */
+const READ_AFTER_MS = 1_000;
+
+/**
+ * Whether `mark`, under a card's newest reply, has been in the page's view
+ * for `READ_AFTER_MS` and still is: a card's channel line or post in view
+ * reads nothing, and neither does a glance while the cards above it are
+ * still growing or a scroll past. Where nothing can observe, the replies
+ * are read once drawn.
+ */
+function useNewestReplySeen(
+  mark: HTMLElement | null,
+  scroller: HTMLElement | null,
+): boolean {
+  const observable = typeof IntersectionObserver !== "undefined";
+  const [seenMark, setSeenMark] = useState<HTMLElement | null>(null);
   useEffect(() => {
-    if (card === null || scroller === null || !observable) return;
+    if (mark === null || scroller === null || !observable) return;
+    let timer: number | null = null;
+    const stop = (): void => {
+      if (timer !== null) window.clearTimeout(timer);
+      timer = null;
+    };
     const observer = new IntersectionObserver(
       (entries) => {
         const entry = entries.at(-1);
-        if (entry !== undefined) setInView(entry.isIntersecting);
+        if (entry === undefined) return;
+        if (entry.isIntersecting) {
+          if (timer === null) {
+            timer = window.setTimeout(() => setSeenMark(mark), READ_AFTER_MS);
+          }
+          return;
+        }
+        stop();
+        setSeenMark(null);
       },
       { root: scroller },
     );
-    observer.observe(card);
-    return () => observer.disconnect();
-  }, [card, observable, scroller]);
-  return { near, inView };
+    observer.observe(mark);
+    return () => {
+      stop();
+      observer.disconnect();
+    };
+  }, [mark, observable, scroller]);
+  if (!observable) return mark !== null;
+  return mark !== null && seenMark === mark;
 }
 
 /**
@@ -680,8 +716,8 @@ function ReplyTime(props: { readonly at: number }): ReactNode {
  * The thread in full, under the card's channel line: the thread panel's own
  * body (`BotThreadCardBody`) - its post, its replies and its box - in the
  * bot's scope, folded in the middle while long and not yet shown in full.
- * While the person can see it (`presented`), its replies are read, as the
- * panel reads them.
+ * Once its newest reply has stayed in the page's view (`scroller`), its
+ * replies are read, as the panel reads them.
  */
 function FullThread(props: {
   readonly hostId: string;
@@ -689,7 +725,7 @@ function FullThread(props: {
   readonly originMessageId: string;
   readonly members: ReadonlyArray<EnvironmentMember> | null;
   readonly resolveMember: BotMemberResolver;
-  readonly presented: boolean;
+  readonly scroller: HTMLElement | null;
   readonly onShowPost: () => void;
   readonly onOpenThread: () => void;
 }): ReactNode {
@@ -699,6 +735,7 @@ function FullThread(props: {
     originMessageId,
     members,
     resolveMember,
+    scroller,
     onShowPost,
     onOpenThread,
   } = props;
@@ -726,12 +763,13 @@ function FullThread(props: {
     boundHostTakes: threadAnchorKinds,
   });
   const readCursors = useBotReadCursors(botId, hostId)?.data;
+  const [repliesEnd, setRepliesEnd] = useState<HTMLElement | null>(null);
   useAdvanceWhilePresented({
     client,
     botId,
     conversationId: threadId,
     readCursors,
-    presented: usePresented(props.presented),
+    presented: usePresented(useNewestReplySeen(repliesEnd, scroller)),
   });
   const unfolded = useBotThreadFoldStore((state) =>
     Object.hasOwn(state.unfolded, threadId),
@@ -749,6 +787,7 @@ function FullThread(props: {
           },
       onOpenThread,
       onShowPost,
+      repliesEnd: setRepliesEnd,
     }),
     [onOpenThread, onShowPost, threadId, unfold, unfolded],
   );
@@ -762,13 +801,14 @@ function FullThread(props: {
   );
   const openChannel = useOpenBotChannel();
   // A receipt opens its turn's session in the bot's channel, where sessions
-  // show.
+  // show, landed as the panel's receipt lands it.
   const openTurn = useCallback<BotTurnOpen>(
-    (ref) =>
+    (ref, sendPostId) =>
       openChannel(botId, {
         kind: "chat",
         chatId: ref.chatId,
         messageId: ref.userMessageId,
+        sendPostId,
       }),
     [botId, openChannel],
   );

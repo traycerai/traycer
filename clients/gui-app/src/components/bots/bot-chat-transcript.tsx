@@ -759,6 +759,7 @@ function BotTranscriptRows(props: {
           transcriptWindow={props.transcriptWindow}
           reportVisibleRange={props.reportVisibleRange}
           fold={flow.fold}
+          end={flow.end}
         />
       </TasklessMarkdownLinkProvider>
     );
@@ -783,6 +784,11 @@ function BotTranscriptRows(props: {
  */
 export interface BotTranscriptFlow {
   readonly fold: BotTranscriptFold | null;
+  /**
+   * Handed a mark under the newest row once that row is drawn, for whoever
+   * needs to know the newest reply is in view; `null` draws none.
+   */
+  readonly end: ((node: HTMLElement | null) => void) | null;
 }
 
 /**
@@ -804,7 +810,8 @@ const NO_BACKGROUND_TOOL_BLOCKS: ReadonlySet<string> = new Set();
  * the list. A row the window has not hydrated yet holds its place with a
  * spinner, one for a run of them. On the windowed line the rows drawn are
  * reported as the visible range, which is what hydrates them, and withdrawn
- * when the rows go.
+ * when the rows go. Under the newest row, once it is drawn, the mark `end`
+ * is handed.
  */
 function BotTranscriptFlowRows(props: {
   readonly header: ReactNode;
@@ -812,8 +819,9 @@ function BotTranscriptFlowRows(props: {
   readonly transcriptWindow: TranscriptWindow | null;
   readonly reportVisibleRange: (range: OrdinalRange | null) => void;
   readonly fold: BotTranscriptFold | null;
+  readonly end: ((node: HTMLElement | null) => void) | null;
 }): ReactNode {
-  const { header, messages, transcriptWindow, reportVisibleRange, fold } =
+  const { header, messages, transcriptWindow, reportVisibleRange, fold, end } =
     props;
   const rows = useMemo(
     () =>
@@ -895,6 +903,13 @@ function BotTranscriptFlowRows(props: {
           </div>
         ),
       )}
+      {end !== null && shown.at(-1)?.kind === "hydrated" ? (
+        <div
+          ref={end}
+          aria-hidden="true"
+          data-testid="bot-chat-transcript-flow-end"
+        />
+      ) : null}
     </div>
   );
 }

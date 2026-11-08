@@ -1246,7 +1246,7 @@ function useSpendTabLanding(args: {
         chatId,
         threadId: session?.threadId ?? null,
         messageId,
-        sendPostId: null,
+        sendPostId: landing.sendPostId,
       });
     }
   }, [

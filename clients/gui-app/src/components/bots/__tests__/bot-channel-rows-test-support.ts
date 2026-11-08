@@ -55,7 +55,7 @@ export function chatSessionWithPosts(
  * a thread chat.
  */
 export function chatSessionWithThreadRows(
-  rows: ReadonlyArray<{ readonly messageId: string; readonly text: string }>,
+  rows: ReadonlyArray<Message>,
 ): ChatSessionStoreHandle {
   const store = createStore<
     Pick<
@@ -87,7 +87,7 @@ export function chatSessionWithThreadRows(
     >
   >(() => ({
     snapshotLoaded: true,
-    messages: rows.map((row) => postRow(row.messageId, row.text)),
+    messages: [...rows],
     events: [],
     transcriptRowContext: {},
     transcriptDerived: null,

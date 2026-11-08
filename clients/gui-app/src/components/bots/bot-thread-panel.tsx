@@ -120,8 +120,8 @@ export type BotThreadPanelThread =
  * (Tracy Bots T137), which grows to the thread while the page scrolls. A
  * card's reply count opens the thread in its channel's panel
  * (`onOpenThread`), its post's time shows the post in the channel
- * (`onShowPost`), and a long thread folds its middle (`fold`, `null` once
- * shown in full).
+ * (`onShowPost`), a long thread folds its middle (`fold`, `null` once shown
+ * in full), and the mark under its newest reply is handed to `repliesEnd`.
  */
 export type BotThreadLayout =
   | { readonly kind: "panel" }
@@ -130,6 +130,7 @@ export type BotThreadLayout =
       readonly fold: BotTranscriptFold | null;
       readonly onOpenThread: () => void;
       readonly onShowPost: () => void;
+      readonly repliesEnd: (node: HTMLElement | null) => void;
     };
 
 const PANEL_LAYOUT: BotThreadLayout = { kind: "panel" };
@@ -1053,7 +1054,10 @@ function KnownThread(
     [hasReplies, openThread, origin, replies],
   );
   const flow = useMemo(
-    () => (layout.kind === "card" ? { fold: layout.fold } : null),
+    () =>
+      layout.kind === "card"
+        ? { fold: layout.fold, end: layout.repliesEnd }
+        : null,
     [layout],
   );
   return (

@@ -30,7 +30,11 @@ import {
   hostRpcRegistry,
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
-import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
+import type {
+  BotThreadSummary,
+  BotTurnRef,
+} from "@traycer/protocol/host/bot/conversation-schemas";
+import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import type {
   BotNotificationLevel,
   BotReadCursorReadResponse,
@@ -49,8 +53,14 @@ import {
   resetBotFailedRequestSupport,
 } from "@/components/bots/__tests__/bot-failed-request-test-support";
 import {
+  botReply,
+  turnRef,
+  turnsAskedFor,
+} from "@/components/bots/__tests__/bot-turn-test-support";
+import {
   chatSessionWithPosts,
   chatSessionWithThreadRows,
+  postRow,
 } from "./bot-channel-rows-test-support";
 
 /** What the host answers for one bot. */
@@ -73,6 +83,10 @@ const mocks = vi.hoisted(() => ({
   channels: {} as Record<string, ChatSessionStoreHandle>,
   /** Each thread's reply texts by thread id, in order; its session holds them. */
   replies: {} as Record<string, string[]>,
+  /** A thread's rows by thread id, where a case scripts them in full. */
+  replyRows: {} as Record<string, Message[]>,
+  /** The turns `bot.turn.locate` knows. */
+  turns: [] as BotTurnRef[],
   threadSessions: {} as Record<string, ChatSessionStoreHandle>,
   advances: [] as unknown[],
   /** Unread notifications by thread id, as the indicators read them. */
@@ -101,12 +115,18 @@ vi.mock("@/hooks/host/use-host-supports-method", async (importOriginal) => ({
   useHostMethodSupport: (_hostId: string | null, method: string) =>
     !mocks.unsupported.has(method),
 }));
-vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/host/use-host-directory-entry")
+  >()),
   useHostDirectoryEntry: () => null,
 }));
 // The bot's live snapshot (its tasks, binding and surface actions) is not
 // what these cases read: no stream is opened.
-vi.mock("@/hooks/bots/use-bot-subscription", () => ({
+vi.mock("@/hooks/bots/use-bot-subscription", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/bots/use-bot-subscription")
+  >()),
   useBotSubscriptionForHost: () => ({
     snapshot: null,
     deleted: false,
@@ -144,15 +164,18 @@ vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
     botId: string,
     chatId: string,
   ): ChatSessionStoreHandle | null => {
+    if (Object.hasOwn(mocks.replyRows, chatId)) {
+      mocks.threadSessions[chatId] ??= chatSessionWithThreadRows(
+        mocks.replyRows[chatId],
+      );
+      return mocks.threadSessions[chatId];
+    }
     if (Object.hasOwn(mocks.replies, chatId)) {
-      if (!Object.hasOwn(mocks.threadSessions, chatId)) {
-        mocks.threadSessions[chatId] = chatSessionWithThreadRows(
-          mocks.replies[chatId].map((text, index) => ({
-            messageId: `${chatId}-reply-${String(index + 1)}`,
-            text,
-          })),
-        );
-      }
+      mocks.threadSessions[chatId] ??= chatSessionWithThreadRows(
+        mocks.replies[chatId].map((text, index) =>
+          postRow(`${chatId}-reply-${String(index + 1)}`, text),
+        ),
+      );
       return mocks.threadSessions[chatId];
     }
     if (!Object.hasOwn(mocks.posts, botId)) return null;
@@ -320,6 +343,7 @@ function mount(): void {
           mocks.reads.push({ method: "bot.notificationLevel.read", params });
           return { levels: mocks.hosted[params.botId].levels };
         },
+        "bot.turn.locate": (params) => turnsAskedFor(mocks.turns, params),
       },
     }),
   });
@@ -407,13 +431,12 @@ function observersOf(
   );
 }
 
-/** Tells every observer of `kind` on the thread's card that it is (not) intersecting. */
-function intersect(
-  threadId: string,
+/** Tells the observers of `kind` on `target` that it is (not) intersecting. */
+function intersectTarget(
+  target: Element,
   kind: "near" | "view",
   isIntersecting: boolean,
 ): void {
-  const target = card(threadId);
   const observers = observersOf(target, kind);
   expect(observers.length).toBeGreaterThan(0);
   act(() => {
@@ -423,9 +446,14 @@ function intersect(
   });
 }
 
+/** The mark under a full card's newest reply. */
+function newestReplyMark(threadId: string): HTMLElement {
+  return within(card(threadId)).getByTestId("bot-chat-transcript-flow-end");
+}
+
 /** Brings a card near the page's view and waits for its thread to draw. */
 async function revealFull(threadId: string): Promise<HTMLElement> {
-  intersect(threadId, "near", true);
+  intersectTarget(card(threadId), "near", true);
   await waitFor(() =>
     expect(card(threadId).getAttribute("data-full")).toBe("true"),
   );
@@ -482,6 +510,8 @@ beforeEach(() => {
   mocks.writes = [];
   mocks.reads = [];
   mocks.replies = {};
+  mocks.replyRows = {};
+  mocks.turns = [];
   mocks.threadSessions = {};
   mocks.advances = [];
   FakeIntersectionObserver.all = [];
@@ -500,6 +530,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   if (originalScrollIntoView === undefined) {
     Reflect.deleteProperty(Element.prototype, "scrollIntoView");
@@ -626,7 +657,7 @@ describe("<BotThreadsView />", () => {
     ).toBeNull();
   });
 
-  it("mounts a card's thread only once it is within a screen of the page's view, keeps it after it leaves, and tells the view observer apart for the read cursor", async () => {
+  it("mounts a card's thread only once it is within a screen of the page's view, and keeps it, watching the card for nothing else", async () => {
     mocks.posts[TEAM] = {
       [conversationRequestMessageId("req-team-new")]: "Nightly train",
     };
@@ -636,13 +667,12 @@ describe("<BotThreadsView />", () => {
 
     const target = card("team-new");
     const scroller = screen.getByTestId("bot-threads-scroll");
-    // Near: a screen's margin around the page's own scroller; in view: none.
+    // Near: a screen's margin around the page's own scroller. The card in
+    // view reads nothing, so nothing watches it for that.
     expect(observersOf(target, "near").map((o) => o.options)).toEqual([
       { root: scroller, rootMargin: "100% 0px" },
     ]);
-    expect(observersOf(target, "view").map((o) => o.options)).toEqual([
-      { root: scroller, rootMargin: undefined },
-    ]);
+    expect(observersOf(target, "view")).toEqual([]);
     expect(within(target).getByTestId("bot-thread-card-summary")).toBeTruthy();
     expect(within(target).queryByTestId("bot-thread-anchor")).toBeNull();
     expect(within(target).queryByTestId("bot-thread-composer")).toBeNull();
@@ -651,10 +681,15 @@ describe("<BotThreadsView />", () => {
     expect(within(target).queryByTestId("bot-thread-card-summary")).toBeNull();
     expect(within(target).getByTestId("bot-thread-anchor")).toBeTruthy();
 
-    // Leaving the view and the margin again keeps the thread mounted.
-    intersect("team-new", "view", false);
+    // Once near, nothing watches the card, so nothing can take its thread
+    // back; the mark under its newest reply is watched in the view alone.
+    expect(
+      FakeIntersectionObserver.all.filter((o) => o.targets.has(target)),
+    ).toEqual([]);
+    expect(
+      observersOf(newestReplyMark("team-new"), "view").map((o) => o.options),
+    ).toEqual([{ root: scroller, rootMargin: undefined }]);
     expect(card("team-new").getAttribute("data-full")).toBe("true");
-    expect(within(target).getByTestId("bot-thread-anchor")).toBeTruthy();
   });
 
   it("draws a near card in full: the origin post, the replies through the real transcript and a reply box", async () => {
@@ -866,30 +901,88 @@ describe("<BotThreadsView />", () => {
     ).toBe("Olive Owner, Team Tracy");
   });
 
-  it("advances the read cursor of a card in view to its newest reply, and none out of view", async () => {
+  it("reads a card's replies only once its newest reply has stayed in view, never for the card's line or post in view", async () => {
+    mocks.hosted[TRACY] = script([], {});
+    mocks.hosted[TEAM] = script(
+      [thread(TEAM, "team-a", 5_000), thread(TEAM, "team-b", 4_000)],
+      { "team-a": FOLLOWING, "team-b": FOLLOWING },
+    );
     mocks.hosted[TEAM].cursors = {
-      cursors: { "team-new": { messageId: "m-1", seq: 2_000 } },
-      latest: { "team-new": { messageId: "m-2", seq: 3_000 } },
+      cursors: {
+        "team-a": { messageId: "m-0", seq: 1_000 },
+        "team-b": { messageId: "m-0", seq: 1_000 },
+      },
+      latest: {
+        "team-a": { messageId: "m-a", seq: 5_000 },
+        "team-b": { messageId: "m-b", seq: 4_000 },
+      },
     };
-    withReplies(TEAM, "team-new", replyTexts(2), 3_000);
+    withReplies(TEAM, "team-a", replyTexts(2), 5_000);
+    withReplies(TEAM, "team-b", replyTexts(2), 4_000);
     mount();
-    await waitFor(() => expect(listed()).toContain("team-new"));
-    await revealFull("team-new");
-    await screen.findByText("reply 2");
-    expect(mocks.advances).toEqual([]);
+    await waitFor(() => expect(listed()).toEqual(["team-a", "team-b"]));
 
-    intersect("team-new", "view", true);
+    // Both summaries come near together and draw their threads in full.
+    await within(await revealFull("team-a")).findByText("reply 2");
+    await within(await revealFull("team-b")).findByText("reply 2");
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    intersectTarget(newestReplyMark("team-a"), "view", true);
+    intersectTarget(newestReplyMark("team-b"), "view", true);
+    // The card's read hold is a second.
+    act(() => {
+      vi.advanceTimersByTime(999);
+    });
+    expect(mocks.advances).toEqual([]);
+    // The second card's newest reply leaves the view before the second is up.
+    intersectTarget(newestReplyMark("team-b"), "view", false);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    vi.useRealTimers();
 
     await waitFor(() =>
       expect(mocks.advances).toEqual([
-        {
-          botId: TEAM,
-          conversationId: "team-new",
-          messageId: "m-2",
-          seq: 3_000,
-        },
+        { botId: TEAM, conversationId: "team-a", messageId: "m-a", seq: 5_000 },
       ]),
     );
+  });
+
+  it("opens a reply's turn from its receipt in a card, landed on the send that wrote the reply", async () => {
+    const user = userEvent.setup();
+    const reply = botReply({
+      messageId: "team-new-bot-1",
+      text: "The Windows leg failed.",
+      timestamp: 3_000,
+    });
+    mocks.replyRows["team-new"] = [reply];
+    mocks.turns = [
+      turnRef({
+        chatId: "session-team-new",
+        turnId: "turn-1",
+        userMessageId: "prompt-1",
+        threadId: "team-new",
+        startedAt: 2_000,
+        endedAt: 3_000,
+        summary: "Read 1 file",
+        messageIds: [reply.messageId],
+        requestIds: [],
+      }),
+    ];
+    mount();
+    await waitFor(() => expect(listed()).toContain("team-new"));
+    const full = within(await revealFull("team-new"));
+
+    await user.click(await full.findByTestId("bot-turn-receipt"));
+
+    expect(useBotTabLandingStore.getState().byBotId).toEqual({
+      [TEAM]: {
+        kind: "chat",
+        chatId: "session-team-new",
+        messageId: "prompt-1",
+        sendPostId: reply.messageId,
+      },
+    });
   });
 
   it("drops a thread from the list when Unfollow is chosen from its menu", async () => {
