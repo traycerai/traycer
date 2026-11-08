@@ -1,37 +1,29 @@
 /**
  * The bot message box and its kept draft across closing it and restarting the
  * app (Tracy Bots T158): the REAL `BotMessageComposer` over the real
- * `useKeptBoxDraft`, drafts store and `localStorage`. Only the send mutation
- * is scripted, and each case settles the send through the callbacks the box
- * handed it.
+ * `useKeptBoxDraft`, drafts store and `localStorage`. Each case starts the
+ * app afresh, so the box, the store and the testing library share one set of
+ * modules, and a restart loads them again over what was stored. Only the send
+ * mutation is scripted, and each case settles the send through the callbacks
+ * the box handed it.
  */
-import { useState, type ReactNode } from "react";
-import { act, cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   BotConversationSendRequest,
   BotConversationSendResponse,
 } from "@traycer/protocol/host/bot/conversation-schemas";
-import { useBotSendFailure } from "@/hooks/bots/use-bot-send-failure";
-import { useKeptBoxDraft } from "@/hooks/bots/use-kept-box-draft";
-import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
-import {
-  boxInput,
-  boxText,
-  findBoxInput,
-  typeKeys,
-} from "@/components/bots/__tests__/bot-box-test-support";
-import { BotTestRunnerHost } from "@/components/bots/__tests__/bot-test-runner-host";
 import {
   BOT_ID,
+  CHANNEL,
+  OWNER_LABEL,
   MENTION,
   boxDoc,
-  pastTheDebounce,
-  restartApp,
+  restart,
   startFresh,
   storeDraftsAsLeft,
   storedDrafts,
   waitForStore,
+  type App,
 } from "@/stores/bots/__tests__/bot-box-draft-persist-support";
 
 interface SendCallbacks {
@@ -72,12 +64,6 @@ vi.mock("@/hooks/bots/use-bot-mutations", async (importOriginal) => ({
   }),
 }));
 
-import { BotIdentityContext } from "@/components/bots/bot-identity-context";
-import { BotMessageComposer } from "@/components/bots/bot-message-composer";
-
-const LABEL = "Message Tracy";
-const CHANNEL = "conversation-channel";
-const THREAD = "post-1";
 const RESPONSE: BotConversationSendResponse = {
   messageId: "post-1",
   requestId: "request-1",
@@ -85,55 +71,34 @@ const RESPONSE: BotConversationSendResponse = {
   threadId: "thread-1",
 };
 
-/** The box of one conversation, with the owner's real failure line and kept draft. */
-function Box(props: { readonly conversation: string }): ReactNode {
-  const failure = useBotSendFailure();
-  const kept = useKeptBoxDraft(BOT_ID, props.conversation);
-  return (
-    <BotTestRunnerHost>
-      <BotMessageComposer
-        key={props.conversation}
-        botId={BOT_ID}
-        botTitle="Tracy"
-        conversationId={CHANNEL}
-        threadId={null}
-        announcementId={null}
-        sendable
-        imageReach="none"
-        placeholder={LABEL}
-        label={LABEL}
-        testId="bot-channel-composer"
-        failure={failure}
-        edit={null}
-        onEditEnd={() => undefined}
-        onEditResume={() => undefined}
-        seed={kept.seed}
-        keptDraft={kept.keptDraft}
-        quote={null}
-        onSent={() => false}
-      />
-    </BotTestRunnerHost>
-  );
+/** What a started app loads for a case: the box's owner, the testing library over the same React. */
+interface Ui {
+  readonly owner: typeof import("@/components/bots/__tests__/bot-box-draft-owner");
+  readonly rtl: typeof import("@testing-library/react");
+  readonly box: typeof import("@/components/bots/__tests__/bot-box-test-support");
 }
 
-/** The channel's box and its thread's, one at a time, as the owner swaps them. */
-function Owner(props: { readonly initial: string }): ReactNode {
-  const [conversation, setConversation] = useState(props.initial);
-  return (
-    <BotIdentityContext value={{ botId: BOT_ID, title: "Tracy", owner: null }}>
-      <button
-        type="button"
-        data-testid="switch-conversation"
-        onClick={() =>
-          setConversation((current) => (current === CHANNEL ? THREAD : CHANNEL))
-        }
-      >
-        Switch
-      </button>
-      <Box conversation={conversation} />
-    </BotIdentityContext>
-  );
+async function loadUi(): Promise<Ui> {
+  const owner = await import("@/components/bots/__tests__/bot-box-draft-owner");
+  const rtl = await import("@testing-library/react");
+  const box = await import("@/components/bots/__tests__/bot-box-test-support");
+  return { owner, rtl, box };
 }
+
+let app: App;
+let ui: Ui;
+
+beforeEach(async () => {
+  app = await startFresh();
+  ui = await loadUi();
+});
+
+afterEach(() => {
+  ui.rtl.cleanup();
+  mocks.send.mockReset();
+  app.close();
+  vi.useRealTimers();
+});
 
 /**
  * The box mounted and its editor found, which polls on the real clock; the
@@ -141,8 +106,8 @@ function Owner(props: { readonly initial: string }): ReactNode {
  */
 async function mountBox(initial: string): Promise<{ unmount: () => void }> {
   vi.useRealTimers();
-  const view = render(<Owner initial={initial} />);
-  await findBoxInput(LABEL);
+  const view = ui.rtl.render(<ui.owner.OwnerBox initial={initial} />);
+  await ui.box.findBoxInput(OWNER_LABEL);
   startDebounceClock();
   return view;
 }
@@ -152,7 +117,11 @@ function startDebounceClock(): void {
 }
 
 function typeBox(sequence: string): void {
-  typeKeys(LABEL, sequence);
+  ui.box.typeKeys(OWNER_LABEL, sequence);
+}
+
+function boxText(): string {
+  return ui.box.boxText(OWNER_LABEL);
 }
 
 function lastSend(): SendCallbacks {
@@ -165,21 +134,11 @@ async function settleSend(
   callbacks: SendCallbacks,
   outcome: (callbacks: SendCallbacks) => void,
 ): Promise<void> {
-  await act(async () => {
+  await ui.rtl.act(async () => {
     outcome(callbacks);
     await mocks.settled.get(callbacks);
   });
 }
-
-beforeEach(async () => {
-  await startFresh();
-});
-
-afterEach(() => {
-  cleanup();
-  mocks.send.mockReset();
-  vi.useRealTimers();
-});
 
 describe("<BotMessageComposer /> and its draft on the device", () => {
   it("restores what a conversation's box held when it is mounted again, and shows another conversation's box empty", async () => {
@@ -188,12 +147,12 @@ describe("<BotMessageComposer /> and its draft on the device", () => {
     first.unmount();
 
     await mountBox(CHANNEL);
-    expect(boxText(LABEL)).toBe("Is CI green?");
+    expect(boxText()).toBe("Is CI green?");
 
     vi.useRealTimers();
-    act(() => screen.getByTestId("switch-conversation").click());
-    await findBoxInput(LABEL);
-    expect(boxText(LABEL)).toBe("");
+    ui.rtl.act(() => ui.rtl.screen.getByTestId("switch-conversation").click());
+    await ui.box.findBoxInput(OWNER_LABEL);
+    expect(boxText()).toBe("");
   });
 
   it("restores the text and the chips of a draft the app left stored, after a restart", async () => {
@@ -206,29 +165,39 @@ describe("<BotMessageComposer /> and its draft on the device", () => {
         },
       },
     });
-    await restartApp();
+    ui.rtl.cleanup();
+    app = await restart();
+    ui = await loadUi();
 
     await mountBox(CHANNEL);
-    const input = boxInput(LABEL);
 
-    expect(boxText(LABEL)).toContain("Ask");
+    expect(boxText()).toContain("Ask");
     expect(
-      within(input).getByTestId("bot-box-mention").getAttribute("data-token"),
+      ui.rtl
+        .within(ui.box.boxInput(OWNER_LABEL))
+        .getByTestId("bot-box-mention")
+        .getAttribute("data-token"),
     ).toBe("<@user-1>");
   });
 
   it("clears the stored draft when a send is accepted", async () => {
     await mountBox(CHANNEL);
     typeBox("Is CI green?");
-    await waitForStore((stored) => stored?.[BOT_ID]?.[CHANNEL] !== undefined);
+    await waitForStore(
+      app,
+      (stored) => stored?.[BOT_ID]?.[CHANNEL] !== undefined,
+    );
 
     typeBox("{Enter}");
     await settleSend(lastSend(), (callbacks) =>
       callbacks.onSuccess?.(RESPONSE),
     );
 
-    await waitForStore((stored) => stored?.[BOT_ID]?.[CHANNEL] === undefined);
-    expect(useBotDraftsStore.getState().threadBoxes[BOT_ID]).toBeUndefined();
+    await waitForStore(
+      app,
+      (stored) => stored?.[BOT_ID]?.[CHANNEL] === undefined,
+    );
+    expect(app.drafts.getState().threadBoxes[BOT_ID]).toBeUndefined();
   });
 
   it("keeps the stored draft when a send fails", async () => {
@@ -238,12 +207,12 @@ describe("<BotMessageComposer /> and its draft on the device", () => {
     await settleSend(lastSend(), (callbacks) =>
       callbacks.onError?.(new Error("host refused the post")),
     );
-    await pastTheDebounce();
 
-    expect(boxText(LABEL)).toBe("Is CI green?");
+    expect(boxText()).toBe("Is CI green?");
     await waitForStore(
+      app,
       (stored) => stored?.[BOT_ID]?.[CHANNEL]?.text === "Is CI green?",
     );
-    expect(storedDrafts()?.[BOT_ID]?.[CHANNEL]?.text).toBe("Is CI green?");
+    expect(storedDrafts(app)?.[BOT_ID]?.[CHANNEL]?.text).toBe("Is CI green?");
   });
 });

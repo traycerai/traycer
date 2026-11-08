@@ -44,47 +44,76 @@ export const BOT_BOX_DRAFT_WRITE_DEBOUNCE_MS = 300;
  * whose bytes are gone.
  *
  * Writes wait for typing to pause, and a page that is going away writes at
- * once, without the images not yet stored. Nothing is written until the
- * first read has answered, so a change made while the stored drafts are
- * still being read cannot replace them.
+ * once, without the images not yet stored. Only a change to the boxes'
+ * drafts is written. Nothing is written until the drafts store says the
+ * stored drafts are read and merged ({@link botBoxDraftsRead}), so a change
+ * made while they are still being read cannot replace them.
  */
 export function createBotBoxDraftStorage(): PersistStorage<PersistedBotBoxDrafts> {
   return {
     getItem: async (name) => {
+      if (writer.stopped) return null;
       const stored = readStoredValue(name);
-      writer.storedHashes = hashesOf(stored);
-      const value =
-        stored === null
-          ? null
-          : { ...stored, state: await inlineStoredImages(stored.state) };
-      writer.hydrated = true;
-      return value;
+      if (stored === null) return null;
+      const state = await inlineStoredImages(stored.state);
+      // The stored drafts were wiped while their images were read.
+      if (wiped()) return null;
+      return { ...stored, state };
     },
     setItem: (name, value) => {
-      if (!writer.hydrated) return;
-      writer.pending = { name, value };
-      if (writer.timer !== null) window.clearTimeout(writer.timer);
-      writer.timer = window.setTimeout(() => {
-        writer.timer = null;
-        void writePending();
-      }, BOT_BOX_DRAFT_WRITE_DEBOUNCE_MS);
+      if (writer.stopped || !writer.read) return;
+      const { threadBoxes } = value.state;
+      if (threadBoxes === writer.lastThreadBoxes) return;
+      writer.lastThreadBoxes = threadBoxes;
+      schedule({ name, value });
     },
     removeItem: (name) => {
       dropWrites();
+      writer.lastThreadBoxes = null;
       localStorage.removeItem(name);
-      writer.storedHashes = new Set();
     },
   };
 }
 
+/** The drafts store reads the stored drafts again: nothing is written until it has. */
+export function botBoxDraftsReading(): void {
+  writer.read = false;
+}
+
+/**
+ * The drafts store has read and merged the stored drafts: from here on its
+ * changes are written. `changedDuringRead` writes the merged drafts at once,
+ * for a change made while they were read reached no write.
+ */
+export function botBoxDraftsRead(input: {
+  readonly name: string;
+  readonly version: number;
+  readonly threadBoxes: StoredBoxDrafts;
+  readonly changedDuringRead: boolean;
+}): void {
+  if (writer.stopped) return;
+  writer.read = true;
+  writer.lastThreadBoxes = input.threadBoxes;
+  if (!input.changedDuringRead) return;
+  schedule({
+    name: input.name,
+    value: {
+      state: { threadBoxes: input.threadBoxes },
+      version: input.version,
+    },
+  });
+}
+
 /**
  * The stored drafts are being wiped: drops a write that has not landed and
- * writes nothing more from this window, where a write after the wipe, the
- * reload's own included, would put them back.
+ * writes nothing more from this window, nor takes a read that answers late,
+ * where a write after the wipe, the reload's own included, would put them
+ * back.
  */
 export function stopBotBoxDraftWrites(): void {
   dropWrites();
-  writer.hydrated = false;
+  writer.stopped = true;
+  writer.read = false;
 }
 
 /**
@@ -93,6 +122,7 @@ export function stopBotBoxDraftWrites(): void {
  * all its images, where the page is still there.
  */
 export function flushPendingBotBoxDraftWrite(): void {
+  if (writer.stopped) return;
   const write = takePending() ?? writer.inFlight;
   if (write === null) return;
   const { hashByInline } = writer;
@@ -112,26 +142,47 @@ interface PendingWrite {
 
 /** One writer per window: the store it serves is a module singleton. */
 const writer: {
-  hydrated: boolean;
+  /** Whether the drafts store has read and merged the stored drafts. */
+  read: boolean;
+  /** Set for good by a wipe. */
+  stopped: boolean;
+  /** The drafts last written or read, to tell a change to them from none. */
+  lastThreadBoxes: StoredBoxDrafts | null;
   pending: PendingWrite | null;
   timer: number | null;
   /** The write whose images are being stored; `null` for none. */
   inFlight: PendingWrite | null;
   /** Bumped by each newer write and each wipe; a write that sees it move is stale. */
   generation: number;
-  /** The image hashes the stored drafts name; `null` before they are read. */
-  storedHashes: ReadonlySet<string> | null;
-  /** The hash each inline image written lately was stored under. */
+  /**
+   * The hash each inline image this window holds is stored under: read back
+   * from storage, or stored by a write.
+   */
   hashByInline: Map<string, string>;
 } = {
-  hydrated: false,
+  read: false,
+  stopped: false,
+  lastThreadBoxes: null,
   pending: null,
   timer: null,
   inFlight: null,
   generation: 0,
-  storedHashes: null,
   hashByInline: new Map(),
 };
+
+/** Read through a call: an await between two reads can see a wipe land. */
+function wiped(): boolean {
+  return writer.stopped;
+}
+
+function schedule(write: PendingWrite): void {
+  writer.pending = write;
+  if (writer.timer !== null) window.clearTimeout(writer.timer);
+  writer.timer = window.setTimeout(() => {
+    writer.timer = null;
+    void writePending();
+  }, BOT_BOX_DRAFT_WRITE_DEBOUNCE_MS);
+}
 
 /** The write waiting for typing to pause, taken: it is newer than any before it. */
 function takePending(): PendingWrite | null {
@@ -158,16 +209,20 @@ async function writePending(): Promise<void> {
   const images = new Set<string>();
   for (const draft of eachDraft(pending.value.state.threadBoxes)) {
     if (draft.content === null) continue;
-    for (const b64content of inlineImages(draft.content)) {
+    for (const b64content of inlineImages(draft.content))
       images.add(b64content);
-      if (writer.hashByInline.has(b64content)) continue;
-      const hash = await storeImage(b64content);
-      if (hash !== null) writer.hashByInline.set(b64content, hash);
-    }
   }
+  await Promise.all(
+    [...images]
+      .filter((b64content) => !writer.hashByInline.has(b64content))
+      .map(async (b64content) => {
+        const hash = await storeImage(b64content);
+        if (hash !== null) writer.hashByInline.set(b64content, hash);
+      }),
+  );
   if (writer.inFlight === pending) writer.inFlight = null;
   // A newer write, or a wipe, came while the images were stored.
-  if (generation !== writer.generation) return;
+  if (generation !== writer.generation || wiped()) return;
   for (const b64content of writer.hashByInline.keys()) {
     if (!images.has(b64content)) writer.hashByInline.delete(b64content);
   }
@@ -186,7 +241,6 @@ function store(pending: PendingWrite, state: PersistedBotBoxDrafts): void {
     ...pending.value,
     state,
   };
-  writer.storedHashes = hashesOf(value);
   localStorage.setItem(pending.name, JSON.stringify(value));
 }
 
@@ -258,21 +312,31 @@ function rewriteNode(
 /**
  * Every stored draft with its images' bytes back inline, and without the
  * images whose bytes are gone; a draft left with nothing in it is dropped.
+ * Each image read back is remembered under its hash, so a write that cannot
+ * wait keeps it.
  */
 async function inlineStoredImages(
   state: PersistedBotBoxDrafts,
 ): Promise<PersistedBotBoxDrafts> {
-  const bytesByHash = new Map<string, string>();
-  const missing = new Set<string>();
+  const hashes = new Set<string>();
   for (const draft of eachDraft(state.threadBoxes)) {
     if (draft.content === null) continue;
-    for (const hash of hashOnlyImageHashes(draft.content)) {
-      if (bytesByHash.has(hash) || missing.has(hash)) continue;
-      const bytes = await getImageBytes(hash).catch(() => undefined);
-      if (bytes === undefined) missing.add(hash);
-      else bytesByHash.set(hash, await bytesToBase64Async(bytes));
-    }
+    for (const hash of hashOnlyImageHashes(draft.content)) hashes.add(hash);
   }
+  const bytesByHash = new Map<string, string>();
+  const missing = new Set<string>();
+  await Promise.all(
+    [...hashes].map(async (hash) => {
+      const bytes = await getImageBytes(hash).catch(() => undefined);
+      if (bytes === undefined) {
+        missing.add(hash);
+        return;
+      }
+      const b64content = await bytesToBase64Async(bytes);
+      bytesByHash.set(hash, b64content);
+      writer.hashByInline.set(b64content, hash);
+    }),
+  );
   return {
     threadBoxes: mapDrafts(state.threadBoxes, (draft) => {
       if (draft.content === null) return draft;
@@ -316,18 +380,6 @@ function* eachDraft(drafts: StoredBoxDrafts): Generator<StoredBoxDraft> {
       if (draft !== undefined) yield draft;
     }
   }
-}
-
-function hashesOf(
-  value: StorageValue<PersistedBotBoxDrafts> | null,
-): ReadonlySet<string> {
-  const hashes = new Set<string>();
-  if (value === null) return hashes;
-  for (const draft of eachDraft(value.state.threadBoxes)) {
-    if (draft.content === null) continue;
-    for (const hash of hashOnlyImageHashes(draft.content)) hashes.add(hash);
-  }
-  return hashes;
 }
 
 /**
@@ -377,16 +429,24 @@ function readStoredValue(
   };
 }
 
-// The images the stored drafts name survive the image store's sweeps, read
-// from storage for this before the drafts store has read it.
-registerExtraImageRootSource({
-  hashes: () => {
-    writer.storedHashes ??= hashesOf(
-      readStoredValue(BOT_BOX_DRAFTS_PERSIST_KEY),
-    );
-    return [...writer.storedHashes];
-  },
-});
+/**
+ * The image hashes the image store's sweeps must keep for the bot boxes: the
+ * ones the stored drafts name as storage holds them now, whichever window
+ * wrote them, and the ones this window's boxes hold, read back or stored.
+ */
+function botBoxDraftImageRoots(): ReadonlyArray<string> {
+  const roots = new Set(writer.hashByInline.values());
+  const stored = readStoredValue(BOT_BOX_DRAFTS_PERSIST_KEY);
+  if (stored !== null) {
+    for (const draft of eachDraft(stored.state.threadBoxes)) {
+      if (draft.content === null) continue;
+      for (const hash of hashOnlyImageHashes(draft.content)) roots.add(hash);
+    }
+  }
+  return [...roots];
+}
+
+registerExtraImageRootSource({ hashes: botBoxDraftImageRoots });
 
 // A window that goes away mid-pause still keeps what its boxes held.
 if (typeof window !== "undefined") {

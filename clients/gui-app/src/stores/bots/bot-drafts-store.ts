@@ -3,6 +3,8 @@ import { persist } from "zustand/middleware";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import {
   BOT_BOX_DRAFTS_PERSIST_KEY,
+  botBoxDraftsRead,
+  botBoxDraftsReading,
   createBotBoxDraftStorage,
   storedBoxDraftsOf,
   type PersistedBotBoxDrafts,
@@ -130,6 +132,28 @@ function withEntry<T>(
 }
 
 /**
+ * The boxes' drafts the store changed while the stored ones were being read,
+ * by bot and box (`boxKey`), and the bots it forgot then: the merge keeps
+ * none of the stored drafts they name, a cleared or forgotten one included,
+ * and the merged drafts are written once read, since nothing was written
+ * while they were read.
+ */
+const changedDuringRead = { keys: new Set<string>(), bots: new Set<string>() };
+let readingStoredDrafts = false;
+
+function boxKey(botId: string, key: string): string {
+  return JSON.stringify([botId, key]);
+}
+
+function noteBoxChange(botId: string, key: string | null): void {
+  if (!readingStoredDrafts) return;
+  if (key === null) changedDuringRead.bots.add(botId);
+  else changedDuringRead.keys.add(boxKey(botId, key));
+}
+
+const PERSIST_OPTIONS = basePersistOptions(BOT_BOX_DRAFTS_PERSIST_KEY);
+
+/**
  * What a member has not sent yet: a card's answer, and what a thread's box
  * or the channel's holds, typed or put there by Discuss. Kept above the
  * channel panes, so switching channels or reopening a thread preserves it;
@@ -138,12 +162,12 @@ function withEntry<T>(
  *
  * The boxes' drafts are kept on this device too (Tracy Bots T158), so a box
  * shows what it held after the app restarts: stored as the person types,
- * read back once at start (`createBotBoxDraftStorage`). A box typed in
- * before that read answers keeps what was typed.
+ * read back once at start (`createBotBoxDraftStorage`). What a box did while
+ * they were read, typing or clearing, wins over what was stored for it.
  */
 export const useBotDraftsStore = create<BotDraftsState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       answers: {},
       threadBoxes: {},
       unsentBoxes: {},
@@ -151,7 +175,8 @@ export const useBotDraftsStore = create<BotDraftsState>()(
         set((state) => ({
           answers: withEntry(state.answers, botId, key, draft),
         })),
-      seedThreadBox: (botId, anchorMessageId, text) =>
+      seedThreadBox: (botId, anchorMessageId, text) => {
+        noteBoxChange(botId, anchorMessageId);
         set((state) => ({
           threadBoxes: withEntry(state.threadBoxes, botId, anchorMessageId, {
             text,
@@ -159,31 +184,33 @@ export const useBotDraftsStore = create<BotDraftsState>()(
             seedId:
               (state.threadBoxes[botId]?.[anchorMessageId]?.seedId ?? 0) + 1,
           }),
-        })),
-      typeThreadBox: (botId, anchorMessageId, text, content) =>
-        set((state) => {
-          const current = state.threadBoxes[botId]?.[anchorMessageId];
-          if (
-            (current?.text ?? "") === text &&
-            (current?.content ?? null) === content
-          ) {
-            return state;
-          }
-          return {
-            threadBoxes: withEntry(
-              state.threadBoxes,
-              botId,
-              anchorMessageId,
-              text.length === 0 && content === null
-                ? null
-                : {
-                    text,
-                    content,
-                    seedId: current?.seedId ?? 0,
-                  },
-            ),
-          };
-        }),
+        }));
+      },
+      typeThreadBox: (botId, anchorMessageId, text, content) => {
+        const current = get().threadBoxes[botId]?.[anchorMessageId];
+        if (
+          (current?.text ?? "") === text &&
+          (current?.content ?? null) === content
+        ) {
+          return;
+        }
+        noteBoxChange(botId, anchorMessageId);
+        set((state) => ({
+          threadBoxes: withEntry(
+            state.threadBoxes,
+            botId,
+            anchorMessageId,
+            text.length === 0 && content === null
+              ? null
+              : {
+                  text,
+                  content,
+                  seedId:
+                    state.threadBoxes[botId]?.[anchorMessageId]?.seedId ?? 0,
+                },
+          ),
+        }));
+      },
       offerUnsent: (botId, anchorMessageId, unsent) =>
         set((state) =>
           unsent === null &&
@@ -198,32 +225,23 @@ export const useBotDraftsStore = create<BotDraftsState>()(
                 ),
               },
         ),
-      forgetBot: (botId) =>
-        set((state) => {
-          const answers = { ...state.answers };
-          const threadBoxes = { ...state.threadBoxes };
-          const unsentBoxes = { ...state.unsentBoxes };
-          delete answers[botId];
-          delete threadBoxes[botId];
-          delete unsentBoxes[botId];
-          return { answers, threadBoxes, unsentBoxes };
-        }),
+      forgetBot: (botId) => {
+        noteBoxChange(botId, null);
+        set((state) => ({
+          answers: withoutBot(state.answers, botId),
+          threadBoxes: withoutBot(state.threadBoxes, botId),
+          unsentBoxes: withoutBot(state.unsentBoxes, botId),
+        }));
+      },
       closeBot: (botId) =>
-        set((state) => {
-          if (state.answers[botId] === undefined) return state;
-          const answers = { ...state.answers };
-          delete answers[botId];
-          return { answers };
-        }),
+        set((state) => ({ answers: withoutBot(state.answers, botId) })),
     }),
     {
-      ...basePersistOptions(BOT_BOX_DRAFTS_PERSIST_KEY),
+      ...PERSIST_OPTIONS,
       storage: createBotBoxDraftStorage(),
       partialize: (state): PersistedBotBoxDrafts => ({
         threadBoxes: state.threadBoxes,
       }),
-      // What a box held before the stored drafts were read is newer than
-      // what was stored for it.
       merge: (persisted, current) => {
         const stored = storedBoxDraftsOf(
           isRecord(persisted) ? persisted.threadBoxes : null,
@@ -236,13 +254,45 @@ export const useBotDraftsStore = create<BotDraftsState>()(
           ...Object.keys(stored),
           ...Object.keys(current.threadBoxes),
         ])) {
-          threadBoxes[botId] = {
-            ...stored[botId],
-            ...current.threadBoxes[botId],
-          };
+          const kept: Partial<Record<string, BotThreadBoxDraft>> = {};
+          if (!changedDuringRead.bots.has(botId)) {
+            for (const [key, draft] of Object.entries(stored[botId] ?? {})) {
+              if (!changedDuringRead.keys.has(boxKey(botId, key))) {
+                kept[key] = draft;
+              }
+            }
+          }
+          const merged = { ...kept, ...current.threadBoxes[botId] };
+          if (Object.keys(merged).length > 0) threadBoxes[botId] = merged;
         }
         return { ...current, threadBoxes };
+      },
+      onRehydrateStorage: () => {
+        readingStoredDrafts = true;
+        botBoxDraftsReading();
+        return (state, error) => {
+          readingStoredDrafts = false;
+          const changed =
+            changedDuringRead.keys.size > 0 || changedDuringRead.bots.size > 0;
+          changedDuringRead.keys.clear();
+          changedDuringRead.bots.clear();
+          if (state === undefined || error !== undefined) return;
+          botBoxDraftsRead({
+            name: PERSIST_OPTIONS.name,
+            version: PERSIST_OPTIONS.version,
+            threadBoxes: state.threadBoxes,
+            changedDuringRead: changed,
+          });
+        };
       },
     },
   ),
 );
+
+/** `byBot` without the bot, the same object where it holds nothing of it. */
+function withoutBot<T>(byBot: ByBot<T>, botId: string): ByBot<T> {
+  if (byBot[botId] === undefined) return byBot;
+  const next = { ...byBot };
+  delete next[botId];
+  return next;
+}
