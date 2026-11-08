@@ -4,6 +4,7 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 
 export interface ConfigurationPlan {
   readonly id: string;
+  readonly bindingVersion?: number | null;
   readonly linkedBy: string | null;
   readonly status?: "linked" | "pending" | "expired";
   readonly providerLabel: string;
