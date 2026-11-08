@@ -119,4 +119,21 @@ describe("<ThreadReferenceChip /> pressed", () => {
       [BOT_ID]: { kind: "thread", threadId: THREAD_ID, messageId: null },
     });
   });
+
+  it("opens nothing for a thread whose post is gone from the channel", async () => {
+    holdThreads(
+      queryClient,
+      [{ ...threadSummary(THREAD_ID, EXCERPT), anchor: null }],
+      { botId: BOT_ID, hostId: HOST_ID },
+    );
+    mount(THREAD_ID);
+
+    const chip = screen.getByRole("button");
+    expect(chip.hasAttribute("disabled")).toBe(true);
+    await userEvent.setup().click(chip);
+
+    expect(useBotTabLandingStore.getState().byBotId).toEqual({});
+    expect(useTracySurfaceStore.getState().open).toBe(false);
+    expect(mocks.activateTabIntent).not.toHaveBeenCalled();
+  });
 });

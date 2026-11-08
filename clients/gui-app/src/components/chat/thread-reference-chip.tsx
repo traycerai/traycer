@@ -20,7 +20,8 @@ import { cn } from "@/lib/utils";
  * An id-shaped token that named no agent (Tracy Bots T160): a chip for the
  * thread it names when the window holds that thread in a bot's thread list -
  * the bot's picture, "thread", and the first words of the post it hangs off -
- * that opens the bot's channel with the thread beside it. Any other token
+ * that opens the bot's channel with the thread beside it, unless that post is
+ * gone from the channel. Any other token
  * goes on to {@link TaskReferenceChip}: a task's chip, or the id as written.
  */
 export function ThreadReferenceChip(props: {
@@ -71,6 +72,9 @@ function ThreadReferenceButton(props: {
   return (
     <button
       type="button"
+      // A thread whose post is gone from the channel cannot be opened, as in
+      // the Threads list: its panel is found through that post.
+      disabled={held.thread.anchor === null}
       onClick={() =>
         openChannel(held.botId, {
           kind: "thread",
@@ -80,7 +84,7 @@ function ThreadReferenceButton(props: {
       }
       className={cn(
         "mx-0.25 inline-flex max-w-[min(26rem,80vw)] items-center gap-1 rounded-md border border-primary/25 bg-primary/10 px-1.5 py-0.5 align-baseline",
-        "text-ui-sm font-medium text-primary transition-colors hover:bg-primary/15 hover:text-primary focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none",
+        "text-ui-sm font-medium text-primary transition-colors hover:bg-primary/15 hover:text-primary focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none disabled:hover:bg-primary/10",
       )}
       data-thread-reference={held.thread.threadId}
       data-bot-id={held.botId}
