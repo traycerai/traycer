@@ -1,3 +1,4 @@
+import type { SandboxCatalogueReadinessRequest } from "@traycer/protocol/host/sandbox-control";
 import {
   createSandboxViaHttp,
   destroySandboxViaHttp,
@@ -700,8 +701,14 @@ export class MockRunnerHost implements IRunnerHost {
 
   getSandboxCatalogue(
     bearerToken: string,
+    context: SandboxCatalogueReadinessRequest | null,
   ): Promise<SandboxCatalogueFetchResult> {
-    return fetchSandboxCatalogueViaHttp(this.serverBaseUrl, bearerToken, null);
+    return fetchSandboxCatalogueViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      context,
+    );
   }
 
   getTraycerModels(bearerToken: string): Promise<TraycerModelsFetchResult> {

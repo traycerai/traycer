@@ -171,6 +171,7 @@ export function ModalFixture() {
               onRefreshCatalog={() => Promise.resolve()}
               hostUnavailableLabel={null}
               onOpenProviderSettings={() => undefined}
+              onOpenHostUpdates={() => undefined}
               onClosePicker={() => setOpen(false)}
               listRef={listRef}
               listKey="fixture"

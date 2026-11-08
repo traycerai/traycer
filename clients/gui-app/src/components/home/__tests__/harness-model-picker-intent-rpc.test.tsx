@@ -7,13 +7,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // query hooks against a mocked host transport so an actual RPC undercount (or
 // overcount) is observable, which a wholesale hook mock structurally cannot
 // catch.
+const systemTabModalMock = vi.hoisted(() => ({
+  openSettings: vi.fn(),
+  openHistory: vi.fn(),
+  close: vi.fn(),
+  setSection: vi.fn(),
+}));
+const providersQueryMock = vi.hoisted(() => ({
+  providers: [] as ReadonlyArray<ProviderCliState>,
+}));
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
-  useSystemTabModalActions: () => ({
-    openSettings: vi.fn(),
-    openHistory: vi.fn(),
-    close: vi.fn(),
-    setSection: vi.fn(),
-  }),
+  useSystemTabModalActions: () => systemTabModalMock,
+}));
+vi.mock("@/components/home/pickers/terminal-account-first-mention", () => ({
+  TerminalAccountFirstMention: () => null,
 }));
 vi.mock("@/components/ui/dropdown-menu", () => {
   const passthrough = (props: { readonly children: ReactNode }): ReactNode =>
@@ -71,7 +78,9 @@ interface QueryActivity {
 
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersList: (activity: QueryActivity) => ({
-    data: activity.enabled ? { providers: [] } : undefined,
+    data: activity.enabled
+      ? { providers: providersQueryMock.providers }
+      : undefined,
     isPending: false,
     isError: false,
     isFetching: false,
@@ -80,7 +89,9 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
     _client: string | null,
     activity: QueryActivity,
   ) => ({
-    data: activity.enabled ? { providers: [] } : undefined,
+    data: activity.enabled
+      ? { providers: providersQueryMock.providers }
+      : undefined,
     isPending: false,
     isError: false,
     isFetching: false,
@@ -262,14 +273,29 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import type { Key, ReactElement, ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
-import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import {
+  MockHostMessenger,
+  type MockHostMessengerOptions,
+} from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import {
+  HostMethodVersionUnsatisfiedError,
+  type HostRequestOptions,
+  type RequestOfMethod,
+  type ResponseOfMethod,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
-import type {
-  GuiHarnessId,
-  ListGuiAgentCommandsResponse,
-  ListGuiAgentModelsResponse,
-  ListGuiHarnessesResponse,
+import {
+  AGENT_GUI_LIST_MODELS_PROFILE_REQUIRED_HOST_VERSION,
+  type GuiHarnessId,
+  type ListGuiAgentCommandsResponse,
+  type ListGuiAgentModelsResponse,
+  type ListGuiHarnessesResponse,
 } from "@traycer/protocol/host/index";
+import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-native-schemas";
+import type {
+  ProviderCliState,
+  ProviderProfile,
+} from "@traycer/protocol/host/provider-schemas";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { createAppQueryClient } from "@/lib/query-client";
@@ -307,6 +333,61 @@ function harnessEntry(
   };
 }
 
+function providerProfile(
+  profileId: string,
+  kind: "ambient" | "managed",
+  label: string,
+): ProviderProfile {
+  return {
+    profileId,
+    enabled: true,
+    kind,
+    authType: "oauth",
+    label,
+    auth: {
+      status: "authenticated",
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    identity: null,
+    usageUpdatedAt: null,
+    rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
+    duplicateOfProfileId: null,
+    ambientDriftNotice: null,
+    accentColor: null,
+  };
+}
+
+function codexProviderWithProfiles(): ProviderCliState {
+  return {
+    providerId: "codex",
+    enabled: true,
+    disabledBy: null,
+    nativeCapabilities: DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
+    selected: { kind: "bundled" },
+    candidates: [],
+    auth: {
+      status: "authenticated",
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    authPending: false,
+    checkedAt: null,
+    apiKey: { supported: false, configured: false, source: null },
+    terminalAgentArgs: "",
+    envOverrides: [],
+    loginCapability: null,
+    availabilityPending: false,
+    profiles: [
+      providerProfile("ambient", "ambient", "Default account"),
+      providerProfile("profile-work", "managed", "Work account"),
+    ],
+  };
+}
+
 function modelsResponseFor(
   harnessId: GuiHarnessId,
 ): ListGuiAgentModelsResponse {
@@ -341,7 +422,52 @@ interface RpcCallLog {
 
 interface PickerRpcFixture {
   readonly calls: RpcCallLog;
+  readonly requiredModelFloors: Array<
+    HostRequestOptions["requiredHostMethodVersion"]
+  >;
   readonly Wrapper: (props: { readonly children: ReactNode }) => ReactNode;
+}
+
+class PickerMockHostMessenger extends MockHostMessenger<HostRpcRegistry> {
+  constructor(
+    options: MockHostMessengerOptions<HostRpcRegistry>,
+    private readonly refuseProfileModels: boolean,
+    private readonly requiredModelFloors: Array<
+      HostRequestOptions["requiredHostMethodVersion"]
+    >,
+  ) {
+    super(options);
+  }
+
+  override async request<Method extends keyof HostRpcRegistry & string>(
+    method: Method,
+    params: RequestOfMethod<HostRpcRegistry, Method>,
+    options: HostRequestOptions,
+  ): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
+    if (method === "agent.gui.listModels") {
+      this.requiredModelFloors.push(options.requiredHostMethodVersion);
+    }
+    const requiredVersion = options.requiredHostMethodVersion;
+    if (
+      this.refuseProfileModels &&
+      method === "agent.gui.listModels" &&
+      requiredVersion !== null &&
+      requiredVersion.method ===
+        AGENT_GUI_LIST_MODELS_PROFILE_REQUIRED_HOST_VERSION.method &&
+      (requiredVersion.version.major > 1 ||
+        (requiredVersion.version.major === 1 &&
+          requiredVersion.version.minor > 1))
+    ) {
+      throw new HostMethodVersionUnsatisfiedError({
+        requirement: requiredVersion,
+        negotiated: { major: 1, minor: 1 },
+        requestId: "req-old-host-profile-models",
+        method,
+        hostId: mockLocalHostEntry.hostId,
+      });
+    }
+    return super.request(method, params, options);
+  }
 }
 
 /**
@@ -354,9 +480,25 @@ interface PickerRpcFixture {
  */
 function createPickerRpcFixture(
   harnesses: ReadonlyArray<ListGuiHarnessesResponse["harnesses"][number]>,
+  options: {
+    readonly refuseProfileModels?: boolean;
+    readonly profileModelsErrorMessage?: string;
+  },
 ): PickerRpcFixture {
   const calls: RpcCallLog = { listModels: [], listCommands: [] };
+  const requiredModelFloors: Array<
+    HostRequestOptions["requiredHostMethodVersion"]
+  > = [];
   const queryClient = createAppQueryClient();
+  if (options.refuseProfileModels === true) {
+    // Host-version refusal is terminal for this assertion. Avoid the app's
+    // single generic query retry so the test records exactly one preflight.
+    const defaults = queryClient.getDefaultOptions();
+    queryClient.setDefaultOptions({
+      ...defaults,
+      queries: { ...defaults.queries, retry: false },
+    });
+  }
   let requestCounter = 0;
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
@@ -365,30 +507,40 @@ function createPickerRpcFixture(
     invalidator: createHostQueryInvalidator(queryClient),
     findHostById: (hostId) =>
       hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
-    messenger: new MockHostMessenger<HostRpcRegistry>({
-      registry: hostRpcRegistry,
-      requestId: () => {
-        requestCounter += 1;
-        return `req-${String(requestCounter)}`;
-      },
-      handlers: {
-        "agent.gui.listHarnesses": () => ({ harnesses: [...harnesses] }),
-        "agent.gui.listModels": (params) => {
-          calls.listModels.push({ harnessId: params.harnessId });
-          return modelsResponseFor(params.harnessId);
+    messenger: new PickerMockHostMessenger(
+      {
+        registry: hostRpcRegistry,
+        requestId: () => {
+          requestCounter += 1;
+          return `req-${String(requestCounter)}`;
         },
-        "agent.gui.listCommands": (params) => {
-          calls.listCommands.push({
-            harnessId: params.harnessId,
-            profileId: params.profileId,
-          });
-          return {
-            harnessId: params.harnessId,
-            commands: [],
-          } satisfies ListGuiAgentCommandsResponse;
+        handlers: {
+          "agent.gui.listHarnesses": () => ({ harnesses: [...harnesses] }),
+          "agent.gui.listModels": (params) => {
+            calls.listModels.push({ harnessId: params.harnessId });
+            if (
+              params.profileId !== null &&
+              options.profileModelsErrorMessage !== undefined
+            ) {
+              throw new Error(options.profileModelsErrorMessage);
+            }
+            return modelsResponseFor(params.harnessId);
+          },
+          "agent.gui.listCommands": (params) => {
+            calls.listCommands.push({
+              harnessId: params.harnessId,
+              profileId: params.profileId,
+            });
+            return {
+              harnessId: params.harnessId,
+              commands: [],
+            } satisfies ListGuiAgentCommandsResponse;
+          },
         },
       },
-    }),
+      options.refuseProfileModels ?? false,
+      requiredModelFloors,
+    ),
   });
   spine.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
@@ -400,7 +552,7 @@ function createPickerRpcFixture(
       {props.children}
     </QueryClientProvider>
   );
-  return { calls, Wrapper };
+  return { calls, requiredModelFloors, Wrapper };
 }
 
 function countFor(
@@ -556,6 +708,11 @@ describe("<HarnessModelPicker /> real-RPC intent edges", () => {
     useComposerHarnessMemoryStore.getState().resetForTests();
     useProviderProfileAddFlowStore.getState().close();
     useProvidersFocusStore.getState().clearFocusHarnessId();
+    systemTabModalMock.openSettings.mockReset();
+    systemTabModalMock.openHistory.mockReset();
+    systemTabModalMock.close.mockReset();
+    systemTabModalMock.setSection.mockReset();
+    providersQueryMock.providers = [];
   });
 
   beforeEach(() => {
@@ -571,10 +728,10 @@ describe("<HarnessModelPicker /> real-RPC intent edges", () => {
   });
 
   it("fetches models on mount (it feeds the UI) but issues zero commands prewarm calls on mount", async () => {
-    const fixture = createPickerRpcFixture([
-      harnessEntry("codex", true),
-      harnessEntry("opencode", false),
-    ]);
+    const fixture = createPickerRpcFixture(
+      [harnessEntry("codex", true), harnessEntry("opencode", false)],
+      {},
+    );
     renderPickerWithFixture(fixture, defaultSelection("codex"));
 
     // Let the harnesses fetch resolve, `selectedHarnessAvailable` flip true,
@@ -592,10 +749,10 @@ describe("<HarnessModelPicker /> real-RPC intent edges", () => {
   });
 
   it("does not refetch the selected harness's models when the picker opens inside the refresh window", async () => {
-    const fixture = createPickerRpcFixture([
-      harnessEntry("codex", true),
-      harnessEntry("opencode", false),
-    ]);
+    const fixture = createPickerRpcFixture(
+      [harnessEntry("codex", true), harnessEntry("opencode", false)],
+      {},
+    );
     renderPickerWithFixture(fixture, defaultSelection("codex"));
     await screen.findByText("codex Model 1");
     const modelsBeforeOpen = countFor(fixture.calls.listModels, "codex");
@@ -617,11 +774,14 @@ describe("<HarnessModelPicker /> real-RPC intent edges", () => {
   });
 
   it("first open on a cold host fetches ONLY the selected harness's models - never the whole rail", async () => {
-    const fixture = createPickerRpcFixture([
-      harnessEntry("codex", true),
-      harnessEntry("claude", true),
-      harnessEntry("opencode", true),
-    ]);
+    const fixture = createPickerRpcFixture(
+      [
+        harnessEntry("codex", true),
+        harnessEntry("claude", true),
+        harnessEntry("opencode", true),
+      ],
+      {},
+    );
     renderPickerWithFixture(fixture, defaultSelection("codex"));
     await screen.findByText("codex Model 1");
 
@@ -644,11 +804,14 @@ describe("<HarnessModelPicker /> real-RPC intent edges", () => {
   });
 
   it("browsing a rail entry fetches exactly that provider's models, exactly once - the rest of the rail stays cold", async () => {
-    const fixture = createPickerRpcFixture([
-      harnessEntry("codex", true),
-      harnessEntry("claude", true),
-      harnessEntry("opencode", true),
-    ]);
+    const fixture = createPickerRpcFixture(
+      [
+        harnessEntry("codex", true),
+        harnessEntry("claude", true),
+        harnessEntry("opencode", true),
+      ],
+      {},
+    );
     renderPickerWithFixture(fixture, defaultSelection("codex"));
     await screen.findByText("codex Model 1");
     await openPickerByTriggerName(/^codex Model 1/);
@@ -668,10 +831,10 @@ describe("<HarnessModelPicker /> real-RPC intent edges", () => {
   });
 
   it("refetches ONLY the selected harness when the picker opens after the refresh window, never the rest of the rail", async () => {
-    const fixture = createPickerRpcFixture([
-      harnessEntry("codex", true),
-      harnessEntry("claude", true),
-    ]);
+    const fixture = createPickerRpcFixture(
+      [harnessEntry("codex", true), harnessEntry("claude", true)],
+      {},
+    );
     renderPickerWithFixture(fixture, defaultSelection("codex"));
     await screen.findByText("codex Model 1");
 
@@ -703,10 +866,10 @@ describe("<HarnessModelPicker /> real-RPC intent edges", () => {
   });
 
   it("prewarms the newly selected harness's commands on a rail selection change, without re-pulling the models that switch just fetched", async () => {
-    const fixture = createPickerRpcFixture([
-      harnessEntry("codex", true),
-      harnessEntry("claude", true),
-    ]);
+    const fixture = createPickerRpcFixture(
+      [harnessEntry("codex", true), harnessEntry("claude", true)],
+      {},
+    );
     renderPickerWithFixture(fixture, defaultSelection("codex"));
     await screen.findByText("codex Model 1");
 
@@ -728,10 +891,10 @@ describe("<HarnessModelPicker /> real-RPC intent edges", () => {
   });
 
   it("refetches only the newly selected harness's models on a rail selection change after the refresh window, and never the harness it left", async () => {
-    const fixture = createPickerRpcFixture([
-      harnessEntry("codex", true),
-      harnessEntry("claude", true),
-    ]);
+    const fixture = createPickerRpcFixture(
+      [harnessEntry("codex", true), harnessEntry("claude", true)],
+      {},
+    );
     renderPickerWithFixture(fixture, defaultSelection("codex"));
     await screen.findByText("codex Model 1");
 
@@ -760,10 +923,10 @@ describe("<HarnessModelPicker /> real-RPC intent edges", () => {
   });
 
   it("prewarms the new profile's commands once when the selected profile changes on the same harness, and not again for a same-profile reselection or a return to a warm profile", async () => {
-    const fixture = createPickerRpcFixture([
-      harnessEntry("codex", true),
-      harnessEntry("opencode", false),
-    ]);
+    const fixture = createPickerRpcFixture(
+      [harnessEntry("codex", true), harnessEntry("opencode", false)],
+      {},
+    );
     const store = renderPickerWithFixture(
       fixture,
       profileSelection("codex", "profile-a"),
@@ -809,7 +972,7 @@ describe("<HarnessModelPicker /> real-RPC intent edges", () => {
   });
 
   it("issues no commands prewarm for a profile change while the surface is inactive", async () => {
-    const fixture = createPickerRpcFixture([harnessEntry("codex", true)]);
+    const fixture = createPickerRpcFixture([harnessEntry("codex", true)], {});
     const { store, setSurfaceActive } = renderPickerWithActivity(
       fixture,
       profileSelection("codex", "profile-a"),
@@ -839,10 +1002,10 @@ describe("<HarnessModelPicker /> real-RPC intent edges", () => {
   });
 
   it("issues no commands prewarm for a profile change on an unavailable harness", async () => {
-    const fixture = createPickerRpcFixture([
-      harnessEntry("codex", true),
-      harnessEntry("opencode", false),
-    ]);
+    const fixture = createPickerRpcFixture(
+      [harnessEntry("codex", true), harnessEntry("opencode", false)],
+      {},
+    );
     const store = renderPickerWithFixture(
       fixture,
       profileSelection("opencode", "profile-a"),
@@ -860,10 +1023,10 @@ describe("<HarnessModelPicker /> real-RPC intent edges", () => {
   });
 
   it("issues zero listModels and zero listCommands calls when the picker opens on an unavailable/disabled selection", async () => {
-    const fixture = createPickerRpcFixture([
-      harnessEntry("codex", true),
-      harnessEntry("opencode", false),
-    ]);
+    const fixture = createPickerRpcFixture(
+      [harnessEntry("codex", true), harnessEntry("opencode", false)],
+      {},
+    );
     renderPickerWithFixture(fixture, defaultSelection("opencode"));
     await screen.findByRole("button", { name: "Select model" });
 
@@ -873,11 +1036,62 @@ describe("<HarnessModelPicker /> real-RPC intent edges", () => {
     expect(countFor(fixture.calls.listCommands, "opencode")).toBe(0);
   });
 
-  it("issues zero listModels and zero listCommands calls on a programmatic selection change to an unavailable/disabled harness", async () => {
-    const fixture = createPickerRpcFixture([
-      harnessEntry("codex", true),
-      harnessEntry("opencode", false),
+  it("shows an account-specific host update state when the host refuses profile model reads", async () => {
+    providersQueryMock.providers = [codexProviderWithProfiles()];
+    const fixture = createPickerRpcFixture([harnessEntry("codex", true)], {
+      refuseProfileModels: true,
+    });
+    renderPickerWithFixture(fixture, profileSelection("codex", "profile-work"));
+    await screen.findByRole("button", { name: /^Select model/ });
+
+    await openPickerByTriggerName(/^Select model/);
+    await screen.findByText(
+      "Update this host to load models for this account.",
+    );
+    expect(fixture.requiredModelFloors).toEqual([
+      AGENT_GUI_LIST_MODELS_PROFILE_REQUIRED_HOST_VERSION,
     ]);
+
+    expect(screen.queryByText("Loading models")).toBeNull();
+    expect(screen.queryByTestId("virtuoso-scroller")).toBeNull();
+    expect(screen.queryByText("codex Model 1")).toBeNull();
+    // The 1.1 host refusal happens before dispatch. An ambient retry would
+    // enter the mock handler, return its ambient row, and fail these checks.
+    expect(fixture.calls.listModels).toEqual([]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Host updates" }));
+    expect(systemTabModalMock.openSettings).toHaveBeenCalledWith({
+      section: "host",
+      resetToGeneral: false,
+      tab: "updates",
+      draft: null,
+      hostId: mockLocalHostEntry.hostId,
+    });
+  });
+
+  it("keeps the host's specific model error visible when the profile request reaches the host", async () => {
+    providersQueryMock.providers = [codexProviderWithProfiles()];
+    const fixture = createPickerRpcFixture([harnessEntry("codex", true)], {
+      profileModelsErrorMessage: "Account model catalog is unavailable.",
+    });
+    renderPickerWithFixture(fixture, profileSelection("codex", "profile-work"));
+    await screen.findByRole("button", { name: /^Select model/ });
+
+    await openPickerByTriggerName(/^Select model/);
+    await screen.findByRole("option", {
+      name: "Account model catalog is unavailable.",
+    });
+    expect(
+      screen.queryByText("Update this host to load models for this account."),
+    ).toBeNull();
+    expect(countFor(fixture.calls.listModels, "codex")).toBeGreaterThan(0);
+  });
+
+  it("issues zero listModels and zero listCommands calls on a programmatic selection change to an unavailable/disabled harness", async () => {
+    const fixture = createPickerRpcFixture(
+      [harnessEntry("codex", true), harnessEntry("opencode", false)],
+      {},
+    );
     const store = renderPickerWithFixture(fixture, defaultSelection("codex"));
     await screen.findByText("codex Model 1");
     await openPickerByTriggerName(/^codex Model 1/);

@@ -763,9 +763,8 @@ describe("live emission shows agent states only", () => {
       body: `Your read-only invitation to ${RETIRED_TEAM_NAME} was removed. Ask the team admin for access again. Other access you have is unchanged.`,
     },
   ])(
-    "keeps $name visible with its scoped text, through the real merged consumer, and announces it nowhere",
+    "keeps $name visible with its scoped text, and announces it nowhere",
     async ({ entry, title, body }) => {
-      // The real merged-notification entrypoint renders accurate, scope-specific copy.
       expect(rowFromHostEntry(entry)).toMatchObject({ title, body });
 
       // Neither live lane announces it.

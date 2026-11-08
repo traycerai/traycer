@@ -7,9 +7,12 @@
  * are merged here into one category listing every Agent in the Task.
  *
  * Layout: both creation leaves first, then the canonical mixed-interface Agent
- * tree from the Epic projection. This is the same parent/child structure and
- * default ordering used by the sidebar, so a child remains findable beneath
- * the Agent that spawned it instead of disappearing into a long flat list.
+ * tree from the Epic projection, then the chats the cloud lists that this
+ * device's tree does not hold yet (`chats-subpage.ts`, `cloudOnly`). This is
+ * the same parent/child structure and default ordering used by the sidebar,
+ * so a child remains findable beneath the Agent that spawned it instead of
+ * disappearing into a long flat list, and a chat started on another machine
+ * is in the opener as soon as it is in the sidebar.
  *
  * Composition, not reimplementation: the per-interface hooks still own their
  * own leaves, so `open:chats:*` / `open:tui:*` ids (and therefore the
@@ -88,5 +91,20 @@ export function useAgentsOpenerItems(
     }
   };
   for (const rootId of tree.rootIds) append(rootId, []);
+  // No projection node, so no place in the tree walk above: a cloud-only chat
+  // is a root of its own, and its activity is not on this device's clocks.
+  for (const item of chat.cloudOnly) {
+    existing.push({
+      ...item,
+      agentTreeRow: {
+        nodeId: item.id.slice("open:chats:".length),
+        depth: 0,
+        ancestorIds: [],
+        hasChildren: false,
+        interface: "chat",
+        activity: "idle",
+      },
+    });
+  }
   return [chat.create, terminal.create, ...existing];
 }

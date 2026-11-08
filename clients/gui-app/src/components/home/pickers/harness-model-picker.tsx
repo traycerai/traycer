@@ -976,6 +976,17 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       hostId: null,
     });
   }
+  function openHostUpdates(): void {
+    closeOnly();
+    openSettings({
+      section: "host",
+      resetToGeneral: false,
+      tab: "updates",
+      draft: null,
+      hostId: runTargetClient?.getActiveHostId() ?? runTargetHostId,
+    });
+  }
+
   // Falls back to the fallback harness list's label while the catalog hasn't
   // resolved the active provider yet (e.g. still loading).
   const activePanelLabel = useMemo(
@@ -1055,11 +1066,15 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   const rows = useMemo(
     () =>
       buildAllHarnessModelRows(
-        catalogHarnesses.flatMap((harness) =>
-          harness.available ? [{ harness, models: harness.models }] : [],
-        ),
+        catalogHarnesses.flatMap((cachedHarness) => {
+          const harness =
+            activeProvider?.id === cachedHarness.id
+              ? activeProvider
+              : cachedHarness;
+          return harness.available ? [{ harness, models: harness.models }] : [];
+        }),
       ),
-    [catalogHarnesses],
+    [activeProvider, catalogHarnesses],
   );
   const providerRows = useMemo(
     () => rows.filter((row) => row.harnessId === resolvedActiveProviderId),
@@ -1435,6 +1450,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         onRefreshCatalog={handleRefreshCatalog}
         hostUnavailableLabel={hostUnavailableLabel}
         onOpenProviderSettings={openProviderSettings}
+        onOpenHostUpdates={openHostUpdates}
         onClosePicker={closeOnly}
         listRef={listRef}
         listKey={listKey}
@@ -1853,7 +1869,6 @@ function modelPickerSelectionSummary(
 function useBrowsedProviderCatalogEntry(input: {
   readonly runTargetClient: HostClient<HostRpcRegistry> | null;
   readonly browsedProviderId: ProviderId;
-  /** The account browsed within the provider; `null` is the ambient one. */
   readonly browsedProfileId: string | null;
   readonly catalogHarnesses: ReadonlyArray<GuiHarnessCatalogEntry>;
   readonly catalogActive: boolean;
@@ -1868,31 +1883,46 @@ function useBrowsedProviderCatalogEntry(input: {
     input.cloudTraycer === null || input.browsedProviderId !== "traycer";
   // A pending entry promoted by cached models needs no fetch. A known-positive
   // host verdict with no models still needs this targeted cold-cache load.
-  const managedProfile = input.browsedProfileId !== null;
   const fetchGate =
     input.catalogActive &&
     hostListsModels &&
     entry?.available === true &&
-    (!entry.availabilityPending || entry.models.length === 0 || managedProfile);
+    (input.browsedProfileId !== null ||
+      !entry.availabilityPending ||
+      entry.models.length === 0);
   const modelsQuery = useGuiHarnessModelsQueryForClient(
     input.runTargetClient,
     input.browsedProviderId,
     null,
     {
-      profileId: input.browsedProfileId,
       enabled: fetchGate,
       subscribed: input.catalogActive,
+      profileId: input.browsedProfileId,
     },
   );
   const modelsLoading = fetchGate && modelsQuery.isPending;
-  const profileModels = managedProfile ? modelsQuery.data?.models : undefined;
   return useMemo(() => {
     if (entry === null) return null;
-    if (!hostListsModels) return entry;
-    return profileModels === undefined
-      ? { ...entry, modelsLoading }
-      : { ...entry, models: profileModels, modelsLoading };
-  }, [entry, hostListsModels, modelsLoading, profileModels]);
+    return hostListsModels
+      ? {
+          ...entry,
+          models:
+            modelsQuery.data?.models ??
+            (input.browsedProfileId === null ? entry.models : []),
+          modelsLoading,
+          modelsError:
+            modelsQuery.error ??
+            (input.browsedProfileId === null ? entry.modelsError : null),
+        }
+      : entry;
+  }, [
+    entry,
+    hostListsModels,
+    input.browsedProfileId,
+    modelsLoading,
+    modelsQuery.data?.models,
+    modelsQuery.error,
+  ]);
 }
 
 // Restrict to harnesses whose adapter advertises a TUI surface. Runtime

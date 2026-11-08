@@ -60,12 +60,13 @@ describe("focused composer controls registry", () => {
 
   it("registers an entry and exposes it via getter", () => {
     const controls = noopControls();
-    const dispose = registerFocusedComposerControls(
-      "landing",
+    const dispose = registerFocusedComposerControls({
+      kind: "landing",
       controls,
-      null,
-      null,
-    );
+      hostClient: null,
+      opencodeLine: null,
+      catalogSelection: { harnessId: "codex", profileId: null },
+    });
     const entry = getFocusedComposerControls();
     expect(entry?.kind).toBe("landing");
     expect(entry?.controls).toBe(controls);
@@ -76,13 +77,20 @@ describe("focused composer controls registry", () => {
   it("the latest registration wins; disposing the winner clears the slot", () => {
     const first = noopControls();
     const second = noopControls();
-    registerFocusedComposerControls("landing", first, null, null);
-    const disposeSecond = registerFocusedComposerControls(
-      "chat-tile",
-      second,
-      null,
-      null,
-    );
+    registerFocusedComposerControls({
+      kind: "landing",
+      controls: first,
+      hostClient: null,
+      opencodeLine: null,
+      catalogSelection: { harnessId: "codex", profileId: null },
+    });
+    const disposeSecond = registerFocusedComposerControls({
+      kind: "chat-tile",
+      controls: second,
+      hostClient: null,
+      opencodeLine: null,
+      catalogSelection: { harnessId: "codex", profileId: null },
+    });
     expect(getFocusedComposerControls()?.controls).toBe(second);
     disposeSecond();
     expect(getFocusedComposerControls()).toBeNull();
@@ -91,13 +99,20 @@ describe("focused composer controls registry", () => {
   it("disposing a non-winner is a no-op (slot keeps the winner)", () => {
     const first = noopControls();
     const second = noopControls();
-    const disposeFirst = registerFocusedComposerControls(
-      "landing",
-      first,
-      null,
-      null,
-    );
-    registerFocusedComposerControls("chat-tile", second, null, null);
+    const disposeFirst = registerFocusedComposerControls({
+      kind: "landing",
+      controls: first,
+      hostClient: null,
+      opencodeLine: null,
+      catalogSelection: { harnessId: "codex", profileId: null },
+    });
+    registerFocusedComposerControls({
+      kind: "chat-tile",
+      controls: second,
+      hostClient: null,
+      opencodeLine: null,
+      catalogSelection: { harnessId: "codex", profileId: null },
+    });
     disposeFirst();
     expect(getFocusedComposerControls()?.controls).toBe(second);
   });
@@ -107,12 +122,13 @@ describe("focused composer controls registry", () => {
     const dispose = subscribeFocusedComposerControls(() => {
       calls += 1;
     });
-    const disposeRegister = registerFocusedComposerControls(
-      "landing",
-      noopControls(),
-      null,
-      null,
-    );
+    const disposeRegister = registerFocusedComposerControls({
+      kind: "landing",
+      controls: noopControls(),
+      hostClient: null,
+      opencodeLine: null,
+      catalogSelection: { harnessId: "codex", profileId: null },
+    });
     expect(calls).toBe(1);
     disposeRegister();
     expect(calls).toBe(2);
@@ -123,10 +139,22 @@ describe("focused composer controls registry", () => {
     const clientA = buildTestHostClient("host-a");
     const clientB = buildTestHostClient("host-b");
 
-    registerFocusedComposerControls("landing", noopControls(), clientA, null);
+    registerFocusedComposerControls({
+      kind: "landing",
+      controls: noopControls(),
+      hostClient: clientA,
+      opencodeLine: null,
+      catalogSelection: { harnessId: "codex", profileId: null },
+    });
     expect(getFocusedComposerControls()?.hostClient).toBe(clientA);
 
-    registerFocusedComposerControls("landing", noopControls(), clientB, null);
+    registerFocusedComposerControls({
+      kind: "landing",
+      controls: noopControls(),
+      hostClient: clientB,
+      opencodeLine: null,
+      catalogSelection: { harnessId: "codex", profileId: null },
+    });
     expect(getFocusedComposerControls()?.hostClient).toBe(clientB);
   });
 });

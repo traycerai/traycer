@@ -1,3 +1,4 @@
+import { AGENT_GUI_LIST_MODELS_PROFILE_REQUIRED_HOST_VERSION } from "@traycer/protocol/host";
 import {
   useQueryClient,
   type QueryClient,
@@ -7,7 +8,10 @@ import {
 import { CATALOG_LIST_RESPONSE_TIMEOUT_MS } from "@/lib/host-rpc-policy/catalog-list-response-timeout";
 import { useCallback, useMemo } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  HostRpcError,
+  type RequiredHostMethodVersion,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { PROVIDER_INVALIDATIONS } from "@/hooks/providers/invalidations";
 import { useRefreshProvidersForClient } from "@/hooks/providers/use-refresh-providers";
@@ -27,7 +31,10 @@ import {
   useHostQueryWithResponseMap,
   type UseHostQueryOptions,
 } from "@/hooks/host/use-host-query";
-import { useHostQueries } from "@/hooks/host/use-host-queries";
+import {
+  useHostQueries,
+  type HostRequestSpec,
+} from "@/hooks/host/use-host-queries";
 import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
 import { automaticJudgeInputs } from "@/lib/auto-mode/auto-judge-billing";
 import { COMMAND_CATALOG_COMPOSER_STALE_MS } from "@traycer/protocol/host/agent/gui/command-catalog-policy";
@@ -167,6 +174,29 @@ export interface QueryActivityOptions {
  */
 export interface CatalogQueryActivityOptions extends QueryActivityOptions {
   readonly modelsFetch: "all-harnesses" | "cached-only";
+  /** The focused provider's account; other providers retain their ambient slots. */
+  readonly modelProfile?: {
+    readonly harnessId: GuiHarnessId;
+    readonly profileId: string | null;
+  };
+}
+
+function modelCatalogProfileParam(
+  harnessId: GuiHarnessId,
+  selection: CatalogQueryActivityOptions["modelProfile"],
+): { readonly profileId?: string } {
+  return selection?.harnessId === harnessId && selection.profileId !== null
+    ? { profileId: selection.profileId }
+    : {};
+}
+
+function modelCatalogRequiredHostVersion(
+  request: HostRequestSpec<HostRpcRegistry, "agent.gui.listModels">,
+): RequiredHostMethodVersion | null {
+  return request.params.profileId === undefined ||
+    request.params.profileId === null
+    ? null
+    : AGENT_GUI_LIST_MODELS_PROFILE_REQUIRED_HOST_VERSION;
 }
 
 /**
@@ -436,6 +466,10 @@ export function useGuiHarnessModelsQueryForClient(
     cacheKeyIdentity: undefined,
     client,
     method: "agent.gui.listModels",
+    requiredHostMethodVersion: () =>
+      activity.profileId === null
+        ? null
+        : AGENT_GUI_LIST_MODELS_PROFILE_REQUIRED_HOST_VERSION,
     responseTimeoutMs: CATALOG_LIST_RESPONSE_TIMEOUT_MS,
     params,
     options: {
@@ -613,13 +647,15 @@ export function useGuiHarnessCatalogForClientLine(
       params: {
         harnessId,
         workingDirectory,
+        ...modelCatalogProfileParam(harnessId, activity.modelProfile),
         ...catalogOpencodeLineParam(harnessId, opencodeLine),
       },
     }));
-  }, [harnessIds, workingDirectory, opencodeLine]);
+  }, [harnessIds, workingDirectory, opencodeLine, activity.modelProfile]);
 
   const modelQueries = useHostQueries<HostRpcRegistry, "agent.gui.listModels">({
     client,
+    requiredHostMethodVersion: modelCatalogRequiredHostVersion,
     responseTimeoutMs: CATALOG_LIST_RESPONSE_TIMEOUT_MS,
     cacheKeyIdentity: undefined,
     requests,
@@ -659,6 +695,10 @@ export function useGuiHarnessCatalogForClientLine(
                     params: {
                       harnessId: harness.id,
                       workingDirectory,
+                      ...modelCatalogProfileParam(
+                        harness.id,
+                        activity.modelProfile,
+                      ),
                       ...catalogOpencodeLineParam(harness.id, opencodeLine),
                     },
                   },
@@ -666,13 +706,20 @@ export function useGuiHarnessCatalogForClientLine(
               : [],
           ) ?? EMPTY_GUI_MODEL_REQUESTS)
         : EMPTY_GUI_MODEL_REQUESTS,
-    [attached, harnessesQuery.data?.harnesses, workingDirectory, opencodeLine],
+    [
+      attached,
+      harnessesQuery.data?.harnesses,
+      workingDirectory,
+      opencodeLine,
+      activity.modelProfile,
+    ],
   );
   const pendingModelQueries = useHostQueries<
     HostRpcRegistry,
     "agent.gui.listModels"
   >({
     client,
+    requiredHostMethodVersion: modelCatalogRequiredHostVersion,
     responseTimeoutMs: CATALOG_LIST_RESPONSE_TIMEOUT_MS,
     cacheKeyIdentity: undefined,
     requests: pendingRequests,

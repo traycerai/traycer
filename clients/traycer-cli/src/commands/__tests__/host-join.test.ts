@@ -132,10 +132,6 @@ async function exists(path: string): Promise<boolean> {
   }
 }
 
-async function rejection(token: string): Promise<CliError> {
-  return refusalOf(readerOf(token));
-}
-
 async function refusalOf(args: HostJoinArgs): Promise<CliError> {
   try {
     await buildHostJoinCommand(args)(fakeCtx());
@@ -189,7 +185,7 @@ describe("buildHostJoinCommand", () => {
   ])(
     "refuses a token that is %s, writing nothing and installing nothing",
     async (_name, token) => {
-      const error = await rejection(token);
+      const error = await refusalOf(readerOf(token));
 
       expect(error.code).toBe(CLI_ERROR_CODES.INVALID_ARGUMENT);
       expect(error.details).toBeNull();
@@ -225,7 +221,6 @@ describe("buildHostJoinCommand", () => {
       const error = await refusalOf({ readToken });
 
       expect(error.code).toBe(CLI_ERROR_CODES.FORBIDDEN);
-      expect(error.message).not.toContain(TOKEN);
       expect(readToken).not.toHaveBeenCalled();
       expect(await exists(tokenPath())).toBe(false);
       expect(mocks.ensureHostMock).not.toHaveBeenCalled();

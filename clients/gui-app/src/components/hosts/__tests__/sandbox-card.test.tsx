@@ -926,6 +926,38 @@ describe("<SandboxHeaderNotices /> session notice follows the resolved state and
   const NOTICE = "sandbox-card-session-notice";
   const DAY = 24 * 60 * 60 * 1000;
 
+  it("tells an awake sandbox its paused session was lost in the restart and its files are unchanged", () => {
+    renderCard(
+      sandboxOf("awake", false, {
+        operation: sandboxOperationFixture({
+          fromState: "suspended",
+          state: "awake",
+          outcomeDetail: "wake-retried",
+        }),
+      }),
+    );
+
+    expect(screen.getByTestId("sandbox-card-session-notice").textContent).toBe(
+      "Your paused session was lost when your sandbox restarted. Your files are unchanged.",
+    );
+  });
+
+  it("says an expired paused session is being stopped with its sandbox", () => {
+    renderCard(
+      sandboxOf("stopping", false, {
+        operation: sandboxOperationFixture({
+          fromState: "suspended",
+          state: "stopping",
+          outcomeDetail: "suspended-session-lost",
+        }),
+      }),
+    );
+
+    expect(screen.getByTestId("sandbox-card-session-notice").textContent).toBe(
+      "Your paused session has expired. Your sandbox is being stopped.",
+    );
+  });
+
   it("shows no resume warning for a row resolved stopped whose stale summary still says suspended", () => {
     renderCard(
       sandboxOf("stopped", false, {
@@ -938,15 +970,21 @@ describe("<SandboxHeaderNotices /> session notice follows the resolved state and
   });
 
   it("control: shows the resume warning for a row resolved suspended whose summary says stopped", () => {
+    const endsAt = Date.now() + DAY;
+    const day = new Date(endsAt).toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
     renderCard(
       sandboxOf("suspended", false, {
         state: "stopped",
-        suspendedSessionEndsAt: Date.now() + DAY,
+        suspendedSessionEndsAt: endsAt,
       }),
     );
 
-    expect(screen.getByTestId(NOTICE).textContent).toMatch(
-      /^Your paused session will be lost on /,
+    expect(screen.getByTestId(NOTICE).textContent).toBe(
+      `Your paused session will be lost on ${day}. Resume your sandbox before then to keep it.`,
     );
   });
 

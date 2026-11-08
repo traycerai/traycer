@@ -40,12 +40,6 @@ vi.mock("@/lib/commands/sources/epics.source", () => ({
   epicsSource: { id: "epics", useItems: () => [] },
 }));
 
-/**
- * What a Tracy row says, as the production palette renders it: its name, and
- * beside it the team a team's bot is in where the name does not already say
- * it. A personal bot is never qualified.
- */
-
 /** A personal Tracy (the only main bot) and a team's bot with no main bot. */
 const ONE_MAIN_BOT_WITH_TEAM_BOT: StandaloneBotsDirectory = {
   model: {
@@ -161,6 +155,11 @@ function resetStores(): void {
   });
 }
 
+/**
+ * What a Tracy row says, as the production palette renders it: its name, and
+ * beside it the team a team's bot is in where the name does not already say
+ * it. A personal bot is never qualified.
+ */
 describe("CommandPalette Tracy rows", () => {
   beforeEach(resetStores);
   afterEach(() => {

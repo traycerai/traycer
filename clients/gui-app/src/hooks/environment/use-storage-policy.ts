@@ -85,15 +85,13 @@ function storagePolicyOf(
 
 /**
  * The picked configuration's environment: Personal's, or the team's the pick
- * names. `null` for a Local row, and while the account's list has not
- * answered.
+ * names. `null` while the account's list has not answered.
  */
 function environmentOfPick(
   environments: ReadonlyMap<string, SandboxDefaultsEnvironment>,
-  pick: EnvironmentPick,
+  pick: Exclude<EnvironmentPick, { readonly kind: "local" }>,
 ): SandboxDefaultsEnvironment | null {
   if (pick.kind === "personal") return environments.get("personal") ?? null;
-  if (pick.kind === "local") return null;
   for (const environment of environments.values()) {
     if (environment.environmentId === pick.environmentId) return environment;
   }
@@ -107,7 +105,9 @@ function environmentOfPick(
  * (`useConfigurationSandboxDefaults`): the environment from the account's
  * list, its items on the viewer's session.
  */
-export function useConfigurationStoragePolicy(pick: EnvironmentPick): {
+export function useConfigurationStoragePolicy(
+  pick: Exclude<EnvironmentPick, { readonly kind: "local" }>,
+): {
   readonly environment: SandboxDefaultsEnvironment | null;
   readonly read: UseQueryResult<ConfigurationStoragePolicy, HostRpcError>;
 } {

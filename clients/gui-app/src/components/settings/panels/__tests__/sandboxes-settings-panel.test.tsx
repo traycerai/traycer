@@ -1331,6 +1331,26 @@ describe("<SandboxesSettingsPanel />", () => {
     );
   });
 
+  it("tells a stopped row its paused session was lost and that its files are unchanged, since the list says nothing else of them", () => {
+    renderPanel([
+      row("stopped-lost", {
+        state: "stopped",
+        operation: sandboxOperationFixture({
+          fromState: "suspended",
+          state: "stopped",
+          outcomeDetail: "suspended-session-lost",
+        }),
+      }),
+    ]);
+
+    expect(
+      within(rowOf("stopped-lost")).getByTestId("sandboxes-row-session-notice")
+        .textContent,
+    ).toBe(
+      "Your paused session was lost when your sandbox stopped. Your files are unchanged.",
+    );
+  });
+
   it("narrows the list by the search and by the state filter, with a count badge", () => {
     renderPanel([
       row("alpha", { state: "awake" }),
@@ -1903,20 +1923,32 @@ describe("<SandboxesSettingsPanel />", () => {
   describe("a row's session notice follows its own state, not the public grouping", () => {
     const NOTICE = "sandboxes-row-session-notice";
 
-    it("says Restarting for a resuming row the public grouping files under awake", () => {
-      renderPanel([
-        row("sbx-retry", {
-          state: "resuming",
-          operation: sandboxOperationFixture({
-            state: "resuming",
-            outcomeDetail: "wake-retry",
+    it.each([
+      { state: "starting", word: "Starting" },
+      { state: "resuming", word: "Resuming" },
+    ] as const)(
+      "says Restarting beside its own $word badge for a $state row grouped under awake",
+      ({ state, word }) => {
+        renderPanel([
+          row("sbx-retry", {
+            state,
+            operation: sandboxOperationFixture({
+              fromState: state === "starting" ? "stopped" : "suspended",
+              state,
+              outcomeDetail: "wake-retry",
+            }),
           }),
-        }),
-      ]);
+        ]);
 
-      const line = within(rowOf("sbx-retry")).getByTestId(NOTICE);
-      expect(line.textContent).toBe("Restarting your sandbox");
-    });
+        expect(
+          within(rowOf("sbx-retry")).getByTestId("sandboxes-row-state")
+            .textContent,
+        ).toBe(word);
+        expect(within(rowOf("sbx-retry")).getByTestId(NOTICE).textContent).toBe(
+          "Restarting your sandbox",
+        );
+      },
+    );
 
     it("says the session expired for a resuming row that a conversion is stopping", () => {
       renderPanel([

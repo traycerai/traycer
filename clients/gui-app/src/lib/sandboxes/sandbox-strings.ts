@@ -27,6 +27,9 @@ export const CONSEQUENCES_WORDING_VERSION = 3;
 export const WINDOWS_SANDBOX_LIMITATION =
   "Windows sandboxes have no desktop or Computer Use.";
 
+export const SANDBOX_SETUP_CHARGES =
+  "Running the sandbox is charged separately from build work. Build work is charged once, even if the build fails. Keeping the result is charged as storage for as long as you keep it.";
+
 /** A configuration as copy reads it: Personal, or a team by its name. */
 export type SandboxConfigurationCopy =
   | { readonly kind: "personal" }

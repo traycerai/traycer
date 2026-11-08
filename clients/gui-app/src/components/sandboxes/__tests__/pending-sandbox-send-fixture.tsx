@@ -779,9 +779,15 @@ vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   useAuthUser: () => ({ data: null }),
 }));
 
-vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
-  useSandboxCatalogue: () => ({ data: null }),
-}));
+vi.mock(
+  "@/hooks/sandboxes/use-sandbox-catalogue-query",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/sandboxes/use-sandbox-catalogue-query")
+    >()),
+    useSandboxCatalogue: () => ({ data: null }),
+  }),
+);
 
 // The real list query backs the staged run's own reads; the hook the ready
 // line reads is the account's rows.

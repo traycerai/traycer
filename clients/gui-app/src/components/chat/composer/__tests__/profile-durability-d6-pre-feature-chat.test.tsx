@@ -33,7 +33,6 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
 vi.mock("@/hooks/providers/use-providers-read-model-routes-query", () => ({
   useProvidersReadModelRoutesQuery: () => ({
     data: undefined,
-    dataUpdatedAt: 0,
     refetch: () => Promise.resolve(undefined),
   }),
 }));

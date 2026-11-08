@@ -2,6 +2,7 @@ export type FormattableHarnessModelSummary = {
   readonly id: string;
   readonly reasoningEfforts: readonly string[];
   readonly fastModeAvailable: boolean;
+  readonly serviceTiers: readonly string[];
 };
 
 export type FormattableListHarnessModelsResponse = {
@@ -12,8 +13,8 @@ export type FormattableListHarnessModelsResponse = {
 export function formatListHarnessModelsResponse(
   response: FormattableListHarnessModelsResponse,
 ): string {
-  const legend = `Each line is: model-name [reasoningEffort: values] [fastMode]
-reasoningEffort and fastMode are optional create params. They are valid only when shown for the selected model.`;
+  const legend = `Each line is: model-name [reasoningEffort: values] [serviceTier: ids] [fastMode]
+reasoningEffort, serviceTier and fastMode are optional create params. They are valid only when shown for the selected model. An explicit serviceTier takes precedence over fastMode.`;
   if (response.models.length === 0) {
     return `${legend}
 
@@ -32,5 +33,9 @@ function formatHarnessModelSummary(
       ? ""
       : ` [reasoningEffort: ${model.reasoningEfforts.join("|")}]`;
   const fastMode = model.fastModeAvailable ? " [fastMode]" : "";
-  return `${model.id}${reasoning}${fastMode}`;
+  const tiers =
+    model.serviceTiers.length === 0
+      ? ""
+      : ` [serviceTier: ${model.serviceTiers.join("|")}]`;
+  return `${model.id}${reasoning}${tiers}${fastMode}`;
 }

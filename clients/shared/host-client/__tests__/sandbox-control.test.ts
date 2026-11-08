@@ -867,9 +867,53 @@ describe("the other sandbox routes parse or fail the same way", () => {
     }
   });
 
+  it.each([
+    {
+      environmentId: null,
+      diskMb: null,
+      expectedEnvironment: "",
+      expectedDisk: "",
+    },
+    {
+      environmentId: "env-team",
+      diskMb: 40960,
+      expectedEnvironment: "env-team",
+      expectedDisk: "40960",
+    },
+  ])(
+    "catalogue: sends the exact contextual GET dimensions",
+    async ({ environmentId, diskMb, expectedEnvironment, expectedDisk }) => {
+      let sent: URL | null = null;
+      stubFetch(async (url) => {
+        sent = new URL(url);
+        return jsonResponse(200, { providers: [] });
+      });
+      await fetchSandboxCatalogueViaHttp(BASE, BEARER, null, {
+        environmentId,
+        os: "linux",
+        cpus: 2,
+        memoryMb: 4096,
+        diskMb,
+        region: "us-east",
+      });
+      expect(
+        sent === null ? null : Object.fromEntries(new URL(sent).searchParams),
+      ).toEqual({
+        environmentId: expectedEnvironment,
+        os: "linux",
+        cpus: "2",
+        memoryMb: "4096",
+        diskMb: expectedDisk,
+        region: "us-east",
+      });
+    },
+  );
+
   it("catalogue: a body that is not the contract is a network error", async () => {
     stubFetch(async () => jsonResponse(200, { providers: "none" }));
-    expect(await fetchSandboxCatalogueViaHttp(BASE, BEARER, null)).toEqual({
+    expect(
+      await fetchSandboxCatalogueViaHttp(BASE, BEARER, null, null),
+    ).toEqual({
       kind: "network-error",
       detail: "the sandbox catalogue did not match the contract",
     });

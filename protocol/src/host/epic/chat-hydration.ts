@@ -11,8 +11,8 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
  * reading from the pool, and sends the message once the host holds the chat
  * again.
  *
- * - `hydrated` - the records are back; the host has cleared its eviction fact,
- *   so the serving witness turns `live` and the tile moves to the host.
+ * - `hydrated` - the records are back; the client continues the chat on its
+ *   host from this answer (the server's eviction fact clears separately).
  * - `not-evicted` - the host held the records already (never evicted, or a
  *   concurrent call brought them back first). The same next step.
  *

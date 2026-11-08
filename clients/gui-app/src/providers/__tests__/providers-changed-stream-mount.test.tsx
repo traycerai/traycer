@@ -248,7 +248,7 @@ describe("<ProvidersChangedStreamMount />", () => {
     let resolveFreshClaudeFetch: (commands: readonly string[]) => void = () =>
       undefined;
     let staleClaudeFetch: Promise<readonly string[]> | undefined;
-    const claudeQueryFn = vi.fn((): Promise<readonly string[]> => {
+    const claudeQueryFn = (): Promise<readonly string[]> => {
       const fetch = new Promise<readonly string[]>((resolve) => {
         claudeFetches += 1;
         if (claudeFetches === 1) {
@@ -259,7 +259,7 @@ describe("<ProvidersChangedStreamMount />", () => {
       });
       if (claudeFetches === 1) staleClaudeFetch = fetch;
       return fetch;
-    });
+    };
     // No cached data to join: the real race this guards, per the production
     // comment ("Invalidation alone joins a first fetch with no cached data").
     const claudeObserver = new QueryObserver(queryClient, {
@@ -271,12 +271,10 @@ describe("<ProvidersChangedStreamMount />", () => {
     // A second harness's held first fetch, left running throughout, proving
     // the claude-code event does not touch it.
     let opencodeFetches = 0;
-    const opencodeQueryFn = vi.fn(
-      (): Promise<readonly string[]> =>
-        new Promise(() => {
-          opencodeFetches += 1;
-        }),
-    );
+    const opencodeQueryFn = (): Promise<readonly string[]> =>
+      new Promise(() => {
+        opencodeFetches += 1;
+      });
     const opencodeObserver = new QueryObserver(queryClient, {
       queryKey: opencodeKey,
       queryFn: opencodeQueryFn,
