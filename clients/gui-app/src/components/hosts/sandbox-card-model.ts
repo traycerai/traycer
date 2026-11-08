@@ -28,7 +28,11 @@ import {
 
 /** An action the card offers. `destroy` always asks for confirmation. */
 export type SandboxCardAction =
-  "suspend" | "resume" | "stop" | "start" | "destroy";
+  | "suspend"
+  | "resume"
+  | "stop"
+  | "start"
+  | "destroy";
 
 const NO_ACTIONS: readonly SandboxCardAction[] = [];
 const FROZEN_ACTIONS: readonly SandboxCardAction[] = ["destroy"];
