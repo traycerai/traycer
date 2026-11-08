@@ -3,6 +3,7 @@
  * provider, the closed sets the app renders, and the bounds a host enforces.
  */
 import { describe, expect, it } from "vitest";
+import { PROFILE_SYNC_LINK_RPC_METHODS } from "@traycer/protocol/host/profile-sync-link-contracts";
 import {
   PROFILE_SYNC_MAX_CREDENTIAL_BYTES,
   hostProfileSyncApplyRequestSchema,
@@ -32,15 +33,6 @@ const CREDENTIALS: Record<string, ProfileSyncCredential> = {
   "antigravity-oauth": { kind: "antigravity-oauth", document: { token: "t" } },
   "antigravity-key": { kind: "antigravity-api-key", apiKey: "key" },
 };
-
-const PAIRS: ReadonlyArray<readonly [ProfileSyncProvider, string]> = [
-  ["claude", "claude"],
-  ["codex", "codex"],
-  ["grok", "grok"],
-  ["grok", "grok-key"],
-  ["antigravity", "antigravity-oauth"],
-  ["antigravity", "antigravity-key"],
-];
 
 function credentialFor(name: string): ProfileSyncCredential {
   const credential = CREDENTIALS[name];
@@ -79,24 +71,9 @@ function offerRequest(
 }
 
 describe("a request's sign-in must belong to its provider", () => {
-  it.each(PAIRS)("accepts %s with %s", (providerId, name) => {
-    const credential = credentialFor(name);
-    expect(
-      hostProfileSyncApplyRequestSchema.safeParse(
-        applyRequest(providerId, credential),
-      ).success,
-    ).toBe(true);
-    expect(
-      hostProfileSyncOfferRequestSchema.safeParse(
-        offerRequest(providerId, credential),
-      ).success,
-    ).toBe(true);
-  });
-
   it("refuses a mismatched provider and sign-in", () => {
     const codex = credentialFor("codex");
     const claude = credentialFor("claude");
-    const grokKey = credentialFor("grok-key");
     expect(
       hostProfileSyncApplyRequestSchema.safeParse(applyRequest("claude", codex))
         .success,
@@ -113,16 +90,6 @@ describe("a request's sign-in must belong to its provider", () => {
     expect(
       hostProfileSyncOfferRequestSchema.safeParse(offerRequest("grok", claude))
         .success,
-    ).toBe(false);
-    expect(
-      hostProfileSyncApplyRequestSchema.safeParse(
-        applyRequest("codex", grokKey),
-      ).success,
-    ).toBe(false);
-    expect(
-      hostProfileSyncOfferRequestSchema.safeParse(
-        offerRequest("codex", grokKey),
-      ).success,
     ).toBe(false);
   });
 });
@@ -254,5 +221,92 @@ describe("hostProfileSyncFetchResponseSchema", () => {
         reason: "not-a-reason",
       }).success,
     ).toBe(false);
+  });
+});
+
+describe("released peer-transfer credential slots", () => {
+  function fetchCurrent(credential: unknown): Record<string, unknown> {
+    return {
+      result: "current",
+      accountId: "synthetic-account",
+      generation: 1,
+      credential,
+    };
+  }
+
+  /** The five variants frozen into the retired @1.0 slots, named as `CREDENTIALS`. */
+  const FROZEN: ReadonlyArray<readonly [ProfileSyncProvider, string]> = [
+    ["claude", "claude"],
+    ["codex", "codex"],
+    ["grok", "grok"],
+    ["antigravity", "antigravity-oauth"],
+    ["antigravity", "antigravity-key"],
+  ];
+  /** Canonical-only kinds: valid for their provider, never on a retired slot. */
+  const LIVE_ONLY: ReadonlyArray<
+    readonly [ProfileSyncProvider, Record<string, unknown>]
+  > = [
+    ["claude", { kind: "claude-api-key", apiKey: "synthetic-key" }],
+    ["grok", { kind: "grok-api-key", apiKey: "synthetic-key" }],
+  ];
+
+  it.each(FROZEN)(
+    "accepts %s with %s on every released slot",
+    (providerId, name) => {
+      const apply =
+        PROFILE_SYNC_LINK_RPC_METHODS["host.profileSync.apply"][1].versions[0]
+          .contract.requestSchema;
+      const offer =
+        PROFILE_SYNC_LINK_RPC_METHODS["host.profileSync.offerCredential"][1]
+          .versions[0].contract.requestSchema;
+      const fetch =
+        PROFILE_SYNC_LINK_RPC_METHODS["host.profileSync.fetchCredential"][1]
+          .versions[0].contract.responseSchema;
+      const credential = credentialFor(name);
+      expect(
+        apply.safeParse(applyRequest(providerId, credential)).success,
+      ).toBe(true);
+      expect(
+        offer.safeParse(offerRequest(providerId, credential)).success,
+      ).toBe(true);
+      expect(fetch.safeParse(fetchCurrent(credential)).success).toBe(true);
+    },
+  );
+
+  it.each(LIVE_ONLY)(
+    "keeps the %s sign-in %j off every released slot",
+    (providerId, credential) => {
+      const apply =
+        PROFILE_SYNC_LINK_RPC_METHODS["host.profileSync.apply"][1].versions[0]
+          .contract.requestSchema;
+      const offer =
+        PROFILE_SYNC_LINK_RPC_METHODS["host.profileSync.offerCredential"][1]
+          .versions[0].contract.requestSchema;
+      const fetch =
+        PROFILE_SYNC_LINK_RPC_METHODS["host.profileSync.fetchCredential"][1]
+          .versions[0].contract.responseSchema;
+      const canonical = profileSyncCredentialSchema.parse(credential);
+      expect(profileSyncCredentialFitsProvider(providerId, canonical)).toBe(
+        true,
+      );
+      expect(apply.safeParse(applyRequest(providerId, canonical)).success).toBe(
+        false,
+      );
+      expect(offer.safeParse(offerRequest(providerId, canonical)).success).toBe(
+        false,
+      );
+      expect(fetch.safeParse(fetchCurrent(canonical)).success).toBe(false);
+    },
+  );
+
+  it("lists every canonical kind outside the frozen five, so each gets a refusal proof", () => {
+    const frozen: string[] = FROZEN.map(([, name]) => credentialFor(name).kind);
+    const canonical: string[] = profileSyncCredentialSchema.def.options.map(
+      (option) => option.shape.kind.value,
+    );
+    expect(canonical).toEqual(expect.arrayContaining(frozen));
+    expect(canonical.filter((kind) => !frozen.includes(kind)).sort()).toEqual(
+      LIVE_ONLY.map(([, credential]) => String(credential.kind)).sort(),
+    );
   });
 });
