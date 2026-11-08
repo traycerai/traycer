@@ -802,6 +802,7 @@ import {
   hostGetRateLimitUsageDowngradeV6ToV4,
   hostGetRateLimitUsageDowngradeV6ToV5,
   providersConsumeRateLimitResetCreditV10,
+  providersReadModelRoutesV10,
   providersRefreshProfileStatusV10,
   providersRefreshProfileStatusV20,
   providersRefreshProfileStatusV30,
@@ -1263,6 +1264,7 @@ import {
   hostNotificationsCloudFeedSubscribeV15,
   hostNotificationsCloudFeedSubscribeV16,
   hostNotificationsCloudFeedSubscribeV17,
+  hostNotificationsCloudFeedSubscribeV18,
   hostNotificationsCloudFeedMarkRead,
   hostNotificationsCloudFeedMarkAllRead,
   hostNotificationsCloudFeedResolve,
@@ -7490,6 +7492,19 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       versions: {
         0: {
           contract: providersConsumeRateLimitResetCreditV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "providers.readModelRoutes": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersReadModelRoutesV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -15183,7 +15198,7 @@ const HOST_STREAM_RPC_REGISTRY_NOTIFICATIONS_DEFINITION = {
   },
   "host.notifications.cloudFeed.subscribe": {
     1: {
-      latestMinor: 7,
+      latestMinor: 8,
       versions: {
         0: {
           contract: hostNotificationsCloudFeedSubscribeV10,
@@ -15209,6 +15224,7 @@ const HOST_STREAM_RPC_REGISTRY_NOTIFICATIONS_DEFINITION = {
         },
         6: { contract: hostNotificationsCloudFeedSubscribeV16 },
         7: { contract: hostNotificationsCloudFeedSubscribeV17 },
+        8: { contract: hostNotificationsCloudFeedSubscribeV18 },
       },
     },
   },

@@ -435,3 +435,27 @@ test("a pause fades the mix out, then suspends the clock, and resume goes on fro
     .poll(async () => (await live<LiveFrame>(page, "read()")).audible)
     .toBe(1);
 });
+
+test("a recording starts at its offset and a cut never reports natural completion", async ({
+  page,
+}) => {
+  const result = await page.evaluate<{ readings: number[]; ended: string[] }>(
+    "window.__soundtrackOutputProbe.renderRecording()",
+  );
+  expect(result.readings[0]).toBeCloseTo(1, 2);
+  expect(result.readings[1]).toBeCloseTo(0.75, 2);
+  expect(result.readings[2]).toBeCloseTo(0, 2);
+  expect(result.ended).toEqual(["natural"]);
+});
+
+test("composed audio reaches the capture tap while volume and duck change the speakers", async ({
+  page,
+}) => {
+  const result = await page.evaluate<{ speaker: number[]; capture: number[] }>(
+    "window.__soundtrackOutputProbe.renderRecordingGraph()",
+  );
+  expect(result.speaker[0]).toBeCloseTo(1, 2);
+  expect(result.speaker[1]).toBeCloseTo(0.5, 2);
+  expect(result.speaker[2]).toBeCloseTo(0.5 * (await duckTuning(page)).gain, 2);
+  for (const sample of result.capture) expect(sample).toBeCloseTo(1, 2);
+});

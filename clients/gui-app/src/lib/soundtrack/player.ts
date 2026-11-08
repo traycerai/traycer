@@ -1009,11 +1009,25 @@ export class TrackPlayer {
   }
 }
 
+export interface PlaybackLifecycle {
+  start(from: number, fade: number): void;
+  fadeOut(seconds: number): void;
+  stop(fade: number): void;
+  rewind(fade: number): void;
+  hold(): void;
+  release(): void;
+  elapsed(): number;
+  describe(): PlayerSnapshot;
+}
+
 /**
  * A view switch: `from` fades out and stops, `to` fades in from where it left
  * off. Reversing it midway takes each player back from wherever its gain is.
  */
-export function crossfadePlayers(from: TrackPlayer, to: TrackPlayer): void {
+export function crossfadePlayers(
+  from: PlaybackLifecycle,
+  to: PlaybackLifecycle,
+): void {
   if (from !== to) from.fadeOut(CROSSFADE_SECONDS);
   to.start(to.elapsed(), CROSSFADE_SECONDS);
 }

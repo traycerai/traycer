@@ -295,6 +295,7 @@ export interface ChatLowerComposerState {
   readonly nodeId: string;
   readonly isActive: boolean;
   readonly mentionRoots: ReadonlyArray<string>;
+  readonly runWorkingDirectory: string | null;
   readonly fallbackToGlobalMentionRoots: boolean;
   readonly currentEpicId: string;
   readonly onSubmitMessage: (
@@ -1027,6 +1028,7 @@ function LiveChatComposer(props: {
       sendDisabled={sendGate.disabled}
       sendDisabledHint={sendGate.hint}
       mentionRoots={model.composer.mentionRoots}
+      runWorkingDirectory={model.composer.runWorkingDirectory}
       fallbackToGlobalMentionRoots={model.composer.fallbackToGlobalMentionRoots}
       currentEpicId={model.composer.currentEpicId}
       viewTabId={model.viewTabId}

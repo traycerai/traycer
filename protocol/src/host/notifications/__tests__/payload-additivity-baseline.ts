@@ -1080,4 +1080,58 @@ export const PAYLOAD_FINGERPRINT_BASELINE = {
     },
     required: ["kind", "epicId", "chatId", "chatTitle", "taskTitle", "blockId"],
   },
+  readonly_access_retired: {
+    type: "anyOf",
+    variants: [
+      {
+        type: "object",
+        properties: {
+          kind: {
+            type: "string",
+            const: "readonly_access_retired",
+          },
+          scope: {
+            type: "string",
+            const: "task",
+          },
+          taskId: {
+            type: "string",
+            minLength: 1,
+          },
+          taskTitle: {
+            type: "string",
+            maxLength: 200,
+          },
+        },
+        required: ["kind", "scope", "taskId", "taskTitle"],
+      },
+      {
+        type: "object",
+        properties: {
+          kind: {
+            type: "string",
+            const: "readonly_access_retired",
+          },
+          scope: {
+            type: "string",
+            const: "team",
+          },
+          environmentId: {
+            type: "string",
+            minLength: 1,
+          },
+          teamName: {
+            type: "string",
+            minLength: 1,
+            maxLength: 200,
+          },
+          invitation: {
+            type: "boolean",
+          },
+        },
+        required: ["kind", "scope", "environmentId", "teamName", "invitation"],
+      },
+    ],
+    discriminator: "scope",
+  },
 } satisfies Record<HostNotificationKnownPayloadKind, JsonSchemaFingerprint>;
