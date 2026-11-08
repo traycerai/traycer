@@ -48,7 +48,6 @@ const FETCH_TEXT_WATCHDOG_MS = 10_000;
 // peer that drips one byte just inside the gap watchdog cannot hold the
 // Desktop's progress-inactivity timer forever.
 const FETCH_TEXT_ATTEMPT_CAP_MS = 20_000;
-const MAX_NETWORK_ATTEMPTS = 4;
 const NETWORK_RETRY_BACKOFF_MS = 750;
 
 // Archive downloads get their own budget, separate from `fetchText`'s
@@ -100,7 +99,7 @@ export interface NetworkHeartbeat {
   readonly attempt: number;
   // The ceiling this attempt counter is actually judged against, or `null`
   // when the counter has no meaningful ceiling to show. `fetchText` reports
-  // a real budget (4 attempts and the payload is abandoned). An archive
+  // a per-document attempt budget. An archive
   // download does not: what terminates it is the consecutive-stall count,
   // while `MAX_DOWNLOAD_ATTEMPTS` is only a runaway guard set far above any
   // real transfer. Rendering "attempt 41/200" there describes a countdown
@@ -115,6 +114,98 @@ export async function fetchText(
   url: string,
   opts: FetchOptions,
 ): Promise<string> {
+  return fetchTextFromOrigins([url], opts, async (body) => body, null);
+}
+
+// One document owns one budget, including origin switches and integrity checks.
+export async function fetchTextFromOrigins<T>(
+  urls: readonly string[],
+  opts: FetchOptions,
+  accept: (body: string, url: string, signal: AbortSignal) => Promise<T>,
+  fetchDocument: ((url: string, opts: FetchOptions) => Promise<string>) | null,
+): Promise<T> {
+  const controller = new AbortController();
+  const signal = linkAbortSignals(controller, opts.signal);
+  let cap: NodeJS.Timeout | null = null;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    cap = setTimeout(() => {
+      controller.abort();
+      reject(
+        networkError(urls.join(", "), "document exceeded 180-second budget"),
+      );
+    }, 180_000);
+  });
+  let lastError: unknown = null;
+  let attempt = 0;
+  let integrityError: unknown = null;
+  const retryable = new Set(urls);
+  const readOrigins = async (): Promise<T> => {
+    for (let cycle = 0; cycle < 2; cycle += 1) {
+      if (cycle > 0 && retryable.size > 0) {
+        emitHeartbeat(opts.onHeartbeat, "backoff", attempt, urls.length * 4);
+        await waitForRetry(NETWORK_RETRY_BACKOFF_MS);
+      }
+      for (const url of urls) {
+        if (cycle > 0 && !retryable.has(url)) continue;
+        for (let local = 0; local < 2; local += 1) {
+          if (signal.aborted) throw networkError(url, lastError);
+          attempt += 1;
+          emitHeartbeat(opts.onHeartbeat, "attempt", attempt, urls.length * 4);
+          let body: string;
+          try {
+            body =
+              fetchDocument === null
+                ? await fetchTextAttempt(
+                    url,
+                    { ...opts, signal },
+                    attempt,
+                    urls.length * 4,
+                  )
+                : await fetchDocument(url, { ...opts, signal });
+          } catch (err) {
+            const shutdownCode = httpClientShutdownCode(err);
+            if (shutdownCode !== null)
+              throw httpClientShutdownError(url, shutdownCode);
+            lastError = err;
+            if (signal.aborted) throw networkError(url, err);
+            if (
+              isCliError(err) ||
+              (err instanceof HttpStatusError && !err.retryable)
+            ) {
+              retryable.delete(url);
+              break;
+            }
+            continue;
+          }
+          try {
+            return await accept(body, url, signal);
+          } catch (err) {
+            integrityError = err;
+            lastError = err;
+            retryable.delete(url);
+            break;
+          }
+        }
+      }
+    }
+    if (integrityError !== null) throw integrityError;
+    if (isCliError(lastError)) throw lastError;
+    throw exhaustedNetworkError(urls.join(", "), lastError, attempt);
+  };
+  try {
+    return await Promise.race([readOrigins(), timeout]);
+  } finally {
+    if (cap !== null) clearTimeout(cap);
+    controller.abort();
+  }
+}
+
+async function fetchTextAttempt(
+  url: string,
+  opts: FetchOptions,
+  attempt: number,
+  maxAttempts: number,
+): Promise<string> {
   if (isFileUrl(url)) {
     const path = fileUrlToPath(url);
     let raw: Buffer;
@@ -128,91 +219,58 @@ export async function fetchText(
     }
     return raw.toString("utf8");
   }
-  let lastError: unknown = null;
-  for (let attempt = 1; attempt <= MAX_NETWORK_ATTEMPTS; attempt += 1) {
-    emitHeartbeat(opts.onHeartbeat, "attempt", attempt, MAX_NETWORK_ATTEMPTS);
-    const controller = new AbortController();
-    const linkedSignal = linkAbortSignals(controller, opts.signal);
-    const watchdog = createWatchdog({
-      controller,
-      timeoutMs: FETCH_TEXT_WATCHDOG_MS,
-      onTimeout: () =>
-        emitHeartbeat(
-          opts.onHeartbeat,
-          "watchdog",
-          attempt,
-          MAX_NETWORK_ATTEMPTS,
-        ),
-    });
-    const attemptCap = setTimeout(() => {
-      emitHeartbeat(
-        opts.onHeartbeat,
-        "watchdog",
-        attempt,
-        MAX_NETWORK_ATTEMPTS,
-      );
-      controller.abort();
-    }, FETCH_TEXT_ATTEMPT_CAP_MS);
-    try {
-      const response = await registryFetch(url, { signal: linkedSignal });
-      if (!response.ok) {
-        throw await httpStatusFailure(url, response);
-      }
-      if (response.body === null) {
-        const body = await response.text();
-        const byteLength = Buffer.byteLength(body);
-        if (byteLength > FETCH_TEXT_MAX_BYTES) {
-          throw oversizeError(url, byteLength, FETCH_TEXT_MAX_BYTES);
-        }
-        return body;
-      }
-      const chunks: Uint8Array[] = [];
-      let received = 0;
-      const reader = response.body.getReader();
-      while (true) {
-        const next = await reader.read();
-        if (next.done) break;
-        const chunk = next.value;
-        if (chunk === undefined) continue;
-        watchdog.reset();
-        received += chunk.byteLength;
-        if (received > FETCH_TEXT_MAX_BYTES) {
-          controller.abort();
-          throw oversizeError(url, received, FETCH_TEXT_MAX_BYTES);
-        }
-        chunks.push(chunk);
-      }
-      return Buffer.concat(chunks).toString("utf8");
-    } catch (err) {
-      controller.abort();
-      if (isCliError(err)) throw err;
-      // Our own HTTP client is gone, not the registry's. No later attempt can
-      // succeed and none of them reaches the network, so stop here and say so.
-      const shutdownCode = httpClientShutdownCode(err);
-      if (shutdownCode !== null) {
-        throw httpClientShutdownError(url, shutdownCode);
-      }
-      // A caller-supplied abort signal is a deliberate cancellation (e.g. the
-      // yank lookup's fail-open watchdog), not a transient network failure:
-      // stop immediately instead of burning the remaining retry budget.
-      if (opts.signal !== null && opts.signal.aborted) {
-        throw networkError(url, err);
-      }
-      lastError = err;
-    } finally {
-      watchdog.clear();
-      clearTimeout(attemptCap);
+  const controller = new AbortController();
+  const linkedSignal = linkAbortSignals(controller, opts.signal);
+  const watchdog = createWatchdog({
+    controller,
+    timeoutMs: FETCH_TEXT_WATCHDOG_MS,
+    onTimeout: () =>
+      emitHeartbeat(opts.onHeartbeat, "watchdog", attempt, maxAttempts),
+  });
+  const attemptCap = setTimeout(() => {
+    emitHeartbeat(opts.onHeartbeat, "watchdog", attempt, maxAttempts);
+    controller.abort();
+  }, FETCH_TEXT_ATTEMPT_CAP_MS);
+  try {
+    const response = await registryFetch(url, { signal: linkedSignal });
+    if (!response.ok) {
+      throw await httpStatusFailure(url, response);
     }
-    if (attempt < MAX_NETWORK_ATTEMPTS) {
-      emitHeartbeat(opts.onHeartbeat, "backoff", attempt, MAX_NETWORK_ATTEMPTS);
-      await waitForRetry(NETWORK_RETRY_BACKOFF_MS);
+    if (response.body === null) {
+      const body = await response.text();
+      const byteLength = Buffer.byteLength(body);
+      if (byteLength > FETCH_TEXT_MAX_BYTES) {
+        throw oversizeError(url, byteLength, FETCH_TEXT_MAX_BYTES);
+      }
+      return body;
     }
+    const chunks: Uint8Array[] = [];
+    let received = 0;
+    const reader = response.body.getReader();
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      const chunk = next.value;
+      if (chunk === undefined) continue;
+      watchdog.reset();
+      received += chunk.byteLength;
+      if (received > FETCH_TEXT_MAX_BYTES) {
+        controller.abort();
+        throw oversizeError(url, received, FETCH_TEXT_MAX_BYTES);
+      }
+      chunks.push(chunk);
+    }
+    return Buffer.concat(chunks).toString("utf8");
+  } finally {
+    controller.abort();
+    watchdog.clear();
+    clearTimeout(attemptCap);
   }
-  throw exhaustedNetworkError(url, lastError, MAX_NETWORK_ATTEMPTS);
 }
 
 export interface DownloadToFileOptions extends FetchOptions {
   readonly url: string;
+  readonly mirrorUrls?: readonly string[];
   readonly destPath: string;
   readonly expectedSizeBytes: number;
   readonly expectedSha256: string;
@@ -233,17 +291,7 @@ export async function downloadToFile(
   if (isFileUrl(opts.url)) {
     return downloadFileScheme(opts);
   }
-  let retriedIntegrity = false;
-  while (true) {
-    await downloadWithRetries(opts);
-    const verification = await verifyDownloadedFile(opts);
-    if (verification.kind === "verified") {
-      return verification.result;
-    }
-    await discardPartial(opts.destPath);
-    if (retriedIntegrity) throw verification.error;
-    retriedIntegrity = true;
-  }
+  return downloadWithRetries(opts);
 }
 
 interface DownloadState {
@@ -259,7 +307,9 @@ type DownloadVerification =
   | { readonly kind: "verified"; readonly result: DownloadToFileResult }
   | { readonly kind: "mismatch"; readonly error: Error };
 
-async function downloadWithRetries(opts: DownloadToFileOptions): Promise<void> {
+async function downloadWithRetries(
+  opts: DownloadToFileOptions,
+): Promise<DownloadToFileResult> {
   const state: DownloadState = {
     entityValidator: null,
     sawFirstSuccessfulResponse: false,
@@ -267,6 +317,11 @@ async function downloadWithRetries(opts: DownloadToFileOptions): Promise<void> {
   let lastError: unknown = null;
   let stalledAttempts = 0;
   let attempt = 1;
+  const urls = [opts.url, ...(opts.mirrorUrls ?? [])];
+  let origin = 0;
+  let originStalls = 0;
+  let retriedIntegrity = false;
+  const hardFailed = new Set<number>();
   // The most bytes on disk since the last restart. Progress is judged
   // against this high-water mark rather than against the attempt's own
   // starting offset, so re-reading ground the download has already covered
@@ -307,36 +362,52 @@ async function downloadWithRetries(opts: DownloadToFileOptions): Promise<void> {
       totalBytes: opts.expectedSizeBytes,
     });
     let restarted = false;
+    let switchOrigin = false;
+    const attemptOpts = { ...opts, url: urls[origin] ?? opts.url };
     try {
-      const result = await downloadAttempt({ opts, state, offset, attempt });
-      if (result.kind === "complete") return;
-      restarted = true;
-      lastError = new Error(result.reason);
+      const result = await downloadAttempt({
+        opts: attemptOpts,
+        state,
+        offset,
+        attempt,
+      });
+      if (result.kind === "complete") {
+        const verification = await verifyDownloadedFile(attemptOpts);
+        if (verification.kind === "verified") return verification.result;
+        await discardPartial(opts.destPath);
+        state.entityValidator = null;
+        state.sawFirstSuccessfulResponse = false;
+        bytesHighWaterMark = 0;
+        if (urls.length === 1) {
+          if (retriedIntegrity) throw verification.error;
+          retriedIntegrity = true;
+        } else {
+          hardFailed.add(origin);
+          if (hardFailed.size >= urls.length) throw verification.error;
+          switchOrigin = true;
+        }
+        lastError = verification.error;
+      } else {
+        restarted = true;
+        lastError = new Error(result.reason);
+      }
     } catch (err) {
-      // Same shutdown class as in `fetchText`, and it stays FIRST - but for a
-      // different reason than the one it arrived with. On `main` it had to
-      // precede the CliError branch because that branch discarded the partial;
-      // here nothing below discards, so what keeps it first is the error
-      // CONVERSION it performs, which the branch below would swallow.
       const shutdownCode = httpClientShutdownCode(err);
       if (shutdownCode !== null) {
         throw httpClientShutdownError(opts.url, shutdownCode);
       }
-      // Terminal, but the partial is NOT this loop's to judge. `isCliError` is
-      // a bare name check, so it cannot tell "these bytes are poisoned" from
-      // "the request could not be made at all" - and both shapes reach here.
-      // The size-cap abort discards its own bytes at the throw site; a staging
-      // `RELEASE_AUTHENTICATION_REQUIRED` wrote nothing, so deleting a
-      // resumable partial for it would restart a multi-hundred-megabyte
-      // download from zero after the user simply re-authenticates. The layer
-      // above already draws that line correctly (`isTrustFailure` in
-      // registry/client.ts keeps the file for everything but a sha256
-      // mismatch); deleting here silently contradicted it.
-      //
-      // `main` added the shutdown branch above as a narrow exemption from that
-      // same discard. Both sides were removing a wrong discard; this keeps the
-      // general answer and the conversion.
-      if (isCliError(err)) throw err;
+      // Preserve partial bytes on transport and authentication failures.
+      if (opts.signal?.aborted === true)
+        throw networkError(attemptOpts.url, err);
+      if (
+        isCliError(err) ||
+        (err instanceof HttpStatusError && !err.retryable)
+      ) {
+        hardFailed.add(origin);
+        if (hardFailed.size >= urls.length)
+          throw isCliError(err) ? err : networkError(attemptOpts.url, err);
+        switchOrigin = true;
+      }
       lastError = err;
     }
     if (restarted) {
@@ -351,8 +422,23 @@ async function downloadWithRetries(opts: DownloadToFileOptions): Promise<void> {
     if (landedBytes > bytesHighWaterMark) {
       bytesHighWaterMark = landedBytes;
       stalledAttempts = 0;
+      originStalls = 0;
     } else {
       stalledAttempts += 1;
+      originStalls += 1;
+    }
+    if ((switchOrigin || originStalls >= 2) && urls.length > 1) {
+      for (let next = 1; next <= urls.length; next += 1) {
+        const candidate = (origin + next) % urls.length;
+        if (!hardFailed.has(candidate)) {
+          origin = candidate;
+          break;
+        }
+      }
+      // Validators describe an origin's HTTP entity, not the signed bytes.
+      state.entityValidator = null;
+      state.sawFirstSuccessfulResponse = false;
+      originStalls = 0;
     }
     if (stalledAttempts >= MAX_DOWNLOAD_STALL_ATTEMPTS) break;
     emitHeartbeat(opts.onHeartbeat, "backoff", attempt, null);
@@ -557,6 +643,7 @@ async function downloadAttempt(
       throw err;
     }
   } finally {
+    controller.abort();
     watchdog.clear();
   }
 }
@@ -658,9 +745,15 @@ async function httpStatusFailure(
   response: Response,
 ): Promise<Error> {
   await cancelResponseBody(response);
-  return new Error(
-    `host registry: GET ${url} returned ${response.status} ${response.statusText}`,
-  );
+  return new HttpStatusError(url, response.status, response.statusText);
+}
+
+class HttpStatusError extends Error {
+  readonly retryable: boolean;
+  constructor(url: string, status: number, statusText: string) {
+    super(`host registry: GET ${url} returned ${status} ${statusText}`);
+    this.retryable = status === 408 || status === 429 || status >= 500;
+  }
 }
 
 function exhaustedNetworkError(
@@ -1003,14 +1096,7 @@ function linkAbortSignals(
   internal: AbortController,
   external: AbortSignal | null,
 ): AbortSignal {
-  if (external !== null) {
-    if (external.aborted) {
-      internal.abort();
-    } else {
-      external.addEventListener("abort", () => internal.abort(), {
-        once: true,
-      });
-    }
-  }
-  return internal.signal;
+  return external === null
+    ? internal.signal
+    : AbortSignal.any([internal.signal, external]);
 }

@@ -32,9 +32,8 @@ export interface HostVersionsManifestParseResult {
 // drift between writer and reader is a hard failure here so a corrupt
 // or partially-published manifest never reaches the installer.
 //
-// schemaVersion: only `1` is recognised in v1. Higher versions are an
-// explicit upgrade signal handled by the caller (REGISTRY_UNAVAILABLE
-// with a clear message); we deliberately don't try to forward-compat.
+// Legacy documents use schema 1; verified envelope payloads use schema 2.
+// Both normalize to the existing manifest API after feed acceptance.
 
 const SUPPORTED_SCHEMA_VERSION = 1;
 
@@ -66,10 +65,10 @@ export function parseHostVersionsManifestWithWarnings(
   }
   const obj = raw as Record<string, unknown>;
   const schemaVersion = obj.schemaVersion;
-  if (schemaVersion !== SUPPORTED_SCHEMA_VERSION) {
+  if (schemaVersion !== SUPPORTED_SCHEMA_VERSION && schemaVersion !== 2) {
     throw cliError({
       code: CLI_ERROR_CODES.REGISTRY_UNAVAILABLE,
-      message: `host registry manifest at ${sourceLabel}: unsupported schemaVersion=${String(schemaVersion)} (expected ${SUPPORTED_SCHEMA_VERSION}); upgrade the Traycer CLI`,
+      message: `host registry manifest at ${sourceLabel}: unsupported schemaVersion=${String(schemaVersion)} (expected 1 or 2); upgrade the Traycer CLI`,
       details: { sourceLabel, schemaVersion },
       exitCode: 1,
     });
@@ -303,7 +302,7 @@ function parseNullableEpoch(raw: unknown, sourceLabel: string): number | null {
   return raw;
 }
 
-function parsePlatformAsset(
+export function parsePlatformAsset(
   raw: unknown,
   sourceLabel: string,
 ): HostPlatformAsset {
@@ -364,6 +363,7 @@ function parsePlatformAsset(
       );
     }
     return {
+      ...parseAssetOrigins(obj, sourceLabel),
       available: true,
       unavailableReason,
       url: obj.url,
@@ -409,4 +409,38 @@ function manifestInvalid(sourceLabel: string, detail: string): Error {
     details: { sourceLabel, detail },
     exitCode: 1,
   });
+}
+
+function parseAssetOrigins(
+  obj: Record<string, unknown>,
+  label: string,
+): Pick<HostPlatformAsset, "mirrors" | "descriptorUrl"> {
+  const origins: {
+    mirrors?: { url: string; signatureUrl: string }[];
+    descriptorUrl?: string;
+  } = {};
+  if (obj.descriptorUrl !== undefined) {
+    if (typeof obj.descriptorUrl !== "string" || obj.descriptorUrl.length === 0)
+      throw manifestInvalid(label, "invalid descriptorUrl");
+    origins.descriptorUrl = obj.descriptorUrl;
+  }
+  if (obj.mirrors !== undefined) {
+    if (!Array.isArray(obj.mirrors))
+      throw manifestInvalid(label, "mirrors must be an array");
+    origins.mirrors = obj.mirrors.map((mirror: unknown) => {
+      if (
+        mirror === null ||
+        typeof mirror !== "object" ||
+        !("url" in mirror) ||
+        typeof mirror.url !== "string" ||
+        mirror.url.length === 0 ||
+        !("signatureUrl" in mirror) ||
+        typeof mirror.signatureUrl !== "string" ||
+        mirror.signatureUrl.length === 0
+      )
+        throw manifestInvalid(label, "invalid mirror");
+      return { url: mirror.url, signatureUrl: mirror.signatureUrl };
+    });
+  }
+  return origins;
 }
