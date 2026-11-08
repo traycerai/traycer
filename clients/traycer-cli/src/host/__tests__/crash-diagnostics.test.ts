@@ -415,6 +415,29 @@ describe("StderrCaptureBuffer", () => {
       expect(buf.uncaughtErrorCode()).toBe("none");
     });
 
+    // Node underlines a whole token with a run of carets.
+    it("reads the header after a multi-caret source marker", () => {
+      const syntax =
+        "/tmp/t.js:1\nconst foo bar = 1;\n      ^^^\n\nSyntaxError: Missing initializer in const declaration\n    at wrapSafe (node:internal/modules/cjs/loader:1:1)\n\nNode.js v24.20.0\n";
+      const buf = capture(syntax);
+      expect(buf.classifyFatal(true)).toBe("node-uncaught");
+      expect(buf.uncaughtErrorClass()).toBe("SyntaxError");
+    });
+
+    // An ordinary nested object in the properties holds a `code` of its own,
+    // at a deeper indent; only the outer error's own properties count.
+    it("reads the outer error's own code, not a nested object's", () => {
+      const nested = (outer: string): string =>
+        uncaught(
+          "Error: outer",
+          ` {\n  details: {\n    message: '${"x".repeat(100)}',\n    code: 'ENOENT'\n  },\n${outer}}`,
+        );
+      expect(
+        capture(nested("  code: 'ERR_WRAPPED'\n")).uncaughtErrorCode(),
+      ).toBe("ERR_WRAPPED");
+      expect(capture(nested("")).uncaughtErrorCode()).toBe("none");
+    });
+
     it.each([
       ["a code outside every shape", "my code!"],
       ["an errno name outside the allowlist", "EVIL"],

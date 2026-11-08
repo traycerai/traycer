@@ -223,11 +223,18 @@ const ERRNO_CODES: ReadonlySet<string> = new Set([
   "ECANCELED",
 ]);
 
-/** The `code: 'X'` line Node's error inspector prints under a stack. */
-const INSPECTED_CODE_LINE = /^[ \t]+code: '([^'\n]{1,64})',?[ \t\r]*$/m;
+/**
+ * The `code: 'X'` line Node's error inspector prints under a stack, at the
+ * outer error's own property indent (two spaces). A deeper indent is a nested
+ * object's property, not the error's.
+ */
+const INSPECTED_CODE_LINE = /^ {2}code: '([^'\n]{1,64})',?[ \t\r]*$/m;
 
-/** Node's source-position caret line, which precedes an uncaught error. */
-const UNCAUGHT_CARET_LINE = /^[ \t]*\^[ \t\r]*$/m;
+/**
+ * Node's source-position marker line, which precedes an uncaught error: one
+ * caret, or a run of them when Node underlines a whole token.
+ */
+const UNCAUGHT_CARET_LINE = /^[ \t]*\^+[ \t\r]*$/m;
 
 /**
  * The head of Node's error header line: the name, then Node's optional
