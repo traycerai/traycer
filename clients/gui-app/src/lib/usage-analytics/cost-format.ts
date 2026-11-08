@@ -111,7 +111,8 @@ export function usageCostTooltip(
  *   here, so it leads with what the number is rather than with a host name.
  * - `hostScopeName` - the reader picked one host out of the account on the
  *   cloud plane. `null` = no host filter (the "All hosts" default), which is
- *   the one case that needs no note at all.
+ *   the one case that needs no note at all. The picked name is the filter
+ *   control's value, so this note states the narrowing without repeating it.
  */
 export function servedByScopeNote(
   servedBy: UsageServedBy,
@@ -121,5 +122,5 @@ export function servedByScopeNote(
     return "This computer's usage only — not synced across your other devices.";
   }
   if (hostScopeName === null) return null;
-  return `${hostScopeName} only — your other hosts aren't included.`;
+  return "Selected host only — your other hosts aren't included.";
 }

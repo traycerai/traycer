@@ -295,6 +295,8 @@ export interface SandboxSummary {
    * nothing enforces.
    */
   readonly withdrawalEndsAt: number | null;
+  /** When the suspended session is lost; absent on older servers. */
+  readonly suspendedSessionEndsAt?: number | null;
 }
 
 /**
@@ -514,6 +516,7 @@ export const sandboxSummarySchema: z.ZodType<SandboxSummary> = lazySchema(() =>
     operation: sandboxOperationSchema.nullable().default(null).catch(null),
     regionLabel: z.string().nullable().default(null),
     withdrawalEndsAt: z.number().nullable().default(null),
+    suspendedSessionEndsAt: z.number().nullable().optional(),
   }),
 );
 

@@ -146,8 +146,9 @@ export function seeButNotChangeLine(teamName: string): string {
   return `You can see ${teamName}'s settings but not change them.`;
 }
 
-export function roleGrantPrefix(role: TeamRole, teamName: string): string {
-  const editor = `You can change ${teamName}'s settings; every change reaches every ${teamName} sandbox.`;
+export function roleGrantPrefix(role: TeamRole): string {
+  const editor =
+    "You can change the team's settings; every change reaches every team sandbox.";
   switch (role) {
     case "editor":
       return editor;
@@ -156,21 +157,21 @@ export function roleGrantPrefix(role: TeamRole, teamName: string): string {
   }
 }
 
-export function roleGrantCommon(teamName: string): string {
-  return `Full use and management of ${teamName}'s sandboxes and connected services. Uses your ${teamName} credits. Every member can interrupt or permanently delete any ${teamName} sandbox, including ones you created. Your name and email are visible to ${teamName}'s members. Your actions are attributed to you in status, history and notifications that the reader is authorized to see.`;
+export function roleGrantCommon(): string {
+  return "Full use and management of the team's sandboxes and connected services. Uses your team credits. Every member can interrupt or permanently delete any team sandbox, including ones you created. Your name and email are visible to the team's members. Your actions are attributed to you in status, history and notifications that the reader is authorized to see.";
 }
 
-export function invitePendingSeatsSentence(teamName: string): string {
-  return `Pending invitations count toward ${teamName}'s paid seats as soon as they are sent, before acceptance.`;
+export function invitePendingSeatsSentence(): string {
+  return "Pending invitations count toward the team's paid seats as soon as they are sent, before acceptance.";
 }
 
 /** The line under the invite's Role picker, for the role picked. */
-export function inviteRoleLine(role: TeamRole, teamName: string): string {
+export function inviteRoleLine(role: TeamRole): string {
   switch (role) {
     case "editor":
-      return `Can change ${teamName}'s settings; every change reaches every ${teamName} sandbox.`;
+      return "Can change the team's settings; every change reaches every team sandbox.";
     case "admin":
-      return `Can change ${teamName}'s settings, invite and remove people, and change roles.`;
+      return "Can change the team's settings, invite and remove people, and change roles.";
   }
 }
 
@@ -180,15 +181,15 @@ export function inviteRoleLine(role: TeamRole, teamName: string): string {
  * rows: past the last seat it grows at once, charged prorated now; with
  * seats to spare the unused ones end with the billing period.
  */
-function inviteSeatDeltaSentence(teamName: string, seats: SeatDelta): string {
+function inviteSeatDeltaSentence(seats: SeatDelta): string {
   const after = seats.used + 1;
   if (after > seats.total) {
-    return `${teamName} has no free seat, so sending this adds one: ${teamName} will use ${String(after)} of ${String(after)} seats. The added seat is charged now to ${teamName}'s card on file, prorated for the rest of the current billing period.`;
+    return `The team has no free seat, so sending this adds one: it will use ${String(after)} of ${String(after)} seats. The added seat is charged now to the team's card on file, prorated for the rest of the current billing period.`;
   }
   if (after === seats.total) {
-    return `${teamName} will use ${String(after)} of ${String(seats.total)} seats; nothing is charged now. The next invitation will add a seat.`;
+    return `The team will use ${String(after)} of ${String(seats.total)} seats; nothing is charged now. The next invitation will add a seat.`;
   }
-  return `${teamName} will use ${String(after)} of ${String(seats.total)} seats; nothing is charged now. At the end of this billing period, ${teamName} keeps only the seats in use and stops paying for the others.`;
+  return `The team will use ${String(after)} of ${String(seats.total)} seats; nothing is charged now. At the end of this billing period, the team keeps only the seats in use and stops paying for the others.`;
 }
 
 /**
@@ -196,25 +197,22 @@ function inviteSeatDeltaSentence(teamName: string, seats: SeatDelta): string {
  * send. `seats` null means a free or pending plan: nothing about seats is
  * shown.
  */
-export function inviteSeatCopy(
-  teamName: string,
-  seats: SeatDelta | null,
-): string | null {
+export function inviteSeatCopy(seats: SeatDelta | null): string | null {
   if (seats === null) return null;
-  return `${invitePendingSeatsSentence(teamName)} ${inviteSeatDeltaSentence(teamName, seats)}`;
+  return `${invitePendingSeatsSentence()} ${inviteSeatDeltaSentence(seats)}`;
 }
 
-export function inviteSeatsReadFailed(teamName: string): string {
-  return `Couldn't read ${teamName}'s seats.`;
+export function inviteSeatsReadFailed(): string {
+  return "Couldn't read the team's seats.";
 }
 
-export function acceptSeatAlreadyCounts(teamName: string): string {
-  return `Your seat already counts toward ${teamName}'s seats; accepting does not add another.`;
+export function acceptSeatAlreadyCounts(): string {
+  return "Your seat already counts toward the team's seats; accepting does not add another.";
 }
 
-export function acceptSeatCopy(teamName: string, paidPlan: boolean): string {
-  if (paidPlan) return acceptSeatAlreadyCounts(teamName);
-  return `An admin sets how much of ${teamName}'s credits you can spend.`;
+export function acceptSeatCopy(paidPlan: boolean): string {
+  if (paidPlan) return acceptSeatAlreadyCounts();
+  return "An admin sets how much of the team's credits you can spend.";
 }
 
 /**
@@ -529,8 +527,8 @@ export function revokeInviteLead(address: string, teamName: string): string {
   return `${address} will not join ${teamName}. The pending seat is released.`;
 }
 
-export function seatLimitRefusal(teamName: string): string {
-  return `${teamName} has no remaining seats. Manage seats and allowances on the dashboard.`;
+export function seatLimitRefusal(): string {
+  return "The team has no remaining seats. Manage seats and allowances on the dashboard.";
 }
 
 export function inviteForbiddenRefusal(): string {
@@ -543,8 +541,8 @@ export const INVITE_FAILED = "Couldn't send that invitation.";
 export const SET_ROLE_FAILED = "Couldn't change that role.";
 export const REMOVE_FAILED = "Couldn't remove that member.";
 
-export function inviteDialogLead(teamName: string): string {
-  return `Invite someone to ${teamName}.`;
+export function inviteDialogLead(): string {
+  return "They join the team when they accept.";
 }
 
 export function inviteEmailLabel(): string {

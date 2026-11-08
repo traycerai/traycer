@@ -143,11 +143,10 @@ describe("servedByScopeNote", () => {
     expect(servedByScopeNote("cloud", null)).toBeNull();
   });
 
-  it("names the picked host when a cloud-served response was filtered to one", () => {
+  it("states the narrowing without repeating the picked host's name", () => {
     const note = servedByScopeNote("cloud", "Studio Mac");
-    expect(note).not.toBeNull();
-    expect(note).toMatch(/Studio Mac/);
-    expect(note).toMatch(/other hosts/i);
+    expect(note).toBe("Selected host only — your other hosts aren't included.");
+    expect(note).not.toContain("Studio Mac");
   });
 
   it("states the this-machine-only scope for a local-served response", () => {

@@ -1665,7 +1665,7 @@ describe("BrowsersPanelActions", () => {
     const filterMenu = screen.getByTestId("epic-browsers-panel-filter-menu");
     expect(filterMenu.getAttribute("data-side")).toBe("right");
     await user.click(
-      screen.getByRole("menuitemcheckbox", { name: "Show offline devices" }),
+      screen.getByRole("menuitemcheckbox", { name: "Show offline hosts" }),
     );
 
     expect(
@@ -1707,7 +1707,7 @@ describe("BrowsersPanelActions", () => {
     await user.click(screen.getByRole("button", { name: "Filter browsers" }));
     await user.click(screen.getByRole("menuitem", { name: "Open links on" }));
     fireEvent.click(
-      screen.getByRole("menuitemradio", { name: /Follow task device/ }),
+      screen.getByRole("menuitemradio", { name: /Follow task host/ }),
     );
 
     expect(browserHostPinState.setSelection).toHaveBeenCalledWith(null);
@@ -1887,7 +1887,7 @@ describe("grouped catalog list", () => {
     expect(work().getAttribute("aria-expanded")).toBe("false");
   });
 
-  it("offers Include offline devices for a search that only an offline device matches, keeping the query", async () => {
+  it("offers Include offline hosts for a search that only an offline device matches, keeping the query", async () => {
     const user = userEvent.setup();
     render(catalogPanel());
     act(() =>
@@ -1898,7 +1898,7 @@ describe("grouped catalog list", () => {
 
     expect(screen.getByText("No matching browsers.")).toBeTruthy();
     await user.click(
-      screen.getByRole("button", { name: "Include offline devices" }),
+      screen.getByRole("button", { name: "Include offline hosts" }),
     );
 
     expect(

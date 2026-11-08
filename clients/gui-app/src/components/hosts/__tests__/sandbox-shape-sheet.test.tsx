@@ -23,6 +23,7 @@ import type {
   SandboxShapeRung,
 } from "@traycer/protocol/host/sandbox-control";
 import { SandboxShapeSheet } from "@/components/hosts/sandbox-shape-sheet";
+import { expectFocusRingInset } from "@/components/ui/__tests__/dialog-scroll-layout-assertions";
 import {
   teamSubscription,
   userSubscription,
@@ -34,6 +35,9 @@ import {
   CHANGE_LABEL,
   idleAndRestingLine,
 } from "@/lib/sandboxes/sandbox-strings";
+
+const WINDOWS_SANDBOX_LIMITATION =
+  "Windows sandboxes have no desktop or Computer Use.";
 
 const CATALOGUE: SandboxCatalogue = {
   providers: [
@@ -220,6 +224,16 @@ describe("<SandboxShapeSheet />", () => {
     ).toContain(
       `From Suspended: ${shortPriceLabel(4)} · Stopped: ${shortPriceLabel(2)}`,
     );
+  });
+
+  it("insets focusable controls inside the shape form scroll area", () => {
+    renderSheet(vi.fn());
+
+    const scroller = screen
+      .getByTestId("sandbox-shape-sheet")
+      .querySelector("div.overflow-y-auto");
+    if (scroller === null) throw new Error("expected the shape form scroller");
+    expectFocusRingInset(scroller, ["-m-1", "p-1"]);
   });
 
   it("says a cleared resting period keeps the sandbox, not the period it opened with", () => {
@@ -508,6 +522,37 @@ describe("<SandboxShapeSheet />", () => {
           .textContent,
       ).not.toContain("$");
     });
+
+    it("says Windows has no desktop or Computer Use as soon as Windows is picked, before anything is staged", () => {
+      withWindowsProvider();
+      const onUseShape = vi.fn();
+      renderSheet(onUseShape);
+      expect(screen.queryByText(WINDOWS_SANDBOX_LIMITATION)).toBeNull();
+
+      switchToWindows();
+
+      expect(screen.getByText(WINDOWS_SANDBOX_LIMITATION)).toBeDefined();
+      expect(onUseShape).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByRole("button", { name: USE_THIS_SHAPE }));
+
+      expect(onUseShape).toHaveBeenCalledTimes(1);
+      expect(onUseShape.mock.calls[0]?.[0]).toMatchObject({ os: "windows" });
+    });
+
+    it("drops the Windows limitation again when Linux is picked back", () => {
+      withWindowsProvider();
+      renderSheet(vi.fn());
+      switchToWindows();
+      expect(screen.getByText(WINDOWS_SANDBOX_LIMITATION)).toBeDefined();
+
+      fireEvent.click(
+        screen.getByRole("combobox", { name: "Operating system" }),
+      );
+      fireEvent.click(screen.getByRole("option", { name: "Linux" }));
+
+      expect(screen.queryByText(WINDOWS_SANDBOX_LIMITATION)).toBeNull();
+    });
   });
 
   describe("opening on Windows with a staged region", () => {
@@ -599,6 +644,12 @@ describe("<SandboxShapeSheet />", () => {
       );
       renderWindowsSheet(region);
     }
+
+    it("says Windows has no desktop or Computer Use when the sheet opens on Windows", () => {
+      openWithWindowsProvider("us");
+
+      expect(screen.getByText(WINDOWS_SANDBOX_LIMITATION)).toBeDefined();
+    });
 
     it("opens with a region selected and a price when the staged region is not offered", () => {
       openWithWindowsProvider("us-east");

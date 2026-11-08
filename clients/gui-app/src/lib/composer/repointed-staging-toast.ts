@@ -11,11 +11,11 @@ import { toast } from "sonner";
  * failover/recovery itself, and re-announcing every derivation move made a
  * startup failover round trip end on a persistent banner presenting the
  * user's own host as news. A toast, not the inline notice slot: the reset
- * is informational, not a submit blocker, and the composer's workspace
+ * is informational, not a submit blocker, and the composer's folder
  * picker plus submit re-validation stand behind it either way.
  */
 export function toastRepointedStagingReset(hostLabel: string): void {
   toast.info(
-    `Worktree and branch choices were reset for ${hostLabel} — check the workspace before sending.`,
+    `Worktree and branch choices were reset for ${hostLabel} — check the folder before sending.`,
   );
 }

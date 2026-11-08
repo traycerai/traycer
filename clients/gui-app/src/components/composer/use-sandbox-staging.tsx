@@ -320,14 +320,19 @@ export function useSandboxStaging(input: {
     const stagedHost = input.hosts.find(
       (host) => host.hostId === (stage.createdHostId ?? existingHostId),
     );
-    const payer = existingHost?.sandbox?.summary?.wakePayer;
+    const existingSummary = existingHost?.sandbox?.summary;
+    const payer = existingSummary?.wakePayer;
     return {
       configuration: stagedConfiguration,
+      os:
+        stage.target.kind === "new"
+          ? stage.target.shape.os
+          : existingSummary?.os,
       price,
       needsCredits: stagedFacts !== null && stagedFacts.needsCredits,
       billingStarted: stagedSandboxBillingStarted(
         stage,
-        stagedHost?.sandbox ?? null,
+        stagedHost === undefined ? null : stagedHost.sandbox,
       ),
       shortfallMc:
         balance === null || price === null

@@ -18,6 +18,9 @@ import {
   useTeamHostDisclosureSeenStore,
 } from "@/stores/hosts/team-host-disclosure-seen-store";
 
+const WINDOWS_SANDBOX_LIMITATION =
+  "Windows sandboxes have no desktop or Computer Use.";
+
 const mocks = vi.hoisted(() => ({
   openLink: vi.fn<(url: string, kind: string) => void>(),
 }));
@@ -184,6 +187,26 @@ describe("<ConsequencesBlock />", () => {
     const summaryText = screen.getByTestId("consequences-block").textContent;
     expect(summaryText.match(/\$0\.12 an hour/g)).toHaveLength(1);
     expect(summaryText.match(/uses your credits/g)).toHaveLength(1);
+  });
+
+  it("keeps the Windows limitation in view on a collapsed repeat, and says nothing of it for Linux", () => {
+    const windows = input({ os: "windows" });
+    const first = render(block(windows));
+    expect(screen.getByText(WINDOWS_SANDBOX_LIMITATION)).toBeDefined();
+    first.unmount();
+
+    const collapsed = render(block(windows));
+    expect(screen.queryByTestId("consequences-clause-team")).toBeNull();
+    expect(screen.getByTestId("consequences-what-this-means")).toBeDefined();
+    expect(screen.getByText(WINDOWS_SANDBOX_LIMITATION)).toBeDefined();
+    collapsed.unmount();
+
+    render(block(input({ os: "linux" })));
+    expect(screen.queryByText(WINDOWS_SANDBOX_LIMITATION)).toBeNull();
+    cleanup();
+
+    render(block(input({})));
+    expect(screen.queryByText(WINDOWS_SANDBOX_LIMITATION)).toBeNull();
   });
 
   it("renders in full again for a different audience", () => {

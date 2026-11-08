@@ -26,6 +26,7 @@ import {
   upsertNote,
 } from "@traycer/protocol/persistence/epic/canvas-layout";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { expectFocusRingInset } from "@/components/ui/__tests__/dialog-scroll-layout-assertions";
 import { CanvasArtifactEditor } from "../canvas-artifact-editor";
 import { useCanvasSelectionStore } from "../canvas-selection-store";
 import type { CanvasFrameEvents } from "../canvas-frame";
@@ -485,7 +486,9 @@ describe("CanvasArtifactEditor pages and boards", () => {
       "Flow",
     );
     openPageMenu();
-    const pages = within(screen.getByRole("list", { name: "Canvas pages" }));
+    const pageList = screen.getByRole("list", { name: "Canvas pages" });
+    expectFocusRingInset(pageList, ["-m-1", "p-1"]);
+    const pages = within(pageList);
     expect(
       pages.getByRole("button", { name: "Flow" }).getAttribute("aria-current"),
     ).toBe("page");

@@ -26,9 +26,12 @@ async function sendInvite(outcome: MembersInviteOutcome): Promise<void> {
 describe("InviteDialog", () => {
   it("names the remedy when no seats remain", async () => {
     await sendInvite({ outcome: "seat_limit" });
+    expect(
+      screen.getByRole("heading", { name: "Invite to Acme" }),
+    ).toBeTruthy();
     const refusal = await screen.findByTestId("members-invite-refusal");
     expect(refusal.textContent).toBe(
-      "Acme has no remaining seats. Manage seats and allowances on the dashboard.",
+      "The team has no remaining seats. Manage seats and allowances on the dashboard.",
     );
   });
 
@@ -38,6 +41,12 @@ describe("InviteDialog", () => {
     expect(body.textContent).toBe(
       "We emailed new@acme.test. They join Acme as an editor when they accept.",
     );
+    expect(
+      screen.getByRole("heading", { name: "Invitation sent" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByTestId("members-invite-dialog").textContent.match(/Acme/g),
+    ).toHaveLength(1);
   });
 
   it("does not call a refused invitation sent", async () => {
@@ -65,14 +74,14 @@ describe("InviteDialog", () => {
     const picker = screen.getByRole("combobox", { name: "Role" });
     expect(picker.getAttribute("aria-describedby")).toBe(line.id);
     expect(line.textContent).toBe(
-      "Can change Acme's settings; every change reaches every Acme sandbox.",
+      "Can change the team's settings; every change reaches every team sandbox.",
     );
 
     await user.click(picker);
     expect(screen.queryByRole("option", { name: "Viewer" })).toBeNull();
     await user.click(await screen.findByRole("option", { name: "Admin" }));
     expect(line.textContent).toBe(
-      "Can change Acme's settings, invite and remove people, and change roles.",
+      "Can change the team's settings, invite and remove people, and change roles.",
     );
   });
 

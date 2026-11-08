@@ -3,10 +3,12 @@
  * keeps every id either way, because ids resolve routes, remembered tab paths
  * and titles.
  *
- * Two sections the installed mobile app does not offer, for two different
- * reasons: Keybindings because chord capture reads `keydown` on `window` and a
- * touch shell can never commit one, and Link mobile app because the panel is the
- * DISPLAY end of a pairing whose scanner end is the mobile app itself.
+ * Sections the installed mobile app does not offer, for different reasons:
+ * Keybindings because chord capture reads `keydown` on `window` and a touch
+ * shell can never commit one, Link mobile app because the panel is the DISPLAY
+ * end of a pairing whose scanner end is the mobile app itself, and Application
+ * Diagnostics because every control needs a desktop bridge. Unlike the first
+ * two, the diagnostics route does not redirect: the panel says so itself.
  *
  * One section ONLY the installed mobile app offers: Delete account, which
  * exists to satisfy App Store review guideline 5.1.1(v). Desktop and the web
@@ -74,6 +76,23 @@ describe("visibleSettingsSections", () => {
     expect(isSettingsSectionVisible("link-phone")).toBe(false);
   });
 
+  it("omits app-diagnostics in the installed mobile app and keeps it on desktop", () => {
+    setMobileApp(true);
+    expect(
+      visibleSettingsSections().map((section) => section.id),
+    ).not.toContain("app-diagnostics");
+    expect(isSettingsSectionVisible("app-diagnostics")).toBe(false);
+    expect(SETTINGS_SECTIONS.map((section) => section.id)).toContain(
+      "app-diagnostics",
+    );
+
+    setMobileApp(false);
+    expect(isSettingsSectionVisible("app-diagnostics")).toBe(true);
+    expect(visibleSettingsSections().map((section) => section.id)).toContain(
+      "app-diagnostics",
+    );
+  });
+
   it("offers delete-account only in the installed mobile app", () => {
     setMobileApp(true);
     const ids = visibleSettingsSections().map((section) => section.id);
@@ -93,7 +112,10 @@ describe("visibleSettingsSections", () => {
     const ids = visibleSettingsSections().map((section) => section.id);
     const expected = SETTINGS_SECTIONS.map((section) => section.id).filter(
       (id) =>
-        id !== "keybindings" && id !== "link-phone" && !RETIRED.includes(id),
+        id !== "keybindings" &&
+        id !== "link-phone" &&
+        id !== "app-diagnostics" &&
+        !RETIRED.includes(id),
     );
     expect(ids).toEqual(expected);
   });
@@ -103,6 +125,7 @@ describe("visibleSettingsSections", () => {
     setMobileApp(true);
     expect(ids).toContain("keybindings");
     expect(ids).toContain("link-phone");
+    expect(ids).toContain("app-diagnostics");
     setMobileApp(false);
     expect(ids).toContain("delete-account");
   });

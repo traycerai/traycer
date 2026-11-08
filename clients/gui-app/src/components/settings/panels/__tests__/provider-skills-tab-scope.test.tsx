@@ -409,10 +409,10 @@ describe("<ProviderSkillsTab /> scope (F5)", () => {
 
     render(<ProviderSkillsTab state={skillsState()} />);
 
-    expect(screen.getByText("Select a workspace")).toBeDefined();
+    expect(screen.getByText("Select a folder")).toBeDefined();
     expect(
       screen.getByText(
-        "Choose a project workspace above to manage project-scoped skills on this host.",
+        "Choose a project folder above to manage project-scoped skills on this host.",
       ),
     ).toBeDefined();
     expect(skillMocks.listCalls.every((c) => !c.enabled)).toBe(true);
@@ -523,7 +523,7 @@ describe("<ProviderSkillsTab /> global-only caption", () => {
     [
       "the host",
       { kind: "host" } satisfies ConfigurationSource,
-      "Applies to every workspace on this host.",
+      "Applies to every folder on this host.",
     ],
   ])(
     "names where a global skill applies under %s",

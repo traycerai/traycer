@@ -61,6 +61,7 @@ import {
   NewConversationModalHost,
 } from "../new-conversation-modal";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
+import { expectFocusRingInset } from "@/components/ui/__tests__/dialog-scroll-layout-assertions";
 import { newConversationSurfaceKey } from "@/stores/host/surface-host-selection-store";
 import { NewConversationTransientContext } from "../new-conversation-transient-context";
 
@@ -1715,6 +1716,14 @@ describe("new-conversation modal host while a staged sandbox boots a terminal ag
     expect(
       screen.getByTestId("epic-sidebar-new-conversation-modal"),
     ).toBeDefined();
+    const dialog = screen.getByTestId("epic-sidebar-new-conversation-modal");
+    expect(dialog.classList.contains("overflow-visible")).toBe(true);
+    expect(dialog.classList.contains("overflow-y-auto")).toBe(false);
+    expect(dialog.classList.contains("overflow-x-hidden")).toBe(false);
+    expectFocusRingInset(
+      screen.getByTestId("epic-sidebar-new-conversation-modal-body"),
+      ["-m-1", "p-1"],
+    );
   });
 
   it("drops the automatic launch when its tab closes before the resubmit, keeping the draft", async () => {

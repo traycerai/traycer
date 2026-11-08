@@ -172,16 +172,14 @@ describe("<HostOverviewSettingsCard />", () => {
       {},
     );
 
-    expect(screen.getByTestId("host-settings-source").textContent).toContain(
-      "Settings: This computer only",
+    expect(
+      screen.getByRole("combobox", { name: "Settings source" }).textContent,
+    ).toBe("This computer only");
+    fireEvent.keyDown(
+      screen.getByRole("combobox", { name: "Settings source" }),
+      { key: "ArrowDown" },
     );
-    fireEvent.pointerDown(
-      screen.getByRole("button", { name: "Change settings source" }),
-      { button: 0 },
-    );
-    fireEvent.click(
-      await screen.findByRole("menuitemradio", { name: /Personal/ }),
-    );
+    fireEvent.click(await screen.findByRole("option", { name: "Personal" }));
     expect(useMoveSheetStore.getState().target).toEqual({
       hostId: "old",
       hostName: "Old laptop",
@@ -198,10 +196,10 @@ describe("<HostOverviewSettingsCard />", () => {
       {},
     );
 
-    expect(screen.getByText(/Settings: This computer only/)).toBeTruthy();
+    expect(screen.getByText("Settings")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Details" })).toBeTruthy();
     expect(screen.getByTestId("host-settings-source").textContent).toContain(
-      "Settings: This computer only",
+      "This computer only",
     );
   });
 
@@ -230,6 +228,9 @@ describe("<HostOverviewSettingsCard />", () => {
     ).toBe(
       "Moving this computer's settings to Personal · 2 of 4 items applied",
     );
+    const source = screen.getByRole("combobox", { name: "Settings source" });
+    expect(source.textContent).toBe("Personal");
+    expect(source.hasAttribute("disabled")).toBe(true);
     const row = screen.getByTestId("host-settings-card-progress").parentElement;
     expect(row?.contains(screen.getByRole("button", { name: "Details" }))).toBe(
       true,
@@ -354,7 +355,7 @@ describe("<HostOverviewSettingsCard />", () => {
     );
 
     expect(screen.getByTestId("host-settings-source").textContent).toContain(
-      "Settings: Personal",
+      "Personal",
     );
     expect(screen.queryByText("Moved to Personal on 20 Oct")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Details" }));
@@ -374,7 +375,7 @@ describe("<HostOverviewSettingsCard />", () => {
     );
 
     expect(screen.getByTestId("host-settings-source").textContent).toContain(
-      "Settings: This computer only",
+      "This computer only",
     );
     fireEvent.click(screen.getByRole("button", { name: "Details" }));
     expect(screen.getByTestId("overview-stop-sharing")).toBeTruthy();
@@ -393,7 +394,7 @@ describe("<HostOverviewSettingsCard />", () => {
     );
 
     expect(screen.getByTestId("host-settings-source").textContent).toContain(
-      "Settings: Personal",
+      "Personal",
     );
     fireEvent.click(screen.getByRole("button", { name: "Details" }));
     expect(
@@ -411,16 +412,28 @@ describe("<HostOverviewSettingsCard />", () => {
     });
   });
 
-  it("shows the team's fixed Settings source without Change", () => {
+  it("shows the team's fixed Settings source in the disabled selector", () => {
     renderCardWithBinding(environmentStatusFixture({}), {}, TEAM_BINDING, true);
 
-    expect(screen.getByText("Designers")).toBeTruthy();
-    expect(
-      screen.queryByRole("button", { name: "Change settings source" }),
-    ).toBeNull();
-    expect(screen.getByText("Designers").parentElement?.textContent).toBe(
-      "Settings: Designers",
-    );
+    const selector = screen.getByRole("combobox", { name: "Settings source" });
+    expect(selector.textContent).toBe("Designers");
+    expect(selector.hasAttribute("disabled")).toBe(true);
+    expect(screen.getByText("Runs the team's settings.")).toBeTruthy();
+  });
+
+  it("names the team once on a team-owned computer, as the selector value", () => {
+    renderCardWithBinding(environmentStatusFixture({}), {}, TEAM_BINDING, true);
+
+    const selector = screen.getByRole("combobox", { name: "Settings source" });
+    const sentence = screen.getByText("Runs the team's settings.");
+    let card: HTMLElement | null = selector;
+    while (card !== null && !card.contains(sentence)) {
+      card = card.parentElement;
+    }
+    expect(card).toBeTruthy();
+    if (card === null) return;
+    expect(card.textContent.match(/Designers/g) ?? []).toHaveLength(1);
+    expect(selector.textContent).toBe("Designers");
   });
 
   it("opens the Stop sharing review when This computer only is selected", async () => {
@@ -440,12 +453,12 @@ describe("<HostOverviewSettingsCard />", () => {
       },
     );
 
-    fireEvent.pointerDown(
-      screen.getByRole("button", { name: "Change settings source" }),
-      { button: 0 },
+    fireEvent.keyDown(
+      screen.getByRole("combobox", { name: "Settings source" }),
+      { key: "ArrowDown" },
     );
     fireEvent.click(
-      await screen.findByRole("menuitemradio", { name: /This computer only/ }),
+      await screen.findByRole("option", { name: "This computer only" }),
     );
 
     expect(
@@ -467,7 +480,7 @@ describe("<HostOverviewSettingsCard />", () => {
     );
 
     expect(screen.getByTestId("host-settings-source").textContent).toContain(
-      "Settings: This computer only",
+      "This computer only",
     );
     fireEvent.click(screen.getByRole("button", { name: "Details" }));
     expect(
@@ -479,7 +492,7 @@ describe("<HostOverviewSettingsCard />", () => {
   it("shows Personal for an unrecorded shared computer", () => {
     renderCard(environmentStatusFixture({ setup: null }), {});
     expect(screen.getByTestId("host-settings-source").textContent).toContain(
-      "Settings: Personal",
+      "Personal",
     );
   });
 });
@@ -695,7 +708,7 @@ describe("hostSettingsRowModel", () => {
     ).toEqual({
       kind: "team",
       label: "Designers",
-      description: "Runs Designers' settings.",
+      description: "Runs the team's settings.",
     });
   });
 

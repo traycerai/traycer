@@ -48,8 +48,10 @@ describe("new conversation modal scroll boundary", () => {
     expect(classNameOf("epic-sidebar-new-conversation-modal-body")).toContain(
       "overflow-y-auto",
     );
-    expect(classNameOf("epic-sidebar-new-conversation-modal")).not.toMatch(
-      /\boverflow-/,
-    );
+    // `DialogContent` scrolls its root by default; `overflow-visible` is the
+    // caller's opt-out and the only overflow token this node may carry.
+    const root = classNameOf("epic-sidebar-new-conversation-modal");
+    expect(root).toContain("overflow-visible");
+    expect(root.replace("overflow-visible", "")).not.toMatch(/\boverflow-/);
   });
 });

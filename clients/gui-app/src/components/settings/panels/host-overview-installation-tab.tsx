@@ -30,8 +30,8 @@ import { SettingsGroup } from "@/components/settings/settings-group";
 
 /**
  * Overview ▸ Installation: what the account knows about this host, how it is
- * installed and started, and removing it - About this host, a compact install
- * line or the install record, Details, the OS service, this computer's
+ * installed and started, and removing it - a compact install line or the
+ * install record, Details including account facts, the OS service, this computer's
  * command-line tools hint, and the Danger zone, last.
  */
 export interface HostOverviewInstallationTabProps {
@@ -40,8 +40,8 @@ export interface HostOverviewInstallationTabProps {
   readonly hostName: string;
   /**
    * The account's record of this host, or `null` for a host the account has
-   * no record of (reachable, but not in the account), which gets no About
-   * this host group - as it gets no Danger zone.
+   * no record of (reachable, but not in the account), which gets no account
+   * facts in Details - as it gets no Danger zone.
    */
   readonly about: HostOverviewAboutSource | null;
   /** `host.getInstallationInfo` support, or why it is missing. */
@@ -94,11 +94,6 @@ export function HostOverviewInstallationTab(
   });
   return (
     <HostOverviewTabSections>
-      {/* The account's facts first. Not a host read, so it stands whether or
-          not the host answers - the state someone most often comes here in. */}
-      {props.about === null ? null : (
-        <HostOverviewAboutThisHost {...props.about} />
-      )}
       {recordReadable ? (
         <HostOverviewInstallStatus
           record={props.record}
@@ -107,6 +102,7 @@ export function HostOverviewInstallationTab(
         />
       ) : null}
       <InstallationDetails
+        about={props.about}
         rows={detailRows}
         serviceManifestLine={
           live && props.service?.degrade === null
@@ -172,11 +168,17 @@ function HostOverviewInstallStatus(props: {
 }
 
 function InstallationDetails(props: {
+  readonly about: HostOverviewAboutSource | null;
   readonly rows: readonly InstallationDetailRow[];
   readonly serviceManifestLine: string | null;
 }): ReactNode {
-  if (props.rows.length === 0 && props.serviceManifestLine === null)
+  if (
+    props.about === null &&
+    props.rows.length === 0 &&
+    props.serviceManifestLine === null
+  ) {
     return null;
+  }
   return (
     <details
       className="min-w-0"
@@ -186,6 +188,9 @@ function InstallationDetails(props: {
         Details
       </summary>
       <dl className="mt-2 flex min-w-0 flex-col gap-3">
+        {props.about === null ? null : (
+          <HostOverviewAboutThisHost {...props.about} />
+        )}
         {props.rows.map((row) => (
           <InstallationFact key={row.testId} row={row} />
         ))}

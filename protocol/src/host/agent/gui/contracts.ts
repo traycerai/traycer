@@ -12,6 +12,7 @@ import {
   listGuiAgentCommandsResponseSchema,
   listGuiAgentModelsRequestSchema,
   listGuiAgentModelsRequestSchemaV11,
+  listGuiAgentModelsRequestSchemaV12,
   listGuiAgentModelsResponseSchema,
   listGuiHarnessesRequestSchema,
   listGuiHarnessesResponseSchema,
@@ -1419,6 +1420,28 @@ export const agentGuiListModelsUpgradeV10ToV11 = defineUpgradePath<
 >({
   from: { major: 1, minor: 0 },
   to: { major: 1, minor: 1 },
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+/**
+ * `agent.gui.listModels@1.2`: the account whose models are listed, like
+ * `agent.gui.listCommands@1.1`'s. A 1.1 request is the ambient account's; a
+ * host below 1.2 lists the ambient account's whatever the client asked.
+ */
+export const agentGuiListModelsV12 = defineRpcContract({
+  method: "agent.gui.listModels",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: listGuiAgentModelsRequestSchemaV12,
+  responseSchema: listGuiAgentModelsResponseSchema,
+});
+
+export const agentGuiListModelsUpgradeV11ToV12 = defineUpgradePath<
+  typeof agentGuiListModelsV11,
+  typeof agentGuiListModelsV12
+>({
+  from: { major: 1, minor: 1 },
+  to: { major: 1, minor: 2 },
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });

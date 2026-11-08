@@ -166,6 +166,7 @@ vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
   useSystemTabModalActions: () => ({ openHistory: testState.openHistory }),
 }));
 
+import userEvent from "@testing-library/user-event";
 import {
   act,
   cleanup,
@@ -1422,7 +1423,74 @@ describe("<CurrentTasksSection />", () => {
       expect(
         screen.queryByRole("button", { name: /Show \d+ more/ }),
       ).toBeNull();
+      expect(screen.queryByRole("button", { name: "Show less" })).toBeNull();
       expect(within(group("Open")).getAllByRole("listitem")).toHaveLength(5);
+    });
+
+    it("offers no 'Show less' for a group of fewer than five", () => {
+      setGroups({ pinned: tasks("p", 3) });
+      renderSection();
+
+      expect(screen.queryByRole("button", { name: "Show less" })).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: /Show \d+ more/ }),
+      ).toBeNull();
+      expect(within(group("Pinned")).getAllByRole("listitem")).toHaveLength(3);
+    });
+
+    it("collapses an expanded group back to five rows", async () => {
+      setGroups({ open: tasks("o", 9), inProgress: tasks("i", 7) });
+      renderSection();
+
+      expect(screen.queryByRole("button", { name: "Show less" })).toBeNull();
+
+      fireEvent.click(screen.getByRole("button", { name: "Show 4 more" }));
+
+      const showLess = screen.getByRole("button", { name: "Show less" });
+      expect(showLess.getAttribute("aria-expanded")).toBe("true");
+      expect(within(group("Open")).getAllByRole("listitem")).toHaveLength(9);
+      expect(screen.queryByRole("button", { name: "Show 4 more" })).toBeNull();
+
+      // One button changes its label. Keyboard activation has to leave focus
+      // on that same control, which a remounted replacement would drop.
+      act(() => {
+        showLess.focus();
+      });
+      expect(document.activeElement).toBe(showLess);
+      await userEvent.keyboard("{Enter}");
+
+      expect(document.activeElement).toBe(showLess);
+      expect(showLess.getAttribute("aria-expanded")).toBe("false");
+      expect(within(group("Open")).getAllByRole("listitem")).toHaveLength(5);
+      expect(
+        within(group("In progress")).getAllByRole("listitem"),
+      ).toHaveLength(5);
+      expect(screen.queryByRole("button", { name: "Show less" })).toBeNull();
+      expect(screen.getByRole("button", { name: "Show 4 more" })).toBe(
+        showLess,
+      );
+      expect(
+        screen.getByRole("button", { name: "Show 2 more" }),
+      ).not.toBeNull();
+    });
+
+    it("gives the section and its list a scrollable half of the page", () => {
+      setGroups({ open: tasks("o", 7) });
+      renderSection();
+
+      const section = screen.getByTestId("current-tasks-section");
+      expect(section.className.split(/\s+/)).toEqual(
+        expect.arrayContaining(["min-h-0", "flex-1"]),
+      );
+      const list = within(group("Open")).getByRole("list");
+      const scroller = list.parentElement?.parentElement ?? null;
+      if (scroller === null) {
+        throw new Error("the list has no scroller");
+      }
+      expect(section.contains(scroller)).toBe(true);
+      expect(scroller.className.split(/\s+/)).toEqual(
+        expect.arrayContaining(["min-h-0", "flex-1", "overflow-y-auto"]),
+      );
     });
   });
 

@@ -12699,7 +12699,7 @@ function isUnauthorizedClose(
  * discarded like every other cancelled row.
  */
 const CANCELLED_AFTER_SETUP_FAILED_REASON =
-  "Workspace setup failed, so this message was never sent. It's back in the composer.";
+  "Folder setup failed, so this message was never sent. It's back in the composer.";
 
 /**
  * The same cause, for a prompt that did NOT reach the composer.
@@ -12712,7 +12712,7 @@ const CANCELLED_AFTER_SETUP_FAILED_REASON =
  * {@link FailedSendRestorationState} existing for a reason.
  */
 const CANCELLED_AFTER_SETUP_FAILED_DISPLACED_REASON =
-  "Workspace setup failed, so this message was never sent.";
+  "Folder setup failed, so this message was never sent.";
 
 /**
  * How this prompt died, phrased to open an {@link unrecoverableSendNotice}
@@ -12721,7 +12721,7 @@ const CANCELLED_AFTER_SETUP_FAILED_DISPLACED_REASON =
  * in the composer."; the stash prompt's `reason` appends "." and the account.
  */
 const CANCELLED_AFTER_SETUP_FAILED_CIRCUMSTANCE =
-  "Workspace setup failed, so a cancelled message was never sent";
+  "Folder setup failed, so a cancelled message was never sent";
 
 /** The three ways one hand-back is told, depending on where the prompt lands. */
 interface HandBackCopy {

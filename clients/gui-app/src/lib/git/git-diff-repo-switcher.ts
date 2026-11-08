@@ -271,8 +271,8 @@ function buildTrigger(
 ): GitDiffRepoSwitcherTriggerModel {
   if (selected === null) {
     return {
-      label: "Select workspace",
-      secondaryLabel: "Choose a bound workspace",
+      label: "Select folder",
+      secondaryLabel: "Choose a bound folder",
       fileChangeCount: null,
       moduleChangeCount: null,
       unavailable: false,
@@ -283,7 +283,7 @@ function buildTrigger(
   const root = selectedRootInput(roots, selected);
   if (root === null) {
     return {
-      label: "Workspace unavailable",
+      label: "Folder unavailable",
       secondaryLabel: selected.rootRunningDir,
       fileChangeCount: null,
       moduleChangeCount: null,

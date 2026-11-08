@@ -118,11 +118,11 @@ export function WorkspaceHostSwitcher(
  * It is the same `HostSwitcher` the Settings rail and the usage popover mount —
  * one row of chrome that names the current host and opens the list — rather
  * than a flat list of every host inline. The flat list was fine at one host and
- * became the whole top of the panel at four, pushing the Workspaces section it
+ * became the whole top of the panel at four, pushing the Folders section it
  * heads below the fold on exactly the accounts that own several machines.
  *
  * What stays local to this surface is only its framing: the "Host" heading that
- * pairs with "Workspaces" below it, which a surface with its own heading omits.
+ * pairs with "Folders" below it, which a surface with its own heading omits.
  */
 export function HostSection(
   props: HostSectionProps & {

@@ -7,7 +7,7 @@ import { navigateToSettingsSection } from "@/lib/settings-navigation";
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 
 /**
- * The local host Overview's one-liner beside the running state - "keeps
+ * The local host Overview's one-liner below the running state - "keeps
  * running after quit" - linking to Settings → General → "When you quit
  * Traycer". The same promise the tray shows, so a Linked user sees why the
  * host will stop and a Background user sees why it is still running. A host
@@ -24,9 +24,6 @@ export function HostLifecycleModeLine(): ReactNode {
   if (line === null) return null;
   return (
     <span className="min-w-0 text-ui-xs text-muted-foreground">
-      <span aria-hidden className="mr-2 text-muted-foreground/40">
-        ·
-      </span>
       <Button
         type="button"
         variant="link"

@@ -59,7 +59,7 @@ function BrowserListEmptyState(props: BrowserListFeedbackProps) {
   const { model } = props;
   const noSearchMatches = props.query.trim().length > 0;
   let message = "No browsers yet.";
-  if (model.filteredEmpty) message = "Browsers on offline devices are hidden.";
+  if (model.filteredEmpty) message = "Browsers on offline hosts are hidden.";
   if (noSearchMatches) message = "No matching browsers.";
   return (
     <div
@@ -89,7 +89,7 @@ function BrowserListEmptyState(props: BrowserListFeedbackProps) {
           size="sm"
           onClick={() => model.preferences.setShowOffline(true)}
         >
-          Include offline devices
+          Include offline hosts
         </Button>
       ) : null}
       {!noSearchMatches && !model.filteredEmpty ? (

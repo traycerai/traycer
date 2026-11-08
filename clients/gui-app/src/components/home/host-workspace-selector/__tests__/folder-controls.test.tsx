@@ -1281,7 +1281,7 @@ describe("WorkspaceSummaryTrigger", () => {
       </TooltipProvider>,
     );
     expect(screen.getByTestId("workspace-summary-draft")).toBeTruthy();
-    expect(screen.getByLabelText("Uncommitted workspace draft")).toBeTruthy();
+    expect(screen.getByLabelText("Uncommitted folder draft")).toBeTruthy();
   });
 
   it("summarizes the primary folder and extra count", () => {

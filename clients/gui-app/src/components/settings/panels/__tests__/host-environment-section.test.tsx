@@ -137,30 +137,28 @@ afterEach(() => {
 });
 
 describe("HostEnvironmentSection", () => {
-  it("shows the current personal source and Change control", () => {
+  it("shows the current personal source in the selector", () => {
     renderSection("personal");
 
     const row = screen.getByTestId("host-settings-source");
-    expect(row.textContent).toContain("Settings: Personal");
+    expect(row.textContent).toContain("Settings");
     expect(
-      screen.getByRole("button", { name: "Change settings source" }),
-    ).toBeTruthy();
+      screen.getByRole("combobox", { name: "Settings source" }).textContent,
+    ).toBe("Personal");
     expect(within(row).getByText("Details")).toBeTruthy();
     expect(screen.queryByText(/team's bots run/)).toBeNull();
     expect(screen.queryByText(/Machines in/)).toBeNull();
   });
 
-  it("shows a legacy team source without a Change control", () => {
+  it("shows a legacy team source in the disabled selector", () => {
     mocks.state.binding = teamBinding(false);
 
     renderSection("personal");
 
-    expect(screen.getByText("Acme").parentElement?.textContent).toBe(
-      "Settings: Acme",
-    );
-    expect(
-      screen.queryByRole("button", { name: "Change settings source" }),
-    ).toBeNull();
+    const selector = screen.getByRole("combobox", { name: "Settings source" });
+    expect(selector.textContent).toBe("Acme");
+    expect(selector.hasAttribute("disabled")).toBe(true);
+    expect(screen.getByText("Runs the team's settings.")).toBeTruthy();
   });
 
   it("shows move progress instead of another source line while settings move", () => {
@@ -170,7 +168,7 @@ describe("HostEnvironmentSection", () => {
       setup: { stage: "moving_settings", state: "awaiting_consent" },
     });
     renderSection("personal");
-    expect(screen.getByText(/Settings:/)).toBeTruthy();
+    expect(screen.getByText("Settings")).toBeTruthy();
     expect(screen.queryByText(/Runs /)).toBeNull();
   });
 

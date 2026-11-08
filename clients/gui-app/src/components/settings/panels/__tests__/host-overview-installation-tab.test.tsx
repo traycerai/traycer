@@ -351,8 +351,8 @@ afterEach(() => {
   window.innerWidth = initialInnerWidth;
 });
 
-describe("Overview ▸ Installation — About this host", () => {
-  it("shows only the account date and the unseen line, and copies the full host id from Details", async () => {
+describe("Overview ▸ Installation — account facts", () => {
+  it("shows the Added to account fact inside Details and copies the full host id", async () => {
     const item = registryItem({});
     setReadyScope({
       isLocalMachine: false,
@@ -364,30 +364,25 @@ describe("Overview ▸ Installation — About this host", () => {
     mount(null);
     await selectHostOverviewTab("installation");
 
-    const about = within(installationPane()).getByTestId("host-overview-about");
+    const details = installationDetails();
+    expect(details.open).toBe(false);
+    expect(within(details).getByText("Added to account")).toBeTruthy();
     const added = formatSettingsDate(Date.parse(item.createdAt), false);
     expect(
-      within(about).getByTestId("host-overview-about-added").textContent,
+      within(details).getByTestId("host-overview-about-added").textContent,
     ).toBe(added);
     expect(
-      within(about).getByTestId("host-overview-about-last-seen").textContent,
+      within(details).getByTestId("host-overview-about-last-seen").textContent,
     ).toBe("Not seen since it was added");
-    expect(
-      within(about).queryByTestId("host-overview-about-host-id"),
-    ).toBeNull();
-    expect(
-      within(about).queryByTestId("host-overview-about-version"),
-    ).toBeNull();
-    expect(
-      within(about).queryByTestId("host-overview-about-platform"),
-    ).toBeNull();
 
-    const details = openInstallationDetails();
-    const hostId = within(details).getByTestId("host-overview-about-host-id");
+    const openDetails = openInstallationDetails();
+    const hostId = within(openDetails).getByTestId(
+      "host-overview-about-host-id",
+    );
     expect(hostId.textContent).toBe("8f14e45f…c9a2");
     const writeText = stubClipboard();
     fireEvent.click(
-      within(details).getByRole("button", { name: "Copy host ID" }),
+      within(openDetails).getByRole("button", { name: "Copy host ID" }),
     );
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith(HOST_ID);
@@ -522,9 +517,9 @@ describe("Overview ▸ Installation — About this host", () => {
       "Offline",
     );
     expect(screen.getAllByText(/last seen/i)).toHaveLength(1);
-    const about = within(installationPane()).getByTestId("host-overview-about");
+    const details = installationDetails();
     expect(
-      within(about).queryByTestId("host-overview-about-last-seen"),
+      within(details).queryByTestId("host-overview-about-last-seen"),
     ).toBeNull();
     const notices = screen.getByTestId("host-overview-notices");
     expect(within(notices).queryByText(/last seen/i)).toBeNull();
@@ -566,21 +561,13 @@ describe("Overview ▸ Installation — About this host", () => {
     mount(null);
     await selectHostOverviewTab("installation");
 
-    const about = within(installationPane()).getByTestId("host-overview-about");
+    const details = installationDetails();
     expect(
-      within(about).getByTestId("host-overview-about-last-seen").textContent,
+      within(details).getByTestId("host-overview-about-last-seen").textContent,
     ).toBe("Not seen since it was added");
     expect(
-      within(about).queryByTestId("host-overview-about-host-id"),
-    ).toBeNull();
-    expect(
-      within(about).queryByTestId("host-overview-about-version"),
-    ).toBeNull();
-    expect(
-      within(about).queryByTestId("host-overview-about-platform"),
-    ).toBeNull();
-
-    const details = installationDetails();
+      within(details).getByTestId("host-overview-about-added"),
+    ).toBeTruthy();
     expect(
       within(details).getByTestId("host-overview-about-host-id").textContent,
     ).toBe("8f14e45f…c9a2");
@@ -608,7 +595,9 @@ describe("Overview ▸ Installation — About this host", () => {
     await selectHostOverviewTab("installation");
 
     const pane = installationPane();
-    expect(within(pane).getByTestId("host-overview-about")).not.toBeNull();
+    expect(
+      within(pane).getByTestId("host-overview-about-added"),
+    ).not.toBeNull();
     expect(within(pane).getByTestId("host-scope-connecting")).not.toBeNull();
     expect(
       within(pane).queryByTestId("host-overview-install-record"),
@@ -637,7 +626,7 @@ describe("Overview ▸ Installation — About this host", () => {
         "Running from a checkout or unpacked tree · no installation record",
       );
     });
-    expect(screen.queryByTestId("host-overview-about")).toBeNull();
+    expect(screen.queryByTestId("host-overview-about-added")).toBeNull();
     expect(screen.queryByTestId("host-overview-install-record")).toBeNull();
   });
 });
@@ -1117,7 +1106,9 @@ describe("Overview ▸ Installation — a host restarting to finish an update", 
   function expectRestartingShape(): void {
     const pane = installationPane();
     expect(within(pane).getByTestId("host-scope-connecting")).not.toBeNull();
-    expect(within(pane).getByTestId("host-overview-about")).not.toBeNull();
+    expect(
+      within(pane).getByTestId("host-overview-about-added"),
+    ).not.toBeNull();
     expect(
       within(pane).queryByTestId("host-overview-installation-needs-connection"),
     ).toBeNull();

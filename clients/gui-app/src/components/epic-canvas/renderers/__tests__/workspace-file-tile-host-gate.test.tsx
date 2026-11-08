@@ -190,10 +190,10 @@ describe("<WorkspaceFileTile /> host-binding gate", () => {
     fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
 
     expect(useDesktopDialogStore.getState().reportIssueContext).toEqual({
-      title: "Workspace file could not be read",
-      message: "The workspace file preview could not be loaded.",
+      title: "Folder file could not be read",
+      message: "The folder file preview could not be loaded.",
       code: null,
-      source: "Workspace file",
+      source: "Folder file",
     });
   });
 
@@ -219,7 +219,7 @@ describe("<WorkspaceFileTile /> host-binding gate", () => {
     // failure: that is what sent one field report's triage looking for an fs
     // error that never happened.
     expect(useDesktopDialogStore.getState().reportIssueContext).toEqual({
-      title: "Workspace file preview failed to load from the host",
+      title: "Folder file preview failed to load from the host",
       message:
         "The app could not reach the Traycer host to load the file preview.",
       code: "UNAUTHORIZED",
@@ -268,7 +268,7 @@ describe("<WorkspaceFileTile /> host-binding gate", () => {
     fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
 
     expect(useDesktopDialogStore.getState().reportIssueContext).toEqual({
-      title: "Workspace file preview failed to load from the host",
+      title: "Folder file preview failed to load from the host",
       message:
         "The app could not reach the Traycer host to load the file preview.",
       code: null,

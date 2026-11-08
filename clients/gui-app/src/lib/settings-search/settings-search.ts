@@ -104,8 +104,9 @@ const KIND_SCORE_FACTOR: Readonly<Record<SettingsSearchEntryKind, number>> = {
  *
  * Filtered twice, for the same reason each time — a hit that navigates to
  * something the current build will not draw is a dead end with no way back:
- * by `visibleSettingsSections()` (the mobile app offers no Keybindings or
- * Link-mobile page), exactly as the sidebar and the command palette filter,
+ * by `visibleSettingsSections()` (the mobile app offers no Keybindings,
+ * Link-mobile, or Application Diagnostics page), exactly as the sidebar and
+ * the command palette filter,
  * and then per entry by its `availableWhen` — the same predicate the panel
  * calls to decide whether the entry's element renders at all.
  *
