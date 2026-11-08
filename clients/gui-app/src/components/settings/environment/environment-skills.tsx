@@ -962,6 +962,18 @@ function SkillsPageList(props: {
       {detailSkill === null ? null : (
         <EnvironmentSkillDetail
           skill={detailSkill}
+          policyIssue={issue}
+          policyControl={
+            <DetailPolicyControl
+              skill={detailSkill}
+              available={props.policiesSettable}
+              canEdit={props.canEdit}
+              writing={writing}
+              removed={open === null}
+              draftHeld={draftHeld}
+              onChoose={choosePolicy}
+            />
+          }
           removed={open === null}
           configuration={name}
           providerId={providers.at(0) ?? "claude-code"}
@@ -977,6 +989,39 @@ function SkillsPageList(props: {
         />
       )}
     </SkillsPage>
+  );
+}
+
+function DetailPolicyControl(props: {
+  readonly skill: EnvironmentSkillV11;
+  readonly available: boolean;
+  readonly canEdit: boolean;
+  readonly writing: boolean;
+  readonly removed: boolean;
+  readonly draftHeld: boolean;
+  readonly onChoose: (
+    skill: EnvironmentSkillV11,
+    policy: EnvironmentSkillPolicy,
+  ) => void;
+}): ReactNode {
+  if (!props.available) return null;
+  return (
+    <>
+      <span className="pt-1.5 text-ui-xs font-medium text-muted-foreground">
+        Updates
+      </span>
+      <div>
+        <SettingsSegmentedControl
+          value={props.skill.policy}
+          options={policyOptions(props.skill)}
+          ariaLabel={`Updates for ${props.skill.name}`}
+          disabled={
+            !props.canEdit || props.writing || props.removed || props.draftHeld
+          }
+          onChange={(policy) => props.onChoose(props.skill, policy)}
+        />
+      </div>
+    </>
   );
 }
 
@@ -1140,6 +1185,8 @@ function skillOriginLine(skill: EnvironmentSkillV11): string | null {
  */
 function EnvironmentSkillDetail(props: {
   readonly skill: EnvironmentSkillV11;
+  readonly policyIssue: ConfigurationWriteIssue;
+  readonly policyControl: ReactNode;
   /** Another editor removed it while this detail held unsaved changes. */
   readonly removed: boolean;
   readonly configuration: string;
@@ -1198,6 +1245,8 @@ function EnvironmentSkillDetail(props: {
   return (
     <ProviderSkillDetailDialog
       skill={row}
+      policyFeedback={<ConfigurationWriteFeedback issue={props.policyIssue} />}
+      policyControl={props.policyControl}
       // The provider lists the configuration's skills as its managed ones;
       // the badge names the source as this page does.
       sourceLabel={skillSourcePhrase(props.skill.origin, name)}
