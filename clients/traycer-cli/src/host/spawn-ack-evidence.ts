@@ -6,7 +6,11 @@ import {
 } from "@traycer-clients/shared/host-start-adoption/spawn-acknowledgement-error";
 import type { Environment } from "../runner/environment";
 import { readBootstrapMarkersStrict } from "./bootstrap-log";
-import { findLiveServiceSupervisor } from "./service-supervisor-relaunch";
+import { getPublishedProcessIdentityVerdict } from "../store/process-identity";
+import {
+  readSupervisorRecord,
+  readSupervisorRunState,
+} from "./lifecycle-files";
 
 // Newest-first scan window over the supervisor's marker log; a grant's own
 // markers are the last few lines of it.
@@ -27,13 +31,49 @@ function markerState(phase: string): SpawnAckMarkerState {
   }
 }
 
+/**
+ * Whether the service's supervisor is alive, keeping "could not tell" apart
+ * from "confirmed absent". `findLiveServiceSupervisor` answers `null` for both
+ * (right for a command deciding not to start over a supervisor, wrong for
+ * evidence), so this reads the same records and process identity and answers
+ * `unknown` wherever those cannot settle it.
+ */
+async function supervisorState(
+  environment: Environment,
+): Promise<SpawnAckSupervisorState> {
+  const [supervisor, run] = await Promise.all([
+    readSupervisorRecord(environment),
+    readSupervisorRunState(environment),
+  ]);
+  if (supervisor.kind === "unreadable" || supervisor.kind === "invalid") {
+    return "unknown";
+  }
+  if (run.kind === "unreadable" || run.kind === "invalid") return "unknown";
+  if (supervisor.kind === "absent" || run.kind === "absent") return "none";
+  if (run.record.supervisorPid !== supervisor.record.pid) return "none";
+  // A hand-run `host start` is not the service's supervisor.
+  if (run.record.admission === "foreground") return "none";
+  const verdict = await getPublishedProcessIdentityVerdict(
+    run.record.supervisorPid,
+    run.record.supervisorStartIdentity,
+  );
+  switch (verdict) {
+    case "current":
+      return "live";
+    case "mismatch":
+    case "dead":
+      return "none";
+    case "indeterminate":
+      return "unknown";
+  }
+}
+
 function readSupervisor(
   environment: Environment,
   deadlineMs: number,
 ): Promise<SpawnAckSupervisorState> {
   return readSpawnAckEvidenceWithin(
-    async (): Promise<SpawnAckSupervisorState> =>
-      (await findLiveServiceSupervisor(environment)) === null ? "none" : "live",
+    () => supervisorState(environment),
     "unknown",
     deadlineMs,
   );

@@ -49,15 +49,14 @@ vi.mock("@traycer-clients/shared/host-update", async (importOriginal) => {
         : actual.readRegularFileNoFollow(path),
   };
 });
-vi.mock("../service-supervisor-relaunch", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../service-supervisor-relaunch")>();
+vi.mock("../lifecycle-files", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lifecycle-files")>();
   return {
     ...actual,
-    findLiveServiceSupervisor: (environment: "production") =>
+    readSupervisorRecord: (environment: "production") =>
       hung.on
         ? new Promise<never>(() => undefined)
-        : actual.findLiveServiceSupervisor(environment),
+        : actual.readSupervisorRecord(environment),
   };
 });
 vi.mock("../bootstrap-log", async (importOriginal) => {
@@ -90,6 +89,7 @@ vi.mock("node:os", async (importOriginal) => {
 });
 
 import { bootstrapLogPath, hostHomeDir } from "../../store/paths";
+import { supervisorRecordPath } from "@traycer/protocol/config/supervisor-record";
 import { readProcessStartIdentity } from "../../store/process-identity";
 import { publishHostStartAdoption } from "../host-start-adoption";
 import { writeSupervisorRecords } from "../lifecycle-files";
@@ -120,8 +120,12 @@ function proofPath(): string {
   return join(hostHomeDir("production"), ".host-start-adoption.json");
 }
 
-async function writeSupervisor(): Promise<void> {
-  const identity = await readProcessStartIdentity(process.pid);
+const keepIdentity = (own: string | null): string | null => own;
+
+async function writeSupervisor(
+  identityFor: (own: string | null) => string | null,
+): Promise<void> {
+  const identity = identityFor(await readProcessStartIdentity(process.pid));
   await writeSupervisorRecords("production", {
     record: {
       v: 1,
@@ -244,7 +248,7 @@ describe("host-start acknowledgement timeout evidence", () => {
     async ({ proof, supervisor }) => {
       const error = await timeoutAfter(async () => {
         await changeProof(proof);
-        if (supervisor === "live") await writeSupervisor();
+        if (supervisor === "live") await writeSupervisor(keepIdentity);
       });
 
       expect(error.message).toBe(TIMEOUT_MESSAGE);
@@ -294,6 +298,53 @@ describe("host-start acknowledgement timeout evidence", () => {
     expect(error.evidence?.marker).toBe("unknown");
   });
 
+  it.each([
+    {
+      what: "a supervisor.json that does not parse",
+      shape: (path: string) => writeFile(path, "not json"),
+    },
+    {
+      what: "a supervisor.json that cannot be read",
+      shape: (path: string) => mkdir(path, { recursive: true }),
+    },
+  ])("reads $what as unknown, not as no supervisor", async ({ shape }) => {
+    const error = await timeoutAfter(async () => {
+      await writeSupervisor(keepIdentity);
+      const path = supervisorRecordPath(hostHomeDir("production"));
+      await rm(path, { force: true });
+      await shape(path);
+    });
+
+    expect(error.evidence?.supervisor).toBe("unknown");
+  });
+
+  it("reads a supervisor whose process identity cannot be told as unknown", async () => {
+    // A record that names a live pid but wrote no start identity: the probe
+    // has nothing to compare, so it is indeterminate, not absent.
+    const error = await timeoutAfter(() => writeSupervisor(() => null));
+
+    expect(error.evidence?.supervisor).toBe("unknown");
+  });
+
+  it("reads a pid the OS handed to another process as no supervisor", async () => {
+    const error = await timeoutAfter(() =>
+      writeSupervisor((own) => (own === null ? null : `${own}-mismatch`)),
+    );
+
+    expect(error.evidence?.supervisor).toBe("none");
+  });
+
+  it("reads a run state with no supervisor.json beside it as no supervisor", async () => {
+    const error = await timeoutAfter(async () => {
+      await writeSupervisor(keepIdentity);
+      await rm(supervisorRecordPath(hostHomeDir("production")), {
+        force: true,
+      });
+    });
+
+    expect(error.evidence?.supervisor).toBe("none");
+  });
+
   it("spends at most 2 s on all three reads together when every one hangs", async () => {
     // The ack wait is shrunk to 200 ms above, so the whole wait is that plus
     // whatever the evidence costs. Three sequential 2 s budgets would be 6 s.
@@ -312,7 +363,7 @@ describe("host-start acknowledgement timeout evidence", () => {
 
   it("carries only closed-set words under exactly three tag keys", async () => {
     const error = await timeoutAfter(async () => {
-      await writeSupervisor();
+      await writeSupervisor(keepIdentity);
       await writeMarkerLine("crashed", Date.now() + 500);
     });
 
