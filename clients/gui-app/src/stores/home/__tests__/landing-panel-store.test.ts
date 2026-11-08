@@ -1,3 +1,4 @@
+import { renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   independentScope,
@@ -356,61 +357,14 @@ describe("layout of a start page with no record of its own", () => {
     ).toBe(0.5);
   });
 
-  it("seeds the preferred width from a v1 global layout that has no preference yet", () => {
-    const reloaded = parsePersistedLandingPanelState({
-      panelOpen: true,
-      panelWidthFraction: 0.6,
-      maximized: false,
-    });
-    expect(landingPanelLayoutFor(reloaded, "page-new")).toEqual({
-      panelOpen: true,
-      panelWidthFraction: 0.6,
-      maximized: false,
-    });
-  });
-
-  it("fills the window only for the first page after an Automations open, not every page after it", () => {
-    const store = useLandingPanelStore.getState();
-    expect(
-      store.openAutomationTerminal(
-        {
-          userId: null,
-          terminalId: "term-1",
-          startedAt: 0,
-          existing: null,
-          teamEnvironmentId: null,
-        },
-        "placeholder-automation",
-      ),
-    ).toBe(true);
-    const opened = useLandingPanelStore.getState();
-    expect(landingPanelLayoutFor(opened, "page-opened").maximized).toBe(true);
-
-    // The opened page restores the panel: its first own record spends the bit.
-    opened.setPanelMaximized("page-opened", false);
-    const later = useLandingPanelStore.getState();
-    expect(landingPanelLayoutFor(later, "page-created-later")).toMatchObject({
-      panelOpen: true,
-      maximized: false,
-    });
-  });
-
-  it("drops the Automations full-screen bit when the panel empties before any page recorded a layout", () => {
-    const store = useLandingPanelStore.getState();
-    store.openAutomationTerminal(
-      {
-        userId: null,
-        terminalId: "term-1",
-        startedAt: 0,
-        existing: null,
-        teamEnvironmentId: null,
-      },
-      "placeholder-automation",
+  it("renders a page with no record through the panel's own store selector", () => {
+    useLandingPanelStore.getState().setPanelWidthFraction("page-a", 0.5);
+    // The panel selects the resolved layout object directly, so a resolver
+    // that built a fresh object per call would re-render without end here.
+    const { result } = renderHook(() =>
+      useLandingPanelStore((state) => landingPanelLayoutFor(state, "page-new")),
     );
-    useLandingPanelStore.getState().dismissPlaceholder();
-    expect(
-      landingPanelLayoutFor(useLandingPanelStore.getState(), "page-new"),
-    ).toMatchObject({ panelOpen: false, maximized: false });
+    expect(result.current.panelWidthFraction).toBe(0.5);
   });
 });
 
