@@ -480,6 +480,32 @@ describe("<HostSwitcher /> composer mode New rows", () => {
     expect(wakeSandboxOnPick).not.toHaveBeenCalled();
   });
 
+  it("keeps the staged shape gear beside the named trigger in the merged row", () => {
+    renderPicker({
+      hosts: [LAPTOP],
+      selected: LAPTOP,
+      composer: composerMode({
+        stagedConfigurationKey: "personal",
+        stagedLabel: "New Personal sandbox",
+      }),
+      intent: "pin",
+      onAncestorKeyDown: null,
+    });
+
+    const trigger = screen.getByRole("button", {
+      name: "Host: New Personal sandbox",
+    });
+    const gear = screen.getByTestId("host-switcher-staged-gear");
+    expect(trigger.parentElement).toBe(gear.parentElement);
+    expect(trigger.parentElement?.classList.contains("items-center")).toBe(
+      true,
+    );
+    expect(gear.classList.contains("shrink-0")).toBe(true);
+    expect(trigger.getAttribute("aria-label")).toBe(
+      "Host: New Personal sandbox",
+    );
+  });
+
   it("marks the staged row picked", () => {
     renderSwitcher({
       hosts: [LAPTOP],
@@ -930,7 +956,7 @@ describe("<HostSwitcher /> composer Details follow search results", () => {
   });
 });
 
-describe("<HostSwitcher /> composer mode row titles wrap", () => {
+describe("<HostSwitcher /> composer mode host names truncate", () => {
   const LOCAL = hostScopeOptionFixture({
     hostId: "local-win",
     name: "windows-test-machine",
@@ -942,12 +968,12 @@ describe("<HostSwitcher /> composer mode row titles wrap", () => {
   const LONG_NAMED = sandboxHost("sbx-long", "awake", {});
   const NAMED = { ...LONG_NAMED, name: ROW_TITLE };
 
-  // jsdom paints no layout, so this checks the classes the title carries for
-  // wrapping and for the absence of truncation.
-  function expectWraps(title: HTMLElement): void {
-    expect(title.classList.contains("truncate")).toBe(false);
-    expect(title.classList.contains("whitespace-normal")).toBe(true);
-    expect(title.classList.contains("wrap-anywhere")).toBe(true);
+  // jsdom paints no layout, so assert the merged utility classes that express
+  // the compact row behavior instead of trying to measure rendered geometry.
+  function expectTruncates(name: HTMLElement): void {
+    expect(name.classList.contains("truncate")).toBe(true);
+    expect(name.classList.contains("whitespace-normal")).toBe(false);
+    expect(name.classList.contains("wrap-anywhere")).toBe(false);
   }
 
   it("wraps the New row's label in full", () => {
@@ -975,31 +1001,33 @@ describe("<HostSwitcher /> composer mode row titles wrap", () => {
     expect(title.classList.contains("wrap-break-word")).toBe(true);
   });
 
-  it("wraps the computer row's title", () => {
+  it("truncates the computer row's name without losing its text", () => {
     renderSwitcher({
       hosts: [LOCAL],
       composer: composerMode({}),
       intent: "pin",
     });
 
-    expectWraps(within(row("local-win")).getByText("windows-test-machine"));
+    const name = within(row("local-win")).getByText("windows-test-machine");
+    expectTruncates(name);
+    expect(name.textContent).toBe("windows-test-machine");
   });
 
-  it("wraps a sandbox row's name", () => {
+  it("truncates a sandbox row's name", () => {
     renderSwitcher({
       hosts: [LAPTOP, NAMED],
       composer: composerMode({ inThisTask: [NAMED] }),
       intent: "pin",
     });
 
-    expectWraps(within(row("sbx-long")).getByText(ROW_TITLE));
+    expectTruncates(within(row("sbx-long")).getByText(ROW_TITLE));
   });
 
-  it("wraps a sandbox's name in a list that is not the composer's", () => {
+  it("truncates a sandbox name in a list that is not the composer's", () => {
     renderSwitcher({ hosts: [LAPTOP, NAMED], composer: null, intent: "pin" });
 
     const title = within(row("sbx-long")).getByText(ROW_TITLE);
-    expectWraps(title);
+    expectTruncates(title);
   });
 });
 

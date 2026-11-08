@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { HostSwitcher } from "@/components/settings/host-scope/host-switcher";
 import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
 import { hostListItemToDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
@@ -28,29 +29,74 @@ afterEach(cleanup);
 
 function renderSelectedHost(
   host: HostScopeOption,
-  surface: "rail" | "inline" | "panel-header",
+  surface: "rail" | "inline" | "panel-header" | "field",
 ): void {
   render(
-    <HostSwitcher
-      hosts={[host]}
-      selected={host}
-      activeHostId={host.hostId}
-      onSelect={() => undefined}
-      action={null}
-      surface={surface}
-      intent="view"
-      consequence={null}
-      refusalByHostId={NO_HOST_OPTION_REFUSALS}
-      inertExceptHostId={null}
-      disabled={false}
-      isLoading={false}
-      listsFailed={false}
-      onRetryLists={() => undefined}
-      updateViewForHost={null}
-      composer={null}
-      environmentLabelForHost={null}
-    />,
+    <TooltipProvider delayDuration={0}>
+      <HostSwitcher
+        hosts={[host]}
+        selected={host}
+        activeHostId={host.hostId}
+        onSelect={() => undefined}
+        action={null}
+        surface={surface}
+        intent="view"
+        consequence={null}
+        refusalByHostId={NO_HOST_OPTION_REFUSALS}
+        inertExceptHostId={null}
+        disabled={false}
+        isLoading={false}
+        listsFailed={false}
+        onRetryLists={() => undefined}
+        updateViewForHost={null}
+        composer={null}
+        environmentLabelForHost={null}
+      />
+    </TooltipProvider>,
   );
+}
+
+function stubTextOverflow(name: string): () => void {
+  const originalScrollWidth = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "scrollWidth",
+  );
+  const originalClientWidth = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "clientWidth",
+  );
+  Object.defineProperty(HTMLElement.prototype, "scrollWidth", {
+    configurable: true,
+    get(this: HTMLElement) {
+      return this.textContent === name ? 240 : 0;
+    },
+  });
+  Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+    configurable: true,
+    get(this: HTMLElement) {
+      return this.textContent === name ? 100 : 0;
+    },
+  });
+  return () => {
+    if (originalScrollWidth !== undefined) {
+      Object.defineProperty(
+        HTMLElement.prototype,
+        "scrollWidth",
+        originalScrollWidth,
+      );
+    } else {
+      Reflect.deleteProperty(HTMLElement.prototype, "scrollWidth");
+    }
+    if (originalClientWidth !== undefined) {
+      Object.defineProperty(
+        HTMLElement.prototype,
+        "clientWidth",
+        originalClientWidth,
+      );
+    } else {
+      Reflect.deleteProperty(HTMLElement.prototype, "clientWidth");
+    }
+  };
 }
 
 function renderEmpty(props: {
@@ -412,6 +458,67 @@ describe("<HostSwitcher /> trigger kind", () => {
       expect(screen.getByTestId("settings-host-switcher").textContent).toBe(
         "Unnamed kind",
       );
+    },
+  );
+});
+
+describe("<HostSwitcher /> trigger layout", () => {
+  it("keeps the rail glyph, long name, status, and chevron in one centered row", () => {
+    const name = "AHostNameThatNeedsRoomToWrapWhenTheRailIsNarrow";
+    const host = hostScopeOptionFixture({
+      hostId: "local-host",
+      name,
+      isLocalMachine: true,
+      health: {
+        state: "offline",
+        label: "Offline",
+        detail: null,
+        tone: "idle",
+        live: false,
+      },
+    });
+    renderSelectedHost(host, "rail");
+
+    const trigger = screen.getByTestId("settings-host-switcher");
+    const nameElement = screen.getByText(name);
+    const status = screen.getByTestId("settings-host-switcher-status");
+    expect(trigger.classList.contains("items-center")).toBe(true);
+    expect(trigger.classList.contains("flex-wrap")).toBe(false);
+    expect(trigger.querySelector("svg.lucide-laptop")).not.toBeNull();
+    expect(trigger.querySelector("svg.lucide-chevron-down")).not.toBeNull();
+    expect(nameElement.classList.contains("whitespace-normal")).toBe(true);
+    expect(nameElement.classList.contains("wrap-anywhere")).toBe(true);
+    expect(nameElement.parentElement?.classList.contains("items-center")).toBe(
+      true,
+    );
+    expect(status.textContent).toBe("offline");
+    expect(status.parentElement?.classList.contains("whitespace-nowrap")).toBe(
+      true,
+    );
+  });
+
+  it.each(["inline", "field"] as const)(
+    "truncates the %s trigger label and exposes its full text in a tooltip",
+    async (surface) => {
+      const name = "A long host name that does not fit in this trigger";
+      const restore = stubTextOverflow(name);
+      try {
+        const host = hostScopeOptionFixture({ hostId: "host-long", name });
+        renderSelectedHost(host, surface);
+
+        const trigger = screen.getByTestId("settings-host-switcher");
+        const nameElement = screen.getByText(name);
+        expect(nameElement.classList.contains("truncate")).toBe(true);
+        expect(nameElement.classList.contains("whitespace-normal")).toBe(false);
+        expect(trigger.getAttribute("aria-label")).toBe(
+          `Settings host: ${name}`,
+        );
+
+        fireEvent.focus(trigger);
+        expect((await screen.findByRole("tooltip")).textContent).toBe(name);
+      } finally {
+        restore();
+      }
     },
   );
 });

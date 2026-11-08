@@ -1,6 +1,7 @@
 import type { ReactNode, Ref } from "react";
 import { HOST_FROZEN_WORD } from "@traycer/protocol/host/host-status";
 import { Badge } from "@/components/ui/badge";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { HostGlyph } from "@/components/settings/host-scope/host-glyph";
 import {
   hostOptionKindLabel,
@@ -14,8 +15,8 @@ import type { FleetUpdateView } from "@/lib/host/fleet-update/fleet-update-view"
 import { cn } from "@/lib/utils";
 
 /**
- * Shared content for every host picker: a wrapping name, then its state and
- * marks. The interaction shell owns selection and the trailing check.
+ * Shared content for every host picker: a single-line name beside its state
+ * and marks. The full name remains available when space cuts it off. The interaction shell owns selection and the trailing check.
  */
 export function HostOptionRow(props: {
   readonly host: HostScopeOption;
@@ -96,16 +97,23 @@ export function HostOptionRow(props: {
   // fact by definition, so the tag would restate the check it sits next to.
   const showActiveTag = intent === "view" && active;
   return (
-    <span className="flex min-w-0 flex-1 items-start gap-2">
+    <span className="flex min-w-0 flex-1 items-center gap-2">
       <HostGlyph
         host={host}
-        className="mt-0.5 size-4 shrink-0 text-muted-foreground"
+        className="size-4 shrink-0 text-muted-foreground"
       />
       <span className="sr-only">{hostOptionKindLabel(host)}</span>
-      <span className="flex min-w-0 flex-1 flex-col gap-0.5 text-start">
-        <span ref={nameRef} className="whitespace-normal wrap-anywhere">
-          {host.name}
-        </span>
+      <span className="flex min-w-0 flex-1 items-center gap-2 text-start">
+        <TooltipWrapper
+          label={nameRef === null ? host.name : null}
+          side="top"
+          sideOffset={6}
+          align={undefined}
+        >
+          <span ref={nameRef} className="min-w-0 flex-1 truncate">
+            {host.name}
+          </span>
+        </TooltipWrapper>
         {picked && intent === "view" ? (
           <span className="sr-only">Currently viewing</span>
         ) : null}
@@ -121,7 +129,7 @@ export function HostOptionRow(props: {
   );
 }
 
-/** Trailing marks share the line below the name and wrap within it. */
+/** Status and marks stay beside the name; truncation retains their full text. */
 function HostOptionMarks(props: {
   readonly host: HostScopeOption;
   readonly statusWord: string | null;
@@ -140,14 +148,21 @@ function HostOptionMarks(props: {
   )
     return null;
   return (
-    <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-ui-xs whitespace-normal wrap-anywhere text-muted-foreground">
+    <span className="flex min-w-0 shrink-0 items-center gap-2 text-ui-xs whitespace-nowrap text-muted-foreground">
       {host.terminalRunNote === null ? null : (
-        <span
-          className="text-pretty"
-          data-testid={`host-option-terminal-run-${host.hostId}`}
+        <TooltipWrapper
+          label={host.terminalRunNote}
+          side="top"
+          sideOffset={6}
+          align={undefined}
         >
-          {host.terminalRunNote}
-        </span>
+          <span
+            className="max-w-32 truncate"
+            data-testid={`host-option-terminal-run-${host.hostId}`}
+          >
+            {host.terminalRunNote}
+          </span>
+        </TooltipWrapper>
       )}
       {statusWord === null ? null : <span>{statusWord}</span>}
       {statusWord !== null && host.sandbox?.frozen ? (

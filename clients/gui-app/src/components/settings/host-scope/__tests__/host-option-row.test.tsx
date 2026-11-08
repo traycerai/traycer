@@ -264,10 +264,10 @@ describe("HostOptionRow — environment label (Tracy Bots)", () => {
   });
 });
 
-describe("HostOptionRow — wrapping names and marks", () => {
+describe("HostOptionRow — compact names and marks", () => {
   afterEach(cleanup);
 
-  it("wraps the complete name and places a refusal below it even when the caller opts out of wrapping", () => {
+  it("keeps a long name truncated beside its refusal in the merged row", () => {
     const name = "A very long host name that must remain readable";
     const host = hostScopeOptionFixture({
       hostId: "host-long",
@@ -286,14 +286,20 @@ describe("HostOptionRow — wrapping names and marks", () => {
       />,
     );
 
-    const title = getByText(name);
-    expect(title.classList.contains("whitespace-normal")).toBe(true);
-    expect(title.classList.contains("wrap-anywhere")).toBe(true);
-    const nameColumn = title.parentElement;
+    const nameElement = getByText(name);
+    expect(nameElement.classList.contains("truncate")).toBe(true);
+    expect(nameElement.getAttribute("title")).toBeNull();
+    const nameRow = nameElement.parentElement;
+    expect(nameRow?.classList.contains("items-center")).toBe(true);
     const marks = getByText("needs update");
-    expect(nameColumn?.contains(marks)).toBe(true);
+    expect(nameRow?.contains(marks)).toBe(true);
+    expect(marks.parentElement?.classList.contains("shrink-0")).toBe(true);
+    expect(marks.parentElement?.classList.contains("whitespace-nowrap")).toBe(
+      true,
+    );
     expect(
-      title.compareDocumentPosition(marks) & Node.DOCUMENT_POSITION_FOLLOWING,
+      nameElement.compareDocumentPosition(marks) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
   });
 });

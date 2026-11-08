@@ -31,6 +31,8 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { useIsTextTruncated } from "@/hooks/ui/use-is-text-truncated";
 import { HostGlyph } from "@/components/settings/host-scope/host-glyph";
 import { HostOptionRow } from "@/components/settings/host-scope/host-option-row";
 import {
@@ -406,7 +408,7 @@ export function HostSwitcher(props: {
   }
 
   return (
-    <>
+    <span className="flex min-w-0 items-center gap-1">
       <Popover open={open} onOpenChange={setOpen}>
         <HostSwitcherTrigger
           intent={props.intent}
@@ -596,7 +598,7 @@ export function HostSwitcher(props: {
         composer={props.composer}
         disabled={props.disabled}
       />
-    </>
+    </span>
   );
 }
 
@@ -695,6 +697,7 @@ function HostSwitcherStagedGear(props: {
       type="button"
       variant="ghost"
       size="icon-xs"
+      className="shrink-0"
       aria-label="Change the staged sandbox's shape"
       data-testid="host-switcher-staged-gear"
       disabled={props.disabled || composer.stagedBusy}
@@ -1209,76 +1212,84 @@ function HostSwitcherTrigger(props: {
     props.surfaceKind,
   );
   const triggerStatus = text.status;
+  const { ref: nameRef, isTruncated } = useIsTextTruncated<HTMLSpanElement>(
+    text.label,
+  );
   const keepFocusableWhenDisabled =
     props.disabled && props.keepFocusableWhenDisabled === true;
 
   return (
-    <PopoverTrigger asChild>
-      <Button
-        type="button"
-        variant="ghost"
-        // The DESTINATION belongs in the accessible name, not just the role.
-        // A bare "Host" would tell a screen-reader user what the control is
-        // for while withholding the one thing it displays.
-        // Named for what choosing DOES here. "Settings host" is the viewing
-        // scope; a `bind` surface is choosing the host the window runs on, and
-        // a screen reader that hears "Settings host" in the composer is being
-        // told about a different control than the one it is on.
-        aria-label={text.ariaLabel}
-        aria-disabled={keepFocusableWhenDisabled ? true : undefined}
-        disabled={props.disabled ? !keepFocusableWhenDisabled : undefined}
-        onClick={
-          keepFocusableWhenDisabled
-            ? (event: React.MouseEvent<HTMLButtonElement>) =>
-                event.preventDefault()
-            : undefined
-        }
-        data-testid="settings-host-switcher"
-        className={cn(
-          "group/host-switcher h-auto w-full justify-start gap-3 px-3 py-2 text-start",
-          "aria-disabled:cursor-not-allowed aria-disabled:opacity-60 aria-disabled:hover:bg-transparent",
-          props.surface.trigger,
-          props.surfaceKind === "rail" && "flex-wrap justify-between gap-y-1",
-        )}
-      >
-        <HostSwitcherStagedBusy composer={props.composer} />
-        {props.surfaceKind !== "rail" || selected === null ? null : (
-          <HostGlyph
-            host={selected}
-            className="size-4 shrink-0 text-muted-foreground"
-          />
-        )}
-        <span
+    <TooltipWrapper
+      label={isTruncated ? text.label : null}
+      side="top"
+      sideOffset={6}
+      align={undefined}
+    >
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          // The DESTINATION belongs in the accessible name, not just the role.
+          // A bare "Host" would tell a screen-reader user what the control is
+          // for while withholding the one thing it displays.
+          // Named for what choosing DOES here. "Settings host" is the viewing
+          // scope; a `bind` surface is choosing the host the window runs on, and
+          // a screen reader that hears "Settings host" in the composer is being
+          // told about a different control than the one it is on.
+          aria-label={text.ariaLabel}
+          aria-disabled={keepFocusableWhenDisabled ? true : undefined}
+          disabled={props.disabled ? !keepFocusableWhenDisabled : undefined}
+          onClick={
+            keepFocusableWhenDisabled
+              ? (event: React.MouseEvent<HTMLButtonElement>) =>
+                  event.preventDefault()
+              : undefined
+          }
+          data-testid="settings-host-switcher"
           className={cn(
-            "flex min-w-0 flex-1 flex-col gap-0.5",
-            props.surfaceKind === "rail" && "order-1 basis-full",
+            "group/host-switcher h-auto w-full min-w-0 justify-start gap-3 px-3 py-2 text-start",
+            "aria-disabled:cursor-not-allowed aria-disabled:opacity-60 aria-disabled:hover:bg-transparent",
+            props.surface.trigger,
           )}
         >
-          <span
-            className={cn(
-              "text-ui-sm font-medium whitespace-normal wrap-anywhere",
-              selected === null || props.surfaceKind === "inline"
-                ? "text-muted-foreground"
-                : "text-foreground",
-              !props.disabled && "group-hover/host-switcher:text-foreground",
-            )}
-          >
-            {text.label}
-          </span>
-          {triggerStatus === null ? null : (
-            <span className="flex min-w-0 flex-wrap items-center gap-2 text-ui-xs whitespace-normal wrap-anywhere text-muted-foreground">
-              <span data-testid="settings-host-switcher-status">
-                {triggerStatus}
-              </span>
-              {selected?.sandbox?.frozen ? (
-                <Badge variant="warning">{HOST_FROZEN_WORD}</Badge>
-              ) : null}
-            </span>
+          <HostSwitcherStagedBusy composer={props.composer} />
+          {props.surfaceKind !== "rail" || selected === null ? null : (
+            <HostGlyph
+              host={selected}
+              className="size-4 shrink-0 text-muted-foreground"
+            />
           )}
-        </span>
-        <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
-      </Button>
-    </PopoverTrigger>
+          <span className="flex min-w-0 flex-1 items-center gap-2">
+            <span
+              ref={nameRef}
+              className={cn(
+                "min-w-0 flex-1 text-ui-sm font-medium",
+                props.surfaceKind === "rail"
+                  ? "whitespace-normal wrap-anywhere"
+                  : "truncate",
+                selected === null || props.surfaceKind === "inline"
+                  ? "text-muted-foreground"
+                  : "text-foreground",
+                !props.disabled && "group-hover/host-switcher:text-foreground",
+              )}
+            >
+              {text.label}
+            </span>
+            {triggerStatus === null ? null : (
+              <span className="flex shrink-0 items-center gap-2 text-ui-xs whitespace-nowrap text-muted-foreground">
+                <span data-testid="settings-host-switcher-status">
+                  {triggerStatus}
+                </span>
+                {selected?.sandbox?.frozen ? (
+                  <Badge variant="warning">{HOST_FROZEN_WORD}</Badge>
+                ) : null}
+              </span>
+            )}
+          </span>
+          <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+        </Button>
+      </PopoverTrigger>
+    </TooltipWrapper>
   );
 }
 
