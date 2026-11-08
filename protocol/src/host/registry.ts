@@ -1241,6 +1241,7 @@ import {
   resourcesSubscribeV13,
   resourcesSubscribeV14,
   resourcesSubscribeV15,
+  resourcesSubscribeV16,
   resourcesKillV10,
   resourcesListLocalServersDowngradeV20ToV10,
   resourcesListLocalServersUpgradeV10ToV20,
@@ -15425,7 +15426,7 @@ const HOST_STREAM_RPC_REGISTRY_CORE_DEFINITION = {
 const HOST_STREAM_RPC_REGISTRY_FEATURE_DEFINITION = {
   "resources.subscribe": {
     1: {
-      latestMinor: 5,
+      latestMinor: 6,
       versions: {
         0: {
           contract: resourcesSubscribeV10,
@@ -15450,6 +15451,11 @@ const HOST_STREAM_RPC_REGISTRY_FEATURE_DEFINITION = {
         // only a visible resource monitor asks for interactive refresh.
         5: {
           contract: resourcesSubscribeV15,
+        },
+        // @1.6 adds the host's processor count without changing the per-core
+        // CPU readings that every earlier negotiated minor still receives.
+        6: {
+          contract: resourcesSubscribeV16,
         },
       },
     },

@@ -568,6 +568,7 @@ export function seedResourceStreams(windowKind: SweepWindow | "panel"): void {
             app: {
               sampledAt,
               hostTotalMemoryBytes: 32 * 1024 ** 3,
+              hostCpuCount: 16,
               process: {
                 pid: 10,
                 parentPid: null,
