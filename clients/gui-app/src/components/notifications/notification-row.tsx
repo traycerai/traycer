@@ -569,6 +569,7 @@ const HOST_KIND_GLYPHS: Record<
   // The reader's own role is the subject, so the row carries the same shield as
   // the task-sharing role change it mirrors.
   "team.role.changed": { icon: Shield, colorClassName: INVITE_COLOR },
+  "access.readonly.retired": { icon: Shield, colorClassName: NEUTRAL_COLOR },
   // Never rendered: the merged rows drop the kind.
   "secret.export.minted": NEUTRAL_BELL,
   "secret.rotated": NEUTRAL_BELL,

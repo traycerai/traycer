@@ -37,6 +37,7 @@ import { BotReadFailure } from "@/components/bots/bot-read-failure";
 import { BotReplyingStrip } from "@/components/bots/bot-replying-strip";
 import { useBotReplyingTurn } from "@/hooks/bots/use-bot-replying-turn";
 import { BotTaskList } from "@/components/bots/bot-task-list";
+import { TracyTranscriptOriginScope } from "@/components/bots/tracy-transcript-origin-scope";
 import { BotThreadFollowControl } from "@/components/bots/bot-thread-follow";
 import { ChannelPost } from "@/components/bots/bot-channel-post";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
@@ -496,13 +497,15 @@ function ThreadOriginPost(
         chatId={conversationId}
         hostId={hostId}
       >
-        <ChatBotMessage
-          message={origin.row}
-          presentation={
-            origin.loaded ? loadedPresentation : unloadedPresentation
-          }
-          hoverActions={false}
-        />
+        <TracyTranscriptOriginScope botId={botId}>
+          <ChatBotMessage
+            message={origin.row}
+            presentation={
+              origin.loaded ? loadedPresentation : unloadedPresentation
+            }
+            hoverActions={false}
+          />
+        </TracyTranscriptOriginScope>
       </BotTranscriptImageScope>
       {queued ? (
         <div className="px-3">

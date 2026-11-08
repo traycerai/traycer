@@ -1024,7 +1024,7 @@ function RoutingCatalogSync({
     client,
     harnessId,
     null,
-    { enabled: open && available, subscribed: open },
+    { profileId: null, enabled: open && available, subscribed: open },
   );
   const models = modelsQuery.data?.models;
   useEffect(() => {

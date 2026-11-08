@@ -210,6 +210,8 @@ import {
 } from "react";
 
 interface ChatMessagesProps {
+  /** Thread side panes use normal scrolling without a minimap rail. */
+  minimapEnabled?: boolean;
   taskTitle: string;
   /** Chat tab identity; keys the composer draft the quote affordance appends to.
    *  Also this chat's `chatId` half of the dual-key identity. */
@@ -5061,6 +5063,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // The rail navigates the transcript, which an open-as-chat view covers; it
   // would float over that view (z-40), so it steps aside until the view closes.
   const showTurnMinimap =
+    props.minimapEnabled !== false &&
     subagentDrillIn.openId === null &&
     shouldMountChatTurnMinimap({
       hasContent,

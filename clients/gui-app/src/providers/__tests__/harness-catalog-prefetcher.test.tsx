@@ -191,6 +191,7 @@ describe("HarnessCatalogPrefetcher", () => {
 
     function BootSurface(): ReactNode {
       useGuiHarnessModelsQueryForClient(client, "claude", null, {
+        profileId: null,
         enabled: true,
         subscribed: true,
       });

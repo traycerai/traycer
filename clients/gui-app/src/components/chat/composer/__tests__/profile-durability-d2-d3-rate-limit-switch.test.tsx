@@ -34,6 +34,14 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
       ? { data: { providers: mocks.providers } }
       : { data: undefined },
 }));
+vi.mock("@/hooks/providers/use-providers-read-model-routes-query", () => ({
+  useProvidersReadModelRoutesQuery: () => ({
+    data: undefined,
+    dataUpdatedAt: 0,
+    refetch: () => Promise.resolve(undefined),
+  }),
+}));
+
 vi.mock("@/hooks/rate-limits/use-profile-usage-presentation", () => ({
   useProfileUsagePresentation: () => ({
     isHostReady: true,
@@ -121,6 +129,8 @@ function ComposerProfileSwitchHarness() {
     "authoritative",
   );
   const prompt = useProfileRateLimitSwitchPrompt({
+    workingDirectory: null,
+    hostId: null,
     harnessId: "claude",
     profileId,
     selectedModel: null,
@@ -168,6 +178,8 @@ function ComposerBannerPrecedenceHarness() {
     "authoritative",
   );
   const prompt = useProfileRateLimitSwitchPrompt({
+    workingDirectory: null,
+    hostId: null,
     harnessId: "claude",
     profileId,
     selectedModel: null,

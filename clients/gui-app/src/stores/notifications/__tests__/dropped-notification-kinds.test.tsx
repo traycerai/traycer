@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, renderHook } from "@testing-library/react";
-import type { HostNotificationsCloudFeedRowV17 } from "@traycer/protocol/host/notifications/contracts";
+import type { HostNotificationsCloudFeedRowV18 } from "@traycer/protocol/host/notifications/contracts";
 import {
   __resetHostNotificationsStoreForTests,
   useHostNotificationsStore,
@@ -53,8 +53,8 @@ const APPLY_FAILED_PAYLOAD = {
 const PRESENTATION = { epicTitle: "Epic", chatTitle: "Chat" } as const;
 
 function cloudRow(
-  entry: HostNotificationsCloudFeedRowV17["entry"],
-): HostNotificationsCloudFeedRowV17 {
+  entry: HostNotificationsCloudFeedRowV18["entry"],
+): HostNotificationsCloudFeedRowV18 {
   return {
     entryId: entry.id,
     originHostId: "host-cloud",

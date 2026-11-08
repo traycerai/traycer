@@ -1,9 +1,9 @@
 import { z } from "zod";
 import type { SchemaVersion } from "@traycer/protocol/framework/index";
 import {
-  hostNotificationsCloudFeedRowSchemaV17,
+  hostNotificationsCloudFeedRowSchemaV18,
   hostNotificationsCloudFeedSummarySchema,
-  type HostNotificationsCloudFeedRowV17,
+  type HostNotificationsCloudFeedRowV18,
   type HostNotificationsCloudFeedSummary,
 } from "@traycer/protocol/host/notifications/contracts";
 import {
@@ -23,7 +23,7 @@ const SERVICE = "host.notifications.cloudFeed.subscribe";
 
 /** The account notification feed as the list and the badge paint it. */
 export interface NotificationFeedReplicaPage {
-  readonly rows: readonly HostNotificationsCloudFeedRowV17[];
+  readonly rows: readonly HostNotificationsCloudFeedRowV18[];
   readonly summary: HostNotificationsCloudFeedSummary;
   /**
    * The `cloudFeed.subscribe` version the serving tier negotiated when this
@@ -43,7 +43,7 @@ const shellSchema = z.object({
     })
     .nullable(),
 });
-const rowsSchema = z.array(hostNotificationsCloudFeedRowSchemaV17);
+const rowsSchema = z.array(hostNotificationsCloudFeedRowSchemaV18);
 
 /**
  * The cloud notification feed in the replica tier. Every row is the
