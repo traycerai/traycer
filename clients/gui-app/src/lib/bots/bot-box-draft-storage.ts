@@ -299,9 +299,9 @@ interface GoneImages extends BoxAt {
   readonly hashes: ReadonlySet<string>;
 }
 
-/** A box a write left an image out of, and the draft it wrote for it (`null`: none). */
+/** A box a write left an image out of, and the draft it wrote for it. */
 interface IncompleteBox extends BoxAt {
-  readonly written: StoredBoxDraft | null;
+  readonly written: StoredBoxDraft;
 }
 
 function boxKeyOf(botId: string, key: string): string {
@@ -467,17 +467,31 @@ function putChangedBoxes(
   for (const { botId, key } of changedBoxes(next, threadBoxes)) {
     const draft = next[botId]?.[key];
     const box = boxKeyOf(botId, key);
+    if (draft === undefined) {
+      putBox(threadBoxes, botId, key, null);
+      continue;
+    }
     const leftOut: string[] = [];
-    const written =
-      draft === undefined
-        ? null
-        : storedDraft(draft, writer.unresolved.get(box), partition, (b64) => {
-            const hash = writer.hashByInline.get(b64) ?? null;
-            if (hash === null) leftOut.push(b64);
-            return hash;
-          });
-    if (leftOut.length > 0) incomplete.set(box, { botId, key, written });
-    putBox(threadBoxes, botId, key, written);
+    const written = storedDraft(
+      draft,
+      writer.unresolved.get(box),
+      partition,
+      (b64) => {
+        const hash = writer.hashByInline.get(b64) ?? null;
+        if (hash === null) leftOut.push(b64);
+        return hash;
+      },
+    );
+    if (leftOut.length === 0) {
+      putBox(threadBoxes, botId, key, written);
+      continue;
+    }
+    // A draft of nothing but images not stored yet is kept as an empty one,
+    // which a read leaves out of the box: what is stored for it then tells
+    // this window's retry apart from another window clearing the box.
+    const kept = written ?? { ...draft, content: { type: "doc", content: [] } };
+    incomplete.set(box, { botId, key, written: kept });
+    putBox(threadBoxes, botId, key, kept);
   }
   return incomplete;
 }
@@ -563,7 +577,7 @@ function changedBoxes(
       writer.cleared.has(box) ||
       !sameDraft(baseline[botId]?.[key], next[botId]?.[key]) ||
       (incomplete !== undefined &&
-        sameDraft(incomplete.written ?? undefined, stored[botId]?.[key]))
+        sameDraft(incomplete.written, stored[botId]?.[key]))
     ) {
       changed.set(box, { botId, key });
     }

@@ -341,27 +341,32 @@ describe("two windows open at once over one device's storage", () => {
     expect(storedDrafts(a)?.[BOT_ID]?.x).toBeUndefined();
   });
 
-  it("does not bring back a box another window cleared that this one wrote without its image", async () => {
-    app.drafts
-      .getState()
-      .typeThreadBox(BOT_ID, "x", "pic", boxDoc("pic", [INLINE_IMAGE]));
-    window.dispatchEvent(new Event("pagehide"));
-    expect(
-      JSON.stringify(storedDrafts(app)?.[BOT_ID]?.x ?? null),
-    ).not.toContain("imageAttachment");
-    const a = app;
-    const b = await windowBeside();
+  it.each(["pic", ""])(
+    "does not bring back a box another window cleared that this one wrote without its image (text %j)",
+    async (text) => {
+      app.drafts
+        .getState()
+        .typeThreadBox(BOT_ID, "x", text, boxDoc(text, [INLINE_IMAGE]));
+      window.dispatchEvent(new Event("pagehide"));
+      expect(
+        JSON.stringify(storedDrafts(app)?.[BOT_ID]?.x ?? null),
+      ).not.toContain("imageAttachment");
+      const a = app;
+      const b = await windowBeside();
 
-    b.drafts.getState().typeThreadBox(BOT_ID, "x", "", null);
-    await waitForStore(
-      b,
-      (stored) => stored !== null && stored[BOT_ID] === undefined,
-    );
-    a.drafts.getState().typeThreadBox(BOT_ID, "z", "from A", null);
-    await waitForStore(a, (stored) => stored?.[BOT_ID]?.z !== undefined);
+      // An image-only draft reads back as nothing there: typing is what a clear needs first.
+      b.drafts.getState().typeThreadBox(BOT_ID, "x", "hi", boxDoc("hi", []));
+      b.drafts.getState().typeThreadBox(BOT_ID, "x", "", null);
+      await waitForStore(
+        b,
+        (stored) => stored !== null && stored[BOT_ID] === undefined,
+      );
+      a.drafts.getState().typeThreadBox(BOT_ID, "z", "from A", null);
+      await waitForStore(a, (stored) => stored?.[BOT_ID]?.z !== undefined);
 
-    expect(storedDrafts(a)?.[BOT_ID]?.x).toBeUndefined();
-  });
+      expect(storedDrafts(a)?.[BOT_ID]?.x).toBeUndefined();
+    },
+  );
 });
 
 /**
@@ -699,10 +704,14 @@ describe("a write a newer one overtakes while it stores an image", () => {
     };
   }
 
-  async function storingTypedImage(held: HeldPuts): Promise<void> {
+  /** The channel's draft of `text` and an image is being written, its image put held. */
+  async function storingTypedImage(
+    held: HeldPuts,
+    text: string,
+  ): Promise<void> {
     held.app.drafts
       .getState()
-      .typeThreadBox(BOT_ID, "channel", "pic", boxDoc("pic", [INLINE_IMAGE]));
+      .typeThreadBox(BOT_ID, "channel", text, boxDoc(text, [INLINE_IMAGE]));
     await vi.advanceTimersByTimeAsync(
       held.app.storage.BOT_BOX_DRAFT_WRITE_DEBOUNCE_MS,
     );
@@ -713,7 +722,7 @@ describe("a write a newer one overtakes while it stores an image", () => {
     const hash = await storeImageBytes();
     const held = await restartWithImagePutsHeld(everyImage);
     app = held.app;
-    await storingTypedImage(held);
+    await storingTypedImage(held, "pic");
 
     app.drafts.getState().typeThreadBox(BOT_ID, "channel", "", null);
     await waitForStore(
@@ -725,26 +734,29 @@ describe("a write a newer one overtakes while it stores an image", () => {
     expect(app.imageRoots().has(hash)).toBe(false);
   });
 
-  it("writes the image a page hide left out once its write stores it, though nothing else changed", async () => {
-    const held = await restartWithImagePutsHeld(everyImage);
-    app = held.app;
-    await storingTypedImage(held);
+  it.each(["pic", ""])(
+    "writes the image a page hide left out once its write stores it, though nothing else changed (text %j)",
+    async (text) => {
+      const held = await restartWithImagePutsHeld(everyImage);
+      app = held.app;
+      await storingTypedImage(held, text);
 
-    window.dispatchEvent(new Event("pagehide"));
-    expect(
-      JSON.stringify(storedDrafts(app)?.[BOT_ID]?.channel ?? null),
-    ).not.toContain("imageAttachment");
-    await held.release();
+      window.dispatchEvent(new Event("pagehide"));
+      expect(
+        JSON.stringify(storedDrafts(app)?.[BOT_ID]?.channel ?? null),
+      ).not.toContain("imageAttachment");
+      await held.release();
 
-    expect(JSON.stringify(storedDrafts(app)?.[BOT_ID]?.channel)).toContain(
-      '"hash"',
-    );
-  });
+      expect(JSON.stringify(storedDrafts(app)?.[BOT_ID]?.channel)).toContain(
+        '"hash"',
+      );
+    },
+  );
 
   it("is not written by a second page hide over the newer draft the first one wrote", async () => {
     const held = await restartWithImagePutsHeld(everyImage);
     app = held.app;
-    await storingTypedImage(held);
+    await storingTypedImage(held, "pic");
 
     app.drafts.getState().typeThreadBox(BOT_ID, "channel", "newer", null);
     window.dispatchEvent(new Event("pagehide"));
