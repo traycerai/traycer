@@ -11,7 +11,9 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
@@ -25,6 +27,7 @@ const fixture = vi.hoisted(() => ({
   hostId: "mock-local",
   supportsSignOut: false,
   supportChecks: [] as Array<{ hostId: string | null; method: string }>,
+  openChanges: [] as boolean[],
 }));
 
 vi.mock("@/lib/host", async (importOriginal) => {
@@ -170,7 +173,9 @@ function renderDialog(current: ProviderProfile) {
           startInReauth={false}
           isLocalHost
           open
-          onOpenChange={() => undefined}
+          onOpenChange={(nextOpen) => {
+            fixture.openChanges.push(nextOpen);
+          }}
           remainingProfilesAfterRemoval={[]}
           onSelectedProfileIdChange={() => undefined}
           profileEnablementAvailable
@@ -209,15 +214,24 @@ function installSignOutClient() {
   return messenger;
 }
 
+/** The real Sonner store: `toastFromHostError` is not mocked in this suite. */
+function storedToastTitles(): unknown[] {
+  return toast
+    .getToasts()
+    .flatMap((entry) => ("title" in entry ? [entry.title] : []));
+}
+
 describe("<ProfileEditDialog /> sign-out gate", () => {
   beforeEach(() => {
     fixture.client = null;
     fixture.supportsSignOut = false;
     fixture.supportChecks = [];
+    fixture.openChanges = [];
   });
 
   afterEach(() => {
     cleanup();
+    toast.dismiss();
     fixture.client = null;
   });
 
@@ -327,5 +341,60 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
       providerId: "claude-code",
       profileId: "profile-work",
     });
+  });
+
+  it("tells the person to refresh when the connection changed, and leaves the retry to them", async () => {
+    fixture.supportsSignOut = true;
+    const messenger = installSignOutClient();
+    messenger.setHandlers({
+      "providers.signOutProfile": () => {
+        throw new HostRpcError({
+          code: "binding-changed",
+          message: "The account changed.",
+          requestId: "req-sign-out-stale",
+          method: "providers.signOutProfile",
+          fatalDetails: null,
+        });
+      },
+    });
+    renderDialog(
+      profile(
+        { kind: "admitted", bindingVersion: 1 },
+        credentialHome("self-sufficient"),
+      ),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+
+    await waitFor(() =>
+      expect(
+        messenger.phases.some(
+          (event) =>
+            event.kind === "response" &&
+            event.error?.code === "binding-changed",
+        ),
+      ).toBe(true),
+    );
+    await waitFor(() =>
+      expect(storedToastTitles()).toContain(
+        "This connection changed. Refresh and try again.",
+      ),
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByRole<HTMLButtonElement>("button", { name: "Sign out" })
+          .disabled,
+      ).toBe(false),
+    );
+    expect(messenger.calls).toHaveLength(1);
+    expect(fixture.openChanges).toEqual([]);
+
+    messenger.setHandlers({
+      "providers.signOutProfile": () => ({ signedOut: true }),
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+
+    await waitFor(() => expect(fixture.openChanges).toEqual([false]));
+    expect(messenger.calls).toHaveLength(2);
   });
 });
