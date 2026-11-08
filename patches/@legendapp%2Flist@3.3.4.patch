@@ -1,5 +1,5 @@
 diff --git a/react-native.web.d.ts b/react-native.web.d.ts
-index b6c7481..4d9ccd8 100644
+index b6c7481..26bd686 100644
 --- a/react-native.web.d.ts
 +++ b/react-native.web.d.ts
 @@ -32,7 +32,7 @@ interface MaintainVisibleContentPositionNormalized<ItemT = any> {
@@ -32,7 +32,7 @@ index b6c7481..4d9ccd8 100644
      /**
       * Called after the initial render work completes.
       */
-@@ -562,14 +576,20 @@ type LegendListState$1 = {
+@@ -562,14 +576,26 @@ type LegendListState$1 = {
      isWithinMaintainScrollAtEndThreshold: boolean;
      getAverageItemSizes: () => Record<string, LegendListAverageItemSize>;
      indexByKey: (key: string) => number | undefined;
@@ -46,6 +46,12 @@ index b6c7481..4d9ccd8 100644
 +    positionAtIndex: (index: number) => number | undefined;
      positionByKey: (key: string) => number | undefined;
      scroll: number;
++    /** Patched: the adjust the list holds in its layout and has not written
++     *  to the offset - an animated scroll's until it ends, or a touch
++     *  scroll's while it owns the scroller. Every row is placed this much
++     *  short of its position, so a row stands on screen at its position
++     *  less this. */
++    scrollAdjustPending: number;
      scrollLength: number;
      scrollVelocity: number;
 -    sizeAtIndex: (index: number) => number;
@@ -55,7 +61,7 @@ index b6c7481..4d9ccd8 100644
      sizes: Map<string, number>;
      start: number;
      startBuffered: number;
-@@ -683,6 +703,12 @@ type LegendListRef$1 = {
+@@ -683,6 +709,12 @@ type LegendListRef$1 = {
       * @param size - The measured item size.
       */
      setItemSize(itemKey: string, size: Pick<LayoutRectangle, "height" | "width">): void;
@@ -69,7 +75,7 @@ index b6c7481..4d9ccd8 100644
       * Sets whether scroll processing is enabled.
       * @param enabled - If true, scroll processing is enabled.
 diff --git a/react-native.web.js b/react-native.web.js
-index ea03488..6013acb 100644
+index ea03488..eb07a0a 100644
 --- a/react-native.web.js
 +++ b/react-native.web.js
 @@ -789,7 +789,15 @@ function recalculateSettledScroll(ctx) {
@@ -942,7 +948,21 @@ index ea03488..6013acb 100644
        isAtEnd: peek$(ctx, "isAtEnd"),
        isAtStart: peek$(ctx, "isAtStart"),
        isEndReached: state.isEndReached,
-@@ -7448,6 +8002,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7385,6 +7939,13 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+         return index === void 0 ? void 0 : state.positions[index];
+       },
+       scroll: state.scroll,
++      // Patched: the adjust the list holds in its layout and has not
++      // written to the offset: an animated scroll's until it ends, or a
++      // touch scroll's while it owns the scroller
++      // (`shouldAbsorbAdjustInLayout`). Every container is placed this much
++      // short of its item's position, so a row stands on screen at its
++      // position less this.
++      scrollAdjustPending: peek$(ctx, "scrollAdjustPending"),
+       scrollLength: state.scrollLength,
+       scrollVelocity: getScrollVelocity(state),
+       sizeAtIndex: (index) => state.sizesKnown.get(getId(state, index)),
+@@ -7448,6 +8009,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      setItemSize: (itemKey, size) => {
        updateItemSizes(ctx, { itemKey, size });
      },
@@ -978,7 +998,7 @@ index ea03488..6013acb 100644
      setScrollProcessingEnabled: (enabled) => {
        state.scrollProcessingEnabled = enabled;
      },
-@@ -7720,6 +8303,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -7720,6 +8310,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
      onEndReached,
      onEndReachedThreshold = 0.5,
      onItemSizeChanged,
@@ -986,7 +1006,7 @@ index ea03488..6013acb 100644
      onMetricsChange,
      onLayout: onLayoutProp,
      onLoad,
-@@ -7845,6 +8429,9 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -7845,6 +8436,9 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
        ctx.values.set("adaptiveRender", (_m = experimental_adaptiveRender == null ? void 0 : experimental_adaptiveRender.initialMode) != null ? _m : "normal");
        ctx.state = {
          averageSizes: {},
@@ -996,7 +1016,7 @@ index ea03488..6013acb 100644
          columnSpans: [],
          columns: [],
          containerItemGenerations: [],
-@@ -7978,6 +8565,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -7978,6 +8572,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
      onEndReachedThreshold,
      onFirstVisibleItemChanged,
      onItemSizeChanged,
@@ -1005,7 +1025,7 @@ index ea03488..6013acb 100644
      onMomentumScrollEnd,
      onScroll: throttleScrollFn,
 diff --git a/react-native.web.mjs b/react-native.web.mjs
-index c96345b..104368c 100644
+index c96345b..49df249 100644
 --- a/react-native.web.mjs
 +++ b/react-native.web.mjs
 @@ -768,7 +768,15 @@ function recalculateSettledScroll(ctx) {
@@ -1878,7 +1898,21 @@ index c96345b..104368c 100644
        isAtEnd: peek$(ctx, "isAtEnd"),
        isAtStart: peek$(ctx, "isAtStart"),
        isEndReached: state.isEndReached,
-@@ -7427,6 +7981,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7364,6 +7918,13 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+         return index === void 0 ? void 0 : state.positions[index];
+       },
+       scroll: state.scroll,
++      // Patched: the adjust the list holds in its layout and has not
++      // written to the offset: an animated scroll's until it ends, or a
++      // touch scroll's while it owns the scroller
++      // (`shouldAbsorbAdjustInLayout`). Every container is placed this much
++      // short of its item's position, so a row stands on screen at its
++      // position less this.
++      scrollAdjustPending: peek$(ctx, "scrollAdjustPending"),
+       scrollLength: state.scrollLength,
+       scrollVelocity: getScrollVelocity(state),
+       sizeAtIndex: (index) => state.sizesKnown.get(getId(state, index)),
+@@ -7427,6 +7988,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      setItemSize: (itemKey, size) => {
        updateItemSizes(ctx, { itemKey, size });
      },
@@ -1914,7 +1948,7 @@ index c96345b..104368c 100644
      setScrollProcessingEnabled: (enabled) => {
        state.scrollProcessingEnabled = enabled;
      },
-@@ -7699,6 +8282,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -7699,6 +8289,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
      onEndReached,
      onEndReachedThreshold = 0.5,
      onItemSizeChanged,
@@ -1922,7 +1956,7 @@ index c96345b..104368c 100644
      onMetricsChange,
      onLayout: onLayoutProp,
      onLoad,
-@@ -7824,6 +8408,9 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -7824,6 +8415,9 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
        ctx.values.set("adaptiveRender", (_m = experimental_adaptiveRender == null ? void 0 : experimental_adaptiveRender.initialMode) != null ? _m : "normal");
        ctx.state = {
          averageSizes: {},
@@ -1932,7 +1966,7 @@ index c96345b..104368c 100644
          columnSpans: [],
          columns: [],
          containerItemGenerations: [],
-@@ -7957,6 +8544,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -7957,6 +8551,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
      onEndReachedThreshold,
      onFirstVisibleItemChanged,
      onItemSizeChanged,
@@ -1941,7 +1975,7 @@ index c96345b..104368c 100644
      onMomentumScrollEnd,
      onScroll: throttleScrollFn,
 diff --git a/react.d.ts b/react.d.ts
-index b6c7481..4d9ccd8 100644
+index b6c7481..26bd686 100644
 --- a/react.d.ts
 +++ b/react.d.ts
 @@ -32,7 +32,7 @@ interface MaintainVisibleContentPositionNormalized<ItemT = any> {
@@ -1974,7 +2008,7 @@ index b6c7481..4d9ccd8 100644
      /**
       * Called after the initial render work completes.
       */
-@@ -562,14 +576,20 @@ type LegendListState$1 = {
+@@ -562,14 +576,26 @@ type LegendListState$1 = {
      isWithinMaintainScrollAtEndThreshold: boolean;
      getAverageItemSizes: () => Record<string, LegendListAverageItemSize>;
      indexByKey: (key: string) => number | undefined;
@@ -1988,6 +2022,12 @@ index b6c7481..4d9ccd8 100644
 +    positionAtIndex: (index: number) => number | undefined;
      positionByKey: (key: string) => number | undefined;
      scroll: number;
++    /** Patched: the adjust the list holds in its layout and has not written
++     *  to the offset - an animated scroll's until it ends, or a touch
++     *  scroll's while it owns the scroller. Every row is placed this much
++     *  short of its position, so a row stands on screen at its position
++     *  less this. */
++    scrollAdjustPending: number;
      scrollLength: number;
      scrollVelocity: number;
 -    sizeAtIndex: (index: number) => number;
@@ -1997,7 +2037,7 @@ index b6c7481..4d9ccd8 100644
      sizes: Map<string, number>;
      start: number;
      startBuffered: number;
-@@ -683,6 +703,12 @@ type LegendListRef$1 = {
+@@ -683,6 +709,12 @@ type LegendListRef$1 = {
       * @param size - The measured item size.
       */
      setItemSize(itemKey: string, size: Pick<LayoutRectangle, "height" | "width">): void;
@@ -2011,7 +2051,7 @@ index b6c7481..4d9ccd8 100644
       * Sets whether scroll processing is enabled.
       * @param enabled - If true, scroll processing is enabled.
 diff --git a/react.js b/react.js
-index ea03488..1d7e3b5 100644
+index ea03488..db6ffa5 100644
 --- a/react.js
 +++ b/react.js
 @@ -785,11 +785,31 @@ function checkThresholds(ctx, allowedEdge) {
@@ -3103,7 +3143,21 @@ index ea03488..1d7e3b5 100644
        isAtEnd: peek$(ctx, "isAtEnd"),
        isAtStart: peek$(ctx, "isAtStart"),
        isEndReached: state.isEndReached,
-@@ -7448,6 +8089,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7385,6 +8026,13 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+         return index === void 0 ? void 0 : state.positions[index];
+       },
+       scroll: state.scroll,
++      // Patched: the adjust the list holds in its layout and has not
++      // written to the offset: an animated scroll's until it ends, or a
++      // touch scroll's while it owns the scroller
++      // (`shouldAbsorbAdjustInLayout`). Every container is placed this much
++      // short of its item's position, so a row stands on screen at its
++      // position less this.
++      scrollAdjustPending: peek$(ctx, "scrollAdjustPending"),
+       scrollLength: state.scrollLength,
+       scrollVelocity: getScrollVelocity(state),
+       sizeAtIndex: (index) => state.sizesKnown.get(getId(state, index)),
+@@ -7448,6 +8096,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      setItemSize: (itemKey, size) => {
        updateItemSizes(ctx, { itemKey, size });
      },
@@ -3139,7 +3193,7 @@ index ea03488..1d7e3b5 100644
      setScrollProcessingEnabled: (enabled) => {
        state.scrollProcessingEnabled = enabled;
      },
-@@ -7720,6 +8390,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -7720,6 +8397,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
      onEndReached,
      onEndReachedThreshold = 0.5,
      onItemSizeChanged,
@@ -3147,7 +3201,7 @@ index ea03488..1d7e3b5 100644
      onMetricsChange,
      onLayout: onLayoutProp,
      onLoad,
-@@ -7845,6 +8516,9 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -7845,6 +8523,9 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
        ctx.values.set("adaptiveRender", (_m = experimental_adaptiveRender == null ? void 0 : experimental_adaptiveRender.initialMode) != null ? _m : "normal");
        ctx.state = {
          averageSizes: {},
@@ -3157,7 +3211,7 @@ index ea03488..1d7e3b5 100644
          columnSpans: [],
          columns: [],
          containerItemGenerations: [],
-@@ -7978,6 +8652,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -7978,6 +8659,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
      onEndReachedThreshold,
      onFirstVisibleItemChanged,
      onItemSizeChanged,
@@ -3166,7 +3220,7 @@ index ea03488..1d7e3b5 100644
      onMomentumScrollEnd,
      onScroll: throttleScrollFn,
 diff --git a/react.mjs b/react.mjs
-index c96345b..0cb0796 100644
+index c96345b..c157ca4 100644
 --- a/react.mjs
 +++ b/react.mjs
 @@ -764,11 +764,31 @@ function checkThresholds(ctx, allowedEdge) {
@@ -4258,7 +4312,21 @@ index c96345b..0cb0796 100644
        isAtEnd: peek$(ctx, "isAtEnd"),
        isAtStart: peek$(ctx, "isAtStart"),
        isEndReached: state.isEndReached,
-@@ -7427,6 +8068,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7364,6 +8005,13 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+         return index === void 0 ? void 0 : state.positions[index];
+       },
+       scroll: state.scroll,
++      // Patched: the adjust the list holds in its layout and has not
++      // written to the offset: an animated scroll's until it ends, or a
++      // touch scroll's while it owns the scroller
++      // (`shouldAbsorbAdjustInLayout`). Every container is placed this much
++      // short of its item's position, so a row stands on screen at its
++      // position less this.
++      scrollAdjustPending: peek$(ctx, "scrollAdjustPending"),
+       scrollLength: state.scrollLength,
+       scrollVelocity: getScrollVelocity(state),
+       sizeAtIndex: (index) => state.sizesKnown.get(getId(state, index)),
+@@ -7427,6 +8075,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      setItemSize: (itemKey, size) => {
        updateItemSizes(ctx, { itemKey, size });
      },
@@ -4294,7 +4362,7 @@ index c96345b..0cb0796 100644
      setScrollProcessingEnabled: (enabled) => {
        state.scrollProcessingEnabled = enabled;
      },
-@@ -7699,6 +8369,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -7699,6 +8376,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
      onEndReached,
      onEndReachedThreshold = 0.5,
      onItemSizeChanged,
@@ -4302,7 +4370,7 @@ index c96345b..0cb0796 100644
      onMetricsChange,
      onLayout: onLayoutProp,
      onLoad,
-@@ -7824,6 +8495,9 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -7824,6 +8502,9 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
        ctx.values.set("adaptiveRender", (_m = experimental_adaptiveRender == null ? void 0 : experimental_adaptiveRender.initialMode) != null ? _m : "normal");
        ctx.state = {
          averageSizes: {},
@@ -4312,7 +4380,7 @@ index c96345b..0cb0796 100644
          columnSpans: [],
          columns: [],
          containerItemGenerations: [],
-@@ -7957,6 +8631,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -7957,6 +8638,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
      onEndReachedThreshold,
      onFirstVisibleItemChanged,
      onItemSizeChanged,
