@@ -219,7 +219,6 @@ function TeamShellEditor(props: {
             key: "shell",
             os: props.os,
             action: "put",
-            draftField: "path",
             value: { path, args },
             original: props.item,
           });
@@ -249,7 +248,6 @@ function ShellRemoveButton(props: {
           key: "shell",
           os: props.os,
           action: "remove",
-          draftField: null,
           value: { path: "", args: [] },
           original: item,
         });

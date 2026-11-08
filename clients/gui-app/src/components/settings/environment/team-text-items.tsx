@@ -249,7 +249,6 @@ function TeamTextItemEditor(props: {
       // An item keeps its own scope; only a new one takes the picker's.
       os: props.item === null ? props.os : props.item.os,
       action: "put",
-      draftField: "value",
       value: { value },
       original: props.currentItem,
     };
@@ -267,7 +266,6 @@ function TeamTextItemEditor(props: {
       key: props.item.key,
       os: props.item.os,
       action: "remove",
-      draftField: null,
       value: { value: saved },
       original: props.currentItem,
     };
