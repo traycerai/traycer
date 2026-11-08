@@ -40,21 +40,27 @@ export interface SpawnAcknowledgementEvidence {
   readonly marker: SpawnAckMarkerState;
 }
 
-/** The whole evidence read at a timeout is bounded by this. */
-export const SPAWN_ACK_EVIDENCE_BUDGET_MS = 2_000;
+// The whole evidence read at a timeout, across every reader, is bounded by this.
+const SPAWN_ACK_EVIDENCE_BUDGET_MS = 2_000;
 
 /**
- * `read`'s answer, or `fallback` when it throws or does not settle inside the
- * budget. Never throws and never retries, so reading evidence cannot change or
- * delay the failure it describes by more than the budget.
+ * `read`'s answer, or `fallback` when it throws or has not settled by
+ * `deadlineMs` (an absolute `Date.now()` time, shared by every reader of one
+ * timeout so their budgets do not add up). Never throws and never retries, so
+ * reading evidence cannot change or delay the failure it describes by more
+ * than the one budget.
  */
 export async function readSpawnAckEvidenceWithin<T>(
   read: () => Promise<T>,
   fallback: T,
+  deadlineMs: number,
 ): Promise<T> {
   let timer: NodeJS.Timeout | null = null;
   const budget = new Promise<T>((resolve) => {
-    timer = setTimeout(() => resolve(fallback), SPAWN_ACK_EVIDENCE_BUDGET_MS);
+    timer = setTimeout(
+      () => resolve(fallback),
+      Math.max(0, deadlineMs - Date.now()),
+    );
   });
   try {
     return await Promise.race([read().catch(() => fallback), budget]);
@@ -66,6 +72,7 @@ export async function readSpawnAckEvidenceWithin<T>(
 }
 
 export class SpawnAcknowledgementTimeoutError extends Error {
+  readonly #evidenceDeadlineMs = Date.now() + SPAWN_ACK_EVIDENCE_BUDGET_MS;
   #proof: SpawnAckProofState | null = null;
   #supervisor: SpawnAckSupervisorState = "unknown";
   #marker: SpawnAckMarkerState = "unknown";
@@ -73,6 +80,11 @@ export class SpawnAcknowledgementTimeoutError extends Error {
   constructor() {
     super("host-start supervisor did not acknowledge its spawn");
     this.name = "SpawnAcknowledgementTimeoutError";
+  }
+
+  /** When reading evidence for this timeout must stop, whoever reads it. */
+  get evidenceDeadlineMs(): number {
+    return this.#evidenceDeadlineMs;
   }
 
   /** Set once by the waiter that raised this error. */

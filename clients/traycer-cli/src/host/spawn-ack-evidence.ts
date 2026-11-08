@@ -29,32 +29,39 @@ function markerState(phase: string): SpawnAckMarkerState {
 
 function readSupervisor(
   environment: Environment,
+  deadlineMs: number,
 ): Promise<SpawnAckSupervisorState> {
   return readSpawnAckEvidenceWithin(
     async (): Promise<SpawnAckSupervisorState> =>
       (await findLiveServiceSupervisor(environment)) === null ? "none" : "live",
     "unknown",
+    deadlineMs,
   );
 }
 
 function readMarker(
   environment: Environment,
   publishedAtMs: number,
+  deadlineMs: number,
 ): Promise<SpawnAckMarkerState> {
-  return readSpawnAckEvidenceWithin(async (): Promise<SpawnAckMarkerState> => {
-    const entries = await readBootstrapMarkersStrict(
-      environment,
-      MARKER_SCAN_ENTRIES,
-    );
-    for (let index = entries.length - 1; index >= 0; index -= 1) {
-      const entry = entries[index];
-      if (entry === undefined) continue;
-      const writtenAtMs = Date.parse(entry.timestamp);
-      if (Number.isNaN(writtenAtMs) || writtenAtMs < publishedAtMs) continue;
-      return markerState(entry.phase);
-    }
-    return "none";
-  }, "unknown");
+  return readSpawnAckEvidenceWithin(
+    async (): Promise<SpawnAckMarkerState> => {
+      const entries = await readBootstrapMarkersStrict(
+        environment,
+        MARKER_SCAN_ENTRIES,
+      );
+      for (let index = entries.length - 1; index >= 0; index -= 1) {
+        const entry = entries[index];
+        if (entry === undefined) continue;
+        const writtenAtMs = Date.parse(entry.timestamp);
+        if (Number.isNaN(writtenAtMs) || writtenAtMs < publishedAtMs) continue;
+        return markerState(entry.phase);
+      }
+      return "none";
+    },
+    "unknown",
+    deadlineMs,
+  );
 }
 
 /**
@@ -68,8 +75,8 @@ export async function attachCliSpawnAckEvidence(
   publishedAtMs: number,
 ): Promise<void> {
   const [supervisor, marker] = await Promise.all([
-    readSupervisor(environment),
-    readMarker(environment, publishedAtMs),
+    readSupervisor(environment, error.evidenceDeadlineMs),
+    readMarker(environment, publishedAtMs, error.evidenceDeadlineMs),
   ]);
   error.attachSupervisorEvidence(supervisor, marker);
 }

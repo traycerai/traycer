@@ -33,6 +33,47 @@ vi.mock(
   },
 );
 
+// Switches for the bound test: when set, the proof file, the supervisor
+// records and the marker log all hang, the way a stuck home directory would.
+const hung = vi.hoisted(() => ({ on: false }));
+vi.mock("@traycer-clients/shared/host-update", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@traycer-clients/shared/host-update")
+    >();
+  return {
+    ...actual,
+    readRegularFileNoFollow: (path: string) =>
+      hung.on && path.endsWith(".host-start-adoption.json")
+        ? new Promise<never>(() => undefined)
+        : actual.readRegularFileNoFollow(path),
+  };
+});
+vi.mock("../service-supervisor-relaunch", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../service-supervisor-relaunch")>();
+  return {
+    ...actual,
+    findLiveServiceSupervisor: (environment: "production") =>
+      hung.on
+        ? new Promise<never>(() => undefined)
+        : actual.findLiveServiceSupervisor(environment),
+  };
+});
+vi.mock("../bootstrap-log", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../bootstrap-log")>();
+  return {
+    ...actual,
+    readBootstrapMarkersStrict: (
+      environment: "production",
+      maxEntries: number,
+    ) =>
+      hung.on
+        ? new Promise<never>(() => undefined)
+        : actual.readBootstrapMarkersStrict(environment, maxEntries),
+  };
+});
+
 // HOME is redirected before anything reads it, so the host home, the marker log
 // and the supervisor records all live in a private temp dir.
 const osHome = vi.hoisted(() => ({ current: "" }));
@@ -72,6 +113,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   vi.useRealTimers();
+  hung.on = false;
 });
 
 function proofPath(): string {
@@ -252,6 +294,22 @@ describe("host-start acknowledgement timeout evidence", () => {
     expect(error.evidence?.marker).toBe("unknown");
   });
 
+  it("spends at most 2 s on all three reads together when every one hangs", async () => {
+    // The ack wait is shrunk to 200 ms above, so the whole wait is that plus
+    // whatever the evidence costs. Three sequential 2 s budgets would be 6 s.
+    hung.on = true;
+    const startedAtMs = Date.now();
+
+    const error = await timeoutAfter(async () => undefined);
+
+    expect(Date.now() - startedAtMs).toBeLessThan(200 + 2_000 + 800);
+    expect(error.evidence).toEqual({
+      proof: "unreadable",
+      supervisor: "unknown",
+      marker: "unknown",
+    });
+  });
+
   it("carries only closed-set words under exactly three tag keys", async () => {
     const error = await timeoutAfter(async () => {
       await writeSupervisor();
@@ -285,7 +343,11 @@ describe("host-start acknowledgement timeout evidence", () => {
 describe("readSpawnAckEvidenceWithin", () => {
   it("answers the fallback when the read throws", async () => {
     await expect(
-      readSpawnAckEvidenceWithin(() => Promise.reject(new Error("boom")), "x"),
+      readSpawnAckEvidenceWithin(
+        () => Promise.reject(new Error("boom")),
+        "x",
+        Date.now() + 2_000,
+      ),
     ).resolves.toBe("x");
   });
 
@@ -294,6 +356,7 @@ describe("readSpawnAckEvidenceWithin", () => {
     const answer = readSpawnAckEvidenceWithin(
       () => new Promise<string>(() => undefined),
       "unknown",
+      Date.now() + 2_000,
     );
     await vi.advanceTimersByTimeAsync(2_000);
     await expect(answer).resolves.toBe("unknown");
@@ -301,7 +364,11 @@ describe("readSpawnAckEvidenceWithin", () => {
 
   it("answers the read's own value when it settles in time", async () => {
     await expect(
-      readSpawnAckEvidenceWithin(() => Promise.resolve("live"), "unknown"),
+      readSpawnAckEvidenceWithin(
+        () => Promise.resolve("live"),
+        "unknown",
+        Date.now() + 2_000,
+      ),
     ).resolves.toBe("live");
   });
 });

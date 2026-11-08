@@ -211,7 +211,9 @@ export async function publishHostStartAdoption(
         await waitForAdoptionPoll();
       }
       const timeout = new SpawnAcknowledgementTimeoutError();
-      timeout.attachProof(await readProofState(path, nonce));
+      timeout.attachProof(
+        await readProofState(path, nonce, timeout.evidenceDeadlineMs),
+      );
       throw timeout;
     },
     cancel: async (): Promise<void> => {
@@ -584,15 +586,20 @@ async function readOrphanedProof(
 function readProofState(
   path: string,
   nonce: string,
+  deadlineMs: number,
 ): Promise<SpawnAckProofState> {
-  return readSpawnAckEvidenceWithin(async (): Promise<SpawnAckProofState> => {
-    const read = await readRegularFileNoFollow(path);
-    if (read.kind === "absent") return "absent";
-    if (read.kind !== "text") return "unreadable";
-    const file = parseAdoption(read.text);
-    if (file === null) return "unreadable";
-    return file.nonce === nonce ? "pending-ours" : "other-nonce";
-  }, "unreadable");
+  return readSpawnAckEvidenceWithin(
+    async (): Promise<SpawnAckProofState> => {
+      const read = await readRegularFileNoFollow(path);
+      if (read.kind === "absent") return "absent";
+      if (read.kind !== "text") return "unreadable";
+      const file = parseAdoption(read.text);
+      if (file === null) return "unreadable";
+      return file.nonce === nonce ? "pending-ours" : "other-nonce";
+    },
+    "unreadable",
+    deadlineMs,
+  );
 }
 
 async function readAcknowledgement(
