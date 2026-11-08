@@ -14,7 +14,7 @@ import { formatSandboxDate } from "@/lib/sandboxes/sandbox-row-lines";
 describe("sandboxRestingPreview", () => {
   it("says Never in whole sentences, ended", () => {
     expect(sandboxRestingPreview(null, 1_791_100_000_000)).toBe(
-      "Kept until you destroy it. Never applies to idle cleanup. Out-of-credit sandboxes are deleted after 30 days frozen.",
+      "Kept until you destroy it. Never applies to idle cleanup. Out-of-credit sandboxes are deleted after 30 days.",
     );
   });
 });

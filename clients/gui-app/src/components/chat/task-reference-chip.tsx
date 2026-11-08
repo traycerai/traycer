@@ -20,10 +20,13 @@ import {
 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { useTracyTranscriptOrigin } from "@/components/bots/tracy-transcript-origin-context";
 import { useHostQueryWithResponseMap } from "@/hooks/host/use-host-query";
 import {
   findCachedTaskContext,
+  findCachedTaskIdsByPrefix,
   readEpicTitlesFromCloudTaskCaches,
+  subscribeToCachedTaskIds,
   subscribeToCloudTaskListCaches,
   subscribeToTaskContextsCaches,
   type CloudEpicTasksCacheScope,
@@ -35,6 +38,7 @@ import { useRegisteredEpicTitles } from "@/lib/epic-selectors";
 import { useOptionalHostClient, type HostRpcRegistry } from "@/lib/host";
 import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
 import { TASK_REFERENCE_LOOKUP_TAG } from "@/lib/query-keys/host-query-keys";
+import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import { cn } from "@/lib/utils";
 import {
   authorizesCloudCapability,
@@ -54,40 +58,113 @@ const COMPLETE_TASK_ID =
 
 /**
  * An id-shaped token that named no agent: a chip with the task's title when it
- * is a complete task id the person can open, else the id as written. A code
- * span stays code, and a prefix is never a task. Until the title is known the
- * id is drawn as text, and markdown that renders with no host or query client
- * behind it (the layout editor's sample transcript) keeps the id.
+ * is a task the person can open, else the id as written. A complete id names
+ * its task; a shorter token names the one task the window holds whose id it
+ * begins, and is drawn as written when it begins none or several, with no
+ * read of its own (only a complete id is ever looked up). A code span stays
+ * code. Until the title is known the token is drawn as written, and markdown
+ * that renders with no host or query client behind it (the layout editor's
+ * sample transcript) keeps it.
  */
 export function TaskReferenceChip(props: {
   readonly referenceId: string;
   readonly display: "text" | "code";
 }): ReactNode {
   const { referenceId, display } = props;
-  if (display === "code" || !COMPLETE_TASK_ID.test(referenceId)) {
-    return referenceIdAsWritten(referenceId, display);
-  }
-  return <TaskTitleSourcesGate taskId={referenceId} />;
+  if (display === "code") return referenceIdAsWritten(referenceId, display);
+  return <TaskTitleSourcesGate referenceId={referenceId} />;
 }
 
-function TaskTitleSourcesGate(props: { readonly taskId: string }): ReactNode {
+function TaskTitleSourcesGate(props: {
+  readonly referenceId: string;
+}): ReactNode {
   const queryClient = useContext(QueryClientContext);
   const hostClient = useOptionalHostClient();
   if (queryClient === undefined || hostClient === null) {
-    return referenceIdAsWritten(props.taskId, "text");
+    return referenceIdAsWritten(props.referenceId, "text");
+  }
+  if (COMPLETE_TASK_ID.test(props.referenceId)) {
+    return (
+      <ResolvedTaskReferenceChip
+        taskId={props.referenceId}
+        referenceId={props.referenceId}
+        hostClient={hostClient}
+      />
+    );
   }
   return (
-    <ResolvedTaskReferenceChip taskId={props.taskId} hostClient={hostClient} />
+    <PrefixTaskReferenceChip
+      referenceId={props.referenceId}
+      hostClient={hostClient}
+    />
   );
+}
+
+function PrefixTaskReferenceChip(props: {
+  readonly referenceId: string;
+  readonly hostClient: HostClient<HostRpcRegistry>;
+}): ReactNode {
+  const taskId = useHeldTaskIdForPrefix(props.referenceId);
+  if (taskId === null) return referenceIdAsWritten(props.referenceId, "text");
+  return (
+    <ResolvedTaskReferenceChip
+      taskId={taskId}
+      referenceId={props.referenceId}
+      hostClient={props.hostClient}
+    />
+  );
+}
+
+/**
+ * The one task the window holds whose id `prefix` begins: a mounted task, a
+ * row of the cached task lists, or a task a cached title lookup found. `null`
+ * when it begins none of them, or more than one.
+ */
+function useHeldTaskIdForPrefix(prefix: string): string | null {
+  const queryClient = useQueryClient();
+  const userId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
+  const subscribe = useCallback(
+    (onStoreChange: () => void) => {
+      const unsubscribeRegistry =
+        getOpenEpicRegistry().subscribe(onStoreChange);
+      if (userId === null) return unsubscribeRegistry;
+      const unsubscribeCaches = subscribeToCachedTaskIds(
+        queryClient,
+        userId,
+        onStoreChange,
+      );
+      return () => {
+        unsubscribeRegistry();
+        unsubscribeCaches();
+      };
+    },
+    [queryClient, userId],
+  );
+  return useSyncExternalStore(subscribe, () => {
+    const normalizedPrefix = prefix.toLowerCase();
+    const matches = new Set(
+      userId === null
+        ? []
+        : findCachedTaskIdsByPrefix(queryClient, userId, prefix),
+    );
+    for (const handle of getOpenEpicRegistry().liveHandles()) {
+      if (handle.epicId.toLowerCase().startsWith(normalizedPrefix)) {
+        matches.add(handle.epicId);
+      }
+    }
+    return matches.size === 1 ? (matches.values().next().value ?? null) : null;
+  });
 }
 
 function ResolvedTaskReferenceChip(props: {
   readonly taskId: string;
+  /** The token as written, drawn until (and unless) the title is known. */
+  readonly referenceId: string;
   /** The app-wide host: a task is the account's, not one machine's. */
   readonly hostClient: HostClient<HostRpcRegistry>;
 }): ReactNode {
   const title = useTaskReferenceTitle(props.taskId, props.hostClient);
-  if (title === null) return referenceIdAsWritten(props.taskId, "text");
+  if (title === null) return referenceIdAsWritten(props.referenceId, "text");
   return (
     <TooltipWrapper
       label={`${title}\n${props.taskId}`}
@@ -107,6 +184,7 @@ function TaskReferenceButton(props: {
   const { taskId, title } = props;
   const navigate = useNavigate();
   const router = useRouter();
+  const tracyOrigin = useTracyTranscriptOrigin();
   const openTask = useCallback(
     (event: MouseEvent<HTMLButtonElement>) => {
       // Cmd/Ctrl-click and the middle button open the task in a background
@@ -118,9 +196,10 @@ function TaskReferenceButton(props: {
       openEpicFromList(navigate, taskId, router.state.location.pathname, {
         title,
         source: "message_task_chip",
+        tracyOrigin,
       });
     },
-    [navigate, router, taskId, title],
+    [navigate, router, taskId, title, tracyOrigin],
   );
   return (
     <button

@@ -21,6 +21,7 @@ import {
   within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { BotTestRunnerHost } from "@/components/bots/__tests__/bot-test-runner-host";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
@@ -65,6 +66,24 @@ import {
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
+import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
+import { mockRemoteHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import type {
+  BotTurnLocateRequest,
+  BotTurnLocateResponse,
+} from "@traycer/protocol/host/bot/conversation-schemas";
+import type { HostRpcRegistry } from "@/lib/host";
+import {
+  hostClientLocating,
+  hostClientLocatingOn,
+  turnRef,
+  turnsAskedFor,
+} from "@/components/bots/__tests__/bot-turn-test-support";
+import {
+  sessionTargetOfTurn,
+  type BotSessionTarget,
+  type BotTurnOpen,
+} from "@/stores/bots/bot-open-thread-store";
 
 /** What a box hands the send mutation for its send. */
 interface SendCallbacks {
@@ -104,8 +123,15 @@ const mocks = vi.hoisted(() => ({
   },
   bot: null as BotRecord | null,
   streamClient: null as StubHostStreamClient | null,
+  /** The tab's host client: the real one over a messenger answering `bot.turn.locate`. */
+  client: null as HostRequester<HostRpcRegistry> | null,
+  /** The turn a tap on the strip asks the tab to open. */
+  openTurn: vi.fn<BotTurnOpen>(),
 }));
 
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => null,
+}));
 vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/lib/registries/chat-session-registry")
@@ -121,7 +147,7 @@ vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
   },
 }));
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
-  useTabHostClient: () => ({ stub: "tab-host-client" }),
+  useTabHostClient: () => mocks.client,
 }));
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => ({ stub: "host-client" }),
@@ -238,6 +264,12 @@ vi.mock("@/components/chat/chat-messages", async () => {
 
 import { BotChannelView } from "@/components/bots/bot-channel-view";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
+import {
+  boxInput,
+  textOf,
+  boxWithin,
+  typeInto,
+} from "@/components/bots/__tests__/bot-box-test-support";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const HOST_ID = "host-bound";
@@ -509,13 +541,16 @@ function ChannelHarness(props: { readonly directive: string }): ReactNode {
       directive={props.directive}
       appConversationChatId={CHANNEL_ID}
       trunkChatId="trunk-chat"
-      onOpenTurn={vi.fn()}
+      onOpenTurn={mocks.openTurn}
       onOpenSession={vi.fn()}
       landOn={null}
       openMemory={null}
       onOpenMemory={vi.fn()}
       environmentId="env-1"
       botNameOf={() => null}
+      environmentBots={null}
+      openExchange={null}
+      exchangeRail={{ open: () => undefined, close: () => undefined }}
       resolveMember={resolveMember}
       tasks={[]}
       surfaceActions={null}
@@ -525,7 +560,6 @@ function ChannelHarness(props: { readonly directive: string }): ReactNode {
           .getState()
           .setRail(BOT_ID, open === null ? null : { kind: "thread", ...open })
       }
-      onOpenActivity={vi.fn()}
       setupHistory={null}
     />
   );
@@ -538,11 +572,13 @@ function mountChannel(threads: ReadonlyArray<BotThreadSummary>): RenderResult {
   // The transcript reads the app's send ledger off the query client.
   return render(
     <QueryClientProvider client={new QueryClient()}>
-      <TooltipProvider>
-        <ChatExpansionTestProviders tileInstanceId="tile-1">
-          <ChannelHarness directive={DIRECTIVE} />
-        </ChatExpansionTestProviders>
-      </TooltipProvider>
+      <BotTestRunnerHost>
+        <TooltipProvider>
+          <ChatExpansionTestProviders tileInstanceId="tile-1">
+            <ChannelHarness directive={DIRECTIVE} />
+          </ChatExpansionTestProviders>
+        </TooltipProvider>
+      </BotTestRunnerHost>
     </QueryClientProvider>,
   );
 }
@@ -596,6 +632,9 @@ beforeEach(() => {
   };
   botStream = new StubSession();
   mocks.streamClient = new StubHostStreamClient(botStream);
+  mocks.openTurn.mockReset();
+  // A host that names no turn, unless a case scripts it.
+  mocks.client = hostClientLocating(() => ({ turns: [] }), []);
   useTracySurfaceStore.getState().openSurface(HOST_ID);
   useTracySurfaceStore.getState().selectChannel(BOT_ID);
 });
@@ -619,6 +658,7 @@ afterEach(() => {
   useAuthStore.setState({ profile: null });
   __resetBotSubscriptionsForTesting();
   mocks.streamClient = null;
+  mocks.client = null;
 });
 
 describe("<BotChannelView tiles={null} /> the channel's typing line", () => {
@@ -780,8 +820,8 @@ describe("<BotChannelView tiles={null} /> a channel nobody has written in", () =
 describe("<BotChannelView tiles={null} /> a post whose answer lands in a thread", () => {
   /** The channel's box sending what was typed into it, and the callbacks it handed the send. */
   async function postInChannel(user: UserEvent): Promise<SendCallbacks> {
-    const box = screen.getByRole("textbox", { name: "Message Tracy" });
-    await user.type(box, "Is CI green?");
+    const box = boxInput("Message Tracy");
+    typeInto(box, "Is CI green?");
     await user.click(screen.getByTestId("bot-channel-composer-send"));
     const call = mocks.send.mock.calls.at(-1);
     if (call === undefined) throw new Error("the channel's box sent nothing");
@@ -805,10 +845,8 @@ describe("<BotChannelView tiles={null} /> a post whose answer lands in a thread"
     });
   }
 
-  function textbox(name: string): HTMLTextAreaElement {
-    const box = screen.getByRole("textbox", { name });
-    if (!(box instanceof HTMLTextAreaElement)) throw new Error("no textbox");
-    return box;
+  function textbox(name: string): HTMLElement {
+    return boxInput(name);
   }
 
   function mountQuietChannel(): RenderResult {
@@ -832,7 +870,7 @@ describe("<BotChannelView tiles={null} /> a post whose answer lands in a thread"
       ),
     ).toBeTruthy();
     expect(within(panel).queryByTestId("bot-thread-loading")).toBeNull();
-    expect(textbox("Message Tracy").value).toBe("");
+    expect(textOf(textbox("Message Tracy"))).toBe("");
     // The channel's row lands after the host answered the send.
     emitSnapshot(CHANNEL_ID, {
       messages: [post({ direct: false, resolvedAt: null })],
@@ -852,7 +890,7 @@ describe("<BotChannelView tiles={null} /> a post whose answer lands in a thread"
     expect(screen.queryByTestId("bot-thread-replying")).toBeNull();
 
     const reply = textbox("Reply in the thread");
-    await user.type(reply, "And the nightly?");
+    typeInto(reply, "And the nightly?");
     expect(document.activeElement).toBe(reply);
 
     // The list's next read returns the thread; the activity frame redraws.
@@ -866,10 +904,8 @@ describe("<BotChannelView tiles={null} /> a post whose answer lands in a thread"
     });
 
     expect(await within(panel).findByTestId("bot-thread-replies")).toBeTruthy();
-    expect(
-      within(panel).getByRole("textbox", { name: "Reply in the thread" }),
-    ).toBe(reply);
-    expect(reply.value).toBe("And the nightly?");
+    expect(boxWithin(panel, "Reply in the thread")).toBe(reply);
+    expect(textOf(reply)).toBe("And the nightly?");
     expect(document.activeElement).toBe(reply);
     expect(within(panel).getByTestId("bot-thread-replying-strip")).toBeTruthy();
   });
@@ -952,7 +988,7 @@ describe("<BotChannelView tiles={null} /> a post whose answer lands in a thread"
     await accept(await postInChannel(user), null, "written");
 
     expect(screen.queryByTestId("bot-thread-panel")).toBeNull();
-    expect(textbox("Message Tracy").value).toBe("");
+    expect(textOf(textbox("Message Tracy"))).toBe("");
   });
 
   it("opens no thread and keeps the text when the send fails", async () => {
@@ -966,6 +1002,104 @@ describe("<BotChannelView tiles={null} /> a post whose answer lands in a thread"
     });
 
     expect(screen.queryByTestId("bot-thread-panel")).toBeNull();
-    expect(textbox("Message Tracy").value).toBe("Is CI green?");
+    expect(textOf(textbox("Message Tracy"))).toBe("Is CI green?");
+  });
+});
+
+describe("<BotChannelView tiles={null} /> the replying line as the way into the turn", () => {
+  /** The trunk's turn that took `requestId`, as the host's `bot.turn.locate` names it. */
+  function trunkTurn(requestId: string, promptId: string) {
+    return turnRef({
+      chatId: TRUNK_ID,
+      turnId: `turn-${requestId}`,
+      userMessageId: promptId,
+      threadId: null,
+      startedAt: Date.now() - 65_000,
+      endedAt: null,
+      summary: null,
+      messageIds: [],
+      requestIds: [requestId],
+    });
+  }
+
+  const REPLYING = { name: "Tracy is replying…" };
+
+  /** The target the tab was last asked to open, as the store would take it. */
+  function openedTarget(): BotSessionTarget {
+    const call = mocks.openTurn.mock.calls.at(-1);
+    if (call === undefined) throw new Error("the strip opened nothing");
+    return sessionTargetOfTurn(call[0], call[1]);
+  }
+
+  it("is a button named by the replying text that opens the trunk's turn for the request, and keeps the status and the hover text out of what is announced", async () => {
+    const user = userEvent.setup();
+    const turn = trunkTurn("request-1", "prompt-1");
+    const asked: BotTurnLocateRequest[] = [];
+    mocks.client = hostClientLocating(
+      (request) => turnsAskedFor([turn], request),
+      asked,
+    );
+    await mountAwaitingDirectReply(replying("request-1", null));
+
+    const button = await screen.findByRole("button", REPLYING);
+    const strip = screen.getByTestId("bot-channel-replying");
+    expect(strip.getAttribute("role")).toBe("status");
+    expect(strip.contains(button)).toBe(true);
+    // What the hover shows, and the running time ticking in it, is not read out.
+    const hoverText = within(button).getByText(/^View turn/);
+    expect(hoverText.getAttribute("aria-hidden")).toBe("true");
+    expect(hoverText.textContent).toMatch(/^View turn · \d+m \d+s$/);
+
+    await user.click(button);
+
+    expect(mocks.openTurn).toHaveBeenCalledTimes(1);
+    expect(mocks.openTurn.mock.calls[0]).toEqual([turn, null]);
+    expect(openedTarget()).toEqual({
+      chatId: TRUNK_ID,
+      threadId: null,
+      messageId: "prompt-1",
+      sendPostId: null,
+    });
+    expect(asked.map((request) => request.requestIds)).toEqual([["request-1"]]);
+  });
+
+  it("is not a button for a request the host has not answered yet, never opening the previous request's turn", async () => {
+    const user = userEvent.setup();
+    const first = trunkTurn("request-1", "prompt-1");
+    const second = trunkTurn("request-2", "prompt-2");
+    const secondAnswer = Promise.withResolvers<BotTurnLocateResponse>();
+    const asked: BotTurnLocateRequest[] = [];
+    // On the host the view is mounted on, so the first answer is held while
+    // the second is read.
+    mocks.client = hostClientLocatingOn(
+      { ...mockRemoteHostEntry, hostId: HOST_ID },
+      (request) =>
+        request.requestIds.includes("request-2")
+          ? secondAnswer.promise
+          : turnsAskedFor([first, second], request),
+      asked,
+    );
+    await mountAwaitingDirectReply(replying("request-1", null));
+    await screen.findByRole("button", REPLYING);
+
+    emitActivity({ trunk: replying("request-2", null), threads: {} });
+
+    await waitFor(() => {
+      expect(
+        asked.some((request) => request.requestIds.includes("request-2")),
+      ).toBe(true);
+    });
+    const strip = screen.getByTestId("bot-channel-replying");
+    expect(within(strip).getByText("Tracy is replying…")).toBeTruthy();
+    expect(screen.queryByRole("button", REPLYING)).toBeNull();
+
+    await act(async () => {
+      secondAnswer.resolve(turnsAskedFor([second], asked[asked.length - 1]));
+      await secondAnswer.promise;
+    });
+    await user.click(await screen.findByRole("button", REPLYING));
+
+    expect(mocks.openTurn).toHaveBeenCalledTimes(1);
+    expect(openedTarget().messageId).toBe("prompt-2");
   });
 });

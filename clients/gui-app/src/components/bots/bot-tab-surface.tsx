@@ -12,7 +12,8 @@ import {
 import type { UseQueryResult } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import { EllipsisVertical } from "lucide-react";
+import { EllipsisVertical, Search } from "lucide-react";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import type {
   BotListResponse,
   BotOpenResponse,
@@ -20,10 +21,8 @@ import type {
 import type { EnvironmentListResponseV11 } from "@traycer/protocol/host/environment/contracts";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
-import { TalkControl } from "@/components/layout/voice/talk-control";
 import { useInstalledAppTileForm } from "@/hooks/ui/use-installed-app-level2-form";
 import { useKeyboardFocusOwnerWithin } from "@/hooks/ui/use-keyboard-focus-layout";
-import { useMobileHeaderActive } from "@/components/layout/header/use-mobile-header-active";
 import type {
   MobileLevel2Form,
   MobileTileCount,
@@ -79,15 +78,24 @@ import {
   type BotChannelLanding,
 } from "@/components/bots/bot-channel-view";
 import {
+  exchangeRailOver,
   memoryRailOver,
   sessionTargetOfTurn,
   useBotOpenThreadStore,
   useBotRail,
+  type BotExchangeRail,
+  type BotOpenExchange,
   type BotOpenMemory,
   type BotOpenThread,
   type BotSessionOpen,
   type BotTurnOpen,
 } from "@/stores/bots/bot-open-thread-store";
+import {
+  openBotSearch,
+  useBotSearchStore,
+} from "@/stores/bots/bot-search-store";
+import { registerBotChannelFind } from "@/lib/bots/bot-channel-find";
+import { formatChordForDisplay } from "@/lib/keybindings/chord";
 import {
   BotSessionView,
   type BotOpenSession,
@@ -102,11 +110,8 @@ import {
 import { BotActivityPage } from "@/components/bots/bot-activity-page";
 import { BotThreadsView } from "@/components/bots/bot-threads-view";
 import { useBotThreadListQuery } from "@/hooks/bots/use-bot-thread-list-query";
-import { useBotActivitySummary } from "@/hooks/bots/use-bot-activity-summary";
-import {
-  activityLabelParts,
-  type BotActivityLabelPart,
-} from "@/lib/bots/bot-activity-model";
+import { useBotActiveTasks } from "@/hooks/bots/use-bot-active-tasks";
+import { UnreadCountBadge } from "@/components/notifications/unread-count-badge";
 import { BotChannelSettingsPanel } from "@/components/bots/bot-settings-panel";
 import {
   BotIdentityContext,
@@ -125,8 +130,10 @@ import { botMemberName } from "@/lib/bots/bot-member-names";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   BotMentionsContext,
+  type BotMentionDirectory,
   type BotMentioned,
 } from "@/components/bots/bot-mentions-context";
+import { useBotMentionTargets } from "@/components/bots/use-bot-mention-targets";
 import { isMainBot, type MainBotIds } from "@/lib/bots/bot-main";
 import {
   botPausedCopy,
@@ -260,7 +267,11 @@ function TracySurfaceShell(props: {
   }, [refetchBots, refetchEnvironments]);
 
   return (
-    <div className="@container flex h-full min-h-0" data-testid="bot-tab">
+    <div
+      className="@container flex h-full min-h-0"
+      data-testid="bot-tab"
+      data-bot-surface=""
+    >
       <BotChannelColumn
         level2={level2}
         activeBotId={botId}
@@ -836,10 +847,11 @@ function BotTabBody(props: {
 }
 
 /**
- * The rail's one slot - a thread or the bot's memory - held in its store,
- * above the views, so it survives a switch between the channel's tabs; and
- * the ways Activity and the bot's profile card open it beside the channel,
- * switching to Messages.
+ * The rail's one slot - a thread, the bot's memory or a search - held in its
+ * store, above the views, so it survives a switch between the channel's tabs;
+ * and the ways Activity and the bot's profile card open it beside the
+ * channel, switching to Messages. A thread a search result opened is the open
+ * thread like any other, with the search still behind it.
  */
 function useBotTabRail(
   botId: string,
@@ -847,15 +859,30 @@ function useBotTabRail(
 ): {
   readonly openThread: BotOpenThread | null;
   readonly openMemory: BotOpenMemory | null;
+  readonly searchResultsOpen: boolean;
   readonly setOpenThread: (open: BotOpenThread | null) => void;
   readonly setOpenMemory: (open: BotOpenMemory | null) => void;
-  readonly openPostInChannel: (open: BotOpenThread) => void;
   readonly openMemoryInChannel: () => void;
+  readonly openExchange: BotOpenExchange | null;
+  readonly exchanges: BotExchangeRail;
 } {
   const rail = useBotRail(botId);
   const setRail = useBotOpenThreadStore((s) => s.setRail);
-  const openThread = rail?.kind === "thread" ? rail : null;
+  const searchShowing = rail?.kind === "search" ? rail.showing : null;
+  const searchThread =
+    searchShowing?.kind === "thread" ? searchShowing.thread : null;
+  const openThread = rail?.kind === "thread" ? rail : searchThread;
   const openMemory = rail?.kind === "memory" ? rail : null;
+  const openExchange = rail?.kind === "exchange" ? rail : null;
+  // A pair's log takes the slot over whatever it holds; closing it brings
+  // that back.
+  const exchanges = useMemo(
+    (): BotExchangeRail => ({
+      open: (peerBotId) => setRail(botId, exchangeRailOver(rail, peerBotId)),
+      close: () => setRail(botId, rail?.kind === "exchange" ? rail.back : rail),
+    }),
+    [botId, rail, setRail],
+  );
   const setOpenMemory = useCallback(
     (open: BotOpenMemory | null) =>
       setRail(botId, open === null ? null : { kind: "memory", ...open }),
@@ -871,22 +898,52 @@ function useBotTabRail(
       setRail(botId, open === null ? null : { kind: "thread", ...open }),
     [botId, setRail],
   );
-  // A post or a thread, from Activity: its thread opens beside the channel.
-  const openPostInChannel = useCallback(
-    (open: BotOpenThread) => {
-      setOpenThread(open);
-      onViewChange("messages");
-    },
-    [onViewChange, setOpenThread],
-  );
   return {
     openThread,
     openMemory,
+    searchResultsOpen: searchShowing?.kind === "results",
     setOpenThread,
     setOpenMemory,
-    openPostInChannel,
     openMemoryInChannel,
+    openExchange,
+    exchanges,
   };
+}
+
+/**
+ * How the channel's search opens: the header's button and ⌘F, on this bot,
+ * while a host that takes it serves the tab (`null` otherwise). Each opening,
+ * the column's box included, shows the channel it opened beside: Messages,
+ * in place of a session or Threads. A session has its own find, and Threads
+ * no channel, so ⌘F is theirs while they show.
+ */
+function useChannelSearchEntry(args: {
+  readonly botId: string;
+  readonly hostId: string;
+  readonly channelShown: boolean;
+  readonly onShow: () => void;
+}): (() => void) | null {
+  const { botId, channelShown, onShow } = args;
+  const supported =
+    useHostMethodSupport(args.hostId, "bot.conversation.search") === true;
+  const opens = useBotSearchStore((state) => state.opens);
+  const seenOpens = useRef(opens);
+  const showChannel = useEffectEvent(onShow);
+  useEffect(() => {
+    if (seenOpens.current === opens) return;
+    seenOpens.current = opens;
+    showChannel();
+  }, [opens]);
+  const open = useCallback(
+    () => openBotSearch(botId, { kind: "bot", botId }, null),
+    [botId],
+  );
+  const paneVisible = usePaneVisible();
+  useEffect(() => {
+    if (!supported || !paneVisible || !channelShown) return undefined;
+    return registerBotChannelFind(open);
+  }, [channelShown, open, paneVisible, supported]);
+  return supported ? open : null;
 }
 
 /**
@@ -1063,6 +1120,7 @@ type BotTabPlace = {
   readonly session: BotOpenSession | null;
   readonly openThread: BotOpenThread | null;
   readonly openMemory: BotOpenMemory | null;
+  readonly searchResultsOpen: boolean;
   readonly channelLanding: BotChannelLanding | null;
 };
 
@@ -1249,6 +1307,19 @@ function useChannelSetupHistory(input: {
 }
 
 /**
+ * Whether a bot's environment is the viewer's personal one; `null` while the
+ * environment list has not answered. The list holds only the viewer's own
+ * environments, so its one personal entry is theirs.
+ */
+function viewerOwnsEnvironment(
+  unread: boolean,
+  environment: EnvironmentListResponseV11["environments"][number] | null,
+): boolean | null {
+  if (unread) return null;
+  return environment !== null && environment.ownerKind === "user";
+}
+
+/**
  * Says whether the rail is drawn beside the channel, before the paint it would
  * otherwise be a frame late for. The rail draws only under Messages.
  */
@@ -1262,6 +1333,7 @@ function useRailDrawnReport(
     place.session === null &&
     !place.threadsShown &&
     (place.openMemory !== null ||
+      place.searchResultsOpen ||
       (threadListSupported && place.openThread !== null));
   useLayoutEffect(() => {
     onRailDrawn(railDrawn);
@@ -1352,10 +1424,12 @@ function BotTabContent(props: {
   const {
     openThread,
     openMemory,
+    searchResultsOpen,
     setOpenThread,
     setOpenMemory,
-    openPostInChannel,
     openMemoryInChannel,
+    openExchange,
+    exchanges: exchangeRail,
   } = useBotTabRail(botId, onViewChange);
   const memoryAccess = useMemo(
     (): BotMemoryAccess => ({
@@ -1399,9 +1473,18 @@ function BotTabContent(props: {
       session,
       openThread,
       openMemory,
+      searchResultsOpen,
       channelLanding,
     }),
-    [channelLanding, openMemory, openThread, session, threadsShown, view],
+    [
+      channelLanding,
+      openMemory,
+      openThread,
+      searchResultsOpen,
+      session,
+      threadsShown,
+      view,
+    ],
   );
   useSpendTabLanding({
     botId,
@@ -1417,13 +1500,16 @@ function BotTabContent(props: {
     onViewChange,
   });
   useRailDrawnReport(place, threadListSupported, onRailDrawn);
-  const openActivity = useCallback(() => changeView("activity"), [changeView]);
-  const activitySummary = useBotActivitySummary({
+  const activeTasks = useBotActiveTasks(snapshot.tasks);
+  const showMessages = useCallback(() => {
+    closeSession();
+    changeView("messages");
+  }, [changeView, closeSession]);
+  const openSearch = useChannelSearchEntry({
     botId,
-    trunkChatId: snapshot.bot.trunkChatId,
-    tasks: snapshot.tasks,
-    activity: snapshot.activity,
-    threads,
+    hostId,
+    channelShown: session === null && !threadsShown,
+    onShow: showMessages,
   });
   // The channel's settings open beside it from the header's ⋮.
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -1463,9 +1549,18 @@ function BotTabContent(props: {
     [botId, owner, snapshot.bot.title],
   );
   // A mention names the viewer, or a member the directory lists; anyone
-  // else's token stays as written.
-  const mentioned = useCallback(
-    (userId: string): BotMentioned | null => {
+  // else's token stays as written. A bot or a task is one of the
+  // environment's (decision 177).
+  const mentionTargets = useBotMentionTargets({
+    environmentId: snapshot.bot.environmentId,
+    tasks: snapshot.tasks,
+    personal: viewerOwnsEnvironment(
+      environments.data === undefined,
+      environment,
+    ),
+  });
+  const mentioned = useMemo((): BotMentionDirectory => {
+    const person = (userId: string): BotMentioned | null => {
       if (viewer !== null && viewer.userId === userId) {
         return {
           name: botMemberName(userId, viewer, resolveMember),
@@ -1475,9 +1570,20 @@ function BotTabContent(props: {
       const member = resolveMember(userId);
       if (member === null) return null;
       return { name: member.displayName ?? "member", self: false };
-    },
-    [resolveMember, viewer],
-  );
+    };
+    return {
+      person,
+      bots: mentionTargets.bots,
+      tasks: mentionTargets.tasks,
+      tasksAnswered: mentionTargets.tasksAnswered,
+    };
+  }, [
+    mentionTargets.bots,
+    mentionTargets.tasks,
+    mentionTargets.tasksAnswered,
+    resolveMember,
+    viewer,
+  ]);
 
   return (
     <BotMentionsContext value={mentioned}>
@@ -1517,11 +1623,8 @@ function BotTabContent(props: {
                     isMain={isMain === true}
                     settingsOpen={settingsOpen}
                     onToggleSettings={toggleSettings}
-                    activityLabel={activityLabelParts({
-                      stopped: activitySummary.stopped.length,
-                      running: activitySummary.running.length,
-                      tasks: activitySummary.tasks,
-                    })}
+                    onOpenSearch={openSearch}
+                    activityCount={activeTasks.rows.length}
                   />
                   {streamError === null ? null : (
                     // A fatal close AFTER a snapshot: the last reading stays on
@@ -1571,7 +1674,9 @@ function BotTabContent(props: {
                       onOpenMemory={setOpenMemory}
                       environmentId={snapshot.bot.environmentId}
                       botNameOf={botNameOf}
-                      onOpenActivity={openActivity}
+                      environmentBots={environmentBots}
+                      openExchange={openExchange}
+                      exchangeRail={exchangeRail}
                       setupHistory={setupHistory}
                       tiles={tiles}
                     />
@@ -1583,20 +1688,11 @@ function BotTabContent(props: {
                     <BotActivityPage
                       botId={botId}
                       hostId={hostId}
-                      boundHost={snapshot.boundHost}
-                      channelId={snapshot.bot.appConversationChatId}
-                      tasks={snapshot.tasks}
-                      notificationSubscriptions={
-                        snapshot.notificationSubscriptions
-                      }
-                      stoppedNotificationWatches={
-                        snapshot.stoppedNotificationWatches
-                      }
+                      botTitle={snapshot.bot.title}
+                      boundHere={snapshot.boundHost.isThisHost}
+                      active={activeTasks}
                       resolveMember={resolveMember}
-                      summary={activitySummary}
                       threads={threads}
-                      onOpenPost={openPostInChannel}
-                      onOpenTurn={openTurn}
                     />
                   </TabsContent>
                 </Tabs>
@@ -1696,8 +1792,7 @@ function ErrorNotice(props: {
  * its name with the main bot's star, the ⋮ that opens the channel's settings,
  * and the channel's views under it. What the bot is for is the top of its channel; nothing else
  * sits here but, on the phone, Talk. A session started here is focused on
- * this channel. Activity's label is the bot's indicator: what stopped, in red
- * and first, what runs and the tasks it tracks.
+ * this channel. Activity's count is the tasks its list shows.
  */
 function BotChannelHeader(props: {
   readonly level2: MobileLevel2Form | null;
@@ -1708,11 +1803,12 @@ function BotChannelHeader(props: {
   readonly isMain: boolean;
   readonly settingsOpen: boolean;
   readonly onToggleSettings: () => void;
-  readonly activityLabel: ReadonlyArray<BotActivityLabelPart>;
+  /** Opens the channel's search; `null` where the tab's host has none. */
+  readonly onOpenSearch: (() => void) | null;
+  /** How many tasks the Activity list shows. */
+  readonly activityCount: number;
 }): ReactNode {
   const { settingsOpen } = props;
-  // Asked as the top row asks it, so a window has one Talk or the other.
-  const phoneLayout = useMobileHeaderActive();
   // With the keyboard up on a short viewport: the name row alone while the
   // channel's box has the focus, and nothing while a thread's does, since the
   // thread's own header is the identity row then. Only a box under this header
@@ -1764,13 +1860,26 @@ function BotChannelHeader(props: {
         {props.isMain ? (
           <MainBotBadge testId="bot-tab-main" tone="muted" />
         ) : null}
-        {phoneLayout ? (
-          <>
-            {/* Takes the free space, so Talk sits beside the ⋮. */}
-            <span className="min-w-0 flex-1" />
-            <TalkControl form="touch" />
-          </>
-        ) : null}
+        {props.onOpenSearch === null ? null : (
+          <TooltipWrapper
+            label={`Search in ${props.title} ${formatChordForDisplay("mod+f")}`}
+            side="bottom"
+            sideOffset={undefined}
+            align={undefined}
+          >
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label={`Search in ${props.title}`}
+              data-testid="bot-channel-search-open"
+              className="ml-auto"
+              onClick={props.onOpenSearch}
+            >
+              <Search aria-hidden="true" />
+            </Button>
+          </TooltipWrapper>
+        )}
         <Button
           ref={settingsButtonRef}
           type="button"
@@ -1779,7 +1888,7 @@ function BotChannelHeader(props: {
           aria-label="Channel settings"
           aria-expanded={settingsOpen}
           data-testid="bot-channel-settings-open"
-          className="ml-auto"
+          className={props.onOpenSearch === null ? "ml-auto" : undefined}
           onClick={props.onToggleSettings}
         >
           <EllipsisVertical aria-hidden="true" />
@@ -1795,20 +1904,13 @@ function BotChannelHeader(props: {
         </TabsTrigger>
         <TabsTrigger value="activity" data-testid="bot-tab-view-activity">
           Activity
-          {props.activityLabel.map((part) => (
-            <span
-              key={part.kind}
-              data-testid={`bot-tab-activity-${part.kind}`}
-              className={cn(
-                "font-normal",
-                part.kind === "stopped"
-                  ? "text-destructive"
-                  : "text-muted-foreground",
-              )}
-            >
-              {` · ${part.text}`}
-            </span>
-          ))}
+          <UnreadCountBadge
+            count={props.activityCount}
+            size="xs"
+            testId="bot-tab-activity-count"
+            corner={null}
+            noun="active"
+          />
         </TabsTrigger>
       </TabsList>
     </header>

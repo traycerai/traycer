@@ -14,26 +14,18 @@ import {
   useLayoutStore,
 } from "@/stores/layout/layout-store";
 import { currentLayoutArrangement } from "@/lib/layout/rail-view";
-import { visibleRailPanelIds, type RailEntry } from "@/lib/layout/rail";
+import {
+  DEFAULT_RAIL,
+  visibleRailPanelIds,
+  type RailEntry,
+} from "@/lib/layout/rail";
 import {
   DEFAULT_ARRANGEMENT,
-  stackRailPanels,
+  type LayoutArrangement,
 } from "@/lib/layout/layout-arrangement";
 import { useEpicSidebarExpansionStore } from "@/stores/epics/epic-sidebar-expansion-store";
 import { makeGitFileDiffTile } from "@/lib/git/git-diff-tile";
 import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
-
-/**
- * The shipped rail with Agents stacked on Artifacts: the pair earlier builds
- * shipped, and the one every stack case below is written about. The shipped
- * rail itself holds no stack.
- */
-const STACKED_ARRANGEMENT = stackRailPanels(
-  DEFAULT_ARRANGEMENT,
-  "artifacts",
-  "chats",
-  "panel",
-);
 
 const TILE_SOURCE = {
   kind: "artifact-tab",
@@ -243,8 +235,12 @@ const TERMINAL_TILE = {
   cwd: "/repo",
 } as const;
 
-const rawNestedFocus: NavigateNestedFocus = (_epicId, _tabId, prepare) =>
-  prepare();
+const rawNestedFocus: NavigateNestedFocus = (
+  _epicId,
+  _tabId,
+  prepare,
+  _provenance,
+) => prepare();
 
 /**
  * A canvas whose `group-a` already holds `TERMINAL_TILE`, so a drop of the
@@ -268,6 +264,19 @@ function seedCanvasWithTerminalTile(): void {
     },
   };
 }
+
+/**
+ * The shipped rail without its Git Diff and Pull Requests stack. The drop
+ * cases below are written against Agents stacked on Artifacts as the only
+ * stack, so each expectation names the one stack it is about.
+ */
+const ONE_STACK_RAIL: ReadonlyArray<RailEntry> = DEFAULT_RAIL.filter(
+  (entry) => entry.id !== "stack:railGitDiff+railPullRequests",
+);
+const ONE_STACK_ARRANGEMENT: LayoutArrangement = {
+  ...DEFAULT_ARRANGEMENT,
+  rail: ONE_STACK_RAIL,
+};
 
 function railSource(
   panelId: LeftPanelId,
@@ -296,7 +305,7 @@ function resetStores(): void {
     vi.fn<(viewTabId: string, args: TabSplitArgs) => void>();
   useLayoutStore.setState({
     ...DEFAULT_LAYOUT_SNAPSHOT,
-    arrangement: STACKED_ARRANGEMENT,
+    arrangement: ONE_STACK_ARRANGEMENT,
   });
   useLeftPanelStore.setState({
     activePanelIdByTabId: {},
@@ -533,7 +542,7 @@ describe("root dnd commits - left panel", () => {
     ];
     useLayoutStore.setState({
       ...DEFAULT_LAYOUT_SNAPSHOT,
-      arrangement: { ...STACKED_ARRANGEMENT, rail: fourMember },
+      arrangement: { ...ONE_STACK_ARRANGEMENT, rail: fourMember },
     });
     const source = railSource("git-diff", "rail");
     const target = { kind: "left-panel-body", panelId: "chats" } as const;
@@ -606,7 +615,7 @@ describe("root dnd commits - left panel", () => {
     ];
     useLayoutStore.setState({
       ...DEFAULT_LAYOUT_SNAPSHOT,
-      arrangement: { ...STACKED_ARRANGEMENT, rail },
+      arrangement: { ...ONE_STACK_ARRANGEMENT, rail },
     });
     const source = railSource("terminals", "rail");
     const target = { kind: "left-panel-body", panelId: "chats" } as const;
@@ -687,7 +696,7 @@ describe("root dnd commits - left panel drop resolver", () => {
       resolveRailForDrop(
         railSource("artifacts", "panel-section"),
         { kind: "left-panel-rail", panelId: "chats", position: "before" },
-        STACKED_ARRANGEMENT,
+        ONE_STACK_ARRANGEMENT,
       ),
     ).toEqual([
       { kind: "panel", id: "railArtifacts" },
@@ -712,9 +721,9 @@ describe("root dnd commits - left panel drop resolver", () => {
       resolveRailForDrop(
         railSource("artifacts", "rail"),
         { kind: "left-panel-rail", panelId: "chats", position: "before" },
-        STACKED_ARRANGEMENT,
+        ONE_STACK_ARRANGEMENT,
       ),
-    ).toEqual(STACKED_ARRANGEMENT.rail);
+    ).toEqual(ONE_STACK_RAIL);
   });
 
   it("moves a section-origin drop beside another panel", () => {
@@ -722,7 +731,7 @@ describe("root dnd commits - left panel drop resolver", () => {
       resolveRailForDrop(
         railSource("artifacts", "panel-section"),
         { kind: "left-panel-rail", panelId: "git-diff", position: "after" },
-        STACKED_ARRANGEMENT,
+        ONE_STACK_ARRANGEMENT,
       ),
     ).toEqual([
       { kind: "panel", id: "railAgents" },
@@ -743,9 +752,9 @@ describe("root dnd commits - left panel drop resolver", () => {
       resolveRailForDrop(
         railSource("artifacts", "panel-section"),
         { kind: "left-panel-rail", panelId: "chats", position: "after" },
-        STACKED_ARRANGEMENT,
+        ONE_STACK_ARRANGEMENT,
       ),
-    ).toEqual(STACKED_ARRANGEMENT.rail);
+    ).toEqual(ONE_STACK_RAIL);
   });
 
   it("moves the WHOLE stack to the rail's end via its icon, or ONE panel via its section header (L-181)", () => {
@@ -754,7 +763,7 @@ describe("root dnd commits - left panel drop resolver", () => {
       resolveRailForDrop(
         railSource("artifacts", "rail"),
         { kind: "left-panel-rail-list" },
-        STACKED_ARRANGEMENT,
+        ONE_STACK_ARRANGEMENT,
       ),
     ).toEqual([
       { kind: "panel", id: "railTerminals" },
@@ -774,7 +783,7 @@ describe("root dnd commits - left panel drop resolver", () => {
       resolveRailForDrop(
         railSource("artifacts", "panel-section"),
         { kind: "left-panel-rail-list" },
-        STACKED_ARRANGEMENT,
+        ONE_STACK_ARRANGEMENT,
       ),
     ).toEqual([
       { kind: "panel", id: "railAgents" },
@@ -799,7 +808,7 @@ describe("root dnd commits - left panel drop resolver", () => {
           panelId: "browsers",
           position: "combine",
         },
-        STACKED_ARRANGEMENT,
+        ONE_STACK_ARRANGEMENT,
       ),
     ).toEqual([
       { kind: "panel", id: "railAgents" },
@@ -821,7 +830,7 @@ describe("root dnd commits - left panel drop resolver", () => {
     const after = resolveRailForDrop(
       railSource("terminals", "rail"),
       { kind: "left-panel-rail", panelId: "browsers", position: "after" },
-      STACKED_ARRANGEMENT,
+      ONE_STACK_ARRANGEMENT,
     );
 
     expect(after).not.toBeNull();
@@ -842,7 +851,7 @@ describe("root dnd commits - left panel drop resolver", () => {
     const next = resolveRailForDrop(
       railSource("chats", "rail"),
       { kind: "left-panel-rail", panelId: "terminals", position: "combine" },
-      STACKED_ARRANGEMENT,
+      ONE_STACK_ARRANGEMENT,
     );
 
     expect(next?.map((entry) => entry.id)).toEqual([
@@ -867,7 +876,7 @@ describe("root dnd commits - left panel drop resolver", () => {
     const next = resolveRailForDrop(
       railSource("chats", "panel-section"),
       { kind: "left-panel-rail", panelId: "terminals", position: "combine" },
-      STACKED_ARRANGEMENT,
+      ONE_STACK_ARRANGEMENT,
     );
 
     expect(next?.map((entry) => entry.id)).toEqual([
@@ -897,7 +906,7 @@ describe("root dnd commits - left panel drop resolver", () => {
           panelId: "artifacts",
           position: "combine",
         },
-        STACKED_ARRANGEMENT,
+        ONE_STACK_ARRANGEMENT,
       ),
     ).toEqual([
       { kind: "panel", id: "railAgents" },
@@ -919,14 +928,14 @@ describe("root dnd commits - left panel drop resolver", () => {
       resolveRailForDrop(
         railSource("artifacts", "rail"),
         { kind: "empty-shell" },
-        STACKED_ARRANGEMENT,
+        ONE_STACK_ARRANGEMENT,
       ),
     ).toBeNull();
     expect(
       resolveRailForDrop(
         railSource("artifacts", "rail"),
         { kind: "artifact-tab-strip", groupId: "group-a", index: 0 },
-        STACKED_ARRANGEMENT,
+        ONE_STACK_ARRANGEMENT,
       ),
     ).toBeNull();
   });

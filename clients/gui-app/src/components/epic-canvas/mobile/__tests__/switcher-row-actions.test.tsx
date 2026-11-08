@@ -50,15 +50,25 @@ const {
   deleteChatMutate,
   deleteArtifactMutate,
   exportMutate,
-} = vi.hoisted(() => ({
-  deleteTuiAgentMutate: vi.fn(),
-  deleteChatMutate: vi.fn(),
-  deleteArtifactMutate: vi.fn(),
-  exportMutate: vi.fn(),
-}));
+  useEpicExportArtifacts,
+} = vi.hoisted(() => {
+  const exportMutate = vi.fn();
+  return {
+    deleteTuiAgentMutate: vi.fn(),
+    deleteChatMutate: vi.fn(),
+    deleteArtifactMutate: vi.fn(),
+    exportMutate,
+    // A hook the row's menu body calls on mount, so its call count says
+    // whether the body is mounted.
+    useEpicExportArtifacts: vi.fn(() => ({
+      mutate: exportMutate,
+      isPending: false,
+    })),
+  };
+});
 
 vi.mock("@/hooks/epic/use-epic-export-artifacts-mutation", () => ({
-  useEpicExportArtifacts: () => ({ mutate: exportMutate, isPending: false }),
+  useEpicExportArtifacts,
 }));
 
 vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
@@ -332,6 +342,12 @@ describe("artifact export", () => {
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).not.toBe(0);
 
+    // A leaf has nothing nested to carry. Checked while the menu is open:
+    // selecting an item closes it, after which every item is absent.
+    expect(
+      screen.queryByTestId(`switcher-export-nested-pdf-${ARTIFACT_NODE_ID}`),
+    ).toBeNull();
+
     fireEvent.click(pdfItem);
 
     expect(exportMutate).toHaveBeenCalledExactlyOnceWith({
@@ -339,7 +355,107 @@ describe("artifact export", () => {
       format: "pdf",
       archive: false,
       archiveTitle: null,
+      includeNested: false,
     });
+  });
+
+  it("offers a nested export on a row with Markdown artifacts under it", () => {
+    const artifactSlice = {
+      byId: {
+        [ARTIFACT_NODE_ID]: artifactProjection({
+          id: ARTIFACT_NODE_ID,
+          kind: "spec",
+        }),
+        "ticket-under": artifactProjection({
+          id: "ticket-under",
+          kind: "ticket",
+          title: "Ticket",
+          parentId: ARTIFACT_NODE_ID,
+        }),
+      },
+      allIds: [ARTIFACT_NODE_ID, "ticket-under"],
+    };
+    const empty = { byId: {}, allIds: [] };
+    handle.store.setState({
+      artifacts: artifactSlice,
+      tree: projectTreeSlice(artifactSlice, empty, empty),
+    });
+    render(
+      <SwitcherRowActions
+        epicId={EPIC_ID}
+        tabId={tabId}
+        kind="artifact"
+        nodeId={ARTIFACT_NODE_ID}
+        name="Artifact One"
+      />,
+      { wrapper: Wrapper },
+    );
+
+    fireEvent.pointerDown(
+      screen.getByTestId(`switcher-more-${ARTIFACT_NODE_ID}`),
+      { button: 0 },
+    );
+    fireEvent.click(
+      screen.getByTestId(`switcher-export-nested-markdown-${ARTIFACT_NODE_ID}`),
+    );
+
+    expect(exportMutate).toHaveBeenCalledExactlyOnceWith({
+      artifacts: [{ id: ARTIFACT_NODE_ID, title: "Artifact One" }],
+      format: "markdown",
+      archive: true,
+      archiveTitle: "Artifact One",
+      includeNested: true,
+    });
+  });
+
+  it("mounts the menu, its dialogs and their hooks only once the row's … is pressed", () => {
+    // A list draws one of these per row, a thousand on a big task: until a
+    // row is pressed it owes the screen nothing but the button.
+    useEpicExportArtifacts.mockClear();
+    render(
+      <SwitcherRowActions
+        epicId={EPIC_ID}
+        tabId={tabId}
+        kind="artifact"
+        nodeId={ARTIFACT_NODE_ID}
+        name="Artifact One"
+      />,
+      { wrapper: Wrapper },
+    );
+    const more = screen.getByTestId(`switcher-more-${ARTIFACT_NODE_ID}`);
+    expect(more.getAttribute("aria-haspopup")).toBe("menu");
+    expect(useEpicExportArtifacts).not.toHaveBeenCalled();
+    expect(screen.queryByRole("menu")).toBeNull();
+
+    fireEvent.pointerDown(more, { button: 0 });
+
+    expect(useEpicExportArtifacts).toHaveBeenCalled();
+    expect(screen.getByRole("menu")).toBeDefined();
+    expect(
+      screen.getByTestId(`switcher-export-markdown-${ARTIFACT_NODE_ID}`),
+    ).toBeDefined();
+  });
+
+  it("puts focus on the first item when the … is opened from the keyboard", () => {
+    // The menu's own trigger focuses the first item on Enter; the menu here
+    // mounts after that keydown and never saw it, so it has to do so itself
+    // or a keyboard user presses ArrowDown twice to reach the first item.
+    render(
+      <SwitcherRowActions
+        epicId={EPIC_ID}
+        tabId={tabId}
+        kind="artifact"
+        nodeId={ARTIFACT_NODE_ID}
+        name="Artifact One"
+      />,
+      { wrapper: Wrapper },
+    );
+    const more = screen.getByTestId(`switcher-more-${ARTIFACT_NODE_ID}`);
+    more.focus();
+    fireEvent.keyDown(more, { key: "Enter" });
+
+    const items = screen.getAllByRole("menuitem");
+    expect(document.activeElement).toBe(items[0]);
   });
 
   it("has no export items on a terminal-agent row", () => {
@@ -364,8 +480,9 @@ describe("artifact export", () => {
     expect(screen.queryByTestId(`switcher-export-pdf-${NODE_ID}`)).toBeNull();
   });
 
-  it("keeps the artifact menu for a viewer, with export enabled and Rename disabled", () => {
-    handle.store.setState({ permissionRole: "viewer" });
+  it("keeps the artifact menu without a role, with export enabled and Rename disabled", () => {
+    // A stored viewer seat is retired and decodes to no role at all.
+    handle.store.setState({ permissionRole: null });
 
     render(
       <SwitcherRowActions

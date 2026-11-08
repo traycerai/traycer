@@ -11,7 +11,6 @@ import { ChatAutoArchiveSettingsRow } from "@/components/settings/panels/chat-au
 import { useSettingsDensity } from "@/providers/settings-density-context";
 import { cn } from "@/lib/utils";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { Switch } from "@/components/ui/switch";
@@ -117,11 +116,6 @@ export function GeneralSettingsPanel() {
           {agentRolesAvailable ? (
             <SettingsRow
               row={GENERAL.definitions.agentRoles}
-              labelStatus={
-                <Badge variant="muted" size="xs">
-                  Experimental
-                </Badge>
-              }
               status={
                 featureSettings.isError
                   ? "Couldn't read feature settings. Repair Traycer's config.json, or back it up before resetting it, then reopen Settings."

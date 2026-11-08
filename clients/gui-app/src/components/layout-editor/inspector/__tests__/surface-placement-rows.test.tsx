@@ -251,8 +251,8 @@ describe("<SideStripViewRow /> (D8)", () => {
       "Tabs and agents",
     ]);
     expect(options.map((node) => node.getAttribute("aria-checked"))).toEqual([
-      "true",
       "false",
+      "true",
     ]);
     expect(screen.getByText("Side tab view")).toBeTruthy();
   });
@@ -351,11 +351,9 @@ describe("<SideStripViewRow /> (D8)", () => {
   it("writes the store at rest, with no history", () => {
     render(<SideStripViewRow {...LIVE_ROW} />);
 
-    pickPictured("Side tab view", "Tabs and agents");
+    pickPictured("Side tab view", "Tabs only");
 
-    expect(useLayoutStore.getState().arrangement.sideStripView).toBe(
-      "activity",
-    );
+    expect(useLayoutStore.getState().arrangement.sideStripView).toBe("layered");
     expect(historyDepth()).toBe(0);
   });
 
@@ -363,43 +361,45 @@ describe("<SideStripViewRow /> (D8)", () => {
     beginSession();
     render(<SideStripViewRow {...LIVE_ROW} />);
 
-    pickPictured("Side tab view", "Tabs and agents");
-    expect(useLayoutStore.getState().arrangement.sideStripView).toBe(
-      "activity",
-    );
+    pickPictured("Side tab view", "Tabs only");
+    expect(useLayoutStore.getState().arrangement.sideStripView).toBe("layered");
     expect(historyDepth()).toBe(1);
 
     useLayoutEditorStore.getState().undo();
-    expect(useLayoutStore.getState().arrangement.sideStripView).toBe("layered");
-
-    useLayoutEditorStore.getState().redo();
     expect(useLayoutStore.getState().arrangement.sideStripView).toBe(
       "activity",
     );
 
-    useLayoutEditorStore.getState().discard();
+    useLayoutEditorStore.getState().redo();
     expect(useLayoutStore.getState().arrangement.sideStripView).toBe("layered");
+
+    useLayoutEditorStore.getState().discard();
+    expect(useLayoutStore.getState().arrangement.sideStripView).toBe(
+      "activity",
+    );
   });
 
   it("offers a revert only while the view differs from the shipped one", () => {
     render(<SideStripViewRow {...LIVE_ROW} />);
     expect(
       screen.queryByRole("button", {
-        name: "Reset side tab view to default: Tabs only",
+        name: "Reset side tab view to default: Tabs and agents",
       }),
     ).toBeNull();
 
-    pickPictured("Side tab view", "Tabs and agents");
+    pickPictured("Side tab view", "Tabs only");
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Reset side tab view to default: Tabs only",
+        name: "Reset side tab view to default: Tabs and agents",
       }),
     );
 
-    expect(useLayoutStore.getState().arrangement.sideStripView).toBe("layered");
+    expect(useLayoutStore.getState().arrangement.sideStripView).toBe(
+      "activity",
+    );
     expect(
       screen.queryByRole("button", {
-        name: "Reset side tab view to default: Tabs only",
+        name: "Reset side tab view to default: Tabs and agents",
       }),
     ).toBeNull();
   });
@@ -408,26 +408,26 @@ describe("<SideStripViewRow /> (D8)", () => {
 describe("<SidebarStartCollapsedRow />", () => {
   const SWITCH = { name: "Collapsed in new tasks" };
   const REVERT = {
-    name: "Reset sidebar collapsed in new tasks to default: On",
+    name: "Reset sidebar collapsed in new tasks to default: Off",
   };
 
-  it("writes the store at rest, and offers a revert only while off", () => {
+  it("writes the store at rest, and offers a revert only while on", () => {
     render(<SidebarStartCollapsedRow {...LIVE_ROW} />);
     expect(
       screen.getByRole("switch", SWITCH).getAttribute("aria-checked"),
-    ).toBe("true");
+    ).toBe("false");
     expect(screen.queryByRole("button", REVERT)).toBeNull();
 
     fireEvent.click(screen.getByRole("switch", SWITCH));
 
     expect(useLayoutStore.getState().arrangement.sidebarStartCollapsed).toBe(
-      false,
+      true,
     );
     expect(historyDepth()).toBe(0);
 
     fireEvent.click(screen.getByRole("button", REVERT));
     expect(useLayoutStore.getState().arrangement.sidebarStartCollapsed).toBe(
-      true,
+      false,
     );
     expect(screen.queryByRole("button", REVERT)).toBeNull();
   });
@@ -441,17 +441,17 @@ describe("<SidebarStartCollapsedRow />", () => {
 
     useLayoutEditorStore.getState().undo();
     expect(useLayoutStore.getState().arrangement.sidebarStartCollapsed).toBe(
-      true,
+      false,
     );
 
     useLayoutEditorStore.getState().redo();
     expect(useLayoutStore.getState().arrangement.sidebarStartCollapsed).toBe(
-      false,
+      true,
     );
 
     useLayoutEditorStore.getState().discard();
     expect(useLayoutStore.getState().arrangement.sidebarStartCollapsed).toBe(
-      true,
+      false,
     );
   });
 });
@@ -467,8 +467,8 @@ describe("<SidebarSideRow />", () => {
     );
     expect(options.map((node) => node.textContent)).toEqual(["Left", "Right"]);
     expect(options.map((node) => node.getAttribute("aria-checked"))).toEqual([
-      "true",
       "false",
+      "true",
     ]);
     expect(screen.getByText("Side")).toBeTruthy();
   });
@@ -476,9 +476,9 @@ describe("<SidebarSideRow />", () => {
   it("writes the store at rest", () => {
     render(<SidebarSideRow {...LIVE_ROW} />);
 
-    pick("Sidebar side", "Right");
+    pick("Sidebar side", "Left");
 
-    expect(useLayoutStore.getState().arrangement.sidebarSide).toBe("right");
+    expect(useLayoutStore.getState().arrangement.sidebarSide).toBe("left");
     expect(historyDepth()).toBe(0);
   });
 
@@ -486,17 +486,17 @@ describe("<SidebarSideRow />", () => {
     beginSession();
     render(<SidebarSideRow {...LIVE_ROW} />);
 
-    pick("Sidebar side", "Right");
+    pick("Sidebar side", "Left");
     expect(historyDepth()).toBe(1);
 
     useLayoutEditorStore.getState().undo();
-    expect(useLayoutStore.getState().arrangement.sidebarSide).toBe("left");
-
-    useLayoutEditorStore.getState().redo();
     expect(useLayoutStore.getState().arrangement.sidebarSide).toBe("right");
 
-    useLayoutEditorStore.getState().discard();
+    useLayoutEditorStore.getState().redo();
     expect(useLayoutStore.getState().arrangement.sidebarSide).toBe("left");
+
+    useLayoutEditorStore.getState().discard();
+    expect(useLayoutStore.getState().arrangement.sidebarSide).toBe("right");
   });
 
   it("offers a revert only while the side differs from the shipped one", () => {
@@ -507,12 +507,12 @@ describe("<SidebarSideRow />", () => {
       }),
     ).toBeNull();
 
-    pick("Sidebar side", "Right");
+    pick("Sidebar side", "Left");
     fireEvent.click(
       screen.getByRole("button", { name: "Reset sidebar side to default" }),
     );
 
-    expect(useLayoutStore.getState().arrangement.sidebarSide).toBe("left");
+    expect(useLayoutStore.getState().arrangement.sidebarSide).toBe("right");
     expect(
       screen.queryByRole("button", {
         name: "Reset sidebar side to default",
@@ -522,7 +522,7 @@ describe("<SidebarSideRow />", () => {
 
   it("keeps focus in the row when its ↺ unmounts, moving it to a sibling control", () => {
     render(<SidebarSideRow {...LIVE_ROW} />);
-    pick("Sidebar side", "Right");
+    pick("Sidebar side", "Left");
 
     const revertButton = screen.getByRole("button", {
       name: "Reset sidebar side to default",
@@ -533,7 +533,7 @@ describe("<SidebarSideRow />", () => {
     revertButton.focus();
     fireEvent.click(revertButton);
 
-    expect(useLayoutStore.getState().arrangement.sidebarSide).toBe("left");
+    expect(useLayoutStore.getState().arrangement.sidebarSide).toBe("right");
     expect(
       screen.queryByRole("button", {
         name: "Reset sidebar side to default",

@@ -18,6 +18,7 @@ import { StrictMode, type ReactNode } from "react";
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { BotTestRunnerHost } from "@/components/bots/__tests__/bot-test-runner-host";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -28,6 +29,7 @@ import { mockRemoteHostEntry } from "@traycer-clients/shared/host-client/mock/mo
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import { botQuestionsText } from "@traycer/protocol/persistence/epic/messages";
 import type {
   BotConversationSendDelivery,
   BotConversationSendRequest,
@@ -46,6 +48,7 @@ import {
   VIEWER_USER_ID,
 } from "@/components/bots/__tests__/bot-failed-request-test-support";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
+import { installLegendListTestClock } from "@/components/chat/__tests__/legend-list-test-environment";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type {
   BotActivity,
@@ -94,6 +97,9 @@ const mocks = vi.hoisted(() => ({
   threads: [] as BotThreadSummary[],
 }));
 
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => null,
+}));
 vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/lib/registries/chat-session-registry")
@@ -115,6 +121,7 @@ vi.mock("@/hooks/host/use-host-supports-method", async (importOriginal) => ({
 vi.mock("@/components/epic-tabs/pane-visibility-context", () => ({
   usePaneVisible: () => true,
   usePaneFocused: () => true,
+  usePaneFocusProbe: () => () => true,
 }));
 vi.mock("@/hooks/bots/use-bot-conversation-list-query", () => ({
   useBotConversationListQuery: () => ({
@@ -190,6 +197,11 @@ import { BotChannelView } from "@/components/bots/bot-channel-view";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import type { BotOpenThread } from "@/stores/bots/bot-open-thread-store";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
+import {
+  boxWithin,
+  textOf,
+  typeInto,
+} from "@/components/bots/__tests__/bot-box-test-support";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const HOST_ID = "host-tab";
@@ -365,15 +377,20 @@ let sent: ReadonlyArray<BotConversationSendRequest>;
 let refuseSends: boolean;
 /** How the host takes each send: `queued` while the bot's host is away. */
 let delivery: BotConversationSendDelivery;
-/** A send the host holds until the case lands it. */
+/** A send the host holds until the case lands or refuses it. */
 interface HeldSend {
   readonly land: () => void;
-  /** The host's answer, once landed. */
+  readonly refuse: () => void;
+  /** The host's answer, once landed or refused. */
   readonly answered: Promise<BotConversationSendResponse>;
 }
-/** While set, each send waits here until the case lands it. */
+/** While set, each send waits here until the case lands or refuses it. */
 let heldSends: HeldSend[] | null;
 const onOpenThread = vi.fn<(open: BotOpenThread | null) => void>();
+
+function settledRefusal(): Error {
+  return new Error("QUESTION_ALREADY_SETTLED: the question is settled");
+}
 
 function hostClientRecordingSends(): HostRequester<HostRpcRegistry> {
   const queryClient = new QueryClient();
@@ -385,9 +402,7 @@ function hostClientRecordingSends(): HostRequester<HostRpcRegistry> {
       "bot.conversation.send": (params) => {
         sent = [...sent, params];
         if (refuseSends) {
-          return Promise.reject(
-            new Error("QUESTION_ALREADY_SETTLED: the question is settled"),
-          );
+          return Promise.reject(settledRefusal());
         }
         const response: BotConversationSendResponse = {
           messageId: "message-new",
@@ -396,9 +411,13 @@ function hostClientRecordingSends(): HostRequester<HostRpcRegistry> {
           threadId: null,
         };
         if (heldSends === null) return Promise.resolve(response);
-        const { promise, resolve } =
+        const { promise, resolve, reject } =
           Promise.withResolvers<BotConversationSendResponse>();
-        heldSends.push({ land: () => resolve(response), answered: promise });
+        heldSends.push({
+          land: () => resolve(response),
+          refuse: () => reject(settledRefusal()),
+          answered: promise,
+        });
         return promise;
       },
     },
@@ -426,6 +445,16 @@ async function land(): Promise<void> {
   });
 }
 
+/** The host refuses the oldest send held. */
+async function refuse(): Promise<void> {
+  const next = heldSends?.shift();
+  if (next === undefined) throw new Error("no send is held");
+  await act(async () => {
+    next.refuse();
+    await next.answered.catch(() => undefined);
+  });
+}
+
 /** A chat's transcript as its session holds it; `set` writes rows as the host does. */
 function session(
   chatId: string,
@@ -444,35 +473,39 @@ function mountChannel(openThread: BotOpenThread | null): {
   const tree = (open: BotOpenThread | null): ReactNode => (
     <StrictMode>
       <QueryClientProvider client={queryClient}>
-        <TooltipProvider>
-          <ChatExpansionTestProviders tileInstanceId="tile-1">
-            <BotChannelView
-              tiles={null}
-              botId={BOT_ID}
-              hostId={HOST_ID}
-              boundHostId={HOST_ID}
-              boundHostEpoch={1}
-              botTitle="Release Bot"
-              directive={null}
-              appConversationChatId={CHANNEL_ID}
-              trunkChatId="trunk-chat"
-              onOpenTurn={vi.fn()}
-              onOpenSession={vi.fn()}
-              landOn={null}
-              openMemory={null}
-              onOpenMemory={vi.fn()}
-              environmentId="env-1"
-              botNameOf={() => null}
-              resolveMember={resolveMember}
-              tasks={[]}
-              surfaceActions={null}
-              openThread={open}
-              onOpenThread={onOpenThread}
-              onOpenActivity={vi.fn()}
-              setupHistory={null}
-            />
-          </ChatExpansionTestProviders>
-        </TooltipProvider>
+        <BotTestRunnerHost>
+          <TooltipProvider>
+            <ChatExpansionTestProviders tileInstanceId="tile-1">
+              <BotChannelView
+                tiles={null}
+                botId={BOT_ID}
+                hostId={HOST_ID}
+                boundHostId={HOST_ID}
+                boundHostEpoch={1}
+                botTitle="Release Bot"
+                directive={null}
+                appConversationChatId={CHANNEL_ID}
+                trunkChatId="trunk-chat"
+                onOpenTurn={vi.fn()}
+                onOpenSession={vi.fn()}
+                landOn={null}
+                openMemory={null}
+                onOpenMemory={vi.fn()}
+                environmentId="env-1"
+                botNameOf={() => null}
+                environmentBots={null}
+                openExchange={null}
+                exchangeRail={{ open: () => undefined, close: () => undefined }}
+                resolveMember={resolveMember}
+                tasks={[]}
+                surfaceActions={null}
+                openThread={open}
+                onOpenThread={onOpenThread}
+                setupHistory={null}
+              />
+            </ChatExpansionTestProviders>
+          </TooltipProvider>
+        </BotTestRunnerHost>
       </QueryClientProvider>
     </StrictMode>
   );
@@ -493,6 +526,7 @@ function cardQuestion(card: HTMLElement, text: string): HTMLElement {
 }
 
 beforeEach(() => {
+  installLegendListTestClock();
   sent = [];
   refuseSends = false;
   delivery = "written";
@@ -508,8 +542,12 @@ beforeEach(() => {
   signInViewer(VIEWER_USER_ID);
 });
 
-afterEach(() => {
+afterEach(async () => {
   cleanup();
+  // Let Tiptap complete its deferred unmount destruction before restoring the clock.
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1);
+  });
   resetBotFailedRequestSupport();
   mocks.handles.clear();
   mocks.client = null;
@@ -536,7 +574,7 @@ describe("<BotChannelView tiles={null} /> a question the bot asks without waitin
   });
 
   it("sends the picked answer as the person's message with the question it settles, and shows the settlement the host writes, with nothing left to do", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const write = session(CHANNEL_ID, [questionRow([deploy(null)])]);
     mountChannel(null);
 
@@ -574,7 +612,7 @@ describe("<BotChannelView tiles={null} /> a question the bot asks without waitin
   });
 
   it("sends a typed answer for the question it is typed under, by its place on the card", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     session(CHANNEL_ID, [questionRow([deploy(null), hold(null)])]);
     mountChannel(null);
 
@@ -594,7 +632,7 @@ describe("<BotChannelView tiles={null} /> a question the bot asks without waitin
   });
 
   it("sends a Skip as skipped, and shows the question skipped once the host settles it", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const write = session(CHANNEL_ID, [questionRow([hold(null)])]);
     mountChannel(null);
 
@@ -646,7 +684,7 @@ describe("<BotChannelView tiles={null} /> a question the bot asks without waitin
   });
 
   it("opens the question's own thread from its hover actions, not the thread of the post it follows", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     session(CHANNEL_ID, [
       botRow(
         QUESTION_ID,
@@ -688,7 +726,7 @@ describe("<BotChannelView tiles={null} /> a question the bot asks without waitin
 
 describe("<BotChannelView tiles={null} /> a question on a tab whose host cannot take a card's answer", () => {
   it("draws the card with nothing to press on a host that negotiated bot.conversation.send 1.1, keeping the member's draft, and offers them again once the host reaches 1.2", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     session(CHANNEL_ID, [questionRow([deploy(null), hold(null)])]);
     mountChannel(null);
     await user.type(holdField(), "Hold the migration");
@@ -725,7 +763,7 @@ describe("<BotChannelView tiles={null} /> a question on a tab whose host cannot 
 
 describe("<BotChannelView tiles={null} /> a question settled while a member was answering (decision 122)", () => {
   it("refuses the member's answer at the host, keeps their draft, and once the settlement lands says who answered, drops Submit, and offers Copy and Discuss", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const write = session(CHANNEL_ID, [questionRow([hold(null)])]);
     mountChannel(null);
     const field = within(cardQuestion(channelCard(), HOLD)).getByRole(
@@ -743,8 +781,10 @@ describe("<BotChannelView tiles={null} /> a question settled while a member was 
     );
 
     expect(sent).toHaveLength(1);
-    expect(screen.getByTestId("bot-channel-composer-send-failed")).toBeTruthy();
-    expect((field as HTMLTextAreaElement).value).toBe("Hold the migration");
+    expect(
+      await screen.findByTestId("bot-channel-composer-send-failed"),
+    ).toBeTruthy();
+    expect(field).toHaveProperty("value", "Hold the migration");
     write([questionRow([hold(byPerson(TEAMMATE_USER_ID, "Nothing"))])]);
 
     const question = cardQuestion(channelCard(), HOLD);
@@ -763,7 +803,7 @@ describe("<BotChannelView tiles={null} /> a question settled while a member was 
   });
 
   it("keeps a picked option in place when another member's settlement arrives, without sending anything", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const write = session(CHANNEL_ID, [questionRow([deploy(null)])]);
     mountChannel(null);
     await user.click(
@@ -794,7 +834,7 @@ describe("<BotChannelView tiles={null} /> a question settled while a member was 
   });
 
   it("opens the question's thread from Discuss with the member's draft in its box, unsent", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const write = session(CHANNEL_ID, [questionRow([hold(null)])]);
     const { reopen } = mountChannel(null);
     await user.type(
@@ -820,10 +860,8 @@ describe("<BotChannelView tiles={null} /> a question settled while a member was 
     expect(onOpenThread).toHaveBeenLastCalledWith(opened);
     reopen(opened);
     const panel = screen.getByTestId("bot-thread-panel");
-    const box = within(panel).getByRole("textbox", {
-      name: "Reply in a new thread",
-    });
-    expect((box as HTMLTextAreaElement).value).toBe("Hold the migration");
+    const box = boxWithin(panel, "Reply in a new thread");
+    expect(textOf(box)).toBe("Hold the migration");
     // The thread opens on the question's card, which is answered in the channel.
     expect(
       within(within(panel).getByTestId("question-card")).getByTestId(
@@ -852,18 +890,17 @@ const QUESTION_THREAD: BotOpenThread = {
 };
 
 /** The box of the question's thread, which nobody has started. */
-function questionThreadBox(): HTMLTextAreaElement {
-  const box = within(screen.getByTestId("bot-thread-panel")).getByRole(
-    "textbox",
-    { name: "Reply in a new thread" },
+function questionThreadBox(): HTMLElement {
+  const box = boxWithin(
+    screen.getByTestId("bot-thread-panel"),
+    "Reply in a new thread",
   );
-  if (!(box instanceof HTMLTextAreaElement)) throw new Error("no box");
   return box;
 }
 
 describe("<BotChannelView tiles={null} /> an answer the host queued while the bot's host is away", () => {
   it("holds the sent answer on the card, its choice pressed and nothing left to press, until the room settles it; the member's own settlement closes it", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     delivery = "queued";
     const write = session(CHANNEL_ID, [questionRow([deploy(null)])]);
     mountChannel(null);
@@ -902,7 +939,7 @@ describe("<BotChannelView tiles={null} /> an answer the host queued while the bo
   });
 
   it("shows a queued answer overtaken once a teammate's settlement reaches the room first, the draft kept with Copy and Discuss, and sends nothing more", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     delivery = "queued";
     const write = session(CHANNEL_ID, [questionRow([hold(null)])]);
     mountChannel(null);
@@ -940,7 +977,7 @@ describe("<BotChannelView tiles={null} /> an answer the host queued while the bo
 
 describe("<BotChannelView tiles={null} /> an answer someone else settled with first, the same member from another window included", () => {
   it("shows the card's sent answer overtaken when a teammate settled the question first with the same answer", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     delivery = "queued";
     const write = session(CHANNEL_ID, [questionRow([deploy(null)])]);
     mountChannel(null);
@@ -965,7 +1002,7 @@ describe("<BotChannelView tiles={null} /> an answer someone else settled with fi
   });
 
   it("shows the card's sent answer overtaken, kept with Copy and Discuss, when the member's settlement is a different answer", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     delivery = "queued";
     const write = session(CHANNEL_ID, [questionRow([deploy(null)])]);
     mountChannel(null);
@@ -1009,12 +1046,14 @@ describe("<BotChannelView tiles={null} /> what a member has not sent, across the
     readonly reopen: (next: BotOpenThread | null) => void;
     readonly unmount: () => void;
   }> {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const write = session(CHANNEL_ID, [
       questionRow([deploy(null), hold(null)]),
     ]);
     const view = mountChannel(null);
-    await user.type(holdField(), typed);
+    // Seed the draft in one paste; these cases exercise its lifecycle after settlement.
+    await user.click(holdField());
+    await user.paste(typed);
     await user.click(
       within(cardQuestion(channelCard(), DEPLOY)).getByRole("button", {
         name: "Now",
@@ -1030,7 +1069,7 @@ describe("<BotChannelView tiles={null} /> what a member has not sent, across the
   }
 
   async function discuss(text: string): Promise<void> {
-    await userEvent.setup().click(
+    await userEvent.setup({ advanceTimers: vi.advanceTimersByTime }).click(
       within(cardQuestion(channelCard(), text)).getByRole("button", {
         name: "Discuss",
       }),
@@ -1038,7 +1077,7 @@ describe("<BotChannelView tiles={null} /> what a member has not sent, across the
   }
 
   it("keeps a card's answers, typed, picked and sent, across the channel unmounting and mounting again, as a switch to another tab and back does", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     delivery = "queued";
     session(CHANNEL_ID, [questionRow([deploy(null), hold(null)])]);
     const first = mountChannel(null);
@@ -1071,25 +1110,24 @@ describe("<BotChannelView tiles={null} /> what a member has not sent, across the
   });
 
   it("keeps the draft Discuss put in the question's thread, and what was typed after it, across the thread closing and the channel remounting", async () => {
-    const user = userEvent.setup();
     const view = await overtakenBoth("Hold the migration");
     await discuss(HOLD);
     view.reopen(QUESTION_THREAD);
-    await user.type(questionThreadBox(), " today");
+    typeInto(questionThreadBox(), " today");
 
     view.reopen(null);
     expect(screen.queryByTestId("bot-thread-panel")).toBeNull();
     view.reopen(QUESTION_THREAD);
-    expect(questionThreadBox().value).toBe("Hold the migration today");
+    expect(textOf(questionThreadBox())).toBe("Hold the migration today");
 
     view.unmount();
     mountChannel(QUESTION_THREAD);
-    expect(questionThreadBox().value).toBe("Hold the migration today");
+    expect(textOf(questionThreadBox())).toBe("Hold the migration today");
     expect(sent).toEqual([]);
   });
 
   it("spends the draft with the send that carries it, even when the send lands after the thread closed", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     heldSends = [];
     const view = await overtakenBoth("Hold the migration");
     await discuss(HOLD);
@@ -1107,12 +1145,40 @@ describe("<BotChannelView tiles={null} /> what a member has not sent, across the
     await land();
     view.reopen(QUESTION_THREAD);
 
-    expect(questionThreadBox().value).toBe("");
+    expect(textOf(questionThreadBox())).toBe("");
   });
 
-  /** The Discuss draft sent from the question's thread, the thread closed and opened again while the send is held. */
+  it("offers the refused send's text back beside a newer draft, in the thread opened again after the send was refused with its thread closed", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    heldSends = [];
+    const view = await overtakenBoth("Hold the migration");
+    await discuss(HOLD);
+    view.reopen(QUESTION_THREAD);
+    await user.click(screen.getByTestId("bot-thread-composer-send"));
+    typeInto(questionThreadBox(), "Hold off today");
+
+    view.reopen(null);
+    await refuse();
+    view.reopen(QUESTION_THREAD);
+
+    expect(textOf(questionThreadBox())).toBe("Hold off today");
+    expect(
+      screen.getByTestId("bot-thread-composer-send-failed").textContent,
+    ).toContain("Hold the migration");
+    await user.click(
+      screen.getByTestId("bot-thread-composer-send-failed-restore"),
+    );
+    expect(textOf(questionThreadBox())).toBe("Hold the migration");
+    expect(screen.queryByTestId("bot-thread-composer-send-failed")).toBeNull();
+  });
+
+  /**
+   * The Discuss draft sent from the question's thread, the thread closed and
+   * opened again while the send is held: the draft went with the send, so the
+   * box opens empty.
+   */
   async function sentThenReopened(): Promise<void> {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     heldSends = [];
     const view = await overtakenBoth("Hold the migration");
     await discuss(HOLD);
@@ -1120,15 +1186,15 @@ describe("<BotChannelView tiles={null} /> what a member has not sent, across the
     await user.click(screen.getByTestId("bot-thread-composer-send"));
     view.reopen(null);
     view.reopen(QUESTION_THREAD);
-    expect(questionThreadBox().value).toBe("Hold the migration");
+    expect(textOf(questionThreadBox())).toBe("");
   }
 
-  it("empties the box opened again while the send was in flight once it lands, so the sent draft is not offered twice", async () => {
+  it("does not offer the sent draft again in the box opened while the send was in flight, once it lands", async () => {
     await sentThenReopened();
 
     await land();
 
-    expect(questionThreadBox().value).toBe("");
+    expect(textOf(questionThreadBox())).toBe("");
     expect(
       screen.getByTestId("bot-thread-composer-send").hasAttribute("disabled"),
     ).toBe(true);
@@ -1136,17 +1202,16 @@ describe("<BotChannelView tiles={null} /> what a member has not sent, across the
   });
 
   it("keeps what was typed in the box opened again after the send left, when the send lands", async () => {
-    const user = userEvent.setup();
     await sentThenReopened();
-    await user.type(questionThreadBox(), " today");
+    typeInto(questionThreadBox(), "Hold off today");
 
     await land();
 
-    expect(questionThreadBox().value).toBe("Hold the migration today");
+    expect(textOf(questionThreadBox())).toBe("Hold off today");
   });
 
   it("keeps a draft Discuss puts in the thread's open box while an earlier send from it is in flight", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     heldSends = [];
     const view = await overtakenBoth("Hold the migration");
     await discuss(HOLD);
@@ -1154,17 +1219,17 @@ describe("<BotChannelView tiles={null} /> what a member has not sent, across the
     await user.click(screen.getByTestId("bot-thread-composer-send"));
 
     await discuss(DEPLOY);
-    expect(questionThreadBox().value).toBe("Now");
+    expect(textOf(questionThreadBox())).toBe("Now");
     await land();
 
-    expect(questionThreadBox().value).toBe("Now");
+    expect(textOf(questionThreadBox())).toBe("Now");
     view.reopen(null);
     view.reopen(QUESTION_THREAD);
-    expect(questionThreadBox().value).toBe("Now");
+    expect(textOf(questionThreadBox())).toBe("Now");
   });
 
   it("keeps a draft Discuss puts in the thread while it is closed, even with the text an earlier send from its box carried, when that send lands after", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     heldSends = [];
     const view = await overtakenBoth("Now");
     await discuss(HOLD);
@@ -1177,7 +1242,7 @@ describe("<BotChannelView tiles={null} /> what a member has not sent, across the
     await land();
     view.reopen(QUESTION_THREAD);
 
-    expect(questionThreadBox().value).toBe("Now");
+    expect(textOf(questionThreadBox())).toBe("Now");
   });
 });
 
@@ -1210,11 +1275,75 @@ describe("<BotChannelView tiles={null} /> a row's text above its question card",
       within(screen.getByTestId("bot-channel")).getAllByText(DEPLOY),
     ).toHaveLength(1);
   });
+
+  describe("with several questions, one long and multi-line", () => {
+    const LONG_MARKER = "rollback window for the canary";
+    const LONG_QUESTION = [
+      "Before the train leaves, which of these should block it?",
+      `Think about the ${LONG_MARKER}, the migration that touches billing,`,
+      "and whether the on-call engineer has signed off on the release.",
+      "x".repeat(200),
+    ].join("\n");
+    const longQuestions: BotQuestionItem[] = [
+      {
+        text: LONG_QUESTION,
+        options: [],
+        allowFreeText: true,
+        settlement: null,
+      },
+      deploy(null),
+    ];
+
+    function expectEachQuestionOnce(): void {
+      const channel = screen.getByTestId("bot-channel");
+      expect(
+        within(channel).getAllByText(new RegExp(LONG_MARKER)),
+      ).toHaveLength(1);
+      expect(within(channel).getAllByText(DEPLOY)).toHaveLength(1);
+      const card = channelCard();
+      expect(within(card).getByText(new RegExp(LONG_MARKER))).toBeTruthy();
+      expect(within(card).getByText(DEPLOY)).toBeTruthy();
+      expect(
+        within(card).getAllByRole("button", { name: "Submit" }).length,
+      ).toBeGreaterThan(0);
+      expect(
+        within(card).getAllByRole("button", { name: "Skip" }).length,
+      ).toBeGreaterThan(0);
+      expect(
+        within(card).getAllByRole("textbox", { name: "Your answer" }).length,
+      ).toBeGreaterThan(0);
+    }
+
+    it("draws each question once, in the card, when the row's text is exactly what the host writes for them", () => {
+      session(CHANNEL_ID, [
+        botRow(
+          QUESTION_ID,
+          botQuestionsText(longQuestions),
+          longQuestions,
+          null,
+        ),
+      ]);
+      mountChannel(null);
+
+      expectEachQuestionOnce();
+    });
+
+    it("draws the prose above the card once, and each question once, when the row says more than its questions", () => {
+      const prose = "Hi, I'm your release assistant. Let me ask a few things.";
+      session(CHANNEL_ID, [botRow(QUESTION_ID, prose, longQuestions, null)]);
+      mountChannel(null);
+
+      expect(
+        within(screen.getByTestId("bot-channel")).getAllByText(prose),
+      ).toHaveLength(1);
+      expectEachQuestionOnce();
+    });
+  });
 });
 
 describe("<BotChannelView tiles={null} /> a question that takes options and the person's own words", () => {
   it("toggles several options, and Submit sends them joined in option order with the typed words after them", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     session(CHANNEL_ID, [questionRow([watch(null)])]);
     mountChannel(null);
 
@@ -1237,7 +1366,7 @@ describe("<BotChannelView tiles={null} /> a question that takes options and the 
   });
 
   it("takes a pick back when it is toggled off", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     session(CHANNEL_ID, [questionRow([watch(null)])]);
     mountChannel(null);
 
@@ -1264,7 +1393,7 @@ describe("<BotChannelView tiles={null} /> a question that takes options and the 
   });
 
   it("stays single-choice on a question without free text: a second pick replaces the first", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     session(CHANNEL_ID, [questionRow([deploy(null)])]);
     mountChannel(null);
 
@@ -1336,7 +1465,7 @@ describe("<BotChannelView tiles={null} /> a question a thread's session asks in 
   };
 
   it("sends the answer into the thread, and Discuss on an overtaken answer puts it in the thread's own box, unsent", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     mocks.threads = [postThread()];
     session(CHANNEL_ID, [memberPost()]);
     const write = session(THREAD_ID, [threadQuestion(null)]);
@@ -1358,11 +1487,11 @@ describe("<BotChannelView tiles={null} /> a question a thread's session asks in 
     await user.click(within(panel).getByRole("button", { name: "Discuss" }));
 
     expect(onOpenThread).not.toHaveBeenCalled();
-    const box = within(screen.getByTestId("bot-thread-panel")).getByRole(
-      "textbox",
-      { name: "Reply in the thread" },
+    const box = boxWithin(
+      screen.getByTestId("bot-thread-panel"),
+      "Reply in the thread",
     );
-    expect((box as HTMLTextAreaElement).value).toBe("Now");
+    expect(textOf(box)).toBe("Now");
     expect(sent).toHaveLength(1);
   });
 
@@ -1416,7 +1545,7 @@ describe("<BotChannelView tiles={null} /> a question a thread's session asks in 
   };
 
   it("keeps an edit opened in the thread's box opened again, when a send from the box before it closed lands", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     heldSends = [];
     activityStore.setState({
       activity: { trunk: null, threads: { [THREAD_ID]: FAILED_ON_REPLY } },
@@ -1425,15 +1554,14 @@ describe("<BotChannelView tiles={null} /> a question a thread's session asks in 
     session(CHANNEL_ID, [memberPost()]);
     session(THREAD_ID, [failedReply()]);
     const view = mountChannel(POST_THREAD);
-    const box = (): HTMLTextAreaElement => {
-      const element = within(screen.getByTestId("bot-thread-panel")).getByRole(
-        "textbox",
-        { name: "Reply in the thread" },
+    const box = (): HTMLElement => {
+      const element = boxWithin(
+        screen.getByTestId("bot-thread-panel"),
+        "Reply in the thread",
       );
-      if (!(element instanceof HTMLTextAreaElement)) throw new Error("no box");
       return element;
     };
-    await user.type(box(), "Ship it today");
+    typeInto(box(), "Ship it today");
     await user.click(screen.getByTestId("bot-thread-composer-send"));
     view.reopen(null);
     view.reopen(POST_THREAD);
@@ -1442,16 +1570,16 @@ describe("<BotChannelView tiles={null} /> a question a thread's session asks in 
         "bot-message-edit",
       ),
     );
-    expect(box().value).toBe("Hold for now");
+    expect(textOf(box())).toBe("Hold for now");
 
     await land();
 
-    expect(box().value).toBe("Hold for now");
+    expect(textOf(box())).toBe("Hold for now");
     expect(screen.getByTestId("bot-thread-composer-editing")).toBeTruthy();
   });
 
   it("starts a new message when Discuss puts a draft in the box while it edits a failed reply: what is sent replaces nothing", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     activityStore.setState({
       activity: { trunk: null, threads: { [THREAD_ID]: FAILED_ON_REPLY } },
     });
@@ -1471,11 +1599,11 @@ describe("<BotChannelView tiles={null} /> a question a thread's session asks in 
     await user.click(within(replies).getByRole("button", { name: "Discuss" }));
 
     expect(screen.queryByTestId("bot-thread-composer-editing")).toBeNull();
-    const box = within(screen.getByTestId("bot-thread-panel")).getByRole(
-      "textbox",
-      { name: "Reply in the thread" },
+    const box = boxWithin(
+      screen.getByTestId("bot-thread-panel"),
+      "Reply in the thread",
     );
-    expect((box as HTMLTextAreaElement).value).toBe("Now");
+    expect(textOf(box)).toBe("Now");
     await user.click(screen.getByTestId("bot-thread-composer-send"));
     expect(
       sent.map((request) => [

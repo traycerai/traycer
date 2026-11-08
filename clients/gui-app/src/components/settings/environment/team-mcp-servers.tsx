@@ -11,7 +11,6 @@ import type { ConfigurationItem } from "@/hooks/environment/team/use-configurati
 import {
   useConfigurationSource,
   useCanEditConfiguration,
-  useConfigurationIsPersonal,
 } from "./configuration-source";
 import { ConfigurationWriteFeedback } from "./configuration-write-feedback";
 import {
@@ -19,19 +18,13 @@ import {
   type ConfigurationWriteIssue,
 } from "./configuration-write-issue";
 import { ConfigurationReadFailed } from "./team-read-failed";
-import { useConfigurationName } from "./team-pick-label";
+import { MCP_PAGE_DESCRIPTION } from "./mcp-skills-copy";
 
 export function TeamMcpServers(): ReactNode {
-  const personal = useConfigurationIsPersonal();
-  const teamName = useConfigurationName();
   return (
     <SettingsPanelShell
       title="MCP servers"
-      description={
-        personal
-          ? "Tools agents can call. Personal's servers reach every provider on every computer and sandbox running Personal."
-          : `Tools agents can call. ${teamName}'s servers reach every provider on every host running ${teamName}.`
-      }
+      description={MCP_PAGE_DESCRIPTION}
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >
       <TeamMcpItems providerId={null} />

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   layoutChanges,
+  layoutEditorSessionChangeSummary,
   layoutModified,
   providerChanged,
   resetLayout,
@@ -117,14 +118,14 @@ describe("what the page can see as changed", () => {
     ).toEqual([]);
     const eachOne: ReadonlyArray<Partial<LayoutArrangement>> = [
       { usageHost: "header" },
-      { minimapSide: "left" },
+      { minimapSide: "right" },
       { resourceSide: "left" },
       { mobileFooter: true },
       { hiddenProviders: [PROVIDER] },
       { dock: [...DEFAULT_ARRANGEMENT.dock].reverse() },
       { tabStripPlacement: "top" },
-      { sidebarSide: "right" },
-      { sideStripView: "activity" },
+      { sidebarSide: "left" },
+      { sideStripView: "layered" },
       { taskTabLayout: "shrink" },
       { readingWidth: "wide" },
       { wideReadingWidthPx: 1600 },
@@ -137,6 +138,51 @@ describe("what the page can see as changed", () => {
       ).toBeGreaterThan(0);
       expect(layoutModified(snapshot), JSON.stringify(patch)).toBe(false);
     }
+  });
+});
+
+describe("panels shown or hidden", () => {
+  const withFileTree: LayoutSnapshot = {
+    basePreset: "default",
+    overrides: { railFileTree: { shown: "shown" } },
+    arrangement: DEFAULT_ARRANGEMENT,
+  };
+
+  it("lists a rail override under panels, not styles, and does not mark the preset Modified", () => {
+    const changes = layoutChanges(withFileTree);
+
+    expect(changes.panels.map((change) => change.region)).toEqual([
+      "railFileTree",
+    ]);
+    expect(changes.styles).toEqual([]);
+    expect(layoutModified(withFileTree)).toBe(false);
+  });
+
+  it("still marks the preset Modified for a display override", () => {
+    const snapshot: LayoutSnapshot = {
+      ...withFileTree,
+      overrides: { ...withFileTree.overrides, mic: { shown: "hidden" } },
+    };
+
+    expect(layoutChanges(snapshot).styles.map((c) => c.region)).toEqual([
+      "mic",
+    ]);
+    expect(layoutModified(snapshot)).toBe(true);
+  });
+
+  it("is put back by the panel change's revert", () => {
+    const [change] = layoutChanges(withFileTree).panels;
+
+    expect(revertLayoutChange(withFileTree, change).overrides).toEqual({});
+  });
+
+  it("counts toward the editor session's changedCount", () => {
+    expect(
+      layoutEditorSessionChangeSummary(
+        snapshotWith(DEFAULT_ARRANGEMENT),
+        withFileTree,
+      ).changedCount,
+    ).toBe(1);
   });
 });
 
@@ -204,7 +250,7 @@ describe("Reset layout (L-20)", () => {
       arrangement: {
         ...DEFAULT_ARRANGEMENT,
         usageHost: "header",
-        minimapSide: "left",
+        minimapSide: "right",
         resourceSide: "left",
         mobileFooter: true,
         hiddenProviders: [PROVIDER],
@@ -214,9 +260,9 @@ describe("Reset layout (L-20)", () => {
         // "Reset layout" restores the tab strip placement and the
         // sidebar side too.
         tabStripPlacement: "right",
-        sidebarSide: "right",
+        sidebarSide: "left",
         // And the vertical strip's view.
-        sideStripView: "activity",
+        sideStripView: "layered",
         wideReadingWidthPx: 1600,
       },
     };
@@ -228,8 +274,8 @@ describe("Reset layout (L-20)", () => {
     expect(layoutModified(after)).toBe(false);
     expect(resetWouldChange(after)).toBe(false);
     expect(after.arrangement.tabStripPlacement).toBe("left");
-    expect(after.arrangement.sidebarSide).toBe("left");
-    expect(after.arrangement.sideStripView).toBe("layered");
+    expect(after.arrangement.sidebarSide).toBe("right");
+    expect(after.arrangement.sideStripView).toBe("activity");
     expect(after.arrangement.wideReadingWidthPx).toBe(
       DEFAULT_ARRANGEMENT.wideReadingWidthPx,
     );

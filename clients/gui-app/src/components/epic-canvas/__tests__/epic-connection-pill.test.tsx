@@ -172,6 +172,10 @@ describe("<EpicConnectionPill />", () => {
     // Icon-only in the steady state: the claim moved off the visible copy and
     // onto the accessible name + tooltip, so the status row stays compact.
     expect(screen.getByTestId("epic-connection-pill").textContent).toBe("");
+    // No label, so no element to hold one: the row cuts a label by this class.
+    expect(
+      screen.getByTestId("epic-connection-pill").querySelector(".truncate"),
+    ).toBeNull();
     expect(
       screen.getByTestId("epic-connection-pill").getAttribute("aria-label"),
     ).toBe("All changes synced");
@@ -282,7 +286,7 @@ describe("<EpicConnectionPill />", () => {
       expect(
         screen.getByTestId("epic-connection-pill").getAttribute("aria-label"),
       ).toBe(
-        "Still reconnecting. This keeps retrying on its own — unsent changes stay in this window, so keep it open.",
+        "Still reconnecting… Still reconnecting. This keeps retrying on its own — unsent changes stay in this window, so keep it open.",
       );
       expect(screen.getByRole("status").textContent).toBe(
         "Still reconnecting. This keeps retrying on its own — unsent changes stay in this window, so keep it open.",
@@ -380,7 +384,7 @@ describe("<EpicConnectionPill />", () => {
     const label = screen
       .getByTestId("epic-connection-pill")
       .getAttribute("aria-label");
-    expect(label).toBe(OFFLINE_COPY);
+    expect(label).toBe(`Offline. ${OFFLINE_COPY}`);
     expect(label).not.toContain("will sync");
     await expectTooltip(OFFLINE_COPY);
   });
@@ -656,7 +660,7 @@ describe("<EpicConnectionPill />", () => {
       .getByTestId("epic-connection-pill")
       .getAttribute("aria-label");
     expect(offlineWithUnsavedChangesLabel).toBe(
-      "Offline. Some recent changes are still being saved. Keep this window open.",
+      "Offline — saving changes… Offline. Some recent changes are still being saved. Keep this window open.",
     );
     expect(offlineWithUnsavedChangesLabel).not.toMatch(
       /\bcloud\b|\blocally\b|this device/i,
@@ -697,7 +701,7 @@ describe("<EpicConnectionPill />", () => {
       .getByTestId("epic-connection-pill")
       .getAttribute("aria-label");
     expect(offlineWithHostPendingLabel).toBe(
-      "Offline. Pending changes are still being processed on the host serving this task; keep that host running.",
+      "Offline — changes pending. Offline. Pending changes are still being processed on the host serving this task; keep that host running.",
     );
     expect(offlineWithHostPendingLabel).not.toMatch(
       /\bcloud\b|\blocally\b|this device/i,
@@ -734,7 +738,7 @@ describe("<EpicConnectionPill />", () => {
       .getByTestId("epic-connection-pill")
       .getAttribute("aria-label");
     expect(unprotectedLabel).toBe(
-      "Offline. Anything you edit now is not backed up and exists only in this window; it is lost if the window closes.",
+      "Offline — new edits not backed up. Offline. Anything you edit now is not backed up and exists only in this window; it is lost if the window closes.",
     );
 
     const unprotectedTooltip =
@@ -815,7 +819,7 @@ describe("<EpicConnectionPill />", () => {
       .getByTestId("epic-connection-pill")
       .getAttribute("aria-label");
     expect(offlineChangesSavedLocallyLabel).toBe(
-      "Offline. Your changes are saved and sync when the connection is back.",
+      "Offline — changes saved. Offline. Your changes are saved and sync when the connection is back.",
     );
     expect(offlineChangesSavedLocallyLabel).not.toMatch(
       /\bcloud\b|\blocally\b|this device/i,
@@ -1059,7 +1063,9 @@ describe("<EpicConnectionPill />", () => {
       expect(
         screen.getByTestId("epic-connection-pill-dot").className,
       ).toContain("bg-red-500");
-      expect(pill.getAttribute("aria-label")).toBe(REJECTED_MESSAGE);
+      expect(pill.getAttribute("aria-label")).toBe(
+        `Change not saved. ${REJECTED_MESSAGE}`,
+      );
       // Load-bearing: `warningAnnouncement` used to test `severity ===
       // "warning"` exactly, so a `danger` non-artifact plane beside a healthy
       // link announced nothing at all.
@@ -1079,7 +1085,9 @@ describe("<EpicConnectionPill />", () => {
       expect(
         screen.getByTestId("epic-connection-pill-dot").className,
       ).toContain("bg-amber-500");
-      expect(pill.getAttribute("aria-label")).toBe(SUPERSEDED_MESSAGE);
+      expect(pill.getAttribute("aria-label")).toBe(
+        `Change replaced. ${SUPERSEDED_MESSAGE}`,
+      );
       expect(screen.getByRole("status").textContent).toBe(SUPERSEDED_MESSAGE);
       await expectTooltip(SUPERSEDED_MESSAGE);
     });
@@ -1092,7 +1100,9 @@ describe("<EpicConnectionPill />", () => {
       expect(pill.dataset.source).toBe("write-command");
       expect(screen.getByText("Change may not be saved")).not.toBeNull();
       expect(pill.className).toContain("bg-amber-500/10");
-      expect(pill.getAttribute("aria-label")).toBe(OUTCOME_UNKNOWN_MESSAGE);
+      expect(pill.getAttribute("aria-label")).toBe(
+        `Change may not be saved. ${OUTCOME_UNKNOWN_MESSAGE}`,
+      );
       expect(screen.getByRole("status").textContent).toBe(
         OUTCOME_UNKNOWN_MESSAGE,
       );
@@ -1111,7 +1121,7 @@ describe("<EpicConnectionPill />", () => {
       expect(pill.dataset.source).toBe("artifact");
       expect(screen.getByText("Offline")).not.toBeNull();
       expect(pill.getAttribute("aria-label")).toBe(
-        `${OFFLINE_COPY} ${REJECTED_MESSAGE}`,
+        `Offline. ${OFFLINE_COPY} ${REJECTED_MESSAGE}`,
       );
       expect(screen.getByRole("status").textContent).toBe(
         `${OFFLINE_COPY} ${REJECTED_MESSAGE}`,
@@ -1134,7 +1144,7 @@ describe("<EpicConnectionPill />", () => {
 
       const pill = screen.getByRole<HTMLButtonElement>("button");
       expect(pill.dataset.source).toBe("artifact");
-      expect(pill.getAttribute("aria-label")).toBe(OFFLINE_COPY);
+      expect(pill.getAttribute("aria-label")).toBe(`Offline. ${OFFLINE_COPY}`);
     });
   });
 
@@ -1258,7 +1268,7 @@ describe("artifact sync in the connection pill", () => {
     vi.clearAllMocks();
   });
 
-  it("announces the warning and offers its sentence on hover", async () => {
+  it("announces a stopped warning as a dot whose name is the sentence", async () => {
     vi.useFakeTimers();
     mocks.artifactSyncReading = {
       rooms: "stopped",
@@ -1270,14 +1280,39 @@ describe("artifact sync in the connection pill", () => {
       vi.advanceTimersByTime(15_000);
     });
     const sentence =
-      "Your changes are saved on this computer. Your other devices and teammates won’t see them yet.";
-    expect(screen.getByRole<HTMLButtonElement>("button").dataset.source).toBe(
-      "artifact-sync",
-    );
-    expect(screen.getByRole("button").textContent).toContain(
-      "Artifacts not syncing",
+      "Artifacts not syncing. Your changes are saved on this computer. Your other devices and teammates won’t see them yet.";
+    const pill = screen.getByRole<HTMLButtonElement>("button");
+    expect(pill.dataset.source).toBe("artifact-sync");
+    expect(pill.textContent).toBe("");
+    expect(pill.getAttribute("aria-label")).toBe(sentence);
+    expect(screen.getByTestId("epic-connection-pill-dot").className).toContain(
+      "bg-warning",
     );
     expect(screen.getByRole("status").textContent).toContain(sentence);
+    vi.useRealTimers();
+    await expectTooltip(sentence);
+  });
+
+  it("renders a retrying warning as the quiet saving dot with the sentence as its name", async () => {
+    vi.useFakeTimers();
+    mocks.artifactSyncReading = {
+      rooms: "retrying",
+      waitingNewArtifacts: 0,
+      pillState: "hostPending",
+    };
+    renderPill("hostPending");
+    act(() => {
+      vi.advanceTimersByTime(15_000);
+    });
+    const sentence =
+      "Artifacts not syncing. Your changes are saved on this computer. Your other devices and teammates won’t see them yet. Retrying on its own.";
+    const pill = screen.getByRole<HTMLButtonElement>("button");
+    expect(pill.dataset.source).toBe("artifact-sync");
+    expect(pill.textContent).toBe("");
+    expect(pill.getAttribute("aria-label")).toBe(sentence);
+    expect(pill.className).toContain("h-5");
+    expect(pill.innerHTML).toContain("bg-muted-foreground/50");
+    expect(pill.innerHTML).not.toContain("bg-warning");
     vi.useRealTimers();
     await expectTooltip(sentence);
   });
@@ -1299,7 +1334,7 @@ describe("artifact sync in the connection pill", () => {
     );
   });
 
-  it("shows recovery over synced and not over a pending pill", () => {
+  it("returns to the synced claim with no recovery flash", () => {
     vi.useFakeTimers();
     mocks.artifactSyncReading = {
       rooms: "retrying",
@@ -1326,11 +1361,14 @@ describe("artifact sync in the connection pill", () => {
     };
     mocks.useEpicSyncPillState.mockReturnValue("synced");
     rerender(pillTree());
+    expect(screen.getByRole("button").textContent).not.toContain(
+      "Artifacts synced",
+    );
     act(() => {
       vi.advanceTimersByTime(750);
     });
-    expect(screen.getByRole("button").textContent).toContain(
-      "Artifacts synced",
-    );
+    const pill = screen.getByRole("button");
+    expect(pill.textContent).not.toContain("Artifacts synced");
+    expect(pill.getAttribute("aria-label")).toBe("All changes synced");
   });
 });

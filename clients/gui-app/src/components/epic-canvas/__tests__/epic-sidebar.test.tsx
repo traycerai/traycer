@@ -7,6 +7,7 @@ import {
   screen,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { LayoutSnapshot } from "@/lib/layout/layout-snapshot";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
@@ -254,27 +255,31 @@ const testQueryClient = new QueryClient({
 });
 const HOST_ID = "epic-sidebar-host";
 
+/**
+ * The layout the rail cases are written against: every panel listed, with
+ * Agents stacked on Artifacts as the only stack. The shipped rail also stacks
+ * Git Diff on Pull Requests and leaves File Tree off, which the shipped-rail
+ * case below seeds for itself.
+ */
+const RAIL_CASES_LAYOUT: LayoutSnapshot = {
+  ...DEFAULT_LAYOUT_SNAPSHOT,
+  overrides: {
+    ...DEFAULT_LAYOUT_SNAPSHOT.overrides,
+    railFileTree: { shown: "shown" },
+  },
+  arrangement: {
+    ...DEFAULT_LAYOUT_SNAPSHOT.arrangement,
+    rail: DEFAULT_LAYOUT_SNAPSHOT.arrangement.rail.filter(
+      (entry) => entry.id !== "stack:railGitDiff+railPullRequests",
+    ),
+  },
+};
+
 function resetLeftPanelStore(): void {
   window.localStorage.clear();
   canvasHostState.id = HOST_ID;
   useSurfaceHostSelectionStore.setState({ selections: {} });
-  // Agents stacked on Artifacts - the pair earlier builds shipped, and the
-  // one the stack cases below are written about - with the sidebar open in a
-  // new tab, which is what the rail cases click from. The shipped rail itself
-  // holds no stack and starts collapsed; the one case about the shipped rail
-  // resets to `DEFAULT_LAYOUT_SNAPSHOT`.
-  useLayoutStore.setState({
-    ...DEFAULT_LAYOUT_SNAPSHOT,
-    arrangement: {
-      ...stackRailPanels(
-        DEFAULT_LAYOUT_SNAPSHOT.arrangement,
-        "artifacts",
-        "chats",
-        "panel",
-      ),
-      sidebarStartCollapsed: false,
-    },
-  });
+  useLayoutStore.setState({ ...RAIL_CASES_LAYOUT });
   useLeftPanelStore.setState({
     activePanelIdByTabId: {},
     mainCollapsedByTabId: {},
@@ -373,7 +378,7 @@ describe("<EpicLeftPanelRail />", () => {
       />,
     );
 
-    // The stacked pair (Agents + Artifacts) draws as ONE group icon (G3): the
+    // The shipped pair (Agents + Artifacts) draws as ONE group icon (G3): the
     // top panel's own button stands for both, and there is no separate
     // "epic-rail-artifacts" button while it is grouped.
     expect(screen.getByTestId("epic-rail-chats")).not.toBeNull();
@@ -399,10 +404,10 @@ describe("<EpicLeftPanelRail />", () => {
     ).not.toBeUndefined();
   });
 
-  it("draws the shipped rail as nine direct children - one icon per panel - with no stack and no dividers", () => {
+  it("draws the shipped rail as six direct children - two capsules plus four icons, File Tree off - with no dividers", () => {
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
     // "Every panel available": comments needs its own reveal + a commentable
     // artifact, same as `revealCommentsPanel` below.
-    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
     testState.activeArtifactId = "artifact-1";
     testState.activeArtifact = { kind: "spec" };
     useLeftPanelStore.getState().revealCommentsPanel(TAB_ID);
@@ -416,18 +421,18 @@ describe("<EpicLeftPanelRail />", () => {
     );
 
     const rail = screen.getByTestId("epic-sidebar-rail");
+    // The two shipped pairs (chats + artifacts, git diff + pull requests) draw
+    // as ONE capsule each (L-166, L-167), and File Tree is off, so the rail's
+    // direct children are the two capsules and the remaining four panels.
     expect(
       Array.from(rail.children).map((child) =>
         child.getAttribute("data-testid"),
       ),
     ).toEqual([
-      "epic-rail-chats",
-      "epic-rail-artifacts",
+      "epic-rail-stack",
       "epic-rail-terminals",
       "epic-rail-browsers",
-      "epic-rail-git-diff",
-      "epic-rail-pull-requests",
-      "epic-rail-file-tree",
+      "epic-rail-stack",
       "epic-rail-sharing",
       "epic-rail-comments",
     ]);
@@ -435,34 +440,22 @@ describe("<EpicLeftPanelRail />", () => {
     // rail's own `gap-1` is the only spacing between icons, and no button
     // adds a margin of its own on top of it.
     expect(screen.queryAllByTestId("epic-rail-divider")).toHaveLength(0);
-    expect(screen.queryAllByTestId("epic-rail-stack")).toHaveLength(0);
     expect(rail.className).toContain("gap-1");
     for (const child of Array.from(rail.children)) {
       expect(child.className).not.toMatch(/\bm[xytrbl]?-\d/);
     }
-  });
-
-  it("draws a stacked pair as ONE capsule holding the top panel's button alone (L-166, L-167, G3)", () => {
-    render(
-      <EpicLeftPanelRail
-        epicId={EPIC_ID}
-        tabId={TAB_ID}
-        orientation="vertical"
-      />,
-    );
-
-    // Agents stacked on Artifacts draws as one capsule among the rail.s
-    // children, in the pair.s place at the top.
-    const rail = screen.getByTestId("epic-sidebar-rail");
-    expect(rail.children[0].getAttribute("data-testid")).toBe(
-      "epic-rail-stack",
-    );
-    // The capsule holds exactly the pair, and draws ONE button for it - the
-    // top's; Artifacts (the bottom, G3) draws none of its own.
-    const stack = screen.getByTestId("epic-rail-stack");
-    expect(stack.getAttribute("data-rail-stack")).toBe(
+    // The first capsule holds exactly the Agents and Artifacts pair, and draws
+    // ONE button for it - the top's; Artifacts (the bottom, G3) draws none of
+    // its own.
+    expect(
+      screen
+        .getAllByTestId("epic-rail-stack")
+        .map((capsule) => capsule.getAttribute("data-rail-stack")),
+    ).toEqual([
       "stack:railAgents+railArtifacts",
-    );
+      "stack:railGitDiff+railPullRequests",
+    ]);
+    const stack = screen.getAllByTestId("epic-rail-stack")[0];
     expect(
       Array.from(stack.querySelectorAll("button")).map((button) =>
         button.getAttribute("data-testid"),
@@ -1564,7 +1557,7 @@ describe("the displayed panel is never collapsed (L-157)", () => {
  * the split the stacked shape draws, and that the same rail with its link
  * removed collapses back to the lone, uncollapsible shape.
  *
- * Terminals with Browsers rather than the Agents-with-Artifacts pair above,
+ * Terminals with Browsers rather than the shipped Agents-with-Artifacts pair,
  * because those two panels' bodies render without an epic session - the same
  * reason every other host case in this file activates Terminals. The join is
  * made the way the inspector's row action makes it, with the panel BELOW as
@@ -1710,7 +1703,7 @@ describe("a stacked pair vs a lone panel in the body (L-166)", () => {
   });
 
   describe("a stack of three", () => {
-    // Terminals, Browsers and Git diff rather than the Agents-with-Artifacts pair's
+    // Terminals, Browsers and Git diff rather than the shipped pair's
     // members: like the pair above, their bodies render without an epic
     // session.
     function stackThree(): void {

@@ -166,6 +166,7 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
             getMessageActions={() => null}
             nextStepActions={null}
             listRef={listRef}
+            isTranscriptWindowInvalidated={false}
             className="h-full"
             data-testid="chat-timeline-overlay"
           />
@@ -627,6 +628,7 @@ function viewerSurfacesProps(): ChatLowerInteractionSurfacesProps {
     nodeId: "chat-1",
     isActive: false,
     mentionRoots: [],
+    runWorkingDirectory: null,
     fallbackToGlobalMentionRoots: true,
     currentEpicId: "epic-1",
     onSubmitMessage: () => false,

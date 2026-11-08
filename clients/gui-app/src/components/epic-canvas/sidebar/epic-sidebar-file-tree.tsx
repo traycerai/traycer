@@ -572,7 +572,10 @@ function FileTreeBodyForResolvedHost(
       const ref = workspaceFileRefForTreePath(treePath);
       if (ref === null) return;
       onLatchHost();
-      openTile(tileIntent(ref, { tabId: props.tabId }, gesture, "direct_ui"));
+      openTile(
+        tileIntent(ref, { tabId: props.tabId }, gesture, "direct_ui"),
+        "user",
+      );
     };
     // Preview is right on a touch viewport too, even though the double-click
     // that promotes it there has no touch equivalent: that viewport shows ONE

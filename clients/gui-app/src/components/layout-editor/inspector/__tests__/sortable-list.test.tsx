@@ -31,11 +31,7 @@ import {
   orderGroupListLabel,
 } from "@/components/layout-editor/regions/surface-groups";
 import { effectiveLayoutValues } from "@/lib/layout/layout-presets";
-import {
-  DEFAULT_ARRANGEMENT,
-  stackRailPanels,
-} from "@/lib/layout/layout-arrangement";
-import { railDividerId } from "@/lib/layout/rail";
+import { DEFAULT_RAIL, railDividerId } from "@/lib/layout/rail";
 import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
 import {
   DEFAULT_LAYOUT_SNAPSHOT,
@@ -207,9 +203,9 @@ function seedRailDivider(): void {
     arrangement: {
       ...arrangement,
       rail: [
-        ...arrangement.rail.slice(0, 1),
+        ...DEFAULT_RAIL.slice(0, 1),
         { kind: "divider", id: railDividerId(1) },
-        ...arrangement.rail.slice(1),
+        ...DEFAULT_RAIL.slice(1),
       ],
       dividerSeq: 1,
     },
@@ -218,17 +214,8 @@ function seedRailDivider(): void {
 
 beforeEach(() => {
   window.localStorage.clear();
-  // Agents stacked on Artifacts - the pair earlier builds shipped, and the
-  // stack link the rail list.s cases are written about. The shipped rail
-  // itself holds no stack.
   useLayoutStore.setState({
     ...DEFAULT_LAYOUT_SNAPSHOT,
-    arrangement: stackRailPanels(
-      DEFAULT_ARRANGEMENT,
-      "artifacts",
-      "chats",
-      "panel",
-    ),
   });
   useLayoutEditorStore.getState().endSession();
   useLayoutEditorStore.getState().beginSession({
@@ -898,6 +885,7 @@ describe("a keyboard step goes past a row that cannot move (G6)", () => {
       "railBrowsers",
       "railSimulators",
       "railGitDiff",
+      "stack:railGitDiff+railPullRequests",
       "railPullRequests",
       "railFileTree",
       "railSharing",

@@ -1,4 +1,8 @@
-import type { HostSandboxState } from "@traycer/protocol/host/host-status";
+import {
+  HOST_FROZEN_WORD,
+  hostSandboxStateWord,
+  type HostSandboxState,
+} from "@traycer/protocol/host/host-status";
 import {
   parseSandboxHeartbeatPhase,
   sandboxSupportReference,
@@ -11,6 +15,7 @@ import type { HostHealthState } from "@/components/settings/host-scope/host-heal
 import { frozenDestroyAt } from "@/lib/sandboxes/sandbox-balance";
 import {
   formatSandboxDate,
+  formatSandboxUtcDay,
   sandboxFailedToStart,
 } from "@/lib/sandboxes/sandbox-row-lines";
 
@@ -100,6 +105,21 @@ export function sandboxCardActions(
   return actions;
 }
 
+/** The one inline verb; all other allowed verbs stay in More. */
+export function sandboxHeaderPrimaryAction(
+  actions: readonly SandboxCardAction[],
+): SandboxCardAction | null {
+  return (
+    actions.find(
+      (action) =>
+        action === "suspend" ||
+        action === "resume" ||
+        action === "start" ||
+        action === "stop",
+    ) ?? null
+  );
+}
+
 /** The label each action's button carries. */
 export const SANDBOX_CARD_ACTION_LABEL: Record<SandboxCardAction, string> = {
   suspend: "Suspend",
@@ -124,10 +144,10 @@ const STATE_LINE: Record<HostSandboxState, string> = {
   destroying: "Destroying. Its disk is being deleted.",
   destroyed: "Destroyed. Its disk is gone and nothing more is billed.",
   failed: "Failed to start.",
-  released: "Suspended, files kept. The next shell starts it.",
+  released: `${hostSandboxStateWord("released")}, files kept. The next shell starts it.`,
 };
 
-/** "Nov 7, 2026". */
+/** "Nov 7, 2026", in the reader's own zone: for an instant that happened. */
 export function formatSandboxDay(at: number): string {
   return new Date(at).toLocaleDateString(undefined, {
     month: "short",
@@ -142,30 +162,66 @@ export function formatSandboxDay(at: number): string {
  * the sentence without it.
  */
 export function sandboxFrozenLine(frozenAt: number | null): string {
-  const base = "Frozen: out of credits. Top up to resume.";
+  const base = `${HOST_FROZEN_WORD}. Top up to resume.`;
   return frozenAt === null
     ? base
     : `${base} Destroyed on ${formatSandboxDate(frozenDestroyAt(frozenAt), true)}.`;
 }
 
 /**
- * Who made a team sandbox, or `null` when the server does not
- * say (a personal sandbox, or a server before the field).
+ * The withdrawal notice: when this sandbox stops running, and what the person
+ * keeps when it does. `null` until a withdrawal is announced for the row's
+ * kind of sandbox, which is every row today.
+ *
+ * What survives the withdrawal is what the person can act on, so the sentence
+ * always carries it. The DATE is carried only when nothing else decides when
+ * this row ends: `destroyAt` wins wherever it is set, because the row then
+ * ends on that day rather than on the announced one. A frozen withdrawn row
+ * is the case that makes the difference: while its `frozenAt` is known it
+ * carries a day-30 `destroyAt`, which can fall well before the announced
+ * day, so naming the announced day here would tell the person the row lasts
+ * longer than it does. A frozen row whose `frozenAt` is absent is NOT that
+ * case — `sandbox-day-30.ts` skips such a record, so it has no day-30
+ * deadline to contradict, `destroyAt` is null, and the announced day is
+ * named like any unfrozen row's.
+ *
+ * The day, where it is named, is the announced one read in UTC: no clock
+ * time, because nothing ends the row at an instant — the date is what was
+ * announced, and the drain is operational.
  */
-export function sandboxCreatorLine(
+export function sandboxWithdrawalLine(
+  endsAt: number | null,
+  destroyAt: number | null,
+): string | null {
+  if (endsAt === null) return null;
+  // The half the person acts on, the same either way: whether the announced
+  // day is named is the only difference between the two sentences.
+  const rebuilt =
+    "is rebuilt from your environment. Files outside the repository are lost.";
+  return destroyAt === null
+    ? `This sandbox stops running on ${formatSandboxUtcDay(endsAt)} and ${rebuilt}`
+    : `This sandbox stops running and ${rebuilt}`;
+}
+
+/**
+ * Who made a team sandbox, as the words that follow "Created by", or `null`
+ * when the server does not say (a personal sandbox, or a server before the
+ * field).
+ */
+export function sandboxCreatorName(
   summary: SandboxSummary,
   viewerUserId: string | null,
 ): string | null {
   const creator = summary.createdBy;
   if (creator === null) return null;
-  return `Created by ${memberWords(creator, viewerUserId, CREATOR_WORDS)}`;
+  return memberWords(creator, viewerUserId, CREATOR_WORDS);
 }
 
 /**
- * Whose bundle the running wake of a team sandbox is charged to, while it is
+ * Who pays for the running wake of a team sandbox, while it is
  * awake; `null` asleep, frozen, or when the server names no payer.
  */
-export function sandboxWakePayerLine(
+export function sandboxWakePayerName(
   state: HostSandboxState | null,
   frozen: boolean,
   summary: SandboxSummary,
@@ -173,7 +229,9 @@ export function sandboxWakePayerLine(
 ): string | null {
   const payer = summary.wakePayer;
   if (state !== "awake" || frozen || payer === null) return null;
-  return `This wake is on ${memberWords(payer, viewerUserId, PAYER_WORDS)} bundle`;
+  return viewerUserId !== null && payer.userId === viewerUserId
+    ? "You"
+    : (payer.displayName ?? "A team member");
 }
 
 /** A frozen team sandbox: the paying member's bundle ran out. */
@@ -182,13 +240,13 @@ export function sandboxTeamFrozenLine(
   viewerUserId: string | null,
 ): string {
   const payer = summary.wakePayer;
-  if (payer === null) return "Frozen: its payer's bundle is out.";
+  if (payer === null) return `${HOST_FROZEN_WORD}: its payer's bundle is out.`;
   if (viewerUserId !== null && payer.userId === viewerUserId) {
-    return "Frozen: your bundle is out.";
+    return `${HOST_FROZEN_WORD}: your bundle is out.`;
   }
   return payer.displayName === null
-    ? "Frozen: its payer's bundle is out."
-    : `Frozen: ${payer.displayName}'s bundle is out.`;
+    ? `${HOST_FROZEN_WORD}: its payer's bundle is out.`
+    : `${HOST_FROZEN_WORD}: ${payer.displayName}'s bundle is out.`;
 }
 
 /**
@@ -201,7 +259,8 @@ export function sandboxTeamFrozenStateLine(
   summary: SandboxSummary | null,
   viewerUserId: string | null,
 ): string {
-  if (summary === null) return "Frozen: its payer's bundle is out.";
+  if (summary === null)
+    return `${HOST_FROZEN_WORD}: its payer's bundle is out.`;
   const line = sandboxTeamFrozenLine(summary, viewerUserId);
   return summary.frozenAt === null
     ? line
@@ -244,12 +303,6 @@ const CREATOR_WORDS: MemberWords = {
   viewer: "you",
   named: (displayName) => displayName,
   unnamed: "a team member",
-};
-
-const PAYER_WORDS: MemberWords = {
-  viewer: "your",
-  named: (displayName) => `${displayName}'s`,
-  unnamed: "a team member's",
 };
 
 function memberWords(
@@ -303,6 +356,70 @@ export function sandboxStateLine(
   return STATE_LINE[state];
 }
 
+/** Operational facts stay on the Sandbox tab; the header owns state and rate. */
+export function sandboxOperationalLine(
+  state: HostSandboxState | null,
+  frozen: boolean,
+): string | null {
+  if (frozen || state === null) return null;
+  switch (state) {
+    case "awake":
+    case "suspending":
+    case "resuming":
+    case "starting":
+    case "failed":
+      return null;
+    case "creating":
+      return "This takes about 10 seconds once capacity is found.";
+    case "stopping":
+      return "Its disk is kept; running processes end.";
+    case "stopped":
+      return "Disk kept, processes ended. Start boots it again; shells marked relaunch-on-restart come back.";
+    case "suspended":
+      return "Resumes on your next action.";
+    case "released":
+      return "Files kept. The next shell starts it.";
+    case "destroying":
+      return "Its disk is being deleted.";
+    case "destroyed":
+      return "Its disk is gone.";
+  }
+}
+
+/** The list price a state accrues: the awake rate, or one of the two storage rates. */
+export type SandboxPriceField = "awakeMc" | "suspendedMc" | "stoppedMc";
+
+/**
+ * The list price a sandbox in `state` accrues, or `null` when it accrues
+ * nothing. The meter bills only awake (compute) and suspended or stopped
+ * (storage); a move in flight is billed as where it is going, the way the
+ * rows read it. A sandbox that has not started, has failed to start or has
+ * been or is being destroyed accrues nothing. Only the Automations row rests
+ * `released`, and it is never metered.
+ */
+export function sandboxBilledPriceField(
+  state: HostSandboxState,
+): SandboxPriceField | null {
+  switch (state) {
+    case "awake":
+    case "resuming":
+    case "starting":
+      return "awakeMc";
+    case "suspending":
+    case "suspended":
+      return "suspendedMc";
+    case "stopping":
+    case "stopped":
+      return "stoppedMc";
+    case "creating":
+    case "released":
+    case "destroying":
+    case "destroyed":
+    case "failed":
+      return null;
+  }
+}
+
 /** The idle period the control plane applies when a row sets none. */
 export const SANDBOX_DEFAULT_IDLE_MINUTES = 30;
 
@@ -316,11 +433,18 @@ function formatMinutes(minutes: number): string {
  * The idle rule as the card states it. A burst sandbox is destroyed, not
  * suspended, once idle for its period; the Automations
  * row is released, its files kept, once no shell has run for its period.
+ * Once released, the state line already says the files are kept and the next
+ * shell starts it, so the rule keeps only its period.
  */
-export function sandboxIdleLine(summary: SandboxSummary): string {
+export function sandboxIdleLine(
+  summary: SandboxSummary,
+  state: HostSandboxState | null,
+): string {
   const minutes = summary.idleMinutes ?? SANDBOX_DEFAULT_IDLE_MINUTES;
   if (summary.kind === "automation") {
-    return `Stops after ${formatMinutes(minutes)} idle · files kept · the next shell starts it`;
+    return state === "released"
+      ? `Stops after ${formatMinutes(minutes)} idle`
+      : `Stops after ${formatMinutes(minutes)} idle · files kept · the next shell starts it`;
   }
   return summary.burst
     ? `Destroyed after ${formatMinutes(minutes)} idle`
@@ -337,11 +461,11 @@ export function sandboxSuspendKeepsLine(
 ): string | null {
   switch (suspendFidelity) {
     case "memory":
-      return "Suspend keeps memory: processes are still running on resume";
+      return "keeps memory";
     case "disk":
-      return "Suspend keeps the disk only: processes restart on resume";
+      return "keeps disk only · processes restart on resume";
     case "none":
-      return "Suspend keeps nothing: it restarts from its image";
+      return "restarts from its image";
     default:
       return null;
   }
@@ -358,8 +482,8 @@ export function sandboxGuestConfigFailure(
   if (summary.guestConfigured !== false) return null;
   const reason = summary.guestConfigFailureReason;
   return reason === null || reason.trim().length === 0
-    ? "Guest setup failed. Agents can't start here until it succeeds."
-    : `Guest setup failed: ${reason}`;
+    ? "Settings did not apply. Agents can't start here until they do."
+    : `Settings did not apply: ${reason}`;
 }
 
 /**
@@ -459,7 +583,7 @@ export function sandboxTileOverlay(
     case "suspended":
       return {
         kind: "asleep",
-        message: "Suspended, resumes on your next action",
+        message: `${hostSandboxStateWord(state)}, resumes on your next action`,
         verb: "resume",
         label: "Resume",
       };
@@ -467,22 +591,22 @@ export function sandboxTileOverlay(
     case "stopped":
       return {
         kind: "asleep",
-        message: "Stopped",
+        message: hostSandboxStateWord(state),
         verb: "start",
         label: "Start",
       };
-    // The Automations row at rest: `start` opens it. Suspended, as its badge.
+    // The Automations row at rest: `start` opens it, with its files kept.
     case "released":
       return {
         kind: "asleep",
-        message: "Suspended",
+        message: hostSandboxStateWord(state),
         verb: "start",
         label: "Start",
       };
     case "resuming":
-      return { kind: "moving", message: "Resuming" };
+      return { kind: "moving", message: hostSandboxStateWord(state) };
     case "starting":
-      return { kind: "moving", message: "Starting" };
+      return { kind: "moving", message: hostSandboxStateWord(state) };
     // Awake renders normally; creating, failed and destroyed are the tile's
     // own connection states, which it already shows.
     case "creating":
@@ -493,4 +617,63 @@ export function sandboxTileOverlay(
     case null:
       return null;
   }
+}
+
+/** Failure details accompany the state word rather than replacing the header. */
+export function sandboxHeaderFailureLine(sandbox: {
+  readonly state: HostSandboxState | null;
+  readonly frozen: boolean;
+  readonly summary: SandboxSummary | null;
+}): string | null {
+  if (sandbox.frozen) return null;
+  if (sandbox.state === "failed")
+    return sandboxStateLine(sandbox.state, false, sandbox.summary);
+  if (
+    sandbox.state === "stopped" &&
+    sandbox.summary !== null &&
+    sandbox.summary.failureCode !== null
+  )
+    return sandboxStateLine(sandbox.state, false, sandbox.summary);
+  return null;
+}
+
+export function sandboxHeaderNeedsRepair(
+  summary: SandboxSummary,
+  state: HostSandboxState | null,
+  frozen: boolean,
+  supported: boolean,
+): boolean {
+  return (
+    state === "awake" &&
+    !frozen &&
+    summary.phase !== null &&
+    summary.guestConfigured === false &&
+    supported
+  );
+}
+
+/** The host page offers only Destroy when credits run out, so names no wake remedy. */
+export function sandboxHeaderCreditsLine(
+  summary: SandboxSummary | null,
+  teamOwned: boolean,
+  teamName: string | null,
+  viewerUserId: string | null,
+): string {
+  const payer = summary?.wakePayer ?? null;
+  let payerName = "Its payer's";
+  if (payer !== null)
+    payerName =
+      payer.userId === viewerUserId
+        ? "Your"
+        : `${payer.displayName ?? "A member"}'s`;
+  const credits = teamOwned
+    ? `${payerName} ${teamName ?? "team"} credits ran out`
+    : "Your credits ran out";
+  const frozenAt = summary?.frozenAt ?? null;
+  const destroyAt =
+    summary?.destroyAt ??
+    (frozenAt === null ? null : frozenDestroyAt(frozenAt));
+  return destroyAt === null
+    ? credits
+    : `${credits} · Will be removed on ${formatSandboxDate(destroyAt, true)}`;
 }

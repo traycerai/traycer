@@ -1,3 +1,4 @@
+import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import {
   act,
@@ -23,7 +24,6 @@ import type { NegotiatedMethodVersion } from "@/lib/host/read-negotiated-method-
 import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
 import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
-import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 
 // The two per-host reads the picker draws from are queries and a manifest
 // registry; they are the boundary, so the suite answers them directly.
@@ -233,7 +233,7 @@ beforeEach(() => {
     defaultPick: PERSONAL_PICK,
   });
   useMoveSheetStore.setState({ target: null });
-  useSettingsHostScopeStore.setState({ scopedHostId: null });
+  useSettingsHostScopeStore.getState().reset();
 });
 
 afterEach(() => {
@@ -241,7 +241,7 @@ afterEach(() => {
 });
 
 describe("<EnvironmentPicker />", () => {
-  it("draws an awaiting_consent host as a Local row and opens the move sheet from its verb", () => {
+  it("draws an awaiting_consent host under its own-settings group and opens the move sheet", () => {
     answer("mac", running, V11);
     answer("dev", running, V11);
     answer("old", awaiting, V11);
@@ -251,7 +251,6 @@ describe("<EnvironmentPicker />", () => {
 
     const row = screen.getByTestId("environment-picker-local-old");
     expect(row.textContent).toContain("Old laptop");
-    expect(row.textContent).toContain("Local");
     expect(row.textContent).toContain("its own settings, not in Personal yet");
     expect(screen.getByTestId("environment-picker-personal").textContent).toBe(
       "Personalyour settings · on MacBook Pro, dev-box",
@@ -276,29 +275,25 @@ describe("<EnvironmentPicker />", () => {
     expect(verb.querySelector("[aria-hidden]")?.textContent).toContain("·");
   });
 
-  it("explains the Local badge on hover, in its row", async () => {
+  it("groups its own-settings computer as an unindented row without a badge", () => {
     answer("mac", running, V11);
     answer("old", awaiting, V11);
     renderPicker("mac");
     openMenu();
 
-    const badge = within(
-      screen.getByTestId("environment-picker-local-old"),
-    ).getByText("Local");
-    await userEvent.hover(badge);
-
-    expect((await screen.findByRole("tooltip")).textContent).toBe(
-      "Settings on this computer only",
-    );
+    const row = screen.getByTestId("environment-picker-local-old");
+    expect(screen.getByText("Runs its own settings")).toBeTruthy();
+    expect(row.getAttribute("data-inset")).not.toBe("true");
+    expect(row.textContent).not.toContain("Local");
   });
 
-  it("explains the Local badge on the trigger when the pick is Local", async () => {
+  it("labels the trigger with the own-settings badge when the pick is local", async () => {
     answer("old", awaiting, V11);
     renderPicker("old");
 
     await userEvent.hover(
       within(screen.getByTestId("environment-picker-trigger")).getByText(
-        "Local",
+        "Runs its own settings",
       ),
     );
 
@@ -318,7 +313,7 @@ describe("<EnvironmentPicker />", () => {
     expect(screen.queryByTestId("environment-picker-move-old")).toBeNull();
 
     fireEvent.click(screen.getByTestId("environment-picker-finish-old"));
-    expect(useSettingsHostScopeStore.getState().scopedHostId).toBe("old");
+    expect(useSettingsHostScopeStore.getState().pendingHostId).toBe("old");
     expect(surface.openSettings).toHaveBeenCalledWith(
       expect.objectContaining({ section: "host" }),
     );
@@ -341,9 +336,9 @@ describe("<EnvironmentPicker />", () => {
     openMenu();
 
     const grey = screen.getByTestId("environment-picker-local-old");
-    expect(grey.textContent).toContain(
-      "Old laptop needs an update to show its settings here.",
-    );
+    expect(
+      within(grey).getByText("Update to view these settings."),
+    ).toBeTruthy();
     expect(grey.getAttribute("aria-disabled")).toBe("true");
     expect(screen.queryByTestId("environment-picker-local-tiny")).toBeNull();
   });
@@ -357,7 +352,7 @@ describe("<EnvironmentPicker />", () => {
       hostName: "Old laptop",
     });
     expect(screen.getByTestId("environment-picker-trigger").textContent).toBe(
-      "Old laptopLocal",
+      "Old laptopRuns its own settings",
     );
     cleanup();
 
@@ -473,13 +468,13 @@ describe("<EnvironmentPicker />", () => {
       "Two computers are named windows-test-machine · Rename",
     );
     fireEvent.click(line);
-    expect(useSettingsHostScopeStore.getState().scopedHostId).toBe("mac");
+    expect(useSettingsHostScopeStore.getState().pendingHostId).toBe("mac");
     expect(surface.openSettings).toHaveBeenCalledWith(
       expect.objectContaining({ section: "host" }),
     );
     cleanup();
 
-    useSettingsHostScopeStore.setState({ scopedHostId: null });
+    useSettingsHostScopeStore.getState().reset();
     reads.running = {
       hosts: [runningHost("other", false), runningHost("third", false)],
       state: "ready",
@@ -493,7 +488,7 @@ describe("<EnvironmentPicker />", () => {
     renderPicker("mac");
     openMenu();
     fireEvent.click(screen.getByTestId("environment-picker-name-collision"));
-    expect(useSettingsHostScopeStore.getState().scopedHostId).toBe("other");
+    expect(useSettingsHostScopeStore.getState().pendingHostId).toBe("other");
   });
 
   // A press takes the surface with it, which is the whole point of pressing:
@@ -570,13 +565,15 @@ describe("<EnvironmentPicker />", () => {
       openMenu();
     }
 
-    it("is drawn as an invited row that cannot be picked, with Review", () => {
+    it("shows the invitation subtitle and Review as a separate action", () => {
       inviteTo("env-beta", "Beta");
 
       const row = screen.getByTestId("environment-invitation-env-beta");
       expect(row.textContent).toContain("Beta");
-      expect(row.textContent).toContain("invited");
-      expect(row.getAttribute("aria-disabled")).toBe("true");
+      expect(row.textContent).toContain(
+        "Invited you · not yours to edit until you accept",
+      );
+      expect(row.getAttribute("aria-disabled")).toBeNull();
       expect(
         screen.getByTestId("environment-invitation-review-env-beta"),
       ).toBeTruthy();

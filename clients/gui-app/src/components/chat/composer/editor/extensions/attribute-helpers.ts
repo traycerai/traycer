@@ -56,6 +56,11 @@ export const MENTION_ATTRIBUTE_NAMES: ReadonlyArray<string> = [
   // below for GitHub; the browser-tab arm reuses it for the tab's address.
   "tabId",
   "sessionId",
+  // Bot reference (`ContextType.Bot`): the LLM projection names the bot's
+  // trunk agent, so a node without `botTrunkChatId` tells the agent nothing
+  // it can message.
+  "botId",
+  "botTrunkChatId",
   // GitHub PR/issue references. These names are the protocol serializer's
   // (`MentionAttrs`), not local ones: `formatMentionForLLMQuery` reads them off
   // the submitted node by name to build `@github-pr:org/repo#N [url=…]`.

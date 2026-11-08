@@ -632,7 +632,7 @@ describe("html view state", () => {
     const harness = ready(null, OPENS);
     harness.host.receive(notification("ui/notifications/initialized", {}));
 
-    harness.host.setHtmlView(true, 1.5);
+    harness.host.setHtmlView({ enabled: true, scale: 1.5, commenting: false });
 
     expect(harness.all("traycer/html/view")).toEqual([]);
   });

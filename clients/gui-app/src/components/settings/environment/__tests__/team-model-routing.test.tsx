@@ -131,7 +131,7 @@ describe("TeamModelRouting", () => {
     [
       "Personal",
       personalPoolSource(),
-      "Applies to your agents on every computer and sandbox running Personal.",
+      "Applies to your agents on every computer and sandbox running these settings.",
     ],
   ])("describes routing for %s", async (_name, source, subtitle) => {
     const harness = mountTeamPage(source, {
@@ -293,6 +293,7 @@ describe("TeamModelRouting", () => {
         policy: policyOf(false),
         storedPolicyUnreadable: false,
         inFlightCount: 0,
+        source: "own",
       }),
       "environment.configuration.items.put": () => ({
         outcome: "saved",

@@ -60,6 +60,7 @@ import {
 import { resetCloudEntityReadDriver } from "@/lib/notifications/cloud-entity-read-driver";
 import {
   readFocusedHostNotificationPresence,
+  setAppSuspended,
   subscribeHostNotificationPresence,
   type FocusedHostNotificationPresence,
   type HostNotificationPresenceFrame,
@@ -77,6 +78,7 @@ import { useNotificationShow } from "@/hooks/notifications/use-notifications";
 import { useNotificationActivationWithNavigate } from "@/hooks/notifications/use-notification-activation";
 import { useNotificationMarkEntityRead } from "@/hooks/notifications/use-notification-mark-entity-read-mutation";
 import { useWindowsBridge } from "@/providers/windows-bridge-context";
+import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import {
   displayCloudSnapshotArrivals,
   displayHostChannelEmission,
@@ -102,7 +104,7 @@ import {
 } from "@/lib/notifications";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
 import type {
-  HostNotificationCloudEntryV27,
+  HostNotificationCloudEntryV28,
   HostNotificationsEntityRef,
 } from "@traycer/protocol/host/notifications/contracts";
 import {
@@ -201,6 +203,26 @@ export function NotificationsSessionProvider(
   props: NotificationsSessionProviderProps,
 ): ReactNode {
   useEffect(() => installNotificationChimeAudioWarmup(), []);
+  const runnerHost = useRunnerHostOrNull();
+  // The shell's leave edge (the app backgrounded, the machine locked or
+  // asleep) withdraws this window's focus claim before the OS suspends it, so
+  // a turn that finishes after the person left still reaches their other
+  // devices; the resume edge restores it, unless the machine woke behind its
+  // lock screen. An audio interruption is not the person leaving.
+  useEffect(() => {
+    if (runnerHost === null) return undefined;
+    const suspended = runnerHost.onSystemSuspended((cause) => {
+      if (cause !== "interrupted") setAppSuspended(true);
+    });
+    const resumed = runnerHost.onSystemResumed((event) => {
+      if (!event.screenLocked) setAppSuspended(false);
+    });
+    return () => {
+      suspended.dispose();
+      resumed.dispose();
+      setAppSuspended(false);
+    };
+  }, [runnerHost]);
   const hostClient = useHostClient();
   const requestContextUserId = useRequestContextUserId(hostClient);
   const servingHostEntry = useNotificationsServingHostEntry();
@@ -465,7 +487,7 @@ function NotificationsSessionBody(
   const recordCompletions = useCallback(
     (
       inputs: ReadonlyArray<{
-        readonly entry: HostNotificationCloudEntryV27;
+        readonly entry: HostNotificationCloudEntryV28;
         readonly originHostId: string;
         readonly semanticId: string;
       }>,

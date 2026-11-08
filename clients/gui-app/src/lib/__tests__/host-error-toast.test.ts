@@ -106,7 +106,7 @@ describe("toastFromHostError", () => {
   // from a bug - into the reason. The host text carries no account id (that is
   // the host's own log rule), and the epic id it does carry stays out of the
   // toast.
-  it("names view-only access when the host's editor gate refused", () => {
+  it("says the task cannot be changed when the host's editor gate refused", () => {
     toastFromHostError(
       makeError(
         "FORBIDDEN",
@@ -115,7 +115,7 @@ describe("toastFromHostError", () => {
       "Couldn't create agent.",
     );
     expect(toast.error).toHaveBeenCalledWith(
-      "You have view-only access to this task, so you can't make changes to it.",
+      "You can't make changes to this task.",
     );
     expect(toast.error).not.toHaveBeenCalledWith(
       expect.stringContaining("epic-1"),

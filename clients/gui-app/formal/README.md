@@ -8,12 +8,26 @@ within small budgets and checks what a reader would notice.
 
 ## Current scope and CI status
 
-`SHIPPED` models pinned OSS main `120982023`, including K (#3110),
+`SHIPPED` models pinned OSS main `8636d3252`, including K (#3110),
 PressKey (#3135), Rule A (#3138), and the away-input follow guard (#3128).
-The generator contains the original 189 exploration configs and sixteen paired
-landed-input controls. CI selects measured configurations explicitly in
+The generator contains 193 exploration configs (the original 189,
+`phone_send` with its two variants, and `touch_end_fixed_withlayouthold`),
+sixteen paired landed-input controls and the four `SendHold_*` controls. CI selects measured configurations explicitly in
 `expected.py`; it does not claim a full matrix verdict. Passing cases and
 known failing controls remain distinct.
+
+The pin moved from `120982023`. Each change since then to the code the
+model maps:
+
+| Change                                          | In the model                                                                                                                                   |
+| ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| #3261, #3253                                    | Modelled: `momdir`, `momaway` and the `MomentumPair_*` controls                                                                                |
+| #3148                                           | Outside it: an end request cancels a cross-tile scroll request's landing that was never issued. Cross-tile requests are left out, so no switch |
+| #3250                                           | Outside it: the list pins a row whose measured height never settles. Every measurement here settles in one step                                |
+| #3187                                           | Outside it: a transcript with no rows draws its header. The model always has rows                                                              |
+| #3262, #3276                                    | Outside it: a saved position across a steer that splits a turn. Turns split into parts are left out                                            |
+| #3171                                           | Outside it: select-to-quote                                                                                                                    |
+| #3155, #3156, #3158, #3167, #3179, #3270, #3337 | Comments, a module-contract refactor (#3270) and a script fix (#3337); no behavior                                                             |
 
 | Switch                  | Landed behavior                                                                                                                                                                                                                                                                                                                                                    |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -91,6 +105,57 @@ produce an engine deadlock. The original symptom invariants and setup/type check
 independent. Companion controls use `regress.py` with recorded bounds and
 expectations; `check.sh` rejects their specifications.
 
+The four `SendHold_*` controls use `ChatScrollSendHold` and `ReplaySpec`
+with the ordinary `Next`. They replay send 6 from the iOS 26.5 frame
+trace, on a WebKit that does not always honour a write issued in a frame
+whose scrollable size changed (`DirtyFrameWrites`), inside the send's void
+(`SendVoid` to `SnapshotReturn`):
+
+1. A following reader at the end sends. The latch writes to the inflated
+   end and queues the list's `scrollToEnd`, and that frame lands.
+2. Still inside the void, the list runs the queued `scrollToEnd` into its
+   end pad as the pad opens.
+3. The sent row is measured taller, and the latch writes back out of the
+   pad to the moved content end.
+4. That frame renders the burst reverted to the offset before it, with the
+   pad still open. Its report reads below the ledger.
+5. The pad resets after the report, and the snapshot returns.
+
+A beat whose write the model did not issue is skipped, and the model
+stutters there. The pad opens as the list's `scrollToEnd` runs it, so it
+is skipped with that command.
+
+- `before`, the shipped switches: the report publishes a departure, and the
+  reader rests detached one unit short of the end with the pill:
+  `I_IntentHeld` at 24 states.
+- `after`, with the proposed `"layouthold"`: neither write is issued, the
+  reader trails the end through the void, and one correction at the close
+  lands. The graph completes inside its bound.
+- `nowindow`, the hold's structural bit alone (`"holdnowindow"`): the bit
+  closes a frame after the send, before the list has settled. The close
+  correction's own command then runs into the pad, and the same burst
+  detaches the reader: `I_IntentHeld` at 26 states.
+- `closepad`, the hold with the pad free to open again as a queued
+  `scrollToEnd` runs once the history is done. The close correction's write
+  lands, then its own queued command runs into the pad as the pad opens.
+  The frame takes it back below the ledger and the report detaches the
+  reader; the pad's reset leaves them free at the strict bottom with the
+  pill: `I_ModeMatchesGeometry` at 29 or 30 states, `I_PillHonest` at 30. The hold
+  removes the writes the void issued, but not a burst caused by the
+  correction it owes at the close. The model cannot tell whether that
+  command overshoots and opens the pad: pads open at the environment's
+  choice.
+
+The hold also reruns where a reader owns the view, with `DirtyFrameWrites`
+off: `touch_end_fixed_withlayouthold`, and `phone_send_fixed_withlayouthold`
+(a send's void with a finger on the transcript, controlled by
+`phone_send_fixed`). Each holds to depth 12, as its control does.
+
+`I_NamedPreconditions` checks the named geometry wherever the burst is
+issued. `I_SendHoldEndpointNotReached` is the inverse coverage observer, as
+in the `MomentumPair` controls, and engine deadlock checks catch a disabled
+beat.
+
 The four existing viewport-family witnesses have source-aligned configurations:
 `armless_viewport_fixed`, `phone_viewport_fixed`, `phone_pad_range_fixed`
 and `wheel_viewport_fixed`. Their removed-`viewcarry` controls stay generated.
@@ -111,7 +176,9 @@ announces a pad clamp before any observer can see regrowth.
 ### Recorded selected runs
 
 [landed-inputs-results.csv](landed-inputs-results.csv) records each pass for
-the 37 selected configs: 35 historical passes for the original 25, 35 fresh
+37 of the 48 selected configs. The `MomentumPair_*` and `SendHold_*`
+controls, `phone_send_fixed` and the two layout-hold variants came later; until the CSV is regenerated, their
+results are the ones recorded in `expected.py`. The 37: 35 historical passes for the original 25, 35 fresh
 passes for those same names and bounds, 41 switched-control passes and five
 focused PressKey passes. Generated and distinct counts belong to individual
 passes; they are never added as unique states. A completed graph can exhaust
@@ -182,7 +249,8 @@ this reader, so this is pre-existing; the positive returns to CI when fixed.
 | Spec                                                                                                                                                                                                                                                                                                            | Production (`src/`)                                                                                                                                                                  |
 | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `LatchSetIntent`, `ObserveLiveGeometry`, `FollowEndIfPermitted`, `ReconcileStrictBottom`, `TryReattach`, `NoteReaderGesture`, `ClearTouch`, `CompletePointerPreflight`, `StartEndCorrection`, `CorrFrame`                                                                                                       | `components/chat/chat-timeline-follow-latch.ts`                                                                                                                                      |
-| `Grow`, `AppendRow`, `PrependRow`, `Measure`, `StructSettle`, `ResizeObserved` (the maintain calls), `TurnEnd`                                                                                                                                                                                                  | `components/chat/chat-timeline.tsx`                                                                                                                                                  |
+| `Grow`, `AppendRow`, `PrependRow`, `Measure`, `StructSettle`, `HoldClose`, `ResizeObserved` (the maintain calls), `TurnEnd`                                                                                                                                                                                     | `components/chat/chat-timeline.tsx`                                                                                                                                                  |
+| `SendVoid`, `SnapshotReturn`                                                                                                                                                                                                                                                                                    | `stores/chats/transcript-window.ts` (`voidedTranscriptWindow` sets `invalidated`; the snapshot's reconcile clears it), read by `chat-messages.tsx`                                   |
 | `OnIntentChange`, `SetTimelineMode`, `SetFollowingEndFromPosition`, `ResolveSuppressedEndLanding`, `HandleReaderGesture`, `IssueFree`, `NavigateToMessage`, `ScrollToEndNav`, `NavSettle`, `RestoreIssue`, `RestoreSettle`, `MountAbort`, `Capture`, `Persist`, `Hide`, `Show`, `HydrationEffect`, `MountState` | `components/chat/chat-messages.tsx` (`ChatMessagesInner`)                                                                                                                            |
 | `RestoreState`, `RestoreForMount`                                                                                                                                                                                                                                                                               | `stores/chats/chat-tab-state-cache.ts`                                                                                                                                               |
 | `LibCall`, `LibRun`, `LibReady`, `LibReadyTimeout`, `LibFinish`, `SmoothStep`, `Resolve`                                                                                                                                                                                                                        | `@legendapp/list` 3.3.4 with `patches/@legendapp%2Flist@3.3.4.patch`: `createImperativeHandle`, `scrollTo`, `doScrollTo`, `finishScrollTo`                                           |
@@ -191,7 +259,7 @@ this reader, so this is pre-existing; the positive returns to CI when fixed.
 | `PadOpen`, `PadReset`                                                                                                                                                                                                                                                                                           | the same patch: `ScrollAdjustHandler`'s one-frame `paddingBottom`                                                                                                                    |
 | `BootSettle`, `Relayout`, `InitPass`                                                                                                                                                                                                                                                                            | the same patch: `finishInitialScroll` and its `recalculateSettledScroll`, the kept end target, `handleBootstrapInitialScrollLayoutChange` and `schedulePreservedEndAnchorCorrection` |
 | `Wheel`, `NestedWheel`, `UnscrolledWheel`                                                                                                                                                                                                                                                                       | `components/chat/chat-timeline-follow-latch.ts` (`handleWheel`)                                                                                                                      |
-| `Write`, `DeliverScroll`, `DeliverScrollEnd`, `NestedScrollEnd`, `NavFallback`, `RestoreFrame`, `WheelScroll`                                                                                                                                                                                                   | the browser: coalesced `scroll`, `scrollend`, timers, animation frames, a wheel's smooth scroll                                                                                      |
+| `Write`, `Frame`, `DeliverScroll`, `DeliverScrollEnd`, `NestedScrollEnd`, `NavFallback`, `RestoreFrame`, `WheelScroll`                                                                                                                                                                                          | the browser: coalesced `scroll`, `scrollend`, timers, animation frames, a frame's rendering, a wheel's smooth scroll                                                                 |
 
 Each event handler, timer, frame callback, promise continuation and React
 commit is one atomic step, because JavaScript runs one task at a time. A
@@ -207,7 +275,8 @@ tops use those; `real` is what the next measurement reads. The 1px epsilons
 are below one unit, so "at the strict bottom" and "landed" are exact here.
 
 Left out: find, cross-tile scroll requests (`landScrollRequestRow`), turns
-split into parts, the windowed line's placeholders and voids, individual
+split into parts, the windowed line's placeholders and its voids but for
+the send's (below), individual
 keyboard kinds and distances beyond the directional one-unit `KeyStep`,
 frames inside sandboxed pages, and most of the list's initial-scroll
 bootstrap (`initialScrollAtEnd`, `initialScrollIndex`): the first-paint scroll
@@ -365,16 +434,87 @@ it preserves the unannounced ledger and references for the before witness.
 cycle scenario restricts input to a stationary press so it isolates that
 producer regression from independent drag movement.
 
+## Frames that change size, the send's void, and the layout hold
+
+`DirtyFrameWrites` is iOS 26.5 WebKit as the send-6 frame trace showed it:
+a write issued in a frame whose scrollable size changed may not hold when
+that frame renders. A synchronous read after the write still sees its
+target. `frameDirty` is set by:
+
+- a key-sequence commit (`AppendRow`, `PrependRow`, `SendVoid`,
+  `SnapshotReturn`);
+- the end pad opening, resetting, or cycling.
+
+A `Write` issued while it holds joins the frame's burst. `Frame`, a
+frame's rendering, decides the burst:
+
+- **land**: as issued;
+- **revert**: to the offset before the burst;
+- **clamp**: to the lowest end the content had while the burst was
+  issued;
+- **late**: revert now, and the last target lands at the next `Frame`,
+  over whatever that frame did.
+
+The browser announces none of it: the ledger, arms, departure and
+momentum stay as the code left them. `Measure` does not set `frameDirty`.
+A streamed row's growth is the same exposure ordinary streaming has, and
+is left out. `Frame` is distinct from `DeliverScroll`, which is a
+coalesced report with two observations, not a clock. The other frame-paced
+steps (`SettleFrames`, `StructSettle`, `CorrFrame`, `RestoreFrame`) keep
+their own pacing. With `DirtyFrameWrites` off and no hold, `Frame` is never
+enabled.
+
+`SendVoid` voids the window until the snapshot returns (`invalidated`). The
+content then carries the sent row as a skeleton at the list's estimate. In
+the model the skeleton is that row appended at its estimate, so its inflate
+is a key-sequence commit, and its real height arrives with `Measure`.
+`SnapshotReturn` clears `invalidated` in a re-key commit that changes no
+geometry. Same-key placeholder replacements are not represented: rows here
+have stable identity.
+
+The proposed `"layouthold"` is the plan "Defer end writes across the send's
+layout transaction". The latch issues no end write and queues no
+`scrollToEnd` while either of two bits holds:
+
+- **The window bit** is `invalidated`.
+- **The structural bit** opens at a key-sequence commit. `Frame` marks that
+  commit's frame rendered, and `HoldClose`, the settle loop's next
+  animation frame, closes it before `StructSettle` can run.
+
+How the hold behaves:
+
+- **Gate.** The gate is `StartEndCorrection` and the validation reissue in
+  `CorrFrame`: either one, while held, owes a correction and writes
+  nothing.
+- **Opening.** A bit's rising edge cancels the active correction (unless a
+  free navigation owns the view), retires the queued end command the latch
+  records, and owes a following reader one correction.
+- **Strict bottom.** A strict-bottom report clears what is owed.
+- **Closing.** Each falling edge flushes the owed correction through
+  `FollowEndIfPermitted` once neither bit holds.
+- **Snapshot.** `SnapshotReturn` clears the window bit in the commit that
+  opens the structural bit, so it flushes nothing.
+
+The hold stops writes, not judgement: departures, arms and the ledger run
+as before. `"holdnowindow"`, the structural bit alone, is the rejected
+variant `SendHold_nowindow` checks.
+
+The close timing is a contract for the code. Here the structural bit
+closes only after `Frame` has rendered the commit's frame. An animation
+frame requested in the commit's layout effect runs before that same
+frame's rendering, so the code needs the frame after it.
+
 ## Platform switches
 
-| Constant             | Desktop (Electron, Chrome)                                                                                                                                       | Phone (iOS WebKit in Capacitor)                           |
-| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
-| `HasWheel`           | `TRUE`                                                                                                                                                           | `FALSE`                                                   |
-| `TouchInput`         | `FALSE`                                                                                                                                                          | `TRUE`                                                    |
-| `TouchMoveDelivered` | —                                                                                                                                                                | `TRUE`: `touchmove` keeps arriving through the native pan |
-| `HasScrollEnd`       | `TRUE`                                                                                                                                                           | `FALSE`                                                   |
-| `DeferUnderFinger`   | `FALSE`                                                                                                                                                          | `FALSE`: a scrollTop write under a finger applies at once |
-| `Foreground`         | `TRUE` (`FALSE` in `nav_follow_bg`: an occluded window stops frames, timers still run; and in `release_wheel`, a renderer starved of frames on a loaded machine) | `TRUE`                                                    |
+| Constant             | Desktop (Electron, Chrome)                                                                                                                                       | Phone (iOS WebKit in Capacitor)                                           |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| `HasWheel`           | `TRUE`                                                                                                                                                           | `FALSE`                                                                   |
+| `TouchInput`         | `FALSE`                                                                                                                                                          | `TRUE`                                                                    |
+| `TouchMoveDelivered` | —                                                                                                                                                                | `TRUE`: `touchmove` keeps arriving through the native pan                 |
+| `HasScrollEnd`       | `TRUE`                                                                                                                                                           | `FALSE`                                                                   |
+| `DeferUnderFinger`   | `FALSE`                                                                                                                                                          | `FALSE`: a scrollTop write under a finger applies at once                 |
+| `DirtyFrameWrites`   | `FALSE`                                                                                                                                                          | `FALSE` in the phone configs; `TRUE` in `SendHold_*` (the iOS 26.5 trace) |
+| `Foreground`         | `TRUE` (`FALSE` in `nav_follow_bg`: an occluded window stops frames, timers still run; and in `release_wheel`, a renderer starved of frames on a loaded machine) | `TRUE`                                                                    |
 
 Three more switches belong to the list rather than the platform:
 `DataAnchored` is `TRUE` for the chat timeline (its MVCP data channel anchors
@@ -670,7 +810,7 @@ Team PRs into main skip the workflow under the repository's normal gate.
 A merge to main runs the selected jobs when model or mapped source paths
 changed, comparing against this workflow's last green push. The workflow
 pins TLC v1.7.4 by checksum, uploads traces, and aggregates the jobs into
-`formal regressions`; `trunk-red` retries a failed merge run once.
+`formal regressions`; `trunk-red` reports a failed merge run.
 
 `trace.py` prints one line per step: the scroll offset over the maximum,
 each row as `r<id>@<top>:<size>` (`~n` is the size its next measurement

@@ -531,8 +531,6 @@ const REPEAT_SENSITIVE_ACTIONS: ReadonlySet<ActionId> = new Set([
   "app.tabs.vertical.toggle",
   // A held chord would walk the strip between the rail and expanded.
   "app.tabs.vertical.collapse",
-  // A held chord would start and end a voice session once per repeat.
-  "voice.talk.toggle",
   // A held chord would open and close the audio device once per repeat.
   "soundtrack.toggle",
 ]);
@@ -631,7 +629,8 @@ function runNestedFocus(
   prepare: PrepareNestedFocusTarget,
 ) {
   if (router.navigateNestedFocus === undefined) return prepare();
-  return router.navigateNestedFocus(tab.epicId, tab.tabId, prepare);
+  // A keybinding is a keypress: the person asked.
+  return router.navigateNestedFocus(tab.epicId, tab.tabId, prepare, "user");
 }
 
 function duplicateActiveEpicTab(router: KeybindingRouter): boolean {
@@ -862,7 +861,12 @@ function focusGroupInDirection(
   if (router.navigateNestedFocusToPrimaryEditor === undefined) {
     runNestedFocus(router, tab, prepare);
   } else {
-    router.navigateNestedFocusToPrimaryEditor(tab.epicId, tab.tabId, prepare);
+    router.navigateNestedFocusToPrimaryEditor(
+      tab.epicId,
+      tab.tabId,
+      prepare,
+      "user",
+    );
   }
   focusGroupEditor(nextId);
   return true;

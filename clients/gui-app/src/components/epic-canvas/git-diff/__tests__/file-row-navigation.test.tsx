@@ -73,6 +73,7 @@ describe("<FileRow /> nested focus navigation", () => {
       "epic-1",
       tabId,
       expect.any(Function),
+      "user",
     );
     const canvas = useEpicCanvasStore.getState().canvasByTabId[tabId];
     if (canvas?.root?.kind !== "pane") throw new Error("expected pane");
@@ -95,6 +96,7 @@ describe("<FileRow /> nested focus navigation", () => {
       "epic-1",
       tabId,
       expect.any(Function),
+      "user",
     );
   });
 });

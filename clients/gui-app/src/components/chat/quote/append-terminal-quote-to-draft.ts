@@ -150,6 +150,8 @@ function terminalMention(quote: TerminalQuote): EntityMentionAttachment {
     chatId: null,
     terminalAgentId: null,
     terminalId: quote.terminalId,
+    botId: null,
+    botTrunkChatId: null,
     status: null,
   };
 }

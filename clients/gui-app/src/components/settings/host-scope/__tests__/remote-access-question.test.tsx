@@ -22,7 +22,6 @@ import {
   buildAccessHostOn,
   type AccessHost,
 } from "@/components/settings/host-scope/__tests__/host-access-test-support";
-import { REMOTE_ACCESS_QUESTION } from "@/components/settings/host-scope/host-access-model";
 import { RemoteAccessQuestion } from "@/components/settings/host-scope/remote-access-question";
 import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
 import { useHostAccessPromptsStore } from "@/stores/hosts/host-access-prompts-store";
@@ -100,9 +99,9 @@ describe("<RemoteAccessQuestion />", () => {
     });
 
     const question = await screen.findByTestId("remote-access-question");
-    expect(question.textContent).toContain(REMOTE_ACCESS_QUESTION);
+    expect(question.textContent).toContain("Not set");
     expect(screen.getByRole("button", { name: "Not now" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "On" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Turn on" })).toBeTruthy();
   });
 
   it("Not now hides it and records the answer for that host only", async () => {
@@ -142,7 +141,7 @@ describe("<RemoteAccessQuestion />", () => {
     expect(await screen.findByTestId("remote-access-question")).toBeTruthy();
   });
 
-  it("On sends enabled: true, records the answer and stops asking", async () => {
+  it("Turn on sends enabled: true, records the answer and stops asking", async () => {
     const host = askingHost({});
     renderQuestion({
       host,
@@ -152,7 +151,7 @@ describe("<RemoteAccessQuestion />", () => {
     });
     await screen.findByTestId("remote-access-question");
 
-    fireEvent.click(screen.getByRole("button", { name: "On" }));
+    fireEvent.click(screen.getByRole("button", { name: "Turn on" }));
 
     await waitFor(() => {
       expect(host.paramsOf("host.remoteAccess.set")).toEqual([

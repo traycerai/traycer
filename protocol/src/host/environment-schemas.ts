@@ -51,6 +51,7 @@ export const ENVIRONMENT_ITEM_KINDS = [
   "member",
   "secret",
   "sandbox_defaults",
+  "storage_policy",
 ] as const;
 export const environmentItemKindSchema = lazySchema(() =>
   z.string().min(1).max(64),
@@ -350,13 +351,11 @@ export type EnvironmentReviewRequest = z.infer<
 >;
 
 /**
- * One "needs you" row: a held credential-like value ("Make it a secret" or
- * "Keep as a variable"), a held executable entry, or a sink-reaching write made
+ * One "needs you" row: a held executable entry, or a sink-reaching write made
  * without a grant. Apply goes through the dashboard's Review page; this method
  * only lists.
  */
 export const ENVIRONMENT_REVIEW_REASONS = [
-  "credential_like_value",
   "executable_entry",
   "needs_grant",
 ] as const;
@@ -407,9 +406,8 @@ export type EnvironmentReviewResponseV11 = z.infer<
 
 /**
  * `environment.review@1.2`: each entry names what a held executable does, the
- * facts its line on the retrospective sheet reads. All null on a held value
- * and on any row the host cannot describe; a `@1.1` answer upgrades with all
- * null.
+ * facts its line on the retrospective sheet reads. All null on any row the
+ * host cannot describe; a `@1.1` answer upgrades with all null.
  *
  * - `command`: what it runs, as configured: an MCP server's or hook's command
  *   line, arguments included and env values left out; a shell's path and
@@ -419,8 +417,9 @@ export type EnvironmentReviewResponseV11 = z.infer<
  * - `harness`: the harness id an agent definition is for, or the program an
  *   env setting changes (its key's `<harness>:` prefix).
  * - `value`: a launch-sensitive variable's or env setting's value as
- *   configured. A value that looks like a credential is never here: that row
- *   is a held value.
+ *   configured. A value that looks like a credential is never here, and is no
+ *   longer anywhere else either: the held-value plane that once carried one is
+ *   gone, and such a value stays on the computer it was found on.
  */
 export const environmentReviewEntrySchemaV12 = lazySchema(() =>
   environmentReviewEntrySchema.extend({
@@ -446,14 +445,16 @@ export type EnvironmentReviewResponseV12 = z.infer<
 
 /**
  * `environment.review.heldApply@1.0`: the retrospective sheet's choice for one
- * held entry (`EnvironmentReviewEntry.entryId`). `secret`, `variable` and
- * `stays` answer a held credential-like value; `approve` a held hook;
- * `discard` either. `gone` is an entry already applied or discarded.
+ * held entry (`EnvironmentReviewEntry.entryId`). `approve` applies the held
+ * hook, `discard` leaves it unapplied. `gone` is an entry already applied or
+ * discarded.
  *
- * `secret` promotes the held value, already sealed in the broker, to a secret
- * with the binding the add dialog collects: its kind, protocol, hosts and
- * port, the swap sites, and the plaintext-at-the-gateway consent's disclosure
- * version where the protocol needs it. The value never travels again.
+ * The `secret`, `variable` and `stays` arms answered a held credential-like
+ * value, a plane this tree no longer has. They stay in the request because
+ * `cli-v1.5.2` and `cli-v1.5.3` can still send them, and this is a released
+ * version whose shape may not change; the review resolver refuses all three.
+ * Nothing promotes a held value any more - the value never travels, because
+ * it is never parked.
  */
 export const environmentReviewHeldApplyRequestSchema = lazySchema(() =>
   z.discriminatedUnion("choice", [
@@ -857,9 +858,12 @@ export const environmentSecretSchema = lazySchema(() =>
     kind: z.string().min(1).max(32),
     protocol: z.string().min(1).max(32).nullable(),
     destinations: z.array(z.string().min(1)),
-    /** Known: brokered, exposed. */
+    /**
+     * Retired, and still declared because `cli-v1.5.2` and `cli-v1.5.3`
+     * require both: `RETIRED_SECRET_ROW_FIELDS` in `released-wire-rows.ts`
+     * holds the only values this tree writes, and says when they go.
+     */
     mode: z.string().min(1).max(32),
-    /** Known: live, pending_review. */
     state: z.string().min(1).max(32),
     currentVersionId: z.string().min(1).nullable(),
     revoked: z.boolean(),
@@ -922,6 +926,14 @@ export const environmentSecretsCreateRequestSchema = lazySchema(() =>
   z.object({
     name: z.string().min(1),
     ...secretBindingCandidateFields,
+    /**
+     * Retired, and still declared here and below because `cli-v1.5.2` and
+     * `cli-v1.5.3` send both: `RETIRED_SECRET_CREATE_FIELDS` in
+     * `released-wire-rows.ts` holds what a client of this tree sends. A
+     * released peer that names a plane this tree does not serve - any `mode`
+     * but brokered, any export policy but none - is refused by the create
+     * resolver.
+     */
     mode: z.string().min(1).max(32),
     /** The person kept a port that is another protocol's default, on purpose. */
     portOverride: z.boolean(),
@@ -936,7 +948,7 @@ export const environmentSecretsCreateRequestSchema = lazySchema(() =>
         }),
       )
       .max(16),
-    /** Known: none, presigned_url, short_lived_credentials. */
+    /** Retired; see `mode` above. */
     exportPolicy: z.string().min(1).max(32).nullable(),
     /** "Sandboxes get it": granted to every live and future sandbox. */
     sandboxesByDefault: z.boolean(),
@@ -958,7 +970,7 @@ export const environmentSecretsCreateResponseSchema = lazySchema(() =>
     z.object({ outcome: z.literal("pending"), uploadId: z.string().min(1) }),
     z.object({
       outcome: z.literal("refused"),
-      /** Known: team_secrets_are_brokered, protocol_not_brokered. */
+      /** Known: protocol_not_brokered. */
       code: z.string().min(1).max(64),
     }),
   ]),
@@ -1435,15 +1447,19 @@ export type EnvironmentSecretsListResponseV11 = z.infer<
 >;
 
 /**
- * `list@1.2`'s row: `@1.1`'s plus the names a computer running the
- * configuration sets the secret's value under. `variables` are the
- * configuration's variable names (Variables & shells); `providerVariables`
- * are names in one provider's env (a provider's Env tab), by provider id.
- * The desktop shows such a name as the secret's, never as a plain value.
+ * `list@1.2`'s row: `@1.1`'s plus the configuration's variable names the
+ * secret's value is set under (Variables & shells). The desktop shows such a
+ * name as the secret's, never as a plain value.
  */
 export const environmentSecretSchemaV12 = lazySchema(() =>
   environmentSecretSchema.extend({
     variables: z.array(z.string().min(1)),
+    /**
+     * Retired, and still declared because `cli-v1.5.2` and `cli-v1.5.3`
+     * require it: nothing binds a secret to a name in one provider's env any
+     * more, so `RETIRED_PROVIDER_VARIABLES` is the empty list every row
+     * carries.
+     */
     providerVariables: z.array(
       z.object({ providerId: z.string().min(1), name: z.string().min(1) }),
     ),

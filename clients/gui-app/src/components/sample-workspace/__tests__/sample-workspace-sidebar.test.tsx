@@ -19,15 +19,15 @@ import {
   SAMPLE_SIDEBAR_ARTIFACTS,
 } from "@/components/sample-workspace/sample-workspace-scene";
 import {
-  DEFAULT_ARRANGEMENT,
   insertRailDivider,
-  stackRailPanels,
+  unstackRail,
 } from "@/lib/layout/layout-arrangement";
 import { leftPanelIdForRailRegion } from "@/lib/layout/rail";
 import {
   DEFAULT_LAYOUT_SNAPSHOT,
   useLayoutStore,
 } from "@/stores/layout/layout-store";
+import type { LayoutSnapshot } from "@/lib/layout/layout-snapshot";
 import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
 import { usePrPanelStore } from "@/stores/epics/pr-panel-store";
 
@@ -57,11 +57,24 @@ function sidebarBody(): HTMLElement {
   return body;
 }
 
+/**
+ * The shipped rail also stacks Git Diff on Pull Requests, which draws those two
+ * as one icon; the cases below are written against Agents on Artifacts as the
+ * only stack, so each icon is one panel.
+ */
+const ONE_STACK_LAYOUT: LayoutSnapshot = {
+  ...DEFAULT_LAYOUT_SNAPSHOT,
+  arrangement: {
+    ...DEFAULT_LAYOUT_SNAPSHOT.arrangement,
+    rail: DEFAULT_LAYOUT_SNAPSHOT.arrangement.rail.filter(
+      (entry) => entry.id !== "stack:railGitDiff+railPullRequests",
+    ),
+  },
+};
+
 beforeEach(() => {
   window.localStorage.clear();
-  useLayoutStore.setState({
-    ...DEFAULT_LAYOUT_SNAPSHOT,
-  });
+  useLayoutStore.setState({ ...ONE_STACK_LAYOUT });
   usePrPanelStore.setState({ stateFilter: "open" });
   useLayoutEditorStore.getState().endSession();
 });
@@ -79,13 +92,12 @@ function addDivider(index: number): void {
     .setArrangement(insertRailDivider(arrangement, index));
 }
 
-/** Agents stacked on Artifacts, for the one-icon-per-stack case (G3). */
-function stackAgentsWithArtifacts(): void {
+/** The rail with its one shipped stack taken apart, for a flat-rail case. */
+function unstackShippedPair(): void {
+  const { arrangement } = useLayoutStore.getState();
   useLayoutStore
     .getState()
-    .setArrangement(
-      stackRailPanels(DEFAULT_ARRANGEMENT, "artifacts", "chats", "panel"),
-    );
+    .setArrangement(unstackRail(arrangement, "stack:railAgents+railArtifacts"));
 }
 
 function hidePanel(railRegion: "railBrowsers"): void {
@@ -98,43 +110,40 @@ function hidePanel(railRegion: "railBrowsers"): void {
 }
 
 describe("the sample sidebar's icon rail", () => {
-  it("is nine icons and nothing else by default (L-155, L-166, L-181)", () => {
+  it("is six icons and nothing else by default (L-155, L-166, L-181)", () => {
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
     render(<SampleWorkspaceSidebar />);
 
-    // Nine panels, nine icons: the shipped rail holds no stack and no divider.
-    expect(railEntries()).toHaveLength(9);
-    expect(screen.queryAllByTestId("epic-rail-stack")).toHaveLength(0);
-    expect(toolbar().querySelectorAll("[data-layout-region]")).toHaveLength(9);
+    const nodes = railEntries();
+    // Six things in the toolbar: each shipped stack draws as ONE group icon
+    // (G3), and File Tree is off.
+    expect(nodes).toHaveLength(6);
+    const stacks = screen.getAllByTestId("epic-rail-stack");
+    expect(stacks).toHaveLength(2);
+    for (const stack of stacks) {
+      expect(stack.querySelectorAll("[data-layout-region]")).toHaveLength(1);
+    }
+    expect(toolbar().querySelectorAll("[data-layout-region]")).toHaveLength(6);
     expect(screen.queryAllByTestId("epic-rail-divider")).toHaveLength(0);
   });
 
-  it("draws a stacked pair as ONE group icon (G3)", () => {
-    stackAgentsWithArtifacts();
-    render(<SampleWorkspaceSidebar />);
-
-    expect(railEntries()).toHaveLength(8);
-    expect(screen.getAllByTestId("epic-rail-stack")).toHaveLength(1);
-    expect(
-      screen
-        .getByTestId("epic-rail-stack")
-        .querySelectorAll("[data-layout-region]"),
-    ).toHaveLength(1);
-    expect(toolbar().querySelectorAll("[data-layout-region]")).toHaveLength(8);
-  });
-
   it("draws a divider the user added as a gap at rest, and its panels in order", () => {
+    unstackShippedPair();
     addDivider(2);
     render(<SampleWorkspaceSidebar />);
 
     const rail = useLayoutStore.getState().arrangement.rail;
     expect(rail.filter((entry) => entry.kind === "divider")).toHaveLength(1);
     // The sample task holds no simulator on a machine that runs none, so the
-    // auto Mobile simulators entry draws nothing.
+    // auto Mobile simulators entry draws nothing, and File Tree is off.
     expect(
       railEntries().map((node) => node.getAttribute("aria-label")),
     ).toEqual(
       rail
-        .filter((entry) => entry.id !== "railSimulators")
+        .filter(
+          (entry) =>
+            entry.id !== "railSimulators" && entry.id !== "railFileTree",
+        )
         .map((entry) =>
           entry.kind === "panel"
             ? getLeftPanelDefinition(leftPanelIdForRailRegion(entry.id)).title
@@ -218,17 +227,17 @@ describe("the sample sidebar's icon rail", () => {
     expect(useLayoutStore.getState().overrides).toEqual({});
   });
 
-  it("offers 'Move sidebar to right' for the default (left) side, and writes sidebarSide on click", () => {
+  it("offers 'Move sidebar to left' for the default (right) side, and writes sidebarSide on click", () => {
     render(<SampleWorkspaceSidebar />);
 
     fireEvent.contextMenu(toolbar());
     expect(screen.getByTestId("epic-rail-move-sidebar").textContent).toBe(
-      "Move sidebar to right",
+      "Move sidebar to left",
     );
 
     fireEvent.click(screen.getByTestId("epic-rail-move-sidebar"));
 
-    expect(useLayoutStore.getState().arrangement.sidebarSide).toBe("right");
+    expect(useLayoutStore.getState().arrangement.sidebarSide).toBe("left");
     expect(useLayoutEditorStore.getState().history.past).toHaveLength(0);
   });
 
@@ -245,7 +254,9 @@ describe("the sample sidebar's icon rail", () => {
 
     const rail = useLayoutStore
       .getState()
-      .arrangement.rail.filter((entry) => entry.id !== "railSimulators");
+      .arrangement.rail.filter(
+        (entry) => entry.id !== "railSimulators" && entry.id !== "railFileTree",
+      );
     const nodes = railEntries();
     expect(nodes).toHaveLength(rail.length);
     for (const [index, entry] of rail.entries()) {
@@ -268,7 +279,7 @@ describe("the sample sidebar's body", () => {
     expect(screen.getByLabelText("Comments")).not.toBeNull();
   });
 
-  it("shows the Agents panel for the default selection", () => {
+  it("shows the Agents+Artifacts stack for the default selection, agents first", () => {
     render(<SampleWorkspaceSidebar />);
 
     const body = within(sidebarBody());
@@ -340,8 +351,7 @@ describe("the sample sidebar's body", () => {
     }
   });
 
-  it("shows both members of a stack when the stacked member is selected", () => {
-    stackAgentsWithArtifacts();
+  it("shows the Agents+Artifacts stack when the stacked member is selected", () => {
     render(<SampleWorkspaceSidebar />);
 
     act(() => {

@@ -94,6 +94,7 @@ import {
 import { FallbackDangerZone } from "@/components/settings/panels/fallback/fallback-danger-zone";
 import { FallbackTierGroupsEditor } from "@/components/settings/panels/fallback/fallback-tier-groups-editor";
 import { FallbackConflictAnnouncementsProvider } from "@/components/settings/panels/fallback/fallback-conflict-announcements-provider";
+import { FallbackTeamRoutingInEffect } from "@/components/settings/panels/fallback/fallback-team-routing-in-effect";
 import {
   FallbackTestModelButton,
   FallbackTestModelPanel,
@@ -179,7 +180,7 @@ function HostFallbackSettingsPanel(): ReactNode {
       title="Model routing"
       description={
         pick.kind === "personal"
-          ? "Applies to your agents on every computer and sandbox running Personal."
+          ? "Applies to your agents on every computer and sandbox running these settings."
           : fallbackPanelDescription(scope)
       }
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
@@ -297,7 +298,6 @@ function FallbackSettingsPanelBody(props: {
    * button nobody pressed). The editor clears it once it has been honoured.
    */
   const [returnFocusToReset, setReturnFocusToReset] = useState(false);
-
   /**
    * The authoritative read of what the host actually has, for the two cases that
    * need one: a save whose reply was lost, and a reset - whose result is by
@@ -369,6 +369,22 @@ function FallbackSettingsPanelBody(props: {
   // refetched policy. This is also what seeds the reducer, which is why there
   // is no hydration effect anywhere in this file.
   const editorKey = `${scope.hostId ?? ""}:${resetGeneration}`;
+
+  // A team computer: routing here is the team's, for everyone who works on
+  // this machine, so the page reads it out and offers no editor. The host
+  // refuses a write either way (`TeamHostRoutingIsTheTeamsError`); this is
+  // what keeps a member from being shown controls that cannot take.
+  //
+  // An unreadable row does not change that - there is no own routing to set
+  // instead - so the read-out says so rather than being skipped.
+  if (query.data.source === "team") {
+    return (
+      <FallbackTeamRoutingInEffect
+        policy={query.data.policy}
+        storedPolicyUnreadable={query.data.storedPolicyUnreadable}
+      />
+    );
+  }
   return (
     // Which tier conflicts have been announced, for exactly the editor's
     // lifetime - the same key - so leaving the Equivalent models tab and

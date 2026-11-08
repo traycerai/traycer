@@ -76,6 +76,8 @@ function seed(): void {
   useLayoutStore
     .getState()
     .setArrangement({ ...arrangement, rail: SEEDED_RAIL });
+  // The spec drops a section onto File Tree's icon, which ships hidden.
+  useLayoutStore.getState().setRegionValues("railFileTree", { shown: "shown" });
   useEpicLeftPanelStore.getState().setActivePanelIdAndExpand(TAB_ID, "chats");
 }
 

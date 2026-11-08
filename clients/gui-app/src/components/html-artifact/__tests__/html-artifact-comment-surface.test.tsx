@@ -122,6 +122,25 @@ const overlay = (): Element | null =>
 const zoomIn = (): HTMLElement | null =>
   screen.queryByRole("button", { name: /zoom in/i });
 
+/** The page the frame is showing, proven, so telling it its mode is observable. */
+function provenBridge() {
+  const bridge = realBridge();
+  frames.bridge = bridge;
+  const setHtmlView = vi.spyOn(bridge, "setHtmlView");
+  const setMode = vi.spyOn(bridge, "setMode");
+  return { setHtmlView, setMode };
+}
+
+/** The entry page proves itself: it names its page, then says ready. */
+function markReady(): void {
+  const frame = frames.latest;
+  if (frame === null) throw new Error("no frame");
+  act(() => {
+    frame.pageNavigation?.onNavigate("index.html");
+    frame.onStatus("ready");
+  });
+}
+
 beforeEach(() => {
   frames.latest = null;
   frames.bridge = null;
@@ -136,10 +155,13 @@ afterEach(() => {
 });
 
 describe("<HtmlArtifactCommentSurface />", () => {
-  it("serves the plain page, with zoom and no overlay, until Comments is turned on", () => {
+  it("serves one commentable page, keeps its zoom, and tells that page when Comments turns on and off", () => {
+    const { setMode, setHtmlView } = provenBridge();
     mount();
+    const source = servedSource();
 
-    expect(servedSource().canvas).toBeUndefined();
+    // Reading and commenting are one document. The tool is a message.
+    expect(source).toMatchObject({ canvas: true, canvasLinks: "native" });
     expect(zoomIn()).not.toBeNull();
     expect(overlay()).toBeNull();
     expect(
@@ -147,46 +169,80 @@ describe("<HtmlArtifactCommentSurface />", () => {
         .getByRole("button", { name: "Comments" })
         .getAttribute("aria-pressed"),
     ).toBe("false");
-  });
 
-  it("serves the element bridge with native links, hides zoom and mounts the overlay while Comments is on", () => {
-    mount();
+    markReady();
+    expect(setMode).toHaveBeenLastCalledWith("play");
+    expect(setHtmlView).toHaveBeenLastCalledWith({
+      enabled: true,
+      scale: 1,
+      commenting: false,
+    });
+
     act(() => {
       fireEvent.click(screen.getByRole("button", { name: "Comments" }));
     });
 
+    expect(servedSource()).toBe(source);
+    expect(zoomIn()).not.toBeNull();
+    expect(overlay()).not.toBeNull();
+    expect(setMode).toHaveBeenLastCalledWith("edit");
+    expect(setHtmlView).toHaveBeenLastCalledWith({
+      enabled: true,
+      scale: 1,
+      commenting: true,
+    });
+
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "Comments" }));
+    });
+
+    expect(servedSource()).toBe(source);
+    expect(zoomIn()).not.toBeNull();
+    expect(overlay()).toBeNull();
+    expect(setMode).toHaveBeenLastCalledWith("play");
+    expect(setHtmlView).toHaveBeenLastCalledWith({
+      enabled: true,
+      scale: 1,
+      commenting: false,
+    });
+  });
+
+  it("offers no Comments toggle when frame comments are off, and still serves that one page", () => {
+    commentsFlag.enabled = false;
+    mount();
+
+    expect(screen.queryByRole("button", { name: "Comments" })).toBeNull();
     expect(servedSource()).toMatchObject({
       canvas: true,
       canvasLinks: "native",
     });
-    expect(zoomIn()).toBeNull();
-    expect(overlay()).not.toBeNull();
-
-    act(() => {
-      fireEvent.click(screen.getByRole("button", { name: "Comments" }));
-    });
-    expect(servedSource().canvas).toBeUndefined();
+    expect(zoomIn()).not.toBeNull();
     expect(overlay()).toBeNull();
   });
 
-  it("offers no Comments toggle when frame comments are off", () => {
-    commentsFlag.enabled = false;
-    mount();
-    expect(screen.queryByRole("button", { name: "Comments" })).toBeNull();
-  });
-
-  it("drops comment mode with the toggle when frame comments become unavailable", () => {
+  it("drops comment mode with the toggle when frame comments become unavailable, without swapping the page", () => {
+    const { setMode, setHtmlView } = provenBridge();
     const view = mount();
+    markReady();
     act(() => {
       fireEvent.click(screen.getByRole("button", { name: "Comments" }));
     });
+    const source = servedSource();
     expect(overlay()).not.toBeNull();
 
     commentsFlag.enabled = false;
     view.rerender(tree(SOURCE));
 
+    expect(screen.queryByRole("button", { name: "Comments" })).toBeNull();
     expect(overlay()).toBeNull();
-    expect(servedSource().canvas).toBeUndefined();
+    expect(servedSource()).toBe(source);
+    expect(zoomIn()).not.toBeNull();
+    expect(setMode).toHaveBeenLastCalledWith("play");
+    expect(setHtmlView).toHaveBeenLastCalledWith({
+      enabled: true,
+      scale: 1,
+      commenting: false,
+    });
   });
 });
 

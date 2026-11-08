@@ -157,6 +157,22 @@ export function buildAttachmentsFromJSONContent(
   ];
 }
 
+/**
+ * A mention node of a bot's message box: `id` is the wire token and `label`
+ * the name. It lives in that box's document only, which is sent as text, so
+ * no prompt or stored message ever holds one.
+ */
+export const BOT_TOKEN_CONTEXT_TYPE = "bot-token";
+
+/** What a mention node reads as text. */
+export function mentionChipText(
+  attrs: Record<string, unknown> | undefined,
+): string {
+  return attrs?.contextType === BOT_TOKEN_CONTEXT_TYPE
+    ? `@${String(attrs.label)}`
+    : mentionPlainTextFromAttrs(attrs);
+}
+
 export function mentionAttrsFromAttachment(
   mention: MentionAttachment,
 ): Record<string, unknown> {
@@ -265,6 +281,8 @@ export function mentionAttrsFromAttachment(
       chatId: mention.chatId,
       terminalAgentId: mention.terminalAgentId,
       terminalId: mention.terminalId,
+      botId: mention.botId,
+      botTrunkChatId: mention.botTrunkChatId,
       status: mention.status,
     };
   }
@@ -536,6 +554,7 @@ function entityMentionId(
   if (mention.contextType === "terminal") {
     return mention.terminalId ?? mention.path;
   }
+  if (mention.contextType === "bot") return mention.botId ?? mention.path;
   return mention.artifactId ?? mention.path;
 }
 

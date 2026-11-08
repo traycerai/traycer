@@ -1,7 +1,11 @@
 import { buildEpicNodeTree } from "@/lib/artifacts/node-display";
 import type { EpicNodeKind } from "@/lib/artifacts/node-display";
 import type { TreeNodeNested } from "@/lib/tree-types";
-import { isOpenableEpicNodeKind } from "@/stores/epics/canvas/types";
+import {
+  isOpenableEpicNodeKind,
+  isRecordBackedEpicNodeKind,
+  type RecordBackedEpicNodeKind,
+} from "@/stores/epics/canvas/types";
 
 export interface AutoOpenRecord {
   readonly id: string;
@@ -24,24 +28,32 @@ export type AutoOpenRecencyByNodeId = Readonly<Record<string, number>>;
 
 interface AutoOpenTarget {
   readonly id: string;
-  readonly type:
-    | "chat"
-    | "terminal-agent"
-    | "spec"
-    | "ticket"
-    | "story"
-    | "review";
+  readonly type: RecordBackedEpicNodeKind;
   readonly name: string;
   readonly hostId: string;
 }
 
-// Plain terminals are renderer-only and never live in the cloud-backed records
-// auto-open consumes, so they stay excluded. Terminal-agents (TUI agents) ARE
-// record-backed and openable, so focusing one - e.g. from the resource monitor -
-// must resolve to that agent rather than falling back to an arbitrary chat.
-function isAutoOpenableKind(
+/**
+ * Kinds a LANDING may choose for itself.
+ *
+ * Plain terminals are renderer-only and never live in the cloud-backed records
+ * auto-open consumes, so they stay excluded. Terminal-agents (TUI agents) ARE
+ * record-backed and openable, so focusing one - e.g. from the resource monitor -
+ * must resolve to that agent rather than falling back to an arbitrary chat.
+ *
+ * Deliberately NARROWER than the set an explicit request may name: an object
+ * artifact (html / canvas / file) is something a person asks for by name, not
+ * somewhere a task should land on its own. Keeping the two apart is what lets
+ * the request arm widen without moving any landing default.
+ */
+type AutoOpenLandingKind = Extract<
+  RecordBackedEpicNodeKind,
+  "chat" | "terminal-agent" | "spec" | "ticket" | "story" | "review"
+>;
+
+function isAutoOpenLandingKind(
   type: EpicNodeKind,
-): type is AutoOpenTarget["type"] {
+): type is AutoOpenLandingKind {
   return (
     type === "chat" ||
     type === "terminal-agent" ||
@@ -66,6 +78,10 @@ function isAutoOpenableKind(
  * so an epic whose projection has produced no agent rows yet is expressed by
  * passing an empty map, and the resolution degrades to the tree-first
  * behaviour rather than waiting on anything.
+ *
+ * The first step answers a REQUEST and the other three pick a LANDING, so they
+ * admit different kinds - see `isAutoOpenLandingKind` and
+ * `findRequestedRecord`.
  */
 export function resolveAutoOpenTarget(
   records: ReadonlyArray<AutoOpenRecord>,
@@ -74,10 +90,10 @@ export function resolveAutoOpenTarget(
   recencyByNodeId: AutoOpenRecencyByNodeId,
 ): AutoOpenTarget | null {
   if (focusArtifactId !== null) {
-    return findOpenableRecord(records, focusArtifactId);
+    return findRequestedRecord(records, focusArtifactId);
   }
 
-  const persistedMatch = findOpenableRecord(records, persistedFocus);
+  const persistedMatch = findLandingRecord(records, persistedFocus);
   if (persistedMatch !== null) return persistedMatch;
 
   const mostRecent = findMostRecentlyActiveInTree(records, recencyByNodeId);
@@ -86,7 +102,35 @@ export function resolveAutoOpenTarget(
   return findFirstOpenableInTree(records);
 }
 
-function findOpenableRecord(
+/**
+ * The record an EXPLICIT request names, admitting every record-backed openable
+ * kind - the same set the same-epic opener admits
+ * (`open-projected-sidebar-node.ts`).
+ *
+ * A cross-task artifact click arrives here as the route's `focusArtifactId`,
+ * and that is the ONLY thing that opens the artifact at the destination: the
+ * cross-epic branch of `openResolvedArtifact` navigates and nothing more. So an
+ * html, canvas or file artifact that opens on one side of the task boundary has
+ * to open on the other - refusing it here is how a click used to land on the
+ * task with the artifact left closed.
+ */
+function findRequestedRecord(
+  records: ReadonlyArray<AutoOpenRecord>,
+  artifactId: string,
+): AutoOpenTarget | null {
+  const match = records.find((record) => record.id === artifactId);
+  if (match === undefined) return null;
+  if (!isRecordBackedEpicNodeKind(match.type)) return null;
+  return {
+    id: match.id,
+    type: match.type,
+    name: match.name,
+    hostId: match.hostId,
+  };
+}
+
+/** The record a LANDING may restore; see `isAutoOpenLandingKind`. */
+function findLandingRecord(
   records: ReadonlyArray<AutoOpenRecord>,
   artifactId: string | null,
 ): AutoOpenTarget | null {
@@ -94,7 +138,7 @@ function findOpenableRecord(
   const match = records.find((record) => record.id === artifactId);
   if (match === undefined) return null;
   if (!isOpenableEpicNodeKind(match.type)) return null;
-  if (!isAutoOpenableKind(match.type)) return null;
+  if (!isAutoOpenLandingKind(match.type)) return null;
   return {
     id: match.id,
     type: match.type,
@@ -128,7 +172,7 @@ function findMostRecentlyActiveInTree(
   let newestAt: number | null = null;
   for (const record of records) {
     if (!isOpenableEpicNodeKind(record.type)) continue;
-    if (!isAutoOpenableKind(record.type)) continue;
+    if (!isAutoOpenLandingKind(record.type)) continue;
     if (!Object.hasOwn(recencyByNodeId, record.id)) continue;
     const activeAt = recencyByNodeId[record.id];
     if (newestAt === null || activeAt > newestAt) {
@@ -159,7 +203,7 @@ function walkTree(
     const nodeType = node.data.type;
     if (
       isOpenableEpicNodeKind(nodeType) &&
-      isAutoOpenableKind(nodeType) &&
+      isAutoOpenLandingKind(nodeType) &&
       accepts(node.id)
     ) {
       return {

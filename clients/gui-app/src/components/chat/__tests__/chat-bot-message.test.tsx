@@ -878,6 +878,42 @@ describe("<ChatMessage /> a message the bot failed to answer", () => {
     expect(retry).toHaveBeenCalledWith("Please review the release");
   });
 
+  it("offers Retry and no Edit on a failed message that carries images, on the line and on hover", async () => {
+    const user = userEvent.setup();
+    const retry = vi.fn<(text: string) => void>();
+    const edit = vi.fn<(text: string) => void>();
+    renderRow(
+      {
+        ...memberPost(OPEN_REQUEST),
+        attachments: [
+          {
+            kind: "image",
+            hash: "a".repeat(64),
+            mediaType: "image/png",
+            dataUrl: null,
+            name: "shot.png",
+            size: 128,
+          },
+        ],
+      },
+      failing(retry, false, edit),
+    );
+
+    const line = within(screen.getByTestId("bot-message-unanswered"));
+    expect(line.getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(line.queryByRole("button", { name: "Edit" })).toBeNull();
+    const actions = within(screen.getByTestId("bot-message-actions"));
+    expect(
+      actions
+        .getAllByRole("button")
+        .map((button) => button.getAttribute("aria-label")),
+    ).toEqual(["Retry", "Reply in thread"]);
+
+    await user.click(actions.getByRole("button", { name: "Retry" }));
+    expect(retry).toHaveBeenCalledWith("Please review the release");
+    expect(edit).not.toHaveBeenCalled();
+  });
+
   it("offers neither on a message the session did not fail on, and none on the bot's own row", () => {
     renderRow(
       memberPost({ ...OPEN_REQUEST, requestId: "req-answered" }),
@@ -1039,13 +1075,13 @@ describe("<ChatMessage /> bot row choices and announcement threads", () => {
     };
   }
 
-  it("draws no turn receipt under a proposal, though the presentation names a turn for any ids", () => {
+  it("draws the receipt the presentation names under a proposal, asked by the announcement's id", () => {
     const replyReceipt = vi.fn<
       (messageIds: ReadonlyArray<string>) => ChatBotTurnReceipt | null
     >(() => ({
       summary: "Read 1 file",
       startedAt: 0,
-      endedAt: 1_000,
+      endedAt: 80_000,
       open: vi.fn(),
     }));
     renderRow(announcementRow("proposal"), {
@@ -1057,8 +1093,12 @@ describe("<ChatMessage /> bot row choices and announcement threads", () => {
       replyReceipt,
     });
 
-    expect(screen.queryByTestId("bot-turn-receipt")).toBeNull();
-    expect(replyReceipt).not.toHaveBeenCalled();
+    expect(replyReceipt).toHaveBeenCalledWith([ANNOUNCEMENT_ID]);
+    expect(
+      within(screen.getByTestId("bot-announcement")).getByTestId(
+        "bot-turn-receipt",
+      ).textContent,
+    ).toBe("Read 1 file · 1m 20s");
   });
 
   it("asks for a reply's turn by its own message id and every record its row carries", () => {

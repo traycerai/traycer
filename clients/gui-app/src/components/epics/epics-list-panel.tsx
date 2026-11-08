@@ -160,7 +160,6 @@ function clearSelectAllController(
   if (slot.current === controller) slot.current = null;
 }
 
-const VIEWER_DELETE_TOOLTIP = "Viewers cannot select task for deletion.";
 const NO_DELETE_PERMISSION_TOOLTIP =
   "You don't have permission to delete this task.";
 const PRESERVED_ORPHAN_DELETE_TOOLTIP =
@@ -2181,7 +2180,6 @@ function historyDeleteDisabledTooltip(
   if (!cloudAuthorized && item.isLocalHome !== true) {
     return UNVERIFIED_SESSION_DELETE_TOOLTIP;
   }
-  if (item.permissionRole === "viewer") return VIEWER_DELETE_TOOLTIP;
   return NO_DELETE_PERMISSION_TOOLTIP;
 }
 

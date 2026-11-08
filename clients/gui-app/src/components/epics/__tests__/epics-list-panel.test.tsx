@@ -535,7 +535,6 @@ function seedMessageHits(
   testState.chatSearchHits = {
     kind: "ready",
     messages,
-    indexState: "complete",
     expansionBase: {
       query: "matching",
       scope: { kind: "all-accessible-tasks" },
@@ -1133,7 +1132,7 @@ describe("<EpicsListPanel />", () => {
     });
   });
 
-  it("opens a viewer's organization chip read-only", async () => {
+  it("opens the organization chip read-only for a row with no granted role", async () => {
     organizationState.value = {
       supported: true,
       userId: "user-1",
@@ -1142,7 +1141,7 @@ describe("<EpicsListPanel />", () => {
     };
     testState.items = [
       historyItem({
-        permissionRole: "viewer",
+        permissionRole: null,
         ownership: "shared",
         organization: groupedOrganization("epic-from-history"),
       }),
@@ -3944,7 +3943,7 @@ describe("<EpicsListPanel />", () => {
     ).toBe("true");
   });
 
-  it("skips viewer rows during history select all and disables them in selection mode", async () => {
+  it("skips no-role rows during history select all and disables them in selection mode", async () => {
     testState.items = [
       historyItem({}),
       historyItem({
@@ -3952,7 +3951,7 @@ describe("<EpicsListPanel />", () => {
         epicId: "viewer-epic",
         title: "Viewer history item",
         ownership: "shared",
-        permissionRole: "viewer",
+        permissionRole: null,
       }),
     ];
     renderPanel("page", "/");
@@ -3998,7 +3997,7 @@ describe("<EpicsListPanel />", () => {
   it("allows selecting all when a later page contains the only deletable task", async () => {
     const viewer = historyItem({
       ownership: "shared",
-      permissionRole: "viewer",
+      permissionRole: null,
     });
     const laterTask = historyItem({
       id: "history-later-task",
@@ -4046,11 +4045,11 @@ describe("<EpicsListPanel />", () => {
         .getAttribute("aria-checked"),
     ).toBe("true");
   });
-  it("disables history selection when every visible row is viewer-only", async () => {
+  it("disables history selection when every visible row has no granted role", async () => {
     testState.items = [
       historyItem({
         ownership: "shared",
-        permissionRole: "viewer",
+        permissionRole: null,
       }),
     ];
     renderPanel("page", "/");
@@ -4665,9 +4664,9 @@ describe("<EpicsListPanel />", () => {
     expect(router.state.location.pathname).toBe("/");
   });
 
-  it("disables the Rename menu entry for viewer rows", async () => {
+  it("disables the Rename menu entry for a row with no granted role", async () => {
     testState.items = [
-      historyItem({ ownership: "shared", permissionRole: "viewer" }),
+      historyItem({ ownership: "shared", permissionRole: null }),
     ];
 
     renderPanel("page", "/");

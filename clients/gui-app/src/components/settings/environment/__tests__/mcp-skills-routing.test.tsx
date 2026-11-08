@@ -135,7 +135,10 @@ describe("MCP servers and Skills on a build with a server pool", () => {
       await screen.findByRole("switch", { name: "github" }),
     );
     await userEvent.click(
-      await screen.findByRole("button", { name: "Remove" }),
+      await screen.findByRole("button", { name: "More for github" }),
+    );
+    await userEvent.click(
+      await screen.findByRole("menuitem", { name: "Remove" }),
     );
     await userEvent.click(
       within(await screen.findByRole("dialog")).getByRole("button", {

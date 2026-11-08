@@ -58,6 +58,13 @@ export enum ContextType {
    * is never itself an Agent.
    */
   BrowserTab = "browser-tab",
+  /**
+   * A bot, mentioned from an agent chat. Not an Agent of the task, so it does
+   * not share the `@agent:` projection: the chip names the bot and its trunk
+   * agent, the two ids `traycer_send_message` needs, since an agent cannot
+   * list bots.
+   */
+  Bot = "bot",
   Execution = "execution",
   User = "user",
 }
@@ -799,6 +806,8 @@ export interface MentionAttrs {
   reviewCommentId?: string;
   terminalId?: string;
   tabId?: string;
+  botId?: string;
+  botTrunkChatId?: string;
   commandName?: string;
   workflowId?: string;
   b64content?: string;
@@ -894,6 +903,10 @@ export function formatMentionForDisplayQuery(attrs: MentionAttrs): string {
     case ContextType.BrowserTab: {
       const title = attrs.label || attrs.tabId || attrs.id || "";
       return `browser-tab:${title}`;
+    }
+    case ContextType.Bot: {
+      const title = attrs.label || attrs.botId || attrs.epicId || "";
+      return `bot:${title}`;
     }
     case ContextType.Execution: {
       const title = attrs.label || attrs.id || "";
@@ -1054,6 +1067,18 @@ function formatMentionForLLMQuery(
       return tabId.length === 0
         ? `@browser-tab:${title} [tabId is unavailable]`
         : `@browser-tab:${title} [tabId=${tabId}]`;
+    }
+    // The ids travel in the text, as a GitHub mention carries its URL: an
+    // agent cannot list bots, and messages one with the bot id as `taskId`
+    // and the trunk agent id as `toAgentId`.
+    case ContextType.Bot: {
+      const botId = attrs.botId || attrs.epicId || "";
+      const trunkChatId = attrs.botTrunkChatId || "";
+      const title = attrs.label || "untitled";
+      if (botId.length === 0) return `@bot:${title} (bot id is unavailable)`;
+      return trunkChatId.length === 0
+        ? `@bot:${title} (bot ${botId})`
+        : `@bot:${title} (bot ${botId}, trunk agent ${trunkChatId})`;
     }
     case ContextType.Execution: {
       const epicPart = attrs.epicId ? `${attrs.epicId}/` : "";

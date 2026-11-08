@@ -434,6 +434,7 @@ describe("dispatchAction", () => {
       "epic-pane-focus",
       tabId,
       expect.any(Function),
+      "user",
     );
     expect(document.activeElement).toBe(
       screen.getByRole("textbox", { name: "Destination chat composer" }),

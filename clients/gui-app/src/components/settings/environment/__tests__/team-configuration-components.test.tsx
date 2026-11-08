@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { grantedEnvironmentRole } from "@traycer/protocol/host/environment/contracts";
 import { ConfigurationConflict } from "@/components/settings/environment/configuration-conflict";
 import { ConfigurationSourceContext } from "@/components/settings/environment/configuration-source";
 import { ConfigurationWriteFeedback } from "@/components/settings/environment/configuration-write-feedback";
@@ -150,7 +151,7 @@ describe("ConfigurationWriteFeedback", () => {
           environmentId: "env-a",
           roomId: "room-a",
           providerHandle: null,
-          effectiveRole: role,
+          effectiveRole: grantedEnvironmentRole(role),
         }}
       >
         <ConfigurationWriteFeedback issue={issue} />

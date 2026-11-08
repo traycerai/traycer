@@ -71,6 +71,12 @@ export const RunnerHostInvoke = {
   // The team's soundtrack set on a staging build, with its samples' links
   // signed: `electron-main/soundtrack/`. Only main holds the key.
   readSoundtrackSet: "runnerHost:soundtrack:readSet",
+  // A recording of the music, on a build that is not production: main owns
+  // the folder and the names (`electron-main/soundtrack/session-recordings.ts`).
+  openSoundtrackRecording: "runnerHost:soundtrack:recording:open",
+  appendSoundtrackRecording: "runnerHost:soundtrack:recording:append",
+  closeSoundtrackRecording: "runnerHost:soundtrack:recording:close",
+  revealSoundtrackRecording: "runnerHost:soundtrack:recording:reveal",
   // The sandbox control plane (traycer-server `/api/sandboxes`). Same CORS
   // reason as the registry calls above: traycer-server's allow-list is the web
   // dashboard origin, so the renderer cannot reach it directly.
@@ -84,9 +90,6 @@ export const RunnerHostInvoke = {
   getVoiceAvailability: "runnerHost:voice:availability",
   mintVoiceSession: "runnerHost:voice:sessions:mint",
   endVoiceSession: "runnerHost:voice:sessions:end",
-  // The voice router's model call (traycer-server `/inference`), same CORS
-  // reason.
-  routeVoiceUtterance: "runnerHost:voice:route",
   // Whether the sender window holds a live voice session: such a window is
   // hidden, not destroyed, when the person closes it.
   setVoiceSessionLive: "runnerHost:voice:setLive",
@@ -107,6 +110,9 @@ export const RunnerHostInvoke = {
   registerSlackApp: "runnerHost:slackApps:register",
   mintSlackAppInstallUrl: "runnerHost:slackApps:installUrl",
   disconnectSlackApp: "runnerHost:slackApps:disconnect",
+  setSlackAppDms: "runnerHost:slackApps:dms",
+  // A team environment's bot-host install token (traycer-server), likewise.
+  mintTeamHostInstallToken: "runnerHost:teamHost:installToken",
   // The secrets broker (authn), from Electron main for the same reason.
   getSandboxGrants: "runnerHost:sandboxSecrets:grants",
   getTeamEnvironment: "runnerHost:environments:team",
@@ -504,7 +510,8 @@ export const RunnerHostEvent = {
   // OS wake pulse (powerMonitor `resume` / `unlock-screen`) bridged to the
   // renderer so it force-reconnects its host streams - re-registering the
   // live request context within seconds of wake instead of waiting out the
-  // ~60s heartbeat. No payload: it is a pure "the machine just woke" signal.
+  // ~60s heartbeat. Payload: `DesktopSystemWake`, which says whether the
+  // screen is still locked.
   systemResumed: "runnerHost:event:systemResumed",
   // The person is leaving the machine (powerMonitor `suspend` /
   // `lock-screen`), bridged so a live voice session ends and its microphone
@@ -632,6 +639,9 @@ export const RunnerHostEvent = {
   // (`HostQuitStateEvent`, fanned to every window).
   hostQuitRequest: "runnerHost:event:hostQuit:request",
   hostQuitState: "runnerHost:event:hostQuit:state",
+  // A quit asking each recording window to finish its recording while the
+  // save channels are still up (`soundtrack-recording-ipc.ts`).
+  soundtrackRecordingFinish: "runnerHost:event:soundtrack:recording:finish",
 } as const;
 
 /**
@@ -654,6 +664,9 @@ export const RunnerHostSync = {
   // Whether this build can read the team's soundtrack set: the toggle is drawn
   // at render, before anything asynchronous could answer.
   soundtrackSourceAvailable: "runnerHost:sync:soundtrackSourceAvailable",
+  // Whether this build can save a recording of the music: true only in dev and
+  // staging. Elsewhere the recording channels are not registered at all.
+  soundtrackRecordingAvailable: "runnerHost:sync:soundtrackRecordingAvailable",
 } as const;
 
 type RunnerHostInvokeChannel =

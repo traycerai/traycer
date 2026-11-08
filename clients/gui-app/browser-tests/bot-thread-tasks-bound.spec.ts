@@ -21,7 +21,8 @@ const TASKS = '[data-testid="bot-thread-tasks"]';
 const TASKS_SCROLL = '[data-testid="bot-thread-tasks-scroll"]';
 const REPLIES = '[data-testid="bot-thread-replies"]';
 const COMPOSER = '[data-testid="bot-thread-composer"]';
-const COMPOSER_INPUT = '[data-testid="bot-thread-composer-input"]';
+const COMPOSER_INPUT =
+  '[data-testid="bot-thread-composer-input"] [data-composer-editor]';
 const COMPOSER_SEND = '[data-testid="bot-thread-composer-send"]';
 const CLOSE = '[data-testid="bot-thread-close"]';
 
@@ -220,4 +221,35 @@ test.describe("a pane shorter than the band's cap", () => {
       page.locator('[data-task-id="task-1"] [data-testid="bot-task-open"]'),
     ).toBeFocused();
   });
+});
+
+test("a loaded thread scrolls its replies without a minimap and keeps a draft", async ({
+  page,
+}) => {
+  await page.goto(
+    `${fixture("bot-thread-tasks-bound")}?loaded=true&tasks=none&post=short`,
+  );
+  const scroll = page.getByTestId("chat-messages-scroll");
+  await expect(scroll).toBeVisible();
+  await expect(page.getByTestId("chat-turn-minimap")).toHaveCount(0);
+  const input = page.locator(COMPOSER_INPUT);
+  await input.fill("A draft reply");
+  await expect
+    .poll(async () =>
+      scroll.evaluate((el) => el.scrollHeight - el.clientHeight),
+    )
+    .toBeGreaterThan(0);
+  await scroll.evaluate((el) => {
+    el.scrollTop = el.scrollHeight;
+  });
+  await expect
+    .poll(async () => scroll.evaluate((el) => el.scrollTop))
+    .toBeGreaterThan(0);
+  await scroll.hover();
+  await page.mouse.wheel(0, -5000);
+  await expect.poll(async () => scroll.evaluate((el) => el.scrollTop)).toBe(0);
+  await expect(page.getByTestId("bot-thread-reply-count")).toContainText(
+    "30 replies",
+  );
+  await expect(input).toContainText("A draft reply");
 });

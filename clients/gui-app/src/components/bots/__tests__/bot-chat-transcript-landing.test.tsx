@@ -17,6 +17,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { BotTestRunnerHost } from "@/components/bots/__tests__/bot-test-runner-host";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
 import {
   afterEach,
@@ -78,6 +79,9 @@ const mocks = vi.hoisted(() => ({
   }>,
 }));
 
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => null,
+}));
 vi.mock("@/components/chat/chat-messages", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("@/components/chat/chat-messages")>();
@@ -135,6 +139,7 @@ import {
   UNRESOLVED_BOT_MEMBERS,
   type BotMemberResolver,
 } from "@/lib/bots/bot-member-names";
+import { useBotSearchStore } from "@/stores/bots/bot-search-store";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const CHAT_ID = "conversation-app";
@@ -286,18 +291,20 @@ function mountTranscript(
   const tree = (): ReactNode => (
     <StrictMode>
       <QueryClientProvider client={queryClient}>
-        <BotChatTranscript
-          botId={BOT_ID}
-          chatId={CHAT_ID}
-          hostId="host-1"
-          title="Release Bot"
-          instanceId="bot-thread:test"
-          surface={surface}
-          resolveMember={members}
-          showConnecting
-          header={null}
-          landOn={landing}
-        />
+        <BotTestRunnerHost>
+          <BotChatTranscript
+            botId={BOT_ID}
+            chatId={CHAT_ID}
+            hostId="host-1"
+            title="Release Bot"
+            instanceId="bot-thread:test"
+            surface={surface}
+            resolveMember={members}
+            showConnecting
+            header={null}
+            landOn={landing}
+          />
+        </BotTestRunnerHost>
       </QueryClientProvider>
     </StrictMode>
   );
@@ -319,6 +326,8 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   mocks.handle = null;
+  vi.unstubAllGlobals();
+  useBotSearchStore.getState().clearMarks();
 });
 
 function flashing(messageId: string): boolean {
@@ -328,6 +337,19 @@ function flashing(messageId: string): boolean {
   if (row === null) throw new Error(`no row for ${messageId}`);
   return row.dataset.navigationHighlighted === "true";
 }
+
+describe("a loaded thread transcript", () => {
+  it("keeps its replies and landing without a minimap", async () => {
+    landing = { messageId: "ask-1", sendPostId: null, visit: 1 };
+    mountTranscript(
+      [resolvedUserMessage(), otherUserMessage(), reply()],
+      THREAD_SURFACE,
+    );
+    await settleLegendList();
+    await waitFor(() => expect(flashing("ask-1")).toBe(true));
+    expect(screen.queryByTestId("chat-turn-minimap")).toBeNull();
+  });
+});
 
 describe("a transcript asked to land on a post", () => {
   it("lands on it at each visit, the same post's again once the first landing has settled and the reader has moved on", async () => {
@@ -356,5 +378,54 @@ describe("a transcript asked to land on a post", () => {
     expect(flashing("ask-1")).toBe(true);
     await waitFor(() => expect(mocks.settled).toHaveLength(2));
     expect(mocks.settled[1]?.outcome).toBe("landed");
+  });
+
+  it("marks the words a search result matched on the row it lands on, in the find colours", async () => {
+    const painted = new Map<string, { readonly ranges: readonly Range[] }>();
+    vi.stubGlobal("CSS", {
+      highlights: {
+        set: (name: string, highlight: { readonly ranges: readonly Range[] }) =>
+          painted.set(name, highlight),
+        delete: (name: string) => painted.delete(name),
+      },
+    });
+    vi.stubGlobal(
+      "Highlight",
+      class PaintedHighlight {
+        readonly ranges: readonly Range[];
+        constructor(...ranges: readonly Range[]) {
+          this.ranges = ranges;
+        }
+      },
+    );
+    useBotSearchStore.setState({
+      marks: { chatId: CHAT_ID, messageId: "ask-1", words: ["review"] },
+    });
+    const view = mountTranscript(
+      [resolvedUserMessage(), otherUserMessage(), reply()],
+      THREAD_SURFACE,
+    );
+    await settleLegendList();
+    landing = { messageId: "ask-1", sendPostId: null, visit: 1 };
+    view.rerender();
+    await settleLegendList();
+
+    const markedRows = [...painted.values()].flatMap((highlight) =>
+      highlight.ranges.map(
+        (range) =>
+          range.startContainer.parentElement?.closest<HTMLElement>(
+            "[data-message-id]",
+          )?.dataset.messageId,
+      ),
+    );
+    const markedWords = [...painted.values()].flatMap((highlight) =>
+      highlight.ranges.map((range) => range.toString()),
+    );
+    expect(markedWords).toEqual(["review"]);
+    expect(markedRows).toEqual(["ask-1"]);
+    expect(flashing("ask-1")).toBe(true);
+
+    cleanup();
+    expect(painted.size).toBe(0);
   });
 });

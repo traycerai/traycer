@@ -1776,6 +1776,37 @@ describe("Terminals opener sub-page", () => {
 });
 
 describe("Browser opener sub-page", () => {
+  it("appends the frozen condition to the lifecycle word in a pinned host row", () => {
+    browserPinSelectionMock.current = "frozen-host";
+    extraHostsMock.options = [
+      hostScopeOptionFixture({
+        hostId: "frozen-host",
+        name: "Frozen box",
+        isLocalMachine: false,
+        isActive: false,
+        connectable: true,
+        kind: "sandbox",
+        sandbox: {
+          state: "suspended",
+          frozen: true,
+          summary: sandboxSummaryFixture({
+            hostId: "frozen-host",
+            state: "suspended",
+            frozen: true,
+          }),
+          teamOwned: false,
+        },
+      }),
+    ];
+    const items = renderBrowserItems([]);
+    const subpage = items[0].subpage;
+    if (subpage === null) throw new Error("Expected browser host subpage");
+    const hostItems = renderHook(() => subpage.useItems(CTX)).result.current;
+    expect(
+      hostItems.find((item) => item.label === "Frozen box")?.statusBadge,
+    ).toBe("Selected · Suspended · Out of credits");
+  });
+
   it("lists an already-open tab from the Browser surface's host and opens its session pointer", () => {
     browserHostIdMock.current = "browser-host";
     browserPinSelectionMock.current = "browser-host";

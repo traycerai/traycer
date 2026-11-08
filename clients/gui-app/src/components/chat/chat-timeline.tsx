@@ -126,7 +126,8 @@ export interface ChatTimelineInitialScrollAnchor {
  */
 interface ChatTimelineItemSizeInfo {
   readonly size: number;
-  readonly itemData: TranscriptListRow;
+  // A queued measurement may outlive the row removed from LegendList's data.
+  readonly itemData: TranscriptListRow | undefined;
 }
 
 /**
@@ -175,13 +176,21 @@ export interface ChatTimelineProps {
    *  scroll state. Not read by any production code. */
   readonly "data-scroll-mode"?: string;
   /**
-   * Whether the initial mount parks at the tail: `true` for a fresh,
-   * never-scrolled-in chat with no saved reading position. The controller
-   * passes `false` when restoring a tab whose saved reading position was NOT
-   * the tail, so the initial DOM position does not contradict the restored
-   * position; `initialScrollIndex` below carries the exact row-level restore.
+   * Whether the initial mount starts at the tail, following it: `true` for a
+   * fresh, never-scrolled-in chat with no saved reading position. The
+   * controller passes `false` when restoring a tab whose saved reading position
+   * was NOT the tail, so the initial DOM position does not contradict the
+   * restored position; `initialScrollIndex` below carries the exact row-level
+   * restore.
    */
   readonly initialScrollAtEnd?: boolean;
+  /**
+   * The initial mount parks at the tail with the reader NOT following: a saved
+   * reading position has no row to land on yet, and the restore waiting for it
+   * still owns the view. LegendList with neither initial prop sits at offset 0,
+   * the first message, which is nowhere the reader was.
+   */
+  readonly initialParkAtEnd?: boolean;
   /**
    * Restored row bootstrap, passed straight through as LegendList's own
    * `initialScrollIndex`: the saved pixel offset, self-correcting as
@@ -205,6 +214,12 @@ export interface ChatTimelineProps {
    * false; this timeline adds its own geometry settle on top.
    */
   readonly isReattachSuppressed?: () => boolean;
+  /**
+   * Whether the transcript window is voided and its replacement index has not
+   * returned: the rows are skeleton and placeholders at estimated heights, so
+   * the follow latch issues no automatic correction until it is false.
+   */
+  readonly isTranscriptWindowInvalidated: boolean;
   /** Message row receiving the temporary external-navigation highlight. */
   readonly navigationHighlightedMessageId?: string | null;
   /**
@@ -259,6 +274,7 @@ export const ChatTimeline = memo(function ChatTimeline({
   onScroll,
   className,
   initialScrollAtEnd = true,
+  initialParkAtEnd = false,
   initialScrollIndex = null,
   contentInsetEndAdjustment = 0,
   onFollowIntentChange,
@@ -267,6 +283,7 @@ export const ChatTimeline = memo(function ChatTimeline({
   isFollowCorrectionSuppressed,
   resolveSuppressedEndLanding,
   isReattachSuppressed,
+  isTranscriptWindowInvalidated,
   navigationHighlightedMessageId,
   navigationHighlightedBlockId,
   rowHeightMemory = null,
@@ -279,7 +296,7 @@ export const ChatTimeline = memo(function ChatTimeline({
 
   const keySequenceChanged = useCommittedKeySequenceChanged(listRef, rows);
 
-  // Set from a key-sequence-changing commit until its layout has settled; see
+  // Set from a row-shape-changing commit until its layout has settled; see
   // the effect that owns it below.
   const structuralCommitUnsettledRef = useRef(false);
   const isLatchReattachSuppressed = useCallback(
@@ -406,7 +423,7 @@ export const ChatTimeline = memo(function ChatTimeline({
       // that row is. A placeholder measures at whatever height the memory just
       // told it to stand at, so recording one would be the memory reading its
       // own estimate back in as evidence for that estimate.
-      if (rowHeightMemory !== null && info.itemData.kind === "hydrated") {
+      if (rowHeightMemory !== null && info.itemData?.kind === "hydrated") {
         // `rowId` is the ROW and the part is the list item: a long turn is
         // drawn as several items, and the placeholder that later stands in for
         // that ordinal stands in for all of them at once.
@@ -457,22 +474,37 @@ export const ChatTimeline = memo(function ChatTimeline({
     [followLatch, onListMetricsChange],
   );
 
-  // The geometry half of reattach suppression. A commit that changes the key
-  // sequence arms the MVCP data walk, and the library applies its adjusts over
-  // the frames after it - any of which can clamp a detached reader to the
+  // The geometry half of reattach suppression. A commit that changes the row
+  // shape - a row's key or its kind, so a placeholder replaced by its hydrated
+  // row counts - arms the MVCP data walk, and the library applies its adjusts
+  // over the frames after it - any of which can clamp a detached reader to the
   // strict bottom for a moment. Hold suppression until `scrollHeight` has held
   // still for two consecutive frames with no end correction outstanding, then
   // reconcile once under the ordinary clamp contract: a reader the settled
   // layout leaves at the strict bottom has no "away" left to keep. Declared
   // before the maintain effect below so this commit's own maintenance already
   // sees the flag. A later structural commit restarts the wait; one that
-  // changes no key leaves it running.
+  // changes no key and no kind leaves it running.
+  //
+  // A row-shape commit that overlaps a void or replaces its window also opens
+  // the latch's structural hold. An end written while those rows stand at
+  // estimates meets a scrollable size WebKit can revert or clamp. Ordinary
+  // appends must be corrected in their own commit, before the prompt paints.
+  // The first requested frame runs before this commit paints; the hold closes
+  // in the second, after the replacement has rendered.
   const structuralSettleFrameRef = useRef<number | null>(null);
+  const previousWindowInvalidatedRef = useRef(isTranscriptWindowInvalidated);
   useLayoutEffect(() => {
     if (!keySequenceChanged) return;
     if (structuralSettleFrameRef.current !== null) {
       cancelAnimationFrame(structuralSettleFrameRef.current);
     }
+    // An ordinary append can be followed before its first paint. Only a
+    // voided window's replacement needs the extra frame: clearing the window
+    // bit in this same commit must not flush into estimated replacement rows.
+    const holdForRekey =
+      previousWindowInvalidatedRef.current || isTranscriptWindowInvalidated;
+    if (holdForRekey) followLatch.openStructuralHold();
     structuralCommitUnsettledRef.current = true;
     const readScrollHeight = (): number | null => {
       const node = listRef.current?.getScrollableNode();
@@ -480,7 +512,15 @@ export const ChatTimeline = memo(function ChatTimeline({
     };
     let previousScrollHeight = readScrollHeight();
     let stillFrames = 0;
+    // The loop runs at least two frames: one check can count one still frame.
+    let framesChecked = 0;
     const checkSettled = (): void => {
+      framesChecked += 1;
+      // A later ordinary row-shape commit can cancel the replacement's loop.
+      // The hold belongs to the latch, so its restarted loop must close it
+      // even though that later commit did not open one. The close is a no-op
+      // when no hold is open.
+      if (framesChecked === 2) followLatch.closeStructuralHold();
       const scrollHeight = readScrollHeight();
       stillFrames =
         scrollHeight === previousScrollHeight &&
@@ -497,7 +537,23 @@ export const ChatTimeline = memo(function ChatTimeline({
       followLatch.followEndIfPermitted();
     };
     structuralSettleFrameRef.current = requestAnimationFrame(checkSettled);
-  }, [followLatch, keySequenceChanged, listRef, rows]);
+  }, [
+    followLatch,
+    isTranscriptWindowInvalidated,
+    keySequenceChanged,
+    listRef,
+    rows,
+  ]);
+
+  // The voided window holds automatic correction too, from the void until its
+  // index returns. After the structural settle above: a commit that ends the
+  // void and reshapes the rows has opened the structural hold before this
+  // clears the window's, so the correction owed waits for the structural
+  // close. Before the maintain effect below, which this commit's bits gate.
+  useLayoutEffect(() => {
+    followLatch.setWindowInvalidated(isTranscriptWindowInvalidated);
+    previousWindowInvalidatedRef.current = isTranscriptWindowInvalidated;
+  }, [followLatch, isTranscriptWindowInvalidated]);
 
   useLayoutEffect(() => {
     const settleFrame = structuralSettleFrameRef;
@@ -569,7 +625,7 @@ export const ChatTimeline = memo(function ChatTimeline({
           // fresh DOM geometry inside the latch; this 10% band can never
           // re-attach a detached reader.
           onEndReachedThreshold={CHAT_TIMELINE_NEAR_END_THRESHOLD}
-          initialScrollAtEnd={initialScrollAtEnd}
+          initialScrollAtEnd={initialScrollAtEnd || initialParkAtEnd}
           initialScrollIndex={initialScrollIndex ?? undefined}
           contentInsetEndAdjustment={contentInsetEndAdjustment}
           // The library's own `maintainScrollAtEnd` is never passed - every
@@ -590,7 +646,7 @@ export const ChatTimeline = memo(function ChatTimeline({
           // content above the viewport changes HEIGHT - a nested chain-open in
           // find, a row remeasuring above the reader.
           //
-          // DATA rides the key sequence, because the two things it is asked to
+          // DATA rides the row shape, because the two things it is asked to
           // tell apart arrive on the same signal. The library treats any row
           // object it cannot prove equal as a structural data change, and while
           // that channel is on it arms an MVCP anchor lock on every such pass.
@@ -604,9 +660,11 @@ export const ChatTimeline = memo(function ChatTimeline({
           // whole stream.
           //
           // The rows themselves distinguish the two: a streaming token changes a
-          // row's CONTENT in place, while an insert, a removal, or a move
-          // changes the sequence of row KEYS. Only structural changes need the
-          // data anchor lock, so that channel is on for exactly those commits.
+          // row's CONTENT in place, while an insert, a removal, a move, or a
+          // placeholder replaced by its hydrated row under the same key changes
+          // the row shape - each row's key and kind. Only structural changes
+          // need the data anchor lock, so that channel is on for exactly those
+          // commits.
           // Content-only passes can still refresh unmeasured height estimates;
           // patches/@legendapp%2Flist@3.3.4.patch compensates via the SIZE channel,
           // without the lock, while recalculating positions inline before paint.
@@ -723,7 +781,7 @@ const stableChatTimelineRowsCache = new WeakMap<
 >();
 
 /**
- * The row key sequence each mounted timeline last RENDERED, keyed by that
+ * The row shape each mounted timeline last RENDERED, keyed by that
  * mount's `listRef` exactly as `stableChatTimelineRowsCache` is. Written only
  * from a layout effect, so a render React discards never advances it - which
  * is the whole point of keeping it separate from the row-reuse cache above,
@@ -744,7 +802,7 @@ const committedChatTimelineKeysCache = new WeakMap<
  *  why it stays correct under a discarded speculative render.
  *
  *  Row reuse is all this decides. Anything that has to reason about what the
- *  list last RENDERED - the key sequence the MVCP data channel rides - reads
+ *  list last RENDERED - the row shape the MVCP data channel rides - reads
  *  `committedChatTimelineKeysCache` instead, precisely because this entry is
  *  published during render and a discarded render can move it. */
 function useStableChatTimelineRows(
@@ -762,8 +820,9 @@ function useStableChatTimelineRows(
 }
 
 /**
- * Whether `rows` moves rows relative to the sequence this timeline last
- * actually RENDERED - the signal `maintainVisibleContentPosition` rides.
+ * Whether `rows` changes the row shape - a row's key or its kind, by index -
+ * relative to the shape this timeline last actually RENDERED: the signal
+ * `maintainVisibleContentPosition` and the structural settle both ride.
  *
  * The baseline is published from a layout effect, never from render, and that
  * is the whole design: React discards renders, and a baseline a discarded one

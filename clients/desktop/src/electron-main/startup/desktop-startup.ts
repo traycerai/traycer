@@ -269,6 +269,12 @@ const QUIT_FRESH_UNSYNCED_SNAPSHOT_TIMEOUT_MS = 200;
 // answer in milliseconds; past this the quit asks as if the host were up.
 const QUIT_HOST_LIVENESS_TIMEOUT_MS = 2_000;
 
+// How long the quit waits for a recording of the music to finish while its
+// save channels are still up: the window's last second of audio, its log's end
+// and its close are local IPC and a small write, well under this. A disk that
+// stalls past it leaves the files closed as they stand, which still open.
+const QUIT_SOUNDTRACK_RECORDING_TIMEOUT_MS = 2_000;
+
 /**
  * A relaunch is intended when this quit hands over to another instance: the
  * updater's `quitAndInstall`, or the macOS move to /Applications, which
@@ -1230,9 +1236,9 @@ function runDeferredBackground(state: BootState, services: AppServices): void {
     installHostWakeRecovery(
       services.host,
       installPowerMonitorListeners,
-      () => {
+      (wake) => {
         state.bridge?.notifySystemResumed();
-        state.bridge?.fanOut(RunnerHostEvent.systemResumed, undefined);
+        state.bridge?.fanOut(RunnerHostEvent.systemResumed, wake);
         checkForUpdatesAfterResume(state.config.isDev);
         // `force: true` - matches `checkForUpdatesAfterResume` above: a real
         // probe on every wake, gated only by the debounce below (not by cache
@@ -1613,8 +1619,18 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
   const authorizeQuitAfterFlush = (): void => {
     const finalBrowserCapture =
       state.bridge?.captureFinalBrowserState() ?? Promise.resolve();
+    const finishedRecordings =
+      state.bridge?.finishSoundtrackRecordings(
+        QUIT_SOUNDTRACK_RECORDING_TIMEOUT_MS,
+      ) ?? Promise.resolve();
     void Promise.all([
       flushShellState(),
+      finishedRecordings.catch((error: unknown) => {
+        log.warn(
+          "[desktop] finishing a soundtrack recording failed - quitting anyway",
+          error,
+        );
+      }),
       finalBrowserCapture.catch((error) => {
         log.warn(
           "[desktop] final browser capture failed - quitting anyway",

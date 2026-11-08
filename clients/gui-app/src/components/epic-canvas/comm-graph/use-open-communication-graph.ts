@@ -14,6 +14,7 @@ export function useOpenCommunicationGraph(epicId: string): () => void {
         "explicit",
         "direct_ui",
       ),
+      "user",
     );
   }, [epicId, openTile]);
 }

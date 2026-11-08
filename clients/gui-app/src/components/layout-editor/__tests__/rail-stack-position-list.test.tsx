@@ -90,16 +90,8 @@ function panelIds(entries: ReadonlyArray<RailEntry>): ReadonlyArray<string> {
 
 beforeEach(() => {
   window.localStorage.clear();
-  // Agents stacked on Artifacts - the pair earlier builds shipped and the one
-  // every case here is written about. The shipped rail itself holds no stack.
   useLayoutStore.setState({
     ...DEFAULT_LAYOUT_SNAPSHOT,
-    arrangement: stackRailPanels(
-      DEFAULT_ARRANGEMENT,
-      "artifacts",
-      "chats",
-      "panel",
-    ),
   });
   useLeftPanelStore.setState({
     panelSectionCollapsedByPanelId: {},
@@ -154,7 +146,9 @@ describe("the stack link as its own Position-list row (L-166, L-168)", () => {
     const linkId = railStackId(["railAgents", "railArtifacts"]);
     const before = rail();
 
-    fireEvent.click(screen.getByRole("button", { name: "Remove stack" }));
+    fireEvent.click(
+      within(row(linkId)).getByRole("button", { name: "Remove stack" }),
+    );
 
     const after = rail();
     expect(
@@ -297,7 +291,12 @@ describe("stacking a panel from its own row (L-166, L-168)", () => {
     // back: while the two are apart neither draws a chevron, so the flag has
     // had no control that could clear it and must not come back with the join.
     useLeftPanelStore.getState().togglePanelSectionCollapsed("artifacts");
-    fireEvent.click(screen.getByRole("button", { name: "Remove stack" }));
+    fireEvent.click(
+      within(row(railStackId(["railAgents", "railArtifacts"]))).getByRole(
+        "button",
+        { name: "Remove stack" },
+      ),
+    );
 
     fireEvent.click(
       screen.getByRole("button", {
@@ -387,7 +386,11 @@ describe("the rail list on a phone, which has no rail", () => {
       stackEntry,
       { kind: "panel", id: panels[1] },
       dividerEntry,
-      ...panels.slice(3).map((id) => ({ kind: "panel", id })),
+      // Everything past the divider keeps its place, the Git Diff stack
+      // included; the grabbed panel left it for the front.
+      ...before
+        .slice(before.indexOf(dividerEntry) + 1)
+        .filter((entry) => entry.id !== panels[2]),
     ]);
   });
 });
@@ -434,8 +437,6 @@ describe("the stack row while the rail does not draw the stack (T3)", () => {
 
 describe("the rail list's own header revert (R3-11)", () => {
   it("shows a revert on the group header only once its order has moved", () => {
-    // On the shipped rail itself: the pair the file seeds is already a change.
-    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
     render(section("railAgents", vi.fn()));
 
     expect(
@@ -449,7 +450,7 @@ describe("the rail list's own header revert (R3-11)", () => {
     ).toBeDefined();
   });
 
-  it("is the only revert after one panel moved: no member row shows one, and it puts back the shipped order with no divider and no stack (T2)", () => {
+  it("is the only revert after one panel moved: no member row shows one, and it puts back the order, the dividers and the stacks (T2)", () => {
     render(section("railAgents", vi.fn()));
     fireEvent.keyDown(row("railTerminals"), { key: "ArrowUp", altKey: true });
     act(() => {

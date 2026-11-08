@@ -16,6 +16,7 @@ import { StrictMode } from "react";
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { BotTestRunnerHost } from "@/components/bots/__tests__/bot-test-runner-host";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -101,6 +102,9 @@ const mocks = vi.hoisted(() => ({
     vi.fn<(args: unknown) => Promise<ResolveArtifactByPathResult | null>>(),
 }));
 
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => null,
+}));
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => mocks.navigate,
   useRouter: () => null,
@@ -142,6 +146,7 @@ vi.mock("@/hooks/host/use-host-supports-method", async (importOriginal) => ({
 vi.mock("@/components/epic-tabs/pane-visibility-context", () => ({
   usePaneVisible: () => true,
   usePaneFocused: () => true,
+  usePaneFocusProbe: () => () => true,
 }));
 vi.mock("@/hooks/bots/use-bot-conversation-list-query", () => ({
   useBotConversationListQuery: () => ({
@@ -513,35 +518,39 @@ function mountChannel(input: {
   ) => (
     <StrictMode>
       <QueryClientProvider client={queryClient}>
-        <TooltipProvider>
-          <ChatExpansionTestProviders tileInstanceId="tile-1">
-            <BotChannelView
-              tiles={null}
-              botId={BOT_ID}
-              hostId={HOST_ID}
-              boundHostId={HOST_ID}
-              boundHostEpoch={1}
-              botTitle="Release Bot"
-              directive={null}
-              appConversationChatId={CHANNEL_ID}
-              trunkChatId="trunk-chat"
-              resolveMember={resolveMember}
-              tasks={tasks}
-              surfaceActions={surfaceActions}
-              openThread={null}
-              onOpenThread={vi.fn()}
-              onOpenTurn={vi.fn()}
-              onOpenSession={vi.fn()}
-              landOn={null}
-              openMemory={null}
-              onOpenMemory={vi.fn()}
-              environmentId="env-1"
-              botNameOf={() => null}
-              onOpenActivity={vi.fn()}
-              setupHistory={null}
-            />
-          </ChatExpansionTestProviders>
-        </TooltipProvider>
+        <BotTestRunnerHost>
+          <TooltipProvider>
+            <ChatExpansionTestProviders tileInstanceId="tile-1">
+              <BotChannelView
+                tiles={null}
+                botId={BOT_ID}
+                hostId={HOST_ID}
+                boundHostId={HOST_ID}
+                boundHostEpoch={1}
+                botTitle="Release Bot"
+                directive={null}
+                appConversationChatId={CHANNEL_ID}
+                trunkChatId="trunk-chat"
+                resolveMember={resolveMember}
+                tasks={tasks}
+                surfaceActions={surfaceActions}
+                openThread={null}
+                onOpenThread={vi.fn()}
+                onOpenTurn={vi.fn()}
+                onOpenSession={vi.fn()}
+                landOn={null}
+                openMemory={null}
+                onOpenMemory={vi.fn()}
+                environmentId="env-1"
+                botNameOf={() => null}
+                environmentBots={null}
+                openExchange={null}
+                exchangeRail={{ open: () => undefined, close: () => undefined }}
+                setupHistory={null}
+              />
+            </ChatExpansionTestProviders>
+          </TooltipProvider>
+        </BotTestRunnerHost>
       </QueryClientProvider>
     </StrictMode>
   );
@@ -1011,7 +1020,7 @@ describe("<BotChannelView tiles={null} /> a post's surface card: Open", () => {
       surfaceActions: null,
     });
 
-    await user.click(screen.getByRole("link", { name: "the plan" }));
+    await user.click(screen.getByRole("button", { name: "the plan" }));
 
     await vi.waitFor(() => expect(mocks.navigate).toHaveBeenCalled());
     expect(mocks.resolveArtifact).toHaveBeenCalledWith(

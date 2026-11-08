@@ -2000,6 +2000,18 @@ export type ChatPendingInterviewState = z.infer<
   typeof chatPendingInterviewStateSchema
 >;
 
+/**
+ * A subscriber's standing on ONE CHAT: its owner, or somebody else watching
+ * it.
+ *
+ * Its own two-value vocabulary, not the task-collaborator role - which has no
+ * view-only value at all any more. A chat is owned by the account that
+ * created it whatever that account's role on the task is, and every other
+ * subscriber watches it: a task editor reading somebody else's chat is a
+ * `viewer` here and may still edit the task. The word means "watching this
+ * chat", the same sense the browser and terminal session tiers use it in, and
+ * nothing resolves it as a grant.
+ */
 export const chatAccessSchema = lazySchema(() =>
   z.object({
     role: z.enum(["owner", "viewer"]),

@@ -65,6 +65,7 @@ describe("navigateNestedFocus", () => {
       },
       { epicId: "epic-1", tabId: "tab-1" },
       () => ({ paneId: "pane-1", tileInstanceId: "tile-1" }),
+      "user",
     );
 
     const options = firstNavigateOptions(navigate.mock.calls);
@@ -106,6 +107,7 @@ describe("navigateNestedFocus", () => {
       },
       { epicId: "epic-1", tabId: "tab-1" },
       () => ({ paneId: "pane-1", tileInstanceId: "tile-1" }),
+      "user",
     );
 
     expect(navigate).not.toHaveBeenCalled();
@@ -130,6 +132,7 @@ describe("navigateNestedFocus", () => {
       },
       { epicId: "epic-1", tabId: "tab-1" },
       () => target,
+      "user",
     );
 
     expect(navigate).toHaveBeenCalledOnce();
@@ -158,6 +161,7 @@ describe("navigateNestedFocus", () => {
       },
       { epicId: "epic-1", tabId: "tab-1" },
       () => ({ paneId: "pane-1", tileInstanceId: "tile-1" }),
+      "user",
     );
 
     expect(target).toEqual({ paneId: "pane-1", tileInstanceId: "tile-1" });
@@ -182,6 +186,7 @@ describe("navigateNestedFocus", () => {
       },
       { epicId: "epic-1", tabId: "tab-1" },
       () => null,
+      "user",
     );
 
     expect(target).toBeNull();
@@ -210,6 +215,7 @@ describe("navigateNestedFocus", () => {
         prepareCalled = true;
         return { paneId: "pane-1", tileInstanceId: "tile-1" };
       },
+      "user",
     );
 
     expect(prepareCalled).toBe(true);

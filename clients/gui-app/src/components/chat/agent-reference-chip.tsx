@@ -101,16 +101,19 @@ function AgentReferenceButton(props: {
   });
   const openAgent = useCallback(
     (event: MouseEvent<HTMLButtonElement>) => {
-      openTile({
-        node: buildOpenRef(),
-        target: { epicId: props.epicId },
-        // A chip is a button, like every other agent-opening control here.
-        gesture: "explicit",
-        modifiers: modifiersFromMouseEvent(event),
-        placement: null,
-        dedupe: true,
-        source: "direct_ui",
-      });
+      openTile(
+        {
+          node: buildOpenRef(),
+          target: { epicId: props.epicId },
+          // A chip is a button, like every other agent-opening control here.
+          gesture: "explicit",
+          modifiers: modifiersFromMouseEvent(event),
+          placement: null,
+          dedupe: true,
+          source: "direct_ui",
+        },
+        "user",
+      );
     },
     [props.epicId, buildOpenRef, openTile],
   );

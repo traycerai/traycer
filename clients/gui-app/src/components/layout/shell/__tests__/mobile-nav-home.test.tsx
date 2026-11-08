@@ -379,9 +379,11 @@ describe("MobileNavDrawer rows", () => {
         renderDrawer();
 
         const row = await screen.findByTestId("mobile-nav-tracy");
-        expect(
-          within(row).getByTestId("tracy-entry-unread-count").textContent,
-        ).toBe(shown);
+        const count = within(row).getByTestId("tracy-entry-unread-count");
+        expect(count.textContent).toBe(shown);
+        // The drawer's ground is the popover, not the strip's canvas.
+        expect(count.classList.contains("ring-popover")).toBe(true);
+        expect(count.classList.contains("ring-canvas")).toBe(false);
         expect(row.getAttribute("aria-label")).toBe(`Tracy, ${shown} unread`);
         expect(row.hasAttribute("data-unread")).toBe(true);
         expect(within(row).getByText("Tracy").className).toContain(

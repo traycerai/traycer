@@ -6,7 +6,7 @@ import type { QuestionCardAnswer } from "@/components/chat/question-card";
  * The thread a channel post opened (Tracy Bots), as the line under the post
  * shows it: how many replies, when the last one landed, whether it has a
  * reply the viewer has not read and how many, whether the bot is answering in
- * it now, and who is in it: the post's writer, and the bot once it has a reply.
+ * it now, and the authors of its stored replies where the host identifies them.
  */
 export interface ChatBotThreadLine {
   readonly participants: ReadonlyArray<StackedIdentity>;
@@ -199,8 +199,9 @@ export interface ChatBotPresentation {
     | ((requestId: string) => ChatBotFailedRecovery | null)
     | null;
   /**
-   * The turn behind a reply of the bot, by the message ids its row carries;
-   * `null` where the host does not say, and the row draws no receipt.
+   * The turn behind a row of the bot (a reply, a question or an
+   * announcement), by the message ids its row carries; `null` where the host
+   * does not say, and the row draws no receipt.
    */
   readonly replyReceipt:
     | ((messageIds: ReadonlyArray<string>) => ChatBotTurnReceipt | null)

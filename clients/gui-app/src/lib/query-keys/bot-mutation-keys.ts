@@ -19,5 +19,4 @@ export const botMutationKeys = {
   taskRunNow: () => ["bot.task.runNow"] as const,
   taskSetPaused: () => ["bot.task.setPaused"] as const,
   taskStop: () => ["bot.task.stop"] as const,
-  notificationsStop: () => ["bot.notifications.stop"] as const,
 };
