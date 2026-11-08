@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
       options: {
         readonly title: string | undefined;
         readonly source: string;
+        readonly tracyOrigin: null;
       },
     ) => void
   >(),
@@ -152,7 +153,7 @@ describe("useHistoryOpenItem while a task's deletion is in flight", () => {
     expect(mocks.openEpicFromList.mock.calls.at(0)?.slice(1)).toEqual([
       "epic-a",
       "/epics",
-      { title: "Alpha", source: "direct_ui" },
+      { title: "Alpha", source: "direct_ui", tracyOrigin: null },
     ]);
   });
 

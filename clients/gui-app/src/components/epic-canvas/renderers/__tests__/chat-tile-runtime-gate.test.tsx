@@ -111,7 +111,6 @@ function frameFor(
     wait,
     restartWait,
     reachability: reachability(status),
-    cloneAllowed: true,
     hasReadySession: false,
     sandboxFooter: false,
   };

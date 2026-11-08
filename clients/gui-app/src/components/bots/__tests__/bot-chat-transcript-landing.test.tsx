@@ -17,6 +17,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { BotTestRunnerHost } from "@/components/bots/__tests__/bot-test-runner-host";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
 import {
   afterEach,
@@ -78,6 +79,9 @@ const mocks = vi.hoisted(() => ({
   }>,
 }));
 
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => null,
+}));
 vi.mock("@/components/chat/chat-messages", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("@/components/chat/chat-messages")>();
@@ -287,18 +291,20 @@ function mountTranscript(
   const tree = (): ReactNode => (
     <StrictMode>
       <QueryClientProvider client={queryClient}>
-        <BotChatTranscript
-          botId={BOT_ID}
-          chatId={CHAT_ID}
-          hostId="host-1"
-          title="Release Bot"
-          instanceId="bot-thread:test"
-          surface={surface}
-          resolveMember={members}
-          showConnecting
-          header={null}
-          landOn={landing}
-        />
+        <BotTestRunnerHost>
+          <BotChatTranscript
+            botId={BOT_ID}
+            chatId={CHAT_ID}
+            hostId="host-1"
+            title="Release Bot"
+            instanceId="bot-thread:test"
+            surface={surface}
+            resolveMember={members}
+            showConnecting
+            header={null}
+            landOn={landing}
+          />
+        </BotTestRunnerHost>
       </QueryClientProvider>
     </StrictMode>
   );
@@ -331,6 +337,19 @@ function flashing(messageId: string): boolean {
   if (row === null) throw new Error(`no row for ${messageId}`);
   return row.dataset.navigationHighlighted === "true";
 }
+
+describe("a loaded thread transcript", () => {
+  it("keeps its replies and landing without a minimap", async () => {
+    landing = { messageId: "ask-1", sendPostId: null, visit: 1 };
+    mountTranscript(
+      [resolvedUserMessage(), otherUserMessage(), reply()],
+      THREAD_SURFACE,
+    );
+    await settleLegendList();
+    await waitFor(() => expect(flashing("ask-1")).toBe(true));
+    expect(screen.queryByTestId("chat-turn-minimap")).toBeNull();
+  });
+});
 
 describe("a transcript asked to land on a post", () => {
   it("lands on it at each visit, the same post's again once the first landing has settled and the reader has moved on", async () => {

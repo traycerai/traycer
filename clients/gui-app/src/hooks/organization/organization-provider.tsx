@@ -53,6 +53,8 @@ const EMPTY_TASK_IDS: string[] = [];
 
 interface OrganizationLifecycle {
   readonly seenFailures: Set<string>;
+  readonly commandsBeforeBaseline: Set<string>;
+  failuresInitialized: boolean;
   confirmedView: OrganizationView | null;
 }
 
@@ -120,6 +122,10 @@ export function OrganizationProvider({
     retry: false,
   });
   const scope = `${hostId}:${userId}`;
+  const lifecycle = useRef<OrganizationLifecycle | null>(null);
+  useLayoutEffect(() => {
+    lifecycle.current = createLifecycle();
+  }, [scope]);
   useLayoutEffect(() => {
     if (accountUserId === null) return;
     const state = useTabsStore.getState();
@@ -206,6 +212,32 @@ export function OrganizationProvider({
         if (previous !== null && previous !== next.historyInvalidation)
           revalidateIdentity(current);
       }
+      // Failure history is durable. Only fresh subscription/refresh answers
+      // establish the baseline; the read cache may predate this mount.
+      const currentLifecycle = lifecycle.current;
+      if (supported && currentLifecycle !== null) {
+        const failures = next.failures.filter((failure) => {
+          const id = failure.commandIds.join(",");
+          if (currentLifecycle.seenFailures.has(id)) return false;
+          currentLifecycle.seenFailures.add(id);
+          return (
+            currentLifecycle.failuresInitialized ||
+            failure.commandIds.some((commandId) =>
+              currentLifecycle.commandsBeforeBaseline.has(commandId),
+            )
+          );
+        });
+        currentLifecycle.failuresInitialized = true;
+        currentLifecycle.commandsBeforeBaseline.clear();
+        const failure = failures.at(-1);
+        if (failure)
+          toast.warning(
+            failure.reason === "conflict"
+              ? "Organization changed elsewhere. Your pending edits were discarded."
+              : "An organization edit couldn't be saved.",
+            { description: failure.message },
+          );
+      }
       const requestedIds = new Set(ids);
       queryClient.setQueryData<OrganizationView>(key, (previous) => ({
         ...next,
@@ -226,7 +258,7 @@ export function OrganizationProvider({
         },
       }));
     },
-    [key, queryClient, client, userId, hostId, revalidateIdentity],
+    [key, queryClient, client, userId, hostId, revalidateIdentity, supported],
   );
   const mutation = useHostMutation({
     client,
@@ -252,8 +284,12 @@ export function OrganizationProvider({
   const { mutateAsync } = mutation;
   const command = useCallback(
     async (action: OrganizationAction) => {
+      const commandId = crypto.randomUUID();
+      const current = lifecycle.current;
+      if (current !== null && !current.failuresInitialized)
+        current.commandsBeforeBaseline.add(commandId);
       await mutateAsync({
-        command: { commandId: crypto.randomUUID(), action },
+        command: { commandId, action },
         userId,
         hostId,
       });
@@ -266,7 +302,6 @@ export function OrganizationProvider({
     },
     [mutateAsync, client, userId, hostId],
   );
-  const lifecycle = useRef<OrganizationLifecycle | null>(null);
   // How many times this provider has tried each tab's draft group intent,
   // and which of those sends has not come back - owned by one scope, and
   // replaced wholesale when the host or account changes. A send closes over
@@ -276,9 +311,6 @@ export function OrganizationProvider({
   // Opening is a local tab transition, independent of the selected host's
   // organization projection. Switching that host must not reopen closed siblings.
   const openedTasks = useRef(new Set<string>());
-  useEffect(() => {
-    lifecycle.current = createLifecycle();
-  }, [scope]);
   // The host's own recovery evidence, and the only thing that reports a
   // session reopening after a drop or a stall: the client is NOT rebuilt for
   // either, so its identity cannot stand in for this. It both gives a
@@ -336,24 +368,6 @@ export function OrganizationProvider({
     }
     current.confirmedView = view;
   }, [query.data, supported, queryClient, lifecycle, hostId, userId]);
-  useEffect(() => {
-    const current = lifecycle.current;
-    if (!supported || current === null) return;
-    const failures = (query.data?.failures ?? []).filter((failure) => {
-      const id = `${userId}:${failure.commandIds.join(",")}`;
-      if (current.seenFailures.has(id)) return false;
-      current.seenFailures.add(id);
-      return true;
-    });
-    const failure = failures.at(-1);
-    if (failure)
-      toast.warning(
-        failure.reason === "conflict"
-          ? "Organization changed elsewhere. Your pending edits were discarded."
-          : "An organization edit couldn't be saved.",
-        { description: failure.message },
-      );
-  }, [query.data?.failures, userId, lifecycle, supported]);
   useEffect(() => {
     const current = lifecycle.current;
     if (!supported || current === null || query.data === undefined) return;
@@ -728,6 +742,8 @@ function newDraftTracking(): DraftIntentTracking {
 function createLifecycle(): OrganizationLifecycle {
   return {
     seenFailures: new Set(),
+    commandsBeforeBaseline: new Set(),
+    failuresInitialized: false,
     confirmedView: null,
   };
 }

@@ -12,6 +12,7 @@ import { StrictMode } from "react";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { BotTestRunnerHost } from "@/components/bots/__tests__/bot-test-runner-host";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AgentMessagePeer,
@@ -42,6 +43,9 @@ const mocks = vi.hoisted(() => ({
   openTile: vi.fn(() => null),
 }));
 
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => null,
+}));
 vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/lib/registries/chat-session-registry")
@@ -162,23 +166,25 @@ function mountTrunk(): void {
   render(
     <StrictMode>
       <QueryClientProvider client={new QueryClient()}>
-        <TabHostProvider hostId={HOST_ID}>
-          <TooltipProvider>
-            <BotIdentityContext value={IDENTITY}>
-              <BotSessionView
-                botId={BOT_ID}
-                hostId={HOST_ID}
-                botTitle="Tracy"
-                session={{ chatId: TRUNK_ID, threadId: null, landOn: null }}
-                threads={[]}
-                resolveMember={UNRESOLVED_BOT_MEMBERS}
-                onClose={vi.fn()}
-                onOpenChannel={vi.fn()}
-                onOpenThread={vi.fn()}
-              />
-            </BotIdentityContext>
-          </TooltipProvider>
-        </TabHostProvider>
+        <BotTestRunnerHost>
+          <TabHostProvider hostId={HOST_ID}>
+            <TooltipProvider>
+              <BotIdentityContext value={IDENTITY}>
+                <BotSessionView
+                  botId={BOT_ID}
+                  hostId={HOST_ID}
+                  botTitle="Tracy"
+                  session={{ chatId: TRUNK_ID, threadId: null, landOn: null }}
+                  threads={[]}
+                  resolveMember={UNRESOLVED_BOT_MEMBERS}
+                  onClose={vi.fn()}
+                  onOpenChannel={vi.fn()}
+                  onOpenThread={vi.fn()}
+                />
+              </BotIdentityContext>
+            </TooltipProvider>
+          </TabHostProvider>
+        </BotTestRunnerHost>
       </QueryClientProvider>
     </StrictMode>,
   );
@@ -238,6 +244,8 @@ describe("a bot's session holding an inbound agent message (no task open)", () =
       kind: "open-epic",
       epicId: "epic-task",
       includeNestedFocus: true,
+      // The card sits in this bot's session, so the task's way back is it.
+      tracyOrigin: { botId: BOT_ID },
       preparation: {
         kind: "open-tile",
         gesture: "explicit",

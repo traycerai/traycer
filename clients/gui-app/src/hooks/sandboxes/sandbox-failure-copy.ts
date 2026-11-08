@@ -10,6 +10,7 @@ import {
   SANDBOX_REFUSAL_CODE_PROVIDER_UNAVAILABLE,
   SANDBOX_REFUSAL_CODE_RENAME_UNAVAILABLE,
   SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED,
+  SANDBOX_REFUSAL_CODE_TEAM_HOST_EXISTS,
   SANDBOX_REFUSAL_CODE_TEAM_PODS_FULL,
   SANDBOX_REFUSAL_CODE_TRANSITION_CONFLICT,
   SANDBOX_REFUSAL_CODE_VERB_NOT_AVAILABLE,
@@ -88,10 +89,11 @@ const REFUSAL_COPY: ReadonlyMap<string, string> = new Map([
   ],
   [
     SANDBOX_REFUSAL_CODE_FROZEN,
-    "This sandbox is frozen because your credits ran out. Add credits to wake it.",
+    "This sandbox is out of credits. Add credits to wake it.",
   ],
   [SANDBOX_REFUSAL_CODE_NOT_FOUND, "This sandbox no longer exists."],
   [SANDBOX_REFUSAL_CODE_VERB_NOT_AVAILABLE, "This action isn't available yet."],
+  [SANDBOX_REFUSAL_CODE_TEAM_HOST_EXISTS, "The team already has a host."],
 ]);
 
 /**
@@ -121,7 +123,7 @@ export function sandboxFailureMessage(failure: SandboxControlFailure): string {
     case SANDBOX_REFUSAL_CODE_TEAM_PODS_FULL:
       return failure.message !== null && failure.message.length > 0
         ? failure.message
-        : "Every team pod is full; ask an admin to add one.";
+        : "Every team sandbox is full; ask an admin to add one.";
     default:
       return REFUSAL_COPY.get(failure.code) ?? "Traycer refused that request.";
   }

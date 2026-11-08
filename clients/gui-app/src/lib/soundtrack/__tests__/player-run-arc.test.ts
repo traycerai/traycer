@@ -9,6 +9,7 @@ import {
 } from "vitest";
 import { MIX_TUNING } from "../mix-tuning";
 import { TrackPlayer } from "../player";
+import { SoundtrackLogRelay } from "../session-log";
 import type { StemSource } from "../stems";
 import type {
   Bookend,
@@ -46,6 +47,7 @@ function layerOf(name: string, variants: number, pan: number | null): Layer {
   return {
     name,
     variants,
+    role: null,
     sublayers: 1,
     sublayerStartingOffset: null,
     pan,
@@ -100,6 +102,7 @@ function makePlayer(
     output,
     stems,
     random: () => 0.5,
+    log: new SoundtrackLogRelay(),
     silenceSeconds: [5, 5],
     resumeAt,
     onRunStart: () => undefined,
@@ -118,6 +121,7 @@ function makeFirstStatePlayer(
     output,
     stems,
     random: () => 0,
+    log: new SoundtrackLogRelay(),
     silenceSeconds: [5, 5],
     resumeAt: 0,
     onRunStart: () => undefined,
@@ -446,6 +450,7 @@ describe("TrackPlayer run arc", () => {
         { name: "Y", variants: 1 },
       ],
       sequence: ["X", "Y"],
+      role: null,
       sublayers: 1,
       sublayerStartingOffset: null,
       pan: null,
@@ -707,6 +712,7 @@ function observedPlayer(options: ObservedOptions): ObservedPlayer {
     output: options.output,
     stems: options.stems,
     random: () => 0,
+    log: new SoundtrackLogRelay(),
     silenceSeconds: [5, 5],
     resumeAt: options.resumeAt,
     onRunStart,

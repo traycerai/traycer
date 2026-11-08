@@ -24,6 +24,7 @@ import {
   ConfigurationSourceContext,
   type ConfigurationSource,
 } from "@/components/settings/environment/configuration-source";
+import { grantedEnvironmentRole } from "@traycer/protocol/host/environment/contracts";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -71,6 +72,11 @@ export function requireTeamHostClient(): HostClient<HostRpcRegistry> {
   return teamHostBoundary.client;
 }
 
+/**
+ * `effectiveRole` is the wire's spelling. `"viewer"` is the retired role, and
+ * the source it yields holds none, exactly as an inventory row naming it
+ * decodes in the app.
+ */
 export function poolSource(
   effectiveRole: "owner" | "admin" | "editor" | "viewer",
 ): ConfigurationSource {
@@ -80,7 +86,7 @@ export function poolSource(
     environmentId: "env-a",
     roomId: "room-a",
     providerHandle: "handle-a",
-    effectiveRole,
+    effectiveRole: grantedEnvironmentRole(effectiveRole),
   };
 }
 

@@ -112,6 +112,10 @@ export const AUTO_RAIL_REGION_IDS: ReadonlyArray<AutoRailRegionId> = [
   "railComments",
 ];
 
+export function isRailRegionId(id: string): id is RailRegionId {
+  return RAIL_REGION_IDS.some((candidate) => candidate === id);
+}
+
 export function isAutoRailRegionId(id: string): id is AutoRailRegionId {
   return AUTO_RAIL_REGION_IDS.some((candidate) => candidate === id);
 }
@@ -248,18 +252,35 @@ export function railStackOf(
 }
 
 /**
- * The shipped rail: the ten panels in order, no dividers (L-155), and exactly
- * one stack - Agents with Artifacts (L-166).
- *
- * That pair is the one the shipped sidebar drew together, and the owner's
- * objection was to the seven default dividers rather than to the two panels
- * sharing the body.
+ * The stack an install from before the second one was shipped never had; it
+ * keeps its rail without it (`layout-store.ts`).
  */
-export const DEFAULT_RAIL: ReadonlyArray<RailEntry> = [
-  { kind: "panel", id: "railAgents" },
-  { kind: "stack", id: railStackId(["railAgents", "railArtifacts"]) },
-  ...RAIL_REGION_IDS.slice(1).map((id): RailEntry => ({ kind: "panel", id })),
-];
+export const GIT_DIFF_PULL_REQUESTS_STACK_ID = railStackId([
+  "railGitDiff",
+  "railPullRequests",
+]);
+
+/**
+ * The shipped rail: the ten panels in order, no dividers (L-155), and two
+ * stacks (L-166): Agents with Artifacts, and Git Diff with Pull Requests. A
+ * pair shares one body so that neither takes a rail slot of its own in a task
+ * with little of it to show.
+ */
+export const DEFAULT_RAIL: ReadonlyArray<RailEntry> = RAIL_REGION_IDS.flatMap(
+  (id): ReadonlyArray<RailEntry> => {
+    const panel: RailEntry = { kind: "panel", id };
+    if (id === "railAgents") {
+      return [
+        panel,
+        { kind: "stack", id: railStackId(["railAgents", "railArtifacts"]) },
+      ];
+    }
+    if (id === "railGitDiff") {
+      return [panel, { kind: "stack", id: GIT_DIFF_PULL_REQUESTS_STACK_ID }];
+    }
+    return [panel];
+  },
+);
 
 /** The `dividerSeq` the shipped rail has used up, so the first one is `divider:1`. */
 export const DEFAULT_RAIL_DIVIDER_SEQ = 0;

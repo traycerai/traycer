@@ -30,6 +30,7 @@ import {
   sandboxSummaryFixture,
   terminalSessionFixture,
 } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 const mocks = vi.hoisted(() => ({
   report: { kind: "unknown" } as SandboxSessionReport,
@@ -145,6 +146,7 @@ describe("sandbox confirm dialogs", () => {
   afterEach(() => {
     cleanup();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useAuthStore.setState({ status: "signed-out", contextMetadata: null });
   });
 
   it("says how many sessions are running, with the caption", () => {
@@ -712,11 +714,92 @@ describe("sandbox confirm dialogs", () => {
         <SandboxKeepDialog sandbox={SANDBOX} open onOpenChange={vi.fn()} />,
       );
       expect(screen.getByTestId("sandbox-confirm-keep").textContent).toContain(
-        "on Nov 1 at 10:36 if it rests from now.",
+        "Destroyed after 7 days instead, on Nov 1 at 10:36 if it's suspended or stopped from now on.",
       );
     });
 
-    it("drops only the resting sentence from the Keep preview for a withdrawn row, keeping the two sentences that are still true", () => {
+    it("states the actual team wake payer once and leaves it out of the preview", () => {
+      mocks.configuration = {
+        kind: "team",
+        teamId: "team-a",
+        teamName: "Acme",
+        environmentId: "team-a",
+      };
+      useAuthStore.setState({
+        status: "signed-in",
+        contextMetadata: { userId: "viewer", username: "viewer" },
+      });
+      const sandbox = sandboxSummaryFixture({
+        displayName: NAME,
+        state: "awake",
+        environmentId: "team-a",
+        wakePayer: { userId: "priya", displayName: "Priya" },
+      });
+      render(
+        <SandboxKeepDialog sandbox={sandbox} open onOpenChange={vi.fn()} />,
+      );
+
+      const dialog = screen.getByTestId("sandbox-confirm-keep");
+      expect(
+        within(dialog).getAllByText("Paid by Priya while awake."),
+      ).toHaveLength(1);
+      expect(dialog.textContent).not.toContain("who pays are unchanged");
+      expect(dialog.textContent).not.toContain("Paid by you while awake.");
+    });
+
+    it("uses you once when the viewer is the wake payer", () => {
+      mocks.configuration = {
+        kind: "team",
+        teamId: "team-a",
+        teamName: "Acme",
+        environmentId: "team-a",
+      };
+      useAuthStore.setState({
+        status: "signed-in",
+        contextMetadata: { userId: "viewer", username: "viewer" },
+      });
+      const sandbox = sandboxSummaryFixture({
+        displayName: NAME,
+        state: "awake",
+        environmentId: "team-a",
+        wakePayer: { userId: "viewer", displayName: "Viewer" },
+      });
+      render(
+        <SandboxKeepDialog sandbox={sandbox} open onOpenChange={vi.fn()} />,
+      );
+
+      expect(
+        within(screen.getByTestId("sandbox-confirm-keep")).getAllByText(
+          "Paid by you while awake.",
+        ),
+      ).toHaveLength(1);
+    });
+
+    it("counts a changed resting period from the pinned now and names the suspended or stopped state", () => {
+      render(
+        <SandboxIdleSettingsDialog
+          sandbox={sandboxSummaryFixture({
+            displayName: NAME,
+            state: "awake",
+            destroyAfterRestingMinutes: 10_080,
+          })}
+          open
+          onOpenChange={vi.fn()}
+        />,
+      );
+      fireEvent.change(
+        screen.getByTestId("sandbox-idle-settings-resting-value"),
+        { target: { value: "2" } },
+      );
+
+      expect(
+        screen.getByTestId("sandbox-idle-settings-preview").textContent,
+      ).toBe(
+        "Destroyed on Oct 27 at 10:36 if it's suspended or stopped from now on.",
+      );
+    });
+
+    it("drops only the idle sentence from the Keep preview for a withdrawn row, keeping the two sentences that are still true", () => {
       render(
         <SandboxKeepDialog
           sandbox={sandboxSummaryFixture({
@@ -730,12 +813,13 @@ describe("sandbox confirm dialogs", () => {
       const text = screen.getByTestId("sandbox-confirm-keep").textContent;
       expect(text).toContain("Stops deleting itself when idle.");
       expect(text).toContain("Paid by you while awake.");
-      expect(text).not.toContain("resting days");
+      expect(text.match(/Paid by you while awake\./gu)).toHaveLength(1);
+      expect(text).not.toContain("idle days");
       expect(text).not.toContain("Destroyed after");
     });
   });
 
-  it("previews a resting period of Never as three whole sentences", () => {
+  it("previews an idle period of Never as three whole sentences", () => {
     render(
       <SandboxIdleSettingsDialog
         sandbox={sandboxSummaryFixture({
@@ -755,7 +839,7 @@ describe("sandbox confirm dialogs", () => {
     expect(
       screen.getByTestId("sandbox-idle-settings-preview").textContent,
     ).toBe(
-      "Kept until you destroy it. Never applies to idle cleanup. Out-of-credit sandboxes are deleted after 30 days frozen.",
+      "Kept until you destroy it. Never applies to idle cleanup. Out-of-credit sandboxes are deleted after 30 days.",
     );
   });
 

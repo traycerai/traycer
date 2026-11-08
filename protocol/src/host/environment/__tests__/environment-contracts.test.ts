@@ -50,6 +50,10 @@ import {
   environmentListUpgradeV10ToV11,
   environmentListV10,
   environmentListV11,
+  environmentEffectiveRoleSchema,
+  environmentMemberRoleSchema,
+  grantedEnvironmentRole,
+  grantedTeamMemberRole,
   environmentMembersInviteV10,
   environmentMembersNoticeSeenV10,
   environmentInvitationsAcceptV10,
@@ -63,7 +67,6 @@ import {
   type EnvironmentMembersResponseV11,
 } from "@traycer/protocol/host/environment/contracts";
 import {
-  ENVIRONMENT_MOVE_ITEM_CHOICE_PREFIX,
   environmentMoveAcceptV10,
   environmentMoveItemChoiceKey,
   environmentMovePlanUpgradeV10ToV11,
@@ -354,6 +357,39 @@ describe("environment.setMainBot protocol contract", () => {
   });
 });
 
+/**
+ * The retired `viewer` role stays in the DECODABLE vocabulary so that released
+ * peers and existing data keep parsing; only the granted roles lose it. A peer
+ * that reads a role the decoder rejects fails the whole response, so removing
+ * the value from these enums breaks every released client.
+ */
+describe("the retired viewer role still decodes and grants nothing", () => {
+  it("parses viewer in the environment's effective-role and member-role enums", () => {
+    expect(environmentEffectiveRoleSchema.parse("viewer")).toBe("viewer");
+    expect(environmentMemberRoleSchema.parse("viewer")).toBe("viewer");
+  });
+
+  it("decodes an @1.1 environment and a member naming it, then resolves both to no authority", () => {
+    const team = environmentListV11.responseSchema.parse({
+      environments: [
+        {
+          ...TEAM,
+          effectiveRole: "viewer",
+          kind: "team",
+          hostCount: 1,
+          providerHandle: "acme",
+        },
+      ],
+    }).environments[0];
+    expect(grantedEnvironmentRole(team.effectiveRole)).toBeNull();
+    expect(grantedEnvironmentRole("editor")).toBe("editor");
+    expect(grantedEnvironmentRole("superuser")).toBeNull();
+    expect(grantedTeamMemberRole("viewer")).toBeNull();
+    expect(grantedTeamMemberRole("admin")).toBe("admin");
+    expect(grantedTeamMemberRole("superuser")).toBeNull();
+  });
+});
+
 describe("environment.list@1.1, environment.host.list@1.1 and environment.members@1.1 upgrade from @1.0 through the registry", () => {
   const ONE_ZERO = { major: 1, minor: 0 } as const;
   const ONE_ONE = { major: 1, minor: 1 } as const;
@@ -387,6 +423,14 @@ describe("environment.list@1.1, environment.host.list@1.1 and environment.member
         },
       ],
     });
+    // The retired role the upgrade names is no authority: a reader that gates
+    // on it gets `null`, never a read-only grant, and the personal row keeps
+    // its own.
+    expect(
+      upgraded.environments.map((environment) =>
+        grantedEnvironmentRole(environment.effectiveRole),
+      ),
+    ).toEqual(["owner", null]);
     // The upgraded answer is a valid @1.1 answer, and the request is untouched.
     expect(environmentListV11.responseSchema.parse(upgraded)).toEqual(upgraded);
     expect(
@@ -571,6 +615,12 @@ describe("environment.list@1.1, environment.host.list@1.1 and environment.member
       legacyRoleNoticeSeenAt: null,
       legacyMembers: [],
     });
+    // Each upgraded member names the retired role, which holds no seat.
+    expect(
+      upgraded.members.map((member) =>
+        grantedTeamMemberRole(member.effectiveRole),
+      ),
+    ).toEqual([null, null]);
   });
 
   it("upgrades an environment.members@1.1 page to @1.2 with each member's email null, and parses an @1.2 email", () => {
@@ -712,7 +762,7 @@ const REDESIGN_WIRE_CASES: readonly RedesignWireCase[] = [
     contract: environmentMoveAcceptV10,
     request: {
       planHash: "h1",
-      keyChoices: [{ key: "TOKEN", choice: "secret" }],
+      keyChoices: [{ key: "item:variable:TOKEN", choice: "stays" }],
     },
     badRequest: {
       planHash: "h1",
@@ -1395,6 +1445,9 @@ describe("the environments redesign's new @1.0 methods", () => {
         staysOnThisComputer: [leaky],
         alreadyInPersonal: [leaky],
         differsMasked: [leaky],
+        // No plan this host builds puts a row here, but the released schema
+        // still declares the group, and a value is stripped out of a row in
+        // it exactly as in every other.
         looksLikeAKey: [leaky],
       },
     });
@@ -1409,7 +1462,7 @@ describe("the environments redesign's new @1.0 methods", () => {
     expect(preview.needsChoice[0].row).toEqual(MOVE_ROW);
   });
 
-  it("opens environment.move.plan@1.1 with sameNameInPersonal, which a @1.0 answer upgrades to empty", () => {
+  it("opens environment.move.plan@1.1 with guideDiffers, which a @1.0 answer upgrades to false", () => {
     const line = hostRpcRegistry["environment.move.plan"][1];
     expect(line.versions[1].contract).toBe(environmentMovePlanV11);
     expect(line.versions[1].upgradeFromPreviousVersion).toBe(
@@ -1429,18 +1482,8 @@ describe("the environments redesign's new @1.0 methods", () => {
       },
     });
     const upgraded = environmentMovePlanUpgradeV10ToV11.upgradeResponse(v10);
-    expect(upgraded.rows.sameNameInPersonal).toEqual([]);
     expect(upgraded.guideDiffers).toBe(false);
     expect(upgraded.rows.moves).toEqual([MOVE_ROW]);
-    const leaky = { ...MOVE_ROW, value: "sk-live-123" };
-    const v11 = environmentMovePlanV11.responseSchema.parse({
-      ...v10,
-      rows: { ...v10.rows, sameNameInPersonal: [leaky] },
-    });
-    expect(v11.rows.sameNameInPersonal).toEqual([MOVE_ROW]);
-    expect(
-      environmentMovePlanV11.responseSchema.parse(v10).rows.sameNameInPersonal,
-    ).toEqual([]);
     expect(environmentMovePlanV11.responseSchema.parse(v10).guideDiffers).toBe(
       false,
     );
@@ -1489,9 +1532,9 @@ describe("the environments redesign's new @1.0 methods", () => {
   });
 
   it("sends a Moves row's choice under item:<kind>:<key>", () => {
-    const key = environmentMoveItemChoiceKey("variable", "X");
-    expect(key).toBe("item:variable:X");
-    expect(key.startsWith(ENVIRONMENT_MOVE_ITEM_CHOICE_PREFIX)).toBe(true);
+    expect(environmentMoveItemChoiceKey("variable", "X")).toBe(
+      "item:variable:X",
+    );
     expect(
       environmentMoveItemChoiceKey("env_override", "claude-code:A_B"),
     ).toBe("item:env_override:claude-code:A_B");

@@ -3,7 +3,7 @@ import type { LocalHistoryReadResponse } from "@traycer/protocol/host/epic/local
 import type {
   ListTaskLight,
   ListTasksResponse,
-  PermissionRole,
+  WirePermissionRole,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import {
   composeHistoryPage,
@@ -17,7 +17,7 @@ import {
 function row(
   id: string,
   overrides: {
-    readonly role: PermissionRole | null;
+    readonly role: WirePermissionRole | null;
     readonly updatedAt: number;
     readonly recentAt: number | undefined;
     readonly pinned: boolean | undefined;

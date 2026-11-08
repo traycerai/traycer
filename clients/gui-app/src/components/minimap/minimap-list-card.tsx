@@ -38,9 +38,11 @@ export function MinimapListCard({
   const currentRowRef = useRef<HTMLButtonElement | null>(null);
   const rowRefs = useRef(new Map<number, HTMLButtonElement>());
 
+  // Position the list when the card opens. A later currentIndex change comes
+  // from navigating the content and must not move the list under the pointer.
   useLayoutEffect(() => {
     currentRowRef.current?.scrollIntoView({ block: "nearest" });
-  }, [currentIndex]);
+  }, []);
 
   const moveFocus = (index: number): void => {
     const next = Math.max(0, Math.min(index, items.length - 1));

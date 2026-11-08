@@ -1,13 +1,16 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import type { EnvironmentInvitation } from "@traycer/protocol/host/environment/contracts";
+import {
+  grantedTeamMemberRole,
+  type EnvironmentInvitation,
+} from "@traycer/protocol/host/environment/contracts";
 import {
   ConfigurationSourceContext,
   configurationRoleOf,
   type ConfigurationSource,
 } from "@/components/settings/environment/configuration-source";
-import { viewerCanSeeLine } from "@/components/settings/members/copy";
+import { seeButNotChangeLine } from "@/components/settings/members/copy";
 import { InviteAcceptDialog } from "@/components/settings/members/invite-accept-dialog";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -62,12 +65,17 @@ interface AnsweredQuestion {
 
 /**
  * The team invited them instead, so its settings are an Accept away — as much
- * of them as the invited role is given. A viewer's invitation promises reading
- * and nothing more.
+ * of them as the invited role is given.
+ *
+ * The role is RESOLVED rather than read literally. An invitation on the retired
+ * view-only role is no longer offered, but a client can be newer than the
+ * service that stops offering it, and the promise is the part that must not be
+ * wrong: a seat that grants nothing must not be sold as one that can change
+ * anything.
  */
 function invitedInsteadLine(invitation: EnvironmentInvitation): string {
   const lead = `You're invited to ${invitation.teamName}. Accept to see`;
-  return invitation.role === "viewer"
+  return grantedTeamMemberRole(invitation.role) === null
     ? `${lead} its settings.`
     : `${lead} and change its settings.`;
 }
@@ -184,9 +192,9 @@ export function ConfigurationSourceBoundary(props: {
       key={JSON.stringify([viewerId, descriptor.environmentId])}
       value={source}
     >
-      {source.kind === "pool" && source.effectiveRole === "viewer" ? (
+      {source.kind === "pool" && source.effectiveRole === null ? (
         <p className="px-5 pt-5 text-ui-sm text-muted-foreground">
-          {viewerCanSeeLine(descriptor.label)}
+          {seeButNotChangeLine(descriptor.label)}
         </p>
       ) : null}
       {props.children}

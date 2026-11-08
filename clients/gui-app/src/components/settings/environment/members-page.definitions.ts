@@ -7,6 +7,6 @@ export const MEMBERS = defineSettingsSection("members", {
     availableWhen: alwaysAvailable,
     label: "Members",
     description: "Who is in this team and what each person can change.",
-    keywords: ["team", "invite", "role", "admin", "editor", "viewer", "seat"],
+    keywords: ["team", "invite", "role", "admin", "editor", "seat"],
   },
 });

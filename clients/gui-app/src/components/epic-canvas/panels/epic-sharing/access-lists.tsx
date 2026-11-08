@@ -10,12 +10,7 @@ import {
   type ReportIssueContext,
 } from "@/lib/report-issue-context";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  ROLE_PILL_CLASS,
-  RoleBadge,
-  RoleDropdown,
-  RoleOrBadge,
-} from "./role-control";
+import { ROLE_PILL_CLASS, RoleBadge, RoleDropdown } from "./role-control";
 import type {
   OwnerTeamRow,
   TeamPendingState,
@@ -24,7 +19,10 @@ import type {
   SharingAccessPermission,
 } from "./types";
 import type { EpicCollaboratorView } from "@/hooks/epics/use-epic-collaborators-query";
-import { type AssignableCollaboratorRole } from "@/lib/epic-collaborator-roles";
+import {
+  roleChangeHasTarget,
+  type AssignableCollaboratorRole,
+} from "@/lib/epic-collaborator-roles";
 import { formatGithubHandle } from "@/lib/epic-invites";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -51,16 +49,7 @@ export interface TeamsAccessProps {
   readonly rows: ReadonlyArray<TeamRow>;
   readonly accessPermission: SharingAccessPermission;
   readonly pending: TeamPendingState;
-  readonly teamRolesById: Readonly<Record<string, AssignableCollaboratorRole>>;
-  readonly onPendingTeamRoleChange: (
-    teamId: string,
-    role: AssignableCollaboratorRole,
-  ) => void;
   readonly onShareTeam: (team: TeamRow) => void;
-  readonly onRoleChange: (
-    team: TeamRow,
-    newRole: AssignableCollaboratorRole,
-  ) => void;
   readonly onRevokeRequest: (team: TeamRow) => void;
 }
 
@@ -178,17 +167,9 @@ export function TeamsAccess(props: TeamsAccessProps) {
           isOwner={props.accessPermission === "owner"}
           isPending={props.pending.anyMutation}
           isSharePending={props.pending.shareTeamId === row.teamId}
-          isRoleUpdatePending={props.pending.roleTeamId === row.teamId}
           isRevokePending={props.pending.revokeTeamId === row.teamId}
-          pendingRole={props.teamRolesById[row.teamId] ?? "editor"}
-          onPendingRoleChange={(role) => {
-            props.onPendingTeamRoleChange(row.teamId, role);
-          }}
           onShare={() => {
             props.onShareTeam(row);
-          }}
-          onRoleChange={(role) => {
-            props.onRoleChange(row, role);
           }}
           onRevoke={() => {
             props.onRevokeRequest(row);
@@ -383,23 +364,11 @@ function TeamAccessRow(props: {
   isOwner: boolean;
   isPending: boolean;
   isSharePending: boolean;
-  isRoleUpdatePending: boolean;
   isRevokePending: boolean;
-  pendingRole: AssignableCollaboratorRole;
-  onPendingRoleChange: (role: AssignableCollaboratorRole) => void;
   onShare: () => void;
-  onRoleChange: (role: AssignableCollaboratorRole) => void;
   onRevoke: () => void;
 }) {
-  const {
-    row,
-    isOwner,
-    isPending,
-    isSharePending,
-    isRoleUpdatePending,
-    isRevokePending,
-    pendingRole,
-  } = props;
+  const { row, isOwner, isPending, isSharePending, isRevokePending } = props;
   const initials = row.name.slice(0, 1).toUpperCase();
   const memberLabel =
     row.kind === "shared" ? buildMemberLabel(row.members.length) : "Not shared";
@@ -425,14 +394,11 @@ function TeamAccessRow(props: {
       </div>
       {row.kind === "shared" ? (
         <>
-          <RoleOrBadge
+          <RoleBadge
             value={row.role}
-            canChange={isOwner}
-            disabled={isPending}
-            isPending={isRoleUpdatePending}
-            ariaLabel={`Change role for ${row.name}`}
-            testId="team-role-select"
-            onChange={props.onRoleChange}
+            testId="team-role-badge"
+            ariaLabel={undefined}
+            tooltip={undefined}
           />
           {isOwner ? (
             <Button
@@ -460,15 +426,6 @@ function TeamAccessRow(props: {
         </>
       ) : (
         <>
-          <RoleOrBadge
-            value={pendingRole}
-            canChange={isOwner}
-            disabled={isPending}
-            isPending={false}
-            ariaLabel={`Role for ${row.name}`}
-            testId="team-pending-role-select"
-            onChange={props.onPendingRoleChange}
-          />
           {isOwner ? (
             <Button
               type="button"
@@ -512,7 +469,7 @@ function CollaboratorRoleControl(props: {
     onRoleChange,
   } = props;
 
-  if (canChangeRole) {
+  if (canChangeRole && roleChangeHasTarget(collaborator.role)) {
     return (
       <RoleDropdown
         value={collaborator.role}

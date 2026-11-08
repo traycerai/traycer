@@ -34,4 +34,5 @@ export const botSlackMutationKeys = {
   register: (botId: string) => ["bot.slack.register", botId] as const,
   installUrl: (botId: string) => ["bot.slack.installUrl", botId] as const,
   disconnect: (botId: string) => ["bot.slack.disconnect", botId] as const,
+  dms: (botId: string) => ["bot.slack.dms", botId] as const,
 };

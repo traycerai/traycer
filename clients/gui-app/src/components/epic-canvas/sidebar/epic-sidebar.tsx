@@ -1731,15 +1731,20 @@ function SidebarBulkDeleteController(props: {
           return found === null ? [] : [found];
         });
         if (openTargets.length > 0) {
-          navigateNested(props.epicId, props.tabId, () => {
-            openTargets.forEach((found) => {
-              closeCanvasTab(props.tabId, found.paneId, found.instanceId);
-            });
-            const canvas =
-              useEpicCanvasStore.getState().canvasByTabId[props.tabId] ??
-              EMPTY_CANVAS;
-            return getCurrentNestedFocusTarget(canvas);
-          });
+          navigateNested(
+            props.epicId,
+            props.tabId,
+            () => {
+              openTargets.forEach((found) => {
+                closeCanvasTab(props.tabId, found.paneId, found.instanceId);
+              });
+              const canvas =
+                useEpicCanvasStore.getState().canvasByTabId[props.tabId] ??
+                EMPTY_CANVAS;
+              return getCurrentNestedFocusTarget(canvas);
+            },
+            "user",
+          );
         }
         targets.forEach((target, index) => {
           if (
@@ -2189,6 +2194,7 @@ function TreePanelActions(props: TreePanelActionsProps) {
               "explicit",
               "direct_ui",
             ),
+            "user",
           );
         },
         onBeforeOpen,
@@ -2286,7 +2292,6 @@ function TreePanelActions(props: TreePanelActionsProps) {
   const artifactsDisabledTooltip = mutationDisabledHint(
     permissionRole,
     isDisconnected,
-    "create artifacts",
   );
   const artifactsAddDisabled = !canMutate || addIsPending;
   const artifactsPresentation = resolveDisabledPresentation(
@@ -2309,11 +2314,7 @@ function TreePanelActions(props: TreePanelActionsProps) {
         parentId={null}
         size="icon-sm"
         disabled={!canMutate || addIsPending}
-        disabledTooltip={mutationDisabledHint(
-          permissionRole,
-          isDisconnected,
-          "create agents",
-        )}
+        disabledTooltip={mutationDisabledHint(permissionRole, isDisconnected)}
         triggerLabel={props.addLabel}
         triggerTestId={props.triggerTestId}
         actionRevealClassName=""
@@ -2685,6 +2686,9 @@ function SidebarBulkSelectionActions() {
       format,
       archive: true,
       archiveTitle: meta?.epicLight?.title ?? "Traycer",
+      // Exactly the checked rows. The archive still lays them out as the
+      // tree; nested export is the row menu's explicit choice.
+      includeNested: false,
     });
   };
   return (

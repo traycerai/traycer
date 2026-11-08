@@ -7,6 +7,7 @@ import {
   RETRY_LABEL,
   REVOKE_LABEL,
   ROLE_LABELS,
+  roleLabelOf,
   memberDetailLine,
   memberDisplayName,
   memberRoleAriaLabel,
@@ -49,9 +50,10 @@ export function MemberRow(props: {
   const title = memberRowTitle(props.member, props.isSelf);
   const pending = props.member.inviteState === "pending";
   const beingRemoved = props.member.removalState !== "none";
-  const showRoleSelect =
-    props.viewerIsAdmin && !props.isLastAdmin && !beingRemoved;
-  const showRemove = showRoleSelect;
+  const showRemove = props.viewerIsAdmin && !props.isLastAdmin && !beingRemoved;
+  // A seat with no authority has no role to move: the picker has nothing to
+  // show it as, and what an admin does with such a row is remove it.
+  const showRoleSelect = showRemove && props.member.effectiveRole !== null;
   const actionLabel = pending ? REVOKE_LABEL : REMOVE_LABEL;
   const detail = memberDetailLine(props.member, {
     isSelf: props.isSelf,
@@ -116,7 +118,7 @@ export function MemberRow(props: {
           />
         ) : (
           <span className="text-ui-sm text-muted-foreground">
-            {ROLE_LABELS[props.member.effectiveRole]}
+            {roleLabelOf(props.member.effectiveRole)}
           </span>
         )}
         {props.checkingRole === null ? null : (

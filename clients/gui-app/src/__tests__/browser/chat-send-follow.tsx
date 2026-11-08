@@ -157,8 +157,6 @@ interface ScrollProbe {
   readonly promptBottom: number | null;
   readonly rows: number;
   readonly lastRowKey: string | null;
-  /** Every rendered row's key in order: the row shape the layout hold rides. */
-  readonly rowKeys: string;
 }
 
 interface ProbeWindow extends Window {
@@ -578,7 +576,6 @@ function readProbe(): ScrollProbe {
     promptBottom: bounds.bottom,
     rows: rowEls.length,
     lastRowKey: rowEls.at(-1)?.dataset.messageId ?? null,
-    rowKeys: rowEls.map((el) => el.dataset.rowKey ?? "").join("|"),
   };
 }
 
@@ -1094,6 +1091,7 @@ export function Fixture(): ReactElement {
                   sendDisabled={false}
                   sendDisabledHint={null}
                   mentionRoots={[]}
+                  runWorkingDirectory={null}
                   fallbackToGlobalMentionRoots={false}
                   currentEpicId={EPIC_ID}
                   viewTabId="view-tab"

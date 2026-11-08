@@ -27,12 +27,17 @@ export function EpicConnectionToasts(props: EpicConnectionToastsProps) {
 }
 
 /**
- * Surfaces role upgrade/downgrade toasts on live permission transitions.
- * The *first* role the tab ever sees is the initial snapshot - we skip
- * it so opening a tab as viewer does not fire a "you can no longer edit"
- * toast. Only transitions that happen after the tab has a real role are
- * considered a live change. `permissionRole === null` (full revoke) is
- * handled upstream by the access-lost banner and is not re-toasted here.
+ * Surfaces role-change toasts on live permission transitions.
+ *
+ * The *first* role the tab ever sees is the initial snapshot - we skip it so
+ * opening a tab does not toast the role it opened on. Only transitions that
+ * happen after the tab has a real role are a live change.
+ * `permissionRole === null` (full revoke) is handled upstream by the
+ * access-lost banner and is not re-toasted here.
+ *
+ * Both remaining roles may write, so neither direction changes what the person
+ * can do to the task's contents; the move is reported because it changes who
+ * may share it and who may delete it.
  */
 function useRoleChangeToasts(
   role: PermissionRole | null,
@@ -61,29 +66,12 @@ function syncRoleChangeToasts(input: RoleChangeToastsInput): void {
   if (role === null) return;
   if (prior === null) return;
   if (prior === role) return;
-  const gainedWrite =
-    (prior === "viewer" && role !== "viewer") ||
-    (prior === "editor" && role === "owner");
-  const lostWrite = prior !== "viewer" && role === "viewer";
-  // Upgrade and downgrade share one channel id per epic: a rapid up-then-down
-  // (or repeated change) collapses to the latest role instead of stacking.
+  // Both directions share one channel id per epic: a rapid up-then-down (or
+  // repeated change) collapses to the latest role instead of stacking.
   const channel = epicRoleToast(epicId);
-  if (gainedWrite) {
-    channel.success(roleUpgradeMessage(role));
+  if (role === "owner") {
+    channel.success("Your role on this Epic is now Owner.");
     return;
   }
-  if (prior === "owner" && role === "editor") {
-    channel.info("Your role on this Epic is now Editor.");
-    return;
-  }
-  if (lostWrite) {
-    channel.warning(
-      "Your role on this Epic is now Viewer. Pending edits were discarded.",
-    );
-  }
-}
-
-function roleUpgradeMessage(role: PermissionRole): string {
-  if (role === "owner") return "Your role on this Epic is now Owner.";
-  return "Your role on this Epic is now Editor.";
+  channel.info("Your role on this Epic is now Editor.");
 }

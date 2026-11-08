@@ -38,6 +38,7 @@ function layer(
   return {
     name: `L${String(variants)}x${String(sublayers)}`,
     variants,
+    role: null,
     sublayers,
     sublayerStartingOffset: offset,
     pan: null,

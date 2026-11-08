@@ -154,6 +154,7 @@ describe("<FileTree /> nested focus navigation", () => {
       "epic-1",
       tabId,
       expect.any(Function),
+      "user",
     );
   });
 
@@ -167,6 +168,7 @@ describe("<FileTree /> nested focus navigation", () => {
       "epic-1",
       tabId,
       expect.any(Function),
+      "user",
     );
   });
 

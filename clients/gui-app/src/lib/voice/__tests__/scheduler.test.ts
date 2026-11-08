@@ -93,6 +93,7 @@ function item(
     priority: "focused",
     text: `reply ${id}`,
     delegationId: `d-${id}`,
+    retry: true,
     confirmWords: ["tracy"],
     onDelivered: null,
     onGivenUp: null,
@@ -743,7 +744,8 @@ describe("withdraw", () => {
     scheduler.enqueue(item("a", {}));
     scheduler.enqueue(item("b", {}));
 
-    scheduler.withdraw("a");
+    expect(scheduler.withdraw("a")).toBe("unappended");
+    expect(scheduler.withdraw("a")).toBe("absent");
     clock.advance(INPUT_ACTIVE_WINDOW_MS);
 
     expect(appended).toEqual([{ text: "reply b", delegationId: "d-b" }]);
@@ -755,7 +757,7 @@ describe("withdraw", () => {
     scheduler.enqueue(item("a", { onDelivered, onGivenUp }));
     expect(appended).toHaveLength(1);
 
-    scheduler.withdraw("a");
+    expect(scheduler.withdraw("a")).toBe("appended");
     clock.advance(CONFIRM_WINDOW_MS * (MAX_DELIVERY_ATTEMPTS + 1));
     // Even the words it was waiting for prove nothing now.
     scheduler.noteOutputTranscript("Tracy says hello");
@@ -764,6 +766,25 @@ describe("withdraw", () => {
     expect(onDelivered).not.toHaveBeenCalled();
     expect(onGivenUp).not.toHaveBeenCalled();
     expect(scheduler.pendingCount()).toBe(0);
+  });
+
+  it("reports an appended item waiting for retry", () => {
+    scheduler.enqueue(item("a", {}));
+    scheduler.setReady(false);
+    clock.advance(CONFIRM_WINDOW_MS);
+    expect(appended).toHaveLength(1);
+    expect(scheduler.withdraw("a")).toBe("appended");
+    scheduler.setReady(true);
+    expect(appended).toHaveLength(1);
+  });
+
+  it("reports an appended item queued after suspension refunded its attempt", () => {
+    scheduler.enqueue(item("a", {}));
+    scheduler.setReady(false);
+    scheduler.suspendInFlight();
+    expect(scheduler.withdraw("a")).toBe("appended");
+    scheduler.setReady(true);
+    expect(appended).toHaveLength(1);
   });
 
   it("lets the next item go once the playback facts are clear, without waiting out the confirm window", () => {
@@ -887,6 +908,56 @@ describe("a bare backchannel", () => {
     scheduler.noteOutputTranscript(" The deployment completed");
     expect(delivered).toBe(1);
     expect(scheduler.pendingCount()).toBe(0);
+  });
+});
+
+describe("single-use speech", () => {
+  it("settles an unconfirmed appended item after one deadline without requeueing", () => {
+    const onGivenUp = vi.fn();
+    scheduler.enqueue(item("hold", { retry: false, onGivenUp }));
+    scheduler.noteOutputTranscript("One moment.");
+    clock.advance(CONFIRM_WINDOW_MS);
+    expect(scheduler.pendingCount()).toBe(0);
+    expect(scheduler.withdraw("hold")).toBe("absent");
+    expect(onGivenUp).toHaveBeenCalledTimes(1);
+    clock.advance(CONFIRM_WINDOW_MS * 2);
+    expect(appended).toEqual([{ text: "reply hold", delegationId: "d-hold" }]);
+  });
+
+  it("keeps a never-appended item through suspension and handoff for its first append", () => {
+    scheduler.setReady(false);
+    scheduler.enqueue(item("hold", { retry: false }));
+    scheduler.suspendInFlight();
+    scheduler.handoff();
+    expect(appended).toEqual([]);
+    scheduler.setReady(true);
+    expect(appended).toEqual([{ text: "reply hold", delegationId: null }]);
+  });
+
+  it("drains an appended item across suspension without requeueing it", () => {
+    scheduler.enqueue(item("hold", { retry: false }));
+    scheduler.enqueue(item("reply", {}));
+    scheduler.setReady(false);
+    scheduler.suspendInFlight();
+    scheduler.setReady(true);
+    expect(appended.map((entry) => entry.text)).toEqual(["reply hold"]);
+    scheduler.noteOutputTranscript("One moment.");
+    clock.advance(OUTPUT_HANGOVER_MS);
+    expect(appended.map((entry) => entry.text)).toEqual([
+      "reply hold",
+      "reply reply",
+    ]);
+  });
+
+  it("does not requeue an appended item on handoff", () => {
+    scheduler.enqueue(item("hold", { retry: false }));
+    scheduler.enqueue(item("reply", {}));
+    scheduler.handoff();
+    scheduler.setReady(true);
+    expect(appended).toEqual([
+      { text: "reply hold", delegationId: "d-hold" },
+      { text: "reply reply", delegationId: null },
+    ]);
   });
 });
 

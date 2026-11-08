@@ -195,6 +195,7 @@ vi.mock("@/components/layout/tabs/use-tracy-entry-signals", () => ({
 const rowSpies = vi.hoisted(() => ({
   openHistory: vi.fn(),
   openNotifications: vi.fn(),
+  activateTabIntent: vi.fn<(navigate: unknown, intent: unknown) => void>(),
 }));
 
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
@@ -208,9 +209,11 @@ vi.mock("@/lib/commands/actions/new-epic", () => ({
   openNewEpicDraft: () => ({ kind: "draft" }),
 }));
 
-vi.mock("@/lib/tab-navigation", () => ({
+vi.mock("@/lib/tab-navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/tab-navigation")>()),
   draftTabIntent: (value: unknown) => value,
   navigateToTabIntent: () => undefined,
+  activateTabIntent: rowSpies.activateTabIntent,
 }));
 
 import {
@@ -415,6 +418,7 @@ describe("MobileNavDrawer", () => {
     useDesktopDialogStore.getState().close();
     rowSpies.openHistory.mockClear();
     rowSpies.openNotifications.mockClear();
+    rowSpies.activateTabIntent.mockClear();
     queryClient.clear();
   });
   afterEach(() => {
@@ -1414,6 +1418,22 @@ describe("MobileNavDrawer", () => {
       // The shared verbose label stays on the item for the landing list / tray;
       // this surface must not render it.
       expect(rows[1]?.textContent).not.toContain("about 1 month ago");
+    });
+
+    it("opens a row's task as a manual list open, with no way back to Tracy", async () => {
+      testState.items = [
+        historyItem({ id: "a", title: "hello", updatedAtMs: NOW_MS - DAY_MS }),
+      ];
+      renderDrawer();
+      const rows = await screen.findAllByTestId("mobile-nav-task-row");
+
+      fireEvent.click(rows[0]);
+
+      expect(rowSpies.activateTabIntent.mock.calls.at(0)?.[1]).toMatchObject({
+        kind: "open-epic",
+        epicId: "a",
+        tracyOrigin: null,
+      });
     });
 
     it("finishes an active first-task guide when a row opens a task", async () => {

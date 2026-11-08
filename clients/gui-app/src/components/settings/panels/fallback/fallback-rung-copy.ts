@@ -41,7 +41,7 @@ import { FRESH_SESSION_HELPER } from "@/components/chat/fallback/fallback-copy";
 export interface FallbackRungCopy {
   /** The step's own line in "Try these in order". */
   readonly label: string;
-  /** One line under it saying what the step actually does. */
+  /** The step's explanation in Help. */
   readonly description: string;
   /**
    * The short form used as a column chip in the per-failure overrides matrix,

@@ -81,6 +81,15 @@ function summaryOf(
   };
 }
 
+/** The notice for a row whose resolved state is the state its summary carries. */
+function noticeOfAgreeingRow(
+  summary: SandboxSummary,
+  now: number,
+  filesOutcomeStated: boolean,
+): string | null {
+  return sandboxSessionNotice(summary, summary.state, now, filesOutcomeStated);
+}
+
 /** The day a loss is announced for, spelled from its instant the way a person reads it. */
 function dayOf(at: number): string {
   return new Date(at).toLocaleDateString(undefined, {
@@ -94,7 +103,7 @@ describe("the restart of a wake that never answered", () => {
   it.each(["starting", "resuming"] as const)(
     "says the sandbox is restarting while it is %s",
     (state) => {
-      const notice = sandboxSessionNotice(
+      const notice = noticeOfAgreeingRow(
         summaryOf(state, { operation: operationOf(state, "wake-retry") }),
         NOW,
         false,
@@ -107,7 +116,7 @@ describe("the restart of a wake that never answered", () => {
   it.each(["awake", "suspended", "stopping", "suspending"] as const)(
     "does not say it while the row is %s, the state word being the card's own",
     (state) => {
-      const notice = sandboxSessionNotice(
+      const notice = noticeOfAgreeingRow(
         summaryOf(state, { operation: operationOf(state, "wake-retry") }),
         NOW,
         false,
@@ -119,7 +128,7 @@ describe("the restart of a wake that never answered", () => {
 
   it("says nothing while the row is starting for an ordinary wake", () => {
     expect(
-      sandboxSessionNotice(
+      noticeOfAgreeingRow(
         summaryOf("starting", { operation: operationOf("starting", null) }),
         NOW,
         false,
@@ -130,7 +139,7 @@ describe("the restart of a wake that never answered", () => {
 
 describe("what a restart or a stop cost the paused session", () => {
   it("tells an awake sandbox that its paused session was lost and its files are unchanged", () => {
-    const notice = sandboxSessionNotice(
+    const notice = noticeOfAgreeingRow(
       summaryOf("awake", { operation: operationOf("awake", "wake-retried") }),
       NOW,
       false,
@@ -145,7 +154,7 @@ describe("what a restart or a stop cost the paused session", () => {
     "says nothing of a restart to an awake sandbox whose last operation ended %s",
     (detail) => {
       expect(
-        sandboxSessionNotice(
+        noticeOfAgreeingRow(
           summaryOf("awake", { operation: operationOf("awake", detail) }),
           NOW,
           false,
@@ -156,7 +165,7 @@ describe("what a restart or a stop cost the paused session", () => {
 
   it("does not tell a sandbox that is not awake that it restarted", () => {
     expect(
-      sandboxSessionNotice(
+      noticeOfAgreeingRow(
         summaryOf("suspended", {
           operation: operationOf("suspended", "wake-retried"),
         }),
@@ -172,7 +181,7 @@ describe("what a restart or a stop cost the paused session", () => {
   ])(
     "tells a stopped sandbox after %s that its paused session was lost when it stopped",
     (_label, detail) => {
-      const notice = sandboxSessionNotice(
+      const notice = noticeOfAgreeingRow(
         summaryOf("stopped", { operation: operationOf("stopped", detail) }),
         NOW,
         false,
@@ -185,7 +194,7 @@ describe("what a restart or a stop cost the paused session", () => {
   );
 
   it("does not repeat the files clause when the card already states what happened to them", () => {
-    const notice = sandboxSessionNotice(
+    const notice = noticeOfAgreeingRow(
       summaryOf("stopped", {
         operation: operationOf("stopped", "suspended-session-lost"),
       }),
@@ -202,7 +211,7 @@ describe("the notice a week ahead of a suspended session's end", () => {
   it("names the day, from the instant the server sent", () => {
     const at = NOW + 3 * DAY;
 
-    const notice = sandboxSessionNotice(
+    const notice = noticeOfAgreeingRow(
       summaryOf("suspended", { suspendedSessionEndsAt: at }),
       NOW,
       false,
@@ -213,12 +222,12 @@ describe("the notice a week ahead of a suspended session's end", () => {
   });
 
   it("starts exactly seven days ahead and not a millisecond earlier", () => {
-    const inside = sandboxSessionNotice(
+    const inside = noticeOfAgreeingRow(
       summaryOf("suspended", { suspendedSessionEndsAt: NOW + 7 * DAY }),
       NOW,
       false,
     );
-    const outside = sandboxSessionNotice(
+    const outside = noticeOfAgreeingRow(
       summaryOf("suspended", { suspendedSessionEndsAt: NOW + 7 * DAY + 1 }),
       NOW,
       false,
@@ -230,7 +239,7 @@ describe("the notice a week ahead of a suspended session's end", () => {
 
   it("keeps showing it on the end day and after the instant has passed", () => {
     expect(
-      sandboxSessionNotice(
+      noticeOfAgreeingRow(
         summaryOf("suspended", { suspendedSessionEndsAt: NOW - DAY }),
         NOW,
         false,
@@ -243,7 +252,7 @@ describe("the notice a week ahead of a suspended session's end", () => {
     ["no limit declared", { suspendedSessionEndsAt: null }],
   ])("says nothing for %s", (_label, fields) => {
     expect(
-      sandboxSessionNotice(summaryOf("suspended", fields), NOW, false),
+      noticeOfAgreeingRow(summaryOf("suspended", fields), NOW, false),
     ).toBeNull();
   });
 
@@ -251,7 +260,7 @@ describe("the notice a week ahead of a suspended session's end", () => {
     "says nothing once the row is %s, whatever end the server still carries",
     (state) => {
       expect(
-        sandboxSessionNotice(
+        noticeOfAgreeingRow(
           summaryOf(state, { suspendedSessionEndsAt: NOW + DAY }),
           NOW,
           false,
@@ -266,7 +275,7 @@ describe("a suspended session being converted to stopped", () => {
     "Your paused session has expired. Your sandbox is being stopped.";
 
   it("says the session expired while the conversion resumes the sandbox", () => {
-    const notice = sandboxSessionNotice(
+    const notice = noticeOfAgreeingRow(
       summaryOf("resuming", {
         operation: operationOf("resuming", "suspended-session-expiry"),
       }),
@@ -278,7 +287,7 @@ describe("a suspended session being converted to stopped", () => {
   });
 
   it("says the same while the conversion is stopping it", () => {
-    const notice = sandboxSessionNotice(
+    const notice = noticeOfAgreeingRow(
       summaryOf("stopping", {
         operation: operationOf("stopping", "suspended-session-lost"),
       }),
@@ -291,14 +300,14 @@ describe("a suspended session being converted to stopped", () => {
 
   it("says nothing of a conversion while a stop is for another reason or a wake is ordinary", () => {
     expect(
-      sandboxSessionNotice(
+      noticeOfAgreeingRow(
         summaryOf("stopping", { operation: operationOf("stopping", null) }),
         NOW,
         false,
       ),
     ).toBeNull();
     expect(
-      sandboxSessionNotice(
+      noticeOfAgreeingRow(
         summaryOf("resuming", { operation: operationOf("resuming", null) }),
         NOW,
         false,
@@ -308,7 +317,7 @@ describe("a suspended session being converted to stopped", () => {
 
   it("takes the expiry detail for the resume and the loss detail for the stop, not each other's", () => {
     expect(
-      sandboxSessionNotice(
+      noticeOfAgreeingRow(
         summaryOf("resuming", {
           operation: operationOf("resuming", "suspended-session-lost"),
         }),
@@ -317,7 +326,7 @@ describe("a suspended session being converted to stopped", () => {
       ),
     ).toBeNull();
     expect(
-      sandboxSessionNotice(
+      noticeOfAgreeingRow(
         summaryOf("stopping", {
           operation: operationOf("stopping", "suspended-session-expiry"),
         }),
@@ -325,5 +334,115 @@ describe("a suspended session being converted to stopped", () => {
         false,
       ),
     ).toBeNull();
+  });
+});
+
+describe("the state the caller resolved, not the summary's", () => {
+  const lostDetail = "suspended-session-lost";
+
+  it("gives no resume warning for a summary that still says suspended once the row is resolved stopped", () => {
+    const summary = summaryOf("suspended", {
+      suspendedSessionEndsAt: NOW + DAY,
+    });
+
+    expect(sandboxSessionNotice(summary, "stopped", NOW, false)).toBeNull();
+    expect(sandboxSessionNotice(summary, "suspended", NOW, false)).toContain(
+      "Resume your sandbox before then to keep it.",
+    );
+  });
+
+  it("warns for a row resolved suspended whose summary has not caught up", () => {
+    const summary = summaryOf("stopped", { suspendedSessionEndsAt: NOW + DAY });
+
+    expect(sandboxSessionNotice(summary, "suspended", NOW, false)).toContain(
+      dayOf(NOW + DAY),
+    );
+  });
+
+  it("says restarting only for a resolved starting or resuming row, whatever the summary says", () => {
+    const retrying = summaryOf("awake", {
+      operation: operationOf("starting", "wake-retry"),
+    });
+    const stale = summaryOf("starting", {
+      operation: operationOf("starting", "wake-retry"),
+    });
+
+    expect(sandboxSessionNotice(retrying, "resuming", NOW, false)).toBe(
+      "Restarting your sandbox",
+    );
+    expect(sandboxSessionNotice(stale, "awake", NOW, false)).toBeNull();
+  });
+
+  it("takes the stopped loss sentence from the resolved state alone", () => {
+    const summary = summaryOf("awake", {
+      operation: operationOf("stopped", lostDetail),
+    });
+
+    expect(sandboxSessionNotice(summary, "stopped", NOW, false)).toContain(
+      "lost when your sandbox stopped",
+    );
+    expect(sandboxSessionNotice(summary, "awake", NOW, false)).toBeNull();
+  });
+
+  it("says nothing while the state is unresolved, whatever the summary carries", () => {
+    expect(
+      sandboxSessionNotice(
+        summaryOf("stopped", {
+          operation: operationOf("stopped", lostDetail),
+          suspendedSessionEndsAt: NOW + DAY,
+        }),
+        null,
+        NOW,
+        false,
+      ),
+    ).toBeNull();
+  });
+
+  it("leaves the files clause to the caller's say, not the summary's frozen flag", () => {
+    const frozenSummary = summaryOf("stopped", {
+      frozen: true,
+      operation: operationOf("stopped", lostDetail),
+    });
+
+    expect(
+      sandboxSessionNotice(frozenSummary, "stopped", NOW, false),
+    ).toContain("Your files are unchanged.");
+    expect(
+      sandboxSessionNotice(frozenSummary, "stopped", NOW, true),
+    ).not.toContain("files");
+  });
+});
+
+describe("which wake-retry details end a stopped row's session", () => {
+  const STOPPED_LOSS = "lost when your sandbox stopped";
+
+  function stoppedWith(detail: string): string | null {
+    return sandboxSessionNotice(
+      summaryOf("stopped", { operation: operationOf("stopped", detail) }),
+      "stopped",
+      NOW,
+      false,
+    );
+  }
+
+  it.each([
+    "wake-retry",
+    "wake-retry-failed",
+    "wake-retry:credit-gate:denied",
+    "wake-retry:a-code-the-server-adds-next-year",
+  ])(
+    "tells a stopped row ended by %s that its paused session was lost",
+    (detail) => {
+      expect(stoppedWith(detail)).toContain(STOPPED_LOSS);
+    },
+  );
+
+  it.each([
+    "wake-retried",
+    "wake-retry-exhausted",
+    "wake-retrying",
+    "wake-retr",
+  ])("says nothing for a stopped row ended by the unlisted %s", (detail) => {
+    expect(stoppedWith(detail)).toBeNull();
   });
 });

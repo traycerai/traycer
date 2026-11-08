@@ -20,14 +20,12 @@ const state = vi.hoisted(
     tier: AgentActivityTier | null;
     gui: string | null;
     tui: string | null;
-    role: "owner" | "viewer";
     /** The chat projection's OWN host, i.e. what `useEpicNodeHostId` answers. */
     ownerHostId: string | null;
   } => ({
     tier: null,
     gui: null,
     tui: null,
-    role: "owner",
     ownerHostId: null,
   }),
 );
@@ -47,8 +45,6 @@ vi.mock("@/lib/epic-selectors", () => ({
       : new Map<string, AgentActivityTier>([["n1", state.tier]]),
   useEpicChatHarnessId: () => state.gui,
   useMaybeEpicTuiAgentHarnessId: () => state.tui,
-  useEpicPermissionRole: () => state.role,
-  useRegisteredEpicPermissionRole: () => state.role,
   useEpicNodeHostId: () => state.ownerHostId,
 }));
 
@@ -101,7 +97,6 @@ afterEach(() => {
   state.tier = null;
   state.gui = null;
   state.tui = null;
-  state.role = "owner";
   state.ownerHostId = null;
 });
 
@@ -254,11 +249,12 @@ describe("<SwitcherAgentIcon /> matches the desktop mapping", () => {
     expect(screen.queryByTestId("switcher-agent-done-n1")).toBeNull();
   });
 
-  it("shows a viewer's read-only lock on a chat row", () => {
-    state.role = "viewer";
+  // The task's role no longer stands in for a chat's own access: every task
+  // role may write, so an unopened row shows no lock.
+  it("shows no read-only lock on a chat row", () => {
     state.gui = "claude";
     render(renderIcon("chat", NO_INDICATORS));
-    expect(screen.getByLabelText("Read-only agent")).toBeTruthy();
+    expect(screen.queryByLabelText("Read-only agent")).toBeNull();
   });
 });
 

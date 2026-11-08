@@ -68,6 +68,7 @@ export function useArtifactRowDisplay(input: {
         "explicit",
         "direct_ui",
       ),
+      "user",
     );
   };
 

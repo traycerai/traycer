@@ -84,7 +84,7 @@ function makeCollaboratorResponse(
         accessType: "direct",
         grantedAt: 1,
         grantedBy: "user-owner",
-        role: "viewer",
+        role: "editor",
         user: {
           userId: `user-${email}`,
           profile: {
