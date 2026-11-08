@@ -76,6 +76,25 @@ export const environmentPresenceCauseSchema = lazySchema(() =>
   ]),
 );
 
+/** Why another entry or an unverified native store remains after this account leaves. */
+export const credentialMaterialRetainedReasonSchema = lazySchema(() =>
+  z.enum([
+    "material-changed",
+    "foreign-entry",
+    "unreadable-entry",
+    "unsupported-store",
+    "linked-location",
+    "home-changed",
+    "store-changed",
+    "write-failed",
+    "shared-settings",
+    "unverified-material",
+  ]),
+);
+export type CredentialMaterialRetainedReason = z.infer<
+  typeof credentialMaterialRetainedReasonSchema
+>;
+
 export const credentialHomeSchema = lazySchema(() =>
   z.strictObject({
     homeAddress: z.string().min(1),
@@ -94,13 +113,13 @@ export const credentialHomeSchema = lazySchema(() =>
           scope: z.literal("environment"),
           environmentId: z.string().min(1),
           state: z.enum(["admitted", "revoking", "absent"]),
-          retainedReason: z.literal("material-changed").nullable(),
+          retainedReason: credentialMaterialRetainedReasonSchema.nullable().catch(null),
           cause: environmentPresenceCauseSchema.nullable().catch(null),
         }),
         z.strictObject({
           scope: z.literal("local"),
           state: z.enum(["revoking", "absent"]),
-          retainedReason: z.literal("material-changed").nullable(),
+          retainedReason: credentialMaterialRetainedReasonSchema.nullable().catch(null),
           cause: z.literal("signed-out-by-person"),
         }),
       ])
