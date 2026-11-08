@@ -70,7 +70,6 @@ test("at 1280px failure remedies wrap beside a readable sandbox identity", async
     expect(measured.actions.y).toBeLessThan(
       measured.identity.y + measured.identity.height,
     );
-    console.warn("1280px sandbox row", measured);
   }
   const buttons = await failed.getByRole("button").all();
   const lines = new Set(
@@ -89,7 +88,6 @@ test("at 390px sandbox controls stay stacked inside the viewport", async ({
     expect(measured.actions.y).toBeGreaterThanOrEqual(
       measured.identity.y + measured.identity.height,
     );
-    console.warn("390px sandbox row", measured);
     for (const button of await row.getByRole("button").all()) {
       await expect(button).toBeVisible();
       const control = await box(button);
