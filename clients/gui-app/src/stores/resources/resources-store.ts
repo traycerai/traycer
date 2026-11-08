@@ -11,7 +11,6 @@ import type {
   ResourcesStreamClient,
 } from "@traycer-clients/shared/host-transport/resources-stream-client";
 import type {
-  AppResourceSnapshotWireV15,
   EpicResourceSnapshotWireV15,
   HostTreeResourceSnapshotWireV15,
   OtherResourceSnapshotWireV15,
@@ -47,7 +46,7 @@ export type ResourcesStreamClientFactory = (
 
 export type OwnerResourceUsage = OwnerResourceSnapshotWireV15;
 export type EpicResourceUsage = EpicResourceSnapshotWireV15;
-export type AppResourceUsage = AppResourceSnapshotWireV15;
+export type AppResourceUsage = NonNullable<ResourcesProjectionPayload["app"]>;
 export type HostTreeResourceUsage = HostTreeResourceSnapshotWireV15;
 export type OtherResourceUsage = OtherResourceSnapshotWireV15;
 export type RestrictedResourceUsage = RestrictedResourceSnapshotWireV15;
@@ -104,7 +103,7 @@ export interface ResourcesState {
    */
   readonly owners: ReadonlyMap<string, OwnerResourceSnapshotWireV15>;
   /** Host-app usage sampled alongside the owner projection. */
-  readonly app: AppResourceSnapshotWireV15 | null;
+  readonly app: AppResourceUsage | null;
   /** Whole host-process-tree aggregate, available from resources.subscribe@1.2. */
   readonly hostTree: HostTreeResourceSnapshotWireV15 | null;
   /** Unattributed host-tree process roots, available from resources.subscribe@1.2. */
@@ -220,11 +219,9 @@ function epicUsageEqual(
   );
 }
 
-function appUsageEqual(
-  a: AppResourceSnapshotWireV15,
-  b: AppResourceSnapshotWireV15,
-): boolean {
+function appUsageEqual(a: AppResourceUsage, b: AppResourceUsage): boolean {
   if (
+    a.hostCpuCount !== b.hostCpuCount ||
     a.hostTotalMemoryBytes !== b.hostTotalMemoryBytes ||
     a.processCount !== b.processCount ||
     a.cpuPercent !== b.cpuPercent ||
@@ -341,9 +338,9 @@ function mergeEpics(
 }
 
 function mergeApp(
-  previous: AppResourceSnapshotWireV15 | null,
-  next: AppResourceSnapshotWireV15 | null,
-): AppResourceSnapshotWireV15 | null {
+  previous: AppResourceUsage | null,
+  next: AppResourceUsage | null,
+): AppResourceUsage | null {
   if (next === null) return null;
   if (previous !== null && appUsageEqual(previous, next)) return previous;
   return next;

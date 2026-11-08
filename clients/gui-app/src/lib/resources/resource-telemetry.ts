@@ -103,6 +103,7 @@ export interface JsHeapReading {
 
 export interface RendererUsageReading {
   readonly workingSetMb: number;
+  /** Per-core percent, unchanged from the desktop metrics source. */
   readonly cpuPercent: number;
 }
 
