@@ -77,8 +77,10 @@ const cloudChatListTestState = vi.hoisted(() => ({
 // never answers" default for every other test in this file.
 const harnessCatalogTestState = vi.hoisted<{
   harnesses: ReadonlyArray<GuiHarnessCatalogEntry>;
+  toolbarModelsReady: boolean;
 }>(() => ({
   harnesses: [],
+  toolbarModelsReady: false,
 }));
 // The one host this suite runs on. The mocked binding/directory, the tile
 // fixtures, and the per-host run-settings buckets all key off it, so they
@@ -526,24 +528,67 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importActual) => ({
   }),
 }));
 
-// Only `useGuiHarnessCatalogForClient` is overridden - every other export
-// (including `useGuiHarnessCatalog`, whose own body calls the real,
-// unmocked `useGuiHarnessCatalogForClient` from module scope rather than
-// through this export) keeps its real implementation.
-vi.mock(
-  "@/hooks/harnesses/use-gui-harness-catalog",
-  async (importOriginal) => ({
-    ...(await importOriginal<
+// `useGuiHarnessCatalogForClient` supplies the lower next-step surfaces. The
+// composer toolbar's host/model query stays pending unless a test explicitly
+// supplies a settled target catalog below.
+vi.mock("@/hooks/harnesses/use-gui-harness-catalog", async (importOriginal) => {
+  const actual =
+    await importOriginal<
       typeof import("@/hooks/harnesses/use-gui-harness-catalog")
-    >()),
+    >();
+  return {
+    ...actual,
     useGuiHarnessCatalogForClient: () => ({
       harnesses: harnessCatalogTestState.harnesses,
       harnessesLoading: false,
       harnessesError: null,
       modelsLoading: false,
     }),
-  }),
-);
+    useGuiHarnessesQueryForClient: (
+      client: Parameters<typeof actual.useGuiHarnessesQueryForClient>[0],
+      activity: Parameters<typeof actual.useGuiHarnessesQueryForClient>[1],
+    ) => {
+      const query = actual.useGuiHarnessesQueryForClient(client, activity);
+      if (!harnessCatalogTestState.toolbarModelsReady) return query;
+      return {
+        ...query,
+        data: { harnesses: harnessCatalogTestState.harnesses },
+        isPending: false,
+        isError: false,
+        error: null,
+      };
+    },
+    useGuiHarnessModelsQueryForClient: (
+      client: Parameters<typeof actual.useGuiHarnessModelsQueryForClient>[0],
+      harnessId: Parameters<typeof actual.useGuiHarnessModelsQueryForClient>[1],
+      workingDirectory: Parameters<
+        typeof actual.useGuiHarnessModelsQueryForClient
+      >[2],
+      activity: Parameters<typeof actual.useGuiHarnessModelsQueryForClient>[3],
+    ) => {
+      const query = actual.useGuiHarnessModelsQueryForClient(
+        client,
+        harnessId,
+        workingDirectory,
+        activity,
+      );
+      if (!harnessCatalogTestState.toolbarModelsReady) return query;
+      const modelCatalog = harnessCatalogTestState.harnesses.find(
+        (row) => row.id === harnessId,
+      );
+      return {
+        ...query,
+        data:
+          modelCatalog === undefined
+            ? undefined
+            : { harnessId, models: modelCatalog.models },
+        isPending: modelCatalog === undefined,
+        isError: false,
+        error: null,
+      };
+    },
+  };
+});
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
@@ -615,6 +660,7 @@ import {
 } from "@/lib/commands/composer-controls-registry";
 import { useInitialChatHandoffStore } from "@/stores/epics/initial-chat-handoff-store";
 import type { GuiHarnessCatalogEntry } from "@/hooks/harnesses/use-gui-harness-catalog";
+import { guiAgentModelOptionSchema } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
@@ -1156,6 +1202,47 @@ function harnessCatalogRow(overrides: {
     modelsLoading: false,
     modelsError: null,
   };
+}
+
+function modelCatalogRow(
+  harnessId: GuiHarnessCatalogEntry["id"],
+  slug: string,
+): GuiHarnessCatalogEntry["models"][number] {
+  return guiAgentModelOptionSchema.parse({
+    harnessId,
+    slug,
+    label: slug,
+    description: null,
+    contextWindow: null,
+    maxOutputTokens: null,
+    defaultReasoningEffort: null,
+    supportedReasoningEfforts: ["low", "medium", "high"].map((id) => ({
+      id,
+      label: id,
+      description: null,
+    })),
+    metadata: {},
+  });
+}
+
+function installResolvedToolbarCatalog(): void {
+  harnessCatalogTestState.toolbarModelsReady = true;
+  harnessCatalogTestState.harnesses = [
+    {
+      ...harnessCatalogRow({
+        id: "claude",
+        supportedPermissionModes: ["supervised", "full_access"],
+      }),
+      models: [modelCatalogRow("claude", "claude-live")],
+    },
+    {
+      ...harnessCatalogRow({
+        id: "codex",
+        supportedPermissionModes: ["supervised"],
+      }),
+      models: [modelCatalogRow("codex", "queued-model")],
+    },
+  ];
 }
 
 function nextStepsAssistantMessage(): Message {
@@ -1905,6 +1992,7 @@ describe("<ChatTile />", () => {
     resetFocusedComposerControlsForTests();
     cloudChatListTestState.knownChatIds.clear();
     harnessCatalogTestState.harnesses = [];
+    harnessCatalogTestState.toolbarModelsReady = false;
     resetNegotiatedManifests();
   });
 
@@ -4511,6 +4599,7 @@ describe("<ChatTile />", () => {
   });
 
   it("keeps live toolbar settings over persisted chat settings after remount", async () => {
+    installResolvedToolbarCatalog();
     chatHarness.teardown();
     chatHarness.installWithSettings("owner", [], SESSION_SETTINGS);
     const rendered = renderChatTile();
@@ -4546,6 +4635,7 @@ describe("<ChatTile />", () => {
   });
 
   it("toolbar changes inside an epic update that epic bucket immediately", async () => {
+    installResolvedToolbarCatalog();
     renderChatTile();
 
     await waitForChatTileLoaded();

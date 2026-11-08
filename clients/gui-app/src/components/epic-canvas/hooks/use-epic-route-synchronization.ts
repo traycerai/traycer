@@ -175,6 +175,19 @@ export function useEpicRouteSynchronization(
   const activeArtifactId = useActiveEpicArtifactId(tabId);
   const canvas = useEpicCanvas(tabId);
   const hasRestoredCanvas = canvas.root !== null;
+  // Whether the canvas shows anything. A canvas whose only pane is the empty
+  // opener is NOT a layout to preserve: `EmptyEpicRoot` seeds that pane the
+  // moment the snapshot lands with no records, and on a task opened for the
+  // first time on this machine the chat records arrive later, from the
+  // polled record list. Gating auto-open on `root !== null` latched on that
+  // seeded pane and left the task on the opener with its chats one click
+  // away in the sidebar; a canvas with no tiles opens the auto-open target
+  // exactly as a canvas with no root does.
+  const canvasHoldsTiles = useMemo(
+    () =>
+      collectPanes(canvas.root).some((pane) => pane.tabInstanceIds.length > 0),
+    [canvas.root],
+  );
   const nestedRouteTarget = useMemo(
     () =>
       parseNestedFocusTargetFromSearch({
@@ -508,7 +521,7 @@ export function useEpicRouteSynchronization(
     }
     const gate = gateLegacyAutoOpen({
       hasExplicitFocus,
-      hasRestoredCanvas,
+      canvasHoldsTiles,
       keyAlreadySpent: lastAutoOpenKey.current === key,
       anyKeySpent: lastAutoOpenKey.current !== null,
     });
@@ -628,7 +641,7 @@ export function useEpicRouteSynchronization(
     focusArtifactId,
     focusedAt,
     persistedFocus,
-    hasRestoredCanvas,
+    canvasHoldsTiles,
     navigate,
     router,
     activeArtifactId,
@@ -847,18 +860,18 @@ type LegacyAutoOpenGate = "skip" | "spend-key" | "resolve";
 
 function gateLegacyAutoOpen(args: {
   readonly hasExplicitFocus: boolean;
-  readonly hasRestoredCanvas: boolean;
+  readonly canvasHoldsTiles: boolean;
   readonly keyAlreadySpent: boolean;
   readonly anyKeySpent: boolean;
 }): LegacyAutoOpenGate {
-  const { hasExplicitFocus, hasRestoredCanvas, keyAlreadySpent, anyKeySpent } =
+  const { hasExplicitFocus, canvasHoldsTiles, keyAlreadySpent, anyKeySpent } =
     args;
   if (hasExplicitFocus) {
     return keyAlreadySpent ? "skip" : "resolve";
   }
-  // A restored canvas already shows what the person left open, so a landing
-  // records its key and chooses nothing.
-  if (hasRestoredCanvas) return "spend-key";
+  // A canvas with tiles already shows what the person left open, so a landing
+  // records its key and chooses nothing. Empty seeded panes are still openers.
+  if (canvasHoldsTiles) return "spend-key";
   return anyKeySpent ? "skip" : "resolve";
 }
 

@@ -4647,6 +4647,382 @@ export const FROZEN_CATALOG_LINE_SNAPSHOTS = {
       ],
       "additionalProperties": false
     },
+    "agent.list@10.3": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "caller": {
+          "type": "object",
+          "properties": {
+            "agentId": {
+              "type": "string"
+            },
+            "canSendMessages": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "agentId",
+            "canSendMessages"
+          ],
+          "additionalProperties": false
+        },
+        "scope": {
+          "type": "string",
+          "enum": [
+            "user",
+            "all"
+          ]
+        },
+        "agents": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "parentId": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "hostId": {
+                "type": "string"
+              },
+              "isLocal": {
+                "type": "boolean"
+              },
+              "surface": {
+                "type": "string",
+                "enum": [
+                  "gui",
+                  "tui"
+                ]
+              },
+              "harnessId": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "claude",
+                      "codex",
+                      "opencode",
+                      "traycer",
+                      "cursor",
+                      "grok",
+                      "qwen",
+                      "kiro",
+                      "droid",
+                      "kimi",
+                      "copilot",
+                      "kilocode",
+                      "openrouter",
+                      "amp",
+                      "devin",
+                      "pi",
+                      "hermes",
+                      "omp",
+                      "huggingface",
+                      "reasonix",
+                      "antigravity",
+                      "commandcode"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "isSelf": {
+                "type": "boolean"
+              },
+              "title": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "capabilities": {
+                "type": "object",
+                "properties": {
+                  "readTranscript": {
+                    "type": "boolean"
+                  },
+                  "sendMessage": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "readTranscript",
+                  "sendMessage"
+                ],
+                "additionalProperties": false
+              },
+              "active": {
+                "type": "boolean"
+              },
+              "folderPaths": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "isWorktree": {
+                "type": "boolean"
+              },
+              "runConfig": {
+                "default": null,
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "model": {
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "const": "concrete"
+                              },
+                              "slug": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "slug"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "const": "provider-default"
+                              }
+                            },
+                            "required": [
+                              "kind"
+                            ],
+                            "additionalProperties": false
+                          }
+                        ]
+                      },
+                      "reasoningEffort": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "fastMode": {
+                        "anyOf": [
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "serviceTier": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "model",
+                      "reasoningEffort",
+                      "fastMode",
+                      "serviceTier"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "sessionState": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "running",
+                      "sleeping",
+                      "stopped"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "lastExit": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "reaped",
+                      "user-stop",
+                      "restart",
+                      "process-exit"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "archived": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "profile": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "permissionMode": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "supervised",
+                      "auto_accept_edits",
+                      "auto",
+                      "full_access"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "reach": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "same_principal",
+                      "other_principal"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "hostConnectivity": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "known"
+                      },
+                      "connectivity": {
+                        "type": "string",
+                        "enum": [
+                          "connectable",
+                          "offline"
+                        ]
+                      },
+                      "observedAt": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "connectivity",
+                      "observedAt"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "unknown"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "parentId",
+              "hostId",
+              "isLocal",
+              "surface",
+              "harnessId",
+              "isSelf",
+              "title",
+              "capabilities",
+              "active",
+              "folderPaths",
+              "isWorktree",
+              "runConfig",
+              "sessionState",
+              "lastExit",
+              "archived",
+              "profile",
+              "permissionMode",
+              "reach",
+              "hostConnectivity"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "caller",
+        "scope",
+        "agents"
+      ],
+      "additionalProperties": false
+    },
     "providers.list@1.0": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
