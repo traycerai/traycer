@@ -12,6 +12,19 @@ on:
   # A manual trigger for a sparing branch run, when a check is actually
   # needed before the merge (AGENTS.md, "When CI runs").
   workflow_dispatch:
+    inputs:
+      mirror_base_url:
+        description: Tools mirror base URL override for staging acceptance
+        type: string
+        default: ""
+      cold:
+        description: Empty every tool and computation cache and assert acquisition steps executed
+        type: boolean
+        default: false
+      blackhole_github:
+        description: Block GitHub before tool setup (requires a populated mirror)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -22,6 +35,13 @@ concurrency:
   # cancel an earlier merge's run.
   group: tests-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: true
+
+env:
+  CI_TOOLS_MIRROR: ${{ inputs.mirror_base_url || vars.CI_TOOLS_MIRROR_BASE_URL }}
+  NX_SKIP_NX_CACHE: ${{ inputs.cold && 'true' || 'false' }}
+  NX_DISABLE_NX_CACHE: ${{ inputs.cold && 'true' || 'false' }}
+  NX_SKIP_REMOTE_CACHE: ${{ inputs.cold && 'true' || 'false' }}
+  NX_DAEMON: "false"
 
 jobs:
   test:
@@ -180,21 +200,38 @@ jobs:
             cache_key: "scripts"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Fetch the host-v1.1.5 tag the schema oracle regenerates from
+        if: matrix.project == '@traycer/protocol'
+        run: git fetch --depth=1 origin tag host-v1.1.5
+      - name: Prepare cold tools and optional GitHub blackhole
+        if: inputs.cold || inputs.blackhole_github
+        shell: bash
+        run: node scripts/ci-cold.cjs prepare '${{ inputs.cold }}' '${{ inputs.blackhole_github }}'
+
       - uses: ./.github/actions/bootstrap-ci-tools
+        id: ci_tool_1
         with:
+          mirror-url: ${{ inputs.mirror_base_url || vars.CI_TOOLS_MIRROR_BASE_URL }}
+          cold: ${{ inputs.cold }}
           bun-version: "1.3.14"
+          tools: bun electron
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        id: ci_tool_2
         with:
           package-manager-cache: false
           node-version: "24.20.0"
       - name: Cache bun global install cache
+        if: ${{ !inputs.cold }}
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/.bun/install/cache
           key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
           restore-keys: |
             bun-${{ runner.os }}-
-      - run: bun install --frozen-lockfile
+      - id: ci_acquisition_1
+        run: |
+          bun install --frozen-lockfile
+          echo "executed=true" >> "$GITHUB_OUTPUT"
       # The host-v1.1.5 oracle in `provider-native-schemas.test.ts` regenerates
       # the checked-in fixture straight from the tag and deep-equals the two.
       # `actions/checkout` fetches no tags, so without this it skips itself and
@@ -204,9 +241,6 @@ jobs:
       # A shallow single-tag fetch is enough — the tag's commit arrives with a
       # complete tree, so the blobs the oracle reads are all present (~2s, ~6MB;
       # a full `fetch-depth: 0` clone would buy nothing here).
-      - name: Fetch the host-v1.1.5 tag the schema oracle regenerates from
-        if: matrix.project == '@traycer/protocol'
-        run: git fetch --depth=1 origin tag host-v1.1.5
       # `--outputStyle=stream` sends the child's stdout/stderr straight to the
       # step log. Nx's default buffers it into an internal stream and replays
       # it AFTER the failure banner, capped — so a failing gui-app job printed
@@ -296,6 +330,11 @@ jobs:
       # a killed vitest parent leaves an empty file. A replay from the Nx cache
       # leaves none, so a missing file is not an upload failure. Kept for the
       # repository's retention, the same seven days as the job log.
+      - name: Restore GitHub access after acquisition proof
+        if: always() && inputs.blackhole_github
+        shell: bash
+        run: node scripts/ci-cold.cjs restore
+
       - name: Upload the JUnit report
         if: always() && matrix.project == 'traycer-clients-gui-app'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -368,6 +407,14 @@ jobs:
           df -h 2>/dev/null | head -10 || true
           echo "::endgroup::"
 
+      - name: Assert cold census tool steps executed
+        if: inputs.cold
+        shell: bash
+        run: |
+          test '${{ steps.ci_tool_1.outputs.executed == 'true' }}' = true
+          test '${{ steps.ci_tool_2.outcome == 'success' }}' = true
+          test '${{ steps.ci_acquisition_1.outputs.executed == 'true' }}' = true
+
   # The one required check for the whole matrix above. The `main` ruleset used to
   # require four matrix names (`test (@traycer/protocol)`,
   # `test (traycer-clients-gui-app)`, `test (@traycer-clients/desktop)` and
@@ -428,17 +475,30 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           persist-credentials: false
+      - name: Prepare cold tools and optional GitHub blackhole
+        if: inputs.cold || inputs.blackhole_github
+        shell: bash
+        run: node scripts/ci-cold.cjs prepare '${{ inputs.cold }}' '${{ inputs.blackhole_github }}'
+
       - uses: ./.github/actions/bootstrap-ci-tools
+        id: ci_tool_1
         with:
+          mirror-url: ${{ inputs.mirror_base_url || vars.CI_TOOLS_MIRROR_BASE_URL }}
+          cold: ${{ inputs.cold }}
           bun-version: "1.3.14"
+          tools: bun electron
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        id: ci_tool_2
         with:
           package-manager-cache: false
           node-version: "24.20.0"
       # The standard runner starts immediately. A larger runner queued for
       # more than three minutes, while cache restore on this runner took 3m27
       # plus a 32s install versus 3m51 for the uncached install below.
-      - run: bun install --frozen-lockfile
+      - id: ci_acquisition_1
+        run: |
+          bun install --frozen-lockfile
+          echo "executed=true" >> "$GITHUB_OUTPUT"
       - name: Build the CLI SEA
         run: bun run --filter @traycer-clients/traycer-cli build:sea
       # Proves the artifact runs at all before the loop below attributes an
@@ -480,6 +540,19 @@ jobs:
       - name: Finalize helper launch, a real PowerShell handoff
         working-directory: clients/traycer-cli
         run: bunx vitest run src/upgrade/__tests__/finalize-helper-launch.win32.test.ts
+
+      - name: Assert cold census tool steps executed
+        if: inputs.cold
+        shell: bash
+        run: |
+          test '${{ steps.ci_tool_1.outputs.executed == 'true' }}' = true
+          test '${{ steps.ci_tool_2.outcome == 'success' }}' = true
+          test '${{ steps.ci_acquisition_1.outputs.executed == 'true' }}' = true
+
+      - name: Restore GitHub access after acquisition proof
+        if: always() && inputs.blackhole_github
+        shell: bash
+        run: node scripts/ci-cold.cjs restore
 
   # Decides whether the macOS job below has anything to test. It is the
   # slowest job in this workflow by minutes (a real electron-builder pack), and
@@ -630,19 +703,33 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           persist-credentials: false
+      - name: Prepare cold tools and optional GitHub blackhole
+        if: inputs.cold || inputs.blackhole_github
+        shell: bash
+        run: node scripts/ci-cold.cjs prepare '${{ inputs.cold }}' '${{ inputs.blackhole_github }}'
+
       - uses: ./.github/actions/bootstrap-ci-tools
+        id: ci_tool_1
         with:
+          mirror-url: ${{ inputs.mirror_base_url || vars.CI_TOOLS_MIRROR_BASE_URL }}
+          cold: ${{ inputs.cold }}
           bun-version: "1.3.14"
+          tools: bun electron
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        id: ci_tool_2
         with:
           package-manager-cache: false
           node-version: "24.20.0"
-      - run: bun install --frozen-lockfile
+      - id: ci_acquisition_1
+        run: |
+          bun install --frozen-lockfile
+          echo "executed=true" >> "$GITHUB_OUTPUT"
       - name: Read the installed Electron version
         id: electron
         working-directory: clients/desktop
         run: echo "version=$(node -p "require('electron/package.json').version")" >> "$GITHUB_OUTPUT"
       - name: Cache the Electron downloads
+        if: ${{ !inputs.cold }}
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/Library/Caches/electron
@@ -672,3 +759,15 @@ jobs:
       - name: Real electron-builder packaging test
         run: bun run test:packaging
         working-directory: clients/desktop
+      - name: Assert cold census tool steps executed
+        if: inputs.cold
+        shell: bash
+        run: |
+          test '${{ steps.ci_tool_1.outputs.executed == 'true' }}' = true
+          test '${{ steps.ci_tool_2.outcome == 'success' }}' = true
+          test '${{ steps.ci_acquisition_1.outputs.executed == 'true' }}' = true
+
+      - name: Restore GitHub access after acquisition proof
+        if: always() && inputs.blackhole_github
+        shell: bash
+        run: node scripts/ci-cold.cjs restore

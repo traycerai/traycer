@@ -10,6 +10,12 @@ inputs:
   cold:
     description: Skip the archive cache for the cold acceptance run
     default: "false"
+  no-cache:
+    description: Skip restoring tool archives for provenance checks
+    default: "false"
+  mirror-url:
+    description: Target release CDN base URL (staging or production)
+    default: ${{ github.event.inputs.mirror_base_url || vars.CI_TOOLS_MIRROR_BASE_URL }}
 outputs:
   executed:
     description: True only after every requested tool was verified and installed
@@ -20,15 +26,21 @@ outputs:
 runs:
   using: composite
   steps:
-    - name: Empty the tool archive cache for a cold run
-      if: inputs.cold == 'true'
+    - name: Resolve archive cache paths from the requested tools
+      id: cache_paths
       shell: bash
-      run: rm -rf "$RUNNER_TEMP/traycer-ci-tools"
+      env:
+        CI_TOOLS_CACHE: ${{ runner.temp }}/traycer-ci-tools
+        CI_TOOLS_REQUESTED: ${{ inputs.tools }}
+        CI_TOOLS_BYPASS_CACHE: ${{ inputs.cold == 'true' || inputs.no-cache == 'true' }}
+      run: |
+        read -ra tools <<< "$CI_TOOLS_REQUESTED"
+        node scripts/ci-tools.cjs cache-paths tools-mirror.lock.json "${tools[@]}"
     - name: Restore verified tool archives
-      if: inputs.cold != 'true'
+      if: inputs.cold != 'true' && inputs.no-cache != 'true'
       uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
-        path: ${{ runner.temp }}/traycer-ci-tools
+        path: ${{ steps.cache_paths.outputs.paths }}
         key: ci-tools-${{ runner.os }}-${{ runner.arch }}-${{ inputs.tools }}-${{ hashFiles('tools-mirror.lock.json') }}
     - name: Verify and install locked tools
       id: install
@@ -37,6 +49,7 @@ runs:
         CI_TOOLS_CACHE: ${{ runner.temp }}/traycer-ci-tools
         CI_TOOLS_REQUESTED: ${{ inputs.tools }}
         CI_TOOLS_BUN_VERSION: ${{ inputs.bun-version }}
+        CI_TOOLS_MIRROR: ${{ inputs.mirror-url }}
       run: |
         set -euo pipefail
         node -e 'const lock = require("./tools-mirror.lock.json"); if (!lock.artifacts.some(e => e.name === "bun" && e.version === process.env.CI_TOOLS_BUN_VERSION)) throw new Error("Bun version does not match CI tool lock")'

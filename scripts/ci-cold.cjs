@@ -32,6 +32,8 @@ function command(program, args) {
 }
 
 async function main() {
+  if (process.env.GITHUB_ACTIONS !== "true")
+    throw new Error("Cold setup is restricted to GitHub Actions runners");
   const [operation, cold, blackhole] = process.argv.slice(2);
   if (operation === "restore") {
     if (!fs.existsSync(stateFile)) return;
@@ -62,6 +64,20 @@ async function main() {
   }
   if (operation !== "prepare") throw new Error("Expected prepare or restore");
   if (cold === "true") {
+    // Keep the image's Node available for the dependency-free bootstrap after
+    // emptying setup-node's tool cache; the pinned setup-node still downloads.
+    const bootstrap = path.join(
+      process.env.RUNNER_TEMP,
+      "ci-bootstrap-runtime",
+    );
+    fs.mkdirSync(bootstrap, { recursive: true });
+    const node = path.join(
+      bootstrap,
+      process.platform === "win32" ? "node.exe" : "node",
+    );
+    fs.copyFileSync(process.execPath, node);
+    fs.chmodSync(node, 0o755);
+    fs.appendFileSync(process.env.GITHUB_PATH, `${bootstrap}\n`);
     for (const directory of [
       ".nx",
       "node_modules",
@@ -71,10 +87,14 @@ async function main() {
       path.join(os.homedir(), ".cache/pre-commit"),
       path.join(os.homedir(), ".cache/electron"),
       path.join(os.homedir(), ".cache/ms-playwright"),
+      path.join(os.homedir(), ".traycer/host/dev/providers"),
+      "traycer-host/src/harnesses/codex/protocol/generated",
+      path.join(os.homedir(), ".npm"),
+      path.join(os.homedir(), ".cache/node-gyp"),
       path.join(os.homedir(), "Library/Caches/electron"),
       path.join(os.homedir(), "Library/Caches/ms-playwright"),
       ...(process.env.RUNNER_TOOL_CACHE
-        ? ["Bun", "Python"].map((tool) =>
+        ? ["Bun", "Python", "node"].map((tool) =>
             path.join(process.env.RUNNER_TOOL_CACHE, tool),
           )
         : []),
