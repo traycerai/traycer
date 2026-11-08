@@ -31,6 +31,7 @@ jobs:
 
       - uses: ./.github/actions/bootstrap-ci-tools
         with:
+          mirror-base-url: ${{ vars.CI_TOOLS_MIRROR_BASE_URL }}
           bun-version: "1.3.14"
 
       - name: Run mintlify lint checks

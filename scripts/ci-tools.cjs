@@ -147,11 +147,7 @@ function downloadLockedUrl(lock, url, destination) {
     throw new Error(
       `GitHub acquisition is absent from tools-mirror.lock.json: ${url}`,
     );
-  download(
-    entry,
-    destination,
-    process.env.CI_TOOLS_MIRROR || lock.mirror || null,
-  );
+  download(entry, destination, process.env.CI_TOOLS_MIRROR || null);
   append(process.env.GITHUB_OUTPUT, `${entry.name}=executed`);
 }
 
@@ -226,7 +222,17 @@ function install(entry, archive, root) {
 function main(args) {
   const [command, lockPath, ...names] = args;
   const lock = readLock(lockPath);
+  const bunVersion = process.env.CI_TOOLS_BUN_VERSION;
+  if (
+    bunVersion &&
+    !lock.artifacts.some(
+      (entry) => entry.name === "bun" && entry.version === bunVersion,
+    )
+  ) {
+    throw new Error("Bun version does not match CI tool lock");
+  }
   if (command === "cache-paths") {
+    append(process.env.GITHUB_OUTPUT, `lock-digest=${sha256(lockPath)}`);
     if (!names.every((name) => /^[a-z0-9-]+$/.test(name)))
       throw new Error("Invalid tool cache name");
     const paths = names.map((name) =>
@@ -256,7 +262,7 @@ function main(args) {
     throw new Error(`Unknown CI tools command: ${command}`);
   const cache =
     process.env.CI_TOOLS_CACHE || path.join(os.tmpdir(), "traycer-ci-tools");
-  const mirror = process.env.CI_TOOLS_MIRROR || lock.mirror || null;
+  const mirror = process.env.CI_TOOLS_MIRROR || null;
   if (mirror !== null) {
     if (!secureOrigin(mirror)) throw new Error("Unsafe CI mirror origin");
     const origin = new URL(mirror);
@@ -266,6 +272,8 @@ function main(args) {
       process.env.GITHUB_ENV,
       `CI_TOOLS_MIRROR=${origin.toString().replace(/\/$/, "")}`,
     );
+  } else {
+    append(process.env.GITHUB_ENV, "CI_TOOLS_MIRROR=");
   }
   // The macOS packaging gate packs both desktop architectures in one job.
   const requests = names.flatMap((name) =>

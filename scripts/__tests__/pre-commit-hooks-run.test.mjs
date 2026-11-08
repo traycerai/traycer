@@ -6,7 +6,7 @@
 // (`dco-signoff`, at `commit-msg`) are outside this workflow and test.
 
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -174,6 +174,58 @@ describe("every pre-commit hook runs in a pre-commit.yml job that can execute it
     expect(hookJob.steps.indexOf(fallbackInstallStep)).toBeLessThan(
       hookJob.steps.indexOf(hookRunStep),
     );
+  });
+
+  it("passes a mirror source to every workflow tool bootstrap", () => {
+    const workflowDir = join(REPO_ROOT, ".github", "workflows");
+    const variableSource = "${{ vars.CI_TOOLS_MIRROR_BASE_URL }}";
+    const dispatchSource =
+      "${{ inputs.mirror_base_url || vars.CI_TOOLS_MIRROR_BASE_URL }}";
+    const callers = readdirSync(workflowDir)
+      .filter((fileName) => /\.ya?ml$/u.test(fileName))
+      .flatMap((fileName) => {
+        const document = parse(
+          readFileSync(join(workflowDir, fileName), "utf8"),
+        );
+        const dispatchInputs = document.on?.workflow_dispatch?.inputs;
+        const source =
+          dispatchInputs !== null &&
+          typeof dispatchInputs === "object" &&
+          Object.hasOwn(dispatchInputs, "mirror_base_url")
+            ? dispatchSource
+            : variableSource;
+        return Object.values(document.jobs ?? {}).flatMap((job) =>
+          (job.steps ?? [])
+            .filter(
+              ({ uses }) => uses === "./.github/actions/bootstrap-ci-tools",
+            )
+            .map((step) => ({ fileName, step, source })),
+        );
+      });
+
+    expect(callers.length).toBeGreaterThan(0);
+    for (const { fileName, step, source } of callers) {
+      expect(
+        step.with?.["mirror-base-url"],
+        `${fileName} bootstrap caller`,
+      ).toBe(source);
+    }
+
+    const bootstrap = parse(
+      readFileSync(
+        join(
+          REPO_ROOT,
+          ".github",
+          "actions",
+          "bootstrap-ci-tools",
+          "action.yml",
+        ),
+        "utf8",
+      ),
+    );
+    expect(bootstrap.inputs["mirror-base-url"].default).toBe("");
+    const install = bootstrap.runs.steps.find(({ id }) => id === "install");
+    expect(install.env.CI_TOOLS_MIRROR).toBe("${{ inputs.mirror-base-url }}");
   });
 
   // This executes the Ubuntu runner's shell; native Windows has no /bin/bash.
