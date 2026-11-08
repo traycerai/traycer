@@ -2,6 +2,7 @@ import {
   credentialHomeSchema,
   credentialVersionSchema,
   credentialIdentitySchema,
+  environmentPresenceCauseSchema,
 } from "./provider-credential-home-schemas";
 /**
  * Schemas for the `providers.*` host RPC surface. Manages the CLI binary
@@ -1613,7 +1614,11 @@ export const providerProfileSchema = lazySchema(() =>
       .optional(),
   }),
 );
-/** A disabled inventory row that retains the identity of an unreadable entry. */
+/**
+ * Unknown row discriminators (record version or readability) fail closed for
+ * the whole row. Unknown additive leaf facts fall back at their own field,
+ * preserving the rest of the inventory entry.
+ */
 export function buildUnreadableProviderProfile(input: {
   readonly profileId: string;
   readonly label: string;
@@ -1656,11 +1661,12 @@ export const providerProfileProjectionSchema = lazySchema(() =>
   providerProfileSchema
     .extend({
       recordVersion: z.literal(1).optional(),
-      credentialIdentity: credentialIdentitySchema.optional(),
-      credentialHome: credentialHomeSchema.optional(),
+      credentialIdentity: credentialIdentitySchema.optional().catch(undefined),
+      credentialHome: credentialHomeSchema.optional().catch(undefined),
       environmentProfileId: z.string().nullable().optional(),
       deliveryRefusal: managedProfileDeliveryRefusalSchema
         .nullable()
+        .catch(null)
         .optional(),
       presence: z
         .discriminatedUnion("kind", [
@@ -1670,18 +1676,13 @@ export const providerProfileProjectionSchema = lazySchema(() =>
           }),
           z.object({
             kind: z.literal("revoking"),
-            cause: z
-              .enum([
-                "host-left-environment",
-                "profile-account-changed",
-                "signed-out-by-person",
-              ])
-              .nullable(),
+            cause: environmentPresenceCauseSchema.nullable().catch(null),
           }),
           z.object({ kind: z.literal("no-home") }),
           z.object({ kind: z.literal("placeholder-only") }),
         ])
-        .optional(),
+        .optional()
+        .catch(undefined),
       readability: z
         .object({
           kind: z.enum(["readable", "unreadable"]),

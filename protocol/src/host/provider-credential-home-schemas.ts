@@ -68,6 +68,14 @@ export const credentialStandingSchema = lazySchema(() =>
 );
 export type CredentialStanding = z.infer<typeof credentialStandingSchema>;
 
+export const environmentPresenceCauseSchema = lazySchema(() =>
+  z.enum([
+    "host-left-environment",
+    "profile-account-changed",
+    "signed-out-by-person",
+  ]),
+);
+
 export const credentialHomeSchema = lazySchema(() =>
   z.strictObject({
     homeAddress: z.string().min(1),
@@ -87,13 +95,7 @@ export const credentialHomeSchema = lazySchema(() =>
           environmentId: z.string().min(1),
           state: z.enum(["admitted", "revoking", "absent"]),
           retainedReason: z.literal("material-changed").nullable(),
-          cause: z
-            .enum([
-              "host-left-environment",
-              "profile-account-changed",
-              "signed-out-by-person",
-            ])
-            .nullable(),
+          cause: environmentPresenceCauseSchema.nullable().catch(null),
         }),
         z.strictObject({
           scope: z.literal("local"),
@@ -105,7 +107,7 @@ export const credentialHomeSchema = lazySchema(() =>
       .nullable(),
     handoffEnvironmentId: z.string().min(1).nullable(),
     materialFingerprint: z.string().nullable(),
-    standing: credentialStandingSchema.optional(),
+    standing: credentialStandingSchema.optional().catch(undefined),
     observation: z
       .object({ identity: credentialIdentitySchema, capturedAt: z.number() })
       .nullable(),

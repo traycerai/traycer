@@ -82,7 +82,29 @@ vi.mock("@/hooks/providers/use-refresh-providers", () => ({
 
 import { ProfileEditDialog } from "@/components/settings/panels/provider-profile-edit-dialog";
 
-function profile(presence: ProviderProfile["presence"]): ProviderProfile {
+type CredentialHome = NonNullable<ProviderProfile["credentialHome"]>;
+
+function credentialHome(
+  custodyClass: CredentialHome["custodyClass"],
+): CredentialHome {
+  return {
+    homeAddress: "synthetic-home",
+    bindingVersion: 1,
+    materialRevision: 1,
+    custodyVersion: 1,
+    custodyClass,
+    environmentPresence: null,
+    handoffEnvironmentId: null,
+    materialFingerprint: "synthetic-material",
+    observation: null,
+    materialMatchesBinding: "yes",
+  };
+}
+
+function profile(
+  presence: ProviderProfile["presence"],
+  home: CredentialHome | undefined,
+): ProviderProfile {
   const base: ProviderProfile = {
     profileId: "profile-work",
     kind: "managed",
@@ -102,6 +124,7 @@ function profile(presence: ProviderProfile["presence"]): ProviderProfile {
     duplicateOfProfileId: null,
     ambientDriftNotice: null,
     accentColor: null,
+    credentialHome: home,
   };
   return presence === undefined ? base : { ...base, presence };
 }
@@ -199,7 +222,12 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
   });
 
   it("hides sign out when the host has not negotiated the method", () => {
-    renderDialog(profile({ kind: "admitted", bindingVersion: 1 }));
+    renderDialog(
+      profile(
+        { kind: "admitted", bindingVersion: 1 },
+        credentialHome("self-sufficient"),
+      ),
+    );
 
     expect(screen.queryByRole("button", { name: "Sign out" })).toBeNull();
     expect(fixture.supportChecks).toContainEqual({
@@ -208,17 +236,55 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
     });
   });
 
-  it("hides sign out for a managed profile without an admitted home", () => {
+  it("hides sign out for an admitted profile without credential home", () => {
     fixture.supportsSignOut = true;
-    renderDialog(profile({ kind: "no-home" }));
+    renderDialog(profile({ kind: "admitted", bindingVersion: 1 }, undefined));
 
+    expect(screen.queryByRole("button", { name: "Sign out" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Sign out on every host" }),
+    ).toBeNull();
+  });
+
+  it.each(["unknown", "transitional"] as const)(
+    "hides sign out for an admitted profile with %s custody",
+    (custodyClass) => {
+      fixture.supportsSignOut = true;
+      renderDialog(
+        profile(
+          { kind: "admitted", bindingVersion: 1 },
+          credentialHome(custodyClass),
+        ),
+      );
+
+      expect(screen.queryByRole("button", { name: "Sign out" })).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: "Sign out on every host" }),
+      ).toBeNull();
+      expect(fixture.supportChecks).toContainEqual({
+        hostId: fixture.hostId,
+        method: "providers.signOutProfile",
+      });
+    },
+  );
+
+  it("hides sign out for a managed profile without admitted presence", () => {
+    fixture.supportsSignOut = true;
+    renderDialog(
+      profile({ kind: "no-home" }, credentialHome("self-sufficient")),
+    );
     expect(screen.queryByRole("button", { name: "Sign out" })).toBeNull();
   });
 
   it("dispatches one sign-out RPC when an admitted profile's control is clicked once", async () => {
     fixture.supportsSignOut = true;
     const messenger = installSignOutClient();
-    renderDialog(profile({ kind: "admitted", bindingVersion: 1 }));
+    renderDialog(
+      profile(
+        { kind: "admitted", bindingVersion: 1 },
+        credentialHome("self-sufficient"),
+      ),
+    );
 
     act(() => {
       fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
@@ -237,21 +303,12 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
   it("names the account-wide effect and waits for confirmation before signing out", async () => {
     fixture.supportsSignOut = true;
     const messenger = installSignOutClient();
-    renderDialog({
-      ...profile({ kind: "admitted", bindingVersion: 1 }),
-      credentialHome: {
-        homeAddress: "synthetic-home",
-        bindingVersion: 1,
-        materialRevision: 1,
-        custodyVersion: 1,
-        custodyClass: "brokered",
-        environmentPresence: null,
-        handoffEnvironmentId: null,
-        materialFingerprint: "synthetic-material",
-        observation: null,
-        materialMatchesBinding: "yes",
-      },
-    });
+    renderDialog(
+      profile(
+        { kind: "admitted", bindingVersion: 1 },
+        credentialHome("brokered"),
+      ),
+    );
     fireEvent.click(
       screen.getByRole("button", { name: "Sign out on every host" }),
     );

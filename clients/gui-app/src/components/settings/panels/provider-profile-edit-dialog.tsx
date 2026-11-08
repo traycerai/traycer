@@ -499,13 +499,15 @@ function ProfileSignOutAction(props: {
     host.hostId,
     "providers.signOutProfile",
   );
+  const custodyClass = props.profile.credentialHome?.custodyClass;
   if (
     !supported ||
     props.profile.kind !== "managed" ||
-    props.profile.presence?.kind !== "admitted"
+    props.profile.presence?.kind !== "admitted" ||
+    (custodyClass !== "self-sufficient" && custodyClass !== "brokered")
   )
     return null;
-  const everyHost = props.profile.credentialHome?.custodyClass === "brokered";
+  const everyHost = custodyClass === "brokered";
   const label = everyHost ? "Sign out on every host" : "Sign out";
   const submit = (): void =>
     signOut.mutate(
