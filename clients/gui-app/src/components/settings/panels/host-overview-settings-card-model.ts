@@ -69,7 +69,6 @@ export function hostSettingsCardState(
 interface HostSettingsRowOption {
   readonly value: "personal" | "local";
   readonly label: string;
-  readonly description: string;
   readonly action: "move" | "stop_sharing";
 }
 
@@ -77,13 +76,11 @@ const HOST_SETTINGS_OPTIONS: readonly HostSettingsRowOption[] = [
   {
     value: "personal",
     label: "Personal",
-    description: "Your Personal settings reach this computer.",
     action: "move",
   },
   {
     value: "local",
     label: "This computer only",
-    description: "Uses the settings stored here.",
     action: "stop_sharing",
   },
 ];
@@ -131,7 +128,7 @@ export function hostSettingsRowModel(
     description:
       value === "local"
         ? "Uses the settings stored on this computer. Changes stay here."
-        : "Your Personal providers, keys, variables and skills reach this computer.",
+        : "Your Personal settings reach this computer.",
     options: HOST_SETTINGS_OPTIONS.filter(
       (option) =>
         option.value === value || option.action === "move" || offerStop,

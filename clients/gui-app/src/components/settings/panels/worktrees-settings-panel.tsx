@@ -1993,6 +1993,8 @@ export function WorktreesList(props: {
               >
                 {virtualItems.map((virtualItem) => {
                   const item = flatItems[virtualItem.index];
+                  const isTaskHeader =
+                    item.kind === "header" && item.group.taskEpicId !== null;
                   const isStickyHeader =
                     item.kind === "header" &&
                     virtualItem.index === activeStickyHeaderIndexRef.current;
@@ -2003,9 +2005,13 @@ export function WorktreesList(props: {
                       ref={virtualizer.measureElement}
                       className={cn(
                         "left-0 w-full",
-                        isStickyHeader
-                          ? "sticky top-0 z-30 bg-background"
-                          : "absolute top-0",
+                        isStickyHeader ? "sticky top-0 z-30" : "absolute top-0",
+                        // The opaque mix matches the panel's card/40 over
+                        // background without letting rows show through it.
+                        isStickyHeader &&
+                          (isTaskHeader
+                            ? "bg-[color-mix(in_srgb,var(--card)_40%,var(--background))]"
+                            : "bg-background"),
                       )}
                       style={
                         isStickyHeader
@@ -2018,7 +2024,7 @@ export function WorktreesList(props: {
                       {item.kind === "header" ? (
                         <div
                           className={cn(
-                            "bg-background",
+                            item.group.taskEpicId === null && "bg-background",
                             item.showDivider && "border-t border-border/40",
                           )}
                         >
@@ -2489,8 +2495,8 @@ type WorktreeScriptReviewDraft = {
 
 /**
  * Repo or Task group header - a quiet sticky divider, not a second status row:
- * no filled high-emphasis background, and muted/regular-weight text so it never
- * competes with a row's bold branch name or colored tier pill. A repo whose
+ * Task headers share the panel's surface; repository dividers keep their fill.
+ * Muted/regular-weight text ensures neither competes with a row's bold branch name or colored tier pill. A repo whose
  * worktrees each belong to one Task splits into one header per Task: the Task
  * title (a button when the title is known) lives here, and its merge caption
  * appears only on the Task's first header across repositories. The rows
@@ -2559,7 +2565,7 @@ const WorktreeRepoHeader = memo(function WorktreeRepoHeader(props: {
     <div
       data-testid="worktree-repo-header"
       data-task-epic-id={taskEpicId}
-      className="flex w-full min-w-0 items-start gap-2 border-b border-border/40 bg-background px-5 py-1.5"
+      className="flex w-full min-w-0 items-start gap-2 border-b border-border/40 px-5 py-1.5"
     >
       <button
         type="button"

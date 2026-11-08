@@ -1568,6 +1568,12 @@ describe("WorktreesList delete flow", () => {
     const headerWrappers = screen
       .getAllByTestId("worktree-repo-header")
       .map((header) => header.closest("[data-index]"));
+    const stickyRepoHeader = headerWrappers.find((wrapper) =>
+      wrapper?.className.includes("sticky"),
+    );
+    expect(stickyRepoHeader).toBeTruthy();
+    expect(stickyRepoHeader?.className).toContain("bg-background");
+    expect(stickyRepoHeader?.className).not.toContain("bg-[color-mix(");
     expect(
       headerWrappers.filter((wrapper) => wrapper?.className.includes("sticky")),
     ).toHaveLength(1);
@@ -4806,6 +4812,20 @@ describe("WorktreesList v1.2 signals", () => {
     expect(headers).toHaveLength(2);
     const firstHeader = headers[0];
     const secondHeader = headers[1];
+    let stickyTaskHeaderCount = 0;
+    for (const header of headers) {
+      expect(header.className).not.toContain("bg-background");
+      expect(header.parentElement?.className).not.toContain("bg-background");
+      const virtualItem = header.closest("[data-index]");
+      expect(virtualItem?.className).not.toContain("bg-background");
+      if (virtualItem?.className.includes("sticky")) {
+        stickyTaskHeaderCount += 1;
+        expect(virtualItem.className).toContain(
+          "bg-[color-mix(in_srgb,var(--card)_40%,var(--background))]",
+        );
+      }
+    }
+    expect(stickyTaskHeaderCount).toBeGreaterThan(0);
     expect(within(firstHeader).getByText("acme/zeta")).toBeTruthy();
     expect(within(secondHeader).getByText("acme/alpha")).toBeTruthy();
     for (const header of headers) {

@@ -51,7 +51,11 @@ const BINDING: EnvironmentHostBinding = {
 
 const { client } = buildEnvironmentClient({ hostId: "host-a", handlers: {} });
 
-function mount(usable: boolean, hostId: string | null): void {
+function mount(
+  usable: boolean,
+  hostId: string | null,
+  fallbackSource: string | null,
+): void {
   const queryClient = new QueryClient();
   render(
     <QueryClientProvider client={queryClient}>
@@ -60,6 +64,7 @@ function mount(usable: boolean, hostId: string | null): void {
         hostId={hostId}
         hostName="A computer"
         usable={usable}
+        fallbackSource={fallbackSource}
       />
     </QueryClientProvider>,
   );
@@ -101,32 +106,42 @@ describe("<HostOverviewSettingsCardSlot />", () => {
     ],
   ] as const)("hides the row for %s", (_name, configure) => {
     configure();
-    mount(true, "host-a");
+    mount(true, "host-a", null);
     expect(screen.queryByRole("status", { name: "Reading" })).toBeNull();
     expect(
-      screen.queryByRole("button", { name: "Change settings source" }),
+      screen.queryByRole("combobox", { name: "Settings source" }),
     ).toBeNull();
   });
 
   it("hides the row when the host is unusable or unnamed", () => {
-    mount(false, "host-a");
+    mount(false, "host-a", null);
     expect(screen.queryByRole("status", { name: "Reading" })).toBeNull();
     cleanup();
-    mount(true, null);
+    mount(true, null, null);
     expect(screen.queryByRole("status", { name: "Reading" })).toBeNull();
   });
 
+  it("keeps the offline fallback in the same disabled settings row", () => {
+    mount(false, "host-a", "Personal");
+
+    expect(screen.getByText("Settings")).toBeTruthy();
+    expect(screen.getByText("Runs Personal settings.")).toBeTruthy();
+    const selector = screen.getByRole("combobox", { name: "Settings source" });
+    expect(selector.textContent).toBe("Personal");
+    expect(selector.hasAttribute("disabled")).toBe(true);
+  });
+
   it("keeps a skeleton while either supported read is pending", () => {
-    mount(true, "host-a");
+    mount(true, "host-a", null);
     expect(screen.getByRole("status", { name: "Reading" })).toBeTruthy();
     cleanup();
     reads.status.data = environmentStatusFixture({});
-    mount(true, "host-a");
+    mount(true, "host-a", null);
     expect(screen.getByRole("status", { name: "Reading" })).toBeTruthy();
     cleanup();
     reads.binding.data = BINDING;
     reads.status.data = null;
-    mount(true, "host-a");
+    mount(true, "host-a", null);
     expect(screen.getByRole("status", { name: "Reading" })).toBeTruthy();
   });
 
@@ -134,7 +149,7 @@ describe("<HostOverviewSettingsCardSlot />", () => {
     reads.status.data = environmentStatusFixture({});
     reads.bindingSupport = null;
 
-    mount(true, "host-a");
+    mount(true, "host-a", null);
 
     expect(screen.getByRole("status", { name: "Reading" })).toBeTruthy();
   });

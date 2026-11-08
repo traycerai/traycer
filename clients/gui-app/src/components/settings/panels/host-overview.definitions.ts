@@ -39,7 +39,7 @@ export const HOST_OVERVIEW = defineSettingsSection("host", {
     group: null,
     search: { contributesTo: "page" },
     label: "Settings",
-    description: null,
+    description: "Where this host gets its settings.",
     availableWhen: alwaysAvailable,
     keywords: ["Personal", "this computer only", "move", "stop sharing"],
   },
@@ -300,16 +300,6 @@ export const HOST_OVERVIEW = defineSettingsSection("host", {
     keywords: [],
   },
   // The Installation tab's groups, top to bottom (the Danger zone is below).
-  // About this host is read from the account's record, not the host.
-  aboutThisHost: {
-    kind: "group",
-    search: { contributesTo: "page" },
-    label: "About this host",
-    description: null,
-    breadcrumb: null,
-    availableWhen: alwaysAvailable,
-    keywords: [],
-  },
   installRecord: {
     kind: "group",
     search: { contributesTo: "page" },

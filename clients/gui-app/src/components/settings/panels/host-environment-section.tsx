@@ -5,7 +5,7 @@ import { hostOptionTeamOwner } from "@/components/settings/host-scope/host-optio
 import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 
-/** One settings source line, read through the host named by the page. */
+/** One settings source row, read through the host named by the page. */
 export function HostEnvironmentSection(props: {
   readonly scope: HostScope;
   readonly hostName: string;
