@@ -234,4 +234,41 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
       },
     ]);
   });
+  it("names the account-wide effect and waits for confirmation before signing out", async () => {
+    fixture.supportsSignOut = true;
+    const messenger = installSignOutClient();
+    renderDialog({
+      ...profile({ kind: "admitted", bindingVersion: 1 }),
+      credentialHome: {
+        homeAddress: "synthetic-home",
+        bindingVersion: 1,
+        materialRevision: 1,
+        custodyVersion: 1,
+        custodyClass: "brokered",
+        environmentPresence: null,
+        handoffEnvironmentId: null,
+        materialFingerprint: "synthetic-material",
+        observation: null,
+        materialMatchesBinding: "yes",
+      },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Sign out on every host" }),
+    );
+    expect(messenger.calls).toEqual([]);
+    expect(
+      screen.getByText("Sign this account out on every host?"),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "You’ll need to sign in again to use this account on any host.",
+      ),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByTestId("confirm-action"));
+    await waitFor(() => expect(messenger.calls).toHaveLength(1));
+    expect(messenger.calls[0]?.params).toEqual({
+      providerId: "claude-code",
+      profileId: "profile-work",
+    });
+  });
 });
