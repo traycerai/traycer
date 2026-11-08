@@ -120,6 +120,7 @@ export function botBoxDraftCleared(botId: string, key: string): void {
   const box = boxKeyOf(botId, key);
   if (!writer.read) writer.droppedDuringRead.keys.add(box);
   writer.unresolved.delete(box);
+  writer.cleared.set(box, { botId, key });
 }
 
 /**
@@ -245,8 +246,19 @@ const writer: {
   baseline: StoredBoxDrafts;
   /** The bots forgotten since the last write that landed: it drops all their boxes. */
   forgotten: Set<string>;
-  /** The boxes (`boxKeyOf`) whose last write left out an image they hold: written again. */
-  incomplete: Set<string>;
+  /**
+   * The boxes (`boxKeyOf`) the person cleared or sent since the last write
+   * that landed: it writes each as this window holds it, whatever the
+   * baseline says, for a box the read left nothing of in this window (one
+   * holding only another window's images) differs from it in nothing.
+   */
+  cleared: Map<string, BoxAt>;
+  /**
+   * By box (`boxKeyOf`): the boxes the last write left an image out of, as
+   * it wrote them. Written again while what is stored for the box is still
+   * that, and left to whoever wrote it since otherwise.
+   */
+  incomplete: Map<string, IncompleteBox>;
   /** The hashes of the images the image budget refused: the person is told once for each. */
   refused: Set<string>;
 } = {
@@ -264,7 +276,8 @@ const writer: {
   droppedDuringRead: { keys: new Set(), bots: new Set() },
   baseline: {},
   forgotten: new Set(),
-  incomplete: new Set(),
+  cleared: new Map(),
+  incomplete: new Map(),
   refused: new Set(),
 };
 
@@ -275,11 +288,20 @@ interface UnresolvedBox {
   readonly images: ReadonlyArray<JsonContent>;
 }
 
-/** A box's images this window stored whose bytes its image store no longer holds. */
-interface GoneImages {
+/** A box, by its bot and its key. */
+interface BoxAt {
   readonly botId: string;
   readonly key: string;
+}
+
+/** A box's images this window stored whose bytes its image store no longer holds. */
+interface GoneImages extends BoxAt {
   readonly hashes: ReadonlySet<string>;
+}
+
+/** A box a write left an image out of, and the draft it wrote for it (`null`: none). */
+interface IncompleteBox extends BoxAt {
+  readonly written: StoredBoxDraft | null;
 }
 
 function boxKeyOf(botId: string, key: string): string {
@@ -318,6 +340,7 @@ function dropWrites(): void {
   writer.unresolved = new Map();
   writer.gone = new Map();
   writer.forgotten.clear();
+  writer.cleared.clear();
   writer.incomplete.clear();
   writer.generation += 1;
 }
@@ -406,6 +429,7 @@ function land(
   }
   writer.baseline = next;
   writer.forgotten.clear();
+  writer.cleared.clear();
   writer.gone = new Map();
   writer.incomplete = incomplete;
 }
@@ -430,28 +454,30 @@ function takeOutGoneImages(
 }
 
 /**
- * Puts each box `next` changed since this window's baseline as this window
- * holds it now, or takes it out where it was cleared; returns the boxes
- * (`boxKeyOf`) written without an image they hold.
+ * Puts each box this window changed (`changedBoxes`) as it holds it now, or
+ * takes it out where it holds nothing; returns the boxes written without an
+ * image they hold, as written.
  */
 function putChangedBoxes(
   threadBoxes: Partial<Record<string, Partial<Record<string, StoredBoxDraft>>>>,
   next: StoredBoxDrafts,
   partition: string,
-): Set<string> {
-  const incomplete = new Set<string>();
-  for (const [botId, key] of changedBoxes(writer.baseline, next)) {
+): Map<string, IncompleteBox> {
+  const incomplete = new Map<string, IncompleteBox>();
+  for (const { botId, key } of changedBoxes(next, threadBoxes)) {
     const draft = next[botId]?.[key];
     const box = boxKeyOf(botId, key);
-    const stored =
+    const leftOut: string[] = [];
+    const written =
       draft === undefined
         ? null
         : storedDraft(draft, writer.unresolved.get(box), partition, (b64) => {
             const hash = writer.hashByInline.get(b64) ?? null;
-            if (hash === null) incomplete.add(box);
+            if (hash === null) leftOut.push(b64);
             return hash;
           });
-    putBox(threadBoxes, botId, key, stored);
+    if (leftOut.length > 0) incomplete.set(box, { botId, key, written });
+    putBox(threadBoxes, botId, key, written);
   }
   return incomplete;
 }
@@ -509,25 +535,37 @@ function editableDrafts(
 }
 
 /**
- * The boxes, as bot and key, that differ between `baseline` and `next`,
- * a box cleared in `next` included, and those whose last write left out an
- * image they hold.
+ * The boxes this window changed: those whose draft in `next` differs from
+ * this window's baseline, one it cleared included; those the person cleared
+ * or sent since the last write that landed; and those the last write left an
+ * image out of, while `stored` still holds for them what it wrote.
  */
 function changedBoxes(
-  baseline: StoredBoxDrafts,
   next: StoredBoxDrafts,
-): ReadonlyArray<readonly [string, string]> {
-  const changed = new Map<string, readonly [string, string]>();
+  stored: StoredBoxDrafts,
+): ReadonlyArray<BoxAt> {
+  const { baseline } = writer;
+  const candidates: BoxAt[] = [
+    ...writer.cleared.values(),
+    ...writer.incomplete.values(),
+  ];
   for (const drafts of [baseline, next]) {
     for (const [botId, key] of eachBox(drafts)) {
-      const box = boxKeyOf(botId, key);
-      if (changed.has(box)) continue;
-      if (
-        writer.incomplete.has(box) ||
-        !sameDraft(baseline[botId]?.[key], next[botId]?.[key])
-      ) {
-        changed.set(box, [botId, key]);
-      }
+      candidates.push({ botId, key });
+    }
+  }
+  const changed = new Map<string, BoxAt>();
+  for (const { botId, key } of candidates) {
+    const box = boxKeyOf(botId, key);
+    if (changed.has(box)) continue;
+    const incomplete = writer.incomplete.get(box);
+    if (
+      writer.cleared.has(box) ||
+      !sameDraft(baseline[botId]?.[key], next[botId]?.[key]) ||
+      (incomplete !== undefined &&
+        sameDraft(incomplete.written ?? undefined, stored[botId]?.[key]))
+    ) {
+      changed.set(box, { botId, key });
     }
   }
   return [...changed.values()];
