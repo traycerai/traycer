@@ -155,6 +155,7 @@ interface CatalogHarness extends HarnessOption {
 interface QueryActivity {
   readonly enabled: boolean;
   readonly subscribed: boolean;
+  readonly profileId?: string | null;
 }
 
 interface MockHostClient {
@@ -173,6 +174,7 @@ const queryMock = vi.hoisted(() => ({
   harnesses: [] as HarnessOption[],
   catalogHarnesses: [] as CatalogHarness[],
   selectedModelsByHarness: new Map<string, ReadonlyArray<ModelOption>>(),
+  selectedModelsByProfile: new Map<string, ReadonlyArray<ModelOption>>(),
   harnessesLoading: false,
   harnessesError: null as Error | null,
   catalogHarnessesLoading: false,
@@ -232,6 +234,11 @@ const queryMock = vi.hoisted(() => ({
       readonly subscribed: boolean;
     }>,
     modelClients: [] as Array<string | null>,
+    modelProfiles: [] as Array<{
+      readonly harnessId: string;
+      readonly profileId: string | null;
+      readonly enabled: boolean;
+    }>,
     providers: [] as Array<{
       readonly enabled: boolean;
       readonly subscribed: boolean;
@@ -591,6 +598,11 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
     workingDirectory: string | null,
     activity: QueryActivity,
   ) => {
+    queryMock.calls.modelProfiles.push({
+      harnessId,
+      profileId: activity.profileId ?? null,
+      enabled: activity.enabled,
+    });
     queryMock.calls.models.push({
       harnessId,
       workingDirectory,
@@ -616,11 +628,14 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
       ? (queryMock.modelsByClient.get(clientKey) ??
         queryMock.selectedModelsByHarness)
       : queryMock.selectedModelsByHarness;
+    const profileModels = queryMock.selectedModelsByProfile.get(
+      `${harnessId}:${activity.profileId ?? "<ambient>"}`,
+    );
     return {
       data: activity.enabled
         ? {
             harnessId,
-            models: modelsByHarness.get(harnessId) ?? [],
+            models: profileModels ?? modelsByHarness.get(harnessId) ?? [],
           }
         : undefined,
       isPending: false,
@@ -1251,6 +1266,7 @@ describe("<HarnessModelPicker />", () => {
     queryMock.providerStatesByClient = new Map();
     queryMock.harnessesByClient = new Map();
     queryMock.modelsByClient = new Map();
+    queryMock.selectedModelsByProfile = new Map();
     queryMock.catalogHarnessesByClient = new Map();
     queryMock.unresolvedHostIds = new Set();
     queryMock.endpointAbsentHostIds = new Set();
@@ -1263,6 +1279,7 @@ describe("<HarnessModelPicker />", () => {
     queryMock.calls.catalogClients = [];
     queryMock.calls.models = [];
     queryMock.calls.modelClients = [];
+    queryMock.calls.modelProfiles = [];
     queryMock.calls.providers = [];
     queryMock.calls.commands = [];
     queryMock.calls.ensurePack = [];
@@ -1669,6 +1686,49 @@ describe("<HarnessModelPicker />", () => {
     fireEvent.click(claudeRail);
     expect(screen.getByText("Claude Sonnet 4.6")).not.toBeNull();
     expect(claudeRail.getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("loads a browsed managed profile catalog while the ambient catalog is pending with cached rows", async () => {
+    const ambientModels = codexModels();
+    const managedModels = [
+      model({ slug: "gpt-work-only", label: "GPT Work only" }),
+    ];
+    const pendingCodex = { ...CODEX_HARNESS, availabilityPending: true };
+    queryMock.harnesses = [pendingCodex, CLAUDE_HARNESS];
+    queryMock.catalogHarnesses = [
+      catalogHarness(pendingCodex, ambientModels),
+      catalogHarness(CLAUDE_HARNESS, claudeModels()),
+    ];
+    queryMock.selectedModelsByHarness = new Map([
+      ["codex", ambientModels],
+      ["claude", claudeModels()],
+    ]);
+    queryMock.selectedModelsByProfile.set("codex:work-profile", managedModels);
+    queryMock.providerStates = [
+      providerCliStateWithProfiles({
+        providerId: "codex",
+        profiles: claudeProfilesForDropdown(),
+      }),
+    ];
+    renderPicker(undefined);
+
+    await openPicker();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("option", { name: /^GPT Work only/ }),
+      ).not.toBeNull();
+    });
+    expect(
+      queryMock.calls.modelProfiles.some(
+        (call) =>
+          call.harnessId === "codex" &&
+          call.profileId === "work-profile" &&
+          call.enabled,
+      ),
+    ).toBe(true);
+    expect(screen.queryByRole("option", { name: /GPT-5\.5/ })).toBeNull();
   });
 
   it("shows 'Loading models' - never the Add API key CTA - for a cold, still-pending API-key provider with no settled verdict yet", async () => {

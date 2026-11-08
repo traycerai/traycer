@@ -312,6 +312,7 @@ function modelsResponseFor(
 ): ListGuiAgentModelsResponse {
   return {
     harnessId,
+    profileId: null,
     models: [
       {
         harnessId,

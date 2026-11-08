@@ -508,12 +508,15 @@ export function useAutoJudgeBilling(
     client,
     judgeModelsTarget.harnessId,
     null,
-    judgeModelsActivity({
-      autoModeHost,
-      applicable: judgeModelsTarget.applicable,
-      nativeDecided: nativeJudgeDecided,
-      isProviderNative,
-    }),
+    {
+      ...judgeModelsActivity({
+        autoModeHost,
+        applicable: judgeModelsTarget.applicable,
+        nativeDecided: nativeJudgeDecided,
+        isProviderNative,
+      }),
+      profileId: selection?.profileId ?? null,
+    },
   );
   // SUCCESS ONLY on the `settled` half, for the same reason `providersSettled`
   // and `harnessesSettled` above are: a read that has not answered is an

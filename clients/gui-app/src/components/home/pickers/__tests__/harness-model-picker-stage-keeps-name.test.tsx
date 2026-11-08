@@ -231,6 +231,7 @@ function createHostWrapper(
         }),
         "agent.gui.listModels": (params) => ({
           harnessId: params.harnessId,
+          profileId: params.profileId ?? null,
           models: [...hostModels],
         }),
         "agent.gui.listCommands": (params) => ({

@@ -807,7 +807,7 @@ export const listGuiAgentModelsRequestSchema = lazySchema(() =>
   }),
 );
 export type ListGuiAgentModelsRequest = z.infer<
-  typeof listGuiAgentModelsRequestSchema
+  typeof listGuiAgentModelsRequestSchemaV12
 >;
 
 /**
@@ -822,10 +822,22 @@ export const listGuiAgentModelsRequestSchemaV11 = lazySchema(() =>
   }),
 );
 
-export const listGuiAgentModelsResponseSchema = lazySchema(() =>
+/** `agent.gui.listModels@1.2`: null selects the ambient login. */
+export const listGuiAgentModelsRequestSchemaV12 = lazySchema(() =>
+  listGuiAgentModelsRequestSchemaV11.extend({
+    profileId: z.string().nullable().optional(),
+  }),
+);
+
+export const listGuiAgentModelsResponseSchemaV11 = lazySchema(() =>
   z.object({
     harnessId: guiHarnessIdSchema,
     models: z.array(guiAgentModelOptionSchema),
+  }),
+);
+export const listGuiAgentModelsResponseSchema = lazySchema(() =>
+  listGuiAgentModelsResponseSchemaV11.extend({
+    profileId: z.string().nullable(),
   }),
 );
 export type ListGuiAgentModelsResponse = z.infer<

@@ -1,3 +1,4 @@
+import { AGENT_CONFIGURE_SERVICE_TIER_REQUIRED_HOST_VERSION } from "@traycer/protocol/host";
 import type { UseMutationResult } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
@@ -29,6 +30,10 @@ export function useAgentConfigure(
 > {
   return useHostScopedMutationForClient(client, {
     method: "agent.configure",
+    requiredHostMethodVersion: (request) =>
+      request.serviceTier === null || request.serviceTier === undefined
+        ? null
+        : AGENT_CONFIGURE_SERVICE_TIER_REQUIRED_HOST_VERSION,
     mutationKey: agentMutationKeys.configure(),
     errorMessage: "Couldn't change what this agent does on a usage limit.",
     invalidateMethods: CONFIGURE_INVALIDATIONS,

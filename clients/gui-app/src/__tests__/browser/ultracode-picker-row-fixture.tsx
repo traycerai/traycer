@@ -226,9 +226,10 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) =>
         previousExit: null,
       }),
       "agent.gui.listHarnesses": () => ({ harnesses: HARNESS_OPTIONS }),
-      "agent.gui.listModels": ({ harnessId }) => ({
-        harnessId,
-        models: [fixtureModel(harnessId, catalogState.offered)],
+      "agent.gui.listModels": (params) => ({
+        harnessId: params.harnessId,
+        profileId: params.profileId ?? null,
+        models: [fixtureModel(params.harnessId, catalogState.offered)],
       }),
       "agent.gui.listCommands": ({ harnessId }) => ({
         harnessId,

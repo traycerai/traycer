@@ -1018,13 +1018,14 @@ function RoutingCatalogSync({
   });
   const harnesses = harnessesQuery.data?.harnesses;
   const harnessId = useStore(store, (state) => state.selection.harnessId);
+  const profileId = useStore(store, (state) => state.selection.profileId);
   const available =
     harnesses?.find((row) => row.id === harnessId)?.available === true;
   const modelsQuery = useGuiHarnessModelsQueryForClient(
     client,
     harnessId,
     null,
-    { enabled: open && available, subscribed: open },
+    { enabled: open && available, subscribed: open, profileId },
   );
   const models = modelsQuery.data?.models;
   useEffect(() => {

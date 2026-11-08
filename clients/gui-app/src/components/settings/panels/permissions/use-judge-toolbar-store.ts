@@ -202,11 +202,13 @@ export function useJudgeToolbarStore(input: {
   // resolves it. Fetched only while that provider is available - the picker's
   // own gate - so an unavailable provider's slug is held as stored.
   const harnessId = useStore(store, (state) => state.selection.harnessId);
+  const profileId = useStore(store, (state) => state.selection.profileId);
   const available =
     harnesses?.find((row) => row.id === harnessId)?.available === true;
   const modelsQuery = useGuiHarnessModelsQuery(harnessId, null, {
     enabled: available,
     subscribed: true,
+    profileId,
   });
   const models = modelsQuery.data?.models;
   const modelsLoaded = models !== undefined;

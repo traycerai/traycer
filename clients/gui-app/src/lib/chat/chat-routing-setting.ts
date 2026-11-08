@@ -1,7 +1,7 @@
 import type { SchemaVersion } from "@traycer/protocol/framework/index";
 import type { ChatRouting } from "@traycer/protocol/persistence/epic/foundation";
 import type { ChatRunSettings } from "@traycer/protocol/persistence/epic/schemas";
-import type { AgentConfigureRequestV71 } from "@traycer/protocol/host/index";
+import type { AgentConfigureRequestV72 } from "@traycer/protocol/host/index";
 
 /** The label of the per-agent setting, as the menu and its tests print it. */
 export const CHAT_ROUTING_SETTING_LABEL = "On a usage limit or error";
@@ -52,7 +52,7 @@ export function buildRoutingConfigureRequest(input: {
   readonly chatId: string;
   readonly settings: ChatRunSettings | null;
   readonly routing: ChatRouting;
-}): AgentConfigureRequestV71 | null {
+}): AgentConfigureRequestV72 | null {
   const { settings } = input;
   if (settings === null) return null;
   return {
@@ -67,6 +67,7 @@ export function buildRoutingConfigureRequest(input: {
         : { kind: "profile", profileId: settings.profileId },
     reasoningEffort: settings.reasoningEffort,
     fastMode: settings.serviceTier !== null,
+    serviceTier: settings.serviceTier,
     permissionMode: null,
     routing: input.routing,
   };

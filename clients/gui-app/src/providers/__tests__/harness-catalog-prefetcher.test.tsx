@@ -54,9 +54,13 @@ function harnesses(
   }));
 }
 
-function modelsResponse(harnessId: GuiHarnessId): ListGuiAgentModelsResponse {
+function modelsResponse(
+  harnessId: GuiHarnessId,
+  profileId: string | null,
+): ListGuiAgentModelsResponse {
   return {
     harnessId,
+    profileId,
     models: [
       {
         harnessId,
@@ -107,7 +111,7 @@ describe("HarnessCatalogPrefetcher", () => {
           },
           "agent.gui.listModels": (params) => {
             calls.listModels.push(params.harnessId);
-            return modelsResponse(params.harnessId);
+            return modelsResponse(params.harnessId, params.profileId ?? null);
           },
         },
       }),
@@ -165,7 +169,7 @@ describe("HarnessCatalogPrefetcher", () => {
           }),
           "agent.gui.listModels": (params) => {
             calls.listModels.push(params.harnessId);
-            return modelsResponse(params.harnessId);
+            return modelsResponse(params.harnessId, params.profileId ?? null);
           },
         },
       }),

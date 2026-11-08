@@ -194,9 +194,13 @@ function harnesses(
   }));
 }
 
-function modelsResponse(count: number): ListGuiAgentModelsResponse {
+function modelsResponse(
+  count: number,
+  profileId: string | null,
+): ListGuiAgentModelsResponse {
   return {
     harnessId: "opencode",
+    profileId,
     models: Array.from({ length: count }, (_unused, index) => ({
       harnessId: "opencode",
       slug: `model-${index}`,
@@ -490,7 +494,7 @@ describe("useGuiHarnessModelsQuery (interval removal regression)", () => {
     const fixture = createCatalogFixture({
       "agent.gui.listModels": () => {
         callCount += 1;
-        return modelsResponse(2);
+        return modelsResponse(2, null);
       },
     });
 
@@ -518,7 +522,7 @@ describe("useGuiHarnessModelsQuery (interval removal regression)", () => {
   it("keeps an inactive invalidated model catalog cached past TanStack's default GC window", async () => {
     vi.useFakeTimers();
     const fixture = createCatalogFixture({
-      "agent.gui.listModels": () => modelsResponse(2),
+      "agent.gui.listModels": () => modelsResponse(2, null),
     });
 
     const hook = renderHook(
@@ -541,7 +545,7 @@ describe("useGuiHarnessModelsQuery (interval removal regression)", () => {
     if (modelQuery === undefined) {
       throw new Error("Expected the model catalog query to be cached");
     }
-    expect(modelQuery.state.data).toEqual(modelsResponse(2));
+    expect(modelQuery.state.data).toEqual(modelsResponse(2, null));
     await fixture.queryClient.invalidateQueries({
       queryKey: modelQuery.queryKey,
       refetchType: "none",
@@ -553,7 +557,7 @@ describe("useGuiHarnessModelsQuery (interval removal regression)", () => {
     });
 
     expect(fixture.queryClient.getQueryData(modelQuery.queryKey)).toEqual(
-      modelsResponse(2),
+      modelsResponse(2, null),
     );
   });
 
@@ -610,7 +614,7 @@ describe("useGuiHarnessCatalog (batched interval removal regression)", () => {
       "agent.gui.listHarnesses": () => ({ harnesses: harnesses(["opencode"]) }),
       "agent.gui.listModels": () => {
         callCount += 1;
-        return modelsResponse(1);
+        return modelsResponse(1, null);
       },
     });
 
@@ -639,7 +643,7 @@ describe("useGuiHarnessCatalog (batched interval removal regression)", () => {
     vi.useFakeTimers();
     const fixture = createCatalogFixture({
       "agent.gui.listHarnesses": () => ({ harnesses: harnesses(["opencode"]) }),
-      "agent.gui.listModels": () => modelsResponse(1),
+      "agent.gui.listModels": () => modelsResponse(1, null),
     });
 
     const hook = renderHook(
@@ -663,7 +667,7 @@ describe("useGuiHarnessCatalog (batched interval removal regression)", () => {
     if (modelQuery === undefined) {
       throw new Error("Expected the batched model catalog query to be cached");
     }
-    expect(modelQuery.state.data).toEqual(modelsResponse(1));
+    expect(modelQuery.state.data).toEqual(modelsResponse(1, null));
     await fixture.queryClient.invalidateQueries({
       queryKey: modelQuery.queryKey,
       refetchType: "none",
@@ -675,7 +679,7 @@ describe("useGuiHarnessCatalog (batched interval removal regression)", () => {
     });
 
     expect(fixture.queryClient.getQueryData(modelQuery.queryKey)).toEqual(
-      modelsResponse(1),
+      modelsResponse(1, null),
     );
   });
 
@@ -732,7 +736,7 @@ describe("useGuiHarnessCatalog cache-only label reader (MED5)", () => {
       },
       "agent.gui.listModels": () => {
         modelCalls += 1;
-        return modelsResponse(2);
+        return modelsResponse(2, null);
       },
     });
 
@@ -778,7 +782,7 @@ describe("useGuiHarnessCatalog cache-only label reader (MED5)", () => {
     vi.useFakeTimers();
     const fixture = createCatalogFixture({
       "agent.gui.listHarnesses": () => ({ harnesses: harnesses(["opencode"]) }),
-      "agent.gui.listModels": () => modelsResponse(2),
+      "agent.gui.listModels": () => modelsResponse(2, null),
     });
     const owner = renderHook(
       () =>
@@ -909,7 +913,7 @@ describe("…ForClient catalog hooks are scoped to the client argument, not the 
           },
           "agent.gui.listModels": () => {
             calls.models += 1;
-            return modelsResponse(1);
+            return modelsResponse(1, null);
           },
           "agent.gui.listCommands": (): ListGuiAgentCommandsResponse => {
             calls.commands += 1;
@@ -1189,7 +1193,7 @@ describe("…ForClient catalog hooks are scoped to the client argument, not the 
       harnessId: "opencode",
       workingDirectory: null,
     });
-    queryClient.setQueryData(queryKey, modelsResponse(1));
+    queryClient.setQueryData(queryKey, modelsResponse(1, null));
     const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries");
     const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
       <QueryClientProvider client={queryClient}>
@@ -1239,7 +1243,7 @@ describe("…ForClient catalog hooks are scoped to the client argument, not the 
           },
           "agent.gui.listModels": () => {
             calls.models += 1;
-            return modelsResponse(1);
+            return modelsResponse(1, null);
           },
           "agent.gui.listCommands": (): ListGuiAgentCommandsResponse => {
             calls.commands += 1;
@@ -1482,6 +1486,9 @@ describe('useGuiHarnessCatalogForClient modelsFetch: "cached-only"', () => {
     readonly queryClient: QueryClient;
     /** Harness ids of every `agent.gui.listModels` request, in arrival order. */
     readonly modelCalls: GuiHarnessId[];
+    readonly modelRequests: Array<
+      RequestOfMethod<HostRpcRegistry, "agent.gui.listModels">
+    >;
   }
 
   function createScopedFixture(
@@ -1492,6 +1499,9 @@ describe('useGuiHarnessCatalogForClient modelsFetch: "cached-only"', () => {
   ): ScopedFixture {
     const queryClient = createAppQueryClient();
     const modelCalls: GuiHarnessId[] = [];
+    const modelRequests: Array<
+      RequestOfMethod<HostRpcRegistry, "agent.gui.listModels">
+    > = [];
     let requestCounter = 0;
     const spine = new HostClient<HostRpcRegistry>({
       registry: hostRpcRegistry,
@@ -1510,8 +1520,9 @@ describe('useGuiHarnessCatalogForClient modelsFetch: "cached-only"', () => {
           "agent.gui.listHarnesses": () => ({ harnesses: harnesses(ids) }),
           "agent.gui.listModels": (params) => {
             modelCalls.push(params.harnessId);
+            modelRequests.push(params);
             return listModelsHandler === null
-              ? modelsResponse(1)
+              ? modelsResponse(1, params.profileId ?? null)
               : listModelsHandler();
           },
         },
@@ -1526,7 +1537,7 @@ describe('useGuiHarnessCatalogForClient modelsFetch: "cached-only"', () => {
         {props.children}
       </QueryClientProvider>
     );
-    return { Wrapper, client, queryClient, modelCalls };
+    return { Wrapper, client, queryClient, modelCalls, modelRequests };
   }
 
   it("issues ZERO listModels on a cold cache, and reports entries as not loading rather than eternally pending", async () => {
@@ -1646,7 +1657,7 @@ describe('useGuiHarnessCatalogForClient modelsFetch: "cached-only"', () => {
     });
     const fixture = createScopedFixture(["opencode", "claude"], async () => {
       await gate;
-      return modelsResponse(1);
+      return modelsResponse(1, null);
     });
     const { result } = renderHook(
       () => ({
@@ -1685,6 +1696,33 @@ describe('useGuiHarnessCatalogForClient modelsFetch: "cached-only"', () => {
       expect(entry?.models).toHaveLength(1);
       expect(entry?.modelsLoading).toBe(false);
     });
+  });
+
+  it("uses profile-scoped request and query identities for the selected account catalogs", async () => {
+    const fixture = createScopedFixture(["opencode"], null);
+    renderHook(
+      () => {
+        useGuiHarnessModelsQueryForClient(fixture.client, "opencode", null, {
+          enabled: true,
+          subscribed: true,
+          profileId: "priority-only",
+        });
+        useGuiHarnessModelsQueryForClient(fixture.client, "opencode", null, {
+          enabled: true,
+          subscribed: true,
+          profileId: "priority-ultrafast",
+        });
+      },
+      { wrapper: fixture.Wrapper },
+    );
+
+    await waitFor(() => {
+      expect(fixture.modelRequests).toHaveLength(2);
+    });
+    expect(fixture.modelRequests.map((request) => request.profileId)).toEqual([
+      "priority-only",
+      "priority-ultrafast",
+    ]);
   });
 
   it("useGuiHarnessModelsWarmup fetches its one subject harness exactly once, and nothing for a null subject", async () => {
@@ -1735,9 +1773,13 @@ describe('useGuiHarnessCatalogForClient modelsFetch: "cached-only"', () => {
 // `response()` fixture already uses - so the returned payload's own
 // `harnessId` field matches what these tests request, instead of borrowing
 // the "opencode" fixture's mismatched label.
-function claudeModelsResponse(count: number): ListGuiAgentModelsResponse {
+function claudeModelsResponse(
+  count: number,
+  profileId: string | null,
+): ListGuiAgentModelsResponse {
   return {
     harnessId: "claude",
+    profileId,
     models: Array.from({ length: count }, (_unused, index) => ({
       harnessId: "claude",
       slug: `model-${index}`,
@@ -1827,7 +1869,7 @@ describe("useGuiHarnessCatalog pending-availability retention (resurrection guar
       "agent.gui.listHarnesses": () => next,
       "agent.gui.listModels": () => {
         modelCalls += 1;
-        return claudeModelsResponse(2);
+        return claudeModelsResponse(2, null);
       },
     });
 
@@ -1940,7 +1982,7 @@ describe("useGuiHarnessCatalog pending-availability retention (resurrection guar
     };
     const fixture = createCatalogFixture({
       "agent.gui.listHarnesses": () => next,
-      "agent.gui.listModels": () => claudeModelsResponse(2),
+      "agent.gui.listModels": () => claudeModelsResponse(2, null),
     });
 
     const { result } = renderHook(
@@ -1997,7 +2039,7 @@ describe("useGuiHarnessCatalog pending-availability retention (resurrection guar
       }),
       "agent.gui.listModels": () => {
         modelCalls += 1;
-        return claudeModelsResponse(2);
+        return claudeModelsResponse(2, null);
       },
     });
 
@@ -2059,7 +2101,7 @@ describe("useGuiHarnessCatalog pending-availability retention (resurrection guar
         "agent.gui.listHarnesses": () => next,
         "agent.gui.listModels": () => {
           modelCalls += 1;
-          return claudeModelsResponse(2);
+          return claudeModelsResponse(2, null);
         },
       });
 
@@ -2413,7 +2455,7 @@ describe("catalog hooks inside a ChatOpencodeLineContext", () => {
     const fixture = createCatalogFixture({
       "agent.gui.listModels": (params) => {
         modelParams.push(params);
-        return modelsResponse(1);
+        return modelsResponse(1, null);
       },
       "agent.gui.listCommands": (params) => {
         commandParams.push(params);
@@ -2512,7 +2554,7 @@ describe("catalog hooks inside a ChatOpencodeLineContext", () => {
     const fixture = createCatalogFixture({
       "agent.gui.listModels": (params) => {
         modelParams.push(params);
-        return modelsResponse(1);
+        return modelsResponse(1, null);
       },
     });
     renderHook(() => useGuiHarnessModelsQuery("opencode", null, ACTIVE), {

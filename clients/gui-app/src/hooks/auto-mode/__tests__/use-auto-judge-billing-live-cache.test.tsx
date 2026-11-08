@@ -273,6 +273,7 @@ function createFixture() {
             : CLAUDE_MODEL_SLUG;
         return {
           harnessId: params.harnessId,
+          profileId: params.profileId ?? null,
           models: [modelRow(params.harnessId, slug)],
         };
       },
@@ -375,6 +376,7 @@ function prewarmModelCatalogs(fixture: {
     }),
     {
       harnessId: CLAUDE_HARNESS_ID,
+      profileId: null,
       models: [modelRow(CLAUDE_HARNESS_ID, CLAUDE_MODEL_SLUG)],
     } satisfies ListGuiAgentModelsResponse,
   );
@@ -385,6 +387,7 @@ function prewarmModelCatalogs(fixture: {
     }),
     {
       harnessId: "traycer",
+      profileId: null,
       models: [modelRow("traycer", TRAYCER_MODEL_SLUG)],
     } satisfies ListGuiAgentModelsResponse,
   );
@@ -407,6 +410,7 @@ describe("useAutoJudgeBilling against the real query cache", () => {
       }),
       {
         harnessId: CLAUDE_HARNESS_ID,
+        profileId: null,
         models: [modelRow(CLAUDE_HARNESS_ID, CLAUDE_MODEL_SLUG)],
       } satisfies ListGuiAgentModelsResponse,
     );
@@ -417,6 +421,7 @@ describe("useAutoJudgeBilling against the real query cache", () => {
       }),
       {
         harnessId: "traycer",
+        profileId: null,
         models: [modelRow("traycer", TRAYCER_MODEL_SLUG)],
       } satisfies ListGuiAgentModelsResponse,
     );
@@ -489,6 +494,7 @@ describe("useAutoJudgeBilling against the real query cache", () => {
       }),
       {
         harnessId: CLAUDE_HARNESS_ID,
+        profileId: null,
         models: [modelRow(CLAUDE_HARNESS_ID, CLAUDE_MODEL_SLUG)],
       } satisfies ListGuiAgentModelsResponse,
     );
@@ -499,6 +505,7 @@ describe("useAutoJudgeBilling against the real query cache", () => {
       }),
       {
         harnessId: "traycer",
+        profileId: null,
         models: [modelRow("traycer", TRAYCER_MODEL_SLUG)],
       } satisfies ListGuiAgentModelsResponse,
     );

@@ -12,7 +12,9 @@ import {
   listGuiAgentCommandsResponseSchema,
   listGuiAgentModelsRequestSchema,
   listGuiAgentModelsRequestSchemaV11,
+  listGuiAgentModelsRequestSchemaV12,
   listGuiAgentModelsResponseSchema,
+  listGuiAgentModelsResponseSchemaV11,
   listGuiHarnessesRequestSchema,
   listGuiHarnessesResponseSchema,
   listGuiHarnessesResponseSchemaV10,
@@ -1399,7 +1401,7 @@ export const agentGuiListModelsV10 = defineRpcContract({
   method: "agent.gui.listModels",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: listGuiAgentModelsRequestSchema,
-  responseSchema: listGuiAgentModelsResponseSchema,
+  responseSchema: listGuiAgentModelsResponseSchemaV11,
 });
 
 /**
@@ -1410,7 +1412,7 @@ export const agentGuiListModelsV11 = defineRpcContract({
   method: "agent.gui.listModels",
   schemaVersion: { major: 1, minor: 1 } as const,
   requestSchema: listGuiAgentModelsRequestSchemaV11,
-  responseSchema: listGuiAgentModelsResponseSchema,
+  responseSchema: listGuiAgentModelsResponseSchemaV11,
 });
 
 export const agentGuiListModelsUpgradeV10ToV11 = defineUpgradePath<
@@ -1421,6 +1423,23 @@ export const agentGuiListModelsUpgradeV10ToV11 = defineUpgradePath<
   to: { major: 1, minor: 1 },
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
+});
+
+export const agentGuiListModelsV12 = defineRpcContract({
+  method: "agent.gui.listModels",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: listGuiAgentModelsRequestSchemaV12,
+  responseSchema: listGuiAgentModelsResponseSchema,
+});
+
+export const agentGuiListModelsUpgradeV11ToV12 = defineUpgradePath<
+  typeof agentGuiListModelsV11,
+  typeof agentGuiListModelsV12
+>({
+  from: agentGuiListModelsV11.schemaVersion,
+  to: agentGuiListModelsV12.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({ ...response, profileId: null }),
 });
 
 export const agentGuiListCommandsV10 = defineRpcContract({
