@@ -179,6 +179,7 @@ jobs:
       - uses: ./.github/actions/bootstrap-ci-tools
         with:
           bun-version: "1.3.14"
+          tools: bun electron
           # Always fetch the pinned Bun fresh in this publish path rather than
           # restoring a cached executable.
           no-cache: true
