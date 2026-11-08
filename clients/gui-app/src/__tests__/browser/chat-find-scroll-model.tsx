@@ -17,11 +17,11 @@ import "@/index.css";
  *
  * Two needle occurrences live far apart in a tall transcript: one requires a
  * real scroll down from the top, the other a further scroll past it - a
- * find-next hop pressed as soon as the first match is revealed. Each needle
- * reply is itself one find UNIT (one text segment) made of many filler
- * paragraphs ahead of the one-sentence needle paragraph - taller than the
- * fixture's own viewport - so a reveal that merely scrolls the UNIT into
- * (partial) view, without landing the actual matched SENTENCE inside the
+ * find-next hop comes after the first match lands and holds through its sample.
+ * Each needle reply is itself one find UNIT (one text segment) made of many
+ * filler paragraphs ahead of the one-sentence needle paragraph. It is taller
+ * than the fixture's own viewport, so a reveal that merely scrolls the UNIT
+ * into (partial) view, without landing the actual matched SENTENCE inside the
  * scroller, is a distinguishable, catchable failure.
  */
 const EPIC_ID = "chat-find-scroll-model";

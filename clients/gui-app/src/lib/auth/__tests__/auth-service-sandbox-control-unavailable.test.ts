@@ -53,6 +53,8 @@ const SLACK_REGISTER_REQUEST: SlackAppRegisterRequest = {
   signingSecret: "signing-secret-value",
 };
 
+const SLACK_DMS_REQUEST = { botId: "bot-1", dmsEnabled: false };
+
 const trackedServices: AuthService[] = [];
 
 function slackSpies() {
@@ -70,6 +72,9 @@ function slackSpies() {
       Promise.resolve({ kind: "network-error" as const, detail: "unscripted" }),
     ),
     disconnectSlackApp: vi.fn<IRunnerHost["disconnectSlackApp"]>(() =>
+      Promise.resolve({ kind: "network-error" as const, detail: "unscripted" }),
+    ),
+    setSlackAppDms: vi.fn<IRunnerHost["setSlackAppDms"]>(() =>
       Promise.resolve({ kind: "network-error" as const, detail: "unscripted" }),
     ),
   };
@@ -258,12 +263,16 @@ describe("AuthService sandbox control on a build that cannot reach it", () => {
     );
     expect(await service.mintSlackAppInstallUrl("bot-1")).toEqual(unavailable);
     expect(await service.disconnectSlackApp("bot-1")).toEqual(unavailable);
+    expect(await service.setSlackAppDms(SLACK_DMS_REQUEST)).toEqual(
+      unavailable,
+    );
 
     expect(slack.readSlackApp).not.toHaveBeenCalled();
     expect(slack.getSlackAppManifest).not.toHaveBeenCalled();
     expect(slack.registerSlackApp).not.toHaveBeenCalled();
     expect(slack.mintSlackAppInstallUrl).not.toHaveBeenCalled();
     expect(slack.disconnectSlackApp).not.toHaveBeenCalled();
+    expect(slack.setSlackAppDms).not.toHaveBeenCalled();
   });
 
   it("answers the team host install token with the staging failure and never reaches the runner host", async () => {
@@ -304,8 +313,12 @@ describe("AuthService sandbox control on a build that cannot reach it", () => {
     expect(await service.disconnectSlackApp("bot-1")).toEqual({
       kind: "unauthorized",
     });
+    expect(await service.setSlackAppDms(SLACK_DMS_REQUEST)).toEqual({
+      kind: "unauthorized",
+    });
     // Signed out, the bearer read stops them before the runner host.
     expect(slack.readSlackApp).not.toHaveBeenCalled();
     expect(slack.disconnectSlackApp).not.toHaveBeenCalled();
+    expect(slack.setSlackAppDms).not.toHaveBeenCalled();
   });
 });

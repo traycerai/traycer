@@ -2235,6 +2235,14 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // The native-memory switch, the same shape and ordering story as its
+  // neighbour: a per-provider write whose order matters, scoped by
+  // `providerNativeMemoryWriteScope` on the hook.
+  "providers.setNativeMemory": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Whether the provider settings document is unusable as a whole: a plain
   // read, latest wins.
   "providers.settingsFile.status": { ...LATEST_SCHEDULING, poll: null },

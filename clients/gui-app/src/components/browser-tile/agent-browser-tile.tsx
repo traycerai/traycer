@@ -1,3 +1,4 @@
+import type { NestedFocusProvenance } from "@/lib/epic-nested-focus-navigation";
 import { useBrowserViewport } from "./use-browser-viewport";
 import { BrowserViewportToolbar } from "./browser-viewport-toolbar";
 import { BrowserViewportFrame } from "./browser-viewport-frame";
@@ -66,12 +67,16 @@ interface ElectronTabSurfaceProps {
   /** Whether the tile body is actually on screen, not merely mounted. */
   readonly visible: boolean;
   readonly pageSessionId: string;
-  readonly onRequestClose: () => void;
+  readonly onRequestClose: (provenance: NestedFocusProvenance) => void;
   readonly persistViewportPreset:
     | ((preset: BrowserViewViewportPresetId) => void)
     | null;
   readonly onOpenLinkInNewTile:
-    | ((url: string, disposition: "foreground" | "background") => void)
+    | ((
+        url: string,
+        disposition: "foreground" | "background",
+        provenance: NestedFocusProvenance,
+      ) => void)
     | null;
   /** See `BrowserTabTileProps.onRequestNewTab`. `null` falls back to a link open. */
   readonly onRequestNewTab: (() => void) | null;
@@ -422,7 +427,16 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     if (browserView === null) return;
     const subscription = browserView.onOpenTileRequest((change) => {
       if (!isSameBrowserViewTile(change, tileKey)) return;
-      onOpenLinkInNewTile?.(change.url, change.disposition);
+      // `=== true`, never a fallback: a main process older than the field
+      // sends `undefined`, and absence of the gesture signal is not evidence
+      // that a person clicked. A page's own `window.open` is reported to
+      // Electron exactly like a `_blank` click, so without this the script
+      // got a human's authority over a pending artifact request.
+      onOpenLinkInNewTile?.(
+        change.url,
+        change.disposition,
+        change.openerHadUserGesture === true ? "user" : "automatic",
+      );
     });
     return () => {
       subscription.dispose();
@@ -499,7 +513,8 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
             onRequestNewTab();
             return;
           }
-          onOpenLinkInNewTile?.(DEFAULT_BROWSER_TILE_URL, "foreground");
+          // The reader pressed the chord; nothing scripted reaches here.
+          onOpenLinkInNewTile?.(DEFAULT_BROWSER_TILE_URL, "foreground", "user");
           return;
         case "focusAddressBar":
           focusAddress();
@@ -509,7 +524,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
           // happens here - not even the liveness guard below, because its path
           // is tombstone-first and closes a row whose device cannot be reached.
           if (browserTileHostOwnsClose(placement)) {
-            onRequestClose();
+            onRequestClose("user");
             return;
           }
           if (
@@ -522,7 +537,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
           // refused close must not leave a live tab with no tile.
           void browserSessions
             .closeTab(props.node.sessionId, props.binding.tabId)
-            .then(onRequestClose)
+            .then(() => onRequestClose("user"))
             .catch(() => {
               toast.error("Couldn't close the browser tab. Try again.");
             });

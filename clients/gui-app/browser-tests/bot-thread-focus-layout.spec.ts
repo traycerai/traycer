@@ -14,7 +14,8 @@ const PANEL = '[data-testid="bot-thread-panel"]';
 const HEADER = `${PANEL} > header`;
 const ANCHOR = '[data-testid="bot-thread-anchor"]';
 const COMPOSER = '[data-testid="bot-thread-composer"]';
-const INPUT = '[data-testid="bot-thread-composer-input"]';
+const INPUT =
+  '[data-testid="bot-thread-composer-input"] [data-composer-editor]';
 const SEND = '[data-testid="bot-thread-composer-send"]';
 const SESSION = '[data-testid="bot-thread-session"]';
 const TASKS = '[data-testid="bot-thread-tasks"]';

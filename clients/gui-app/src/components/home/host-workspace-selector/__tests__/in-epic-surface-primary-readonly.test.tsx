@@ -1857,6 +1857,22 @@ describe("the chat chip is the composer's picker", () => {
     fireEvent.click(screen.getByTestId("settings-host-switcher"));
   }
 
+  /** Details belongs to the host's wrapper, outside the selecting option. */
+  function openHostDetails(row: HTMLElement): HTMLDetailsElement {
+    const details = row.parentElement?.querySelector("details");
+    if (details === null || details === undefined) {
+      throw new Error("host row has no Details disclosure");
+    }
+    expect(details.open).toBe(false);
+    fireEvent.click(
+      within(details).getByText("Details", { selector: "summary" }),
+    );
+    expect(details.open).toBe(true);
+    expect(onForkOnHost).not.toHaveBeenCalled();
+    expect(onForkOnNewSandbox).not.toHaveBeenCalled();
+    return details;
+  }
+
   beforeEach(() => {
     useAuthStore.setState({
       status: "signed-in",
@@ -1946,12 +1962,12 @@ describe("the chat chip is the composer's picker", () => {
       true,
     );
     expect(row.textContent).toContain("e2e-sbx-agent-1");
-    expect(row.textContent).toContain(
+    expect(openHostDetails(row).textContent).toContain(
       "Agent sandbox · created by Planner · destroys itself after 2 idle min",
     );
-    expect(within(row).getByTestId("host-switcher-row-tag").textContent).toBe(
-      "Personal",
-    );
+    expect(
+      within(row).getByTestId("host-option-environment-box-agent").textContent,
+    ).toBe("Personal");
     expect(
       screen.queryByTestId("settings-host-switcher-option-box-automations"),
     ).toBeNull();
@@ -1970,7 +1986,7 @@ describe("the chat chip is the composer's picker", () => {
     expect(screen.getByTestId("host-switcher-in-this-task").contains(row)).toBe(
       true,
     );
-    expect(row.textContent).toContain(
+    expect(openHostDetails(row).textContent).toContain(
       "Agent sandbox · created by Planner · destroys itself after 2 idle min",
     );
   });
@@ -1984,13 +2000,8 @@ describe("the chat chip is the composer's picker", () => {
     expect(
       within(computer).getByText("Computer").classList.contains("sr-only"),
     ).toBe(true);
-    const visibleCopy = Array.from(computer.querySelectorAll("span"))
-      .filter(
-        (span) =>
-          span.children.length === 0 && !span.classList.contains("sr-only"),
-      )
-      .map((span) => span.textContent);
-    expect(visibleCopy).toEqual(["windows-test-machine", "Windows · Active"]);
+    expect(within(computer).getByText("windows-test-machine")).toBeDefined();
+    expect(openHostDetails(computer).textContent).toContain("Windows · Active");
     expect(screen.getByText("New Personal sandbox")).toBeDefined();
     expect(
       screen.getByText(
@@ -2029,10 +2040,10 @@ describe("the chat chip is the composer's picker", () => {
       screen.getByTestId("host-switcher-sandboxes-you-started-toggle"),
     );
 
-    expect(
-      screen.getByTestId("settings-host-switcher-option-box-started")
-        .textContent,
-    ).toContain("Personal · $0.03 today");
+    const row = screen.getByTestId("settings-host-switcher-option-box-started");
+    expect(openHostDetails(row).textContent).toContain(
+      "Personal · $0.03 today",
+    );
   });
 
   it("hands a New row's pick to the fork, staging nothing", () => {

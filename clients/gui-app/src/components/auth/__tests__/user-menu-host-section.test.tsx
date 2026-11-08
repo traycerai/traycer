@@ -657,7 +657,7 @@ describe("<UserMenu /> host section", () => {
   });
 
   describe("host row tooltip (G4)", () => {
-    it("shows the full name and the activate hint when the row's name is truncated", async () => {
+    it("shows only the full name when an account-menu row's name is truncated", async () => {
       const active = hostScopeOptionFixture({
         hostId: "host-active",
         isActive: true,
@@ -679,15 +679,19 @@ describe("<UserMenu /> host section", () => {
       });
 
       await openMenu();
+      const name = screen.getByText("Office Linux Workstation");
+      expect(name.classList.contains("whitespace-normal")).toBe(true);
+      expect(name.classList.contains("wrap-anywhere")).toBe(true);
+      expect(name.classList.contains("truncate")).toBe(false);
       fireEvent.focus(screen.getByTestId("user-menu-host-option-host-other"));
       const tooltip = await screen.findByRole("tooltip");
 
-      expect(tooltip.textContent).toContain("Office Linux Workstation");
-      expect(tooltip.textContent).toContain(ACTIVATE_HOST_HINT);
+      expect(tooltip.textContent).toBe("Office Linux Workstation");
+      expect(screen.getAllByText(ACTIVATE_HOST_HINT)).toHaveLength(1);
       restore();
     });
 
-    it("shows only the activate hint - no host name - when the row's name fits", async () => {
+    it("shows no row tooltip when the account-menu name fits and keeps the activation hint in the header once", async () => {
       const active = hostScopeOptionFixture({
         hostId: "host-active",
         isActive: true,
@@ -709,11 +713,22 @@ describe("<UserMenu /> host section", () => {
       });
 
       await openMenu();
-      fireEvent.focus(screen.getByTestId("user-menu-host-option-host-other"));
-      const tooltip = await screen.findByRole("tooltip");
-
-      expect(tooltip.textContent).toBe(ACTIVATE_HOST_HINT);
-      restore();
+      const row = screen.getByTestId("user-menu-host-option-host-other");
+      expect(
+        screen.getByText("Short").classList.contains("wrap-anywhere"),
+      ).toBe(true);
+      vi.useFakeTimers();
+      try {
+        fireEvent.pointerMove(row, { pointerType: "mouse" });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(501);
+        });
+        expect(screen.queryByRole("tooltip")).toBeNull();
+        expect(screen.getAllByText(ACTIVATE_HOST_HINT)).toHaveLength(1);
+      } finally {
+        vi.useRealTimers();
+        restore();
+      }
     });
 
     it("shows no tooltip at all on the active row when its name fits", async () => {

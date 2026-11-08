@@ -238,21 +238,24 @@ describe("legacy traycer-* reference components", () => {
     expect(resolveTargetTabForEpic).not.toHaveBeenCalled();
     // A chip click is a SINGLE gesture naming the epic, de-duped, carrying the
     // click's modifier triple; preview-vs-permanent is the resolver's call.
-    expect(openTile).toHaveBeenCalledWith({
-      node: {
-        id: "spec-1",
-        instanceId: "inst-spec",
-        type: "spec",
-        name: "Spec One",
-        hostId: "active-host-1",
+    expect(openTile).toHaveBeenCalledWith(
+      {
+        node: {
+          id: "spec-1",
+          instanceId: "inst-spec",
+          type: "spec",
+          name: "Spec One",
+          hostId: "active-host-1",
+        },
+        target: { epicId: OPEN_EPIC_ID },
+        gesture: "single",
+        modifiers: { shift: false, alt: false, middle: false },
+        placement: null,
+        dedupe: true,
+        source: "direct_ui",
       },
-      target: { epicId: OPEN_EPIC_ID },
-      gesture: "single",
-      modifiers: { shift: false, alt: false, middle: false },
-      placement: null,
-      dedupe: true,
-      source: "direct_ui",
-    });
+      "user",
+    );
     expect(navigateToTabIntent).not.toHaveBeenCalled();
   });
 
@@ -265,21 +268,24 @@ describe("legacy traycer-* reference components", () => {
 
     clickRef("Chat One");
 
-    expect(openTile).toHaveBeenCalledWith({
-      node: {
-        id: "chat-1",
-        instanceId: "inst-chat",
-        type: "chat",
-        name: "Chat One",
-        hostId: "active-host-1",
+    expect(openTile).toHaveBeenCalledWith(
+      {
+        node: {
+          id: "chat-1",
+          instanceId: "inst-chat",
+          type: "chat",
+          name: "Chat One",
+          hostId: "active-host-1",
+        },
+        target: { epicId: OPEN_EPIC_ID },
+        gesture: "single",
+        modifiers: { shift: false, alt: false, middle: false },
+        placement: null,
+        dedupe: true,
+        source: "direct_ui",
       },
-      target: { epicId: OPEN_EPIC_ID },
-      gesture: "single",
-      modifiers: { shift: false, alt: false, middle: false },
-      placement: null,
-      dedupe: true,
-      source: "direct_ui",
-    });
+      "user",
+    );
     expect(navigateToTabIntent).not.toHaveBeenCalled();
   });
 
@@ -582,6 +588,7 @@ describe("DEFAULT_COMPONENTS wires the legacy reference tags", () => {
         target: { epicId: OPEN_EPIC_ID },
         gesture: "single",
       }),
+      "user",
     );
   });
 });

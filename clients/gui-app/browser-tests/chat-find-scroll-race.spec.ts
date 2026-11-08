@@ -145,10 +145,9 @@ test("reveals a matched sentence far below the fold inside the viewport, holds i
   );
   assertLandsAndHolds(nearSamples);
 
-  // Pressed as soon as the first match lands - the real-browser analogue of
-  // the hook-level "same-unit hop while navigation is pending" regression:
-  // here it is a different row entirely, farther down, so the hop must
-  // issue (and this time land) a brand new real scroll.
+  // After the first match lands and holds through the full 45-frame sample,
+  // Enter requests the second occurrence in a different row farther down,
+  // which must issue and land a brand-new real scroll.
   await page.locator(FIND_INPUT).press("Enter");
 
   const farSamples = await sampleSentenceFullyInsideScroller(

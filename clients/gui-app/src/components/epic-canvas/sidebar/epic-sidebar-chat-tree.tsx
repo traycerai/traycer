@@ -1793,15 +1793,18 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     (event: React.MouseEvent<HTMLButtonElement>) => {
       if (isRenaming) return;
       if (openableType === null) return;
-      openTile({
-        node: openRef(),
-        target: { tabId },
-        gesture: "single",
-        modifiers: modifiersFromMouseEvent(event),
-        placement: null,
-        dedupe: true,
-        source: "direct_ui",
-      });
+      openTile(
+        {
+          node: openRef(),
+          target: { tabId },
+          gesture: "single",
+          modifiers: modifiersFromMouseEvent(event),
+          placement: null,
+          dedupe: true,
+          source: "direct_ui",
+        },
+        "user",
+      );
       // The opening itself is the tree's, on every surface. A mounting surface
       // only gets to append - the switcher sheet closes here.
       if (surface !== null) surface.onRowActivated();
@@ -1817,15 +1820,18 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       if (openableType === null) return;
       // Host-aware dedupe: a cross-host clone holds one tab per host for the
       // same copied chat id, and `openRef` means this row's own.
-      openTile({
-        node: { ...openRef(), instanceId: uuidv4() },
-        target: { tabId },
-        gesture: "double",
-        modifiers: modifiersFromMouseEvent(event),
-        placement: null,
-        dedupe: true,
-        source: "direct_ui",
-      });
+      openTile(
+        {
+          node: { ...openRef(), instanceId: uuidv4() },
+          target: { tabId },
+          gesture: "double",
+          modifiers: modifiersFromMouseEvent(event),
+          placement: null,
+          dedupe: true,
+          source: "direct_ui",
+        },
+        "user",
+      );
     },
     [openRef, isRenaming, openableType, openTile, tabId],
   );

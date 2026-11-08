@@ -70,7 +70,7 @@ export const DESKTOP_SECRET_KINDS = [
 ] as const satisfies readonly SandboxSecretFormKind[];
 export type DesktopSecretKind = (typeof DESKTOP_SECRET_KINDS)[number];
 
-/** The kinds Add a secret offers; a provider's key is set on its Account tab. */
+/** The kinds Add a secret offers; a provider's key is set on that provider's page. */
 export const ADD_SECRET_KINDS = [
   "api_key",
   "database",

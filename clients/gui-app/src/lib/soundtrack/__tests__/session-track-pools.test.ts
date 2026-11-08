@@ -75,6 +75,12 @@ function openWith(config: SessionConfig) {
     setVolume: vi.fn<(volume: number) => void>(),
     duck: vi.fn<(chimeSeconds: number) => void>(),
     close: vi.fn<(afterSeconds: number) => void>(),
+    pause: () => {
+      output.stopClock();
+    },
+    resume: () => {
+      output.startClock();
+    },
   };
   const manifest: SoundtrackManifest = {
     tracks: config.tracks,
@@ -100,6 +106,7 @@ function openWith(config: SessionConfig) {
     director,
     resumePositions: config.resumePositions,
     onSounding,
+    onResumeRefused: () => undefined,
   });
   return { session, output, onSounding };
 }

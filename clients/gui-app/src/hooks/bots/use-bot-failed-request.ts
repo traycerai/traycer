@@ -6,6 +6,7 @@ import type {
   BotActivityReason,
 } from "@traycer/protocol/host/bot/schemas";
 import { sandboxRefusalCopyFor } from "@/components/chat/segments/sandbox-refusal-copy";
+import { BOT_CONVERSATION_IMAGES_ONLY_TEXT } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { BotComposerEdit } from "@/components/bots/bot-message-composer";
 import type { ChatBotFailedRequest } from "@/components/chat/chat-bot-presentation-context";
 import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
@@ -133,7 +134,12 @@ export function useBotFailedRequest(args: {
                   {
                     botId,
                     conversationId: channelId,
-                    text,
+                    // A post of images alone has no text; its images are
+                    // the row's, which the retry re-sends.
+                    text:
+                      text.length === 0
+                        ? BOT_CONVERSATION_IMAGES_ONLY_TEXT
+                        : text,
                     threadId,
                     announcementId: null,
                     redeliver: { requestId },
@@ -148,7 +154,7 @@ export function useBotFailedRequest(args: {
           channelId !== null &&
           senderUserId !== null &&
           senderUserId === viewerUserId
-            ? (text) => onEdit({ requestId, text })
+            ? (text) => onEdit({ requestId, text, content: null })
             : null,
       };
     },

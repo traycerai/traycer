@@ -61,6 +61,7 @@ import {
   botConversationSendRequestSchemaV10,
   botConversationSendRequestSchemaV11,
   botConversationSendRequestSchemaV12,
+  botConversationSendRequestSchemaV13,
   botConversationSendResponseSchema,
   botConversationSearchRequestSchema,
   botConversationSearchResponseSchema,
@@ -396,7 +397,7 @@ export const botConversationSearchV10 = defineRpcContract({
 export const botConversationSendV13 = defineRpcContract({
   method: "bot.conversation.send",
   schemaVersion: { major: 1, minor: 3 } as const,
-  requestSchema: botConversationSendRequestSchema,
+  requestSchema: botConversationSendRequestSchemaV13,
   responseSchema: botConversationSendResponseSchema,
 });
 export const botConversationSendUpgradeV12ToV13 = defineUpgradePath<
@@ -405,6 +406,26 @@ export const botConversationSendUpgradeV12ToV13 = defineUpgradePath<
 >({
   from: botConversationSendV12.schemaVersion,
   to: botConversationSendV13.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+/**
+ * `bot.conversation.send@1.4` (T123): a message may carry images
+ * (`attachments`), and with one needs no text. A 1.3 request carries none.
+ */
+export const botConversationSendV14 = defineRpcContract({
+  method: "bot.conversation.send",
+  schemaVersion: { major: 1, minor: 4 } as const,
+  requestSchema: botConversationSendRequestSchema,
+  responseSchema: botConversationSendResponseSchema,
+});
+export const botConversationSendUpgradeV13ToV14 = defineUpgradePath<
+  typeof botConversationSendV13,
+  typeof botConversationSendV14
+>({
+  from: botConversationSendV13.schemaVersion,
+  to: botConversationSendV14.schemaVersion,
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });

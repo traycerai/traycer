@@ -321,8 +321,12 @@ function SwitcherRowActionsBody(
             hostId: mutationHostId,
           });
     if (found === null) return;
-    navigateNested(epicId, tabId, () =>
-      prepareCloseCanvasTabFocusTarget(tabId, found.paneId, found.instanceId),
+    navigateNested(
+      epicId,
+      tabId,
+      () =>
+        prepareCloseCanvasTabFocusTarget(tabId, found.paneId, found.instanceId),
+      "user",
     );
   }, [
     epicId,

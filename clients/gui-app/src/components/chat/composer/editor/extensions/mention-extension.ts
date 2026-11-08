@@ -4,8 +4,9 @@ import { PluginKey } from "@tiptap/pm/state";
 import { ReactNodeViewRenderer } from "@tiptap/react";
 
 import {
+  BOT_TOKEN_CONTEXT_TYPE,
   mentionAttrsFromAttachment,
-  mentionPlainTextFromAttrs,
+  mentionChipText,
 } from "@/lib/composer/tiptap-json-content";
 import type {
   BrowserTabMentionEntry,
@@ -62,14 +63,14 @@ export function createMentionExtension(deps: MentionExtensionDeps) {
     },
 
     renderText({ node }) {
-      return mentionPlainTextFromAttrs(node.attrs);
+      return mentionChipText(node.attrs);
     },
 
     renderHTML({ node, HTMLAttributes }) {
       return [
         "span",
         mergeAttributes(HTMLAttributes, { "data-composer-mention": "" }),
-        mentionPlainTextFromAttrs(node.attrs),
+        mentionChipText(node.attrs),
       ];
     },
 
@@ -114,11 +115,15 @@ export function createMentionExtension(deps: MentionExtensionDeps) {
           commitBrowserTabPreviewInsertion(editor, range, action.entry);
           return;
         }
-        // The prompt's rows all carry what they insert; a `select` row is
-        // another picker's.
-        if (action.kind === "complete") {
-          commitMentionInsertion(editor, range, action.mention);
+        if (action.kind === "complete-token") {
+          commitMentionNode(editor, range, {
+            contextType: BOT_TOKEN_CONTEXT_TYPE,
+            id: action.token,
+            label: action.label,
+          });
+          return;
         }
+        commitMentionInsertion(editor, range, action.mention);
       },
     },
   });
@@ -164,6 +169,14 @@ function commitMentionInsertion(
   range: { from: number; to: number },
   mention: MentionAttachment,
 ): boolean {
+  return commitMentionNode(editor, range, mentionAttrsFromAttachment(mention));
+}
+
+function commitMentionNode(
+  editor: Editor,
+  range: { from: number; to: number },
+  attrs: Record<string, unknown>,
+): boolean {
   const overrideSpace =
     editor.state.doc.textBetween(range.to, range.to + 1) === " ";
   return editor
@@ -172,7 +185,7 @@ function commitMentionInsertion(
     .insertContentAt(
       { from: range.from, to: overrideSpace ? range.to + 1 : range.to },
       [
-        { type: "mention", attrs: mentionAttrsFromAttachment(mention) },
+        { type: "mention", attrs },
         { type: "text", text: " " },
       ],
     )

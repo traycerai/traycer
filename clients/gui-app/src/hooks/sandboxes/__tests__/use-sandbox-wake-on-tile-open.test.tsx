@@ -402,6 +402,7 @@ describe("useSandboxWakeForOpenedTile", () => {
     expect(mocks.toastWarning.mock.calls[0][0]).toBe(
       "This sandbox can't be woken from here yet",
     );
+    expect(mocks.toastWarning.mock.calls[0][1]).toBeUndefined();
   });
 
   it("names the shortfall when the credit gate refuses the wake", async () => {

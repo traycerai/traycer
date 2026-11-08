@@ -57,6 +57,7 @@ export function useBoundSandboxRemedies(input: {
                   "explicit",
                   "direct_ui",
                 ),
+                "user",
               );
             },
       onChooseAnotherHost: cloneAvailable
