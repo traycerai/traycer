@@ -21,6 +21,7 @@ import { BotIdentityContext } from "@/components/bots/bot-identity-context";
 import { BotMentionsContext } from "@/components/bots/bot-mentions-context";
 import { BotReadFailure } from "@/components/bots/bot-read-failure";
 import { BotSurfaceCardsContext } from "@/components/bots/bot-surface-card-context";
+import type { BotTranscriptMark } from "@/components/bots/bot-chat-transcript";
 import { BotThreadRowMenu } from "@/components/bots/bot-thread-follow";
 import {
   BotThreadCardBody,
@@ -60,6 +61,7 @@ import {
   botMemberName,
   type BotMemberResolver,
 } from "@/lib/bots/bot-member-names";
+import { advanceTarget } from "@/lib/bots/bot-read-cursor";
 import { firstLineOf } from "@/lib/bots/bot-trunk-model";
 import { postTextOf } from "@/lib/bots/reply-row";
 import type { MobileLevel2Form } from "@/lib/layout/mobile-layout-form";
@@ -428,17 +430,65 @@ function useCardNear(
   return near;
 }
 
-/** How long a card's newest reply stays in view before its replies are read. */
+/**
+ * A card's reading, as the panel reads: the reply its read cursor would
+ * advance to is marked under that reply's row once the row is drawn (`null`
+ * while there is nothing to read), and the cursor advances once that mark
+ * has stayed in the page's view. A mark seen for any other reply
+ * acknowledges nothing.
+ */
+function useCardRead(input: {
+  readonly botId: string;
+  readonly hostId: string;
+  readonly threadId: string;
+  readonly scroller: HTMLElement | null;
+}): BotTranscriptMark | null {
+  const { botId, hostId, threadId, scroller } = input;
+  const client = useTabHostClient();
+  const readCursors = useBotReadCursors(botId, hostId)?.data;
+  const targetId =
+    readCursors === undefined
+      ? null
+      : (advanceTarget(readCursors, threadId)?.messageId ?? null);
+  const [drawn, setDrawn] = useState<{
+    readonly node: HTMLElement;
+    readonly messageId: string;
+  } | null>(null);
+  const ref = useCallback(
+    (node: HTMLElement | null) =>
+      setDrawn(
+        node === null || targetId === null
+          ? null
+          : { node, messageId: targetId },
+      ),
+    [targetId],
+  );
+  const seen = useMarkSeen(drawn?.node ?? null, scroller);
+  useAdvanceWhilePresented({
+    client,
+    botId,
+    conversationId: threadId,
+    readCursors,
+    presented: usePresented(seen && drawn?.messageId === targetId),
+  });
+  return useMemo(
+    () => (targetId === null ? null : { messageId: targetId, ref }),
+    [ref, targetId],
+  );
+}
+
+/** How long a card's marked reply stays in view before it is read. */
 const READ_AFTER_MS = 1_000;
 
 /**
- * Whether `mark`, under a card's newest reply, has been in the page's view
- * for `READ_AFTER_MS` and still is: a card's channel line or post in view
- * reads nothing, and neither does a glance while the cards above it are
- * still growing or a scroll past. Where nothing can observe, the replies
- * are read once drawn.
+ * Whether `mark`, under the reply a card's reading would acknowledge, has
+ * been in the page's view for `READ_AFTER_MS` and still is: a card's channel
+ * line or post in view reads nothing, and neither does a glance while the
+ * cards above it are still growing or a scroll past. Each reply's mark is a
+ * node of its own, so each is held anew. Where nothing can observe, a mark
+ * is seen once drawn.
  */
-function useNewestReplySeen(
+function useMarkSeen(
   mark: HTMLElement | null,
   scroller: HTMLElement | null,
 ): boolean {
@@ -716,8 +766,8 @@ function ReplyTime(props: { readonly at: number }): ReactNode {
  * The thread in full, under the card's channel line: the thread panel's own
  * body (`BotThreadCardBody`) - its post, its replies and its box - in the
  * bot's scope, folded in the middle while long and not yet shown in full.
- * Once its newest reply has stayed in the page's view (`scroller`), its
- * replies are read, as the panel reads them.
+ * Once the newest reply its read cursor names is drawn and has stayed in the
+ * page's view (`scroller`), its replies are read, as the panel reads them.
  */
 function FullThread(props: {
   readonly hostId: string;
@@ -762,15 +812,7 @@ function FullThread(props: {
     boundHostId,
     boundHostTakes: threadAnchorKinds,
   });
-  const readCursors = useBotReadCursors(botId, hostId)?.data;
-  const [repliesEnd, setRepliesEnd] = useState<HTMLElement | null>(null);
-  useAdvanceWhilePresented({
-    client,
-    botId,
-    conversationId: threadId,
-    readCursors,
-    presented: usePresented(useNewestReplySeen(repliesEnd, scroller)),
-  });
+  const readMark = useCardRead({ botId, hostId, threadId, scroller });
   const unfolded = useBotThreadFoldStore((state) =>
     Object.hasOwn(state.unfolded, threadId),
   );
@@ -787,9 +829,9 @@ function FullThread(props: {
           },
       onOpenThread,
       onShowPost,
-      repliesEnd: setRepliesEnd,
+      readMark,
     }),
-    [onOpenThread, onShowPost, threadId, unfold, unfolded],
+    [onOpenThread, onShowPost, readMark, threadId, unfold, unfolded],
   );
   const viewer = useAuthStore((s) => s.profile);
   const anchorSenderLabel = useCallback(

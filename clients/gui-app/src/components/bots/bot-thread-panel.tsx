@@ -54,6 +54,7 @@ import type { BotImageReach } from "@/hooks/bots/use-bot-send-version";
 import type {
   BotTranscriptFold,
   BotTranscriptLanding,
+  BotTranscriptMark,
   QuestionAnswerSend,
 } from "@/components/bots/bot-chat-transcript";
 import type {
@@ -121,7 +122,8 @@ export type BotThreadPanelThread =
  * card's reply count opens the thread in its channel's panel
  * (`onOpenThread`), its post's time shows the post in the channel
  * (`onShowPost`), a long thread folds its middle (`fold`, `null` once shown
- * in full), and the mark under its newest reply is handed to `repliesEnd`.
+ * in full), and the reply its reading would acknowledge is marked
+ * (`readMark`, `null` for none).
  */
 export type BotThreadLayout =
   | { readonly kind: "panel" }
@@ -130,7 +132,7 @@ export type BotThreadLayout =
       readonly fold: BotTranscriptFold | null;
       readonly onOpenThread: () => void;
       readonly onShowPost: () => void;
-      readonly repliesEnd: (node: HTMLElement | null) => void;
+      readonly readMark: BotTranscriptMark | null;
     };
 
 const PANEL_LAYOUT: BotThreadLayout = { kind: "panel" };
@@ -1056,7 +1058,7 @@ function KnownThread(
   const flow = useMemo(
     () =>
       layout.kind === "card"
-        ? { fold: layout.fold, end: layout.repliesEnd }
+        ? { fold: layout.fold, mark: layout.readMark }
         : null,
     [layout],
   );

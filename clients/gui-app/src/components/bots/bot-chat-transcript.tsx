@@ -759,7 +759,7 @@ function BotTranscriptRows(props: {
           transcriptWindow={props.transcriptWindow}
           reportVisibleRange={props.reportVisibleRange}
           fold={flow.fold}
-          end={flow.end}
+          mark={flow.mark}
         />
       </TasklessMarkdownLinkProvider>
     );
@@ -784,11 +784,18 @@ function BotTranscriptRows(props: {
  */
 export interface BotTranscriptFlow {
   readonly fold: BotTranscriptFold | null;
-  /**
-   * Handed a mark under the newest row once that row is drawn, for whoever
-   * needs to know the newest reply is in view; `null` draws none.
-   */
-  readonly end: ((node: HTMLElement | null) => void) | null;
+  /** A mark drawn under one message's row; `null` draws none. */
+  readonly mark: BotTranscriptMark | null;
+}
+
+/**
+ * A mark under the row of `messageId`, drawn once that row is, and anew for
+ * each message, handed to `ref`: for whoever needs to know that message is
+ * in view.
+ */
+export interface BotTranscriptMark {
+  readonly messageId: string;
+  readonly ref: (node: HTMLElement | null) => void;
 }
 
 /**
@@ -810,8 +817,8 @@ const NO_BACKGROUND_TOOL_BLOCKS: ReadonlySet<string> = new Set();
  * the list. A row the window has not hydrated yet holds its place with a
  * spinner, one for a run of them. On the windowed line the rows drawn are
  * reported as the visible range, which is what hydrates them, and withdrawn
- * when the rows go. Under the newest row, once it is drawn, the mark `end`
- * is handed.
+ * when the rows go. `mark` is drawn under its message's row while that row
+ * is drawn.
  */
 function BotTranscriptFlowRows(props: {
   readonly header: ReactNode;
@@ -819,9 +826,9 @@ function BotTranscriptFlowRows(props: {
   readonly transcriptWindow: TranscriptWindow | null;
   readonly reportVisibleRange: (range: OrdinalRange | null) => void;
   readonly fold: BotTranscriptFold | null;
-  readonly end: ((node: HTMLElement | null) => void) | null;
+  readonly mark: BotTranscriptMark | null;
 }): ReactNode {
-  const { header, messages, transcriptWindow, reportVisibleRange, fold, end } =
+  const { header, messages, transcriptWindow, reportVisibleRange, fold, mark } =
     props;
   const rows = useMemo(
     () =>
@@ -837,6 +844,13 @@ function BotTranscriptFlowRows(props: {
   const folded = fold !== null && rows.length > fold.maxRows;
   const shown = folded ? rows.slice(rows.length - fold.tail) : rows;
   const hidden = rows.length - shown.length;
+  const markRowId =
+    mark === null
+      ? null
+      : replyRowIdFor(
+          shown.flatMap((row) => (row.kind === "hydrated" ? [row.model] : [])),
+          mark.messageId,
+        );
   const range = ordinalRangeOf(shown);
   const fromOrdinal = range?.fromOrdinal ?? null;
   const toOrdinal = range?.toOrdinal ?? null;
@@ -900,16 +914,18 @@ function BotTranscriptFlowRows(props: {
               nextStepActions={null}
               part={null}
             />
+            {mark !== null && row.model.id === markRowId ? (
+              <div
+                key={mark.messageId}
+                ref={mark.ref}
+                aria-hidden="true"
+                data-testid="bot-chat-transcript-mark"
+                data-mark-message-id={mark.messageId}
+              />
+            ) : null}
           </div>
         ),
       )}
-      {end !== null && shown.at(-1)?.kind === "hydrated" ? (
-        <div
-          ref={end}
-          aria-hidden="true"
-          data-testid="bot-chat-transcript-flow-end"
-        />
-      ) : null}
     </div>
   );
 }

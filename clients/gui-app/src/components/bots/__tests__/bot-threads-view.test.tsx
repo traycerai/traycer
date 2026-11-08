@@ -288,9 +288,11 @@ const FOLLOWING: BotThreadFollow = {
 
 /** The installed app's form the next mount draws in; `null` where the container decides. */
 let mountLevel2: MobileLevel2Form | null = null;
+/** The last mount's query client, for a case that has the host read again. */
+let queryClient = new QueryClient();
 
 function mount(): void {
-  const queryClient = new QueryClient({
+  queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false, staleTime: 0, gcTime: Infinity },
       mutations: { retry: false },
@@ -331,9 +333,13 @@ function mount(): void {
         },
         "bot.readCursor.advance": (params) => {
           mocks.advances.push(params);
-          return {
-            cursor: { messageId: params.messageId, seq: params.seq },
+          const cursor = { messageId: params.messageId, seq: params.seq };
+          const read = mocks.hosted[params.botId].cursors;
+          mocks.hosted[params.botId].cursors = {
+            ...read,
+            cursors: { ...read.cursors, [params.conversationId]: cursor },
           };
+          return { cursor };
         },
         "bot.readCursor.read": (params) => {
           mocks.reads.push({ method: "bot.readCursor.read", params });
@@ -446,9 +452,9 @@ function intersectTarget(
   });
 }
 
-/** The mark under a full card's newest reply. */
-function newestReplyMark(threadId: string): HTMLElement {
-  return within(card(threadId)).getByTestId("bot-chat-transcript-flow-end");
+/** The mark under the reply a full card's reading would acknowledge. */
+function readMark(threadId: string): HTMLElement {
+  return within(card(threadId)).getByTestId("bot-chat-transcript-mark");
 }
 
 /** Brings a card near the page's view and waits for its thread to draw. */
@@ -682,13 +688,10 @@ describe("<BotThreadsView />", () => {
     expect(within(target).getByTestId("bot-thread-anchor")).toBeTruthy();
 
     // Once near, nothing watches the card, so nothing can take its thread
-    // back; the mark under its newest reply is watched in the view alone.
+    // back.
     expect(
       FakeIntersectionObserver.all.filter((o) => o.targets.has(target)),
     ).toEqual([]);
-    expect(
-      observersOf(newestReplyMark("team-new"), "view").map((o) => o.options),
-    ).toEqual([{ root: scroller, rootMargin: undefined }]);
     expect(card("team-new").getAttribute("data-full")).toBe("true");
   });
 
@@ -913,8 +916,8 @@ describe("<BotThreadsView />", () => {
         "team-b": { messageId: "m-0", seq: 1_000 },
       },
       latest: {
-        "team-a": { messageId: "m-a", seq: 5_000 },
-        "team-b": { messageId: "m-b", seq: 4_000 },
+        "team-a": { messageId: "team-a-reply-2", seq: 5_000 },
+        "team-b": { messageId: "team-b-reply-2", seq: 4_000 },
       },
     };
     withReplies(TEAM, "team-a", replyTexts(2), 5_000);
@@ -925,17 +928,26 @@ describe("<BotThreadsView />", () => {
     // Both summaries come near together and draw their threads in full.
     await within(await revealFull("team-a")).findByText("reply 2");
     await within(await revealFull("team-b")).findByText("reply 2");
+    // The mark sits under the newest reply, watched in the page's view alone.
+    expect(readMark("team-a").getAttribute("data-mark-message-id")).toBe(
+      "team-a-reply-2",
+    );
+    expect(
+      observersOf(readMark("team-a"), "view").map((o) => o.options),
+    ).toEqual([
+      { root: screen.getByTestId("bot-threads-scroll"), rootMargin: undefined },
+    ]);
 
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    intersectTarget(newestReplyMark("team-a"), "view", true);
-    intersectTarget(newestReplyMark("team-b"), "view", true);
+    intersectTarget(readMark("team-a"), "view", true);
+    intersectTarget(readMark("team-b"), "view", true);
     // The card's read hold is a second.
     act(() => {
       vi.advanceTimersByTime(999);
     });
     expect(mocks.advances).toEqual([]);
     // The second card's newest reply leaves the view before the second is up.
-    intersectTarget(newestReplyMark("team-b"), "view", false);
+    intersectTarget(readMark("team-b"), "view", false);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2_000);
     });
@@ -943,9 +955,87 @@ describe("<BotThreadsView />", () => {
 
     await waitFor(() =>
       expect(mocks.advances).toEqual([
-        { botId: TEAM, conversationId: "team-a", messageId: "m-a", seq: 5_000 },
+        {
+          botId: TEAM,
+          conversationId: "team-a",
+          messageId: "team-a-reply-2",
+          seq: 5_000,
+        },
       ]),
     );
+  });
+
+  it("acknowledges a newer reply only once it is drawn and has stayed in view itself, not on the strength of the reply seen before it", async () => {
+    mocks.hosted[TEAM].cursors = {
+      cursors: { "team-new": { messageId: "team-new-reply-1", seq: 2_000 } },
+      latest: { "team-new": { messageId: "team-new-reply-2", seq: 3_000 } },
+    };
+    withReplies(TEAM, "team-new", replyTexts(2), 3_000);
+    mount();
+    await waitFor(() => expect(listed()).toContain("team-new"));
+    await within(await revealFull("team-new")).findByText("reply 2");
+
+    // The tail is read.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    intersectTarget(readMark("team-new"), "view", true);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    vi.useRealTimers();
+    await waitFor(() => expect(mocks.advances).toHaveLength(1));
+
+    // The host names a newer reply the thread's session has not brought in.
+    mocks.hosted[TEAM].cursors = {
+      ...mocks.hosted[TEAM].cursors,
+      latest: { "team-new": { messageId: "team-new-reply-3", seq: 4_000 } },
+    };
+    await act(() => queryClient.invalidateQueries());
+    await waitFor(() =>
+      expect(
+        within(card("team-new")).queryByTestId("bot-chat-transcript-mark"),
+      ).toBeNull(),
+    );
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    vi.useRealTimers();
+    expect(mocks.advances).toHaveLength(1);
+
+    // The reply arrives: its own mark, held anew.
+    const session = mocks.threadSessions["team-new"].store;
+    act(() => {
+      session.setState({
+        messages: [
+          ...session.getState().messages,
+          postRow("team-new-reply-3", "reply 3"),
+        ],
+      });
+    });
+    await within(card("team-new")).findByText("reply 3");
+    expect(readMark("team-new").getAttribute("data-mark-message-id")).toBe(
+      "team-new-reply-3",
+    );
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    intersectTarget(readMark("team-new"), "view", true);
+    act(() => {
+      vi.advanceTimersByTime(999);
+    });
+    expect(mocks.advances).toHaveLength(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    vi.useRealTimers();
+
+    await waitFor(() =>
+      expect(mocks.advances.at(-1)).toEqual({
+        botId: TEAM,
+        conversationId: "team-new",
+        messageId: "team-new-reply-3",
+        seq: 4_000,
+      }),
+    );
+    expect(mocks.advances).toHaveLength(2);
   });
 
   it("opens a reply's turn from its receipt in a card, landed on the send that wrote the reply", async () => {
