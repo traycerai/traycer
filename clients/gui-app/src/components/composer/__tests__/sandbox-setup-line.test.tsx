@@ -7,6 +7,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import { toast } from "sonner";
 import {
   SandboxSetupLine,
   type SandboxSetupLineActions,
@@ -551,6 +552,29 @@ describe("SandboxSetupLine's failed start", () => {
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith("SBX-0412 · sbx_made_1");
     });
+  });
+
+  it("shows an error toast when copying the support reference is rejected", async () => {
+    const writeText = vi.fn(() => Promise.reject(new Error("denied")));
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const errorToast = vi.spyOn(toast, "error").mockReturnValue(0);
+    try {
+      mountFailed();
+      fireEvent.click(
+        await screen.findByTestId("sandbox-setup-copy-reference"),
+      );
+      await waitFor(() => {
+        expect(errorToast).toHaveBeenCalledWith(
+          "Couldn't copy the diagnostics.",
+        );
+      });
+      expect(writeText).toHaveBeenCalledWith("SBX-0412 · sbx_made_1");
+    } finally {
+      errorToast.mockRestore();
+    }
   });
 });
 

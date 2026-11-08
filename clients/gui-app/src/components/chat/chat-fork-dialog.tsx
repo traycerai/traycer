@@ -1311,9 +1311,6 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
               </ComposerStagedSurfaceKeyProvider>
             </div>
           </section>
-          <p className="min-w-0 break-words text-ui-xs text-muted-foreground">
-            {CHAT_FORK_SECOND_CHAT_NOTICE}
-          </p>
           <div
             className="flex min-w-0 flex-col gap-1"
             aria-label="Run location"
@@ -1352,6 +1349,9 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
               {TEAM_SANDBOX_HARNESS_UNAVAILABLE}
             </p>
           ) : null}
+          <p className="min-w-0 break-words text-ui-xs text-muted-foreground">
+            {CHAT_FORK_SECOND_CHAT_NOTICE}
+          </p>
           <ChatForkTargetNotices
             isCrossHost={isCrossHost}
             emptySandbox={forkStage !== null && forkStage.target.kind === "new"}

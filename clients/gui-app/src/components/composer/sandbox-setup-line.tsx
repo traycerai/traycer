@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from "react";
+import { toast } from "sonner";
 import { sandboxSupportReference } from "@traycer/protocol/host/sandbox-control";
 import { AlertCircle, Check, ChevronDown, ChevronRight } from "lucide-react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -781,7 +782,7 @@ function CopySupportReference(props: {
   const clipboard = useClipboardCopy({
     resetMs: 1500,
     onSuccess: null,
-    onError: null,
+    onError: () => toast.error("Couldn't copy the diagnostics."),
   });
   return (
     <LineButton
