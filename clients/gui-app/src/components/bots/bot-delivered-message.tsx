@@ -12,13 +12,15 @@ import { deliveredMessageRow } from "@/lib/bots/reply-row";
  * (Tracy Bots T159), drawn where the delivery landed, above the work it
  * prompted: the writer, the time, the text and the images, read from the
  * conversation's own row (fetched when it is not loaded), with a link to
- * where it was written that opens it there, landed on the message. Where
- * the row cannot be read, the writer and the time the delivery recorded,
- * and that the message is unavailable.
+ * where it was written that opens it there, landed on the message. Until the
+ * row is read, the writer and the time the delivery recorded, over a
+ * placeholder; where it cannot be read, that the message is unavailable.
  */
 export function BotDeliveredMessage(props: {
   readonly delivered: AutonomousResumeConversationMessage;
   readonly access: BotSessionAccess;
+  /** How the turn the message started ended when it drew no reply, under the link; `null` for none. */
+  readonly foot: ReactNode | null;
 }): ReactNode {
   const { delivered, access } = props;
   const { memberName, memberAvatarUrl, openChannel, openThread } = access;
@@ -36,7 +38,7 @@ export function BotDeliveredMessage(props: {
     threadId === null
       ? openChannel(delivered.messageId)
       : openThread(threadId, delivered.messageId);
-  const place = (
+  const link = (
     <Button
       type="button"
       variant="link"
@@ -48,6 +50,20 @@ export function BotDeliveredMessage(props: {
       {threadId === null ? "in the channel" : "in the thread"}
     </Button>
   );
+  const place =
+    props.foot === null ? (
+      link
+    ) : (
+      <>
+        {link}
+        <div
+          className="text-ui-xs text-muted-foreground"
+          data-testid="bot-delivered-ending"
+        >
+          {props.foot}
+        </div>
+      </>
+    );
   return (
     <div
       data-testid="bot-delivered-message"
@@ -74,7 +90,7 @@ export function BotDeliveredMessage(props: {
                 senderLabel,
                 senderAvatarUrl: memberAvatarUrl,
               })}
-              standIn={missing ? "Message unavailable" : null}
+              body={deliveredBody(post !== null, missing)}
               place={place}
             />
           )}
@@ -82,4 +98,13 @@ export function BotDeliveredMessage(props: {
       </BotTranscriptImageScope>
     </div>
   );
+}
+
+/** The row's text once read; else loading, until the fetch ends without it. */
+function deliveredBody(
+  read: boolean,
+  missing: boolean,
+): "message" | "loading" | "unavailable" {
+  if (read) return "message";
+  return missing ? "unavailable" : "loading";
 }

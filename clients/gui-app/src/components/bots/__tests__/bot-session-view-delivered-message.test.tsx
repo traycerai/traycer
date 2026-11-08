@@ -7,7 +7,7 @@
  * that cannot be read still says who wrote it and when.
  */
 import { StrictMode } from "react";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -16,6 +16,7 @@ import type {
   AutonomousResumeConversationMessage,
   AutonomousResumeTrigger,
 } from "@traycer/protocol/persistence/epic/content-blocks";
+import type { OpenChatEvent } from "@traycer/protocol/persistence/epic/open-harness-records";
 import type {
   ContentBlock,
   Message,
@@ -198,8 +199,42 @@ const opened = {
   thread: vi.fn<(threadId: string, messageId: string | null) => void>(),
 };
 
+/** A turn lifecycle event of the thread's session, as the host records it. */
+function turnEvent(
+  type: "turn.started" | "turn.completed",
+  timestamp: number,
+): OpenChatEvent {
+  return {
+    eventId: `event:${type}:${String(timestamp)}`,
+    type,
+    timestamp,
+    clientActionId: null,
+    actor: null,
+    message: null,
+    turnId: "turn-1",
+    messageId: null,
+    queueItemId: null,
+    approvalId: null,
+    blockId: null,
+    severity: "info",
+    metadata: null,
+  };
+}
+
 /** The thread's session, holding one turn that opens with `trigger`'s resume block. */
 function mountThreadSession(trigger: AutonomousResumeTrigger): void {
+  mountThreadSessionWith(trigger, [], true);
+}
+
+/**
+ * The same, with the turn's lifecycle `events` and whether the turn goes on
+ * to a reply (`withReply`) or holds nothing but the resume block.
+ */
+function mountThreadSessionWith(
+  trigger: AutonomousResumeTrigger,
+  events: ReadonlyArray<OpenChatEvent>,
+  withReply: boolean,
+): void {
   const turn = sessionTurn({
     messageId: "turn-record",
     turnId: "turn-1",
@@ -207,9 +242,16 @@ function mountThreadSession(trigger: AutonomousResumeTrigger): void {
     endedAt: 3_000,
     costUsd: 0.01,
   });
-  mocks.sessions[THREAD_SESSION_ID] = scriptedSession(THREAD_SESSION_ID, [
-    { ...turn, blocks: [resumeBlock(trigger), ...turn.blocks] },
-  ]).handle;
+  const session = scriptedSession(THREAD_SESSION_ID, [
+    {
+      ...turn,
+      blocks: withReply
+        ? [resumeBlock(trigger), ...turn.blocks]
+        : [resumeBlock(trigger)],
+    },
+  ]);
+  session.store.setState({ events: [...events] });
+  mocks.sessions[THREAD_SESSION_ID] = session.handle;
   render(
     <StrictMode>
       <QueryClientProvider client={new QueryClient()}>
@@ -340,5 +382,73 @@ describe("a bot's session holding a delivered member message", () => {
       within(message).getByTestId("bot-delivered-post-stand-in").textContent,
     ).toBe("Message unavailable");
     expect(within(message).queryByText(MESSAGE_TEXT)).toBeNull();
+  });
+
+  it("never draws an empty row while the message is not there to read: until its conversation is open, the writer, the time and a loading status", async () => {
+    mountThreadSession(resumeTrigger(delivered({})));
+    await settleLegendList();
+
+    const message = within(view()).getByTestId("bot-delivered-message");
+    expect(within(message).getByText("Tess Teammate")).not.toBeNull();
+    expect(within(message).getByRole("time")).not.toBeNull();
+    expect(
+      within(message).getByRole("status", { name: "Loading message" }),
+    ).not.toBeNull();
+    expect(
+      within(message).getByRole("button", { name: "in the thread" }),
+    ).not.toBeNull();
+    expect(
+      within(message).queryByTestId("bot-delivered-post-stand-in"),
+    ).toBeNull();
+  });
+
+  it("shows a loading status while the row is being located, and the text in its place once it arrives", async () => {
+    const thread = scriptedSession(THREAD_ID, []);
+    mocks.sessions[THREAD_ID] = thread.handle;
+    mountThreadSession(resumeTrigger(delivered({})));
+    await settleLegendList();
+
+    const message = within(view()).getByTestId("bot-delivered-message");
+    expect(
+      within(message).getByTestId("bot-delivered-post-loading"),
+    ).not.toBeNull();
+    expect(within(message).queryByText(MESSAGE_TEXT)).toBeNull();
+
+    act(() => {
+      thread.store.setState({ messages: [personMessage(THREAD_MESSAGE_ID)] });
+    });
+
+    expect(within(message).getByText(MESSAGE_TEXT)).not.toBeNull();
+    expect(
+      within(message).queryByTestId("bot-delivered-post-loading"),
+    ).toBeNull();
+  });
+
+  it("keeps how a resume-only turn ended under the delivered message, which replaces the card that would have said it", async () => {
+    mocks.sessions[THREAD_ID] = scriptedSession(THREAD_ID, [
+      personMessage(THREAD_MESSAGE_ID),
+    ]).handle;
+    mountThreadSessionWith(
+      resumeTrigger(delivered({})),
+      [turnEvent("turn.started", 2_000), turnEvent("turn.completed", 5_000)],
+      false,
+    );
+    await settleLegendList();
+
+    const message = within(view()).getByTestId("bot-delivered-message");
+    expect(
+      within(message).getByTestId("bot-delivered-ending").textContent,
+    ).toMatch(/^No reply/);
+  });
+
+  it("draws no ending under the delivered message of a turn that went on to reply", async () => {
+    mocks.sessions[THREAD_ID] = scriptedSession(THREAD_ID, [
+      personMessage(THREAD_MESSAGE_ID),
+    ]).handle;
+    mountThreadSession(resumeTrigger(delivered({})));
+    await settleLegendList();
+
+    const message = within(view()).getByTestId("bot-delivered-message");
+    expect(within(message).queryByTestId("bot-delivered-ending")).toBeNull();
   });
 });

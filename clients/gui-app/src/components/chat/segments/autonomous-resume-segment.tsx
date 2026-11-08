@@ -78,8 +78,9 @@ function triggerKey(trigger: AutonomousResumeTrigger): string {
 
 /**
  * In one of a bot's sessions, a trigger that carried a member's message draws
- * that message (Tracy Bots T159) in place of its card; every other trigger,
- * and every trigger outside a bot's session, draws its card.
+ * that message (Tracy Bots T159) in place of its card, with the card's foot
+ * under it when it is the last; every other trigger, and every trigger outside
+ * a bot's session, draws its card.
  */
 export function AutonomousResumeSegment(props: AutonomousResumeSegmentProps) {
   const { triggers } = props;
@@ -89,6 +90,8 @@ export function AutonomousResumeSegment(props: AutonomousResumeSegmentProps) {
   return (
     <div className="flex flex-col gap-2">
       {triggers.map((trigger, index) => {
+        const ending = index === lastIndex ? props.ending : null;
+        const folded = index === lastIndex ? props.folded : NO_FOLDED_EVENTS;
         // Defaulted key: a row validated structurally off an older host's
         // line never wrote it.
         const delivered = trigger.conversationMessage ?? null;
@@ -97,14 +100,19 @@ export function AutonomousResumeSegment(props: AutonomousResumeSegmentProps) {
             key={triggerKey(trigger)}
             trigger={trigger}
             variant={props.variant}
-            ending={index === lastIndex ? props.ending : null}
-            folded={index === lastIndex ? props.folded : NO_FOLDED_EVENTS}
+            ending={ending}
+            folded={folded}
           />
         ) : (
           <BotDeliveredMessage
             key={triggerKey(trigger)}
             delivered={delivered}
             access={session}
+            foot={
+              ending === null && folded.length === 0 ? null : (
+                <BackgroundEventFooter ending={ending} folded={folded} />
+              )
+            }
           />
         );
       })}

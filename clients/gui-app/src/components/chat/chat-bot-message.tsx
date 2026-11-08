@@ -231,17 +231,18 @@ function MemberRow(props: {
 /**
  * A member's message drawn outside its own channel or thread - the message a
  * delivery brought into one of the bot's sessions (Tracy Bots T159): the
- * member's row with nothing on hover, `place` under its text, and `standIn`
- * in place of the text where the message cannot be read.
+ * member's row with nothing on hover and `place` under its text. Until the
+ * message is read its text is a placeholder, and where it cannot be read the
+ * row says so; the row is never empty.
  */
 export function ChatBotDeliveredPost(props: {
   readonly message: ChatMessageModel;
-  /** What the row says in place of its text; `null` draws the text. */
-  readonly standIn: string | null;
-  /** Where the message was written, under it. */
+  /** `message`: its text is read; `loading`: it is being read; `unavailable`: it cannot be. */
+  readonly body: "message" | "loading" | "unavailable";
+  /** Where the message was written, and how its turn ended, under it. */
   readonly place: ReactNode;
 }): ReactElement {
-  const { message, standIn, place } = props;
+  const { message, body, place } = props;
   const name = message.senderLabel ?? "Member";
   return (
     <BotMessageFrame
@@ -268,30 +269,51 @@ export function ChatBotDeliveredPost(props: {
         attachments={message.attachments}
         browserAnnotations={message.browserAnnotations}
       />
-      {standIn === null ? (
-        <div className="flex min-w-0 flex-col gap-1">
-          {message.segments.map((segment) =>
-            segment.kind === "text" ? (
-              <TextSegment
-                key={segment.id}
-                findUnitId={null}
-                markdown={segment.markdown}
-                isStreaming={false}
-                nextStepActions={null}
-              />
-            ) : null,
-          )}
-        </div>
-      ) : (
-        <p
-          className="text-ui-sm text-muted-foreground"
-          data-testid="bot-delivered-post-stand-in"
-        >
-          {standIn}
-        </p>
-      )}
+      <DeliveredPostBody message={message} body={body} />
       {place}
     </BotMessageFrame>
+  );
+}
+
+/** The delivered row's text, or what stands in for it until or unless it is read. */
+function DeliveredPostBody(props: {
+  readonly message: ChatMessageModel;
+  readonly body: "message" | "loading" | "unavailable";
+}): ReactElement {
+  if (props.body === "loading") {
+    return (
+      <div
+        role="status"
+        aria-label="Loading message"
+        className="h-4 w-full max-w-64 animate-pulse rounded-sm bg-foreground/10"
+        data-testid="bot-delivered-post-loading"
+      />
+    );
+  }
+  if (props.body === "unavailable") {
+    return (
+      <p
+        className="text-ui-sm text-muted-foreground"
+        data-testid="bot-delivered-post-stand-in"
+      >
+        Message unavailable
+      </p>
+    );
+  }
+  return (
+    <div className="flex min-w-0 flex-col gap-1">
+      {props.message.segments.map((segment) =>
+        segment.kind === "text" ? (
+          <TextSegment
+            key={segment.id}
+            findUnitId={null}
+            markdown={segment.markdown}
+            isStreaming={false}
+            nextStepActions={null}
+          />
+        ) : null,
+      )}
+    </div>
   );
 }
 
