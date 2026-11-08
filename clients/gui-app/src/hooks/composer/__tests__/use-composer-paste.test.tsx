@@ -88,6 +88,7 @@ function useAdapterUnderTest(
   });
   const editorRef = useRef<ComposerPasteEditorHandle>({
     isReady: () => true,
+    insertFileAttachment: () => false,
     insertImageAttachments: (attrs) => {
       insertRef.current(attrs);
     },
@@ -98,6 +99,7 @@ function useAdapterUnderTest(
     editorRef,
     filePaths.fileDrops,
     filePaths.mentionRoots,
+    null,
   );
 }
 
@@ -107,7 +109,7 @@ function usePasteUnderTest(
   fileDrops: IFileDropHost,
   mentionRoots: ReadonlyArray<string>,
 ): UseComposerPasteResult {
-  return useComposerHashPaste(editorRef, fileDrops, mentionRoots);
+  return useComposerHashPaste(editorRef, fileDrops, mentionRoots, null);
 }
 
 // Default fixture for tests that don't care about file-path resolution at
@@ -154,6 +156,7 @@ describe("composer paste core - runPendingImageJob (landing in-place paste)", ()
       isAttachmentIngestPending({
         isIngestingImages: result.current.isIngestingImages,
         isResolvingFilePaths: result.current.isResolvingFilePaths,
+        isAttachingFiles: false,
       }),
     ).toBe(true);
 
@@ -172,6 +175,7 @@ describe("composer paste core - runPendingImageJob (landing in-place paste)", ()
       isAttachmentIngestPending({
         isIngestingImages: result.current.isIngestingImages,
         isResolvingFilePaths: result.current.isResolvingFilePaths,
+        isAttachingFiles: false,
       }),
     ).toBe(false);
   });
@@ -424,6 +428,7 @@ describe("composer paste core - attachImageFiles", () => {
     const editorRef: { current: PasteAndIngestHandle | null } = {
       current: {
         insertImageAttachments,
+        insertFileAttachment: () => false,
         beginPathInsertion: () => null,
         isReady: () => true,
         focus: vi.fn(),
@@ -458,6 +463,7 @@ describe("composer paste core - attachImageFiles", () => {
     const editorRef: { current: PasteAndIngestHandle | null } = {
       current: {
         insertImageAttachments,
+        insertFileAttachment: () => false,
         beginPathInsertion: () => null,
         // The subject of this pin: a live handle that is NOT ready.
         isReady: () => false,
@@ -857,6 +863,7 @@ describe("composer paste core - isResolvingFilePaths / attachment pending", () =
       isAttachmentIngestPending({
         isIngestingImages: zone.getAttribute("data-ingesting") === "true",
         isResolvingFilePaths: zone.getAttribute("data-resolving") === "true",
+        isAttachingFiles: false,
       }),
     ).toBe(true);
     expect(insertPaths).not.toHaveBeenCalled();
@@ -866,6 +873,7 @@ describe("composer paste core - isResolvingFilePaths / attachment pending", () =
       isAttachmentIngestPending({
         isIngestingImages: false,
         isResolvingFilePaths: true,
+        isAttachingFiles: false,
       }),
     ).toBe(true);
 
@@ -882,6 +890,7 @@ describe("composer paste core - isResolvingFilePaths / attachment pending", () =
       isAttachmentIngestPending({
         isIngestingImages: zone.getAttribute("data-ingesting") === "true",
         isResolvingFilePaths: zone.getAttribute("data-resolving") === "true",
+        isAttachingFiles: false,
       }),
     ).toBe(false);
     expect(insertPaths).toHaveBeenCalledWith(["notes.txt"]);
@@ -937,18 +946,21 @@ describe("composer paste core - isResolvingFilePaths / attachment pending", () =
       isAttachmentIngestPending({
         isIngestingImages: true,
         isResolvingFilePaths: false,
+        isAttachingFiles: false,
       }),
     ).toBe(true);
     expect(
       isAttachmentIngestPending({
         isIngestingImages: false,
         isResolvingFilePaths: true,
+        isAttachingFiles: false,
       }),
     ).toBe(true);
     expect(
       isAttachmentIngestPending({
         isIngestingImages: false,
         isResolvingFilePaths: false,
+        isAttachingFiles: false,
       }),
     ).toBe(false);
   });

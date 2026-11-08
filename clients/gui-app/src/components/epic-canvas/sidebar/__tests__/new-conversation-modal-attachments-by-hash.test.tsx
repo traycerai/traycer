@@ -280,6 +280,7 @@ function editorHandle(content: JsonContent): ComposerPromptEditorHandle {
       current = next;
     },
     syncContent: () => undefined,
+    insertFileAttachment: () => false,
     insertImageAttachments: () => undefined,
     insertMentionAttachment: () => false,
     beginPathInsertion: () => null,

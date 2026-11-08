@@ -52,7 +52,11 @@ import { useSurfaceActivity } from "@/components/home/composer/surface-activity-
 import { useComposerDictation } from "@/hooks/composer/use-composer-dictation";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useLandingComposerPaste } from "@/hooks/composer/use-landing-composer-paste";
-import { isAttachmentIngestPending } from "@/hooks/composer/use-composer-paste";
+import {
+  composerAttachmentsHoldSend,
+  useComposerFileRoute,
+} from "@/hooks/composer/use-composer-paste";
+import { containsPendingFileAttachment } from "@/lib/composer/file-attachments";
 import {
   useLandingComposerMentionRoots,
   useLandingRunWorkingDirectory,
@@ -568,12 +572,14 @@ export function LandingComposer(props: LandingComposerProps) {
     chatComposerActive && !workspaceGate.stagedAhead,
   );
   const runnerHost = useRunnerHost();
+  const fileRoute = useComposerFileRoute(resolvedHostId, hostClient);
   const paste = useLandingComposerPaste({
     editorRef,
     draftId,
     disabled: isSubmitting,
     fileDrops: runnerHost.fileDrops,
     mentionRoots,
+    fileRoute,
   });
   // The SHARED pending-image ingest, the same one the chat composer, the inline
   // edit and the new-conversation modal use. This surface grew the logic first
@@ -593,7 +599,10 @@ export function LandingComposer(props: LandingComposerProps) {
       runPendingImageJob: paste.runPendingImageJob,
       draftId,
     });
-  const attachmentPending = isAttachmentIngestPending(paste);
+  const attachmentPending = composerAttachmentsHoldSend(
+    paste,
+    containsPendingFileAttachment(runtimeState.content),
+  );
   // Send-time gate for the selected provider's managed binary pack. Folded
   // into `canSubmit` rather than checked separately at submit, so the button
   // and its hint can never disagree - the user is told why BEFORE pressing,

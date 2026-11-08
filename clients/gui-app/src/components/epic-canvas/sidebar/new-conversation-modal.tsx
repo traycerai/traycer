@@ -83,9 +83,11 @@ import {
   usePrimaryActionShortcut,
 } from "@/hooks/use-primary-action-shortcut";
 import {
-  isAttachmentIngestPending,
+  composerAttachmentsHoldSend,
+  useComposerFileRoute,
   useComposerHashPaste,
 } from "@/hooks/composer/use-composer-paste";
+import { containsPendingFileAttachment } from "@/lib/composer/file-attachments";
 import { useComposerPendingImageIngest } from "@/hooks/composer/use-composer-pending-image-ingest";
 import {
   mentionRootsFromWorktreeIntent,
@@ -392,6 +394,18 @@ function useHasSubmittableContent(
     (state) => (state.byEpicId[epicId]?.length ?? 0) > 0,
   );
   return hasText || hasCards;
+}
+
+/** A file still uploading holds send, as an image still preparing does. */
+function useHasPendingFileAttachment(
+  epicId: string,
+  seed: NewConversationModalSeed,
+): boolean {
+  return useNewConversationModalStore((state) =>
+    containsPendingFileAttachment(
+      state.draftPatchesByEpicId[epicId]?.content ?? seed.content,
+    ),
+  );
 }
 
 /**
@@ -1042,6 +1056,7 @@ export function NewConversationModalBody(props: {
     workspace: draftWorkspace,
   } = useNewConversationDraftFields(epicId, seed);
   const hasSubmittableContent = useHasSubmittableContent(epicId, seed);
+  const hasPendingFileAttachment = useHasPendingFileAttachment(epicId, seed);
   const [initialContent] = useState<JsonContent>(
     () =>
       useNewConversationModalStore.getState().draftPatchesByEpicId[epicId]
@@ -1268,10 +1283,13 @@ export function NewConversationModalBody(props: {
   const workspaceCanStart = workspaceGate.canStart;
   const draftWorkspaceFolderCount = draftWorkspace.folders.length;
   const runnerHost = useRunnerHost();
+  // Files go to the placement host, the one the chat is created on.
+  const fileRoute = useComposerFileRoute(resolvedHostId, hostClient);
   const paste = useComposerHashPaste(
     editorRef,
     runnerHost.fileDrops,
     mentionRoots,
+    fileRoute,
   );
   const {
     ingestPastedComposerImages,
@@ -1282,7 +1300,10 @@ export function NewConversationModalBody(props: {
     runPendingImageJob: paste.runPendingImageJob,
     draftId: null,
   });
-  const attachmentPending = isAttachmentIngestPending(paste);
+  const attachmentPending = composerAttachmentsHoldSend(
+    paste,
+    hasPendingFileAttachment,
+  );
   const pickedModelSlug = useStore(
     toolbarStore,
     (state) => state.values.selection.modelSlug,

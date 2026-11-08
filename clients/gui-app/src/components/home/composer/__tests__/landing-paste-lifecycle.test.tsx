@@ -179,6 +179,7 @@ vi.mock(
         instance.setContent(content, selection),
       syncContent: (content, selection) =>
         instance.syncContent(content, selection),
+      insertFileAttachment: () => false,
       insertImageAttachments: (attrs) => instance.insertImageAttachments(attrs),
       insertMentionAttachment: (mention) =>
         instance.insertMentionAttachment(mention),

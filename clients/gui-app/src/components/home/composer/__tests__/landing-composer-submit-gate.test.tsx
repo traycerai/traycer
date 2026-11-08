@@ -2113,6 +2113,7 @@ function editorHandle(): ComposerPromptEditorHandle {
     clear: testState.clearEditor,
     setContent: () => undefined,
     syncContent: () => undefined,
+    insertFileAttachment: () => false,
     insertImageAttachments: () => undefined,
     insertMentionAttachment: () => false,
     beginPathInsertion: () => null,

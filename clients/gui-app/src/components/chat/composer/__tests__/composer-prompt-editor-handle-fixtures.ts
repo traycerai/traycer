@@ -115,6 +115,7 @@ export function createFakeComposerPromptEditorHandle(
     },
     setContent,
     syncContent,
+    insertFileAttachment: () => false,
     insertImageAttachments: () => undefined,
     insertMentionAttachment: () => false,
     beginPathInsertion: () => null,

@@ -242,6 +242,7 @@ describe("useLandingComposerPaste - reservation charges the PREPARED byte length
         disabled: false,
         fileDrops: NOOP_FILE_DROPS,
         mentionRoots: NO_MENTION_ROOTS,
+        fileRoute: { target: null },
       }),
     );
 
@@ -281,6 +282,7 @@ describe("useLandingComposerPaste - reservation charges the PREPARED byte length
     const editorRef = {
       current: {
         isReady: () => true,
+        insertFileAttachment: () => false,
         insertImageAttachments: (
           _attrs: ReadonlyArray<ImageAttachmentAttrs>,
         ) => {
@@ -304,6 +306,7 @@ describe("useLandingComposerPaste - reservation charges the PREPARED byte length
         disabled: false,
         fileDrops: NOOP_FILE_DROPS,
         mentionRoots: NO_MENTION_ROOTS,
+        fileRoute: { target: null },
       }),
     );
 
@@ -326,6 +329,7 @@ describe("useLandingComposerPaste - reservation charges the PREPARED byte length
     const editorRef = {
       current: {
         isReady: () => true,
+        insertFileAttachment: () => false,
         insertImageAttachments: (
           _attrs: ReadonlyArray<ImageAttachmentAttrs>,
         ) => {
@@ -343,6 +347,7 @@ describe("useLandingComposerPaste - reservation charges the PREPARED byte length
         disabled: false,
         fileDrops: NOOP_FILE_DROPS,
         mentionRoots: NO_MENTION_ROOTS,
+        fileRoute: { target: null },
       }),
     );
 

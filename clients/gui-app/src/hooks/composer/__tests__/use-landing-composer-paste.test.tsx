@@ -124,6 +124,7 @@ describe("useLandingComposerPaste", () => {
         disabled: true,
         fileDrops: NOOP_FILE_DROPS,
         mentionRoots: NO_MENTION_ROOTS,
+        fileRoute: { target: null },
       }),
     );
 
@@ -150,6 +151,7 @@ describe("useLandingComposerPaste", () => {
         disabled: false,
         fileDrops: NOOP_FILE_DROPS,
         mentionRoots: NO_MENTION_ROOTS,
+        fileRoute: { target: null },
       }),
     );
 
@@ -192,6 +194,7 @@ describe("useLandingComposerPaste", () => {
         disabled: false,
         fileDrops: NOOP_FILE_DROPS,
         mentionRoots: NO_MENTION_ROOTS,
+        fileRoute: { target: null },
       }),
     );
 
@@ -223,6 +226,7 @@ describe("useLandingComposerPaste", () => {
         disabled: false,
         fileDrops: NOOP_FILE_DROPS,
         mentionRoots: NO_MENTION_ROOTS,
+        fileRoute: { target: null },
       }),
     );
 
@@ -271,6 +275,7 @@ describe("useLandingComposerPaste", () => {
         disabled: false,
         fileDrops: NOOP_FILE_DROPS,
         mentionRoots: NO_MENTION_ROOTS,
+        fileRoute: { target: null },
       }),
     );
     const file = new File(["hello"], "shot.png", { type: "image/png" });

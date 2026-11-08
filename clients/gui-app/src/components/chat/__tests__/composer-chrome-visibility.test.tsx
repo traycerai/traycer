@@ -69,10 +69,13 @@ describe("ComposerAttachImageButton follows Layout ▸ Composer 'Attach image'",
   it("renders the button and still attaches a picked file when visible", () => {
     const onAttachImages = vi.fn<(files: ReadonlyArray<File>) => void>();
     const { container } = render(
-      <ComposerAttachImageButton onAttachImages={onAttachImages} />,
+      <ComposerAttachImageButton
+        onAttachImages={onAttachImages}
+        onAttachFiles={vi.fn()}
+      />,
     );
 
-    expect(screen.getByRole("button", { name: "Attach image" })).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Attach" })).not.toBeNull();
 
     const input =
       container.querySelector<HTMLInputElement>('input[type="file"]');
@@ -96,7 +99,10 @@ describe("ComposerAttachImageButton follows Layout ▸ Composer 'Attach image'",
       .getState()
       .setRegionValues("attachImage", { shown: "hidden" });
     const { container } = render(
-      <ComposerAttachImageButton onAttachImages={onAttachImages} />,
+      <ComposerAttachImageButton
+        onAttachImages={onAttachImages}
+        onAttachFiles={vi.fn()}
+      />,
     );
 
     expect(container.firstChild).toBeNull();

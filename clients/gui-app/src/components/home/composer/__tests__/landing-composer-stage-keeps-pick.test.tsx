@@ -515,6 +515,7 @@ function editorHandle(): ComposerPromptEditorHandle {
     clear: host.clearEditor,
     setContent: () => undefined,
     syncContent: () => undefined,
+    insertFileAttachment: () => false,
     insertImageAttachments: () => undefined,
     insertMentionAttachment: () => false,
     beginPathInsertion: () => null,

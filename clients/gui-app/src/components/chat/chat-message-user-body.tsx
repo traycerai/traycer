@@ -794,11 +794,14 @@ function InlineUserMessageEditor({
     attachImageFiles,
     isIngestingImages,
     isResolvingFilePaths,
+    isAttachingFiles,
     runPendingImageJob,
   } = useComposerHashPaste(
     editorRef,
     runnerHost.fileDrops,
     resolvedMentionRoots,
+    // An edit keeps the files its message already carries; it attaches none.
+    null,
   );
   const {
     ingestPastedComposerImages,
@@ -812,6 +815,7 @@ function InlineUserMessageEditor({
   const attachmentPending = isAttachmentIngestPending({
     isIngestingImages,
     isResolvingFilePaths,
+    isAttachingFiles,
   });
 
   // Without this, the picker opens empty - nothing writes items into the store.

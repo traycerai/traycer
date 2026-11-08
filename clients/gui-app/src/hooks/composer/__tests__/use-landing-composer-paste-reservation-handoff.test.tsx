@@ -217,6 +217,7 @@ describe("useLandingComposerPaste - reservation handoff (B2)", () => {
     const editorRef = {
       current: {
         isReady: () => true,
+        insertFileAttachment: () => false,
         insertImageAttachments: (
           attrs: ReadonlyArray<ImageAttachmentAttrs>,
         ) => {
@@ -243,6 +244,7 @@ describe("useLandingComposerPaste - reservation handoff (B2)", () => {
         disabled: false,
         fileDrops: NOOP_FILE_DROPS,
         mentionRoots: NO_MENTION_ROOTS,
+        fileRoute: { target: null },
       }),
     );
 
@@ -307,6 +309,7 @@ describe("useLandingComposerPaste - reservation handoff (B2)", () => {
         disabled: false,
         fileDrops: NOOP_FILE_DROPS,
         mentionRoots: NO_MENTION_ROOTS,
+        fileRoute: { target: null },
       }),
     );
 
@@ -354,6 +357,7 @@ describe("useLandingComposerPaste - reservation handoff (B2)", () => {
     const editorRef = {
       current: {
         isReady: () => true,
+        insertFileAttachment: () => false,
         insertImageAttachments: (
           _attrs: ReadonlyArray<ImageAttachmentAttrs>,
         ) => {
@@ -371,6 +375,7 @@ describe("useLandingComposerPaste - reservation handoff (B2)", () => {
         disabled: false,
         fileDrops: NOOP_FILE_DROPS,
         mentionRoots: NO_MENTION_ROOTS,
+        fileRoute: { target: null },
       }),
     );
 
@@ -419,6 +424,7 @@ describe("useLandingComposerPaste - reservation handoff (B2)", () => {
         disabled: false,
         fileDrops: NOOP_FILE_DROPS,
         mentionRoots: NO_MENTION_ROOTS,
+        fileRoute: { target: null },
       }),
     );
 
@@ -465,6 +471,7 @@ describe("useLandingComposerPaste - reservation handoff (B2)", () => {
         disabled: false,
         fileDrops: NOOP_FILE_DROPS,
         mentionRoots: NO_MENTION_ROOTS,
+        fileRoute: { target: null },
       }),
     );
 
@@ -511,6 +518,7 @@ describe("useLandingComposerPaste - reservation handoff (B2)", () => {
     const editorRef = {
       current: {
         isReady: () => true,
+        insertFileAttachment: () => false,
         insertImageAttachments: (
           attrs: ReadonlyArray<ImageAttachmentAttrs>,
         ) => {
@@ -534,6 +542,7 @@ describe("useLandingComposerPaste - reservation handoff (B2)", () => {
         disabled: false,
         fileDrops: NOOP_FILE_DROPS,
         mentionRoots: NO_MENTION_ROOTS,
+        fileRoute: { target: null },
       }),
     );
 

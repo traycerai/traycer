@@ -95,6 +95,7 @@ function mutableFakeEditor(initial: JsonContent): {
       },
       setContent: () => undefined,
       syncContent: () => undefined,
+      insertFileAttachment: () => false,
       insertImageAttachments: () => undefined,
       insertMentionAttachment: () => false,
       beginPathInsertion: () => null,

@@ -80,6 +80,7 @@ const NOOP_FILE_PATHS: ComposerFilePathIngestArgs = {
 function renderPasteHook(inserted: ImageAttachmentAttrs[][]) {
   const handle: PasteAndIngestHandle = {
     isReady: () => true,
+    insertFileAttachment: () => false,
     insertImageAttachments: (attrs) => {
       inserted.push([...attrs]);
     },
@@ -95,6 +96,7 @@ function renderPasteHook(inserted: ImageAttachmentAttrs[][]) {
       editorRef,
       NOOP_FILE_PATHS.fileDrops,
       NOOP_FILE_PATHS.mentionRoots,
+      null,
     ),
   );
 }

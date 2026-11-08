@@ -53,7 +53,10 @@ function Scene(props: { readonly suppressed: boolean }): ReactNode {
   return (
     <TooltipProvider>
       <TooltipsSuppressedProvider value={props.suppressed}>
-        <ComposerAttachImageButton onAttachImages={() => undefined} />
+        <ComposerAttachImageButton
+          onAttachImages={() => undefined}
+          onAttachFiles={() => undefined}
+        />
         <DockPanelAction />
       </TooltipsSuppressedProvider>
     </TooltipProvider>
@@ -81,7 +84,7 @@ describe("tooltips inside the layout editor's sample scene", () => {
   it("opens no label on the sample composer's Attach image chip", () => {
     render(<Scene suppressed />);
 
-    hover(screen.getByRole("button", { name: "Attach image" }));
+    hover(screen.getByRole("button", { name: "Attach" }));
 
     expect(screen.queryByRole("tooltip")).toBeNull();
     // No Radix root at all, which is also what takes ~8 of them out of the
@@ -100,8 +103,8 @@ describe("tooltips inside the layout editor's sample scene", () => {
   it("still opens both outside the sample scene, unchanged", () => {
     render(<Scene suppressed={false} />);
 
-    hover(screen.getByRole("button", { name: "Attach image" }));
-    expect(screen.getByRole("tooltip").textContent).toBe("Attach image");
+    hover(screen.getByRole("button", { name: "Attach" }));
+    expect(screen.getByRole("tooltip").textContent).toBe("Attach");
 
     cleanup();
     render(<Scene suppressed={false} />);

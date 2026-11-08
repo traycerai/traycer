@@ -34,9 +34,14 @@ import type {
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 
 import {
-  isAttachmentIngestPending,
+  composerAttachmentsHoldSend,
+  useComposerFileRoute,
   useComposerHashPaste,
 } from "@/hooks/composer/use-composer-paste";
+import {
+  containsFileAttachments,
+  containsPendingFileAttachment,
+} from "@/lib/composer/file-attachments";
 import { useComposerPendingImageIngest } from "@/hooks/composer/use-composer-pending-image-ingest";
 import { useComposerDictation } from "@/hooks/composer/use-composer-dictation";
 import { useWorkspaceMentionRoots } from "@/hooks/composer/use-workspace-mention-roots";
@@ -523,6 +528,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
   const runnerHost = useRunnerHost();
   const hostClient = useTabHostClient();
   const tabHostId = useTabHostId();
+  const fileRoute = useComposerFileRoute(tabHostId, hostClient);
   // The client for reads about the host this chat's turns RUN on: the tab's
   // own, except for a resting sandbox's chat, whose tab host only serves its
   // published copy and whose sandbox answers nothing until it wakes. Its
@@ -622,6 +628,14 @@ function ChatComposerImpl(props: ChatComposerProps) {
     chatTitle,
     epicTitle,
   });
+  const draftHasFiles = useMemo(
+    () => containsFileAttachments(draftContent),
+    [draftContent],
+  );
+  const draftHasPendingFile = useMemo(
+    () => containsPendingFileAttachment(draftContent),
+    [draftContent],
+  );
 
   const { dictationControl, dictationPreparing } = useComposerDictation({
     editorRef,
@@ -844,14 +858,19 @@ function ChatComposerImpl(props: ChatComposerProps) {
     onDragEnter,
     onDragLeave,
     attachImageFiles,
+    attachFiles,
     dragOverlayVariant,
     isIngestingImages,
     isResolvingFilePaths,
+    isAttachingFiles,
     runPendingImageJob,
   } = useComposerHashPaste(
     editorRef,
     runnerHost.fileDrops,
     resolvedMentionRoots,
+    // Files go to the tab's host: the chat lives there, and its send installs
+    // them from that host's draft blob store.
+    fileRoute,
   );
   // The rich-clipboard channel and the mount-time restart. A file paste is
   // already hashed before insertion; these two cover the HTML paste (whose
@@ -876,10 +895,10 @@ function ChatComposerImpl(props: ChatComposerProps) {
     editorReadyTick,
     reingestPendingImages,
   });
-  const pastePending = isAttachmentIngestPending({
-    isIngestingImages,
-    isResolvingFilePaths,
-  });
+  const pastePending = composerAttachmentsHoldSend(
+    { isIngestingImages, isResolvingFilePaths, isAttachingFiles },
+    draftHasPendingFile,
+  );
 
   const authority = useChatComposerDraftAuthority({
     chatId: taskId,
@@ -1009,6 +1028,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     attachmentPreparationPending: attachmentPending,
     draftHasText,
     draftHasImages,
+    draftHasFiles,
   });
   // Sending drops the phone sheet back to the compact card: an empty
   // full-screen editor over a reply that just started is the wrong thing to
@@ -1171,6 +1191,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
                     <ChatComposerToolbarSlot
                       store={toolbarStore}
                       onAttachImages={attachImageFiles}
+                      onAttachFiles={attachFiles}
                       canSubmit={canSubmit}
                       attachmentPending={attachmentPending}
                       onSubmit={handleSubmitFromButton}
@@ -1298,6 +1319,7 @@ interface CanSubmitDraftArgs {
   readonly attachmentPreparationPending: boolean;
   readonly draftHasText: boolean;
   readonly draftHasImages: boolean;
+  readonly draftHasFiles: boolean;
 }
 
 /**
@@ -1385,7 +1407,7 @@ function canSubmitDraft(args: CanSubmitDraftArgs): boolean {
     !args.workspaceBlocked &&
     !args.imagesUnsupported &&
     !args.attachmentPreparationPending &&
-    (args.draftHasText || args.draftHasImages)
+    (args.draftHasText || args.draftHasImages || args.draftHasFiles)
   );
 }
 

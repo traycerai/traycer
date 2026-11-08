@@ -27,6 +27,7 @@ export function makeHandle(
   const focusCalls = { count: 0 };
   const handle: ComposerPasteEditorHandle = {
     isReady: () => true,
+    insertFileAttachment: () => false,
     insertImageAttachments: (attrs) => inserted.push([...attrs]),
     // Paths commit independently of image insertion (A1: mixed may be 2 undo steps).
     beginPathInsertion: () => (paths) => {
