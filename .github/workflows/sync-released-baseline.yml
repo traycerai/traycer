@@ -41,6 +41,7 @@ jobs:
       - uses: ./.github/actions/bootstrap-ci-tools
         with:
           bun-version: "1.3.14"
+          tools: bun electron
       - name: Cache bun global install cache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
