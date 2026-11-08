@@ -39,8 +39,6 @@ import {
   waitForCreateChats,
   createChatCalls,
   composerStages,
-  getSetupAction,
-  findSetupAction,
   expectOnlyTheRecordWritten,
   listAnswers,
   type Deferred,
@@ -3785,9 +3783,6 @@ describe("a pending chat create", () => {
             failure: { kind: "settings", code: "SBX-0520" },
           });
         });
-        fireEvent.pointerDown(screen.getByRole("button", { name: "More" }), {
-          button: 0,
-        });
         expect(screen.queryByTestId("sandbox-setup-stop")).toBeNull();
         expect(
           screen.queryByTestId("sandbox-setup-choose-another-host"),
@@ -4855,26 +4850,14 @@ describe("a send whose created sandbox stalled on settings, on a host with only 
     const line = screen.getByTestId("sandbox-setup-line");
     expect(
       within(line).getByTestId("sandbox-setup-line-toggle").textContent,
-    ).not.toContain("SBX-0520");
-    const disclosure = within(line).getByTestId<HTMLDetailsElement>(
-      "sandbox-setup-support-reference",
-    );
-    expect(disclosure.open).toBe(false);
-
-    fireEvent.click(within(disclosure).getByText("Support reference"));
-
-    expect(disclosure.open).toBe(true);
-    expect(within(disclosure).getByText("SBX-0520")).toBeTruthy();
+    ).toContain("SBX-0520");
   });
 
   it("offers Repair setup, not Retry applying, for a guest that really failed, and runs only the guest repair", async () => {
     await mountStalled(false, true);
 
     const strip = screen.getByTestId("pending-sandbox-sends");
-    fireEvent.pointerDown(within(strip).getByRole("button", { name: "More" }), {
-      button: 0,
-    });
-    const repairSetup = await screen.findByRole("menuitem", {
+    const repairSetup = within(strip).getByRole("button", {
       name: /repair setup/i,
     });
     expect(screen.queryByTestId("sandbox-setup-retry-applying")).toBeNull();
@@ -4902,12 +4885,8 @@ describe("a send whose created sandbox stalled on settings, on a host with only 
         );
       });
       expect(screen.queryByTestId("sandbox-setup-retry-applying")).toBeNull();
-      fireEvent.pointerDown(
-        within(strip).getByRole("button", { name: "More" }),
-        { button: 0 },
-      );
       expect(
-        screen.queryByRole("menuitem", { name: /repair setup/i }),
+        within(strip).queryByRole("button", { name: /repair setup/i }),
       ).toBeNull();
     },
   );
@@ -5009,10 +4988,10 @@ describe("a send whose sandbox left awake on its own after the create timed out"
     // The line's own remedies mount under the sandbox's host, never crashing
     // on the strip's missing tab provider.
     expect(within(line).getByTestId("sandbox-row-retry")).toBeDefined();
+    expect(within(line).getByRole("button", { name: "Details" })).toBeDefined();
     fireEvent.keyDown(within(line).getByTestId("sandbox-row-menu"), {
       key: "Enter",
     });
-    expect(await screen.findByTestId("sandbox-row-menu-details")).toBeDefined();
     expect(screen.getByTestId("sandbox-row-menu-destroy")).toBeDefined();
   });
 
@@ -5559,7 +5538,7 @@ describe("a send held on settings that didn't apply, once its sandbox leaves awa
     await mountHeld();
     const before = composerStages();
 
-    fireEvent.click(getSetupAction("sandbox-setup-cancel"));
+    fireEvent.click(screen.getByTestId("sandbox-setup-cancel"));
 
     await waitFor(() => {
       expect(usePendingSandboxSendStore.getState().sends).toEqual({});
@@ -5585,7 +5564,7 @@ describe("a send held on settings that didn't apply, once its sandbox leaves awa
     await mountHeld();
     const before = composerStages();
 
-    fireEvent.click(getSetupAction("sandbox-setup-cancel"));
+    fireEvent.click(screen.getByTestId("sandbox-setup-cancel"));
 
     await waitFor(() => {
       expect(usePendingSandboxSendStore.getState().sends).toEqual({});
@@ -5738,8 +5717,10 @@ describe("a send whose sandbox has no id yet", () => {
         });
       });
 
-      expect(await findSetupAction("sandbox-setup-cancel")).toBeDefined();
-      expect(getSetupAction("sandbox-setup-choose-another-host")).toBeDefined();
+      expect(await screen.findByTestId("sandbox-setup-cancel")).toBeDefined();
+      expect(
+        screen.getByTestId("sandbox-setup-choose-another-host"),
+      ).toBeDefined();
       expect(screen.queryByTestId("sandbox-setup-stop")).toBeNull();
       expect(mocks.stopSandbox).not.toHaveBeenCalled();
       expect(
@@ -7023,7 +7004,7 @@ describe("a task deleted while its message waits on a sandbox", () => {
         failure: { kind: "settings", code: "SBX-0520" },
       });
     });
-    fireEvent.click(await findSetupAction("sandbox-setup-stop"));
+    fireEvent.click(await screen.findByTestId("sandbox-setup-stop"));
     await waitFor(() => {
       expect(mocks.stopSandbox).toHaveBeenCalledWith("stop");
     });
@@ -7244,7 +7225,7 @@ describe("Stop while the sandbox boots", () => {
           .getState()
           .report(SURFACE, { step: "applying", stepAt: Date.now() });
       });
-      expect(await findSetupAction("sandbox-setup-stop")).toBeDefined();
+      expect(await screen.findByTestId("sandbox-setup-stop")).toBeDefined();
       expect(mocks.stopSandbox).not.toHaveBeenCalled();
     },
   );
