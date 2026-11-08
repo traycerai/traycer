@@ -76,7 +76,10 @@ export const environmentPresenceCauseSchema = lazySchema(() =>
   ]),
 );
 
-/** Why another entry or an unverified native store remains after this account leaves. */
+/**
+ * Retained native bytes are separate from the departing account's presence.
+ * Readers fall back at this leaf so an unknown cause preserves absent presence.
+ */
 export const credentialMaterialRetainedReasonSchema = lazySchema(() =>
   z.enum([
     "material-changed",
