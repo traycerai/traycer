@@ -4,6 +4,8 @@ import { autoUpdater } from "electron-updater";
 // `electron-updater` package-root mock (which exports `autoUpdater` alone).
 import type {
   UpdateDownloadedEvent,
+  UpdateInfo,
+  UpdateCheckResult,
   VerifyUpdateCodeSignature,
 } from "electron-updater";
 import { execFileSync } from "node:child_process";
@@ -34,11 +36,17 @@ import {
   projectDesktopRelease,
   readCompatibilityEpoch,
   readManifestCompatibilityEpoch,
+  readDesktopManifestIdentity,
+  desktopManifestIdentity,
   resolveDesktopManifestRequest,
   validateDesktopReleaseManifest,
   type DesktopReleaseCandidate,
   type DesktopUpdateFeed,
 } from "./desktop-release-feed";
+import {
+  fetchDesktopReleaseIndex,
+  desktopReleaseOrigins,
+} from "./desktop-release-index";
 import { isCanonicalReleaseCandidate } from "@traycer-clients/shared/host-version/release-line";
 import {
   AuthenticationRequiredError,
@@ -166,6 +174,13 @@ function discardStagingUpdateTokenForLog(): string {
   return rejectedToken;
 }
 
+function usesCdnDesktopUpdates(): boolean {
+  return (
+    DESKTOP_RELEASE_CHANNEL === "staging" ||
+    currentPrivateUpdateToken().trim().length === 0
+  );
+}
+
 function currentPrivateUpdateToken(): string {
   return config.environment === "staging"
     ? stagingUpdateToken
@@ -244,6 +259,9 @@ let checkIntent: DesktopAppUpdateCheckIntent | null = null;
 let checkErrorEmitted = false;
 let downloadInProgress = false;
 let downloadIntent: DesktopAppUpdateCheckIntent | null = null;
+let selectedDesktopRelease: DesktopReleaseCandidate | null = null;
+// Public origin attempts report one terminal outcome after recovery is exhausted.
+let originOperation = false;
 // On macOS the ZIP download completes before Squirrel.Mac has validated and
 // staged the app. Only its native completion makes a restart installable.
 let pendingMacUpdate: UpdateDownloadedEvent | null = null;
@@ -330,7 +348,7 @@ function markUpdaterInitialized(state: "initialized" | "failed"): void {
 }
 
 /**
- * Wires `electron-updater` to the GitHub Releases publish target declared in
+ * Wires `electron-updater` to the desktop release feed declared in
  * `package.json` (`build.publish`). Actual release channels, signing, and
  * promotion flows are set up in T5 (CI/CD) - here we only install the core
  * wiring so the desktop shell checks for updates at startup and surfaces
@@ -503,7 +521,11 @@ async function configureAutoUpdater(deps: AppUpdaterDeps): Promise<void> {
   // Skip feed configuration entirely when the private config is invalid: the
   // startup check below is refused by the same guard, so we must not leave a
   // partially-configured or packaged public feed in place (review amendment 2).
-  if (!autoUpdater.allowPrerelease && !invalidPrivateConfig()) {
+  if (
+    !usesCdnDesktopUpdates() &&
+    !autoUpdater.allowPrerelease &&
+    !invalidPrivateConfig()
+  ) {
     configurePrivateGitHubUpdateFeed();
   }
 
@@ -511,62 +533,10 @@ async function configureAutoUpdater(deps: AppUpdaterDeps): Promise<void> {
     log.debug("[updater] checking for updates"),
   );
   autoUpdater.on("update-available", (info) => {
-    log.info("[updater] update available", info);
-    // The channel changed after this check queried the feed: the result belongs
-    // to a superseded channel, so drop it rather than surface (or later let the
-    // user download) a candidate the current preference no longer selects.
-    if (checkGeneration !== null && checkGeneration !== channelGeneration) {
-      return;
-    }
-    // Already past the "found it" stage (downloading / downloaded), or already
-    // surfaced as available - don't re-emit or re-notify on a later re-check.
-    if (
-      currentSnapshot.status === "available" ||
-      currentSnapshot.status === "downloading" ||
-      currentSnapshot.status === "ready" ||
-      downloadInProgress
-    ) {
-      return;
-    }
-    const intent = checkIntent ?? "automatic";
-    candidateGeneration = channelGeneration;
-    emitSnapshot({
-      status: "available",
-      latestVersion: info.version,
-      latestCompatibilityEpoch: readCandidateCompatibilityEpoch(info),
-      downloadProgress: null,
-      errorMessage: null,
-      lastCheckedAt: new Date().toISOString(),
-      lastCheckIntent: intent,
-    });
-    notifyUpdateWhenUnfocused("available", info.version);
+    if (!originOperation) handleUpdateAvailable(info);
   });
   autoUpdater.on("update-not-available", (info) => {
-    log.debug("[updater] no update available", info);
-    if (currentSnapshot.status === "ready") {
-      return;
-    }
-    // Result belongs to a superseded channel: ignore it and let the queued
-    // check for the current channel publish the authoritative outcome.
-    if (checkGeneration !== null && checkGeneration !== channelGeneration) {
-      return;
-    }
-    const intent = checkIntent ?? "automatic";
-    downloadInProgress = false;
-    downloadIntent = null;
-    emitSnapshot({
-      status: intent === "manual" ? "up-to-date" : "idle",
-      latestVersion: info.version ?? null,
-      // Read off THIS check's `info`, same as `latestVersion` above: the pair
-      // describes the feed's current latest build even when it is not an
-      // upgrade for us. That freshness is what recovery routing needs - a
-      // previously cached epoch could describe a build the feed no longer
-      // offers, and `null`ing it would hide a generation the feed does state.
-      latestCompatibilityEpoch: readCandidateCompatibilityEpoch(info),
-      errorMessage: null,
-      lastCheckedAt: new Date().toISOString(),
-      lastCheckIntent: intent,
-    });
+    if (!originOperation) handleUpdateNotAvailable(info);
   });
   autoUpdater.on("download-progress", (progress) => {
     log.debug("[updater] download progress", progress);
@@ -628,12 +598,72 @@ async function configureAutoUpdater(deps: AppUpdaterDeps): Promise<void> {
       // failing while Squirrel still works, so only this native event releases
       // preparation ownership and allows a retry.
       pendingMacUpdate = null;
-      handleUpdaterError(err);
+      handleUpdaterError(err, false);
     });
   }
   autoUpdater.on("error", (err) => {
     log.error("[updater] error", credentialSafeLogValue(err));
-    handleUpdaterError(err);
+    if (!originOperation) handleUpdaterError(err, false);
+  });
+}
+
+function handleUpdateAvailable(info: UpdateInfo): void {
+  log.info("[updater] update available", info);
+  // The channel changed after this check queried the feed: the result belongs
+  // to a superseded channel, so drop it rather than surface (or later let the
+  // user download) a candidate the current preference no longer selects.
+  if (checkGeneration !== null && checkGeneration !== channelGeneration) {
+    return;
+  }
+  // Already past the "found it" stage (downloading / downloaded), or already
+  // surfaced as available - don't re-emit or re-notify on a later re-check.
+  if (
+    currentSnapshot.status === "available" ||
+    currentSnapshot.status === "downloading" ||
+    currentSnapshot.status === "ready" ||
+    downloadInProgress
+  ) {
+    return;
+  }
+  const intent = checkIntent ?? "automatic";
+  candidateGeneration = channelGeneration;
+  emitSnapshot({
+    status: "available",
+    latestVersion: info.version,
+    latestCompatibilityEpoch: readCandidateCompatibilityEpoch(info),
+    downloadProgress: null,
+    errorMessage: null,
+    lastCheckedAt: new Date().toISOString(),
+    lastCheckIntent: intent,
+  });
+  notifyUpdateWhenUnfocused("available", info.version);
+}
+
+function handleUpdateNotAvailable(info: UpdateInfo): void {
+  log.debug("[updater] no update available", info);
+  if (currentSnapshot.status === "ready") {
+    return;
+  }
+  // Result belongs to a superseded channel: ignore it and let the queued
+  // check for the current channel publish the authoritative outcome.
+  if (checkGeneration !== null && checkGeneration !== channelGeneration) {
+    return;
+  }
+  const intent = checkIntent ?? "automatic";
+  downloadInProgress = false;
+  downloadIntent = null;
+  emitSnapshot({
+    status: intent === "manual" ? "up-to-date" : "idle",
+    latestVersion: info.version ?? null,
+    // Read off THIS check's `info`, same as `latestVersion` above: the pair
+    // describes the feed's current latest build even when it is not an
+    // upgrade for us. That freshness is what recovery routing needs - a
+    // previously cached epoch could describe a build the feed no longer
+    // offers, and `null`ing it would hide a generation the feed does state.
+    latestCompatibilityEpoch: readCandidateCompatibilityEpoch(info),
+    errorMessage: null,
+    lastCheckedAt: new Date().toISOString(),
+    lastCheckIntent: intent,
   });
 }
 
@@ -761,19 +791,6 @@ export async function checkForUpdatesNow(
     }
     return currentSnapshot;
   }
-  if (stagingReleaseAuthRequired()) {
-    const token = await prepareStagingUpdateToken();
-    if (token === null) {
-      emitStagingAuthUnavailable(
-        intent,
-        AUTHENTICATION_REQUIRED_MESSAGE,
-        "",
-        null,
-      );
-      return currentSnapshot;
-    }
-    stagingUpdateToken = token;
-  }
   if (checkInFlight) {
     // A check is already running. If it belongs to an older channel generation
     // it will abort without publishing, so queue a fresh check for the newest
@@ -809,27 +826,8 @@ export async function checkForUpdatesNow(
     });
   }
   try {
-    // THE MODE decides whether the namespaced selector runs, not the flag it
-    // derived: `allowPrerelease` is now an effect of the mode, and reading the
-    // effect back to re-decide the cause is how the two drift.
-    //
-    // Stable deliberately does NOT run discovery, and is safe without it only
-    // because of an invariant that lives in the release workflows rather than
-    // here: electron-updater's stable path resolves this repository's
-    // `/releases/latest`, and although the repo also publishes `host-v*` and
-    // `cli-v*` stable tags, both are created with `--latest=false`
-    // (`release-host.yml`: "host version releases must never become the
-    // latest"; same in `release-cli.yml`), while only a stable desktop publish
-    // passes `--latest`. So `/releases/latest` can only ever be a `desktop-v*`
-    // stable release. If that ever changes, a host-only release becomes the
-    // latest, its `latest.yml` does not exist, and EVERY stable check starts
-    // failing - at which point stable needs the selector too.
-    if (modeAllowsPrerelease(activeChannelMode)) {
+    if (usesCdnDesktopUpdates() || modeAllowsPrerelease(activeChannelMode)) {
       const feed = await resolveDesktopReleaseFeed(activeChannelMode);
-      // Discovery is async: if the channel changed while it ran, reject this
-      // stale result before touching the feed or publishing any state - the
-      // superseding channel's own check (queued below via `pendingRecheck`)
-      // owns the outcome now.
       if (checkGeneration !== channelGeneration) {
         return currentSnapshot;
       }
@@ -846,7 +844,16 @@ export async function checkForUpdatesNow(
       }
       applyDesktopReleaseFeed(feed);
     }
-    await autoUpdater.checkForUpdates();
+    if (selectedDesktopRelease?.origins !== undefined) {
+      originOperation = true;
+      try {
+        await checkSelectedDesktopRelease();
+      } finally {
+        originOperation = false;
+      }
+    } else {
+      await autoUpdater.checkForUpdates();
+    }
   } catch (err) {
     if (isStagingAuthFailure(err)) {
       const rejectedToken = discardStagingUpdateTokenForLog();
@@ -1126,8 +1133,9 @@ async function performChannelChange(
   channelGeneration += 1;
   activeChannelMode = requestedMode;
   autoUpdater.allowPrerelease = modeAllowsPrerelease(activeChannelMode);
-  if (!autoUpdater.allowPrerelease) {
-    configureStableGitHubUpdateFeed();
+  selectedDesktopRelease = null;
+  if (!usesCdnDesktopUpdates() && !autoUpdater.allowPrerelease) {
+    configurePrivateGitHubUpdateFeed();
   }
 
   // Any not-yet-downloading candidate the previous channel produced (an
@@ -1661,11 +1669,39 @@ export function startUpdateDownload(): DesktopAppUpdateSnapshot {
   // call in an async IIFE funnels both a synchronous throw and an async rejection
   // into the one `.catch`, so either way the download takes the single
   // reset/error transition in `handleUpdaterError`.
+  const managedOrigins = selectedDesktopRelease?.origins !== undefined;
   void (async () => {
-    await autoUpdater.downloadUpdate();
+    const release = selectedDesktopRelease;
+    originOperation = release?.origins !== undefined;
+    try {
+      try {
+        await autoUpdater.downloadUpdate();
+      } catch (failure) {
+        const originalError = await settleStagingOriginError(failure);
+        // Squirrel may already own the ZIP even if wrapper bookkeeping failed.
+        if (
+          pendingMacUpdate !== null ||
+          currentSnapshot.status === "ready" ||
+          release === null
+        ) {
+          throw originalError;
+        }
+        try {
+          if (!(await advanceDesktopReleaseOrigin())) throw originalError;
+          const retry = await checkCurrentDesktopOrigin();
+          if (!retry.isUpdateAvailable) throw originalError;
+          await autoUpdater.downloadUpdate();
+        } catch (alternateError) {
+          await settleStagingOriginError(alternateError);
+          throw originalError;
+        }
+      }
+    } finally {
+      originOperation = false;
+    }
   })().catch((err: unknown) => {
     log.warn("[updater] download failed", credentialSafeLogValue(err));
-    handleUpdaterError(err);
+    handleUpdaterError(err, managedOrigins);
   });
   return currentSnapshot;
 }
@@ -1713,7 +1749,7 @@ export function installDownloadedUpdate(): DesktopAppUpdateSnapshot {
     // emits the error. Call it BEFORE clearing the flag; that branch is
     // selected by it.
     log.warn("[updater] install handoff threw", credentialSafeLogValue(err));
-    handleUpdaterError(err);
+    handleUpdaterError(err, false);
   }
   return currentSnapshot;
 }
@@ -1803,7 +1839,10 @@ function configurePrivateGitHubUpdateFeed(): void {
 // feed (review finding 2).
 function resolveUpdateRepo(): GitHubRepoCoordinate | null {
   const parsed = parseGitHubRepoCoordinate(PRIVATE_UPDATE_REPO);
-  if (currentPrivateUpdateToken().trim().length > 0) {
+  if (
+    DESKTOP_RELEASE_CHANNEL === "staging" ||
+    currentPrivateUpdateToken().trim().length > 0
+  ) {
     return parsed;
   }
   return parsed ?? { owner: "traycerai", repo: "traycer" };
@@ -1815,62 +1854,15 @@ function resolveUpdateRepo(): GitHubRepoCoordinate | null {
 // public feed.
 function invalidPrivateConfig(): boolean {
   return (
-    currentPrivateUpdateToken().trim().length > 0 &&
+    (DESKTOP_RELEASE_CHANNEL === "staging" ||
+      currentPrivateUpdateToken().trim().length > 0) &&
     parseGitHubRepoCoordinate(PRIVATE_UPDATE_REPO) === null
   );
 }
 
 /**
- * The stable feed: electron-updater's own GitHub provider, which resolves the
- * repository's `/releases/latest`.
- *
- * That is only correct because of an invariant enforced OUTSIDE this file. The
- * repository publishes `host-v*` and `cli-v*` releases beside `desktop-v*`, and
- * GitHub would by default hand `/releases/latest` to whichever of them is the
- * newest non-prerelease - a host-only release such as `host-v1.1.11` (which has
- * no `desktop-v1.1.11` counterpart) would then win it, and every stable check
- * would fail on its absent `latest.yml`. It cannot, because both other release
- * workflows publish with `--latest=false` ("host version releases must never
- * become the latest") while only a stable desktop publish passes `--latest`.
- *
- * If that ever changes, stable must move to `resolveDesktopReleaseFeed` like
- * the prerelease modes already have - the namespaced selector is the only
- * in-process defence.
- */
-function configureStableGitHubUpdateFeed(): void {
-  const coordinate = resolveUpdateRepo();
-  const token = currentPrivateUpdateToken().trim();
-  if (coordinate === null) {
-    // Token set + invalid coordinate: fail closed. Leave the existing feed in
-    // place rather than point an authenticated build at the public repo.
-    log.warn(
-      "[updater] private update token is configured but VITE_TRAYCER_DESKTOP_UPDATE_REPO is not a valid owner/repo coordinate; leaving the update feed unchanged",
-    );
-    return;
-  }
-  if (token.length === 0) {
-    autoUpdater.setFeedURL({
-      provider: "github",
-      owner: coordinate.owner,
-      repo: coordinate.repo,
-    });
-    autoUpdater.requestHeaders = null;
-    return;
-  }
-  const feed: PrivateGitHubUpdateFeed = {
-    provider: "github",
-    owner: coordinate.owner,
-    repo: coordinate.repo,
-    private: true,
-    token,
-  };
-  autoUpdater.setFeedURL(feed);
-}
-
-/**
- * Resolves the compatible desktop-tagged GitHub Release this MODE selects
- * across pagination, and builds the feed that points electron-updater at that
- * exact release. The repository also hosts host and CLI releases, so
+ * Resolves the compatible desktop release this mode selects from the CDN
+ * index or GitHub discovery and pins electron-updater to that exact release. The repository also hosts host and CLI releases, so
  * electron-updater's built-in `allowPrerelease` GitHub path is unsafe: it
  * selects the newest prerelease without respecting the `desktop-v` namespace.
  * Returns null when no selectable desktop release exists (genuine "up to
@@ -1885,7 +1877,10 @@ async function resolveDesktopReleaseFeed(
       "Desktop update repository is not a valid owner/repo coordinate for the configured private update token",
     );
   }
+  const generation = channelGeneration;
   const release = await findNewestDesktopRelease(coordinate, mode);
+  if (generation !== channelGeneration) return null;
+  selectedDesktopRelease = release;
   if (release === null) return null;
   const token = currentPrivateUpdateToken().trim();
   log.debug("[updater] configured desktop release feed", {
@@ -1923,10 +1918,39 @@ async function findNewestDesktopRelease(
   coordinate: GitHubRepoCoordinate,
   mode: DesktopUpdateChannelMode,
 ): Promise<DesktopReleaseCandidate | null> {
-  const candidates = await collectDesktopReleaseCandidates(
-    coordinate,
-    undefined,
-  );
+  const signal = usesCdnDesktopUpdates()
+    ? AbortSignal.timeout(120_000)
+    : undefined;
+  let candidates: readonly DesktopReleaseCandidate[];
+  if (!usesCdnDesktopUpdates()) {
+    candidates = await collectDesktopReleaseCandidates(coordinate, undefined);
+  } else {
+    try {
+      const index = await fetchDesktopReleaseIndex(
+        DESKTOP_RELEASE_CHANNEL === "staging"
+          ? "staging"
+          : mode === "stable-only"
+            ? "stable"
+            : "rc",
+        coordinate.owner,
+        coordinate.repo,
+        signal,
+      );
+      candidates =
+        mode === "stable-only"
+          ? index.versions.filter((it) => it.version === index.stableHead)
+          : index.versions;
+    } catch (error) {
+      log.debug(
+        "[updater] desktop index unavailable; using GitHub discovery",
+        credentialSafeLogValue(error),
+      );
+      candidates =
+        mode === "stable-only"
+          ? [await fetchLatestDesktopRelease(coordinate, signal)]
+          : await collectGitHubDesktopReleaseCandidates(coordinate, signal);
+    }
+  }
   // Evaluate candidates newest-first, actually fetching + parsing each channel
   // manifest and fully validating it (tag/version agreement, checksums,
   // referenced installer assets, applicable installer, OS compatibility). The
@@ -1957,59 +1981,298 @@ async function findNewestDesktopRelease(
       candidates: ordered.map((candidate) => candidate.version),
     });
   }
-  const token = currentPrivateUpdateToken().trim();
   const channelFile = platformChannelFile();
   const currentOsRelease = osRelease();
   // Resolved consistently with MacUpdater so discovery filters manifests by the
   // same architecture the installed updater applies at download time. Only
   // meaningful on macOS; false elsewhere.
   const isArm64Mac = process.platform === "darwin" ? isArm64MacTarget() : false;
+  let discoveryError: unknown = null;
   for (const candidate of ordered) {
     // Cheap asset-presence gate first: never spend a manifest fetch on a release
     // that doesn't even publish this platform's manifest + applicable installer.
     if (!isPlatformCompatibleRelease(candidate, linuxPackageType)) {
       continue;
     }
-    const request = resolveDesktopManifestRequest(
+    const origins = candidate.origins;
+    let firstError: unknown = null;
+    for (let index = 0; index < (origins?.length ?? 1); index += 1) {
+      let attempt =
+        origins === undefined
+          ? candidate
+          : { ...candidate, origins: origins.slice(index) };
+      try {
+        attempt = await materializeDesktopReleaseOrigin(
+          attempt,
+          coordinate,
+          signal,
+        );
+      } catch (error) {
+        firstError ??= error;
+        continue;
+      }
+      const request = resolveDesktopManifestRequest(
+        coordinate.owner,
+        coordinate.repo,
+        attempt,
+        currentPrivateUpdateToken().trim(),
+      );
+      if (request === null) continue;
+      try {
+        const rawManifest = await fetchDesktopReleaseManifest(request, signal);
+        if (rawManifest === null) {
+          if (origins !== undefined)
+            firstError ??= new Error(
+              "Desktop release channel manifest unavailable",
+            );
+          continue;
+        }
+        const validation = validateDesktopReleaseManifest(
+          rawManifest,
+          channelFile,
+          request.url,
+          attempt,
+          linuxPackageType,
+          currentOsRelease,
+          isArm64Mac,
+        );
+        if (validation.ok) {
+          return {
+            ...attempt,
+            manifestIdentity: readDesktopManifestIdentity(
+              rawManifest,
+              request.url,
+            ),
+          };
+        }
+        log.warn("[updater] skipping unusable desktop release", {
+          version: candidate.version,
+          reason: validation.reason,
+        });
+      } catch (error) {
+        if (origins === undefined) throw error;
+        firstError ??= error;
+      }
+    }
+    discoveryError ??= firstError;
+  }
+  if (discoveryError !== null) throw discoveryError;
+  return null;
+}
+
+async function ensureStagingDesktopToken(): Promise<void> {
+  if (!stagingReleaseAuthRequired()) return;
+  const token = await prepareStagingUpdateToken();
+  if (token === null)
+    throw new AuthenticationRequiredError(AUTHENTICATION_REQUIRED_MESSAGE);
+  stagingUpdateToken = token;
+}
+
+async function materializeDesktopReleaseOrigin(
+  release: DesktopReleaseCandidate,
+  coordinate: GitHubRepoCoordinate,
+  signal: AbortSignal | undefined,
+): Promise<DesktopReleaseCandidate> {
+  const origin = release.origins?.[0];
+  if (DESKTOP_RELEASE_CHANNEL !== "staging" || origin?.blockMapAssets !== null)
+    return release;
+  await ensureStagingDesktopToken();
+  let assets = origin.assets;
+  if (assets === undefined) {
+    const response = await fetchStagingGitHubRelease(
+      `https://api.github.com/repos/${coordinate.owner}/${coordinate.repo}/releases/tags/${encodeURIComponent(release.tag)}`,
+      {
+        headers: {
+          accept: "application/vnd.github+json",
+          authorization: `token ${currentPrivateUpdateToken().trim()}`,
+        },
+        signal,
+      },
+    );
+    if (!response.ok) {
+      await cancelResponseBody(response);
+      if (response.status === 404)
+        await assertStagingRepositoryVisible(
+          coordinate,
+          {
+            accept: "application/vnd.github+json",
+            authorization: `token ${currentPrivateUpdateToken().trim()}`,
+          },
+          signal,
+        );
+      throw new Error(
+        `GitHub exact desktop release failed with HTTP ${response.status}`,
+      );
+    }
+    const raw: unknown = await response.json();
+    const [candidate] = projectDesktopRelease(raw, "staging");
+    if (candidate === undefined || candidate.tag !== release.tag)
+      throw new Error(
+        "GitHub retry did not identify the selected staging release",
+      );
+    assets = candidate.assets;
+  }
+  const prefix = `https://api.github.com/repos/${coordinate.owner}/${coordinate.repo}/releases/assets/`;
+  if (assets.some((asset) => !asset.url.startsWith(prefix)))
+    throw new Error(
+      "Staging release assets must use the exact GitHub asset origin",
+    );
+  return { ...release, assets };
+}
+
+// CDN failures say nothing about a GitHub lease. A private-provider 404 can be
+// GitHub hiding a revoked credential, so settle that verdict before the held
+// updater error event is discarded or the next origin replaces this one.
+async function settleStagingOriginError(error: unknown): Promise<unknown> {
+  if (
+    DESKTOP_RELEASE_CHANNEL !== "staging" ||
+    selectedDesktopRelease?.origins?.[0]?.blockMapAssets !== null
+  )
+    return error;
+  if (
+    isStagingAuthFailure(error) ||
+    (isStagingMasked404Candidate(error) &&
+      (await stagingCredentialRejected(undefined)))
+  ) {
+    discardStagingUpdateTokenForLog();
+    return isStagingAuthFailure(error)
+      ? error
+      : new AuthenticationRequiredError(AUTHENTICATION_REQUIRED_MESSAGE);
+  }
+  return error;
+}
+
+async function checkCurrentDesktopOrigin(): Promise<UpdateCheckResult> {
+  let result: UpdateCheckResult | null;
+  try {
+    result = await autoUpdater.checkForUpdates();
+  } catch (error) {
+    throw await settleStagingOriginError(error);
+  }
+  const release = selectedDesktopRelease;
+  if (
+    result === null ||
+    release === null ||
+    result.updateInfo.version !== release.version ||
+    desktopManifestIdentity(result.updateInfo) !== release.manifestIdentity
+  ) {
+    throw new Error(
+      "Desktop update origin changed the selected version or asset identity",
+    );
+  }
+  return result;
+}
+
+async function checkSelectedDesktopRelease(): Promise<void> {
+  let result: UpdateCheckResult;
+  try {
+    result = await checkCurrentDesktopOrigin();
+  } catch (originalError) {
+    try {
+      if (!(await advanceDesktopReleaseOrigin())) throw originalError;
+      result = await checkCurrentDesktopOrigin();
+    } catch (alternateError) {
+      if (isStagingAuthFailure(alternateError))
+        discardStagingUpdateTokenForLog();
+      throw originalError;
+    }
+  }
+  if (result.isUpdateAvailable) handleUpdateAvailable(result.updateInfo);
+  else handleUpdateNotAvailable(result.updateInfo);
+}
+
+async function advanceDesktopReleaseOrigin(): Promise<boolean> {
+  const release = selectedDesktopRelease;
+  const coordinate = resolveUpdateRepo();
+  if (
+    isSupersededCheckGeneration() ||
+    release === null ||
+    coordinate === null ||
+    (release.origins?.length ?? 0) < 2
+  )
+    return false;
+  const next = await materializeDesktopReleaseOrigin(
+    { ...release, origins: release.origins?.slice(1) },
+    coordinate,
+    undefined,
+  );
+  if (isSupersededCheckGeneration()) return false;
+  selectedDesktopRelease = next;
+  applyDesktopReleaseFeed(
+    buildDesktopReleaseFeed(
       coordinate.owner,
       coordinate.repo,
-      candidate,
-      token,
-    );
-    if (request === null) {
-      continue;
-    }
-    const rawManifest = await fetchDesktopReleaseManifest(request, undefined);
-    if (rawManifest === null) {
-      // A missing/errored manifest (HTTP failure) makes this release unusable;
-      // fall back to the next. A transport-level failure propagates as a
-      // discovery error instead (see `fetchDesktopReleaseManifest`).
-      log.warn(
-        "[updater] skipping desktop release: channel manifest unavailable",
-        {
-          version: candidate.version,
-        },
-      );
-      continue;
-    }
-    const validation = validateDesktopReleaseManifest(
-      rawManifest,
-      channelFile,
-      request.url,
-      candidate,
+      next,
+      currentPrivateUpdateToken().trim(),
       linuxPackageType,
-      currentOsRelease,
-      isArm64Mac,
+      process.platform === "darwin" ? isArm64MacTarget() : false,
+    ),
+  );
+  return true;
+}
+
+async function fetchLatestDesktopRelease(
+  coordinate: GitHubRepoCoordinate,
+  signal: AbortSignal | undefined,
+): Promise<DesktopReleaseCandidate> {
+  const response = await fetchStagingGitHubRelease(
+    `https://api.github.com/repos/${coordinate.owner}/${coordinate.repo}/releases/latest`,
+    { headers: { accept: "application/vnd.github+json" }, signal },
+  );
+  if (!response.ok) {
+    await cancelResponseBody(response);
+    throw new Error(
+      `GitHub desktop Latest discovery failed with HTTP ${response.status}`,
     );
-    if (validation.ok) {
-      return candidate;
-    }
-    log.warn("[updater] skipping unusable desktop release", {
-      version: candidate.version,
-      reason: validation.reason,
-    });
   }
-  return null;
+  const raw: unknown = await response.json();
+  const [release] = projectDesktopRelease(raw, DESKTOP_RELEASE_CHANNEL);
+  if (
+    release === undefined ||
+    !isSelectableCandidate({
+      mode: "stable-only",
+      candidateVersion: release.version,
+      installedVersion: CURRENT_VERSION,
+      isStrictlyNewer:
+        compareHostVersions(release.version, CURRENT_VERSION) > 0,
+    })
+  ) {
+    throw new Error("GitHub Latest does not identify a stable desktop release");
+  }
+  return {
+    ...release,
+    origins: desktopReleaseOrigins(
+      coordinate.owner,
+      coordinate.repo,
+      release,
+      null,
+      true,
+    ),
+  };
+}
+
+async function collectDesktopReleaseCandidates(
+  coordinate: GitHubRepoCoordinate,
+  signal: AbortSignal | undefined,
+): Promise<DesktopReleaseCandidate[]> {
+  if (usesCdnDesktopUpdates()) {
+    try {
+      const index = await fetchDesktopReleaseIndex(
+        DESKTOP_RELEASE_CHANNEL === "staging" ? "staging" : "rc",
+        coordinate.owner,
+        coordinate.repo,
+        signal,
+      );
+      return [...index.versions];
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      log.debug(
+        "[updater] desktop RC index unavailable; using GitHub discovery",
+        credentialSafeLogValue(error),
+      );
+    }
+  }
+  return collectGitHubDesktopReleaseCandidates(coordinate, signal);
 }
 
 // Collects every `desktop-v*` candidate (RC-only consent applied by
@@ -2017,10 +2280,11 @@ async function findNewestDesktopRelease(
 // caller can order them and validate newest-first. Hitting the page cap with a
 // still-full final page is a discovery error, not "no update", so a real release
 // beyond the cap is never mistaken for "up to date".
-async function collectDesktopReleaseCandidates(
+async function collectGitHubDesktopReleaseCandidates(
   coordinate: GitHubRepoCoordinate,
   signal: AbortSignal | undefined,
 ): Promise<DesktopReleaseCandidate[]> {
+  await ensureStagingDesktopToken();
   const token = currentPrivateUpdateToken().trim();
   const headers: Record<string, string> = {
     accept: "application/vnd.github+json",
@@ -2066,7 +2330,19 @@ async function collectDesktopReleaseCandidates(
       ),
     );
     // A short page is GitHub's signal that no releases remain.
-    if (raw.length < 100) return candidates;
+    if (raw.length < 100)
+      return !usesCdnDesktopUpdates()
+        ? candidates
+        : candidates.map((release) => ({
+            ...release,
+            origins: desktopReleaseOrigins(
+              coordinate.owner,
+              coordinate.repo,
+              release,
+              null,
+              true,
+            ),
+          }));
   }
   throw new Error(
     `GitHub release discovery exceeded the ${MAX_DISCOVERY_PAGES}-page safety limit`,
@@ -2116,16 +2392,19 @@ async function fetchDesktopReleaseManifest(
   },
   signal: AbortSignal | undefined,
 ): Promise<string | null> {
-  const response = await fetchStagingGitHubRelease(request.url, {
+  const authenticatedGitHub =
+    new URL(request.url).hostname === "api.github.com" &&
+    request.headers.authorization !== undefined;
+  const fetchManifest =
+    new URL(request.url).hostname === "api.github.com"
+      ? fetchStagingGitHubRelease
+      : fetch;
+  const response = await fetchManifest(request.url, {
     headers: request.headers,
     signal,
   });
   if (!response.ok) {
     await cancelResponseBody(response);
-    // The THIRD masked-404 site, and the last one: `fetchStagingGitHubRelease`
-    // has exactly three call sites in this file - the release listing (guarded
-    // above), the visibility probe itself (which must not recurse), and this.
-    //
     // It is the only one whose failure mode is silent. The listing throws and
     // the download emits an error; this returns `null`, which discovery reads
     // as "unusable release, try the next one". So a credential that lost
@@ -2140,7 +2419,11 @@ async function fetchDesktopReleaseManifest(
     // A probe that cannot answer - offline, rate limited - returns false and
     // leaves this release merely unusable, which is the same fail-safe
     // direction discovery and `settleMasked404` take.
-    if (response.status === 404 && (await stagingCredentialRejected(signal))) {
+    if (
+      authenticatedGitHub &&
+      response.status === 404 &&
+      (await stagingCredentialRejected(signal))
+    ) {
       throw new AuthenticationRequiredError(AUTHENTICATION_REQUIRED_MESSAGE);
     }
     // A RATE LIMIT IS NOT A MISSING MANIFEST. `fetchWithGitHubReleaseAuth`
@@ -2356,25 +2639,7 @@ function emitSnapshot(patch: AppUpdateSnapshotPatch): DesktopAppUpdateSnapshot {
   return currentSnapshot;
 }
 
-// REMOVED with the three-mode channel model: the "no production release exists
-// yet" fallback.
-//
-// It existed because an RC build used to check the STABLE `/releases/latest`
-// feed, which 404s until the line's first GA release is published, and
-// reporting that 404 as a service failure to every RC user was noise. Under the
-// mode model a canonical `X.Y.Z-rc.N` build is never on the stable feed - it
-// derives `implicit-rc-line`, configures `allowPrerelease: true`, and resolves
-// its candidate through the namespaced `desktop-v*` selector, which answers
-// "nothing selectable" by returning a null feed (a genuine up-to-date), not by
-// raising an updater error. The only builds still on the stable feed are stable
-// releases and non-canonical prereleases, and for both of those a 404 from the
-// release feed IS a service problem worth surfacing.
-//
-// Keeping the fallback would have meant keeping a second, contradictory
-// definition of "is this a prerelease" (`version.includes("-")`) alive purely
-// to suppress an error path that the supported builds can no longer reach.
-
-function handleUpdaterError(error: unknown): void {
+function handleUpdaterError(error: unknown, originErrorSettled: boolean): void {
   // MacUpdater resolves downloadUpdate after serving the ZIP, before Squirrel
   // finishes preparing it. A later wrapper failure (such as copying the cached
   // blockmap) does not cancel that native work. Keep its ownership until native
@@ -2445,7 +2710,7 @@ function handleUpdaterError(error: unknown): void {
   // mid-flight all 404 with a perfectly good token, and only the probe
   // distinguishes those from a revoked one. Costs one request, on the 404
   // path only, and only when a staging token is actually configured.
-  if (isStagingMasked404Candidate(error)) {
+  if (!originErrorSettled && isStagingMasked404Candidate(error)) {
     // The only asynchronous branch in this handler, so it is also the only one
     // that can turn a throwing listener into an unhandled rejection instead of
     // propagating to the emitter. Terminate the chain here.
