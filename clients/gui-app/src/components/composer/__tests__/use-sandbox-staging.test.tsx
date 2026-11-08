@@ -609,6 +609,24 @@ describe("useSandboxStaging New rows", () => {
     expect(staging().composer.stagedConfigurationKey).toBe("personal");
   });
 
+  it("states what a setup is charged for under a new stage that is still only staged, before anything launches", () => {
+    const { composer } = mount([LAPTOP]);
+
+    act(() => composer.onPickNew("personal"));
+    renderStagedConsequences();
+
+    expect(readStagedSandbox(SURFACE)).toMatchObject({
+      phase: "staged",
+      clientRequestId: null,
+    });
+    expect(screen.getByTestId("consequences-setup-charges").textContent).toBe(
+      "Running the sandbox is charged separately from build work. Build work is charged once, even if the build fails. Keeping the result is charged as storage for as long as you keep it.",
+    );
+    expect(screen.getByTestId("consequences-price").textContent).toContain(
+      "an hour while awake",
+    );
+  });
+
   it("hands the block a Linux OS, and no Windows limitation, for a new Linux stage", () => {
     mocks.catalogue = { providers: [PROVIDER, WINDOWS_PROVIDER] };
     const { composer } = mount([LAPTOP]);
