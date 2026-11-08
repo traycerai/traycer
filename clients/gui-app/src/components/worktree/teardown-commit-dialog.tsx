@@ -147,7 +147,7 @@ function dialogTitle(choice: TeardownCommitChoice | null): string {
   }
   if (choice === "submit") return "Send in the new folder?";
   if (choice === "remove") return "Remove this folder?";
-  return "Switch workspace?";
+  return "Switch folder?";
 }
 
 function dialogDescription(

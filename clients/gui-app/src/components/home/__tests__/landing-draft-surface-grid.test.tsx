@@ -1,7 +1,7 @@
 /**
- * The start page's row tracks. `HomePage`'s suite mounts this surface for
- * composer identity; this file mounts it only to read the grid the task list
- * scrolls inside.
+ * Where the task list sits relative to the composer. Row heights and the
+ * editor cap are layout, measured in
+ * `browser-tests/landing-draft-surface-cap.spec.ts`.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
@@ -73,46 +73,22 @@ function appearanceGrid(): Element {
   return grid;
 }
 
-function desktopTrack(grid: Element): string | undefined {
-  return [...grid.classList].find((name) => name.startsWith("grid-rows-"));
-}
-
 afterEach(() => {
   cleanup();
   useSettingsStore.setState({ showGreeting: true, showRecentHistory: true });
 });
 
 describe("LandingDraftSurface grid", () => {
-  it("keeps the task list inside a desktop fraction of the page", () => {
+  it("places the task list after the composer, and on a phone offers history from the composer", () => {
     setViewportWidth(1280);
     useSettingsStore.setState({ showGreeting: true, showRecentHistory: true });
     const view = render(<LandingDraftSurface />);
 
     const grid = appearanceGrid();
-    // The last desktop track is the task list, floored at 12.5rem. The auto
-    // track before it is the composer's own row, so a tall draft cannot spend
-    // the list's floor. Below md that floor is not the track that applies.
-    expect(desktopTrack(grid)).toBe(
-      "grid-rows-[auto_minmax(0,1fr)_auto_minmax(12.5rem,1fr)]",
-    );
-    expect(
-      grid.classList.contains(
-        "max-md:grid-rows-[auto_minmax(0,1fr)_minmax(min-content,1.4fr)]",
-      ),
-    ).toBe(true);
-    expect(
-      [...grid.classList].some(
-        (name) => name.startsWith("max-md:") && name.includes("12.5rem"),
-      ),
-    ).toBe(false);
-    expect(grid.classList.contains("overflow-y-auto")).toBe(true);
-    expect(grid.classList.contains("overflow-hidden")).toBe(false);
-
     const composer = grid.querySelector("[data-composer-placement]");
     if (composer === null) {
       throw new Error("composer track is missing");
     }
-    expect(composer.className.split(/\s+/)).toContain("md:min-h-0");
 
     const tasks = screen.getByTestId("current-tasks-section");
     const wrapper = tasks.parentElement;
@@ -123,20 +99,9 @@ describe("LandingDraftSurface grid", () => {
     expect(composer.parentElement).toBe(grid);
     expect(composer.contains(tasks)).toBe(false);
     expect(composer.nextElementSibling).toBe(wrapper);
-    expect(wrapper.className.split(/\s+/)).toEqual(
-      expect.arrayContaining([
-        "mx-auto",
-        "w-full",
-        "max-w-3xl",
-        "px-6",
-        "min-h-0",
-        "overflow-hidden",
-        "pb-6",
-      ]),
-    );
 
-    // Same row tokens at every width. Below md the section is not mounted;
-    // recent tasks are the history control in the composer column.
+    // Below md the section is not mounted. Recent tasks are the history
+    // control in the composer column.
     view.unmount();
     setViewportWidth(390);
     render(<LandingDraftSurface />);
@@ -149,7 +114,7 @@ describe("LandingDraftSurface grid", () => {
     ).toBe(true);
   });
 
-  it("keeps the empty start page centred on the composer's own height", () => {
+  it("omits the task list on the empty start page", () => {
     setViewportWidth(1280);
     useSettingsStore.setState({
       showGreeting: false,
@@ -157,16 +122,6 @@ describe("LandingDraftSurface grid", () => {
     });
     render(<LandingDraftSurface />);
 
-    const grid = appearanceGrid();
-    expect(desktopTrack(grid)).toBe(
-      "grid-rows-[auto_0_minmax(min-content,1fr)]",
-    );
-    expect(
-      grid.classList.contains("max-md:short-landscape:grid-rows-[auto_0_auto]"),
-    ).toBe(true);
-    expect([...grid.classList].some((name) => name.includes("12.5rem"))).toBe(
-      false,
-    );
     expect(screen.queryByTestId("current-tasks-section")).toBeNull();
   });
 });

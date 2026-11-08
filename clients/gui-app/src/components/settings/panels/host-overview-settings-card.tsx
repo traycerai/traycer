@@ -178,6 +178,15 @@ function FixedSettingsSource(props: { readonly value: string }): ReactNode {
   );
 }
 
+/**
+ * An unreachable sandbox's known source is the word Personal, or the team's
+ * name. The name stays in the control; the sentence does not repeat it.
+ */
+function offlineSourceStatus(source: string): string {
+  if (source === "Personal") return "Runs Personal settings.";
+  return "Runs the team's settings.";
+}
+
 /** Unavailable reads retain a known source; pending reads reserve its control. */
 export function HostOverviewSettingsCardSlot(props: {
   readonly client: HostClient<HostRpcRegistry> | null;
@@ -215,7 +224,7 @@ export function HostOverviewSettingsCardSlot(props: {
       props.fallbackSource === undefined ? null : (
       <SettingsRow
         row={HOST_OVERVIEW.definitions.settingsRow}
-        status={`Runs ${props.fallbackSource} settings.`}
+        status={offlineSourceStatus(props.fallbackSource)}
         control={<FixedSettingsSource value={props.fallbackSource} />}
       />
     );

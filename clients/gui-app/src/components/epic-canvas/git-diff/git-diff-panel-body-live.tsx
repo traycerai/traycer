@@ -438,7 +438,7 @@ function renderGitDiffPanelBody(input: {
   // render only inside `GitDiffPanelLoaded`. So each of the states below -
   // reached BY choosing a host - removed the one control that could choose a
   // different one. Pinning to a host that could not answer produced "No git
-  // workspaces available" with no picker, no auto-follow (the pin is deposed
+  // folders available" with no picker, no auto-follow (the pin is deposed
   // only on a lease death that needs a refusal streak nothing here re-dials to
   // produce) and no refetch (host queries disable every automatic recovery
   // route), so the panel stayed there across reloads: the pin is persisted.
@@ -532,7 +532,7 @@ interface GitDiffPanelDegradedProps {
  * loaded header renders do not exist here - there is no selected root, so no
  * change counts, no submodule tree and no watcher status to qualify. The
  * switcher already models exactly this: `selected: null` renders "Select
- * workspace", and an empty `roots` renders "No folders found." in its list.
+ * folder", and an empty `roots` renders "No folders found." in its list.
  * What survives is the part that matters - the host section, and any rows the
  * host DID return, so a pick can move the panel out of this state.
  *

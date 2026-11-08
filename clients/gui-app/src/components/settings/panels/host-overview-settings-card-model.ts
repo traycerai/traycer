@@ -113,9 +113,11 @@ export function hostSettingsRowModel(
 ): HostSettingsRowModel {
   if (status === null || binding === null) return { kind: "loading" };
   if (binding.explicit && binding.environment.ownerKind === "organization") {
-    const label = binding.environment.label;
-    const possessive = label.endsWith("s") ? `${label}'` : `${label}'s`;
-    return { kind: "team", label, description: `Runs ${possessive} settings.` };
+    return {
+      kind: "team",
+      label: binding.environment.label,
+      description: "Runs the team's settings.",
+    };
   }
   const state = hostSettingsCardState(status);
   if (state.kind === "moving" || state.kind === "move_stopped")

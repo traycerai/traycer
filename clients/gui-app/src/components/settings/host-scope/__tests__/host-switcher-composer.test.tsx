@@ -9,6 +9,7 @@ import {
 } from "@testing-library/react";
 import { HostSwitcher } from "@/components/settings/host-scope/host-switcher";
 import type { HostSwitcherComposerMode } from "@/components/settings/host-scope/host-switcher";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import type { HostPickIntent } from "@/components/settings/host-scope/host-option-model";
 import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
@@ -165,6 +166,48 @@ function renderSwitcher(input: {
 
 function row(hostId: string): HTMLElement {
   return screen.getByTestId(`settings-host-switcher-option-${hostId}`);
+}
+
+/**
+ * jsdom paints no layout. Report one label as cut off so the trigger's
+ * tooltip opens, and put the prototype back for the tests that follow.
+ */
+function stubStagedLabelOverflow(label: string): () => void {
+  const originalScrollWidth = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "scrollWidth",
+  );
+  const originalClientWidth = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "clientWidth",
+  );
+  Object.defineProperty(HTMLElement.prototype, "scrollWidth", {
+    configurable: true,
+    get(this: HTMLElement) {
+      return this.textContent === label ? 240 : 0;
+    },
+  });
+  Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+    configurable: true,
+    get(this: HTMLElement) {
+      return this.textContent === label ? 100 : 0;
+    },
+  });
+  return () => {
+    restoreMeasuredProperty("scrollWidth", originalScrollWidth);
+    restoreMeasuredProperty("clientWidth", originalClientWidth);
+  };
+}
+
+function restoreMeasuredProperty(
+  name: "scrollWidth" | "clientWidth",
+  descriptor: PropertyDescriptor | undefined,
+): void {
+  if (descriptor === undefined) {
+    Reflect.deleteProperty(HTMLElement.prototype, name);
+    return;
+  }
+  Object.defineProperty(HTMLElement.prototype, name, descriptor);
 }
 
 describe("<HostSwitcher /> composer mode picks", () => {
@@ -480,31 +523,80 @@ describe("<HostSwitcher /> composer mode New rows", () => {
     expect(wakeSandboxOnPick).not.toHaveBeenCalled();
   });
 
-  it("keeps the staged shape gear beside the named trigger in the merged row", () => {
-    renderPicker({
-      hosts: [LAPTOP],
-      selected: LAPTOP,
-      composer: composerMode({
-        stagedConfigurationKey: "personal",
-        stagedLabel: "New Personal sandbox",
-      }),
-      intent: "pin",
-      onAncestorKeyDown: null,
-    });
+  it.each(["inline", "field"] as const)(
+    "keeps the staged shape gear beside the named trigger in the merged %s row",
+    async (surface) => {
+      const stagedLabel = "New Personal sandbox";
+      const restore = stubStagedLabelOverflow(stagedLabel);
+      try {
+        render(
+          <TooltipProvider delayDuration={0}>
+            <HostSwitcher
+              refusalByHostId={NO_HOST_OPTION_REFUSALS}
+              inertExceptHostId={null}
+              hosts={[LAPTOP]}
+              selected={LAPTOP}
+              activeHostId={LAPTOP.hostId}
+              onSelect={onSelect}
+              action={null}
+              surface={surface}
+              intent="pin"
+              consequence={null}
+              disabled={false}
+              isLoading={false}
+              listsFailed={false}
+              onRetryLists={() => undefined}
+              updateViewForHost={null}
+              environmentLabelForHost={null}
+              composer={composerMode({
+                stagedConfigurationKey: "personal",
+                stagedLabel,
+              })}
+            />
+          </TooltipProvider>,
+        );
 
-    const trigger = screen.getByRole("button", {
-      name: "Host: New Personal sandbox",
-    });
-    const gear = screen.getByTestId("host-switcher-staged-gear");
-    expect(trigger.parentElement).toBe(gear.parentElement);
-    expect(trigger.parentElement?.classList.contains("items-center")).toBe(
-      true,
-    );
-    expect(gear.classList.contains("shrink-0")).toBe(true);
-    expect(trigger.getAttribute("aria-label")).toBe(
-      "Host: New Personal sandbox",
-    );
-  });
+        const trigger = screen.getByRole("button", {
+          name: `Host: ${stagedLabel}`,
+        });
+        const gear = screen.getByTestId("host-switcher-staged-gear");
+        const triggerWrapper = trigger.parentElement;
+        const row = triggerWrapper?.parentElement ?? null;
+        expect(row).not.toBeNull();
+        expect(row).toBe(gear.parentElement);
+        expect(triggerWrapper?.nextElementSibling).toBe(gear);
+        expect(row?.classList.contains("flex")).toBe(true);
+        expect(row?.classList.contains("items-center")).toBe(true);
+        expect(row?.classList.contains("gap-1")).toBe(true);
+        expect(row?.classList.contains("w-full")).toBe(true);
+        expect(row?.classList.contains("flex-wrap")).toBe(false);
+        expect(row?.classList.contains("flex-col")).toBe(false);
+        expect(triggerWrapper?.classList.contains("min-w-0")).toBe(true);
+        expect(triggerWrapper?.classList.contains("flex-1")).toBe(true);
+        expect(gear.classList.contains("shrink-0")).toBe(true);
+        expect(trigger.getAttribute("aria-label")).toBe(`Host: ${stagedLabel}`);
+        expect(gear.getAttribute("aria-label")).toBe(
+          "Change the staged sandbox's shape",
+        );
+
+        const label = screen.getByText(stagedLabel);
+        expect(label.className).toContain("truncate");
+        expect(label.className).not.toContain("whitespace-normal");
+        expect(label.className).not.toContain("wrap-anywhere");
+        fireEvent.focus(trigger);
+        expect((await screen.findByRole("tooltip")).textContent).toBe(
+          stagedLabel,
+        );
+
+        fireEvent.click(gear);
+        expect(onOpenShape).toHaveBeenCalledWith("personal");
+        expect(onPickNew).not.toHaveBeenCalled();
+        expect(onSelect).not.toHaveBeenCalled();
+      } finally {
+        restore();
+      }
+    },
+  );
 
   it("marks the staged row picked", () => {
     renderSwitcher({

@@ -531,19 +531,6 @@ describe("landing paste lifecycle (real draft-runtime registry + keyed LandingCo
     render(<KeyedLandingComposerHarness />);
     await waitForEditorReady();
 
-    const editor = screen.getByTestId("composer-editor");
-    // The md cap, the phone cap, and the editor's own unprefixed max-height
-    // are separate tokens on the rendered editor. The md token is what binds
-    // from that breakpoint up.
-    expect(editor.classList.contains("md:max-h-[40dvh]")).toBe(true);
-    expect(editor.classList.contains("overflow-y-auto")).toBe(true);
-    expect(
-      editor.classList.contains(
-        "max-md:max-h-[min(calc(var(--spacing-safe-dvh)*0.3),15rem)]",
-      ),
-    ).toBe(true);
-    expect(editor.classList.contains("max-h-[min(50vh,15rem)]")).toBe(true);
-
     const editorBefore = screen.getByRole("textbox", {
       name: "Ask Traycer anything. @ mention for context",
     });

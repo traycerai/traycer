@@ -42,11 +42,14 @@ export function ChatSearchDialogHost() {
     <Dialog open={open} onOpenChange={changeOpen}>
       <DialogContent
         // Anchored high like the command palette, so the list grows downward
-        // instead of re-centring on every page. The width stays a viewport cap:
-        // the unmodified class keeps the safe-area term, the `sm:` one displaces
+        // instead of re-centring on every page. The height cap is the
+        // primitive's safe-viewport cap less that anchor, so the box ends
+        // above the bottom inset (and the keyboard) instead of running past
+        // it by the anchor's height. The width stays a viewport cap: the
+        // unmodified class keeps the safe-area term, the `sm:` one displaces
         // the primitive's `sm:max-w-sm`.
         layout="banded"
-        className="top-[15vh] flex w-full max-w-[min(calc(100%_-_2rem),44rem,var(--safe-area-width))] translate-y-0 flex-col overflow-hidden sm:max-w-[min(calc(100%_-_2rem),44rem,var(--safe-area-width))]"
+        className="top-[15vh] flex max-h-[calc(var(--spacing-safe-dvh)-var(--spacing-safe-bottom)-15vh)] w-full max-w-[min(calc(100%_-_2rem),44rem,var(--safe-area-width))] translate-y-0 flex-col overflow-hidden sm:max-w-[min(calc(100%_-_2rem),44rem,var(--safe-area-width))]"
         showCloseButton={false}
       >
         <DialogHeader className="sr-only">

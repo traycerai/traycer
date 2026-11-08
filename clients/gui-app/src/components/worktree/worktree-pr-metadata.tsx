@@ -344,24 +344,24 @@ export function OwnerWorkspaceMetadataContent(props: {
   // Ahead of the spinner, because this is the state that CANNOT resolve on its
   // own. The owner's host is unreachable, so no request is in flight and none
   // is coming; a spinner here waits for an event that never arrives. It also
-  // outranks "No workspace linked", which would claim the owner runs nowhere
+  // outranks "No folder linked", which would claim the owner runs nowhere
   // when the truth is only that nobody could be asked.
   if (props.hostUnavailable && !hasContent) {
     return (
       <span className="block px-3 py-2 text-ui-xs text-muted-foreground">
-        Workspace unknown — host unreachable
+        Folder unknown — host unreachable
       </span>
     );
   }
   // Gated on having NOTHING TO SHOW, not on `binding === null`, and that
-  // difference is the whole point. "No workspace linked" is a definitive claim
+  // difference is the whole point. "No folder linked" is a definitive claim
   // about an owner - it is what the card says when a chat really runs nowhere -
   // so it must never be the answer while a read that could contradict it is
   // still in flight. The old condition only covered the FIRST load: once a
   // `{ binding: null }` had been cached, a later re-open served that null with
   // `isPending` false and printed the definitive negative over a refetch that
   // was about to replace it (`ownerMetadataPending` documents the matching
-  // half). A chat with a perfectly good workspace read "No workspace linked"
+  // half). A chat with a perfectly good workspace read "No folder linked"
   // until the refetch landed.
   //
   // Owners that DO have items keep rendering them through a refetch, so the
@@ -374,21 +374,21 @@ export function OwnerWorkspaceMetadataContent(props: {
           variant="dots"
           className="size-4"
         />
-        Loading workspace…
+        Loading folder…
       </span>
     );
   }
   if (props.error && !hasContent) {
     return (
       <span className="block px-3 py-2 text-ui-xs text-muted-foreground">
-        Unable to load workspace details
+        Unable to load folder details
       </span>
     );
   }
   if (!hasContent) {
     return (
       <span className="block px-3 py-2 text-ui-xs text-muted-foreground">
-        No workspace linked
+        No folder linked
       </span>
     );
   }

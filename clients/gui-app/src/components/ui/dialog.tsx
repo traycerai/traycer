@@ -96,6 +96,7 @@ function DialogContent({
         ref={ref}
         data-slot="dialog-content"
         data-layout={layout}
+        data-close-button={showCloseButton ? "true" : "false"}
         className={cn(
           // `top-safe-center-y` / `left-safe-center-x`, not `top-1/2` /
           // `left-1/2`: a fixed element centres on the viewport, which on a
@@ -160,8 +161,13 @@ function DialogHeader({ className, ...props }: React.ComponentProps<"div">) {
       data-slot="dialog-header"
       className={cn(
         "flex shrink-0 flex-col gap-2",
-        // `pr-12` clears the close button (`absolute top-2 right-2` on the
-        // content): in a banded dialog the header band runs under it.
+        // The close button is `absolute top-2 right-2 size-7` on the content,
+        // so it ends 2.25rem in from the edge. A title line must stop before
+        // it, not run under it: a padded dialog's `p-4` leaves 1rem, so the
+        // header adds `pr-8` while the button is shown; a banded header band
+        // runs under the button whatever the caller chose, so it always
+        // carries `pr-12`.
+        "group-data-[close-button=true]/dialog-content:pr-8",
         "group-data-[layout=banded]/dialog-content:border-b group-data-[layout=banded]/dialog-content:px-5 group-data-[layout=banded]/dialog-content:py-4 group-data-[layout=banded]/dialog-content:pr-12",
         className,
       )}

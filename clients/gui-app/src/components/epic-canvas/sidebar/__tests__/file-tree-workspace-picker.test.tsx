@@ -279,6 +279,22 @@ describe("<FileTreeWorkspacePicker />", () => {
     expect(trigger.textContent).not.toContain("changed");
   });
 
+  it("says Select folder when nothing is selected", () => {
+    renderWithClient(
+      <FileTreeWorkspacePicker
+        epicId="epic-1"
+        hostId="host-1"
+        selectedPath={null}
+        onSelectPath={() => undefined}
+        surfaceKey="file-tree-test"
+      />,
+    );
+
+    const trigger = screen.getByTestId("file-tree-workspace-picker-trigger");
+    expect(trigger.textContent).toContain("Select folder");
+    expect(trigger.textContent).toContain("Choose a folder");
+  });
+
   it("left-truncates the selected workspace path in the trigger", () => {
     renderWithClient(
       <FileTreeWorkspacePicker

@@ -414,7 +414,7 @@ describe("<OpenInEditorButton />", () => {
     );
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Open workspace in editor" }),
+      screen.getByRole("button", { name: "Open folder in editor" }),
     );
 
     expect(editorState.mutate).toHaveBeenCalledWith({
@@ -436,7 +436,7 @@ describe("<OpenInEditorButton />", () => {
     );
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Open workspace in editor" }),
+      screen.getByRole("button", { name: "Open folder in editor" }),
     );
 
     expect(editorState.mutate).toHaveBeenCalledWith({
@@ -525,7 +525,7 @@ describe("<OpenInEditorButton />", () => {
     );
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Open workspace in editor" }),
+      screen.getByRole("button", { name: "Open folder in editor" }),
     );
 
     expect(editorState.mutate).toHaveBeenCalledWith({

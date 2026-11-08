@@ -217,7 +217,7 @@ export function useRecentWorkspaces(args: {
         updateState((current) => ({
           ...current,
           failedPaths: withoutPath(current.failedPaths, workspacePath),
-          announcement: "Workspace forgotten.",
+          announcement: "Folder forgotten.",
         }));
         return true;
       } catch {
@@ -225,16 +225,12 @@ export function useRecentWorkspaces(args: {
           ...current,
           hiddenPaths: withoutPath(current.hiddenPaths, workspacePath),
         }));
-        reportableErrorToast(
-          "Couldn't forget workspace. Try again.",
-          undefined,
-          {
-            title: "Could not forget recent workspace",
-            message: null,
-            code: null,
-            source: "Workspace folders",
-          },
-        );
+        reportableErrorToast("Couldn't forget folder. Try again.", undefined, {
+          title: "Could not forget recent folder",
+          message: null,
+          code: null,
+          source: "Folders",
+        });
         return false;
       }
     },
@@ -293,8 +289,8 @@ export function useRecentWorkspaces(args: {
             ...activatedPaths,
           ]),
           announcement: alreadyActive
-            ? "Workspace is already in context."
-            : "Workspace added to context.",
+            ? "Folder is already in context."
+            : "Folder added to context.",
         }));
       } else {
         updateState((current) => ({
@@ -361,8 +357,8 @@ export function useRecentWorkspaces(args: {
           ? withoutPath(current.failedPaths, workspacePath)
           : new Set(current.failedPaths).add(workspacePath),
         announcement: replacementForgotten
-          ? "Workspace location updated and added to context."
-          : "Workspace added to context. The old entry is still in Recent.",
+          ? "Folder location updated and added to context."
+          : "Folder added to context. The old entry is still in Recent.",
       }));
       Analytics.getInstance().track(AnalyticsEvent.WorkspaceContextAdded, {
         source: "browse",
@@ -398,7 +394,7 @@ export function useRecentWorkspaces(args: {
           updateState((current) => ({
             ...current,
             hiddenPaths: withoutPath(current.hiddenPaths, workspacePath),
-            announcement: "Workspace moved to Recent.",
+            announcement: "Folder moved to Recent.",
           }));
           Analytics.getInstance().track(AnalyticsEvent.WorkspaceMovedToRecent, {
             surface: analyticsSurface,

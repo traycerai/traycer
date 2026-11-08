@@ -946,8 +946,10 @@ history returns on wake. Their frozen state also keeps the lifecycle word beside
 **Out of credits** and gives a future removal date.
 
 Folder groups in the fork, terminal, file-tree, Git Diff and History pickers are
-**Folders**, including accessible names and search/empty states; code identifiers
-remain workspace-based. Invitation review, Invite, Link a plan and Add an MCP
+**Folders**, including accessible names, search and empty states, and the sentences
+that name the pick: **Select folder**, **Choose a bound folder**, **Choose a folder**,
+**No git folders available**, **Add folders to the agent to get started**, and
+**the folder you pick here**. Code identifiers remain workspace-based. Invitation review, Invite, Link a plan and Add an MCP
 server name the team or environment once in the heading; subsequent copy uses
 the team or this environment and keeps every grant, seat and sharing consequence.
 The team-host notice keeps shared access and billing in its resting line, names
@@ -3499,7 +3501,7 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
       STATIC TEXT, so the most common case never looked like a choice. And both
       labelled folders by basename only, which cannot distinguish two worktrees
       of one repo.
-    - **Rows.** `Global` ("Every workspace on this host") sits above one row
+    - **Rows.** `Global` ("Every folder on this host") sits above one row
       per target. Targets come from `useMcpScope`: the resolved workspace
       folders, PLUS every worktree the host reports for them
       (`useWorktreeListByWorkspacePathsForClient`), deduped by path since a repo
@@ -3523,8 +3525,8 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
       legitimately empty on a fresh install or a host whose work happens
       elsewhere - and then the picker offered Global and nothing else, with no
       way to reach a project config at all. The list now says
-      "No workspaces added on this host yet." and carries an **Add a workspace
-      folder…** row driving the same `pickAndPrepareFolders` the Home workspace
+      "No folders added on this host yet." and carries an **Add a folder…**
+      row driving the same `pickAndPrepareFolders` the Home workspace
       selector uses, bound to the SETTINGS-selected client so a folder picked
       while viewing host B is prepared on B. The added folder becomes the
       selection; a cancelled pick changes nothing.
@@ -3538,7 +3540,7 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
       renders as a selected control that can be changed, rather than a
       sentence. With more than one candidate there is still no auto-pick.
     - A provider advertising only one `list` scope gets a plain "Applies to
-      every workspace on this host." line instead of a picker holding one dead
+      every folder on this host." line instead of a picker holding one dead
       option; the wording matches the Global row so the two never disagree.
       Plugins and Skills remain hardcoded global-scope and get no picker.
     - The OAuth resume key is `{providerId, scope, workspaceRoot, hostId}`
@@ -6302,7 +6304,8 @@ set-state-in-effect` forbids the effect form, and an effect would also
     known) with the repo under it, and that Task's merge caption once. Task
     headers share the panel surface with a thin divider; repository headers
     keep their background fill. Rows
-    in the group keep their own PR state and drop the Task title. A worktree
+    in the group keep the primary PR inline and other PRs in the bounded,
+    scrollable **More pull requests** popover, and drop the Task title. A worktree
     with no Task, or with more than one, stays in the repo's other group and
     keeps one Task label. Names wrap rather than truncating. On a narrow
     window (under 768px, and in the installed phone app) the list toolbar
@@ -6576,9 +6579,9 @@ set-state-in-effect` forbids the effect form, and an effect would also
        existing personal/local choices, move sheet and stop-sharing confirmation.
        Progress replaces the description while a move runs or has stopped, with
        the select disabled. Details retains dates and the sharing history. A team
-       source stays visible in the disabled select; transfer choices appear only
+       source stays visible in the disabled select and the row says "Runs the team's settings."; the team's name is that select's value. Transfer choices appear only
        when a host supports them. A sandbox retains its known source in the same
-       disabled control while its host is unreachable.
+       disabled control while its host is unreachable, with that same sentence when the source is a team.
        The create-bot form's "Set one up in Settings" link opens this
        page. The sidebar's host list shows each host's environment label
        beside its name (`HostOptionRow`'s `environmentLabel`, resolved by

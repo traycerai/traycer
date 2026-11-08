@@ -268,7 +268,7 @@ export function useArtifactLinkOpener(args: {
         toast(
           worktrees.isError
             ? "Couldn't open link"
-            : "Workspace links are still loading",
+            : "Folder links are still loading",
         );
         return;
       }

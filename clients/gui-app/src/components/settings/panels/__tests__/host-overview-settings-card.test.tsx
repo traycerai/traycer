@@ -418,7 +418,22 @@ describe("<HostOverviewSettingsCard />", () => {
     const selector = screen.getByRole("combobox", { name: "Settings source" });
     expect(selector.textContent).toBe("Designers");
     expect(selector.hasAttribute("disabled")).toBe(true);
-    expect(screen.getByText("Runs Designers' settings.")).toBeTruthy();
+    expect(screen.getByText("Runs the team's settings.")).toBeTruthy();
+  });
+
+  it("names the team once on a team-owned computer, as the selector value", () => {
+    renderCardWithBinding(environmentStatusFixture({}), {}, TEAM_BINDING, true);
+
+    const selector = screen.getByRole("combobox", { name: "Settings source" });
+    const sentence = screen.getByText("Runs the team's settings.");
+    let card: HTMLElement | null = selector;
+    while (card !== null && !card.contains(sentence)) {
+      card = card.parentElement;
+    }
+    expect(card).toBeTruthy();
+    if (card === null) return;
+    expect(card.textContent.match(/Designers/g) ?? []).toHaveLength(1);
+    expect(selector.textContent).toBe("Designers");
   });
 
   it("opens the Stop sharing review when This computer only is selected", async () => {
@@ -693,7 +708,7 @@ describe("hostSettingsRowModel", () => {
     ).toEqual({
       kind: "team",
       label: "Designers",
-      description: "Runs Designers' settings.",
+      description: "Runs the team's settings.",
     });
   });
 

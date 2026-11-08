@@ -9,7 +9,6 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
-  type MouseEvent,
   type ReactNode,
   type RefCallback,
 } from "react";
@@ -26,7 +25,6 @@ import {
   Copy,
   CopyMinus,
   CopyPlus,
-  ExternalLink,
   FileSliders,
   FolderGit2,
   GitCommitHorizontal,
@@ -45,7 +43,6 @@ import type {
 } from "@traycer/protocol/host/index";
 import type {
   WorktreeEntryScripts,
-  WorktreePrState,
   WorktreeSubmoduleMergeFactV12,
 } from "@traycer/protocol/host/worktree-schemas";
 import {
@@ -103,6 +100,7 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { ScriptsReviewDialog } from "@/components/workspaces/scripts-review-dialog";
 import { TeardownForceDeleteDialog } from "@/components/worktree/teardown-force-delete-dialog";
+import { WorktreePrPills } from "@/components/worktree/worktree-pr-metadata";
 import { type RepoScriptsSeed } from "@/components/workspaces/repo-scripts-form";
 import {
   hostLabelAtSentenceStart,
@@ -145,7 +143,6 @@ import {
   navigateToTabIntent,
   openOrFocusEpicIntent,
 } from "@/lib/tab-navigation";
-import { useOpenLink } from "@/lib/links/open-link";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
@@ -162,7 +159,6 @@ import {
   useWorktreesSettingsSelectionStore,
   type SelectedWorktreePathsUpdate,
 } from "@/stores/settings/worktrees-settings-selection-store";
-import { onMiddleClick } from "@/lib/dom/on-middle-click";
 
 type WorktreeRowDeleteStatus = "deleting";
 // Per-row activity-enrichment state, driving ONLY the tier pill's presentation:
@@ -3044,14 +3040,6 @@ const WORKTREE_TIER_PILL_STYLE: Record<
   },
 };
 
-interface WorktreePrChipModel {
-  readonly key: string;
-  readonly label: string;
-  readonly ariaLabel: string;
-  readonly prState: WorktreeDisplayedPrState;
-  readonly prUrl: string;
-}
-
 interface WorktreeMutedPrChipModel {
   readonly key: string;
   readonly label: string;
@@ -3061,68 +3049,21 @@ interface WorktreeMutedPrChipModel {
 function WorktreePrChips(props: {
   readonly entry: WorktreeHostEntryV14;
 }): ReactNode {
-  const chips = worktreePrChips(props.entry);
-  if (chips.length === 0) return null;
-  return chips.map((chip) =>
-    "prUrl" in chip ? (
-      <WorktreePrChip key={chip.key} chip={chip} />
-    ) : (
-      <WorktreeMutedPrChip key={chip.key} chip={chip} />
-    ),
+  return (
+    <>
+      <WorktreePrPills
+        worktrees={[props.entry]}
+        detailOnHover
+        maximumVisible={1}
+        className={undefined}
+        testId="worktree-pr-chips"
+        openPrInApp={null}
+      />
+      {props.entry.submodules.flatMap(submoduleUnmergedChip).map((chip) => (
+        <WorktreeMutedPrChip key={chip.key} chip={chip} />
+      ))}
+    </>
   );
-}
-
-function worktreePrChips(
-  entry: WorktreeHostEntryV14,
-): readonly (WorktreePrChipModel | WorktreeMutedPrChipModel)[] {
-  return [
-    ...superprojectPrChip(entry),
-    ...entry.submodules.flatMap((submodule) => [
-      ...submodulePrChip(submodule),
-      ...submoduleUnmergedChip(submodule),
-    ]),
-  ];
-}
-
-function superprojectPrChip(
-  entry: WorktreeHostEntryV14,
-): readonly WorktreePrChipModel[] {
-  const prState = displayedPrState(entry.prState);
-  if (prState === null || entry.prNumber === null || entry.prUrl === null) {
-    return [];
-  }
-  return [
-    {
-      key: `superproject:${entry.prNumber}:${entry.prUrl}`,
-      label: `#${entry.prNumber} ${WORKTREE_PR_STATE_LABEL[prState]}`,
-      ariaLabel: `Open PR #${entry.prNumber} ${WORKTREE_PR_STATE_LABEL[prState]}`,
-      prState,
-      prUrl: entry.prUrl,
-    },
-  ];
-}
-
-function submodulePrChip(
-  submodule: WorktreeSubmoduleMergeFactV12,
-): readonly WorktreePrChipModel[] {
-  const prState = displayedPrState(submodule.prState);
-  if (
-    prState === null ||
-    submodule.prNumber === null ||
-    submodule.prUrl === null
-  ) {
-    return [];
-  }
-  const repoName = submodule.repoIdentifier.repo;
-  return [
-    {
-      key: `submodule:${submodule.repoIdentifier.owner}/${repoName}:${submodule.branch}:${submodule.prNumber}:${submodule.prUrl}`,
-      label: `${repoName} #${submodule.prNumber} ${WORKTREE_PR_STATE_LABEL[prState]}`,
-      ariaLabel: `Open ${repoName} PR #${submodule.prNumber} ${WORKTREE_PR_STATE_LABEL[prState]}`,
-      prState,
-      prUrl: submodule.prUrl,
-    },
-  ];
 }
 
 function submoduleUnmergedChip(
@@ -3179,66 +3120,6 @@ function submoduleUnmergedChip(
   ];
 }
 
-type WorktreeDisplayedPrState = "open" | "closed" | "merged";
-
-const WORKTREE_PR_STATE_LABEL: Record<WorktreeDisplayedPrState, string> = {
-  open: "Open",
-  closed: "Closed",
-  merged: "Merged",
-};
-
-function WorktreePrChip(props: {
-  readonly chip: WorktreePrChipModel;
-}): ReactNode {
-  const style = WORKTREE_PR_PILL_STYLE[props.chip.prState];
-  return (
-    <Badge
-      asChild
-      variant="outline"
-      wrap
-      className={cn(style.className, "max-w-full min-w-0 shrink")}
-    >
-      <WorktreePrAnchor
-        href={props.chip.prUrl}
-        ariaLabel={props.chip.ariaLabel}
-        className="max-w-full min-w-0 wrap-anywhere whitespace-normal"
-        testId="worktree-pr-chip"
-        prState={props.chip.prState}
-      >
-        <span className="wrap-anywhere">{props.chip.label}</span>
-        <ExternalLink className="size-3" aria-hidden />
-      </WorktreePrAnchor>
-    </Badge>
-  );
-}
-
-function displayedPrState(
-  prState: WorktreePrState | null,
-): WorktreeDisplayedPrState | null {
-  if (prState === "open" || prState === "closed" || prState === "merged") {
-    return prState;
-  }
-  return null;
-}
-
-const WORKTREE_PR_PILL_STYLE: Record<
-  WorktreeDisplayedPrState,
-  { readonly className: string }
-> = {
-  open: {
-    className:
-      "border-green-600/30 bg-green-500/10 text-green-700 dark:border-green-400/30 dark:text-green-300",
-  },
-  closed: {
-    className:
-      "border-red-600/25 bg-red-500/10 text-red-700 dark:border-red-400/25 dark:text-red-300",
-  },
-  merged: {
-    className:
-      "border-purple-600/30 bg-purple-500/10 text-purple-700 dark:border-purple-400/30 dark:text-purple-300",
-  },
-};
-
 function WorktreeMutedPrChip(props: {
   readonly chip: WorktreeMutedPrChipModel;
 }): ReactNode {
@@ -3259,38 +3140,6 @@ function WorktreeMutedPrChip(props: {
         <span className="wrap-anywhere">{props.chip.label}</span>
       </Badge>
     </TooltipWrapper>
-  );
-}
-
-function WorktreePrAnchor(props: {
-  readonly href: string;
-  readonly ariaLabel: string;
-  readonly className: string | undefined;
-  readonly testId: string | undefined;
-  readonly prState: WorktreeDisplayedPrState | undefined;
-  readonly children: ReactNode;
-}): ReactNode {
-  const openLink = useOpenLink();
-  const openExternal = useCallback(
-    (event: MouseEvent<HTMLAnchorElement>): void => {
-      event.stopPropagation();
-      event.preventDefault();
-      void openLink(props.href, "github", event);
-    },
-    [openLink, props.href],
-  );
-  return (
-    <a
-      href={props.href}
-      aria-label={props.ariaLabel}
-      className={props.className}
-      data-testid={props.testId}
-      data-pr-state={props.prState}
-      onClick={openExternal}
-      onAuxClick={onMiddleClick(openExternal)}
-    >
-      {props.children}
-    </a>
   );
 }
 

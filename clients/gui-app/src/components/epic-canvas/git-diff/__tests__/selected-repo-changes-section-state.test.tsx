@@ -227,7 +227,7 @@ describe("<SelectedRepoChanges /> module section state", () => {
       submoduleHeader,
       "Repository location: /repo/traycer",
     );
-    expect(previewText).toContain("Location in workspace: traycer");
+    expect(previewText).toContain("Location in folder: traycer");
     expect(previewText).toContain("Branch: main");
     expect(previewText).toContain(
       "Parent reference: Checkout differs from parent reference",

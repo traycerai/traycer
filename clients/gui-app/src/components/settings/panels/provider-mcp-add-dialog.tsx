@@ -521,7 +521,7 @@ export function ProviderMcpAddDialog(props: {
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
         layout="banded"
-        className="top-[15vh] flex max-h-[min(85vh,42rem)] w-[min(92vw,28rem)] translate-y-0 flex-col overflow-hidden sm:max-w-md"
+        className="top-[15vh] flex max-h-[min(calc(var(--spacing-safe-dvh)-var(--spacing-safe-bottom)-15vh),42rem)] w-[min(92vw,28rem)] translate-y-0 flex-col overflow-hidden sm:max-w-md"
         data-testid="provider-mcp-add-dialog"
       >
         <form

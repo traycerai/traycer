@@ -819,7 +819,7 @@ describe("ownerPrReferences", () => {
  * The three ways this block can have nothing to show, and why they must not
  * collapse into one message.
  *
- * "No workspace linked" is a CLAIM ABOUT THE OWNER - that it runs nowhere. It
+ * "No folder linked" is a CLAIM ABOUT THE OWNER - that it runs nowhere. It
  * was previously printed whenever the binding happened to be null at render
  * time, which made it the answer for two states it has no right to speak for:
  * a read still in flight, and a read that could not be issued at all.
@@ -848,18 +848,18 @@ describe("owner workspace metadata empty states", () => {
     );
   }
 
-  it("says loading while a read is in flight, not 'No workspace linked'", () => {
+  it("says loading while a read is in flight, not 'No folder linked'", () => {
     renderEmpty({ pending: true, hostUnavailable: false, error: false });
 
-    expect(screen.getByText("Loading workspace…")).toBeDefined();
-    expect(screen.queryByText("No workspace linked")).toBeNull();
+    expect(screen.getByText("Loading folder…")).toBeDefined();
+    expect(screen.queryByText("No folder linked")).toBeNull();
   });
 
   it("claims no workspace only once the read has settled", () => {
     renderEmpty({ pending: false, hostUnavailable: false, error: false });
 
-    expect(screen.getByText("No workspace linked")).toBeDefined();
-    expect(screen.queryByText("Loading workspace…")).toBeNull();
+    expect(screen.getByText("No folder linked")).toBeDefined();
+    expect(screen.queryByText("Loading folder…")).toBeNull();
   });
 
   it("reports an unreachable host instead of spinning forever", () => {
@@ -868,11 +868,9 @@ describe("owner workspace metadata empty states", () => {
     // on an event that never arrives, so this state outranks it.
     renderEmpty({ pending: true, hostUnavailable: true, error: false });
 
-    expect(
-      screen.getByText("Workspace unknown — host unreachable"),
-    ).toBeDefined();
-    expect(screen.queryByText("Loading workspace…")).toBeNull();
-    expect(screen.queryByText("No workspace linked")).toBeNull();
+    expect(screen.getByText("Folder unknown — host unreachable")).toBeDefined();
+    expect(screen.queryByText("Loading folder…")).toBeNull();
+    expect(screen.queryByText("No folder linked")).toBeNull();
   });
 
   it("keeps showing folders through a refetch rather than flashing a spinner", () => {
@@ -892,7 +890,7 @@ describe("owner workspace metadata empty states", () => {
       />,
     );
 
-    expect(screen.queryByText("Loading workspace…")).toBeNull();
+    expect(screen.queryByText("Loading folder…")).toBeNull();
     expect(
       screen.getByTestId("owner-workspace-metadata-content"),
     ).toBeDefined();
@@ -965,6 +963,6 @@ describe("owner workspace metadata association references", () => {
     expect(
       within(group).getByRole("link", { name: "Open PR #42 Open" }),
     ).toBeDefined();
-    expect(screen.queryByText("No workspace linked")).toBeNull();
+    expect(screen.queryByText("No folder linked")).toBeNull();
   });
 });

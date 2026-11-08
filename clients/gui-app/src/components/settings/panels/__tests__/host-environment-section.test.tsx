@@ -158,7 +158,7 @@ describe("HostEnvironmentSection", () => {
     const selector = screen.getByRole("combobox", { name: "Settings source" });
     expect(selector.textContent).toBe("Acme");
     expect(selector.hasAttribute("disabled")).toBe(true);
-    expect(screen.getByText("Runs Acme's settings.")).toBeTruthy();
+    expect(screen.getByText("Runs the team's settings.")).toBeTruthy();
   });
 
   it("shows move progress instead of another source line while settings move", () => {

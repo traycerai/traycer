@@ -607,7 +607,9 @@ describe("<ProviderMcpAddDialog />", () => {
     const dialog = screen.getByTestId("provider-mcp-add-dialog");
     expect(dialog.className.split(" ")).toContain("top-[15vh]");
     expect(dialog.className.split(" ")).toContain("translate-y-0");
-    expect(dialog.className.split(" ")).toContain("max-h-[min(85vh,42rem)]");
+    expect(dialog.className.split(" ")).toContain(
+      "max-h-[min(calc(var(--spacing-safe-dvh)-var(--spacing-safe-bottom)-15vh),42rem)]",
+    );
     expect(dialog.className).toContain("overflow-hidden");
   });
 

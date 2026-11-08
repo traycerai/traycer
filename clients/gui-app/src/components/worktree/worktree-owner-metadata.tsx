@@ -247,7 +247,7 @@ function OwnerMetadataRefreshFooter(props: {
           type="button"
           size="xs"
           variant="ghost"
-          aria-label="Refresh workspace details"
+          aria-label="Refresh folder details"
           aria-keyshortcuts="R"
           disabled={!props.canRefresh || props.refreshing}
           // The pointer is what holds a HoverCard open; letting the button take

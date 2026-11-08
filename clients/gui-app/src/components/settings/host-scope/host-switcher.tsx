@@ -409,192 +409,200 @@ export function HostSwitcher(props: {
   }
 
   return (
-    <span className="flex min-w-0 items-center gap-1">
-      <Popover open={open} onOpenChange={setOpen}>
-        <HostSwitcherTrigger
-          intent={props.intent}
-          selected={selected}
-          disabled={props.disabled}
-          keepFocusableWhenDisabled={props.keepFocusableWhenDisabled}
-          surfaceKind={props.surface}
-          surface={surface}
-          composer={props.composer}
-        />
-        <PopoverContent
-          align="start"
-          sideOffset={surface.sideOffsetPx}
-          // Never narrower than the row it drops out of. A list floating at its
-          // own width under a wider trigger reads as an unrelated panel that
-          // happened to land there — the connection between "this row" and "these
-          // choices" is carried by the shared left edge AND the shared width. The
-          // 20rem is a FLOOR for the narrow case (the rail, whose trigger is far
-          // too narrow to read host names in), not a size.
-          className={cn(
-            "w-[min(90vw,20rem)] min-w-[var(--radix-popover-trigger-width)] max-w-[var(--radix-popover-content-available-width)]",
-            surface.list,
-          )}
-          data-testid="settings-host-switcher-list"
-          {...{ [HOST_SWITCHER_LIST_ATTRIBUTE]: "true" }}
-          ref={contentRef}
-          // Only the search input is worth declining for; below the threshold
-          // there is no input and Radix's default lands on a host row, which
-          // summons nothing.
-          onOpenAutoFocus={showSearch ? coarseOpenAutoFocus : undefined}
-          // The list is portalled, but React still bubbles its keys up the
-          // tree it was mounted from: a composer above this picker would
-          // take the search's keystrokes (an Enter that picks a row would
-          // also send the draft).
-          onKeyDown={(event) => event.stopPropagation()}
-        >
-          <Command
-            filter={props.composer === null ? undefined : composerSearchFilter}
-          >
-            {props.surface === "rail" ? (
-              <div className="border-b px-3 py-2 text-ui-sm font-semibold">
-                View host
-              </div>
-            ) : null}
-            {props.consequence === null ? null : (
-              <div className="border-b px-3 py-2">
-                <p className="text-ui-sm font-semibold">
-                  {props.consequence.heading}
-                </p>
-                <p className="text-ui-xs text-muted-foreground">
-                  {props.consequence.hint}
-                </p>
-              </div>
+    <span className="flex w-full min-w-0 items-center gap-1">
+      {/* The gear keeps its size. The trigger yields width, so the row stays
+          inside its container and a long staged label truncates. */}
+      <span className="min-w-0 flex-1">
+        <Popover open={open} onOpenChange={setOpen}>
+          <HostSwitcherTrigger
+            intent={props.intent}
+            selected={selected}
+            disabled={props.disabled}
+            keepFocusableWhenDisabled={props.keepFocusableWhenDisabled}
+            surfaceKind={props.surface}
+            surface={surface}
+            composer={props.composer}
+          />
+          <PopoverContent
+            align="start"
+            sideOffset={surface.sideOffsetPx}
+            // Never narrower than the row it drops out of. A list floating at its
+            // own width under a wider trigger reads as an unrelated panel that
+            // happened to land there — the connection between "this row" and "these
+            // choices" is carried by the shared left edge AND the shared width. The
+            // 20rem is a FLOOR for the narrow case (the rail, whose trigger is far
+            // too narrow to read host names in), not a size.
+            className={cn(
+              "w-[min(90vw,20rem)] min-w-[var(--radix-popover-trigger-width)] max-w-[var(--radix-popover-content-available-width)]",
+              surface.list,
             )}
-            {showSearch ? (
-              <CommandInput
-                placeholder={SEARCH_HOSTS_PLACEHOLDER}
-                value={search}
-                onValueChange={setSearch}
-              />
-            ) : null}
-            <CommandList>
-              {/* The composer's New rows never filter out, so its no-match
-                  line is drawn by its groups instead. */}
-              {props.composer === null ? (
-                <CommandEmpty>No hosts match.</CommandEmpty>
+            data-testid="settings-host-switcher-list"
+            {...{ [HOST_SWITCHER_LIST_ATTRIBUTE]: "true" }}
+            ref={contentRef}
+            // Only the search input is worth declining for; below the threshold
+            // there is no input and Radix's default lands on a host row, which
+            // summons nothing.
+            onOpenAutoFocus={showSearch ? coarseOpenAutoFocus : undefined}
+            // The list is portalled, but React still bubbles its keys up the
+            // tree it was mounted from: a composer above this picker would
+            // take the search's keystrokes (an Enter that picks a row would
+            // also send the draft).
+            onKeyDown={(event) => event.stopPropagation()}
+          >
+            <Command
+              filter={
+                props.composer === null ? undefined : composerSearchFilter
+              }
+            >
+              {props.surface === "rail" ? (
+                <div className="border-b px-3 py-2 text-ui-sm font-semibold">
+                  View host
+                </div>
               ) : null}
-              <HostSwitcherGroups
-                hosts={hosts}
-                action={props.action}
-                composer={props.composer}
-                onPickNew={(configurationKey) => {
-                  props.composer?.onPickNew(configurationKey);
-                  setOpen(false);
-                }}
-                onOpenShape={(configurationKey) => {
-                  setOpen(false);
-                  props.composer?.onOpenShape(configurationKey);
-                }}
-                searching={search.length > 0}
-                search={search}
-                renderRow={(host) => (
-                  <HostSwitcherRow
-                    key={host.hostId}
-                    host={host}
-                    scoped={
-                      selected !== null && host.hostId === selected.hostId
-                    }
-                    active={host.hostId === props.activeHostId}
-                    intent={props.intent}
-                    surfaceRefusal={
-                      props.refusalByHostId.get(host.hostId) ?? null
-                    }
-                    surfaceInert={
-                      props.inertExceptHostId !== null &&
-                      host.hostId !== props.inertExceptHostId
-                    }
-                    updateView={props.updateViewForHost?.(host.hostId) ?? null}
-                    environmentLabel={
-                      props.environmentLabelForHost?.(host.hostId) ?? null
-                    }
-                    composer={props.composer !== null}
-                    subLines={hostSubLines(props.composer, host.hostId)}
-                    tag={
-                      props.composer === null
-                        ? null
-                        : props.composer.tagFor(host.hostId)
-                    }
-                    onSelect={() => {
-                      pickHostRow(props.composer, props.intent, host);
-                      props.onSelect(host.hostId);
-                      setOpen(false);
-                    }}
-                  />
-                )}
-                selected={selected}
-              />
-              {trailingAction === null ? null : (
-                // The composer's footer stays under a search that matched
-                // nothing: it is where the rest are.
-                <CommandGroup forceMount={props.composer !== null}>
-                  <CommandItem
-                    forceMount={props.composer !== null}
-                    value={trailingAction.commandValue}
-                    keywords={[...trailingAction.keywords]}
-                    onSelect={() => {
-                      setOpen(false);
-                      trailingAction.onSelect();
-                    }}
-                    data-testid={trailingAction.testId}
-                  >
-                    <trailingAction.icon className="size-4 shrink-0 text-muted-foreground" />
-                    <span className="min-w-0 flex-1 truncate text-ui-sm">
-                      {trailingAction.label}
-                    </span>
-                  </CommandItem>
-                </CommandGroup>
+              {props.consequence === null ? null : (
+                <div className="border-b px-3 py-2">
+                  <p className="text-ui-sm font-semibold">
+                    {props.consequence.heading}
+                  </p>
+                  <p className="text-ui-xs text-muted-foreground">
+                    {props.consequence.hint}
+                  </p>
+                </div>
               )}
-            </CommandList>
-          </Command>
-          {/* The same "a FAILED list is not an empty account" rule, at its third
-            consumer — the non-empty case. When one source list fails while the
-            other still contributes rows, `hosts` is nonempty, so the empty
-            branch above never runs and nothing said the picture was partial:
-            the sidebar presented half an account as all of it. The rows stay
-            usable; this footer says what is missing and offers the retry. */}
-          {/* Rows can be listed while a list is still on its first read (a
-            sandbox list withholds its rows until it answers): say more are
-            coming, so the rows shown do not read as the whole account. */}
-          {props.isLoading ? (
-            <div
-              className="flex items-center gap-2 border-t border-border/60 px-3 py-2"
-              data-testid="settings-host-switcher-loading-more"
-            >
-              <AgentSpinningDots
-                className={undefined}
-                testId={undefined}
-                variant={undefined}
-                tone="muted"
-              />
-              <span className="text-ui-xs text-muted-foreground">
-                Loading more hosts…
-              </span>
-            </div>
-          ) : null}
-          {props.listsFailed && !props.isLoading ? (
-            <div
-              className="flex items-center justify-between gap-2 border-t border-border/60 px-3 py-2"
-              data-testid="settings-host-switcher-partial-failure"
-            >
-              <span className="text-ui-xs text-muted-foreground">
-                Some hosts may be missing
-              </span>
-              <button
-                type="button"
-                onClick={props.onRetryLists}
-                className="shrink-0 rounded-md px-1 py-0.5 text-ui-xs text-primary transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
-                data-testid="settings-host-switcher-retry-lists"
+              {showSearch ? (
+                <CommandInput
+                  placeholder={SEARCH_HOSTS_PLACEHOLDER}
+                  value={search}
+                  onValueChange={setSearch}
+                />
+              ) : null}
+              <CommandList>
+                {/* The composer's New rows never filter out, so its no-match
+                    line is drawn by its groups instead. */}
+                {props.composer === null ? (
+                  <CommandEmpty>No hosts match.</CommandEmpty>
+                ) : null}
+                <HostSwitcherGroups
+                  hosts={hosts}
+                  action={props.action}
+                  composer={props.composer}
+                  onPickNew={(configurationKey) => {
+                    props.composer?.onPickNew(configurationKey);
+                    setOpen(false);
+                  }}
+                  onOpenShape={(configurationKey) => {
+                    setOpen(false);
+                    props.composer?.onOpenShape(configurationKey);
+                  }}
+                  searching={search.length > 0}
+                  search={search}
+                  renderRow={(host) => (
+                    <HostSwitcherRow
+                      key={host.hostId}
+                      host={host}
+                      scoped={
+                        selected !== null && host.hostId === selected.hostId
+                      }
+                      active={host.hostId === props.activeHostId}
+                      intent={props.intent}
+                      surfaceRefusal={
+                        props.refusalByHostId.get(host.hostId) ?? null
+                      }
+                      surfaceInert={
+                        props.inertExceptHostId !== null &&
+                        host.hostId !== props.inertExceptHostId
+                      }
+                      updateView={
+                        props.updateViewForHost?.(host.hostId) ?? null
+                      }
+                      environmentLabel={
+                        props.environmentLabelForHost?.(host.hostId) ?? null
+                      }
+                      composer={props.composer !== null}
+                      subLines={hostSubLines(props.composer, host.hostId)}
+                      tag={
+                        props.composer === null
+                          ? null
+                          : props.composer.tagFor(host.hostId)
+                      }
+                      onSelect={() => {
+                        pickHostRow(props.composer, props.intent, host);
+                        props.onSelect(host.hostId);
+                        setOpen(false);
+                      }}
+                    />
+                  )}
+                  selected={selected}
+                />
+                {trailingAction === null ? null : (
+                  // The composer's footer stays under a search that matched
+                  // nothing: it is where the rest are.
+                  <CommandGroup forceMount={props.composer !== null}>
+                    <CommandItem
+                      forceMount={props.composer !== null}
+                      value={trailingAction.commandValue}
+                      keywords={[...trailingAction.keywords]}
+                      onSelect={() => {
+                        setOpen(false);
+                        trailingAction.onSelect();
+                      }}
+                      data-testid={trailingAction.testId}
+                    >
+                      <trailingAction.icon className="size-4 shrink-0 text-muted-foreground" />
+                      <span className="min-w-0 flex-1 truncate text-ui-sm">
+                        {trailingAction.label}
+                      </span>
+                    </CommandItem>
+                  </CommandGroup>
+                )}
+              </CommandList>
+            </Command>
+            {/* The same "a FAILED list is not an empty account" rule, at its third
+              consumer — the non-empty case. When one source list fails while the
+              other still contributes rows, `hosts` is nonempty, so the empty
+              branch above never runs and nothing said the picture was partial:
+              the sidebar presented half an account as all of it. The rows stay
+              usable; this footer says what is missing and offers the retry. */}
+            {/* Rows can be listed while a list is still on its first read (a
+              sandbox list withholds its rows until it answers): say more are
+              coming, so the rows shown do not read as the whole account. */}
+            {props.isLoading ? (
+              <div
+                className="flex items-center gap-2 border-t border-border/60 px-3 py-2"
+                data-testid="settings-host-switcher-loading-more"
               >
-                Try again
-              </button>
-            </div>
-          ) : null}
-        </PopoverContent>
-      </Popover>
+                <AgentSpinningDots
+                  className={undefined}
+                  testId={undefined}
+                  variant={undefined}
+                  tone="muted"
+                />
+                <span className="text-ui-xs text-muted-foreground">
+                  Loading more hosts…
+                </span>
+              </div>
+            ) : null}
+            {props.listsFailed && !props.isLoading ? (
+              <div
+                className="flex items-center justify-between gap-2 border-t border-border/60 px-3 py-2"
+                data-testid="settings-host-switcher-partial-failure"
+              >
+                <span className="text-ui-xs text-muted-foreground">
+                  Some hosts may be missing
+                </span>
+                <button
+                  type="button"
+                  onClick={props.onRetryLists}
+                  className="shrink-0 rounded-md px-1 py-0.5 text-ui-xs text-primary transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+                  data-testid="settings-host-switcher-retry-lists"
+                >
+                  Try again
+                </button>
+              </div>
+            ) : null}
+          </PopoverContent>
+        </Popover>
+      </span>
       <HostSwitcherStagedGear
         composer={props.composer}
         disabled={props.disabled}
