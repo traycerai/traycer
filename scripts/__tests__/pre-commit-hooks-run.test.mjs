@@ -1,16 +1,9 @@
-// Every pre-commit-stage hook .pre-commit-config.yaml declares runs in
-// pre-commit.yml, in a job that can execute it, on every run that runs the
-// hooks.
-//
-// The `static` job runs the hooks through `pre-commit/action`. It provisions
-// only Python, from which pre-commit builds the remote hooks' environments
-// itself; it has no bun and no node_modules. So a local hook that runs a
-// program from the runner (`language: system` or `script`, or their pre-commit
-// 4.4 names `unsupported` and `unsupported_script`) is skipped there and
-// runs as its own `entry` in a step of another job, one that runs whenever
-// `static` does and sets up the executable a `system` hook calls. Hooks at
-// other stages (`dco-signoff`, at `commit-msg`) are outside `pre-commit/action`
-// and this test.
+// Every pre-commit-stage hook .pre-commit-config.yaml declares is covered by
+// pre-commit.yml. The `static` job bootstraps pinned Python and prepared hook
+// environments, falls back to pip only when the hook archive is unavailable,
+// and explicitly runs pre-commit. Local hooks that need runner programs are
+// skipped there and run as their own required lane. Hooks at other stages
+// (`dco-signoff`, at `commit-msg`) are outside this workflow and test.
 
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -30,13 +23,7 @@ const workflow = parse(
   ),
 );
 
-// The action that puts each system executable a local hook calls on PATH.
-const SETUP_ACTION = {
-  bun: "oven-sh/setup-bun@",
-  node: "actions/setup-node@",
-  python: "actions/setup-python@",
-  python3: "actions/setup-python@",
-};
+const TOOL_BOOTSTRAP_ACTION = "./.github/actions/bootstrap-ci-tools";
 
 const normalize = (text) => String(text).replace(/\s+/g, " ").trim();
 
@@ -61,30 +48,40 @@ const jobs = Object.entries(workflow.jobs).map(([id, job]) => ({
   shell: job.defaults?.run?.shell ?? workflow.defaults?.run?.shell,
   steps: job.steps ?? [],
 }));
-const isHookStep = (step) =>
-  String(step.uses ?? "").startsWith("pre-commit/action@");
-const hookJob = jobs.find((job) => job.steps.some(isHookStep));
-const hookStep = hookJob.steps.find(isHookStep);
+const hookJob = jobs.find((job) =>
+  job.steps.some(({ name }) => name === "Run pinned pre-commit hooks"),
+);
+const hookRunStep = hookJob.steps.find(
+  ({ name }) => name === "Run pinned pre-commit hooks",
+);
+const bootstrapStep = hookJob.steps.find(
+  ({ uses }) => uses === "./.github/actions/bootstrap-ci-tools",
+);
+const fallbackInstallStep = hookJob.steps.find(
+  ({ name }) =>
+    name === "Install pre-commit when the hook archive is unavailable",
+);
 // The required check: it passes only when every job it needs passed, so a job
 // it does not need can fail unseen.
 const required = workflow.jobs["pre-commit"].needs;
 const skipped = new Set(
-  String(hookStep.env?.SKIP ?? "")
+  String(hookRunStep.env?.SKIP ?? "")
     .split(",")
     .map((id) => id.trim())
     .filter((id) => id !== ""),
 );
 
 // A setup step counts only before the step that runs the hook, and only with
-// no `if` of its own, which may not run when the job does: `static` sets node
-// up only for pull requests.
-const setsUpBefore = (job, step, action) =>
-  job.steps
-    .slice(0, job.steps.indexOf(step))
-    .some(
-      (setup) =>
-        setup.if === undefined && String(setup.uses ?? "").startsWith(action),
-    );
+// no `if` of its own, which may prevent it from running when the job does.
+const setsUpBefore = (job, step, tool) =>
+  job.steps.slice(0, job.steps.indexOf(step)).some(
+    (setup) =>
+      setup.if === undefined &&
+      setup.uses === TOOL_BOOTSTRAP_ACTION &&
+      String(setup.with?.tools ?? "")
+        .split(/\s+/u)
+        .includes(tool),
+  );
 
 // The runner's implicit shell, `bash -e`, fails the step when any line's
 // command fails, but not a command in a pipeline (no pipefail), in an `&&` or
@@ -141,15 +138,41 @@ describe("every pre-commit hook runs in a pre-commit.yml job that can execute it
     expect(preCommitHooks.map((hook) => hook.id)).toContain("workspace-checks");
   });
 
-  // `extra_args` defaults to `--all-files`; a hook id or another stage there
-  // would run other hooks than these.
-  it("runs every hook on every run of static", () => {
-    expect(hookStep.if).toBeUndefined();
-    expect(hookStep["continue-on-error"]).toBeUndefined();
+  // The explicit command covers the pre-commit stage; only the separately
+  // gated local checks are skipped and covered by their own required lanes.
+  it("runs the pinned hook command on every run of static", () => {
+    expect(hookRunStep.if).toBeUndefined();
+    expect(hookRunStep["continue-on-error"]).toBeUndefined();
     expect(hookJob.continueOnError).toBeUndefined();
     expect(required).toContain(hookJob.id);
-    expect(normalize(hookStep.with?.extra_args ?? "--all-files")).toBe(
-      "--all-files",
+    expect(String(hookRunStep.run).trim().split("\n").map(normalize)).toEqual([
+      "pre-commit run --all-files --show-diff-on-failure",
+      'echo "executed=true" >> "$GITHUB_OUTPUT"',
+    ]);
+    expect([...skipped].sort()).toEqual([
+      "local-definition-ratchet",
+      "workspace-checks",
+    ]);
+    expect(
+      hookJob.steps.some(({ uses }) =>
+        String(uses ?? "").startsWith("pre-commit/action@"),
+      ),
+    ).toBe(false);
+  });
+
+  it("bootstraps pinned Python and hook environments, with a pinned pip fallback", () => {
+    expect(bootstrapStep).toBeDefined();
+    expect(hookJob.steps.indexOf(bootstrapStep)).toBeLessThan(
+      hookJob.steps.indexOf(hookRunStep),
+    );
+    expect(bootstrapStep.id).toBe("ci_tool_1");
+    expect(bootstrapStep.with?.tools).toBe("python-312 hooks");
+    expect(fallbackInstallStep.if).toBe(
+      "steps.ci_tool_1.outputs.hooks == 'fallback'",
+    );
+    expect(fallbackInstallStep.run).toBe("pip install pre-commit==4.7.0");
+    expect(hookJob.steps.indexOf(fallbackInstallStep)).toBeLessThan(
+      hookJob.steps.indexOf(hookRunStep),
     );
   });
 
@@ -207,7 +230,7 @@ describe("every pre-commit hook runs in a pre-commit.yml job that can execute it
     const hook = hooks.find(({ id }) => id === "workspace-checks");
     const runner = runnerOf(hook);
     expect(
-      setsUpBefore(runner.job, runner.step, SETUP_ACTION.bun),
+      setsUpBefore(runner.job, runner.step, "bun"),
       `${runner.job.id} sets up Bun`,
     ).toBe(true);
     expect(runner.step.env?.WORKSPACE_CHECK_LANE).toBe("${{ matrix.lane }}");
@@ -248,15 +271,10 @@ describe("every pre-commit hook runs in a pre-commit.yml job that can execute it
       if (hook.local && SYSTEM.has(hook.language)) {
         it("runs in a job that sets up its executable", () => {
           const executable = normalize(hook.entry).split(" ")[0];
-          const action = SETUP_ACTION[executable];
-          expect(
-            action,
-            `no setup action known for ${executable}`,
-          ).toBeDefined();
           const runner = runnerOf(hook);
           expect(
             runner !== undefined &&
-              setsUpBefore(runner.job, runner.step, action),
+              setsUpBefore(runner.job, runner.step, executable),
             `${runner?.job.id} sets up ${executable}`,
           ).toBe(true);
         });

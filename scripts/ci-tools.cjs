@@ -35,6 +35,19 @@ function readLock(lockPath) {
     if (keys.has(key)) throw new Error(`Duplicate mirror object: ${key}`);
     keys.add(key);
   }
+  for (const hook of lock.hookEnvironments || []) {
+    if (
+      !/^[a-f0-9]{64}$/.test(hook.configSha256) ||
+      !/^[a-f0-9]{64}$/.test(hook.sha256) ||
+      !/^\d+$/.test(String(hook.prepareRunId)) ||
+      hook.os !== "linux" ||
+      hook.arch !== "x64" ||
+      hook.objectKey !==
+        `tools/pre-commit-hooks/${hook.configSha256}/hooks-${hook.configSha256}-linux-x64.tar.gz`
+    ) {
+      throw new Error("Malformed prepared hook environment lock");
+    }
+  }
   return lock;
 }
 
@@ -134,7 +147,12 @@ function downloadLockedUrl(lock, url, destination) {
     throw new Error(
       `GitHub acquisition is absent from tools-mirror.lock.json: ${url}`,
     );
-  download(entry, destination, lock.mirror);
+  download(
+    entry,
+    destination,
+    process.env.CI_TOOLS_MIRROR || lock.mirror || null,
+  );
+  append(process.env.GITHUB_OUTPUT, `${entry.name}=executed`);
 }
 
 function append(filename, value) {
@@ -208,17 +226,55 @@ function install(entry, archive, root) {
 function main(args) {
   const [command, lockPath, ...names] = args;
   const lock = readLock(lockPath);
+  if (command === "cache-paths") {
+    if (!names.every((name) => /^[a-z0-9-]+$/.test(name)))
+      throw new Error("Invalid tool cache name");
+    const paths = names.map((name) =>
+      path.join(process.env.CI_TOOLS_CACHE, "archives", name),
+    );
+    if (process.env.CI_TOOLS_BYPASS_CACHE === "true") {
+      for (const directory of paths)
+        fs.rmSync(directory, { recursive: true, force: true });
+    }
+    append(
+      process.env.GITHUB_OUTPUT,
+      `paths<<CI_TOOL_PATHS\n${paths.join("\n")}\nCI_TOOL_PATHS`,
+    );
+    return;
+  }
   if (command === "list") {
     for (const entry of lock.artifacts)
       console.log(`${objectKey(entry)}\t${entry.sha256}\t${entry.upstreamUrl}`);
+    return;
+  }
+  if (command === "fetch") {
+    downloadLockedUrl(lock, names[0], names[1]);
+    append(process.env.GITHUB_OUTPUT, "executed=true");
     return;
   }
   if (command !== "install")
     throw new Error(`Unknown CI tools command: ${command}`);
   const cache =
     process.env.CI_TOOLS_CACHE || path.join(os.tmpdir(), "traycer-ci-tools");
-  const mirror = process.env.CI_TOOLS_MIRROR || lock.mirror;
-  for (const name of names) {
+  const mirror = process.env.CI_TOOLS_MIRROR || lock.mirror || null;
+  if (mirror !== null) {
+    if (!secureOrigin(mirror)) throw new Error("Unsafe CI mirror origin");
+    const origin = new URL(mirror);
+    if (origin.search || origin.hash)
+      throw new Error("CI mirror base URL cannot carry a query or fragment");
+    append(
+      process.env.GITHUB_ENV,
+      `CI_TOOLS_MIRROR=${origin.toString().replace(/\/$/, "")}`,
+    );
+  }
+  // The macOS packaging gate packs both desktop architectures in one job.
+  const requests = names.flatMap((name) =>
+    name === "electron" && process.platform === "darwin"
+      ? ["electron:x64", "electron:arm64"]
+      : [name],
+  );
+  for (const request of requests) {
+    const [name, requestedArch] = request.split(":");
     if (name === "hooks") {
       const configSha256 = sha256(".pre-commit-config.yaml");
       const home = `/opt/traycer-ci/hooks/${configSha256}`;
@@ -230,33 +286,41 @@ function main(args) {
           candidate.arch === process.arch,
       );
       let source = "fallback";
-      if (hook) {
-        const archive = path.join(cache, `${hook.sha256}-hooks.tar.gz`);
+      if (hook && mirror) {
+        const archive = path.join(
+          cache,
+          "archives",
+          "hooks",
+          `${hook.sha256}-hooks.tar.gz`,
+        );
         try {
-          fs.mkdirSync(cache, { recursive: true });
-          execFileSync(
-            "curl",
-            [
-              "--fail",
-              "--silent",
-              "--show-error",
-              "--location",
-              "--connect-timeout",
-              "10",
-              "--max-time",
-              "60",
-              "--output",
-              archive,
-              `${mirror}/${hook.objectKey}`,
-            ],
-            { stdio: ["ignore", "ignore", "pipe"], timeout: 65000 },
-          );
+          fs.mkdirSync(path.dirname(archive), { recursive: true });
+          const cached =
+            fs.existsSync(archive) && sha256(archive) === hook.sha256;
+          if (!cached)
+            execFileSync(
+              "curl",
+              [
+                "--fail",
+                "--silent",
+                "--show-error",
+                "--location",
+                "--connect-timeout",
+                "10",
+                "--max-time",
+                "60",
+                "--output",
+                archive,
+                `${mirror}/${hook.objectKey}`,
+              ],
+              { stdio: ["ignore", "ignore", "pipe"], timeout: 65000 },
+            );
           if (sha256(archive) !== hook.sha256)
             throw new Error("Hook archive SHA-256 mismatch");
           execFileSync("tar", ["-xzf", archive, "-C", "/opt/traycer-ci"], {
             stdio: "inherit",
           });
-          source = "mirror";
+          source = cached ? "cache" : "mirror";
         } catch {
           fs.rmSync(archive, { force: true });
           // pre-commit builds environments at the config's pinned revisions.
@@ -267,9 +331,16 @@ function main(args) {
       append(process.env.GITHUB_OUTPUT, `hooks=${source}`);
       continue;
     }
-    const entry = select(lock, name, process.platform, process.arch);
+    const entry = select(
+      lock,
+      name,
+      process.platform,
+      requestedArch || process.arch,
+    );
     const archive = path.join(
       cache,
+      "archives",
+      name,
       `${entry.sha256}-${path.basename(objectKey(entry))}`,
     );
     // A restored archive is untrusted until its digest is checked again.

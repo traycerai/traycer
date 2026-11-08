@@ -383,7 +383,8 @@ jobs:
           # A pinned winget rather than whatever the runner image carries. The
           # App Installer bundle's x64 package holds winget.exe, which runs
           # unpacked, as Scoop's own winget package runs it.
-          Invoke-WebRequest -Uri $env:WINGET_CLI_URL -OutFile winget-bundle.zip
+          node scripts/ci-tools.cjs fetch tools-mirror.lock.json $env:WINGET_CLI_URL winget-bundle.zip
+          if ($LASTEXITCODE -ne 0) { throw "Locked winget-cli download failed" }
           $actual = (Get-FileHash -Algorithm SHA256 winget-bundle.zip).Hash
           if ($actual -ne $env:WINGET_CLI_SHA256) { throw "App Installer bundle sha256 $actual does not match the pinned $env:WINGET_CLI_SHA256" }
           Expand-Archive winget-bundle.zip -DestinationPath winget-bundle
@@ -439,7 +440,8 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          Invoke-WebRequest -Uri $env:WINGETCREATE_URL -OutFile wingetcreate.exe
+          node scripts/ci-tools.cjs fetch tools-mirror.lock.json $env:WINGETCREATE_URL wingetcreate.exe
+          if ($LASTEXITCODE -ne 0) { throw "Locked wingetcreate download failed" }
           $actual = (Get-FileHash -Algorithm SHA256 wingetcreate.exe).Hash
           if ($actual -ne $env:WINGETCREATE_SHA256) { throw "wingetcreate.exe sha256 $actual does not match the pinned $env:WINGETCREATE_SHA256" }
           $manifest = (Resolve-Path "manifests\winget\manifests\t\Traycer\Desktop\$env:VERSION").Path
