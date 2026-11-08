@@ -88,6 +88,50 @@ describe("ComposerAttachImageButton follows Layout ▸ Composer 'Attach image'",
     expect(onAttachImages).toHaveBeenCalledWith([file]);
   });
 
+  it("has no accept filter and splits a mixed pick: images to onAttachImages, the rest to onAttachFiles", () => {
+    const onAttachImages = vi.fn<(files: ReadonlyArray<File>) => void>();
+    const onAttachFiles = vi.fn<(files: ReadonlyArray<File>) => void>();
+    const { container } = render(
+      <ComposerAttachImageButton
+        onAttachImages={onAttachImages}
+        onAttachFiles={onAttachFiles}
+      />,
+    );
+    const input =
+      container.querySelector<HTMLInputElement>('input[type="file"]');
+    if (input === null) throw new Error("expected the hidden file input");
+    expect(input.hasAttribute("accept")).toBe(false);
+
+    const png = new File(["p"], "shot.png", { type: "image/png" });
+    const mov = new File(["m"], "clip.mov", { type: "video/quicktime" });
+    const pdf = new File(["d"], "doc.pdf", { type: "application/pdf" });
+    fireEvent.change(input, { target: { files: [mov, png, pdf] } });
+
+    expect(onAttachImages).toHaveBeenCalledTimes(1);
+    expect(onAttachImages).toHaveBeenCalledWith([png]);
+    expect(onAttachFiles).toHaveBeenCalledTimes(1);
+    expect(onAttachFiles).toHaveBeenCalledWith([mov, pdf]);
+  });
+
+  it("calls only the route a single-kind pick needs", () => {
+    const onAttachImages = vi.fn<(files: ReadonlyArray<File>) => void>();
+    const onAttachFiles = vi.fn<(files: ReadonlyArray<File>) => void>();
+    const { container } = render(
+      <ComposerAttachImageButton
+        onAttachImages={onAttachImages}
+        onAttachFiles={onAttachFiles}
+      />,
+    );
+    const input =
+      container.querySelector<HTMLInputElement>('input[type="file"]');
+    if (input === null) throw new Error("expected the hidden file input");
+    const zip = new File(["z"], "a.zip", { type: "application/zip" });
+    fireEvent.change(input, { target: { files: [zip] } });
+
+    expect(onAttachImages).not.toHaveBeenCalled();
+    expect(onAttachFiles).toHaveBeenCalledWith([zip]);
+  });
+
   // Hidden removes only the toolbar affordance. Paste and drag-drop call
   // `onAttachImages` directly from the composer's own handlers, never through
   // this component - so once the button is gone there is nothing left here to
