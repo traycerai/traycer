@@ -1,7 +1,7 @@
 import { useSandboxesPageStore } from "@/stores/sandboxes/sandboxes-page-store";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useEffect } from "react";
-import { QueryClient } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AuthService } from "@/lib/auth/auth-service";
 import { HostDirectoryService } from "@/lib/host";
 import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
@@ -96,9 +96,21 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   useAuthUser: () => ({ data: mocks.user }),
 }));
-vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
-  useSandboxCatalogue: () => ({ data: mocks.catalogue }),
-}));
+// The readiness hook builds its read from the module's real query options, so
+// only the catalogue read the surface consumes is replaced.
+vi.mock(
+  "@/hooks/sandboxes/use-sandbox-catalogue-query",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/sandboxes/use-sandbox-catalogue-query")
+    >()),
+    useSandboxCatalogue: () => ({
+      data: mocks.catalogue,
+      isPending: mocks.catalogue === null,
+      isError: false,
+    }),
+  }),
+);
 vi.mock("@/hooks/sandboxes/use-sandbox-costs-query", () => ({
   useSandboxCosts: () => ({ data: mocks.costs }),
 }));
@@ -286,7 +298,23 @@ const TEAM_SUSPENDED = sandboxHost(
 
 let latest: SandboxStaging | null = null;
 
+/** The sheet reads the readiness query, so the harness mounts under a real client. */
+const harnessQueryClient = new QueryClient({
+  defaultOptions: { queries: { retry: false } },
+});
+
 function Harness(props: {
+  readonly surfaceKey: string | null;
+  readonly hosts: readonly HostScopeOption[];
+}) {
+  return (
+    <QueryClientProvider client={harnessQueryClient}>
+      <HarnessBody {...props} />
+    </QueryClientProvider>
+  );
+}
+
+function HarnessBody(props: {
   readonly surfaceKey: string | null;
   readonly hosts: readonly HostScopeOption[];
 }) {
@@ -351,6 +379,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  harnessQueryClient.clear();
   useAuthStore.setState({ status: "signed-out", contextMetadata: null });
 });
 
@@ -373,6 +402,11 @@ describe("a staged name at create", () => {
       .mockResolvedValue(
         refusal(402, SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT),
       );
+    // The create's preflight reads the catalogue with its readiness context
+    // before it creates; the host answers it, so the create is reached.
+    const catalogue = vi
+      .spyOn(auth, "getSandboxCatalogue")
+      .mockResolvedValue({ kind: "ok", catalogue: CATALOGUE });
     const client = new QueryClient();
     let completed = Promise.resolve();
     let pendingId: string | null = null;
@@ -418,6 +452,7 @@ describe("a staged name at create", () => {
       directory.dispose();
       auth.dispose();
       client.clear();
+      catalogue.mockRestore();
       create.mockRestore();
     }
   }
@@ -565,6 +600,24 @@ describe("useSandboxStaging New rows", () => {
       ],
     ).toBe("personal");
     expect(staging().composer.stagedConfigurationKey).toBe("personal");
+  });
+
+  it("states what a setup is charged for under a new stage that is still only staged, before anything launches", () => {
+    const { composer } = mount([LAPTOP]);
+
+    act(() => composer.onPickNew("personal"));
+    renderStagedConsequences();
+
+    expect(readStagedSandbox(SURFACE)).toMatchObject({
+      phase: "staged",
+      clientRequestId: null,
+    });
+    expect(screen.getByTestId("consequences-setup-charges").textContent).toBe(
+      "Running the sandbox is charged separately from build work. Build work is charged once, even if the build fails. Keeping the result is charged as storage for as long as you keep it.",
+    );
+    expect(screen.getByTestId("consequences-price").textContent).toContain(
+      "an hour while awake",
+    );
   });
 
   it("hands the block a Linux OS, and no Windows limitation, for a new Linux stage", () => {

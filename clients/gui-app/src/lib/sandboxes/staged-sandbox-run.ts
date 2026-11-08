@@ -1,4 +1,5 @@
 import { stagedSandboxName } from "@/lib/sandboxes/staged-sandbox-name";
+import { stageProviderForShape } from "@/lib/sandboxes/sandbox-stage-model";
 import {
   MutationObserver as QueryMutationObserver,
   type QueryClient,
@@ -31,6 +32,7 @@ import {
   sandboxListReadSentAt,
 } from "@/hooks/sandboxes/use-sandbox-list-query";
 import { teamEnvironmentQueryOptions } from "@/hooks/sandboxes/use-team-environment-query";
+import { sandboxCatalogueQueryOptions } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
 import type { AuthService } from "@/lib/auth/auth-service";
 import type { HostDirectoryService } from "@/lib/host";
 import { dialableHostEndpoint } from "@/lib/host/transport-key";
@@ -160,20 +162,126 @@ export async function runStagedSandbox(
   if (clientRequestId === null) return;
   running.set(surfaceKey, clientRequestId);
   try {
-    const started = await startStagedRun(
+    await drivePreparedRun(
       { surfaceKey, clientRequestId, ...request },
       stage,
       freshCreate,
       deps,
     );
-    if (started === null) return;
-    await settle(
-      { surfaceKey, clientRequestId, started, deps },
-      readStagedSandbox(surfaceKey)?.startedAt ?? deps.now(),
-    );
   } finally {
     if (running.get(surfaceKey) === clientRequestId) running.delete(surfaceKey);
   }
+}
+
+/** The preflight and the accepted run share one resolved environment and attempt budget. */
+async function drivePreparedRun(
+  run: Omit<StagedRun, "environmentId">,
+  stage: StagedSandbox,
+  fresh: boolean,
+  deps: StagedSandboxRunDeps,
+): Promise<void> {
+  const { surfaceKey, clientRequestId } = run;
+  const prepared = await prepareRun(run, stage, fresh, deps);
+  if (!stillCurrent(surfaceKey, clientRequestId)) return;
+  if (prepared === null) {
+    fail(surfaceKey, { kind: "unavailable" });
+    return;
+  }
+  const started = await startStagedRun(
+    {
+      surfaceKey,
+      clientRequestId,
+      resume: run.resume,
+      taskId: run.taskId,
+      environmentId: prepared.environmentId,
+    },
+    stage,
+    fresh,
+    deps,
+  );
+  if (started === null) return;
+  let budgetFrom = prepared.startedAt;
+  if (
+    stage.target.kind === "new" &&
+    stage.failure?.kind === "failed" &&
+    stage.failure.code === "wake"
+  ) {
+    budgetFrom = deps.now();
+    useStagedSandboxStore.getState().report(surfaceKey, {
+      createAttempt: { budgetMs: prepared.budgetMs, startedAt: budgetFrom },
+    });
+  }
+  await settle(
+    { surfaceKey, clientRequestId, started, deps },
+    stage.target.kind === "existing" ? deps.now() : budgetFrom,
+    prepared.budgetMs,
+  );
+}
+
+interface PreparedCreate {
+  readonly environmentId: string | null;
+  readonly budgetMs: number;
+}
+
+interface PreparedRun extends PreparedCreate {
+  readonly startedAt: number;
+}
+
+async function prepareRun(
+  run: Omit<StagedRun, "environmentId">,
+  stage: StagedSandbox,
+  fresh: boolean,
+  deps: StagedSandboxRunDeps,
+): Promise<PreparedRun | null> {
+  if (stage.target.kind === "existing") {
+    return {
+      environmentId: null,
+      budgetMs: STAGED_CREATE_BUDGET_MS,
+      startedAt: deps.now(),
+    };
+  }
+  const attempt = fresh ? null : (stage.createAttempt ?? null);
+  const prepared =
+    sandboxAlreadyMade(stage, fresh, run.resume) === null
+      ? await prepareCreate(stage.target, deps, attempt?.budgetMs ?? null)
+      : {
+          environmentId: null,
+          budgetMs: attempt?.budgetMs ?? STAGED_CREATE_BUDGET_MS,
+        };
+  if (prepared === null || !stillCurrent(run.surfaceKey, run.clientRequestId))
+    return null;
+  const startedAt = run.resume
+    ? (attempt?.startedAt ?? stage.startedAt ?? deps.now())
+    : deps.now();
+  useStagedSandboxStore.getState().report(run.surfaceKey, {
+    createAttempt: { budgetMs: prepared.budgetMs, startedAt },
+  });
+  return { ...prepared, startedAt };
+}
+
+async function prepareCreate(
+  target: Extract<StagedSandboxTarget, { kind: "new" }>,
+  deps: StagedSandboxRunDeps,
+  retainedBudgetMs: number | null,
+): Promise<PreparedCreate | null> {
+  const environmentId = await environmentIdFor(target, deps);
+  if (environmentId === undefined) return null;
+  if (retainedBudgetMs !== null)
+    return { environmentId, budgetMs: retainedBudgetMs };
+  const catalogue = await deps.queryClient
+    .fetchQuery(
+      sandboxCatalogueQueryOptions(deps.auth, deps.userId, true, {
+        environmentId,
+        ...target.shape,
+      }),
+    )
+    .catch(() => null);
+  if (catalogue === null) return null;
+  const entry = stageProviderForShape(catalogue, target.shape);
+  return {
+    environmentId,
+    budgetMs: Math.max(STAGED_CREATE_BUDGET_MS, entry?.createBudgetMs ?? 0),
+  };
 }
 
 /**
@@ -307,6 +415,7 @@ export interface StagedRunRequest {
 interface StagedRun extends StagedRunRequest {
   readonly surfaceKey: string;
   readonly clientRequestId: string;
+  readonly environmentId: string | null;
 }
 
 /** Reuses a created sandbox and retries its wake before considering a create. */
@@ -343,7 +452,7 @@ async function startTarget(
   target: StagedSandboxTarget,
   deps: StagedSandboxRunDeps,
 ): Promise<StartedSandbox | null> {
-  const { surfaceKey, clientRequestId, taskId } = run;
+  const { surfaceKey, clientRequestId, taskId, environmentId } = run;
   if (target.kind === "existing") {
     useStagedSandboxStore.getState().report(surfaceKey, {
       createdSandboxId: target.sandboxId,
@@ -362,12 +471,6 @@ async function startTarget(
       return null;
     }
     return { sandboxId: target.sandboxId, hostId: target.hostId };
-  }
-  const environmentId = await environmentIdFor(target, deps);
-  if (!stillCurrent(surfaceKey, clientRequestId)) return null;
-  if (environmentId === undefined) {
-    fail(surfaceKey, { kind: "unavailable" });
-    return null;
   }
   // Give an older persisted blank stage one name, retained across retries.
   const name = stagedSandboxName(target.name);
@@ -551,9 +654,10 @@ interface SandboxSettlement {
 async function settle(
   input: SandboxSettlement,
   budgetFrom: number,
+  budgetMs: number,
 ): Promise<void> {
   const { surfaceKey, clientRequestId, started, deps } = input;
-  const deadline = budgetFrom + STAGED_CREATE_BUDGET_MS;
+  const deadline = budgetFrom + budgetMs;
   while (deps.now() < deadline) {
     if (!stillCurrent(surfaceKey, clientRequestId)) return;
     const row = await readRow(deps, started.sandboxId, surfaceKey);

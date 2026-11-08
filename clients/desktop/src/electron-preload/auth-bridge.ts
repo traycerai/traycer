@@ -1,3 +1,4 @@
+import type { SandboxCatalogueReadinessRequest } from "@traycer/protocol/host/sandbox-control";
 import { ipcRenderer } from "electron";
 import {
   RunnerHostEvent,
@@ -143,6 +144,7 @@ export interface AuthBridgeSurface {
   getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult>;
   getSandboxCatalogue(
     bearerToken: string,
+    context: SandboxCatalogueReadinessRequest | null,
   ): Promise<SandboxCatalogueFetchResult>;
   getTraycerModels(bearerToken: string): Promise<TraycerModelsFetchResult>;
   getVoiceAvailability(
@@ -330,10 +332,11 @@ export function buildAuthBridge(): AuthBridgeSurface {
         bearerToken,
       ) as Promise<SandboxCostsFetchResult>,
 
-    getSandboxCatalogue: (bearerToken) =>
+    getSandboxCatalogue: (bearerToken, context) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.getSandboxCatalogue,
         bearerToken,
+        context,
       ) as Promise<SandboxCatalogueFetchResult>,
 
     getVoiceAvailability: (bearerToken) =>

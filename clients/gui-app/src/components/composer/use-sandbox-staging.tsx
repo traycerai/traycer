@@ -1004,5 +1004,10 @@ function existingTargetPrice(
   const summary =
     host === undefined || host.sandbox === null ? null : host.sandbox.summary;
   if (summary === null || summary.priceMcPerHour === null) return null;
-  return { awakeMcPerHour: summary.priceMcPerHour.awakeMc, exact: true };
+  return {
+    awakeMcPerHour: summary.priceMcPerHour.awakeMc,
+    suspendedMcPerHour: summary.priceMcPerHour.suspendedMc,
+    stoppedMcPerHour: summary.priceMcPerHour.stoppedMc,
+    exact: true,
+  };
 }

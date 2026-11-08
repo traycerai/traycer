@@ -14,6 +14,7 @@ import {
   type SandboxAutomationOpenTarget,
   type SandboxAutomationResponse,
   type SandboxCatalogue,
+  type SandboxCatalogueReadinessRequest,
   type SandboxCreditSource,
   type SandboxCreateAccepted,
   type SandboxCreateRequest,
@@ -346,9 +347,22 @@ export async function fetchSandboxCatalogueViaHttp(
   serverBaseUrl: string,
   bearerToken: string,
   proxyToken: string | null,
+  context: SandboxCatalogueReadinessRequest | null,
 ): Promise<SandboxCatalogueFetchResult> {
+  const url = new URL(sandboxesUrl(serverBaseUrl, "/catalogue"));
+  if (context !== null) {
+    url.searchParams.set("environmentId", context.environmentId ?? "");
+    url.searchParams.set("os", context.os);
+    url.searchParams.set("cpus", String(context.cpus));
+    url.searchParams.set("memoryMb", String(context.memoryMb));
+    url.searchParams.set(
+      "diskMb",
+      context.diskMb === null ? "" : String(context.diskMb),
+    );
+    url.searchParams.set("region", context.region);
+  }
   const raw = await call(
-    sandboxesUrl(serverBaseUrl, "/catalogue"),
+    url.toString(),
     { method: "GET", body: null, timeoutMs: SANDBOX_CONTROL_FETCH_TIMEOUT_MS },
     bearerToken,
     proxyToken,

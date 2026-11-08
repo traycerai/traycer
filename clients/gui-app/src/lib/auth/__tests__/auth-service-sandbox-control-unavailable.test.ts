@@ -149,7 +149,7 @@ describe("AuthService sandbox control on a build that cannot reach it", () => {
 
     expect(await service.listSandboxes()).toEqual(unavailable);
     expect(await service.getSandboxCosts()).toEqual(unavailable);
-    expect(await service.getSandboxCatalogue()).toEqual(unavailable);
+    expect(await service.getSandboxCatalogue(null)).toEqual(unavailable);
     expect(await service.getTraycerModels()).toEqual(unavailable);
     expect(await service.createSandbox(CREATE_REQUEST)).toEqual(unavailable);
     expect(await service.destroySandbox("sbx_1", false)).toEqual(unavailable);
@@ -198,7 +198,7 @@ describe("AuthService sandbox control on a build that cannot reach it", () => {
 
     expect(await service.listSandboxes()).toEqual({ kind: "unauthorized" });
     expect(await service.getSandboxCosts()).toEqual({ kind: "unauthorized" });
-    expect(await service.getSandboxCatalogue()).toEqual({
+    expect(await service.getSandboxCatalogue(null)).toEqual({
       kind: "unauthorized",
     });
     expect(

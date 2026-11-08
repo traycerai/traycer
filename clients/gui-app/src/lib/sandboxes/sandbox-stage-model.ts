@@ -1,6 +1,8 @@
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import type {
   SandboxCatalogue,
+  SandboxCatalogueRegion,
+  SandboxHourlyPrice,
   SandboxCataloguePricing,
   SandboxCatalogueProvider,
   SandboxOs,
@@ -14,6 +16,7 @@ import {
 import { sandboxBalanceMc } from "@/lib/sandboxes/sandbox-balance";
 import {
   roundSandboxShape,
+  roundUpToStep,
   sandboxShapeProblem,
 } from "@/lib/sandboxes/sandbox-pricing";
 import {
@@ -123,17 +126,86 @@ export type StageSize = Pick<
   "os" | "region" | "cpus" | "memoryMb" | "diskMb"
 >;
 
-/** Whether a stage's size is this listed shape; an unset disk is the default. */
+/** The first provider that can quote this OS, region and size. */
+export function stageProviderForShape(
+  catalogue: SandboxCatalogue,
+  shape: StageSize,
+): SandboxCatalogueProvider | null {
+  return (
+    catalogue.providers.find(
+      (provider) =>
+        provider.creatable &&
+        provider.os.includes(shape.os) &&
+        provider.regions.some((region) => region.id === shape.region) &&
+        stageQuotedSize(provider, shape) !== null,
+    ) ?? null
+  );
+}
+
+/** Whether a stage's size is this listed shape; an unset disk uses the rung's disk. */
 export function stageSizeIsRung(
-  provider: SandboxCatalogueProvider,
   rung: SandboxShapeRung,
   size: Pick<StageShape, "cpus" | "memoryMb" | "diskMb">,
 ): boolean {
   return (
     size.cpus === rung.cpus &&
     size.memoryMb === rung.memoryMb &&
-    (size.diskMb ?? provider.shape.diskDefaultMb) === rung.diskMb
+    (size.diskMb === null || size.diskMb === rung.diskMb)
   );
+}
+
+interface StageGeometry {
+  readonly cpus: number;
+  readonly memoryMb: number;
+  readonly diskMb: number;
+}
+
+interface QuotedStageSize {
+  readonly shape: StageGeometry;
+  readonly exact: boolean;
+}
+
+/** The allocated geometry the server quotes, or a lower bound when an older server omits its disk step. */
+export function stageQuotedSize(
+  provider: SandboxCatalogueProvider,
+  requestedSize: Pick<StageShape, "cpus" | "memoryMb" | "diskMb">,
+): QuotedStageSize | null {
+  if (provider.shapes !== null) {
+    const rung = provider.shapes.find((candidate) =>
+      stageSizeIsRung(candidate, requestedSize),
+    );
+    return rung === undefined
+      ? null
+      : {
+          shape: {
+            cpus: rung.cpus,
+            memoryMb: rung.memoryMb,
+            diskMb: rung.diskMb,
+          },
+          exact: true,
+        };
+  }
+  if (sandboxShapeProblem(provider.shape, requestedSize) !== null) return null;
+  const bounds = provider.shape;
+  const requestedDisk = requestedSize.diskMb ?? bounds.diskDefaultMb;
+  if (
+    !Number.isSafeInteger(requestedDisk) ||
+    requestedDisk < bounds.diskMinMb ||
+    requestedDisk > bounds.diskMaxMb
+  )
+    return null;
+  const diskMb =
+    bounds.diskStepMb === undefined
+      ? requestedDisk
+      : Math.min(
+          bounds.diskMaxMb,
+          roundUpToStep(requestedDisk, bounds.diskStepMb, bounds.diskMinMb),
+        );
+  return {
+    shape: { ...roundSandboxShape(bounds, requestedSize), diskMb },
+    exact:
+      bounds.diskStepMb !== undefined || requestedDisk === bounds.diskDefaultMb,
+  };
 }
 
 /** The listed shape a provider defaults to, or `null` when it lists none. */
@@ -141,20 +213,6 @@ export function defaultShapeRung(
   provider: SandboxCatalogueProvider,
 ): SandboxShapeRung | null {
   return provider.shapes?.find((rung) => rung.default) ?? null;
-}
-
-/**
- * Whether the provider offers a stage's size: one of its listed shapes, or
- * inside its bounds when it lists none.
- */
-function stageSizeOffered(
-  provider: SandboxCatalogueProvider,
-  size: Pick<StageShape, "cpus" | "memoryMb" | "diskMb">,
-): boolean {
-  if (provider.shapes === null) {
-    return sandboxShapeProblem(provider.shape, size) === null;
-  }
-  return provider.shapes.some((rung) => stageSizeIsRung(provider, rung, size));
 }
 
 /**
@@ -266,7 +324,7 @@ export function configurationStageShape(
     destroyAfterRestingMinutes: defaults.restingMinutes,
   };
   const provider = stageProviderFor(catalogue, defaults.os);
-  if (provider !== null && stageSizeOffered(provider, defaults)) {
+  if (provider !== null && stageQuotedSize(provider, defaults) !== null) {
     return {
       os: defaults.os,
       cpus: defaults.cpus,
@@ -280,20 +338,20 @@ export function configurationStageShape(
 }
 
 /**
- * A staged shape as the configuration's defaults hold it, an unset disk the
- * provider's default; `null` when no provider serves its OS any more.
+ * A staged shape as the configuration's defaults hold it, at the geometry
+ * the provider allocates; `null` when the shape is no longer offered.
  */
 export function stageShapeDefaults(
   catalogue: SandboxCatalogue,
   shape: StageShape,
 ): SandboxConfigurationDefaults | null {
-  const provider = stageProviderFor(catalogue, shape.os);
+  const provider = stageProviderForShape(catalogue, shape);
   if (provider === null) return null;
+  const quoted = stageQuotedSize(provider, shape);
+  if (quoted === null) return null;
   return {
     os: shape.os,
-    cpus: shape.cpus,
-    memoryMb: shape.memoryMb,
-    diskMb: shape.diskMb ?? provider.shape.diskDefaultMb,
+    ...quoted.shape,
     idleMinutes: shape.idleMinutes,
     restingMinutes: shape.destroyAfterRestingMinutes,
   };
@@ -315,7 +373,7 @@ export function rememberedOrConfigurationStageShape(
     if (
       provider !== null &&
       provider.regions.some((region) => region.id === remembered.region) &&
-      stageSizeOffered(provider, remembered)
+      stageQuotedSize(provider, remembered) !== null
     ) {
       return remembered;
     }
@@ -325,28 +383,55 @@ export function rememberedOrConfigurationStageShape(
 
 /**
  * The hourly price a stage is shown at: the shape's own, computed from the
- * region's per-unit rates. A server without them prices only each region's
- * SMALLEST shape, so the figure is then exact for that shape and a lower
- * bound (`exact: false`, read as "from") for any larger one.
+ * region's per-unit rates. Without them, the served source quote is exact
+ * only for its own geometry and a lower bound for a shape at least as large
+ * on every axis; a smaller disk cannot be priced from that source quote.
  */
 export interface StagePrice {
   readonly awakeMcPerHour: number;
+  readonly suspendedMcPerHour: number;
+  readonly stoppedMcPerHour: number;
   readonly exact: boolean;
 }
 
 /**
- * A size's awake price an hour from a region's per-unit rates, by the
- * server's own rule, so it is the rate the row is billed at: vCPU and memory
- * only (disk is the resting rate), rounded up.
+ * A shape's hourly costs from the same rates and rounding the server bills.
  */
-function ratedAwakeMcPerHour(
+function ratedHourlyPrice(
   rates: SandboxCataloguePricing,
-  size: { readonly cpus: number; readonly memoryMb: number },
-): number {
-  return Math.ceil(
-    (size.cpus * rates.vcpuHourMillicredits +
-      (size.memoryMb / MB_PER_GIB) * rates.memoryGbHourMillicredits) *
-      rates.multiplier,
+  quoted: QuotedStageSize,
+): StagePrice {
+  const size = quoted.shape;
+  const memoryGib = size.memoryMb / MB_PER_GIB;
+  const diskGib = size.diskMb / MB_PER_GIB;
+  return {
+    awakeMcPerHour: Math.ceil(
+      (size.cpus * rates.vcpuHourMillicredits +
+        memoryGib * rates.memoryGbHourMillicredits +
+        diskGib * (rates.awakeDiskGbHourMillicredits ?? 0)) *
+        rates.multiplier,
+    ),
+    suspendedMcPerHour: Math.ceil(
+      (memoryGib *
+        (rates.suspendedMemoryGbHourMillicredits ??
+          rates.diskGbHourMillicredits) +
+        diskGib * rates.diskGbHourMillicredits) *
+        rates.multiplier,
+    ),
+    stoppedMcPerHour: Math.ceil(
+      diskGib * rates.diskGbHourMillicredits * rates.multiplier,
+    ),
+    exact: quoted.exact,
+  };
+}
+
+function exactShapePrice(
+  region: SandboxCatalogueRegion,
+  shape: StageGeometry,
+): SandboxHourlyPrice | null {
+  return (
+    region.shapePrices?.find((entry) => sameGeometry(entry, shape))
+      ?.priceMcPerHour ?? null
   );
 }
 
@@ -364,43 +449,64 @@ function smallestShapeRung(
   }, null);
 }
 
-/**
- * The region's smallest shape: its price, and whether `shape` is it, by its
- * cpus, memory and disk (an unset disk is the provider's default). Of a
- * provider that lists its shapes, the smallest listed one, priced from the
- * region's rates when it has them.
- */
+/** The geometry that produced the served from-price, matching the server's fromShape. */
+function catalogueSourceGeometry(
+  provider: SandboxCatalogueProvider,
+): StageGeometry | null {
+  if (provider.shapes !== null) return provider.shapes[0] ?? null;
+  const bounds = provider.shape;
+  return {
+    cpus: bounds.cpuMin,
+    memoryMb: Math.max(
+      bounds.memoryMinMb,
+      bounds.cpuMin * bounds.memoryPerCpuMinMb,
+    ),
+    diskMb: bounds.diskDefaultMb,
+  };
+}
+
+function sameGeometry(left: StageGeometry, right: StageGeometry): boolean {
+  return (
+    left.cpus === right.cpus &&
+    left.memoryMb === right.memoryMb &&
+    left.diskMb === right.diskMb
+  );
+}
+
+/** The true smallest offered shape's awake price; unknown when no served rates can price it. */
 export function stageSmallestShape(
   catalogue: SandboxCatalogue,
   shape: StageSize,
 ): { readonly isStaged: boolean; readonly awakeMcPerHour: number } | null {
-  const provider = stageProviderFor(catalogue, shape.os);
+  const provider = stageProviderForShape(catalogue, shape);
   if (provider === null) return null;
-  const region =
-    provider.regions.find((candidate) => candidate.id === shape.region) ?? null;
-  if (region === null) return null;
-  const smallestRung =
-    provider.shapes === null ? null : smallestShapeRung(provider.shapes);
-  if (smallestRung !== null) {
-    return {
-      isStaged: stageSizeIsRung(provider, smallestRung, shape),
-      awakeMcPerHour:
-        region.pricing === null
-          ? region.fromPriceMcPerHour.awakeMc
-          : ratedAwakeMcPerHour(region.pricing, smallestRung),
-    };
-  }
-  const bounds = provider.shape;
-  const smallestMemoryMb = Math.max(
-    bounds.memoryMinMb,
-    bounds.cpuMin * bounds.memoryPerCpuMinMb,
+  const region = provider.regions.find(
+    (candidate) => candidate.id === shape.region,
   );
+  const source = catalogueSourceGeometry(provider);
+  if (region === undefined || source === null) return null;
+  const smallest =
+    provider.shapes === null
+      ? { ...source, diskMb: provider.shape.diskMinMb }
+      : smallestShapeRung(provider.shapes);
+  if (smallest === null) return null;
+  const minimum = stageQuotedSize(provider, smallest);
+  const selected = stageQuotedSize(provider, shape);
+  if (minimum === null || selected === null) return null;
+  const exact = exactShapePrice(region, minimum.shape);
+  if (
+    exact === null &&
+    region.pricing === null &&
+    !sameGeometry(minimum.shape, source)
+  )
+    return null;
   return {
-    isStaged:
-      shape.cpus === bounds.cpuMin &&
-      shape.memoryMb === smallestMemoryMb &&
-      (shape.diskMb ?? bounds.diskDefaultMb) === bounds.diskMinMb,
-    awakeMcPerHour: region.fromPriceMcPerHour.awakeMc,
+    isStaged: sameGeometry(selected.shape, minimum.shape),
+    awakeMcPerHour:
+      exact?.awakeMc ??
+      (region.pricing === null
+        ? region.fromPriceMcPerHour.awakeMc
+        : ratedHourlyPrice(region.pricing, minimum).awakeMcPerHour),
   };
 }
 
@@ -408,22 +514,35 @@ export function stagePrice(
   catalogue: SandboxCatalogue,
   shape: StageSize,
 ): StagePrice | null {
-  const provider = stageProviderFor(catalogue, shape.os);
-  const region =
-    provider?.regions.find((candidate) => candidate.id === shape.region) ??
-    null;
-  const smallest = stageSmallestShape(catalogue, shape);
-  if (provider === null || region === null || smallest === null) return null;
-  const rates = region.pricing;
-  if (rates === null) {
+  const provider = stageProviderForShape(catalogue, shape);
+  if (provider === null) return null;
+  const region = provider.regions.find(
+    (candidate) => candidate.id === shape.region,
+  );
+  const quoted = stageQuotedSize(provider, shape);
+  if (region === undefined || quoted === null) return null;
+  const exact = exactShapePrice(region, quoted.shape);
+  if (exact !== null)
     return {
-      awakeMcPerHour: smallest.awakeMcPerHour,
-      exact: smallest.isStaged,
+      awakeMcPerHour: exact.awakeMc,
+      suspendedMcPerHour: exact.suspendedMc,
+      stoppedMcPerHour: exact.stoppedMc,
+      exact: quoted.exact,
     };
-  }
+  if (region.pricing !== null) return ratedHourlyPrice(region.pricing, quoted);
+  const source = catalogueSourceGeometry(provider);
+  if (
+    source === null ||
+    quoted.shape.cpus < source.cpus ||
+    quoted.shape.memoryMb < source.memoryMb ||
+    quoted.shape.diskMb < source.diskMb
+  )
+    return null;
   return {
-    awakeMcPerHour: ratedAwakeMcPerHour(rates, shape),
-    exact: true,
+    awakeMcPerHour: region.fromPriceMcPerHour.awakeMc,
+    suspendedMcPerHour: region.fromPriceMcPerHour.suspendedMc,
+    stoppedMcPerHour: region.fromPriceMcPerHour.stoppedMc,
+    exact: sameGeometry(quoted.shape, source),
   };
 }
 

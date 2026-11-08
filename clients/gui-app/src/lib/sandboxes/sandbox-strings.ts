@@ -27,6 +27,9 @@ export const CONSEQUENCES_WORDING_VERSION = 1;
 export const WINDOWS_SANDBOX_LIMITATION =
   "Windows sandboxes have no desktop or Computer Use.";
 
+export const SANDBOX_SETUP_CHARGES =
+  "Running the sandbox is charged separately from build work. Build work is charged once, even if the build fails. Keeping the result is charged as storage for as long as you keep it.";
+
 /** A configuration as copy reads it: Personal, or a team by its name. */
 export type SandboxConfigurationCopy =
   | { readonly kind: "personal" }
@@ -261,7 +264,7 @@ export function teamClause(teamName: string): string {
 }
 
 export const RESTING_STORAGE_CLAUSE =
-  "Storage while it rests, on the same credits until another member wakes it.";
+  "Storage while suspended or stopped, on the same credits until another member wakes it.";
 export function restingStorageClause(): string {
   return RESTING_STORAGE_CLAUSE;
 }
@@ -302,7 +305,7 @@ export function wakeString(suspendFidelity: string): string | null {
   }
 }
 
-/** `Suspends after 30 idle min · destroyed after 7 resting days`. */
+/** `Suspends after 30 idle min · removed after 7 days suspended or stopped`. */
 export function idleAndRestingLine(
   idleMinutes: number,
   destroyAfterRestingMinutes: number | null,
@@ -311,7 +314,7 @@ export function idleAndRestingLine(
   // `0` is never, as the server spells it.
   return destroyAfterRestingMinutes === null || destroyAfterRestingMinutes === 0
     ? `${idle} · ${KEPT_UNTIL_YOU_DESTROY_IT}`
-    : `${idle} · destroyed after ${restingPeriodLabel(destroyAfterRestingMinutes)}`;
+    : `${idle} · removed after ${removalPeriodLabel(destroyAfterRestingMinutes)} suspended or stopped`;
 }
 
 /**
@@ -323,17 +326,17 @@ export function idleLine(idleMinutes: number): string {
   return `Suspends after ${idleMinutes} idle min`;
 }
 
-/** `7 resting days`, `12 resting hours`, `45 resting minutes`. */
-export function restingPeriodLabel(minutes: number): string {
+/** The removal policy's duration: `7 days`, `12 hours`, `45 minutes`. */
+function removalPeriodLabel(minutes: number): string {
   if (minutes % (24 * 60) === 0) {
     const days = minutes / (24 * 60);
-    return `${days} resting ${days === 1 ? "day" : "days"}`;
+    return `${days} ${days === 1 ? "day" : "days"}`;
   }
   if (minutes % 60 === 0) {
     const hours = minutes / 60;
-    return `${hours} resting ${hours === 1 ? "hour" : "hours"}`;
+    return `${hours} ${hours === 1 ? "hour" : "hours"}`;
   }
-  return `${minutes} resting ${minutes === 1 ? "minute" : "minutes"}`;
+  return `${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
 }
 
 export const KEPT_UNTIL_YOU_DESTROY_IT = "kept until you destroy it";
