@@ -192,6 +192,10 @@ export const profileSyncCredentialSchema = lazySchema(() =>
         document: providerDocumentSchema,
       }),
       z.strictObject({
+        kind: z.literal("grok-api-key"),
+        apiKey: z.string().min(1).max(PROFILE_SYNC_MAX_CREDENTIAL_BYTES),
+      }),
+      z.strictObject({
         kind: z.literal("grok-auth-file"),
         document: providerDocumentSchema,
       }),
@@ -229,7 +233,10 @@ export function profileSyncCredentialFitsProvider(
     case "codex":
       return credential.kind === "codex-auth-file";
     case "grok":
-      return credential.kind === "grok-auth-file";
+      return (
+        credential.kind === "grok-auth-file" ||
+        credential.kind === "grok-api-key"
+      );
     case "antigravity":
       return (
         credential.kind === "antigravity-oauth" ||

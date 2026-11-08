@@ -98,6 +98,18 @@ export type CredentialMaterialRetainedReason = z.infer<
   typeof credentialMaterialRetainedReasonSchema
 >;
 
+export const credentialRuntimeRetirementSchema = lazySchema(() =>
+  z.strictObject({
+    requestId: z.string().min(1),
+    bindingVersion: credentialVersionSchema,
+    materialRevision: credentialVersionSchema,
+    state: z.enum(["pending", "claimed"]),
+  }),
+);
+export type CredentialRuntimeRetirement = z.infer<
+  typeof credentialRuntimeRetirementSchema
+>;
+
 export const credentialHomeSchema = lazySchema(() =>
   z.strictObject({
     homeAddress: z.string().min(1),
@@ -138,6 +150,10 @@ export const credentialHomeSchema = lazySchema(() =>
       .object({ identity: credentialIdentitySchema, capturedAt: z.number() })
       .nullable(),
     materialMatchesBinding: z.enum(["yes", "no", "unknown"]),
+    // A future retirement format must not discard the admitted home beside it.
+    runtimeRetirement: credentialRuntimeRetirementSchema
+      .optional()
+      .catch(undefined),
   }),
 );
 export type CredentialHome = z.infer<typeof credentialHomeSchema>;
