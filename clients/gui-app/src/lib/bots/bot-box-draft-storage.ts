@@ -446,6 +446,9 @@ function takeOutGoneImages(
     const draft = threadBoxes[botId]?.[key];
     if (draft === undefined || draft.content === null) continue;
     const content = withoutImages(draft.content, hashes, partition);
+    // A box stored without those images stays as it is: an empty one is
+    // another window's draft written ahead of its images, which its retry needs.
+    if (content === draft.content) continue;
     const empty =
       draft.text.length === 0 &&
       (content === null || !containsImageAtoms(content));
@@ -513,7 +516,7 @@ function putBox(
 /**
  * `node` without the images `hashes` names that this window stored
  * (`partition`), and without a block they alone filled; `null` where nothing
- * is left of it.
+ * is left of it, and `node` itself where it holds none of them.
  */
 function withoutImages(
   node: JsonContent,
@@ -528,11 +531,14 @@ function withoutImages(
   const children = node.content;
   if (children === undefined) return node;
   const next: JsonContent[] = [];
+  let removed = false;
   for (const child of children) {
     const kept = withoutImages(child, hashes, partition);
+    if (kept !== child) removed = true;
     if (kept !== null) next.push(kept);
   }
-  if (children.length > 0 && next.length === 0) return null;
+  if (!removed) return node;
+  if (next.length === 0) return null;
   return { ...node, content: next };
 }
 

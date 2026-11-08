@@ -367,6 +367,35 @@ describe("two windows open at once over one device's storage", () => {
       expect(storedDrafts(a)?.[BOT_ID]?.x).toBeUndefined();
     },
   );
+
+  it("leaves a box another window wrote ahead of its only image for that window to finish, when this one takes its own gone image out of storage", async () => {
+    storeDraftsAsLeft({
+      [BOT_ID]: {
+        x: {
+          text: "",
+          content: boxDoc("", [hashedImage("f".repeat(64))]),
+          seedId: 1,
+        },
+      },
+    });
+    app = await restart();
+    const a = app;
+    const b = await windowBeside();
+
+    b.drafts
+      .getState()
+      .typeThreadBox(BOT_ID, "x", "", boxDoc("", [INLINE_IMAGE]));
+    window.dispatchEvent(new Event("pagehide"));
+    expect(storedDrafts(b)?.[BOT_ID]?.x?.text).toBe("");
+    a.drafts.getState().typeThreadBox(BOT_ID, "z", "from A", null);
+    await waitForStore(a, (stored) => stored?.[BOT_ID]?.z !== undefined);
+    b.drafts.getState().typeThreadBox(BOT_ID, "y", "from B", null);
+    await waitForStore(b, (stored) => stored?.[BOT_ID]?.y !== undefined);
+
+    expect(JSON.stringify(storedDrafts(b)?.[BOT_ID]?.x ?? null)).toContain(
+      '"hash"',
+    );
+  });
 });
 
 /**
