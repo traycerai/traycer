@@ -44,7 +44,7 @@ export async function readSignedFeed(
     throw feedError("FEED_BUILD_FLOOR_INVALID");
   return fetchTextFromOrigins(
     opts.urls ?? signedFeedUrls(opts.feed),
-    opts,
+    { ...opts, resource: "feed-envelope" },
     async (body, url, signal) => {
       const payload = verifyEnvelope(body, url, trusted.keys);
       if (payload.schemaVersion !== 2)

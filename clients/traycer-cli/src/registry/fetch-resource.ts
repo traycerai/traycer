@@ -27,11 +27,12 @@ import { registryFetch } from "./staging-release-auth";
 // streaming gigabytes into the user's tmpdir before the post-hoc
 // sha256/size verification has a chance to fail.
 
-// Hard cap for `fetchText` payloads (manifests + minisign files). A
-// production versions.json with thousands of entries is well under
-// 1MB, and minisign signature files are <1KB; anything larger is a
-// red flag.
-const FETCH_TEXT_MAX_BYTES = 1024 * 1024;
+// Feed envelopes grow with release history; detached signatures and other
+// metadata retain their smaller bound. Both are enforced while streaming.
+const FETCH_TEXT_MAX_BYTES = {
+  metadata: 1024 * 1024,
+  "feed-envelope": 8 * 1024 * 1024,
+} as const;
 
 // Small absolute slack added on top of `expectedSizeBytes` when
 // streaming an archive to disk. Lets implementations append a few
@@ -110,17 +111,26 @@ export interface NetworkHeartbeat {
 
 export type NetworkHeartbeatListener = (heartbeat: NetworkHeartbeat) => void;
 
+interface FetchTextOptions extends FetchOptions {
+  readonly resource: keyof typeof FETCH_TEXT_MAX_BYTES;
+}
+
 export async function fetchText(
   url: string,
   opts: FetchOptions,
 ): Promise<string> {
-  return fetchTextFromOrigins([url], opts, async (body) => body, null);
+  return fetchTextFromOrigins(
+    [url],
+    { ...opts, resource: "metadata" },
+    async (body) => body,
+    null,
+  );
 }
 
 // One document owns one budget, including origin switches and integrity checks.
 export async function fetchTextFromOrigins<T>(
   urls: readonly string[],
-  opts: FetchOptions,
+  opts: FetchTextOptions,
   accept: (body: string, url: string, signal: AbortSignal) => Promise<T>,
   fetchDocument: ((url: string, opts: FetchOptions) => Promise<string>) | null,
 ): Promise<T> {
@@ -202,10 +212,11 @@ export async function fetchTextFromOrigins<T>(
 
 async function fetchTextAttempt(
   url: string,
-  opts: FetchOptions,
+  opts: FetchTextOptions,
   attempt: number,
   maxAttempts: number,
 ): Promise<string> {
+  const maxBytes = FETCH_TEXT_MAX_BYTES[opts.resource];
   if (isFileUrl(url)) {
     const path = fileUrlToPath(url);
     let raw: Buffer;
@@ -214,8 +225,8 @@ async function fetchTextAttempt(
     } catch (err) {
       throw networkError(url, err);
     }
-    if (raw.byteLength > FETCH_TEXT_MAX_BYTES) {
-      throw oversizeError(url, raw.byteLength, FETCH_TEXT_MAX_BYTES);
+    if (raw.byteLength > maxBytes) {
+      throw oversizeError(url, raw.byteLength, maxBytes);
     }
     return raw.toString("utf8");
   }
@@ -239,8 +250,8 @@ async function fetchTextAttempt(
     if (response.body === null) {
       const body = await response.text();
       const byteLength = Buffer.byteLength(body);
-      if (byteLength > FETCH_TEXT_MAX_BYTES) {
-        throw oversizeError(url, byteLength, FETCH_TEXT_MAX_BYTES);
+      if (byteLength > maxBytes) {
+        throw oversizeError(url, byteLength, maxBytes);
       }
       return body;
     }
@@ -254,9 +265,9 @@ async function fetchTextAttempt(
       if (chunk === undefined) continue;
       watchdog.reset();
       received += chunk.byteLength;
-      if (received > FETCH_TEXT_MAX_BYTES) {
+      if (received > maxBytes) {
         controller.abort();
-        throw oversizeError(url, received, FETCH_TEXT_MAX_BYTES);
+        throw oversizeError(url, received, maxBytes);
       }
       chunks.push(chunk);
     }

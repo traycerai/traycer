@@ -397,6 +397,7 @@ export async function createRegistryClient(
           ],
           {
             signal: null,
+            resource: "metadata",
             onHeartbeat: (heartbeat) =>
               emitRegistryHeartbeat(opts.onProgress, "signature", heartbeat),
           },

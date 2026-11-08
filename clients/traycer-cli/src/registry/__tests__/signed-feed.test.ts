@@ -78,6 +78,23 @@ async function envelope(overrides: Record<string, unknown>): Promise<string> {
   return signFeedPayload(payload, signingKey);
 }
 
+async function envelopeWithByteLength(
+  target: "production" | "staging",
+  byteLength: number,
+): Promise<string> {
+  const basePayload = JSON.stringify(feedPayload({ target, padding: "" }));
+  const baseEnvelope = await signFeedPayload(basePayload, signingKey);
+  const paddingLength = byteLength - Buffer.byteLength(baseEnvelope);
+  if (paddingLength < 0) throw new Error("target envelope size is too small");
+  const payload = JSON.stringify(
+    feedPayload({ target, padding: "x".repeat(paddingLength) }),
+  );
+  const result = await signFeedPayload(payload, signingKey);
+  if (Buffer.byteLength(result) !== byteLength)
+    throw new Error("signed envelope did not match its requested byte length");
+  return result;
+}
+
 function startOrigin(
   bodyForRequest: (
     path: string,
@@ -159,6 +176,45 @@ function runReaderProcess(
 }
 
 describe("readSignedFeed", () => {
+  it.each(["production", "staging"] as const)(
+    "accepts an 8 MiB signed envelope and rejects 8 MiB plus one byte for %s",
+    async (target) => {
+      const maxBytes = 8 * 1024 * 1024;
+      config.environment = target;
+      const exactEnvelope = await envelopeWithByteLength(target, maxBytes);
+      const oversizedEnvelope = await envelopeWithByteLength(
+        target,
+        maxBytes + 1,
+      );
+      let exactRequests = 0;
+      const exactOrigin = await startOrigin((_path, response) => {
+        exactRequests += 1;
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(exactEnvelope);
+      });
+
+      const accepted = await readAt(`${exactOrigin}/versions.signed.json`);
+
+      expect(Buffer.byteLength(exactEnvelope)).toBe(maxBytes);
+      expect(accepted.target).toBe(target);
+      expect(exactRequests).toBe(1);
+
+      let oversizedRequests = 0;
+      const oversizedOrigin = await startOrigin((_path, response) => {
+        oversizedRequests += 1;
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(oversizedEnvelope);
+      });
+
+      await expect(
+        readAt(`${oversizedOrigin}/versions.signed.json`),
+      ).rejects.toThrow(`${maxBytes}-byte cap`);
+      expect(Buffer.byteLength(oversizedEnvelope)).toBe(maxBytes + 1);
+      expect(oversizedRequests).toBe(1);
+    },
+    30_000,
+  );
+
   it("verifies the exact signed payload bytes from a local HTTP origin", async () => {
     const exactPayload = ` ${JSON.stringify(feedPayload({ latest: "1.5.8" }))}\n`;
     const signedEnvelope = await signFeedPayload(exactPayload, signingKey);
