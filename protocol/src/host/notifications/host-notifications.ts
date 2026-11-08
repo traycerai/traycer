@@ -60,6 +60,7 @@ export const hostNotificationKindSchema = lazySchema(() =>
     "environment.move.stalled",
     "environment.apply.failed",
     "team.role.changed",
+    "access.readonly.retired",
     "team.host.returned",
     "secret.removed",
     "sandbox.notice",
@@ -629,6 +630,26 @@ export type HostNotificationCloudEntryV27 = z.infer<
   typeof hostNotificationCloudEntrySchemaV27
 >;
 
+const readonlyAccessRetiredEntryArm = lazySchema(() =>
+  z.object({
+    ...hostNotificationEntryBaseFields,
+    kind: z.literal("access.readonly.retired"),
+    outcome: z.literal("completed"),
+    payload: hostNotificationPayloadSchema,
+  }),
+);
+
+/** CloudFeed @1.8 adds notices for retired read-only grants and seats. */
+export const hostNotificationCloudEntrySchemaV28 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    ...hostNotificationCloudEntrySchemaV27.options,
+    readonlyAccessRetiredEntryArm,
+  ]),
+);
+export type HostNotificationCloudEntryV28 = z.infer<
+  typeof hostNotificationCloudEntrySchemaV28
+>;
+
 /**
  * Narrows a widest-union entry to the released union. Derived from
  * {@link RELEASED_HOST_NOTIFICATION_KINDS} rather than listing the exclusions:
@@ -637,7 +658,7 @@ export type HostNotificationCloudEntryV27 = z.infer<
  * excluded by DEFAULT, not by remembering to name it here.
  */
 export function isReleasedHostNotificationEntry(
-  entry: HostNotificationCloudEntryV27,
+  entry: HostNotificationCloudEntryV28,
 ): entry is HostNotificationEntry {
   return RELEASED_HOST_NOTIFICATION_KINDS.includes(entry.kind);
 }
@@ -758,10 +779,15 @@ export const V27_HOST_NOTIFICATION_KINDS: readonly HostNotificationKind[] = [
   ...V26_HOST_NOTIFICATION_KINDS,
   "feedback.drafted",
 ];
-/** Every kind this build can carry, on the newest version of each surface. */
-export const ALL_HOST_NOTIFICATION_KINDS: readonly HostNotificationKind[] = [
+/** Frozen cloudFeed @1.7 vocabulary. */
+export const V27_CLOUD_NOTIFICATION_KINDS: readonly HostNotificationKind[] = [
   ...V26_CLOUD_NOTIFICATION_KINDS,
   "feedback.drafted",
+];
+/** Every kind this build can carry, on the newest version of each surface. */
+export const ALL_HOST_NOTIFICATION_KINDS: readonly HostNotificationKind[] = [
+  ...V27_CLOUD_NOTIFICATION_KINDS,
+  "access.readonly.retired",
 ];
 
 /**
@@ -834,7 +860,8 @@ export function visibleHostNotificationKinds(
     // compatibility buckets from here rather than re-deciding `minor >= 1`.
     case "host.notifications.cloudFeed.subscribe":
       if (schemaVersion.major === 1) {
-        if (schemaVersion.minor >= 7) return ALL_HOST_NOTIFICATION_KINDS;
+        if (schemaVersion.minor >= 8) return ALL_HOST_NOTIFICATION_KINDS;
+        if (schemaVersion.minor === 7) return V27_CLOUD_NOTIFICATION_KINDS;
         if (schemaVersion.minor === 6) return V26_CLOUD_NOTIFICATION_KINDS;
         if (schemaVersion.minor === 5) return V25_CLOUD_NOTIFICATION_KINDS;
         if (schemaVersion.minor === 4) return V24_HOST_NOTIFICATION_KINDS;
@@ -3232,6 +3259,54 @@ export const hostNotificationsCloudFeedSubscribeV17 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 7 } as const,
   openRequestSchema: hostNotificationsCloudFeedSubscribeOpenRequestSchemaV10,
   serverFrameSchema: hostNotificationsCloudFeedSubscribeServerFrameSchemaV17,
+  clientFrameSchema: hostNotificationsCloudFeedSubscribeClientFrameSchemaV10,
+});
+
+export const hostNotificationsCloudFeedRowSchemaV18 = lazySchema(() =>
+  z.object({
+    ...hostNotificationsCloudFeedRowSchema.shape,
+    entry: hostNotificationCloudEntrySchemaV28,
+  }),
+);
+export type HostNotificationsCloudFeedRowV18 = z.infer<
+  typeof hostNotificationsCloudFeedRowSchemaV18
+>;
+
+const hostNotificationsCloudFeedSnapshotSchemaV18 = lazySchema(() =>
+  z.object({
+    kind: z.literal("snapshot"),
+    ...textFrameFields,
+    connectionState: z.literal("connected"),
+    version: z.number().int().nonnegative(),
+    rows: z.array(hostNotificationsCloudFeedRowSchemaV18),
+    summary: hostNotificationsCloudFeedSummarySchema,
+  }),
+);
+const hostNotificationsCloudFeedPartitionSnapshotSchemaV18 = lazySchema(() =>
+  hostNotificationsCloudFeedSnapshotSchemaV18.extend({
+    kind: z.literal("partitionSnapshot"),
+    partition: hostNotificationsCloudPartitionSchema,
+  }),
+);
+export const hostNotificationsCloudFeedSubscribeServerFrameSchemaV18 =
+  lazySchema(() =>
+    z.discriminatedUnion("kind", [
+      hostNotificationsCloudFeedPartitionSnapshotSchemaV18,
+      hostNotificationsCloudFeedSnapshotSchemaV18,
+      hostNotificationsCloudFeedConnectionStateSchemaV10,
+      hostNotificationsCloudFeedPongSchemaV10,
+    ]),
+  );
+export type HostNotificationsCloudFeedSubscribeServerFrameV18 = z.infer<
+  typeof hostNotificationsCloudFeedSubscribeServerFrameSchemaV18
+>;
+
+/** Additive minor: same open request and client frames, widened entry union. */
+export const hostNotificationsCloudFeedSubscribeV18 = defineStreamRpcContract({
+  method: "host.notifications.cloudFeed.subscribe",
+  schemaVersion: { major: 1, minor: 8 } as const,
+  openRequestSchema: hostNotificationsCloudFeedSubscribeOpenRequestSchemaV10,
+  serverFrameSchema: hostNotificationsCloudFeedSubscribeServerFrameSchemaV18,
   clientFrameSchema: hostNotificationsCloudFeedSubscribeClientFrameSchemaV10,
 });
 

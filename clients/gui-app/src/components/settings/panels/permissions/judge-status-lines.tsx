@@ -183,6 +183,7 @@ function EffectiveModelLabel(props: {
   readonly hostRunsEffort: boolean;
 }): ReactNode {
   const models = useGuiHarnessModelsQuery(props.row.id, null, {
+    profileId: null,
     enabled: true,
     subscribed: true,
   }).data?.models;

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
-import type { HostNotificationsCloudFeedRowV17 } from "@traycer/protocol/host/notifications/contracts";
+import type { HostNotificationsCloudFeedRowV18 } from "@traycer/protocol/host/notifications/contracts";
 import type { NotificationShowOutcome } from "@traycer-clients/shared/platform/runner-host";
 import { projectNotificationFeedDisplay } from "@traycer-clients/shared/notifications/feed-delivery";
 import type { NotificationShowRequest } from "@/hooks/notifications/use-notifications";
@@ -18,6 +18,7 @@ import {
 import { __resetAppLocalNotificationsStoreForTests } from "@/stores/notifications/app-local-notifications-store";
 import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
 import {
+  rowFromHostEntry,
   useMergedNotificationRows,
   type NotificationBellState,
   useMergedNotificationUnreadCount,
@@ -60,7 +61,7 @@ const PRESENTATION = { epicTitle: "Epic", chatTitle: "Chat" } as const;
 
 function cloudRow(
   entry: HostNotificationFeedEntry,
-): HostNotificationsCloudFeedRowV17 {
+): HostNotificationsCloudFeedRowV18 {
   return {
     entryId: entry.id,
     originHostId: "host-cloud",
@@ -474,6 +475,49 @@ function roleChangedEntry(id: string): HostNotificationFeedEntry {
   };
 }
 
+const RETIRED_TASK_TITLE = "Billing dashboard redesign";
+const RETIRED_TEAM_NAME = "Acme";
+
+/** A task-scoped view-only grant's retirement. */
+function readonlyRetiredTaskEntry(id: string): HostNotificationFeedEntry {
+  return {
+    ...BASE,
+    id,
+    kind: "access.readonly.retired",
+    sourceRef: id,
+    severity: "info",
+    outcome: "completed",
+    payload: {
+      kind: "readonly_access_retired",
+      scope: "task",
+      taskId: "11111111-1111-4111-8111-111111111111",
+      taskTitle: RETIRED_TASK_TITLE,
+    },
+  };
+}
+
+/** A team-scoped view-only seat's retirement: an accepted membership, or an invitation. */
+function readonlyRetiredTeamEntry(
+  id: string,
+  invitation: boolean,
+): HostNotificationFeedEntry {
+  return {
+    ...BASE,
+    id,
+    kind: "access.readonly.retired",
+    sourceRef: id,
+    severity: "info",
+    outcome: "completed",
+    payload: {
+      kind: "readonly_access_retired",
+      scope: "team",
+      environmentId: "env-1",
+      teamName: RETIRED_TEAM_NAME,
+      invitation,
+    },
+  };
+}
+
 function applyHost(
   entries: ReadonlyArray<HostNotificationFeedEntry>,
   summary: { readonly unreadCount: number; readonly attentionCount: number },
@@ -593,6 +637,29 @@ describe("the notification center carries agent states only", () => {
     });
   });
 
+  it("keeps a retired read-only grant, task-scoped or team-scoped, counted unread beside the agent row", () => {
+    const rows = [
+      agentFailureEntry(AGENT_ID),
+      readonlyRetiredTaskEntry("retired-task-kept"),
+      readonlyRetiredTeamEntry("retired-team-kept", true),
+    ];
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: rows.map(cloudRow),
+      summary: {
+        totalCount: rows.length,
+        unreadCount: rows.length,
+        attentionCount: attentionCount(rows),
+      },
+      version: 3,
+    });
+
+    expect(readCenter()).toEqual({
+      sourceIds: [AGENT_ID, "retired-task-kept", "retired-team-kept"],
+      bell: { kind: "attention", count: 1 },
+      unread: 3,
+    });
+  });
+
   it("keeps a role change a host still holds", () => {
     useCloudNotificationsStore.getState().applySnapshot({
       rows: [],
@@ -675,6 +742,45 @@ describe("live emission shows agent states only", () => {
     }
     expect(toastCalls).toHaveLength(0);
   });
+
+  it.each([
+    {
+      name: "a retired task grant",
+      entry: readonlyRetiredTaskEntry("retired-task-live"),
+      title: "Read-only task access removed",
+      body: `Your read-only grant to ${RETIRED_TASK_TITLE} was removed. Ask the task owner for access again. Other access you have is unchanged.`,
+    },
+    {
+      name: "a retired, accepted team seat",
+      entry: readonlyRetiredTeamEntry("retired-team-seat-live", false),
+      title: "Read-only team membership removed",
+      body: `Your read-only membership in ${RETIRED_TEAM_NAME} was removed. Ask the team admin for access again. Other access you have is unchanged.`,
+    },
+    {
+      name: "a retired team invitation",
+      entry: readonlyRetiredTeamEntry("retired-team-invite-live", true),
+      title: "Read-only team invitation removed",
+      body: `Your read-only invitation to ${RETIRED_TEAM_NAME} was removed. Ask the team admin for access again. Other access you have is unchanged.`,
+    },
+  ])(
+    "keeps $name visible with its scoped text, through the real merged consumer, and announces it nowhere",
+    async ({ entry, title, body }) => {
+      // The real merged-notification entrypoint renders accurate, scope-specific copy.
+      expect(rowFromHostEntry(entry)).toMatchObject({ title, body });
+
+      // Neither live lane announces it.
+      const fromHost = displayTarget();
+      await displayHostChannelEmission([entry], fromHost, "host-1");
+      const fromCloud = displayTarget();
+      await displayCloudSnapshotArrivals([cloudRow(entry)], fromCloud);
+
+      for (const target of [fromHost, fromCloud]) {
+        expect(target.showNotification).not.toHaveBeenCalled();
+        expect(target.playChime).not.toHaveBeenCalled();
+      }
+      expect(toastCalls).toHaveLength(0);
+    },
+  );
 
   it("shows the agent failure and only it from a mixed emission", async () => {
     const target = displayTarget();

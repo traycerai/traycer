@@ -129,10 +129,12 @@ function ComposerMobileToolbarImpl(props: ComposerMobileToolbarProps) {
   // Same two inputs as the desktop toolbar - see `ComposerToolbar`.
   const runHarnessId = useStore(store, (s) => s.selection.harnessId);
   const runModelSlug = useStore(store, (s) => s.selection.modelSlug);
+  const runProfileId = useStore(store, (s) => s.selection.profileId);
   const judgeBilling = useAutoJudgeBilling(
     runTargetHostId,
     runHarnessId,
     runModelSlug,
+    runProfileId,
   );
   const openPermissionSettings = useOpenPermissionSettings(runTargetHostId);
   // Same gate as `ComposerToolbarRight`: an empty slug is the transient

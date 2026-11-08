@@ -244,6 +244,8 @@ describe("a bot's session holding an inbound agent message (no task open)", () =
       kind: "open-epic",
       epicId: "epic-task",
       includeNestedFocus: true,
+      // The card sits in this bot's session, so the task's way back is it.
+      tracyOrigin: { botId: BOT_ID },
       preparation: {
         kind: "open-tile",
         gesture: "explicit",

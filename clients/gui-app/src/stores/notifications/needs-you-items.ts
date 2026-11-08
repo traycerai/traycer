@@ -1,8 +1,8 @@
 import { useMemo } from "react";
 import {
   parseKnownHostNotificationPayloadForKind,
-  type HostNotificationCloudEntryV27,
-  type HostNotificationsCloudFeedRowV17,
+  type HostNotificationCloudEntryV28,
+  type HostNotificationsCloudFeedRowV18,
 } from "@traycer/protocol/host/notifications/contracts";
 import {
   useRegisteredEpicLiveAgents,
@@ -97,7 +97,7 @@ export function groupNeedsYouByEpic(
 
 /** The chat title a prompt entry carries, for the item's "task · agent" line. */
 function agentTitleOfEntry(
-  entry: HostNotificationCloudEntryV27,
+  entry: HostNotificationCloudEntryV28,
 ): string | null {
   const known = parseKnownHostNotificationPayloadForKind(
     entry.kind,
@@ -109,7 +109,7 @@ function agentTitleOfEntry(
 }
 
 function cloudAgentTitle(
-  row: HostNotificationsCloudFeedRowV17 | undefined,
+  row: HostNotificationsCloudFeedRowV18 | undefined,
 ): string | null {
   if (row === undefined) return null;
   const title = row.presentation.chatTitle;
