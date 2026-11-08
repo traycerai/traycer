@@ -310,11 +310,23 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", () => {
     },
     get catalog() {
       return testState.catalogHostId === null
-        ? { hostId: null, harnesses: undefined, modelsLoaded: false }
+        ? {
+            hostId: null,
+            harnesses: undefined,
+            modelsHarnessId: testState.displayedHarness,
+            modelsProfileId: null,
+            models: [],
+            modelsLoaded: false,
+            modelsFailed: false,
+          }
         : {
             hostId: testState.catalogHostId,
             harnesses: [],
+            modelsHarnessId: testState.displayedHarness,
+            modelsProfileId: null,
+            models: [],
             modelsLoaded: true,
+            modelsFailed: false,
           };
     },
     // The raw pick; `selection` above is what this host's catalog shows.
@@ -974,7 +986,11 @@ describe("LandingComposer direct submit gate", () => {
         catalog: {
           hostId: "host-test",
           harnesses: [{ id: "claude", available: true, modes: ["gui", "tui"] }],
+          modelsHarnessId: "claude",
+          modelsProfileId: null,
+          models: [],
           modelsLoaded: true,
+          modelsFailed: false,
         },
       });
       useStagedSandboxStore.getState().report("landing:window-test", {
@@ -1217,7 +1233,11 @@ describe("LandingComposer direct submit gate", () => {
         catalog: {
           hostId: "host-test",
           harnesses: [{ id: "claude", available: true, modes: ["gui", "tui"] }],
+          modelsHarnessId: "claude",
+          modelsProfileId: null,
+          models: [],
           modelsLoaded: true,
+          modelsFailed: false,
         },
       });
       useStagedSandboxStore.getState().report("landing:window-test", {
@@ -1295,7 +1315,11 @@ describe("LandingComposer direct submit gate", () => {
           catalog: {
             hostId: "host-test",
             harnesses: [{ id: "claude", ...harness }],
+            modelsHarnessId: "claude",
+            modelsProfileId: null,
+            models: [],
             modelsLoaded: true,
+            modelsFailed: false,
           },
         });
         useStagedSandboxStore.getState().report("landing:window-test", {
@@ -1457,13 +1481,19 @@ describe("LandingComposer direct submit gate", () => {
       // is sent there, through the composer's ordinary submit.
       act(() => {
         testState.catalogHostId = "host-test";
+        testState.displayedHarness = "codex";
+        testState.modelSlug = "gpt-6.1-sol";
         testState.toolbarStore?.setState({
           catalog: {
             hostId: "host-test",
             harnesses: [
               { id: "codex", available: true, modes: ["gui", "tui"] },
             ],
+            modelsHarnessId: "codex",
+            modelsProfileId: null,
+            models: [],
             modelsLoaded: true,
+            modelsFailed: false,
           },
         });
         useStagedSandboxStore.getState().report("landing:window-test", {

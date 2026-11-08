@@ -184,9 +184,8 @@ export interface ComposerToolbarState extends ComposerToolbarDerived {
   readonly catalog: ComposerToolbarCatalog;
   readonly onSettingsChange: ((settings: ChatRunSettings) => void) | null;
   /**
-   * A user edit awaits its account catalog or a concrete model slug. The emit
-   * is deferred until `setCatalog` resolves both, so another account's tier
-   * and `model: ""` never reach persistence.
+   * Any edit waits for a concrete model slug. Run edits and retained setting
+   * effort also wait for their account's catalog before reaching persistence.
    */
   readonly pendingSettingsEmit: boolean;
   /**
@@ -378,8 +377,12 @@ export function createComposerToolbarStore(
         state.catalog,
         derived.selection,
       );
-      // A profile change waits for its own catalog. Other edits defer when
-      // the slug is still unresolved (catalog loading), the
+      const needsAccountCatalog =
+        purpose === "run" || values.reasoning.length > 0;
+      // A run's account change, or a setting's retained effort, waits for that
+      // account's catalog. A setting's named-default provider switch carries no
+      // effort and commits at once. Other edits defer when the slug is still
+      // unresolved (catalog loading), the
       // harness was surface-rerouted, or the slug is a display-only heal - the
       // surface emit (live-settings/last-run) is NOT gated on catalog
       // confirmation. Memory integrity is enforced at the write site (the
@@ -393,10 +396,11 @@ export function createComposerToolbarStore(
         settings.model.length === 0 ||
         rerouted ||
         derived.selectionHealedForDisplay ||
-        !catalogMatchesAccount ||
-        (state.pendingSettingsEmit &&
-          !state.catalog.modelsLoaded &&
-          !(purpose === "run" && state.catalog.modelsFailed))
+        (needsAccountCatalog &&
+          (!catalogMatchesAccount ||
+            (state.pendingSettingsEmit &&
+              !state.catalog.modelsLoaded &&
+              (purpose === "setting" || !state.catalog.modelsFailed))))
       ) {
         set({ values, ...derived, pendingSettingsEmit: true });
         return;

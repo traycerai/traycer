@@ -41,7 +41,12 @@ const ACME = { kind: "team", teamId: "team-acme", teamName: "Acme" } as const;
 function input(overrides: Partial<ConsequencesInput>): ConsequencesInput {
   return {
     configuration: ACME,
-    price: { awakeMcPerHour: 120, exact: true },
+    price: {
+      awakeMcPerHour: 120,
+      suspendedMcPerHour: 4,
+      stoppedMcPerHour: 2,
+      exact: true,
+    },
     needsCredits: false,
     billingStarted: false,
     audience: "shared",
@@ -364,7 +369,18 @@ describe("<ConsequencesBlock />", () => {
   });
 
   it("prefixes `from ` for a price that is only a lower bound", () => {
-    render(block(input({ price: { awakeMcPerHour: 120, exact: false } })));
+    render(
+      block(
+        input({
+          price: {
+            awakeMcPerHour: 120,
+            suspendedMcPerHour: 4,
+            stoppedMcPerHour: 2,
+            exact: false,
+          },
+        }),
+      ),
+    );
     expect(screen.getByTestId("consequences-price").textContent).toBe(
       "from $0.12 an hour while awake",
     );
