@@ -139,6 +139,8 @@ export interface SandboxRateLimit {
 }
 
 export interface SandboxSummary {
+  /** Whole start/resume attempt; absent from older servers. */
+  readonly wakeBudgetMs?: number;
   /** The sandbox id: the path segment of every `/api/sandboxes/:id` verb. */
   readonly id: string;
   /** The host id the sandbox enrolled under; joins the host list row. */
@@ -447,6 +449,7 @@ export const sandboxSummarySchema: z.ZodType<SandboxSummary> = lazySchema(() =>
   z.object({
     id: z.string().min(1),
     hostId: z.string().min(1),
+    wakeBudgetMs: z.number().positive().optional(),
     kind: sandboxKindSchema,
     provider: z.string(),
     region: z.string(),
@@ -627,6 +630,8 @@ export interface SandboxShapeBounds {
   readonly diskMinMb: number;
   readonly diskMaxMb: number;
   readonly diskDefaultMb: number;
+  /** Allocation step; absent on older catalogues. */
+  readonly diskStepMb?: number;
 }
 
 export const sandboxShapeBoundsSchema: z.ZodType<SandboxShapeBounds> =
@@ -643,6 +648,7 @@ export const sandboxShapeBoundsSchema: z.ZodType<SandboxShapeBounds> =
       diskMinMb: z.number().int().positive(),
       diskMaxMb: z.number().int().positive(),
       diskDefaultMb: z.number().int().positive(),
+      diskStepMb: z.number().int().positive().optional(),
     }),
   );
 
@@ -670,14 +676,18 @@ export const sandboxShapeRungSchema: z.ZodType<SandboxShapeRung> = lazySchema(
 
 /**
  * A region's rates per unit, in millicredits an hour, as the server bills
- * them (memory and disk in GiB, `MB / 1024`): a shape's awake price is
- * `ceil((cpus × vcpu + memory GB × memory) × multiplier)`; `disk` is the
- * snapshot rate a suspended or stopped sandbox pays instead.
+ * them (memory and disk in GiB, `MB / 1024`). Awake bills CPU, memory and
+ * optional awake disk; suspended bills memory and disk; stopped bills disk.
+ * Each total is multiplied by the margin and rounded up.
  */
 export interface SandboxCataloguePricing {
   readonly vcpuHourMillicredits: number;
   readonly memoryGbHourMillicredits: number;
   readonly diskGbHourMillicredits: number;
+  /** Absent or null uses the snapshot disk rate. */
+  readonly suspendedMemoryGbHourMillicredits?: number | null;
+  /** Absent or null bills no disk while awake. */
+  readonly awakeDiskGbHourMillicredits?: number | null;
   readonly multiplier: number;
 }
 
@@ -687,9 +697,35 @@ export const sandboxCataloguePricingSchema: z.ZodType<SandboxCataloguePricing> =
       vcpuHourMillicredits: z.number().nonnegative(),
       memoryGbHourMillicredits: z.number().nonnegative(),
       diskGbHourMillicredits: z.number().nonnegative(),
+      suspendedMemoryGbHourMillicredits: z
+        .number()
+        .nonnegative()
+        .nullable()
+        .optional(),
+      awakeDiskGbHourMillicredits: z
+        .number()
+        .nonnegative()
+        .nullable()
+        .optional(),
       multiplier: z.number().positive(),
     }),
   );
+
+export interface SandboxShapePrice {
+  readonly cpus: number;
+  readonly memoryMb: number;
+  readonly diskMb: number;
+  readonly priceMcPerHour: SandboxHourlyPrice;
+}
+
+const sandboxShapePriceSchema: z.ZodType<SandboxShapePrice> = lazySchema(() =>
+  z.object({
+    cpus: z.number().positive(),
+    memoryMb: z.number().int().positive(),
+    diskMb: z.number().int().positive(),
+    priceMcPerHour: sandboxHourlyPriceSchema,
+  }),
+);
 
 export interface SandboxCatalogueRegion {
   readonly id: string;
@@ -701,7 +737,90 @@ export interface SandboxCatalogueRegion {
    * that predates them, which leaves only the "from" price.
    */
   readonly pricing: SandboxCataloguePricing | null;
+  /** Exact rung prices; absent from servers that publish only unit rates. */
+  readonly shapePrices?: readonly SandboxShapePrice[];
 }
+
+/** Null environment selects Personal, as it does on a create. */
+export interface SandboxCatalogueReadinessRequest {
+  readonly environmentId: string | null;
+  readonly os: SandboxOs;
+  readonly cpus: number;
+  readonly memoryMb: number;
+  readonly diskMb: number | null;
+  readonly region: string;
+}
+
+export const sandboxCatalogueReadinessRequestSchema: z.ZodType<SandboxCatalogueReadinessRequest> =
+  lazySchema(() =>
+    z.object({
+      environmentId: z.string().min(1).nullable(),
+      os: sandboxOsSchema,
+      cpus: z.number().positive(),
+      memoryMb: z.number().int().positive(),
+      diskMb: z.number().int().positive().nullable(),
+      region: z.string().min(1),
+    }),
+  );
+
+export interface SandboxCatalogueReadiness {
+  readonly request: {
+    readonly os: SandboxOs;
+    readonly shape: {
+      readonly cpus: number;
+      readonly memoryMb: number;
+      readonly diskMb: number;
+    };
+    readonly generationId: string | null;
+    readonly launchForm: {
+      readonly kind: "template";
+      readonly object: string;
+      readonly digest: string;
+    } | null;
+    readonly region: string;
+  };
+  readonly result: { readonly warm: number | null };
+}
+
+const sandboxCatalogueReadinessSchema: z.ZodType<SandboxCatalogueReadiness> =
+  lazySchema(() =>
+    z
+      .object({
+        request: z.object({
+          os: sandboxOsSchema,
+          shape: z.object({
+            cpus: z.number().positive(),
+            memoryMb: z.number().positive(),
+            diskMb: z.number().positive(),
+          }),
+          generationId: z.string().min(1).nullable(),
+          launchForm: z
+            .object({
+              kind: z.literal("template"),
+              object: z.string().min(1),
+              digest: z.string().regex(/^[a-f0-9]{64}$/),
+            })
+            .nullable(),
+          region: z.string().min(1),
+        }),
+        result: z.object({ warm: z.number().int().nonnegative().nullable() }),
+      })
+      .refine(
+        ({ request }) =>
+          request.generationId === null || request.launchForm === null,
+        {
+          message:
+            "A readiness request cannot name both a generation and a launch form",
+        },
+      )
+      .refine(
+        ({ request, result }) =>
+          result.warm === null ||
+          request.generationId !== null ||
+          request.launchForm !== null,
+        { message: "A warmth count requires a generation or launch form" },
+      ),
+  );
 
 export const sandboxCatalogueRegionSchema: z.ZodType<SandboxCatalogueRegion> =
   lazySchema(() =>
@@ -710,11 +829,17 @@ export const sandboxCatalogueRegionSchema: z.ZodType<SandboxCatalogueRegion> =
       label: z.string(),
       fromPriceMcPerHour: sandboxHourlyPriceSchema,
       pricing: sandboxCataloguePricingSchema.nullable().default(null),
+      shapePrices: z.array(sandboxShapePriceSchema).optional(),
     }),
   );
 
 export interface SandboxCatalogueProvider {
   readonly provider: string;
+  /** Whole attempts, derived from this provider's lifecycle budgets. */
+  readonly createBudgetMs?: number;
+  /** Recorded p95 create-to-registration in raw milliseconds; absent on older servers. */
+  readonly coldCreateMeasuredMs?: number | null;
+  readonly readiness?: SandboxCatalogueReadiness;
   readonly os: readonly SandboxOs[];
   /**
    * The bounds a create must fall inside. A server that lists
@@ -757,6 +882,9 @@ export const sandboxCatalogueProviderSchema: z.ZodType<SandboxCatalogueProvider>
   lazySchema(() =>
     z.object({
       provider: z.string().min(1),
+      createBudgetMs: z.number().positive().optional(),
+      coldCreateMeasuredMs: z.number().nonnegative().nullable().optional(),
+      readiness: sandboxCatalogueReadinessSchema.optional(),
       os: z.array(sandboxOsSchema),
       shape: sandboxShapeBoundsSchema,
       // Absent, unparseable, or without exactly one default reads as `null`,

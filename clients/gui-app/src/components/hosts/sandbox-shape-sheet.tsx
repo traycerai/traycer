@@ -28,6 +28,7 @@ import {
 } from "@/components/ui/select";
 import { useAuthUser } from "@/hooks/auth/use-auth-user-query";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
+import { useSandboxReadiness } from "@/hooks/sandboxes/use-sandbox-readiness-query";
 import {
   formatMemory,
   roundSandboxShape,
@@ -42,6 +43,7 @@ import {
   stageNeedsCredits,
   stagePrice,
   stageProviderFor,
+  stageQuotedSize,
   stageSizeIsRung,
   type ConsequencesInput,
   type SandboxConfigurationDefaults,
@@ -236,12 +238,13 @@ function formOf(
   name: string,
   provider: SandboxCatalogueProvider,
 ): ShapeForm {
+  const size = stageQuotedSize(provider, shape)?.shape;
   return {
     name,
     os: shape.os,
-    cpus: String(shape.cpus),
-    memoryGb: String(shape.memoryMb / MB_PER_GIB),
-    diskGb: String((shape.diskMb ?? provider.shape.diskDefaultMb) / MB_PER_GIB),
+    cpus: String(size?.cpus ?? shape.cpus),
+    memoryGb: String((size?.memoryMb ?? shape.memoryMb) / MB_PER_GIB),
+    diskGb: size === undefined ? "" : String(size.diskMb / MB_PER_GIB),
     region: shape.region,
     idleMinutes: String(shape.idleMinutes),
     ...restingFields(shape.destroyAfterRestingMinutes),
@@ -267,28 +270,28 @@ function rungKey(rung: SandboxShapeRung): string {
 function rungOfForm(
   form: ShapeForm,
   shapes: readonly SandboxShapeRung[],
-  provider: SandboxCatalogueProvider,
 ): SandboxShapeRung | null {
   const size = {
     cpus: Number(form.cpus),
     memoryMb: Math.round(Number(form.memoryGb) * MB_PER_GIB),
     diskMb: Math.round(Number(form.diskGb) * MB_PER_GIB),
   };
-  return shapes.find((rung) => stageSizeIsRung(provider, rung, size)) ?? null;
+  return shapes.find((rung) => stageSizeIsRung(rung, size)) ?? null;
 }
 
 type FormSize = Pick<StageShape, "cpus" | "memoryMb" | "diskMb">;
 
 /**
- * The form's size: the listed shape it names, or inside the bounds of a
- * provider that lists none, rounded as the server rounds it.
+ * The form's size: an exact rung, or a free-form request within bounds.
+ * CPU and memory are rounded here; disk remains a request whose allocated
+ * geometry is read through `stageQuotedSize` by pricing and readiness.
  */
 function sizeOfForm(
   form: ShapeForm,
   provider: SandboxCatalogueProvider,
 ): { readonly size: FormSize } | { readonly problem: string } {
   if (provider.shapes !== null) {
-    const rung = rungOfForm(form, provider.shapes, provider);
+    const rung = rungOfForm(form, provider.shapes);
     if (rung === null) return { problem: "Pick a size." };
     return {
       size: { cpus: rung.cpus, memoryMb: rung.memoryMb, diskMb: rung.diskMb },
@@ -337,7 +340,7 @@ function shapeOfForm(
   if (form.restingAmount.trim().length > 0) {
     const amount = Number(form.restingAmount);
     if (!Number.isInteger(amount) || amount <= 0) {
-      return { problem: "Resting period must be a whole number, or empty." };
+      return { problem: "Removal period must be a whole number, or empty." };
     }
     destroyAfterRestingMinutes = amount * UNIT_MINUTES[form.restingUnit];
   }
@@ -490,7 +493,7 @@ function ShapeSheetForm(props: {
             <ShapeSelect
               id={`${ids}-size`}
               label="Size"
-              value={sizeValue(form, provider.shapes, provider)}
+              value={sizeValue(form, provider.shapes)}
               options={provider.shapes.map((rung) => ({
                 value: rungKey(rung),
                 label: rungLabel(props.catalogue, form, rung),
@@ -506,9 +509,11 @@ function ShapeSheetForm(props: {
           </div>
         )}
       </div>
-      {wake === null ? null : (
-        <p className="m-0 text-ui-xs text-muted-foreground">{wake}</p>
-      )}
+      <ShapeStartupPreview
+        configuration={props.configuration}
+        shape={shape}
+        wake={wake}
+      />
       <div className="flex flex-wrap items-baseline gap-x-1.5 text-ui-xs text-muted-foreground">
         <span>
           {idleAndRestingLine(
@@ -543,7 +548,9 @@ function ShapeSheetForm(props: {
             onChange={(value) => setForm({ ...form, idleMinutes: value })}
           />
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor={`${ids}-resting`}>Destroyed after resting</Label>
+            <Label htmlFor={`${ids}-resting`}>
+              Remove after suspension or stop
+            </Label>
             <div className="flex gap-2">
               <Input
                 id={`${ids}-resting`}
@@ -569,7 +576,7 @@ function ShapeSheetForm(props: {
                   }
                 }}
               >
-                <SelectTrigger aria-label="Resting period unit">
+                <SelectTrigger aria-label="Removal period unit">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -615,6 +622,13 @@ function ShapeSheetForm(props: {
             </p>
           ),
         )}
+        {price === null ? null : (
+          <p className="m-0" data-testid="sandbox-shape-sheet-resting-price">
+            {price.exact ? "" : "From "}Suspended:{" "}
+            {shortPriceLabel(price.suspendedMcPerHour)}
+            {" · "}Stopped: {shortPriceLabel(price.stoppedMcPerHour)}
+          </p>
+        )}
       </div>
       <DialogFooter>
         <Button type="button" variant="ghost" onClick={props.onCancel}>
@@ -632,12 +646,35 @@ function ShapeSheetForm(props: {
   );
 }
 
+/** The selected shape's startup time and what a later wake keeps. */
+function ShapeStartupPreview(props: {
+  readonly configuration: StageConfiguration;
+  readonly shape: StageShape | null;
+  readonly wake: string | null;
+}): ReactNode {
+  const readinessLine = useSandboxReadiness(props.configuration, props.shape);
+  return (
+    <>
+      {readinessLine === null ? null : (
+        <p
+          className="m-0 text-ui-xs text-muted-foreground"
+          data-testid="sandbox-shape-sheet-readiness"
+        >
+          {readinessLine}
+        </p>
+      )}
+      {props.wake === null ? null : (
+        <p className="m-0 text-ui-xs text-muted-foreground">{props.wake}</p>
+      )}
+    </>
+  );
+}
+
 function sizeValue(
   form: ShapeForm,
   shapes: readonly SandboxShapeRung[],
-  provider: SandboxCatalogueProvider,
 ): string {
-  const rung = rungOfForm(form, shapes, provider);
+  const rung = rungOfForm(form, shapes);
   return rung === null ? "" : rungKey(rung);
 }
 

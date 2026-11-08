@@ -1,3 +1,4 @@
+import type { SandboxCatalogueReadinessRequest } from "@traycer/protocol/host/sandbox-control";
 import type { WindowCaptureRect } from "../ipc-contracts/window-capture-types";
 import type { SandboxArtifactBridge } from "@traycer-clients/shared/platform/sandbox-artifacts";
 import type { NotificationFeedOccurrence } from "@traycer-clients/shared/notifications/feed-delivery";
@@ -254,6 +255,7 @@ export interface DesktopPreloadBridge {
   getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult>;
   getSandboxCatalogue(
     bearerToken: string,
+    context: SandboxCatalogueReadinessRequest | null,
   ): Promise<SandboxCatalogueFetchResult>;
   getTraycerModels(bearerToken: string): Promise<TraycerModelsFetchResult>;
   getVoiceAvailability(
@@ -1291,8 +1293,9 @@ export class DesktopRunnerHost implements IRunnerHost {
 
   getSandboxCatalogue(
     bearerToken: string,
+    context: SandboxCatalogueReadinessRequest | null,
   ): Promise<SandboxCatalogueFetchResult> {
-    return this.bridge.getSandboxCatalogue(bearerToken);
+    return this.bridge.getSandboxCatalogue(bearerToken, context);
   }
 
   getVoiceAvailability(

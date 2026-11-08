@@ -147,7 +147,7 @@ describe("<ChatSandboxFooter /> a resting sandbox", () => {
     const paying = document.body.textContent;
     expect(paying).toContain("uses your Acme credits");
     expect(paying).toContain(
-      "Storage while it rests, on the same credits until another member wakes it.",
+      "Storage while suspended or stopped, on the same credits until another member wakes it.",
     );
     expect(paying).toContain("Other members can use it while you pay.");
     unmount();
@@ -161,7 +161,7 @@ describe("<ChatSandboxFooter /> a resting sandbox", () => {
     );
     const same = document.body.textContent;
     expect(same).toContain("uses your Acme credits");
-    expect(same).not.toContain("Storage while it rests");
+    expect(same).not.toContain("Storage while suspended or stopped");
     expect(same).not.toContain("Other members can use it");
   });
 

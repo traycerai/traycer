@@ -239,7 +239,7 @@ describe("useSandboxWakeForOpenedTile on a frozen sandbox", () => {
 
     expect(binding.auth.runSandboxVerb).not.toHaveBeenCalled();
     expect(mocks.toastWarning).toHaveBeenCalledTimes(1);
-    expect(mocks.toastWarning).toHaveBeenCalledWith("This sandbox is frozen", {
+    expect(mocks.toastWarning).toHaveBeenCalledWith("Out of credits", {
       description: "Its payer's bundle is out.",
     });
   });
@@ -248,7 +248,7 @@ describe("useSandboxWakeForOpenedTile on a frozen sandbox", () => {
     await openFrozen(undefined);
 
     expect(mocks.toastWarning).toHaveBeenCalledTimes(1);
-    expect(mocks.toastWarning).toHaveBeenCalledWith("This sandbox is frozen", {
+    expect(mocks.toastWarning).toHaveBeenCalledWith("Out of credits", {
       description: SANDBOX_FROZEN_MESSAGE,
     });
   });

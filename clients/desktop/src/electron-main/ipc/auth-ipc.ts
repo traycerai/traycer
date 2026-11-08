@@ -1,3 +1,4 @@
+import { sandboxCatalogueReadinessRequestSchema } from "@traycer/protocol/host/sandbox-control";
 import {
   RunnerHostEvent,
   RunnerHostInvoke,
@@ -196,12 +197,17 @@ function registerSandboxControlPlaneIpc(bridge: RunnerIpcBridge): void {
 
   bridge.handleInvoke(
     RunnerHostInvoke.getSandboxCatalogue,
-    async (_event, bearerToken: unknown) => {
+    async (_event, bearerToken: unknown, context: unknown) => {
       assertString(bearerToken, "getSandboxCatalogue.bearerToken");
+      const request =
+        context == null
+          ? null
+          : sandboxCatalogueReadinessRequestSchema.parse(context);
       return fetchSandboxCatalogueViaHttp(
         config.serverBaseUrl,
         bearerToken,
         await iapProxyToken(),
+        request,
       );
     },
   );

@@ -677,7 +677,7 @@ describe("sandboxIdlePolicyLine", () => {
         }),
       ),
     ).toBe(
-      `Suspends after ${SANDBOX_DEFAULT_IDLE_MINUTES} idle min · destroyed after 7 resting days`,
+      `Suspends after ${SANDBOX_DEFAULT_IDLE_MINUTES} idle min · removed after 7 days suspended or stopped`,
     );
   });
 });
