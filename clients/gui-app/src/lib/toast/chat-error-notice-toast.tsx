@@ -51,14 +51,14 @@ export function showErrorNoticeToast(notice: ChatErrorNotice): void {
   // shows the previous account's draft to the next person on the machine. The
   // id is registered so the identity boundary can take it down, and dropped
   // again when the toast goes on its own.
-  const retained = noticeCarriesOnlyCopy(notice);
   // A send or a queued message over the per-message file cap. The person's
   // message is over a limit, not something broken, so it is said plainly and
   // offers no report; the host's text says how many and what to do.
-  if (notice.code === TOO_MANY_FILE_ATTACHMENTS_CODE && !retained) {
+  if (notice.code === TOO_MANY_FILE_ATTACHMENTS_CODE) {
     toast.warning("Too many files attached", { description: text });
     return;
   }
+  const retained = noticeCarriesOnlyCopy(notice);
   const options: ExternalToast | undefined = retained
     ? {
         duration: Number.POSITIVE_INFINITY,
