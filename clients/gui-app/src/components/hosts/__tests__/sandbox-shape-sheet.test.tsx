@@ -24,6 +24,9 @@ import {
   idleAndRestingLine,
 } from "@/lib/sandboxes/sandbox-strings";
 
+const WINDOWS_SANDBOX_LIMITATION =
+  "Windows sandboxes have no desktop or Computer Use.";
+
 const CATALOGUE: SandboxCatalogue = {
   providers: [
     {
@@ -339,6 +342,37 @@ describe("<SandboxShapeSheet />", () => {
           .textContent,
       ).not.toContain("$");
     });
+
+    it("says Windows has no desktop or Computer Use as soon as Windows is picked, before anything is staged", () => {
+      withWindowsProvider();
+      const onUseShape = vi.fn();
+      renderSheet(onUseShape);
+      expect(screen.queryByText(WINDOWS_SANDBOX_LIMITATION)).toBeNull();
+
+      switchToWindows();
+
+      expect(screen.getByText(WINDOWS_SANDBOX_LIMITATION)).toBeDefined();
+      expect(onUseShape).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByRole("button", { name: USE_THIS_SHAPE }));
+
+      expect(onUseShape).toHaveBeenCalledTimes(1);
+      expect(onUseShape.mock.calls[0]?.[0]).toMatchObject({ os: "windows" });
+    });
+
+    it("drops the Windows limitation again when Linux is picked back", () => {
+      withWindowsProvider();
+      renderSheet(vi.fn());
+      switchToWindows();
+      expect(screen.getByText(WINDOWS_SANDBOX_LIMITATION)).toBeDefined();
+
+      fireEvent.click(
+        screen.getByRole("combobox", { name: "Operating system" }),
+      );
+      fireEvent.click(screen.getByRole("option", { name: "Linux" }));
+
+      expect(screen.queryByText(WINDOWS_SANDBOX_LIMITATION)).toBeNull();
+    });
   });
 
   describe("opening on Windows with a staged region", () => {
@@ -430,6 +464,12 @@ describe("<SandboxShapeSheet />", () => {
       );
       renderWindowsSheet(region);
     }
+
+    it("says Windows has no desktop or Computer Use when the sheet opens on Windows", () => {
+      openWithWindowsProvider("us");
+
+      expect(screen.getByText(WINDOWS_SANDBOX_LIMITATION)).toBeDefined();
+    });
 
     it("opens with a region selected and a price when the staged region is not offered", () => {
       openWithWindowsProvider("us-east");

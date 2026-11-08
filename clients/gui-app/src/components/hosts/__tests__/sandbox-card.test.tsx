@@ -43,6 +43,9 @@ import {
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { SANDBOX_VERB_FETCH_TIMEOUT_MS } from "@traycer-clients/shared/host-client/sandbox-control";
 
+const WINDOWS_SANDBOX_LIMITATION =
+  "Windows sandboxes have no desktop or Computer Use.";
+
 const mocks = vi.hoisted(() => ({
   binding: null as FakeSandboxBinding | null,
   toastSuccess: vi.fn(),
@@ -553,6 +556,15 @@ describe("<SandboxCard /> per state", () => {
     expect(screen.getByTestId("sandbox-card-state-line").textContent).toMatch(
       /Will be removed on /,
     );
+  });
+
+  it("says a Windows sandbox has no desktop or Computer Use, and a Linux one says nothing of it", () => {
+    renderCard(sandboxOf("awake", false, { os: "windows" }));
+    expect(screen.getByText(WINDOWS_SANDBOX_LIMITATION)).toBeDefined();
+    cleanup();
+
+    renderCard(sandboxOf("awake", false, { os: "linux" }));
+    expect(screen.queryByText(WINDOWS_SANDBOX_LIMITATION)).toBeNull();
   });
 
   it("names the region by the server's label, never its id", () => {

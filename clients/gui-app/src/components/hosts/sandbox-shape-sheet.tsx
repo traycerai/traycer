@@ -54,6 +54,7 @@ import {
   SANDBOX_REGION_LABEL,
   SHAPE_SHEET_DESCRIPTION,
   USE_THIS_SHAPE,
+  WINDOWS_SANDBOX_LIMITATION,
   idleAndRestingLine,
   newSandboxRowLabel,
   sandboxShapeLabel,
@@ -509,6 +510,11 @@ function ShapeSheetForm(props: {
             </div>
           )}
         </div>
+        {form.os === "windows" ? (
+          <p className="m-0 text-ui-xs text-muted-foreground">
+            {WINDOWS_SANDBOX_LIMITATION}
+          </p>
+        ) : null}
         {wake === null ? null : (
           <p className="m-0 text-ui-xs text-muted-foreground">{wake}</p>
         )}
