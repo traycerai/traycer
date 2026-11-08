@@ -57,6 +57,7 @@ import {
 import {
   defineDowngradePath,
   defineFloorAwareVersionedRpcRegistry,
+  defineRpcContract,
   defineUpgradePath,
   type DowngradeResult,
   type VersionedRpcRegistry,
@@ -1439,7 +1440,6 @@ import {
   mentionGithubCatalogV10,
   mentionGithubSearchV10,
 } from "@traycer/protocol/host/mention-contracts";
-import { defineRpcContract } from "@traycer/protocol/framework/index";
 import {
   worktreeCreateRequestSchema,
   worktreeCreateRequestSchemaV10,
