@@ -357,10 +357,7 @@ function WorktreesToolbar(props: {
           {selectionControls}
           <span
             aria-hidden={refresh.refreshing}
-            className={cn(
-              "hidden @sm/worktrees-toolbar:inline",
-              refresh.refreshing && "invisible",
-            )}
+            className={cn(refresh.refreshing && "invisible")}
           >
             <WorktreesUpdatedAgoLabel updatedAt={lastUpdatedAt} />
           </span>

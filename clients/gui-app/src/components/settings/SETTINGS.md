@@ -6345,8 +6345,8 @@ set-state-in-effect` forbids the effect form, and an effect would also
     search, and separate filter and sort controls inline. They wrap onto extra
     lines so a 390px window does not clip them. Search takes its own line until
     the toolbar is wide enough to share a row with filter and sort. The
-    updated-ago line stays beside Refresh and appears once the toolbar itself is
-    wide enough for the small container size. A list-less toolbar (offline,
+    updated-ago line stays beside Refresh at every width and wraps with the row
+    when the toolbar is narrow. A list-less toolbar (offline,
     empty, still loading) still shows the policy chips and refresh, without
     selection, search, filter, or sort. The selected host is reached
     through a **transient per-host client** (`useHostClientFor`) so picking a
