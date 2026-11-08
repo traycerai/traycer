@@ -1,8 +1,9 @@
 import {
   createServer,
   request as httpRequest,
-  type ClientRequest,
   type IncomingMessage,
+  type ClientRequest,
+  type OutgoingHttpHeaders,
   type RequestOptions,
   type Server,
   type ServerResponse,
@@ -53,39 +54,40 @@ interface FixtureState {
   visibilityProbe: { readonly gate: Promise<void> } | null;
 }
 
-class FixtureHttpExecutor extends ElectronHttpExecutor {
-  constructor(private readonly serverUrl: string) {
-    super(() => undefined);
-  }
-
-  override createRequest(
-    options: RequestOptions,
-    callback: (response: IncomingMessage) => void,
-  ): ClientRequest {
-    const headers: Record<string, string | number | readonly string[]> = {};
-    for (const [key, value] of Object.entries(options.headers ?? {})) {
-      if (
-        typeof value === "string" ||
-        typeof value === "number" ||
-        Array.isArray(value)
-      ) {
-        headers[key] = value;
+// Only transport is replaced: the updater, providers and downloader still run.
+function installFixtureExecutor(updater: NsisUpdater, serverUrl: string): void {
+  const executor = new ElectronHttpExecutor(() => undefined);
+  Object.defineProperty(executor, "createRequest", {
+    value: (
+      options: RequestOptions,
+      callback: (response: IncomingMessage) => void,
+    ): ClientRequest => {
+      const headers: OutgoingHttpHeaders = {};
+      for (const [key, value] of Object.entries(options.headers ?? {})) {
+        if (typeof value === "string" || typeof value === "number") {
+          headers[key] = value;
+        } else if (Array.isArray(value)) {
+          headers[key] = value.filter(
+            (entry: unknown) => typeof entry === "string",
+          );
+        }
       }
-    }
-    const host =
-      typeof options.hostname === "string" ? options.hostname : "unknown";
-    headers["x-fixture-origin"] = host;
-    headers["x-fixture-client"] = "electron-updater";
-    const path = typeof options.path === "string" ? options.path : "/";
-    return httpRequest(
-      new URL(path, this.serverUrl),
-      {
-        method: typeof options.method === "string" ? options.method : "GET",
-        headers,
-      },
-      callback,
-    );
-  }
+      const host =
+        typeof options.hostname === "string" ? options.hostname : "unknown";
+      headers["x-fixture-origin"] = host;
+      headers["x-fixture-client"] = "electron-updater";
+      const path = typeof options.path === "string" ? options.path : "/";
+      return httpRequest(
+        new URL(path, serverUrl),
+        {
+          method: typeof options.method === "string" ? options.method : "GET",
+          headers,
+        },
+        callback,
+      );
+    },
+  });
+  Object.defineProperty(updater, "httpExecutor", { value: executor });
 }
 
 const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
@@ -1200,7 +1202,7 @@ async function loadRealUpdater(
     value: "win32",
   });
   const autoUpdater = new NsisUpdater(null, appAdapter);
-  autoUpdater["httpExecutor"] = new FixtureHttpExecutor(serverUrl);
+  installFixtureExecutor(autoUpdater, serverUrl);
   vi.doMock("electron-updater", () => ({ autoUpdater }));
   vi.doMock("electron", () => ({
     app: { getVersion: () => appVersion },

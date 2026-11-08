@@ -762,7 +762,7 @@ export function desktopManifestIdentity(info: UpdateInfo): string {
         name: file.url,
         size: file.size ?? null,
         sha512: file.sha512 ?? null,
-        sha2: file.sha2 ?? null,
+        sha2: readManifestString(file, "sha2"),
       }))
       .sort((a, b) => a.name.localeCompare(b.name)),
   });
