@@ -1675,7 +1675,8 @@ export function startUpdateDownload(): DesktopAppUpdateSnapshot {
     try {
       try {
         await autoUpdater.downloadUpdate();
-      } catch (originalError) {
+      } catch (failure) {
+        const originalError = await settleStagingOriginError(failure);
         // Squirrel may already own the ZIP even if wrapper bookkeeping failed.
         if (
           pendingMacUpdate !== null ||
@@ -1690,8 +1691,7 @@ export function startUpdateDownload(): DesktopAppUpdateSnapshot {
           if (!retry.isUpdateAvailable) throw originalError;
           await autoUpdater.downloadUpdate();
         } catch (alternateError) {
-          if (isStagingAuthFailure(alternateError))
-            discardStagingUpdateTokenForLog();
+          await settleStagingOriginError(alternateError);
           throw originalError;
         }
       }
@@ -2119,8 +2119,35 @@ async function materializeDesktopReleaseOrigin(
   return { ...release, assets };
 }
 
+// CDN failures say nothing about a GitHub lease. A private-provider 404 can be
+// GitHub hiding a revoked credential, so settle that verdict before the held
+// updater error event is discarded or the next origin replaces this one.
+async function settleStagingOriginError(error: unknown): Promise<unknown> {
+  if (
+    DESKTOP_RELEASE_CHANNEL !== "staging" ||
+    selectedDesktopRelease?.origins?.[0]?.blockMapAssets !== null
+  )
+    return error;
+  if (
+    isStagingAuthFailure(error) ||
+    (isStagingMasked404Candidate(error) &&
+      (await stagingCredentialRejected(undefined)))
+  ) {
+    discardStagingUpdateTokenForLog();
+    return isStagingAuthFailure(error)
+      ? error
+      : new AuthenticationRequiredError(AUTHENTICATION_REQUIRED_MESSAGE);
+  }
+  return error;
+}
+
 async function checkCurrentDesktopOrigin(): Promise<UpdateCheckResult> {
-  const result = await autoUpdater.checkForUpdates();
+  let result: UpdateCheckResult | null;
+  try {
+    result = await autoUpdater.checkForUpdates();
+  } catch (error) {
+    throw await settleStagingOriginError(error);
+  }
   const release = selectedDesktopRelease;
   if (
     result === null ||
@@ -2364,6 +2391,9 @@ async function fetchDesktopReleaseManifest(
   },
   signal: AbortSignal | undefined,
 ): Promise<string | null> {
+  const authenticatedGitHub =
+    new URL(request.url).hostname === "api.github.com" &&
+    request.headers.authorization !== undefined;
   const fetchManifest =
     new URL(request.url).hostname === "api.github.com"
       ? fetchStagingGitHubRelease
@@ -2388,7 +2418,11 @@ async function fetchDesktopReleaseManifest(
     // A probe that cannot answer - offline, rate limited - returns false and
     // leaves this release merely unusable, which is the same fail-safe
     // direction discovery and `settleMasked404` take.
-    if (response.status === 404 && (await stagingCredentialRejected(signal))) {
+    if (
+      authenticatedGitHub &&
+      response.status === 404 &&
+      (await stagingCredentialRejected(signal))
+    ) {
       throw new AuthenticationRequiredError(AUTHENTICATION_REQUIRED_MESSAGE);
     }
     // A RATE LIMIT IS NOT A MISSING MANIFEST. `fetchWithGitHubReleaseAuth`
