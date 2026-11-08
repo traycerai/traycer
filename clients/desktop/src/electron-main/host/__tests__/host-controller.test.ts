@@ -8213,15 +8213,12 @@ describe("HostControllerStatus.lastEnsureFailure", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Windows bundled-host `--from` fallback (a fixup): on Windows the per-user
-// slot CLI is a COPY outside the app bundle (symlinks need elevated
-// privilege there), so the CLI's own sibling-archive resolution can't see
-// the bundled host archive and would fall back to the registry - which
-// publishes no win32 asset for dogfood/unsigned builds. `convergeReadyCliOwned`
-// must pass `--from <archive>` explicitly when running on win32 with a
-// bundled archive present beside the CLI binary.
+// Windows bundled-host `--bundled`: the per-user slot CLI is a copy outside
+// the app bundle, so the CLI's sibling-archive resolution cannot see the
+// archive. `convergeReadyCliOwned` passes `--bundled <archive>` when one is
+// beside the bundled CLI. `--from` would record the install as unsigned.
 // ---------------------------------------------------------------------------
-describe("Windows bundled-host --from fallback", () => {
+describe("Windows bundled-host --bundled", () => {
   const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(
     process,
     "platform",
@@ -8248,7 +8245,7 @@ describe("Windows bundled-host --from fallback", () => {
     Object.defineProperty(process, "arch", { configurable: true, value });
   }
 
-  it("passes --from the bundled host archive on win32 when it exists beside the CLI binary", async () => {
+  it("passes --bundled the host archive on win32 when it exists beside the CLI binary", async () => {
     setPlatform("win32");
     setArch("x64");
     const cliDir = join(workHome, "cli");
@@ -8274,16 +8271,98 @@ describe("Windows bundled-host --from fallback", () => {
       "keep-installed",
     );
 
-    // A background converge is liveness-only (the mid-session revert guard),
-    // so `--keep-installed` accompanies `--from` here - the archive is only
-    // the first-install source, never a reason to move a viable install.
+    // A background converge is liveness-only, so `--keep-installed`
+    // accompanies `--bundled`. The archive is only the first-install source.
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
       expect.objectContaining({
         args: [
           "host",
           "ensure",
           "--keep-installed",
-          "--from",
+          "--bundled",
+          archive,
+          "--lifecycle-origin",
+          "desktop",
+        ],
+      }),
+    );
+  });
+
+  it("passes --bundled the zip when that is the only archive beside the CLI", async () => {
+    setPlatform("win32");
+    setArch("x64");
+    const cliDir = join(workHome, "cli");
+    mkdirSync(cliDir, { recursive: true });
+    const bundledCli = join(cliDir, "traycer.exe");
+    writeFileSync(bundledCli, "");
+    const archive = join(cliDir, "host-runtime-win32-x64.zip");
+    writeFileSync(archive, "");
+    vi.mocked(resolveBundledCliPath).mockResolvedValue(bundledCli);
+
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: { running: true, version: "1.7.0", action: "noop" },
+    });
+
+    await controller.convergeReady(
+      false,
+      { kind: "background" },
+      "keep-installed",
+    );
+
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: [
+          "host",
+          "ensure",
+          "--keep-installed",
+          "--bundled",
+          archive,
+          "--lifecycle-origin",
+          "desktop",
+        ],
+      }),
+    );
+  });
+
+  it("prefers the tar.gz archive over a zip beside the same CLI", async () => {
+    setPlatform("win32");
+    setArch("x64");
+    const cliDir = join(workHome, "cli");
+    mkdirSync(cliDir, { recursive: true });
+    const bundledCli = join(cliDir, "traycer.exe");
+    writeFileSync(bundledCli, "");
+    const archive = join(cliDir, "host-runtime-win32-x64.tar.gz");
+    writeFileSync(archive, "");
+    writeFileSync(join(cliDir, "host-runtime-win32-x64.zip"), "");
+    vi.mocked(resolveBundledCliPath).mockResolvedValue(bundledCli);
+
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: { running: true, version: "1.7.0", action: "noop" },
+    });
+
+    await controller.convergeReady(
+      false,
+      { kind: "background" },
+      "keep-installed",
+    );
+
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: [
+          "host",
+          "ensure",
+          "--keep-installed",
+          "--bundled",
           archive,
           "--lifecycle-origin",
           "desktop",
@@ -8324,7 +8403,7 @@ describe("Windows bundled-host --from fallback", () => {
           "host",
           "ensure",
           "--keep-installed",
-          "--from",
+          "--bundled",
           archive,
           "--lifecycle-origin",
           "desktop",
@@ -8333,7 +8412,7 @@ describe("Windows bundled-host --from fallback", () => {
     );
   });
 
-  it("omits --from on win32 when no bundled archive is present (dev/CLI-only install)", async () => {
+  it("omits --bundled on win32 when no bundled archive is present (dev/CLI-only install)", async () => {
     setPlatform("win32");
     setArch("x64");
     vi.mocked(resolveBundledCliPath).mockResolvedValue(null);
@@ -8365,7 +8444,7 @@ describe("Windows bundled-host --from fallback", () => {
       }),
     );
   });
-  it("omits --from on macOS/Linux even when a bundled CLI path resolves (POSIX symlink self-resolution)", async () => {
+  it("omits --bundled on macOS/Linux even when a bundled CLI path resolves (POSIX symlink self-resolution)", async () => {
     setPlatform("darwin");
     const cliDir = join(workHome, "cli");
     mkdirSync(cliDir, { recursive: true });

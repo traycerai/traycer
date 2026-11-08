@@ -957,35 +957,38 @@ function parseAvailableSnapshot(raw: unknown): AvailableSnapshotShape {
 }
 
 // Resolve the host-runtime archive bundled beside the desktop's CLI binary
-// (`resources/cli/<platform>-<arch>/host-runtime-<platform>-<arch>.tar.gz`,
-// staged by scripts/desktop-install-cloud.js). Windows-only (fixup A2): on
-// POSIX the per-user slot CLI is a symlink into the app bundle, so
-// `process.execPath` resolves beside the bundled host archive and the CLI's
-// own `resolveBundledHostArchive` finds it unaided - passing nothing is
-// correct there. On Windows symlinks need elevated privilege, so the slot
-// CLI is a COPY living outside the bundle; the CLI can no longer see the
-// sibling archive and would fall back to the registry, which publishes no
-// win32 asset for dogfood/unsigned builds. `--from` points it at the
-// archive explicitly. Returns null when there is no packaged archive (dev
-// builds, CLI-only installs) - `host ensure` then falls through to its
-// normal registry resolution.
+// (`resources/cli/win32-<arch>/host-runtime-win32-<arch>.tar.gz`, or `.zip`
+// when that is the signed asset). Windows-only: on POSIX the per-user slot
+// CLI is a symlink into the app bundle, so `process.execPath` resolves
+// beside the archive and the CLI's own `resolveBundledHostArchive` finds it.
+// On Windows the slot CLI is a copy outside the bundle, so this passes
+// `--bundled <archive>`. A pinned CLI then verifies the sibling descriptor
+// and records registry provenance. An unpinned CLI treats the same path as
+// a local file. `--from` would record every install as unsigned.
+// Returns null when there is no packaged archive (dev builds, CLI-only
+// installs). `host ensure` then uses its normal resolution.
 async function resolveWindowsBundledHostArchive(): Promise<string | null> {
   if (process.platform !== "win32") return null;
   const bundledCli = await resolveBundledCliPath();
   if (bundledCli === null) return null;
   // No native Windows arm64 host - arm64 runs the x64 runtime (mirrors
-  // resolveBundledHostArchive in the CLI).
+  // resolveBundledHostArchive in the CLI). tar.gz first, then zip, same
+  // order as the CLI's candidate names.
   const arch = process.arch === "arm64" ? "x64" : process.arch;
-  const archive = join(
-    dirname(bundledCli),
+  const dir = dirname(bundledCli);
+  for (const name of [
     `host-runtime-win32-${arch}.tar.gz`,
-  );
-  try {
-    await access(archive, constants.R_OK);
-    return archive;
-  } catch {
-    return null;
+    `host-runtime-win32-${arch}.zip`,
+  ]) {
+    const archive = join(dir, name);
+    try {
+      await access(archive, constants.R_OK);
+      return archive;
+    } catch {
+      // Try the next candidate.
+    }
   }
+  return null;
 }
 
 function latestVersionFromSnapshot(
@@ -4115,16 +4118,16 @@ export class HostController {
     keepInstalled: boolean,
   ): Promise<MutationOutcome<ConvergeReadyOk>> {
     const prePid = (await readRunningHostIdentity(this.layout))?.pid ?? null;
-    const bundledHostFrom = await resolveWindowsBundledHostArchive();
-    // `--keep-installed` and `--from` coexist deliberately: on this (Windows)
-    // route `--from` is only the FIRST-INSTALL source, so a viable install is
-    // kept and the bundled archive is used only when nothing is installed.
+    const bundledHostArchive = await resolveWindowsBundledHostArchive();
+    // `--keep-installed` and `--bundled` coexist: `--bundled` is only the
+    // first-install source, so a viable install is kept and the archive is
+    // used only when nothing is installed.
     const args = [
       "host",
       "ensure",
       ...(force ? ["--force"] : []),
       ...(keepInstalled ? ["--keep-installed"] : []),
-      ...(bundledHostFrom !== null ? ["--from", bundledHostFrom] : []),
+      ...(bundledHostArchive !== null ? ["--bundled", bundledHostArchive] : []),
     ];
     let raw: unknown;
     try {
