@@ -25,7 +25,10 @@ import {
   type ComposerEditorIncarnation,
 } from "@/lib/composer/composer-editor-incarnation";
 import type { MentionAttachment } from "@/lib/composer/types";
-import type { ComposerFileAttachmentAttrs } from "@/lib/composer/file-attachments";
+import type {
+  ComposerFileAttachmentAttrs,
+  FileNodeSettlement,
+} from "@/lib/composer/file-attachments";
 import { isMobileApp } from "@/lib/mobile-app";
 import { cn } from "@/lib/utils";
 import {
@@ -185,6 +188,15 @@ export interface ComposerPromptEditorHandle {
    */
   readonly insertFileAttachment: (
     attrs: ComposerFileAttachmentAttrs,
+  ) => boolean;
+  /**
+   * Apply an upload's outcome to the file node `id` in the live document.
+   * `false` when the editor is not ready or holds no such node; the caller then
+   * settles the persisted draft instead.
+   */
+  readonly settleFileAttachment: (
+    id: string,
+    settlement: FileNodeSettlement,
   ) => boolean;
   /**
    * Flip a pending base64 image node (located by `id`) to its stored content
@@ -776,6 +788,14 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     [editor],
   );
 
+  const settleFileAttachment = useCallback(
+    (id: string, settlement: FileNodeSettlement): boolean => {
+      if (editor === null || editor.isDestroyed) return false;
+      return editor.commands.settleFileAttachmentById(id, settlement);
+    },
+    [editor],
+  );
+
   const rewriteImageAttachmentHashById = useCallback(
     (id: string, rewrite: ImageAttachmentRewrite): boolean => {
       if (editor === null || editor.isDestroyed) return false;
@@ -857,6 +877,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
       beginPathInsertion,
       removeImageAttachmentById,
       insertFileAttachment,
+      settleFileAttachment,
       rewriteImageAttachmentHashById,
       insertDictatedText,
       dismissActiveSuggestion,
@@ -880,6 +901,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
       removeImageAttachmentById,
       rewriteImageAttachmentHashById,
       setContent,
+      settleFileAttachment,
       syncContent,
     ],
   );

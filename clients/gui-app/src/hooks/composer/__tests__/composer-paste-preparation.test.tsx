@@ -81,6 +81,9 @@ function renderPasteHook(inserted: ImageAttachmentAttrs[][]) {
   const handle: PasteAndIngestHandle = {
     isReady: () => true,
     insertFileAttachment: () => false,
+    settleFileAttachment: () => false,
+    getEditorIncarnation: () => null,
+    draftGeneration: () => 0,
     insertImageAttachments: (attrs) => {
       inserted.push([...attrs]);
     },

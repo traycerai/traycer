@@ -4529,6 +4529,7 @@ function editorHandleForPrompt(prompt: string): ComposerPromptEditorHandle {
     setContent: () => undefined,
     syncContent: () => undefined,
     insertFileAttachment: () => false,
+    settleFileAttachment: () => false,
     insertImageAttachments: () => undefined,
     insertMentionAttachment: () => false,
     beginPathInsertion: () => null,

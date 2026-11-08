@@ -36,12 +36,20 @@ import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import {
   composerAttachmentsHoldSend,
   useComposerFileRoute,
+  useComposerFileSend,
   useComposerHashPaste,
 } from "@/hooks/composer/use-composer-paste";
 import {
   containsFileAttachments,
   containsPendingFileAttachment,
+  settleFileNodeInContent,
 } from "@/lib/composer/file-attachments";
+import type { FileNodeSettle } from "@/lib/composer/file-attachment-upload";
+import {
+  readComposerDraftSnapshot,
+  useComposerDraftStore,
+} from "@/stores/composer/composer-draft-store";
+import { useDraftsPutFileBlob } from "@/hooks/drafts/use-drafts-put-file-blob-mutation";
 import { useComposerPendingImageIngest } from "@/hooks/composer/use-composer-pending-image-ingest";
 import { useComposerDictation } from "@/hooks/composer/use-composer-dictation";
 import { useWorkspaceMentionRoots } from "@/hooks/composer/use-workspace-mention-roots";
@@ -528,13 +536,34 @@ function ChatComposerImpl(props: ChatComposerProps) {
   const runnerHost = useRunnerHost();
   const hostClient = useTabHostClient();
   const tabHostId = useTabHostId();
-  const fileRoute = useComposerFileRoute(tabHostId, hostClient);
   // The client for reads about the host this chat's turns RUN on: the tab's
   // own, except for a resting sandbox's chat, whose tab host only serves its
   // published copy and whose sandbox answers nothing until it wakes. Its
   // providers, packs, profiles and limits say nothing about that send.
   const resting = restingSandbox !== null;
   const runHostClient = resting ? null : hostClient;
+  const putFileBlob = useDraftsPutFileBlob();
+  const settleDraftFile = useCallback<FileNodeSettle>(
+    (id, settlement) => {
+      const draft = readComposerDraftSnapshot(taskId);
+      const next = settleFileNodeInContent(draft.content, id, settlement);
+      if (next === null) return;
+      useComposerDraftStore
+        .getState()
+        .setSnapshot(taskId, next, draft.selection);
+    },
+    [taskId],
+  );
+  // Files go to the tab's host: the chat lives there, and its send installs
+  // them from that host's draft blob store. A resting sandbox's chat keeps them
+  // here instead, and its send uploads them to the sandbox once it is awake.
+  const fileRoute = useComposerFileRoute({
+    hostId: tabHostId,
+    client: hostClient,
+    uploadAtAttach: !resting,
+    putFileBlob,
+    settleDraft: settleDraftFile,
+  });
   const guideRef = useRef<HTMLDivElement | null>(null);
   const submitWithGuide = useFirstTaskSubmit(
     onSubmitMessage,
@@ -559,6 +588,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
   const workspaceBlocked = !workspaceComposerCanStart(workspaceAvailability);
 
   const editorRef = useRef<ComposerPromptEditorHandle | null>(null);
+  const fileSend = useComposerFileSend(editorRef, fileRoute);
   const epicImagePresence = useEpicAttachmentBytesPresence();
   const hasPastedImageBytes = useCallback(
     (hash: string) => {
@@ -868,8 +898,6 @@ function ChatComposerImpl(props: ChatComposerProps) {
     editorRef,
     runnerHost.fileDrops,
     resolvedMentionRoots,
-    // Files go to the tab's host: the chat lives there, and its send installs
-    // them from that host's draft blob store.
     fileRoute,
   );
   // The rich-clipboard channel and the mount-time restart. A file paste is
@@ -948,6 +976,9 @@ function ChatComposerImpl(props: ChatComposerProps) {
       // tile's `onSubmitMessage` chooses its destination from - so it is part
       // of the submit intent a preparation has to re-check before delivering.
       queueEditTargetId: editingQueueItemId,
+      // A resting sandbox's send is handed off; the hand-off puts the files on
+      // the sandbox once it wakes (`pending-sandbox-sends.tsx`).
+      fileSend: resting ? null : fileSend,
     });
   const attachmentPending = composerAttachmentPending(
     pastePending,

@@ -5,6 +5,7 @@ import {
   FILE_ATTACHMENT_NODE_TYPE,
   fileAttachmentSizeValue,
   type ComposerFileAttachmentAttrs,
+  type FileNodeSettlement,
 } from "@/lib/composer/file-attachments";
 
 import { FileAttachmentNodeView } from "../nodes/file-attachment-node-view";
@@ -14,16 +15,21 @@ declare module "@tiptap/core" {
   interface Commands<ReturnType> {
     fileAttachment: {
       insertFileAttachment: (attrs: ComposerFileAttachmentAttrs) => ReturnType;
+      settleFileAttachmentById: (
+        id: string,
+        settlement: FileNodeSettlement,
+      ) => ReturnType;
     };
   }
 }
 
 /**
  * A non-image file the author attached, by hash (`common/file-attachment.ts`).
- * The node's whole lifecycle after insertion - pending until the host holds the
- * bytes, then stored, or removed on a failed upload - is applied by its node
- * view from the upload registry (`lib/composer/file-attachment-upload.ts`), so
- * the only command is the insert.
+ * After insertion the node is pending until the host holds the bytes, then
+ * stored (recording the host), marked for reattach, or removed on a failed
+ * upload. Those outcomes arrive through `settleFileAttachmentById` while the
+ * composer is mounted, and through the node view from the upload registry
+ * (`lib/composer/file-attachment-upload.ts`) when it mounts again.
  */
 export const FileAttachmentNode = TiptapNode.create({
   name: FILE_ATTACHMENT_NODE_TYPE,
@@ -41,6 +47,7 @@ export const FileAttachmentNode = TiptapNode.create({
         "fileName",
         "mediaType",
         "uploadState",
+        "uploadHostId",
       ]),
       // Parsed back to a number: the wire schema requires one, and an HTML
       // clipboard round trip hands every data attribute back as a string.
@@ -81,6 +88,43 @@ export const FileAttachmentNode = TiptapNode.create({
           const content = { type: FILE_ATTACHMENT_NODE_TYPE, attrs };
           if (state.selection.empty) return commands.insertContent(content);
           return commands.insertContentAt(state.selection.to, content);
+        },
+      settleFileAttachmentById:
+        (id, settlement) =>
+        ({ tr, state, dispatch }) => {
+          const matches: Array<{
+            readonly pos: number;
+            readonly size: number;
+            readonly attrs: Record<string, unknown>;
+          }> = [];
+          state.doc.descendants((node, pos) => {
+            if (node.type.name !== FILE_ATTACHMENT_NODE_TYPE) return true;
+            if (node.attrs.id === id) {
+              matches.push({ pos, size: node.nodeSize, attrs: node.attrs });
+            }
+            return false;
+          });
+          if (matches.length === 0) return false;
+          // Last to first, so an earlier position is not shifted by a later
+          // deletion.
+          for (const match of matches.toReversed()) {
+            if (settlement.kind === "remove") {
+              tr.delete(match.pos, match.pos + match.size);
+            } else if (settlement.kind === "stored") {
+              tr.setNodeMarkup(match.pos, undefined, {
+                ...match.attrs,
+                uploadState: null,
+                uploadHostId: settlement.hostId,
+              });
+            } else {
+              tr.setNodeMarkup(match.pos, undefined, {
+                ...match.attrs,
+                uploadState: "reattach",
+              });
+            }
+          }
+          if (dispatch) dispatch(tr);
+          return true;
         },
     };
   },

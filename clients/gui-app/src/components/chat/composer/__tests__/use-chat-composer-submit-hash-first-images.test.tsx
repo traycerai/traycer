@@ -135,6 +135,7 @@ function fakeEditor(content: JsonContent): ComposerPromptEditorHandle {
     setContent: () => undefined,
     syncContent: () => undefined,
     insertFileAttachment: () => false,
+    settleFileAttachment: () => false,
     insertImageAttachments: () => undefined,
     insertMentionAttachment: () => false,
     beginPathInsertion: () => null,
@@ -202,6 +203,7 @@ function mountSubmit(args: {
       onSideChat: null,
       targetHostId: null,
       queueEditTargetId: null,
+      fileSend: null,
       getDraftBlobBridgeSupported: () => false,
     }),
   );

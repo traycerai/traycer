@@ -53,11 +53,14 @@ import {
   getBasename,
   relativizeToWorkspaceRoot,
 } from "@/lib/path/cross-platform-path";
+import { MAX_FILE_ATTACHMENTS_PER_MESSAGE } from "@traycer/protocol/common/file-attachment";
 import {
-  countFileAttachments,
-  MAX_FILE_ATTACHMENTS_PER_MESSAGE,
+  fileAttachmentIdentities,
+  fileAttachmentIdentity,
   type ComposerFileAttachmentAttrs,
+  type FileNodeSettlement,
 } from "@/lib/composer/file-attachments";
+import type { ComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import {
   attachFileAttachment,
   refuseFileAttachment,
@@ -67,7 +70,15 @@ import {
   showTooManyFilesToast,
   type FileAttachmentUploadClient,
   type FileAttachmentUploadTarget,
+  type FileInsertion,
+  type FileNodeSettle,
+  type PutFileBlob,
+  type PutFileBlobVariables,
 } from "@/lib/composer/file-attachment-upload";
+import type { UseMutationResult } from "@tanstack/react-query";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { DraftsPutBlobResponseV12 } from "@traycer/protocol/host/drafts/schemas";
+import { usePutFileBlob } from "@/hooks/drafts/use-drafts-put-file-blob-mutation";
 
 export const IMAGE_MIME_PREFIX = "image/";
 /**
@@ -513,12 +524,30 @@ export interface ComposerFilePathIngestArgs {
  * bot box, an inline message edit, an artifact); its non-image pastes keep
  * resolving to paths only.
  */
-export interface ComposerFileAttachArgs {
+/**
+ * What a send needs to put a draft's files on its destination
+ * (`ensureFileAttachmentsOnHost`): the composer's host, the upload, and how a
+ * node is settled wherever it now lives.
+ */
+export interface ComposerFileSend {
   /** The composer's send host; `null` while it has none to upload to. */
   readonly target: FileAttachmentUploadTarget | null;
-  readonly insert: (attrs: ComposerFileAttachmentAttrs) => boolean;
-  /** Files already in the draft, by `countFileAttachments`. */
-  readonly attachedFileCount: () => number;
+  readonly put: PutFileBlob;
+  readonly settle: FileNodeSettle;
+}
+
+export interface ComposerFileAttachArgs extends ComposerFileSend {
+  /**
+   * `false` for a composer whose sends are handed off to a host that is not
+   * awake yet (a resting sandbox's chat): a pick keeps its bytes here and the
+   * hand-off uploads them to that host once it wakes, before it sends.
+   */
+  readonly uploadAtAttach: boolean;
+  /**
+   * Fences a pick to the draft the editor holds now, returning the insertion
+   * to commit once a file is hashed, or `null` when the editor is not ready.
+   */
+  readonly beginInsertion: () => FileInsertion | null;
 }
 
 /**
@@ -754,10 +783,6 @@ export function useComposerPasteEvents<Attrs>(args: {
   const [pendingImageCount, setPendingImageCount] = useState(0);
   const [pendingPathCount, setPendingPathCount] = useState(0);
   const [pendingFileCount, setPendingFileCount] = useState(0);
-  // Files admitted by a pick but not yet in the document: they are being read
-  // and hashed. Counted against the per-message cap with the document's own,
-  // so two quick picks cannot both fit in the last slot.
-  const unplacedFileCountRef = useRef(0);
   const activeRef = useRef(true);
   const controllersRef = useRef(new Set<AbortController>());
 
@@ -805,40 +830,39 @@ export function useComposerPasteEvents<Attrs>(args: {
     (files: ReadonlyArray<File>) => {
       if (files.length === 0 || fileAttach === null) return;
       const admitted: File[] = [];
-      const overCap: File[] = [];
       let hostRefusal: "no-host" | "host-outdated" | null = null;
-      let slots =
-        MAX_FILE_ATTACHMENTS_PER_MESSAGE -
-        fileAttach.attachedFileCount() -
-        unplacedFileCountRef.current;
       for (const file of files) {
         const refusal = refuseFileAttachment(file, fileAttach.target);
         if (refusal === "too-large") showFileTooLargeToast(file);
         else if (refusal !== null) hostRefusal = refusal;
-        else if (slots <= 0) overCap.push(file);
-        else {
-          admitted.push(file);
-          slots -= 1;
-        }
+        else admitted.push(file);
       }
       // Once per pick: every file in it was refused for the same reason.
       if (hostRefusal === "no-host") showNoHostForFilesToast();
       if (hostRefusal === "host-outdated") showHostOutdatedForFilesToast();
-      showTooManyFilesToast(overCap);
       const target = fileAttach.target;
       if (admitted.length === 0 || target === null) return;
-      unplacedFileCountRef.current += admitted.length;
+      // Fenced NOW, before any byte is read: the pick belongs to the draft the
+      // editor holds at this moment, and a file hashed after a send or a
+      // switch must not land in whatever draft holds the editor then.
+      const insert = fileAttach.beginInsertion();
+      if (insert === null) return;
       setPendingFileCount((count) => count + 1);
       void (async () => {
+        const overCap: string[] = [];
         // In pick order, so the chips land in the order the files were
         // chosen, and so only one file's bytes are read for hashing at once.
         for (const file of admitted) {
           try {
-            await attachFileAttachment({
+            const placed = await attachFileAttachment({
               file,
               target,
-              insert: fileAttach.insert,
+              uploadAtAttach: fileAttach.uploadAtAttach,
+              put: fileAttach.put,
+              insert,
+              settle: fileAttach.settle,
             });
+            if (placed === "over-cap") overCap.push(file.name);
           } catch {
             reportableErrorToast(
               "Couldn't attach the file.",
@@ -850,12 +874,9 @@ export function useComposerPasteEvents<Attrs>(args: {
                 source: "Chat composer",
               },
             );
-          } finally {
-            // Placed in the document now, or never will be: either way the
-            // document's own count is the one that speaks for it from here.
-            unplacedFileCountRef.current -= 1;
           }
         }
+        showTooManyFilesToast(overCap);
       })().finally(() => {
         if (!activeRef.current) return;
         setPendingFileCount((count) => Math.max(0, count - 1));
@@ -1365,10 +1386,17 @@ export interface ComposerPasteEditorHandle {
   readonly insertFileAttachment: (
     attrs: ComposerFileAttachmentAttrs,
   ) => boolean;
+  readonly settleFileAttachment: (
+    id: string,
+    settlement: FileNodeSettlement,
+  ) => boolean;
   readonly beginPathInsertion: () => PathInsertionCommit | null;
   readonly focus: () => void;
-  /** Read once per file pick, for the per-message file count. */
+  /** Read once per hashed file, for the per-message file count. */
   readonly getJSON: () => JsonContent;
+  /** With `draftGeneration`, what a file pick is fenced to. */
+  readonly getEditorIncarnation: () => ComposerEditorIncarnation | null;
+  readonly draftGeneration: () => number;
 }
 
 export function useComposerPaste(
@@ -1407,18 +1435,71 @@ export function useComposerPaste(
  */
 export interface ComposerFileRoute {
   readonly target: FileAttachmentUploadTarget | null;
+  readonly uploadAtAttach: boolean;
+  readonly put: PutFileBlob;
+  /**
+   * Settles a file node in this surface's PERSISTED draft. Reached when the
+   * live editor no longer holds the node - the composer unmounted while the
+   * upload ran - so the stored draft says what the upload did before a
+   * restart can lose the registry that knows it.
+   */
+  readonly settleDraft: FileNodeSettle;
 }
 
 /** A surface's file route to `hostId`, stable while the host and client are. */
-export function useComposerFileRoute(
-  hostId: string | null,
-  client: FileAttachmentUploadClient | null,
-): ComposerFileRoute {
+export function useComposerFileRoute(input: {
+  readonly hostId: string | null;
+  readonly client: FileAttachmentUploadClient | null;
+  readonly uploadAtAttach: boolean;
+  readonly putFileBlob: UseMutationResult<
+    DraftsPutBlobResponseV12,
+    HostRpcError,
+    PutFileBlobVariables
+  >;
+  readonly settleDraft: FileNodeSettle;
+}): ComposerFileRoute {
+  const { hostId, client, uploadAtAttach, settleDraft } = input;
+  const put = usePutFileBlob(input.putFileBlob);
   return useMemo(
     () => ({
       target: hostId === null || client === null ? null : { hostId, client },
+      uploadAtAttach,
+      put,
+      settleDraft,
     }),
-    [client, hostId],
+    [client, hostId, put, settleDraft, uploadAtAttach],
+  );
+}
+
+/** The send half of a surface's file route, settling through `editorRef`. */
+export function useComposerFileSend(
+  editorRef: {
+    readonly current: Pick<
+      ComposerPasteEditorHandle,
+      "settleFileAttachment"
+    > | null;
+  },
+  fileRoute: ComposerFileRoute | null,
+): ComposerFileSend | null {
+  const settleDraft = fileRoute?.settleDraft ?? null;
+  const settle = useCallback<FileNodeSettle>(
+    (id, settlement) => {
+      // The live editor first: while the composer is mounted its document IS
+      // the draft, and writing the store underneath it would be overwritten by
+      // the next keystroke. Only a node the editor does not hold - the
+      // composer unmounted while the upload ran - is settled in the store.
+      if (editorRef.current?.settleFileAttachment(id, settlement) === true) {
+        return;
+      }
+      settleDraft?.(id, settlement);
+    },
+    [editorRef, settleDraft],
+  );
+  const target = fileRoute?.target ?? null;
+  const put = fileRoute?.put ?? null;
+  return useMemo(
+    () => (put === null ? null : { target, put, settle }),
+    [put, settle, target],
   );
 }
 
@@ -1432,24 +1513,38 @@ export function useComposerFileAttachArgs(
   },
   fileRoute: ComposerFileRoute | null,
 ): ComposerFileAttachArgs | null {
-  const insert = useCallback(
-    (attrs: ComposerFileAttachmentAttrs): boolean => {
-      const handle = editorRef.current;
-      if (handle === null || !handle.isReady()) return false;
-      return handle.insertFileAttachment(attrs);
-    },
-    [editorRef],
-  );
-  const attachedFileCount = useCallback((): number => {
+  const beginInsertion = useCallback((): FileInsertion | null => {
     const handle = editorRef.current;
-    if (handle === null || !handle.isReady()) return 0;
-    return countFileAttachments(handle.getJSON());
+    if (handle === null || !handle.isReady()) return null;
+    const incarnation = handle.getEditorIncarnation();
+    const generation = handle.draftGeneration();
+    return (attrs) => {
+      const live = editorRef.current;
+      if (
+        live === null ||
+        !live.isReady() ||
+        live.getEditorIncarnation() !== incarnation ||
+        live.draftGeneration() !== generation
+      ) {
+        return "dropped";
+      }
+      // Counted on the hashed identity: a file the draft already carries adds
+      // no line to the agent's list, so only a NEW one can be over the cap.
+      const identities = fileAttachmentIdentities(live.getJSON());
+      if (
+        !identities.has(fileAttachmentIdentity(attrs)) &&
+        identities.size >= MAX_FILE_ATTACHMENTS_PER_MESSAGE
+      ) {
+        return "over-cap";
+      }
+      return live.insertFileAttachment(attrs) ? "inserted" : "dropped";
+    };
   }, [editorRef]);
-  const target = fileRoute?.target ?? null;
-  const hasRoute = fileRoute !== null;
+  const send = useComposerFileSend(editorRef, fileRoute);
+  const uploadAtAttach = fileRoute?.uploadAtAttach ?? true;
   return useMemo(
-    () => (hasRoute ? { target, insert, attachedFileCount } : null),
-    [attachedFileCount, hasRoute, insert, target],
+    () => (send === null ? null : { ...send, uploadAtAttach, beginInsertion }),
+    [beginInsertion, send, uploadAtAttach],
   );
 }
 

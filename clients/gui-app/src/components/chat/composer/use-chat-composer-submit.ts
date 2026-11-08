@@ -26,6 +26,8 @@ import {
   inlineHashOnlyImageBytes,
 } from "@/lib/composer/image-atoms";
 import { containsFileAttachments } from "@/lib/composer/file-attachments";
+import { ensureFileAttachmentsOnHost } from "@/lib/composer/file-attachment-upload";
+import type { ComposerFileSend } from "@/hooks/composer/use-composer-paste";
 import { NO_HOST_HELD_HASHES } from "@/lib/composer/host-held-image-hashes";
 import { submitHostHeldImageHashes } from "@/lib/composer/submit-host-held-image-hashes";
 import { captureComposerSubmitGeneration } from "@/lib/composer/composer-submit-generation";
@@ -160,6 +162,13 @@ interface UseChatComposerSubmitArgs {
    */
   readonly queueEditTargetId: string | null;
   /**
+   * How this composer's files reach its send host, or `null` when its sends are
+   * handed off and the hand-off puts them on the destination itself (a resting
+   * sandbox's chat). A message carrying files sends only once every one of
+   * them is confirmed on `targetHostId` (`ensureFileAttachmentsOnHost`).
+   */
+  readonly fileSend: ComposerFileSend | null;
+  /**
    * Whether THIS chat's live stream can materialize a hash-only draft image at
    * send (`chat.subscribe` 1.12 capability). The gate is per-session and
    * not app-wide: one host can serve one chat on a bridging stream and another
@@ -246,6 +255,7 @@ export function useChatComposerSubmit(
     onSideChat,
     targetHostId,
     queueEditTargetId,
+    fileSend,
     getDraftBlobBridgeSupported,
     getQueuedSteerRestartConfirmationSupported,
   } = args;
@@ -845,7 +855,15 @@ export function useChatComposerSubmit(
         () => readComposerDraftSnapshot(taskId).revision,
       );
 
-      if (annotationRecords.length === 0 && pendingImageHashes.length === 0) {
+      // Any file node takes the async path, where the files are confirmed on
+      // (or uploaded to) this send's host before anything is sent.
+      const sendsFiles =
+        fileSend !== null && containsFileAttachments(editorContent);
+      if (
+        annotationRecords.length === 0 &&
+        pendingImageHashes.length === 0 &&
+        !sendsFiles
+      ) {
         // This exit never enters the flight, so the latch owner below never
         // runs to reset the bound. Without this, a re-entry that lands here -
         // the user deleted the image during the read - leaves `attempt` at 1
@@ -874,6 +892,18 @@ export function useChatComposerSubmit(
         rootsLabel,
         editorContent,
         async () => {
+          // Files first, and awaited alone: the image reconcile below expects
+          // no other wait beside it. A file pasted in meanwhile moves the draft
+          // revision, so `commit` re-enters and this runs again for it.
+          if (sendsFiles) {
+            const files = await ensureFileAttachmentsOnHost({
+              content: editorContent,
+              target: fileSend.target,
+              put: fileSend.put,
+              settle: fileSend.settle,
+            });
+            if (files === "held") return;
+          }
           // Awaited BEFORE the reconcile loop, not beside it. As one leg of a
           // `Promise.all` the image leg could finish while this one was still
           // pending, and an image added during the remaining wait was never
@@ -1041,6 +1071,7 @@ export function useChatComposerSubmit(
       // longer reads.
       clearAcceptedDraft,
       editorRef,
+      fileSend,
       finalizeSend,
       onSideChat,
       pickerStore,

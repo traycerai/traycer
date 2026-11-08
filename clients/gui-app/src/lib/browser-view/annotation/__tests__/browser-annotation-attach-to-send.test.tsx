@@ -80,6 +80,7 @@ function fakeEditor(content: JsonContent): ComposerPromptEditorHandle {
     setContent: () => undefined,
     syncContent: () => undefined,
     insertFileAttachment: () => false,
+    settleFileAttachment: () => false,
     insertImageAttachments: () => undefined,
     insertMentionAttachment: () => false,
     beginPathInsertion: () => null,
@@ -138,6 +139,7 @@ function mountSubmit(args: {
       onSideChat: null,
       targetHostId: null,
       queueEditTargetId: null,
+      fileSend: null,
       // The gate is off in these fixtures: they predate it and assert the
       // inline behaviour, which is what `false` preserves exactly.
       getDraftBlobBridgeSupported: () => false,

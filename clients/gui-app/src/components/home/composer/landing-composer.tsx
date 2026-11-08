@@ -57,6 +57,9 @@ import {
   useComposerFileRoute,
 } from "@/hooks/composer/use-composer-paste";
 import { containsPendingFileAttachment } from "@/lib/composer/file-attachments";
+import type { FileNodeSettle } from "@/lib/composer/file-attachment-upload";
+import { useDraftsPutFileBlob } from "@/hooks/drafts/use-drafts-put-file-blob-mutation";
+import { settleFileNodeInLandingDraft } from "@/components/home/composer/landing-file-attachments";
 import {
   useLandingComposerMentionRoots,
   useLandingRunWorkingDirectory,
@@ -572,7 +575,26 @@ export function LandingComposer(props: LandingComposerProps) {
     chatComposerActive && !workspaceGate.stagedAhead,
   );
   const runnerHost = useRunnerHost();
-  const fileRoute = useComposerFileRoute(resolvedHostId, hostClient);
+  const putFileBlob = useDraftsPutFileBlob();
+  // The draft the node went into: this page's, or the one the first edit of
+  // an unbound page minted.
+  const settleDraftFile = useCallback<FileNodeSettle>(
+    (id, settlement) => {
+      settleFileNodeInLandingDraft(
+        draftId ?? createdUnboundDraftIdRef.current,
+        id,
+        settlement,
+      );
+    },
+    [draftId],
+  );
+  const fileRoute = useComposerFileRoute({
+    hostId: resolvedHostId,
+    client: hostClient,
+    uploadAtAttach: true,
+    putFileBlob,
+    settleDraft: settleDraftFile,
+  });
   const paste = useLandingComposerPaste({
     editorRef,
     draftId,

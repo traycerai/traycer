@@ -17,6 +17,7 @@ import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import * as idb from "idb-keyval";
 
 import {
+  NO_FILE_ROUTE,
   makeHandle,
   NO_MENTION_ROOTS,
   NOOP_FILE_DROPS,
@@ -124,7 +125,7 @@ describe("useLandingComposerPaste", () => {
         disabled: true,
         fileDrops: NOOP_FILE_DROPS,
         mentionRoots: NO_MENTION_ROOTS,
-        fileRoute: { target: null },
+        fileRoute: NO_FILE_ROUTE,
       }),
     );
 
@@ -151,7 +152,7 @@ describe("useLandingComposerPaste", () => {
         disabled: false,
         fileDrops: NOOP_FILE_DROPS,
         mentionRoots: NO_MENTION_ROOTS,
-        fileRoute: { target: null },
+        fileRoute: NO_FILE_ROUTE,
       }),
     );
 
@@ -194,7 +195,7 @@ describe("useLandingComposerPaste", () => {
         disabled: false,
         fileDrops: NOOP_FILE_DROPS,
         mentionRoots: NO_MENTION_ROOTS,
-        fileRoute: { target: null },
+        fileRoute: NO_FILE_ROUTE,
       }),
     );
 
@@ -226,7 +227,7 @@ describe("useLandingComposerPaste", () => {
         disabled: false,
         fileDrops: NOOP_FILE_DROPS,
         mentionRoots: NO_MENTION_ROOTS,
-        fileRoute: { target: null },
+        fileRoute: NO_FILE_ROUTE,
       }),
     );
 
@@ -275,7 +276,7 @@ describe("useLandingComposerPaste", () => {
         disabled: false,
         fileDrops: NOOP_FILE_DROPS,
         mentionRoots: NO_MENTION_ROOTS,
-        fileRoute: { target: null },
+        fileRoute: NO_FILE_ROUTE,
       }),
     );
     const file = new File(["hello"], "shot.png", { type: "image/png" });

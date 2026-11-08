@@ -281,6 +281,7 @@ function editorHandle(content: JsonContent): ComposerPromptEditorHandle {
     },
     syncContent: () => undefined,
     insertFileAttachment: () => false,
+    settleFileAttachment: () => false,
     insertImageAttachments: () => undefined,
     insertMentionAttachment: () => false,
     beginPathInsertion: () => null,

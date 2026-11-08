@@ -131,6 +131,7 @@ describe("chat-composer submit gate (path resolution)", () => {
           onSideChat: null,
           targetHostId: null,
           queueEditTargetId: null,
+          fileSend: null,
           // The gate is off in these fixtures: they predate it and assert the
           // inline behaviour, which is what `false` preserves exactly.
           getDraftBlobBridgeSupported: () => false,
@@ -945,6 +946,7 @@ function mountSubmitHookWith(args: {
         onSideChat: null,
         targetHostId: args.targetHostId,
         queueEditTargetId: null,
+        fileSend: null,
         // The gate is off in these fixtures: they predate it and assert the
         // inline behaviour, which is what `false` preserves exactly.
         getDraftBlobBridgeSupported: () => false,

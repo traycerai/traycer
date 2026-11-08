@@ -96,6 +96,7 @@ function mutableFakeEditor(initial: JsonContent): {
       setContent: () => undefined,
       syncContent: () => undefined,
       insertFileAttachment: () => false,
+      settleFileAttachment: () => false,
       insertImageAttachments: () => undefined,
       insertMentionAttachment: () => false,
       beginPathInsertion: () => null,
@@ -162,6 +163,7 @@ function mountSubmit(
         onSideChat: null,
         targetHostId: null,
         queueEditTargetId: props.queueEditTargetId,
+        fileSend: null,
         // The gate is off in this fixture: it predates the gate and asserts the
         // inline behaviour, which is what `false` preserves exactly.
         getDraftBlobBridgeSupported: () => false,
@@ -376,6 +378,7 @@ describe("steering a queue edit that changes settings", () => {
         onSideChat: null,
         targetHostId: null,
         queueEditTargetId: input.queueEditTargetId,
+        fileSend: null,
         getDraftBlobBridgeSupported: () => false,
         getQueuedSteerRestartConfirmationSupported: () =>
           input.hostConfirmsRestarts,

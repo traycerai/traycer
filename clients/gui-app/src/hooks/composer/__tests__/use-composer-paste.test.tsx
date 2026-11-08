@@ -89,6 +89,9 @@ function useAdapterUnderTest(
   const editorRef = useRef<ComposerPasteEditorHandle>({
     isReady: () => true,
     insertFileAttachment: () => false,
+    settleFileAttachment: () => false,
+    getEditorIncarnation: () => null,
+    draftGeneration: () => 0,
     getJSON: () => ({ type: "doc", content: [] }),
     insertImageAttachments: (attrs) => {
       insertRef.current(attrs);
@@ -430,6 +433,9 @@ describe("composer paste core - attachImageFiles", () => {
       current: {
         insertImageAttachments,
         insertFileAttachment: () => false,
+        settleFileAttachment: () => false,
+        getEditorIncarnation: () => null,
+        draftGeneration: () => 0,
         beginPathInsertion: () => null,
         isReady: () => true,
         focus: vi.fn(),
@@ -465,6 +471,9 @@ describe("composer paste core - attachImageFiles", () => {
       current: {
         insertImageAttachments,
         insertFileAttachment: () => false,
+        settleFileAttachment: () => false,
+        getEditorIncarnation: () => null,
+        draftGeneration: () => 0,
         beginPathInsertion: () => null,
         // The subject of this pin: a live handle that is NOT ready.
         isReady: () => false,
