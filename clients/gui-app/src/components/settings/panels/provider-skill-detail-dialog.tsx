@@ -157,6 +157,7 @@ export function ProviderSkillDetailDialog(props: {
   readonly removePending: boolean;
   readonly removeDisabled: boolean;
   readonly actionError: string | null;
+  readonly policyFeedback: ReactNode;
   /**
    * Why this skill's settings can't be changed here, or `null`. A skill that
    * is one of the person's settings is changed in the dashboard; Remove stays.
@@ -175,6 +176,7 @@ export function ProviderSkillDetailDialog(props: {
   readonly onDraftHeldChange: ((held: boolean) => void) | null;
   readonly canUpdate: boolean;
   readonly origin: string | null;
+  readonly policyControl: ReactNode;
   readonly updatePending: boolean;
   readonly editPending: boolean;
   readonly onStartEdit: () => void;
@@ -256,9 +258,11 @@ export function ProviderSkillDetailDialog(props: {
             removePending={props.removePending}
             actionsDisabled={props.removeDisabled}
             actionError={props.actionError}
+            policyFeedback={props.policyFeedback}
             lockedNote={props.lockedNote}
             canUpdate={props.canUpdate}
             origin={props.origin}
+            policyControl={props.policyControl}
             updatePending={props.updatePending}
             pending={fileQuery.isPending}
             error={readError}
@@ -281,8 +285,10 @@ export function ProviderSkillDetailDialog(props: {
             removePending={props.removePending}
             actionsDisabled={props.removeDisabled}
             actionError={props.actionError}
+            policyFeedback={props.policyFeedback}
             canUpdate={props.canUpdate}
             origin={props.origin}
+            policyControl={props.policyControl}
             updatePending={props.updatePending}
             editPending={props.editPending}
             onStartEdit={props.onStartEdit}
@@ -323,8 +329,10 @@ function EditableSkillDetail(props: {
   readonly removePending: boolean;
   readonly actionsDisabled: boolean;
   readonly actionError: string | null;
+  readonly policyFeedback: ReactNode;
   readonly canUpdate: boolean;
   readonly origin: string | null;
+  readonly policyControl: ReactNode;
   readonly updatePending: boolean;
   readonly editPending: boolean;
   readonly onStartEdit: () => void;
@@ -590,6 +598,7 @@ function EditableSkillDetail(props: {
           sourceLabel={props.sourceLabel}
           editing={editing}
           origin={props.origin}
+          policyControl={props.policyControl}
           canUpdate={props.canUpdate}
           updatePending={props.updatePending}
           updateDisabled={props.actionsDisabled}
@@ -597,6 +606,7 @@ function EditableSkillDetail(props: {
         />
 
         <div className="flex min-h-0 flex-col overflow-hidden px-5 py-4">
+          {props.policyFeedback}
           {props.actionError === null ? null : (
             <div className="mb-3 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-ui-sm text-destructive">
               {props.actionError}
@@ -759,6 +769,7 @@ function EditableSkillHeader(props: {
   readonly sourceLabel: string;
   readonly editing: boolean;
   readonly origin: string | null;
+  readonly policyControl: ReactNode;
   readonly canUpdate: boolean;
   readonly updatePending: boolean;
   readonly updateDisabled: boolean;
@@ -795,6 +806,8 @@ function EditableSkillHeader(props: {
           When to use
         </Label>
         {props.descriptionField}
+
+        {props.policyControl}
 
         {props.origin === null ? null : (
           <>
@@ -889,9 +902,11 @@ function ReadOnlySkillDetail(props: {
   readonly removePending: boolean;
   readonly actionsDisabled: boolean;
   readonly actionError: string | null;
+  readonly policyFeedback: ReactNode;
   readonly lockedNote: string | null;
   readonly canUpdate: boolean;
   readonly origin: string | null;
+  readonly policyControl: ReactNode;
   readonly updatePending: boolean;
   readonly pending: boolean;
   readonly error: string | null;
@@ -906,12 +921,14 @@ function ReadOnlySkillDetail(props: {
         skill={props.skill}
         sourceLabel={props.sourceLabel}
         origin={props.origin}
+        policyControl={props.policyControl}
         canUpdate={props.canUpdate}
         updatePending={props.updatePending}
         updateDisabled={props.actionsDisabled}
         onRequestUpdate={props.onRequestUpdate}
       />
       <div className="flex min-h-0 flex-col overflow-hidden px-5 py-4">
+        {props.policyFeedback}
         {props.lockedNote === null ? null : (
           <p
             className="mb-3 rounded-md border border-border/60 bg-foreground/3 px-3 py-2 text-ui-sm text-muted-foreground"
@@ -952,6 +969,7 @@ function ReadOnlySkillHeader(props: {
   readonly skill: ProviderSkill;
   readonly sourceLabel: string;
   readonly origin: string | null;
+  readonly policyControl: ReactNode;
   readonly canUpdate: boolean;
   readonly updatePending: boolean;
   readonly updateDisabled: boolean;
@@ -985,6 +1003,8 @@ function ReadOnlySkillHeader(props: {
             ? props.skill.description
             : "No description in this skill's frontmatter."}
         </p>
+
+        {props.policyControl}
 
         {props.origin === null ? null : (
           <>
