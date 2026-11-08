@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   /** What `useChatLocateRowAnswer` answers a cold fetch of a row. */
   locate: { status: "waiting" } as
     | { status: "waiting" }
+    | { status: "found"; ordinal: number }
     | { status: "missing" },
 }));
 
@@ -422,6 +423,44 @@ describe("a bot's session holding a delivered member message", () => {
     expect(
       within(message).queryByTestId("bot-delivered-post-loading"),
     ).toBeNull();
+  });
+
+  it("says the message is unavailable once the host closes its conversation's stream before the located row arrives, and shows the row a reconnect brings in", async () => {
+    mocks.locate = { status: "found", ordinal: 0 };
+    const thread = scriptedSession(THREAD_ID, []);
+    mocks.sessions[THREAD_ID] = thread.handle;
+    mountThreadSession(resumeTrigger(delivered({})));
+    await settleLegendList();
+    const message = within(view()).getByTestId("bot-delivered-message");
+    expect(
+      within(message).getByTestId("bot-delivered-post-loading"),
+    ).not.toBeNull();
+
+    act(() => {
+      thread.store.setState({
+        connectionStatus: "closed",
+        fatalClose: {
+          code: "CHAT_NOT_VISIBLE",
+          reason: "CHAT_NOT_VISIBLE: not visible",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        },
+      });
+    });
+
+    expect(
+      within(message).getByTestId("bot-delivered-post-stand-in").textContent,
+    ).toBe("Message unavailable");
+
+    act(() => {
+      thread.store.setState({
+        connectionStatus: "open",
+        fatalClose: null,
+        messages: [personMessage(THREAD_MESSAGE_ID)],
+      });
+    });
+
+    expect(within(message).getByText(MESSAGE_TEXT)).not.toBeNull();
   });
 
   it("keeps how a resume-only turn ended under the delivered message, which replaces the card that would have said it", async () => {
