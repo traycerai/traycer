@@ -21,7 +21,7 @@ import {
 } from "./client-floor";
 import { parseHostVersionsManifestWithWarnings } from "./manifest-schema";
 import { resolveManifestUrl } from "./manifest-url";
-import { verifyMinisignArchive } from "./minisign";
+import { verifyLocalAsset } from "./verify-local-asset";
 import { loadTrustedKeys } from "./trusted-keys";
 import type {
   HostPlatformAsset,
@@ -407,33 +407,15 @@ export async function createRegistryClient(
           onHeartbeat: (heartbeat) =>
             emitRegistryHeartbeat(opts.onProgress, "signature", heartbeat),
         });
-        const verifyResult = await verifyMinisignArchive({
+        const verified = await verifyLocalAsset({
           archivePath,
+          sizeBytes: asset.sizeBytes,
+          sha256: asset.sha256,
+          publicKeyId: asset.publicKeyId,
           signatureText,
           signatureSourceLabel: asset.signatureUrl,
           trustedKeys: trustedKeySet.keys,
         });
-        // The publicKeyId pinned in the manifest must match the keyId of
-        // the signature itself - otherwise the publisher could swap the
-        // signing key after the fact without changing the manifest.
-        if (verifyResult.keyId !== asset.publicKeyId) {
-          logger.error(
-            "Registry signature key mismatch",
-            {
-              environment: opts.environment,
-            },
-            null,
-          );
-          throw cliError({
-            code: CLI_ERROR_CODES.HOST_VERIFY_FAILED,
-            message: `host registry: signature key id '${verifyResult.keyId}' does not match manifest publicKeyId '${asset.publicKeyId}'`,
-            details: {
-              signatureKeyId: verifyResult.keyId,
-              manifestPublicKeyId: asset.publicKeyId,
-            },
-            exitCode: 1,
-          });
-        }
         succeeded = true;
         logger.info("Registry download and verification completed", {
           environment: opts.environment,
@@ -441,9 +423,7 @@ export async function createRegistryClient(
         });
         return {
           archivePath,
-          archiveSha256: download.sha256,
-          signatureKeyId: verifyResult.keyId,
-          signatureVerifiedAt: new Date().toISOString(),
+          ...verified,
         };
       } catch (err) {
         failure = err;

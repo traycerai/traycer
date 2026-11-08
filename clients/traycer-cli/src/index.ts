@@ -1481,6 +1481,16 @@ function registerHostCommands(program: Command): void {
       }),
   );
 
+  host
+    .command("pin")
+    .description("Print the host version pinned by this CLI build")
+    .requiredOption("--json", "Print JSON")
+    .action(() => {
+      process.stdout.write(
+        `${JSON.stringify({ supportedHostVersion: config.supportedHostVersion })}\n`,
+      );
+    });
+
   registerServiceCommands(host);
 
   withRunner(
@@ -1613,6 +1623,7 @@ function registerHostCommands(program: Command): void {
         "--from <path>",
         "Ensure from a local archive. Mutually exclusive with --release.",
       )
+      .option("--bundled <path>", "Ensure from a signed bundled host archive.")
       .option(
         "--no-linger",
         "Linux only (ignored on macOS/Windows): skip 'loginctl enable-linger'",
@@ -1642,15 +1653,21 @@ function registerHostCommands(program: Command): void {
           ? opts.release
           : null;
       const fromPath = typeof opts.from === "string" ? opts.from : null;
+      const bundledPath =
+        typeof opts.bundled === "string" ? opts.bundled : null;
       // See `host install` above - the mutual-exclusion check runs inside
       // the CommandFn so the runner emits a proper NDJSON error envelope.
       return async (ctx) => {
-        if (explicitVersion !== null && fromPath !== null) {
+        if (
+          [explicitVersion, fromPath, bundledPath].filter(
+            (value) => value !== null,
+          ).length > 1
+        ) {
           throw cliError({
             code: CLI_ERROR_CODES.INVALID_ARGUMENT,
             message:
-              "host ensure: --release and --from are mutually exclusive; pass one or the other",
-            details: { release: explicitVersion, from: fromPath },
+              "host ensure: --release, --from and --bundled are mutually exclusive",
+            details: null,
             exitCode: 1,
           });
         }
@@ -1659,6 +1676,7 @@ function registerHostCommands(program: Command): void {
           lifecycleOrigin: hostStartOriginFromOption(opts.lifecycleOrigin),
           versionRequest: explicitVersion,
           fromPath,
+          bundledPath,
           enableLinger: opts.linger !== false,
           allowSelfInvocation: opts.allowSelfInvocation === true,
           // commander's `--no-service-register` materialises as

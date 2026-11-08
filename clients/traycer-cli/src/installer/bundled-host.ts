@@ -41,7 +41,7 @@ export function bundledHostArchiveNames(
 // NOTE: this resolves relative to `process.execPath`, which only sits beside
 // the bundled archive when the running CLI is the bundle's binary (or a symlink
 // into it, as on POSIX desktop installs). On Windows the desktop's per-user CLI
-// is a COPY outside the bundle, so the desktop passes `--from <archive>`
+// is a COPY outside the bundle, so the desktop passes `--bundled <archive>`
 // explicitly (see host-ensure-ipc.ts) rather than relying on this resolver.
 export async function resolveBundledHostArchive(): Promise<string | null> {
   const dir = dirname(process.execPath);

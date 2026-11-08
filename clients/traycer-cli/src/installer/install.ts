@@ -1,3 +1,7 @@
+import {
+  verifyBundledHostArchive,
+  type BundledHostDescriptor,
+} from "./bundled-descriptor";
 import { randomUUID } from "node:crypto";
 import { access, mkdir, readFile, rm, stat } from "node:fs/promises";
 import type { Stats } from "node:fs";
@@ -94,7 +98,12 @@ import {
 
 export type InstallSourceArg =
   | { readonly kind: "registry"; readonly versionRequest: string }
-  | { readonly kind: "local-file"; readonly path: string };
+  | { readonly kind: "local-file"; readonly path: string }
+  | {
+      readonly kind: "bundled";
+      readonly path: string;
+      readonly descriptor: BundledHostDescriptor;
+    };
 
 // Lifecycle hooks the installer fires around the atomic swap. Both
 // hooks run while the per-environment CLI lock is still held, so callers
@@ -340,8 +349,8 @@ export async function stageHostInstallSource(
   const logger = createCliLogger(opts.environment);
   await opts.verifyMutationCapability();
   const plan: StagePlan =
-    opts.source.kind === "local-file"
-      ? { kind: "local-file", path: opts.source.path }
+    opts.source.kind !== "registry"
+      ? opts.source
       : {
           kind: "registry",
           resolved: await resolveRegistryAsset({
@@ -350,7 +359,7 @@ export async function stageHostInstallSource(
             onProgress: opts.onProgress,
           }),
         };
-  if (plan.kind === "registry") {
+  if (plan.kind !== "local-file") {
     // Every registry install (`host install`, `host ensure`, the `host
     // update` downgrade arm) stages here, a fresh one included: with nothing
     // installed only the supported-host floor applies.
@@ -360,7 +369,10 @@ export async function stageHostInstallSource(
       environment: opts.environment,
       installedVersion:
         installed === null ? null : installedFloorVersion(installed),
-      targetVersion: plan.resolved.entry.version,
+      targetVersion:
+        plan.kind === "bundled"
+          ? plan.descriptor.version
+          : plan.resolved.entry.version,
     });
   }
   await ensureHostHomeDir(opts.environment);
@@ -368,21 +380,29 @@ export async function stageHostInstallSource(
   const owned = await createOwnedTempDir(opts.environment, "install-");
   const stagingDir = owned.path;
 
-  const staging =
-    plan.kind === "local-file"
-      ? await stageLocalFile({
-          environment: opts.environment,
-          sourcePath: plan.path,
-          stagingDir,
-          onProgress: opts.onProgress,
-          recordVersion: opts.recordVersionOverride,
-        })
-      : await stageRegistry({
-          environment: opts.environment,
-          resolved: plan.resolved,
-          stagingDir,
-          onProgress: opts.onProgress,
-        });
+  let staging: StageResult;
+  try {
+    staging =
+      plan.kind === "local-file"
+        ? await stageLocalFile({
+            environment: opts.environment,
+            sourcePath: plan.path,
+            stagingDir,
+            onProgress: opts.onProgress,
+            recordVersion: opts.recordVersionOverride,
+          })
+        : plan.kind === "bundled"
+          ? await stageBundled(plan, stagingDir)
+          : await stageRegistry({
+              environment: opts.environment,
+              resolved: plan.resolved,
+              stagingDir,
+              onProgress: opts.onProgress,
+            });
+  } catch (cause) {
+    await rm(stagingDir, { recursive: true, force: true });
+    throw cause;
+  }
   logger.info("Host install staging completed", {
     environment: opts.environment,
     sourceKind: opts.source.kind,
@@ -403,6 +423,15 @@ export async function stageHostInstallSource(
       onProgress: opts.onProgress,
       beforeExtract: opts.beforeExtract,
     });
+    if (plan.kind === "bundled" && runtimeVersion !== plan.descriptor.version) {
+      throw cliError({
+        code: CLI_ERROR_CODES.HOST_VERIFY_FAILED,
+        message:
+          "bundled host: extracted runtime version does not match the signed descriptor",
+        details: { expected: plan.descriptor.version, runtimeVersion },
+        exitCode: 1,
+      });
+    }
     logger.info("Host install archive extracted", {
       environment: opts.environment,
       version: staging.version,
@@ -427,7 +456,9 @@ export async function stageHostInstallSource(
       targetRegistryEntry:
         plan.kind === "registry"
           ? { storeFormats: plan.resolved.entry.storeFormats }
-          : null,
+          : plan.kind === "bundled"
+            ? { storeFormats: plan.descriptor.storeFormats }
+            : null,
     };
   } catch (err) {
     // The owner-tokened temp (and its archive, if separate) is
@@ -1361,6 +1392,25 @@ async function stageLocalFile(opts: StageLocalOptions): Promise<StageResult> {
   };
 }
 
+async function stageBundled(
+  source: { readonly path: string; readonly descriptor: BundledHostDescriptor },
+  stagingDir: string,
+): Promise<StageResult> {
+  const verified = await verifyBundledHostArchive(
+    source.path,
+    source.descriptor,
+  );
+  return {
+    archivePath: source.path,
+    archiveIsTemporary: false,
+    stagingDir,
+    version: source.descriptor.version,
+    sizeBytes: source.descriptor.sizeBytes,
+    ...verified,
+    recordSource: { kind: "registry", value: source.descriptor.version },
+  };
+}
+
 interface ResolvedRegistryAsset {
   readonly client: RegistryClient;
   readonly entry: HostVersionEntry;
@@ -1369,7 +1419,12 @@ interface ResolvedRegistryAsset {
 
 type StagePlan =
   | { readonly kind: "local-file"; readonly path: string }
-  | { readonly kind: "registry"; readonly resolved: ResolvedRegistryAsset };
+  | { readonly kind: "registry"; readonly resolved: ResolvedRegistryAsset }
+  | {
+      readonly kind: "bundled";
+      readonly path: string;
+      readonly descriptor: BundledHostDescriptor;
+    };
 
 // Resolution only, before any temp dir exists: the moved-data-root refusal
 // below it must leave nothing behind.
