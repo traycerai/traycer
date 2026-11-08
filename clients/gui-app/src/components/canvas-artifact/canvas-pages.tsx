@@ -62,8 +62,11 @@ export function CanvasPageMenu({
           <ChevronDown />
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-64">
-        <ul aria-label="Canvas pages" className="flex flex-col">
+      <PopoverContent align="start" className="w-64 overflow-hidden">
+        <ul
+          aria-label="Canvas pages"
+          className="flex min-h-0 flex-col overflow-y-auto"
+        >
           {pages.map((item) => (
             <li key={item.id}>
               <div className="group flex items-center gap-1 rounded-md hover:bg-foreground/5">
@@ -138,7 +141,7 @@ export function CanvasPageMenu({
           <Button
             variant="ghost"
             size="sm"
-            className="w-full"
+            className="w-full shrink-0"
             onClick={() => {
               onAdd();
               setOpen(false);

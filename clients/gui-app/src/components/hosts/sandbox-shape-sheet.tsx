@@ -114,7 +114,7 @@ export function SandboxShapeSheet(props: {
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogContent
-        className="w-[min(92vw,30rem)] sm:max-w-[min(92vw,30rem)]"
+        className="flex w-[min(92vw,30rem)] flex-col sm:max-w-[min(92vw,30rem)]"
         data-testid="sandbox-shape-sheet"
       >
         <DialogHeader>
@@ -405,218 +405,220 @@ function ShapeSheetForm(props: {
   return (
     <form
       noValidate
-      className="flex flex-col gap-4"
+      className="flex min-h-0 min-w-0 flex-col gap-4"
       onSubmit={(event) => {
         event.preventDefault();
         if (shape === null) return;
         props.onUseShape(shape, stagedSandboxName(form.name), wake);
       }}
     >
-      <div className="flex flex-col gap-1.5">
-        <Label htmlFor={`${ids}-name`}>Name</Label>
-        <Input
-          id={`${ids}-name`}
-          value={form.name}
-          maxLength={NAME_MAX_LENGTH}
-          data-testid="sandbox-shape-sheet-name"
-          onChange={(event) => setForm({ ...form, name: event.target.value })}
-        />
-      </div>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <ShapeSelect
-          id={`${ids}-os`}
-          label="Operating system"
-          value={form.os}
-          options={offered.map((os) => ({ value: os, label: OS_LABEL[os] }))}
-          onChange={(value) => {
-            const os = offered.find((candidate) => candidate === value);
-            if (os === undefined) return;
-            const next = stageProviderFor(props.catalogue, os);
-            if (next === null) return;
-            const rung = defaultShapeRung(next);
-            setForm({
-              ...form,
-              os,
-              region: next.regions[0].id,
-              ...(rung === null
-                ? { diskGb: String(next.shape.diskDefaultMb / MB_PER_GIB) }
-                : rungFields(rung)),
-            });
-          }}
-        />
-        <ShapeSelect
-          id={`${ids}-region`}
-          label={SANDBOX_REGION_LABEL}
-          value={form.region}
-          options={provider.regions.map((region) => ({
-            value: region.id,
-            label: region.label,
-          }))}
-          onChange={(value) => setForm({ ...form, region: value })}
-        />
-        {provider.shapes === null ? (
-          <>
-            <ShapeNumber
-              id={`${ids}-cpus`}
-              label="vCPU"
-              value={form.cpus}
-              min={provider.shape.cpuMin}
-              max={provider.shape.cpuMax}
-              step={provider.shape.cpuStep}
-              testId="sandbox-shape-sheet-cpus"
-              onChange={(value) => setForm({ ...form, cpus: value })}
-            />
-            <ShapeNumber
-              id={`${ids}-memory`}
-              label="Memory (GB)"
-              value={form.memoryGb}
-              min={provider.shape.memoryMinMb / MB_PER_GIB}
-              max={provider.shape.memoryMaxMb / MB_PER_GIB}
-              step={provider.shape.memoryStepMb / MB_PER_GIB}
-              testId="sandbox-shape-sheet-memory"
-              onChange={(value) => setForm({ ...form, memoryGb: value })}
-            />
-            <ShapeNumber
-              id={`${ids}-disk`}
-              label="Disk (GB)"
-              value={form.diskGb}
-              min={provider.shape.diskMinMb / MB_PER_GIB}
-              max={provider.shape.diskMaxMb / MB_PER_GIB}
-              step={1}
-              testId="sandbox-shape-sheet-disk"
-              onChange={(value) => setForm({ ...form, diskGb: value })}
-            />
-          </>
-        ) : (
-          <div className="sm:col-span-2">
-            <ShapeSelect
-              id={`${ids}-size`}
-              label="Size"
-              value={sizeValue(form, provider.shapes, provider)}
-              options={provider.shapes.map((rung) => ({
-                value: rungKey(rung),
-                label: rungLabel(rung),
-              }))}
-              onChange={(value) => {
-                const rung = provider.shapes?.find(
-                  (candidate) => rungKey(candidate) === value,
-                );
-                if (rung === undefined) return;
-                setForm({ ...form, ...rungFields(rung) });
-              }}
-            />
-          </div>
-        )}
-      </div>
-      {wake === null ? null : (
-        <p className="m-0 text-ui-xs text-muted-foreground">{wake}</p>
-      )}
-      <div className="flex flex-wrap items-baseline gap-x-1.5 text-ui-xs text-muted-foreground">
-        <span>
-          {idleAndRestingLine(
-            Number(form.idleMinutes),
-            // A cleared period is never, the form's own `null`; only a form
-            // that does not parse shows the shape it opened with.
-            shape === null
-              ? props.initialShape.destroyAfterRestingMinutes
-              : shape.destroyAfterRestingMinutes,
-          )}
-        </span>
-        <Button
-          type="button"
-          variant="link"
-          size="inline-xs"
-          aria-expanded={periodsOpen}
-          onClick={() => setPeriodsOpen(!periodsOpen)}
-        >
-          {CHANGE_LABEL}
-        </Button>
-      </div>
-      {periodsOpen ? (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <ShapeNumber
-            id={`${ids}-idle`}
-            label="Suspends after (idle minutes)"
-            value={form.idleMinutes}
-            min={IDLE_FLOOR_MINUTES}
-            max={null}
-            step={1}
-            testId="sandbox-shape-sheet-idle"
-            onChange={(value) => setForm({ ...form, idleMinutes: value })}
+      <div className="flex min-h-0 flex-col gap-4 overflow-y-auto">
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor={`${ids}-name`}>Name</Label>
+          <Input
+            id={`${ids}-name`}
+            value={form.name}
+            maxLength={NAME_MAX_LENGTH}
+            data-testid="sandbox-shape-sheet-name"
+            onChange={(event) => setForm({ ...form, name: event.target.value })}
           />
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor={`${ids}-resting`}>Destroyed after idle for</Label>
-            <div className="flex gap-2">
-              <Input
-                id={`${ids}-resting`}
-                type="number"
-                inputMode="numeric"
-                min={1}
-                value={form.restingAmount}
-                placeholder="Never"
-                data-testid="sandbox-shape-sheet-resting"
-                onChange={(event) =>
-                  setForm({ ...form, restingAmount: event.target.value })
-                }
+        </div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <ShapeSelect
+            id={`${ids}-os`}
+            label="Operating system"
+            value={form.os}
+            options={offered.map((os) => ({ value: os, label: OS_LABEL[os] }))}
+            onChange={(value) => {
+              const os = offered.find((candidate) => candidate === value);
+              if (os === undefined) return;
+              const next = stageProviderFor(props.catalogue, os);
+              if (next === null) return;
+              const rung = defaultShapeRung(next);
+              setForm({
+                ...form,
+                os,
+                region: next.regions[0].id,
+                ...(rung === null
+                  ? { diskGb: String(next.shape.diskDefaultMb / MB_PER_GIB) }
+                  : rungFields(rung)),
+              });
+            }}
+          />
+          <ShapeSelect
+            id={`${ids}-region`}
+            label={SANDBOX_REGION_LABEL}
+            value={form.region}
+            options={provider.regions.map((region) => ({
+              value: region.id,
+              label: region.label,
+            }))}
+            onChange={(value) => setForm({ ...form, region: value })}
+          />
+          {provider.shapes === null ? (
+            <>
+              <ShapeNumber
+                id={`${ids}-cpus`}
+                label="vCPU"
+                value={form.cpus}
+                min={provider.shape.cpuMin}
+                max={provider.shape.cpuMax}
+                step={provider.shape.cpuStep}
+                testId="sandbox-shape-sheet-cpus"
+                onChange={(value) => setForm({ ...form, cpus: value })}
               />
-              <Select
-                value={form.restingUnit}
-                onValueChange={(value) => {
-                  if (
-                    value === "minutes" ||
-                    value === "hours" ||
-                    value === "days"
-                  ) {
-                    setForm({ ...form, restingUnit: value });
-                  }
+              <ShapeNumber
+                id={`${ids}-memory`}
+                label="Memory (GB)"
+                value={form.memoryGb}
+                min={provider.shape.memoryMinMb / MB_PER_GIB}
+                max={provider.shape.memoryMaxMb / MB_PER_GIB}
+                step={provider.shape.memoryStepMb / MB_PER_GIB}
+                testId="sandbox-shape-sheet-memory"
+                onChange={(value) => setForm({ ...form, memoryGb: value })}
+              />
+              <ShapeNumber
+                id={`${ids}-disk`}
+                label="Disk (GB)"
+                value={form.diskGb}
+                min={provider.shape.diskMinMb / MB_PER_GIB}
+                max={provider.shape.diskMaxMb / MB_PER_GIB}
+                step={1}
+                testId="sandbox-shape-sheet-disk"
+                onChange={(value) => setForm({ ...form, diskGb: value })}
+              />
+            </>
+          ) : (
+            <div className="sm:col-span-2">
+              <ShapeSelect
+                id={`${ids}-size`}
+                label="Size"
+                value={sizeValue(form, provider.shapes, provider)}
+                options={provider.shapes.map((rung) => ({
+                  value: rungKey(rung),
+                  label: rungLabel(rung),
+                }))}
+                onChange={(value) => {
+                  const rung = provider.shapes?.find(
+                    (candidate) => rungKey(candidate) === value,
+                  );
+                  if (rung === undefined) return;
+                  setForm({ ...form, ...rungFields(rung) });
                 }}
-              >
-                <SelectTrigger aria-label="Idle period unit">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="minutes">minutes</SelectItem>
-                  <SelectItem value="hours">hours</SelectItem>
-                  <SelectItem value="days">days</SelectItem>
-                </SelectContent>
-              </Select>
+              />
+            </div>
+          )}
+        </div>
+        {wake === null ? null : (
+          <p className="m-0 text-ui-xs text-muted-foreground">{wake}</p>
+        )}
+        <div className="flex flex-wrap items-baseline gap-x-1.5 text-ui-xs text-muted-foreground">
+          <span>
+            {idleAndRestingLine(
+              Number(form.idleMinutes),
+              // A cleared period is never, the form's own `null`; only a form
+              // that does not parse shows the shape it opened with.
+              shape === null
+                ? props.initialShape.destroyAfterRestingMinutes
+                : shape.destroyAfterRestingMinutes,
+            )}
+          </span>
+          <Button
+            type="button"
+            variant="link"
+            size="inline-xs"
+            aria-expanded={periodsOpen}
+            onClick={() => setPeriodsOpen(!periodsOpen)}
+          >
+            {CHANGE_LABEL}
+          </Button>
+        </div>
+        {periodsOpen ? (
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <ShapeNumber
+              id={`${ids}-idle`}
+              label="Suspends after (idle minutes)"
+              value={form.idleMinutes}
+              min={IDLE_FLOOR_MINUTES}
+              max={null}
+              step={1}
+              testId="sandbox-shape-sheet-idle"
+              onChange={(value) => setForm({ ...form, idleMinutes: value })}
+            />
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor={`${ids}-resting`}>Destroyed after idle for</Label>
+              <div className="flex gap-2">
+                <Input
+                  id={`${ids}-resting`}
+                  type="number"
+                  inputMode="numeric"
+                  min={1}
+                  value={form.restingAmount}
+                  placeholder="Never"
+                  data-testid="sandbox-shape-sheet-resting"
+                  onChange={(event) =>
+                    setForm({ ...form, restingAmount: event.target.value })
+                  }
+                />
+                <Select
+                  value={form.restingUnit}
+                  onValueChange={(value) => {
+                    if (
+                      value === "minutes" ||
+                      value === "hours" ||
+                      value === "days"
+                    ) {
+                      setForm({ ...form, restingUnit: value });
+                    }
+                  }}
+                >
+                  <SelectTrigger aria-label="Idle period unit">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="minutes">minutes</SelectItem>
+                    <SelectItem value="hours">hours</SelectItem>
+                    <SelectItem value="days">days</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
           </div>
-        </div>
-      ) : null}
-      {"problem" in result ? (
-        <p
-          className="m-0 text-ui-sm text-destructive"
-          role="alert"
-          data-testid="sandbox-shape-sheet-problem"
+        ) : null}
+        {"problem" in result ? (
+          <p
+            className="m-0 text-ui-sm text-destructive"
+            role="alert"
+            data-testid="sandbox-shape-sheet-problem"
+          >
+            {result.problem}
+          </p>
+        ) : null}
+        <div
+          className="flex flex-col gap-1 rounded-md border border-border/60 p-3 text-ui-xs text-muted-foreground"
+          data-testid="sandbox-shape-sheet-price"
         >
-          {result.problem}
-        </p>
-      ) : null}
-      <div
-        className="flex flex-col gap-1 rounded-md border border-border/60 p-3 text-ui-xs text-muted-foreground"
-        data-testid="sandbox-shape-sheet-price"
-      >
-        {clauses.map((clause) =>
-          clause.kind === "price" ? (
-            <p
-              key={clause.kind}
-              className="m-0 flex flex-wrap items-baseline gap-x-1.5"
-            >
-              <span className="text-foreground/85">{clause.text}</span>
-              {needsCredits ? (
-                <AddCreditsLink
-                  configuration={props.configuration}
-                  testId="sandbox-shape-sheet-add-credits"
-                />
-              ) : null}
-            </p>
-          ) : (
-            <p key={clause.kind} className="m-0">
-              {clause.text}
-            </p>
-          ),
-        )}
+          {clauses.map((clause) =>
+            clause.kind === "price" ? (
+              <p
+                key={clause.kind}
+                className="m-0 flex flex-wrap items-baseline gap-x-1.5"
+              >
+                <span className="text-foreground/85">{clause.text}</span>
+                {needsCredits ? (
+                  <AddCreditsLink
+                    configuration={props.configuration}
+                    testId="sandbox-shape-sheet-add-credits"
+                  />
+                ) : null}
+              </p>
+            ) : (
+              <p key={clause.kind} className="m-0">
+                {clause.text}
+              </p>
+            ),
+          )}
+        </div>
       </div>
       <DialogFooter>
         <Button type="button" variant="ghost" onClick={props.onCancel}>

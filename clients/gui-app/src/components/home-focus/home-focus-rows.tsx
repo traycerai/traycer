@@ -646,6 +646,7 @@ function StopAllDialog(props: {
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogContent
         showCloseButton={false}
+        className="flex flex-col"
         data-testid="home-focus-stop-all-dialog"
       >
         <DialogHeader>
@@ -655,7 +656,7 @@ function StopAllDialog(props: {
           </DialogDescription>
         </DialogHeader>
         <ul
-          className="flex flex-col gap-1 text-ui-sm text-foreground"
+          className="flex min-h-0 min-w-0 flex-col gap-1 overflow-y-auto text-ui-sm text-foreground"
           data-testid="home-focus-stop-all-list"
         >
           {row.agents.map((agent) => (

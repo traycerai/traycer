@@ -172,13 +172,13 @@ function WorktreePrOverflow(props: {
         aria-label="More pull requests"
         align="end"
         sideOffset={6}
-        className="w-[min(90vw,24rem)]"
+        className="w-[min(90vw,24rem)] overflow-hidden"
         data-testid="worktree-pr-overflow-content"
       >
-        <span className="text-ui-xs font-medium text-muted-foreground">
+        <span className="shrink-0 text-ui-xs font-medium text-muted-foreground">
           More pull requests
         </span>
-        <span className="flex flex-wrap gap-1.5">
+        <span className="flex min-h-0 flex-wrap gap-1.5 overflow-y-auto">
           {props.references.map((reference) => (
             <WorktreePrPill
               key={reference.key}

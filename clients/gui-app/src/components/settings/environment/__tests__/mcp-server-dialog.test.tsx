@@ -154,12 +154,13 @@ describe("The MCP server dialog", () => {
       configuration: "Personal",
       source: personalPoolSource(),
       reach:
-        "It reaches every provider on every computer and sandbox running Personal.",
+        "It reaches every provider on every host running this environment.",
     },
     {
       configuration: "Acme",
       source: poolSource("editor"),
-      reach: "It reaches every provider on every host running Acme.",
+      reach:
+        "It reaches every provider on every host running this environment.",
     },
   ])(
     "adds to $configuration with no scope picker",
@@ -255,7 +256,7 @@ describe("The MCP server dialog", () => {
     ).toBeTruthy();
     expect(
       within(dialog).getByText(
-        "Stored encrypted in Traycer's cloud. Acme's sandboxes and connected services use it without seeing it; no computer receives the value.",
+        "Stored encrypted in Traycer's cloud. This environment's sandboxes and connected services use it without seeing it; no computer receives the value.",
       ),
     ).toBeTruthy();
     await userEvent.click(

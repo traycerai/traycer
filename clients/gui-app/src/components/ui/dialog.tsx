@@ -116,8 +116,18 @@ function DialogContent({
           // scrollbar, and a trackpad swipe shifted every band and the close
           // button with it (the profile edit dialog shipped that in desktop
           // v1.3.0). `grid-cols-1` is `minmax(0, 1fr)`, which pins the column
-          // to the box and leaves overflow to whichever descendant scrolls.
-          "group/dialog-content fixed top-safe-center-y left-safe-center-x z-50 grid grid-cols-1 w-full max-w-[min(calc(100%-2rem),var(--safe-area-width))] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl bg-popover p-4 text-ui-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          // to the box. `overflow-x-hidden` keeps that pin when a caller
+          // switches the box to `flex` so a list can shrink.
+          //
+          // The height cap is the safe viewport: `--spacing-safe-dvh` is
+          // `100dvh` minus the top inset and the keyboard, and the bottom
+          // inset comes off here. Radix Dialog does not publish an
+          // available-height variable. `overflow-y-auto` is the fallback so a
+          // caller that does not split header and footer can still reach
+          // every control. A caller that pins them adds `flex flex-col` (it
+          // displaces `grid`) and `min-h-0 overflow-y-auto` on the body.
+          // A caller's own unprefixed `max-h-*` displaces this cap.
+          "group/dialog-content fixed top-safe-center-y left-safe-center-x z-50 grid max-h-[calc(var(--spacing-safe-dvh)-var(--spacing-safe-bottom))] min-h-0 grid-cols-1 w-full max-w-[min(calc(100%-2rem),var(--safe-area-width))] -translate-x-1/2 -translate-y-1/2 gap-4 overflow-x-hidden overflow-y-auto rounded-xl bg-popover p-4 text-ui-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           // The bands carry the padding, so the box carries none.
           layout === "banded" && "gap-0 p-0",
           className,
@@ -149,7 +159,7 @@ function DialogHeader({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="dialog-header"
       className={cn(
-        "flex flex-col gap-2",
+        "flex shrink-0 flex-col gap-2",
         // `pr-12` clears the close button (`absolute top-2 right-2` on the
         // content): in a banded dialog the header band runs under it.
         "group-data-[layout=banded]/dialog-content:border-b group-data-[layout=banded]/dialog-content:px-5 group-data-[layout=banded]/dialog-content:py-4 group-data-[layout=banded]/dialog-content:pr-12",
@@ -177,7 +187,7 @@ function DialogFooter({
         // defines `--muted` equal to `--popover`, so the band used to
         // disappear in all of them and leave only `border-t`. See
         // `ui/skeleton.tsx` for the token collapse in full.
-        "-mx-4 -mb-4 flex flex-col-reverse gap-2 rounded-b-xl border-t bg-foreground/5 p-4 sm:flex-row sm:justify-end",
+        "-mx-4 -mb-4 flex shrink-0 flex-col-reverse gap-2 rounded-b-xl border-t bg-foreground/5 p-4 sm:flex-row sm:justify-end",
         // A banded dialog's content has no padding to escape, so the footer is
         // already at the edges and sets its own band rhythm.
         "group-data-[layout=banded]/dialog-content:mx-0 group-data-[layout=banded]/dialog-content:mb-0 group-data-[layout=banded]/dialog-content:px-5 group-data-[layout=banded]/dialog-content:py-3",

@@ -139,18 +139,16 @@ export function McpServerDialog(props: {
         if (!open) props.onClose();
       }}
     >
-      <DialogContent>
+      <DialogContent className="flex flex-col">
         <DialogHeader>
           <DialogTitle>
             {server === null
               ? addServerTitle(name)
               : editServerTitle(server.name)}
           </DialogTitle>
-          <DialogDescription>
-            {addServerReach(personal, name)}
-          </DialogDescription>
+          <DialogDescription>{addServerReach()}</DialogDescription>
         </DialogHeader>
-        <div className="flex flex-col gap-3">
+        <div className="flex min-h-0 min-w-0 flex-col gap-3 overflow-y-auto">
           <Label htmlFor="mcp-server-name">Name</Label>
           <Input
             id="mcp-server-name"
@@ -182,7 +180,7 @@ export function McpServerDialog(props: {
               canPick={canPick}
               secrets={secretList}
               secretsRead={secretsRead}
-              custody={custodySentence(personal, name)}
+              custody={custodySentence(personal, "This environment")}
             />
           ) : null}
           {problem === null ? null : (
