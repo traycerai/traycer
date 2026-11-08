@@ -524,28 +524,18 @@ export interface ComposerFilePathIngestArgs {
  * bot box, an inline message edit, an artifact); its non-image pastes keep
  * resolving to paths only.
  */
-/**
- * What a send needs to put a draft's files on its destination
- * (`ensureFileAttachmentsOnHost`): the composer's host, the upload, and how a
- * node is settled wherever it now lives.
- */
-export interface ComposerFileSend {
-  /** The composer's send host; `null` while it has none to upload to. */
+export interface ComposerFileAttachArgs {
+  /** The composer's own host; `null` while it has none to upload to. */
   readonly target: FileAttachmentUploadTarget | null;
   readonly put: PutFileBlob;
+  /** Settles a node wherever it now lives: the live editor, else the draft. */
   readonly settle: FileNodeSettle;
-}
-
-export interface ComposerFileAttachArgs extends ComposerFileSend {
-  /**
-   * `false` for a composer whose sends are handed off to a host that is not
-   * awake yet (a resting sandbox's chat): a pick keeps its bytes here and the
-   * hand-off uploads them to that host once it wakes, before it sends.
-   */
-  readonly uploadAtAttach: boolean;
   /**
    * Fences a pick to the draft the editor holds now, returning the insertion
    * to commit once a file is hashed, or `null` when the editor is not ready.
+   * Called at the GESTURE - the picker's change, the paste, the drop - so a
+   * paste whose paths take a while to resolve is still fenced to the draft it
+   * was pasted into.
    */
   readonly beginInsertion: () => FileInsertion | null;
 }
@@ -826,8 +816,10 @@ export function useComposerPasteEvents<Attrs>(args: {
     [captureImageInsertion, imageIngest, insertAttrs, trackPendingImageJob],
   );
 
-  const attachFiles = useCallback(
-    (files: ReadonlyArray<File>) => {
+  // Admits `files` and attaches them through `insert`, the fence the gesture
+  // captured.
+  const attachFencedFiles = useCallback(
+    (files: ReadonlyArray<File>, insert: FileInsertion) => {
       if (files.length === 0 || fileAttach === null) return;
       const admitted: File[] = [];
       let hostRefusal: "no-host" | "host-outdated" | null = null;
@@ -842,11 +834,6 @@ export function useComposerPasteEvents<Attrs>(args: {
       if (hostRefusal === "host-outdated") showHostOutdatedForFilesToast();
       const target = fileAttach.target;
       if (admitted.length === 0 || target === null) return;
-      // Fenced NOW, before any byte is read: the pick belongs to the draft the
-      // editor holds at this moment, and a file hashed after a send or a
-      // switch must not land in whatever draft holds the editor then.
-      const insert = fileAttach.beginInsertion();
-      if (insert === null) return;
       setPendingFileCount((count) => count + 1);
       void (async () => {
         const overCap: string[] = [];
@@ -857,7 +844,6 @@ export function useComposerPasteEvents<Attrs>(args: {
             const placed = await attachFileAttachment({
               file,
               target,
-              uploadAtAttach: fileAttach.uploadAtAttach,
               put: fileAttach.put,
               insert,
               settle: fileAttach.settle,
@@ -885,24 +871,45 @@ export function useComposerPasteEvents<Attrs>(args: {
     [fileAttach],
   );
 
+  const attachFiles = useCallback(
+    (files: ReadonlyArray<File>) => {
+      // Fenced NOW, before any byte is read: the pick belongs to the draft the
+      // editor holds at this moment, and a file hashed after a send or a
+      // switch must not land in whatever draft holds the editor then.
+      const insert = fileAttach?.beginInsertion() ?? null;
+      if (insert === null) return;
+      attachFencedFiles(files, insert);
+    },
+    [attachFencedFiles, fileAttach],
+  );
+
   const attachFilePaths = useCallback(
     (files: ReadonlyArray<File>, fileUrlPaths: ReadonlyArray<string>) => {
       if (files.length === 0 && fileUrlPaths.length === 0) return;
       const commit = filePaths.beginPathInsertion();
       if (commit === null) return;
+      // Both fences at the gesture, before the paths resolve: a file that
+      // resolves to no path is attached to the draft it was pasted into, not
+      // to whatever draft the editor holds once resolution answers.
+      const fileInsert = fileAttach?.beginInsertion() ?? null;
       setPendingPathCount((count) => count + 1);
       void resolveAndInsertFilePaths({
         files,
         fileUrlPaths,
         filePaths,
         commit,
-        attachUnresolved: fileAttach === null ? null : attachFiles,
+        attachUnresolved:
+          fileInsert === null
+            ? null
+            : (unresolved) => {
+                attachFencedFiles(unresolved, fileInsert);
+              },
       }).finally(() => {
         if (!activeRef.current) return;
         setPendingPathCount((count) => Math.max(0, count - 1));
       });
     },
-    [attachFiles, fileAttach, filePaths],
+    [attachFencedFiles, fileAttach, filePaths],
   );
 
   const attachNativeClipboardFilePaths = useCallback(() => {
@@ -1435,7 +1442,6 @@ export function useComposerPaste(
  */
 export interface ComposerFileRoute {
   readonly target: FileAttachmentUploadTarget | null;
-  readonly uploadAtAttach: boolean;
   readonly put: PutFileBlob;
   /**
    * Settles a file node in this surface's PERSISTED draft. Reached when the
@@ -1450,7 +1456,6 @@ export interface ComposerFileRoute {
 export function useComposerFileRoute(input: {
   readonly hostId: string | null;
   readonly client: FileAttachmentUploadClient | null;
-  readonly uploadAtAttach: boolean;
   readonly putFileBlob: UseMutationResult<
     DraftsPutBlobResponseV12,
     HostRpcError,
@@ -1458,48 +1463,15 @@ export function useComposerFileRoute(input: {
   >;
   readonly settleDraft: FileNodeSettle;
 }): ComposerFileRoute {
-  const { hostId, client, uploadAtAttach, settleDraft } = input;
+  const { hostId, client, settleDraft } = input;
   const put = usePutFileBlob(input.putFileBlob);
   return useMemo(
     () => ({
       target: hostId === null || client === null ? null : { hostId, client },
-      uploadAtAttach,
       put,
       settleDraft,
     }),
-    [client, hostId, put, settleDraft, uploadAtAttach],
-  );
-}
-
-/** The send half of a surface's file route, settling through `editorRef`. */
-export function useComposerFileSend(
-  editorRef: {
-    readonly current: Pick<
-      ComposerPasteEditorHandle,
-      "settleFileAttachment"
-    > | null;
-  },
-  fileRoute: ComposerFileRoute | null,
-): ComposerFileSend | null {
-  const settleDraft = fileRoute?.settleDraft ?? null;
-  const settle = useCallback<FileNodeSettle>(
-    (id, settlement) => {
-      // The live editor first: while the composer is mounted its document IS
-      // the draft, and writing the store underneath it would be overwritten by
-      // the next keystroke. Only a node the editor does not hold - the
-      // composer unmounted while the upload ran - is settled in the store.
-      if (editorRef.current?.settleFileAttachment(id, settlement) === true) {
-        return;
-      }
-      settleDraft?.(id, settlement);
-    },
-    [editorRef, settleDraft],
-  );
-  const target = fileRoute?.target ?? null;
-  const put = fileRoute?.put ?? null;
-  return useMemo(
-    () => (put === null ? null : { target, put, settle }),
-    [put, settle, target],
+    [client, hostId, put, settleDraft],
   );
 }
 
@@ -1540,11 +1512,25 @@ export function useComposerFileAttachArgs(
       return live.insertFileAttachment(attrs) ? "inserted" : "dropped";
     };
   }, [editorRef]);
-  const send = useComposerFileSend(editorRef, fileRoute);
-  const uploadAtAttach = fileRoute?.uploadAtAttach ?? true;
+  const settleDraft = fileRoute?.settleDraft ?? null;
+  const settle = useCallback<FileNodeSettle>(
+    (id, settlement) => {
+      // The live editor first: while the composer is mounted its document IS
+      // the draft, and writing the store underneath it would be overwritten by
+      // the next keystroke. Only a node the editor does not hold - the
+      // composer unmounted while the upload ran - is settled in the store.
+      if (editorRef.current?.settleFileAttachment(id, settlement) === true) {
+        return;
+      }
+      settleDraft?.(id, settlement);
+    },
+    [editorRef, settleDraft],
+  );
+  const target = fileRoute?.target ?? null;
+  const put = fileRoute?.put ?? null;
   return useMemo(
-    () => (send === null ? null : { ...send, uploadAtAttach, beginInsertion }),
-    [beginInsertion, send, uploadAtAttach],
+    () => (put === null ? null : { target, put, settle, beginInsertion }),
+    [beginInsertion, put, settle, target],
   );
 }
 

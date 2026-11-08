@@ -221,7 +221,6 @@ function mountSubmit(args: {
       onSideChat: null,
       targetHostId: args.targetHostId ?? null,
       queueEditTargetId: null,
-      fileSend: null,
       // The gate is off by default in these fixtures: most predate it and
       // assert the inline behaviour, which is what `false` preserves exactly.
       getDraftBlobBridgeSupported: () => args.draftBlobBridgeSupported ?? false,
@@ -700,7 +699,6 @@ function mountSubmitRerenderable(initial: {
         onSideChat: null,
         targetHostId: initial.targetHostId,
         queueEditTargetId: null,
-        fileSend: null,
         // A STABLE getter over a mutable source, which is what production
         // supplies: `chat-tile.tsx` builds it with `useCallback(() =>
         // handle.store.getState().draftBlobBridgeSupported, [handle.store])`.
@@ -1066,7 +1064,6 @@ describe("useChatComposerSubmit draft images - /btw re-inlines before forking", 
         onSideChat,
         targetHostId: GATE_HOST,
         queueEditTargetId: null,
-        fileSend: null,
         getDraftBlobBridgeSupported: () => true,
       }),
     );

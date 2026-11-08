@@ -5,7 +5,6 @@ import {
   HostRpcError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { MAX_FILE_ATTACHMENTS_PER_MESSAGE } from "@traycer/protocol/common/file-attachment";
-import type { JsonContent } from "@traycer/protocol/common/registry";
 import {
   FILE_ATTACHMENT_MAX_BYTES,
   type DraftsPutBlobRequestV12,
@@ -22,11 +21,8 @@ import { appLogger, describeLogError } from "@/lib/logger";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
 import {
-  collectFileAttachmentNodes,
-  countFileAttachments,
   FILE_ATTACHMENT_FALLBACK_MEDIA_TYPE,
   type ComposerFileAttachmentAttrs,
-  type ComposerFileAttachmentNode,
   type FileNodeSettlement,
 } from "./file-attachments";
 
@@ -90,11 +86,9 @@ export function hostFileAttachmentSupport(
  *
  * - `uploading`: queued or on the wire.
  * - `stored`: the host acknowledged the bytes; the node drops its pending
- *   state and records the host.
+ *   state.
  * - `failed`: refused or lost; the node is removed and a toast said why.
  * - `cancelled`: the person removed the node first, or the draft moved on.
- * - `reattach`: a send needed these bytes on a host that never got them, and
- *   this renderer no longer has them to upload.
  *
  * Kept outside the editor because an upload outlives the composer that started
  * it: a tab switch unmounts the editor, and a 16 MiB upload over a relay is
@@ -106,14 +100,11 @@ export type FileAttachmentUploadStatus =
   | "uploading"
   | "stored"
   | "failed"
-  | "cancelled"
-  | "reattach";
+  | "cancelled";
 
 interface UploadEntry {
   readonly status: FileAttachmentUploadStatus;
   readonly controller: AbortController;
-  /** The host the bytes were confirmed on; `null` until then. */
-  readonly hostId: string | null;
 }
 
 const uploads = new Map<string, UploadEntry>();
@@ -128,11 +119,6 @@ export function readFileAttachmentUploadStatus(
   id: string,
 ): FileAttachmentUploadStatus | null {
   return uploads.get(id)?.status ?? null;
-}
-
-/** The host a stored upload was confirmed on, for the node view to record. */
-export function readFileAttachmentUploadHost(id: string): string | null {
-  return uploads.get(id)?.hostId ?? null;
 }
 
 export function subscribeFileAttachmentUploads(
@@ -156,45 +142,9 @@ export function cancelFileAttachmentUpload(id: string): void {
 }
 
 /**
- * The picked files, by content hash, so a send to a host that never got them
- * can upload them there first. In memory only and never persisted: after a
- * reload a file whose host does not match the destination has to be attached
- * again. Bounded so a long session does not pin every file ever picked.
- */
-const pickedFiles = new Map<string, File>();
-const PICKED_FILES_RETAINED = 64;
-
-function retainPickedFile(hash: string, file: File): void {
-  pickedFiles.delete(hash);
-  pickedFiles.set(hash, file);
-  while (pickedFiles.size > PICKED_FILES_RETAINED) {
-    const oldest = pickedFiles.keys().next();
-    if (oldest.done === true) break;
-    pickedFiles.delete(oldest.value);
-  }
-}
-
-/**
- * Which hosts acknowledged which hashes in this renderer. Keyed by HOST, so a
- * placement change can never borrow another host's confirmation: the send
- * asks about its own destination, and a host it never asked has no entry.
- */
-const confirmedHashesByHost = new Map<string, Set<string>>();
-
-function recordConfirmed(hostId: string, hash: string): void {
-  const hashes = confirmedHashesByHost.get(hostId);
-  if (hashes === undefined) {
-    confirmedHashesByHost.set(hostId, new Set([hash]));
-    return;
-  }
-  hashes.add(hash);
-}
-
-/**
  * ONE file on the wire at a time, across every composer in this renderer. A
  * 16 MiB file is about 22 MB of base64 string; two at once on a phone is the
- * memory spike this exists to prevent. Attach-time uploads and send-time
- * re-uploads share it.
+ * memory spike this exists to prevent.
  */
 let uploadQueue: Promise<unknown> = Promise.resolve();
 
@@ -290,38 +240,6 @@ function showUploadFailedToast(fileName: string): void {
   );
 }
 
-function showReattachToast(fileNames: ReadonlyArray<string>): void {
-  const first = fileNames.at(0);
-  if (first === undefined) return;
-  reportableErrorToast(
-    fileNames.length === 1
-      ? `Attach ${first} again to send it.`
-      : `Attach ${String(fileNames.length)} files again to send them.`,
-    { description: "This host never received them." },
-    {
-      title: "File attachment needs to be attached again",
-      message: null,
-      code: null,
-      source: TOAST_SOURCE,
-    },
-  );
-}
-
-function showTooManyFilesAtSendToast(): void {
-  reportableErrorToast(
-    "Too many files attached.",
-    {
-      description: `${TOO_MANY_FILES_DESCRIPTION} Remove some and send again.`,
-    },
-    {
-      title: "File attachment count exceeded the limit",
-      message: null,
-      code: null,
-      source: TOAST_SOURCE,
-    },
-  );
-}
-
 /**
  * Why `file` cannot go to `target` at all, decided before any byte is read.
  * `null` admits it. The per-message count is decided after hashing, by the
@@ -372,9 +290,7 @@ async function putFile(input: {
       },
       signal,
     });
-    if (!response.ok) return "failed";
-    recordConfirmed(target.hostId, identity.hash);
-    return "stored";
+    return response.ok ? "stored" : "failed";
   } catch (error: unknown) {
     if (signal.aborted) return "failed";
     if (
@@ -393,8 +309,9 @@ async function putFile(input: {
 
 /**
  * What an upload's outcome does to its node, wherever the node now lives: the
- * live editor if the composer is mounted, else the persisted draft. Supplied by
- * the surface, which alone knows its draft store.
+ * live editor if the composer is mounted, else the persisted draft, so a
+ * restart cannot leave a finished upload looking unconfirmed. Supplied by the
+ * surface, which alone knows its draft store.
  */
 export type FileNodeSettle = (
   nodeId: string,
@@ -424,16 +341,11 @@ export type FileInsertion = (
 export async function attachFileAttachment(input: {
   readonly file: File;
   readonly target: FileAttachmentUploadTarget;
-  /**
-   * `false` keeps the bytes here and inserts the node ready, for a composer
-   * whose send uploads to its destination itself once that host is awake.
-   */
-  readonly uploadAtAttach: boolean;
   readonly put: PutFileBlob;
   readonly insert: FileInsertion;
   readonly settle: FileNodeSettle;
 }): Promise<"inserted" | "over-cap" | "dropped"> {
-  const { file, target, uploadAtAttach, put, insert, settle } = input;
+  const { file, target, put, insert, settle } = input;
   // `crypto.subtle` digests off the JS thread; the buffer is dropped as soon
   // as the hash exists and re-read for the upload, so a queued file does not
   // hold its bytes while it waits its turn.
@@ -445,22 +357,15 @@ export async function attachFileAttachment(input: {
     mediaType:
       file.type.length > 0 ? file.type : FILE_ATTACHMENT_FALLBACK_MEDIA_TYPE,
     size: file.size,
-    uploadState: uploadAtAttach ? "pending" : null,
-    uploadHostId: null,
+    uploadState: "pending",
   };
-  if (!uploadAtAttach) {
-    const placed = insert(attrs);
-    if (placed === "inserted") retainPickedFile(hash, file);
-    return placed;
-  }
   const controller = new AbortController();
-  setUploadEntry(attrs.id, { status: "uploading", controller, hostId: null });
+  setUploadEntry(attrs.id, { status: "uploading", controller });
   const placed = insert(attrs);
   if (placed !== "inserted") {
-    setUploadEntry(attrs.id, { status: "cancelled", controller, hostId: null });
+    setUploadEntry(attrs.id, { status: "cancelled", controller });
     return placed;
   }
-  retainPickedFile(hash, file);
   void runSerially(async () => {
     if (readFileAttachmentUploadStatus(attrs.id) !== "uploading") return;
     const outcome = await putFile({
@@ -472,145 +377,16 @@ export async function attachFileAttachment(input: {
     });
     if (readFileAttachmentUploadStatus(attrs.id) !== "uploading") return;
     if (outcome === "stored") {
-      setUploadEntry(attrs.id, {
-        status: "stored",
-        controller,
-        hostId: target.hostId,
-      });
-      settle(attrs.id, { kind: "stored", hostId: target.hostId });
+      setUploadEntry(attrs.id, { status: "stored", controller });
+      settle(attrs.id, { kind: "stored" });
       return;
     }
-    setUploadEntry(attrs.id, { status: "failed", controller, hostId: null });
+    // Removed, not left pending: no bytes are kept for a retry, so a pending
+    // node could only ever be removed by hand.
+    setUploadEntry(attrs.id, { status: "failed", controller });
     settle(attrs.id, { kind: "remove" });
     if (outcome === "host-outdated") showHostOutdatedForFilesToast();
     else showUploadFailedToast(attrs.fileName);
   });
   return "inserted";
-}
-
-/**
- * Whether a send of `content` to `hostId` may go without the async file step:
- * it carries no file, or every file is within the cap, settled, and already
- * confirmed on `hostId`. The synchronous gate a surface checks before deciding
- * to await {@link ensureFileAttachmentsOnHost}, and re-checks at commit when
- * the host can have moved during that wait.
- */
-export function fileAttachmentsReadyOn(
-  content: JsonContent,
-  hostId: string | null,
-): boolean {
-  const nodes = collectFileAttachmentNodes(content);
-  if (nodes.length === 0) return true;
-  if (hostId === null) return false;
-  if (countFileAttachments(content) > MAX_FILE_ATTACHMENTS_PER_MESSAGE) {
-    return false;
-  }
-  if (hostFileAttachmentSupport(hostId) === "outdated") return false;
-  return nodes.every(
-    (node) =>
-      node.uploadState === null &&
-      (node.uploadHostId === hostId ||
-        confirmedHashesByHost.get(hostId)?.has(node.hash) === true),
-  );
-}
-
-export type FileSendReadiness = "ready" | "held";
-
-/**
- * The checks that need no upload, each saying why it refuses. A node still
- * uploading or marked for reattach is gated before submit and never reaches
- * the wire, so it holds silently.
- */
-function fileSendAdmitted(
-  content: JsonContent,
-  nodes: ReadonlyArray<ComposerFileAttachmentNode>,
-  target: FileAttachmentUploadTarget | null,
-): target is FileAttachmentUploadTarget {
-  if (countFileAttachments(content) > MAX_FILE_ATTACHMENTS_PER_MESSAGE) {
-    showTooManyFilesAtSendToast();
-    return false;
-  }
-  if (nodes.some((node) => node.uploadState !== null)) return false;
-  if (target === null) {
-    showNoHostForFilesToast();
-    return false;
-  }
-  if (hostFileAttachmentSupport(target.hostId) === "outdated") {
-    showHostOutdatedForFilesToast();
-    return false;
-  }
-  return true;
-}
-
-function groupByHash(
-  nodes: ReadonlyArray<ComposerFileAttachmentNode>,
-): ReadonlyMap<string, ReadonlyArray<ComposerFileAttachmentNode>> {
-  const byHash = new Map<string, ComposerFileAttachmentNode[]>();
-  for (const node of nodes) {
-    const group = byHash.get(node.hash);
-    if (group === undefined) byHash.set(node.hash, [node]);
-    else group.push(node);
-  }
-  return byHash;
-}
-
-/**
- * The pre-dispatch step every file-carrying send and create runs on its FINAL
- * destination: each file in `content` must be confirmed on `target`, by this
- * renderer's acknowledgement or by the node's own record of the host it was
- * stored on. A file confirmed only elsewhere - the placement moved, a staged
- * sandbox took the draft over - is uploaded to `target` first, through the
- * same serial queue and floor as an attach. One whose bytes this renderer no
- * longer has (a reload) is marked `reattach` through `settle` and holds the
- * send.
- *
- * `"held"` means the send must not go: every reason has already been shown
- * (a toast, a chip). `"ready"` means every file is on `target`.
- */
-export async function ensureFileAttachmentsOnHost(input: {
-  readonly content: JsonContent;
-  readonly target: FileAttachmentUploadTarget | null;
-  readonly put: PutFileBlob;
-  readonly settle: FileNodeSettle;
-}): Promise<FileSendReadiness> {
-  const { content, target, put, settle } = input;
-  const nodes = collectFileAttachmentNodes(content);
-  if (nodes.length === 0) return "ready";
-  if (!fileSendAdmitted(content, nodes, target)) return "held";
-  const reattach: ComposerFileAttachmentNode[] = [];
-  for (const [hash, group] of groupByHash(nodes)) {
-    const confirmed =
-      confirmedHashesByHost.get(target.hostId)?.has(hash) === true ||
-      group.some((node) => node.uploadHostId === target.hostId);
-    if (confirmed) continue;
-    const file = pickedFiles.get(hash);
-    if (file === undefined) {
-      reattach.push(...group);
-      continue;
-    }
-    const first = group[0];
-    const outcome = await runSerially(() =>
-      putFile({
-        put,
-        target,
-        file,
-        identity: first,
-        signal: new AbortController().signal,
-      }),
-    );
-    if (outcome === "host-outdated") {
-      showHostOutdatedForFilesToast();
-      return "held";
-    }
-    if (outcome === "failed") {
-      showUploadFailedToast(first.fileName);
-      return "held";
-    }
-  }
-  if (reattach.length > 0) {
-    for (const node of reattach) settle(node.id, { kind: "reattach" });
-    showReattachToast([...new Set(reattach.map((node) => node.fileName))]);
-    return "held";
-  }
-  return "ready";
 }

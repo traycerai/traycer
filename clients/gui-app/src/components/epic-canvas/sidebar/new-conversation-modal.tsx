@@ -85,18 +85,13 @@ import {
 import {
   composerAttachmentsHoldSend,
   useComposerFileRoute,
-  useComposerFileSend,
   useComposerHashPaste,
 } from "@/hooks/composer/use-composer-paste";
 import {
   containsPendingFileAttachment,
   settleFileNodeInContent,
 } from "@/lib/composer/file-attachments";
-import {
-  ensureFileAttachmentsOnHost,
-  fileAttachmentsReadyOn,
-  type FileNodeSettle,
-} from "@/lib/composer/file-attachment-upload";
+import type { FileNodeSettle } from "@/lib/composer/file-attachment-upload";
 import { useDraftsPutFileBlob } from "@/hooks/drafts/use-drafts-put-file-blob-mutation";
 import { useComposerPendingImageIngest } from "@/hooks/composer/use-composer-pending-image-ingest";
 import {
@@ -1293,8 +1288,9 @@ export function NewConversationModalBody(props: {
   const workspaceCanStart = workspaceGate.canStart;
   const draftWorkspaceFolderCount = draftWorkspace.folders.length;
   const runnerHost = useRunnerHost();
-  // Files go to the placement host, the one the chat is created on. A send
-  // to another host (the picker moved) puts them there first.
+  // Files go to the placement host, the one the chat is created on. A create
+  // on another host (the picker moved) pulls them by hash from the cloud copy
+  // that host publishes.
   const putFileBlob = useDraftsPutFileBlob();
   const settleDraftFile = useCallback<FileNodeSettle>(
     (id, settlement) => {
@@ -1309,11 +1305,9 @@ export function NewConversationModalBody(props: {
   const fileRoute = useComposerFileRoute({
     hostId: resolvedHostId,
     client: hostClient,
-    uploadAtAttach: true,
     putFileBlob,
     settleDraft: settleDraftFile,
   });
-  const fileSend = useComposerFileSend(editorRef, fileRoute);
   const paste = useComposerHashPaste(
     editorRef,
     runnerHost.fileDrops,
@@ -2162,10 +2156,7 @@ export function NewConversationModalBody(props: {
       if (live === null) return [];
       return draftImageInliningNeeded(live.getJSON(), liveHostHeld());
     };
-    if (
-      pending.length === 0 &&
-      fileAttachmentsReadyOn(captured, flightHostId)
-    ) {
+    if (pending.length === 0) {
       submitPreparedDraft(editorContent, false);
       return;
     }
@@ -2187,24 +2178,6 @@ export function NewConversationModalBody(props: {
       holderId,
       captured,
       async () => {
-        // Files first, alone: every one must be on the host the chat is
-        // created on, uploaded there now if the picker moved since it was
-        // attached. The commit below re-checks against the host then current.
-        if (
-          fileSend !== null &&
-          !fileAttachmentsReadyOn(captured, flightHostId)
-        ) {
-          const files = await ensureFileAttachmentsOnHost({
-            content: captured,
-            target:
-              flightHostId === null || submitTarget.client === null
-                ? null
-                : { hostId: flightHostId, client: submitTarget.client },
-            put: fileSend.put,
-            settle: fileSend.settle,
-          });
-          if (files === "held") return;
-        }
         // `epic.createChat@1.2` MATERIALIZES from the host's own draft-blob
         // tier, so a digest this host confirms need not be inlined at all.
         // Uploaded first, before `prepareDraftImageInlining`, because the
@@ -2305,17 +2278,9 @@ export function NewConversationModalBody(props: {
             // pre-await capture. Aborting instead would leave a user who
             // pressed Enter with nothing sent and no notice; re-entry derives
             // the whole plan from the document actually on screen.
-            //
-            // A file not yet on the host the chip shows NOW - the picker moved
-            // during the upload - is the same case: re-enter, and the next pass
-            // puts it there.
             if (
               live.getEditorIncarnation() !== incarnation ||
-              !generation.stillCurrent() ||
-              !fileAttachmentsReadyOn(
-                live.getJSON(),
-                submitTargetRef.current.resolvedHostId,
-              )
+              !generation.stillCurrent()
             ) {
               // Bounded to ONE: typing through both passes sends nothing and
               // clears nothing, leaving the draft intact to send again.
@@ -2439,7 +2404,6 @@ export function NewConversationModalBody(props: {
   }, [
     canSubmit,
     epicId,
-    fileSend,
     raiseHostNotice,
     raiseSendRefusal,
     resolvedHostId,

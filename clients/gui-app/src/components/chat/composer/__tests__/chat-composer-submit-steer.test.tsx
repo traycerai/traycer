@@ -730,7 +730,6 @@ function mountSubmit(input: MountSubmitInput): {
         onSideChat: null,
         targetHostId: null,
         queueEditTargetId: null,
-        fileSend: null,
         // The gate is off in these fixtures: they predate it and assert the
         // inline behaviour, which is what `false` preserves exactly.
         getDraftBlobBridgeSupported: () => false,

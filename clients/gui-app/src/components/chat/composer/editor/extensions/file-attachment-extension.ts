@@ -26,10 +26,10 @@ declare module "@tiptap/core" {
 /**
  * A non-image file the author attached, by hash (`common/file-attachment.ts`).
  * After insertion the node is pending until the host holds the bytes, then
- * stored (recording the host), marked for reattach, or removed on a failed
- * upload. Those outcomes arrive through `settleFileAttachmentById` while the
- * composer is mounted, and through the node view from the upload registry
- * (`lib/composer/file-attachment-upload.ts`) when it mounts again.
+ * stored, or removed on a failed upload. Those outcomes arrive through
+ * `settleFileAttachmentById` while the composer is mounted, and through the
+ * node view from the upload registry (`lib/composer/file-attachment-upload.ts`)
+ * when it mounts again.
  */
 export const FileAttachmentNode = TiptapNode.create({
   name: FILE_ATTACHMENT_NODE_TYPE,
@@ -47,7 +47,6 @@ export const FileAttachmentNode = TiptapNode.create({
         "fileName",
         "mediaType",
         "uploadState",
-        "uploadHostId",
       ]),
       // Parsed back to a number: the wire schema requires one, and an HTML
       // clipboard round trip hands every data attribute back as a string.
@@ -110,16 +109,10 @@ export const FileAttachmentNode = TiptapNode.create({
           for (const match of matches.toReversed()) {
             if (settlement.kind === "remove") {
               tr.delete(match.pos, match.pos + match.size);
-            } else if (settlement.kind === "stored") {
-              tr.setNodeMarkup(match.pos, undefined, {
-                ...match.attrs,
-                uploadState: null,
-                uploadHostId: settlement.hostId,
-              });
             } else {
               tr.setNodeMarkup(match.pos, undefined, {
                 ...match.attrs,
-                uploadState: "reattach",
+                uploadState: null,
               });
             }
           }

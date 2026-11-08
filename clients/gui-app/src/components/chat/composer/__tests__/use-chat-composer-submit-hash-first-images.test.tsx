@@ -203,7 +203,6 @@ function mountSubmit(args: {
       onSideChat: null,
       targetHostId: null,
       queueEditTargetId: null,
-      fileSend: null,
       getDraftBlobBridgeSupported: () => false,
     }),
   );

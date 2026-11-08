@@ -12,35 +12,24 @@ export const FILE_ATTACHMENT_NODE_TYPE = "fileAttachment";
 export const FILE_ATTACHMENT_FALLBACK_MEDIA_TYPE = "application/octet-stream";
 
 /**
- * The composer's own attrs on a `fileAttachment` node. Neither is part of the
- * wire attrs (`FileAttachmentAttrs`); the host's schema strips both.
+ * The composer's own attr on a `fileAttachment` node: `"pending"` from the
+ * moment the node is inserted until the host acknowledges the bytes, and
+ * `null` once it has. Not part of the wire attrs (`FileAttachmentAttrs`); the
+ * host's schema strips it, and a send never carries a pending node because the
+ * composer refuses to send one.
  *
- * `uploadState` is `"pending"` from the moment the node is inserted until the
- * host acknowledges the bytes, `"reattach"` once a send needed the bytes on a
- * host that never got them and they are no longer at hand, and `null` when the
- * file is stored. Either non-null state holds send. It lives IN the document
- * rather than in a job counter so that a draft persisted mid-upload (the app
- * closed, the tab switched, another device looking at the same draft) still
- * says its bytes were never confirmed.
+ * It lives IN the document rather than in a job counter so that a draft
+ * persisted mid-upload (the app closed, the tab switched, another device
+ * looking at the same draft) still says its bytes were never confirmed.
  *
- * `uploadHostId` is the host that acknowledged the bytes, so a send can tell,
- * even after a reload, whether its destination already holds them.
+ * Which host holds the bytes is not the client's to track: the host publishes
+ * a stored draft file to the cloud, and the host a message is sent on pulls a
+ * file it lacks by hash, as it does for images.
  */
-export type FileAttachmentUploadState = "pending" | "reattach";
+export type FileAttachmentUploadState = "pending";
 
 export interface ComposerFileAttachmentAttrs extends FileAttachmentAttrs {
   readonly uploadState: FileAttachmentUploadState | null;
-  readonly uploadHostId: string | null;
-}
-
-/** A file node as a send reads it: its identity and where its bytes are. */
-export interface ComposerFileAttachmentNode {
-  readonly id: string;
-  readonly hash: string;
-  readonly fileName: string;
-  readonly mediaType: string;
-  readonly uploadState: FileAttachmentUploadState | null;
-  readonly uploadHostId: string | null;
 }
 
 /**
@@ -71,40 +60,10 @@ export function fileAttachmentAttrsOf(
   return parsed.success ? parsed.data : null;
 }
 
-export function fileAttachmentUploadStateOf(
+export function isPendingFileAttachmentAttrs(
   attrs: Record<string, unknown> | undefined,
-): FileAttachmentUploadState | null {
-  const state = stringValue(attrs?.uploadState);
-  return state === "pending" || state === "reattach" ? state : null;
-}
-
-/**
- * Every file node whose attrs parse, in document order. A node that does not
- * parse names no bytes a send could carry, so it is not a file to a send.
- */
-export function collectFileAttachmentNodes(
-  content: JsonContent,
-): ReadonlyArray<ComposerFileAttachmentNode> {
-  const out: ComposerFileAttachmentNode[] = [];
-  const visit = (node: JsonContent): void => {
-    if (node.type === FILE_ATTACHMENT_NODE_TYPE) {
-      const attrs = fileAttachmentAttrsOf(node.attrs);
-      if (attrs !== null) {
-        out.push({
-          id: attrs.id,
-          hash: attrs.hash,
-          fileName: attrs.fileName,
-          mediaType: attrs.mediaType,
-          uploadState: fileAttachmentUploadStateOf(node.attrs),
-          uploadHostId: stringValue(node.attrs?.uploadHostId),
-        });
-      }
-      return;
-    }
-    node.content?.forEach(visit);
-  };
-  visit(content);
-  return out;
+): boolean {
+  return stringValue(attrs?.uploadState) === "pending";
 }
 
 /** The identity the per-message cap counts: one per `(hash, fileName)`. */
@@ -152,13 +111,9 @@ export function countFileAttachments(content: JsonContent): number {
   return fileAttachmentIdentities(content).size;
 }
 
-/**
- * What an upload's outcome does to a file node: stored on a host, waiting to
- * be attached again, or gone.
- */
+/** What an upload's outcome does to a file node: stored, or gone. */
 export type FileNodeSettlement =
-  | { readonly kind: "stored"; readonly hostId: string }
-  | { readonly kind: "reattach" }
+  | { readonly kind: "stored" }
   | { readonly kind: "remove" };
 
 /**
@@ -177,17 +132,7 @@ export function settleFileNodeInContent(
     if (node.type === FILE_ATTACHMENT_NODE_TYPE && node.attrs?.id === id) {
       match.found = true;
       if (settlement.kind === "remove") return null;
-      return {
-        ...node,
-        attrs:
-          settlement.kind === "stored"
-            ? {
-                ...node.attrs,
-                uploadState: null,
-                uploadHostId: settlement.hostId,
-              }
-            : { ...node.attrs, uploadState: "reattach" },
-      };
+      return { ...node, attrs: { ...node.attrs, uploadState: null } };
     }
     if (node.content === undefined) return node;
     return {
@@ -207,17 +152,16 @@ export function containsFileAttachments(content: JsonContent): boolean {
 }
 
 /**
- * Whether any file in the draft is not ready to send: still uploading, never
- * confirmed, or waiting to be attached again. Send is refused while this
- * holds: a node whose bytes the host never stored would reach the agent as an
- * unavailable file.
+ * Whether any file in the draft is not yet confirmed on the host. Send is
+ * refused while this holds: a node whose bytes the host never stored would
+ * reach the agent as an unavailable file.
  */
 export function containsPendingFileAttachment(content: JsonContent): boolean {
   return someNode(
     content,
     (node) =>
       node.type === FILE_ATTACHMENT_NODE_TYPE &&
-      fileAttachmentUploadStateOf(node.attrs) !== null,
+      isPendingFileAttachmentAttrs(node.attrs),
   );
 }
 

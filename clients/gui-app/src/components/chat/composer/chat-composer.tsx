@@ -36,7 +36,6 @@ import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import {
   composerAttachmentsHoldSend,
   useComposerFileRoute,
-  useComposerFileSend,
   useComposerHashPaste,
 } from "@/hooks/composer/use-composer-paste";
 import {
@@ -554,13 +553,12 @@ function ChatComposerImpl(props: ChatComposerProps) {
     },
     [taskId],
   );
-  // Files go to the tab's host: the chat lives there, and its send installs
-  // them from that host's draft blob store. A resting sandbox's chat keeps them
-  // here instead, and its send uploads them to the sandbox once it is awake.
+  // Files go to the tab's host, the host that holds this draft, as its images
+  // do - a resting sandbox's chat included. A send on another host pulls them
+  // by hash from the cloud copy that host publishes.
   const fileRoute = useComposerFileRoute({
     hostId: tabHostId,
     client: hostClient,
-    uploadAtAttach: !resting,
     putFileBlob,
     settleDraft: settleDraftFile,
   });
@@ -588,7 +586,6 @@ function ChatComposerImpl(props: ChatComposerProps) {
   const workspaceBlocked = !workspaceComposerCanStart(workspaceAvailability);
 
   const editorRef = useRef<ComposerPromptEditorHandle | null>(null);
-  const fileSend = useComposerFileSend(editorRef, fileRoute);
   const epicImagePresence = useEpicAttachmentBytesPresence();
   const hasPastedImageBytes = useCallback(
     (hash: string) => {
@@ -976,9 +973,6 @@ function ChatComposerImpl(props: ChatComposerProps) {
       // tile's `onSubmitMessage` chooses its destination from - so it is part
       // of the submit intent a preparation has to re-check before delivering.
       queueEditTargetId: editingQueueItemId,
-      // A resting sandbox's send is handed off; the hand-off puts the files on
-      // the sandbox once it wakes (`pending-sandbox-sends.tsx`).
-      fileSend: resting ? null : fileSend,
     });
   const attachmentPending = composerAttachmentPending(
     pastePending,

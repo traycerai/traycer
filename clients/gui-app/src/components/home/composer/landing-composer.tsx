@@ -591,7 +591,6 @@ export function LandingComposer(props: LandingComposerProps) {
   const fileRoute = useComposerFileRoute({
     hostId: resolvedHostId,
     client: hostClient,
-    uploadAtAttach: true,
     putFileBlob,
     settleDraft: settleDraftFile,
   });

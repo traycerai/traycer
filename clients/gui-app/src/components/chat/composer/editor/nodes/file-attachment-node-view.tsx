@@ -14,7 +14,6 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import {
   cancelFileAttachmentUpload,
-  readFileAttachmentUploadHost,
   readFileAttachmentUploadStatus,
   subscribeFileAttachmentUploads,
   type FileAttachmentUploadStatus,
@@ -22,8 +21,7 @@ import {
 import {
   fileAttachmentFamily,
   fileAttachmentSizeValue,
-  fileAttachmentUploadStateOf,
-  type FileAttachmentUploadState,
+  isPendingFileAttachmentAttrs,
 } from "@/lib/composer/file-attachments";
 import { stringValue } from "@/lib/composer/tiptap-json-content";
 import { formatByteSize } from "@/lib/format-byte-size";
@@ -31,7 +29,7 @@ import { cn } from "@/lib/utils";
 
 const CHIP_CLASS_NAMES = composerInlineChipClassNames("regular");
 
-type FileChipState = "uploading" | "unconfirmed" | "reattach" | "stored";
+type FileChipState = "uploading" | "unconfirmed" | "stored";
 
 function useFileAttachmentUploadStatus(
   id: string | null,
@@ -50,11 +48,10 @@ function useFileAttachmentUploadStatus(
  * blocking send until the upload lands or the person removes it.
  */
 function chipState(
-  uploadState: FileAttachmentUploadState | null,
+  pending: boolean,
   status: FileAttachmentUploadStatus | null,
 ): FileChipState {
-  if (uploadState === null) return "stored";
-  if (uploadState === "reattach") return "reattach";
+  if (!pending) return "stored";
   return status === "uploading" ? "uploading" : "unconfirmed";
 }
 
@@ -62,9 +59,6 @@ function chipTooltip(state: FileChipState, fileName: string): string {
   if (state === "uploading") return `Uploading ${fileName}`;
   if (state === "unconfirmed") {
     return "This file hasn't finished uploading. Remove it and attach it again.";
-  }
-  if (state === "reattach") {
-    return "This host never received this file. Remove it and attach it again to send it.";
   }
   return fileName;
 }
@@ -80,23 +74,18 @@ function FileAttachmentNodeViewBase(props: NodeViewProps) {
   const fileName = stringValue(node.attrs.fileName) ?? "File";
   const mediaType = stringValue(node.attrs.mediaType) ?? "";
   const size = fileAttachmentSizeValue(node.attrs.size);
-  const uploadState = fileAttachmentUploadStateOf(node.attrs);
-  const pending = uploadState === "pending";
+  const pending = isPendingFileAttachmentAttrs(node.attrs);
   const status = useFileAttachmentUploadStatus(id);
-  const state = chipState(uploadState, status);
+  const state = chipState(pending, status);
 
   // The upload's outcome, applied to whichever editor shows this node. It runs
   // again on every mount, so an upload that settled while the composer was
   // unmounted lands the next time the node is drawn.
   useEffect(() => {
-    if (!pending || id === null) return;
-    if (status === "stored") {
-      updateAttributes({
-        uploadState: null,
-        uploadHostId: readFileAttachmentUploadHost(id),
-      });
-    } else if (status === "failed") deleteNode();
-  }, [deleteNode, id, pending, status, updateAttributes]);
+    if (!pending) return;
+    if (status === "stored") updateAttributes({ uploadState: null });
+    else if (status === "failed") deleteNode();
+  }, [deleteNode, pending, status, updateAttributes]);
 
   const remove = useCallback(
     (event: MouseEvent<HTMLButtonElement>) => {
@@ -119,14 +108,14 @@ function FileAttachmentNodeViewBase(props: NodeViewProps) {
         aria-label={`Attached file ${fileName}`}
         className={cn(
           CHIP_CLASS_NAMES.root,
-          (state === "unconfirmed" || state === "reattach") &&
+          state === "unconfirmed" &&
             "border-warning/30 bg-warning/10 text-warning-foreground",
         )}
         contentEditable={false}
         data-composer-chip="file-attachment"
         data-file-attachment-state={state}
       >
-        {state === "unconfirmed" || state === "reattach" ? (
+        {state === "unconfirmed" ? (
           <FileWarning className={CHIP_CLASS_NAMES.icon} aria-hidden />
         ) : (
           <FileAttachmentIcon

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useNavigate, type UseNavigateResult } from "@tanstack/react-router";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { v4 as uuidv4 } from "uuid";
@@ -97,15 +97,6 @@ import {
   inlineHashOnlyImageBytes,
 } from "@/lib/composer/image-atoms";
 import { containsFileAttachments } from "@/lib/composer/file-attachments";
-import {
-  ensureFileAttachmentsOnHost,
-  fileAttachmentsReadyOn,
-} from "@/lib/composer/file-attachment-upload";
-import {
-  useDraftsPutFileBlob,
-  usePutFileBlob,
-} from "@/hooks/drafts/use-drafts-put-file-blob-mutation";
-import { settleFileNodeInLandingDraft } from "@/components/home/composer/landing-file-attachments";
 import { sessionImageBytes } from "@/lib/composer/landing-image-store";
 import { draftImageByteTargetForHost } from "@/lib/drafts/draft-image-byte-target";
 import { openLandingDraft } from "@/lib/drafts/open-landing-draft";
@@ -396,17 +387,6 @@ export function useLandingComposerActions(
   // sitting disabled with nothing changing for the whole pass.
   const [attachmentUpload, setAttachmentUpload] =
     useState<DraftBlobUploadProgress | null>(null);
-  // The file step before a create: every file confirmed on the placement the
-  // create goes to, uploaded there first when the chip moved since it was
-  // attached. STATE for the same reason as `attachmentUpload` - Send has to
-  // read busy through the upload.
-  const [filePreparationPending, setFilePreparationPending] = useState(false);
-  const putFileBlob = usePutFileBlob(useDraftsPutFileBlob());
-  // `submit` re-enters itself once the files are on the host, so the
-  // placement is resolved again: the chip may have moved during the upload.
-  const submitRef = useRef<
-    ((args: LandingComposerSubmitArgs) => LandingPlacementRefusal | null) | null
-  >(null);
 
   // Single create path shared by the GUI-chat and terminal-agent flows so the
   // epic.create request (epic light + repos + workspaces + folded chat) - and
@@ -1595,47 +1575,6 @@ export function useLandingComposerActions(
         queryClient,
         placement.hostId,
       );
-      const content = args.editor?.getJSON() ?? null;
-      if (
-        content !== null &&
-        !fileAttachmentsReadyOn(content, placement.hostId)
-      ) {
-        // One preparation at a time, shared with the session-cold image path.
-        if (submissionInFlightRef.current) return null;
-        submissionInFlightRef.current = true;
-        setFilePreparationPending(true);
-        const editor = args.editor;
-        void ensureFileAttachmentsOnHost({
-          content,
-          target:
-            submitClient === null
-              ? null
-              : { hostId: placement.hostId, client: submitClient },
-          put: putFileBlob,
-          settle: (id, settlement) => {
-            if (editor?.settleFileAttachment(id, settlement) === true) return;
-            settleFileNodeInLandingDraft(args.draftId, id, settlement);
-          },
-        }).then((files) => {
-          submissionInFlightRef.current = false;
-          setFilePreparationPending(false);
-          if (files === "held") {
-            args.settled?.(false);
-            return;
-          }
-          const refusal = submitRef.current?.(args) ?? null;
-          if (refusal !== null) {
-            reportableErrorToast(refusal.message, undefined, {
-              title: "Landing create refused after file upload",
-              message: null,
-              code: null,
-              source: "Chat composer",
-            });
-            args.settled?.(false);
-          }
-        });
-        return null;
-      }
       if (
         workspaceContext.worktreeIntentSuspended ||
         !dispatchSubmission(args, workspaceContext, placement.hostId)
@@ -1644,17 +1583,8 @@ export function useLandingComposerActions(
       }
       return null;
     },
-    [
-      dispatchSubmission,
-      putFileBlob,
-      queryClient,
-      resolveAdmittedPlacement,
-      submitClient,
-    ],
+    [dispatchSubmission, queryClient, resolveAdmittedPlacement],
   );
-  useEffect(() => {
-    submitRef.current = submit;
-  }, [submit]);
 
   const selectTerminalAgent = useCallback(
     (args: LandingTerminalAgentArgs): LandingPlacementRefusal | null => {
@@ -1832,8 +1762,7 @@ export function useLandingComposerActions(
         createEpic.isPending ||
         attachEnvironment.isPending ||
         terminalAgentCreate.isPending ||
-        attachmentUpload !== null ||
-        filePreparationPending,
+        attachmentUpload !== null,
       // The upload burst's position, for the composer to render beside its
       // disabled Send; `null` whenever no by-hash submit is uploading.
       attachmentUpload,
@@ -1842,7 +1771,6 @@ export function useLandingComposerActions(
       attachmentUpload,
       attachEnvironment.isPending,
       createEpic.isPending,
-      filePreparationPending,
       placementAdmitsTask,
       selectTerminalAgent,
       startTaskOnStagedSandbox,

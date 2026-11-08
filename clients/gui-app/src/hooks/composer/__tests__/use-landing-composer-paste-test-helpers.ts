@@ -54,7 +54,6 @@ export function makeHandle(
 /** A landing paste rig with no file route to speak of: files never upload. */
 export const NO_FILE_ROUTE: ComposerFileRoute = {
   target: null,
-  uploadAtAttach: true,
   put: () => Promise.reject(new Error("no file upload in this test")),
   settleDraft: () => undefined,
 };

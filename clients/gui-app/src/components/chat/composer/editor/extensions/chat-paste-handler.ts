@@ -147,7 +147,7 @@ export function createChatPasteHandler(deps: ChatPasteHandlerDeps) {
           if (plain === null) return false;
           workingContent = plain;
         }
-        const capped = capPastedFileAttachments(view.state.doc, workingContent);
+        const capped = capPastedFileAttachments(view.state, workingContent);
         showTooManyFilesToast(capped.refusedNames);
         return validateAndPasteComposerContent(view, capped.content);
       };
@@ -189,7 +189,7 @@ export function createChatPasteHandler(deps: ChatPasteHandlerDeps) {
           );
         }
         const cappedFragment = capPastedFileAttachmentFragment(
-          view.state.doc,
+          view.state,
           workingSlice.content,
         );
         showTooManyFilesToast(cappedFragment.refusedNames);
@@ -354,7 +354,15 @@ export function createChatPasteHandler(deps: ChatPasteHandlerDeps) {
   });
 }
 
-function fileIdentitiesInDoc(doc: ProseMirrorNode): Set<string> {
+/**
+ * The files the document will still hold around the paste. A paste REPLACES
+ * the selection, so a file inside it is gone once the paste lands and must not
+ * count against the files the paste brings in.
+ */
+function fileIdentitiesAroundPaste(state: EditorState): Set<string> {
+  const doc = state.selection.empty
+    ? state.doc
+    : state.tr.deleteSelection().doc;
   const identities = new Set<string>();
   doc.descendants((node) => {
     if (node.type.name !== FILE_ATTACHMENT_NODE_TYPE) return true;
@@ -392,10 +400,10 @@ function admitPastedFile(
  * so the person hears what the paste dropped.
  */
 function capPastedFileAttachments(
-  doc: ProseMirrorNode,
+  state: EditorState,
   content: JsonContent,
 ): { readonly content: JsonContent; readonly refusedNames: string[] } {
-  const identities = fileIdentitiesInDoc(doc);
+  const identities = fileIdentitiesAroundPaste(state);
   const refusedNames: string[] = [];
   const visit = (node: JsonContent): JsonContent | null => {
     if (node.type === FILE_ATTACHMENT_NODE_TYPE) {
@@ -417,10 +425,10 @@ function capPastedFileAttachments(
 
 /** {@link capPastedFileAttachments} over an HTML paste's parsed fragment. */
 function capPastedFileAttachmentFragment(
-  doc: ProseMirrorNode,
+  state: EditorState,
   fragment: Fragment,
 ): { readonly fragment: Fragment; readonly refusedNames: string[] } {
-  const identities = fileIdentitiesInDoc(doc);
+  const identities = fileIdentitiesAroundPaste(state);
   const refusedNames: string[] = [];
   const visit = (current: Fragment): Fragment => {
     const kept: ProseMirrorNode[] = [];

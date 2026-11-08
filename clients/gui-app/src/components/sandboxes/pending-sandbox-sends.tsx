@@ -213,14 +213,6 @@ import {
   pendingSandboxSendFacts,
   pendingSandboxDispatchCurrent,
 } from "@/stores/sandboxes/pending-sandbox-send-store";
-import {
-  ensureFileAttachmentsOnHost,
-  type PutFileBlob,
-} from "@/lib/composer/file-attachment-upload";
-import {
-  useDraftsPutFileBlob,
-  usePutFileBlob,
-} from "@/hooks/drafts/use-drafts-put-file-blob-mutation";
 
 import {
   pendingSendState,
@@ -593,7 +585,6 @@ function PendingSendDelivery(
     sandbox.environment,
     props.chatLineReady,
   );
-  const putFileBlob = usePutFileBlob(useDraftsPutFileBlob());
   const event = sandboxObservation(stageBlocker(stage), environment);
   const plan = transitionPendingSend(
     pendingSendState(send, stageBlocker(stage)),
@@ -629,7 +620,6 @@ function PendingSendDelivery(
       send: resolved.send,
       stage: resolved.stage,
       client,
-      putFileBlob,
       requested: {
         readiness: requested.readiness,
         profiles: requested.profiles,
@@ -638,7 +628,6 @@ function PendingSendDelivery(
     });
   }, [
     client,
-    putFileBlob,
     environment,
     event,
     model.model,
@@ -771,7 +760,6 @@ function executePendingReadiness(input: {
   readonly send: PendingSandboxSend;
   readonly stage: StagedSandbox;
   readonly client: HostClient<HostRpcRegistry> | null;
-  readonly putFileBlob: PutFileBlob;
   readonly requested: Pick<PendingAgentReadiness, "readiness" | "profiles">;
   readonly model: Pick<PendingDefaultModel, "model" | "refetch">;
 }): void {
@@ -801,7 +789,6 @@ function executePendingReadiness(input: {
     send,
     stage: current,
     client,
-    putFileBlob: input.putFileBlob,
     model: model.model,
     profiles: requested.profiles,
     opencodeLine: requested.readiness.opencodeLine,
@@ -813,7 +800,6 @@ function preparePendingReadySend(input: {
   readonly send: PendingSandboxSend;
   readonly stage: StagedSandbox;
   readonly client: HostClient<HostRpcRegistry> | null;
-  readonly putFileBlob: PutFileBlob;
   readonly model: string | null;
   readonly profiles: ReadonlyArray<ProviderProfile> | undefined;
   readonly opencodeLine: OpencodeLine | null;
@@ -844,7 +830,6 @@ function preparePendingReadySend(input: {
       send,
       hostId,
       client,
-      putFileBlob: input.putFileBlob,
       settings,
       opencodeLine: input.opencodeLine,
     });
@@ -1434,7 +1419,6 @@ function prepareAndDeliverSend(input: {
   readonly send: PendingSandboxSend;
   readonly hostId: string;
   readonly client: HostClient<HostRpcRegistry>;
-  readonly putFileBlob: PutFileBlob;
   readonly settings: PendingSandboxSend["settings"];
   readonly opencodeLine: OpencodeLine | null;
 }): void {
@@ -1442,19 +1426,9 @@ function prepareAndDeliverSend(input: {
   const surfaceKey = pendingSendSurfaceKey(send.id);
   if (deliveriesPreparing.has(send.id)) return;
   deliveriesPreparing.add(send.id);
-  void contentForHost(hostId, input.client, input.putFileBlob, send.content)
+  void contentForHost(hostId, input.client, send.content)
     .then((prepared) => {
       if (!preparingSendCurrent(send)) return;
-      if (prepared === "files-held") {
-        // The file step said why already (reattach, too many, an old host).
-        const decision = transitionPendingSend(
-          pendingSendState(send, stageBlocker(readStagedSandbox(surfaceKey))),
-          "prepare-failed",
-          pendingSandboxSendFacts(send.id, UNKNOWN_PENDING_SEND_FACTS),
-        );
-        if (decision.effects.includes("report-not-sent")) notSent(surfaceKey);
-        return;
-      }
       if (prepared === null) {
         reportableErrorToast(
           "Couldn't attach an image.",
@@ -1542,37 +1516,18 @@ function notSent(surfaceKey: string): void {
 }
 
 /**
- * The message as the sandbox can read it: each file is put on the sandbox
- * from this device (`ensureFileAttachmentsOnHost`), each image the sandbox
- * takes by hash is uploaded to it, and every other one is inlined from this
- * device. `"files-held"` when a file cannot be put there, and `null` when an
- * image's bytes are nowhere here.
+ * The message as the sandbox can read it: each image the sandbox takes by
+ * hash is uploaded to it, and every other one is inlined from this device.
+ * `null` when an image's bytes are nowhere here.
  */
 async function contentForHost(
   hostId: string,
   client: HostClient<HostRpcRegistry>,
-  putFileBlob: PutFileBlob,
   content: JsonContent,
-): Promise<
-  | {
-      readonly content: JsonContent;
-      readonly attachmentsByHash: boolean;
-    }
-  | "files-held"
-  | null
-> {
-  // The sandbox was asleep or not yet made when the files were attached, so
-  // this is the first moment they can go to it. The message waits in the
-  // pending-send store, not in an editor, so there is no node to mark: a file
-  // whose bytes are gone is named in the toast, and the message stays here for
-  // Retry or for the person to take back.
-  const files = await ensureFileAttachmentsOnHost({
-    content,
-    target: { hostId, client },
-    put: putFileBlob,
-    settle: () => undefined,
-  });
-  if (files === "held") return "files-held";
+): Promise<{
+  readonly content: JsonContent;
+  readonly attachmentsByHash: boolean;
+} | null> {
   const plan = planAttachmentsByHash(content);
   if (plan.eligible.length === 0 && plan.ineligible.length === 0) {
     return { content, attachmentsByHash: false };

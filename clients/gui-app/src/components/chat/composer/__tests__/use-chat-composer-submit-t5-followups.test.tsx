@@ -296,7 +296,6 @@ function mountSubmit(args: MountArgs) {
       onSideChat: args.onSideChat ?? null,
       targetHostId: args.targetHostId ?? null,
       queueEditTargetId: args.queueEditTargetId ?? null,
-      fileSend: null,
       getDraftBlobBridgeSupported:
         args.getDraftBlobBridgeSupported ?? (() => false),
     }),
@@ -559,7 +558,6 @@ function mountSteerConflictLiveBlock(args: {
         onSideChat: null,
         targetHostId: GATE_HOST,
         queueEditTargetId: null,
-        fileSend: null,
         getDraftBlobBridgeSupported: args.bridgeSupported ?? (() => false),
       }),
     { initialProps: { workspaceBlocked: false } },
@@ -772,7 +770,6 @@ function Harness(props: {
     onSideChat: null,
     targetHostId: props.targetHostId,
     queueEditTargetId: null,
-    fileSend: null,
     // The production shape (`chat-tile.tsx`): a STABLE getter bound directly
     // to the store, never to a value captured from this render.
     getDraftBlobBridgeSupported: () =>
