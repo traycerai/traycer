@@ -1968,6 +1968,50 @@ describe("runHostStart - signal/exit propagation", () => {
       expect(recorded.crashReports[0]?.stderrFatal).toBe("v8-heap-oom");
     });
 
+    it("carries the same closed-set evidence on a fatal-signal death", async () => {
+      const exec = "/opt/traycer/host/install/traycer-host";
+      const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+      const stderr = new PassThrough();
+      Object.assign(child, { stderr });
+      const originalSpawn = deps.spawn;
+      if (originalSpawn === undefined) {
+        throw new Error("test spawn dependency missing");
+      }
+      await runUntilExit(
+        () =>
+          runHostStart(
+            { environment: "production", cwd: null },
+            {
+              ...deps,
+              stopIntentState: async () => "stale",
+              spawn: (command, args, options) => {
+                const spawned = originalSpawn(command, args, options);
+                setImmediate(() => {
+                  stderr.write(
+                    Buffer.from(
+                      "[host] layer0-acquired attempt=a fs-type=NTFS\n",
+                    ),
+                  );
+                  stderr.write(Buffer.from(oomBlock));
+                  stderr.end();
+                  child.emit("exit", null, "SIGABRT");
+                });
+                return spawned;
+              },
+            },
+          ),
+        recorded,
+      );
+      expect(recorded.crashReports).toHaveLength(1);
+      const report = recorded.crashReports[0];
+      expect(report?.signal).toBe("SIGABRT");
+      expect(report?.stderrFatal).toBe("v8-heap-oom");
+      expect(report?.hostLastLine).toBe("layer0-acquired");
+      expect(report?.errorClass).toBe("none");
+      expect(report?.errorCode).toBe("none");
+      expect(report?.stopIntentState).toBe("stale");
+    });
+
     it("tags nothing-recognised as incomplete when the stderr pipe errored before it ended", async () => {
       const exec = "/opt/traycer/host/install/traycer-host";
       const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);

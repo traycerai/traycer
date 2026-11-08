@@ -165,13 +165,20 @@ const ERROR_CLASS_SHAPE = /^(?:[A-Z][A-Za-z0-9]{0,58})?Error$/;
 const ERROR_CODE_SHAPE = /^(ERR_[A-Z0-9_]{1,48}|E[A-Z]{2,12})$/;
 
 /** The `code: 'X'` line Node's error inspector prints under a stack. */
-const INSPECTED_CODE_LINE = /^[ \t]+code: '([^'\n]{1,64})',?[ \t]*$/m;
+const INSPECTED_CODE_LINE = /^[ \t]+code: '([^'\n]{1,64})',?[ \t\r]*$/m;
 
 /** Node's source-position caret line, which precedes an uncaught error. */
-const UNCAUGHT_CARET_LINE = /^[ \t]*\^[ \t]*$/gm;
+const UNCAUGHT_CARET_LINE = /^[ \t]*\^[ \t\r]*$/gm;
 
-/** A stack-frame line. */
-const STACK_FRAME_LINE = /^[ \t]+at /m;
+/**
+ * The head of Node's error header line: the name, then Node's optional
+ * bracketed code (`TypeError [ERR_INVALID_ARG_TYPE]: ...`), then the colon or
+ * the end of the line.
+ */
+const ERROR_HEADER_NAME = /^([A-Za-z0-9_$]+)(?: \[[A-Z0-9_]{1,64}\])?(?::|$)/;
+
+/** Every stack-frame line, whole. */
+const STACK_FRAME_LINES = /^[ \t]+at [^\n]*$/gm;
 
 /** Heap-exhaustion wording in a `FATAL ERROR:` line (V8 and Node's own). */
 const HEAP_OOM_LINE = /heap out of memory|heap limit/;
@@ -521,23 +528,27 @@ export class StderrCaptureBuffer {
   }
 
   /**
-   * The error class of a Node uncaught-error block, kept only in the shape of
-   * {@link ERROR_CLASS_SHAPE}: `none` when the capture holds no such block,
-   * `unclassified` when it does and the line before its first stack frame
-   * names nothing of that shape. Never the message. Never throws.
+   * The error class of a Node uncaught-error block: the name on Node's header
+   * line, which is the FIRST non-empty line after the caret line and reads
+   * `Name: message` (a coded error reads `Name [CODE]: message`). Kept only in
+   * the shape of {@link ERROR_CLASS_SHAPE}; a later message line is message
+   * text and is never read. `none` when the capture holds no Node trailer,
+   * `unclassified` when it does and no caret line survives (an elided capture
+   * cannot say which error the header belongs to), the header is missing, or
+   * its name is outside the shape. Never the message. Never throws.
    */
   uncaughtErrorClass(): string {
     try {
+      if (!NODE_UNCAUGHT_TRAILER.test(this.heldText())) return EVIDENCE_NONE;
       const block = this.uncaughtBlock();
-      if (block === null) return EVIDENCE_NONE;
-      const frame = block.search(STACK_FRAME_LINE);
-      if (frame <= 0) return EVIDENCE_UNCLASSIFIED;
-      const lines = block.slice(0, frame).split("\n");
-      // The line the frame follows: the last non-empty one before it.
-      const header = lines.reverse().find((line) => line.trim() !== "");
-      const token = header?.match(/^([A-Za-z0-9_$]+)(?::|$)/)?.[1];
-      return token !== undefined && ERROR_CLASS_SHAPE.test(token)
-        ? token
+      if (block === null) return EVIDENCE_UNCLASSIFIED;
+      const header = block
+        .split("\n")
+        .map((line) => line.replace(/\r$/, ""))
+        .find((line) => line.trim() !== "");
+      const name = header?.match(ERROR_HEADER_NAME)?.[1];
+      return name !== undefined && ERROR_CLASS_SHAPE.test(name)
+        ? name
         : EVIDENCE_UNCLASSIFIED;
     } catch {
       return EVIDENCE_UNCLASSIFIED;
@@ -545,16 +556,23 @@ export class StderrCaptureBuffer {
   }
 
   /**
-   * The `code` Node's inspector printed under an uncaught error's stack, kept
-   * only in the shape of {@link ERROR_CODE_SHAPE}: `none` when the capture
-   * holds no uncaught-error block or the block prints no code, `unclassified`
-   * when it prints one outside the shape. Never throws.
+   * The `code` Node's inspector printed in the properties block that follows
+   * an uncaught error's last stack frame, kept only in the shape of
+   * {@link ERROR_CODE_SHAPE}. A `code:` line anywhere earlier is message text
+   * and is never read. `none` when the capture holds no uncaught-error block,
+   * no caret anchors it, or the properties block prints no code;
+   * `unclassified` when it prints one outside the shape. Never throws.
    */
   uncaughtErrorCode(): string {
     try {
       const block = this.uncaughtBlock();
       if (block === null) return EVIDENCE_NONE;
-      const code = block.match(INSPECTED_CODE_LINE)?.[1];
+      let lastFrameEnd = -1;
+      for (const frame of block.matchAll(STACK_FRAME_LINES)) {
+        lastFrameEnd = frame.index + frame[0].length;
+      }
+      if (lastFrameEnd === -1) return EVIDENCE_NONE;
+      const code = block.slice(lastFrameEnd).match(INSPECTED_CODE_LINE)?.[1];
       if (code === undefined) return EVIDENCE_NONE;
       return ERROR_CODE_SHAPE.test(code) ? code : EVIDENCE_UNCLASSIFIED;
     } catch {
@@ -563,21 +581,21 @@ export class StderrCaptureBuffer {
   }
 
   /**
-   * The text from Node's source-position caret line (`    ^`) up to the
-   * trailer, or `null` when the capture has no trailer. A block with no caret
-   * (a thrown non-error prints none) starts at the capture's first byte, so
-   * earlier output can only make the class `unclassified`, never carry text.
+   * The text after Node's source-position caret line (`    ^`) up to the
+   * trailer, or `null` when the capture has no trailer or no caret line (an
+   * elided capture, or a thrown non-error): without the caret nothing says
+   * where the block begins, so earlier output is never read as part of it.
    */
   private uncaughtBlock(): string | null {
     const held = this.heldText();
     const trailer = held.search(NODE_UNCAUGHT_TRAILER);
     if (trailer === -1) return null;
     const upToTrailer = held.slice(0, trailer);
-    let start = 0;
+    let start = -1;
     for (const caret of upToTrailer.matchAll(UNCAUGHT_CARET_LINE)) {
       start = caret.index + caret[0].length;
     }
-    return upToTrailer.slice(start);
+    return start === -1 ? null : upToTrailer.slice(start);
   }
 
   /**

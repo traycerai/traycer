@@ -3142,6 +3142,11 @@ export async function runHostStart(
       signal: ending.signal,
       platform: deps.lifecycle.teardown.platform,
       stopRequested,
+      // A second read of the same file, right after the one above: the two can
+      // straddle a change to the record, so the tag can disagree with
+      // `stopRequested` once in a blue moon. Accepted: the tag is evidence
+      // only and nothing decides from it, and a rare pair that disagrees
+      // reads as noise in a fleet query, not as a cell.
       stopIntentState: await readStopIntentStateBestEffort(
         deps,
         opts.environment,

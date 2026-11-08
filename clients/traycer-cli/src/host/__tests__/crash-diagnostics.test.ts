@@ -308,7 +308,33 @@ describe("StderrCaptureBuffer", () => {
     });
 
     it.each([
+      // Node prints a coded error's code in the header, between the class and
+      // the colon (`fs.readFileSync(null)`, `new URL("x")`).
+      [
+        "a TypeError with its code in the header",
+        "TypeError [ERR_INVALID_ARG_TYPE]: The path argument must be of type string",
+        "TypeError",
+      ],
+      [
+        "a bare Error with its code in the header",
+        "Error [ERR_STREAM_WRITE_AFTER_END]: write after end",
+        "Error",
+      ],
+      [
+        "a coded error with no message",
+        "SystemError [ERR_SYSTEM_ERROR]",
+        "SystemError",
+      ],
+    ])("keeps the class of %s", (_name, header, expected) => {
+      const buf = capture(uncaught(header, ""));
+      expect(buf.classifyFatal(true)).toBe("node-uncaught");
+      expect(buf.uncaughtErrorClass()).toBe(expected);
+    });
+
+    it.each([
       ["a class not ending in Error", "Whatever: x"],
+      ["a user word before a bracketed code", "Tom [ERR_X]: x"],
+      ["a lowercase bracket", "TypeError [oops]: x"],
       ["a lowercase token", "someError: x"],
       ["a multi-line message ending in a user word", "Tom Smith"],
       ["a token longer than the bound", `E${"a".repeat(60)}Error: x`],
@@ -317,6 +343,56 @@ describe("StderrCaptureBuffer", () => {
       expect(buf.classifyFatal(true)).toBe("node-uncaught");
       expect(buf.uncaughtErrorClass()).toBe("unclassified");
       expect(buf.uncaughtErrorCode()).toBe("none");
+    });
+
+    // The header is Node's first line after the caret: `Name: message`. A
+    // multi-line message is the message, never a class.
+    it.each([
+      [
+        "a second message line shaped like a class",
+        "Error: spawn failed\nAcmeCorpPaymentError: card 4111 for bob",
+      ],
+      [
+        "a traceback line inside the message",
+        "Error: Command failed: py x.py\nTraceback (most recent call last):\nValueError: bad",
+      ],
+    ])(
+      "takes the class from the first header line, not %s",
+      (_name, header) => {
+        const buf = capture(uncaught(header, ""));
+        expect(buf.uncaughtErrorClass()).toBe("Error");
+      },
+    );
+
+    it("reads a code only from the inspected properties after the last frame", () => {
+      const buf = capture(uncaught("Error: x\n  code: 'EVIL',", ""));
+      expect(buf.classifyFatal(true)).toBe("node-uncaught");
+      expect(buf.uncaughtErrorCode()).toBe("none");
+    });
+
+    it("says unclassified for a block with no caret line, even when an earlier logged error is held", () => {
+      // An elided capture: the head holds an earlier logged error, the tail
+      // holds the last frames and the trailer, and no caret line survives.
+      const buf = new StderrCaptureBuffer(80, 80);
+      buf.append(Buffer.from("RangeError: earlier\n    at f (a.js:1:1)\n"));
+      buf.append(Buffer.from("x".repeat(400)));
+      buf.append(
+        Buffer.from("\n    at run (file.js:1:1)\n\nNode.js v24.20.0\n"),
+      );
+      expect(buf.classifyFatal(true)).toBe("node-uncaught");
+      expect(buf.uncaughtErrorClass()).toBe("unclassified");
+      expect(buf.uncaughtErrorCode()).toBe("none");
+    });
+
+    it("reads a CRLF block (Windows) the same way", () => {
+      const crlf = uncaught(
+        "TypeError [ERR_INVALID_ARG_TYPE]: bad",
+        " {\n  code: 'ERR_INVALID_ARG_TYPE'\n}",
+      ).replaceAll("\n", "\r\n");
+      const buf = capture(crlf);
+      expect(buf.classifyFatal(true)).toBe("node-uncaught");
+      expect(buf.uncaughtErrorClass()).toBe("TypeError");
+      expect(buf.uncaughtErrorCode()).toBe("ERR_INVALID_ARG_TYPE");
     });
 
     it("says unclassified for a code outside the closed shape", () => {
