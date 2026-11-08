@@ -270,6 +270,95 @@ describe("providers.list@10.9 profile identity projection", () => {
     },
   );
 
+  it.each([
+    {
+      name: "environment presence with a known foreign entry",
+      homePresence: {
+        scope: "environment",
+        environmentId: "synthetic-environment",
+        state: "absent",
+        retainedReason: "foreign-entry",
+        cause: null,
+      },
+      expectedRetainedReason: "foreign-entry",
+      profilePresence: { kind: "revoking", cause: "host-left-environment" },
+    },
+    {
+      name: "local presence with a known foreign entry",
+      homePresence: {
+        scope: "local",
+        state: "absent",
+        retainedReason: "foreign-entry",
+        cause: "signed-out-by-person",
+      },
+      expectedRetainedReason: "foreign-entry",
+      profilePresence: { kind: "revoking", cause: "signed-out-by-person" },
+    },
+    {
+      name: "environment presence with a future retained reason",
+      homePresence: {
+        scope: "environment",
+        environmentId: "synthetic-environment",
+        state: "absent",
+        retainedReason: "synthetic-future-retained-reason",
+        cause: null,
+      },
+      expectedRetainedReason: null,
+      profilePresence: { kind: "revoking", cause: "host-left-environment" },
+    },
+    {
+      name: "local presence with a future retained reason",
+      homePresence: {
+        scope: "local",
+        state: "absent",
+        retainedReason: "synthetic-future-retained-reason",
+        cause: "signed-out-by-person",
+      },
+      expectedRetainedReason: null,
+      profilePresence: { kind: "revoking", cause: "signed-out-by-person" },
+    },
+  ])(
+    "keeps the home and account-absence state for $name",
+    ({ homePresence, expectedRetainedReason, profilePresence }) => {
+      const parsed = providersListResponseSchema.parse({
+        providers: [
+          {
+            ...provider,
+            profiles: [
+              {
+                ...currentManagedProfile,
+                credentialHome: {
+                  ...currentManagedProfile.credentialHome,
+                  environmentPresence: homePresence,
+                },
+                presence: profilePresence,
+              },
+            ],
+          },
+        ],
+      });
+      const parsedProfile = parsed.providers[0]?.profiles[0];
+
+      expect(parsedProfile).toMatchObject({
+        profileId: "managed-1",
+        enabled: true,
+        recordVersion: 1,
+        credentialIdentity: currentManagedProfile.credentialIdentity,
+        credentialHome: {
+          homeAddress: "/synthetic/home",
+          bindingVersion: 1,
+          materialRevision: 1,
+          environmentPresence: {
+            ...homePresence,
+            retainedReason: expectedRetainedReason,
+          },
+        },
+        presence: profilePresence,
+      });
+      expect(parsedProfile?.readability?.kind).not.toBe("unreadable");
+    },
+  );
+
   it("keeps an unknown readability kind row-wide unreadable", () => {
     const parsed = providersListResponseSchema.parse({
       providers: [
@@ -302,12 +391,38 @@ describe("providers.list@10.9 profile identity projection", () => {
 
   it("strips identity facts through the frozen 10.8 response schema", () => {
     const frozen108 = providersList.versions[8].contract.responseSchema;
-    const parsed = frozen108.parse({ providers: [provider] });
+    const parsed = frozen108.parse({
+      providers: [
+        {
+          ...provider,
+          profiles: [
+            {
+              ...currentManagedProfile,
+              credentialHome: {
+                ...currentManagedProfile.credentialHome,
+                environmentPresence: {
+                  scope: "environment",
+                  environmentId: "synthetic-environment",
+                  state: "absent",
+                  retainedReason: "foreign-entry",
+                  cause: null,
+                },
+              },
+              presence: {
+                kind: "revoking",
+                cause: "host-left-environment",
+              },
+            },
+          ],
+        },
+      ],
+    });
     const parsedProfile = parsed.providers[0]?.profiles[0];
 
     expect(parsedProfile).toBeDefined();
     expect(parsedProfile).not.toHaveProperty("recordVersion");
     expect(parsedProfile).not.toHaveProperty("credentialIdentity");
     expect(parsedProfile).not.toHaveProperty("credentialHome");
+    expect(parsedProfile).not.toHaveProperty("presence");
   });
 });
