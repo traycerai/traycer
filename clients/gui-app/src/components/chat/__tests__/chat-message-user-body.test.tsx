@@ -1214,7 +1214,6 @@ describe("<UserMessageBody /> agent messages", () => {
 
   it.each([
     ["pending", "pending", true],
-    ["to attach again", "reattach", true],
     ["stored", null, false],
   ] as const)(
     "holds Send edit while an edited message's file is %s",
@@ -1237,7 +1236,6 @@ describe("<UserMessageBody /> agent messages", () => {
                   mediaType: "application/pdf",
                   size: 10,
                   uploadState,
-                  uploadHostId: null,
                 },
               },
             ],

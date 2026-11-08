@@ -194,12 +194,6 @@ import {
   requestPaneOpenerFocus,
   resetPaneOpenerFocusForTests,
 } from "@/lib/canvas/focus-pane-opener";
-import { attachFileAttachment } from "@/lib/composer/file-attachment-upload";
-import type { ComposerFileAttachmentAttrs } from "@/lib/composer/file-attachments";
-import {
-  okPut,
-  targetFor,
-} from "@/lib/composer/__tests__/file-attachment-fixtures";
 
 describe("the empty task canvas while its first sandbox send waits", () => {
   beforeEach(() => {
@@ -3314,106 +3308,6 @@ describe("a send whose message carries images, delivered on its sandbox", () => 
     } finally {
       restoreLocks();
     }
-  });
-});
-
-describe("a send whose message carries files, delivered on its sandbox", () => {
-  function withFile(attrs: ComposerFileAttachmentAttrs): JsonContent {
-    return {
-      type: "doc",
-      content: [
-        {
-          type: "paragraph",
-          content: [
-            { type: "text", text: "see this" },
-            { type: "fileAttachment", attrs: { ...attrs } },
-          ],
-        },
-      ],
-    };
-  }
-
-  const NODE_ATTRS: ComposerFileAttachmentAttrs = {
-    id: "file-node-1",
-    hash: "d".repeat(64),
-    fileName: "report.pdf",
-    mediaType: "application/pdf",
-    size: 10,
-    uploadState: null,
-    uploadHostId: "host-the-file-was-stored-on",
-  };
-
-  beforeEach(() => {
-    installFreshIndexedDb();
-  });
-
-  afterEach(() => {
-    resetNegotiatedManifests();
-  });
-
-  it("sends nothing and offers Retry when the file was stored on another host and its bytes are not on this device", async () => {
-    const restoreLocks = installImmediateExclusiveLocks();
-    try {
-      seed({
-        ...SEEDED,
-        send: { content: withFile(NODE_ATTRS) },
-        phase: "handoff",
-        created: true,
-      });
-      answerHost(SANDBOX_HOST, CODEX_READY);
-      mount();
-
-      await waitFor(() => {
-        expect(readStagedSandbox(SURFACE)?.failure).toEqual({
-          kind: "not-sent",
-        });
-      });
-      expect(createChatCalls()).toEqual([]);
-      expect(
-        mocks.wire.filter((entry) => entry.startsWith("drafts.putBlob")),
-      ).toEqual([]);
-    } finally {
-      restoreLocks();
-    }
-  });
-
-  it("puts a file picked on this device on the sandbox before the create", async () => {
-    const picked: ComposerFileAttachmentAttrs[] = [];
-    await attachFileAttachment({
-      file: new File([crypto.randomUUID()], "notes.txt", {
-        type: "text/plain",
-      }),
-      target: targetFor("composer-host-before-the-sandbox"),
-      uploadAtAttach: false,
-      put: okPut(),
-      insert: (attrs) => {
-        picked.push(attrs);
-        return "inserted";
-      },
-      settle: () => undefined,
-    });
-    const attrs = picked.at(0);
-    if (attrs === undefined) throw new Error("expected the picked file's node");
-    seed({
-      ...SEEDED,
-      send: { content: withFile(attrs) },
-      phase: "handoff",
-      created: true,
-    });
-    recordNegotiatedHostManifest(SANDBOX_HOST, {
-      "drafts.putBlob": { major: 1, minor: 2 },
-      "epic.createChat": { major: 1, minor: 1 },
-    });
-    answerHost(SANDBOX_HOST, CODEX_READY);
-    mount();
-
-    await waitFor(() => {
-      expect(createChatCalls()).toHaveLength(1);
-    });
-    expect(mocks.wire).toEqual([
-      `drafts.putBlob:${attrs.hash}`,
-      "epic.createChat",
-    ]);
   });
 });
 

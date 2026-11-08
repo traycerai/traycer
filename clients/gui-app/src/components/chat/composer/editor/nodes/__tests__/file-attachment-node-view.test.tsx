@@ -19,7 +19,6 @@ import {
   targetFor,
 } from "@/lib/composer/__tests__/file-attachment-fixtures";
 import {
-  collectFileAttachmentNodes,
   containsPendingFileAttachment,
   type ComposerFileAttachmentAttrs,
 } from "@/lib/composer/file-attachments";
@@ -67,7 +66,6 @@ function pendingAttrs(id: string): ComposerFileAttachmentAttrs {
     mediaType: "video/quicktime",
     size: 4096,
     uploadState: "pending",
-    uploadHostId: null,
   };
 }
 
@@ -103,7 +101,6 @@ function attachTo(input: {
       type: "video/quicktime",
     }),
     target: targetFor("host-1"),
-    uploadAtAttach: true,
     put: input.put,
     insert: input.insert,
     settle: settleInEditor,
@@ -173,7 +170,7 @@ describe("fileAttachment node view", () => {
     release();
   });
 
-  it("clears the pending state and records the host when the upload is stored", async () => {
+  it("clears the pending state when the upload is stored", async () => {
     const put = okPut();
     const { container } = render(<Harness content={[]} />);
 
@@ -181,11 +178,6 @@ describe("fileAttachment node view", () => {
 
     await waitFor(() => expect(chipState(container)).toBe("stored"));
     expect(docHasPending()).toBe(false);
-    expect(
-      collectFileAttachmentNodes(mounted().getJSON()).map(
-        (node) => node.uploadHostId,
-      ),
-    ).toEqual(["host-1"]);
     expect(screen.getByText("clip.mov")).not.toBeNull();
   });
 
@@ -202,16 +194,5 @@ describe("fileAttachment node view", () => {
     expect(
       container.querySelector('[data-composer-chip="file-attachment"]'),
     ).toBeNull();
-  });
-
-  it("settling reattach marks the chip and keeps the draft held", async () => {
-    const node = { ...pendingAttrs("n1"), uploadState: null };
-    const { container } = render(<Harness content={[node]} />);
-    await waitFor(() => expect(chipState(container)).toBe("stored"));
-
-    settleInEditor("n1", { kind: "reattach" });
-
-    await waitFor(() => expect(chipState(container)).toBe("reattach"));
-    expect(docHasPending()).toBe(true);
   });
 });

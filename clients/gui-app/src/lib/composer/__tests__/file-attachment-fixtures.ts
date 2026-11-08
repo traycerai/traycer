@@ -68,7 +68,6 @@ export function fileNodeAttrs(
     mediaType: "text/plain",
     size: 4,
     uploadState: null,
-    uploadHostId: null,
     ...overrides,
   };
 }

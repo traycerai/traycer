@@ -197,7 +197,6 @@ describe("composer rich clipboard paste", () => {
           mediaType: "text/plain",
           size: 1,
           uploadState: null,
-          uploadHostId: null,
         },
       };
     }
@@ -239,6 +238,30 @@ describe("composer rich clipboard paste", () => {
       expect(mocks.reportableErrorToast.mock.calls[0][0]).toBe(
         "Couldn't attach f101.txt.",
       );
+    });
+
+    it("counts the draft without the selection a paste replaces: at 20 files with one selected, a new file fits", () => {
+      const editor = makeEditor(KNOWN_SLASH_NAMES);
+      editor.commands.setContent(
+        docOfFiles(Array.from({ length: 20 }, (_, index) => index)),
+      );
+      let from = -1;
+      let to = -1;
+      editor.state.doc.descendants((node, pos) => {
+        if (from === -1 && node.type.name === "fileAttachment") {
+          from = pos;
+          to = pos + node.nodeSize;
+        }
+        return from === -1;
+      });
+      editor.commands.setTextSelection({ from, to });
+
+      pasteComposerContent(editor, docOfFiles([100]));
+
+      expect(fileNames(editor)).toHaveLength(20);
+      expect(fileNames(editor)).toContain("f100.txt");
+      expect(fileNames(editor)).not.toContain("f0.txt");
+      expect(mocks.reportableErrorToast).not.toHaveBeenCalled();
     });
 
     it("keeps a pasted file the draft already holds at 20 identities", () => {

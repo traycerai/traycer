@@ -22,14 +22,12 @@ import { FILE_ATTACHMENT_MAX_BYTES } from "@traycer/protocol/host/drafts/schemas
 import {
   composerAttachmentsHoldSend,
   useComposerFileAttachArgs,
-  useComposerFileSend,
   useComposerHashPasteAdapter,
   type ComposerFileRoute,
   type ComposerFilePathIngestArgs,
   type ComposerPasteEditorHandle,
 } from "@/hooks/composer/use-composer-paste";
 import {
-  ensureFileAttachmentsOnHost,
   readFileAttachmentUploadStatus,
   type PutFileBlob,
 } from "@/lib/composer/file-attachment-upload";
@@ -171,7 +169,6 @@ interface Rig {
 
 function makeRig(input: {
   readonly seed: ReadonlyArray<ComposerFileAttachmentAttrs>;
-  readonly uploadAtAttach: boolean;
 }): Rig {
   const editor = new FakeEditor(input.seed);
   const hostId = freshHostId("host");
@@ -185,7 +182,6 @@ function makeRig(input: {
     settleDraft,
     route: {
       target: targetFor(hostId),
-      uploadAtAttach: input.uploadAtAttach,
       put,
       settleDraft,
     },
@@ -214,7 +210,7 @@ afterEach(() => {
 
 describe("attachFiles", () => {
   it("refuses an over-cap file before upload: toast names the size, no node, no putBlob", () => {
-    const rig = makeRig({ seed: [], uploadAtAttach: true });
+    const rig = makeRig({ seed: [] });
     const { result } = renderHook(() => useRig(rig, rig.route));
 
     act(() => {
@@ -232,7 +228,7 @@ describe("attachFiles", () => {
   });
 
   it("admits the files in a pick that fit and refuses only the oversized one", async () => {
-    const rig = makeRig({ seed: [], uploadAtAttach: true });
+    const rig = makeRig({ seed: [] });
     const { result } = renderHook(() => useRig(rig, rig.route));
 
     act(() => {
@@ -248,7 +244,7 @@ describe("attachFiles", () => {
   });
 
   it("holds the composer while picked files are being hashed, then releases it", async () => {
-    const rig = makeRig({ seed: [], uploadAtAttach: true });
+    const rig = makeRig({ seed: [] });
     const { result } = renderHook(() => useRig(rig, rig.route));
 
     act(() => {
@@ -262,7 +258,7 @@ describe("attachFiles", () => {
   });
 
   it("says there is no host and uploads nothing when the route has no target", () => {
-    const rig = makeRig({ seed: [], uploadAtAttach: true });
+    const rig = makeRig({ seed: [] });
     const { result } = renderHook(() =>
       useRig(rig, { ...rig.route, target: null }),
     );
@@ -279,7 +275,7 @@ describe("attachFiles", () => {
   });
 
   it("is a no-op on a surface with no file route", () => {
-    const rig = makeRig({ seed: [], uploadAtAttach: true });
+    const rig = makeRig({ seed: [] });
     const { result } = renderHook(() => useRig(rig, null));
 
     act(() => {
@@ -291,37 +287,9 @@ describe("attachFiles", () => {
   });
 });
 
-describe("a chat whose host is resting (uploadAtAttach: false)", () => {
-  it("inserts the node ready with no put, and a later send uploads the kept bytes to the sandbox", async () => {
-    const rig = makeRig({ seed: [], uploadAtAttach: false });
-    const { result } = renderHook(() => useRig(rig, rig.route));
-
-    act(() => {
-      result.current.attachFiles([uniqueFile("later.txt")]);
-    });
-
-    await waitFor(() => expect(attachedNames(rig)).toEqual(["later.txt"]));
-    const [node] = rig.editor.nodes();
-    expect(node.uploadState).toBeNull();
-    expect(rig.put).not.toHaveBeenCalled();
-
-    const sandbox = freshHostId("sandbox");
-    const readiness = await ensureFileAttachmentsOnHost({
-      content: rig.editor.getJSON(),
-      target: targetFor(sandbox),
-      put: rig.put,
-      settle: () => undefined,
-    });
-
-    expect(readiness).toBe("ready");
-    expect(rig.put).toHaveBeenCalledTimes(1);
-    expect(rig.put.mock.calls[0][0].target.hostId).toBe(sandbox);
-  });
-});
-
 describe("the pick fence", () => {
   it("inserts and uploads nothing when the draft moved on while the file was hashing", async () => {
-    const rig = makeRig({ seed: [], uploadAtAttach: true });
+    const rig = makeRig({ seed: [] });
     const { result } = renderHook(() => useRig(rig, rig.route));
 
     act(() => {
@@ -336,7 +304,7 @@ describe("the pick fence", () => {
   });
 
   it("inserts and uploads nothing when the editor was recreated while the file was hashing", async () => {
-    const rig = makeRig({ seed: [], uploadAtAttach: true });
+    const rig = makeRig({ seed: [] });
     const { result } = renderHook(() => useRig(rig, rig.route));
 
     act(() => {
@@ -351,13 +319,13 @@ describe("the pick fence", () => {
 });
 
 describe("settling a node whose composer is gone", () => {
-  const stored: FileNodeSettlement = { kind: "stored", hostId: "host-a" };
+  const stored: FileNodeSettlement = { kind: "stored" };
 
   it("falls back to the route's persisted draft when the live editor does not hold the node", () => {
-    const rig = makeRig({ seed: [], uploadAtAttach: true });
+    const rig = makeRig({ seed: [] });
     rig.editor.mounted = false;
     const { result } = renderHook(() =>
-      useComposerFileSend(rig.editorRef, rig.route),
+      useComposerFileAttachArgs(rig.editorRef, rig.route),
     );
 
     result.current?.settle("node-1", stored);
@@ -367,22 +335,19 @@ describe("settling a node whose composer is gone", () => {
 
   it("settles in the live editor alone while it holds the node", () => {
     const node = fileNodeAttrs({ uploadState: "pending" });
-    const rig = makeRig({ seed: [node], uploadAtAttach: true });
+    const rig = makeRig({ seed: [node] });
     const { result } = renderHook(() =>
-      useComposerFileSend(rig.editorRef, rig.route),
+      useComposerFileAttachArgs(rig.editorRef, rig.route),
     );
 
     result.current?.settle(node.id, stored);
 
-    expect(rig.editor.nodes()[0]).toMatchObject({
-      uploadState: null,
-      uploadHostId: "host-a",
-    });
+    expect(rig.editor.nodes()[0].uploadState).toBeNull();
     expect(rig.settleDraft).not.toHaveBeenCalled();
   });
 
   it("an upload that finishes after the editor unmounted is settled in the draft", async () => {
-    const rig = makeRig({ seed: [], uploadAtAttach: true });
+    const rig = makeRig({ seed: [] });
     let finish: () => void = () => undefined;
     const gated = vi.fn<PutFileBlob>().mockImplementation(
       () =>
@@ -404,7 +369,6 @@ describe("settling a node whose composer is gone", () => {
     await waitFor(() =>
       expect(rig.settleDraft).toHaveBeenCalledWith(node.id, {
         kind: "stored",
-        hostId: rig.hostId,
       }),
     );
   });
@@ -412,7 +376,7 @@ describe("settling a node whose composer is gone", () => {
 
 describe("the per-message file cap, by identity", () => {
   it("with 19 identities, a pick of 2 inserts the first and refuses the second by name", async () => {
-    const rig = makeRig({ seed: seedNodes(19), uploadAtAttach: true });
+    const rig = makeRig({ seed: seedNodes(19) });
     const { result } = renderHook(() => useRig(rig, rig.route));
 
     act(() => {
@@ -433,7 +397,7 @@ describe("the per-message file cap, by identity", () => {
   });
 
   it("with 20 identities, a pick of 2 new files is refused whole with one toast", async () => {
-    const rig = makeRig({ seed: seedNodes(20), uploadAtAttach: true });
+    const rig = makeRig({ seed: seedNodes(20) });
     const { result } = renderHook(() => useRig(rig, rig.route));
 
     act(() => {
@@ -456,7 +420,7 @@ describe("the per-message file cap, by identity", () => {
     seed.push(
       fileNodeAttrs({ hash: await sha256Hex(bytes), fileName: "same.txt" }),
     );
-    const rig = makeRig({ seed, uploadAtAttach: true });
+    const rig = makeRig({ seed });
     const { result } = renderHook(() => useRig(rig, rig.route));
 
     act(() => {
@@ -469,7 +433,7 @@ describe("the per-message file cap, by identity", () => {
   });
 
   it("two back-to-back picks at 19 insert one file in total", async () => {
-    const rig = makeRig({ seed: seedNodes(19), uploadAtAttach: true });
+    const rig = makeRig({ seed: seedNodes(19) });
     const { result } = renderHook(() => useRig(rig, rig.route));
 
     act(() => {
@@ -483,7 +447,7 @@ describe("the per-message file cap, by identity", () => {
   });
 
   it("a too-large file does not use up a slot", async () => {
-    const rig = makeRig({ seed: seedNodes(19), uploadAtAttach: true });
+    const rig = makeRig({ seed: seedNodes(19) });
     const { result } = renderHook(() => useRig(rig, rig.route));
 
     act(() => {
@@ -529,12 +493,15 @@ describe("paste and drop of a non-image file", () => {
         onPaste={handlers.onPaste}
         onDrop={handlers.onDrop}
         onDragOver={handlers.onDragOver}
+        data-busy={String(
+          handlers.isResolvingFilePaths || handlers.isAttachingFiles,
+        )}
       />
     );
   }
 
   it("a pasted file with no resolvable path goes to the file route, with no path-failure toast", async () => {
-    const rig = makeRig({ seed: [], uploadAtAttach: true });
+    const rig = makeRig({ seed: [] });
     render(<Zone rig={rig} route={rig.route} />);
 
     fireEvent.paste(screen.getByTestId("zone"), {
@@ -552,7 +519,7 @@ describe("paste and drop of a non-image file", () => {
   });
 
   it("a dropped file with no resolvable path goes to the file route", async () => {
-    const rig = makeRig({ seed: [], uploadAtAttach: true });
+    const rig = makeRig({ seed: [] });
     render(<Zone rig={rig} route={rig.route} />);
 
     fireEvent.drop(screen.getByTestId("zone"), {
@@ -565,9 +532,60 @@ describe("paste and drop of a non-image file", () => {
     expect(toasts.error).not.toHaveBeenCalled();
   });
 
+  it.each(["paste", "drop"] as const)(
+    "a %s fenced at the gesture attaches nothing when the draft moved on while its path resolved",
+    async (gesture) => {
+      let resolvePaths: () => void = () => undefined;
+      resolveDroppedFilePaths.mockImplementation(
+        () =>
+          new Promise<string[]>((resolve) => {
+            resolvePaths = () => resolve([]);
+          }),
+      );
+      const rig = makeRig({ seed: [] });
+      render(<Zone rig={rig} route={rig.route} />);
+      const zone = screen.getByTestId("zone");
+      const files = [uniqueFile("slow.txt")];
+
+      if (gesture === "paste") {
+        fireEvent.paste(zone, { clipboardData: fileTransfer(files) });
+      } else {
+        fireEvent.drop(zone, { dataTransfer: fileTransfer(files) });
+      }
+      await waitFor(() => expect(resolveDroppedFilePaths).toHaveBeenCalled());
+      rig.editor.generation += 1;
+      resolvePaths();
+
+      await waitFor(() => expect(zone.getAttribute("data-busy")).toBe("false"));
+      expect(attachedNames(rig)).toEqual([]);
+      expect(rig.put).not.toHaveBeenCalled();
+      expect(toasts.error).not.toHaveBeenCalled();
+    },
+  );
+
+  it("the same delayed paste with the draft unchanged attaches the file", async () => {
+    let resolvePaths: () => void = () => undefined;
+    resolveDroppedFilePaths.mockImplementation(
+      () =>
+        new Promise<string[]>((resolve) => {
+          resolvePaths = () => resolve([]);
+        }),
+    );
+    const rig = makeRig({ seed: [] });
+    render(<Zone rig={rig} route={rig.route} />);
+
+    fireEvent.paste(screen.getByTestId("zone"), {
+      clipboardData: fileTransfer([uniqueFile("slow.txt")]),
+    });
+    await waitFor(() => expect(resolveDroppedFilePaths).toHaveBeenCalled());
+    resolvePaths();
+
+    await waitFor(() => expect(attachedNames(rig)).toEqual(["slow.txt"]));
+  });
+
   it("a file that resolves to a path keeps the path route and uploads nothing", async () => {
     resolveDroppedFilePaths.mockResolvedValue(["/home/me/a.txt"]);
-    const rig = makeRig({ seed: [], uploadAtAttach: true });
+    const rig = makeRig({ seed: [] });
     render(<Zone rig={rig} route={rig.route} />);
 
     fireEvent.paste(screen.getByTestId("zone"), {
@@ -581,7 +599,7 @@ describe("paste and drop of a non-image file", () => {
   });
 
   it("without a file route the unresolvable file still reports the path failure", async () => {
-    const rig = makeRig({ seed: [], uploadAtAttach: true });
+    const rig = makeRig({ seed: [] });
     render(<Zone rig={rig} route={null} />);
 
     fireEvent.paste(screen.getByTestId("zone"), {

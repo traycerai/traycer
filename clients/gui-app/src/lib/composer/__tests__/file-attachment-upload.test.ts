@@ -20,8 +20,6 @@ import { FILE_ATTACHMENT_MAX_BYTES } from "@traycer/protocol/host/drafts/schemas
 import {
   attachFileAttachment,
   cancelFileAttachmentUpload,
-  ensureFileAttachmentsOnHost,
-  fileAttachmentsReadyOn,
   readFileAttachmentUploadStatus,
   refuseFileAttachment,
   type FileInsertion,
@@ -30,8 +28,6 @@ import {
 } from "@/lib/composer/file-attachment-upload";
 import { type ComposerFileAttachmentAttrs } from "@/lib/composer/file-attachments";
 import {
-  docOfFileNodes,
-  fileNodeAttrs,
   freshHostId,
   okPut,
   recordingSettle,
@@ -65,7 +61,6 @@ async function attach(input: {
   readonly file: File;
   readonly hostId: string;
   readonly put: PutFileBlob;
-  readonly uploadAtAttach: boolean;
 }): Promise<Attached> {
   const inserted: ComposerFileAttachmentAttrs[] = [];
   const settle = recordingSettle();
@@ -76,7 +71,6 @@ async function attach(input: {
   await attachFileAttachment({
     file: input.file,
     target: targetFor(input.hostId),
-    uploadAtAttach: input.uploadAtAttach,
     put: input.put,
     insert,
     settle,
@@ -139,7 +133,6 @@ describe("attachFileAttachment", () => {
       file,
       hostId,
       put,
-      uploadAtAttach: true,
     });
 
     expect(attrs).toMatchObject({
@@ -148,14 +141,13 @@ describe("attachFileAttachment", () => {
       mediaType: "text/plain",
       size: 5,
       uploadState: "pending",
-      uploadHostId: null,
     });
     expect(readFileAttachmentUploadStatus(attrs.id)).toBe("uploading");
 
     await settled(attrs.id);
 
     expect(readFileAttachmentUploadStatus(attrs.id)).toBe("stored");
-    expect(settle).toHaveBeenCalledWith(attrs.id, { kind: "stored", hostId });
+    expect(settle).toHaveBeenCalledWith(attrs.id, { kind: "stored" });
     expect(put).toHaveBeenCalledTimes(1);
     const [variables] = put.mock.calls[0];
     expect(variables.target.hostId).toBe(hostId);
@@ -173,7 +165,6 @@ describe("attachFileAttachment", () => {
       file: new File([crypto.randomUUID()], "", { type: "" }),
       hostId: freshHostId("host"),
       put: okPut(),
-      uploadAtAttach: true,
     });
     await settled(attrs.id);
     expect(attrs.mediaType).toBe("application/octet-stream");
@@ -193,13 +184,11 @@ describe("attachFileAttachment", () => {
       file: uniqueFile("a.txt"),
       hostId,
       put,
-      uploadAtAttach: true,
     });
     const second = await attach({
       file: uniqueFile("b.txt"),
       hostId,
       put,
-      uploadAtAttach: true,
     });
 
     await vi.waitFor(() => expect(put).toHaveBeenCalledTimes(1));
@@ -224,7 +213,6 @@ describe("attachFileAttachment", () => {
       file: uniqueFile("a.txt"),
       hostId: freshHostId("host"),
       put,
-      uploadAtAttach: true,
     });
     await settled(attrs.id);
     expect(readFileAttachmentUploadStatus(attrs.id)).toBe("failed");
@@ -241,7 +229,6 @@ describe("attachFileAttachment", () => {
       file: uniqueFile("a.txt"),
       hostId: freshHostId("host"),
       put,
-      uploadAtAttach: true,
     });
     await settled(attrs.id);
     expect(settle).toHaveBeenCalledWith(attrs.id, { kind: "remove" });
@@ -277,7 +264,6 @@ describe("attachFileAttachment", () => {
       file: uniqueFile("a.txt"),
       hostId: freshHostId("host"),
       put,
-      uploadAtAttach: true,
     });
     await settled(attrs.id);
     expect(readFileAttachmentUploadStatus(attrs.id)).toBe("failed");
@@ -300,13 +286,11 @@ describe("attachFileAttachment", () => {
       file: uniqueFile("a.txt"),
       hostId,
       put,
-      uploadAtAttach: true,
     });
     const second = await attach({
       file: uniqueFile("b.txt"),
       hostId,
       put,
-      uploadAtAttach: true,
     });
     await vi.waitFor(() => expect(put).toHaveBeenCalledTimes(1));
 
@@ -317,7 +301,6 @@ describe("attachFileAttachment", () => {
       file: uniqueFile("c.txt"),
       hostId,
       put,
-      uploadAtAttach: true,
     });
     await vi.waitFor(() => expect(put).toHaveBeenCalledTimes(2));
     release[1]();
@@ -338,7 +321,6 @@ describe("attachFileAttachment", () => {
       const placed = await attachFileAttachment({
         file: uniqueFile("a.txt"),
         target: targetFor(freshHostId("host")),
-        uploadAtAttach: true,
         put,
         insert: () => answer,
         settle,
@@ -349,184 +331,10 @@ describe("attachFileAttachment", () => {
         file: uniqueFile("b.txt"),
         hostId: freshHostId("host"),
         put,
-        uploadAtAttach: true,
       });
       await settled(next.attrs.id);
       expect(put).toHaveBeenCalledTimes(1);
       expect(settle).not.toHaveBeenCalled();
     },
   );
-});
-
-describe("a file bound to the destination host", () => {
-  it("uploaded to host A is put on host B before a send to B, and then B is ready", async () => {
-    const hostA = freshHostId("host-a");
-    const hostB = freshHostId("host-b");
-    const put = okPut();
-    const { attrs } = await attach({
-      file: uniqueFile("report.txt"),
-      hostId: hostA,
-      put,
-      uploadAtAttach: true,
-    });
-    await settled(attrs.id);
-    const content = docOfFileNodes([
-      { ...attrs, uploadState: null, uploadHostId: hostA },
-    ]);
-    expect(fileAttachmentsReadyOn(content, hostA)).toBe(true);
-    expect(fileAttachmentsReadyOn(content, hostB)).toBe(false);
-    put.mockClear();
-
-    const readiness = await ensureFileAttachmentsOnHost({
-      content,
-      target: targetFor(hostB),
-      put,
-      settle: recordingSettle(),
-    });
-
-    expect(readiness).toBe("ready");
-    expect(put).toHaveBeenCalledTimes(1);
-    const [variables] = put.mock.calls[0];
-    expect(variables.target.hostId).toBe(hostB);
-    expect(variables.request).toMatchObject({
-      kind: "file",
-      sha256: attrs.hash,
-      fileName: "report.txt",
-    });
-    expect(fileAttachmentsReadyOn(content, hostB)).toBe(true);
-  });
-
-  it("whose bytes this renderer never had is marked for reattach and holds a send to another host", async () => {
-    const put = okPut();
-    const settle = recordingSettle();
-    const node = fileNodeAttrs({
-      hash: crypto.randomUUID().replaceAll("-", "").repeat(2),
-      fileName: "restored.pdf",
-      uploadHostId: "host-a",
-    });
-
-    const readiness = await ensureFileAttachmentsOnHost({
-      content: docOfFileNodes([node]),
-      target: targetFor("host-b"),
-      put,
-      settle,
-    });
-
-    expect(readiness).toBe("held");
-    expect(put).not.toHaveBeenCalled();
-    expect(settle).toHaveBeenCalledWith(node.id, { kind: "reattach" });
-    expect(toasts.error).toHaveBeenCalledTimes(1);
-    expect(toasts.error.mock.calls[0][0]).toBe(
-      "Attach restored.pdf again to send it.",
-    );
-  });
-
-  it("whose bytes this renderer never had is ready on the host that holds them, with no put", async () => {
-    const put = okPut();
-    const settle = recordingSettle();
-    const node = fileNodeAttrs({
-      hash: crypto.randomUUID().replaceAll("-", "").repeat(2),
-      uploadHostId: "host-a",
-    });
-    const content = docOfFileNodes([node]);
-
-    expect(fileAttachmentsReadyOn(content, "host-a")).toBe(true);
-    const readiness = await ensureFileAttachmentsOnHost({
-      content,
-      target: targetFor("host-a"),
-      put,
-      settle,
-    });
-
-    expect(readiness).toBe("ready");
-    expect(put).not.toHaveBeenCalled();
-    expect(settle).not.toHaveBeenCalled();
-  });
-});
-
-describe("a composer that uploads at send (uploadAtAttach: false)", () => {
-  it("inserts the node ready, puts nothing, and keeps the bytes for the send", async () => {
-    const sandbox = freshHostId("sandbox");
-    const put = okPut();
-    const { attrs } = await attach({
-      file: uniqueFile("later.txt"),
-      hostId: freshHostId("composer-host"),
-      put,
-      uploadAtAttach: false,
-    });
-
-    expect(attrs.uploadState).toBeNull();
-    expect(attrs.uploadHostId).toBeNull();
-    expect(readFileAttachmentUploadStatus(attrs.id)).toBeNull();
-    expect(put).not.toHaveBeenCalled();
-
-    const readiness = await ensureFileAttachmentsOnHost({
-      content: docOfFileNodes([attrs]),
-      target: targetFor(sandbox),
-      put,
-      settle: recordingSettle(),
-    });
-
-    expect(readiness).toBe("ready");
-    expect(put).toHaveBeenCalledTimes(1);
-    expect(put.mock.calls[0][0].target.hostId).toBe(sandbox);
-  });
-});
-
-describe("the per-message file cap at send", () => {
-  it("holds a send of 21 identities with the too-many-files toast, and puts nothing", async () => {
-    const put = okPut();
-    const nodes = Array.from({ length: 21 }, (_, index) =>
-      fileNodeAttrs({
-        hash: index.toString(16).padStart(64, "0"),
-        fileName: `f${String(index)}.txt`,
-        uploadHostId: "host-a",
-      }),
-    );
-
-    const readiness = await ensureFileAttachmentsOnHost({
-      content: docOfFileNodes(nodes),
-      target: targetFor("host-a"),
-      put,
-      settle: recordingSettle(),
-    });
-
-    expect(readiness).toBe("held");
-    expect(put).not.toHaveBeenCalled();
-    expect(toasts.error).toHaveBeenCalledTimes(1);
-    expect(toasts.error.mock.calls[0][0]).toBe("Too many files attached.");
-  });
-
-  it("sends 20 identities even when one is repeated under another node", async () => {
-    const nodes = Array.from({ length: 20 }, (_, index) =>
-      fileNodeAttrs({
-        hash: index.toString(16).padStart(64, "0"),
-        fileName: `f${String(index)}.txt`,
-        uploadHostId: "host-a",
-      }),
-    );
-    const repeat = fileNodeAttrs({ ...nodes[0], id: "repeat-node" });
-
-    const readiness = await ensureFileAttachmentsOnHost({
-      content: docOfFileNodes([...nodes, repeat]),
-      target: targetFor("host-a"),
-      put: okPut(),
-      settle: recordingSettle(),
-    });
-
-    expect(readiness).toBe("ready");
-  });
-});
-
-describe("a node that is still uploading", () => {
-  it("holds a send silently", async () => {
-    const readiness = await ensureFileAttachmentsOnHost({
-      content: docOfFileNodes([fileNodeAttrs({ uploadState: "pending" })]),
-      target: targetFor("host-a"),
-      put: okPut(),
-      settle: recordingSettle(),
-    });
-    expect(readiness).toBe("held");
-    expect(toasts.error).not.toHaveBeenCalled();
-  });
 });
