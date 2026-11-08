@@ -243,7 +243,7 @@ function SandboxLifecycleRowActions(
   };
 
   return (
-    <div className="flex max-w-full min-w-0 shrink-0 flex-wrap items-center gap-2">
+    <div className="flex max-w-full min-w-0 flex-wrap items-center gap-2">
       {openAutomationTerminal.failure ? (
         <p role="alert" className="text-ui-xs text-destructive">
           {openAutomationTerminal.failure}

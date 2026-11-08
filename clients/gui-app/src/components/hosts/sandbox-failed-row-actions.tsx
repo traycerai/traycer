@@ -113,7 +113,7 @@ export function SandboxFailedRowActions(props: {
   };
 
   return (
-    <div className="flex max-w-full min-w-0 shrink-0 flex-wrap items-center gap-2">
+    <div className="flex max-w-full min-w-0 flex-wrap items-center gap-2">
       {pendingVerb !== null || actions.primary === "retry" ? (
         <Button
           type="button"

@@ -967,7 +967,7 @@ function SandboxListRow(props: {
       data-testid="sandboxes-row"
       className="flex flex-col gap-4 px-5 py-4 sm:flex-row sm:items-center sm:justify-between"
     >
-      <div className="flex min-w-0 flex-1 gap-3">
+      <div className="flex min-w-0 flex-1 gap-3 sm:shrink-0 sm:basis-80">
         <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-foreground/8 text-muted-foreground">
           <KindTile summary={summary} />
         </div>
