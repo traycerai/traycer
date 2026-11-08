@@ -546,19 +546,17 @@ export function useEpicRouteSynchronization(
       // this device's session yet - a cold cross-task landing, or a record
       // created on another device moments before the click - and it arrives on
       // this effect's own `records` dependency, so the next run resolves it.
-      // Burning the key here is what used to drop the request for good, since
-      // every later run then returned at `lastAutoOpenKey.current === key` and
-      // the requested artifact never opened at all.
+      // Spending the key here would drop the request for good: every later run
+      // returns at `lastAutoOpenKey.current === key`.
       //
       // Nothing is retried on a schedule: there is no timer and no poll, only
       // the re-evaluation this effect already did. A request naming a record
-      // that never arrives therefore keeps today's bounded refusal - it opens
-      // nothing, quietly. It also names a real artifact: the cross-epic branch
+      // that never arrives therefore opens nothing, quietly. It also names a real artifact: the cross-epic branch
       // of `openResolvedArtifact` only navigates once
       // `epic.resolveArtifactByPath` has confirmed one.
       //
-      // A LANDING still spends its key on a null resolve, so its once-per-epic
-      // behaviour is unchanged.
+      // A LANDING still spends its key on a null resolve: it runs once per
+      // epic.
       if (!hasExplicitFocus) {
         lastAutoOpenKey.current = key;
       }
@@ -600,13 +598,9 @@ export function useEpicRouteSynchronization(
         // Armed for the same reason the navigation boundary arms it: the
         // replace below is async, so until it commits the route still names
         // the PREVIOUS target, and the nested-route sync effect would reapply
-        // it and bounce focus straight off the artifact just opened.
-        //
-        // Unnecessary until now, which is why this path never armed it: the
-        // auto-open only ever ran when the route named no nested target, so
-        // there was nothing stale to reapply. Letting a waiting request outrank
-        // a target committed during its wait is exactly what makes a stale
-        // target reachable here, so the guard stops being redundant.
+        // it and bounce focus straight off the artifact just opened. A waiting
+        // request can outrank a target committed during its wait, which is what
+        // makes a stale target reachable here.
         //
         // It matters most where the commit does not land at all:
         // `replaceNestedFocusRoute` tolerates a rejected or superseded

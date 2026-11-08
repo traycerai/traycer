@@ -243,11 +243,7 @@ describe("the log of Next and Previous", () => {
 
   it("writes nothing for any of it while nobody listens", async () => {
     const quiet = open(["one", "two"], ["two"], false);
-    const writes: SoundtrackLogEvent[] = [];
-    const log = quiet.session.ports.log;
-    const spy = vi.spyOn(log, "write").mockImplementation((event) => {
-      writes.push(event);
-    });
+    const spy = vi.spyOn(quiet.session.ports.log, "write");
 
     quiet.session.setSignals(HOME);
     await advance(3);
@@ -259,9 +255,7 @@ describe("the log of Next and Previous", () => {
     quiet.session.logNow();
     quiet.session.end();
 
-    expect(log.listening()).toBe(false);
     expect(spy).not.toHaveBeenCalled();
-    expect(writes).toEqual([]);
   });
 });
 

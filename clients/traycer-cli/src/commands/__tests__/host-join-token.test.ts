@@ -97,7 +97,6 @@ describe("readInstallToken on a terminal", () => {
     expect(await reading).toBe(TOKEN);
     expect(terminal.rawModes).toEqual([true, false]);
     expect(prompt.text).toBe("Install token: \n");
-    expect(prompt.text).not.toContain(TOKEN);
   });
 
   it("has stopped the echo and is listening before the prompt is written", async () => {

@@ -98,9 +98,6 @@ type MockState = {
     fetchEligibility?: RateLimitFetchEligibility;
   }>;
   results: Record<string, QueryResult>;
-  // `useTraycerSubscription` gates the Traycer tab on this provider row's
-  // `enabled` flag, independent from host-RPC providers above. Defaults to
-  // enabled so the existing Traycer-tab cases below behave exactly as before.
   providersList: { data: { providers: ProviderCliState[] } | undefined };
   selectedProviders: { data: { providers: ProviderCliState[] } | undefined };
   traycerUsageFetching: boolean;

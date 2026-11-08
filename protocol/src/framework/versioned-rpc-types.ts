@@ -303,8 +303,8 @@ export const RPC_ERROR_CODES = [
   //
   // A host dropped a chat's records once the cloud held them, and could not
   // bring them back for a write (`epic.hydrateChat`, or a send that reached
-  // the host first). The chat stays as it was and nothing was written; each
-  // has its own line on the chat's composer. Additive, as above.
+  // the host first). The chat stays as it was and nothing was written.
+  // Additive, as above.
   //
   // The host could not reach the cloud copy. Retryable once it can.
   "CHAT_EVICTED_UNREACHABLE",

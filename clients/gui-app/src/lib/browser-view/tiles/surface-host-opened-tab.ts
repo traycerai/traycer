@@ -288,11 +288,10 @@ export function surfaceHostOpenedTab(input: HostOpenedTabSurfacing): boolean {
           ? null
           : { kind: "tab", paneId: groupedPaneId, index: null },
       dedupe: true,
-      // ponytail: `AnalyticsSource` has no host-push member and
-      // `analytics.ts` is out of this change's blast radius;
-      // `trackOpenedCanvasTile` emits nothing for `browser-session` tiles
-      // anyway, so this value is inert today. Add a real source when the
-      // analytics schema is next opened.
+      // ponytail: `AnalyticsSource` has no host-push member and `analytics.ts` is
+      // out of this change's blast radius; `trackOpenedCanvasTile` emits nothing
+      // for `browser-session` tiles anyway, so this value is inert today. Add a
+      // real source when the analytics schema is next opened.
       source: "direct_ui",
     },
     input.navigateNested,

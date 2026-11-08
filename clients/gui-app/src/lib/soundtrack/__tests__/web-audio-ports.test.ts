@@ -11,8 +11,6 @@ import type { MixCapture, RecordingQuality } from "../recording";
 import type { SoundtrackPorts } from "../session";
 import { openWebAudioPorts } from "../web-audio-ports";
 
-// The wait past the fade that `web-audio-ports.ts` keeps before it suspends or
-// closes, for what is still on its way to the speakers. It is private there.
 // What `captureMix` opens a capture with, which the real one would build nodes
 // from; only the arguments are read here.
 const capture = vi.hoisted(() => ({
@@ -35,6 +33,8 @@ const NO_CAPTURE: MixCapture = {
   stop: () => Promise.resolve({ frames: null, droppedFrames: null }),
 };
 
+// The wait past the fade that `web-audio-ports.ts` keeps before it suspends or
+// closes, for what is still on its way to the speakers. It is private there.
 const DRAIN_AFTER_FADE_SECONDS = 0.5;
 const SUSPEND_AFTER_MS =
   (MIX_TUNING.pauseFadeSeconds + DRAIN_AFTER_FADE_SECONDS) * 1000;

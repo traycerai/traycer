@@ -7,17 +7,16 @@ import {
 } from "@tanstack/react-query";
 import { createElement, type ReactNode } from "react";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
-import type {
-  ProviderCliState,
-  ProviderId,
-  ProviderProfile,
-  ProviderProfileRateLimitStatus,
-} from "@traycer/protocol/host/provider-schemas";
+import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import type { ModelOption } from "@/components/home/data/landing-options";
+import { useProfileRateLimitSwitchPrompt } from "../use-profile-rate-limit-switch-prompt";
 import {
-  useProfileRateLimitSwitchPrompt,
-  type ProfileRateLimitSwitchPrompt,
-} from "../use-profile-rate-limit-switch-prompt";
+  claudeState,
+  model,
+  OPUS,
+  profile,
+  visiblePrompt,
+} from "./profile-rate-limit-fixtures";
 import { useRateLimitSwitchPromptDismissalsStore } from "@/stores/rate-limits/rate-limit-switch-prompt-dismissals-store";
 
 const mocks = vi.hoisted(() => ({
@@ -64,106 +63,6 @@ vi.mock("@/hooks/host/use-host-query", () => ({
       }),
     ),
 }));
-
-function profile(input: {
-  readonly profileId: string;
-  readonly kind: "ambient" | "managed";
-  readonly label: string;
-  readonly rateLimitStatus: ProviderProfileRateLimitStatus;
-  readonly rateLimitLimitedScopes: ProviderProfile["rateLimitLimitedScopes"];
-  readonly authenticated: boolean;
-}): ProviderProfile {
-  const {
-    profileId,
-    kind,
-    label,
-    rateLimitStatus,
-    rateLimitLimitedScopes,
-    authenticated,
-  } = input;
-  return {
-    profileId,
-    enabled: true,
-    kind,
-    authType: "oauth",
-    label,
-    auth: {
-      status: authenticated ? "authenticated" : "unauthenticated",
-      badgeText: null,
-      label: null,
-      detail: null,
-    },
-    identity: null,
-    usageUpdatedAt: null,
-    rateLimitStatus,
-    rateLimitLimitedScopes,
-    duplicateOfProfileId: null,
-    accentColor: null,
-    ambientDriftNotice: null,
-  };
-}
-
-function model(slug: string, label: string): ModelOption {
-  return {
-    harnessId: "claude",
-    slug,
-    label,
-    description: null,
-    contextWindow: null,
-    maxOutputTokens: null,
-    defaultReasoningEffort: null,
-    supportedReasoningEfforts: [],
-    defaultServiceTier: null,
-    supportedServiceTiers: [],
-    metadata: {},
-  };
-}
-
-const OPUS = model("opus[1m]", "Opus");
-
-function visiblePrompt(prompt: ProfileRateLimitSwitchPrompt) {
-  if (prompt.kind !== "visible") {
-    throw new Error("Expected a visible rate-limit switch prompt");
-  }
-  return prompt;
-}
-
-function claudeState(
-  profiles: ReadonlyArray<ProviderProfile>,
-): ProviderCliState {
-  const providerId: ProviderId = "claude-code";
-  return {
-    providerId,
-    enabled: true,
-    disabledBy: null,
-    selected: { kind: "bundled" },
-    candidates: [],
-    auth: {
-      status: "authenticated",
-      badgeText: null,
-      label: null,
-      detail: null,
-    },
-    authPending: false,
-    checkedAt: null,
-    apiKey: { supported: false, configured: false, source: null },
-    terminalAgentArgs: "",
-    envOverrides: [],
-    loginCapability: null,
-    availabilityPending: false,
-    nativeCapabilities: {
-      supportedTabs: ["general", "env", "usage"],
-      mcp: null,
-      plugins: null,
-      skills: null,
-      modelProviders: null,
-    },
-    managedInstallState: null,
-    versionVisibility: null,
-    advisory: null,
-    profiles: [...profiles],
-  };
-}
 
 const DEFAULT = model("default", "Default");
 function setup(cwd: string | null, selectedModel: ModelOption) {

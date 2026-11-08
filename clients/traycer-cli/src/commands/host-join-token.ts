@@ -15,7 +15,7 @@ const END_OF_TRANSMISSION = "\u0004";
 const BACKSPACE = "\b";
 const DELETE = "\u007f";
 
-export interface InstallTokenInput extends NodeJS.ReadableStream {
+interface InstallTokenInput extends NodeJS.ReadableStream {
   readonly isTTY?: boolean;
   setRawMode?(mode: boolean): unknown;
 }

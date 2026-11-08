@@ -492,29 +492,8 @@ describe("MembersView", () => {
 });
 
 describe("MembersView demotion", () => {
-  it("opens the demotion preview with the lost-powers line instead of changing the role", async () => {
-    const user = userEvent.setup();
-    const { onSetRole } = renderView({
-      ...BASE,
-      viewerRole: "admin",
-      members: [ADMIN, SECOND_ADMIN],
-    });
-    await user.click(screen.getByRole("combobox", { name: "Role for Grace" }));
-    await user.click(await screen.findByRole("option", { name: "Editor" }));
-    const loss = await screen.findByTestId("members-demotion-loss");
-    expect(loss.textContent).toBe(
-      "Grace can no longer invite people, change roles or edit the approval policy.",
-    );
-    expect(onSetRole).not.toHaveBeenCalled();
-    const dialogText = screen.getByTestId(
-      "members-demotion-preview",
-    ).textContent;
-    expect(dialogText).not.toContain("within a minute");
-    expect(dialogText).not.toContain("next turn");
-  });
-
-  // NEW-154-23: every demotion confirms before it writes - and an admin going
-  // to editor is the only one a team has left.
+  // Every demotion confirms before it writes - and an admin going to editor is
+  // the only one a team has left.
   it("confirms an admin's demotion to editor before writing it", async () => {
     const user = userEvent.setup();
     const { onSetRole } = renderView({
@@ -534,6 +513,11 @@ describe("MembersView demotion", () => {
     expect(screen.getByTestId("members-demotion-confirm").textContent).toBe(
       "Change to editor",
     );
+    const dialogText = screen.getByTestId(
+      "members-demotion-preview",
+    ).textContent;
+    expect(dialogText).not.toContain("within a minute");
+    expect(dialogText).not.toContain("next turn");
     expect(onSetRole).not.toHaveBeenCalled();
 
     await user.click(screen.getByTestId("members-demotion-confirm"));

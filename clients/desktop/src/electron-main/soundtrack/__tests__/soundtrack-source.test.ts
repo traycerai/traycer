@@ -107,6 +107,7 @@ function source(overrides: Partial<SoundtrackSourceOptions>) {
     keyFilePath,
     audience: "audience-fixture",
     set: "team",
+    manifestVersion: 1,
     fetch: fetchMock,
     now: () => NOW_MS,
     warn,
@@ -204,9 +205,6 @@ describe("read", () => {
     expect(new URL(urls[0]).searchParams.get("X-Goog-Signature")).toMatch(
       /^[0-9a-f]+$/,
     );
-    expect(
-      fetchMock.mock.calls.some(([input]) => String(input) === v2Url),
-    ).toBe(true);
   });
 
   it("rejects a recording path escaping the set without exposing a URL", async () => {
