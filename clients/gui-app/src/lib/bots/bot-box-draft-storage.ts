@@ -347,7 +347,8 @@ function rewriteNode(
 
 /**
  * Every stored draft with its images' bytes back inline, and without the
- * images whose bytes are gone; a draft left with nothing in it is dropped.
+ * images whose bytes are gone or cannot be read back, so one such image
+ * never fails the whole read; a draft left with nothing in it is dropped.
  * Each image read back is remembered under its hash, so a write that cannot
  * wait keeps it.
  */
@@ -365,11 +366,14 @@ async function inlineStoredImages(
   await Promise.all(
     [...hashes].map(async (hash) => {
       const bytes = await getImageBytes(hash).catch(() => undefined);
-      if (bytes === undefined) {
+      const b64content =
+        bytes === undefined
+          ? null
+          : await bytesToBase64Async(bytes).catch(() => null);
+      if (b64content === null) {
         missing.add(hash);
         return;
       }
-      const b64content = await bytesToBase64Async(bytes);
       bytesByHash.set(hash, b64content);
       restored.set(b64content, hash);
     }),

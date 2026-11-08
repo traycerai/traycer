@@ -18,6 +18,7 @@ import {
 } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ImageBytes } from "@/lib/attachments/image-bytes";
+import type * as ImageBase64 from "@/lib/composer/image-base64";
 import type * as LandingImageStore from "@/lib/composer/landing-image-store";
 import {
   BOT_ID,
@@ -114,6 +115,42 @@ describe("the boxes' drafts through the persisted store", () => {
       "imageAttachment",
     );
     expect(kept?.imageOnly).toBeUndefined();
+  });
+
+  it("drops an image whose bytes cannot be read back, and still reads the drafts and writes the next change", async () => {
+    const hash = await storeImageBytes();
+    storeDraftsAsLeft({
+      [BOT_ID]: {
+        channel: {
+          text: "still here",
+          content: boxDoc("still here", [hashedImage(hash)]),
+          seedId: 1,
+        },
+      },
+    });
+    const IMAGE_BASE64 = "@/lib/composer/image-base64";
+    vi.doMock(IMAGE_BASE64, async (importOriginal) => ({
+      ...(await importOriginal<typeof ImageBase64>()),
+      bytesToBase64Async: () =>
+        Promise.reject(new Error("base64 encode failed")),
+    }));
+    onTestFinished(() => {
+      vi.doUnmock(IMAGE_BASE64);
+    });
+
+    app = await startApp();
+    await vi.waitFor(() => {
+      expect(app.drafts.persist.hasHydrated()).toBe(true);
+    });
+
+    const kept = app.drafts.getState().threadBoxes[BOT_ID]?.channel;
+    expect(kept?.text).toBe("still here");
+    expect(JSON.stringify(kept?.content)).not.toContain("imageAttachment");
+    app.drafts.getState().typeThreadBox(BOT_ID, "channel", "after", null);
+    await waitForStore(
+      app,
+      (stored) => stored?.[BOT_ID]?.channel?.text === "after",
+    );
   });
 });
 
