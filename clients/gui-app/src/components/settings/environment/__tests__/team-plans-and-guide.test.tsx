@@ -103,6 +103,7 @@ describe("TeamPlans", () => {
     plans: [
       {
         profileId: "prof-1",
+        bindingVersion: 7,
         harness: "claude",
         status: "linked" as const,
         linkedBy: { name: "Ada", you: false },
@@ -213,7 +214,11 @@ describe("TeamPlans", () => {
     );
     await waitFor(() => {
       expect(harness.paramsOf("environment.plans.unlink")).toEqual([
-        { environmentId: "env-a", profileId: "prof-1" },
+        {
+          environmentId: "env-a",
+          profileId: "prof-1",
+          expectedBindingVersion: 7,
+        },
       ]);
     });
   });
