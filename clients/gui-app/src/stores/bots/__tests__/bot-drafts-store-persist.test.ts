@@ -653,6 +653,32 @@ describe("a window that is going away or being wiped", () => {
     expect(JSON.stringify(stored?.content)).not.toContain("imageAttachment");
   });
 
+  it("writes a draft storage refused once the page is hidden", async () => {
+    const setItem = vi
+      .spyOn(Storage.prototype, "setItem")
+      .mockImplementationOnce(() => {
+        throw new DOMException(
+          "The quota has been exceeded.",
+          "QuotaExceededError",
+        );
+      });
+    onTestFinished(() => {
+      setItem.mockRestore();
+    });
+    app.drafts.getState().typeThreadBox(BOT_ID, "channel", "unsent", null);
+    await vi.advanceTimersByTimeAsync(
+      app.storage.BOT_BOX_DRAFT_WRITE_DEBOUNCE_MS,
+    );
+    await vi.waitFor(() => {
+      expect(setItem).toHaveBeenCalled();
+    });
+    expect(storedDrafts(app)).toBeNull();
+
+    window.dispatchEvent(new Event("pagehide"));
+
+    expect(storedDrafts(app)?.[BOT_ID]?.channel?.text).toBe("unsent");
+  });
+
   it("keeps a write that has not landed from landing once the stored drafts are being wiped", async () => {
     app.drafts.getState().typeThreadBox(BOT_ID, "channel", "unsent", null);
 

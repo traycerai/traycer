@@ -20,6 +20,7 @@ import {
 } from "@/lib/composer/landing-image-store";
 import { stringValue } from "@/lib/composer/tiptap-json-content";
 import { isJsonContent, isRecord } from "@/lib/editor/prosemirror-json";
+import { appLogger, describeLogError } from "@/lib/logger";
 import { persistKey, STORE_KEYS } from "@/lib/persist/keys";
 
 /** What a bot's message box holds unsent, as the drafts store keeps it. */
@@ -339,7 +340,16 @@ function land(
       (b64content) => hashByInline.get(b64content) ?? null,
     ),
   };
-  localStorage.setItem(write.name, JSON.stringify(value));
+  try {
+    localStorage.setItem(write.name, JSON.stringify(value));
+  } catch (error) {
+    // Storage refused it (full, say): it waits again, for the next change to
+    // replace or the page hiding to try once more.
+    appLogger.warn("[bot-box-drafts] draft write failed", {
+      error: describeLogError(error),
+    });
+    writer.pending ??= write;
+  }
 }
 
 /** The bytes of every inline image the drafts hold, each with the first box holding it. */
