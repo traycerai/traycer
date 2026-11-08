@@ -33,8 +33,8 @@ Switch models instantly within the same agent, orchestrate agent-to-agent commun
 
 ## Installation
 
-| Platform              | Install                                                                                                                   |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| Platform              | Install                                                                                                |
+| --------------------- | ------------------------------------------------------------------------------------------------------ |
 | macOS (Apple Silicon) | [Download .dmg (arm64)](https://releases.traycer.ai/desktop/stable/traycer-desktop-macos-arm64.dmg)    |
 | macOS (Intel)         | [Download .dmg (x64)](https://releases.traycer.ai/desktop/stable/traycer-desktop-macos-x64.dmg)        |
 | Linux (AppImage)      | [Download .AppImage](https://releases.traycer.ai/desktop/stable/traycer-desktop-linux-x86_64.AppImage) |
