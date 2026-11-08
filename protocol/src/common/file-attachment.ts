@@ -34,3 +34,21 @@ export const fileAttachmentAttrsSchema = lazySchema(() =>
   }),
 );
 export type FileAttachmentAttrs = z.infer<typeof fileAttachmentAttrsSchema>;
+
+/**
+ * The most file attachments one message may carry, counted one per distinct
+ * `(hash, fileName)` - one per line of the agent's "Attached files" block.
+ * Image attachments are not counted.
+ *
+ * The host refuses a send, and pauses a queued message, that is over it, with
+ * {@link TOO_MANY_ATTACHMENTS_CODE}. A client stops at it first so the person
+ * learns at attach time rather than at send.
+ */
+export const MAX_FILE_ATTACHMENTS_PER_MESSAGE = 20;
+
+/**
+ * The refusal code for a message over {@link MAX_FILE_ATTACHMENTS_PER_MESSAGE}:
+ * a send's rejected acknowledgement, and the notice a paused queued message
+ * carries.
+ */
+export const TOO_MANY_ATTACHMENTS_CODE = "TOO_MANY_ATTACHMENTS";
