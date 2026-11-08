@@ -1,7 +1,16 @@
 diff --git a/react-native.web.d.ts b/react-native.web.d.ts
-index b6c7481..ff554d2 100644
+index b6c7481..4d9ccd8 100644
 --- a/react-native.web.d.ts
 +++ b/react-native.web.d.ts
+@@ -32,7 +32,7 @@ interface MaintainVisibleContentPositionNormalized<ItemT = any> {
+ }
+
+ type ListenerType = "activeStickyIndex" | "alignItemsAtEndPadding" | "anchoredEndSpaceSize" | "containerLayoutEpoch" | "debugComputedScroll" | "debugRawScroll" | "extraData" | "footerSize" | "headerSize" | "lastItemKeys" | "lastPositionUpdate" | "maintainVisibleContentPosition" | "numColumns" | "numContainers" | "numContainersPooled" | "otherAxisSize" | "readyToRender" | "scrollAdjust" | "scrollAdjustPending" | "scrollAdjustUserOffset" | "scrollSize" | "snapToOffsets" | "stylePaddingTop" | "totalSize" | "isAtEnd" | "isAtStart" | "isNearEnd" | "isNearStart" | "isWithinMaintainScrollAtEndThreshold" | "adaptiveRender" | `containerColumn${number}` | `containerSpan${number}` | `containerItemData${number}` | `containerItemIndex${number}` | `containerItemKey${number}` | `containerPosition${number}` | `containerSticky${number}`;
+-type LegendListListenerType = Extract<ListenerType, "activeStickyIndex" | "anchoredEndSpaceSize" | "footerSize" | "headerSize" | "isAtEnd" | "isAtStart" | "isNearEnd" | "isNearStart" | "isWithinMaintainScrollAtEndThreshold" | "adaptiveRender" | "lastItemKeys" | "lastPositionUpdate" | "numContainers" | "numContainersPooled" | "otherAxisSize" | "readyToRender" | "snapToOffsets" | "totalSize">;
++type LegendListListenerType = Extract<ListenerType, "activeStickyIndex" | "anchoredEndSpaceSize" | "footerSize" | "headerSize" | "isAtEnd" | "isAtStart" | "isNearEnd" | "isNearStart" | "isWithinMaintainScrollAtEndThreshold" | "adaptiveRender" | "lastItemKeys" | "lastPositionUpdate" | "numContainers" | "numContainersPooled" | "otherAxisSize" | "readyToRender" | "scrollAdjustPending" | "snapToOffsets" | "totalSize">;
+ type ListenerTypeValueMap = {
+     activeStickyIndex: number;
+     alignItemsAtEndPadding: number;
 @@ -348,6 +348,20 @@ interface LegendListSpecificProps<ItemT, TItemType extends string | undefined> {
          itemKey: string;
          itemData: ItemT;
@@ -1932,9 +1941,18 @@ index c96345b..104368c 100644
      onMomentumScrollEnd,
      onScroll: throttleScrollFn,
 diff --git a/react.d.ts b/react.d.ts
-index b6c7481..ff554d2 100644
+index b6c7481..4d9ccd8 100644
 --- a/react.d.ts
 +++ b/react.d.ts
+@@ -32,7 +32,7 @@ interface MaintainVisibleContentPositionNormalized<ItemT = any> {
+ }
+
+ type ListenerType = "activeStickyIndex" | "alignItemsAtEndPadding" | "anchoredEndSpaceSize" | "containerLayoutEpoch" | "debugComputedScroll" | "debugRawScroll" | "extraData" | "footerSize" | "headerSize" | "lastItemKeys" | "lastPositionUpdate" | "maintainVisibleContentPosition" | "numColumns" | "numContainers" | "numContainersPooled" | "otherAxisSize" | "readyToRender" | "scrollAdjust" | "scrollAdjustPending" | "scrollAdjustUserOffset" | "scrollSize" | "snapToOffsets" | "stylePaddingTop" | "totalSize" | "isAtEnd" | "isAtStart" | "isNearEnd" | "isNearStart" | "isWithinMaintainScrollAtEndThreshold" | "adaptiveRender" | `containerColumn${number}` | `containerSpan${number}` | `containerItemData${number}` | `containerItemIndex${number}` | `containerItemKey${number}` | `containerPosition${number}` | `containerSticky${number}`;
+-type LegendListListenerType = Extract<ListenerType, "activeStickyIndex" | "anchoredEndSpaceSize" | "footerSize" | "headerSize" | "isAtEnd" | "isAtStart" | "isNearEnd" | "isNearStart" | "isWithinMaintainScrollAtEndThreshold" | "adaptiveRender" | "lastItemKeys" | "lastPositionUpdate" | "numContainers" | "numContainersPooled" | "otherAxisSize" | "readyToRender" | "snapToOffsets" | "totalSize">;
++type LegendListListenerType = Extract<ListenerType, "activeStickyIndex" | "anchoredEndSpaceSize" | "footerSize" | "headerSize" | "isAtEnd" | "isAtStart" | "isNearEnd" | "isNearStart" | "isWithinMaintainScrollAtEndThreshold" | "adaptiveRender" | "lastItemKeys" | "lastPositionUpdate" | "numContainers" | "numContainersPooled" | "otherAxisSize" | "readyToRender" | "scrollAdjustPending" | "snapToOffsets" | "totalSize">;
+ type ListenerTypeValueMap = {
+     activeStickyIndex: number;
+     alignItemsAtEndPadding: number;
 @@ -348,6 +348,20 @@ interface LegendListSpecificProps<ItemT, TItemType extends string | undefined> {
          itemKey: string;
          itemData: ItemT;

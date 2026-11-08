@@ -20,9 +20,6 @@ declare global {
 const SCROLLER = "[data-testid=list]";
 const ROW = 100;
 const GROWTH = 300;
-// The list's scroll-end fallback (`SCROLL_END_FALLBACK_MS`): a fling whose
-// scroller has been quiet this long has ended.
-const QUIET_MS = 200;
 
 test.use({
   hasTouch: true,
@@ -110,27 +107,37 @@ test("without a touch scroll a row measured above the view adjusts the offset at
   expect(await rowTop(page, marker)).toBe(before);
 });
 
+/** Every value the list's pending adjust term has taken, in order. */
+function pendingLog(page: Page): Promise<number[]> {
+  return page.evaluate("window.__pendingLog") as Promise<number[]>;
+}
+
+// No real-time waits in what follows: the list's quiet timer runs on the
+// page's own clock, and the test waits on what the list emits - its pending
+// term taking the adjust, and its one announced write when it commits - so a
+// slow runner delays the observations and never changes them.
 test("a touch scroll's adjust waits in the layout and is committed once the scroller is quiet", async ({
   page,
 }) => {
   await open(page);
   await report(page, 40 * ROW);
+  await recordWrites(page);
   const marker = 40;
   const before = await rowTop(page, marker);
 
   await touch(page);
   await growRow(page, 38);
-  await nextFrames(page, 4);
 
-  // The row grew and the view did not move: the layout took the adjust and
-  // the scroller was not written.
-  expect(await scrollTop(page)).toBe(40 * ROW);
-  expect(await rowTop(page, marker)).toBe(before);
-
-  // Quiet for the fallback: the commit writes the whole adjust, and the row
-  // on screen stays where it was.
-  await page.waitForTimeout(QUIET_MS * 2);
-  await expect.poll(() => scrollTop(page)).toBe(40 * ROW + GROWTH);
+  // The commit, when the scroller has been quiet: one write, from the offset
+  // the touch found the scroller at, by the whole adjust.
+  await expect
+    .poll(() => writes(page))
+    .toEqual([{ from: 40 * ROW, to: 40 * ROW + GROWTH }]);
+  // Between the measurement and that write the adjust sat in the pending
+  // term - the same growth with no touch scroll is written at once, with the
+  // term never leaving 0 - and the row on screen never moved.
+  expect(await pendingLog(page)).toEqual([GROWTH, 0]);
+  expect(await scrollTop(page)).toBe(40 * ROW + GROWTH);
   expect(await rowTop(page, marker)).toBe(before);
 });
 
@@ -194,27 +201,29 @@ test("a fling that reaches the end commits the pending adjust a step early, in f
   await recordWrites(page);
   await touch(page);
   await growRow(page, 48);
-  await nextFrames(page, 4);
-  expect(await scrollTop(page)).toBe(50 * ROW);
-  expect(await writes(page)).toEqual([]);
+  // The adjust is in the pending term: the fling below starts from there.
+  await expect.poll(() => pendingLog(page)).toEqual([GROWTH]);
 
   // The fling runs into the end of the content, 100px a frame. Left to the
   // commit at rest, the pending 300 would be clamped there and the rows on
   // screen would step by the difference. The list commits it from the last
-  // report where it still lands: the first write is the whole adjust, inside
-  // the range. The rows the fling mounts on its way are re-estimated, and
-  // those smaller adjusts follow the same rule, so no write is clamped. (The
-  // end is read from the scroller, since the re-estimates move it.)
+  // report where it still lands: the first write is the whole adjust, from
+  // an offset of the fling's, inside the range. The rows the fling mounts on
+  // its way are re-estimated, and those smaller adjusts follow the same
+  // rule, so no write is clamped. (The end is read from the scroller, since
+  // the re-estimates move it.)
   const end = await scrollEnd(page);
   await fling(
     page,
     Array.from({ length: 12 }, (_, i) => end - 1000 + (i + 1) * 100),
   );
-  await page.waitForTimeout(QUIET_MS * 2);
 
+  await expect.poll(async () => (await writes(page)).length).toBeGreaterThan(0);
+  // The fling has ended and the term is back at 0: every write is in.
+  await expect.poll(async () => (await pendingLog(page)).at(-1)).toBe(0);
   const seen = await writes(page);
-  expect(seen.length).toBeGreaterThanOrEqual(1);
   expect(seen[0].to - seen[0].from).toBe(GROWTH);
+  expect(seen[0].from).toBeGreaterThanOrEqual(end - 900);
   const endAfter = await scrollEnd(page);
   for (const write of seen) {
     expect(write.to).toBeLessThanOrEqual(endAfter);
