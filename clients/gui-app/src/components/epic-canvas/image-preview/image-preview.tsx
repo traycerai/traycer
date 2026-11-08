@@ -38,6 +38,7 @@ import {
   type ImagePreviewTransformState,
   type TransformOrigin,
 } from "./image-preview-transform";
+import { zoomInstanceTo } from "./zoom-instance-to";
 
 export { DEFAULT_ANIMATION_MS };
 
@@ -426,6 +427,13 @@ export function ImagePreview(props: ImagePreviewProps) {
     ref.zoomOut(ZOOM_STEP, animationMs);
   }
 
+  function handleZoomTo(percent: number): void {
+    const ref = transformRef.current;
+    if (ref === null) return;
+    pendingProgrammaticCountRef.current += 1;
+    zoomInstanceTo(ref, percent / 100, animationMs);
+  }
+
   // Plain functions (not `useCallback`), matching `handleFit`/etc. above -
   // they close over this render's `isFitted`/`handleFit`/etc. directly, and
   // the React Compiler auto-memoizes the component as a whole.
@@ -685,6 +693,7 @@ export function ImagePreview(props: ImagePreviewProps) {
               canZoomOut={!zoomOutDisabled}
               onZoomIn={handleZoomIn}
               onZoomOut={handleZoomOut}
+              onZoomTo={handleZoomTo}
               fitKind="screen"
               fitActive={isFitted}
               onFit={handleFit}
