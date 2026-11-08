@@ -893,6 +893,7 @@ if (VARIANT.readings !== "none") {
             app: {
               sampledAt,
               hostTotalMemoryBytes: 32 * 1024 ** 3,
+              hostCpuCount: 16,
               process: {
                 pid: 10,
                 parentPid: null,

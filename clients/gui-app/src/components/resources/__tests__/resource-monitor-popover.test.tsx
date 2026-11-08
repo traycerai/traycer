@@ -28,7 +28,6 @@ import {
   within,
 } from "@testing-library/react";
 import type {
-  AppResourceSnapshotWireV15,
   HostTreeResourceSnapshotWireV15,
   OtherResourceSnapshotWireV15,
   OwnerResourceSnapshotWireV15,
@@ -539,14 +538,36 @@ function resourceProcess(
   };
 }
 
-function app(): AppResourceSnapshotWireV15 {
+type AppSnapshot = NonNullable<ResourcesProjectionPayload["app"]>;
+
+function app(): AppSnapshot {
   return {
     sampledAt: 1_000,
     hostTotalMemoryBytes: 2 * 1024 * 1024 * 1024,
+    hostCpuCount: 16,
     process: resourceProcess({}),
     processCount: 1,
     cpuPercent: 1,
     rssBytes: 20 * 1024 * 1024,
+    pssBytes: null,
+    privateBytes: null,
+  };
+}
+
+/**
+ * The host's processor count and nothing else: no host process, no memory
+ * total, no sampled usage. For projections that exist to give CPU a
+ * denominator without adding a number of their own to any total.
+ */
+function appCountOnly(hostCpuCount: number | undefined): AppSnapshot {
+  return {
+    sampledAt: 1_000,
+    hostTotalMemoryBytes: 0,
+    hostCpuCount,
+    process: null,
+    processCount: 0,
+    cpuPercent: 0,
+    rssBytes: 0,
     pssBytes: null,
     privateBytes: null,
   };
@@ -813,7 +834,7 @@ function desktopMetric(
   return {
     pid: 1,
     type: "Browser",
-    cpu: { percentCPUUsage: 2 },
+    cpu: { cpuSharePercent: 2 },
     memory: { workingSetSize: 1024 },
     ...over,
   };
@@ -1834,6 +1855,7 @@ describe("ResourceMonitorPopover", () => {
     act(() => {
       stub.emit().onSnapshot(
         projection({
+          app: appCountOnly(16),
           owners: [
             owner({
               processes: [
@@ -1878,9 +1900,9 @@ describe("ResourceMonitorPopover", () => {
     fireEvent.click(screen.getByRole("button", { name: "Resources" }));
     // 3 + 5 + 9 single-counted, shown by exactly two elements: the task
     // header and the owner row. A double-count regression in either
-    // projection drops the count below 2 and surfaces 26% instead.
-    expect(screen.getAllByText("17%")).toHaveLength(2);
-    expect(screen.queryByText("26%")).toBeNull();
+    // projection drops the count below 2 and surfaces 26 / 16 = 1.6% instead.
+    expect(screen.getAllByText("1.1%")).toHaveLength(2);
+    expect(screen.queryByText("1.6%")).toBeNull();
   });
 
   it("updates an auto-titled terminal owner from each resource frame", () => {
@@ -1926,7 +1948,7 @@ describe("ResourceMonitorPopover", () => {
               {
                 pid: 10,
                 type: "Browser",
-                cpu: { percentCPUUsage: 1.5 },
+                cpu: { cpuSharePercent: 1.5 },
                 memory: { workingSetSize: 100 * 1024 },
               },
             ],
@@ -1947,7 +1969,9 @@ describe("ResourceMonitorPopover", () => {
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Resources" }));
-    expect(await screen.findByText("12%")).not.toBeNull();
+    // 10 per-core host points are 0.625% of the machine; Electron contributes
+    // its native 1.5% machine share directly.
+    expect(await screen.findByText("2.1%")).not.toBeNull();
     expect(screen.getByText("500 MB")).not.toBeNull();
     expect(screen.getByRole("progressbar").getAttribute("aria-valuenow")).toBe(
       "24",
@@ -2299,7 +2323,7 @@ describe("ResourceMonitorPopover", () => {
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Resources" }));
-    expect(screen.getByText("3.0%")).not.toBeNull();
+    expect(screen.getByText("0.19%")).not.toBeNull();
     expect(screen.queryByText("Other")).toBeNull();
   });
 
@@ -2310,13 +2334,13 @@ describe("ResourceMonitorPopover", () => {
         {
           pid: 10,
           type: "Browser",
-          cpu: { percentCPUUsage: 0.5 },
+          cpu: { cpuSharePercent: 0.5 },
           memory: { workingSetSize: 100 * 1024 },
         },
         {
           pid: 11,
           type: "Tab",
-          cpu: { percentCPUUsage: 0.25 },
+          cpu: { cpuSharePercent: 0.25 },
           memory: { workingSetSize: 200 * 1024 },
         },
       ],
@@ -2449,6 +2473,7 @@ describe("ResourceMonitorPopover", () => {
     act(() => {
       stub.emit().onSnapshot(
         projection({
+          app: appCountOnly(16),
           owners: [
             owner({
               cpuPercent: 13,
@@ -2463,7 +2488,7 @@ describe("ResourceMonitorPopover", () => {
 
     const ownerRow = screen.getByText("Terminal Alpha").closest("button");
     if (ownerRow === null) throw new Error("Expected owner row button");
-    expect(ownerRow.textContent).toContain("13%");
+    expect(ownerRow.textContent).toContain("0.81%");
     expect(ownerRow.textContent).toContain("106 MB");
     expect(
       screen.queryByText("node dev-server.js (2 sub-processes)"),
@@ -2472,13 +2497,13 @@ describe("ResourceMonitorPopover", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Expand process tree" }),
     );
-    expect(ownerRow.textContent).toContain("2.0%");
+    expect(ownerRow.textContent).toContain("0.13%");
     expect(ownerRow.textContent).toContain("40.0 MB");
     const nodeRow = screen
       .getByText("node dev-server.js (2 sub-processes)")
       .closest("button");
     if (nodeRow === null) throw new Error("Expected node row button");
-    expect(nodeRow.textContent).toContain("11%");
+    expect(nodeRow.textContent).toContain("0.69%");
     expect(nodeRow.textContent).toContain("66.0 MB");
 
     const metrics = ownerRow.querySelector('[data-slot="tooltip-trigger"]');
@@ -2486,20 +2511,24 @@ describe("ResourceMonitorPopover", () => {
       throw new Error("Expected owner metric tooltip trigger");
     fireEvent.pointerMove(metrics);
     expect(
-      await screen.findAllByText(/Self: 2\.0% CPU · 40\.0 MB memory/),
+      await screen.findAllByText(
+        /Self: 0\.13% CPU \(0\.0 of 16 cores\) · 40\.0 MB memory/,
+      ),
     ).not.toHaveLength(0);
     expect(
-      await screen.findAllByText(/Tree: 13% CPU · 106 MB memory/),
+      await screen.findAllByText(
+        /Tree: 0\.81% CPU \(0\.1 of 16 cores\) · 106 MB memory/,
+      ),
     ).not.toHaveLength(0);
 
     fireEvent.click(nodeRow);
-    expect(nodeRow.textContent).toContain("10%");
+    expect(nodeRow.textContent).toContain("0.63%");
     expect(nodeRow.textContent).toContain("60.0 MB");
     const shellRow = screen
       .getByText("/bin/sh (1 sub-process)")
       .closest("button");
     if (shellRow === null) throw new Error("Expected shell row button");
-    expect(shellRow.textContent).toContain("1.0%");
+    expect(shellRow.textContent).toContain("0.06%");
     expect(shellRow.textContent).toContain("6.0 MB");
   });
 
@@ -3638,19 +3667,19 @@ describe("ResourceMonitorPopover", () => {
               {
                 pid: 10,
                 type: "Browser",
-                cpu: { percentCPUUsage: 0.5 },
+                cpu: { cpuSharePercent: 0.5 },
                 memory: { workingSetSize: 100 * 1024 },
               },
               {
                 pid: 11,
                 type: "Tab",
-                cpu: { percentCPUUsage: 2 },
+                cpu: { cpuSharePercent: 2 },
                 memory: { workingSetSize: 300 * 1024 },
               },
               {
                 pid: 12,
                 type: "GPU",
-                cpu: { percentCPUUsage: 1 },
+                cpu: { cpuSharePercent: 1 },
                 memory: { workingSetSize: 200 * 1024 },
               },
             ],
@@ -3764,6 +3793,7 @@ describe("ResourceMonitorPopover", () => {
     act(() => {
       stub.emit().onSnapshot(
         projection({
+          app: appCountOnly(16),
           owners: [
             owner({}),
             owner({
@@ -3803,7 +3833,7 @@ describe("ResourceMonitorPopover", () => {
     expect(screen.getByText("Terminal Alpha")).not.toBeNull();
     expect(screen.getByText("idle-shell")).not.toBeNull();
     expect(screen.queryByText("/usr/bin/idle-zsh")).toBeNull();
-    expect(screen.getAllByText("89%").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("5.6%").length).toBeGreaterThan(0);
     expect(screen.getAllByText("1000 MB").length).toBeGreaterThan(0);
   });
 
@@ -4081,6 +4111,301 @@ describe("ResourceMonitorPopover", () => {
   });
 });
 
+describe("ResourceMonitorPopover · CPU as a share of the machine", () => {
+  function openWith(over: Partial<ResourcesProjectionPayload>): void {
+    const stub = installStubFactory();
+    render(
+      <TooltipProvider delayDuration={0}>
+        <EpicLease epicId="epic-1" />
+        <ResourceMonitorPopover
+          trigger="header-button"
+          form="glyph"
+          claimsOpenAction
+        />
+      </TooltipProvider>,
+    );
+    act(() => {
+      stub.emit().onSnapshot(projection(over));
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+  }
+
+  /** A shell with a child, so its row can expand to a Self and a Tree line. */
+  function ownerWithChild(cpuPercent: number): OwnerResourceSnapshotWireV15 {
+    return owner({
+      cpuPercent,
+      processCount: 2,
+      processes: [
+        resourceProcess({
+          pid: 100,
+          rootPid: 100,
+          name: "zsh",
+          command: "/bin/zsh",
+          cpuPercent,
+          rssBytes: 40 * 1024 * 1024,
+        }),
+        resourceProcess({
+          pid: 101,
+          parentPid: 100,
+          rootPid: 100,
+          name: "sleep",
+          command: "sleep 60",
+          cpuPercent: 0,
+          rssBytes: 1024 * 1024,
+        }),
+      ],
+    });
+  }
+
+  /** The headline CPU block's hover: the one place its detail is carried. */
+  async function headlineCpuTooltip(): Promise<string> {
+    const label = screen
+      .getAllByText("CPU")
+      .find((node) => node.parentElement?.getAttribute("tabindex") === "0");
+    if (label === undefined || label.parentElement === null) {
+      throw new Error("Expected the headline CPU block");
+    }
+    fireEvent.focus(label.parentElement);
+    const tooltip = (await screen.findByRole("tooltip")).textContent;
+    return tooltip;
+  }
+
+  function ownerRowButton(): HTMLElement {
+    const row = screen.getByText("Terminal Alpha").closest("button");
+    if (row === null) throw new Error("Expected owner row button");
+    return row;
+  }
+
+  it("reads one busy core as 6.3% in the headline, names the cores on hover, and leaves the RAM share alone", async () => {
+    openWith({
+      app: app(),
+      hostTree: hostTree({ cpuPercent: 100, rssBytes: 512 * 1024 * 1024 }),
+    });
+
+    expect(screen.getByText("6.3%")).not.toBeNull();
+    expect(await headlineCpuTooltip()).toContain("1.0 of 16 cores");
+    // 512 MiB of the fixture's 2 GiB, the same way it was before CPU moved.
+    expect(screen.getByText("25%")).not.toBeNull();
+    expect(screen.getByRole("progressbar").getAttribute("aria-valuenow")).toBe(
+      "25",
+    );
+  });
+
+  it("keeps the RAM share's own precision beside a CPU share with the finer tier", () => {
+    // 20 MiB of the fixture's 2 GiB is 0.977%: the RAM share keeps one decimal
+    // ("1.0%"), where the CPU formatter's sub-1% tier would print "0.98%".
+    openWith({
+      app: app(),
+      hostTree: hostTree({ cpuPercent: 100, rssBytes: 20 * 1024 * 1024 }),
+    });
+
+    expect(screen.getByText("6.3%")).not.toBeNull();
+    expect(screen.getByText("1.0%")).not.toBeNull();
+    expect(screen.queryByText("0.98%")).toBeNull();
+  });
+
+  it("prints a 0.05-core process row as 0.31% of 16 processors, and its Self and Tree lines name the cores", async () => {
+    openWith({ app: appCountOnly(16), owners: [ownerWithChild(5)] });
+
+    expect(ownerRowButton().textContent).toContain("0.31%");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Expand process tree" }),
+    );
+    expect(ownerRowButton().textContent).toContain("0.31%");
+
+    const metrics = ownerRowButton().querySelector(
+      '[data-slot="tooltip-trigger"]',
+    );
+    if (metrics === null) throw new Error("Expected owner metric tooltip");
+    fireEvent.pointerMove(metrics);
+    expect(
+      await screen.findAllByText(
+        /Self: 0\.31% CPU \(0\.1 of 16 cores\) · 40\.0 MB memory/,
+      ),
+    ).not.toHaveLength(0);
+    expect(
+      await screen.findAllByText(/Tree: 0\.31% CPU \(0\.1 of 16 cores\)/),
+    ).not.toHaveLength(0);
+  });
+
+  it("names the cores behind a row's share on hover", async () => {
+    openWith({ app: appCountOnly(16), owners: [ownerWithChild(100)] });
+
+    const cell = within(ownerRowButton()).getByText("6.3%");
+    fireEvent.pointerMove(cell);
+
+    // One tooltip, the row's Self and Tree lines: the CPU cell does not open
+    // a second, cores-only tooltip of its own on top of it.
+    const tooltips = await screen.findAllByRole("tooltip");
+    expect(tooltips).toHaveLength(1);
+    expect(tooltips[0]?.textContent).toMatch(
+      /Self: 6\.3% CPU \(1\.0 of 16 cores\)/,
+    );
+    expect(tooltips[0]?.textContent).toMatch(
+      /Tree: 6\.3% CPU \(1\.0 of 16 cores\)/,
+    );
+  });
+
+  it("names the cores behind the share on a row with no children to expand", async () => {
+    // A single-process row has no Self and Tree tooltip: its CPU cell carries
+    // the cores figure itself.
+    openWith({
+      app: appCountOnly(16),
+      owners: [
+        owner({
+          cpuPercent: 100,
+          processCount: 1,
+          processes: [
+            resourceProcess({
+              pid: 100,
+              rootPid: 100,
+              name: "zsh",
+              command: "/bin/zsh",
+              cpuPercent: 100,
+              rssBytes: 40 * 1024 * 1024,
+            }),
+          ],
+        }),
+      ],
+    });
+
+    fireEvent.pointerMove(within(ownerRowButton()).getByText("6.3%"));
+
+    expect(await screen.findAllByText(/1\.0 of 16 cores/)).not.toHaveLength(0);
+  });
+
+  it("adds Electron's native desktop share to the host share", async () => {
+    installDesktopMetricsBridge(() =>
+      Promise.resolve({
+        appMetrics: [
+          desktopMetric({
+            type: "Browser",
+            cpu: { cpuSharePercent: 6.25 },
+          }),
+        ],
+      }),
+    );
+    openWith({
+      app: appCountOnly(16),
+      hostTree: hostTree({ cpuPercent: 100, rssBytes: 512 * 1024 * 1024 }),
+      owners: [ownerWithChild(100)],
+    });
+
+    expect(await screen.findByText("Traycer Desktop")).not.toBeNull();
+    // Host 100 per-core points are 6.25%; Electron's native 6.25% share adds
+    // directly, while the detail converts it back to one core for the label.
+    expect(screen.getByText("13%")).not.toBeNull();
+    expect(await headlineCpuTooltip()).toContain("2.0 of 16 cores");
+    const desktopHeader =
+      screen.getByText("Traycer Desktop").parentElement?.parentElement;
+    const desktopMain = screen.getByText("Main").parentElement?.parentElement;
+    if (desktopHeader === null || desktopHeader === undefined) {
+      throw new Error("Expected the desktop heading row");
+    }
+    if (desktopMain === null || desktopMain === undefined) {
+      throw new Error("Expected the desktop Main row");
+    }
+    // Both desktop rows retain Electron's native share; the host row is
+    // independently divided by its 16 processors.
+    expect(desktopHeader.textContent).toContain("6.3%");
+    expect(desktopMain.textContent).toContain("6.3%");
+    expect(ownerRowButton().textContent).toContain("6.3%");
+  });
+
+  describe("a host that sends no processor count", () => {
+    const NO_COUNT_SENTENCE =
+      "This host doesn't report how many processors it has, so there is no total to take a CPU share of.";
+
+    it("shows a dash and says why in the headline, with the other readings intact", async () => {
+      openWith({
+        app: { ...app(), hostCpuCount: undefined },
+        hostTree: hostTree({ cpuPercent: 100, rssBytes: 512 * 1024 * 1024 }),
+      });
+
+      expect(await headlineCpuTooltip()).toContain(NO_COUNT_SENTENCE);
+      expect(screen.queryByText("100%")).toBeNull();
+      expect(screen.queryByText("6.3%")).toBeNull();
+      // The RAM share does not depend on the count.
+      expect(screen.getByText("25%")).not.toBeNull();
+    });
+
+    it("shows a dash on a process row instead of the per-core figure", () => {
+      openWith({
+        app: appCountOnly(undefined),
+        owners: [ownerWithChild(100)],
+      });
+
+      const row = ownerRowButton();
+      expect(row.textContent).toContain("—");
+      expect(row.textContent).not.toContain("100");
+      expect(row.textContent).not.toContain("%");
+    });
+
+    it("explains the missing host count in a parent row's CPU tooltip", async () => {
+      openWith({
+        app: appCountOnly(undefined),
+        owners: [ownerWithChild(100)],
+      });
+
+      const cpuDash = within(ownerRowButton()).getByText("—");
+      fireEvent.pointerMove(cpuDash);
+
+      const tooltips = await screen.findAllByRole("tooltip");
+      expect(tooltips).toHaveLength(1);
+      const tooltip = tooltips[0]?.textContent ?? "";
+      expect(tooltip).toContain(NO_COUNT_SENTENCE);
+      expect(tooltip).toMatch(/Self: —\s+CPU/);
+      expect(tooltip).toMatch(/Tree: —\s+CPU/);
+    });
+
+    it("keeps Electron's native share visible when the host count is missing", async () => {
+      installDesktopMetricsBridge(() =>
+        Promise.resolve({
+          appMetrics: [desktopMetric({ cpu: { cpuSharePercent: 6.25 } })],
+        }),
+      );
+      openWith({
+        app: { ...app(), hostCpuCount: undefined },
+        hostTree: hostTree({ cpuPercent: 100 }),
+        owners: [ownerWithChild(100)],
+      });
+
+      await screen.findByText("Traycer Desktop");
+      const headlineLabel = screen
+        .getAllByText("CPU")
+        .find((node) => node.parentElement?.getAttribute("tabindex") === "0");
+      if (
+        headlineLabel?.parentElement === null ||
+        headlineLabel === undefined
+      ) {
+        throw new Error("Expected the headline CPU block");
+      }
+      fireEvent.focus(headlineLabel.parentElement);
+      expect((await screen.findByRole("tooltip")).textContent).toContain(
+        NO_COUNT_SENTENCE,
+      );
+      expect(screen.queryByText("100%")).toBeNull();
+      const hostRow = ownerRowButton();
+      expect(hostRow.textContent).toContain("—");
+      expect(hostRow.textContent).not.toContain("%");
+      fireEvent.blur(headlineLabel.parentElement);
+
+      const desktopHeader =
+        screen.getByText("Traycer Desktop").parentElement?.parentElement;
+      if (desktopHeader === null || desktopHeader === undefined) {
+        throw new Error("Expected the desktop heading row");
+      }
+      const desktopCpu = within(desktopHeader).getByText("6.3%");
+      expect(desktopHeader.textContent).toContain("6.3%");
+
+      fireEvent.pointerMove(desktopCpu);
+      expect((await screen.findByRole("tooltip")).textContent).toBe(
+        "Core count unavailable.",
+      );
+    });
+  });
+});
+
 /**
  * Shells nest under their creator (the agent whose tool call made
  * them), uniformly for a chat whose program is still running and for one whose
@@ -4181,7 +4506,11 @@ describe("ResourceMonitorPopover · shells nested under their creator", () => {
     const stub = installStubFactory();
     renderPopover();
     act(() => {
-      stub.emit().onSnapshot(projection({ owners: [...owners] }));
+      // One processor: a share equals the per-core number the owners carry, so
+      // these grouping assertions stay about sums, not about the division.
+      stub
+        .emit()
+        .onSnapshot(projection({ app: appCountOnly(1), owners: [...owners] }));
     });
     fireEvent.click(screen.getByRole("button", { name: "Resources" }));
     return stub;
@@ -5433,7 +5762,7 @@ describe("ResourceMonitorPopover · header-button forms (G6)", () => {
       within(button).queryByTestId("status-bar-resource-metric-memory"),
     ).toBeNull();
     expect(button.getAttribute("aria-label")).toBe(
-      "Resources: cpu 1.0%, procs 1",
+      "Resources: cpu 0.06% (0.0 of 16 cores), procs 1",
     );
 
     // The Metrics checkboxes (the resource monitor's fine-tune row) are the
@@ -5489,7 +5818,7 @@ describe("ResourceMonitorPopover · header-button forms (G6)", () => {
         memory: true,
       });
       const stub = renderPopoverForm("strip");
-      emitCpu(stub, 16);
+      emitCpu(stub, 160);
 
       const button = screen.getByTestId("resource-monitor-header-button");
       expect(button.getAttribute("data-variant")).toBe("muted");
@@ -5500,13 +5829,13 @@ describe("ResourceMonitorPopover · header-button forms (G6)", () => {
 
       fireEvent.focus(button);
       expect((await screen.findByRole("tooltip")).textContent).toContain(
-        "Resources · CPU 16%",
+        "Resources · CPU 10% (1.6 of 16 cores)",
       );
     });
 
     it("says cpu before the percent in the expanded strip's outlined tile", () => {
       const stub = renderPopoverForm("readout");
-      emitCpu(stub, 16);
+      emitCpu(stub, 256);
 
       const button = screen.getByTestId("resource-monitor-header-button");
       expect(button.getAttribute("data-variant")).toBe("outline");
@@ -5533,11 +5862,16 @@ describe("ResourceMonitorPopover · header-button forms (G6)", () => {
           .getByTestId("resource-monitor-header-button")
           .querySelector("svg");
 
-      emitCpu(stub, 84);
+      // One saturated core is 6.25% of 16 processors, nowhere near the line.
+      emitCpu(stub, 100);
       expect(icon()?.getAttribute("class")).not.toContain(
         "text-warning-foreground",
       );
-      emitCpu(stub, 85);
+      emitCpu(stub, 1344);
+      expect(icon()?.getAttribute("class")).not.toContain(
+        "text-warning-foreground",
+      );
+      emitCpu(stub, 1360);
       expect(icon()?.getAttribute("class")).toContain(
         "text-warning-foreground",
       );
@@ -5572,7 +5906,7 @@ describe("ResourceMonitorPopover · header-button forms (G6)", () => {
       within(button).getByTestId("status-bar-resource-metric-cpu"),
     ).not.toBeNull();
     expect(button.getAttribute("aria-label")).toBe(
-      "Resources: cpu 1.0%, procs 1",
+      "Resources: cpu 0.06% (0.0 of 16 cores), procs 1",
     );
   });
 
@@ -5593,9 +5927,9 @@ describe("ResourceMonitorPopover · header-button forms (G6)", () => {
         "status-bar-resource-metric-cpu",
       ).lastElementChild?.className;
 
-    emitCpu(16);
+    emitCpu(100);
     expect(cpuValue()).not.toContain("text-warning-foreground");
-    emitCpu(92);
+    emitCpu(1472);
     expect(cpuValue()).toContain("text-warning-foreground");
   });
 
