@@ -25,6 +25,7 @@ vi.mock("@/lib/analytics", async (importOriginal) => ({
 
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -167,7 +168,7 @@ function mount(): TeamPageHarness {
   return harness;
 }
 
-/** The row's own line, which is where every outcome below is reported. */
+/** The row's status line; request failures use the shared host notice. */
 async function line(): Promise<string> {
   const row = await screen.findByText("Use Traycer memories for agents");
   const text = row.closest("div")?.parentElement?.textContent ?? null;
@@ -188,6 +189,8 @@ async function flipOn(): Promise<void> {
 
 beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
+  vi.spyOn(toast, "error");
+  vi.spyOn(toast, "info");
   script.reads = [read(false, 5)];
   script.get = null;
   script.status = null;
@@ -198,6 +201,8 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   resetTeamPageHarness();
+  toast.dismiss();
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
@@ -794,9 +799,7 @@ describe("Agent memories ▸ the host row's write", () => {
       throw new Error("response lost");
     };
     await flipOn();
-    await waitFor(async () =>
-      expect(await line()).toContain("Couldn't change this setting"),
-    );
+    await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(1));
     script.get = null;
     await act(async () => {
       release(read(false, 5));
@@ -831,9 +834,7 @@ describe("Agent memories ▸ the host row's write", () => {
       wrapper: harness.Wrapper,
     });
     await flipOn();
-    await waitFor(async () =>
-      expect(await line()).toContain("Couldn't change this setting"),
-    );
+    await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(1));
     const reads = harness.paramsOf("config.agentMemories.get").length;
     view.rerender(null);
     view.rerender(<AgentMemoriesSettingsPanel />);
@@ -1286,17 +1287,16 @@ describe("Agent memories ▸ the host row's write", () => {
     },
   );
 
-  it("does not claim the configuration refused a write whose reply failed", async () => {
+  it("reports a setter failure once through the shared host notice", async () => {
     script.set = () => {
       throw new Error("the connection dropped");
     };
     mount();
     await flipOn();
 
-    await waitFor(async () =>
-      expect(await line()).toContain("Couldn't change this setting"),
-    );
+    await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(1));
     const text = await line();
+    expect(text).not.toContain("Couldn't change this setting");
     expect(text).not.toContain("Someone else");
     expect(text).not.toContain("Saved to your configuration");
   });
@@ -1478,22 +1478,49 @@ describe("Agent memories ▸ the host row's write", () => {
     );
   });
 
-  it("reports a stale write as somebody else's change, which is the one refusal it can name", async () => {
+  it("keeps stale-write origin in the shared notice without duplicating it inline", async () => {
     script.set = () => {
-      throw new HostRpcError({
-        code: "ENVIRONMENT_WRITE_STALE",
-        message: "someone else changed it",
-        requestId: "req-stale",
-        method: "config.agentMemories.set",
-        fatalDetails: null,
-      });
+      throw HostRpcError.fromWireEnvelope(
+        {
+          code: "ENVIRONMENT_WRITE_STALE",
+          message: "someone else changed it",
+          staleWrite: { changedBy: { kind: "dashboard" }, currentRevision: 6 },
+        },
+        "req-stale",
+        "config.agentMemories.set",
+      );
     };
     mount();
     await flipOn();
 
-    await waitFor(async () =>
-      expect(await line()).toContain("Someone else changed this setting"),
+    await waitFor(() => expect(toast.info).toHaveBeenCalledTimes(1));
+    expect(toast.info).toHaveBeenCalledWith(
+      "This setting was changed in the dashboard just now.",
+      { id: "environment-write-stale" },
     );
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(await line()).not.toContain("Someone else changed this setting");
+  });
+
+  it("finishes after navigation with one shared setter failure notice", async () => {
+    let reject: (error: Error) => void = () => {
+      throw new Error("setter was not started");
+    };
+    script.set = () =>
+      new Promise((_resolve, rejectWrite) => {
+        reject = rejectWrite;
+      });
+    const harness = mountTeamPage({ kind: "host" }, handlers());
+    const view = render(<AgentMemoriesSettingsPanel />, {
+      wrapper: harness.Wrapper,
+    });
+    await flipOn();
+    await waitFor(() =>
+      expect(harness.paramsOf("config.agentMemories.set")).toHaveLength(1),
+    );
+    view.unmount();
+    act(() => reject(new Error("response lost after navigation")));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(1));
   });
 
   it("never asks for the host's configuration card for a write the configuration already took", async () => {

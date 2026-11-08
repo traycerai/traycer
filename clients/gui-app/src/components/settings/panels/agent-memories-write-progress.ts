@@ -9,7 +9,6 @@ export type AgentMemoryWriteProgress =
   | { readonly kind: "queued" }
   | { readonly kind: "waiting" }
   | { readonly kind: "unconfirmed" }
-  | { readonly kind: "failed" }
   | { readonly kind: "stale" }
   | { readonly kind: "refused" };
 

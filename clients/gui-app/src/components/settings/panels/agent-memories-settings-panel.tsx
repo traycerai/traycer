@@ -167,11 +167,6 @@ function hostRowStatus(input: {
       return "Your configuration refused this change. Reopen Settings to read what it holds.";
     case "stale":
       return "Someone else changed this setting first. Reopen Settings to read what your configuration holds.";
-    case "failed":
-      // Deliberately says nothing about whether it was saved. A refusal from
-      // the configuration and a reply that never arrived are the same code
-      // here, so naming either would be a guess.
-      return "Couldn't change this setting. Reopen Settings to read what your configuration holds.";
     case "settled":
       return SETTING_STATUS;
   }
@@ -422,11 +417,11 @@ function AgentMemoriesRow(): ReactNode {
     setEnabled.mutate(
       { enabled: asked },
       {
-        onError: (error) => {
+        onError: () => {
           if (!live()) return;
-          finish({
-            kind: error.code === "ENVIRONMENT_WRITE_STALE" ? "stale" : "failed",
-          });
+          // The shared mutation reports setter failures, including after this
+          // row unmounts. Retire the observation without repeating that notice.
+          finish({ kind: "settled" });
         },
         onSuccess: (response) => {
           if (!live()) return;
