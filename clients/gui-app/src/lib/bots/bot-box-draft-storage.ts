@@ -9,7 +9,7 @@ import { base64ToBytes, bytesToBase64Async } from "@/lib/composer/image-base64";
 import {
   registerExtraImageRootSource,
   showLandingImageBudgetExceededToast,
-  tryReserveLandingImageBudget,
+  tryReserveLandingImageResidency,
   type LandingImageBudgetReservation,
 } from "@/lib/composer/landing-image-budget";
 import {
@@ -56,8 +56,14 @@ export const BOT_BOX_DRAFT_WRITE_DEBOUNCE_MS = 300;
  * A window never writes an image out of the drafts by failing to read it.
  * The image store is the window's own, so an image another window stored,
  * or one whose bytes cannot be read back here, is left out of this window's
- * box but kept in every write it makes ({@link botBoxDraftCleared}). Only an
- * image this window stored and its image store no longer holds is dropped.
+ * box but kept in what is stored, a write of that box included
+ * ({@link botBoxDraftCleared}). Only an image this window stored and its
+ * image store no longer holds is dropped.
+ *
+ * Nor does a window write another's boxes away: every window's drafts share
+ * one stored document, and a write puts only the boxes this window changed
+ * since it last read or wrote them (its clears and forgotten bots included)
+ * onto the document as it stands, leaving every other box as stored.
  *
  * Writes wait for typing to pause, and a page that is going away writes at
  * once, without the images not yet stored. Each image is admitted against
@@ -77,6 +83,7 @@ export function createBotBoxDraftStorage(): PersistStorage<PersistedBotBoxDrafts
       const state = await inlineStoredImages(stored.state);
       // The stored drafts were wiped while their images were read.
       if (wiped()) return null;
+      writer.baseline = state.threadBoxes;
       return { ...stored, state };
     },
     setItem: (name, value) => {
@@ -89,6 +96,7 @@ export function createBotBoxDraftStorage(): PersistStorage<PersistedBotBoxDrafts
     removeItem: (name) => {
       dropWrites();
       writer.lastThreadBoxes = null;
+      writer.baseline = {};
       localStorage.removeItem(name);
     },
   };
@@ -97,7 +105,9 @@ export function createBotBoxDraftStorage(): PersistStorage<PersistedBotBoxDrafts
 /** The drafts store reads the stored drafts again: nothing is written until it has. */
 export function botBoxDraftsReading(): void {
   writer.read = false;
+  writer.baseline = {};
   writer.unresolved = new Map();
+  writer.gone = new Map();
   writer.droppedDuringRead.keys.clear();
   writer.droppedDuringRead.bots.clear();
 }
@@ -112,9 +122,13 @@ export function botBoxDraftCleared(botId: string, key: string): void {
   writer.unresolved.delete(box);
 }
 
-/** The bot is gone: so are the images its boxes kept that this window could not show. */
+/**
+ * The bot is gone: the next write drops all its boxes, another window's
+ * included, and the images its boxes kept that this window could not show.
+ */
 export function botBoxDraftsForgotten(botId: string): void {
   if (!writer.read) writer.droppedDuringRead.bots.add(botId);
+  writer.forgotten.add(botId);
   for (const [box, unresolved] of writer.unresolved) {
     if (unresolved.botId === botId) writer.unresolved.delete(box);
   }
@@ -213,13 +227,27 @@ const writer: {
   inFlightHashByInline: Map<string, string>;
   /**
    * By box (`boxKeyOf`): the stored images the last read could not
-   * put back in that box, kept in every write until the person clears or
-   * sends the box or its bot is gone.
+   * put back in that box, kept in each write of it until the person clears
+   * or sends the box or its bot is gone.
    */
   unresolved: Map<string, UnresolvedBox>;
+  /**
+   * By box (`boxKeyOf`): the images this window stored that the last read
+   * found gone, until a write takes them out of what is stored.
+   */
+  gone: Map<string, GoneImages>;
   /** The boxes cleared and the bots forgotten while the stored drafts are read. */
   droppedDuringRead: { readonly keys: Set<string>; readonly bots: Set<string> };
-  /** The images the image budget refused: the person is told once for each. */
+  /**
+   * This window's drafts as it last read or wrote them: a write puts only the
+   * boxes that differ from them onto what is stored.
+   */
+  baseline: StoredBoxDrafts;
+  /** The bots forgotten since the last write that landed: it drops all their boxes. */
+  forgotten: Set<string>;
+  /** The boxes (`boxKeyOf`) whose last write left out an image they hold: written again. */
+  incomplete: Set<string>;
+  /** The hashes of the images the image budget refused: the person is told once for each. */
   refused: Set<string>;
 } = {
   read: false,
@@ -232,17 +260,26 @@ const writer: {
   hashByInline: new Map(),
   inFlightHashByInline: new Map(),
   unresolved: new Map(),
+  gone: new Map(),
   droppedDuringRead: { keys: new Set(), bots: new Set() },
+  baseline: {},
+  forgotten: new Set(),
+  incomplete: new Set(),
   refused: new Set(),
 };
 
 /** A box's stored images this window could not put back in it. */
 interface UnresolvedBox {
   readonly botId: string;
-  readonly key: string;
-  readonly seedId: number;
   /** As stored: named by hash, with the window that stored them. */
   readonly images: ReadonlyArray<JsonContent>;
+}
+
+/** A box's images this window stored whose bytes its image store no longer holds. */
+interface GoneImages {
+  readonly botId: string;
+  readonly key: string;
+  readonly hashes: ReadonlySet<string>;
 }
 
 function boxKeyOf(botId: string, key: string): string {
@@ -279,6 +316,9 @@ function dropWrites(): void {
   writer.inFlight = null;
   writer.inFlightHashByInline = new Map();
   writer.unresolved = new Map();
+  writer.gone = new Map();
+  writer.forgotten.clear();
+  writer.incomplete.clear();
   writer.generation += 1;
 }
 
@@ -292,12 +332,15 @@ async function writePending(): Promise<void> {
   // Held until this write has landed or is overtaken: by then what it stored
   // is charged as the roots that name it, or is no one's.
   const admitted: LandingImageBudgetReservation[] = [];
+  // Every image still to store is tried again on each write, so these are the
+  // hashes of all the images a box still holds unstored.
+  const tried = new Set<string>();
   try {
     await Promise.all(
       [...draftImages(pending.value.state)]
         .filter(([b64content]) => !writer.hashByInline.has(b64content))
         .map(async ([b64content, box]) => {
-          const hash = await storeImage(b64content, box, admitted);
+          const hash = await storeImage(b64content, box, admitted, tried);
           if (hash !== null) stored.set(b64content, hash);
         }),
     );
@@ -308,6 +351,9 @@ async function writePending(): Promise<void> {
     // A newer write, or a wipe, came while the images were stored: the images
     // this one stored are kept only by what still names them.
     if (generation !== writer.generation || wiped()) return;
+    for (const hash of writer.refused) {
+      if (!tried.has(hash)) writer.refused.delete(hash);
+    }
     const { hashByInline } = writer;
     land(
       pending,
@@ -319,29 +365,36 @@ async function writePending(): Promise<void> {
 }
 
 /**
- * Writes `write`, each inline image named by the hash `hashOf` has for it and
- * left out where it has none; from here on, the hashes of the images it
- * names are the ones this window's boxes hold.
+ * Writes the boxes `write` changed onto the drafts as they are stored now,
+ * each inline image named by the hash `hashOf` has for it and left out where
+ * it has none; every other box stays as stored, whichever window wrote it.
+ * From here on, the hashes of the images `write` names are the ones this
+ * window's boxes hold.
  */
 function land(
   write: PendingWrite,
   hashOf: (b64content: string) => string | undefined,
 ): void {
+  const next = write.value.state.threadBoxes;
   const hashByInline = new Map<string, string>();
   for (const b64content of draftImages(write.value.state).keys()) {
     const hash = hashOf(b64content);
     if (hash !== undefined) hashByInline.set(b64content, hash);
   }
   writer.hashByInline = hashByInline;
-  const value: StorageValue<PersistedBotBoxDrafts> = {
-    ...write.value,
-    state: storedState(
-      write.value.state,
-      (b64content) => hashByInline.get(b64content) ?? null,
-    ),
-  };
+  const partition = landingImagePartition();
+  const threadBoxes = editableDrafts(
+    readStoredValue(write.name)?.state.threadBoxes ?? {},
+  );
+  for (const botId of writer.forgotten) delete threadBoxes[botId];
+  // Before this write's own boxes, which replace a box it changed anyway.
+  takeOutGoneImages(threadBoxes, partition);
+  const incomplete = putChangedBoxes(threadBoxes, next, partition);
   try {
-    localStorage.setItem(write.name, JSON.stringify(value));
+    localStorage.setItem(
+      write.name,
+      JSON.stringify({ ...write.value, state: { threadBoxes } }),
+    );
   } catch (error) {
     // Storage refused it (full, say): it waits again, for the next change to
     // replace or the page hiding to try once more.
@@ -349,7 +402,150 @@ function land(
       error: describeLogError(error),
     });
     writer.pending ??= write;
+    return;
   }
+  writer.baseline = next;
+  writer.forgotten.clear();
+  writer.gone = new Map();
+  writer.incomplete = incomplete;
+}
+
+/**
+ * Takes this window's own images the last read found gone out of each box as
+ * stored, which may be another window's newer draft of it.
+ */
+function takeOutGoneImages(
+  threadBoxes: Partial<Record<string, Partial<Record<string, StoredBoxDraft>>>>,
+  partition: string,
+): void {
+  for (const { botId, key, hashes } of writer.gone.values()) {
+    const draft = threadBoxes[botId]?.[key];
+    if (draft === undefined || draft.content === null) continue;
+    const content = withoutImages(draft.content, hashes, partition);
+    const empty =
+      draft.text.length === 0 &&
+      (content === null || !containsImageAtoms(content));
+    putBox(threadBoxes, botId, key, empty ? null : { ...draft, content });
+  }
+}
+
+/**
+ * Puts each box `next` changed since this window's baseline as this window
+ * holds it now, or takes it out where it was cleared; returns the boxes
+ * (`boxKeyOf`) written without an image they hold.
+ */
+function putChangedBoxes(
+  threadBoxes: Partial<Record<string, Partial<Record<string, StoredBoxDraft>>>>,
+  next: StoredBoxDrafts,
+  partition: string,
+): Set<string> {
+  const incomplete = new Set<string>();
+  for (const [botId, key] of changedBoxes(writer.baseline, next)) {
+    const draft = next[botId]?.[key];
+    const box = boxKeyOf(botId, key);
+    const stored =
+      draft === undefined
+        ? null
+        : storedDraft(draft, writer.unresolved.get(box), partition, (b64) => {
+            const hash = writer.hashByInline.get(b64) ?? null;
+            if (hash === null) incomplete.add(box);
+            return hash;
+          });
+    putBox(threadBoxes, botId, key, stored);
+  }
+  return incomplete;
+}
+
+/** Sets that box to `draft`, or takes it out for `null`, with its bot where it holds nothing more. */
+function putBox(
+  threadBoxes: Partial<Record<string, Partial<Record<string, StoredBoxDraft>>>>,
+  botId: string,
+  key: string,
+  draft: StoredBoxDraft | null,
+): void {
+  const byKey = { ...threadBoxes[botId] };
+  if (draft === null) delete byKey[key];
+  else byKey[key] = draft;
+  if (Object.keys(byKey).length === 0) delete threadBoxes[botId];
+  else threadBoxes[botId] = byKey;
+}
+
+/**
+ * `node` without the images `hashes` names that this window stored
+ * (`partition`), and without a block they alone filled; `null` where nothing
+ * is left of it.
+ */
+function withoutImages(
+  node: JsonContent,
+  hashes: ReadonlySet<string>,
+  partition: string,
+): JsonContent | null {
+  if (node.type === "imageAttachment") {
+    const hash = stringValue(node.attrs?.hash);
+    const ours = node.attrs?.partition === partition;
+    return hash !== null && ours && hashes.has(hash) ? null : node;
+  }
+  const children = node.content;
+  if (children === undefined) return node;
+  const next: JsonContent[] = [];
+  for (const child of children) {
+    const kept = withoutImages(child, hashes, partition);
+    if (kept !== null) next.push(kept);
+  }
+  if (children.length > 0 && next.length === 0) return null;
+  return { ...node, content: next };
+}
+
+/** The drafts as stored, copied down to each bot's boxes so a write can change them. */
+function editableDrafts(
+  drafts: StoredBoxDrafts,
+): Partial<Record<string, Partial<Record<string, StoredBoxDraft>>>> {
+  const copy: Partial<Record<string, Partial<Record<string, StoredBoxDraft>>>> =
+    {};
+  for (const [botId, byKey] of Object.entries(drafts)) {
+    if (byKey !== undefined) copy[botId] = { ...byKey };
+  }
+  return copy;
+}
+
+/**
+ * The boxes, as bot and key, that differ between `baseline` and `next`,
+ * a box cleared in `next` included, and those whose last write left out an
+ * image they hold.
+ */
+function changedBoxes(
+  baseline: StoredBoxDrafts,
+  next: StoredBoxDrafts,
+): ReadonlyArray<readonly [string, string]> {
+  const changed = new Map<string, readonly [string, string]>();
+  for (const drafts of [baseline, next]) {
+    for (const [botId, key] of eachBox(drafts)) {
+      const box = boxKeyOf(botId, key);
+      if (changed.has(box)) continue;
+      if (
+        writer.incomplete.has(box) ||
+        !sameDraft(baseline[botId]?.[key], next[botId]?.[key])
+      ) {
+        changed.set(box, [botId, key]);
+      }
+    }
+  }
+  return [...changed.values()];
+}
+
+/** Whether two drafts of one box hold the same, compared by value where they are not one object. */
+function sameDraft(
+  a: StoredBoxDraft | undefined,
+  b: StoredBoxDraft | undefined,
+): boolean {
+  if (a === b) return true;
+  if (a === undefined || b === undefined) return false;
+  return (
+    a.text === b.text &&
+    a.seedId === b.seedId &&
+    (a.content === b.content ||
+      JSON.stringify(a.content) === JSON.stringify(b.content))
+  );
 }
 
 /** The bytes of every inline image the drafts hold, each with the first box holding it. */
@@ -368,33 +564,40 @@ function draftImages(state: PersistedBotBoxDrafts): Map<string, string> {
 
 /**
  * The image's bytes stored under their hash, once the image budget has
- * admitted them (`admitted` takes the reservation); `null` where they cannot
- * be. A refusal tells the person once per image, as a refused paste does.
+ * admitted them (`admitted` takes the reservation, `tried` the hash); `null`
+ * where they cannot be. A refusal tells the person once per image, as a
+ * refused paste does.
  */
 async function storeImage(
   b64content: string,
   box: string,
   admitted: LandingImageBudgetReservation[],
+  tried: Set<string>,
 ): Promise<string | null> {
   const bytes = base64ToBytes(b64content);
   if (bytes === null) return null;
-  const reservation = tryReserveLandingImageBudget([
-    { hash: await hashOf(bytes), bytes: bytes.byteLength },
+  const hash = await contentHash(bytes);
+  if (hash !== null) tried.add(hash);
+  // As bytes becoming resident: a hash another window's draft names is a root
+  // whose bytes this window's image store does not hold, and storing them
+  // here adds them; a hash this store holds still costs nothing more.
+  const reservation = tryReserveLandingImageResidency([
+    { hash, bytes: bytes.byteLength },
   ]);
   if (reservation === null) {
-    if (!writer.refused.has(b64content)) {
-      writer.refused.add(b64content);
+    if (hash === null || !writer.refused.has(hash)) {
+      if (hash !== null) writer.refused.add(hash);
       showLandingImageBudgetExceededToast(box);
     }
     return null;
   }
-  writer.refused.delete(b64content);
+  if (hash !== null) writer.refused.delete(hash);
   admitted.push(reservation);
   return putImage(bytes).catch(() => null);
 }
 
 /** The image's content hash, `null` where it cannot be taken: the budget then charges it in full. */
-async function hashOf(bytes: ImageBytes): Promise<string | null> {
+async function contentHash(bytes: ImageBytes): Promise<string | null> {
   return sha256Hex(bytes).catch(() => null);
 }
 
@@ -407,55 +610,43 @@ function inlineImages(node: JsonContent): ReadonlyArray<string> {
 }
 
 /**
- * The drafts as they are stored: each inline image named by its hash and
- * this window's image store instead of carrying its bytes, and left out
- * where `hashOf` has none for it; then, in a paragraph of their own at the
- * end, the images each box held that this window could not put back in it.
- * A draft left with nothing in it is dropped.
+ * The draft as it is stored: each inline image named by its hash and this
+ * window's image store (`partition`) instead of carrying its bytes, and left
+ * out where `hashOf` has none for it; then, in a paragraph of their own at
+ * the end, the images the box held that this window could not put back in
+ * it (`unresolved`). `null` for a draft left with nothing in it.
  */
-function storedState(
-  state: PersistedBotBoxDrafts,
+function storedDraft(
+  draft: StoredBoxDraft,
+  unresolved: UnresolvedBox | undefined,
+  partition: string,
   hashOf: (b64content: string) => string | null,
-): PersistedBotBoxDrafts {
-  const partition = landingImagePartition();
-  const written = mapDrafts(state.threadBoxes, (draft) => {
-    if (draft.content === null) return draft;
-    const rewritten = rewriteNode(draft.content, hashOf, partition);
-    const content =
-      rewritten === null || (rewritten.content?.length ?? 0) === 0
-        ? null
-        : rewritten;
-    if (
-      draft.text.length === 0 &&
-      (content === null || !containsImageAtoms(content))
-    ) {
-      return null;
-    }
-    return { ...draft, content };
-  });
-  if (writer.unresolved.size === 0) return { threadBoxes: written };
-  const threadBoxes: Partial<
-    Record<string, Partial<Record<string, StoredBoxDraft>>>
-  > = { ...written };
-  for (const box of writer.unresolved.values()) {
-    const draft = threadBoxes[box.botId]?.[box.key];
-    const content = draft?.content ?? { type: "doc", content: [] };
-    threadBoxes[box.botId] = {
-      ...threadBoxes[box.botId],
-      [box.key]: {
-        text: draft?.text ?? "",
-        seedId: draft?.seedId ?? box.seedId,
-        content: {
-          ...content,
-          content: [
-            ...(content.content ?? []),
-            { type: "paragraph", content: [...box.images] },
-          ],
-        },
-      },
+): StoredBoxDraft | null {
+  const rewritten =
+    draft.content === null
+      ? null
+      : rewriteNode(draft.content, hashOf, partition);
+  let content =
+    rewritten === null || (rewritten.content?.length ?? 0) === 0
+      ? null
+      : rewritten;
+  if (unresolved !== undefined) {
+    const doc = content ?? { type: "doc", content: [] };
+    content = {
+      ...doc,
+      content: [
+        ...(doc.content ?? []),
+        { type: "paragraph", content: [...unresolved.images] },
+      ],
     };
   }
-  return { threadBoxes };
+  if (
+    draft.text.length === 0 &&
+    (content === null || !containsImageAtoms(content))
+  ) {
+    return null;
+  }
+  return { ...draft, content };
 }
 
 function rewriteNode(
@@ -529,19 +720,22 @@ async function inlineStoredImages(
   );
   const partition = landingImagePartition();
   const unresolved = new Map<string, UnresolvedBox>();
+  const gone = new Map<string, GoneImages>();
   const threadBoxes = mapDrafts(state.threadBoxes, (draft, botId, key) => {
     if (draft.content === null) return draft;
-    const left: JsonContent[] = [];
-    const content = restoreNode(draft.content, found, partition, left) ?? {
+    const out: RestoreOut = { left: [], gone: [] };
+    const content = restoreNode(draft.content, found, partition, out) ?? {
       type: "doc",
       content: [],
     };
-    if (left.length > 0) {
-      unresolved.set(boxKeyOf(botId, key), {
+    if (out.left.length > 0) {
+      unresolved.set(boxKeyOf(botId, key), { botId, images: out.left });
+    }
+    if (out.gone.length > 0) {
+      gone.set(boxKeyOf(botId, key), {
         botId,
         key,
-        seedId: draft.seedId,
-        images: left,
+        hashes: new Set(out.gone),
       });
     }
     if (draft.text.length === 0 && !containsImageAtoms(content)) return null;
@@ -562,20 +756,29 @@ async function inlineStoredImages(
         ([box, { botId }]) => !keys.has(box) && !bots.has(botId),
       ),
     );
+    writer.gone = gone;
   }
   return { threadBoxes };
 }
 
+/** What a read could not put back in a box's document. */
+interface RestoreOut {
+  /** The images it left out to keep: another window's, or unreadable here. */
+  readonly left: JsonContent[];
+  /** The hashes of the images this window stored whose bytes are gone. */
+  readonly gone: string[];
+}
+
 /**
  * `node` with each stored image's bytes back inline. An image it cannot put
- * back is left out, and goes to `left` unless this window stored it
- * (`partition`) and its image store no longer holds it.
+ * back is left out: to `out.gone` where this window stored it (`partition`)
+ * and its image store no longer holds it, to `out.left` otherwise.
  */
 function restoreNode(
   node: JsonContent,
   found: ReadonlyMap<string, ReadBack>,
   partition: string,
-  left: JsonContent[],
+  out: RestoreOut,
 ): JsonContent | null {
   if (node.type === "imageAttachment") {
     const {
@@ -589,15 +792,23 @@ function restoreNode(
     if (outcome?.kind === "bytes") {
       return { ...node, attrs: { ...attrs, b64content: outcome.b64content } };
     }
-    if (outcome?.kind !== "gone" || storedIn !== partition) left.push(node);
+    if (outcome?.kind === "gone" && storedIn === partition) out.gone.push(hash);
+    else out.left.push(node);
     return null;
   }
   const children = node.content;
   if (children === undefined) return node;
   const next: JsonContent[] = [];
   for (const child of children) {
-    const restored = restoreNode(child, found, partition, left);
+    const restored = restoreNode(child, found, partition, out);
     if (restored !== null) next.push(restored);
+  }
+  // A block that held nothing but images left out goes with them: the
+  // paragraph a write carries them in is one, and keeping it would add an
+  // empty line to the draft on every read and write here. An empty paragraph
+  // the person wrote had nothing to leave out, and stays.
+  if (node.type !== "doc" && children.length > 0 && next.length === 0) {
+    return null;
   }
   return { ...node, content: next };
 }

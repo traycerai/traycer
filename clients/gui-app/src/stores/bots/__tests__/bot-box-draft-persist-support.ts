@@ -44,19 +44,32 @@ let running: App | null = null;
  */
 export async function startApp(): Promise<App> {
   running?.close();
+  const app = await loadApp();
+  running = app;
+  return app;
+}
+
+/**
+ * A second window of the app, started beside the running one over the same
+ * storage, with modules of its own; the caller closes it. Returns once the
+ * modules are loaded, as {@link startApp} does.
+ */
+export async function startWindowBeside(): Promise<App> {
+  return loadApp();
+}
+
+async function loadApp(): Promise<App> {
   vi.resetModules();
   const storage = await import("@/lib/bots/bot-box-draft-storage");
   const { useBotDraftsStore: drafts } =
     await import("@/stores/bots/bot-drafts-store");
   const budget = await import("@/lib/composer/landing-image-budget");
-  const app: App = {
+  return {
     storage,
     drafts,
     imageRoots: budget.landingLiveImageRootHashes,
     close: storage.stopBotBoxDraftWrites,
   };
-  running = app;
-  return app;
 }
 
 /** The app's drafts store has read and merged what was stored. */

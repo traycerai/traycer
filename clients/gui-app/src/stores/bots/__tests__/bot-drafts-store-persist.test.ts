@@ -15,6 +15,7 @@ import {
   it,
   onTestFinished,
   vi,
+  type Mock,
 } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ImageBytes } from "@/lib/attachments/image-bytes";
@@ -34,6 +35,7 @@ import {
   restart,
   startApp,
   startFresh,
+  startWindowBeside,
   storeDraftsAsLeft,
   storeImageBytes,
   storedDrafts,
@@ -229,25 +231,137 @@ describe("two windows over one device's storage", () => {
 
     expect(storedDrafts(app)?.[BOT_ID]?.channel).toBeUndefined();
   });
+
+  it("carries that image in one paragraph however often the other window reads and edits the draft", async () => {
+    await storedByAThenStartB();
+
+    for (const edit of ["one", "two", "three"]) {
+      const kept = app.drafts.getState().threadBoxes[BOT_ID]?.channel;
+      const text = `${kept?.text ?? ""} ${edit}`;
+      app.drafts
+        .getState()
+        .typeThreadBox(BOT_ID, "channel", text, kept?.content ?? null);
+      await waitForStore(
+        app,
+        (stored) => stored?.[BOT_ID]?.channel?.text === text,
+      );
+      app = await restart();
+    }
+
+    const content = storedDrafts(app)?.[BOT_ID]?.channel?.content;
+    expect(content?.content?.map((block) => block.type)).toEqual([
+      "paragraph",
+      "paragraph",
+    ]);
+    expect(JSON.stringify(content)).toContain('"hash"');
+  });
+
+  it("charges an image pasted here that another window's draft holds against this window's image budget", async () => {
+    const toast = watchRefusalToast();
+    await storedByAThenStartB();
+    await fillImageBudget();
+
+    app.drafts
+      .getState()
+      .typeThreadBox(
+        BOT_ID,
+        "other",
+        "same pic",
+        boxDoc("same pic", [INLINE_IMAGE]),
+      );
+    await waitForStore(app, (stored) => stored?.[BOT_ID]?.other !== undefined);
+
+    expect(JSON.stringify(storedDrafts(app)?.[BOT_ID]?.other)).not.toContain(
+      "imageAttachment",
+    );
+    expect(toast).toHaveBeenCalledTimes(1);
+  });
 });
+
+describe("two windows open at once over one device's storage", () => {
+  /** A second window beside the running one, read and ready; closed when the test ends. */
+  async function windowBeside(): Promise<App> {
+    const beside = await hydrated(await startWindowBeside());
+    onTestFinished(beside.close);
+    return beside;
+  }
+
+  it("keeps a box another window saved when this one saves and clears its own", async () => {
+    const a = app;
+    const b = await windowBeside();
+
+    a.drafts.getState().typeThreadBox(BOT_ID, "x", "from A", null);
+    await waitForStore(a, (stored) => stored?.[BOT_ID]?.x !== undefined);
+    b.drafts.getState().typeThreadBox(BOT_ID, "y", "from B", null);
+    await waitForStore(b, (stored) => stored?.[BOT_ID]?.y !== undefined);
+    expect(storedDrafts(b)?.[BOT_ID]?.x?.text).toBe("from A");
+
+    b.drafts.getState().typeThreadBox(BOT_ID, "y", "", null);
+    await waitForStore(
+      b,
+      (stored) => stored !== null && stored[BOT_ID]?.y === undefined,
+    );
+
+    expect(storedDrafts(b)?.[BOT_ID]?.x?.text).toBe("from A");
+  });
+
+  it("does not bring back a box another window cleared when this one saves another", async () => {
+    app.drafts.getState().typeThreadBox(BOT_ID, "x", "from A", null);
+    await waitForStore(app, (stored) => stored?.[BOT_ID]?.x !== undefined);
+    const a = app;
+    const b = await windowBeside();
+    expect(b.drafts.getState().threadBoxes[BOT_ID]?.x?.text).toBe("from A");
+
+    b.drafts.getState().typeThreadBox(BOT_ID, "x", "", null);
+    await waitForStore(
+      b,
+      (stored) => stored !== null && stored[BOT_ID] === undefined,
+    );
+    a.drafts.getState().typeThreadBox(BOT_ID, "z", "from A again", null);
+    await waitForStore(a, (stored) => stored?.[BOT_ID]?.z !== undefined);
+
+    expect(storedDrafts(a)?.[BOT_ID]?.x).toBeUndefined();
+  });
+});
+
+/**
+ * The refusal the person sees, watched: in force for every start after this
+ * call, until the test ends.
+ */
+function watchRefusalToast(): Mock {
+  const REPORTABLE_TOAST = "@/lib/reportable-error-toast";
+  const toast = vi.fn();
+  vi.doMock(REPORTABLE_TOAST, async (importOriginal) => ({
+    ...(await importOriginal<typeof ReportableErrorToast>()),
+    reportableErrorToast: toast,
+  }));
+  onTestFinished(() => {
+    vi.doUnmock(REPORTABLE_TOAST);
+  });
+  return toast;
+}
+
+/**
+ * Another paste or import holds the whole image budget of the running app's
+ * window, once its image store has measured what it holds.
+ */
+async function fillImageBudget(): Promise<{ readonly release: () => void }> {
+  const { awaitLandingImageSizes } =
+    await import("@/lib/composer/landing-image-store");
+  await awaitLandingImageSizes();
+  const budget = await import("@/lib/composer/landing-image-budget");
+  const elsewhere = budget.tryReserveLandingImageBudget([
+    { hash: null, bytes: budget.LANDING_IMAGE_BUDGET_BYTES },
+  ]);
+  if (elsewhere === null) throw new Error("the budget is not empty");
+  return elsewhere;
+}
 
 describe("the image budget a draft's images are stored under", () => {
   it("writes a draft without an image the budget refuses, tells the person once, and stores the image once there is room", async () => {
-    const REPORTABLE_TOAST = "@/lib/reportable-error-toast";
-    const toast = vi.fn();
-    vi.doMock(REPORTABLE_TOAST, async (importOriginal) => ({
-      ...(await importOriginal<typeof ReportableErrorToast>()),
-      reportableErrorToast: toast,
-    }));
-    onTestFinished(() => {
-      vi.doUnmock(REPORTABLE_TOAST);
-    });
+    const toast = watchRefusalToast();
     app = await restart();
-    const budget = await import("@/lib/composer/landing-image-budget");
-    const elsewhere = budget.tryReserveLandingImageBudget([
-      { hash: null, bytes: budget.LANDING_IMAGE_BUDGET_BYTES },
-    ]);
-    expect(elsewhere).not.toBeNull();
+    const elsewhere = await fillImageBudget();
 
     const content = boxDoc("pic", [INLINE_IMAGE]);
     app.drafts.getState().typeThreadBox(BOT_ID, "channel", "pic", content);
@@ -270,7 +384,7 @@ describe("the image budget a draft's images are stored under", () => {
       expect.anything(),
     );
 
-    elsewhere?.release();
+    elsewhere.release();
     app.drafts
       .getState()
       .typeThreadBox(BOT_ID, "channel", "pic again", content);
@@ -278,6 +392,36 @@ describe("the image budget a draft's images are stored under", () => {
       JSON.stringify(stored?.[BOT_ID]?.channel).includes('"hash"'),
     );
     expect(toast).toHaveBeenCalledTimes(1);
+  });
+
+  it("tells the person again about an image pasted again after the refused one was removed", async () => {
+    const toast = watchRefusalToast();
+    app = await restart();
+    await fillImageBudget();
+
+    app.drafts
+      .getState()
+      .typeThreadBox(BOT_ID, "channel", "pic", boxDoc("pic", [INLINE_IMAGE]));
+    await waitForStore(
+      app,
+      (stored) => stored?.[BOT_ID]?.channel !== undefined,
+    );
+    app.drafts
+      .getState()
+      .typeThreadBox(BOT_ID, "channel", "no pic", boxDoc("no pic", []));
+    await waitForStore(
+      app,
+      (stored) => stored?.[BOT_ID]?.channel?.text === "no pic",
+    );
+    app.drafts
+      .getState()
+      .typeThreadBox(BOT_ID, "channel", "pic", boxDoc("pic", [INLINE_IMAGE]));
+    await waitForStore(
+      app,
+      (stored) => stored?.[BOT_ID]?.channel?.text === "pic",
+    );
+
+    expect(toast).toHaveBeenCalledTimes(2);
   });
 });
 
