@@ -116,13 +116,17 @@ export const credentialHomeSchema = lazySchema(() =>
           scope: z.literal("environment"),
           environmentId: z.string().min(1),
           state: z.enum(["admitted", "revoking", "absent"]),
-          retainedReason: credentialMaterialRetainedReasonSchema.nullable().catch(null),
+          retainedReason: credentialMaterialRetainedReasonSchema
+            .nullable()
+            .catch(null),
           cause: environmentPresenceCauseSchema.nullable().catch(null),
         }),
         z.strictObject({
           scope: z.literal("local"),
           state: z.enum(["revoking", "absent"]),
-          retainedReason: credentialMaterialRetainedReasonSchema.nullable().catch(null),
+          retainedReason: credentialMaterialRetainedReasonSchema
+            .nullable()
+            .catch(null),
           cause: z.literal("signed-out-by-person"),
         }),
       ])
