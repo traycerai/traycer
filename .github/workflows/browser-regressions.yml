@@ -167,6 +167,7 @@ jobs:
       - uses: ./.github/actions/bootstrap-ci-tools
         with:
           bun-version: "1.3.14"
+          tools: bun electron
       # Playwright's CLI and the Vite server it starts both run under Node.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
