@@ -412,7 +412,7 @@ function ShapeSheetForm(props: {
         props.onUseShape(shape, stagedSandboxName(form.name), wake);
       }}
     >
-      <div className="flex min-h-0 flex-col gap-4 overflow-y-auto">
+      <div className="-m-1 flex min-h-0 flex-col gap-4 overflow-y-auto p-1">
         <div className="flex flex-col gap-1.5">
           <Label htmlFor={`${ids}-name`}>Name</Label>
           <Input

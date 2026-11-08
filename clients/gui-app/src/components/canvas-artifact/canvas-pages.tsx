@@ -65,7 +65,7 @@ export function CanvasPageMenu({
       <PopoverContent align="start" className="w-64 overflow-hidden">
         <ul
           aria-label="Canvas pages"
-          className="flex min-h-0 flex-col overflow-y-auto"
+          className="-m-1 flex min-h-0 flex-col overflow-y-auto p-1"
         >
           {pages.map((item) => (
             <li key={item.id}>

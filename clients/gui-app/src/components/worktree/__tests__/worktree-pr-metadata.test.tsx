@@ -15,6 +15,7 @@ import type {
 } from "@traycer/protocol/host/worktree-schemas";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HoverCard } from "@/components/ui/hover-card";
+import { expectFocusRingInset } from "@/components/ui/__tests__/dialog-scroll-layout-assertions";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   OwnerWorkspaceMetadataContent,
@@ -417,6 +418,9 @@ describe("worktree PR metadata", () => {
     fireEvent.click(overflow);
 
     const content = screen.getByTestId("worktree-pr-overflow-content");
+    const scrollPills = content.querySelector("span.overflow-y-auto");
+    if (scrollPills === null) throw new Error("expected the PR pills scroller");
+    expectFocusRingInset(scrollPills, ["-m-1", "p-1"]);
     expect(screen.getByRole("dialog", { name: "More pull requests" })).toBe(
       content,
     );

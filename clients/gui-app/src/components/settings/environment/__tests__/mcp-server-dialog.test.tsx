@@ -13,6 +13,7 @@ import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mo
 import type { EnvironmentSecretV12 } from "@traycer/protocol/host/environment-schemas";
 import type { EnvironmentMcpServerDeclaration } from "@traycer/protocol/host/environment/configuration-contracts";
 import { EnvironmentMcpServersPage } from "@/components/settings/environment/environment-mcp-servers";
+import { expectFocusRingInset } from "@/components/ui/__tests__/dialog-scroll-layout-assertions";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
   declaredServer,
@@ -173,6 +174,9 @@ describe("The MCP server dialog", () => {
       render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
 
       const dialog = await openAdd();
+      const scroller = dialog.querySelector("div.overflow-y-auto");
+      if (scroller === null) throw new Error("expected the MCP form scroller");
+      expectFocusRingInset(scroller, ["-m-1", "p-1"]);
 
       expect(
         within(dialog).getByText(`Add an MCP server to ${configuration}`),

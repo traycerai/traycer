@@ -82,7 +82,7 @@ export function HostQuitDialogView(props: HostQuitDialogViewProps): ReactNode {
       <DialogContent
         layout="banded"
         showCloseButton={false}
-        className="w-[min(92vw,32rem)] overflow-hidden sm:max-w-lg"
+        className="flex w-[min(92vw,32rem)] flex-col overflow-hidden sm:max-w-lg"
         data-testid="host-quit-dialog"
         data-quit-state={props.stateKind}
         onOpenAutoFocus={(event) => {
@@ -90,66 +90,68 @@ export function HostQuitDialogView(props: HostQuitDialogViewProps): ReactNode {
           (keepRef.current ?? cancelRef.current)?.focus();
         }}
       >
-        <div className="flex flex-col gap-1.5 p-5">
+        <div className="flex shrink-0 flex-col gap-1.5 p-5">
           <DialogTitle>{props.title}</DialogTitle>
           <DialogDescription>{props.description}</DialogDescription>
+        </div>
+        <div className="-m-1 min-h-0 overflow-y-auto p-1">
           {props.detail === null ? null : (
             <p
-              className="text-ui-sm leading-relaxed text-muted-foreground"
+              className="px-5 pb-4 text-ui-sm leading-relaxed text-muted-foreground"
               data-testid="host-quit-detail"
             >
               {props.detail}
             </p>
           )}
-        </div>
-        {stopping ? (
-          <div
-            role="status"
-            className="flex items-center gap-2 border-t border-border/60 px-5 py-3 text-ui-sm"
-            data-testid="host-quit-stopping"
-          >
-            <AgentSpinningDots
-              className={undefined}
-              testId={undefined}
-              variant={undefined}
-            />
-            <span className="min-w-0">{props.stoppingLine}</span>
-          </div>
-        ) : (
-          <>
-            {props.sessionsHostId === null ? null : (
-              <HostRestartSessions
-                hostId={props.sessionsHostId}
-                disabled={locked}
-                onNavigate={props.onNavigate}
+          {stopping ? (
+            <div
+              role="status"
+              className="flex items-center gap-2 border-t border-border/60 px-5 py-3 text-ui-sm"
+              data-testid="host-quit-stopping"
+            >
+              <AgentSpinningDots
+                className={undefined}
+                testId={undefined}
+                variant={undefined}
               />
-            )}
-            {props.countsLine === null ? null : (
-              <p
-                className="border-t border-border/60 px-5 py-3 text-ui-sm text-muted-foreground"
-                data-testid="host-quit-counts"
-              >
-                {props.countsLine}
-              </p>
-            )}
-            {props.remember === null ? null : (
-              <div className="flex items-center gap-2 px-5 pb-4">
-                <Checkbox
-                  id={rememberId}
-                  checked={props.remember.checked}
+              <span className="min-w-0">{props.stoppingLine}</span>
+            </div>
+          ) : (
+            <>
+              {props.sessionsHostId === null ? null : (
+                <HostRestartSessions
+                  hostId={props.sessionsHostId}
                   disabled={locked}
-                  onCheckedChange={(checked) => {
-                    props.remember?.onChange(checked === true);
-                  }}
-                  data-testid="host-quit-remember"
+                  onNavigate={props.onNavigate}
                 />
-                <Label htmlFor={rememberId} variant="option">
-                  {HOST_QUIT_REMEMBER_LABEL}
-                </Label>
-              </div>
-            )}
-          </>
-        )}
+              )}
+              {props.countsLine === null ? null : (
+                <p
+                  className="border-t border-border/60 px-5 py-3 text-ui-sm text-muted-foreground"
+                  data-testid="host-quit-counts"
+                >
+                  {props.countsLine}
+                </p>
+              )}
+              {props.remember === null ? null : (
+                <div className="flex items-center gap-2 px-5 pb-4">
+                  <Checkbox
+                    id={rememberId}
+                    checked={props.remember.checked}
+                    disabled={locked}
+                    onCheckedChange={(checked) => {
+                      props.remember?.onChange(checked === true);
+                    }}
+                    data-testid="host-quit-remember"
+                  />
+                  <Label htmlFor={rememberId} variant="option">
+                    {HOST_QUIT_REMEMBER_LABEL}
+                  </Label>
+                </div>
+              )}
+            </>
+          )}
+        </div>
         <DialogFooter>
           <Button
             ref={cancelRef}

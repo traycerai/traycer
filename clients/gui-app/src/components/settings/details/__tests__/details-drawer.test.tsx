@@ -47,6 +47,7 @@ import type {
   EnvironmentSecretsVersionsResponseV11,
 } from "@traycer/protocol/host/environment-schemas";
 import { SettingsDetailsDialog } from "@/components/settings/details/settings-details-button";
+import { expectFocusRingInset } from "@/components/ui/__tests__/dialog-scroll-layout-assertions";
 import type { DetailsSubject } from "@/lib/settings-details-entry";
 import {
   mountTeamPage,
@@ -321,7 +322,11 @@ describe("the drawer's reader scopes", () => {
 
     cleanup();
     openDrawer(harness, { kind: "setup_script", key: "macos" }, "Setup");
-    await user.click(await screen.findByRole("button", { name: "Retry" }));
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    const recoveryList = retry.closest("ul");
+    if (recoveryList === null) throw new Error("expected the recovery list");
+    expectFocusRingInset(recoveryList, ["-m-1", "p-1"]);
+    await user.click(retry);
     expect(hoisted.recover.mock.calls).toEqual([
       [{ kind: "retry", hostId: "host-a" }],
     ]);

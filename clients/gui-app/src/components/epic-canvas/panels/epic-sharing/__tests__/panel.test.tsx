@@ -17,6 +17,7 @@ import type {
 import type { PermissionRole } from "@/lib/epic-collaborator-roles";
 import { stubImmediateImage } from "@/__tests__/immediate-avatar-image";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { expectScrollableDialogLayout } from "@/components/ui/__tests__/dialog-scroll-layout-assertions";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 interface TestState {
@@ -965,9 +966,9 @@ describe("<SharingPanel /> My agents", () => {
     renderSharingPanel();
 
     fireEvent.click(screen.getByTestId("epic-sharing-my-agents-switch"));
-    expect(
-      screen.getByTestId("epic-sharing-my-agents-confirm").textContent,
-    ).toContain("2 of your agent chats");
+    const confirm = screen.getByTestId("epic-sharing-my-agents-confirm");
+    expectScrollableDialogLayout(confirm);
+    expect(confirm.textContent).toContain("2 of your agent chats");
 
     fireEvent.click(
       screen.getByTestId("epic-sharing-my-agents-confirm-action"),

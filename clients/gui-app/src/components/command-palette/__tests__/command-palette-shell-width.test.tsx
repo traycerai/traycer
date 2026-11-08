@@ -113,8 +113,15 @@ describe("CommandPaletteShell", () => {
     const dialog = label.closest('[data-slot="dialog-content"]');
     expect(dialog).not.toBeNull();
     const dialogClasses = dialog?.className.split(" ") ?? [];
+    expect(dialogClasses).toContain("flex");
+    expect(dialogClasses).toContain("flex-col");
     expect(dialogClasses).toContain("sm:max-w-[min(90vw,40rem)]");
     expect(dialogClasses).not.toContain("sm:max-w-sm");
+    const command = dialog?.querySelector("[cmdk-root]");
+    expect(command?.classList.contains("min-h-0")).toBe(true);
+    const list = screen.getByTestId("command-palette-list");
+    expect(list.classList.contains("min-h-0")).toBe(true);
+    expect(list.classList.contains("overflow-y-auto")).toBe(true);
 
     hover(label);
     expect(screen.getByRole("tooltip").textContent).toBe(LONG_LABEL);

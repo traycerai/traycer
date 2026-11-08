@@ -178,7 +178,7 @@ function WorktreePrOverflow(props: {
         <span className="shrink-0 text-ui-xs font-medium text-muted-foreground">
           More pull requests
         </span>
-        <span className="flex min-h-0 flex-wrap gap-1.5 overflow-y-auto">
+        <span className="-m-1 flex min-h-0 flex-wrap gap-1.5 overflow-y-auto p-1">
           {props.references.map((reference) => (
             <WorktreePrPill
               key={reference.key}

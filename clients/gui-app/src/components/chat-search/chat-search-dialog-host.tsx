@@ -46,7 +46,7 @@ export function ChatSearchDialogHost() {
         // the unmodified class keeps the safe-area term, the `sm:` one displaces
         // the primitive's `sm:max-w-sm`.
         layout="banded"
-        className="top-[15vh] w-full max-w-[min(calc(100%_-_2rem),44rem,var(--safe-area-width))] translate-y-0 overflow-hidden sm:max-w-[min(calc(100%_-_2rem),44rem,var(--safe-area-width))]"
+        className="top-[15vh] flex w-full max-w-[min(calc(100%_-_2rem),44rem,var(--safe-area-width))] translate-y-0 flex-col overflow-hidden sm:max-w-[min(calc(100%_-_2rem),44rem,var(--safe-area-width))]"
         showCloseButton={false}
       >
         <DialogHeader className="sr-only">

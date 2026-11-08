@@ -32,6 +32,7 @@ import {
   type HostStreamRpcRegistry,
 } from "@traycer/protocol/host/registry";
 import { WorktreesList } from "@/components/settings/panels/worktrees-settings-panel";
+import { expectScrollableDialogLayout } from "@/components/ui/__tests__/dialog-scroll-layout-assertions";
 import { useWorktreeListing } from "@/components/settings/panels/worktrees-listing-query";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import {
@@ -1840,6 +1841,9 @@ describe("WorktreesList delete flow", () => {
     // Aggregate-by-class confirmation names the dirty loss and the neutral
     // unverified caveat instead of a single stacked warning.
     screen.getByText("Delete 2 worktrees?");
+    expectScrollableDialogLayout(
+      screen.getByTestId("worktree-bulk-delete-dialog"),
+    );
     screen.getByTestId("worktree-bulk-delete-dirty-loss");
     screen.getByText("1 not selected: 1 in use");
     fireEvent.click(screen.getByTestId("confirm-action"));

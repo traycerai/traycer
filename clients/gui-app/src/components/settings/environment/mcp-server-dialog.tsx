@@ -148,7 +148,7 @@ export function McpServerDialog(props: {
           </DialogTitle>
           <DialogDescription>{addServerReach()}</DialogDescription>
         </DialogHeader>
-        <div className="flex min-h-0 min-w-0 flex-col gap-3 overflow-y-auto">
+        <div className="-m-1 flex min-h-0 min-w-0 flex-col gap-3 overflow-y-auto p-1">
           <Label htmlFor="mcp-server-name">Name</Label>
           <Input
             id="mcp-server-name"

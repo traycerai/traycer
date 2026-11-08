@@ -2392,12 +2392,12 @@ function WorktreeBulkDeleteDialog(props: {
       <DialogContent
         layout="banded"
         showCloseButton={false}
-        className="w-[min(92vw,32rem)] overflow-hidden sm:max-w-lg"
+        className="flex w-[min(92vw,32rem)] flex-col overflow-hidden sm:max-w-lg"
         data-testid="worktree-bulk-delete-dialog"
       >
         {summary !== null ? (
           <>
-            <div className="flex min-w-0 items-start gap-3 p-5">
+            <div className="flex min-w-0 shrink-0 items-start gap-3 p-5">
               <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-destructive/10 text-destructive">
                 <AlertTriangle className="size-4" aria-hidden />
               </div>
@@ -2409,6 +2409,10 @@ function WorktreeBulkDeleteDialog(props: {
                   Deleting {summary.classSummary}. Traycer runs each repo's
                   teardown script, then removes the worktree.
                 </DialogDescription>
+              </div>
+            </div>
+            <div className="min-h-0 min-w-0 overflow-y-auto">
+              <div className="space-y-2 px-5 pb-4">
                 {summary.dirtyLoss !== null ? (
                   <p
                     className="text-ui-sm leading-relaxed text-warning-foreground"
@@ -2444,23 +2448,23 @@ function WorktreeBulkDeleteDialog(props: {
                   </p>
                 ) : null}
               </div>
+              <ul className="max-h-[min(30vh,12rem)] overflow-y-auto border-t border-border/60 px-5 py-2">
+                {summary.paths.map((path) => (
+                  <TooltipWrapper
+                    key={path}
+                    label={path}
+                    side="top"
+                    sideOffset={undefined}
+                    align={undefined}
+                  >
+                    <li className="truncate py-0.5 text-ui-xs text-muted-foreground">
+                      {path}
+                    </li>
+                  </TooltipWrapper>
+                ))}
+              </ul>
             </div>
-            <ul className="max-h-[min(30vh,12rem)] overflow-y-auto border-t border-border/60 px-5 py-2">
-              {summary.paths.map((path) => (
-                <TooltipWrapper
-                  key={path}
-                  label={path}
-                  side="top"
-                  sideOffset={undefined}
-                  align={undefined}
-                >
-                  <li className="truncate py-0.5 text-ui-xs text-muted-foreground">
-                    {path}
-                  </li>
-                </TooltipWrapper>
-              ))}
-            </ul>
-            <div className="flex justify-end gap-2 border-t border-border/60 bg-foreground/3 px-5 py-3">
+            <div className="flex shrink-0 justify-end gap-2 border-t border-border/60 bg-foreground/3 px-5 py-3">
               <Button
                 type="button"
                 variant="ghost"

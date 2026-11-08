@@ -145,7 +145,7 @@ export function CommandPaletteShell(props: CommandPaletteShellProps) {
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
         layout="banded"
-        className="top-[15vh] w-full max-w-[min(90vw,40rem)] translate-y-0 overflow-hidden sm:max-w-[min(90vw,40rem)]"
+        className="top-[15vh] flex w-full max-w-[min(90vw,40rem)] translate-y-0 flex-col overflow-hidden sm:max-w-[min(90vw,40rem)]"
         showCloseButton={false}
         // Radix's document-level Esc listener can't be reached via React
         // propagation; `onEscapeKeyDown` + `preventDefault` is the first-party
@@ -162,6 +162,7 @@ export function CommandPaletteShell(props: CommandPaletteShellProps) {
           <DialogDescription>Search for a command to run.</DialogDescription>
         </DialogHeader>
         <Command
+          className="min-h-0"
           filter={paletteFilter}
           label="Search commands"
           onKeyDown={handleKeyDown}
@@ -177,7 +178,7 @@ export function CommandPaletteShell(props: CommandPaletteShellProps) {
             />
             <CommandList
               ref={listRef}
-              className="min-h-[min(50vh,20rem)] max-h-[60vh]"
+              className="max-h-[60vh] min-h-0"
               data-testid="command-palette-list"
             >
               {activeSubpage !== null ? (

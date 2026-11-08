@@ -1,3 +1,8 @@
+/**
+ * Rendered overlay content: the cap class on the content element, `flex` and
+ * `flex-col` on that element when a caller scrolls an inner body, `min-h-0`
+ * and `overflow-y-auto` on that body, and a pinned control outside it.
+ */
 import "../../../../__tests__/test-browser-apis";
 import {
   cleanup,
@@ -60,15 +65,6 @@ const DROPDOWN_CAP = "max-h-(--radix-dropdown-menu-content-available-height)";
 const DIALOG_CAP =
   "max-h-[calc(var(--spacing-safe-dvh)-var(--spacing-safe-bottom))]";
 
-const VIEWPORTS: readonly {
-  readonly width: number;
-  readonly height: number;
-}[] = [
-  { width: 1440, height: 1000 },
-  { width: 1280, height: 720 },
-  { width: 844, height: 390 },
-];
-
 const ROW_COUNT = 15;
 
 const sandboxCatalogueState = vi.hoisted(() => {
@@ -110,9 +106,6 @@ const sandboxCatalogueState = vi.hoisted(() => {
   };
   return { data };
 });
-
-const ORIGINAL_INNER_WIDTH = window.innerWidth;
-const ORIGINAL_INNER_HEIGHT = window.innerHeight;
 
 const writeCommandMocks = vi.hoisted(() => ({
   retryWriteCommand: vi.fn<(commandId: string) => void>(),
@@ -257,45 +250,6 @@ vi.mock("@/lib/settings-navigation", () => ({
   navigateToSettingsSection: vi.fn(),
 }));
 
-function applyViewport(width: number, height: number): void {
-  Object.defineProperty(window, "innerWidth", {
-    configurable: true,
-    writable: true,
-    value: width,
-  });
-  Object.defineProperty(window, "innerHeight", {
-    configurable: true,
-    writable: true,
-    value: height,
-  });
-  const root = document.documentElement.style;
-  root.setProperty("--radix-popover-content-available-height", `${height}px`);
-  root.setProperty(
-    "--radix-dropdown-menu-content-available-height",
-    `${height}px`,
-  );
-  root.setProperty("--spacing-safe-dvh", `${height}px`);
-  root.setProperty("--spacing-safe-bottom", "0px");
-}
-
-function restoreViewport(): void {
-  Object.defineProperty(window, "innerWidth", {
-    configurable: true,
-    writable: true,
-    value: ORIGINAL_INNER_WIDTH,
-  });
-  Object.defineProperty(window, "innerHeight", {
-    configurable: true,
-    writable: true,
-    value: ORIGINAL_INNER_HEIGHT,
-  });
-  const root = document.documentElement.style;
-  root.removeProperty("--radix-popover-content-available-height");
-  root.removeProperty("--radix-dropdown-menu-content-available-height");
-  root.removeProperty("--spacing-safe-dvh");
-  root.removeProperty("--spacing-safe-bottom");
-}
-
 function requireElement(node: Element | null, label: string): HTMLElement {
   if (!(node instanceof HTMLElement)) {
     throw new Error(`expected ${label}`);
@@ -311,68 +265,23 @@ function unprefixedMaxHeightTokens(className: string): string[] {
   return className.split(/\s+/).filter((token) => token.startsWith("max-h-"));
 }
 
-const injectedStyles: HTMLStyleElement[] = [];
-
-function injectUtility(className: string, declaration: string): void {
-  const style = document.createElement("style");
-  style.textContent = `.${CSS.escape(className)} { ${declaration} }`;
-  document.head.appendChild(style);
-  injectedStyles.push(style);
+function assertCapClass(element: HTMLElement, capClass: string): void {
+  expect(hasToken(element.className, capClass)).toBe(true);
 }
 
-function clearInjectedStyles(): void {
-  for (const style of injectedStyles) {
-    style.remove();
-  }
-  injectedStyles.length = 0;
+function assertColumn(element: HTMLElement): void {
+  expect(hasToken(element.className, "flex")).toBe(true);
+  expect(hasToken(element.className, "flex-col")).toBe(true);
 }
 
-function documentCssPx(variable: string): number {
-  const value = document.documentElement.style
-    .getPropertyValue(variable)
-    .trim();
-  if (!/^\d+(\.\d+)?px$/.test(value)) {
-    throw new Error(`expected ${variable} to be a pixel length`);
-  }
-  return Number.parseFloat(value);
-}
-
-function assertCappedMaxHeight(
-  element: HTMLElement,
-  capClass: string,
-  declaration: string,
-  viewportHeight: number,
-): void {
-  expect(element.className).toContain(capClass);
-  injectUtility(capClass, declaration);
-  const maxHeight = getComputedStyle(element).maxHeight;
-  expect(maxHeight).toMatch(/^\d+(\.\d+)?px$/);
-  expect(Number.parseFloat(maxHeight)).toBeLessThanOrEqual(viewportHeight);
-}
-
-function assertOverflowYAuto(element: HTMLElement): void {
+function assertScrollClasses(element: HTMLElement): void {
+  expect(hasToken(element.className, "min-h-0")).toBe(true);
   expect(hasToken(element.className, "overflow-y-auto")).toBe(true);
-  injectUtility("overflow-y-auto", "overflow-y: auto;");
-  expect(getComputedStyle(element).overflowY).toBe("auto");
 }
 
 function assertOutsideScroll(control: HTMLElement, scroll: HTMLElement): void {
   expect(document.body.contains(control)).toBe(true);
   expect(scroll.contains(control)).toBe(false);
-}
-
-function popoverCapDeclaration(): string {
-  return `max-height: ${String(documentCssPx("--radix-popover-content-available-height"))}px;`;
-}
-
-function dropdownCapDeclaration(): string {
-  return `max-height: ${String(documentCssPx("--radix-dropdown-menu-content-available-height"))}px;`;
-}
-
-function dialogCapDeclaration(): string {
-  const dvh = documentCssPx("--spacing-safe-dvh");
-  const bottom = documentCssPx("--spacing-safe-bottom");
-  return `max-height: ${String(dvh - bottom)}px;`;
 }
 
 function withTooltip(node: ReactNode): ReactNode {
@@ -387,25 +296,6 @@ function resetOverlayStores(): void {
     usePanelHeaderMenuStore.getInitialState(),
     true,
   );
-}
-
-async function atEachViewport(
-  run: (viewport: {
-    readonly width: number;
-    readonly height: number;
-  }) => void | Promise<void>,
-): Promise<void> {
-  for (const viewport of VIEWPORTS) {
-    applyViewport(viewport.width, viewport.height);
-    resetOverlayStores();
-    try {
-      await run(viewport);
-    } finally {
-      cleanup();
-      clearInjectedStyles();
-      resetOverlayStores();
-    }
-  }
 }
 
 function chipHosts(): ConfigurationChipHost[] {
@@ -555,419 +445,324 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  clearInjectedStyles();
-  restoreViewport();
   resetTeamPageHarness();
   resetNegotiatedManifests();
   resetOverlayStores();
 });
 
-describe("bounded overlays", () => {
-  it("ConfigurationStatusChip caps the popover and scrolls the host list", async () => {
-    await atEachViewport(async (viewport) => {
-      const user = userEvent.setup();
-      render(
-        <ConfigurationStatusChip
-          hosts={chipHosts()}
-          emptyText="Nothing runs this yet"
-          savingOffline={false}
-          local={false}
-          onDetails={() => undefined}
-          onRecover={() => undefined}
-          recoveryPending={false}
+describe("overlay cap and scroll classes", () => {
+  it("ConfigurationStatusChip content carries the popover cap and the host list carries the scroll classes", async () => {
+    const user = userEvent.setup();
+    render(
+      <ConfigurationStatusChip
+        hosts={chipHosts()}
+        emptyText="Nothing runs this yet"
+        savingOffline={false}
+        local={false}
+        onDetails={() => undefined}
+        onRecover={() => undefined}
+        recoveryPending={false}
+      />,
+    );
+    await user.click(screen.getByRole("button"));
+    const popover = requireElement(
+      document.querySelector("[data-slot='popover-content']"),
+      "popover content",
+    );
+    assertCapClass(popover, POPOVER_CAP);
+    assertColumn(popover);
+    expect(hasToken(popover.className, "overflow-hidden")).toBe(true);
+    const list = requireElement(
+      popover.querySelector("ul.overflow-y-auto"),
+      "host list",
+    );
+    assertScrollClasses(list);
+    expect(within(list).getAllByRole("listitem")).toHaveLength(ROW_COUNT);
+    assertOutsideScroll(screen.getByRole("button", { name: "Details" }), list);
+  });
+
+  it("browser host submenu carries the dropdown cap and the host list carries the scroll classes", async () => {
+    const user = userEvent.setup();
+    browserHostOptionsState.hosts = pickableHosts();
+    render(
+      withTooltip(
+        <BrowserOfflineFilter
+          epicId="epic-1"
+          tabId="view-tab-1"
+          mobile={false}
         />,
-      );
-      await user.click(screen.getByRole("button"));
-      const popover = requireElement(
-        document.querySelector("[data-slot='popover-content']"),
-        "popover content",
-      );
-      expect(hasToken(popover.className, "overflow-hidden")).toBe(true);
-      assertCappedMaxHeight(
-        popover,
-        POPOVER_CAP,
-        popoverCapDeclaration(),
-        viewport.height,
-      );
-      const list = requireElement(
-        popover.querySelector("ul.overflow-y-auto"),
-        "host list",
-      );
-      assertOverflowYAuto(list);
-      expect(within(list).getAllByRole("listitem")).toHaveLength(ROW_COUNT);
-      assertOutsideScroll(
-        screen.getByRole("button", { name: "Details" }),
-        list,
-      );
-    });
+      ),
+    );
+    await user.click(screen.getByRole("button", { name: "Filter browsers" }));
+    expect(screen.getByText("Show offline hosts")).toBeTruthy();
+    await user.click(screen.getByRole("menuitem", { name: "Open links on" }));
+    expect(await screen.findByText("Follow task host")).toBeTruthy();
+    const submenu = requireElement(
+      document.querySelector("[data-slot='dropdown-menu-sub-content']"),
+      "dropdown submenu",
+    );
+    assertCapClass(submenu, DROPDOWN_CAP);
+    assertColumn(submenu);
+    expect(hasToken(submenu.className, "overflow-hidden")).toBe(true);
+    const list = requireElement(
+      submenu.querySelector("div.overflow-y-auto"),
+      "host filter list",
+    );
+    assertScrollClasses(list);
+    assertOutsideScroll(within(submenu).getByText("Open links on"), list);
   });
 
-  it("Browser host submenu caps the dropdown and scrolls pickable hosts", async () => {
-    await atEachViewport(async (viewport) => {
-      const user = userEvent.setup();
-      browserHostOptionsState.hosts = pickableHosts();
-      render(
-        withTooltip(
-          <BrowserOfflineFilter
-            epicId="epic-1"
-            tabId="view-tab-1"
-            mobile={false}
-          />,
-        ),
-      );
-      await user.click(screen.getByRole("button", { name: "Filter browsers" }));
-      expect(screen.getByText("Show offline hosts")).toBeTruthy();
-      await user.click(screen.getByRole("menuitem", { name: "Open links on" }));
-      expect(await screen.findByText("Follow task host")).toBeTruthy();
-      const submenu = requireElement(
-        document.querySelector("[data-slot='dropdown-menu-sub-content']"),
-        "dropdown submenu",
-      );
-      expect(hasToken(submenu.className, "overflow-hidden")).toBe(true);
-      assertCappedMaxHeight(
-        submenu,
-        DROPDOWN_CAP,
-        dropdownCapDeclaration(),
-        viewport.height,
-      );
-      const list = requireElement(
-        submenu.querySelector("div.overflow-y-auto"),
-        "host filter list",
-      );
-      assertOverflowYAuto(list);
-      const openLinksOn = within(submenu).getByText("Open links on");
-      assertOutsideScroll(openLinksOn, list);
+  it("McpServerDialog content carries the dialog cap and the fields carry the scroll classes", async () => {
+    negotiateMethods({
+      "environment.configuration.mcpServers.list": { major: 1, minor: 0 },
+      "environment.configuration.mcpServers.put": { major: 1, minor: 1 },
+      "environment.configuration.mcpServers.delete": { major: 1, minor: 0 },
+      "environment.secrets.list": { major: 1, minor: 1 },
     });
+    const harness = mountTeamPage(personalPoolSource(), mcpHandlers());
+    render(<McpServerDialog server={null} onClose={() => undefined} />, {
+      wrapper: harness.Wrapper,
+    });
+    const dialog = await screen.findByRole("dialog");
+    assertCapClass(dialog, DIALOG_CAP);
+    assertColumn(dialog);
+    const fields = innerOverflowYAuto(dialog);
+    assertScrollClasses(fields);
+    assertOutsideScroll(
+      within(dialog).getByRole("button", { name: "Cancel" }),
+      fields,
+    );
+    assertOutsideScroll(
+      within(dialog).getByRole("button", { name: "Add" }),
+      fields,
+    );
   });
 
-  it("McpServerDialog caps the dialog and keeps Cancel and Add outside the fields", async () => {
-    await atEachViewport(async (viewport) => {
-      negotiateMethods({
-        "environment.configuration.mcpServers.list": { major: 1, minor: 0 },
-        "environment.configuration.mcpServers.put": { major: 1, minor: 1 },
-        "environment.configuration.mcpServers.delete": { major: 1, minor: 0 },
-        "environment.secrets.list": { major: 1, minor: 1 },
-      });
-      const harness = mountTeamPage(personalPoolSource(), mcpHandlers());
-      render(<McpServerDialog server={null} onClose={() => undefined} />, {
-        wrapper: harness.Wrapper,
-      });
-      const dialog = await screen.findByRole("dialog");
-      expect(hasToken(dialog.className, "flex")).toBe(true);
-      expect(hasToken(dialog.className, "flex-col")).toBe(true);
-      assertCappedMaxHeight(
-        dialog,
-        DIALOG_CAP,
-        dialogCapDeclaration(),
-        viewport.height,
-      );
-      const fields = innerOverflowYAuto(dialog);
-      assertOverflowYAuto(fields);
-      assertOutsideScroll(
-        within(dialog).getByRole("button", { name: "Cancel" }),
-        fields,
-      );
-      assertOutsideScroll(
-        within(dialog).getByRole("button", { name: "Add" }),
-        fields,
-      );
-    });
+  it("SandboxShapeSheet content carries the dialog cap and the form body carries the scroll classes", () => {
+    render(
+      <SandboxShapeSheet
+        open
+        onOpenChange={() => undefined}
+        configuration={{ kind: "personal" }}
+        defaults={null}
+        initialShape={{
+          os: "linux",
+          cpus: 2,
+          memoryMb: 4096,
+          diskMb: null,
+          region: "us-east",
+          idleMinutes: 30,
+          destroyAfterRestingMinutes: 10_080,
+        }}
+        initialName=""
+        context={{
+          audience: "private",
+          reachHost: null,
+          unmovedComputer: null,
+        }}
+        onUseShape={() => undefined}
+      />,
+    );
+    const dialog = screen.getByTestId("sandbox-shape-sheet");
+    assertCapClass(dialog, DIALOG_CAP);
+    assertColumn(dialog);
+    const form = requireElement(dialog.querySelector("form"), "shape form");
+    const body = requireElement(
+      form.querySelector("div.overflow-y-auto"),
+      "shape form body",
+    );
+    assertScrollClasses(body);
+    assertOutsideScroll(screen.getByTestId("sandbox-shape-sheet-use"), body);
+    assertOutsideScroll(screen.getByRole("button", { name: "Cancel" }), body);
   });
 
-  it("SandboxShapeSheet caps the dialog and keeps Use and Cancel outside the form body", async () => {
-    await atEachViewport((viewport) => {
-      render(
-        <SandboxShapeSheet
-          open
-          onOpenChange={() => undefined}
-          configuration={{ kind: "personal" }}
-          defaults={null}
-          initialShape={{
-            os: "linux",
-            cpus: 2,
-            memoryMb: 4096,
-            diskMb: null,
-            region: "us-east",
-            idleMinutes: 30,
-            destroyAfterRestingMinutes: 10_080,
+  it("ConfirmDestructiveDialog content carries the dialog cap and the body carries the scroll classes", () => {
+    render(
+      <ConfirmDestructiveDialog
+        open
+        onOpenChange={() => undefined}
+        title="Destroy 15 idle sandboxes?"
+        description="Files on these sandboxes cannot be recovered."
+        cascadeSummary={null}
+        actionLabel="Destroy 15"
+        isPending={false}
+        blockedReason={null}
+        onConfirm={() => undefined}
+      >
+        {Array.from({ length: ROW_COUNT }, (_, index) => (
+          <p key={`idle-${String(index + 1)}`}>
+            {`Idle sandbox ${String(index + 1)}`}
+          </p>
+        ))}
+      </ConfirmDestructiveDialog>,
+    );
+    const dialog = screen.getByTestId("confirm-destructive-dialog");
+    assertCapClass(dialog, DIALOG_CAP);
+    assertColumn(dialog);
+    const body = requireElement(
+      dialog.querySelector("div.min-h-0.overflow-y-auto"),
+      "confirm body",
+    );
+    assertScrollClasses(body);
+    expect(within(body).getAllByText(/^Idle sandbox \d+$/)).toHaveLength(
+      ROW_COUNT,
+    );
+    assertOutsideScroll(screen.getByTestId("confirm-cancel"), body);
+    assertOutsideScroll(screen.getByTestId("confirm-action"), body);
+  });
+
+  it("HomeFocusTaskStopCluster dialog carries the dialog cap and the agent list carries the scroll classes", async () => {
+    render(
+      withTooltip(
+        <HomeFocusTaskStopCluster
+          row={focusTaskRow()}
+          actions={focusActions()}
+          hostLabel={null}
+        />,
+      ),
+    );
+    fireEvent.click(screen.getByTestId("home-focus-task-stop-all"));
+    const dialog = await screen.findByTestId("home-focus-stop-all-dialog");
+    assertCapClass(dialog, DIALOG_CAP);
+    assertColumn(dialog);
+    const list = screen.getByTestId("home-focus-stop-all-list");
+    assertScrollClasses(list);
+    expect(within(list).getAllByRole("listitem")).toHaveLength(ROW_COUNT);
+    assertOutsideScroll(screen.getByTestId("home-focus-stop-all-cancel"), list);
+  });
+
+  it("EpicWriteCommandsDialog content carries the dialog cap and the command list carries the scroll classes", () => {
+    writeCommandMocks.commands = Array.from({ length: ROW_COUNT }, (_, index) =>
+      queuedCommand(
+        `cmd-${String(index + 1)}`,
+        `Queued rename ${String(index + 1)}`,
+      ),
+    );
+    render(<EpicWriteCommandsDialog open onOpenChange={() => undefined} />);
+    const dialog = screen.getByTestId("epic-write-commands-dialog");
+    assertCapClass(dialog, DIALOG_CAP);
+    assertColumn(dialog);
+    const list = requireElement(
+      dialog.querySelector("ul.overflow-y-auto"),
+      "write command list",
+    );
+    assertScrollClasses(list);
+    expect(within(list).getAllByRole("listitem")).toHaveLength(ROW_COUNT);
+    assertOutsideScroll(screen.getByText("Pending changes"), list);
+  });
+
+  it("CanvasPageMenu content carries the popover cap and the page list carries the scroll classes", async () => {
+    const user = userEvent.setup();
+    const pages = canvasPages();
+    const firstPage = pages[0];
+    const boards: CanvasPageItems["boards"] = [];
+    render(
+      <CanvasPageMenu
+        pages={pages}
+        viewOnly={false}
+        page={firstPage.id}
+        boards={boards}
+        onSelect={() => undefined}
+        onRename={() => undefined}
+        onAdd={() => undefined}
+        onRemove={() => undefined}
+        onCenterBoard={() => undefined}
+        onMoveBoard={() => undefined}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Pages" }));
+    const popover = requireElement(
+      document.querySelector("[data-slot='popover-content']"),
+      "pages popover",
+    );
+    assertCapClass(popover, POPOVER_CAP);
+    assertColumn(popover);
+    expect(hasToken(popover.className, "overflow-hidden")).toBe(true);
+    const list = screen.getByRole("list", { name: "Canvas pages" });
+    assertScrollClasses(list);
+    expect(within(list).getAllByRole("listitem")).toHaveLength(ROW_COUNT);
+    assertOutsideScroll(screen.getByRole("button", { name: "New page" }), list);
+  });
+
+  it("GithubMentionFilterPopover content carries the popover cap and the repository list carries the scroll classes", async () => {
+    const user = userEvent.setup();
+    render(
+      withTooltip(
+        <GithubMentionFilterPopover
+          filter={{
+            section: "pull-requests",
+            epicId: "epic-1",
+            repositories: githubRepositories(),
+            selected: DEFAULT_PULL_REQUEST_MENTION_FILTER,
           }}
-          initialName=""
-          context={{
-            audience: "private",
-            reachHost: null,
-            unmovedComputer: null,
-          }}
-          onUseShape={() => undefined}
+          onReturnFocus={() => undefined}
         />,
-      );
-      const dialog = screen.getByTestId("sandbox-shape-sheet");
-      expect(hasToken(dialog.className, "flex")).toBe(true);
-      expect(hasToken(dialog.className, "flex-col")).toBe(true);
-      assertCappedMaxHeight(
-        dialog,
-        DIALOG_CAP,
-        dialogCapDeclaration(),
-        viewport.height,
-      );
-      const form = requireElement(dialog.querySelector("form"), "shape form");
-      const body = requireElement(
-        form.querySelector("div.overflow-y-auto"),
-        "shape form body",
-      );
-      assertOverflowYAuto(body);
-      assertOutsideScroll(screen.getByTestId("sandbox-shape-sheet-use"), body);
-      assertOutsideScroll(screen.getByRole("button", { name: "Cancel" }), body);
-    });
+      ),
+    );
+    await user.click(screen.getByRole("button", { name: "Filter" }));
+    const popover = requireElement(
+      document.querySelector("[data-slot='popover-content']"),
+      "mention filter popover",
+    );
+    assertCapClass(popover, POPOVER_CAP);
+    assertColumn(popover);
+    expect(hasToken(popover.className, "overflow-hidden")).toBe(true);
+    const list = requireElement(
+      popover.querySelector("div.overflow-y-auto"),
+      "repository list",
+    );
+    assertScrollClasses(list);
+    expect(within(list).getAllByRole("radio").length).toBeGreaterThanOrEqual(
+      ROW_COUNT,
+    );
+    assertOutsideScroll(screen.getByRole("radio", { name: "Open" }), list);
   });
 
-  it("ConfirmDestructiveDialog caps the dialog and scrolls 15 child rows", async () => {
-    await atEachViewport((viewport) => {
-      render(
-        <ConfirmDestructiveDialog
-          open
-          onOpenChange={() => undefined}
-          title="Destroy 15 idle sandboxes?"
-          description="Files on these sandboxes cannot be recovered."
-          cascadeSummary={null}
-          actionLabel="Destroy 15"
-          isPending={false}
-          blockedReason={null}
-          onConfirm={() => undefined}
-        >
-          {Array.from({ length: ROW_COUNT }, (_, index) => (
-            <p key={`idle-${String(index + 1)}`}>
-              {`Idle sandbox ${String(index + 1)}`}
-            </p>
-          ))}
-        </ConfirmDestructiveDialog>,
-      );
-      const dialog = screen.getByTestId("confirm-destructive-dialog");
-      expect(hasToken(dialog.className, "flex")).toBe(true);
-      expect(hasToken(dialog.className, "flex-col")).toBe(true);
-      assertCappedMaxHeight(
-        dialog,
-        DIALOG_CAP,
-        dialogCapDeclaration(),
-        viewport.height,
-      );
-      const body = requireElement(
-        dialog.querySelector("div.min-h-0.overflow-y-auto"),
-        "confirm body",
-      );
-      assertOverflowYAuto(body);
-      expect(within(body).getAllByText(/^Idle sandbox \d+$/)).toHaveLength(
-        ROW_COUNT,
-      );
-      assertOutsideScroll(screen.getByTestId("confirm-cancel"), body);
-      assertOutsideScroll(screen.getByTestId("confirm-action"), body);
-    });
-  });
-
-  it("HomeFocusTaskStopCluster Stop all dialog caps and scrolls 15 agents", async () => {
-    await atEachViewport(async (viewport) => {
-      render(
-        withTooltip(
-          <HomeFocusTaskStopCluster
-            row={focusTaskRow()}
-            actions={focusActions()}
-            hostLabel={null}
-          />,
-        ),
-      );
-      fireEvent.click(screen.getByTestId("home-focus-task-stop-all"));
-      const dialog = await screen.findByTestId("home-focus-stop-all-dialog");
-      expect(hasToken(dialog.className, "flex")).toBe(true);
-      expect(hasToken(dialog.className, "flex-col")).toBe(true);
-      assertCappedMaxHeight(
-        dialog,
-        DIALOG_CAP,
-        dialogCapDeclaration(),
-        viewport.height,
-      );
-      const list = screen.getByTestId("home-focus-stop-all-list");
-      expect(hasToken(list.className, "overflow-y-auto")).toBe(true);
-      assertOverflowYAuto(list);
-      expect(within(list).getAllByRole("listitem")).toHaveLength(ROW_COUNT);
-      assertOutsideScroll(
-        screen.getByTestId("home-focus-stop-all-cancel"),
-        list,
-      );
-    });
-  });
-
-  it("EpicWriteCommandsDialog caps the dialog and scrolls 15 pending commands", async () => {
-    await atEachViewport((viewport) => {
-      writeCommandMocks.commands = Array.from(
-        { length: ROW_COUNT },
-        (_, index) =>
-          queuedCommand(
-            `cmd-${String(index + 1)}`,
-            `Queued rename ${String(index + 1)}`,
-          ),
-      );
-      render(<EpicWriteCommandsDialog open onOpenChange={() => undefined} />);
-      const dialog = screen.getByTestId("epic-write-commands-dialog");
-      expect(hasToken(dialog.className, "flex")).toBe(true);
-      expect(hasToken(dialog.className, "flex-col")).toBe(true);
-      assertCappedMaxHeight(
-        dialog,
-        DIALOG_CAP,
-        dialogCapDeclaration(),
-        viewport.height,
-      );
-      const list = requireElement(
-        dialog.querySelector("ul.overflow-y-auto"),
-        "write command list",
-      );
-      assertOverflowYAuto(list);
-      expect(within(list).getAllByRole("listitem")).toHaveLength(ROW_COUNT);
-      assertOutsideScroll(screen.getByText("Pending changes"), list);
-    });
-  });
-
-  it("CanvasPageMenu caps the popover and keeps New page outside the page list", async () => {
-    await atEachViewport(async (viewport) => {
-      const user = userEvent.setup();
-      const pages = canvasPages();
-      const firstPage = pages[0];
-      const boards: CanvasPageItems["boards"] = [];
-      render(
-        <CanvasPageMenu
-          pages={pages}
-          viewOnly={false}
-          page={firstPage.id}
-          boards={boards}
-          onSelect={() => undefined}
-          onRename={() => undefined}
-          onAdd={() => undefined}
-          onRemove={() => undefined}
-          onCenterBoard={() => undefined}
-          onMoveBoard={() => undefined}
+  it("PrReferencePills content carries the popover cap and the pill list carries the scroll classes", async () => {
+    const user = userEvent.setup();
+    const references = Array.from({ length: ROW_COUNT + 1 }, (_, index) =>
+      prReference(index),
+    );
+    render(
+      withTooltip(
+        <PrReferencePills
+          references={references}
+          detailOnHover={false}
+          maximumVisible={1}
+          className={undefined}
+          testId="history-prs"
+          openPrInApp={null}
         />,
-      );
-      await user.click(screen.getByRole("button", { name: "Pages" }));
-      const popover = requireElement(
-        document.querySelector("[data-slot='popover-content']"),
-        "pages popover",
-      );
-      expect(hasToken(popover.className, "overflow-hidden")).toBe(true);
-      assertCappedMaxHeight(
-        popover,
-        POPOVER_CAP,
-        popoverCapDeclaration(),
-        viewport.height,
-      );
-      const list = screen.getByRole("list", { name: "Canvas pages" });
-      assertOverflowYAuto(list);
-      expect(within(list).getAllByRole("listitem")).toHaveLength(ROW_COUNT);
-      assertOutsideScroll(
-        screen.getByRole("button", { name: "New page" }),
-        list,
-      );
-    });
+      ),
+    );
+    await user.click(screen.getByTestId("worktree-pr-overflow-trigger"));
+    const popover = screen.getByTestId("worktree-pr-overflow-content");
+    assertCapClass(popover, POPOVER_CAP);
+    assertColumn(popover);
+    expect(hasToken(popover.className, "overflow-hidden")).toBe(true);
+    const list = requireElement(
+      popover.querySelector("span.overflow-y-auto"),
+      "overflow pills",
+    );
+    assertScrollClasses(list);
+    assertOutsideScroll(screen.getByText("More pull requests"), list);
   });
 
-  it("GithubMentionFilterPopover caps the popover and scrolls repositories", async () => {
-    await atEachViewport(async (viewport) => {
-      const user = userEvent.setup();
-      render(
-        withTooltip(
-          <GithubMentionFilterPopover
-            filter={{
-              section: "pull-requests",
-              epicId: "epic-1",
-              repositories: githubRepositories(),
-              selected: DEFAULT_PULL_REQUEST_MENTION_FILTER,
-            }}
-            onReturnFocus={() => undefined}
-          />,
-        ),
-      );
-      await user.click(screen.getByRole("button", { name: "Filter" }));
-      const popover = requireElement(
-        document.querySelector("[data-slot='popover-content']"),
-        "mention filter popover",
-      );
-      expect(hasToken(popover.className, "overflow-hidden")).toBe(true);
-      assertCappedMaxHeight(
-        popover,
-        POPOVER_CAP,
-        popoverCapDeclaration(),
-        viewport.height,
-      );
-      const list = requireElement(
-        popover.querySelector("div.overflow-y-auto"),
-        "repository list",
-      );
-      assertOverflowYAuto(list);
-      expect(within(list).getAllByRole("radio").length).toBeGreaterThanOrEqual(
-        ROW_COUNT,
-      );
-      const stateRadio = screen.getByRole("radio", { name: "Open" });
-      expect(list.contains(stateRadio)).toBe(false);
-    });
-  });
-
-  it("PrReferencePills overflow popover caps and keeps the heading outside the list", async () => {
-    await atEachViewport(async (viewport) => {
-      const user = userEvent.setup();
-      const references = Array.from({ length: ROW_COUNT + 1 }, (_, index) =>
-        prReference(index),
-      );
-      render(
-        withTooltip(
-          <PrReferencePills
-            references={references}
-            detailOnHover={false}
-            maximumVisible={1}
-            className={undefined}
-            testId="history-prs"
-            openPrInApp={null}
-          />,
-        ),
-      );
-      await user.click(screen.getByTestId("worktree-pr-overflow-trigger"));
-      const popover = screen.getByTestId("worktree-pr-overflow-content");
-      expect(hasToken(popover.className, "overflow-hidden")).toBe(true);
-      assertCappedMaxHeight(
-        popover,
-        POPOVER_CAP,
-        popoverCapDeclaration(),
-        viewport.height,
-      );
-      const list = requireElement(
-        popover.querySelector("span.overflow-y-auto"),
-        "overflow pills",
-      );
-      assertOverflowYAuto(list);
-      assertOutsideScroll(screen.getByText("More pull requests"), list);
-    });
-  });
-
-  it("AddHostDialog caps the dialog and keeps Close outside the steps", async () => {
-    await atEachViewport((viewport) => {
-      scopeMocks.scope = {
-        hosts: [],
-        isLoading: false,
-        listsFailed: false,
-      };
-      useAddHostDialogStore.getState().openDialog([]);
-      render(<AddHostDialog />);
-      const dialog = screen.getByTestId("add-host-dialog");
-      expect(hasToken(dialog.className, "flex")).toBe(true);
-      expect(hasToken(dialog.className, "flex-col")).toBe(true);
-      expect(dialog.className).toContain(DIALOG_CAP);
-      expect(unprefixedMaxHeightTokens(dialog.className)).toEqual([DIALOG_CAP]);
-      assertCappedMaxHeight(
-        dialog,
-        DIALOG_CAP,
-        dialogCapDeclaration(),
-        viewport.height,
-      );
-      const steps = innerOverflowYAuto(dialog);
-      assertOverflowYAuto(steps);
-      expect(steps.contains(screen.getByTestId("add-host-steps"))).toBe(true);
-      assertOutsideScroll(screen.getByRole("button", { name: "Close" }), steps);
-    });
+  it("AddHostDialog content keeps the dialog cap through the merge and the steps carry the scroll classes", () => {
+    scopeMocks.scope = {
+      hosts: [],
+      isLoading: false,
+      listsFailed: false,
+    };
+    useAddHostDialogStore.getState().openDialog([]);
+    render(<AddHostDialog />);
+    const dialog = screen.getByTestId("add-host-dialog");
+    assertCapClass(dialog, DIALOG_CAP);
+    assertColumn(dialog);
+    expect(unprefixedMaxHeightTokens(dialog.className)).toEqual([DIALOG_CAP]);
+    const steps = innerOverflowYAuto(dialog);
+    assertScrollClasses(steps);
+    expect(steps.contains(screen.getByTestId("add-host-steps"))).toBe(true);
+    assertOutsideScroll(screen.getByRole("button", { name: "Close" }), steps);
   });
 });
