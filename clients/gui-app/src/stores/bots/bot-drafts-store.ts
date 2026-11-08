@@ -1,5 +1,14 @@
 import { create } from "zustand";
+import { persist } from "zustand/middleware";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import {
+  BOT_BOX_DRAFTS_PERSIST_KEY,
+  createBotBoxDraftStorage,
+  storedBoxDraftsOf,
+  type PersistedBotBoxDrafts,
+} from "@/lib/bots/bot-box-draft-storage";
+import { isRecord } from "@/lib/editor/prosemirror-json";
+import { basePersistOptions } from "@/lib/persist";
 
 /**
  * A member's answer to one question of a bot's question card (Tracy Bots,
@@ -91,8 +100,10 @@ interface BotDraftsState {
     anchorMessageId: string,
     unsent: BotUnsentMessage | null,
   ) => void;
-  /** Drops every draft of the bot: its tab closed. */
+  /** Drops every draft of the bot: it is gone. */
   readonly forgetBot: (botId: string) => void;
+  /** Drops the bot's card answers: the Tracy surface closed. Its boxes' drafts stay. */
+  readonly closeBot: (botId: string) => void;
 }
 
 /** Which question of which bot row a card draft answers. */
@@ -122,69 +133,116 @@ function withEntry<T>(
  * What a member has not sent yet: a card's answer, and what a thread's box
  * or the channel's holds, typed or put there by Discuss. Kept above the
  * channel panes, so switching channels or reopening a thread preserves it;
- * a send consumes what it carried. Forgetting a bot or closing the Tracy
- * surface drops its drafts (`forgetBotState`). Not persisted.
+ * a send consumes what it carried. Forgetting a bot drops its drafts; closing
+ * the Tracy surface drops its card answers only.
+ *
+ * The boxes' drafts are kept on this device too (Tracy Bots T158), so a box
+ * shows what it held after the app restarts: stored as the person types,
+ * read back once at start (`createBotBoxDraftStorage`). A box typed in
+ * before that read answers keeps what was typed.
  */
-export const useBotDraftsStore = create<BotDraftsState>()((set) => ({
-  answers: {},
-  threadBoxes: {},
-  unsentBoxes: {},
-  setAnswer: (botId, key, draft) =>
-    set((state) => ({ answers: withEntry(state.answers, botId, key, draft) })),
-  seedThreadBox: (botId, anchorMessageId, text) =>
-    set((state) => ({
-      threadBoxes: withEntry(state.threadBoxes, botId, anchorMessageId, {
-        text,
-        content: null,
-        seedId: (state.threadBoxes[botId]?.[anchorMessageId]?.seedId ?? 0) + 1,
-      }),
-    })),
-  typeThreadBox: (botId, anchorMessageId, text, content) =>
-    set((state) => {
-      const current = state.threadBoxes[botId]?.[anchorMessageId];
-      if (
-        (current?.text ?? "") === text &&
-        (current?.content ?? null) === content
-      ) {
-        return state;
-      }
-      return {
-        threadBoxes: withEntry(
-          state.threadBoxes,
-          botId,
-          anchorMessageId,
-          text.length === 0 && content === null
-            ? null
-            : {
-                text,
-                content,
-                seedId: current?.seedId ?? 0,
-              },
-        ),
-      };
-    }),
-  offerUnsent: (botId, anchorMessageId, unsent) =>
-    set((state) =>
-      unsent === null &&
-      state.unsentBoxes[botId]?.[anchorMessageId] === undefined
-        ? state
-        : {
-            unsentBoxes: withEntry(
-              state.unsentBoxes,
+export const useBotDraftsStore = create<BotDraftsState>()(
+  persist(
+    (set) => ({
+      answers: {},
+      threadBoxes: {},
+      unsentBoxes: {},
+      setAnswer: (botId, key, draft) =>
+        set((state) => ({
+          answers: withEntry(state.answers, botId, key, draft),
+        })),
+      seedThreadBox: (botId, anchorMessageId, text) =>
+        set((state) => ({
+          threadBoxes: withEntry(state.threadBoxes, botId, anchorMessageId, {
+            text,
+            content: null,
+            seedId:
+              (state.threadBoxes[botId]?.[anchorMessageId]?.seedId ?? 0) + 1,
+          }),
+        })),
+      typeThreadBox: (botId, anchorMessageId, text, content) =>
+        set((state) => {
+          const current = state.threadBoxes[botId]?.[anchorMessageId];
+          if (
+            (current?.text ?? "") === text &&
+            (current?.content ?? null) === content
+          ) {
+            return state;
+          }
+          return {
+            threadBoxes: withEntry(
+              state.threadBoxes,
               botId,
               anchorMessageId,
-              unsent,
+              text.length === 0 && content === null
+                ? null
+                : {
+                    text,
+                    content,
+                    seedId: current?.seedId ?? 0,
+                  },
             ),
-          },
-    ),
-  forgetBot: (botId) =>
-    set((state) => {
-      const answers = { ...state.answers };
-      const threadBoxes = { ...state.threadBoxes };
-      const unsentBoxes = { ...state.unsentBoxes };
-      delete answers[botId];
-      delete threadBoxes[botId];
-      delete unsentBoxes[botId];
-      return { answers, threadBoxes, unsentBoxes };
+          };
+        }),
+      offerUnsent: (botId, anchorMessageId, unsent) =>
+        set((state) =>
+          unsent === null &&
+          state.unsentBoxes[botId]?.[anchorMessageId] === undefined
+            ? state
+            : {
+                unsentBoxes: withEntry(
+                  state.unsentBoxes,
+                  botId,
+                  anchorMessageId,
+                  unsent,
+                ),
+              },
+        ),
+      forgetBot: (botId) =>
+        set((state) => {
+          const answers = { ...state.answers };
+          const threadBoxes = { ...state.threadBoxes };
+          const unsentBoxes = { ...state.unsentBoxes };
+          delete answers[botId];
+          delete threadBoxes[botId];
+          delete unsentBoxes[botId];
+          return { answers, threadBoxes, unsentBoxes };
+        }),
+      closeBot: (botId) =>
+        set((state) => {
+          if (state.answers[botId] === undefined) return state;
+          const answers = { ...state.answers };
+          delete answers[botId];
+          return { answers };
+        }),
     }),
-}));
+    {
+      ...basePersistOptions(BOT_BOX_DRAFTS_PERSIST_KEY),
+      storage: createBotBoxDraftStorage(),
+      partialize: (state): PersistedBotBoxDrafts => ({
+        threadBoxes: state.threadBoxes,
+      }),
+      // What a box held before the stored drafts were read is newer than
+      // what was stored for it.
+      merge: (persisted, current) => {
+        const stored = storedBoxDraftsOf(
+          isRecord(persisted) ? persisted.threadBoxes : null,
+        );
+        const threadBoxes: Record<
+          string,
+          Readonly<Partial<Record<string, BotThreadBoxDraft>>>
+        > = {};
+        for (const botId of new Set([
+          ...Object.keys(stored),
+          ...Object.keys(current.threadBoxes),
+        ])) {
+          threadBoxes[botId] = {
+            ...stored[botId],
+            ...current.threadBoxes[botId],
+          };
+        }
+        return { ...current, threadBoxes };
+      },
+    },
+  ),
+);
