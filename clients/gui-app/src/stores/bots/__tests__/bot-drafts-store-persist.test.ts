@@ -7,7 +7,17 @@
  * a window leaves for the others, and what closing Tracy, forgetting a bot
  * and a wipe do to it.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
+import type { ImageBytes } from "@/lib/attachments/image-bytes";
+import type * as LandingImageStore from "@/lib/composer/landing-image-store";
 import {
   BOT_ID,
   BOX_DRAFTS_KEY,
@@ -255,6 +265,98 @@ describe("the image hashes the stored drafts keep alive", () => {
     localStorage.removeItem(BOX_DRAFTS_KEY);
 
     expect(app.imageRoots().has(hash ?? "")).toBe(true);
+  });
+});
+
+describe("a write a newer one overtakes while it stores an image", () => {
+  const IMAGE_STORE = "@/lib/composer/landing-image-store";
+
+  interface HeldPuts {
+    readonly app: App;
+    /** Resolves once a write has asked for an image's bytes to be stored. */
+    readonly entered: Promise<void>;
+    /** Lets the held puts store their bytes; resolves once the writes that wait on them are done. */
+    readonly release: () => Promise<void>;
+  }
+
+  /** The app restarted with every image put held until `release`. */
+  async function restartWithImagePutsHeld(): Promise<HeldPuts> {
+    let open = (): void => {};
+    const gate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    let enter = (): void => {};
+    const entered = new Promise<void>((resolve) => {
+      enter = resolve;
+    });
+    const puts: Array<Promise<string>> = [];
+    vi.doMock(IMAGE_STORE, async (importOriginal) => {
+      const real = await importOriginal<typeof LandingImageStore>();
+      return {
+        ...real,
+        putImage: (bytes: ImageBytes): Promise<string> => {
+          const put = gate.then(() => real.putImage(bytes));
+          puts.push(put);
+          enter();
+          return put;
+        },
+      };
+    });
+    onTestFinished(() => {
+      vi.doUnmock(IMAGE_STORE);
+    });
+    return {
+      app: await restart(),
+      entered,
+      release: async () => {
+        open();
+        await Promise.all(puts);
+        // A write does nothing but microtasks after its puts: one turn of the event loop sees it done.
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+      },
+    };
+  }
+
+  async function storingTypedImage(held: HeldPuts): Promise<void> {
+    held.app.drafts
+      .getState()
+      .typeThreadBox(BOT_ID, "channel", "pic", boxDoc("pic", [INLINE_IMAGE]));
+    await vi.advanceTimersByTimeAsync(
+      held.app.storage.BOT_BOX_DRAFT_WRITE_DEBOUNCE_MS,
+    );
+    await held.entered;
+  }
+
+  it("keeps none of its images alive once a cleared box overtook it", async () => {
+    const hash = await storeImageBytes();
+    const held = await restartWithImagePutsHeld();
+    app = held.app;
+    await storingTypedImage(held);
+
+    app.drafts.getState().typeThreadBox(BOT_ID, "channel", "", null);
+    await waitForStore(
+      app,
+      (stored) => stored !== null && stored[BOT_ID] === undefined,
+    );
+    await held.release();
+
+    expect(app.imageRoots().has(hash)).toBe(false);
+  });
+
+  it("is not written by a second page hide over the newer draft the first one wrote", async () => {
+    const held = await restartWithImagePutsHeld();
+    app = held.app;
+    await storingTypedImage(held);
+
+    app.drafts.getState().typeThreadBox(BOT_ID, "channel", "newer", null);
+    window.dispatchEvent(new Event("pagehide"));
+    window.dispatchEvent(new Event("pagehide"));
+
+    expect(storedDrafts(app)?.[BOT_ID]?.channel?.text).toBe("newer");
+    await held.release();
+    expect(storedDrafts(app)?.[BOT_ID]?.channel?.text).toBe("newer");
   });
 });
 

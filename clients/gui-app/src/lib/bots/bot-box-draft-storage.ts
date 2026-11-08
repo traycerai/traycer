@@ -118,19 +118,29 @@ export function stopBotBoxDraftWrites(): void {
 
 /**
  * Writes now what is waiting, else what is being written, keeping only the
- * images already stored. A write being stored still lands after it, with
- * all its images, where the page is still there.
+ * images already stored. Written from what was being written, that write
+ * still lands after it, with all its images, where the page is still there;
+ * written from what was waiting, the older write being stored never lands.
  */
 export function flushPendingBotBoxDraftWrite(): void {
   if (writer.stopped) return;
-  const write = takePending() ?? writer.inFlight;
+  const { hashByInline, inFlightHashByInline } = writer;
+  const pending = takePending();
+  const write = pending ?? writer.inFlight;
   if (write === null) return;
-  const { hashByInline } = writer;
+  if (pending !== null) {
+    // The write being stored is older than the one written now: it never lands.
+    writer.inFlight = null;
+    writer.inFlightHashByInline = new Map();
+  }
   store(
     write,
     storedState(
       write.value.state,
-      (b64content) => hashByInline.get(b64content) ?? null,
+      (b64content) =>
+        hashByInline.get(b64content) ??
+        inFlightHashByInline.get(b64content) ??
+        null,
     ),
   );
 }
@@ -155,10 +165,16 @@ const writer: {
   /** Bumped by each newer write and each wipe; a write that sees it move is stale. */
   generation: number;
   /**
-   * The hash each inline image this window holds is stored under: read back
-   * from storage, or stored by a write.
+   * The hash each inline image of this window's boxes is stored under, as of
+   * the last write that landed, or as read back from storage.
    */
-  hashByInline: Map<string, string>;
+  hashByInline: ReadonlyMap<string, string>;
+  /**
+   * The images the write being stored has stored so far, kept from the image
+   * store's sweeps until that write lands or a newer write or a wipe
+   * overtakes it: an image only an overtaken write held is not kept.
+   */
+  inFlightHashByInline: Map<string, string>;
 } = {
   read: false,
   stopped: false,
@@ -168,6 +184,7 @@ const writer: {
   inFlight: null,
   generation: 0,
   hashByInline: new Map(),
+  inFlightHashByInline: new Map(),
 };
 
 /** Read through a call: an await between two reads can see a wipe land. */
@@ -198,6 +215,7 @@ function takePending(): PendingWrite | null {
 function dropWrites(): void {
   takePending();
   writer.inFlight = null;
+  writer.inFlightHashByInline = new Map();
   writer.generation += 1;
 }
 
@@ -205,7 +223,9 @@ async function writePending(): Promise<void> {
   const pending = takePending();
   if (pending === null) return;
   const generation = writer.generation;
+  const stored = new Map<string, string>();
   writer.inFlight = pending;
+  writer.inFlightHashByInline = stored;
   const images = new Set<string>();
   for (const draft of eachDraft(pending.value.state.threadBoxes)) {
     if (draft.content === null) continue;
@@ -217,16 +237,22 @@ async function writePending(): Promise<void> {
       .filter((b64content) => !writer.hashByInline.has(b64content))
       .map(async (b64content) => {
         const hash = await storeImage(b64content);
-        if (hash !== null) writer.hashByInline.set(b64content, hash);
+        if (hash !== null) stored.set(b64content, hash);
       }),
   );
   if (writer.inFlight === pending) writer.inFlight = null;
-  // A newer write, or a wipe, came while the images were stored.
-  if (generation !== writer.generation || wiped()) return;
-  for (const b64content of writer.hashByInline.keys()) {
-    if (!images.has(b64content)) writer.hashByInline.delete(b64content);
+  if (writer.inFlightHashByInline === stored) {
+    writer.inFlightHashByInline = new Map();
   }
-  const { hashByInline } = writer;
+  // A newer write, or a wipe, came while the images were stored: the images
+  // this one stored are kept only by what still names them.
+  if (generation !== writer.generation || wiped()) return;
+  const hashByInline = new Map<string, string>();
+  for (const b64content of images) {
+    const hash = writer.hashByInline.get(b64content) ?? stored.get(b64content);
+    if (hash !== undefined) hashByInline.set(b64content, hash);
+  }
+  writer.hashByInline = hashByInline;
   store(
     pending,
     storedState(
@@ -325,6 +351,7 @@ async function inlineStoredImages(
   }
   const bytesByHash = new Map<string, string>();
   const missing = new Set<string>();
+  const restored = new Map<string, string>();
   await Promise.all(
     [...hashes].map(async (hash) => {
       const bytes = await getImageBytes(hash).catch(() => undefined);
@@ -334,9 +361,12 @@ async function inlineStoredImages(
       }
       const b64content = await bytesToBase64Async(bytes);
       bytesByHash.set(hash, b64content);
-      writer.hashByInline.set(b64content, hash);
+      restored.set(b64content, hash);
     }),
   );
+  if (!wiped()) {
+    writer.hashByInline = new Map([...writer.hashByInline, ...restored]);
+  }
   return {
     threadBoxes: mapDrafts(state.threadBoxes, (draft) => {
       if (draft.content === null) return draft;
@@ -432,10 +462,14 @@ function readStoredValue(
 /**
  * The image hashes the image store's sweeps must keep for the bot boxes: the
  * ones the stored drafts name as storage holds them now, whichever window
- * wrote them, and the ones this window's boxes hold, read back or stored.
+ * wrote them; the ones this window's boxes held at the last write that
+ * landed, or read back; and the ones the newest write has stored so far.
  */
 function botBoxDraftImageRoots(): ReadonlyArray<string> {
-  const roots = new Set(writer.hashByInline.values());
+  const roots = new Set([
+    ...writer.hashByInline.values(),
+    ...writer.inFlightHashByInline.values(),
+  ]);
   const stored = readStoredValue(BOT_BOX_DRAFTS_PERSIST_KEY);
   if (stored !== null) {
     for (const draft of eachDraft(stored.state.threadBoxes)) {
