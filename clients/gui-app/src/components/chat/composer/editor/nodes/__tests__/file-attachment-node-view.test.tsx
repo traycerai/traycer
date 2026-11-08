@@ -10,9 +10,16 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   attachFileAttachment,
   readFileAttachmentUploadStatus,
-  type FileAttachmentUploadClient,
+  type FileInsertion,
+  type FileNodeSettle,
+  type PutFileBlob,
 } from "@/lib/composer/file-attachment-upload";
 import {
+  okPut,
+  targetFor,
+} from "@/lib/composer/__tests__/file-attachment-fixtures";
+import {
+  collectFileAttachmentNodes,
   containsPendingFileAttachment,
   type ComposerFileAttachmentAttrs,
 } from "@/lib/composer/file-attachments";
@@ -20,8 +27,6 @@ import {
 vi.mock("@/lib/reportable-error-toast", () => ({
   reportableErrorToast: vi.fn(),
 }));
-
-type PutBlob = FileAttachmentUploadClient["requestWithOptions"];
 
 let editor: Editor | null = null;
 
@@ -62,6 +67,7 @@ function pendingAttrs(id: string): ComposerFileAttachmentAttrs {
     mediaType: "video/quicktime",
     size: 4096,
     uploadState: "pending",
+    uploadHostId: null,
   };
 }
 
@@ -74,12 +80,34 @@ function docHasPending(): boolean {
   return containsPendingFileAttachment(mounted().getJSON());
 }
 
-function insertNode(attrs: ComposerFileAttachmentAttrs): boolean {
-  let inserted = false;
+const insertNode: FileInsertion = (attrs) => {
+  const results: boolean[] = [];
   act(() => {
-    inserted = mounted().commands.insertFileAttachment(attrs);
+    results.push(mounted().commands.insertFileAttachment(attrs));
   });
-  return inserted;
+  return results.at(0) === true ? "inserted" : "dropped";
+};
+
+const settleInEditor: FileNodeSettle = (id, settlement) => {
+  act(() => {
+    mounted().commands.settleFileAttachmentById(id, settlement);
+  });
+};
+
+function attachTo(input: {
+  readonly put: PutFileBlob;
+  readonly insert: FileInsertion;
+}): Promise<unknown> {
+  return attachFileAttachment({
+    file: new File([crypto.randomUUID()], "clip.mov", {
+      type: "video/quicktime",
+    }),
+    target: targetFor("host-1"),
+    uploadAtAttach: true,
+    put: input.put,
+    insert: input.insert,
+    settle: settleInEditor,
+  });
 }
 
 function fileNodeCount(): number {
@@ -116,7 +144,7 @@ describe("fileAttachment node view", () => {
 
   it("removing a node cancels its upload and deletes it", async () => {
     let release: () => void = () => undefined;
-    const put = vi.fn<PutBlob>().mockImplementation(
+    const put = vi.fn<PutFileBlob>().mockImplementation(
       () =>
         new Promise((resolve) => {
           release = () => resolve({ ok: true });
@@ -124,15 +152,11 @@ describe("fileAttachment node view", () => {
     );
     const inserted: ComposerFileAttachmentAttrs[] = [];
     const { container } = render(<Harness content={[]} />);
-    await attachFileAttachment({
-      file: new File(["abc"], "clip.mov", { type: "video/quicktime" }),
-      target: { hostId: "host-1", client: { requestWithOptions: put } },
+    await attachTo({
+      put,
       insert: (next) => {
         inserted.push(next);
-        act(() => {
-          mounted().commands.insertFileAttachment(next);
-        });
-        return true;
+        return insertNode(next);
       },
     });
     const id = inserted.at(0)?.id;
@@ -149,29 +173,28 @@ describe("fileAttachment node view", () => {
     release();
   });
 
-  it("clears the pending state when the upload is stored", async () => {
-    const put = vi.fn<PutBlob>().mockResolvedValue({ ok: true });
+  it("clears the pending state and records the host when the upload is stored", async () => {
+    const put = okPut();
     const { container } = render(<Harness content={[]} />);
 
-    await attachFileAttachment({
-      file: new File(["abc"], "clip.mov", { type: "video/quicktime" }),
-      target: { hostId: "host-1", client: { requestWithOptions: put } },
-      insert: insertNode,
-    });
+    await attachTo({ put, insert: insertNode });
 
     await waitFor(() => expect(chipState(container)).toBe("stored"));
     expect(docHasPending()).toBe(false);
+    expect(
+      collectFileAttachmentNodes(mounted().getJSON()).map(
+        (node) => node.uploadHostId,
+      ),
+    ).toEqual(["host-1"]);
     expect(screen.getByText("clip.mov")).not.toBeNull();
   });
 
   it("removes the node when the upload fails", async () => {
-    const put = vi.fn<PutBlob>().mockRejectedValue(new Error("socket closed"));
+    const put = vi
+      .fn<PutFileBlob>()
+      .mockRejectedValue(new Error("socket closed"));
     const { container } = render(<Harness content={[]} />);
-    await attachFileAttachment({
-      file: new File(["abc"], "clip.mov", { type: "video/quicktime" }),
-      target: { hostId: "host-1", client: { requestWithOptions: put } },
-      insert: insertNode,
-    });
+    await attachTo({ put, insert: insertNode });
 
     expect(fileNodeCount()).toBe(1);
     await waitFor(() => expect(fileNodeCount()).toBe(0));
@@ -179,5 +202,16 @@ describe("fileAttachment node view", () => {
     expect(
       container.querySelector('[data-composer-chip="file-attachment"]'),
     ).toBeNull();
+  });
+
+  it("settling reattach marks the chip and keeps the draft held", async () => {
+    const node = { ...pendingAttrs("n1"), uploadState: null };
+    const { container } = render(<Harness content={[node]} />);
+    await waitFor(() => expect(chipState(container)).toBe("stored"));
+
+    settleInEditor("n1", { kind: "reattach" });
+
+    await waitFor(() => expect(chipState(container)).toBe("reattach"));
+    expect(docHasPending()).toBe(true);
   });
 });

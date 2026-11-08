@@ -186,6 +186,78 @@ describe("composer rich clipboard paste", () => {
     });
   });
 
+  describe("the per-message file cap", () => {
+    function fileNode(index: number): JsonContent {
+      return {
+        type: "fileAttachment",
+        attrs: {
+          id: `file-${String(index)}`,
+          hash: index.toString(16).padStart(64, "0"),
+          fileName: `f${String(index)}.txt`,
+          mediaType: "text/plain",
+          size: 1,
+          uploadState: null,
+          uploadHostId: null,
+        },
+      };
+    }
+
+    function docOfFiles(indexes: ReadonlyArray<number>): JsonContent {
+      return {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: indexes.map((index) => fileNode(index)),
+          },
+        ],
+      };
+    }
+
+    function fileNames(editor: Editor): string[] {
+      const names: string[] = [];
+      editor.state.doc.descendants((node) => {
+        if (node.type.name === "fileAttachment") {
+          names.push(String(node.attrs.fileName));
+        }
+      });
+      return names;
+    }
+
+    it("keeps the pasted file that fits at 19 identities, drops the other, and names it", () => {
+      const editor = makeEditor(KNOWN_SLASH_NAMES);
+      editor.commands.setContent(
+        docOfFiles(Array.from({ length: 19 }, (_, index) => index)),
+      );
+
+      pasteComposerContent(editor, docOfFiles([100, 101]));
+
+      expect(fileNames(editor)).toHaveLength(20);
+      expect(fileNames(editor)).toContain("f100.txt");
+      expect(fileNames(editor)).not.toContain("f101.txt");
+      expect(mocks.reportableErrorToast).toHaveBeenCalledTimes(1);
+      expect(mocks.reportableErrorToast.mock.calls[0][0]).toBe(
+        "Couldn't attach f101.txt.",
+      );
+    });
+
+    it("keeps a pasted file the draft already holds at 20 identities", () => {
+      const editor = makeEditor(KNOWN_SLASH_NAMES);
+      editor.commands.setContent(
+        docOfFiles(Array.from({ length: 20 }, (_, index) => index)),
+      );
+
+      pasteComposerContent(editor, docOfFiles([0, 100]));
+
+      expect(fileNames(editor)).toHaveLength(21);
+      expect(fileNames(editor)).not.toContain("f100.txt");
+      expect(mocks.reportableErrorToast).toHaveBeenCalledTimes(1);
+      expect(mocks.reportableErrorToast.mock.calls[0][0]).toBe(
+        "Couldn't attach f100.txt.",
+      );
+    });
+  });
+
   it("preserves a hash-only image when the destination has its bytes", () => {
     const hasBytes = vi.fn((hash: string) => hash === "same-epic-hash");
     const editor = makeEditorWithPastedImagePresence(

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatErrorNotice } from "@traycer/protocol/host/agent/gui/subscribe";
 
-import { TOO_MANY_FILE_ATTACHMENTS_CODE } from "@/lib/composer/file-attachments";
+import { TOO_MANY_ATTACHMENTS_CODE } from "@traycer/protocol/common/file-attachment";
 import { showErrorNoticeToast } from "@/lib/toast/chat-error-notice-toast";
 
 const mocks = vi.hoisted(() => ({
@@ -22,7 +22,7 @@ vi.mock("@/lib/reportable-error-toast", () => ({
 
 function notice(overrides: Partial<ChatErrorNotice>): ChatErrorNotice {
   return {
-    code: TOO_MANY_FILE_ATTACHMENTS_CODE,
+    code: TOO_MANY_ATTACHMENTS_CODE,
     message: "This message has 21 files; a message can carry up to 20.",
     severity: "error",
     clientActionId: null,

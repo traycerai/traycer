@@ -1,3 +1,4 @@
+import { collectFileAttachmentNodes } from "@/lib/composer/file-attachments";
 import { createRef, useRef, useState, type ReactNode } from "react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -1170,3 +1171,55 @@ function editorHandle(): ComposerPromptEditorHandle {
     dismissActiveSuggestion: () => false,
   };
 }
+
+describe("NewConversationModalBody submit with a file stored on another host", () => {
+  it("does not create the chat when the file's bytes are not here, and marks it for reattach in the draft", async () => {
+    useAuthStore.setState({
+      profile: {
+        userId: "user-1",
+        userName: "Tester",
+        email: "t@example.com",
+      },
+    });
+    const node = {
+      id: "file-node-1",
+      hash: "f".repeat(64),
+      fileName: "report.pdf",
+      mediaType: "application/pdf",
+      size: 10,
+      uploadState: null,
+      uploadHostId: "host-elsewhere",
+    };
+    const doc: JsonContent = {
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [{ type: "fileAttachment", attrs: node }],
+        },
+      ],
+    };
+    testState.editorDoc = doc;
+    useNewConversationModalStore.getState().setContent("epic-1", doc);
+
+    render(<Med4Harness focused />, { wrapper: QueryWrapper });
+    act(() => {
+      testState.installEditor?.();
+    });
+    await act(async () => {
+      testState.bodySubmit?.();
+      await flushMicrotasks();
+    });
+
+    expect(testState.createChat).not.toHaveBeenCalled();
+    const stored =
+      useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"]
+        ?.content;
+    if (stored === undefined || stored === null) {
+      throw new Error("expected the draft to keep its content");
+    }
+    expect(collectFileAttachmentNodes(stored)).toMatchObject([
+      { id: node.id, uploadState: "reattach" },
+    ]);
+  });
+});

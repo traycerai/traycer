@@ -174,6 +174,44 @@ describe("chatMessageEditingForInlineEdit", () => {
     expect(renderInlineEdit(true).canSubmit).toBe(true);
   });
 
+  it("lets a message that is only a file be resubmitted", () => {
+    const fileOnly: JsonContent = {
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            {
+              type: "fileAttachment",
+              attrs: {
+                id: "file-1",
+                hash: "a".repeat(64),
+                fileName: "report.pdf",
+                mediaType: "application/pdf",
+                size: 10,
+                uploadState: null,
+                uploadHostId: null,
+              },
+            },
+          ],
+        },
+      ],
+    };
+    const editing = chatMessageEditingForInlineEdit({
+      editing: { ...inlineEditState(true), currentContent: fileOnly },
+      canModifyMessages: true,
+      editSettings: SETTINGS,
+      mentionRoots: [],
+      fallbackToGlobalMentionRoots: true,
+      currentEpicId: "epic-1",
+      onSnapshot: vi.fn(),
+      onSubmit: vi.fn(),
+      onCancel: vi.fn(),
+    });
+
+    expect(editing?.canSubmit).toBe(true);
+  });
+
   it("carries the workspace fallback policy into the inline editor", () => {
     expect(renderInlineEdit(false).fallbackToGlobalMentionRoots).toBe(true);
   });

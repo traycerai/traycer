@@ -4486,6 +4486,67 @@ describe("useLandingComposerActions", () => {
       queryClient.clear();
     });
   });
+
+  it("holds the create when a file was stored on another host and its bytes are not here, marking it for reattach", async () => {
+    setSingleWorkspace();
+    const node = {
+      id: "file-node-1",
+      hash: "f".repeat(64),
+      fileName: "report.pdf",
+      mediaType: "application/pdf",
+      size: 10,
+      uploadState: null,
+      uploadHostId: "host-elsewhere",
+    };
+    const settleFileAttachment = vi.fn(() => true);
+    const settled = vi.fn<(dispatched: boolean) => void>();
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      { wrapper: queryClientWrapper(queryClient) },
+    );
+
+    act(() => {
+      result.current.submit({
+        draftId: null,
+        editor: {
+          ...editorHandleForPrompt("see attached"),
+          getJSON: () => ({
+            type: "doc",
+            content: [
+              {
+                type: "paragraph",
+                content: [{ type: "fileAttachment", attrs: node }],
+              },
+            ],
+          }),
+          settleFileAttachment,
+        },
+        slashCatalog: null,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
+        settled,
+        toolbar: defaultToolbar(),
+      });
+    });
+
+    await waitFor(() => {
+      expect(settled.mock.calls).toEqual([[false]]);
+    });
+    expect(settleFileAttachment).toHaveBeenCalledWith(node.id, {
+      kind: "reattach",
+    });
+    expect(
+      landingMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
+    ).toBe(false);
+    expect(
+      landingMocks.request.mock.calls.some((c) => c[0] === "drafts.putBlob"),
+    ).toBe(false);
+
+    queryClient.clear();
+  });
 });
 
 function queryClientWrapper(
