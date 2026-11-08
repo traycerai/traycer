@@ -745,6 +745,46 @@ describe("runStagedSandbox settling", () => {
     expect(stageOf().failure).toEqual({ kind: "timed-out", step: "booting" });
   });
 
+  it.each([
+    ["rejects", () => Promise.reject(new Error("offline"))],
+    [
+      "answers a network error",
+      () =>
+        Promise.resolve({ kind: "network-error" as const, detail: "offline" }),
+    ],
+  ])(
+    "still sends the create and waits the 360 second floor when the fresh catalogue read %s, after reading the projected context",
+    async (_name, answer) => {
+      useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
+      const { auth, deps, clock } = harness(
+        { lists: [listOf(row({ state: "creating" }))] },
+        true,
+      );
+      const preflight = vi
+        .spyOn(auth, "getSandboxCatalogue")
+        .mockImplementation(answer);
+
+      await run(false, deps);
+
+      expect(preflight).toHaveBeenCalledTimes(1);
+      expect(preflight).toHaveBeenCalledWith({
+        environmentId: null,
+        os: SHAPE.os,
+        cpus: SHAPE.cpus,
+        memoryMb: SHAPE.memoryMb,
+        diskMb: SHAPE.diskMb,
+        region: SHAPE.region,
+      });
+      expect(auth.requests).toHaveLength(1);
+      expect(clock.now - 1_000_000).toBe(STAGED_CREATE_BUDGET_MS);
+      expect(stageOf().createAttempt).toEqual({
+        budgetMs: STAGED_CREATE_BUDGET_MS,
+        startedAt: 1_000_000,
+      });
+      expect(stageOf().failure).toEqual({ kind: "timed-out", step: "booting" });
+    },
+  );
+
   it("times out when the budget runs out with the sandbox still on its way", async () => {
     useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
     const { auth, deps, clock } = harness(

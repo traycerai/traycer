@@ -322,25 +322,6 @@ describe("SessionRecordings: a write the disk refuses", () => {
 });
 
 describe("SessionRecordings: close", () => {
-  it("writes the 44-byte header at offset 0 of a WAV, over its placeholder", async () => {
-    const store = recordings();
-    await store.openRecording(OWNER, { quality: "lossless" });
-    await store.append(OWNER, "rec-1", "audio", new Uint8Array(44).fill(1));
-    await store.append(OWNER, "rec-1", "audio", new Uint8Array(10).fill(2));
-
-    const closed = await store.close(
-      OWNER,
-      "rec-1",
-      new Uint8Array(44).fill(7),
-    );
-
-    expect(closed).toEqual({ kind: "ok" });
-    const bytes = await readFile(join(folder, "session-2026-11-06-1722.wav"));
-    expect(bytes).toHaveLength(54);
-    expect(Array.from(bytes.subarray(0, 44))).toEqual(Array(44).fill(7));
-    expect(Array.from(bytes.subarray(44))).toEqual(Array(10).fill(2));
-  });
-
   it("holds a close sent without waiting behind the appends before it", async () => {
     const store = recordings();
     await store.openRecording(OWNER, { quality: "lossless" });

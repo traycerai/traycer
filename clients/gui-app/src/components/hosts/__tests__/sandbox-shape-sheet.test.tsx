@@ -78,6 +78,8 @@ const CATALOGUE: SandboxCatalogue = {
 };
 
 let catalogueInUse: SandboxCatalogue = CATALOGUE;
+const SETTLED = { isSuccess: true, isFetching: false };
+let readinessState = SETTLED;
 let authUser: AuthenticatedUser | null = null;
 
 const GIB = 1024;
@@ -99,11 +101,18 @@ vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
     data: catalogueInUse,
   }),
 }));
-vi.mock("@/hooks/sandboxes/use-sandbox-readiness-query", () => ({
-  useSandboxReadiness: (
+// The query's state is a case's to set; its data is the sentence the
+// catalogue in use reads as, as the real hook's select would answer. The
+// sheet's own guard on that state is what each case observes.
+vi.mock("@/hooks/sandboxes/use-sandbox-get-readiness-query", () => ({
+  useSandboxGetReadiness: (
     _configuration: StageConfiguration | null,
     shape: StageSize | null,
-  ) => sandboxReadinessLine(catalogueInUse, shape),
+  ) => ({
+    isSuccess: readinessState.isSuccess,
+    isFetching: readinessState.isFetching,
+    data: sandboxReadinessLine(catalogueInUse, shape),
+  }),
 }));
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   useAuthUser: () => ({ data: authUser }),
@@ -118,6 +127,7 @@ vi.mock("@/lib/links/open-link", () => ({
 afterEach(() => {
   cleanup();
   catalogueInUse = CATALOGUE;
+  readinessState = SETTLED;
   authUser = null;
 });
 
@@ -184,6 +194,25 @@ describe("<SandboxShapeSheet />", () => {
       const line = screen.queryByTestId("sandbox-shape-sheet-readiness");
       if (text === null) expect(line).toBeNull();
       else expect(line?.textContent).toBe(text);
+    },
+  );
+
+  it.each([
+    { name: "refetching", state: { isSuccess: true, isFetching: true } },
+    {
+      name: "errored on its last read",
+      state: { isSuccess: false, isFetching: false },
+    },
+  ])(
+    "shows no readiness while the query is $name, though it still holds a sentence",
+    ({ state }) => {
+      catalogueInUse = servedReadiness({
+        warm: 2,
+        coldCreateMeasuredMs: SERVED_MS,
+      });
+      readinessState = state;
+      renderSheet(vi.fn());
+      expect(screen.queryByTestId("sandbox-shape-sheet-readiness")).toBeNull();
     },
   );
 

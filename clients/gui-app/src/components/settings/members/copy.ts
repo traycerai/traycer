@@ -35,7 +35,7 @@ export const ROLE_LABELS: Readonly<Record<TeamRole, string>> = {
 };
 
 /** The label for a seat with no authority: the role is retired or unknown. */
-export const NO_ROLE_LABEL = "No access";
+const NO_ROLE_LABEL = "No access";
 
 /** One row's role label, `null` included. */
 export function roleLabelOf(role: TeamRole | null): string {

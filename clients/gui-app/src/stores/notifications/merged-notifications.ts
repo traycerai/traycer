@@ -2366,6 +2366,7 @@ const ROW_COMPLETE_PAYLOAD_KINDS = [
   "environment_move_stalled",
   "environment_apply_failed",
   "team_role_changed",
+  "readonly_access_retired",
   "team_host_returned",
   "secret_removed",
   "sandbox_notice",
@@ -2386,10 +2387,9 @@ function isRowCompletePayload(
   return ROW_COMPLETE_PAYLOAD_KIND_SET.has(known.kind);
 }
 
-/** Payload kinds with no navigation target. */
+/** Never shown: readers drop these rows. */
 const UNSHOWN_PAYLOAD_KINDS = [
   "notification_hooks_removed",
-  "readonly_access_retired",
   "worktree_deletion",
   "worktree_auto_cleanup",
   "secret_export_minted",

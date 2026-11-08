@@ -1,5 +1,6 @@
 import { stagedSandboxName } from "@/lib/sandboxes/staged-sandbox-name";
 import { stageProviderForShape } from "@/lib/sandboxes/sandbox-stage-model";
+import { sandboxReadinessContext } from "@/lib/sandboxes/sandbox-readiness";
 import {
   MutationObserver as QueryMutationObserver,
   type QueryClient,
@@ -270,14 +271,16 @@ async function prepareCreate(
     return { environmentId, budgetMs: retainedBudgetMs };
   const catalogue = await deps.queryClient
     .fetchQuery(
-      sandboxCatalogueQueryOptions(deps.auth, deps.userId, true, {
-        environmentId,
-        ...target.shape,
-      }),
+      sandboxCatalogueQueryOptions(
+        deps.auth,
+        deps.userId,
+        true,
+        sandboxReadinessContext(environmentId, target.shape),
+      ),
     )
     .catch(() => null);
-  if (catalogue === null) return null;
-  const entry = stageProviderForShape(catalogue, target.shape);
+  const entry =
+    catalogue === null ? null : stageProviderForShape(catalogue, target.shape);
   return {
     environmentId,
     budgetMs: Math.max(STAGED_CREATE_BUDGET_MS, entry?.createBudgetMs ?? 0),

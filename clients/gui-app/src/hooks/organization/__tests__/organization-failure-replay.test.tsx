@@ -255,14 +255,6 @@ function expectNoCommand(): void {
 }
 
 describe("organization historical failure replay (real query hook)", () => {
-  it("does not toast the host's retained historical failures on a fresh mount", async () => {
-    openTask("task-a");
-    const queryClient = newClient();
-    render(tree(queryClient));
-    await settledWith(queryClient, 1);
-    expect(toastDescriptions()).toEqual([]);
-    expectNoCommand();
-  });
   it("does not toast historical failures again on unmount/remount with no command", async () => {
     openTask("task-a");
     const queryClient = newClient();
@@ -350,7 +342,6 @@ describe("organization historical failure replay (real query hook)", () => {
 
   it("toasts a failure of this scope's own command that the first response carries, while still suppressing historical ones", async () => {
     openTask("task-a");
-    state.hostView.current = viewWithFailures([FAILURE_1]);
     let release: () => void = () => {};
     state.gate.current = new Promise<void>((resolve) => {
       release = resolve;

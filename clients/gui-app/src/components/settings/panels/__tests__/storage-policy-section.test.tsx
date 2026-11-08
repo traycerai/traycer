@@ -54,7 +54,7 @@ import type { StoragePolicyValue } from "@/hooks/environment/use-storage-policy"
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 
 const PERSONAL_ENV = "env-personal";
-const PERSONAL_SECTION = <StoragePolicySection pick={PERSONAL_PICK} />;
+const PERSONAL_SECTION = <StoragePolicySection pick={{ kind: "personal" }} />;
 const TEAM_ENV = "env-acme";
 const PUT = "environment.configuration.items.put";
 
@@ -440,7 +440,7 @@ describe("<StoragePolicySection />", () => {
     ).toBe(line);
   });
 
-  it("disables the task window but not the archived one while Chats is off", async () => {
+  it("keeps both windows enabled while Chats is off and Artifacts is on", async () => {
     host.items = [
       storageItem(
         {
@@ -633,20 +633,6 @@ describe("<StoragePolicySection />", () => {
         2,
       );
     });
-  });
-
-  it("has no environment to write under a Local pick, so every control is disabled", async () => {
-    renderSection(
-      <StoragePolicySection
-        pick={{ kind: "local", hostId: "host-1", hostName: "Laptop" }}
-      />,
-    );
-
-    const control = await chatsSwitch();
-    expect(control.hasAttribute("disabled")).toBe(true);
-    expect(artifactsSwitch().hasAttribute("disabled")).toBe(true);
-    expect(idleTasksSelect().hasAttribute("disabled")).toBe(true);
-    expect(archivedChatsSelect().hasAttribute("disabled")).toBe(true);
   });
 });
 

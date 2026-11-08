@@ -16,6 +16,7 @@ import {
 import { CommandPaletteRouterContext } from "@/components/command-palette/command-palette-context";
 import { buildCommandContext } from "@/lib/commands/context";
 import { botsSource } from "@/lib/commands/sources/bots.source";
+import { tracyRecord } from "@/lib/home-bots/__tests__/standalone-bots-fixtures";
 import { routerAdapterFor } from "@/lib/keybindings/router-adapter";
 import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
 import { useCommandPaletteStore } from "@/stores/command-palette/command-palette-store";
@@ -45,22 +46,9 @@ useStandaloneBotsStore.setState({
           canCreate: true,
           bots: [
             {
-              botId: "bot_0BHAF30C73QHBSQ7G0M8C7W2PR",
-              environmentId: "env-team",
-              createdByUserId: "user-1",
+              ...tracyRecord("bot_0BHAF30C73QHBSQ7G0M8C7W2PR", "env-team"),
               title: "Triage",
-              harness: "claude",
-              model: "claude-opus-5-5",
-              effort: null,
-              profile: null,
               trunkChatId: "trunk-triage",
-              boundHostId: "host-1",
-              hostEpoch: 0,
-              createdAt: 1,
-              archivedAt: null,
-              directive: null,
-              replyMode: "direct",
-              appConversationChatId: null,
             },
           ],
           mainBotId: null,

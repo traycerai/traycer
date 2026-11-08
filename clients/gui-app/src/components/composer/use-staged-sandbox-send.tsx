@@ -34,7 +34,7 @@ import { hostQueryKeys } from "@/lib/query-keys";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { v4 as uuidv4 } from "uuid";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
-import { useSandboxReadiness } from "@/hooks/sandboxes/use-sandbox-readiness-query";
+import { useSandboxGetReadiness } from "@/hooks/sandboxes/use-sandbox-get-readiness-query";
 import { useSandboxVerb } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
 import { teamCannotCoverAnHour } from "@/components/hosts/sandbox-create-model";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
@@ -479,7 +479,7 @@ export function useSetupLineFacts(
 ): SandboxSetupLineFacts | null {
   const user = useAuthUser().data ?? null;
   const catalogue = useSandboxCatalogue(stage !== null).data ?? null;
-  const readinessLine = useStagedReadiness(stage);
+  const readinessLine = useSandboxGetStagedReadinessLine(stage);
   const sandboxList = useSandboxList();
   const sandboxes = sandboxList.data?.sandboxes;
   // Whether the stage's sandbox is awake: `null` until the list has its row.
@@ -585,15 +585,18 @@ export function useSetupLineFacts(
 }
 
 /** Readiness belongs only to a New target before it has a sandbox row. */
-function useStagedReadiness(stage: StagedSandbox | null): string | null {
+function useSandboxGetStagedReadinessLine(
+  stage: StagedSandbox | null,
+): string | null {
   const newTarget =
     stage?.target.kind === "new" && stage.createdSandboxId === null
       ? stage.target
       : null;
-  return useSandboxReadiness(
+  const readiness = useSandboxGetReadiness(
     newTarget?.configuration ?? null,
     newTarget?.shape ?? null,
   );
+  return readiness.isSuccess && !readiness.isFetching ? readiness.data : null;
 }
 
 /**

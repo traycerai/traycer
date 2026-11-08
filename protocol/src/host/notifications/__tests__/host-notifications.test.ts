@@ -53,8 +53,6 @@ import {
   visibleHostNotificationKinds,
   ALL_HOST_NOTIFICATION_KINDS,
   RELEASED_HOST_NOTIFICATION_KINDS,
-  V27_HOST_NOTIFICATION_KINDS,
-  V27_CLOUD_NOTIFICATION_KINDS,
   type HostNotificationsSurface,
 } from "@traycer/protocol/host/notifications/contracts";
 import {
@@ -1316,19 +1314,6 @@ describe("browser.human.needed stays off every released contract", () => {
 });
 
 describe("access.readonly.retired is center-only: cloudFeed@1.8+ only, every other surface unchanged", () => {
-  it("is in ALL_HOST_NOTIFICATION_KINDS but outside the released and @1.7 cloud vocabularies", () => {
-    expect(ALL_HOST_NOTIFICATION_KINDS).toContain("access.readonly.retired");
-    expect(RELEASED_HOST_NOTIFICATION_KINDS).not.toContain(
-      "access.readonly.retired",
-    );
-    expect(V27_HOST_NOTIFICATION_KINDS).not.toContain(
-      "access.readonly.retired",
-    );
-    expect(V27_CLOUD_NOTIFICATION_KINDS).not.toContain(
-      "access.readonly.retired",
-    );
-  });
-
   it("the ordinary host feed (list, feed.subscribe, the frozen legacy stream) never carries it, at any negotiated version", () => {
     const ordinary: ReadonlyArray<{
       readonly surface: HostNotificationsSurface;

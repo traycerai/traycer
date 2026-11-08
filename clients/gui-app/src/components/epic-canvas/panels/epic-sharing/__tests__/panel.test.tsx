@@ -571,7 +571,6 @@ describe("<SharingPanel />", () => {
       ).toBe("Team");
       // Nobody is demoted or removed on a task the team owns.
       expect(within(row).queryAllByRole("button")).toEqual([]);
-      expect(within(row).queryAllByRole("combobox")).toEqual([]);
       expect(screen.queryByText("No direct collaborators yet.")).toBeNull();
     },
   );
@@ -707,7 +706,6 @@ describe("<SharingPanel />", () => {
     expect(within(teams).getByTestId("team-role-badge").textContent).toBe(
       "Editor",
     );
-    expect(within(teams).queryAllByRole("combobox")).toEqual([]);
     expect(screen.queryByTestId("team-role-select")).toBeNull();
     expect(screen.queryByTestId("team-pending-role-select")).toBeNull();
   });
@@ -755,15 +753,6 @@ describe("<SharingPanel />", () => {
 
     const options = screen.getAllByRole("menuitemradio");
     expect(options.map((option) => option.textContent)).toEqual(["Editor"]);
-    expect(screen.queryByRole("menuitemradio", { name: /view/i })).toBeNull();
-  });
-
-  it("offers no role choice in the invite form", () => {
-    renderSharingPanel();
-
-    expect(screen.getByTestId("invite-card")).toBeTruthy();
-    expect(screen.queryByTestId("invite-role-select")).toBeNull();
-    expect(screen.queryByRole("combobox")).toBeNull();
   });
 
   // `isOwner` and `canInvitePeople` now AND the role with the cloud

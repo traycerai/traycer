@@ -404,10 +404,11 @@ function mergeOptionalIndicatorFlags(
  * never allocated an all-false record.
  *
  * `pendingApproval` is the wire's generic "needs a person" flag: every
- * agent pending-prompt kind but `interview.requested` lights it, driven off the
- * shared `HOST_NOTIFICATION_PENDING_PROMPT_KINDS` tuple so a new kind lights
- * this glyph (and the host SQL projection) by joining that tuple. Browser
- * prompts belong to their browser tab and do not decorate the requesting chat.
+ * agent pending-prompt kind but `interview.requested` and `feedback.drafted`
+ * lights it, driven off the shared `HOST_NOTIFICATION_PENDING_PROMPT_KINDS`
+ * tuple so a new kind lights this glyph (and the host SQL projection) by
+ * joining that tuple. Browser prompts belong to their browser tab and feedback
+ * drafts to the bell; neither decorates the requesting task or chat.
  */
 function indicatorContribution(
   entry: HostNotificationCloudEntryV28,

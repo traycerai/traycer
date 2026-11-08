@@ -16,6 +16,8 @@ import {
 import type { StagedSandbox } from "@/stores/composer/staged-sandbox-store";
 
 let catalogueInUse: SandboxCatalogue | null = null;
+const SETTLED = { isSuccess: true, isFetching: false };
+let readinessState = SETTLED;
 
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   useAuthUser: () => ({ data: null }),
@@ -23,16 +25,22 @@ vi.mock("@/hooks/auth/use-auth-user-query", () => ({
 vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
   useSandboxCatalogue: () => ({ data: catalogueInUse }),
 }));
-// The query hook has its own test; here the served catalogue reaches the
-// sentence through the same formatter the hook calls.
-vi.mock("@/hooks/sandboxes/use-sandbox-readiness-query", () => ({
-  useSandboxReadiness: (
+// The query hook has its own test. Its state is a case's to set, and its data
+// is the sentence the served catalogue reads as through the same formatter its
+// select calls; the staged line's own guard on that state is what each case
+// observes.
+vi.mock("@/hooks/sandboxes/use-sandbox-get-readiness-query", () => ({
+  useSandboxGetReadiness: (
     _configuration: unknown,
     shape: Parameters<typeof sandboxReadinessLine>[1],
-  ) =>
-    catalogueInUse === null
-      ? null
-      : sandboxReadinessLine(catalogueInUse, shape),
+  ) => ({
+    isSuccess: readinessState.isSuccess,
+    isFetching: readinessState.isFetching,
+    data:
+      catalogueInUse === null
+        ? null
+        : sandboxReadinessLine(catalogueInUse, shape),
+  }),
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-list-query", () => ({
   useSandboxList: () => ({ data: undefined, dataUpdatedAt: 0 }),
@@ -50,6 +58,7 @@ vi.mock("@/lib/links/open-link", () => ({
 afterEach(() => {
   cleanup();
   catalogueInUse = null;
+  readinessState = SETTLED;
 });
 
 const ACTIONS: SandboxSetupLineActions = {
@@ -129,6 +138,25 @@ describe("the staged New setup line's readiness", () => {
       const line = screen.queryByTestId("sandbox-staged-readiness");
       if (text === null) expect(line).toBeNull();
       else expect(line?.textContent).toBe(text);
+    },
+  );
+
+  it.each([
+    { name: "refetching", state: { isSuccess: true, isFetching: true } },
+    {
+      name: "errored on its last read",
+      state: { isSuccess: false, isFetching: false },
+    },
+  ])(
+    "draws no readiness line while the query is $name, though it still holds a sentence",
+    ({ state }) => {
+      catalogueInUse = readinessCatalogue({
+        warm: 2,
+        coldCreateMeasuredMs: SERVED_MS,
+      });
+      readinessState = state;
+      render(<StagedLine />);
+      expect(screen.queryByTestId("sandbox-staged-readiness")).toBeNull();
     },
   );
 });

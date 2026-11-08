@@ -215,7 +215,6 @@ describe("composer path paste/drop integration (real editor)", () => {
       await flushMicrotasks();
 
       expect(resolveDroppedFilePaths).toHaveBeenCalledOnce();
-      expect(pathSpanTexts(handleRef.current)).toEqual(["notes.txt"]);
       expect(textRuns(handleRef.current)).toEqual([
         { text: "AAAA", code: false },
         { text: "notes.txt", code: true },

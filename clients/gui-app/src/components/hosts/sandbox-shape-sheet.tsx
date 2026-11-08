@@ -28,7 +28,7 @@ import {
 } from "@/components/ui/select";
 import { useAuthUser } from "@/hooks/auth/use-auth-user-query";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
-import { useSandboxReadiness } from "@/hooks/sandboxes/use-sandbox-readiness-query";
+import { useSandboxGetReadiness } from "@/hooks/sandboxes/use-sandbox-get-readiness-query";
 import {
   formatMemory,
   roundSandboxShape,
@@ -498,7 +498,7 @@ function ShapeSheetForm(props: {
               <ShapeSelect
                 id={`${ids}-size`}
                 label="Size"
-                value={sizeValue(form, provider.shapes, provider)}
+                value={sizeValue(form, provider.shapes)}
                 options={provider.shapes.map((rung) => ({
                   value: rungKey(rung),
                   label: rungLabel(rung),
@@ -661,7 +661,9 @@ function ShapeStartupPreview(props: {
   readonly shape: StageShape | null;
   readonly wake: string | null;
 }): ReactNode {
-  const readinessLine = useSandboxReadiness(props.configuration, props.shape);
+  const readiness = useSandboxGetReadiness(props.configuration, props.shape);
+  const readinessLine =
+    readiness.isSuccess && !readiness.isFetching ? readiness.data : null;
   return (
     <>
       {readinessLine === null ? null : (

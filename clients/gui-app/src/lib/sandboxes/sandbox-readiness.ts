@@ -1,9 +1,27 @@
-import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
+import type {
+  SandboxCatalogue,
+  SandboxCatalogueReadinessRequest,
+} from "@traycer/protocol/host/sandbox-control";
 import {
   stageProviderForShape,
   stageQuotedSize,
   type StageSize,
 } from "@/lib/sandboxes/sandbox-stage-model";
+
+/** Cache and transport identity include only the dimensions the catalogue reads. */
+export function sandboxReadinessContext(
+  environmentId: string | null,
+  shape: StageSize,
+): SandboxCatalogueReadinessRequest {
+  return {
+    environmentId,
+    os: shape.os,
+    cpus: shape.cpus,
+    memoryMb: shape.memoryMb,
+    diskMb: shape.diskMb,
+    region: shape.region,
+  };
+}
 
 /** A count is a current observation, never a reservation for this create. */
 export function sandboxReadinessLine(

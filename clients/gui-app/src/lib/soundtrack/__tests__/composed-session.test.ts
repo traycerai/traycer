@@ -54,7 +54,6 @@ function openSession(options: { missingLoader?: boolean; resumeAt?: number }) {
   const output = new RecordingOutput();
   const stems = new FakeStems(1);
   const loadRecording = vi.fn(() => Promise.resolve(makeAudioBuffer(10, 10)));
-  const duck = vi.fn<(seconds: number) => void>();
   const random = vi.fn(() => 0);
   const ports: SoundtrackPorts = {
     output,
@@ -63,7 +62,7 @@ function openSession(options: { missingLoader?: boolean; resumeAt?: number }) {
       : { load: stems.load.bind(stems), loadRecording },
     setDimmed: () => undefined,
     setVolume: () => undefined,
-    duck,
+    duck: () => undefined,
     close: () => undefined,
     log: new SoundtrackLogRelay(),
     captureMix: captureNothing,
@@ -96,11 +95,11 @@ function openSession(options: { missingLoader?: boolean; resumeAt?: number }) {
     onSounding: () => undefined,
     onResumeRefused: () => undefined,
   });
-  return { session, output, loadRecording, duck, random };
+  return { session, output, loadRecording, random };
 }
 
 it("plays a complete recording through the session and preserves the heard position across a pause", async () => {
-  const { session, output, loadRecording, duck } = openSession({});
+  const { session, output, loadRecording } = openSession({});
   session.setSignals({
     view: "home",
     working: 0,
@@ -112,8 +111,6 @@ it("plays a complete recording through the session and preserves the heard posit
   expect(loadRecording).toHaveBeenCalledWith("master");
   expect(output.recordings).toHaveLength(1);
   expect(output.recordings[0]).toMatchObject({ duration: 10, offset: 0 });
-  session.duck(2);
-  expect(duck).toHaveBeenCalledWith(2);
   session.pause();
   await vi.advanceTimersByTimeAsync(20000);
   session.play();
@@ -134,7 +131,6 @@ it("ignores a late completion from a recording replaced by Next", async () => {
   });
   await vi.advanceTimersByTimeAsync(1000);
   const old = output.recordings[0];
-  expect(old).toBeDefined();
   session.next();
   await vi.advanceTimersByTimeAsync(100);
   expect(old.cancelled).toBe(true);

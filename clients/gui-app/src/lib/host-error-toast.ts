@@ -676,13 +676,9 @@ export const HOST_UNSUPPORTED_MESSAGE =
  * (cloning a shared agent, for one) got the bare generic, indistinguishable
  * from a bug.
  *
- * The editor line no longer names a role. With view-only access retired, the
- * editor gate's only remaining refusal is a caller who holds NO role on the
- * task, so the old line ("You have view-only access to this task") told them
- * they held one they do not - which is the same mistake the host's own gate
- * contract keeps the task-access refusal clear of. What the person needs is
- * that it is this TASK they cannot change, which is what distinguishes it from
- * the generic sentence below.
+ * The editor gate refuses only a caller holding no role on the task, so the
+ * line names the task, never a role: what distinguishes it from the generic
+ * sentence below is that it is this TASK they cannot change.
  */
 function forbiddenToastMessage(message: string): string {
   if (message.includes(EDITOR_ACCESS_DENIED_PHRASE)) {
