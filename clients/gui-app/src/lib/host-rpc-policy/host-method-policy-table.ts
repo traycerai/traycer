@@ -2273,12 +2273,13 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
-  // Profile eligibility is persisted provider configuration.
+  // Signing out revokes credentials; an identical repeat must not coalesce.
   "providers.signOutProfile": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Profile eligibility is persisted provider configuration.
   "providers.setProfileEnabled": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
