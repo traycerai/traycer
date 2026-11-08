@@ -19,10 +19,12 @@ import {
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ImageBytes } from "@/lib/attachments/image-bytes";
 import type * as ImageBase64 from "@/lib/composer/image-base64";
+import type * as ReportableErrorToast from "@/lib/reportable-error-toast";
 import type * as LandingImageStore from "@/lib/composer/landing-image-store";
 import {
   BOT_ID,
   BOX_DRAFTS_KEY,
+  IMAGE_B64,
   INLINE_IMAGE,
   MENTION,
   boxDoc,
@@ -90,7 +92,7 @@ describe("the boxes' drafts through the persisted store", () => {
     });
   });
 
-  it("drops an image whose bytes are gone and keeps the text; a draft left with nothing is dropped", async () => {
+  it("drops an image this window stored whose bytes are gone, from the box and from storage, and keeps the text; a draft left with nothing is dropped", async () => {
     const gone = "f".repeat(64);
     storeDraftsAsLeft({
       [BOT_ID]: {
@@ -115,9 +117,12 @@ describe("the boxes' drafts through the persisted store", () => {
       "imageAttachment",
     );
     expect(kept?.imageOnly).toBeUndefined();
+    app.drafts.getState().typeThreadBox(BOT_ID, "other", "elsewhere", null);
+    await waitForStore(app, (stored) => stored?.[BOT_ID]?.other !== undefined);
+    expect(localStorage.getItem(BOX_DRAFTS_KEY)).not.toContain(gone);
   });
 
-  it("drops an image whose bytes cannot be read back, and still reads the drafts and writes the next change", async () => {
+  it("leaves an image whose bytes cannot be read back out of the box, still reads the drafts, and keeps the image in the next write", async () => {
     const hash = await storeImageBytes();
     storeDraftsAsLeft({
       [BOT_ID]: {
@@ -151,6 +156,128 @@ describe("the boxes' drafts through the persisted store", () => {
       app,
       (stored) => stored?.[BOT_ID]?.channel?.text === "after",
     );
+    expect(JSON.stringify(storedDrafts(app)?.[BOT_ID]?.channel)).toContain(
+      hash,
+    );
+  });
+});
+
+describe("two windows over one device's storage", () => {
+  /** The app runs in the desktop window `windowId`, whose image store is its own. */
+  function inWindow(windowId: string): void {
+    vi.stubGlobal("runnerHost", { windows: { windowId } });
+  }
+
+  /** Window A stores a draft with an image; window B, which cannot read its bytes, starts. */
+  async function storedByAThenStartB(): Promise<void> {
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+    });
+    inWindow("window-a");
+    app = await restart();
+    app.drafts
+      .getState()
+      .typeThreadBox(BOT_ID, "channel", "pic", boxDoc("pic", [INLINE_IMAGE]));
+    await waitForStore(app, (stored) =>
+      JSON.stringify(stored?.[BOT_ID]?.channel).includes('"hash"'),
+    );
+    inWindow("window-b");
+    app = await restart();
+    expect(
+      JSON.stringify(app.drafts.getState().threadBoxes[BOT_ID]?.channel),
+    ).not.toContain("imageAttachment");
+  }
+
+  it("keeps the image one window stored through another's edits, for the first window to read back", async () => {
+    await storedByAThenStartB();
+
+    app.drafts
+      .getState()
+      .typeThreadBox(
+        BOT_ID,
+        "channel",
+        "pic, edited",
+        boxDoc("pic, edited", []),
+      );
+    app.drafts.getState().typeThreadBox(BOT_ID, "other", "elsewhere", null);
+    await waitForStore(
+      app,
+      (stored) => stored?.[BOT_ID]?.channel?.text === "pic, edited",
+    );
+
+    inWindow("window-a");
+    app = await restart();
+    const channel = app.drafts.getState().threadBoxes[BOT_ID]?.channel;
+    expect(channel?.text).toBe("pic, edited");
+    expect(JSON.stringify(channel?.content)).toContain(IMAGE_B64);
+  });
+
+  it("drops that image once the other window's person clears the box", async () => {
+    await storedByAThenStartB();
+
+    app.drafts
+      .getState()
+      .typeThreadBox(
+        BOT_ID,
+        "channel",
+        "pic, edited",
+        boxDoc("pic, edited", []),
+      );
+    app.drafts.getState().typeThreadBox(BOT_ID, "channel", "", null);
+    app.drafts.getState().typeThreadBox(BOT_ID, "other", "elsewhere", null);
+    await waitForStore(app, (stored) => stored?.[BOT_ID]?.other !== undefined);
+
+    expect(storedDrafts(app)?.[BOT_ID]?.channel).toBeUndefined();
+  });
+});
+
+describe("the image budget a draft's images are stored under", () => {
+  it("writes a draft without an image the budget refuses, tells the person once, and stores the image once there is room", async () => {
+    const REPORTABLE_TOAST = "@/lib/reportable-error-toast";
+    const toast = vi.fn();
+    vi.doMock(REPORTABLE_TOAST, async (importOriginal) => ({
+      ...(await importOriginal<typeof ReportableErrorToast>()),
+      reportableErrorToast: toast,
+    }));
+    onTestFinished(() => {
+      vi.doUnmock(REPORTABLE_TOAST);
+    });
+    app = await restart();
+    const budget = await import("@/lib/composer/landing-image-budget");
+    const elsewhere = budget.tryReserveLandingImageBudget([
+      { hash: null, bytes: budget.LANDING_IMAGE_BUDGET_BYTES },
+    ]);
+    expect(elsewhere).not.toBeNull();
+
+    const content = boxDoc("pic", [INLINE_IMAGE]);
+    app.drafts.getState().typeThreadBox(BOT_ID, "channel", "pic", content);
+    await waitForStore(
+      app,
+      (stored) => stored?.[BOT_ID]?.channel !== undefined,
+    );
+    expect(localStorage.getItem(BOX_DRAFTS_KEY)).not.toContain(
+      "imageAttachment",
+    );
+    app.drafts.getState().typeThreadBox(BOT_ID, "channel", "pic more", content);
+    await waitForStore(
+      app,
+      (stored) => stored?.[BOT_ID]?.channel?.text === "pic more",
+    );
+    expect(toast).toHaveBeenCalledTimes(1);
+    expect(toast).toHaveBeenCalledWith(
+      "Couldn't add the image.",
+      expect.anything(),
+      expect.anything(),
+    );
+
+    elsewhere?.release();
+    app.drafts
+      .getState()
+      .typeThreadBox(BOT_ID, "channel", "pic again", content);
+    await waitForStore(app, (stored) =>
+      JSON.stringify(stored?.[BOT_ID]?.channel).includes('"hash"'),
+    );
+    expect(toast).toHaveBeenCalledTimes(1);
   });
 });
 

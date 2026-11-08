@@ -3,6 +3,8 @@ import { persist } from "zustand/middleware";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import {
   BOT_BOX_DRAFTS_PERSIST_KEY,
+  botBoxDraftCleared,
+  botBoxDraftsForgotten,
   botBoxDraftsRead,
   botBoxDraftsReading,
   createBotBoxDraftStorage,
@@ -195,12 +197,15 @@ export const useBotDraftsStore = create<BotDraftsState>()(
           return;
         }
         noteBoxChange(botId, anchorMessageId);
+        const cleared = text.length === 0 && content === null;
+        // Cleared or sent: what it kept that this window could not show goes too.
+        if (cleared) botBoxDraftCleared(botId, anchorMessageId);
         set((state) => ({
           threadBoxes: withEntry(
             state.threadBoxes,
             botId,
             anchorMessageId,
-            text.length === 0 && content === null
+            cleared
               ? null
               : {
                   text,
@@ -227,6 +232,7 @@ export const useBotDraftsStore = create<BotDraftsState>()(
         ),
       forgetBot: (botId) => {
         noteBoxChange(botId, null);
+        botBoxDraftsForgotten(botId);
         set((state) => ({
           answers: withoutBot(state.answers, botId),
           threadBoxes: withoutBot(state.threadBoxes, botId),

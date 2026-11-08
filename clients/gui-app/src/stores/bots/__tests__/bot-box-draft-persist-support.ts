@@ -129,11 +129,20 @@ export const INLINE_IMAGE: JsonContent = {
   },
 };
 
-/** An image named by its hash, as the drafts are stored. */
+/**
+ * An image named by its hash, as the drafts are stored by this window: one
+ * with no desktop window id keeps its images under `"default"`.
+ */
 export function hashedImage(hash: string): JsonContent {
   return {
     type: "imageAttachment",
-    attrs: { id: "image-1", fileName: "shot.png", mimeType: "image/png", hash },
+    attrs: {
+      id: "image-1",
+      fileName: "shot.png",
+      mimeType: "image/png",
+      hash,
+      partition: "default",
+    },
   };
 }
 
