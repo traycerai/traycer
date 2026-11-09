@@ -95,6 +95,7 @@ describe("<ComposerToolbarLeft />", () => {
       <TooltipProvider>
         <ComposerToolbarLeft
           onAttachImages={vi.fn<(files: ReadonlyArray<File>) => void>()}
+          onAttachFiles={vi.fn<(files: ReadonlyArray<File>) => void>()}
           permission="supervised"
           onPermissionChange={vi.fn<(next: PermissionMode) => void>()}
           supportedPermissionModes={[
@@ -171,6 +172,7 @@ function renderToolbar(
     <TooltipProvider>
       <ComposerToolbarLeft
         onAttachImages={onAttachImages}
+        onAttachFiles={vi.fn()}
         permission="supervised"
         onPermissionChange={onPermissionChange}
         supportedPermissionModes={null}

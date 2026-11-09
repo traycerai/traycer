@@ -2220,7 +2220,7 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     The Tabs card was called "Top bar"; its id is still `topBar`, and search still finds it by "top bar" and "title bar".
     Wherever a label names the place, it is the tab strip: "Tab strip - left of the tabs", a reading's `Position` of Status bar or Tab strip, and "Tab strip, left" in the index.
   - **Composer, Chat and Sidebar details.**
-    The phone layout's toolbar lists are what it draws, unordered: Attach image on the left, Model (Reasoning control; Style applies on wider windows) and the Microphone on the right; a list with no member is not drawn.
+    The phone layout's toolbar lists are what it draws, unordered: Attach on the left, Model (Reasoning control; Style applies on wider windows) and the Microphone on the right; a list with no member is not drawn.
     Model's Style and Reasoning control say they matter only for models with several effort levels; the Compact conversation button says it shows only for harnesses that can compact.
     While General > Voice input is off, the Microphone row is dimmed and disabled with "Turn on Voice input in General settings to use this." (C4).
     Context usage opens with Pin breakdown, then under it Chip style (disabled while pinned) and Breakdown rows (disabled while not pinned); its state word is "Pinned" while pinned (C1).

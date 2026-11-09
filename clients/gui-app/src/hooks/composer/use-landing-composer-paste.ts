@@ -7,10 +7,12 @@ import type { PastedComposerImage } from "@/components/chat/composer/editor/exte
 import {
   collectImages,
   prepareComposerImageFile,
+  useComposerFileAttachArgs,
   useComposerPasteEvents,
   IMAGE_MIME_PREFIX,
   MAX_IMAGE_SOURCE_BYTES,
   type ComposerImageConversionResult,
+  type ComposerFileRoute,
   type ComposerImageIngest,
   type ComposerPasteEditorHandle,
   type PathInsertionCommit,
@@ -174,8 +176,11 @@ export function useLandingComposerPaste(params: {
   readonly disabled: boolean;
   readonly fileDrops: IFileDropHost;
   readonly mentionRoots: ReadonlyArray<string>;
+  /** Files go to the placement host, the one the epic is created on. */
+  readonly fileRoute: ComposerFileRoute;
 }): UseComposerPasteResult {
-  const { editorRef, draftId, disabled, fileDrops, mentionRoots } = params;
+  const { editorRef, draftId, disabled, fileDrops, mentionRoots, fileRoute } =
+    params;
   // THIS HOOK's session, one per mount, so the file-paste path serializes its
   // own decodes: a multi-file drop holds one bitmap at a time however many
   // files it carries.
@@ -266,7 +271,14 @@ export function useLandingComposerPaste(params: {
     }),
     [disabled, draftId, preparationSession],
   );
-  return useComposerPasteEvents(imageIngest, insertAttrs, filePaths, undefined);
+  const fileAttach = useComposerFileAttachArgs(editorRef, fileRoute);
+  return useComposerPasteEvents({
+    imageIngest,
+    insertAttrs,
+    filePaths,
+    captureImageInsertion: undefined,
+    fileAttach,
+  });
 }
 
 // A base64 clipboard image whose decoded size would exceed the source ceiling

@@ -81,6 +81,7 @@ function renderToolbar(
     <ComposerMobileToolbar
       store={makeStore(modelSlug, voice.permission ?? "supervised")}
       onAttachImages={vi.fn()}
+      onAttachFiles={vi.fn()}
       canSubmit
       attachmentPending={false}
       onSubmit={onSubmit}
