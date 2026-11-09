@@ -370,6 +370,7 @@ test.describe("the canvas at the top placement", () => {
 
   test("a real right-click on the mic at rest opens the quick-verb menu, though its named element has no box", async () => {
     const page = getPage();
+    await probe(page, "setVoiceInputEnabled(true)");
     const names = await probeValue<Readonly<Partial<Record<string, string>>>>(
       page,
       "names",

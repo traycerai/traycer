@@ -343,6 +343,7 @@ interface LayoutCanvasProbe {
   readonly foldDockPills: () => void;
   readonly unfoldDockPills: () => void;
   readonly setMicShown: (shown: boolean) => void;
+  readonly setVoiceInputEnabled: (enabled: boolean) => void;
   /** A Settings search result for `anchor` on the Layout page (H2). */
   readonly revealSetting: (anchor: string) => void;
   /** The editor door's deep link to a region's row, as the width gate sends it (H2). */
@@ -1044,6 +1045,9 @@ function buildProbe(): LayoutCanvasProbe {
         .getState()
         .setRegionValues("mic", { shown: shown ? "shown" : "hidden" });
     },
+    setVoiceInputEnabled: (enabled) => {
+      useSettingsStore.getState().setVoiceInputEnabled(enabled);
+    },
     revealSetting: (anchor) => {
       useSettingsSearchStore.getState().requestReveal("layout", anchor);
     },
@@ -1181,6 +1185,7 @@ function buildProbe(): LayoutCanvasProbe {
       strip.resetWidth();
       strip.setCollapsed(VARIANT.collapsed);
       useSettingsStore.getState().setTheme("system");
+      useSettingsStore.getState().setVoiceInputEnabled(false);
       useLeftPanelStore.getState().setMainCollapsed(EPIC_SURFACE_ID, false);
       fixtureIndicators = { epics: {}, chats: {}, complete: true };
       applyFixtureIndicators();

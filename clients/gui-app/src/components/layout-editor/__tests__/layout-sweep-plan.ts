@@ -100,6 +100,7 @@ import { providerDisplayName } from "@/lib/provider-ordering";
 import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
 import type { SettingsAvailabilityContext } from "@/lib/settings/settings-availability";
 import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import {
   getLayoutSnapshot,
   useLayoutStore,
@@ -443,8 +444,8 @@ const NO_GIVEN: ReadonlyArray<SweepStep> = [];
 
 /**
  * The context every row's rule reads, for the layout the plan starts from.
- * General > Voice input stays at its shipped value, on: the sweep never writes
- * it, and the Microphone's rule reads nothing else of it.
+ * General > Voice input starts off; the Microphone display entry discovers
+ * its opt-in precondition through the region's own availability rule.
  */
 function formContext(input: SweepPlanInput): LayoutFormContext {
   const { shipped, availability } = input;
@@ -452,7 +453,7 @@ function formContext(input: SweepPlanInput): LayoutFormContext {
     values: effectiveLayoutValues(shipped.basePreset, shipped.overrides),
     arrangement: shipped.arrangement,
     shell: availability,
-    facts: { voiceInputEnabled: true },
+    facts: { voiceInputEnabled: false },
   };
 }
 
@@ -476,7 +477,21 @@ const TAB_PLACEMENT_TOP: SweepStep = arrangementFieldStep(
   "top",
 );
 
+const VOICE_INPUT_ON: SweepStep = {
+  label: "Voice input: on",
+  run: () => {
+    useSettingsStore.getState().setVoiceInputEnabled(true);
+  },
+};
+
 const UNLOCKS: ReadonlyArray<Unlock> = [
+  {
+    step: VOICE_INPUT_ON,
+    applied: (context) => ({
+      ...context,
+      facts: { ...context.facts, voiceInputEnabled: true },
+    }),
+  },
   {
     step: controlStep(
       "contextUsage",
@@ -609,6 +624,7 @@ type StyleGrammarRow = Extract<AnyGrammarRow, { readonly kind: "style" }>;
 function showSwitchEntries(
   region: RegionId,
   values: LayoutValues,
+  given: ReadonlyArray<SweepStep>,
 ): ReadonlyArray<SweepEntry> {
   const name = regionFacts(region).name;
   const shown = !regionValuesHidden(values[region]);
@@ -617,7 +633,7 @@ function showSwitchEntries(
       id: `region-display:${region}:${shown ? "hidden" : "shown"}`,
       source: "region-display",
       mirrors: null,
-      given: NO_GIVEN,
+      given,
       write: {
         label: `Show ${name}: ${shown ? "off" : "on"}`,
         run: () => {
@@ -633,6 +649,7 @@ function showSwitchEntries(
 function displayEntries(
   region: RegionId,
   values: LayoutValues,
+  given: ReadonlyArray<SweepStep>,
 ): ReadonlyArray<SweepEntry> {
   const display = displayControl(region, values);
   if (display === null) return [];
@@ -642,7 +659,7 @@ function displayEntries(
       id: `region-display:${region}:${option.value}`,
       source: "region-display",
       mirrors: display.mirrors(option.value),
-      given: NO_GIVEN,
+      given,
       write: {
         label: `${display.ariaLabel}: ${option.label}`,
         run: () => {
@@ -792,11 +809,17 @@ function regionPlan(input: SweepPlanInput): ReadonlyArray<SweepEntry> {
     const region = facts.id;
     // A region its shell gate leaves out of this shell is no row, so no control.
     if (!facts.shellGate(context.shell)) continue;
-    entries.push(
-      ...(asBarRegionId(region) === null
-        ? displayEntries(region, context.values)
-        : showSwitchEntries(region, context.values)),
-    );
+    const displayGiven = givenFor(context, `${region}/display`, {
+      under: null,
+      availability: facts.availability,
+    });
+    if (displayGiven !== null) {
+      entries.push(
+        ...(asBarRegionId(region) === null
+          ? displayEntries(region, context.values, displayGiven)
+          : showSwitchEntries(region, context.values, displayGiven)),
+      );
+    }
     const declared: ReadonlyArray<AnyGrammarRow> = LAYOUT_REGIONS[region].rows;
     for (const row of declared) {
       entries.push(...grammarRowEntries(region, row, context));

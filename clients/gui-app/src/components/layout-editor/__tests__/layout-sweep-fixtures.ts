@@ -28,6 +28,7 @@ import {
 import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
 import { tabItemId, tabRefKey, type StripItem } from "@/stores/tabs/layout";
 import { useTabsStore } from "@/stores/tabs/store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { TabCustomizations } from "@/stores/tabs/tab-groups";
 import type { TabRef } from "@/stores/tabs/types";
 import type { LayoutSnapshot } from "@/lib/layout/layout-snapshot";
@@ -186,6 +187,7 @@ const BASE_SNAPSHOT: LayoutSnapshot = {
  * the delta and the arrangement all return.
  */
 export function resetToShippedLayout(): void {
+  useSettingsStore.getState().setVoiceInputEnabled(false);
   useLayoutStore.getState().replaceAll(BASE_SNAPSHOT);
   useLayoutStore.getState().setRegionValues("resourceMonitor", {
     cpu: true,
