@@ -1123,7 +1123,9 @@ describe("WsRpcClient", () => {
     });
     const authority = authorityForToken("token-abc");
 
-    // "host.status" is on `dial-priority.ts`'s background list.
+    // "host.status" is on `dial-priority.ts`'s background list. The first
+    // call to an unclassified host owns the dial; a second call waits until
+    // that handshake says whether the host keeps a session.
     const backgroundPending = client.request(
       "host.status",
       {},
@@ -1135,7 +1137,11 @@ describe("WsRpcClient", () => {
       },
     );
     await flush();
-    // "host.echo" is not - it must fall through to the interactive default.
+    expect(sockets).toHaveLength(1);
+    expect(sockets[0].priority).toBe("background");
+
+    // "host.echo" is not on the background list - it must fall through to
+    // the interactive default. It stays queued until the ack below.
     const interactivePending = client.request(
       "host.echo",
       { message: "hi" },
@@ -1147,17 +1153,21 @@ describe("WsRpcClient", () => {
       },
     );
     await flush();
+    expect(sockets).toHaveLength(1);
+
+    sockets[0].socket.fireOpen();
+    await flush();
+    // This ack does not advertise a persistent session, so the waiter dials
+    // its own socket and keeps the method's priority.
+    sockets[0].socket.fireMessage(
+      openAckWithOptionalHostEcho({ major: 1, minor: 0 }),
+    );
+    await flush();
 
     expect(sockets).toHaveLength(2);
     expect(sockets[0].priority).toBe("background");
     expect(sockets[1].priority).toBe("interactive");
 
-    sockets[0].socket.fireOpen();
-    await flush();
-    sockets[0].socket.fireMessage(
-      openAckWithOptionalHostEcho({ major: 1, minor: 0 }),
-    );
-    await flush();
     const statusRequest = expectRequestFrame(sockets[0].sent[1]);
     sockets[0].socket.fireMessage({
       kind: "response",
@@ -1642,8 +1652,9 @@ describe("WsRpcClient", () => {
     });
     const authority = authorityForToken("token-abc");
 
-    // Fire two overlapping RPCs to the SAME host - neither awaited before the
-    // next is started, so both sockets are open at once.
+    // The first call classifies the host. A second call to the same host
+    // waits on that dial. A non-advertising ack releases it onto its own
+    // socket, and the two sockets are then open together.
     const pending1 = client.request(
       "host.echo",
       { message: "one" },
@@ -1666,10 +1677,18 @@ describe("WsRpcClient", () => {
       },
     );
     await flush();
-    expect(sockets).toHaveLength(2);
+    expect(sockets).toHaveLength(1);
 
     sockets[0].socket.fireOpen();
     await flush();
+    expect(recorder.callsNamed("sessionEstablished")).toHaveLength(1);
+
+    sockets[0].socket.fireMessage(
+      openAckWithOptionalHostEcho({ major: 1, minor: 0 }),
+    );
+    await flush();
+    expect(sockets).toHaveLength(2);
+
     sockets[1].socket.fireOpen();
     await flush();
 
@@ -1678,10 +1697,6 @@ describe("WsRpcClient", () => {
     expect(recorder.callsNamed("sessionEstablished")).toHaveLength(1);
     expect(recorder.callsNamed("sessionLost")).toHaveLength(0);
 
-    sockets[0].socket.fireMessage(
-      openAckWithOptionalHostEcho({ major: 1, minor: 0 }),
-    );
-    await flush();
     const req0 = expectRequestFrame(sockets[0].sent[1]);
     sockets[0].socket.fireMessage({
       kind: "response",
