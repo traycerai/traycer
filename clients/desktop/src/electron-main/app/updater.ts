@@ -187,6 +187,13 @@ function currentPrivateUpdateToken(): string {
     : BAKED_PRIVATE_UPDATE_TOKEN;
 }
 
+class DesktopReleaseManifestUnavailableError extends Error {
+  constructor() {
+    super("Desktop release channel manifest unavailable");
+    this.name = "DesktopReleaseManifestUnavailableError";
+  }
+}
+
 // User-facing copy for the update failure classes. Deliberately generic and
 // reassuring - users shouldn't see release-feed internals, HTTP bodies, or be
 // asked to reason about repository visibility. The raw error is still logged,
@@ -2022,9 +2029,7 @@ async function findNewestDesktopRelease(
         const rawManifest = await fetchDesktopReleaseManifest(request, signal);
         if (rawManifest === null) {
           if (origins !== undefined)
-            firstError ??= new Error(
-              "Desktop release channel manifest unavailable",
-            );
+            firstError ??= new DesktopReleaseManifestUnavailableError();
           continue;
         }
         const validation = validateDesktopReleaseManifest(
@@ -2917,6 +2922,9 @@ function rawErrorMessage(error: unknown): string {
 }
 
 function readErrorMessage(error: unknown): string {
+  if (error instanceof DesktopReleaseManifestUnavailableError) {
+    return UPDATE_ERROR_SERVICE_MESSAGE;
+  }
   return formatUserVisibleUpdateError(rawErrorMessage(error));
 }
 
