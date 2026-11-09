@@ -124,6 +124,8 @@ class StubWebSocket implements WebSocketLike {
 
   /** When set, an `openAck` closes the socket before `fireMessage` returns. */
   closeOnAck = false;
+  /** When set, an `openAck` is followed by a host fatal before `fireMessage` returns. */
+  fatalAfterAck = false;
 
   fireMessage(
     frame:
@@ -148,8 +150,23 @@ class StubWebSocket implements WebSocketLike {
         },
   ): void {
     this.onmessage?.({ data: JSON.stringify(frame) });
-    if (this.closeOnAck && frame.kind === "openAck") {
+    if (frame.kind !== "openAck") {
+      return;
+    }
+    if (this.closeOnAck) {
       this.fireClose(1006, "peer-dropped", false);
+    }
+    if (this.fatalAfterAck) {
+      this.fireMessage({
+        kind: "fatalError",
+        details: {
+          code: "UNAUTHORIZED",
+          reason: "host refused the session",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+          retryable: false,
+        },
+      });
     }
   }
 
@@ -1526,6 +1543,60 @@ describe("local unary session", () => {
     expect(error.replaySafetyFromKey).toBe(false);
     expect(mayHaveReachedHost(error)).toBe(false);
     expect(requestFrames(discovering)).toHaveLength(0);
+
+    const second = client.request(
+      "host.echo",
+      { message: "second" },
+      optionsFor(bearer, new AbortController().signal, null, false, null),
+    );
+    expect(sockets).toHaveLength(2);
+    const retried = sockets[1];
+    if (retried === undefined) {
+      throw new Error("expected the next call to dial");
+    }
+    await classify(retried, sessionAck(true));
+    const frame = requestFrames(retried)[0];
+    if (frame === undefined) {
+      throw new Error("expected the retried request");
+    }
+    respondEcho(retried.socket, frame, "second");
+    await expect(second).resolves.toEqual({ echoed: "second" });
+  });
+
+  it("reports a fatal buffered behind openAck and does not publish the session", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory, 0);
+    const bearer = new MutableBearerLease("token-a", USER_A);
+    const first = captureRejection(
+      client.request(
+        "host.echo",
+        { message: "first" },
+        optionsFor(bearer, new AbortController().signal, null, false, null),
+      ),
+    );
+    const discovering = sockets[0];
+    if (discovering === undefined) {
+      throw new Error("expected the discovering socket");
+    }
+    const opened = discovering.socket.nextSend();
+    discovering.socket.fireOpen();
+    await opened;
+    discovering.socket.fatalAfterAck = true;
+    discovering.socket.fireMessage(sessionAck(true));
+
+    const error = await first;
+    expect(error).toBeInstanceOf(HostRpcError);
+    expect(error).not.toBeInstanceOf(RetryableTransportError);
+    if (!(error instanceof HostRpcError)) {
+      throw new Error("expected the host fatal");
+    }
+    expect(error.message).toBe("host refused the session");
+    expect(mayHaveReachedHost(error)).toBe(false);
+    expect(requestFrames(discovering)).toHaveLength(0);
+    expect(discovering.socket.closed).toEqual({
+      code: 1000,
+      reason: "session-closed",
+    });
 
     const second = client.request(
       "host.echo",

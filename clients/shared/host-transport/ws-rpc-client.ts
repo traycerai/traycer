@@ -472,8 +472,8 @@ export class WsRpcClient<
       }
       if (
         cause instanceof HostRpcError &&
-        cause.code === "INCOMPATIBLE" &&
-        cause.fatalDetails !== null
+        cause.fatalDetails !== null &&
+        !(cause instanceof RetryableTransportError)
       ) {
         publish.failed(cause);
       } else {
@@ -629,6 +629,12 @@ export class WsRpcClient<
           ackFrame.capabilities?.includes(UNARY_CAPABILITY_IDEMPOTENCY_KEY) ===
             true,
         );
+        if (local.isRetired) {
+          const fatal = local.admissionFatalFrame;
+          throw fatal === null
+            ? closedBeforeAdopt(requestId, method)
+            : hostFatalError(fatal, requestId, method, "beforeRequest");
+        }
         publish.ready(local);
         published = true;
         adopted = true;
@@ -817,8 +823,8 @@ export class WsRpcClient<
       hostManifest,
       idempotency,
     };
-    socketSession.adoptMultiplex(local.handlers);
     local.attach(attached);
+    socketSession.adoptMultiplex(local.handlers);
     return local;
   }
 
@@ -949,6 +955,7 @@ export class WsRpcClient<
           ackFrame.capabilities?.includes(UNARY_CAPABILITY_IDEMPOTENCY_KEY) ===
           true,
       };
+      local.attach(attached);
       socketSession.adoptMultiplex(local.handlers);
       adopted = true;
       return { kind: "persistent", attached };

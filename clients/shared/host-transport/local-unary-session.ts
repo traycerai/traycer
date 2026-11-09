@@ -154,6 +154,8 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
   private closeWhenIdle = false;
   /** Set around a close this session initiated, so that close is not a peer drop. */
   private suppressClose = false;
+  /** A fatal delivered before any call was queued. The adopter throws this instead of publishing. */
+  private admissionFatal: HostFatalErrorFrame | null = null;
 
   constructor(options: LocalUnarySessionOptions<Registry>) {
     this.key = options.key;
@@ -174,6 +176,11 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
   /** Whether this object still accepts calls. A retired session is dropped from the directory. */
   get isRetired(): boolean {
     return this.retired;
+  }
+
+  /** The host fatal that arrived before a call was queued, if adoption delivered one. */
+  get admissionFatalFrame(): HostFatalErrorFrame | null {
+    return this.admissionFatal;
   }
 
   attach(attached: AttachedPersistentSocket): void {
@@ -554,6 +561,9 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
   private onFatal(frame: HostFatalErrorFrame): void {
     // rejectInFlight pumps the queue. Drop the socket first so that pump
     // cannot write another request after the fatal frame.
+    if (this.inFlight.size === 0 && this.queue.length === 0) {
+      this.admissionFatal = frame;
+    }
     this.closeSocket();
     const pending = Array.from(this.inFlight.values());
     for (const entry of pending) {
@@ -657,6 +667,10 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
           this.failQueued(null);
           this.redialing = false;
           this.retireIfIdle();
+          return;
+        }
+        if (this.retired) {
+          this.redialing = false;
           return;
         }
         this.attach(dialed.attached);
