@@ -557,9 +557,8 @@ function BotQuestionCard(props: {
       text: item.text,
       options: item.options,
       allowFreeText: item.allowFreeText,
-      // A question that takes the person's own words takes several of its
-      // options too: the host holds such an answer to no one option.
-      several: item.allowFreeText,
+      // Absent from a host below `chat.subscribe@1.43`: one pick.
+      several: item.multiSelect === true,
       settlement: botQuestionCardSettlement(
         item.settlement,
         memberName,
