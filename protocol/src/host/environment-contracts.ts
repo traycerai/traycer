@@ -217,10 +217,24 @@ export const environmentStatusUpgradeV10ToV11 = defineUpgradePath<
     planes: { records: "moved", broker: "moved", room: "moved" },
     returnedFromTeam: null,
     stoppedAt: null,
-    // A host answering `@1.0` acknowledges no queued edit, which reads the same
-    // as one that has none: no receipt is never evidence either way.
-    acceptedUploads: [],
   }),
+});
+
+export const environmentStatusV12 = defineRpcContract({
+  method: "environment.status",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: schemas.environmentStatusRequestSchema,
+  responseSchema: schemas.environmentStatusResponseSchemaV12,
+});
+
+export const environmentStatusUpgradeV11ToV12 = defineUpgradePath<
+  typeof environmentStatusV11,
+  typeof environmentStatusV12
+>({
+  from: environmentStatusV11.schemaVersion,
+  to: environmentStatusV12.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({ ...response, acceptedUploads: [] }),
 });
 
 export const environmentReviewV10 = defineRpcContract({
@@ -822,7 +836,7 @@ export const ENVIRONMENT_RPC_METHODS = {
   "environment.status": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: environmentStatusV10,
@@ -831,6 +845,10 @@ export const ENVIRONMENT_RPC_METHODS = {
         1: {
           contract: environmentStatusV11,
           upgradeFromPreviousVersion: environmentStatusUpgradeV10ToV11,
+        },
+        2: {
+          contract: environmentStatusV12,
+          upgradeFromPreviousVersion: environmentStatusUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},

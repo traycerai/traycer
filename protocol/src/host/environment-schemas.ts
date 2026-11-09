@@ -312,19 +312,9 @@ export type EnvironmentPlaneState = z.infer<typeof environmentPlaneStateSchema>;
  * is when this computer went back to its own settings after a team, null when
  * it never did. `stoppedAt` is when this computer stopped sharing, null while
  * it shares or never did.
- *
- * `acceptedUploads` is added here rather than at `@1.0` because `@1.0` is
- * published; a host that predates it answers nothing for the field and it
- * upgrades to the empty list, which a reader already has to handle - the list
- * is bounded and best-effort, so "none" is never evidence either way.
  */
 export const environmentStatusResponseSchemaV11 = lazySchema(() =>
   environmentStatusResponseSchema.extend({
-    /**
-     * Acknowledgements for edits this host sent from its queue, newest last.
-     * See {@link environmentUploadReceiptSchema}: one is evidence, none is not.
-     */
-    acceptedUploads: z.array(environmentUploadReceiptSchema).default([]),
     /** Current sandbox apply operation; absent on older hosts, null while unknown or applying. */
     sandboxSettingsOperationId: z.string().min(1).nullable().optional(),
     consent: z
@@ -344,6 +334,17 @@ export const environmentStatusResponseSchemaV11 = lazySchema(() =>
 );
 export type EnvironmentStatusResponseV11 = z.infer<
   typeof environmentStatusResponseSchemaV11
+>;
+
+/** Upload receipts require @1.2; the published @1.1 response stays frozen. */
+export const environmentStatusResponseSchemaV12 = lazySchema(() =>
+  environmentStatusResponseSchemaV11.extend({
+    /** One receipt is evidence of acceptance; its absence is not evidence of rejection. */
+    acceptedUploads: z.array(environmentUploadReceiptSchema).default([]),
+  }),
+);
+export type EnvironmentStatusResponseV12 = z.infer<
+  typeof environmentStatusResponseSchemaV12
 >;
 
 // ── environment.notices / .undo / .review ───────────────────────────────────

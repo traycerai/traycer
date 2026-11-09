@@ -16,6 +16,7 @@ export type EnvironmentPageId =
   | "mcp-servers"
   | "skills"
   | "permissions"
+  | "agent-memories"
   | "agents"
   | "model-routing"
   | "variables"
@@ -72,6 +73,7 @@ const PAGE_SECTIONS: Readonly<Record<EnvironmentPageId, SettingsSectionId>> = {
   "mcp-servers": "mcp-servers",
   skills: "skills",
   permissions: "permissions",
+  "agent-memories": "agent-memories",
   agents: "agents",
   "model-routing": "fallback",
   variables: "shell",

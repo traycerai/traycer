@@ -952,9 +952,11 @@ Account; the rest is the app itself.
     The host applies the same test before it says `applied`.
     The host row observes each write for at most 60 seconds from submission.
     One single-flight loop reads the getter, and while queued reads
-    `environment.status@1.1` for an exact upload id, environment and item
-    address. It rechecks the getter after status to reject a rebind during
-    the read. An accepted receipt latches its revision floor; missing receipts
+    `environment.status` for an exact upload id, environment and item
+    address. Version 1.2 carries accepted receipts; a 1.1 host can report
+    refusals in `pendingUploads` but supplies no accepted receipt. It rechecks
+    the getter after status to reject a rebind during the read. An accepted
+    receipt latches its revision floor; missing receipts
     keep waiting and never acknowledge a write. Confirmation requires the same
     non-null environment, a revision at or above that floor, and the requested
     value. A later opposite value is unconfirmed. Explicit queue refusals are
