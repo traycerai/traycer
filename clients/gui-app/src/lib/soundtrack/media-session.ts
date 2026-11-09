@@ -18,8 +18,6 @@ export interface SoundtrackMediaSession {
   close(): void;
 }
 
-const ACTIONS = ["play", "pause", "nexttrack", "previoustrack"] as const;
-
 /**
  * Passed along with every title: a Mac or Windows would fall back to the app's
  * icon on its own, but Linux has nothing to fall back on. A fresh array each
@@ -108,15 +106,48 @@ export function openSoundtrackMediaSession(
         : { title, artist: "Traycer", artwork: artwork() },
     );
   };
+  const releaseAnchor = (): void => {
+    anchor.pause();
+    anchor.removeAttribute("src");
+    anchor.load();
+    URL.revokeObjectURL(url);
+  };
+  // Only the actions the system took: one it refused has nothing to clear.
+  const registered: MediaSessionAction[] = [];
+  const register = (action: MediaSessionAction, handler: () => void): void => {
+    mediaSession.setActionHandler(action, handler);
+    registered.push(action);
+  };
+  const leaveControls = (): void => {
+    for (const action of registered)
+      mediaSession.setActionHandler(action, null);
+    mediaSession.setPositionState();
+    mediaSession.metadata = null;
+    mediaSession.playbackState = "none";
+  };
   playAnchor();
-  mediaSession.setActionHandler("play", handlers.play);
-  mediaSession.setActionHandler("pause", handlers.pause);
-  mediaSession.setActionHandler("nexttrack", handlers.next);
-  mediaSession.setActionHandler("previoustrack", handlers.previous);
-  mediaSession.setPositionState({ duration: 0, position: 0, playbackRate: 1 });
-  mediaSession.playbackState = "playing";
-  // Ahead of the first track: without metadata the system shows the window's title.
-  setTrack(null);
+  try {
+    register("play", handlers.play);
+    register("pause", handlers.pause);
+    register("nexttrack", handlers.next);
+    register("previoustrack", handlers.previous);
+    mediaSession.setPositionState({
+      duration: 0,
+      position: 0,
+      playbackRate: 1,
+    });
+    mediaSession.playbackState = "playing";
+    // Ahead of the first track: without metadata the system shows the window's title.
+    setTrack(null);
+  } catch (error) {
+    // The controls are an extra: the music plays on without them.
+    appLogger.warn("[soundtrack] could not join the system's media controls", {
+      error: describeLogError(error),
+    });
+    leaveControls();
+    releaseAnchor();
+    return null;
+  }
   return {
     setTrack,
     setPaused: (paused) => {
@@ -125,14 +156,8 @@ export function openSoundtrackMediaSession(
       mediaSession.playbackState = paused ? "paused" : "playing";
     },
     close: () => {
-      anchor.pause();
-      anchor.removeAttribute("src");
-      anchor.load();
-      URL.revokeObjectURL(url);
-      for (const action of ACTIONS) mediaSession.setActionHandler(action, null);
-      mediaSession.setPositionState();
-      mediaSession.metadata = null;
-      mediaSession.playbackState = "none";
+      releaseAnchor();
+      leaveControls();
     },
   };
 }

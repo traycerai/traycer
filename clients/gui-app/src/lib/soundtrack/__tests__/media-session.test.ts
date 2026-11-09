@@ -104,6 +104,25 @@ afterEach(() => {
 });
 
 describe("openSoundtrackMediaSession", () => {
+  it("stays out of the controls, with no anchor left playing, when the system refuses an action", () => {
+    const accept = osSession.setActionHandler.bind(osSession);
+    osSession.setActionHandler = (action, handler) => {
+      if (action === "previoustrack" && handler !== null) {
+        throw new TypeError("previoustrack is not supported");
+      }
+      accept(action, handler);
+    };
+
+    const session = openSoundtrackMediaSession(newHandlers());
+
+    expect(session).toBeNull();
+    expect(pause).toHaveBeenCalledTimes(1);
+    expect(revokeObjectURL).toHaveBeenCalledWith(OBJECT_URL);
+    expect(osSession.handlers.size).toBe(0);
+    expect(osSession.playbackState).toBe("none");
+    expect(osSession.metadata).toBeNull();
+  });
+
   it("plays a looping anchor, offers the four buttons with no timeline, and routes each press to its handler", () => {
     const handlers = newHandlers();
 
