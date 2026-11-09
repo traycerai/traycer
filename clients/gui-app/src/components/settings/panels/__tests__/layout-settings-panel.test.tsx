@@ -1266,6 +1266,7 @@ describe("Settings - Layout", () => {
           phoneLayout: false,
           soundtrackOffered: false,
           soundtrackRecordingOffered: false,
+          soundtrackSetPiecesOffered: false,
           soundtrackOn: false,
         }).map((result) => result.entry.anchor);
 
@@ -1283,6 +1284,7 @@ describe("Settings - Layout", () => {
           phoneLayout: false,
           soundtrackOffered: false,
           soundtrackRecordingOffered: false,
+          soundtrackSetPiecesOffered: false,
           soundtrackOn: false,
         }).map((result) => result.entry.anchor);
 

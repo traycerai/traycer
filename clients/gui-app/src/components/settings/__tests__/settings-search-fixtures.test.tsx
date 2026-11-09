@@ -302,14 +302,27 @@ const RECORDING_CHANNEL: RecordingSaveChannel = {
 };
 
 function setWindowBridges(context: SettingsAvailabilityContext): void {
-  const { featureSettings, soundtrackRecordingOffered } = context;
+  const {
+    featureSettings,
+    soundtrackRecordingOffered,
+    soundtrackSetPiecesOffered,
+  } = context;
   (globalThis as { runnerHost?: unknown }).runnerHost =
-    featureSettings === null && !soundtrackRecordingOffered
+    featureSettings === null &&
+    !soundtrackRecordingOffered &&
+    !soundtrackSetPiecesOffered
       ? undefined
       : {
           platform: { featureSettings },
           soundtrackRecording: soundtrackRecordingOffered
             ? RECORDING_CHANNEL
             : null,
+          ...(soundtrackSetPiecesOffered
+            ? {
+                soundtrackSourceAvailable: true,
+                readSoundtrackSet: () =>
+                  Promise.resolve({ kind: "unavailable" as const }),
+              }
+            : {}),
         };
 }

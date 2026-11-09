@@ -792,7 +792,7 @@ export class RunnerIpcBridge {
       keyFilePath: resolveIapKeyFilePath(process.resourcesPath),
       audience: config.iapAudience,
       set: "team",
-      manifestVersion: 1,
+      manifestVersion: 2,
       fetch: globalThis.fetch,
       now: Date.now,
       warn: (message) => log.warn(message),
