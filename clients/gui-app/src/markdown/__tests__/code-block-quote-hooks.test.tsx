@@ -7,13 +7,9 @@ const highlightState = vi.hoisted((): { nodes: ReactNode | null } => ({
   nodes: null,
 }));
 
-vi.mock("@tailmark/react", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@tailmark/react")>();
-  return {
-    ...actual,
-    useThrottledHighlight: () => highlightState.nodes,
-  };
-});
+vi.mock("@/markdown/use-closed-fence-highlight", () => ({
+  useClosedFenceHighlight: () => highlightState.nodes,
+}));
 
 describe("<CodeBlock /> quote hooks", () => {
   afterEach(() => {
