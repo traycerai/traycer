@@ -312,7 +312,11 @@ Open an agent row's ⋯ menu, or right-click the row:
 | **Archive** / **Unarchive**         | Hides the agent, or brings it back. See [Archiving](#archiving).                                  |
 | **Share with task** / **Make private** | Controls whether people you share the Task with can see this agent. Not shown for Terminal-interface agents. See [Sharing](/panels/sharing). |
 | **Copy ID**                         | Copies the agent's ID.                                                                            |
-| **Delete**                          | Deletes the agent after you confirm. Agents nested under it are kept, and the ones directly under it move to the top level. |
+| **Delete**                          | Deletes the agent after you confirm. By default, agents nested under it are kept, and the ones directly under it move to the top level. |
+
+In the Agents panel, deleting a single agent with nested agents offers an unchecked **Also delete all … nested agents** option. Select it to include every level of nested agents; the confirmation button shows the total number to delete. This option is unavailable while the list is loading, any included agent is working, or a required host is offline or unavailable.
+
+If deletion stops partway through, the dialog reports how many agents were deleted and where it stopped. Agents already deleted are not restored.
 
 ### Archiving
 
