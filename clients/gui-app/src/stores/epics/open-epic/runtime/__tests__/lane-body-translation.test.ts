@@ -329,6 +329,19 @@ describe("doc-unavailable / body-unavailable: availability follows terminal", ()
   });
 });
 
+describe("doc-unavailable / body-moved: terminal, yet the consumer reattaches at once", () => {
+  it("terminal: true reads as retrying, not unavailable, so the tile shows the transient state until the reattach seeds it", () => {
+    expect(laneBodyTranslationOf(docUnavailable("body-moved", true))).toEqual({
+      kind: "room-event",
+      event: {
+        kind: "room-availability",
+        artifactRoomId: DOC_ID,
+        availability: "retrying",
+      },
+    });
+  });
+});
+
 describe("doc-unavailable / artifact-not-found: not special-cased by code - availability follows terminal exactly like body-unavailable", () => {
   it("terminal: true reads as unavailable", () => {
     expect(

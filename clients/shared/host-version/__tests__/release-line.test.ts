@@ -9,9 +9,9 @@ import {
   STABLE_VERSION_PATTERN,
   isCanonicalReleaseCandidate,
   isCanonicalReleaseVersion,
+  isCanonicalStableRelease,
   isCanonicalStagingVersion,
   isHiddenFromDefaultCatalog,
-  isMatchingStableRelease,
   isPreReleaseVersion,
   isSameReleaseLine,
 } from "../release-line";
@@ -94,7 +94,6 @@ describe("release-line membership", () => {
   it("gives a canonical RC and its stable the same line", () => {
     expect(isSameReleaseLine("2.0.0-rc.1", "2.0.0")).toBe(true);
     expect(isSameReleaseLine("2.0.0", "2.0.0")).toBe(true);
-    expect(isMatchingStableRelease("2.0.0", "2.0.0-rc.1")).toBe(true);
   });
 
   it("refuses a line for a non-canonical prerelease that shares the core", () => {
@@ -110,7 +109,6 @@ describe("release-line membership", () => {
     ]) {
       expect(isSameReleaseLine(version, "2.0.0")).toBe(false);
       expect(isSameReleaseLine(version, "2.0.0-rc.1")).toBe(false);
-      expect(isMatchingStableRelease("2.0.0", version)).toBe(false);
     }
   });
 
@@ -239,15 +237,29 @@ describe("isPreReleaseVersion", () => {
   });
 });
 
-describe("isMatchingStableRelease", () => {
-  it("identifies the stable that terminates an RC's line", () => {
-    expect(isMatchingStableRelease("2.0.0", "2.0.0-rc.1")).toBe(true);
+describe("isCanonicalStableRelease", () => {
+  it("accepts exactly X.Y.Z", () => {
+    for (const version of ["2.0.0", "0.0.1", "10.20.30"]) {
+      expect(isCanonicalStableRelease(version)).toBe(true);
+    }
   });
 
-  it("rejects a later RC, another line's stable, and a non-canonical install", () => {
-    expect(isMatchingStableRelease("2.0.0-rc.2", "2.0.0-rc.1")).toBe(false);
-    expect(isMatchingStableRelease("2.1.0", "2.0.0-rc.1")).toBe(false);
-    expect(isMatchingStableRelease("2.0.0", "2.0.0-beta.1")).toBe(false);
+  it("rejects every pre-release, build metadata, and invalid SemVer", () => {
+    // An RC is the one that matters: implicit following takes any newer
+    // stable on any line but only its OWN line's RCs, so an RC read as stable
+    // would cross lines.
+    for (const version of [
+      "2.0.0-rc.1",
+      "2.0.0-beta.1",
+      "1.2.3-staging.4.gabcdef1",
+      "2.0.0+build.4",
+      "02.0.0",
+      "2.0",
+      "v2.0.0",
+      "",
+    ]) {
+      expect(isCanonicalStableRelease(version)).toBe(false);
+    }
   });
 });
 

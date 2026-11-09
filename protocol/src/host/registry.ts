@@ -1063,6 +1063,7 @@ import {
   epicStateSubscribeV13,
   epicStateSubscribeV14,
   epicStateSubscribeV15,
+  epicStateSubscribeV16,
 } from "@traycer/protocol/host/epic/state-subscribe";
 import {
   epicStatusSubscribeV10,
@@ -1072,6 +1073,7 @@ import {
 import {
   artifactSubscribeV10,
   artifactSubscribeV11,
+  artifactSubscribeV12,
 } from "@traycer/protocol/host/epic/artifact-subscribe";
 import {
   epicGetWorkspaceContextV10,
@@ -15557,7 +15559,7 @@ const HOST_STREAM_RPC_REGISTRY_CORE_DEFINITION = {
   // released floor (`released-floor.ts`), which is fail-closed on the name set.
   "epic.state.subscribe": {
     1: {
-      latestMinor: 5,
+      latestMinor: 6,
       versions: {
         0: {
           contract: epicStateSubscribeV10,
@@ -15579,6 +15581,7 @@ const HOST_STREAM_RPC_REGISTRY_CORE_DEFINITION = {
         // 1.5's thread rows gain the canvas-point anchor kind; the host
         // serves pre-1.5 subscribers a whole-artifact reading instead.
         5: { contract: epicStateSubscribeV15 },
+        6: { contract: epicStateSubscribeV16 },
       },
     },
   },
@@ -15611,15 +15614,20 @@ const HOST_STREAM_RPC_REGISTRY_CORE_DEFINITION = {
     1: {
       // @1.1 adds the server-only `bodySync` frame (a body served from the
       // host's local copy before its cloud sync, and when that sync lands).
-      // @1.0 stays installed and FROZEN: the host gates the frame on the
-      // negotiated minor (`ARTIFACT_SUBSCRIBE_BODY_SYNC_MINOR`).
-      latestMinor: 1,
+      // @1.2 adds the `bodyMoved` unavailable code (a body that moved off its
+      // room onto the revision chain). Earlier minors stay installed and
+      // FROZEN: the host gates each on the negotiated minor
+      // (`ARTIFACT_SUBSCRIBE_BODY_SYNC_MINOR`, `ARTIFACT_SUBSCRIBE_BODY_MOVED_MINOR`).
+      latestMinor: 2,
       versions: {
         0: {
           contract: artifactSubscribeV10,
         },
         1: {
           contract: artifactSubscribeV11,
+        },
+        2: {
+          contract: artifactSubscribeV12,
         },
       },
     },

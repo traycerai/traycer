@@ -3,10 +3,12 @@ import { ArtifactExpandButton } from "@/components/artifacts/artifact-expand-but
 import {
   useEffect,
   useEffectEvent,
+  useImperativeHandle,
   useLayoutEffect,
   useRef,
   useState,
   type ReactNode,
+  type Ref,
 } from "react";
 import { ArrowLeft, House, Minus, MoreHorizontal, Plus } from "lucide-react";
 import { ActualSizeGlyph } from "@/components/epic-canvas/zoom-controls/zoom-controls";
@@ -27,7 +29,10 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Separator } from "@/components/ui/separator";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import type { ArtifactManifest } from "@/lib/sandbox/artifact-serving";
+import {
+  artifactPagePaths,
+  type ArtifactManifest,
+} from "@/lib/sandbox/artifact-serving";
 import type {
   SandboxBridgeHost,
   SandboxHtmlView,
@@ -48,12 +53,6 @@ const noop = (): void => undefined;
  * clear of them in its first paint rather than moving once they measure.
  */
 const ESTIMATED_CONTROLS_BOTTOM_PX = { fine: 44, coarse: 62 } as const;
-
-/** How many pages the artifact has, counting only what a link can open. */
-function htmlPageCount(manifest: ArtifactManifest): number {
-  return Object.keys(manifest.files).filter((path) => /\.html?$/i.test(path))
-    .length;
-}
 
 /**
  * The space a filling page keeps above its content for the controls floating
@@ -104,7 +103,8 @@ function pageNavigationFor(
 ): PageNavigationState | null {
   const awayFromEntry = history.currentPath !== history.entryPath;
   const canGoBack = history.backStack.length > 0;
-  if (!awayFromEntry && !canGoBack && htmlPageCount(manifest) <= 1) return null;
+  if (!awayFromEntry && !canGoBack && artifactPagePaths(manifest).length <= 1)
+    return null;
   // A link to a page the folder lacks leaves the reader on the page that had
   // it, and Home is the way out. An unreachable page is not: Home would read
   // the same failed page again, which is what its own Retry is for.
@@ -258,21 +258,46 @@ function freshHistory(entryPath: string): PageHistory {
   };
 }
 
+/** A page the frame showed, a fresh object for each document that proved itself. */
+export interface ProvenPage {
+  readonly path: string;
+}
+
 /**
- * Comments anchor to the entry page's bytes, so only the entry page is
- * commented on, and only once it is the page loaded: Back and Home name it at
- * once, while the page they leave is still showing.
+ * The document on show is the page the reader asked for once it has proved
+ * itself: a page still loading, a stand-in and a page Back or Home is leaving
+ * are none. Comments go on it when it is one of the artifact's own pages,
+ * which are the files the host stamps a comment's id into; any other page on
+ * show is `uncommentable`.
  */
-function commentsOnLoadedEntryPage(
-  commenting: boolean,
-  onEntryPage: boolean,
-  provenPage: { readonly path: string } | null,
-  entryPath: string,
-): boolean {
-  return commenting && onEntryPage && provenPage?.path === entryPath;
+function commentPageOnShow(
+  history: PageHistory,
+  provenPage: ProvenPage | null,
+  ready: boolean,
+  manifest: ArtifactManifest,
+): {
+  readonly commentPage: ProvenPage | null;
+  readonly uncommentable: boolean;
+} {
+  if (
+    !ready ||
+    history.missing ||
+    history.unreachable ||
+    provenPage?.path !== history.currentPath
+  )
+    return { commentPage: null, uncommentable: false };
+  return artifactPagePaths(manifest).includes(provenPage.path)
+    ? { commentPage: provenPage, uncommentable: false }
+    : { commentPage: null, uncommentable: true };
+}
+
+/** Opens a page of the artifact as a link would, so Back returns from it. */
+export interface ArtifactPagesNavigator {
+  readonly openPage: (path: string) => void;
 }
 
 interface ArtifactPagesFrameProps {
+  readonly ref?: Ref<ArtifactPagesNavigator>;
   readonly initialHistory?: PageHistory;
   readonly source: Extract<SandboxSource, { kind: "artifact" }>;
   readonly title: string;
@@ -280,12 +305,18 @@ interface ArtifactPagesFrameProps {
   /** The page's height in px, or `null` to fill what the row leaves. */
   readonly height: number | null;
   /**
-   * Whether a press on the entry page picks an element to comment on instead
-   * of acting on the page. The page stays loaded either way - this is a mode
-   * the loaded page is told to take - so its scroll, zoom and own state
-   * outlast the switch. Other pages show a notice while commenting is on.
+   * Whether a press on the page picks an element to comment on instead of
+   * acting on the page. The page stays loaded either way - this is a mode the
+   * loaded page is told to take - so its scroll, zoom and own state outlast
+   * the switch. A page comments cannot go on shows a notice while this is on.
    */
   readonly commenting: boolean;
+  /**
+   * The page comments go on, told each time it changes: the page the reader
+   * asked for once it proved itself, while it is one of the artifact's own
+   * pages, and `null` while a page loads, fails or is not one of them.
+   */
+  readonly onCommentPage: ((page: ProvenPage | null) => void) | null;
   readonly onSize: (size: SandboxSize) => void;
   readonly onStatus: (status: SandboxStatus) => void;
   readonly onBridge: ((bridge: SandboxBridgeHost | null) => void) | null;
@@ -294,14 +325,11 @@ interface ArtifactPagesFrameProps {
     | null;
   /** Hands over the iframe element, and `null` once it is gone. */
   readonly onFrame: ((frame: HTMLIFrameElement | null) => void) | null;
-  /**
-   * Layers drawn over the page. Comments and selection are anchored to the
-   * entry page's bytes, so they are told when another page is showing.
-   */
-  readonly renderOverlay: ((onEntryPage: boolean) => ReactNode) | null;
+  /** Layers drawn over the page, such as comment outlines and pins. */
+  readonly overlay: ReactNode;
   /**
    * Keeps the mounted document through a source change it already carries,
-   * such as the entry page's own first-comment id; `null` reloads on every
+   * such as the page's own first-comment id; `undefined` reloads on every
    * change. See the frame's own `sourceEquivalent`.
    */
   readonly sourceEquivalent:
@@ -339,8 +367,9 @@ export function ArtifactPagesFrame(props: ArtifactPagesFrameProps) {
     onBridge,
     onTextSelection,
     onFrame,
-    renderOverlay,
+    overlay,
     sourceEquivalent,
+    ref,
   } = props;
   const expanded = useArtifactExpanded();
   // A link out of the artifact opens its target in a tile, through whatever
@@ -369,12 +398,10 @@ export function ArtifactPagesFrame(props: ArtifactPagesFrameProps) {
   const scaleRef = useRef(1);
   const [scale, setScale] = useState(1);
   const [ready, setReady] = useState(false);
-  // The page of the document that last proved itself, a fresh object for
-  // each proof. Back and Home move `currentPath` at once while the page they
-  // leave is still loaded, so the comment mode follows this, not the request.
-  const [provenPage, setProvenPage] = useState<{
-    readonly path: string;
-  } | null>(null);
+  // The page of the document that last proved itself. Back and Home move
+  // `currentPath` at once while the page they leave is still loaded, so the
+  // comment mode follows this, not the request.
+  const [provenPage, setProvenPage] = useState<ProvenPage | null>(null);
   const coarsePointer = useCoarsePointer();
   const controlSize = coarsePointer ? "icon-touch" : "icon-sm";
   const [history, setHistory] = useState(
@@ -454,6 +481,27 @@ export function ArtifactPagesFrame(props: ArtifactPagesFrameProps) {
       visit: previous.visit + 1,
     }));
   };
+  useImperativeHandle(
+    ref,
+    () => ({
+      // Asking for the page already asked for reads it again, which is what
+      // gets a reader off a stand-in shown in its place.
+      openPage: (path) => {
+        setHistory((previous) => ({
+          ...previous,
+          currentPath: path,
+          backStack:
+            path === previous.currentPath
+              ? previous.backStack
+              : [...previous.backStack, previous.currentPath],
+          missing: false,
+          unreachable: false,
+          visit: previous.visit + 1,
+        }));
+      },
+    }),
+    [],
+  );
 
   const standIn = pageStandIn(current, { goHome, readAgain });
   // An expanded surface fills its panel whatever sizing the inline row asked
@@ -461,13 +509,19 @@ export function ArtifactPagesFrame(props: ArtifactPagesFrameProps) {
   // passing `height={null}` and `h-full w-full`. It carries the zoom controls
   // and keeps the controls on show for the same reason it did.
   const fills = height === null || expanded;
-  const onEntryPage = currentPath === entryPath && standIn === null;
-  const commentingHere = commentsOnLoadedEntryPage(
-    commenting,
-    onEntryPage,
+  const { commentPage, uncommentable } = commentPageOnShow(
+    current,
     provenPage,
-    entryPath,
+    ready,
+    source.manifest,
   );
+  const commentingHere = commenting && commentPage !== null;
+  const reportCommentPage = useEffectEvent((page: ProvenPage | null) =>
+    props.onCommentPage?.(page),
+  );
+  useEffect(() => {
+    reportCommentPage(commentPage);
+  }, [commentPage]);
   const viewAt = (next: number): SandboxHtmlView => ({
     enabled: fills,
     scale: next,
@@ -553,11 +607,11 @@ export function ArtifactPagesFrame(props: ArtifactPagesFrameProps) {
           sourceEquivalent={sourceEquivalent}
           ref={attachFrame}
         />
-        {renderOverlay?.(onEntryPage)}
+        {overlay}
         {standIn ??
-          (commenting && !onEntryPage ? (
+          (commenting && uncommentable ? (
             <PageStandIn
-              sentence="Comments can only be added on the first page."
+              sentence="Comments can't be added on this page."
               action="Go home"
               onAct={goHome}
             />

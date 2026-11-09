@@ -44,7 +44,8 @@ export function ArtifactPagesToolbarFixture(): ReactElement {
         onBridge={null}
         onTextSelection={null}
         onFrame={null}
-        renderOverlay={null}
+        onCommentPage={null}
+        overlay={null}
         sourceEquivalent={undefined}
         toolbarControls={<button type="button">Probe control</button>}
       />

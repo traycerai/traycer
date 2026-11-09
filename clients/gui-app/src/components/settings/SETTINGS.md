@@ -6783,16 +6783,16 @@ set-state-in-effect` forbids the effect form, and an effect would also
     lives in the host header. Tone and title come from `ANSWER_CARD_LOOK`,
     keyed by `answerKind`:
 
-    | Answer              | Tone    | Title                                 | Line                                            | Control                                                                              |
-    | ------------------- | ------- | ------------------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------ |
-    | `available`         | info    | Update available                      | `v1.4.0 → v1.5.1` (sentence sr-only)            | Update now                                                                           |
-    | `needs-cli`         | warning | Needs newer CLI tools                 | the remedy sentence                             | the command-line-tools fix                                                           |
-    | `restart-to-finish` | warning | Restart to finish                     | "v1.5.1 is installed — restart host to finish." | none, or Update now when the catalog offers something newer than the installed bytes |
-    | `stranded`          | info    | Newer version on another release line | the stranded sentence                           | none                                                                                 |
-    | `not-installable`   | neutral | Update unavailable for this host      | the not-installable sentence                    | none                                                                                 |
-    | `unreachable`       | neutral | Update check failed                   | "Couldn't ask … which versions …"               | none                                                                                 |
-    | `check-failed`      | neutral | Update check failed                   | "Couldn't check for updates on …"               | none                                                                                 |
-    | degrade             | neutral | Updates aren't managed here           | `describeOverviewDegrade`                       | none                                                                                 |
+    | Answer              | Tone    | Title                                     | Line                                            | Control                                                                              |
+    | ------------------- | ------- | ----------------------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------ |
+    | `available`         | info    | Update available                          | `v1.4.0 → v1.5.1` (sentence sr-only)            | Update now                                                                           |
+    | `needs-cli`         | warning | Needs newer CLI tools                     | the remedy sentence                             | the command-line-tools fix                                                           |
+    | `restart-to-finish` | warning | Restart to finish                         | "v1.5.1 is installed — restart host to finish." | none, or Update now when the catalog offers something newer than the installed bytes |
+    | `stranded`          | info    | Release candidate on another release line | the stranded sentence                           | none                                                                                 |
+    | `not-installable`   | neutral | Update unavailable for this host          | the not-installable sentence                    | none                                                                                 |
+    | `unreachable`       | neutral | Update check failed                       | "Couldn't ask … which versions …"               | none                                                                                 |
+    | `check-failed`      | neutral | Update check failed                       | "Couldn't check for updates on …"               | none                                                                                 |
+    | degrade             | neutral | Updates aren't managed here               | `describeOverviewDegrade`                       | none                                                                                 |
 
     The neutral tone is `bg-foreground/5`, never `bg-muted` (raised surface).
     - **One standing live region.** The check runs on its own, so the answer

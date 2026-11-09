@@ -3403,11 +3403,12 @@ describe("yank/apply ordering", () => {
   });
 
   it("leaves an unpinned legacy stage alone while following, without attempting a purge", async () => {
-    // A legacy (fingerprint-less) stage plus a line with nothing to replace it:
-    // the repair must not run `--automatic` (that would stage another line's
-    // build), and the reconcile must stop there rather than fall into the purge
-    // branch - which needs a fingerprint this stage has never had, and would
-    // warn about "registry invalidation" that did not happen, on every pass.
+    // A legacy (fingerprint-less) stage with nothing a follower may take: no
+    // newer stable on any line, and only another line's RC. The repair must not
+    // run `--automatic` (that would stage whatever `latest` names), and the
+    // reconcile must stop there rather than fall into the purge branch - which
+    // needs a fingerprint this stage has never had, and would warn about
+    // "registry invalidation" that did not happen, on every pass.
     vi.mocked(prereleaseUpdatesEnabled).mockReturnValue(false);
     const controller = newController("production");
     writeInstallRecord("production", {
@@ -3425,7 +3426,7 @@ describe("yank/apply ordering", () => {
       }),
     );
     vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
-      availableSnapshotFixture("2.1.0", ["2.0.0-rc.1", "2.1.0"]),
+      availableSnapshotFixture("1.9.0", ["1.9.0", "2.0.0-rc.1", "2.1.0-rc.1"]),
     );
     const cliCommands: string[] = [];
     vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
@@ -3448,10 +3449,10 @@ describe("yank/apply ordering", () => {
     expect((await controller.getStatus()).updateReady).toBe(false);
   });
 
-  it("still repairs an unpinned legacy stage from its own line when one exists", async () => {
+  it("still repairs an unpinned legacy stage when a newer stable exists", async () => {
     // The control: the same legacy state, but the line has published its
-    // stable. The repair runs, pinned to that exact version rather than to
-    // `--automatic`.
+    // stable while `latest` still lags. The repair runs, pinned to that exact
+    // version rather than to `--automatic`.
     vi.mocked(prereleaseUpdatesEnabled).mockReturnValue(false);
     const controller = newController("production");
     writeInstallRecord("production", {
