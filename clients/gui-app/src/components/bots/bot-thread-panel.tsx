@@ -40,7 +40,6 @@ import { BotThreadFollowControl } from "@/components/bots/bot-thread-follow";
 import { ChannelPost } from "@/components/bots/bot-channel-post";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
-import { useBotSendTakesAnswers } from "@/hooks/bots/use-bot-send-version";
 import {
   failedOn,
   failedOnRequest,
@@ -48,22 +47,28 @@ import {
 } from "@/hooks/bots/use-bot-activity";
 import { useBotBoxEdit } from "@/hooks/bots/use-bot-box-edit";
 import { useBotFailedRequest } from "@/hooks/bots/use-bot-failed-request";
-import type { BotImageReach } from "@/hooks/bots/use-bot-send-version";
+import type {
+  BotAnswerReach,
+  BotImageReach,
+} from "@/hooks/bots/use-bot-send-version";
 import type {
   BotTranscriptFold,
   BotTranscriptLanding,
   BotTranscriptMark,
   QuestionAnswerSend,
+  QuestionAnswersSend,
 } from "@/components/bots/bot-chat-transcript";
-import type {
-  ChatBotPresentation,
-  ChatBotQuestions,
-  ChatBotTurnReceipt,
+import {
+  answerEntries,
+  type ChatBotPresentation,
+  type ChatBotQuestions,
+  type ChatBotTurnReceipt,
 } from "@/components/chat/chat-bot-presentation-context";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
 import { threadOriginRow, type ThreadOriginRow } from "@/lib/bots/reply-row";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
+import { NO_TRANSCRIPT_BASELINE } from "@/stores/chats/chat-announcements";
 import { useKeptBoxDraft } from "@/hooks/bots/use-kept-box-draft";
 import type {
   BotSessionOpen,
@@ -170,6 +175,8 @@ export function BotThreadPanel(props: {
   readonly boundHostId: string | null;
   /** What the panel's box does with images. */
   readonly imageReach: BotImageReach;
+  /** How a question card's answers reach the bot. */
+  readonly answerReach: BotAnswerReach;
   readonly botTitle: string;
   /** The channel the thread's post is in. */
   readonly conversationId: string;
@@ -318,6 +325,7 @@ type ThreadPanelBodyProps = {
   readonly hostId: string;
   readonly boundHostId: string | null;
   readonly imageReach: BotImageReach;
+  readonly answerReach: BotAnswerReach;
   readonly botTitle: string;
   readonly conversationId: string;
   readonly originMessageId: string;
@@ -495,6 +503,8 @@ function ThreadOriginPost(
       viewerUserId,
       memberName: anchorSenderLabel,
       answer: null,
+      answerAll: null,
+      baselineEpoch: NO_TRANSCRIPT_BASELINE,
       discuss: null,
     }),
     [anchorSenderLabel, botId, viewerUserId],
@@ -883,6 +893,7 @@ function KnownThread(
     botId,
     hostId,
     boundHostId,
+    answerReach,
     botTitle,
     conversationId,
     threadId,
@@ -947,8 +958,8 @@ function KnownThread(
   // A question card's answer or Skip, on a question asked in the thread, is
   // the person's next message in it; a failed one says so where a failed
   // message does, and the card keeps the draft. A host that cannot take the
-  // answer gets a card without actions.
-  const answersTaken = useBotSendTakesAnswers(hostId);
+  // answer gets a card without actions; where both hosts take a card's
+  // answers together, one Submit sends them as one message.
   const answerQuestion = useCallback<QuestionAnswerSend>(
     async (questionMessageId, given) => {
       clearSendFailure();
@@ -966,6 +977,26 @@ function KnownThread(
             questionIndex: given.questionIndex,
             skipped: given.skipped,
           },
+        },
+        { onError: () => failSend(null) },
+      );
+    },
+    [botId, clearSendFailure, conversationId, failSend, sendAsync, threadId],
+  );
+  const answerQuestions = useCallback<QuestionAnswersSend>(
+    async (questionMessageId, given) => {
+      clearSendFailure();
+      await sendAsync(
+        {
+          botId,
+          conversationId,
+          text: given.text,
+          threadId,
+          announcementId: null,
+          redeliver: null,
+          supersedes: null,
+          answer: null,
+          answers: { questionMessageId, entries: answerEntries(given) },
         },
         { onError: () => failSend(null) },
       );
@@ -997,7 +1028,10 @@ function KnownThread(
                 { onError: () => failSend(null) },
               );
             },
-      answerQuestion: sendable && answersTaken ? answerQuestion : null,
+      answerQuestion:
+        sendable && answerReach !== "none" ? answerQuestion : null,
+      answerQuestions:
+        sendable && answerReach === "together" ? answerQuestions : null,
       discussQuestion: onDiscuss,
       failedRequest: failedRequestShown,
       openTurn: onOpenTurn,
@@ -1005,7 +1039,8 @@ function KnownThread(
     }),
     [
       answerQuestion,
-      answersTaken,
+      answerQuestions,
+      answerReach,
       botId,
       clearSendFailure,
       conversationId,

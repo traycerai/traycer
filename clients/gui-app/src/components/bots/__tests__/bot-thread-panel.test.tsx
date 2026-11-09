@@ -508,6 +508,7 @@ function panelTree(thread: BotThreadPanelThread): ReactNode {
                 hostId={HOST_ID}
                 boundHostId={HOST_ID}
                 imageReach="none"
+                answerReach="each"
                 botTitle="Release Bot"
                 conversationId={CONVERSATION_ID}
                 originMessageId={originOf(thread)}

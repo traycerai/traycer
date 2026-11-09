@@ -22,12 +22,21 @@ import { basePersistOptions } from "@/lib/persist";
 export interface BotAnswerDraft {
   readonly chosen: ReadonlyArray<string>;
   readonly typed: string;
+  /** Whether the person chose to skip it, on a card whose answers go together. */
+  readonly skip: boolean;
   /**
    * The answer sent: held from the send until the question shows settled,
    * whether the host took it at once or queued it for a bot's host that is
    * away; `null` before a send, and again after a send that failed.
    */
   readonly sent: BotSentAnswer | null;
+  /**
+   * For a sent answer whose send failed after it may have reached the host:
+   * the transcript's baseline (`transcriptBaselineEpoch`) when it was sent.
+   * A later baseline - the subscription resynced - shows whether it landed:
+   * settled, or still open and given back to edit. `null` otherwise.
+   */
+  readonly unsureSince: number | null;
 }
 
 export interface BotSentAnswer {

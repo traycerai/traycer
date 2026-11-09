@@ -41,6 +41,7 @@ import {
   ChatBotPresentationContext,
   type ChatBotFailedRequest,
   type ChatBotPresentation,
+  type ChatBotQuestionAnswers,
   type ChatBotThreadLine,
   type ChatBotTurnReceipt,
 } from "@/components/chat/chat-bot-presentation-context";
@@ -93,6 +94,8 @@ export type BotTranscriptSurface =
       readonly chooseOption: ((choice: string) => void) | null;
       /** Sends a question card's answer at the channel's top level; `null` where nothing can send it. */
       readonly answerQuestion: QuestionAnswerSend | null;
+      /** Sends a card's answers together at the channel's top level; `null` where they go one at a time. */
+      readonly answerQuestions: QuestionAnswersSend | null;
       /** Opens a question's thread with the person's draft in its box; `null` where threads cannot be opened. */
       readonly discussQuestion:
         | ((questionMessageId: string, draft: string) => void)
@@ -123,6 +126,8 @@ export type BotTranscriptSurface =
       readonly chooseOption: ((choice: string) => void) | null;
       /** Sends a question card's answer in the thread; `null` where the thread takes no send. */
       readonly answerQuestion: QuestionAnswerSend | null;
+      /** Sends a card's answers together in the thread; `null` where they go one at a time. */
+      readonly answerQuestions: QuestionAnswersSend | null;
       /** Puts the person's draft in the thread's box, unsent. */
       readonly discussQuestion:
         | ((questionMessageId: string, draft: string) => void)
@@ -145,6 +150,16 @@ export type BotTranscriptSurface =
 export type QuestionAnswerSend = (
   questionMessageId: string,
   answer: QuestionCardAnswer,
+) => Promise<void>;
+
+/**
+ * Sends a member's answers to every open question of the row
+ * `questionMessageId` as one message (T167): resolves once the host takes
+ * them, rejects when not.
+ */
+export type QuestionAnswersSend = (
+  questionMessageId: string,
+  answers: ChatBotQuestionAnswers,
 ) => Promise<void>;
 
 const CHAT_NOT_VISIBLE_CODE = "CHAT_NOT_VISIBLE";
@@ -588,6 +603,7 @@ function BotChatTranscriptBody(props: {
     messages,
     surface,
   });
+  const baselineEpoch = state.transcriptBaselineEpoch;
   const presentation = useMemo<ChatBotPresentation | null>(() => {
     if (surface === null) return null;
     const questions = {
@@ -596,6 +612,8 @@ function BotChatTranscriptBody(props: {
       memberName: (userId: string) =>
         botMemberName(userId, profile, resolveMember),
       answer: surface.answerQuestion,
+      answerAll: surface.answerQuestions,
+      baselineEpoch,
       discuss: surface.discussQuestion,
     };
     if (surface.kind === "thread") {
@@ -622,7 +640,7 @@ function BotChatTranscriptBody(props: {
       failedRequest: surface.failedRequest,
       ...turns,
     };
-  }, [botId, profile, resolveMember, surface, title, turns]);
+  }, [baselineEpoch, botId, profile, resolveMember, surface, title, turns]);
 
   const transcriptWindow = isWindowedTranscript(state)
     ? state.transcriptWindow

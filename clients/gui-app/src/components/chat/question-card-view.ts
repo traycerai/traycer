@@ -16,6 +16,13 @@ export interface QuestionCardSettlement {
         readonly viewer: boolean;
       }
     | { readonly kind: "asker" };
+  /** When it was settled. */
+  readonly at: number;
+  /**
+   * The set of answers that settled it with the card's other open questions
+   * at once (T167), by its request; `null` for an answer given alone.
+   */
+  readonly setId: string | null;
 }
 
 /**
@@ -26,6 +33,8 @@ export interface QuestionCardSettlement {
 export interface QuestionCardDraft {
   readonly chosen: ReadonlyArray<string>;
   readonly typed: string;
+  /** Whether the person chose to skip it, on a card whose answers go together. */
+  readonly skip: boolean;
   readonly sent: {
     readonly text: string;
     readonly skipped: boolean;
@@ -50,6 +59,8 @@ export function botQuestionCardSettlement(
             name: memberName(settlement.by.userId),
             viewer: settlement.by.userId === viewerUserId,
           },
+    at: settlement.at,
+    setId: settlement.requestId ?? null,
   };
 }
 
@@ -57,6 +68,7 @@ export function botQuestionCardSettlement(
 export const EMPTY_QUESTION_CARD_DRAFT: QuestionCardDraft = {
   chosen: [],
   typed: "",
+  skip: false,
   sent: null,
 };
 
@@ -102,6 +114,101 @@ export function chosenAfterPress(
   return options.filter((item) =>
     item === option ? !picked : chosen.includes(item),
   );
+}
+
+/**
+ * The draft once the person picks `option`. A question that takes one answer
+ * takes a choice or their own words, not both: a choice clears what they
+ * typed.
+ */
+export function draftAfterPress(
+  options: ReadonlyArray<string>,
+  draft: QuestionCardDraft,
+  option: string,
+  several: boolean,
+): QuestionCardDraft {
+  const chosen = chosenAfterPress(options, draft.chosen, option, several);
+  return {
+    ...draft,
+    chosen,
+    typed: several || chosen.length === 0 ? draft.typed : "",
+  };
+}
+
+/** The draft once the person types `typed`: on a question that takes one answer, their words clear the choice. */
+export function draftAfterTyping(
+  draft: QuestionCardDraft,
+  typed: string,
+  several: boolean,
+): QuestionCardDraft {
+  return {
+    ...draft,
+    typed,
+    chosen: several || typed.trim().length === 0 ? draft.chosen : [],
+  };
+}
+
+/**
+ * One question's part of a card's answers sent together (T167), as
+ * `bot.conversation.send@1.5` takes it: a Skip, or the options picked, in
+ * the question's order, and the words typed. `null` while it has neither.
+ */
+export interface QuestionCardEntry {
+  readonly questionIndex: number;
+  readonly skipped: boolean;
+  readonly selected: ReadonlyArray<string>;
+  readonly text: string | null;
+}
+
+export function questionCardEntry(
+  questionIndex: number,
+  draft: QuestionCardDraft,
+): QuestionCardEntry | null {
+  if (draft.skip) {
+    return { questionIndex, skipped: true, selected: [], text: null };
+  }
+  const typed = draft.typed.trim();
+  if (draft.chosen.length === 0 && typed.length === 0) return null;
+  return {
+    questionIndex,
+    skipped: false,
+    selected: draft.chosen,
+    text: typed.length > 0 ? typed : null,
+  };
+}
+
+/**
+ * What the foot of a card whose answers go together says: how many of its
+ * open questions the person has answered or skipped, and, until all of
+ * them, what Submit waits for. A question settled already, by the asker or
+ * anyone, is not counted.
+ */
+export function questionCardTallyLine(answered: number, open: number): string {
+  const tally = `${String(answered)} of ${String(open)} answered.`;
+  const left = open - answered;
+  if (left === 0) return tally;
+  if (left === 1) {
+    return `${tally} Answer or skip the last one to submit.`;
+  }
+  return answered === 0
+    ? `${tally} Answer or skip each one to submit.`
+    : `${tally} Answer or skip the other ${String(left)} to submit.`;
+}
+
+/**
+ * Who settled every question of the card with one set of answers, and when;
+ * `null` while any is open, or where they were settled otherwise.
+ */
+export function questionCardAnsweredBy(
+  settlements: ReadonlyArray<QuestionCardSettlement | null>,
+): { readonly name: string; readonly at: number } | null {
+  const first = settlements[0] ?? null;
+  if (first === null || first.setId === null || first.by.kind !== "person") {
+    return null;
+  }
+  return settlements.every((item) => item?.setId === first.setId)
+    ? { name: first.by.name, at: first.at }
+    : null;
 }
 
 /** What one question shows, from how it was settled and the person's own answer to it. */
