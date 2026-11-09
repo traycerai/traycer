@@ -166,6 +166,34 @@ const artifactSubscribeAddressFields = {
   artifactId: lazySchema(() => z.string().min(1)),
 } as const;
 
+/**
+ * The body is not being served. `code` says what a client should DO; `reason`
+ * is a short host-side summary for logs and must never be parsed or rendered
+ * as product copy.
+ */
+const artifactSubscribeUnavailableFrameSchemaV10 = lazySchema(() =>
+  z.object({
+    kind: z.literal("unavailable"),
+    ...epicLaneEpochFrameFields,
+    ...artifactSubscribeAddressFields,
+    code: artifactSubscribeUnavailableCodeSchema,
+    reason: z.string(),
+    /**
+     * Whether this lane is finished. `true` means no later frame will arrive
+     * on this subscription and the client must close and (if it still wants
+     * the body) reattach; `false` means the host is retrying and the tile
+     * should show a transient unavailable state without tearing down.
+     *
+     * Kept as its own boolean rather than derived from `code` because
+     * `bodyUnavailable` is genuinely both - a room that is retrying and a
+     * room that has given up - and folding them would force the host to pick
+     * a lie for one of the two.
+     */
+    terminal: z.boolean(),
+    hasBinaryPayload: z.literal(false),
+  }),
+);
+
 export const artifactSubscribeServerFrameSchemaV10 = lazySchema(() =>
   z.discriminatedUnion("kind", [
     /**
@@ -259,31 +287,7 @@ export const artifactSubscribeServerFrameSchemaV10 = lazySchema(() =>
       ...artifactSubscribeAddressFields,
       hasBinaryPayload: z.literal(true),
     }),
-    /**
-     * The body is not being served. `code` says what a client should DO;
-     * `reason` is a short host-side summary for logs and must never be parsed
-     * or rendered as product copy.
-     */
-    z.object({
-      kind: z.literal("unavailable"),
-      ...epicLaneEpochFrameFields,
-      ...artifactSubscribeAddressFields,
-      code: artifactSubscribeUnavailableCodeSchema,
-      reason: z.string(),
-      /**
-       * Whether this lane is finished. `true` means no later frame will arrive
-       * on this subscription and the client must close and (if it still wants
-       * the body) reattach; `false` means the host is retrying and the tile
-       * should show a transient unavailable state without tearing down.
-       *
-       * Kept as its own boolean rather than derived from `code` because
-       * `bodyUnavailable` is genuinely both - a room that is retrying and a
-       * room that has given up - and folding them would force the host to pick
-       * a lie for one of the two.
-       */
-      terminal: z.boolean(),
-      hasBinaryPayload: z.literal(false),
-    }),
+    artifactSubscribeUnavailableFrameSchemaV10,
     z.object({
       kind: z.literal("pong"),
       ...epicLaneTextFrameFields,
@@ -404,5 +408,66 @@ export const artifactSubscribeV11 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 1 } as const,
   openRequestSchema: artifactSubscribeOpenRequestSchemaV10,
   serverFrameSchema: artifactSubscribeServerFrameSchemaV11,
+  clientFrameSchema: artifactSubscribeClientFrameSchemaV10,
+});
+
+// ─── `artifact.subscribe@1.2` - additive: the `bodyMoved` code ────────────
+//
+// A markdown artifact's body moves off its shared artifact room onto the
+// revision chain when its epic reaches the markdown body epoch
+// (`MARKDOWN_BODY_EPOCH_FIELD`). A lane attached to the room before that keeps
+// reading and writing the room, which is no longer the body. The host ends
+// such a lane, and refuses a write made on it, with `unavailable` and a code
+// that says where the body went, so the client reattaches at once and is
+// served the body where it lives now, with the refused write's change already
+// in it. Below `@1.2` the same refusal reads as a terminal `bodyUnavailable`,
+// and the refused write is not carried.
+//
+// @1.0 and @1.1 stay installed and FROZEN: the host gates the code on the
+// negotiated minor.
+
+/**
+ * `@1.0`'s codes and one more:
+ *
+ * - `bodyMoved` - the body is no longer served from what this lane attached
+ *   to: it moved to the artifact's revision chain. Always terminal. An edit
+ *   the lane carried was not applied to the room; it is carried to the body
+ *   where it lives now. Reattach to be served that body; a reattach is never
+ *   answered `bodyMoved`.
+ */
+export const artifactSubscribeUnavailableCodeSchemaV12 = lazySchema(() =>
+  z.enum([...artifactSubscribeUnavailableCodeSchema.options, "bodyMoved"]),
+);
+export type ArtifactSubscribeUnavailableCodeV12 = z.infer<
+  typeof artifactSubscribeUnavailableCodeSchemaV12
+>;
+
+export const artifactSubscribeServerFrameSchemaV12 = lazySchema(() =>
+  // Read inside the thunk, as `@1.1` does: a module-scope `.options` read
+  // builds the earlier unions at import.
+  z.discriminatedUnion("kind", [
+    artifactSubscribeUnavailableFrameSchemaV10.extend({
+      code: artifactSubscribeUnavailableCodeSchemaV12,
+    }),
+    ...artifactSubscribeServerFrameSchemaV11.options.filter(
+      (option) => option !== artifactSubscribeUnavailableFrameSchemaV10,
+    ),
+  ]),
+);
+export type ArtifactSubscribeServerFrameV12 = z.infer<
+  typeof artifactSubscribeServerFrameSchemaV12
+>;
+
+/**
+ * The minor at which `bodyMoved` exists. A producer gates on it per
+ * subscription; a consumer on a lower minor never sees the code.
+ */
+export const ARTIFACT_SUBSCRIBE_BODY_MOVED_MINOR = 2;
+
+export const artifactSubscribeV12 = defineStreamRpcContract({
+  method: "artifact.subscribe",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  openRequestSchema: artifactSubscribeOpenRequestSchemaV10,
+  serverFrameSchema: artifactSubscribeServerFrameSchemaV12,
   clientFrameSchema: artifactSubscribeClientFrameSchemaV10,
 });
