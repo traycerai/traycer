@@ -249,7 +249,10 @@ function settledText(
   return settlement.answer ?? QUESTION_SKIPPED_TEXT;
 }
 
-/** A question's Skip on a card whose answers go together: pressed again, it is answered after all. */
+/**
+ * A question's Skip on a card whose answers go together: pressed again, it is
+ * answered after all. One name; `aria-pressed` says whether it is skipped.
+ */
 function SkipToggle(props: {
   readonly skip: boolean;
   readonly disabled: boolean;
@@ -266,7 +269,7 @@ function SkipToggle(props: {
       data-testid="question-card-skip"
       onClick={props.onToggle}
     >
-      {props.skip ? "Answer this question" : "Skip this question"}
+      Skip this question
     </Button>
   );
 }

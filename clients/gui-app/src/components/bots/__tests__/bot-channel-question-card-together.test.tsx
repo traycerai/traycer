@@ -867,7 +867,8 @@ describe("<BotChannelView tiles={null} /> a card whose answers go together", () 
 
     await user.click(
       within(cardQuestion(card, WATCH)).getByRole("button", {
-        name: "Answer this question",
+        name: "Skip this question",
+        pressed: true,
       }),
     );
     expect(tally(card)).toBe(
