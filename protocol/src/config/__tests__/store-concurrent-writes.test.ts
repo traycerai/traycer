@@ -954,18 +954,32 @@ describe("concurrent config writers", () => {
     });
 
     it("lands a failed release in the background without another setter", async () => {
-      setCliConfigLockTimingForTests({ backgroundReleaseDelaysMs: [50] });
-      vi.spyOn(console, "warn").mockImplementation(() => {});
+      // Three foreground unlinks, then one unref'd retry. The retry runs only
+      // once a ref'd timer has pulled the lock clock forward to its delay, so
+      // a 50ms delay can still be ahead when the poll returns. Zero is already
+      // due: the three failures stay on the foreground, and the fourth unlink
+      // is the background retry, with no second setter.
+      setCliConfigLockTimingForTests({ backgroundReleaseDelaysMs: [0] });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       h.unlinkFailures = ["EBUSY", "EBUSY", "EBUSY"];
 
       await setEnvOverride("ONLY", "1");
+
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls.flat().join(" ")).toContain(lockPath());
+      expect(h.lockUnlinks).toBe(3);
+      expect(h.unlinkFailures).toEqual([]);
       expect(existsSync(lockPath())).toBe(true);
 
-      for (let i = 0; i < 200 && existsSync(lockPath()); i += 1) {
-        await delay(10);
+      await delay(0);
+      for (let i = 0; i < 10 && existsSync(lockPath()); i += 1) {
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
       }
 
       expect(existsSync(lockPath())).toBe(false);
+      expect(h.lockUnlinks).toBe(4);
     });
 
     it("falls back to an exclusive create when hard links are unsupported", async () => {
