@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { PanelsTopLeft } from "lucide-react";
+import { ArtifactExpansion } from "@/components/artifacts/artifact-expansion";
 import type { ToolCallArtifactStamp } from "@traycer/protocol/persistence/epic/content-blocks";
 import type { HtmlArtifactVersionSelection } from "@traycer/protocol/host/epic/html-artifact-versions";
 import {
@@ -229,7 +230,7 @@ function ShownArtifact(props: {
     );
   } else {
     content = (
-      <>
+      <ArtifactExpansion title={stamp.title}>
         {state.kind === "latest" ? (
           <figcaption className="mb-2 text-ui-xs text-muted-foreground">
             Showing latest
@@ -263,7 +264,7 @@ function ShownArtifact(props: {
             />
           }
         />
-      </>
+      </ArtifactExpansion>
     );
   }
 
