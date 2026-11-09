@@ -1,12 +1,5 @@
 import { useState, type ReactNode } from "react";
 import type { EnvironmentOs } from "@traycer/protocol/host/environment-schemas";
-import { MoreHorizontal } from "lucide-react";
-import {
-  DropdownMenu,
-  DropdownMenuTrigger,
-  DropdownMenuContent,
-  DropdownMenuItem,
-} from "@/components/ui/dropdown-menu";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -241,7 +234,6 @@ function TeamTextItemEditor(props: {
       ? saved
       : configurationTextValueSchema.parse(props.draft.value).value,
   );
-  const [editing, setEditing] = useState(props.draft?.draftField === "value");
   const title = props.item?.key ?? "New variable";
   const label = props.osLabel === null ? title : `${title} · ${props.osLabel}`;
   const validName = /^[A-Za-z_][A-Za-z0-9_]*$/.test(name.trim());
@@ -257,7 +249,6 @@ function TeamTextItemEditor(props: {
       // An item keeps its own scope; only a new one takes the picker's.
       os: props.item === null ? props.os : props.item.os,
       action: "put",
-      draftField: "value",
       value: { value },
       original: props.currentItem,
     };
@@ -275,24 +266,11 @@ function TeamTextItemEditor(props: {
       key: props.item.key,
       os: props.item.os,
       action: "remove",
-      draftField: null,
       value: { value: saved },
       original: props.currentItem,
     };
     void props.onWrite(write);
   };
-  if (props.item === null && !editing)
-    return (
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        disabled={props.busy}
-        onClick={() => setEditing(true)}
-      >
-        Add variable
-      </Button>
-    );
   return (
     <section
       className="flex min-w-0 flex-col gap-2 border-b border-border/60 px-3 py-3 last:border-b-0"
@@ -303,9 +281,7 @@ function TeamTextItemEditor(props: {
         label={label}
         osLabel={props.osLabel}
         isNew={props.item === null}
-        canDelete={props.currentItem !== null || props.saving}
         canEdit={canEdit}
-        editing={editing}
         disabled={props.busy}
         name={name}
         value={value}
@@ -316,26 +292,20 @@ function TeamTextItemEditor(props: {
           if (props.draft !== null)
             props.onDraftChange({ ...props.draft, value: { value: next } });
         }}
-        onEdit={() => setEditing(true)}
-        onDelete={deleteItem}
         details={props.details}
       />
       <ConfigurationPendingWriteStatus
         write={props.saving ? props.pending : null}
       />
       <ConfigurationItemWriteError failure={props.failure} />
-      {canEdit && editing ? (
+      {canEdit ? (
         <TeamTextActions
           isNew={props.item === null}
           disabled={props.busy}
           canSave={props.item === null ? validName : value !== saved}
           saving={props.saving}
           onSave={save}
-          onCancel={() => {
-            if (props.draft !== null) props.onDiscardDraft(props.draft);
-            setValue(saved);
-            setEditing(false);
-          }}
+          onDelete={props.currentItem !== null ? deleteItem : null}
         />
       ) : null}
     </section>
@@ -368,19 +338,21 @@ function TeamTextActions(props: {
   readonly canSave: boolean;
   readonly saving: boolean;
   readonly onSave: () => void;
-  readonly onCancel: () => void;
+  readonly onDelete: (() => void) | null;
 }): ReactNode {
   return (
-    <div className="flex justify-end gap-2">
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        disabled={props.disabled}
-        onClick={props.onCancel}
-      >
-        Cancel
-      </Button>
+    <div className="flex min-w-0 flex-wrap justify-end gap-2">
+      {props.onDelete === null ? null : (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          disabled={props.disabled}
+          onClick={props.onDelete}
+        >
+          Delete
+        </Button>
+      )}
       <Button
         type="button"
         size="sm"
@@ -399,93 +371,51 @@ function TeamTextFields(props: {
   readonly label: string;
   readonly osLabel: string | null;
   readonly isNew: boolean;
-  readonly canDelete: boolean;
   readonly canEdit: boolean;
-  readonly editing: boolean;
   readonly disabled: boolean;
   readonly name: string;
   readonly value: string;
   readonly saved: string;
   readonly onName: (value: string) => void;
   readonly onValue: (value: string) => void;
-  readonly onEdit: () => void;
-  readonly onDelete: () => void;
   readonly details: ReactNode;
 }): ReactNode {
-  let valueControl: ReactNode = (
-    <span className="wrap-anywhere font-mono text-ui-sm">{props.saved}</span>
-  );
-  if (props.canEdit)
-    valueControl = props.editing ? (
-      <Input
-        ref={props.isNew ? null : focusInput}
-        aria-label={`${props.label} value`}
-        disabled={props.disabled}
-        value={props.value}
-        onChange={(event) => props.onValue(event.target.value)}
-      />
-    ) : (
-      <button
-        type="button"
-        className="w-full cursor-text text-left font-mono text-ui-sm wrap-anywhere"
-        aria-label={`Edit ${props.label} value`}
-        disabled={props.disabled}
-        onClick={() => props.onEdit()}
-      >
-        {props.saved || "Empty value"}
-      </button>
-    );
   return (
-    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_auto]">
-      <span className="flex min-w-0 flex-wrap items-center gap-1.5">
-        <span className="wrap-anywhere font-mono text-ui-sm">
-          {props.title}
+    <div className="flex min-w-0 flex-col gap-2">
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+        <span className="flex min-w-0 flex-wrap items-center gap-1.5">
+          <span className="wrap-anywhere font-mono text-ui-sm">
+            {props.title}
+          </span>
+          {props.osLabel === null ? null : (
+            <Badge variant="secondary" size="xs">
+              {props.osLabel}
+            </Badge>
+          )}
         </span>
-        {props.osLabel === null ? null : (
-          <Badge variant="secondary" size="xs">
-            {props.osLabel}
-          </Badge>
-        )}
-      </span>
-      <div className="col-start-1 row-start-2 min-w-0 sm:col-start-2 sm:row-start-1">
-        {props.isNew ? (
-          <Input
-            ref={focusInput}
-            aria-label="Variable name"
-            disabled={props.disabled}
-            value={props.name}
-            onChange={(event) => props.onName(event.target.value)}
-            placeholder="NODE_ENV"
-          />
-        ) : null}
-        {valueControl}
         {props.details}
       </div>
-      {props.canEdit && !props.isNew && props.canDelete ? (
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              className="col-start-2 row-start-1 sm:col-start-3"
-              aria-label={`More for ${props.label}`}
-              disabled={props.disabled}
-            >
-              <MoreHorizontal />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem onSelect={props.onDelete}>
-              Delete
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+      {props.isNew ? (
+        <Input
+          aria-label="Variable name"
+          disabled={props.disabled}
+          value={props.name}
+          onChange={(event) => props.onName(event.target.value)}
+          placeholder="NODE_ENV"
+        />
       ) : null}
+      {props.canEdit ? (
+        <Input
+          aria-label={`${props.label} value`}
+          disabled={props.disabled}
+          value={props.value}
+          onChange={(event) => props.onValue(event.target.value)}
+        />
+      ) : (
+        <span className="wrap-anywhere font-mono text-ui-sm">
+          {props.saved}
+        </span>
+      )}
     </div>
   );
-}
-
-function focusInput(node: HTMLInputElement | null): void {
-  node?.focus();
 }

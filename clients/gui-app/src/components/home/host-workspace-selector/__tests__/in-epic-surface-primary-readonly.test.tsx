@@ -41,6 +41,7 @@ import {
   userSubscription,
   userWith,
 } from "@/lib/sandboxes/__tests__/auth-user-fixture";
+import { wakeSandboxOnPick } from "@/lib/sandboxes/sandbox-wake";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
 import {
@@ -301,6 +302,16 @@ vi.mock(
     ) => ({ surfaceKey, task: chipMocks.task }),
   }),
 );
+// Whether a pick asks to wake is this helper's assertion. The wake itself
+// still runs, so a real pick elsewhere in the file keeps its effect.
+vi.mock("@/lib/sandboxes/sandbox-wake", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/lib/sandboxes/sandbox-wake")>();
+  return {
+    ...actual,
+    wakeSandboxOnPick: vi.fn(actual.wakeSandboxOnPick),
+  };
+});
 vi.mock("@/hooks/auth/use-auth-user-query", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/hooks/auth/use-auth-user-query")
@@ -1857,20 +1868,16 @@ describe("the chat chip is the composer's picker", () => {
     fireEvent.click(screen.getByTestId("settings-host-switcher"));
   }
 
-  /** Details belongs to the host's wrapper, outside the selecting option. */
-  function openHostDetails(row: HTMLElement): HTMLDetailsElement {
-    const details = row.parentElement?.querySelector("details");
-    if (details === null || details === undefined) {
-      throw new Error("host row has no Details disclosure");
-    }
-    expect(details.open).toBe(false);
-    fireEvent.click(
-      within(details).getByText("Details", { selector: "summary" }),
-    );
-    expect(details.open).toBe(true);
+  /**
+   * Supplemental facts are already inside the option. There is no disclosure
+   * to open, and reading them does not pick the row or wake the sandbox.
+   */
+  function openHostDetails(row: HTMLElement): HTMLElement {
+    expect(row.querySelector("details")).toBeNull();
     expect(onForkOnHost).not.toHaveBeenCalled();
     expect(onForkOnNewSandbox).not.toHaveBeenCalled();
-    return details;
+    expect(wakeSandboxOnPick).not.toHaveBeenCalled();
+    return row;
   }
 
   beforeEach(() => {
@@ -1904,6 +1911,7 @@ describe("the chat chip is the composer's picker", () => {
     );
     chipMocks.costs = null;
     useStagedSandboxStore.setState({ bySurface: {} });
+    vi.mocked(wakeSandboxOnPick).mockClear();
   });
 
   afterEach(() => {

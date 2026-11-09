@@ -315,11 +315,11 @@ describe("the secrets list", () => {
     const added = dayMonth(ADDED_AT);
     await waitFor(() => {
       expect(within(rows[0]).getByTestId("secret-row-line").textContent).toBe(
-        `STRIPE_KEY · Set · 1 destination · added by you ${added}`,
+        `STRIPE_KEY · Set · sent to api.stripe.com · added by you ${added}`,
       );
     });
     expect(within(rows[1]).getByTestId("secret-row-line").textContent).toBe(
-      `PROD_DB · Set · 2 destinations · added by you ${added}`,
+      `PROD_DB · Set · sent to db.example.com, db2.example.com · added by you ${added}`,
     );
     for (const row of rows) {
       expect(row.textContent).not.toContain("Written as a plain value");
@@ -334,9 +334,22 @@ describe("the secrets list", () => {
     ).toEqual(["Replace", "Remove", "Details"]);
     expect(screen.queryByTestId("secrets-empty")).toBeNull();
     const details = await openRowDetails(rows[1]);
-    expect(within(details).getByText("Destinations")).toBeTruthy();
-    expect(within(details).getByText("db.example.com")).toBeTruthy();
-    expect(within(details).getByText("db2.example.com")).toBeTruthy();
+    const recovery = within(details).getByTestId("secret-recovery");
+    expect(within(recovery).queryByText("Secret leaked?")).toBeNull();
+    expect(
+      within(recovery)
+        .getAllByRole("listitem")
+        .map((step) => step.textContent),
+    ).toEqual([
+      "Remove it first: every sandbox stops using the old value, and each computer that holds it as a value keeps it until its tools restart.",
+      "Rotate the credential at the service it belongs to.",
+      "Replace the value here.",
+      "Grant it again.",
+    ]);
+    expect(recovery.textContent).toContain("If this secret leaked");
+    expect(recovery.textContent).toContain(
+      "If Traycer can't be reached, stopping the sandbox ends its sessions.",
+    );
   });
 
   it("says replaced, not added, once the current version is a replacement", async () => {
@@ -360,7 +373,7 @@ describe("the secrets list", () => {
     const line = await screen.findByTestId("secret-row-line");
     await waitFor(() => {
       expect(line.textContent).toBe(
-        `STRIPE_KEY · Set · 1 destination · replaced by you ${dayMonth(ADDED_AT)}`,
+        `STRIPE_KEY · Set · sent to api.stripe.com · replaced by you ${dayMonth(ADDED_AT)}`,
       );
     });
   });
@@ -371,7 +384,7 @@ describe("the secrets list", () => {
     renderPage(host);
 
     const line = await screen.findByTestId("secret-row-line");
-    expect(line.textContent).toBe("STRIPE_KEY · Set · 1 destination");
+    expect(line.textContent).toBe("STRIPE_KEY · Set · sent to api.stripe.com");
   });
 
   it("marks a revoked secret, and its Details offers no Verify", async () => {

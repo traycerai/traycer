@@ -4,7 +4,10 @@
  */
 import type { ReactNode } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { remoteAccessQuestionShown } from "@/components/settings/host-scope/host-access-model";
+import {
+  REMOTE_ACCESS_QUESTION,
+  remoteAccessQuestionShown,
+} from "@/components/settings/host-scope/host-access-model";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { useEnvironmentStatusRead } from "@/hooks/environment/use-environment-reads";
@@ -13,13 +16,13 @@ import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useHostAccessPromptsStore } from "@/stores/hosts/host-access-prompts-store";
 
-/** The unanswered Remote access row, using the same remembered per-host choice. */
+/** One explanatory prompt in the Access row, using the remembered per-host choice. */
 export function RemoteAccessQuestion(props: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly hostId: string | null;
   /** Whether the scope can reach the host, and so whether a read may mount. */
   readonly enabled: boolean;
-  readonly children?: ReactNode;
+  readonly children: ReactNode;
 }): ReactNode {
   const status = useEnvironmentStatusRead(
     props.client,
@@ -48,12 +51,15 @@ export function RemoteAccessQuestion(props: {
   }
   const hostId = props.hostId;
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3 text-ui-sm">
+    <div
+      role="status"
+      className="flex min-w-0 flex-wrap items-center justify-between gap-3 px-5 py-3 text-ui-sm"
+    >
       <span
-        className="text-muted-foreground"
+        className="min-w-0 wrap-anywhere text-foreground"
         data-testid="remote-access-question"
       >
-        Not set
+        {REMOTE_ACCESS_QUESTION}
       </span>
 
       <div className="flex max-w-full flex-wrap gap-2">
@@ -63,7 +69,7 @@ export function RemoteAccessQuestion(props: {
           disabled={set.isPending}
           onClick={() => set.mutate({ enabled: true })}
         >
-          Turn on
+          On
           {set.isPending ? (
             <AgentSpinningDots
               className={undefined}

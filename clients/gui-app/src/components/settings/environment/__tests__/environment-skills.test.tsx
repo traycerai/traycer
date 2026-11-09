@@ -236,22 +236,27 @@ describe("The Skills page", () => {
     });
     render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
 
-    expect(screen.queryByLabelText("Skill name")).toBeNull();
-    const addSkill = await screen.findByRole("button", { name: "Add skill" });
-    expect(addSkill.closest("header")).not.toBeNull();
+    const row = await screen.findByText("find-skills");
+    const skillName = screen.getByLabelText("Skill name");
+    const archive = screen.getByLabelText("Skill folder archive");
+    const body = row.closest("[data-settings-panel-body]");
+    expect(body).not.toBeNull();
+    expect(body?.contains(skillName)).toBe(true);
+    expect(body?.contains(archive)).toBe(true);
+    expect(skillName.closest("header")).toBeNull();
+    expect(skillName.closest("[role='dialog']")).toBeNull();
+    expect(
+      row.compareDocumentPosition(skillName) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(
+      screen.getByText("Choose a .tar.gz skill folder, up to 32 MB."),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Add a skill" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Add skill" })).toBeNull();
     expect(
       screen.queryByRole("heading", { level: 3, name: "Skills" }),
     ).toBeNull();
-    await userEvent.click(addSkill);
-    expect(
-      await screen.findByRole("dialog", { name: "Add skill" }),
-    ).toBeTruthy();
-    expect(
-      within(screen.getByRole("dialog", { name: "Add skill" })).getByText(
-        "Upload a skill folder.",
-      ),
-    ).toBeTruthy();
-    await userEvent.type(await screen.findByLabelText("Skill name"), "review");
+    await userEvent.type(skillName, "review");
     await userEvent.upload(
       screen.getByLabelText("Skill folder archive"),
       new File([new Uint8Array([1, 2, 3, 4])], "review.tar.gz", {
@@ -284,15 +289,11 @@ describe("The Skills page", () => {
     });
     render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
 
-    expect(screen.queryByLabelText("Skill name")).toBeNull();
-    await userEvent.click(
-      await screen.findByRole("button", { name: "Add skill" }),
-    );
-    expect(
-      await screen.findByRole("dialog", { name: "Add skill" }),
-    ).toBeTruthy();
     // The list comes from the room, so the page names no host for it.
-    await userEvent.type(await screen.findByLabelText("Skill name"), "review");
+    const skillName = await screen.findByLabelText("Skill name");
+    expect(skillName.closest("[role='dialog']")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add skill" })).toBeNull();
+    await userEvent.type(skillName, "review");
     expect(screen.queryByText(/as reported by/)).toBeNull();
     expect(screen.queryAllByRole("combobox")).toHaveLength(0);
 
@@ -2843,16 +2844,12 @@ describe("The Skills page's skills from a source", () => {
         [IMPORT]: (request) => answers(request),
       });
       render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+      await screen.findByText("review");
+      expect(screen.queryByRole("button", { name: "Add skill" })).toBeNull();
+      expect(screen.queryByLabelText("Skill name")).toBeNull();
+      expect(screen.queryByRole("dialog")).toBeNull();
       await userEvent.click(
-        await screen.findByRole("button", { name: "Add skill" }),
-      );
-      expect(
-        within(screen.getByRole("dialog", { name: "Add skill" })).getByText(
-          "Import a skill from a source.",
-        ),
-      ).toBeTruthy();
-      await userEvent.click(
-        await screen.findByRole("button", { name: "Import from source" }),
+        screen.getByRole("button", { name: "Import from source" }),
       );
       const dialog = await screen.findByRole("dialog", {
         name: "Import skills from a source",
@@ -2909,7 +2906,7 @@ describe("The Skills page's skills from a source", () => {
       expect(screen.queryByRole("dialog", { name: "Add skill" })).toBeNull();
     });
 
-    it("describes both available ways to add a skill", async () => {
+    it("shows the upload form and import together, and import opens its sheet", async () => {
       negotiateMethods({
         ...BASE_METHODS,
         "environment.configuration.skills.upload": LIST,
@@ -2924,18 +2921,31 @@ describe("The Skills page's skills from a source", () => {
       });
       render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
 
-      await userEvent.click(
-        await screen.findByRole("button", { name: "Add skill" }),
-      );
-      const dialog = await screen.findByRole("dialog", { name: "Add skill" });
+      const row = await screen.findByText("review");
+      const skillName = screen.getByLabelText("Skill name");
+      const importSkill = screen.getByRole("button", {
+        name: "Import from source",
+      });
+      expect(screen.getByLabelText("Skill folder archive")).toBeTruthy();
       expect(
-        within(dialog).getByText(
-          "Upload a skill folder or import from a source.",
-        ),
+        screen.getByText("Choose a .tar.gz skill folder, up to 32 MB."),
       ).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Add a skill" })).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Add skill" })).toBeNull();
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(skillName.closest("[role='dialog']")).toBeNull();
+      expect(importSkill.closest("[role='dialog']")).toBeNull();
       expect(
-        within(dialog).getByRole("button", { name: "Import from source" }),
+        row.compareDocumentPosition(skillName) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+      await userEvent.click(importSkill);
+      expect(
+        await screen.findByRole("dialog", {
+          name: "Import skills from a source",
+        }),
       ).toBeTruthy();
+      expect(screen.queryByRole("dialog", { name: "Add skill" })).toBeNull();
     });
 
     it("selects the first 64 of 70 uninstalled skills, stops at the cap, and installs exactly those in order", async () => {
@@ -3096,9 +3106,6 @@ describe("The Skills page's skills from a source", () => {
           [SEARCH]: (request) => answer(request),
         });
         render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
-        await userEvent.click(
-          await screen.findByRole("button", { name: "Add skill" }),
-        );
         await userEvent.click(
           await screen.findByRole("button", { name: "Import from source" }),
         );

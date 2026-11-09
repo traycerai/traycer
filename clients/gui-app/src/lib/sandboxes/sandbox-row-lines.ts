@@ -17,6 +17,9 @@ import { resolvePlatformBaseUrl } from "@/lib/auth/platform-base-url";
 import { frozenDestroyAt } from "@/lib/sandboxes/sandbox-balance";
 import { formatMemory } from "@/lib/sandboxes/sandbox-pricing";
 import {
+  AGENT_SANDBOX,
+  keptByLine,
+  startedByLine,
   KEPT_UNTIL_YOU_DESTROY_IT,
   LESS_THAN_A_CENT_SO_FAR,
   burstIdleLine,
@@ -274,6 +277,34 @@ export function sandboxMemberName(
 ): string {
   if (viewerUserId !== null && member.userId === viewerUserId) return "you";
   return member.displayName ?? "a member";
+}
+
+/**
+ * Starter history; Automations already names its role in the row's title.
+ * A row an agent created and someone kept reads `Started by <agent>`, or
+ * `Started by an agent` where the server does not name it to this viewer:
+ * Keep changes who keeps it, never who started it.
+ */
+export function sandboxStartedByLabel(
+  summary: SandboxSummary,
+  viewerUserId: string | null,
+): string | null {
+  if (summary.kind === "automation") return null;
+  if (summary.burst) return AGENT_SANDBOX;
+  if (summary.createdByAgentId !== null) {
+    return startedByLine(summary.createdByAgentName ?? "an agent");
+  }
+  if (summary.createdBy === null) return startedByLine("you");
+  return startedByLine(sandboxMemberName(summary.createdBy, viewerUserId));
+}
+
+export function sandboxKeptByLabel(
+  summary: SandboxSummary,
+  viewerUserId: string | null,
+): string | null {
+  return summary.keptBy === null
+    ? null
+    : keptByLine(sandboxMemberName(summary.keptBy, viewerUserId));
 }
 
 // ── The shape and cost line ─────────────────────────────────────────────────
@@ -692,8 +723,10 @@ export function sandboxClockLine(input: SandboxClockInput): string {
         .filter((item): item is string => item !== null)
         .join(" ");
     case "failed":
-      // Details names the failure's support reference.
-      return `Couldn't start at ${formatSandboxTime(summary.lastTransitionAt)}`;
+      return joinParts(
+        `Couldn't start at ${formatSandboxTime(summary.lastTransitionAt)}`,
+        sandboxSupportReference(summary.failureCode),
+      );
     case "creating":
       return "Pending.";
     case "awake":
@@ -717,10 +750,11 @@ function awakeClockLine(input: SandboxClockInput): string {
       ? "Running, but Traycer can't connect"
       : `Running, but Traycer can't connect · last contact ${formatSandboxAge(contact, now)}`;
   }
-  // The row's name and its Awake · Setup failed pill sit just above, and the
-  // support reference is in Details: the line names only whose settings failed.
   if (summary.guestConfigured === false) {
-    return `${configurationLabel(configurationCopy(input.configuration))}'s settings didn't apply`;
+    return joinParts(
+      `${configurationLabel(configurationCopy(input.configuration))}'s settings didn't apply`,
+      sandboxSupportReference(summary.failureCode) ?? "SBX-0520",
+    );
   }
   const awakeMs = input.cost?.todayAwakeMs ?? null;
   const today = sandboxTodayCost(
@@ -1139,7 +1173,7 @@ export function sandboxGiveAnotherLabel(
 // ── Header ──────────────────────────────────────────────────────────────────
 
 /**
- * `5 sandboxes and Automations · $0.34 today, $0.16 of it yours.`
+ * `5 sandboxes and Automations · $0.34 today (UTC day), $0.16 of it yours.`
  * The share is left out only when it is none of the day's or not known
  * (`null`); all of it reads `$0.04 of it yours`. The count is of the rows
  * shown, an Automations host not created yet (`unstartedAutomations`)
@@ -1163,7 +1197,7 @@ export function sandboxListHeader(input: {
     count = sandboxes === 0 ? "Automations only" : `${count} and Automations`;
   }
   if (input.todayMc === null) return count;
-  const today = `${formatSandboxCost(input.todayMc)} today`;
+  const today = `${formatSandboxCost(input.todayMc)} today (UTC day)`;
   if (input.todayYoursMc === null || input.todayYoursMc <= 0) {
     return `${count} · ${today}`;
   }

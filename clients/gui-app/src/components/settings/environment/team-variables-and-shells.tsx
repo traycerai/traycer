@@ -1,11 +1,4 @@
 import { useState, type ReactNode } from "react";
-import { MoreHorizontal } from "lucide-react";
-import {
-  DropdownMenu,
-  DropdownMenuTrigger,
-  DropdownMenuContent,
-  DropdownMenuItem,
-} from "@/components/ui/dropdown-menu";
 import type { EnvironmentOs } from "@traycer/protocol/host/environment-schemas";
 import type { EnvironmentConfigurationItemWriteResponse } from "@traycer/protocol/host/environment/configuration-contracts";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
@@ -15,10 +8,7 @@ import { Input } from "@/components/ui/input";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { useBoundedRead } from "@/hooks/environment/team/use-bounded-read";
 import { useConfigurationVariablesQuery } from "@/hooks/environment/team/use-variables-query";
-import {
-  configurationShellValueSchema,
-  configurationTextValueSchema,
-} from "@/hooks/environment/team/configuration-item-values";
+import { configurationShellValueSchema } from "@/hooks/environment/team/configuration-item-values";
 import type { ConfigurationItem } from "@/hooks/environment/team/use-configuration-items-query";
 import {
   useCanEditConfiguration,
@@ -30,7 +20,6 @@ import {
   configurationWriteIssue,
   type ConfigurationWriteIssue,
 } from "./configuration-write-issue";
-import { comparesWithHost } from "./host-environment-os";
 import { TeamVariableLiveFacts } from "./team-variable-live-facts";
 import { TeamTextItems } from "./team-text-items";
 import { ConfigurationReadFailed } from "./team-read-failed";
@@ -84,62 +73,25 @@ export function TeamVariablesAndShells(): ReactNode {
       ) : null}
       {read.pending ? <MutedAgentSpinner /> : null}
       {items === undefined ? null : (
-        <TeamVariableLiveFacts>
-          {(applied) => (
-            <>
-              <TeamTextItems
-                items={items}
-                kind="variable"
-                os={os}
-                providerId={null}
-                writes={writes}
-                renderDetails={(item) => {
-                  const entry = comparesWithHost({
-                    rowOs: item.os,
-                    hostOs: applied.hostOs,
-                    siblings: items
-                      .filter(
-                        (other) =>
-                          other.kind === "variable" && other.key === item.key,
-                      )
-                      .map((other) => other.os),
-                  })
-                    ? applied.variables?.entries.find(
-                        (entry) => entry.key === item.key,
-                      )
-                    : undefined;
-                  const saved = configurationTextValueSchema.parse(
-                    item.value,
-                  ).value;
-                  return entry === undefined || entry.value === saved ? null : (
-                    <p className="wrap-anywhere text-ui-xs text-muted-foreground">
-                      This host uses {entry.value ?? "Unset"}
-                    </p>
-                  );
-                }}
-              />
-              <h2 className="text-ui-sm font-medium">Shell</h2>
-              <TeamShellEditor
-                key={`${os}:${shell?.revision ?? "new"}:${acceptedShell(writes, os) !== null}:${shellDraft(writes, os) !== null}`}
-                item={shell}
-                applied={
-                  applied.shell === undefined ||
-                  !comparesWithHost({
-                    rowOs: os,
-                    hostOs: applied.hostOs,
-                    siblings: items
-                      .filter((other) => other.kind === "shell")
-                      .map((other) => other.os),
-                  })
-                    ? null
-                    : { path: applied.shell.path, args: applied.shell.args }
-                }
-                os={os}
-                writes={writes}
-              />
-            </>
-          )}
-        </TeamVariableLiveFacts>
+        <>
+          <h2 className="text-ui-sm font-medium">Variables</h2>
+          <TeamTextItems
+            items={items}
+            kind="variable"
+            os={os}
+            providerId={null}
+            writes={writes}
+            renderDetails={() => null}
+          />
+          <h2 className="text-ui-sm font-medium">Shell</h2>
+          <TeamShellEditor
+            key={`${os}:${shell?.revision ?? "new"}:${acceptedShell(writes, os) !== null}:${shellDraft(writes, os) !== null}`}
+            item={shell}
+            os={os}
+            writes={writes}
+          />
+          <TeamVariableLiveFacts />
+        </>
       )}
     </SettingsPanelShell>
   );
@@ -191,26 +143,8 @@ function shellDraft(
   return configurationItemDraft(writes, { kind: "shell", key: "shell", os });
 }
 
-function shellDraftState(
-  draft: ConfigurationItemWrite | null,
-  saved: ShellValue,
-): {
-  readonly field: "path" | "args" | null;
-  readonly value: ShellValue;
-} {
-  if (draft === null) return { field: null, value: saved };
-  return {
-    field: draft.draftField === "args" ? "args" : "path",
-    value: configurationShellValueSchema.parse(draft.value),
-  };
-}
-
 function TeamShellEditor(props: {
   readonly item: ConfigurationItem | null;
-  readonly applied: {
-    readonly path: string;
-    readonly args: readonly string[];
-  } | null;
   readonly os: EnvironmentOs;
   readonly writes: ConfigurationItemWrites;
 }): ReactNode {
@@ -218,10 +152,10 @@ function TeamShellEditor(props: {
   const pending = pendingWriteInScope(props.writes, shellWriteScope(props.os));
   const saved = shownShell(props.item, acceptedShell(props.writes, props.os));
   const draft = shellDraft(props.writes, props.os);
-  const initial = shellDraftState(draft, saved);
-  const [editing, setEditing] = useState<"path" | "args" | null>(initial.field);
-  const [path, setPath] = useState(initial.value.path);
-  const [args, setArgs] = useState(initial.value.args);
+  const initial =
+    draft === null ? saved : configurationShellValueSchema.parse(draft.value);
+  const [path, setPath] = useState(initial.path);
+  const [args, setArgs] = useState(initial.args);
   const updateValue = (value: ShellValue): void => {
     setPath(value.path);
     setArgs(value.args);
@@ -231,87 +165,45 @@ function TeamShellEditor(props: {
         value: { path: value.path, args: value.args },
       });
   };
-  const editField = (field: "path" | "args"): void => {
-    setEditing(field);
-    if (draft !== null)
-      props.writes.updateDraft({ ...draft, draftField: field });
-  };
-  const configured = props.item === null ? null : saved;
-  const editingVisible = canEdit && editing !== null;
   const busy = props.writes.pending !== null;
   const changed =
     path !== saved.path || JSON.stringify(args) !== JSON.stringify(saved.args);
   return (
     <section className="flex min-w-0 flex-col gap-3 rounded-lg border border-border/60 p-3">
-      <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,2fr)_auto] items-start gap-3">
-        <span className="text-ui-sm">Program</span>
-        <div className="min-w-0">
-          <ShellField
-            label="Shell path"
+      {canEdit ? (
+        <>
+          <Input
+            aria-label="Shell path"
+            placeholder="/bin/zsh"
             value={path}
-            empty="No shell set."
-            canEdit={canEdit}
-            busy={busy}
-            editing={editing === "path"}
-            onEdit={() => editField("path")}
-            editor={
-              <Input
-                ref={focusShellPath}
-                aria-label="Shell path"
-                placeholder="/bin/zsh"
-                value={path}
-                disabled={busy}
-                onChange={(event) =>
-                  updateValue({ path: event.target.value, args })
-                }
-              />
+            disabled={busy}
+            onChange={(event) =>
+              updateValue({ path: event.target.value, args })
             }
           />
-          <AppliedShellValue
-            saved={configured?.path ?? null}
-            applied={props.applied?.path ?? null}
-          />
-        </div>
-        <ShellRemoveMenu
-          item={props.item}
-          os={props.os}
-          writes={props.writes}
-          busy={busy}
-          canEdit={canEdit}
-        />
-        <span className="col-start-1 row-start-2 text-ui-sm">Arguments</span>
-        <div className="col-start-2 row-start-2 min-w-0">
-          <ShellField
-            label="Shell arguments"
-            value={args.join(" · ")}
-            empty="None"
-            canEdit={canEdit}
-            busy={busy}
-            editing={editing === "args"}
-            onEdit={() => editField("args")}
-            editor={
-              <ShellFlagChips
-                args={args}
-                disabled={busy}
-                onAdd={(flag) => updateValue({ path, args: [...args, flag] })}
-                onRemove={(index) =>
-                  updateValue({
-                    path,
-                    args: args.filter((_, i) => i !== index),
-                  })
-                }
-              />
+          <ShellFlagChips
+            args={args}
+            disabled={busy}
+            onAdd={(flag) => updateValue({ path, args: [...args, flag] })}
+            onRemove={(index) =>
+              updateValue({ path, args: args.filter((_, i) => i !== index) })
             }
           />
-          <AppliedShellValue
-            saved={configured?.args.join(" · ") ?? null}
-            applied={props.applied?.args.join(" · ") ?? null}
+          <ShellRemoveButton
+            item={props.item}
+            os={props.os}
+            writes={props.writes}
+            busy={busy}
           />
-        </div>
-      </div>
+        </>
+      ) : (
+        <p className="wrap-anywhere font-mono text-ui-sm">
+          {props.item === null ? "No shell set." : [path, ...args].join(" ")}
+        </p>
+      )}
       <ShellWriteStatus writes={props.writes} os={props.os} />
       <ShellEditActions
-        visible={editingVisible}
+        visible={canEdit}
         changed={changed}
         path={path}
         busy={busy}
@@ -320,7 +212,6 @@ function TeamShellEditor(props: {
           if (draft !== null) props.writes.discardDraft(draft);
           setPath(saved.path);
           setArgs(saved.args);
-          setEditing(null);
         }}
         onSave={() => {
           void props.writes.write({
@@ -328,7 +219,6 @@ function TeamShellEditor(props: {
             key: "shell",
             os: props.os,
             action: "put",
-            draftField: editing,
             value: { path, args },
             original: props.item,
           });
@@ -338,46 +228,33 @@ function TeamShellEditor(props: {
   );
 }
 
-function ShellRemoveMenu(props: {
+function ShellRemoveButton(props: {
   readonly item: ConfigurationItem | null;
   readonly os: EnvironmentOs;
   readonly writes: ConfigurationItemWrites;
   readonly busy: boolean;
-  readonly canEdit: boolean;
 }): ReactNode {
   const item = props.item;
-  if (!props.canEdit || item === null) return null;
+  if (item === null) return null;
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          aria-label="More for shell"
-          disabled={props.busy}
-        >
-          <MoreHorizontal />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
-        <DropdownMenuItem
-          onSelect={() => {
-            void props.writes.write({
-              kind: "shell",
-              key: "shell",
-              os: props.os,
-              action: "remove",
-              draftField: null,
-              value: { path: "", args: [] },
-              original: item,
-            });
-          }}
-        >
-          Remove
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      disabled={props.busy}
+      onClick={() => {
+        void props.writes.write({
+          kind: "shell",
+          key: "shell",
+          os: props.os,
+          action: "remove",
+          value: { path: "", args: [] },
+          original: item,
+        });
+      }}
+    >
+      Remove
+    </Button>
   );
 }
 
@@ -400,53 +277,6 @@ function ShellWriteStatus(props: {
   );
 }
 
-function AppliedShellValue(props: {
-  readonly saved: string | null;
-  readonly applied: string | null;
-}): ReactNode {
-  if (
-    props.saved === null ||
-    props.applied === null ||
-    props.saved === props.applied
-  )
-    return null;
-  return (
-    <p className="wrap-anywhere text-ui-xs text-muted-foreground">
-      This host uses {props.applied || "None"}
-    </p>
-  );
-}
-
-function ShellField(props: {
-  readonly label: string;
-  readonly value: string;
-  readonly empty: string;
-  readonly canEdit: boolean;
-  readonly busy: boolean;
-  readonly editing: boolean;
-  readonly onEdit: () => void;
-  readonly editor: ReactNode;
-}): ReactNode {
-  if (!props.canEdit)
-    return (
-      <span className="font-mono text-ui-sm wrap-anywhere">
-        {props.value || props.empty}
-      </span>
-    );
-  if (props.editing) return props.editor;
-  return (
-    <button
-      type="button"
-      className="w-full text-left font-mono text-ui-sm wrap-anywhere"
-      aria-label={`Edit ${props.label}`}
-      disabled={props.busy}
-      onClick={props.onEdit}
-    >
-      {props.value || props.empty}
-    </button>
-  );
-}
-
 function ShellEditActions(props: {
   readonly visible: boolean;
   readonly changed: boolean;
@@ -466,7 +296,7 @@ function ShellEditActions(props: {
         disabled={props.busy}
         onClick={props.onCancel}
       >
-        Cancel
+        Reset
       </Button>
       <Button
         type="button"
@@ -480,8 +310,4 @@ function ShellEditActions(props: {
       </Button>
     </div>
   );
-}
-
-function focusShellPath(node: HTMLInputElement | null): void {
-  node?.focus();
 }

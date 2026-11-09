@@ -6,6 +6,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { ArtifactExpansion } from "@/components/artifacts/artifact-expansion";
 import { CanvasFrameEventsContext } from "@/components/canvas-artifact/canvas-surface-context";
 import type { CanvasFrameEvents } from "@/components/canvas-artifact/canvas-frame";
 import type { CanvasCommentView } from "@/components/canvas-artifact/canvas-frame-registry";
@@ -179,7 +180,12 @@ function HtmlArtifactCommentFrame(
     };
   }, [events, path, served, servedSha256]);
   return (
-    <>
+    // Around the draft as well as the frame: the draft is a sibling of the
+    // frame, so an expansion raised inside the frame would leave it outside
+    // the raised surface - portalled onto the pane or the body, behind an
+    // inert document, invisible and unreachable. Inside here it portals into
+    // the surface, and the menus it raises resolve their container from it.
+    <ArtifactExpansion title={props.title}>
       <ArtifactPagesFrame
         source={served}
         title={props.title}
@@ -206,6 +212,6 @@ function HtmlArtifactCommentFrame(
         menuItems={props.menuItems}
       />
       {events.renderCommentDraft?.()}
-    </>
+    </ArtifactExpansion>
   );
 }

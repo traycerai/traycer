@@ -750,7 +750,7 @@ describe("<SandboxRowActions />", () => {
       expect(automation.close).toHaveBeenCalledTimes(1);
     });
 
-    it("offers Open terminal, and Rename and Details in its menu, with no Destroy or Stop", async () => {
+    it("offers Open terminal, inline Details and Rename in its menu, with no Destroy or Stop", async () => {
       renderAutomations(new QueryClient(), automationsRow("awake", null), {
         kind: "personal",
       });
@@ -766,7 +766,7 @@ describe("<SandboxRowActions />", () => {
         within(menu)
           .getAllByRole("menuitem")
           .map((item) => item.textContent),
-      ).toEqual(["Rename", "Details"]);
+      ).toEqual(["Rename"]);
     });
 
     it("starts Personal's released Automations with no body, then asks for a terminal on it", async () => {
@@ -843,7 +843,7 @@ describe("<SandboxRowActions />", () => {
       expect(screen.getByTestId("automation-terminal-pane")).toBeTruthy();
     });
 
-    it("offers a failed row Retry, and Rename and Details in its menu", async () => {
+    it("offers a failed row Retry, inline Details and Rename in its menu", async () => {
       renderAutomations(new QueryClient(), automationsRow("failed", null), {
         kind: "personal",
       });
@@ -858,7 +858,7 @@ describe("<SandboxRowActions />", () => {
         within(menu)
           .getAllByRole("menuitem")
           .map((item) => item.textContent),
-      ).toEqual(["Rename", "Details"]);
+      ).toEqual(["Rename"]);
     });
 
     it("retries a failed row by starting Automations again, and opens no terminal", async () => {
@@ -1175,18 +1175,19 @@ describe("<SandboxRowActions /> a sandbox whose settings did not apply", () => {
       recordNegotiatedHostMethods("host-failed", [REPAIR_METHOD]);
     });
 
-    it("keeps Retry setup primary and lists each other setup action once in More", async () => {
+    it("shows setup recovery actions inline and excludes menu duplicates", async () => {
       renderFailed({ state: "awake" }, false);
 
       expect(screen.getByRole("button", { name: "Retry setup" })).toBeTruthy();
-      expect(await menuItems()).toEqual([
+      for (const name of [
         "Open terminal",
-        "Rename",
         "Stop",
         "Choose another host",
         "Details",
-        "Destroy",
-      ]);
+      ]) {
+        expect(screen.getAllByRole("button", { name })).toHaveLength(1);
+      }
+      expect(await menuItems()).toEqual(["Rename", "Destroy"]);
     });
 
     it("offers Retry setup for an environment-only failure whose guest is fine", () => {
@@ -1199,24 +1200,19 @@ describe("<SandboxRowActions /> a sandbox whose settings did not apply", () => {
       { guestConfigured: false, settingsFailed: false },
       { guestConfigured: true, settingsFailed: true },
     ])(
-      "keeps Details and lifecycle actions in More for guestConfigured=$guestConfigured, settingsFailed=$settingsFailed",
+      "shows each setup recovery action inline for guestConfigured=$guestConfigured, settingsFailed=$settingsFailed",
       async ({ guestConfigured, settingsFailed }) => {
         renderFailed({ state: "awake", guestConfigured }, settingsFailed);
-        expect(await menuItems()).toEqual([
-          "Open terminal",
-          "Rename",
-          "Stop",
-          "Choose another host",
-          "Details",
-          "Destroy",
-        ]);
+        expect(
+          screen.getAllByRole("button", { name: "Open terminal" }),
+        ).toHaveLength(1);
+        expect(screen.getAllByRole("button", { name: "Stop" })).toHaveLength(1);
+        expect(
+          screen.getAllByRole("button", { name: "Choose another host" }),
+        ).toHaveLength(1);
+        expect(await menuItems()).toEqual(["Rename", "Destroy"]);
         await userEvent.keyboard("{Escape}");
-        await userEvent.click(
-          screen.getByRole("button", { name: /^More actions for/ }),
-        );
-        await userEvent.click(
-          await screen.findByRole("menuitem", { name: "Details" }),
-        );
+        await userEvent.click(screen.getByRole("button", { name: "Details" }));
         expect(useSandboxDetailsStore.getState().sandboxId).toBe("sbx-failed");
       },
     );
@@ -1328,7 +1324,7 @@ describe("<SandboxRowActions /> a sandbox whose settings did not apply", () => {
       expect(await menuItems()).toContain("Destroy");
     });
 
-    it("keeps Give it another period in More on a stopped sandbox near its destroy time", async () => {
+    it("shows Give it another period inline on a stopped sandbox near its destroy time", async () => {
       renderFailed(
         {
           state: "stopped",
@@ -1338,7 +1334,10 @@ describe("<SandboxRowActions /> a sandbox whose settings did not apply", () => {
         false,
       );
 
-      expect(await menuItems()).toContain("Give it another 1 hour");
+      expect(
+        screen.getByRole("button", { name: "Give it another 1 hour" }),
+      ).toBeTruthy();
+      expect(await menuItems()).not.toContain("Give it another 1 hour");
     });
   });
 
@@ -1347,14 +1346,13 @@ describe("<SandboxRowActions /> a sandbox whose settings did not apply", () => {
       renderFailed({ state: "awake", guestConfigured: true }, false);
 
       expect(screen.getByRole("button", { name: "Suspend" })).toBeTruthy();
-      expect(screen.queryByRole("button", { name: "Details" })).toBeNull();
+      expect(screen.getByRole("button", { name: "Details" })).toBeTruthy();
       expect(await menuItems()).toEqual([
         "Open a tab",
         "Open terminal",
         "Rename",
         "Idle settings…",
         "Stop",
-        "Details",
         "Destroy",
       ]);
       expect(screen.queryByRole("button", { name: "Retry setup" })).toBeNull();

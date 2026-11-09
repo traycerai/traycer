@@ -706,7 +706,7 @@ function showFileTree(): void {
 describe("AgentHoverTooltip host section", () => {
   beforeEach(showFileTree);
 
-  it("shows host identity, cost, payer, shape and actions for a row in the viewer's sandbox list", async () => {
+  it("shows host identity, cost, payer, shape and actions for a row in the viewer's sandbox list", () => {
     h.sandboxes = [sandboxRow({})];
     h.cost = [{ sandboxId: "sbx-1", todayMillicredits: 2000 }];
     h.busySessionCount = 3;
@@ -740,18 +740,15 @@ describe("AgentHoverTooltip host section", () => {
     expect(text).toContain(hoverTodayCost(2000));
     expect(text).toContain("Suspends after 30 idle min");
     expect(text).toContain("destroyed after 7 idle days");
-    const sessions = closedSessionDisclosure("3 sessions");
-    expect(sessions.tagName).not.toBe("BUTTON");
-    expect(sessions.className).toContain("max-w-full");
-    expect(sessions.className).toContain("break-words");
-    expect(sessions.className).not.toContain("underline");
-    const body = openedSessionBody(sessions);
-    expect(within(body).getByText("Creator, build")).toBeDefined();
-    expect(within(body).getByText("1 more in other tasks")).toBeDefined();
-    expect(within(body).queryByTestId("agent-host-activity")).toBeNull();
+    const section = screen.getByTestId("worktree-host-section");
+    expect(section.querySelector("details")).toBeNull();
+    expect(within(section).getByText("Creator, build")).toBeDefined();
+    expect(within(section).getByText("1 more in other tasks")).toBeDefined();
+    expect(within(section).queryByTestId("agent-host-activity")).toBeNull();
+    expect(screen.queryByRole("button", { name: "3 sessions" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Creator, build" })).toBeNull();
     expect(h.refetchAgents).toHaveBeenCalled();
     expect(h.refetchTerminals).toHaveBeenCalled();
-    await userEvent.click(sessionSummary(sessions));
     expect(h.openDetails).not.toHaveBeenCalled();
     for (const name of ["Open terminal", "Files", "Details"]) {
       expect(screen.getByRole("button", { name })).toBeDefined();
@@ -987,7 +984,7 @@ describe("AgentHoverTooltip host section", () => {
       });
     }
 
-    it("counts listed and busy sessions as one total, after the idle policy", () => {
+    it("shows agents and terminals on the host, after the idle policy", () => {
       h.sessions = {
         agents: [agentSessionFixture({})],
         terminals: [terminalSessionFixture({})],
@@ -995,58 +992,57 @@ describe("AgentHoverTooltip host section", () => {
       renderAwake();
 
       const section = screen.getByTestId("worktree-host-section");
-      const sessions = closedSessionDisclosure("2 sessions");
-      const bodyElement = sessions.querySelector(":scope > div");
-      expect(bodyElement?.classList.contains("max-h-40")).toBe(true);
-      expect(bodyElement?.classList.contains("overflow-y-auto")).toBe(true);
-      expect(bodyElement?.classList.contains("overscroll-contain")).toBe(true);
+      expect(section.querySelector("details")).toBeNull();
+      const activity = within(section).getByTestId("agent-host-activity");
+      expect(activity.textContent).toBe("1 agent and 1 terminal on it");
+      expect(section.textContent).toContain("2 more in other tasks");
+      expect(section.textContent).not.toContain("4 sessions");
       const idle = within(section).getByText("Suspends after 30 idle min", {
         exact: false,
       });
       expect(
-        idle.compareDocumentPosition(sessions) &
+        idle.compareDocumentPosition(activity) &
           Node.DOCUMENT_POSITION_FOLLOWING,
       ).toBeTruthy();
-      const body = openedSessionBody(sessions);
-      expect(within(body).getByTestId("agent-host-activity").textContent).toBe(
-        "1 agent and 1 terminal on it",
-      );
-      expect(within(body).getByText("2 more in other tasks")).toBeDefined();
     });
 
-    it("counts the busy sessions when the host lists one terminal", () => {
+    it("shows the busy remainder when the host lists one terminal", () => {
       h.sessions = {
         agents: [],
         terminals: [terminalSessionFixture({})],
       };
       renderAwake();
 
-      const body = openedSessionBody(closedSessionDisclosure("2 sessions"));
-      expect(within(body).getByTestId("agent-host-activity").textContent).toBe(
-        "1 terminal on it",
-      );
-      expect(within(body).getByText("2 more in other tasks")).toBeDefined();
+      const section = screen.getByTestId("worktree-host-section");
+      expect(section.querySelector("details")).toBeNull();
+      expect(
+        within(section).getByTestId("agent-host-activity").textContent,
+      ).toBe("1 terminal on it");
+      expect(section.textContent).toContain("2 more in other tasks");
+      expect(section.textContent).not.toContain("3 sessions");
     });
 
-    it("counts the busy sessions when the host sends no list", () => {
+    it("shows the busy remainder when the host sends no list", () => {
       h.sessions = null;
       renderAwake();
 
-      const body = openedSessionBody(closedSessionDisclosure("2 sessions"));
-      expect(within(body).getByText("2 more in other tasks")).toBeDefined();
-      expect(within(body).queryByTestId("agent-host-activity")).toBeNull();
+      const section = screen.getByTestId("worktree-host-section");
+      expect(section.querySelector("details")).toBeNull();
+      expect(section.textContent).toContain("2 more in other tasks");
+      expect(within(section).queryByTestId("agent-host-activity")).toBeNull();
     });
 
-    it("counts the busy sessions when the host lists nothing", () => {
+    it("shows the busy remainder when the host lists nothing", () => {
       h.sessions = { agents: [], terminals: [] };
       renderAwake();
 
-      const body = openedSessionBody(closedSessionDisclosure("2 sessions"));
-      expect(within(body).getByText("2 more in other tasks")).toBeDefined();
-      expect(within(body).queryByTestId("agent-host-activity")).toBeNull();
+      const section = screen.getByTestId("worktree-host-section");
+      expect(section.querySelector("details")).toBeNull();
+      expect(section.textContent).toContain("2 more in other tasks");
+      expect(within(section).queryByTestId("agent-host-activity")).toBeNull();
     });
 
-    it("draws no session disclosure when the live report totals zero", () => {
+    it("draws nothing about sessions when the live report totals zero", () => {
       h.sessions = { agents: [], terminals: [] };
       h.sandboxes = [sandboxRow({})];
       h.busySessionCount = 0;
@@ -1057,9 +1053,12 @@ describe("AgentHoverTooltip host section", () => {
       });
 
       const section = screen.getByTestId("worktree-host-section");
+      expect(section.querySelector("details")).toBeNull();
       expect(within(section).queryByTestId("agent-host-sessions")).toBeNull();
+      expect(within(section).queryByTestId("agent-host-activity")).toBeNull();
       expect(section.textContent).not.toContain(SESSIONS_UNKNOWN);
       expect(section.textContent).not.toContain("0 sessions");
+      expect(section.textContent).not.toContain("more in other tasks");
     });
   });
 
@@ -1132,14 +1131,12 @@ describe("AgentHoverTooltip host section", () => {
     expect(text).toContain("team-box");
     expect(text).toContain(hoverTaskConfiguration("acme"));
     expect(text).toContain(reachSentence(REACH_UNNAMED_HOSTS));
-    // Closed, the count is visible but agent names stay inside the disclosure.
+    // Closed, the count is the summary. Names stay in the disclosure until it opens.
     const sessions = closedSessionDisclosure(hoverAlsoInTask(1));
     expect(card.contains(sessions)).toBe(true);
+    expect(sessionSummary(sessions).textContent).not.toContain("Planner");
     const otherAgents = openedSessionBody(sessions);
     expect(otherAgents.textContent).toBe("Planner");
-    expect(otherAgents.classList.contains("max-h-40")).toBe(true);
-    expect(otherAgents.classList.contains("overflow-y-auto")).toBe(true);
-    expect(otherAgents.classList.contains("overscroll-contain")).toBe(true);
 
     expect(screen.getByRole("button", { name: TASK_FILES })).toBeDefined();
     for (const name of ["Open terminal", "Details", KEEP_THIS_SANDBOX]) {
@@ -1303,7 +1300,7 @@ describe("AgentHoverTooltip host section", () => {
   });
 
   describe("held session snapshot", () => {
-    const LIVE = "3 sessions";
+    const SHOWN = "Creator, build";
 
     function holdSessions(count: number, at: number): void {
       h.sandboxes = [sandboxRow({})];
@@ -1335,24 +1332,26 @@ describe("AgentHoverTooltip host section", () => {
         ownerKind: "chat",
         ownerHostUnreachable: false,
       });
-      closedSessionDisclosure(LIVE);
+      expect(sectionText()).toContain(SHOWN);
       expect(sectionText()).not.toContain(SESSIONS_UNKNOWN);
+      expect(screen.queryByTestId("agent-host-sessions")).toBeNull();
 
       act(() => {
         vi.advanceTimersByTime(29_999);
       });
-      closedSessionDisclosure(LIVE);
+      expect(sectionText()).toContain(SHOWN);
       expect(sectionText()).not.toContain(SESSIONS_UNKNOWN);
 
       act(() => {
         vi.advanceTimersByTime(1);
       });
       expect(sectionText()).toContain(SESSIONS_UNKNOWN);
+      expect(sectionText()).not.toContain(SHOWN);
+      expect(sectionText()).not.toContain("3 sessions");
       expect(screen.queryByTestId("agent-host-sessions")).toBeNull();
-      expect(sectionText()).not.toContain(LIVE);
     });
 
-    it("shows unknown while the task lists predate a newer held count, then the refreshed count", () => {
+    it("shows unknown while the task lists predate a newer held count, then the refreshed names", () => {
       const base = Date.now();
       holdSessions(3, base);
       const view = renderAgent({
@@ -1373,20 +1372,22 @@ describe("AgentHoverTooltip host section", () => {
           }),
         );
       };
-      closedSessionDisclosure(LIVE);
+      expect(sectionText()).toContain(SHOWN);
+      expect(sectionText()).toContain("1 more in other tasks");
+      expect(screen.queryByTestId("agent-host-sessions")).toBeNull();
       // The held status asks the task lists to refresh once.
       expect(h.refetchAgents).toHaveBeenCalledTimes(1);
       expect(h.refetchTerminals).toHaveBeenCalledTimes(1);
 
-      // A newer count lands while both snapshots are older than it.
+      // A newer count lands while both snapshots are older than it: combining
+      // them would call the new work "in other tasks".
       h.busySessionCount = 5;
       h.statusUpdatedAt = base + 1_000;
       rerenderSame(view);
       expect(sectionText()).toContain(SESSIONS_UNKNOWN);
       expect(screen.queryByTestId("agent-host-sessions")).toBeNull();
-      expect(sectionText()).not.toContain(LIVE);
       expect(sectionText()).not.toContain("5 sessions");
-      expect(sectionText()).not.toContain("Creator, build");
+      expect(sectionText()).not.toContain(SHOWN);
       expect(sectionText()).not.toContain("more in other tasks");
       expect(h.refetchAgents).toHaveBeenCalledTimes(2);
       expect(h.refetchTerminals).toHaveBeenCalledTimes(2);
@@ -1398,15 +1399,15 @@ describe("AgentHoverTooltip host section", () => {
       expect(sectionText()).toContain(SESSIONS_UNKNOWN);
       expect(screen.queryByTestId("agent-host-sessions")).toBeNull();
       expect(sectionText()).not.toContain("5 sessions");
-      expect(sectionText()).not.toContain("Creator, build");
+      expect(sectionText()).not.toContain(SHOWN);
       expect(sectionText()).not.toContain("more in other tasks");
 
       h.listFetching = false;
       rerenderSame(view);
-      const body = openedSessionBody(closedSessionDisclosure("5 sessions"));
-      expect(within(body).getByText("Creator, build")).toBeDefined();
-      expect(within(body).getByText("3 more in other tasks")).toBeDefined();
-      expect(within(body).queryByTestId("agent-host-activity")).toBeNull();
+      expect(sectionText()).toContain(SHOWN);
+      expect(sectionText()).toContain("3 more in other tasks");
+      expect(screen.queryByTestId("agent-host-sessions")).toBeNull();
+      expect(sectionText()).not.toContain(SESSIONS_UNKNOWN);
     });
   });
 });
