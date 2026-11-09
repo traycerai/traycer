@@ -9,11 +9,10 @@ import {
   type SchemaVersion,
 } from "@traycer/protocol/framework/index";
 import {
-  downgradeRequestAcrossMajors,
-  downgradeResponseAcrossMajors,
   upgradeRequestToVersion,
   upgradeResponseToVersion,
 } from "@traycer/protocol/framework/versioned-rpc";
+import { decodeResponsePayload } from "@traycer/protocol/host-transport/remote/rpc-codec";
 import {
   configEnvSetUpgradeV10ToV11,
   configEnvSetV10,
@@ -1817,6 +1816,17 @@ describe("environment.status@1.1 and environment.review@1.1 upgrade from @1.0 to
       hostRpcRegistry[
         "environment.status"
       ][1].versions[2].contract.responseSchema.parse(answer),
+    ).toEqual(answer);
+    // A newer minor's response passes through to an older client unchanged.
+    expect(
+      decodeResponsePayload(
+        hostRpcRegistry["environment.status"],
+        ONE_ONE,
+        { major: 1, minor: 2 },
+        answer,
+        "status-minor",
+        "environment.status",
+      ),
     ).toEqual(answer);
     const { acceptedUploads: _receipts, ...frozenAnswer } = answer;
     expect(

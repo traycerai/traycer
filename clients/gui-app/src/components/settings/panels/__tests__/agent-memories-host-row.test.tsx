@@ -1088,28 +1088,31 @@ describe("Agent memories ▸ the host row's write", () => {
     );
   });
 
-  it("leaves a queued edit unconfirmed when a 1.1 host cannot supply acceptance evidence", async () => {
+  it("shows a queued edit's stale refusal from a negotiated 1.1 host", async () => {
     script.set = () => queuedAnswer(UPLOAD);
-    script.reads = [read(false, 5), read(true, 7)];
-    const status = vi.fn(() =>
-      Promise.resolve(
-        environmentStatusFixture({
-          acceptedUploads: [receipt({ revision: 7 })],
-        }),
-      ),
-    );
-    script.status = status;
+    script.reads = [read(false, 5)];
+    script.statuses = [
+      environmentStatusFixture({
+        pendingUploads: [
+          pendingUploadFixture({
+            kind: "agent_memory",
+            key: "memory",
+            uploadId: UPLOAD,
+            receipt: "refused",
+            code: "ENVIRONMENT_WRITE_STALE",
+          }),
+        ],
+      }),
+    ];
     const harness = mountTeamPageNegotiating({ kind: "host" }, handlers(), {
       "environment.status": { major: 1, minor: 1 },
     });
     render(<AgentMemoriesSettingsPanel />, { wrapper: harness.Wrapper });
     await flipOn();
 
-    await vi.advanceTimersByTimeAsync(AGENT_MEMORY_CONFIRM_BOUND_MS + 1_000);
     await waitFor(async () =>
-      expect(await line()).toContain("can't be shown here"),
+      expect(await line()).toContain("Someone else changed this setting first"),
     );
-    expect(status).not.toHaveBeenCalled();
   });
 
   it("keeps an acknowledgement whose revision the host's projection already passed, instead of losing the write to the fast path", async () => {

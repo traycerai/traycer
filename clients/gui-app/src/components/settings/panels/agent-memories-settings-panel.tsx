@@ -278,10 +278,6 @@ function AgentMemoriesRow(): ReactNode {
       response,
       attempt: requestContext,
     }),
-    requiredHostMethodVersion: () => ({
-      method: "environment.status",
-      version: { major: 1, minor: 2 },
-    }),
   });
   const confirmationReadHash = useHostQueryEntryHash({
     cacheKeyIdentity: confirmationIdentity,
