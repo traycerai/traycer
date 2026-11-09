@@ -31,6 +31,8 @@ function openWindow(
     readManifest,
     openPorts,
     random: () => 0.5,
+    recordingChannel: () => null,
+    openMediaSession: () => null,
   }).getState;
 }
 
@@ -212,6 +214,8 @@ describe("the soundtrack lock when the browser's answers come late", () => {
       readManifest: readBundled,
       openPorts: openFakePorts,
       random: () => 0.5,
+      recordingChannel: () => null,
+      openMediaSession: () => null,
     });
     const seen: boolean[] = [];
     store.subscribe((state) => {

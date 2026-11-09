@@ -361,6 +361,11 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
     args: [],
   },
   {
+    path: "host pin",
+    options: [],
+    args: [],
+  },
+  {
     path: "host status",
     options: [
       { flags: "--json", mandatory: false },
@@ -490,6 +495,7 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
     options: [
       { flags: "--accept-store-format-loss", mandatory: false },
       { flags: "--allow-self-invocation", mandatory: false },
+      { flags: "--bundled <path>", mandatory: false },
       { flags: "--force", mandatory: false },
       { flags: "--from <path>", mandatory: false },
       { flags: "--json", mandatory: false },
@@ -505,8 +511,8 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
     ],
     args: [],
   },
-  // Tracy Bots T141: a team's own machine joins with the app's one-time
-  // install token.
+  // A team's own machine joins with the app's one-time install token, which
+  // it asks for rather than taking as an argument.
   {
     path: "host join",
     options: [
@@ -514,7 +520,7 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
       { flags: "--no-progress", mandatory: false },
       { flags: "--quiet", mandatory: false },
     ],
-    args: [{ name: "token", required: true, variadic: false }],
+    args: [],
   },
   {
     path: "host apply",
@@ -957,6 +963,7 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
       { flags: "--profile <ambient|id>", mandatory: false },
       { flags: "--quiet", mandatory: false },
       { flags: "--reasoning-effort <effort>", mandatory: false },
+      { flags: "--service-tier <id>", mandatory: false },
       { flags: "--surface <surface>", mandatory: false },
       { flags: "--workspace-entry <workspace=path>", mandatory: false },
       { flags: "--workspace-path <path>", mandatory: false },
@@ -968,12 +975,15 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
     options: [
       { flags: "--agent-id <id>", mandatory: true },
       { flags: "--cwd <path>", mandatory: false },
+      { flags: "--fast", mandatory: false },
       { flags: "--json", mandatory: false },
       { flags: "--name <name>", mandatory: false },
+      { flags: "--no-fast", mandatory: false },
       { flags: "--no-progress", mandatory: false },
       { flags: "--permission-mode <mode>", mandatory: false },
       { flags: "--profile <ambient|id>", mandatory: false },
       { flags: "--quiet", mandatory: false },
+      { flags: "--service-tier <id>", mandatory: false },
       { flags: "--workspace-entry <workspace=path>", mandatory: false },
       { flags: "--workspace-path <path>", mandatory: false },
     ],
@@ -1002,6 +1012,7 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
     options: [
       { flags: "--json", mandatory: false },
       { flags: "--no-progress", mandatory: false },
+      { flags: "--profile <ambient|id>", mandatory: false },
       { flags: "--quiet", mandatory: false },
     ],
     args: [{ name: "harness", required: true, variadic: false }],
@@ -1038,6 +1049,7 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
       { flags: "--profile <ambient|id>", mandatory: true },
       { flags: "--quiet", mandatory: false },
       { flags: "--reasoning-effort <effort>", mandatory: false },
+      { flags: "--service-tier <id>", mandatory: false },
     ],
     args: [],
   },

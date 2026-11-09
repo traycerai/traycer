@@ -77,13 +77,13 @@ export function useWorkspaceRecordRecentWorkspace(args: {
       onError: (_error, variables) => {
         if (variables.failureFeedback !== "move_warning") return;
         reportableErrorToast(
-          "Workspace wasn't moved because it couldn't be saved to Recent.",
+          "Folder wasn't moved because it couldn't be saved to Recent.",
           undefined,
           {
-            title: "Could not save recent workspace",
+            title: "Could not save recent folder",
             message: null,
             code: null,
-            source: "Workspace folders",
+            source: "Folders",
           },
         );
       },

@@ -27,10 +27,7 @@ import {
   type KeyRefusalFor,
 } from "./env-override-editor";
 import { envNamePlaceholder } from "./provider-env-name-placeholder";
-import {
-  providerEnvSubtitle,
-  providerNativeConfigOnlyEnvSubtitle,
-} from "./provider-env-subtitle";
+import { PROVIDER_ENV_TAB_SUBTITLE } from "./provider-env-subtitle";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import { useHostsRunningPersonal } from "@/components/settings/environment/use-hosts-running-configuration";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
@@ -79,12 +76,7 @@ function providerKeyRefusal(
  */
 const NO_PROVIDER_CLAIMS: ReadonlyMap<string, string> = new Map();
 
-export function ProviderEnvOverridesSection({
-  providerId,
-  overrides,
-  envOverrideScope,
-  keyHome,
-}: {
+export function ProviderEnvOverridesSection(props: {
   readonly providerId: ProviderId;
   /**
    * Opens the tab that holds this provider's key, named as that tab is named;
@@ -95,8 +87,13 @@ export function ProviderEnvOverridesSection({
     readonly key: string;
     readonly value: string | null;
   }[];
+  /**
+   * Still required from the provider row. The Env line no longer changes
+   * with it: every scope uses {@link PROVIDER_ENV_TAB_SUBTITLE}.
+   */
   readonly envOverrideScope: ProviderCliState["nativeCapabilities"]["envOverrideScope"];
 }) {
+  const { providerId, overrides, keyHome } = props;
   const providerName = PROVIDER_DISPLAY_NAMES[providerId];
   const queryClient = useQueryClient();
   const hostClient = useHostBinding()?.hostClient ?? null;
@@ -242,11 +239,7 @@ export function ProviderEnvOverridesSection({
           <div className="text-ui-sm font-medium text-foreground">
             Variables
           </div>
-          <ProviderEnvSubtitleLine
-            providerName={providerName}
-            nativeConfigOnly={envOverrideScope === "native-config-only"}
-            local={local}
-          />
+          <ProviderEnvSubtitleLine />
         </div>
         {setOverride.isPending || deleteOverride.isPending ? (
           <MutedAgentSpinner />
@@ -285,23 +278,11 @@ export function ProviderEnvOverridesSection({
   );
 }
 
-/** What the provider's variables apply to. */
-function ProviderEnvSubtitleLine(props: {
-  readonly providerName: string;
-  readonly nativeConfigOnly: boolean;
-  readonly local: boolean;
-}): ReactNode {
-  const { providerName } = props;
-  const configuration = props.local
-    ? { kind: "local" as const }
-    : { kind: "personal" as const };
-  return props.nativeConfigOnly ? (
+/** The Env tab's one line. Reach does not change it. */
+function ProviderEnvSubtitleLine(): ReactNode {
+  return (
     <p className="text-ui-xs text-muted-foreground">
-      {providerNativeConfigOnlyEnvSubtitle(providerName, configuration)}
-    </p>
-  ) : (
-    <p className="text-ui-xs text-muted-foreground">
-      {providerEnvSubtitle(providerName, configuration)}
+      {PROVIDER_ENV_TAB_SUBTITLE}
     </p>
   );
 }

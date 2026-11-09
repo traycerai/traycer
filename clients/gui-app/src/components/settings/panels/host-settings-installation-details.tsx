@@ -1,10 +1,19 @@
 import type { ReactNode } from "react";
 import { HOST_OVERVIEW } from "@/components/settings/panels/host-overview.definitions";
 import {
+  HostOverviewFact,
+  HostOverviewFacts,
+} from "@/components/settings/panels/host-overview-facts";
+import { abbreviateIdentifier } from "@/components/settings/panels/host-overview-installation-model";
+import {
   describeOverviewDegrade,
   type OverviewDegradeReason,
 } from "@/components/settings/panels/host-overview-model";
 import { HostOverviewNotice } from "@/components/settings/panels/host-overview-status-card";
+import {
+  formatInstallDate,
+  formatSource,
+} from "@/components/settings/panels/host-settings-panel-model";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import type { HostInstallSourceTag } from "@traycer-clients/shared/platform/runner-host";
 
@@ -57,17 +66,23 @@ export interface InstallationDetailsRecord {
   readonly arch: string;
 }
 
+/** The CLI's sentinel for "this install was never signed". */
+const UNSIGNED_SIGNATURE_KEY_ID = "local-file:unsigned";
+
 interface InstallRecordGroupProps {
   readonly hostName: string;
   /** `host.getInstallationInfo` support, or why it is missing. */
   readonly degrade: OverviewDegradeReason | null;
+  readonly record: InstallationDetailsRecord | null;
+  readonly loading: boolean;
+  /** The read itself failed. That is not the same as no record. */
+  readonly readFailed: boolean;
 }
 
 /**
- * Installation ▸ Install record, shown only when the record cannot be shown:
- * `host.getInstallationInfo` is unsupported (`degrade`), or, with no `degrade`,
- * the read itself failed. A record that loaded, and a host with none, are
- * drawn by the tab from the model.
+ * Installation ▸ Install record. A failed read, a missing method, and a host
+ * with no record each say so. The version is the install runtime, which stays
+ * even when it matches the account's last report.
  */
 export function InstallRecordGroup(props: InstallRecordGroupProps): ReactNode {
   return (
@@ -78,17 +93,13 @@ export function InstallRecordGroup(props: InstallRecordGroupProps): ReactNode {
       dataTestId="host-overview-install-record"
       fill={false}
     >
-      <InstallRecordFailure {...props} />
+      <InstallRecordBody {...props} />
     </SettingsGroup>
   );
 }
 
-/**
- * A FAILED read is not an unmanaged host: collapsing both to "no record" made
- * the card assert that this host runs from a checkout or an unpacked tree - a
- * fact the RPC never established.
- */
-function InstallRecordFailure(props: InstallRecordGroupProps): ReactNode {
+function InstallRecordBody(props: InstallRecordGroupProps): ReactNode {
+  const { record } = props;
   if (props.degrade !== null) {
     return (
       <HostOverviewNotice testId="host-overview-installation-degraded">
@@ -96,9 +107,113 @@ function InstallRecordFailure(props: InstallRecordGroupProps): ReactNode {
       </HostOverviewNotice>
     );
   }
+  if (props.readFailed && record === null) {
+    return (
+      <HostOverviewNotice testId="host-overview-installation-unreadable">
+        {`Couldn't read ${props.hostName}'s installation record.`}
+      </HostOverviewNotice>
+    );
+  }
+  if (record === null) {
+    return (
+      <p
+        className="px-5 py-4 text-ui-sm text-muted-foreground"
+        data-testid="host-overview-installation-empty"
+      >
+        {props.loading
+          ? "Reading install record…"
+          : `${props.hostName} is running from a checkout or an unpacked tree, so it has no installation record.`}
+      </p>
+    );
+  }
+  return <InstallRecordFacts record={record} />;
+}
+
+function InstallRecordFacts(props: {
+  readonly record: InstallationDetailsRecord;
+}): ReactNode {
+  const { record } = props;
+  const verified = isSignatureVerified(record);
+  const showBuild =
+    record.runtimeVersion !== null && record.runtimeVersion !== record.version;
   return (
-    <HostOverviewNotice testId="host-overview-installation-unreadable">
-      {`Couldn't read ${props.hostName}'s installation record.`}
-    </HostOverviewNotice>
+    <HostOverviewFacts testId="host-overview-install-record-facts">
+      <HostOverviewFact
+        label="Version"
+        value={`v${record.runtimeVersion ?? record.version}`}
+        kind="code"
+        tone="default"
+        copy={null}
+        testId="settings-host-install-version"
+      />
+      {showBuild ? (
+        <HostOverviewFact
+          label="Build"
+          value={record.version}
+          kind="code"
+          tone="default"
+          copy={null}
+          testId="settings-host-install-build"
+        />
+      ) : null}
+      <HostOverviewFact
+        label="Source"
+        value={formatSource(record.source)}
+        kind="code"
+        tone="default"
+        copy={null}
+        testId={undefined}
+      />
+      <HostOverviewFact
+        label="Installed"
+        value={formatInstallDate(record.installedAt)}
+        kind="code"
+        tone="default"
+        copy={null}
+        testId={undefined}
+      />
+      <HostOverviewFact
+        label="Verification"
+        value={describeVerification(record)}
+        kind="code"
+        tone={verified ? "success" : "warning"}
+        copy={null}
+        testId="settings-host-verification"
+      />
+      {record.archiveSha256 !== null && record.archiveSha256.length > 0 ? (
+        <HostOverviewFact
+          label="SHA-256"
+          value={abbreviateIdentifier(record.archiveSha256)}
+          kind="code"
+          tone="default"
+          copy={{ value: record.archiveSha256, label: "Copy SHA-256" }}
+          testId="settings-host-install-sha256"
+        />
+      ) : null}
+      <HostOverviewFact
+        label="Platform"
+        value={`${record.platform}/${record.arch}`}
+        kind="code"
+        tone="default"
+        copy={null}
+        testId={undefined}
+      />
+    </HostOverviewFacts>
   );
+}
+
+function isSignatureVerified(record: InstallationDetailsRecord): boolean {
+  return (
+    record.signatureVerifiedAt !== null &&
+    record.signatureKeyId !== UNSIGNED_SIGNATURE_KEY_ID
+  );
+}
+
+function describeVerification(record: InstallationDetailsRecord): string {
+  if (record.signatureKeyId === UNSIGNED_SIGNATURE_KEY_ID) {
+    return "Unsigned local build";
+  }
+  return record.signatureVerifiedAt === null
+    ? "Unverified"
+    : `Verified ${formatInstallDate(record.signatureVerifiedAt)}`;
 }

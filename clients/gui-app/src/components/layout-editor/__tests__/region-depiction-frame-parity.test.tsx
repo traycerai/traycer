@@ -311,6 +311,7 @@ function renderToolbar(): void {
             hostId: null,
           })}
           onAttachImages={() => undefined}
+          onAttachFiles={() => undefined}
           canSubmit={false}
           attachmentPending={false}
           onSubmit={() => undefined}

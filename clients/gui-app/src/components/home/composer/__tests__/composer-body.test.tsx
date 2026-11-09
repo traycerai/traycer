@@ -111,11 +111,13 @@ function makePaste(): UseComposerPasteResult {
     onDragEnter: vi.fn(),
     onDragLeave: vi.fn(),
     attachImageFiles: vi.fn(),
+    attachFiles: vi.fn(),
     runPendingImageJob: vi.fn(),
     isDraggingFiles: true,
     dragOverlayVariant: "paths",
     isIngestingImages: false,
     isResolvingFilePaths: false,
+    isAttachingFiles: false,
   };
 }
 

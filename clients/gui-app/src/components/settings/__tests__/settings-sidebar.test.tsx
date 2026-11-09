@@ -317,6 +317,42 @@ describe("<SettingsSidebar /> leader hints", () => {
     ).toBeDefined();
   });
 
+  // Application Diagnostics needs a desktop bridge. The host group's
+  // Diagnostics row is a different section and stays; the two links share
+  // the accessible name, so the row is the app-diagnostics test id.
+  it("omits the Application Diagnostics entry in the installed mobile app", async () => {
+    setMobileApp(true);
+    const router = buildRouter("/settings/general");
+    render(
+      <KeybindingProvider router={router}>
+        <RouterProvider router={router} />
+      </KeybindingProvider>,
+    );
+
+    expect(await screen.findByRole("link", { name: "General" })).toBeDefined();
+    const diagnostics = screen.getAllByRole("link", { name: "Diagnostics" });
+    expect(diagnostics.map((link) => link.getAttribute("href"))).toEqual([
+      "/settings/diagnostics",
+    ]);
+  });
+
+  it("renders the Application Diagnostics entry on other builds", async () => {
+    setMobileApp(false);
+    const router = buildRouter("/settings/general");
+    render(
+      <KeybindingProvider router={router}>
+        <RouterProvider router={router} />
+      </KeybindingProvider>,
+    );
+
+    expect(await screen.findByRole("link", { name: "General" })).toBeDefined();
+    const diagnostics = screen.getAllByRole("link", { name: "Diagnostics" });
+    expect(diagnostics.map((link) => link.getAttribute("href"))).toEqual([
+      "/settings/app-diagnostics",
+      "/settings/diagnostics",
+    ]);
+  });
+
   // The machine console is labelled "Overview" now - it sits under the host
   // switcher, which supplies the machine's name, so repeating "Host" in the
   // entry would name the container twice. Its `id` and route are unchanged.
@@ -738,12 +774,14 @@ const EXPECTED_SECTION_GROUPS: ReadonlyArray<
   ["mcp-servers", "personal"],
   ["skills", "personal"],
   ["permissions", "personal"],
+  ["agent-memories", "personal"],
   ["agents", "personal"],
   ["fallback", "personal"],
   ["shell", "personal"],
   ["browser-agent-access", "personal"],
   ["secrets", "personal"],
   ["sandboxes", "personal"],
+  ["storage", "personal"],
   ["members", "personal"],
   ["agent-definitions", "personal"],
   ["machine-setup", "personal"],
@@ -912,7 +950,7 @@ describe("<SettingsSidebar /> scope groups", () => {
     expect(aside.contains(picker)).toBe(true);
   });
 
-  it("keeps the Hosts group and titles the rail picker View host without an introduction", async () => {
+  it("keeps the Hosts group and introduces the rail picker", async () => {
     const { hostScopeOptionFixture } =
       await import("@/components/settings/host-scope/host-scope-fixture");
     const member = hostScopeOptionFixture({
@@ -941,11 +979,11 @@ describe("<SettingsSidebar /> scope groups", () => {
 
     expect(screen.getByRole("heading", { name: "Hosts" })).not.toBeNull();
     fireEvent.click(screen.getByTestId("settings-host-switcher"));
-    expect(screen.getByText("View host")).not.toBeNull();
-    expect(screen.queryByText("Look at another machine")).toBeNull();
+    expect(screen.getByText("Look at another host")).not.toBeNull();
     expect(
-      screen.queryByText("Changes what this window shows. Nothing is created."),
-    ).toBeNull();
+      screen.getByText("Changes what this window shows. Nothing is created."),
+    ).not.toBeNull();
+    expect(screen.queryByText("View host")).toBeNull();
     expect(
       screen.getByTestId("settings-host-switcher-option-host-member"),
     ).not.toBeNull();
@@ -982,6 +1020,7 @@ describe("<SettingsSidebar /> scope groups", () => {
       "usage",
       "credits",
       "permissions",
+      "agent-memories",
       "sandboxes",
       "notifications",
     ]) {
@@ -1061,11 +1100,13 @@ describe("<SettingsSidebar /> Environment pick", () => {
     "MCP servers",
     "Skills",
     "Permissions",
+    "Agent memories",
     "Agents",
     "Model routing",
     "Variables & shells",
     "Secrets",
     "Sandboxes",
+    "Storage",
   ];
 
   it("lists Personal's Environment rows exactly, with no retired page and no Members", async () => {
@@ -1078,7 +1119,7 @@ describe("<SettingsSidebar /> Environment pick", () => {
     expect(present("credits")).toBe(true);
   });
 
-  it("hides MCP servers, Skills, Sandboxes and Members while a Local row is picked", async () => {
+  it("hides MCP servers, Skills, Sandboxes, Storage and Members while a Local row is picked", async () => {
     useSettingsEnvironmentPickStore.setState({
       pick: { kind: "local", hostId: "host-old", hostName: "Old laptop" },
     });
@@ -1088,6 +1129,7 @@ describe("<SettingsSidebar /> Environment pick", () => {
     expect(environmentRows()).toEqual([
       "Providers",
       "Permissions",
+      "Agent memories",
       "Agents",
       "Model routing",
       "Variables & shells",

@@ -1,5 +1,5 @@
 import {
-  type HostNotificationCloudEntryV27,
+  type HostNotificationCloudEntryV28,
   type HostNotificationOutcome,
 } from "@traycer/protocol/host/notifications/host-notifications";
 import {
@@ -39,7 +39,7 @@ export interface HostNotificationPresentation {
  * generic copy instead of throwing or exposing untrusted raw error text.
  */
 export function formatHostNotificationPresentation(
-  entry: HostNotificationCloudEntryV27,
+  entry: HostNotificationCloudEntryV28,
 ): HostNotificationPresentation {
   const known = parseKnownHostNotificationPayloadForKind(
     entry.kind,
@@ -121,6 +121,25 @@ export function formatHostNotificationPresentation(
       };
     case "secret.rotated":
       return secretRotatedPresentation(known);
+    case "access.readonly.retired":
+      if (known?.kind !== "readonly_access_retired") {
+        return {
+          title: "Read-only access removed",
+          body: "Ask the task owner or team admin for access again.",
+        };
+      }
+      if (known.scope === "task") {
+        return {
+          title: "Read-only task access removed",
+          body: `Your read-only grant to ${known.taskTitle} was removed. Ask the task owner for access again. Other access you have is unchanged.`,
+        };
+      }
+      return {
+        title: known.invitation
+          ? "Read-only team invitation removed"
+          : "Read-only team membership removed",
+        body: `Your read-only ${known.invitation ? "invitation to" : "membership in"} ${known.teamName} was removed. Ask the team admin for access again. Other access you have is unchanged.`,
+      };
     case "team.member.removed":
     case "team.member.joined":
     case "team.policy.unapplied":
@@ -375,7 +394,12 @@ function environmentNotificationPresentation(
   }
 }
 
-/** A role read off a payload as a string; a role newer than this build reads as-is. */
+/**
+ * A role read off a payload as a string; a role newer than this build reads
+ * as-is. `viewer` is retired and no notice reports a move to or from it any
+ * more, but a notice written before the retirement still names it, and an old
+ * row renders the sentence it always did.
+ */
 function roleName(role: string): string {
   switch (role) {
     case "owner":
@@ -698,6 +722,7 @@ export function hostOperationKnownCopy(
     case "team_host_returned":
     case "secret_removed":
     case "sandbox_notice":
+    case "readonly_access_retired":
     case "notification_hooks_removed":
       return null;
     // The host no longer writes the worktree operations; readers drop them.
@@ -808,6 +833,7 @@ function knownTaskTitle(payload: HostNotificationKnownPayload): string | null {
     case "team_host_returned":
     case "secret_removed":
     case "sandbox_notice":
+    case "readonly_access_retired":
     case "notification_hooks_removed":
       return null;
   }
@@ -845,6 +871,7 @@ function knownAgentName(payload: HostNotificationKnownPayload): string | null {
     case "team_host_returned":
     case "secret_removed":
     case "sandbox_notice":
+    case "readonly_access_retired":
     case "notification_hooks_removed":
       return null;
   }
@@ -882,6 +909,7 @@ function knownChatTitle(payload: HostNotificationKnownPayload): string | null {
     case "team_host_returned":
     case "secret_removed":
     case "sandbox_notice":
+    case "readonly_access_retired":
     case "notification_hooks_removed":
       return null;
   }
@@ -924,6 +952,7 @@ function knownStoppedReason(
     case "team_host_returned":
     case "secret_removed":
     case "sandbox_notice":
+    case "readonly_access_retired":
     case "notification_hooks_removed":
       return null;
   }
@@ -965,6 +994,7 @@ function knownProviderId(
     case "team_host_returned":
     case "secret_removed":
     case "sandbox_notice":
+    case "readonly_access_retired":
     case "notification_hooks_removed":
       return null;
   }
@@ -1018,6 +1048,7 @@ function knownUnverified(payload: HostNotificationKnownPayload): boolean {
     case "team_host_returned":
     case "secret_removed":
     case "sandbox_notice":
+    case "readonly_access_retired":
     case "notification_hooks_removed":
       return false;
   }
@@ -1057,6 +1088,7 @@ function knownBackgroundWorkRunning(
     case "team_host_returned":
     case "secret_removed":
     case "sandbox_notice":
+    case "readonly_access_retired":
     case "notification_hooks_removed":
       return false;
   }

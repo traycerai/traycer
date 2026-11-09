@@ -50,7 +50,7 @@ export function TeardownCommitDialog(props: {
     >
       <DialogContent
         layout="banded"
-        className="w-full min-w-0 overflow-hidden"
+        className="flex w-full min-w-0 flex-col overflow-hidden"
         style={{ maxWidth: "min(92vw, 34rem)" }}
         showCloseButton={false}
         data-testid="teardown-commit-dialog"
@@ -68,7 +68,7 @@ export function TeardownCommitDialog(props: {
             </p>
           )}
         </DialogHeader>
-        <div className="min-w-0 w-full overflow-hidden px-6 py-2">
+        <div className="min-h-0 w-full min-w-0 overflow-y-auto px-6 py-2">
           <TeardownDisclosure
             holders={props.holders}
             failures={props.failures}
@@ -147,7 +147,7 @@ function dialogTitle(choice: TeardownCommitChoice | null): string {
   }
   if (choice === "submit") return "Send in the new folder?";
   if (choice === "remove") return "Remove this folder?";
-  return "Switch workspace?";
+  return "Switch folder?";
 }
 
 function dialogDescription(

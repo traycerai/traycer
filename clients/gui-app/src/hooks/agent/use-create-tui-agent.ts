@@ -557,7 +557,7 @@ async function dispatchWorktreeIntent(
         (entryResult) =>
           entryResult.workspacePath === failedPaths[0] && !entryResult.ok,
       )?.errorMessage ?? null;
-    const message = `Couldn't prepare the workspace for ${scope}. The terminal agent was not launched.`;
+    const message = `Couldn't prepare the folder for ${scope}. The terminal agent was not launched.`;
     reportableErrorToast(
       message,
       reason === null ? undefined : { description: reason },

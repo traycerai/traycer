@@ -805,11 +805,11 @@ function worktreeEntryLabel(
         : null;
     case "local":
       return entry.workspacePath.length > 0
-        ? `the workspace checkout ${entry.workspacePath}`
+        ? `the folder checkout ${entry.workspacePath}`
         : null;
     default:
       // A new entry kind must be NAMED here, not absorbed by an else-branch
-      // that labels it "the workspace checkout" and quietly misdescribes what
+      // that labels it "the folder checkout" and quietly misdescribes what
       // the send was staged to do. Same fail-closed rule the content
       // classification follows, enforced at compile time.
       return assertNeverEntry(entry);

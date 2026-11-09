@@ -103,10 +103,11 @@ No workflow filters its own push trigger by path. Narrowing is always a
 job-level skip inside a run that happened, because the internal repository's
 release gate refuses a commit whose own push started no run.
 
-`trunk-red.yml` re-runs failed jobs once; a failed `trunk-red` run means `main`
-is really red, a break to fix or revert, not a flake. A red merge stays red
-until a run covering it passes, and a red `main` blocks the internal
-repository's staging train and promotion.
+No test may need a retry: a test passes on its first attempt (owner ruling,
+3 Nov 2026). `trunk-red.yml` re-runs nothing, so a failed `trunk-red` run means
+a merge run failed on attempt 1 and `main` is red, to be fixed forward. A red
+merge stays red until a run covering it passes, and a red `main` blocks the
+internal repository's staging train and promotion.
 
 How the gate works and how a new workflow carries it:
 [`.github/AGENTS.md`](.github/AGENTS.md).
@@ -176,6 +177,9 @@ ReturnType<typeof fn>          // name the concrete type
 | Keep runtime declarations with no production consumer.          | Remove unused declarations and tests that exercise only them.                         |
 | Check for a result the private implementation cannot return.    | Make its return type exact and remove the unreachable branch.                         |
 | Cast a partial fixture to a constructible browser type.         | Use the real constructor to create the fixture.                                       |
+| Write a comment that restates the next line or assertion.       | Remove it; comment only a reason or invariant the code cannot show.                   |
+| Copy a fixture another test file already builds.                | Import or spread the shared fixture; override only the fields that differ.            |
+| Reassign a fixture to the value its setup already gave it.      | Keep the shared setup; override only what the test changes.                           |
 
 ## Skills
 

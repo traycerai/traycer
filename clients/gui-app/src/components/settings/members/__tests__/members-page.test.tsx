@@ -195,6 +195,32 @@ describe("MembersPage members read", () => {
     expect(failure.textContent).toBe("Couldn't load Acme's members.Retry");
   });
 
+  it("keeps a listed retired role from regaining admin controls through the descriptor", async () => {
+    useAuthStore.setState({
+      profile: { userId: "u-admin", userName: "Ada", email: "ada@acme.test" },
+    });
+    const harness = mountTeamPage(
+      { kind: "host" },
+      {
+        "environment.list": () => ({ environments: [TEAM] }),
+        "environment.members": () =>
+          membersPage([{ ...ADA, effectiveRole: "viewer" }, PRIYA]),
+      },
+    );
+    render(<MembersPage environmentId="env-a" />, {
+      wrapper: harness.Wrapper,
+    });
+
+    await screen.findByText("Acme · 2 people");
+    expect(screen.queryByRole("button", { name: "Invite" })).toBeNull();
+    expect(
+      within(rowOf("u-priya")).queryByRole("button", { name: "Remove" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("combobox", { name: "Role for Priya" }),
+    ).toBeNull();
+  });
+
   it("names members by name and email, you by name, and never by user id", async () => {
     useAuthStore.setState({
       profile: { userId: "u-admin", userName: "Ada", email: "ada@acme.test" },
@@ -579,7 +605,7 @@ describe("MembersPage offboarding previews", () => {
       await screen.findByRole("combobox", { name: "Role for Grace" }),
     );
     await userEvent.click(
-      await screen.findByRole("option", { name: "Viewer" }),
+      await screen.findByRole("option", { name: "Editor" }),
     );
     const table = await screen.findByTestId("members-demotion-preview-table");
     expect(table.textContent).toContain("Unavailable");
@@ -605,7 +631,7 @@ describe("MembersPage offboarding previews", () => {
       await screen.findByRole("combobox", { name: "Role for Grace" }),
     );
     await userEvent.click(
-      await screen.findByRole("option", { name: "Viewer" }),
+      await screen.findByRole("option", { name: "Editor" }),
     );
     // A refused read is an answer, so the dialog opens on it rather than
     // staying shut — and it opens with the failure line already in it, which
@@ -632,8 +658,8 @@ describe("MembersPage offboarding previews", () => {
 });
 
 const PENDING_SEATS_SENTENCE =
-  "Pending invitations count toward Acme's paid seats as soon as they are sent, before acceptance.";
-const SEAT_SENTENCE = `${PENDING_SEATS_SENTENCE} Acme will use 5 of 5 seats; nothing is charged now. The next invitation will add a seat.`;
+  "Pending invitations count toward the team's paid seats as soon as they are sent, before acceptance.";
+const SEAT_SENTENCE = `${PENDING_SEATS_SENTENCE} The team will use 5 of 5 seats; nothing is charged now. The next invitation will add a seat.`;
 
 async function openInvite(): Promise<void> {
   await userEvent.click(await screen.findByRole("button", { name: "Invite" }));
@@ -665,13 +691,13 @@ describe("MembersPage invite seats", () => {
       name: "a full team, which adds a seat and charges it now",
       seats: { used: 5, total: 5 },
       sentence:
-        "Acme has no free seat, so sending this adds one: Acme will use 6 of 6 seats. The added seat is charged now to Acme's card on file, prorated for the rest of the current billing period.",
+        "The team has no free seat, so sending this adds one: it will use 6 of 6 seats. The added seat is charged now to the team's card on file, prorated for the rest of the current billing period.",
     },
     {
       name: "a team with seats to spare, which keeps only the seats in use at period end",
       seats: { used: 2, total: 5 },
       sentence:
-        "Acme will use 3 of 5 seats; nothing is charged now. At the end of this billing period, Acme keeps only the seats in use and stops paying for the others.",
+        "The team will use 3 of 5 seats; nothing is charged now. At the end of this billing period, the team keeps only the seats in use and stops paying for the others.",
     },
   ])(
     "states what sending does to the seats for $name",
@@ -740,7 +766,7 @@ describe("MembersPage invite seats", () => {
 
     await openInvite();
     const failed = await screen.findByTestId("members-invite-seats-failed");
-    expect(failed.textContent).toContain("Couldn't read Acme's seats.");
+    expect(failed.textContent).toContain("Couldn't read the team's seats.");
     await userEvent.type(
       screen.getByTestId("members-invite-email"),
       "new@acme.test",
@@ -931,7 +957,7 @@ describe("MembersPage refused writes", () => {
       { kind: "host" },
       {
         "environment.list": () => ({ environments: [TEAM] }),
-        "environment.members": () => membersPage([ADA, PRIYA]),
+        "environment.members": () => membersPage([ADA, GRACE]),
         "environment.members.removePreview": () => PREVIEW,
         "environment.members.setRole": () => ({ outcome: "forbidden" }),
       },
@@ -941,22 +967,22 @@ describe("MembersPage refused writes", () => {
     });
 
     await userEvent.click(
-      await screen.findByRole("combobox", { name: "Role for Priya" }),
+      await screen.findByRole("combobox", { name: "Role for Grace" }),
     );
     await userEvent.click(
-      await screen.findByRole("option", { name: "Viewer" }),
+      await screen.findByRole("option", { name: "Editor" }),
     );
     // A demotion is confirmed before it is written, so the refusal answers
     // the confirmed write.
     await userEvent.click(
-      await screen.findByRole("button", { name: "Change to viewer" }),
+      await screen.findByRole("button", { name: "Change to editor" }),
     );
 
     expect((await screen.findByTestId("members-banner")).textContent).toBe(
       "An admin changes roles.",
     );
     expect(harness.paramsOf("environment.members.setRole")).toEqual([
-      { environmentId: "env-a", userId: "u-priya", role: "viewer" },
+      { environmentId: "env-a", userId: "u-grace", role: "editor" },
     ]);
   });
 

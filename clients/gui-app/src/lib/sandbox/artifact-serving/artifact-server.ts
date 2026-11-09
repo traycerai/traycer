@@ -178,8 +178,9 @@ function waitForRead(
   });
 }
 
-/** One immutable manifest and document context per mounted artifact. */
+/** One document context per mounted artifact, and the manifest it serves. */
 export class ArtifactServer {
+  private manifest: ArtifactManifest;
   private readonly cache = new Map<string, CachedBytes>();
   private readonly pending = new Map<string, Promise<ReadResult>>();
   private cacheBytes = 0;
@@ -196,6 +197,17 @@ export class ArtifactServer {
     }
     this.treePrefix = options.treePath === "" ? "" : `${options.treePath}/`;
     this.outside = options.resolveOutsideReference ?? NO_OUTSIDE_REFERENCE;
+    this.manifest = options.manifest;
+  }
+
+  /**
+   * Serves a newer manifest from here on, for a mounted document that already
+   * carries the change (a comment's id stamped into it in place): a page read
+   * again later must get the stamped bytes, not the ones the mount began
+   * with. Cached bytes are checked against each file's sha, so none go stale.
+   */
+  replaceManifest(manifest: ArtifactManifest): void {
+    this.manifest = manifest;
   }
 
   dispose(): void {
@@ -314,10 +326,7 @@ export class ArtifactServer {
 
   private resolve(path: string): ResolvedFile | null {
     const own = path.startsWith(this.treePrefix)
-      ? resolveManifestPath(
-          this.options.manifest,
-          path.slice(this.treePrefix.length),
-        )
+      ? resolveManifestPath(this.manifest, path.slice(this.treePrefix.length))
       : null;
     if (own !== null) return { entry: own, compose: isDocument(path, own) };
     // A miss inside our prefix may name a child artifact. The resolver needs

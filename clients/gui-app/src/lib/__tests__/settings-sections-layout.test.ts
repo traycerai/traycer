@@ -4,7 +4,7 @@
  * then Diagnostics - the tenth desktop entry, which takes leader digit 0.
  * Account follows it, so Sessions - the first Account entry - and everything
  * after it (the rest of Account, all of Environment, the host group) has no
- * digit, Providers included. Desktop's Host ("Overview") is the twenty-eighth
+ * digit, Providers included. Desktop's Host ("Overview") is the twenty-ninth
  * entry. Mobile omits
  * Keybindings and Link mobile app. This suite pins the positions against
  * `visibleSettingsSections()`, the same list the leader-digit dispatcher walks.
@@ -85,6 +85,7 @@ describe("Layout section placement and digit reassignment", () => {
       "credits",
       "permissions",
       "sandboxes",
+      "storage",
       "members",
       "notifications",
       "host",
@@ -106,11 +107,13 @@ describe("Layout section placement and digit reassignment", () => {
       "MCP servers",
       "Skills",
       "Permissions",
+      "Agent memories",
       "Agents",
       "Model routing",
       "Variables & shells",
       "Secrets",
       "Sandboxes",
+      "Storage",
       "Members",
     ]);
   });
@@ -136,11 +139,11 @@ describe("Layout section placement and digit reassignment", () => {
     ).toBe("personal");
   });
 
-  it("pushes host (Overview) to index 27, past the single-digit leader limit", () => {
+  it("pushes host (Overview) to index 29, past the single-digit leader limit", () => {
     setMobileApp(false);
     const sections = visibleSettingsSections();
     const hostIndex = sections.findIndex((section) => section.id === "host");
-    expect(hostIndex).toBe(27);
+    expect(hostIndex).toBe(29);
   });
 
   it("keeps the first ten sections within the single-digit range", () => {

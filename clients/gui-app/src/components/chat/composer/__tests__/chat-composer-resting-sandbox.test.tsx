@@ -256,7 +256,10 @@ vi.mock("@/hooks/composer/use-composer-dictation", () => ({
     dictationPreparing: false,
   }),
 }));
-vi.mock("@/hooks/composer/use-composer-paste", () => ({
+vi.mock("@/hooks/composer/use-composer-paste", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/composer/use-composer-paste")
+  >()),
   isAttachmentIngestPending: () => false,
   useComposerHashPaste: () => ({
     onPaste: () => undefined,
@@ -265,9 +268,11 @@ vi.mock("@/hooks/composer/use-composer-paste", () => ({
     onDragEnter: () => undefined,
     onDragLeave: () => undefined,
     attachImageFiles: () => undefined,
+    attachFiles: () => undefined,
     dragOverlayVariant: null,
     isIngestingImages: false,
     isResolvingFilePaths: false,
+    isAttachingFiles: false,
     runPendingImageJob: () => undefined,
   }),
 }));
@@ -504,6 +509,7 @@ function mountComposerOn(
         sendDisabled={false}
         sendDisabledHint={null}
         mentionRoots={[]}
+        runWorkingDirectory={null}
         fallbackToGlobalMentionRoots={false}
         currentEpicId="epic-1"
         viewTabId="tab-1"

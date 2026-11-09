@@ -61,6 +61,13 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   },
 }));
 
+vi.mock("@/hooks/providers/use-providers-read-model-routes-query", () => ({
+  useProvidersReadModelRoutesQuery: () => ({
+    data: undefined,
+    refetch: () => Promise.resolve(undefined),
+  }),
+}));
+
 vi.mock("@/hooks/rate-limits/use-profile-usage-presentation", () => ({
   useProfileUsagePresentation: () => ({
     isHostReady: true,
@@ -203,6 +210,8 @@ function LandingRateLimitBannerHarness(props: {
     (state) => state.selection.profileId,
   );
   const prompt = useProfileRateLimitSwitchPrompt({
+    workingDirectory: null,
+    hostId: null,
     harnessId,
     profileId,
     selectedModel: props.selectedModel,
@@ -266,6 +275,8 @@ function ChatSurfaceDismissHarness(props: {
   readonly selectedModel: ModelOption | null;
 }) {
   const prompt = useProfileRateLimitSwitchPrompt({
+    workingDirectory: null,
+    hostId: null,
     harnessId: "claude",
     profileId: props.profileId,
     selectedModel: props.selectedModel,
@@ -331,6 +342,8 @@ function LoadingSeedHarness(props: {
   readonly selectedModel: ModelOption | null;
 }) {
   const prompt = useProfileRateLimitSwitchPrompt({
+    workingDirectory: null,
+    hostId: null,
     harnessId: "claude",
     profileId: props.profileId,
     selectedModel: props.selectedModel,

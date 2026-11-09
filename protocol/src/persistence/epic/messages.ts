@@ -527,14 +527,31 @@ export const botQuestionSettlementSchema = lazySchema(() =>
 );
 export type BotQuestionSettlement = z.infer<typeof botQuestionSettlementSchema>;
 
-export const botQuestionItemSchema = lazySchema(() =>
+/**
+ * One of a bot's questions as `chat.subscribe` lines through `1.42` and the
+ * epic records carry it: without `multiSelect`.
+ */
+const botQuestionItemSchemaPreMultiSelect = lazySchema(() =>
   z.object({
     text: z.string().min(1),
     /** Choices shown as buttons; empty for a question answered in words only. */
     options: z.array(z.string().min(1)),
+    /** Whether the person may answer in their own words. */
     allowFreeText: z.boolean(),
     /** `null` while the question is open. */
     settlement: botQuestionSettlementSchema.nullable(),
+  }),
+);
+export const botQuestionItemSchema = lazySchema(() =>
+  botQuestionItemSchemaPreMultiSelect.extend({
+    /**
+     * Whether several of the options may be picked (`chat.subscribe@1.43`),
+     * the answer then naming each one picked, joined with commas. Absent or
+     * `false` means one: a question written before the key, or read by a
+     * peer below `1.43`, which strips it on decode. Independent of
+     * `allowFreeText`. Optional for `turnProfile`'s reason.
+     */
+    multiSelect: z.boolean().optional(),
   }),
 );
 export type BotQuestionItem = z.infer<typeof botQuestionItemSchema>;
@@ -553,6 +570,12 @@ export const botQuestionSchema = lazySchema(() =>
   }),
 );
 export type BotQuestion = z.infer<typeof botQuestionSchema>;
+/** {@link botQuestionSchema} as the lines and records without `multiSelect` carry it. */
+const botQuestionSchemaPreMultiSelect = lazySchema(() =>
+  botQuestionSchema.extend({
+    questions: z.array(botQuestionItemSchemaPreMultiSelect).min(1),
+  }),
+);
 
 /**
  * The text a question row carries when the asker wrote nothing above its
@@ -916,7 +939,11 @@ export const assistantMessageSchemaV18 = lazySchema(() =>
     imageResolutions: z.array(imageResolutionEntrySchema).default([]),
   }),
 );
-export const assistantMessageSchema = lazySchema(() =>
+/**
+ * The assistant row `chat.subscribe` lines through `1.42` and the epic
+ * records carry: the live row with its questions saying no `multiSelect`.
+ */
+export const assistantMessageSchemaPreMultiSelect = lazySchema(() =>
   assistantMessageSchemaV18.extend({
     blocks: z.array(contentBlockSchema),
     /**
@@ -975,7 +1002,7 @@ export const assistantMessageSchema = lazySchema(() =>
      * reader that does not draw the card. Optional and live line only, as
      * `turnProfile`.
      */
-    question: botQuestionSchema.optional(),
+    question: botQuestionSchemaPreMultiSelect.optional(),
     /**
      * What in a task this bot post points at (Tracy Bots T89), drawn as a
      * card under the post's text; the bound host rewrites its `resolution`
@@ -986,21 +1013,32 @@ export const assistantMessageSchema = lazySchema(() =>
     surface: botSurfaceReferenceSchema.optional(),
   }),
 );
+export const assistantMessageSchema = lazySchema(() =>
+  assistantMessageSchemaPreMultiSelect.extend({
+    /** The row's questions, each of which may say `multiSelect` (`chat.subscribe@1.43`). */
+    question: botQuestionSchema.optional(),
+  }),
+);
 export type AssistantMessage = z.infer<typeof assistantMessageSchema>;
 
 export const messageSchema = lazySchema(() =>
   z.discriminatedUnion("role", [userMessageSchema, assistantMessageSchema]),
 );
-/** The message union of `chat.subscribe` lines through `1.42`: the user arm without `slack`. */
+/**
+ * The message union of `chat.subscribe` lines through `1.42`: the user arm
+ * without `slack`, the assistant arm without `multiSelect`.
+ */
 export const messageSchemaPreSlack = lazySchema(() =>
   z.discriminatedUnion("role", [
     userMessageSchemaPreSlack,
-    assistantMessageSchema,
+    assistantMessageSchemaPreMultiSelect,
   ]),
 );
 /** Epic records and released chat lines retain the four-kind operation block. */
 export const assistantMessageSchemaPreHtml = lazySchema(() =>
-  assistantMessageSchema.extend({ blocks: z.array(contentBlockSchemaPreHtml) }),
+  assistantMessageSchemaPreMultiSelect.extend({
+    blocks: z.array(contentBlockSchemaPreHtml),
+  }),
 );
 export const messageSchemaPreHtml = lazySchema(() =>
   z.discriminatedUnion("role", [

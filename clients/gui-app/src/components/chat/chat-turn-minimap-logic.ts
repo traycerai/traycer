@@ -124,6 +124,11 @@ export interface ChatTurnMinimapListState {
   readonly positionAtIndex?: (index: number) => number | undefined;
   readonly sizeAtIndex?: (index: number) => number | undefined;
   readonly topOffsetAdjustment?: number;
+  /**
+   * Whether the timeline is at its end: its follow mode, the same state that
+   * hides the jump-to-latest pill. Never derived from the geometry here.
+   */
+  readonly atEnd: boolean;
 }
 
 export interface ChatTurnMinimapTurnRange {
@@ -187,14 +192,20 @@ function mostVisibleQueryIndex(
 }
 
 /**
- * A visible user query is current. Otherwise, the reply occupying most of the
- * viewport keeps its triggering query current.
+ * At the end of the timeline the last turn is current, whatever queries are
+ * visible above it: at the end, short queries over a long last reply all
+ * show in full, and the tie below would hand the marker to the earliest of
+ * them while the person reads the last reply.
+ *
+ * Elsewhere a visible user query is current. Otherwise, the reply occupying
+ * most of the viewport keeps its triggering query current.
  */
 export function resolveChatTurnMinimapCurrentIndex(
   state: ChatTurnMinimapListState,
   turns: ReadonlyArray<ChatTurnMinimapTurnRange>,
 ): number | null {
   if (turns.length === 0) return null;
+  if (state.atEnd) return turns.length - 1;
   const topOffset = finiteValue(state.topOffsetAdjustment) ?? 0;
   const viewportTop = (finiteValue(state.scroll) ?? 0) - topOffset;
   const viewportBottom =

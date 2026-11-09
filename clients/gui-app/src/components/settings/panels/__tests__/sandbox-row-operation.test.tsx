@@ -25,10 +25,7 @@ import type { HostSandboxState } from "@traycer/protocol/host/host-status";
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import type { SandboxLifecycleVerbFetchResult } from "@traycer-clients/shared/host-client/sandbox-control";
 import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
-import {
-  SandboxCard,
-  SandboxHeaderActions,
-} from "@/components/hosts/sandbox-card";
+import { SandboxHeaderActions } from "@/components/hosts/sandbox-card";
 import { SandboxDetailsDrawerHost } from "@/components/hosts/sandbox-details-drawer";
 import { SandboxTileStateFrame } from "@/components/hosts/sandbox-tile-state-frame";
 import { SandboxRowActions } from "@/components/settings/panels/sandbox-row-actions";
@@ -507,7 +504,6 @@ describe("sandbox row operations", () => {
             renderActions={null}
           />
         </div>
-        <SandboxCard hostState="online" sandbox={sandbox} />
       </QueryClientProvider>,
     );
     const headerActions = screen.getByTestId("sandbox-header-actions");
@@ -609,7 +605,6 @@ describe("sandbox row operations", () => {
               renderActions={null}
             />
           </div>
-          <SandboxCard hostState="online" sandbox={sandbox} />
         </QueryClientProvider>,
       );
 
@@ -803,7 +798,6 @@ describe("sandbox row operations", () => {
               renderActions={null}
             />
           </div>
-          <SandboxCard hostState="online" sandbox={sandbox} />
         </QueryClientProvider>
       );
     };
@@ -884,13 +878,16 @@ describe("sandbox row operations", () => {
           .getByRole("button", { name: testCase.pending })
           .hasAttribute("disabled"),
       ).toBe(true);
-      await userEvent.click(
-        within(row).getByRole("button", { name: "More actions for build-box" }),
-      );
       expect(
-        screen.getAllByRole("menuitem").map((item) => item.textContent),
-      ).toEqual(["Details"]);
-      await userEvent.keyboard("{Escape}");
+        within(row)
+          .getByRole("button", { name: "Details" })
+          .hasAttribute("disabled"),
+      ).toBe(false);
+      expect(
+        within(row).queryByRole("button", {
+          name: "More actions for build-box",
+        }),
+      ).toBeNull();
       const otherRow = screen.getByRole("region", { name: "other-box" });
       expect(within(otherRow).queryByRole("status")).toBeNull();
       expect(

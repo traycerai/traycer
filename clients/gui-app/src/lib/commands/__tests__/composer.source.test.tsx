@@ -5,9 +5,10 @@ import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import {
-  registerFocusedComposerControls,
+  registerFocusedComposerControls as registerFocusedComposerControlsWithCatalog,
   resetFocusedComposerControlsForTests,
   type ComposerControls,
+  type FocusedComposerEntry,
 } from "@/lib/commands/composer-controls-registry";
 import {
   registerActiveModelPicker,
@@ -68,38 +69,40 @@ interface ComposerCatalogHarnessFixture {
   readonly modelsError: null;
 }
 
-const catalogMock: { harnesses: ComposerCatalogHarnessFixture[] } = vi.hoisted(
-  () => ({
-    harnesses: [
-      {
-        id: "codex",
-        label: "Codex",
-        available: true,
-        error: null,
-        models: [
-          {
-            harnessId: "codex",
-            slug: "gpt-live",
-            label: "GPT Live",
-            description: null,
-            isDefault: true,
-            contextWindow: null,
-            maxOutputTokens: null,
-            defaultReasoningEffort: "high",
-            supportedReasoningEfforts: [
-              { id: "high", label: "High", description: null },
-            ],
-            defaultServiceTier: null,
-            supportedServiceTiers: [],
-            metadata: {},
-          },
-        ],
-        modelsLoading: false,
-        modelsError: null,
-      },
-    ],
-  }),
-);
+const catalogMock: {
+  harnesses: ComposerCatalogHarnessFixture[];
+  profileCatalogs: Map<string, ComposerCatalogHarnessFixture[]>;
+} = vi.hoisted(() => ({
+  harnesses: [
+    {
+      id: "codex",
+      label: "Codex",
+      available: true,
+      error: null,
+      models: [
+        {
+          harnessId: "codex",
+          slug: "gpt-live",
+          label: "GPT Live",
+          description: null,
+          isDefault: true,
+          contextWindow: null,
+          maxOutputTokens: null,
+          defaultReasoningEffort: "high",
+          supportedReasoningEfforts: [
+            { id: "high", label: "High", description: null },
+          ],
+          defaultServiceTier: null,
+          supportedServiceTiers: [],
+          metadata: {},
+        },
+      ],
+      modelsLoading: false,
+      modelsError: null,
+    },
+  ],
+  profileCatalogs: new Map(),
+}));
 
 /**
  * Minimal shape the mocked binding / `useGuiHarnessCatalogForClient`
@@ -114,6 +117,10 @@ const focusedComposerCatalogMock = vi.hoisted(() => ({
   defaultClient: { getActiveHostId: () => "default-host" },
   clientCalls: [] as Array<{ getActiveHostId: () => string | null } | null>,
   lineCalls: [] as Array<1 | 2 | null>,
+  modelProfileCalls: [] as Array<{
+    readonly harnessId: string;
+    readonly profileId: string | null;
+  } | null>,
 }));
 
 const latestConversationWorkspaceSeedMock = vi.hoisted(() => ({
@@ -154,11 +161,23 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
     client: FakeCatalogHostClient | null,
     _workingDirectory: string | null,
     opencodeLine: 1 | 2 | null,
+    activity: {
+      readonly modelProfile?: {
+        readonly harnessId: string;
+        readonly profileId: string | null;
+      };
+    },
   ) => {
     focusedComposerCatalogMock.clientCalls.push(client);
     focusedComposerCatalogMock.lineCalls.push(opencodeLine);
+    const modelProfile = activity.modelProfile ?? null;
+    focusedComposerCatalogMock.modelProfileCalls.push(modelProfile);
+    const profileCatalog =
+      modelProfile?.profileId === null || modelProfile === null
+        ? catalogMock.harnesses
+        : (catalogMock.profileCatalogs.get(modelProfile.profileId) ?? []);
     return {
-      harnesses: catalogMock.harnesses,
+      harnesses: profileCatalog,
       harnessesLoading: false,
       harnessesError: null,
       modelsLoading: false,
@@ -264,6 +283,26 @@ function stubControls(overrides: Partial<ComposerControls>): ComposerControls {
   };
 }
 
+const DEFAULT_CATALOG_SELECTION: FocusedComposerEntry["catalogSelection"] = {
+  harnessId: "codex",
+  profileId: null,
+};
+
+function registerFocusedComposerControls(
+  kind: FocusedComposerKind,
+  controls: ComposerControls,
+  hostClient: HostClient<HostRpcRegistry> | null,
+  opencodeLine: 1 | 2 | null,
+): () => void {
+  return registerFocusedComposerControlsWithCatalog({
+    kind,
+    controls,
+    hostClient,
+    opencodeLine,
+    catalogSelection: DEFAULT_CATALOG_SELECTION,
+  });
+}
+
 /**
  * A real, distinct `HostClient` instance (never a cast) so identity
  * assertions on `FocusedComposerEntry.hostClient` compare the exact object a
@@ -318,6 +357,8 @@ describe("composerSource", () => {
     latestConversationWorkspaceSeedMock.seed = null;
     focusedComposerCatalogMock.clientCalls.length = 0;
     focusedComposerCatalogMock.lineCalls.length = 0;
+    focusedComposerCatalogMock.modelProfileCalls.length = 0;
+    catalogMock.profileCatalogs.clear();
     resetCanvasStore();
     resetFocusedComposerControlsForTests();
     resetActiveModelPickerForTests();
@@ -332,6 +373,8 @@ describe("composerSource", () => {
     latestConversationWorkspaceSeedMock.seed = null;
     focusedComposerCatalogMock.clientCalls.length = 0;
     focusedComposerCatalogMock.lineCalls.length = 0;
+    focusedComposerCatalogMock.modelProfileCalls.length = 0;
+    catalogMock.profileCatalogs.clear();
     resetCanvasStore();
     resetFocusedComposerControlsForTests();
     resetActiveModelPickerForTests();
@@ -634,6 +677,54 @@ describe("composerSource", () => {
     // The leaf funnels through `selectModel` (memory-aware), NOT bare
     // `setSelection`, so the pick restores that pair's remembered effort/tier.
     expect(picks).toEqual([{ harnessId: "codex", modelSlug: "gpt-live" }]);
+  });
+
+  it("lists only the focused managed profile's cached models and dispatches its row", () => {
+    const ambientCodex = catalogMock.harnesses.find(
+      (harness) => harness.id === "codex",
+    );
+    if (ambientCodex === undefined) {
+      throw new Error("expected the ambient Codex fixture");
+    }
+    const profileOnlyModel = {
+      ...ambientCodex.models[0],
+      slug: "profile-b-only",
+      label: "Profile B Only",
+    };
+    catalogMock.profileCatalogs.set("profile-b", [
+      { ...ambientCodex, models: [profileOnlyModel] },
+    ]);
+    const picks: Array<{ harnessId: string; modelSlug: string }> = [];
+    registerFocusedComposerControlsWithCatalog({
+      kind: "landing",
+      controls: stubControls({
+        selectModel: (harnessId, modelSlug) =>
+          picks.push({ harnessId, modelSlug }),
+      }),
+      hostClient: TEST_HOST_CLIENT,
+      opencodeLine: null,
+      catalogSelection: { harnessId: "codex", profileId: "profile-b" },
+    });
+
+    const modelSubpage = captureItems(null, "landing").find(
+      (item) => item.id === "composer:switch-model",
+    )?.subpage;
+    if (modelSubpage === null || modelSubpage === undefined) {
+      throw new Error("expected a model subpage");
+    }
+    const modelItems = collectSubpageItems(modelSubpage, "landing");
+
+    expect(focusedComposerCatalogMock.modelProfileCalls.at(-1)).toEqual({
+      harnessId: "codex",
+      profileId: "profile-b",
+    });
+    expect(modelItems.map((item) => item.id)).toEqual([
+      "composer:model:codex:profile-b-only",
+    ]);
+    void modelItems[0]?.run(ctx(null, "landing"));
+    expect(picks).toEqual([
+      { harnessId: "codex", modelSlug: "profile-b-only" },
+    ]);
   });
 
   it("provider leaf item dispatches the memory-aware switchHarness control", () => {

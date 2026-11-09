@@ -322,7 +322,12 @@ function useFocusedComposerCatalog(): GuiHarnessCatalog {
     entry === null ? defaultClient : entry.hostClient,
     null,
     entry === null ? null : entry.opencodeLine,
-    { enabled: true, subscribed: true, modelsFetch: "cached-only" },
+    {
+      enabled: true,
+      subscribed: true,
+      modelsFetch: "cached-only",
+      modelProfile: entry?.catalogSelection,
+    },
   );
 }
 
@@ -353,10 +358,8 @@ function providerOfferableInPalette(provider: HarnessOption): boolean {
  * pinned to a managed profile is judged on THAT profile's own auth. Filtering
  * these rows out therefore hid every provider and model command for a
  * configuration that runs turns perfectly well - a signed-out terminal account
- * beside a signed-in managed profile. The palette cannot tell the two apart
- * (`FocusedComposerEntry` carries a host client, not profile state), so it
- * takes the reading it can defend: say so, order accordingly, and leave the
- * verdict to the gate that has the profile in hand.
+ * beside a signed-in managed profile. The ambient verdict says nothing about
+ * that managed profile, so leave the execution verdict to its send gate.
  *
  * The rail reads the identical signal (`railHarnessDegraded`) and reaches the
  * same conclusion by a different route: there it dims the row and leaves it

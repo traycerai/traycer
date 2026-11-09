@@ -1466,3 +1466,42 @@ export const providersConsumeRateLimitResetCreditResponseSchema = lazySchema(
 export type ProvidersConsumeRateLimitResetCreditResponse = z.infer<
   typeof providersConsumeRateLimitResetCreditResponseSchema
 >;
+
+/**
+ * Asks which model `modelSlug` runs on for each profile when the CLI is spawned
+ * in `workingDirectory`. An alias's route belongs to one account in one folder:
+ * a project's `env.ANTHROPIC_DEFAULT_MODEL` moves it, so an answer for another
+ * profile or folder says nothing about this one.
+ */
+export const providersReadModelRoutesRequestSchema = lazySchema(() =>
+  z.object({
+    providerId: z.literal("claude-code"),
+    workingDirectory: z.string().min(1),
+    modelSlug: z.string().min(1),
+    profileIds: z.array(z.string().nullable()),
+  }),
+);
+export type ProvidersReadModelRoutesRequest = z.infer<
+  typeof providersReadModelRoutesRequestSchema
+>;
+
+/**
+ * `resolvedModel` is `null` when the CLI's handshake named no first-party model
+ * for the alias, or could not be read: the alias stays unresolved.
+ * `validForMs` is measured from this response on the host's clock and is not
+ * renewed by asking again; a route past it says nothing.
+ */
+export const providersReadModelRoutesResponseSchema = lazySchema(() =>
+  z.object({
+    routes: z.array(
+      z.object({
+        profileId: z.string().nullable(),
+        resolvedModel: z.string().min(1).nullable(),
+        validForMs: z.number().int().nonnegative(),
+      }),
+    ),
+  }),
+);
+export type ProvidersReadModelRoutesResponse = z.infer<
+  typeof providersReadModelRoutesResponseSchema
+>;

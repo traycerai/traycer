@@ -118,7 +118,7 @@ const BOX_FULL = {
   send: "pb-1.5",
 };
 
-/** 44 tall: the field's 40, its frame's border and the form's padding. */
+/** The field and actions share one row while the keyboard is open. */
 const BOX_ONE_ROW = {
   name: "one-row",
   form: "px-2 py-px",
@@ -330,10 +330,14 @@ export function BotMessageComposer(props: {
   // that message again, and a new message's text is the box's draft.
   const putBack = (unsent: BotUnsentMessage): void => {
     if (unsent.supersedes !== null) {
+      // The owner may immediately retire this edit if its request resumed
+      // while the failed send was offered back. Restore the draft either way.
+      loadBox(unsent.content);
       onEditResume({
         requestId: unsent.supersedes,
         text: unsent.wire,
         content: unsent.content,
+        sessionThreadId: unsent.sessionThreadId,
       });
       return;
     }
@@ -349,6 +353,7 @@ export function BotMessageComposer(props: {
       wire,
       supersedes: edit?.requestId ?? null,
       content,
+      sessionThreadId: edit?.sessionThreadId,
     };
     // The box empties as the send starts, which drops the draft kept outside
     // it, and the edit it held ends: the row the host writes reaches the
@@ -562,7 +567,7 @@ export function BotMessageComposer(props: {
             />
             <Button
               type="submit"
-              size="icon-sm"
+              size="icon-sm-touch"
               disabled={!canSend}
               aria-label="Send"
               data-testid={`${testId}-send`}
@@ -638,7 +643,7 @@ export function BotMessageComposerUnavailable(props: {
         <div className="flex items-center justify-end gap-2 px-2 pb-1.5">
           <Button
             type="button"
-            size="icon-sm"
+            size="icon-sm-touch"
             disabled
             aria-label="Send"
             data-testid={`${testId}-send`}
@@ -716,7 +721,10 @@ function useBotBoxDocument(
   const { edit, seed, quote, contentOf } = incoming;
   const [content, setContent] = useState(EMPTY_BOT_BOX);
   const [loaded, setLoaded] = useState<JsonContent | null>(null);
+  const [editContent, setEditContent] = useState<JsonContent | null>(null);
   const loadBox = (next: JsonContent): void => {
+    // An explicit load replaces the row copy, even when its document matches.
+    setEditContent(null);
     setContent(next);
     // Each load must trigger the editor sync, including repeated clears with
     // EMPTY_BOT_BOX after consecutive sends on one mounted composer.
@@ -729,8 +737,23 @@ function useBotBoxDocument(
     setLoadedEdit(edit);
     if (edit !== null) {
       const next = edit.content ?? contentOf(edit.text);
+      // A refused replacement is unsent work, even before another keystroke.
+      // Only a fresh row load can be an untouched duplicate of the request.
+      setEditContent(edit.content === null ? next : null);
       setContent(next);
       setLoaded(next);
+    } else {
+      // A retry outside this box ends replacement mode. Drop the duplicate
+      // only while it is still the document Edit loaded; a changed draft
+      // becomes an ordinary new message, including its images and quotes.
+      if (
+        editContent !== null &&
+        JSON.stringify(content) === JSON.stringify(editContent)
+      ) {
+        setContent(EMPTY_BOT_BOX);
+        setLoaded(EMPTY_BOT_BOX);
+      }
+      setEditContent(null);
     }
   }
   const seedId = seed?.id ?? null;
@@ -840,6 +863,8 @@ export type BotComposerQuote = {
 
 /** A failed message loaded into the box to be edited and sent again. */
 export type BotComposerEdit = {
+  /** Captured by the edit owner; null is trunk, absent means not observed. */
+  readonly sessionThreadId?: string | null;
   /** The failed message's request, which the edit replaces. */
   readonly requestId: string;
   readonly text: string;

@@ -1,6 +1,7 @@
 import type { ReactNode, Ref } from "react";
 import { HOST_FROZEN_WORD } from "@traycer/protocol/host/host-status";
 import { Badge } from "@/components/ui/badge";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { HostGlyph } from "@/components/settings/host-scope/host-glyph";
 import {
   hostOptionKindLabel,
@@ -14,8 +15,8 @@ import type { FleetUpdateView } from "@/lib/host/fleet-update/fleet-update-view"
 import { cn } from "@/lib/utils";
 
 /**
- * Shared content for every host picker: a wrapping name, then its state and
- * marks. The interaction shell owns selection and the trailing check.
+ * Shared content for every host picker: a single-line name beside its state
+ * and marks. The full name remains available when space cuts it off. The interaction shell owns selection and the trailing check.
  */
 export function HostOptionRow(props: {
   readonly host: HostScopeOption;
@@ -96,16 +97,28 @@ export function HostOptionRow(props: {
   // fact by definition, so the tag would restate the check it sits next to.
   const showActiveTag = intent === "view" && active;
   return (
-    <span className="flex min-w-0 flex-1 items-start gap-2">
+    <span className="flex min-w-0 flex-1 items-center gap-2">
       <HostGlyph
         host={host}
-        className="mt-0.5 size-4 shrink-0 text-muted-foreground"
+        className="size-4 shrink-0 text-muted-foreground"
       />
       <span className="sr-only">{hostOptionKindLabel(host)}</span>
-      <span className="flex min-w-0 flex-1 flex-col gap-0.5 text-start">
-        <span ref={nameRef} className="whitespace-normal wrap-anywhere">
-          {host.name}
-        </span>
+      <span className="flex min-w-0 flex-1 items-center gap-2 text-start">
+        <TooltipWrapper
+          label={nameRef === null ? host.name : null}
+          side="top"
+          sideOffset={6}
+          align={undefined}
+        >
+          {/*
+            `flex-1` bases the name at zero, and `min-w-[8ch]` is the floor
+            (about eight characters at the row's font). The name gives space
+            back down to that floor before the marks group shrinks.
+          */}
+          <span ref={nameRef} className="min-w-[8ch] flex-1 truncate">
+            {host.name}
+          </span>
+        </TooltipWrapper>
         {picked && intent === "view" ? (
           <span className="sr-only">Currently viewing</span>
         ) : null}
@@ -121,7 +134,34 @@ export function HostOptionRow(props: {
   );
 }
 
-/** Trailing marks share the line below the name and wrap within it. */
+/**
+ * A capped mark. `max-w-32` is the ceiling, `min-w-0` lets it go below that
+ * ceiling when the marks group shrinks, and the tooltip carries the full text.
+ */
+function CappedHostMark(props: {
+  readonly text: string;
+  readonly testId: string;
+}): ReactNode {
+  return (
+    <TooltipWrapper
+      label={props.text}
+      side="top"
+      sideOffset={6}
+      align={undefined}
+    >
+      <span className="min-w-0 max-w-32 truncate" data-testid={props.testId}>
+        {props.text}
+      </span>
+    </TooltipWrapper>
+  );
+}
+
+/**
+ * Marks stay on one line beside the name. The status word, frozen badge and
+ * active tag stay whole. The terminal note, environment label and update
+ * badge are capped, and each tooltip carries that mark's full text. The group
+ * shrinks below those caps only after the name has reached its floor.
+ */
 function HostOptionMarks(props: {
   readonly host: HostScopeOption;
   readonly statusWord: string | null;
@@ -140,29 +180,31 @@ function HostOptionMarks(props: {
   )
     return null;
   return (
-    <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-ui-xs whitespace-normal wrap-anywhere text-muted-foreground">
+    <span className="flex min-w-0 items-center gap-2 text-ui-xs whitespace-nowrap text-muted-foreground">
       {host.terminalRunNote === null ? null : (
-        <span
-          className="text-pretty"
-          data-testid={`host-option-terminal-run-${host.hostId}`}
-        >
-          {host.terminalRunNote}
-        </span>
+        <CappedHostMark
+          text={host.terminalRunNote}
+          testId={`host-option-terminal-run-${host.hostId}`}
+        />
       )}
-      {statusWord === null ? null : <span>{statusWord}</span>}
+      {statusWord === null ? null : (
+        <span className="shrink-0">{statusWord}</span>
+      )}
       {statusWord !== null && host.sandbox?.frozen ? (
         <Badge variant="warning">{HOST_FROZEN_WORD}</Badge>
       ) : null}
       {showActiveTag ? <ActiveTag /> : null}
       {environmentLabel === null ? null : (
-        <span data-testid={`host-option-environment-${host.hostId}`}>
-          {environmentLabel}
-        </span>
+        <CappedHostMark
+          text={environmentLabel}
+          testId={`host-option-environment-${host.hostId}`}
+        />
       )}
       {updateBadge === null ? null : (
-        <span data-testid={`host-option-update-badge-${host.hostId}`}>
-          {updateBadge}
-        </span>
+        <CappedHostMark
+          text={updateBadge}
+          testId={`host-option-update-badge-${host.hostId}`}
+        />
       )}
     </span>
   );

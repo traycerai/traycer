@@ -89,6 +89,38 @@ export function profileInventoryNotice(
     : `${CREDENTIAL_STANDING_LABELS[standing.material]}${cause}`;
 }
 
+/** The existing inventory words split between the status badge and its detail. */
+export function profileInventorySummary(profile: ProviderProfile): {
+  readonly badge: string;
+  readonly detail: string | null;
+} {
+  const notice = profileInventoryNotice(profile);
+  const standing = profile.credentialHome?.standing;
+  let badge = profileAuthStatusText(profile);
+  if (standing !== undefined) {
+    if (
+      standing.observation.status === "unknown" ||
+      standing.material === null
+    ) {
+      badge = "Unknown";
+    } else if (standing.material !== "usable") {
+      badge = CREDENTIAL_STANDING_LABELS[standing.material];
+    }
+  }
+  if (
+    profile.readability?.kind === "unreadable" ||
+    profile.presence?.kind === "revoking"
+  ) {
+    return { badge, detail: notice };
+  }
+  const separator = notice?.indexOf(": ") ?? -1;
+  return {
+    badge,
+    detail:
+      notice !== null && separator !== -1 ? notice.slice(separator + 2) : null,
+  };
+}
+
 /** Semantic identity of a rendered inventory row, shared across both surfaces. */
 export function profileInventoryAttributes(profile: ProviderProfile) {
   return {

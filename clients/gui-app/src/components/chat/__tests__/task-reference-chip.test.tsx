@@ -25,6 +25,7 @@ import type {
   ListTasksResponse,
   TaskContextResult,
 } from "@traycer/protocol/host/epic/unary-schemas";
+import { TracyTranscriptOriginScope } from "@/components/bots/tracy-transcript-origin-scope";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import { makeMessage } from "@/components/chat/__tests__/chat-message-fixtures";
 import {
@@ -385,6 +386,32 @@ describe("a task id in a message", () => {
       kind: "open-epic",
       epicId: TASK_ID,
       name: "Ship the release",
+      tracyOrigin: null,
+    });
+  });
+
+  it("hands the controller the transcript's bot when the chip is drawn inside a Tracy transcript", async () => {
+    answerLookups({ [TASK_ID]: "Ship the release" });
+    render(
+      <TracyTranscriptOriginScope botId="bot-1">
+        <TextSegment
+          findUnitId={null}
+          markdown={`In flight: ${TASK_ID} today.`}
+          isStreaming={false}
+          nextStepActions={null}
+        />
+      </TracyTranscriptOriginScope>,
+      { wrapper: Providers },
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Ship the release" }),
+    );
+
+    expect(mocks.activateTabIntent.mock.calls[0]?.[1]).toMatchObject({
+      kind: "open-epic",
+      epicId: TASK_ID,
+      tracyOrigin: { botId: "bot-1" },
     });
   });
 

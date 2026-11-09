@@ -13,6 +13,7 @@ import {
   listAgentsResponseSchemaV92,
   listAgentsResponseSchemaV100,
   listAgentsResponseSchemaV101,
+  listAgentsResponseSchemaV102,
   listAgentsResponseSchema,
 } from "@traycer/protocol/host/agent/shared";
 import {
@@ -160,9 +161,12 @@ const LIVE_FROZEN_EXPORTS = {
   // 10.1 froze when 10.2 opened to put `reach` and `hostConnectivity` on the
   // row. Its dump did not change by the freeze.
   "agent.list@10.1": listAgentsResponseSchemaV101,
-  // The head line, holding 10.1's old job: it names the LIVE schema, so the
-  // next attempt to grow the agent summary fails here first.
-  "agent.list@10.2": listAgentsResponseSchema,
+  // 10.2 froze when 10.3 opened for serviceTier; its dump did not change by
+  // the freeze.
+  "agent.list@10.2": listAgentsResponseSchemaV102,
+  // The head line. It dumps LIVE, so the next attempt to grow the agent
+  // summary goes red on this line.
+  "agent.list@10.3": listAgentsResponseSchema,
   "providers.list@1.0": providersListResponseSchemaV10,
   "providers.list@2.0": providersListResponseSchemaV20,
   "providers.list@3.0": providersListResponseSchemaV30,

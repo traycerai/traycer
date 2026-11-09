@@ -85,32 +85,23 @@ describe("Variables and shells moving between two teams", () => {
     );
     const view = render(page("env-a"));
     const field = (): HTMLInputElement => {
-      const input = screen.getByLabelText("NODE_ENV value");
+      const input = screen.getByLabelText("Value for NODE_ENV");
       if (!(input instanceof HTMLInputElement)) {
-        throw new Error("NODE_ENV value is not an input");
+        throw new Error("Value for NODE_ENV is not an input");
       }
       return input;
     };
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Edit NODE_ENV value" }),
-    );
     await waitFor(() => {
       expect(field().value).toBe("production");
     });
     fireEvent.change(field(), { target: { value: "a draft nobody saved" } });
 
     view.rerender(page("env-b"));
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Edit NODE_ENV value" }),
-    );
     await waitFor(() => {
       expect(field().value).toBe("staging");
     });
 
     view.rerender(page("env-a"));
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Edit NODE_ENV value" }),
-    );
     await waitFor(() => {
       expect(field().value).toBe("production");
     });

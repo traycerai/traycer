@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SteerSettingsConflictDialog } from "@/components/chat/segments/steer-settings-conflict-dialog";
+import { expectScrollableDialogLayout } from "@/components/ui/__tests__/dialog-scroll-layout-assertions";
 
 const onOpenChange = vi.fn();
 const onRestart = vi.fn();
@@ -52,6 +53,9 @@ describe("<SteerSettingsConflictDialog /> reasons", () => {
     expect(
       screen.getByText("End the current turn to send with new settings?"),
     ).toBeDefined();
+    expectScrollableDialogLayout(
+      screen.getByTestId("steer-settings-conflict-dialog"),
+    );
     expect(screen.getByRole("dialog").textContent).toContain(
       "The current turn is running with different model.",
     );

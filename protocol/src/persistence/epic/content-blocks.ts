@@ -1749,6 +1749,25 @@ export type AutonomousResumeOutputFile = z.infer<
   typeof autonomousResumeOutputFileSchema
 >;
 
+// The member's message a bot conversation delivery carried (Tracy Bots
+// T159): the row as its conversation stores it (`conversationId` is the
+// channel for a post and a thread's own record for a message in the thread),
+// the request it opened, and who wrote it when - so a reader whose
+// conversation row is gone still says who wrote and when.
+// `senderUserId` is `null` for a row whose sender is no member.
+export const autonomousResumeConversationMessageSchema = lazySchema(() =>
+  z.object({
+    conversationId: z.string(),
+    messageId: z.string(),
+    requestId: z.string(),
+    senderUserId: z.string().nullable(),
+    postedAt: z.number(),
+  }),
+);
+export type AutonomousResumeConversationMessage = z.infer<
+  typeof autonomousResumeConversationMessageSchema
+>;
+
 // One background task whose terminal settle contributed to waking the agent
 // into an autonomous (no-user-message) turn. `kind` mirrors the live
 // BackgroundItem vocabulary, while `status` is the terminal outcome; `title` is
@@ -1820,10 +1839,53 @@ export const autonomousResumeTriggerSchema = lazySchema(() =>
       })
       .nullable()
       .default(null),
+    // The member's message a bot conversation delivery carried into the
+    // session (Tracy Bots T159), so a reader of the session can show the
+    // message that prompted the turn. A defaulted key, for the reason `mcp`
+    // and `managedCommand` are. `null` for every other trigger, for a
+    // delivery that carried no member's message (a thread's resume
+    // orientation), and for every trigger written before the key. Added in
+    // place on the unreleased `chat.subscribe@1.43`; every line through
+    // `1.42` binds `autonomousResumeTriggerSchemaPreConversationMessage`
+    // below, and an older peer drops the key on decode.
+    conversationMessage: autonomousResumeConversationMessageSchema
+      .nullable()
+      .default(null),
   }),
 );
 export type AutonomousResumeTrigger = z.infer<
   typeof autonomousResumeTriggerSchema
+>;
+
+// Wire-freeze copy of the trigger as `chat.subscribe@1.11` through `@1.42`
+// ship it: the live trigger without the `conversationMessage` that `1.43`
+// added. Hand-frozen field-for-field, NOT `.omit()` off the live shape.
+export const autonomousResumeTriggerSchemaPreConversationMessage = lazySchema(
+  () =>
+    z.object({
+      kind: z.enum(["command", "monitor", "subagent", "wakeup"]),
+      title: z.string(),
+      status: z.enum(["completed", "failed", "stopped"]),
+      summary: z.string(),
+      blockId: z.string().default(""),
+      outputFile: autonomousResumeOutputFileSchema.nullable().default(null),
+      mcp: z
+        .object({ serverName: z.string(), toolName: z.string() })
+        .nullable()
+        .default(null),
+      live: z.boolean().default(false),
+      managedCommand: z
+        .object({
+          commandId: z.string(),
+          monitoring: z.boolean().default(false),
+          hostId: z.string().nullable().default(null),
+        })
+        .nullable()
+        .default(null),
+    }),
+);
+export type AutonomousResumeTriggerPreConversationMessage = z.infer<
+  typeof autonomousResumeTriggerSchemaPreConversationMessage
 >;
 
 // Wire-freeze copy of the trigger as every `chat.subscribe` line through
@@ -1977,9 +2039,43 @@ type RawStoredAutonomousResumeBlockPreShellHost = Omit<
   deliveryPlacement?: AutonomousResumeDeliveryPlacement;
 };
 
-// The live shape: the 1.9/1.10 checkpoint with `triggers` swapped for the
-// live trigger, whose `managedCommand` names the shell's host. Same key
-// order as the checkpoint for the same reason.
+// Checkpoint for chat.subscribe 1.11 through 1.42: the 1.9/1.10 checkpoint
+// with the trigger that names the shell's host and no member's message. Same
+// key order as the checkpoint for the same reason.
+const persistedAutonomousResumeBlockSchemaPreConversationMessage = lazySchema(
+  () =>
+    persistedAutonomousResumeBlockSchemaV18
+      .omit({ triggers: true, wakeTriggers: true })
+      .extend({
+        deliveryPlacement: autonomousResumeDeliveryPlacementSchema,
+        triggers: z.array(autonomousResumeTriggerSchemaPreConversationMessage),
+        wakeTriggers:
+          persistedAutonomousResumeBlockSchemaV18.shape.wakeTriggers,
+      }),
+);
+const domainAutonomousResumeBlockSchemaPreConversationMessage = lazySchema(() =>
+  domainAutonomousResumeBlockSchemaV18.omit({ triggers: true }).extend({
+    deliveryPlacement: autonomousResumeDeliveryPlacementSchema,
+    triggers: z.array(autonomousResumeTriggerSchemaPreConversationMessage),
+  }),
+);
+type AutonomousResumeBlockPreConversationMessage = z.infer<
+  typeof domainAutonomousResumeBlockSchemaPreConversationMessage
+>;
+type PersistedAutonomousResumeBlockPreConversationMessage = z.infer<
+  typeof persistedAutonomousResumeBlockSchemaPreConversationMessage
+>;
+type RawStoredAutonomousResumeBlockPreConversationMessage = Omit<
+  PersistedAutonomousResumeBlockPreConversationMessage,
+  "wakeTriggers" | "deliveryPlacement"
+> & {
+  wakeTriggers: AutonomousResumeWakeTrigger[] | undefined;
+  deliveryPlacement?: AutonomousResumeDeliveryPlacement;
+};
+
+// The live shape: the 1.11-1.42 checkpoint with `triggers` swapped for the
+// live trigger, which can carry the member's message a delivery carried. Same
+// key order as the checkpoint for the same reason.
 const persistedAutonomousResumeBlockSchema = lazySchema(() =>
   persistedAutonomousResumeBlockSchemaV18
     .omit({ triggers: true, wakeTriggers: true })
@@ -2020,10 +2116,10 @@ export type RawStoredAutonomousResumeBlock = Omit<
 
 // A fired wake as a trigger row: terminal by construction (it happened, then
 // it was over - nothing about a schedule keeps producing), never an MCP call,
-// and never a managed command. `managedCommand` is null, so the row belongs
-// to BOTH the live trigger and the pre-shell-host freeze - the one field the
-// two differ on - which is what lets the merge and split below serve every
-// codec here without a per-shape copy.
+// never a managed command and never a member's message. `managedCommand` and
+// `conversationMessage` are null, so the row belongs to the live trigger and
+// to both freezes - the fields they differ on - which is what lets the merge
+// and split below serve every codec here without a per-shape copy.
 type WakeupTrigger = AutonomousResumeTrigger &
   AutonomousResumeTriggerPreShellHost;
 function wakeupTrigger(wake: AutonomousResumeWakeTrigger): WakeupTrigger {
@@ -2033,6 +2129,7 @@ function wakeupTrigger(wake: AutonomousResumeWakeTrigger): WakeupTrigger {
     mcp: null,
     managedCommand: null,
     live: false,
+    conversationMessage: null,
   };
 }
 
@@ -2124,9 +2221,29 @@ function decodeAutonomousResumeBlockPreShellHost(
   };
 }
 
+function decodeAutonomousResumeBlockPreConversationMessage(
+  stored: RawStoredAutonomousResumeBlockPreConversationMessage,
+): AutonomousResumeBlockPreConversationMessage {
+  const { deliveryPlacement, wakeTriggers, ...rest } = stored;
+  return {
+    ...rest,
+    triggers:
+      wakeTriggers === undefined || wakeTriggers.length === 0
+        ? rest.triggers
+        : withWakeTriggers(rest.triggers, wakeTriggers),
+    deliveryPlacement: deliveryPlacement ?? null,
+  };
+}
+
 export function encodeAutonomousResumeBlock(
   domain: AutonomousResumeBlock,
 ): PersistedAutonomousResumeBlock {
+  return { ...domain, ...splitWakeTriggers(domain.triggers) };
+}
+
+function encodeAutonomousResumeBlockPreConversationMessage(
+  domain: AutonomousResumeBlockPreConversationMessage,
+): PersistedAutonomousResumeBlockPreConversationMessage {
   return { ...domain, ...splitWakeTriggers(domain.triggers) };
 }
 
@@ -2176,6 +2293,26 @@ export const autonomousResumeBlockSchemaV18 = lazySchema(() =>
         ),
     },
   ),
+);
+
+// Frozen wire shape for chat.subscribe 1.11 through 1.42: the shell's host on
+// a trigger, no member's message. Bound through every frozen content-block
+// union of those lines, here and in `open-harness-records.ts`.
+export const autonomousResumeBlockSchemaPreConversationMessage = lazySchema(
+  () =>
+    z.codec(
+      persistedAutonomousResumeBlockSchemaPreConversationMessage,
+      domainAutonomousResumeBlockSchemaPreConversationMessage,
+      {
+        decode: decodeAutonomousResumeBlockPreConversationMessage,
+        encode: (domain) =>
+          encodeAutonomousResumeBlockPreConversationMessage(
+            domainAutonomousResumeBlockSchemaPreConversationMessage.parse(
+              domain,
+            ),
+          ),
+      },
+    ),
 );
 
 // Frozen wire shape for chat.subscribe 1.9 and 1.10: delivery placement, no
@@ -2666,7 +2803,7 @@ export const contentBlockSchemaPreHtml = lazySchema(() =>
     planBlockSchema,
     errorBlockSchema,
     compactionBlockSchemaPreNotApplied,
-    autonomousResumeBlockSchema,
+    autonomousResumeBlockSchemaPreConversationMessage,
     steerBlockSchema,
     interviewBlockSchema,
     artifactOperationBlockSchemaPreHtml,
@@ -2797,7 +2934,7 @@ export const contentBlockSchemaPreReasonix = lazySchema(() =>
     planBlockSchemaPreReasonix,
     errorBlockSchemaPreFallback,
     compactionBlockSchemaPreNotApplied,
-    autonomousResumeBlockSchema,
+    autonomousResumeBlockSchemaPreConversationMessage,
     steerBlockSchemaPreReasonix,
     interviewBlockSchema,
     artifactOperationBlockSchemaPreHtml,
@@ -2980,7 +3117,7 @@ export const contentBlockSchemaPreBrowser = lazySchema(() =>
     planBlockSchema,
     errorBlockSchema,
     compactionBlockSchemaPreNotApplied,
-    autonomousResumeBlockSchema,
+    autonomousResumeBlockSchemaPreConversationMessage,
     steerBlockSchema,
     interviewBlockSchema,
     artifactOperationBlockSchemaPreHtml,
@@ -3007,7 +3144,7 @@ export const contentBlockSchemaPreReceipt = lazySchema(() =>
     planBlockSchema,
     errorBlockSchema,
     compactionBlockSchemaPreNotApplied,
-    autonomousResumeBlockSchema,
+    autonomousResumeBlockSchemaPreConversationMessage,
     steerBlockSchema,
     interviewBlockSchema,
     artifactOperationBlockSchemaPreHtml,
@@ -3034,7 +3171,7 @@ export const contentBlockSchemaPreMcpApp = lazySchema(() =>
     planBlockSchema,
     errorBlockSchema,
     compactionBlockSchemaPreNotApplied,
-    autonomousResumeBlockSchema,
+    autonomousResumeBlockSchemaPreConversationMessage,
     steerBlockSchema,
     interviewBlockSchema,
     artifactOperationBlockSchemaPreHtml,

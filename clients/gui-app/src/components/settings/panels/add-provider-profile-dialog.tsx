@@ -64,6 +64,7 @@ import {
 import { waitingStepCopy } from "./waiting-step-copy";
 import {
   useProviderProfileLoginFlow,
+  providerProfileLoginProgress,
   type ProviderProfileLoginFlowCodePaste,
   type ProviderProfileLoginFlowState,
 } from "./use-provider-profile-login-flow";
@@ -568,21 +569,13 @@ function AddProfileAccountSection({
     return (
       <div className="border-t border-border/60 pt-4">
         <AddProfileWaitingStep
-          loginUrl={flowState.kind === "waiting" ? flowState.url : null}
-          userCode={flowState.kind === "waiting" ? flowState.userCode : null}
+          {...providerProfileLoginProgress(flowState)}
           loginCapability={loginCapability}
           isLocalHost={isLocalHost}
           queuePending={startPending}
           startingCopy={startingCopy}
-          cancelRequested={
-            flowState.kind === "starting" && flowState.cancelRequested
-          }
           cancelPending={cancelPending}
           cancelDisabled={cancelDisabled}
-          waiting={flowState.kind === "waiting"}
-          readerCount={
-            flowState.kind === "waiting" ? flowState.readerCount : undefined
-          }
           codePaste={codePaste}
           onOpenExternalLink={onOpenExternalLink}
           onCancel={onCancel}

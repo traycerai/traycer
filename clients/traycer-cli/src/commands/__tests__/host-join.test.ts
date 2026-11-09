@@ -11,8 +11,9 @@ import { tmpdir } from "node:os";
 import { dirname } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// `traycer host join <token>` leaves a team computer's one-time install token
-// where the host enrolls from, then installs and starts the host. The files
+// `traycer host join` takes a team computer's one-time install token from a
+// prompt or stdin (the token reader is stubbed here) and leaves it where the
+// host enrolls from, then installs and starts the host. The files
 // are real, in a temp HOME (the data root resolves from it); only
 // `ensureHost`, the install/service boundary, is mocked.
 
@@ -25,12 +26,13 @@ vi.mock("../../host/ensure", () => ({
     mocks.ensureHostMock(...callArgs),
 }));
 
-import { buildHostJoinCommand } from "../host-join";
+import { buildHostJoinCommand, type HostJoinArgs } from "../host-join";
 import type { CommandContext } from "../../runner/runner";
 import type { HostEnsureResult } from "../../host/ensure";
 import { CliError, CLI_ERROR_CODES } from "../../runner/errors";
 import {
   hostEnrollmentRecordPath,
+  hostIdentityNeedsReauthPath,
   hostTeamInstallTokenPath,
 } from "../../store/paths";
 
@@ -78,13 +80,17 @@ function ensureResult(overrides: Partial<HostEnsureResult>): HostEnsureResult {
 }
 
 function fakeCtx(): CommandContext {
+  return fakeCtxFor(false, false);
+}
+
+function fakeCtxFor(json: boolean, nonInteractive: boolean): CommandContext {
   return {
     runtime: {
-      json: false,
+      json,
       quiet: false,
       noProgress: false,
       noBootstrap: false,
-      nonInteractive: false,
+      nonInteractive,
       environment: "production",
       logger: {
         debug: vi.fn(),
@@ -104,6 +110,15 @@ function fakeCtx(): CommandContext {
   };
 }
 
+function readerOf(token: string): HostJoinArgs {
+  return { readToken: async () => token };
+}
+
+async function writeIdentityFile(path: string, content: string): Promise<void> {
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, content);
+}
+
 function tokenPath(): string {
   return hostTeamInstallTokenPath("production");
 }
@@ -117,9 +132,9 @@ async function exists(path: string): Promise<boolean> {
   }
 }
 
-async function rejection(token: string): Promise<CliError> {
+async function refusalOf(args: HostJoinArgs): Promise<CliError> {
   try {
-    await buildHostJoinCommand({ token })(fakeCtx());
+    await buildHostJoinCommand(args)(fakeCtx());
   } catch (error) {
     if (error instanceof CliError) return error;
     throw error;
@@ -135,7 +150,7 @@ describe("buildHostJoinCommand", () => {
       return ensureResult({});
     });
 
-    await buildHostJoinCommand({ token: TOKEN })(fakeCtx());
+    await buildHostJoinCommand(readerOf(TOKEN))(fakeCtx());
 
     expect(tokenFileWhenEnsureRan).toBe(`${TOKEN}\n`);
     expect(mocks.ensureHostMock).toHaveBeenCalledTimes(1);
@@ -155,7 +170,7 @@ describe("buildHostJoinCommand", () => {
   });
 
   it("trims whitespace around the token", async () => {
-    await buildHostJoinCommand({ token: `  \t${TOKEN}\n` })(fakeCtx());
+    await buildHostJoinCommand(readerOf(`  \t${TOKEN}\n`))(fakeCtx());
 
     expect(await readFile(tokenPath(), "utf8")).toBe(`${TOKEN}\n`);
   });
@@ -170,7 +185,7 @@ describe("buildHostJoinCommand", () => {
   ])(
     "refuses a token that is %s, writing nothing and installing nothing",
     async (_name, token) => {
-      const error = await rejection(token);
+      const error = await refusalOf(readerOf(token));
 
       expect(error.code).toBe(CLI_ERROR_CODES.INVALID_ARGUMENT);
       expect(error.details).toBeNull();
@@ -185,29 +200,68 @@ describe("buildHostJoinCommand", () => {
   it("accepts a token of exactly 4096 characters", async () => {
     const longest = "a".repeat(4096);
 
-    await buildHostJoinCommand({ token: longest })(fakeCtx());
+    await buildHostJoinCommand(readerOf(longest))(fakeCtx());
 
     expect(await readFile(tokenPath(), "utf8")).toBe(`${longest}\n`);
   });
 
-  it("refuses a machine that is already enrolled, writing nothing and installing nothing", async () => {
-    const enrollment = hostEnrollmentRecordPath("production");
-    await mkdir(dirname(enrollment), { recursive: true });
-    await writeFile(enrollment, "{}");
+  it.each([
+    ["a team machine that is not paused", '{"kind":"machine"}', false],
+    ["a person's host that has the pause marker", '{"kind":"person"}', true],
+    ["a record that does not parse, with the pause marker", "{not json", true],
+  ])(
+    "refuses %s before reading the token, writing nothing and installing nothing",
+    async (_name, record, paused) => {
+      await writeIdentityFile(hostEnrollmentRecordPath("production"), record);
+      if (paused) {
+        await writeIdentityFile(hostIdentityNeedsReauthPath("production"), "");
+      }
+      const readToken = vi.fn(async () => TOKEN);
 
-    const error = await rejection(TOKEN);
+      const error = await refusalOf({ readToken });
 
-    expect(error.code).toBe(CLI_ERROR_CODES.FORBIDDEN);
-    expect(error.message).not.toContain(TOKEN);
-    expect(await exists(tokenPath())).toBe(false);
-    expect(mocks.ensureHostMock).not.toHaveBeenCalled();
+      expect(error.code).toBe(CLI_ERROR_CODES.FORBIDDEN);
+      expect(readToken).not.toHaveBeenCalled();
+      expect(await exists(tokenPath())).toBe(false);
+      expect(mocks.ensureHostMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("lets a team machine paused on its needs-reauth marker join again", async () => {
+    await writeIdentityFile(
+      hostEnrollmentRecordPath("production"),
+      '{"kind":"machine"}',
+    );
+    await writeIdentityFile(hostIdentityNeedsReauthPath("production"), "");
+
+    await buildHostJoinCommand(readerOf(TOKEN))(fakeCtx());
+
+    expect(await readFile(tokenPath(), "utf8")).toBe(`${TOKEN}\n`);
+    expect(mocks.ensureHostMock).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    ["--json", true, false, false],
+    ["--non-interactive", false, true, false],
+    ["neither", false, false, true],
+  ])(
+    "asks the reader to prompt only when neither flag forbids it (%s)",
+    async (_name, json, nonInteractive, expected) => {
+      const readToken = vi.fn(async (_canPrompt: boolean) => TOKEN);
+
+      await buildHostJoinCommand({ readToken })(
+        fakeCtxFor(json, nonInteractive),
+      );
+
+      expect(readToken.mock.calls).toEqual([[expected]]);
+    },
+  );
+
   it("replaces an earlier token whole", async () => {
-    await buildHostJoinCommand({ token: "first-token-which-is-longer" })(
+    await buildHostJoinCommand(readerOf("first-token-which-is-longer"))(
       fakeCtx(),
     );
-    await buildHostJoinCommand({ token: "second" })(fakeCtx());
+    await buildHostJoinCommand(readerOf("second"))(fakeCtx());
 
     expect(await readFile(tokenPath(), "utf8")).toBe("second\n");
   });
@@ -225,7 +279,7 @@ describe("buildHostJoinCommand", () => {
       }),
     );
 
-    const result = await buildHostJoinCommand({ token: TOKEN })(fakeCtx());
+    const result = await buildHostJoinCommand(readerOf(TOKEN))(fakeCtx());
 
     expect(result.exitCode).toBe(1);
     expect(result.human).toContain("launchctl load failed");
@@ -234,14 +288,14 @@ describe("buildHostJoinCommand", () => {
   it("tells the person to restart a host that was already running", async () => {
     mocks.ensureHostMock.mockResolvedValue(ensureResult({ action: "noop" }));
 
-    const result = await buildHostJoinCommand({ token: TOKEN })(fakeCtx());
+    const result = await buildHostJoinCommand(readerOf(TOKEN))(fakeCtx());
 
     expect(result.exitCode).toBe(0);
     expect(result.human).toContain("traycer host restart");
   });
 
   it("never puts the token in the result", async () => {
-    const result = await buildHostJoinCommand({ token: TOKEN })(fakeCtx());
+    const result = await buildHostJoinCommand(readerOf(TOKEN))(fakeCtx());
 
     expect(JSON.stringify(result)).not.toContain(TOKEN);
   });

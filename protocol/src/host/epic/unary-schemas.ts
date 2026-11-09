@@ -29,6 +29,7 @@ import {
   EpicArtifactKindSchemaPreHtml,
 } from "@traycer/protocol/common/registry";
 import { accountContextSchema } from "@traycer/protocol/common/schemas";
+import type { GrantedPermissionRole } from "@traycer/protocol/common/permission-role";
 import { opencodeLineSchema } from "@traycer/protocol/common/opencode-line";
 import {
   agentModeSchema,
@@ -80,7 +81,22 @@ export const LatestTicketStatusSchema = getRecordSchema(
 
 // ─── Enums ────────────────────────────────────────────────────────────────────
 
-export type PermissionRole = z.infer<typeof LatestPermissionRoleSchema>;
+/**
+ * A role as it arrives: every value {@link LatestPermissionRoleSchema}
+ * decodes, the retired `viewer` among them. Only a decoder reads this type.
+ * Turn it into access with `grantedRole` (`protocol/common/permission-role`),
+ * which is the one place a retired role becomes no access.
+ */
+export type WirePermissionRole = z.infer<typeof LatestPermissionRoleSchema>;
+
+/**
+ * A role somebody HOLDS: owner or editor.
+ *
+ * Deliberately narrower than what the wire decodes, so a payload's role
+ * cannot reach a gate, a label or a grant without passing `grantedRole`
+ * first - the compiler shows every such crossing.
+ */
+export type PermissionRole = GrantedPermissionRole;
 
 export const accessTypeSchema = lazySchema(() =>
   z.enum(["direct", "link", "organization"]),

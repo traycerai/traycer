@@ -5527,6 +5527,49 @@ export const chatSyncSchemaSurfaceBaseline = {
                                                         "type": "null"
                                                       }
                                                     ]
+                                                  },
+                                                  "conversationMessage": {
+                                                    "default": null,
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "object",
+                                                        "properties": {
+                                                          "conversationId": {
+                                                            "type": "string"
+                                                          },
+                                                          "messageId": {
+                                                            "type": "string"
+                                                          },
+                                                          "requestId": {
+                                                            "type": "string"
+                                                          },
+                                                          "senderUserId": {
+                                                            "anyOf": [
+                                                              {
+                                                                "type": "string"
+                                                              },
+                                                              {
+                                                                "type": "null"
+                                                              }
+                                                            ]
+                                                          },
+                                                          "postedAt": {
+                                                            "type": "number"
+                                                          }
+                                                        },
+                                                        "required": [
+                                                          "conversationId",
+                                                          "messageId",
+                                                          "requestId",
+                                                          "senderUserId",
+                                                          "postedAt"
+                                                        ],
+                                                        "additionalProperties": false
+                                                      },
+                                                      {
+                                                        "type": "null"
+                                                      }
+                                                    ]
                                                   }
                                                 },
                                                 "required": [
@@ -5538,7 +5581,8 @@ export const chatSyncSchemaSurfaceBaseline = {
                                                   "outputFile",
                                                   "mcp",
                                                   "live",
-                                                  "managedCommand"
+                                                  "managedCommand",
+                                                  "conversationMessage"
                                                 ],
                                                 "additionalProperties": false
                                               }
@@ -6775,6 +6819,9 @@ export const chatSyncSchemaSurfaceBaseline = {
                                           "type": "null"
                                         }
                                       ]
+                                    },
+                                    "multiSelect": {
+                                      "type": "boolean"
                                     }
                                   },
                                   "required": [

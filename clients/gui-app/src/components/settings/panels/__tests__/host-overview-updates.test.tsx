@@ -744,10 +744,16 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
       ).toBeTruthy();
     });
     expect(screen.getByText("Install a different version")).toBeTruthy();
-    expect(screen.queryByText(/Install a specific host version/)).toBeNull();
-    expect(
-      screen.queryByText("Show RC host versions when choosing a version."),
-    ).toBeNull();
+    // Both sentences stay in the open Updates tab, beside the checkbox.
+    // A disclosure, or dropping either sentence, is the shape this refuses.
+    const specificVersion = screen.getByText(
+      "Install a specific host version — upgrade to a release candidate or hotfix, or downgrade to an earlier release.",
+    );
+    expect(specificVersion.closest("details")).toBeNull();
+    const releaseCandidates = screen.getByText(
+      "Show RC host versions when choosing a version.",
+    );
+    expect(releaseCandidates.closest("details")).toBeNull();
     expect(
       screen.getByRole("checkbox", { name: "Include release candidates" }),
     ).toBeTruthy();
@@ -2070,15 +2076,45 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     );
   });
 
-  it("does not claim an abandoned-line RC is on the latest version while a newer row is listed", async () => {
-    // The regression this batch created: with `installed-rc` and NOTHING on
-    // the installed line, `targetCandidates` is empty, so the summary read
-    // "This host is running the latest version." — directly above an enabled,
-    // installable row for a newer version on another line.
-    //
-    // Not moving automatically is deliberate (a follower must not be pushed
-    // onto a line nobody put it on). Saying it is already latest is not.
+  it("offers the newest stable on another line to an RC whose own line never shipped one", async () => {
+    // One hop: an RC takes any newer stable, so `2.1.0` is what Update now
+    // installs, and the next launch is a stable host in stable-only mode.
     const manifest = multiVersionManifest(["2.1.0", "1.9.0"]);
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "2.0.0-rc.1",
+      overrideHandlers: {
+        "host.update.check": () =>
+          Promise.resolve({
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: true,
+            includePreReleasesSource: "installed-rc" as const,
+            manifest,
+          }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = bindingWith(fixture.client);
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+    await selectHostOverviewTab("updates");
+
+    await waitFor(() => {
+      expect(screen.getByText("v2.1.0 is available.")).toBeTruthy();
+    });
+  });
+
+  it("does not claim an RC is on the latest version while a newer RC on another line is listed", async () => {
+    // With `installed-rc`, no newer stable anywhere and NOTHING later on the
+    // installed line, `targetCandidates` is empty, so the summary would read
+    // "This host is running the latest version." — directly above an enabled,
+    // installable row for a newer release candidate on another line.
+    //
+    // Not moving automatically is deliberate (a follower consented to one
+    // line's prereleases, not to prereleases in general). Saying it is
+    // already latest is not.
+    const manifest = multiVersionManifest(["2.1.0-rc.1", "1.9.0"]);
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,
@@ -2104,7 +2140,9 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     // stranded kind, is the answer saying a newer version exists.
     const card = await screen.findByTestId("host-overview-answer-card");
     expect(card.getAttribute("data-answer")).toBe("stranded");
-    const summary = await screen.findByText(/2\.1\.0 is available/);
+    const summary = await screen.findByText(
+      /2\.1\.0-rc\.1 is a release candidate on another release line/,
+    );
     // Names the newer version AND says it will not be taken automatically, so
     // the sentence and the enabled row below it agree.
     expect(summary.textContent).toContain("2.0.0-rc.1");
@@ -2112,10 +2150,10 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
 
     // The manual route stays open: the newer row is present and installable.
     const rows = within(await screen.findByTestId("host-version-rows"));
-    const row = rowFor(rows.getAllByRole("listitem"), "2.1.0");
+    const row = rowFor(rows.getAllByRole("listitem"), "2.1.0-rc.1");
     expect(
       within(row)
-        .getByRole("button", { name: "Install 2.1.0" })
+        .getByRole("button", { name: "Install 2.1.0-rc.1" })
         .hasAttribute("disabled"),
     ).toBe(false);
   });
@@ -2195,9 +2233,10 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
   });
 
   it("does not tell a STABLE host it follows a release line when explicit include surfaces a newer RC", async () => {
-    // The stranded-line sentence explains a mechanism — "follows its own
-    // release line" — that applies only to a host whose catalog was DERIVED
-    // from an installed release candidate. This host is stable, on the newest
+    // The stranded-line sentence explains a mechanism — the host won't move to
+    // another line's RC on its own — that applies only to a host whose
+    // catalog was DERIVED from an installed release candidate. This host is
+    // stable, on the newest
     // stable, and sees an RC row only because the user ticked the box. Gating
     // the copy on `upToDate` alone would have narrated that state with a
     // mechanism the host is not subject to.
@@ -2231,7 +2270,9 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     expect(installed.textContent).toContain("latest");
     expect(installed.textContent).toContain("installed");
     expect(screen.queryByTestId("host-overview-answer-card")).toBeNull();
-    expect(screen.queryByText(/follows its own release line/)).toBeNull();
+    expect(
+      screen.queryByText(/release candidate on another release line/),
+    ).toBeNull();
 
     // The RC the user asked to see is still there and still installable — the
     // gate changes the sentence, never the manual route.

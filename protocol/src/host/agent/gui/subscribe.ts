@@ -2011,6 +2011,18 @@ export type ChatPendingInterviewState = z.infer<
   typeof chatPendingInterviewStateSchema
 >;
 
+/**
+ * A subscriber's standing on ONE CHAT: its owner, or somebody else watching
+ * it.
+ *
+ * Its own two-value vocabulary, not the task-collaborator role - which has no
+ * view-only value at all any more. A chat is owned by the account that
+ * created it whatever that account's role on the task is, and every other
+ * subscriber watches it: a task editor reading somebody else's chat is a
+ * `viewer` here and may still edit the task. The word means "watching this
+ * chat", the same sense the browser and terminal session tiers use it in, and
+ * nothing resolves it as a grant.
+ */
 export const chatAccessSchema = lazySchema(() =>
   z.object({
     role: z.enum(["owner", "viewer"]),
@@ -9250,6 +9262,17 @@ export const chatSubscribeV142 = defineStreamRpcContract({
  * A user row may also say `spoken`, a member's message spoken on a call.
  * Optional, so a peer below 1.43 strips it on decode and reads the row as the
  * plain message it is.
+ *
+ * A bot's question may say `multiSelect`: several of its options may be
+ * picked. Optional, so a peer below 1.43 strips it on decode and draws the
+ * question as one pick; `1.42` and every older line bind the assistant row
+ * without it (`assistantMessageSchemaPreMultiSelect`).
+ *
+ * A resume divider's trigger may carry `conversationMessage`, the member's
+ * message a bot conversation delivery carried. Defaulted `null`, so a peer
+ * below 1.43 drops it on decode and draws the divider it always did; `1.42`
+ * and every older line bind the trigger without it
+ * (`autonomousResumeTriggerSchemaPreConversationMessage`).
  */
 export const chatSubscribeV143 = defineStreamRpcContract({
   method: "chat.subscribe",

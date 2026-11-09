@@ -67,25 +67,25 @@ describe("desktopAppResourceUsageFromMetrics", () => {
         {
           pid: 10,
           type: "Browser",
-          cpu: { percentCPUUsage: 0.5 },
+          cpu: { cpuSharePercent: 0.5 },
           memory: { workingSetSize: 100 },
         },
         {
           pid: 11,
           type: "Tab",
-          cpu: { percentCPUUsage: 0.25 },
+          cpu: { cpuSharePercent: 0.25 },
           memory: { workingSetSize: 200 },
         },
         {
           pid: 12,
           type: "renderer",
-          cpu: { percentCPUUsage: 0.75 },
+          cpu: { cpuSharePercent: 0.75 },
           memory: { workingSetSize: 300 },
         },
         {
           pid: 13,
           type: "GPU",
-          cpu: { percentCPUUsage: 1.5 },
+          cpu: { cpuSharePercent: 1.5 },
           memory: { workingSetSize: 400 },
         },
       ]),
@@ -94,21 +94,21 @@ describe("desktopAppResourceUsageFromMetrics", () => {
 
     expect(usage.sampledAt).toBe(123);
     expect(usage.main).toEqual({
-      cpuPercent: 0.5,
+      cpuSharePercent: 0.5,
       rssBytes: 100 * 1024,
       processCount: 1,
     });
     expect(usage.renderer).toEqual({
-      cpuPercent: 1,
+      cpuSharePercent: 1,
       rssBytes: 500 * 1024,
       processCount: 2,
     });
     expect(usage.other).toEqual({
-      cpuPercent: 1.5,
+      cpuSharePercent: 1.5,
       rssBytes: 400 * 1024,
       processCount: 1,
     });
-    expect(usage.cpuPercent).toBe(3);
+    expect(usage.cpuSharePercent).toBe(3);
     expect(usage.rssBytes).toBe(1000 * 1024);
     expect(usage.processCount).toBe(4);
   });
@@ -119,20 +119,20 @@ describe("desktopAppResourceUsageFromMetrics", () => {
         {
           pid: 10,
           type: "Browser",
-          cpu: { percentCPUUsage: Number.NaN },
+          cpu: { cpuSharePercent: Number.NaN },
           memory: { workingSetSize: -10 },
         },
         {
           pid: 0,
           type: "Tab",
-          cpu: { percentCPUUsage: -1 },
+          cpu: { cpuSharePercent: -1 },
           memory: { workingSetSize: Number.POSITIVE_INFINITY },
         },
       ]),
       123,
     );
 
-    expect(usage.cpuPercent).toBe(0);
+    expect(usage.cpuSharePercent).toBe(0);
     expect(usage.rssBytes).toBe(0);
     expect(usage.processCount).toBe(1);
   });

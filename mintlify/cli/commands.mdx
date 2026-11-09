@@ -342,7 +342,7 @@ The new agent's parent is the calling agent. Settings you leave out are inherite
 | Option | Purpose |
 | --- | --- |
 | `--surface <surface>` | `gui` for the Chat interface or `tui` for the Terminal interface. `tui` works only with `--harness claude`. Without `--surface`, the new agent uses the calling agent's interface. |
-| `--harness <id>` | Coding agent. `traycer agent list-harnesses` lists the ids. Without it, the new agent uses the calling agent's coding agent. |
+| `--harness <id>` | Coding agent. `traycer agent list-harnesses` lists the ids. Required when `--surface` is set; otherwise, omitting it uses the calling agent's coding agent. |
 | `--model <id>` | Model. `traycer agent list-harness-models <harness>` lists them. |
 | `--name <name>` | Display name. |
 | `--reasoning-effort <effort>` | Reasoning effort, for models that support it. |

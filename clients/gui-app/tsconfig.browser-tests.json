@@ -7,6 +7,10 @@
     "types": ["node"],
     "skipLibCheck": true,
     "moduleResolution": "bundler",
+    "paths": {
+      "@traycer/protocol/utils/*": ["../../protocol/utils/*"],
+      "@traycer/protocol/*": ["../../protocol/src/*"]
+    },
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,
     "moduleDetection": "force",

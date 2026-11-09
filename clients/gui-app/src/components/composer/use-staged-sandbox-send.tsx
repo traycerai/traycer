@@ -34,6 +34,7 @@ import { hostQueryKeys } from "@/lib/query-keys";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { v4 as uuidv4 } from "uuid";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
+import { useSandboxGetReadiness } from "@/hooks/sandboxes/use-sandbox-get-readiness-query";
 import { useSandboxVerb } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
 import { teamCannotCoverAnHour } from "@/components/hosts/sandbox-create-model";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
@@ -478,6 +479,7 @@ export function useSetupLineFacts(
 ): SandboxSetupLineFacts | null {
   const user = useAuthUser().data ?? null;
   const catalogue = useSandboxCatalogue(stage !== null).data ?? null;
+  const readinessLine = useSandboxGetStagedReadinessLine(stage);
   const sandboxList = useSandboxList();
   const sandboxes = sandboxList.data?.sandboxes;
   // Whether the stage's sandbox is awake: `null` until the list has its row.
@@ -506,7 +508,12 @@ export function useSetupLineFacts(
     const row = sandboxes?.find((candidate) => candidate.id === sandboxId);
     return row === undefined || row.priceMcPerHour === null
       ? null
-      : { awakeMcPerHour: row.priceMcPerHour.awakeMc, exact: true };
+      : {
+          awakeMcPerHour: row.priceMcPerHour.awakeMc,
+          suspendedMcPerHour: row.priceMcPerHour.suspendedMc,
+          stoppedMcPerHour: row.priceMcPerHour.stoppedMc,
+          exact: true,
+        };
   }, [sandboxes, stage]);
   return useMemo(() => {
     if (stage === null) return null;
@@ -547,6 +554,7 @@ export function useSetupLineFacts(
         reachHost: null,
         unmovedComputer: null,
       }).text,
+      readinessLine,
       // A region the catalogue does not name is left unsaid, never its id.
       regionLabel: region === null ? "" : region.label,
       shapeLabel: sandboxShapeLabel(shape.cpus, shape.memoryMb),
@@ -566,6 +574,7 @@ export function useSetupLineFacts(
     };
   }, [
     catalogue,
+    readinessLine,
     existingPrice,
     sandboxAwake,
     sandboxResting,
@@ -573,6 +582,21 @@ export function useSetupLineFacts(
     stage,
     user,
   ]);
+}
+
+/** Readiness belongs only to a New target before it has a sandbox row. */
+function useSandboxGetStagedReadinessLine(
+  stage: StagedSandbox | null,
+): string | null {
+  const newTarget =
+    stage?.target.kind === "new" && stage.createdSandboxId === null
+      ? stage.target
+      : null;
+  const readiness = useSandboxGetReadiness(
+    newTarget?.configuration ?? null,
+    newTarget?.shape ?? null,
+  );
+  return readiness.isSuccess && !readiness.isFetching ? readiness.data : null;
 }
 
 /**

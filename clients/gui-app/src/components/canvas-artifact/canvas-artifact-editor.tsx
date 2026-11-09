@@ -1,3 +1,6 @@
+import { useArtifactEscape } from "@/components/artifacts/artifact-expanded-context";
+import { ArtifactExpandButton } from "@/components/artifacts/artifact-expand-button";
+import { ArtifactExpansion } from "@/components/artifacts/artifact-expansion";
 import type { CanvasPageError } from "@/lib/sandbox/canvas-bridge";
 import { resolveCanvasBoardLink } from "./canvas-links";
 import {
@@ -109,6 +112,7 @@ const NODE_TYPES = {
   image: CanvasNoteNode,
 };
 const INITIAL_VIEW: Viewport = { x: 60, y: 100, zoom: 0.6 };
+const DEFAULT_VIEW = { page: null, viewport: INITIAL_VIEW };
 /** Shapes and placed text come back selected; the pen keeps drawing until Esc. */
 const SELECT_AFTER_CREATE: ReadonlySet<string> = new Set([
   "sticky",
@@ -315,7 +319,21 @@ function canvasCommentSurfaces(
   };
 }
 
-export function CanvasArtifactEditor({
+/**
+ * The expansion wraps the editor instead of living inside it, because the
+ * editor READS it - `useArtifactEscape` registers the canvas's own Escape
+ * modes with it - and a component cannot consume a context it renders the
+ * provider for.
+ */
+export function CanvasArtifactEditor(props: CanvasArtifactEditorProps) {
+  return (
+    <ArtifactExpansion title="Canvas">
+      <CanvasEditorSurface {...props} />
+    </ArtifactExpansion>
+  );
+}
+
+function CanvasEditorSurface({
   artifactId,
   store,
   awareness,
@@ -328,6 +346,9 @@ export function CanvasArtifactEditor({
   viewOnly,
   onAddError,
 }: CanvasArtifactEditorProps) {
+  // One instance now serves inline and expanded alike, so there is no second
+  // editor to seed with the first one's page and viewport.
+  const startingView = DEFAULT_VIEW;
   const readOnly = viewOnly === true;
   const activeStore = useRef<CanvasLayoutStore | null>(null);
   useLayoutEffect(() => {
@@ -338,7 +359,9 @@ export function CanvasArtifactEditor({
   }, [store]);
   const state = useCanvasLayoutState(store);
   const snapshot = state.layout;
-  const [chosenPage, setChosenPage] = useState<string | null>(null);
+  const [chosenPage, setChosenPage] = useState<string | null>(
+    startingView.page,
+  );
   const page = resolveCanvasPage(snapshot, chosenPage);
   const [tool, setTool] = useState<CanvasTool>("select");
   // One board plays in place at a time. The state is ephemeral by design:
@@ -366,8 +389,8 @@ export function CanvasArtifactEditor({
   const [flow, setFlow] = useState<ReactFlowInstance<CanvasFlowNode> | null>(
     null,
   );
-  const [viewport, setViewport] = useState(INITIAL_VIEW);
-  const [settledViewport, setSettledViewport] = useState(INITIAL_VIEW);
+  const [viewport, setViewport] = useState(startingView.viewport);
+  const [settledViewport, setSettledViewport] = useState(startingView.viewport);
   const [interactions, setInteractions] = useState<
     Readonly<Record<string, NodeInteraction | undefined>>
   >({});
@@ -1082,6 +1105,39 @@ export function CanvasArtifactEditor({
       stopPlay();
     }
   };
+  useArtifactEscape((event) => {
+    // Text fields own Escape: note text commits on blur, while names cancel.
+    // Keep the dialog open and let the target handle the original event.
+    if (
+      event.target instanceof Element &&
+      event.target.closest("input, textarea, [contenteditable=true]")
+    )
+      return true;
+    if (activeFullscreen !== null) {
+      closeFullscreen();
+      return true;
+    }
+    if (!readOnly && tool !== "select") {
+      chooseTool("select");
+      return true;
+    }
+    if (selectedNotes.length > 0 || selectedBoards.length > 0) {
+      setInteractions((previous) =>
+        Object.fromEntries(
+          Object.entries(previous).map(([key, value]) => [
+            key,
+            { ...value, selected: false },
+          ]),
+        ),
+      );
+      return true;
+    }
+    if (playingBoard !== null) {
+      stopPlay();
+      return true;
+    }
+    return false;
+  });
   const chooseToolForKey = (event: KeyboardEvent): void => {
     const next = canvasToolForKey(
       event.code.startsWith("Key") ? event.code.slice(3) : event.code,
@@ -1105,6 +1161,10 @@ export function CanvasArtifactEditor({
             role="application"
             tabIndex={-1}
             aria-label="Canvas"
+            // The whole canvas, fullscreen header included, keeps horizontal
+            // swipes: the gesture must not change meaning between the board
+            // and the chrome beside it.
+            data-history-gesture-owner=""
             className="relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden bg-canvas text-foreground outline-none"
             onPointerDownCapture={(event) => {
               // A relayed board press dismisses overlays without taking the
@@ -1369,7 +1429,12 @@ export function CanvasArtifactEditor({
                         <CanvasViewControls
                           viewOnly={readOnly}
                           commenting={commenting}
-                          trailing={frameEvents?.renderToolbarControls?.()}
+                          trailing={
+                            <>
+                              {frameEvents?.renderToolbarControls?.()}
+                              <ArtifactExpandButton />
+                            </>
+                          }
                           undo={store.undo}
                           redo={store.redo}
                           canUndo={state.canUndo}

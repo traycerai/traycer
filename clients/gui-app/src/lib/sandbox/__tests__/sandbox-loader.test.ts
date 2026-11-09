@@ -139,7 +139,14 @@ describe("sandbox loader wheel", () => {
           {
             jsonrpc: "2.0",
             method: "traycer/notifications/wheel",
-            params: { deltaX: 0, deltaY: 40, deltaMode: 0 },
+            params: {
+              deltaX: 0,
+              deltaY: 40,
+              deltaMode: 0,
+              cancelable: true,
+              ownsBack: false,
+              ownsForward: false,
+            },
           },
           "*",
         ],
@@ -151,6 +158,87 @@ describe("sandbox loader wheel", () => {
         wheel(unscrollable, { deltaY: 40, ctrlKey: true }).defaultPrevented,
       ).toBe(false);
       expect(posted).toEqual([]);
+    });
+  });
+});
+
+describe("sandbox loader swipe ownership", () => {
+  function wheelParams(posted: unknown[]): unknown {
+    const [[message]] = posted as [[{ params: unknown }, string]];
+    return message.params;
+  }
+
+  it.each([
+    { scrollLeft: 0, deltaX: -40, ownsBack: false, ownsForward: true },
+    { scrollLeft: 300, deltaX: 40, ownsBack: true, ownsForward: false },
+  ])(
+    "reports an inner scroller at scrollLeft $scrollLeft as owning back $ownsBack and forward $ownsForward",
+    async ({ scrollLeft, deltaX, ownsBack, ownsForward }) => {
+      await inBootstrapWindow((page, posted) => {
+        const rail = page.document.body.appendChild(
+          page.document.createElement("div"),
+        );
+        rail.style.overflowX = "auto";
+        Object.defineProperty(rail, "scrollWidth", { value: 600 });
+        Object.defineProperty(rail, "clientWidth", { value: 300 });
+        rail.scrollLeft = scrollLeft;
+        const inRail = rail.appendChild(page.document.createElement("span"));
+
+        // The wheel pulls toward the edge the rail has already reached, so the
+        // page gives it up while the rail still owns the other direction.
+        inRail.dispatchEvent(
+          new page.WheelEvent("wheel", {
+            bubbles: true,
+            cancelable: true,
+            deltaX,
+          }),
+        );
+
+        expect(wheelParams(posted)).toMatchObject({ ownsBack, ownsForward });
+      });
+    },
+  );
+
+  it("cancels every wheel while the app holds the page still, and relays again once released", async () => {
+    await inBootstrapWindow((page, posted) => {
+      const { document } = page;
+      const panel = document.body.appendChild(document.createElement("div"));
+      panel.style.overflowY = "auto";
+      Object.defineProperty(panel, "scrollHeight", { value: 900 });
+      Object.defineProperty(panel, "clientHeight", { value: 300 });
+      const inPanel = panel.appendChild(document.createElement("span"));
+      const unscrollable = document.body.appendChild(
+        document.createElement("p"),
+      );
+      const hold = (held: boolean): void => {
+        page.dispatchEvent(
+          new page.MessageEvent("message", {
+            data: { method: "traycer/history-gesture/hold", params: { held } },
+            // A top-level window is its own parent, which is what the
+            // bootstrap takes the app to be.
+            source: page.parent,
+          }),
+        );
+      };
+      const wheel = (target: Element): WheelEvent => {
+        const event = new page.WheelEvent("wheel", {
+          bubbles: true,
+          cancelable: true,
+          deltaY: 40,
+        });
+        target.dispatchEvent(event);
+        return event;
+      };
+
+      hold(true);
+      expect(wheel(inPanel).defaultPrevented).toBe(true);
+      expect(wheel(unscrollable).defaultPrevented).toBe(true);
+      expect(posted).toEqual([]);
+
+      hold(false);
+      expect(wheel(inPanel).defaultPrevented).toBe(false);
+      expect(wheel(unscrollable).defaultPrevented).toBe(true);
+      expect(posted).toHaveLength(1);
     });
   });
 });

@@ -134,6 +134,71 @@ export const botRecordSchema = lazySchema(() =>
 );
 export type BotRecord = z.infer<typeof botRecordSchema>;
 
+// ---- a bot's appearance ------------------------------------------------ //
+
+/**
+ * How many swatches a bot's icon and its channel's background choose
+ * among: the GUI's twelve profile hues in two tones each.
+ */
+export const BOT_SWATCH_COUNT = 24;
+const botSwatchIndexSchema = lazySchema(() =>
+  z
+    .number()
+    .int()
+    .min(0)
+    .max(BOT_SWATCH_COUNT - 1),
+);
+
+/** A creature's silhouette: the cells it carries outside its 5×5 body. */
+export const botCreatureFamilySchema = lazySchema(() =>
+  z.enum(["none", "ears", "feet", "crest"]),
+);
+export type BotCreatureFamily = z.infer<typeof botCreatureFamilySchema>;
+
+/** The largest creature seed a bot's settings may store. */
+export const BOT_CREATURE_SEED_MAX = 65_535;
+
+/**
+ * The bot's chosen icon: a creature the GUI grows again from its family and
+ * seed (seed 0 is the bot's own body), never stored as pixels.
+ */
+export const botAppearanceMarkSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("creature"),
+    family: botCreatureFamilySchema,
+    seed: z.number().int().min(0).max(BOT_CREATURE_SEED_MAX),
+  }),
+);
+export type BotAppearanceMark = z.infer<typeof botAppearanceMarkSchema>;
+
+/**
+ * What a person chose for a bot's look. Each choice is `null` for the
+ * default the GUI derives from the bot's id: its own creature, its own
+ * swatch, and no background of the channel's own. Clearing a choice brings
+ * back exactly the derived look.
+ */
+export const botAppearanceSchema = lazySchema(() =>
+  z.object({
+    mark: botAppearanceMarkSchema.nullable(),
+    /** The swatch the icon draws on, by index. */
+    swatch: botSwatchIndexSchema.nullable(),
+    /** The swatch the channel's background is tinted with, by index. */
+    background: botSwatchIndexSchema.nullable(),
+  }),
+);
+export type BotAppearance = z.infer<typeof botAppearanceSchema>;
+
+/**
+ * A bot row as the directory carries it (`bot.list@1.2`, `bot.read@1.1`,
+ * `bot.updateAppearance@1.0`): the bot record and its appearance. Absent from
+ * a host that predates it, which a reader takes as every choice at its
+ * default. The record every other method and minor carries stays without it.
+ */
+export const botDirectoryRecordSchema = lazySchema(() =>
+  botRecordSchema.extend({ appearance: botAppearanceSchema.optional() }),
+);
+export type BotDirectoryRecord = z.infer<typeof botDirectoryRecordSchema>;
+
 // ---- bot.create -------------------------------------------------------- //
 
 /**
@@ -195,11 +260,19 @@ export const botListResponseSchemaV10 = lazySchema(() =>
  * `bot.list@1.1` adds each environment's main bot (decision 30): environment
  * id to bot id, for every listed environment with a live bot. `null` when the
  * answering host predates it (a `1.0` response upgraded), which says nothing
- * about which bot is main.
+ * about which bot is main. Frozen: its rows carry no appearance.
  */
-export const botListResponseSchema = lazySchema(() =>
+export const botListResponseSchemaV11 = lazySchema(() =>
   z.object({
     bots: z.array(botRecordSchema),
+    mainBotIds: z.record(z.string().min(1), botIdSchema).nullable(),
+  }),
+);
+
+/** `bot.list@1.2`: each row carries the bot's appearance. */
+export const botListResponseSchema = lazySchema(() =>
+  z.object({
+    bots: z.array(botDirectoryRecordSchema),
     mainBotIds: z.record(z.string().min(1), botIdSchema).nullable(),
   }),
 );
@@ -212,8 +285,14 @@ export const botReadRequestSchema = lazySchema(() =>
 );
 export type BotReadRequest = z.infer<typeof botReadRequestSchema>;
 
-export const botReadResponseSchema = lazySchema(() =>
+/** `bot.read@1.0`'s response, frozen: the row without its appearance. */
+export const botReadResponseSchemaV10 = lazySchema(() =>
   z.object({ bot: botRecordSchema }),
+);
+
+/** `bot.read@1.1`: the row and its appearance. */
+export const botReadResponseSchema = lazySchema(() =>
+  z.object({ bot: botDirectoryRecordSchema }),
 );
 export type BotReadResponse = z.infer<typeof botReadResponseSchema>;
 
@@ -273,6 +352,32 @@ export const botUpdateResponseSchema = lazySchema(() =>
   z.object({ bot: botRecordSchema }),
 );
 export type BotUpdateResponse = z.infer<typeof botUpdateResponseSchema>;
+
+// ---- bot.updateAppearance ---------------------------------------------- //
+
+/**
+ * The bot's look, one choice at a time: a key left out keeps its choice, and
+ * `null` clears it back to the default. Changing it takes the same authority
+ * as renaming the bot.
+ */
+export const botUpdateAppearanceRequestSchema = lazySchema(() =>
+  z.object({
+    botId: botIdSchema,
+    mark: botAppearanceMarkSchema.nullable().optional(),
+    swatch: botSwatchIndexSchema.nullable().optional(),
+    background: botSwatchIndexSchema.nullable().optional(),
+  }),
+);
+export type BotUpdateAppearanceRequest = z.infer<
+  typeof botUpdateAppearanceRequestSchema
+>;
+
+export const botUpdateAppearanceResponseSchema = lazySchema(() =>
+  z.object({ bot: botDirectoryRecordSchema }),
+);
+export type BotUpdateAppearanceResponse = z.infer<
+  typeof botUpdateAppearanceResponseSchema
+>;
 
 // ---- bot.notificationLevel.read / bot.notificationLevel.set ------------ //
 

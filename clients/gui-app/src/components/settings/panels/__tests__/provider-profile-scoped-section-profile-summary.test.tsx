@@ -1,33 +1,15 @@
-import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
+import type { CredentialStanding } from "@traycer/protocol/host/provider-credential-home-schemas";
+import type {
+  ProviderCliState,
+  ProviderProfile,
+} from "@traycer/protocol/host/provider-schemas";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import {
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-  within,
-} from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { tooltipTextFor } from "@/components/ui/__tests__/tooltip-probe";
-import {
-  NO_NOTICES,
-  NO_OVERRIDES,
-  NO_REVIEW,
-  PersonalPageContext,
-} from "@/components/settings/personal/personal-page-context";
-import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
-import {
-  environmentStatusFixture,
-  itemStatusFixture,
-} from "@/lib/environment/__tests__/environment-test-support";
-import {
-  registerDetailsProvider,
-  type DetailsProvider,
-} from "@/lib/settings-details-entry";
 
 // Same rationale as the sibling report-issue test: `ProfileEditDialog` and the
 // refresh button pull in mutation/host hooks unconditionally, so those are
@@ -159,6 +141,50 @@ function opencodeState(): ProviderCliState {
   };
 }
 
+function profileWithStanding(
+  standing: Partial<CredentialStanding>,
+  overrides: Partial<ProviderProfile>,
+): ProviderProfile {
+  return {
+    ...managedProfile(),
+    credentialHome: {
+      homeAddress: "synthetic-home",
+      bindingVersion: 1,
+      materialRevision: 1,
+      custodyVersion: 1,
+      custodyClass: "self-sufficient",
+      environmentPresence: null,
+      handoffEnvironmentId: null,
+      materialFingerprint: "synthetic-material",
+      observation: null,
+      materialMatchesBinding: "yes",
+      standing: {
+        material: "usable",
+        repairDeadline: null,
+        familyVersion: null,
+        authority: null,
+        cause: null,
+        observation: { source: "custodian", status: "answered", capturedAt: 1 },
+        ...standing,
+      },
+    },
+    ...overrides,
+  };
+}
+
+function renderProfile(profile: ProviderProfile) {
+  renderSection({ state: { ...opencodeState(), profiles: [profile] } });
+}
+
+// The row's own inventory attributes sit beside the badge row, inside the summary.
+function summaryAttributes(badge: HTMLElement): HTMLElement | null {
+  return (
+    badge.parentElement?.parentElement?.querySelector<HTMLElement>(
+      "[data-provider-profile-id]",
+    ) ?? null
+  );
+}
+
 function renderSection(
   overrides: Partial<Parameters<typeof ProviderProfileScopedSection>[0]>,
 ) {
@@ -194,63 +220,6 @@ function renderSection(
   );
 }
 
-function renderSectionWithRecordedProfile(): void {
-  const queryClient = new QueryClient({
-    defaultOptions: {
-      queries: { retry: false },
-      mutations: { retry: false },
-    },
-  });
-  render(
-    <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <PersonalPageContext.Provider
-          value={{
-            section: "providers",
-            pick: PERSONAL_PICK,
-            state: {
-              kind: "ready",
-              status: environmentStatusFixture({
-                items: [
-                  itemStatusFixture({
-                    kind: "managed_profile",
-                    key: "opencode:profile-managed",
-                  }),
-                ],
-              }),
-            },
-            line: null,
-            hostName: "Studio",
-            localOverrides: NO_OVERRIDES,
-            hostId: "host-1",
-            client: null,
-            notices: NO_NOTICES,
-            review: NO_REVIEW,
-          }}
-        >
-          <ProviderProfileScopedSection
-            state={opencodeState()}
-            hostId="host-1"
-            isSelectedHostLocal
-            canAddProfile
-            credentialRefusal={null}
-            onOpenCliSettings={() => undefined}
-            startInReauth={false}
-            failedAttempt={null}
-            onAddProfile={() => undefined}
-            onDismissFailedAttempt={() => undefined}
-            selectedProfileId="profile-managed"
-            onSelectedProfileIdChange={() => undefined}
-            profileEnablementAvailable
-            profileEnablementPending={() => false}
-            onSetProfileEnabled={() => undefined}
-          />
-        </PersonalPageContext.Provider>
-      </TooltipProvider>
-    </QueryClientProvider>,
-  );
-}
-
 describe("<ProviderProfileScopedSection /> profile summary email reveal", () => {
   afterEach(() => {
     cleanup();
@@ -268,19 +237,17 @@ describe("<ProviderProfileScopedSection /> profile summary email reveal", () => 
     expect(tooltipTextFor(emailSpan)).not.toBe(RAW_EMAIL);
   });
 
-  it("reveals the raw email in the wrapping address, with no tooltip", () => {
+  it("reveals the raw email in the truncated address and its tooltip", () => {
     renderSection({});
 
     fireEvent.click(screen.getByRole("button", { name: /Reveal email/ }));
 
     const emailSpan = screen.getByText(RAW_EMAIL);
-    expect(emailSpan.className).toContain("whitespace-normal");
-    expect(emailSpan.className).toContain("break-words");
-    expect(emailSpan.className).not.toContain("truncate");
-    expect(tooltipTextFor(emailSpan)).toBeNull();
+    expect(emailSpan.className).toContain("truncate");
+    expect(tooltipTextFor(emailSpan)).toBe(RAW_EMAIL);
   });
 
-  it("wraps the address and the plan, and shows no Signed in badge on a usable row", () => {
+  it("truncates the address and the plan chip, and badges a usable row Signed in", () => {
     const profile = managedProfile();
     renderSection({
       state: {
@@ -294,20 +261,32 @@ describe("<ProviderProfileScopedSection /> profile summary email reveal", () => 
       },
     });
 
+    const actions = document.querySelector(
+      '[data-slot="profile-summary-actions"]',
+    );
+    expect(actions).not.toBeNull();
+    expect(actions?.className).toContain("flex-wrap");
     const email = screen.getByText(REDACTED_EMAIL);
-    expect(email.className).toContain("whitespace-normal");
-    expect(email.className).toContain("break-words");
-    expect(email.className).not.toContain("truncate");
+    expect(email.className).toContain("truncate");
     const plan = screen.getByText("Team");
-    expect(plan.tagName).toBe("P");
-    expect(plan.className).toContain("whitespace-normal");
-    expect(plan.className).toContain("break-words");
-    expect(plan.className).not.toContain("truncate");
-    expect(screen.queryByText("Signed in")).toBeNull();
+    expect(plan.className).toContain("truncate");
+    const planChip = plan.parentElement;
+    expect(planChip?.getAttribute("data-variant")).toBe("outline");
+    expect(planChip?.getAttribute("data-size")).toBe("xs");
+    expect(planChip?.textContent).toBe("Team");
+    const signedIn = screen.getByText("Signed in");
+    expect(signedIn.getAttribute("data-slot")).toBe("badge");
+    expect(signedIn.getAttribute("data-variant")).toBe("outline");
+    expect(signedIn.getAttribute("data-size")).toBe("xs");
+    const manage = screen.getByRole("button", { name: "Manage profile" });
+    expect(manage.getAttribute("data-size")).toBe("xs");
+    expect(manage.getAttribute("data-variant")).toBe("outline");
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Details" })).toBeNull();
     expect(screen.queryByText("Signed out")).toBeNull();
   });
 
-  it("shows standing text only when the profile is not usable, and keeps the verbs in More", async () => {
+  it("badges Signed out and offers Sign in only when the profile is unauthenticated", async () => {
     const profile = managedProfile();
     const onAddProfile = vi.fn();
     renderSection({
@@ -329,70 +308,168 @@ describe("<ProviderProfileScopedSection /> profile summary email reveal", () => 
     });
 
     const standing = screen.getByText("Signed out");
-    expect(standing.tagName).toBe("P");
-    expect(standing.className).toContain("whitespace-normal");
-    expect(standing.className).toContain("break-words");
-    expect(standing.className).not.toContain("truncate");
+    expect(standing.getAttribute("data-slot")).toBe("badge");
+    expect(standing.getAttribute("data-variant")).toBe("outline");
+    expect(standing.getAttribute("data-size")).toBe("xs");
     expect(screen.queryByText("Signed in")).toBeNull();
 
-    const trigger = screen.getByRole("button", {
-      name: "More for Work account",
-    });
-    trigger.focus();
-    await userEvent.keyboard("{Enter}");
-    const menu = screen.getByRole("menu");
-    expect(
-      within(menu).getByRole("menuitem", { name: "Sign in" }),
-    ).toBeTruthy();
-    expect(
-      within(menu).getByRole("menuitem", { name: "Manage profile" }),
-    ).toBeTruthy();
-    expect(within(menu).queryByRole("switch")).toBeNull();
-
-    await userEvent.keyboard("{ArrowDown}{Enter}");
+    const signIn = screen.getByRole("button", { name: "Sign in" });
+    expect(signIn.getAttribute("data-size")).toBe("xs");
+    expect(signIn.getAttribute("data-variant")).toBe("secondary");
+    const manage = screen.getByRole("button", { name: "Manage profile" });
+    expect(manage.getAttribute("data-size")).toBe("xs");
+    expect(manage.getAttribute("data-variant")).toBe("outline");
+    expect(screen.queryByRole("button", { name: /^More for / })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Details" })).toBeNull();
+    await userEvent.click(manage);
     expect(screen.getByRole("dialog", { name: "Profile editor" })).toBeTruthy();
-    expect(screen.queryByRole("menu")).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Close editor" }));
-
-    trigger.focus();
-    await userEvent.keyboard("{Enter}{Enter}");
+    await userEvent.click(signIn);
     expect(screen.getByRole("dialog", { name: "Sign in editor" })).toBeTruthy();
     expect(onAddProfile).not.toHaveBeenCalled();
-    expect(screen.queryByRole("menu")).toBeNull();
   });
 
-  it("opens recorded managed-profile Details from More and keeps the drawer after menu close", async () => {
-    useSettingsEnvironmentPickStore.setState({ pick: PERSONAL_PICK });
-    const provider = vi.fn<DetailsProvider>(() =>
-      Promise.reject(new Error("no evidence")),
-    );
-    const unregister = registerDetailsProvider("managed_profile", provider);
-    try {
-      renderSectionWithRecordedProfile();
-      const trigger = screen.getByRole("button", {
-        name: "More for Work account",
-      });
-      trigger.focus();
-      await userEvent.keyboard("{Enter}");
-      await screen.findByRole("menu");
-      expect(screen.getByRole("menuitem", { name: "Details" })).toBeTruthy();
-      await userEvent.keyboard("{Enter}");
+  it("does not put Details on the selected profile row", () => {
+    renderSection({});
+    expect(screen.queryByRole("button", { name: "Details" })).toBeNull();
+  });
 
-      const drawer = await screen.findByRole("dialog");
-      expect(
-        within(drawer).getByRole("heading", { name: "Work account" }),
-      ).toBeTruthy();
-      expect(screen.queryByRole("menu")).toBeNull();
-      await waitFor(() => {
-        expect(provider).toHaveBeenCalled();
-      });
-      expect(provider.mock.calls[0]?.[0]).toEqual({
-        environmentId: "personal-env",
-        kind: "managed_profile",
-        key: "opencode:profile-managed",
-      });
-    } finally {
-      unregister();
-    }
+  it("badges an ambient row Signed out when the provider is unauthenticated", async () => {
+    const unauthenticated = {
+      status: "unauthenticated" as const,
+      badgeText: null,
+      label: null,
+      detail: null,
+    };
+    renderSection({
+      selectedProfileId: null,
+      state: {
+        ...opencodeState(),
+        auth: unauthenticated,
+        profiles: [
+          {
+            ...managedProfile(),
+            profileId: "ambient",
+            kind: "ambient",
+            label: "Terminal account",
+            auth: {
+              status: "authenticated",
+              badgeText: null,
+              label: null,
+              detail: null,
+            },
+          },
+        ],
+      },
+    });
+
+    const badge = screen.getByText("Signed out");
+    expect(badge.getAttribute("data-slot")).toBe("badge");
+    expect(badge.getAttribute("data-variant")).toBe("outline");
+    expect(screen.queryByText("Signed in")).toBeNull();
+    const signIn = screen.getByRole("button", { name: "Sign in" });
+    expect(signIn.getAttribute("data-size")).toBe("xs");
+    expect(signIn.getAttribute("data-variant")).toBe("secondary");
+    await userEvent.click(signIn);
+    expect(screen.getByRole("dialog", { name: "Sign in editor" })).toBeTruthy();
+  });
+
+  it("keeps a managed profile's own badge and hides Sign in when only the provider is unauthenticated", () => {
+    const unauthenticated = {
+      status: "unauthenticated" as const,
+      badgeText: null,
+      label: null,
+      detail: null,
+    };
+    renderSection({
+      state: {
+        ...opencodeState(),
+        auth: unauthenticated,
+      },
+    });
+
+    const badge = screen.getByText("Signed in");
+    expect(badge.getAttribute("data-slot")).toBe("badge");
+    expect(badge.getAttribute("data-variant")).toBe("outline");
+    expect(screen.queryByText("Signed out")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
+  });
+
+  it("badges a refused credential and shows only its cause on the detail line", () => {
+    renderProfile(
+      profileWithStanding(
+        { material: "refused-by-provider", cause: "plan lapsed" },
+        {},
+      ),
+    );
+
+    expect(
+      screen.getByText("Refused by provider").getAttribute("data-slot"),
+    ).toBe("badge");
+    expect(screen.getByText("plan lapsed")).toBeTruthy();
+    expect(screen.queryByText("Signed in")).toBeNull();
+    expect(screen.queryByText(/Refused by provider:/)).toBeNull();
+  });
+
+  it("badges Unknown with the cause when the credential observation is unknown", () => {
+    renderProfile(
+      profileWithStanding(
+        {
+          cause: "probe timed out",
+          observation: {
+            source: "custodian",
+            status: "unknown",
+            capturedAt: 1,
+          },
+        },
+        {},
+      ),
+    );
+
+    expect(screen.getByText("Unknown").getAttribute("data-slot")).toBe("badge");
+    expect(screen.getByText("probe timed out")).toBeTruthy();
+    expect(screen.queryByText(/Status unknown/)).toBeNull();
+  });
+
+  it("renders a usable credential as Signed in without a detail line", () => {
+    renderProfile(profileWithStanding({}, {}));
+
+    const badge = screen.getByText("Signed in");
+    expect(badge.getAttribute("data-slot")).toBe("badge");
+    expect(summaryAttributes(badge)?.querySelector("p")).toBeNull();
+  });
+
+  it("keeps the whole revoking notice on the detail line beside the status badge", () => {
+    renderProfile({
+      ...managedProfile(),
+      presence: { kind: "revoking", cause: "signed-out-by-person" },
+    });
+
+    expect(screen.getByText("Signed in").getAttribute("data-slot")).toBe(
+      "badge",
+    );
+    expect(screen.getByText("Disconnecting: signed out.")).toBeTruthy();
+  });
+
+  it("keeps the data inventory attributes on the secondary line", () => {
+    renderProfile({
+      ...profileWithStanding(
+        { material: "stale", cause: "session expired" },
+        {},
+      ),
+      presence: { kind: "admitted", bindingVersion: 1 },
+    });
+
+    const attributes = summaryAttributes(screen.getByText("Stale"));
+    expect(attributes?.getAttribute("data-provider-profile-id")).toBe(
+      "profile-managed",
+    );
+    expect(attributes?.getAttribute("data-provider-profile-presence")).toBe(
+      JSON.stringify({ kind: "admitted", bindingVersion: 1 }),
+    );
+    expect(
+      attributes?.getAttribute("data-provider-profile-standing"),
+    ).toContain('"material":"stale"');
+    expect(attributes?.textContent).toBe("session expired");
   });
 });

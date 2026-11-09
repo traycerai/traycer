@@ -1183,13 +1183,12 @@ export function ActiveTabBody(props: ActiveTabBodyProps) {
           hostLabel={ownerHostLabel}
           reason="chat-no-longer-shared"
           // All moot for this reason: the revoked copy never varies by owner
-          // and declares `offersClone: false`, so no owner or clone flag can
-          // render anything. Passed as the do-nothing values, like `noopClone`.
+          // and declares `offersClone: false`, so no owner flag can render
+          // anything. Passed as the do-nothing values, like `noopClone`.
           ownedByViewer
           ownerName={null}
           cloneTargetLabel={null}
           environmentOwned={false}
-          cloneAllowed={false}
           showsPublishedCopy={false}
           continueTargetLabel={null}
           onClone={noopClone}

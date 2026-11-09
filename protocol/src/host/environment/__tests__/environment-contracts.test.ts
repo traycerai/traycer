@@ -52,6 +52,10 @@ import {
   environmentListUpgradeV10ToV11,
   environmentListV10,
   environmentListV11,
+  environmentEffectiveRoleSchema,
+  environmentMemberRoleSchema,
+  grantedEnvironmentRole,
+  grantedTeamMemberRole,
   environmentMembersInviteV10,
   environmentMembersNoticeSeenV10,
   environmentInvitationsAcceptV10,
@@ -355,6 +359,39 @@ describe("environment.setMainBot protocol contract", () => {
   });
 });
 
+/**
+ * The retired `viewer` role stays in the DECODABLE vocabulary so that released
+ * peers and existing data keep parsing; only the granted roles lose it. A peer
+ * that reads a role the decoder rejects fails the whole response, so removing
+ * the value from these enums breaks every released client.
+ */
+describe("the retired viewer role still decodes and grants nothing", () => {
+  it("parses viewer in the environment's effective-role and member-role enums", () => {
+    expect(environmentEffectiveRoleSchema.parse("viewer")).toBe("viewer");
+    expect(environmentMemberRoleSchema.parse("viewer")).toBe("viewer");
+  });
+
+  it("decodes an @1.1 environment and a member naming it, then resolves both to no authority", () => {
+    const team = environmentListV11.responseSchema.parse({
+      environments: [
+        {
+          ...TEAM,
+          effectiveRole: "viewer",
+          kind: "team",
+          hostCount: 1,
+          providerHandle: "acme",
+        },
+      ],
+    }).environments[0];
+    expect(grantedEnvironmentRole(team.effectiveRole)).toBeNull();
+    expect(grantedEnvironmentRole("editor")).toBe("editor");
+    expect(grantedEnvironmentRole("superuser")).toBeNull();
+    expect(grantedTeamMemberRole("viewer")).toBeNull();
+    expect(grantedTeamMemberRole("admin")).toBe("admin");
+    expect(grantedTeamMemberRole("superuser")).toBeNull();
+  });
+});
+
 describe("environment.list@1.1, environment.host.list@1.1 and environment.members@1.1 upgrade from @1.0 through the registry", () => {
   const ONE_ZERO = { major: 1, minor: 0 } as const;
   const ONE_ONE = { major: 1, minor: 1 } as const;
@@ -388,6 +425,14 @@ describe("environment.list@1.1, environment.host.list@1.1 and environment.member
         },
       ],
     });
+    // The retired role the upgrade names is no authority: a reader that gates
+    // on it gets `null`, never a read-only grant, and the personal row keeps
+    // its own.
+    expect(
+      upgraded.environments.map((environment) =>
+        grantedEnvironmentRole(environment.effectiveRole),
+      ),
+    ).toEqual(["owner", null]);
     // The upgraded answer is a valid @1.1 answer, and the request is untouched.
     expect(environmentListV11.responseSchema.parse(upgraded)).toEqual(upgraded);
     expect(
@@ -572,6 +617,12 @@ describe("environment.list@1.1, environment.host.list@1.1 and environment.member
       legacyRoleNoticeSeenAt: null,
       legacyMembers: [],
     });
+    // Each upgraded member names the retired role, which holds no seat.
+    expect(
+      upgraded.members.map((member) =>
+        grantedTeamMemberRole(member.effectiveRole),
+      ),
+    ).toEqual([null, null]);
   });
 
   it("upgrades an environment.members@1.1 page to @1.2 with each member's email null, and parses an @1.2 email", () => {

@@ -92,13 +92,16 @@ export function ConfigurationStatusChip(props: {
             </span>
           </Button>
         </PopoverTrigger>
-        <PopoverContent align="start" className="w-auto max-w-sm">
+        <PopoverContent
+          align="start"
+          className="w-auto max-w-sm overflow-hidden"
+        >
           <DetailsHostRows
             hosts={props.hosts.map(hostSummaryRow)}
             onRecover={props.onRecover}
             pending={props.recoveryPending}
           />
-          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/60 pt-2">
+          <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-border/60 pt-2">
             {latest === null || latest.lastReportedAt === null ? (
               <span />
             ) : (

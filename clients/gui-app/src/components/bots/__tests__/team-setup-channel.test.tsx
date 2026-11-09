@@ -197,6 +197,19 @@ afterEach(() => {
   endBotTabSurfaceCase(queryClient);
 });
 
+/** The join card's command block holds the command alone; the token never goes in it. */
+const JOIN_COMMAND = "traycer host join";
+
+/** The card's two blocks: the command to run, and the token it asks for. */
+function expectJoinBlocks(token: string): void {
+  expect(
+    screen.getByTestId("team-host-option-machine-command").textContent,
+  ).toBe(JOIN_COMMAND);
+  expect(screen.getByTestId("team-host-option-machine-token").textContent).toBe(
+    token,
+  );
+}
+
 describe("<BotTabSurface /> a team's main bot still to be set up", () => {
   beforeEach(() => {
     setUpNewTeam();
@@ -212,7 +225,6 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
     const TOKEN_WINDOW_MS = 10 * 60_000;
     const NOW = Date.UTC(2026, 10, 4, 12, 0, 0);
     const EXPIRES_AT = NOW + TOKEN_WINDOW_MS;
-    const JOIN_COMMAND = `traycer host join ${TOKEN}`;
     const MINTED: TeamHostInstallTokenResult = {
       kind: "ok",
       hostId: HOST_ID,
@@ -301,10 +313,8 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
         answer(MINTED);
       });
 
-      expect(
-        (await screen.findByTestId("team-host-option-machine-command"))
-          .textContent,
-      ).toBe(JOIN_COMMAND);
+      await screen.findByTestId("team-host-option-machine-command");
+      expectJoinBlocks(TOKEN);
       expect(
         screen.getByTestId("team-host-option-machine-expiry").textContent,
       ).toBe(
@@ -484,6 +494,33 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
       ).toBeTruthy();
     });
 
+    it("copies the token alone from its own button, leaving the command's button as it was", async () => {
+      const user = userEvent.setup();
+      const writeText = vi.fn((_value: string) => Promise.resolve());
+      Object.defineProperty(navigator, "clipboard", {
+        value: { writeText },
+        configurable: true,
+      });
+      auth().mintTeamHostInstallToken.mockResolvedValue(MINTED);
+      render(surfaceFor(SETUP_BOT_ID));
+      await sandboxListRead();
+      await user.click(createButton());
+
+      await user.click(
+        await within(machineOption()).findByRole("button", {
+          name: "Copy token",
+        }),
+      );
+
+      expect(writeText.mock.calls).toEqual([[TOKEN]]);
+      expect(
+        await within(machineOption()).findByRole("button", { name: "Copied" }),
+      ).toBeTruthy();
+      expect(
+        within(machineOption()).getByRole("button", { name: "Copy command" }),
+      ).toBeTruthy();
+    });
+
     it("keeps the token when the card is left and comes back within its window: the join view again, with no second mint", async () => {
       const user = userEvent.setup();
       auth().mintTeamHostInstallToken.mockResolvedValue(MINTED);
@@ -495,9 +532,7 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
 
       render(surfaceFor(SETUP_BOT_ID));
 
-      expect(
-        screen.getByTestId("team-host-option-machine-command").textContent,
-      ).toBe(JOIN_COMMAND);
+      expectJoinBlocks(TOKEN);
       expect(
         within(machineOption()).queryByRole("button", {
           name: "Create team host",
@@ -537,10 +572,8 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
         answer(MINTED);
       });
 
-      expect(
-        (await screen.findByTestId("team-host-option-machine-command"))
-          .textContent,
-      ).toBe(JOIN_COMMAND);
+      await screen.findByTestId("team-host-option-machine-command");
+      expectJoinBlocks(TOKEN);
       expect(auth().mintTeamHostInstallToken).toHaveBeenCalledTimes(1);
     });
 
@@ -724,9 +757,7 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
         await act(async () => {
           await vi.advanceTimersByTimeAsync(TOKEN_WINDOW_MS / 2);
         });
-        expect(
-          screen.getByTestId("team-host-option-machine-command").textContent,
-        ).toBe(JOIN_COMMAND);
+        expectJoinBlocks(TOKEN);
 
         await lapse();
 
@@ -739,8 +770,16 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
           screen.queryByTestId("team-host-option-machine-command"),
         ).toBeNull();
         expect(
+          screen.queryByTestId("team-host-option-machine-token"),
+        ).toBeNull();
+        expect(
           within(machineOption()).queryByRole("button", {
             name: "Copy command",
+          }),
+        ).toBeNull();
+        expect(
+          within(machineOption()).queryByRole("button", {
+            name: "Copy token",
           }),
         ).toBeNull();
         expect(document.body.innerHTML).not.toContain(TOKEN);
@@ -791,10 +830,8 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
           ["env-new"],
           ["env-new"],
         ]);
-        expect(
-          (await screen.findByTestId("team-host-option-machine-command"))
-            .textContent,
-        ).toBe(`traycer host join ${REMINTED_TOKEN}`);
+        await screen.findByTestId("team-host-option-machine-command");
+        expectJoinBlocks(REMINTED_TOKEN);
         expect(
           screen.queryByTestId("team-host-option-machine-expired"),
         ).toBeNull();
@@ -854,9 +891,7 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
           mocks.reads["env-new"] = { setup: JOINING_SETUP };
           view.rerender(surfaceFor(SETUP_BOT_ID));
 
-          expect(
-            screen.getByTestId("team-host-option-machine-command").textContent,
-          ).toBe(JOIN_COMMAND);
+          expectJoinBlocks(TOKEN);
 
           await lapse();
 
@@ -1066,10 +1101,8 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
           });
         });
 
-        expect(
-          (await screen.findByTestId("team-host-option-machine-command"))
-            .textContent,
-        ).toBe("traycer host join team-host-install-token-fixture");
+        await screen.findByTestId("team-host-option-machine-command");
+        expectJoinBlocks("team-host-install-token-fixture");
         expect(auth().createSandbox).not.toHaveBeenCalled();
       });
     });

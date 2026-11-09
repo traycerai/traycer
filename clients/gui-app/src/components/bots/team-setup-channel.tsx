@@ -379,6 +379,9 @@ function createTeamMachineNote(input: {
   return input.machineJoining ? MACHINE_JOINING_NOTE : null;
 }
 
+/** Takes the install token from a prompt, so no shell history keeps it. */
+const TEAM_HOST_JOIN_COMMAND = "traycer host join";
+
 /** How long "Copied" stays on the copy button. */
 const COPIED_RESET_MS = 2_000;
 
@@ -400,17 +403,19 @@ function useLapsed(atMs: number | null): boolean {
 }
 
 /**
- * The minted token: the command that joins the machine and when the token
- * lapses. Once it lapses the command is gone, and a new token can be made
- * (`onRemint`); the server lets the lapsed one go unless the machine joined
- * with it in time, and then refuses. A refused new token is the newest mint,
- * so the card shows the Create button with the refusal under it.
+ * The minted token: the command that joins the machine, the token it asks
+ * for, and when the token lapses. The token stays out of the command, where
+ * the machine's shell history would keep it. Once it lapses both are gone,
+ * and a new token can be made (`onRemint`); the server lets the lapsed one go
+ * unless the machine joined with it in time, and then refuses. A refused new
+ * token is the newest mint, so the card shows the Create button with the
+ * refusal under it.
  *
  * `held` is why the team cannot take another host now (its cloud sandbox,
  * or a computer of its own still joining, past this token's window: the
  * one this token enrolled, waiting for a provider), said in place of the
- * lapse and holding "Create a new token". A token still in its window keeps
- * its command whatever the hold: its own pending machine is listed.
+ * lapse and holding "Create a new token". A token still in its window stays
+ * on the card whatever the hold: its own pending machine is listed.
  */
 function TeamMachineJoin(props: {
   readonly token: TeamHostInstallToken;
@@ -420,13 +425,7 @@ function TeamMachineJoin(props: {
 }): ReactNode {
   const { testId, held } = props;
   const heldId = useId();
-  const command = `traycer host join ${props.token.installToken}`;
   const lapsed = useLapsed(props.token.expiresAt);
-  const { copied, copy } = useClipboardCopy({
-    resetMs: COPIED_RESET_MS,
-    onSuccess: null,
-    onError: null,
-  });
   if (lapsed) {
     return (
       <div
@@ -462,23 +461,21 @@ function TeamMachineJoin(props: {
       data-testid={`${testId}-join`}
     >
       <p className="text-ui-xs text-foreground">
-        Run this on the machine. The token works once and is shown only here.
+        Run this on the machine, then paste the token when it asks. The token
+        works once and is shown only here.
       </p>
-      <pre
-        className="w-full overflow-x-auto rounded-md border border-border/60 bg-foreground/3 p-2 font-mono text-ui-xs text-foreground"
-        data-testid={`${testId}-command`}
-      >
-        {command}
-      </pre>
-      <Button
-        type="button"
-        size="sm"
-        variant="outline"
-        onClick={() => copy(command)}
-        data-testid={`${testId}-copy`}
-      >
-        {copied ? "Copied" : "Copy command"}
-      </Button>
+      <TeamMachineCopyBlock
+        text={TEAM_HOST_JOIN_COMMAND}
+        copyLabel="Copy command"
+        testId={`${testId}-command`}
+        copyTestId={`${testId}-copy`}
+      />
+      <TeamMachineCopyBlock
+        text={props.token.installToken}
+        copyLabel="Copy token"
+        testId={`${testId}-token`}
+        copyTestId={`${testId}-copy-token`}
+      />
       <p
         className="text-ui-xs text-muted-foreground"
         data-testid={`${testId}-expiry`}
@@ -486,6 +483,39 @@ function TeamMachineJoin(props: {
         {`Expires at ${formatClockTime(props.token.expiresAt)}. The team's bots start once the machine joins.`}
       </p>
     </div>
+  );
+}
+
+/** One line to copy to the machine, as the join card shows it. */
+function TeamMachineCopyBlock(props: {
+  readonly text: string;
+  readonly copyLabel: string;
+  readonly testId: string;
+  readonly copyTestId: string;
+}): ReactNode {
+  const { copied, copy } = useClipboardCopy({
+    resetMs: COPIED_RESET_MS,
+    onSuccess: null,
+    onError: null,
+  });
+  return (
+    <>
+      <pre
+        className="w-full overflow-x-auto rounded-md border border-border/60 bg-foreground/3 p-2 font-mono text-ui-xs text-foreground"
+        data-testid={props.testId}
+      >
+        {props.text}
+      </pre>
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        onClick={() => copy(props.text)}
+        data-testid={props.copyTestId}
+      >
+        {copied ? "Copied" : props.copyLabel}
+      </Button>
+    </>
   );
 }
 

@@ -267,6 +267,7 @@ export function useComposerToolbarStore(
   // (availability rerouting included); `modelsHarnessId` rides along so a
   // stale response can never resolve a slug for the wrong harness.
   const harnessId = useStore(store, (s) => s.selection.harnessId);
+  const profileId = useStore(store, (s) => s.selection.profileId);
   const staged = useStagedSandboxStore(
     (s) =>
       stagedSurfaceKey !== null && s.bySurface[stagedSurfaceKey] !== undefined,
@@ -276,9 +277,10 @@ export function useComposerToolbarStore(
     enabled: activityEnabled,
     subscribed: activityEnabled,
   });
-  const modelsData = useToolbarModelsData({
+  const { models: modelsData, failed: modelsFailed } = useToolbarModelsData({
     hostClient,
     harnessId,
+    profileId,
     activityEnabled,
     cloudTraycer: sandboxRunTarget !== null && harnessId === "traycer",
   });
@@ -321,8 +323,10 @@ export function useComposerToolbarStore(
       hostId,
       harnesses,
       modelsHarnessId: harnessId,
+      modelsProfileId: profileId,
       models,
       modelsLoaded,
+      modelsFailed,
       tuiOnly,
       chatLineCarriesAutoMode,
       ultracodeCarried,
@@ -334,7 +338,9 @@ export function useComposerToolbarStore(
     harnesses,
     models,
     modelsLoaded,
+    modelsFailed,
     harnessId,
+    profileId,
     tuiOnly,
     chatLineCarriesAutoMode,
     ultracodeCarried,
@@ -355,26 +361,42 @@ export function useComposerToolbarStore(
       setReasoning: actions.setReasoning,
       setServiceTier: actions.setServiceTier,
       setPermission: actions.setPermission,
-      // The command palette has no rail/profile context of its own - default
-      // the independent profile choice to ambient while restoring the
-      // provider's last-used model/effort/tier.
+      // Within the current provider the palette keeps the account whose
+      // models it lists; a different provider starts on ambient.
       switchHarness: (harnessId: ProviderId) => {
         if (teamSandboxHarnessBlocked(harnessId)) return;
-        commitSelection(store, harnessId, null, null);
+        const current = store.getState().selection;
+        commitSelection(
+          store,
+          harnessId,
+          null,
+          current.harnessId === harnessId ? current.profileId : null,
+        );
       },
       selectModel: (harnessId: ProviderId, modelSlug: string) => {
         if (teamSandboxHarnessBlocked(harnessId)) return;
-        commitSelection(store, harnessId, modelSlug, null);
+        const current = store.getState().selection;
+        commitSelection(
+          store,
+          harnessId,
+          modelSlug,
+          current.harnessId === harnessId ? current.profileId : null,
+        );
       },
     };
   }, [store, teamSandboxHarnessBlocked]);
   // The palette's composer subpages list the catalog of the SAME host this
   // store reads it through, so what they offer is what `switchHarness` /
   // `selectModel` can commit against.
+  const catalogSelection = useMemo(
+    () => ({ harnessId, profileId }),
+    [harnessId, profileId],
+  );
   useRegisterFocusedComposerControls(
     activityEnabled ? registerAs : null,
     registeredControls,
     hostClient,
+    catalogSelection,
   );
 
   return store;
@@ -397,21 +419,30 @@ interface ComposerToolbarDefaults {
 function useToolbarModelsData(input: {
   readonly hostClient: HostClient<HostRpcRegistry> | null;
   readonly harnessId: ProviderId;
+  readonly profileId: string | null;
   readonly activityEnabled: boolean;
   readonly cloudTraycer: boolean;
-}): ReadonlyArray<ModelOption> | undefined {
-  const { hostClient, harnessId, activityEnabled, cloudTraycer } = input;
+}): {
+  readonly models: ReadonlyArray<ModelOption> | undefined;
+  readonly failed: boolean;
+} {
+  const { hostClient, harnessId, profileId, activityEnabled, cloudTraycer } =
+    input;
   const hostActive = activityEnabled && !cloudTraycer;
   const modelsQuery = useGuiHarnessModelsQueryForClient(
     hostClient,
     harnessId,
     null,
-    { enabled: hostActive, subscribed: hostActive },
+    { profileId, enabled: hostActive, subscribed: hostActive },
   );
   const cloudModelsQuery = useSandboxTraycerModels(
     activityEnabled && cloudTraycer,
   );
-  return cloudTraycer ? cloudModelsQuery.data : modelsQuery.data?.models;
+  const selectedQuery = cloudTraycer ? cloudModelsQuery : modelsQuery;
+  return {
+    models: cloudTraycer ? cloudModelsQuery.data : modelsQuery.data?.models,
+    failed: selectedQuery.isError && selectedQuery.data === undefined,
+  };
 }
 
 function sandboxRunTargetOf(

@@ -844,6 +844,115 @@ describe("<BotChannelView tiles={null} /> Edit on a post the bot failed to answe
     expect(textOf(box)).toBe("");
   });
 
+  it.each([false, true])(
+    "retires the edit when the same request resumes (edited: %s)",
+    async (edited) => {
+      const user = userEvent.setup();
+      activityStore.setState({ activity: trunkFailedOn(POST_REQUEST) });
+      mountChannel(null, memberPost(VIEWER_USER_ID));
+      await user.click(screen.getByTestId("bot-message-edit"));
+      const box = channelBox();
+      if (edited) typeInto(box, " Check nightly too.");
+
+      act(() => {
+        activityStore.setState({
+          activity: {
+            trunk: {
+              state: "replying",
+              startedAt: 3_000,
+              step: null,
+              requestId: POST_REQUEST,
+              reason: null,
+            },
+            threads: {},
+          },
+        });
+      });
+
+      await waitFor(() => {
+        expect(screen.queryByTestId("bot-channel-composer-editing")).toBeNull();
+      });
+      expect(textOf(box)).toBe(edited ? `${POST_TEXT} Check nightly too.` : "");
+    },
+  );
+
+  it("retires a thread anchor edit only when that thread resumes its request", async () => {
+    const user = userEvent.setup();
+    mocks.threads = [postThread(VIEWER_USER_ID)];
+    activityStore.setState({
+      activity: {
+        trunk: null,
+        threads: { [THREAD_ID]: failedOn(POST_REQUEST) },
+      },
+    });
+    mountChannel(
+      {
+        anchorMessageId: POST_ID,
+        announcement: false,
+        anchorKind: null,
+        sent: null,
+      },
+      memberPost(VIEWER_USER_ID),
+    );
+    await user.click(
+      within(screen.getByTestId("bot-thread-anchor")).getByTestId(
+        "bot-message-unanswered-edit",
+      ),
+    );
+
+    const replying = {
+      state: "replying" as const,
+      startedAt: 3_000,
+      step: null,
+      requestId: POST_REQUEST,
+      reason: null,
+    };
+    act(() =>
+      activityStore.setState({
+        activity: { trunk: null, threads: { "another-thread": replying } },
+      }),
+    );
+    expect(screen.getByTestId("bot-channel-composer-editing")).toBeTruthy();
+    expect(textOf(channelBox())).toBe(POST_TEXT);
+
+    act(() =>
+      activityStore.setState({
+        activity: { trunk: null, threads: { [THREAD_ID]: replying } },
+      }),
+    );
+    await waitFor(() => {
+      expect(screen.queryByTestId("bot-channel-composer-editing")).toBeNull();
+    });
+    expect(textOf(channelBox())).toBe("");
+  });
+
+  it("keeps an edit when activity is unknown or another request replies", async () => {
+    const user = userEvent.setup();
+    activityStore.setState({ activity: trunkFailedOn(POST_REQUEST) });
+    mountChannel(null, memberPost(VIEWER_USER_ID));
+    await user.click(screen.getByTestId("bot-message-edit"));
+
+    act(() => activityStore.setState({ activity: null }));
+    expect(screen.getByTestId("bot-channel-composer-editing")).toBeTruthy();
+    expect(textOf(channelBox())).toBe(POST_TEXT);
+    act(() =>
+      activityStore.setState({
+        activity: {
+          trunk: {
+            state: "replying",
+            startedAt: 3_000,
+            step: null,
+            requestId: SECOND_REQUEST,
+            reason: null,
+          },
+          threads: {},
+        },
+      }),
+    );
+    expect(screen.getByTestId("bot-channel-composer-editing")).toBeTruthy();
+    expect(textOf(channelBox())).toBe(POST_TEXT);
+  });
+
   it("drops the edit of a failed message when the channel resolves to another conversation", async () => {
     const user = userEvent.setup();
     activityStore.setState({ activity: trunkFailedOn(POST_REQUEST) });
@@ -862,6 +971,76 @@ describe("<BotChannelView tiles={null} /> Edit on a post the bot failed to answe
 
     expect(screen.queryByTestId("bot-channel-composer-editing")).toBeNull();
     expect(textOf(channelBox())).toBe("");
+  });
+
+  it("shows a thread reply's timeout only on its request and retries that same request in the thread", async () => {
+    const user = userEvent.setup();
+    const requestId = "req-timed-out";
+    const summary =
+      "The provider did not start responding to this message. Please try again.";
+    mocks.threads = [postThread(VIEWER_USER_ID)];
+    const threadMessage = (id: string, request: string): Message => ({
+      role: "user",
+      messageId: id,
+      sender: { type: "user", userId: VIEWER_USER_ID },
+      sessionAnchor: null,
+      message: { kind: "user", content: textDoc(id), browserAnnotations: [] },
+      timestamp: 3_000,
+      conversationRequest: {
+        requestId: request,
+        resolvedAt: null,
+        resolvedByMessageId: null,
+      },
+    });
+    mocks.threadHandle = {
+      store: createChannelStore([
+        threadMessage("timed-out", requestId),
+        threadMessage("unrelated", "req-other"),
+      ]),
+    } as ChatSessionStoreHandle;
+    activityStore.setState({
+      activity: {
+        trunk: null,
+        threads: {
+          [THREAD_ID]: {
+            ...failedOn(requestId),
+            reason: {
+              summary,
+              code: "TURN_START_TIMEOUT",
+              harnessId: "codex",
+              action: "none",
+            },
+          },
+        },
+      },
+    });
+    mountChannelWith(
+      {
+        anchorMessageId: POST_ID,
+        announcement: false,
+        anchorKind: null,
+        sent: null,
+      },
+      [memberPost(VIEWER_USER_ID)],
+    );
+    const rows = within(screen.getByTestId("bot-thread-panel")).getAllByTestId(
+      "bot-member-row",
+    );
+    const timedOut = rows.find((row) => row.textContent.includes("timed-out"));
+    const other = rows.find((row) => row.textContent.includes("unrelated"));
+    if (timedOut === undefined || other === undefined)
+      throw new Error("thread replies missing");
+    expect(
+      within(timedOut).getByTestId("bot-message-unanswered").textContent,
+    ).toContain(summary);
+    expect(within(other).queryByTestId("bot-message-unanswered")).toBeNull();
+    await user.click(
+      within(timedOut).getByTestId("bot-message-unanswered-retry"),
+    );
+    expect(sent.at(-1)).toMatchObject({
+      threadId: THREAD_ID,
+      redeliver: { requestId },
+    });
   });
 
   it("keeps an edit of a message in the open thread, its text and the message it replaces, while the channel's session goes and comes back", async () => {
@@ -935,6 +1114,97 @@ describe("<BotChannelView tiles={null} /> Edit on a post the bot failed to answe
     });
   });
 
+  it.each([false, true])(
+    "retires a resumed thread reply edit (edited: %s)",
+    async (edited) => {
+      const user = userEvent.setup();
+      const THREAD_REQUEST = "req-in-thread";
+      const THREAD_TEXT = "And the release branch?";
+      mocks.threads = [postThread(VIEWER_USER_ID)];
+      mocks.threadHandle = {
+        store: createChannelStore([
+          {
+            role: "user",
+            messageId: "thread-message-1",
+            sender: { type: "user", userId: VIEWER_USER_ID },
+            sessionAnchor: null,
+            message: {
+              kind: "user",
+              content: textDoc(THREAD_TEXT),
+              browserAnnotations: [],
+            },
+            timestamp: 3_000,
+            conversationRequest: {
+              requestId: THREAD_REQUEST,
+              resolvedAt: null,
+              resolvedByMessageId: null,
+            },
+          },
+        ]),
+      } as ChatSessionStoreHandle;
+      activityStore.setState({
+        activity: {
+          trunk: null,
+          threads: { [THREAD_ID]: failedOn(THREAD_REQUEST) },
+        },
+      });
+      mountChannelWith(
+        {
+          anchorMessageId: POST_ID,
+          announcement: false,
+          anchorKind: null,
+          sent: null,
+        },
+        [memberPost(VIEWER_USER_ID)],
+      );
+      const panel = screen.getByTestId("bot-thread-panel");
+      const messages = within(panel).getByTestId("chat-messages-stub");
+      // The reply's row, not the post the list opens on.
+      const anchor = within(panel).getByTestId("bot-thread-anchor");
+      const [replyRow] = within(messages)
+        .getAllByTestId("bot-member-row")
+        .filter((row) => !anchor.contains(row));
+      await user.click(within(replyRow).getByTestId("bot-message-edit"));
+      const box = editableIn(
+        within(panel).getByTestId("bot-thread-composer-input"),
+      );
+      if (edited) typeInto(box, " Since Monday.");
+
+      act(() => activityStore.setState({ activity: null }));
+      expect(screen.getByTestId("bot-thread-composer-editing")).toBeTruthy();
+      const replying = {
+        state: "replying" as const,
+        startedAt: 4_000,
+        step: null,
+        requestId: THREAD_REQUEST,
+        reason: null,
+      };
+      act(() =>
+        activityStore.setState({
+          activity: { trunk: null, threads: { "other-thread": replying } },
+        }),
+      );
+      expect(screen.getByTestId("bot-thread-composer-editing")).toBeTruthy();
+      act(() =>
+        activityStore.setState({
+          activity: { trunk: null, threads: { [THREAD_ID]: replying } },
+        }),
+      );
+      await waitFor(() =>
+        expect(screen.queryByTestId("bot-thread-composer-editing")).toBeNull(),
+      );
+      expect(textOf(box)).toBe(edited ? `${THREAD_TEXT} Since Monday.` : "");
+      if (edited) {
+        await user.click(screen.getByTestId("bot-thread-composer-send"));
+        expect(sent.at(-1)).toMatchObject({
+          threadId: THREAD_ID,
+          text: `${THREAD_TEXT} Since Monday.`,
+          supersedes: null,
+        });
+      }
+    },
+  );
+
   it("opens the replacement's thread when the bot answers it in one", async () => {
     const user = userEvent.setup();
     answerThreadId = "thread-new";
@@ -963,6 +1233,184 @@ describe("<BotChannelView tiles={null} /> Edit on a post the bot failed to answe
     });
     expect(sent[0]?.supersedes).toBe(POST_REQUEST);
     expect(textOf(channelBox())).toBe("");
+  });
+
+  it("preserves a modified replacement restored after a refused send when the request resumes", async () => {
+    const user = userEvent.setup();
+    activityStore.setState({ activity: trunkFailedOn(POST_REQUEST) });
+    mountChannel(null, memberPost(VIEWER_USER_ID));
+    await user.click(screen.getByTestId("bot-message-edit"));
+    const box = channelBox();
+    typeInto(box, " Check nightly too.");
+    refuseSends = true;
+    await user.click(screen.getByTestId("bot-channel-composer-send"));
+    await screen.findByTestId("bot-channel-composer-send-failed");
+    expect(screen.getByTestId("bot-channel-composer-editing")).toBeTruthy();
+    expect(textOf(box)).toBe(`${POST_TEXT} Check nightly too.`);
+
+    act(() => {
+      activityStore.setState({
+        activity: {
+          trunk: {
+            state: "replying",
+            startedAt: 3_000,
+            step: null,
+            requestId: POST_REQUEST,
+            reason: null,
+          },
+          threads: {},
+        },
+      });
+    });
+    expect(screen.queryByTestId("bot-channel-composer-editing")).toBeNull();
+    expect(textOf(box)).toBe(`${POST_TEXT} Check nightly too.`);
+    refuseSends = false;
+    await user.click(screen.getByTestId("bot-channel-composer-send"));
+    expect(sent.at(-1)).toMatchObject({
+      text: `${POST_TEXT} Check nightly too.`,
+      supersedes: null,
+    });
+  });
+
+  it("restores a rejected replacement as an ordinary draft after the request resumes", async () => {
+    const user = userEvent.setup();
+    activityStore.setState({ activity: trunkFailedOn(POST_REQUEST) });
+    mountChannel(null, memberPost(VIEWER_USER_ID));
+    await user.click(screen.getByTestId("bot-message-edit"));
+    const box = channelBox();
+    typeInto(box, " Check nightly too.");
+    const hold = Promise.withResolvers<void>();
+    heldSends = hold.promise;
+    await user.click(screen.getByTestId("bot-channel-composer-send"));
+    typeInto(box, "A newer draft.");
+    await act(async () => {
+      hold.reject(new Error("host refused replacement"));
+      await hold.promise.catch(() => undefined);
+    });
+    await screen.findByTestId("bot-channel-composer-send-failed-restore");
+    expect(textOf(box)).toBe("A newer draft.");
+    act(() =>
+      activityStore.setState({
+        activity: {
+          trunk: {
+            state: "replying",
+            startedAt: 3_000,
+            step: null,
+            requestId: POST_REQUEST,
+            reason: null,
+          },
+          threads: {},
+        },
+      }),
+    );
+    await user.click(
+      screen.getByTestId("bot-channel-composer-send-failed-restore"),
+    );
+    expect(screen.queryByTestId("bot-channel-composer-editing")).toBeNull();
+    expect(textOf(box)).toBe(`${POST_TEXT} Check nightly too.`);
+    heldSends = null;
+    await user.click(screen.getByTestId("bot-channel-composer-send"));
+    expect(sent.at(-1)).toMatchObject({
+      text: `${POST_TEXT} Check nightly too.`,
+      supersedes: null,
+    });
+  });
+
+  it("preserves a refused replacement restored over an identical row while the original replies", async () => {
+    const user = userEvent.setup();
+    const second = secondPost();
+    if (second.role !== "user") throw new Error("Expected a user post");
+    const other: Message = {
+      ...second,
+      message: {
+        kind: "user",
+        content: textDoc(POST_TEXT),
+        browserAnnotations: [],
+      },
+    };
+    activityStore.setState({
+      activity: {
+        trunk: null,
+        threads: { [THREAD_ID]: failedOn(POST_REQUEST) },
+      },
+    });
+    mountChannelWith(null, [memberPost(VIEWER_USER_ID), other]);
+    await user.click(screen.getByTestId("bot-message-edit"));
+    const box = channelBox();
+    expect(textOf(box)).toBe(POST_TEXT);
+    const hold = Promise.withResolvers<void>();
+    heldSends = hold.promise;
+    await user.click(screen.getByTestId("bot-channel-composer-send"));
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0].supersedes).toBe(POST_REQUEST);
+    act(() =>
+      activityStore.setState({
+        activity: {
+          trunk: failedOn(SECOND_REQUEST),
+          threads: {
+            [THREAD_ID]: {
+              state: "replying",
+              startedAt: 3000,
+              step: null,
+              requestId: POST_REQUEST,
+              reason: null,
+            },
+          },
+        },
+      }),
+    );
+    await user.click(screen.getByTestId("bot-message-edit"));
+    expect(screen.getByTestId("bot-channel-composer-editing")).toBeTruthy();
+    expect(textOf(box)).toBe(POST_TEXT);
+    await act(async () => {
+      hold.reject(new Error("host refused replacement"));
+      await hold.promise.catch(() => undefined);
+    });
+    await screen.findByTestId("bot-channel-composer-send-failed-restore");
+    await user.click(
+      screen.getByTestId("bot-channel-composer-send-failed-restore"),
+    );
+    expect(screen.queryByTestId("bot-channel-composer-editing")).toBeNull();
+    expect(textOf(box)).toBe(POST_TEXT);
+    heldSends = null;
+    await user.click(screen.getByTestId("bot-channel-composer-send"));
+    expect(sent.at(-1)).toMatchObject({ text: POST_TEXT, supersedes: null });
+  });
+
+  it("remembers the original edit session after restoration with no activity", async () => {
+    const user = userEvent.setup();
+    activityStore.setState({ activity: trunkFailedOn(POST_REQUEST) });
+    mountChannel(null, memberPost(VIEWER_USER_ID));
+    await user.click(screen.getByTestId("bot-message-edit"));
+    const box = channelBox();
+    typeInto(box, " Modified unsent work.");
+    act(() => activityStore.setState({ activity: null }));
+    refuseSends = true;
+    await user.click(screen.getByTestId("bot-channel-composer-send"));
+    await screen.findByTestId("bot-channel-composer-send-failed");
+    expect(screen.getByTestId("bot-channel-composer-editing")).toBeTruthy();
+    act(() =>
+      activityStore.setState({
+        activity: {
+          trunk: {
+            state: "replying",
+            startedAt: 3000,
+            step: null,
+            requestId: POST_REQUEST,
+            reason: null,
+          },
+          threads: {},
+        },
+      }),
+    );
+    expect(textOf(box)).toBe(POST_TEXT + " Modified unsent work.");
+    expect(screen.queryByTestId("bot-channel-composer-editing")).toBeNull();
+    refuseSends = false;
+    await user.click(screen.getByTestId("bot-channel-composer-send"));
+    expect(sent.at(-1)).toMatchObject({
+      text: POST_TEXT + " Modified unsent work.",
+      supersedes: null,
+    });
   });
 
   it("keeps the draft of an edit opened while an earlier edit's send was in flight", async () => {

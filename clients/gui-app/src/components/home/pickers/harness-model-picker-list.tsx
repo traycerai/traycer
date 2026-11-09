@@ -33,6 +33,7 @@ interface HarnessModelPickerListProps {
   readonly onActive: (rowId: string) => void;
   readonly onSelect: (row: HarnessModelRow) => void;
   readonly onOpenProviderSettings: (focusTab: string) => void;
+  readonly onOpenHostUpdates: () => void;
   readonly terminalLoginSurface: ProviderTerminalLoginSurface | null;
   readonly runTargetHostId: string | null;
   readonly onClosePicker: () => void;
@@ -64,6 +65,7 @@ export function HarnessModelPickerList(
     onActive,
     onSelect,
     onOpenProviderSettings,
+    onOpenHostUpdates,
     terminalLoginSurface,
     runTargetHostId,
     onClosePicker,
@@ -79,6 +81,7 @@ export function HarnessModelPickerList(
     activeProviderState,
     rowsCount: rows.length,
     onOpenProviderSettings,
+    onOpenHostUpdates,
     terminalLoginSurface,
     runTargetHostId,
     onClosePicker,

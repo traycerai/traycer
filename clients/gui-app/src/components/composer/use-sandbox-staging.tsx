@@ -320,14 +320,19 @@ export function useSandboxStaging(input: {
     const stagedHost = input.hosts.find(
       (host) => host.hostId === (stage.createdHostId ?? existingHostId),
     );
-    const payer = existingHost?.sandbox?.summary?.wakePayer;
+    const existingSummary = existingHost?.sandbox?.summary;
+    const payer = existingSummary?.wakePayer;
     return {
       configuration: stagedConfiguration,
+      os:
+        stage.target.kind === "new"
+          ? stage.target.shape.os
+          : existingSummary?.os,
       price,
       needsCredits: stagedFacts !== null && stagedFacts.needsCredits,
       billingStarted: stagedSandboxBillingStarted(
         stage,
-        stagedHost?.sandbox ?? null,
+        stagedHost === undefined ? null : stagedHost.sandbox,
       ),
       shortfallMc:
         balance === null || price === null
@@ -495,7 +500,8 @@ export function useSandboxStaging(input: {
         stage === null || stage.target.kind !== "new"
           ? null
           : stageConfigurationKey(stage.target.configuration),
-      stagedLabel: stage === null ? null : stagedLabel(stage, input.hosts),
+      stagedLabel:
+        stage === null ? null : stagedLabel(stage, stagedFacts, input.hosts),
       // Running, not settled: a refusal or a failure ends the wait.
       stagedBusy:
         stage !== null && stage.phase !== "staged" && stage.failure === null,
@@ -552,6 +558,7 @@ export function useSandboxStaging(input: {
     rows,
     setSheetKey,
     stage,
+    stagedFacts,
     stageNew,
     surfaceKey,
     task,
@@ -733,6 +740,7 @@ export function restingVerb(
 
 function stagedLabel(
   stage: StagedSandbox,
+  facts: NewRowFacts | null,
   hosts: readonly HostScopeOption[],
 ): string {
   const { target } = stage;
@@ -759,6 +767,11 @@ function stagedLabel(
     configuration: stageConfigurationCopy(target.configuration),
     cpus: target.shape.cpus,
     memoryMb: target.shape.memoryMb,
+    priceMcPerHour:
+      facts === null || facts.price === null
+        ? null
+        : facts.price.awakeMcPerHour,
+    priceIsFrom: facts !== null && facts.price !== null && !facts.price.exact,
   });
 }
 
@@ -1029,5 +1042,10 @@ function existingTargetPrice(
   const summary =
     host === undefined || host.sandbox === null ? null : host.sandbox.summary;
   if (summary === null || summary.priceMcPerHour === null) return null;
-  return { awakeMcPerHour: summary.priceMcPerHour.awakeMc, exact: true };
+  return {
+    awakeMcPerHour: summary.priceMcPerHour.awakeMc,
+    suspendedMcPerHour: summary.priceMcPerHour.suspendedMc,
+    stoppedMcPerHour: summary.priceMcPerHour.stoppedMc,
+    exact: true,
+  };
 }

@@ -460,6 +460,7 @@ describe("<BotMessageComposer /> taking images", () => {
     await holdsImage("Image#1: first.png");
     pasteFiles(imageFile("second.png", "image/png"));
     await holdsImage("Image#2: second.png");
+    await waitFor(() => expect(sendButton().disabled).toBe(false));
 
     await user.click(
       screen.getByRole("button", { name: "Remove Image#1: first.png" }),
@@ -479,6 +480,7 @@ describe("<BotMessageComposer /> sending images", () => {
       mount("delivered", PLAIN_BOX);
       pasteFiles(imageFile("shot.png", "image/png"));
       await holdsImage("Image#1: shot.png");
+      await waitFor(() => expect(sendButton().disabled).toBe(false));
       decode.mockClear();
 
       typeInto(box(), "caption");
@@ -495,6 +497,7 @@ describe("<BotMessageComposer /> sending images", () => {
     mount("delivered", PLAIN_BOX);
     pasteFiles(imageFile("shot.png", "image/png"));
     await holdsImage("Image#1: shot.png");
+    await waitFor(() => expect(sendButton().disabled).toBe(false));
     typeInto(box(), "What is this?");
 
     await user.click(sendButton());
@@ -531,7 +534,7 @@ describe("<BotMessageComposer /> sending images", () => {
 
     pasteFiles(imageFile("shot.png", "image/png"));
     await holdsImage("Image#1: shot.png");
-    expect(sendButton().disabled).toBe(false);
+    await waitFor(() => expect(sendButton().disabled).toBe(false));
     await user.click(sendButton());
 
     expect(lastSend().request.text).toBe(BOT_CONVERSATION_IMAGES_ONLY_TEXT);
@@ -556,7 +559,9 @@ describe("<BotMessageComposer /> sending images", () => {
     pasteFiles(imageFile("shot.png", "image/png"));
     await holdsImage("Image#1: shot.png");
 
-    typeInto(box(), "Is CI green?{Enter}");
+    typeInto(box(), "Is CI green?");
+    await waitFor(() => expect(sendButton().disabled).toBe(false));
+    typeInto(box(), "{Enter}");
 
     expect(lastSend().request.text).toBe("Is CI green?");
     expect("attachments" in lastSend().request).toBe(false);
@@ -730,6 +735,7 @@ describe("<BotMessageComposer /> a send that fails", () => {
     mount("delivered", PLAIN_BOX);
     pasteFiles(imageFile("shot.png", "image/png"));
     await holdsImage("Image#1: shot.png");
+    await waitFor(() => expect(sendButton().disabled).toBe(false));
     typeInto(box(), "What is this?{Enter}");
     expect(boxText("Message Tracy")).toBe("");
     expect(openButtons()).toHaveLength(0);
@@ -759,6 +765,7 @@ describe("<BotMessageComposer /> a send that fails", () => {
     });
     pasteFiles(imageFile("shot.png", "image/png"));
     await holdsImage("Image#1: shot.png");
+    await waitFor(() => expect(sendButton().disabled).toBe(false));
     await user.click(sendButton());
     expect(lastSend().request.supersedes).toBe("request-failed");
 
@@ -787,6 +794,7 @@ describe("<BotMessageComposer /> a send that fails", () => {
     const view = mount("delivered", { edit: null, keepDraft: true });
     pasteFiles(imageFile("shot.png", "image/png"));
     await holdsImage("Image#1: shot.png");
+    await waitFor(() => expect(sendButton().disabled).toBe(false));
     typeInto(box(), "What is this?{Enter}");
     expect(useBotDraftsStore.getState().threadBoxes["bot-1"]).toBeUndefined();
     view.unmount();

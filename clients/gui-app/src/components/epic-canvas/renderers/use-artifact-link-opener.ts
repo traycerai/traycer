@@ -227,6 +227,8 @@ export function useArtifactLinkOpener(args: {
       client: tabHostClient,
       workspaceClient: tabHostClient,
       navigate,
+      // An artifact tile is a task's own, never a Tracy transcript.
+      tracyOrigin: null,
       openTile,
     };
   }, [
@@ -266,7 +268,7 @@ export function useArtifactLinkOpener(args: {
         toast(
           worktrees.isError
             ? "Couldn't open link"
-            : "Workspace links are still loading",
+            : "Folder links are still loading",
         );
         return;
       }

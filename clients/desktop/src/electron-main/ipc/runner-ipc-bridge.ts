@@ -1,9 +1,16 @@
 import { SandboxArtifactServer } from "../app/sandbox-artifact-server";
 import { registerSandboxArtifactIpc } from "./sandbox-artifact-ipc";
 import type { BrowserDesktopControl } from "../browser-sessions/browser-desktop-control";
-import { ipcMain, type IpcMainEvent, type IpcMainInvokeEvent } from "electron";
+import {
+  app,
+  ipcMain,
+  shell,
+  type IpcMainEvent,
+  type IpcMainInvokeEvent,
+} from "electron";
 import { randomUUID } from "node:crypto";
-import { config } from "../../config";
+import { join } from "node:path";
+import { canRecordSoundtrack, config } from "../../config";
 import { describeLogError, log } from "../app/logger";
 import { resolveIapKeyFilePath } from "../auth/iap-proxy-token";
 import type { DesktopTrayController } from "../tray/tray";
@@ -114,6 +121,11 @@ import {
 import type { LocalHostCapability } from "../../ipc-contracts/host-lifecycle-types";
 import { registerPowerIpc } from "./power-ipc";
 import { registerSoundtrackIpc } from "./soundtrack-ipc";
+import {
+  registerSoundtrackRecordingIpc,
+  type FinishSoundtrackRecordings,
+} from "./soundtrack-recording-ipc";
+import { SessionRecordings } from "../soundtrack/session-recordings";
 import { registerAppUpdateIpc } from "./app-update-ipc";
 import { registerGlobalShortcutsIpc } from "./global-shortcuts-ipc";
 import { registerZoomIpc } from "./zoom-ipc";
@@ -691,6 +703,7 @@ export class RunnerIpcBridge {
   private browserViewManager: BrowserViewManager | null = null;
   private browserSessions: BrowserSessionsRegistry | null = null;
   private browserPreparation: BrowserDesktopControl | null = null;
+  private finishRecordings: FinishSoundtrackRecordings | null = null;
 
   readonly sandboxArtifacts: SandboxArtifactServer;
 
@@ -779,10 +792,25 @@ export class RunnerIpcBridge {
       keyFilePath: resolveIapKeyFilePath(process.resourcesPath),
       audience: config.iapAudience,
       set: "team",
+      manifestVersion: 1,
       fetch: globalThis.fetch,
       now: Date.now,
       warn: (message) => log.warn(message),
     });
+    this.finishRecordings = registerSoundtrackRecordingIpc(
+      this,
+      canRecordSoundtrack
+        ? new SessionRecordings({
+            folder: () => join(app.getPath("userData"), "soundtrack-sessions"),
+            now: () => new Date(),
+            newId: randomUUID,
+            reveal: (path) => {
+              shell.showItemInFolder(path);
+            },
+            warn: (message) => log.warn(message),
+          })
+        : null,
+    );
   }
 
   /**
@@ -1034,6 +1062,14 @@ export class RunnerIpcBridge {
    */
   async captureFinalBrowserState(): Promise<void> {
     await this.browserSessions?.captureFinalPrimaryProfiles(null);
+  }
+
+  /**
+   * Finishes every recording of the music before the quit takes its channels
+   * down, waiting no longer than `deadlineMs`.
+   */
+  finishSoundtrackRecordings(deadlineMs: number): Promise<void> {
+    return this.finishRecordings?.(deadlineMs) ?? Promise.resolve();
   }
 
   notifySystemResumed(): void {

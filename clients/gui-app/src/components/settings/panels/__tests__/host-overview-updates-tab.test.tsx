@@ -322,6 +322,36 @@ function scopeFrom(
 }
 
 describe("<HostSettingsPanel /> Overview ▸ Updates tab", () => {
+  it("shows the specific-version and release-candidate guidance beside the version controls", async () => {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: false,
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = bindingWith(fixture.client);
+    scopeOverrides.current = scopeFrom(
+      "host-a",
+      fixture,
+      registryItemFor("host-a", "manual"),
+      {},
+    );
+    renderPanelPersistent();
+
+    await selectHostOverviewTab("updates");
+
+    expect(
+      screen.getByText(
+        "Install a specific host version — upgrade to a release candidate or hotfix, or downgrade to an earlier release.",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByText("Show RC host versions when choosing a version."),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("checkbox", { name: "Include release candidates" }),
+    ).toBeTruthy();
+  });
+
   it("draws no group label over the single-row auto-update group, and its switch still writes the account policy while the host can't be reached", async () => {
     // The contrast: "Pick a different version" gets an explicit
     // label div ahead of its bordered group; the auto-update row does not —
@@ -1434,13 +1464,16 @@ async function renderUpdatesTabFor(
 }
 
 describe("<HostSettingsPanel /> Overview ▸ Updates tab, desktop app row", () => {
-  it("shows the desktop app row for the local host when the desktop bridge is present", async () => {
-    await renderUpdatesTabFor(
-      true,
-      makeDesktopRunnerHost(new StubAppUpdatesBridge()),
-    );
-    const state = await screen.findByTestId("host-overview-desktop-app-state");
-    expect(state.textContent).toBe("Up to date (v1.4.0)");
+  it("omits the desktop app row for the local host when the updater is idle", async () => {
+    const bridge = new StubAppUpdatesBridge();
+    await renderUpdatesTabFor(true, makeDesktopRunnerHost(bridge));
+    await waitFor(() => {
+      expect(bridge.getSnapshot).toHaveBeenCalled();
+    });
+    await act(async () => {
+      await Promise.all(bridge.snapshotLoads);
+    });
+    expect(screen.queryByTestId("host-overview-desktop-app-row")).toBeNull();
   });
 
   it("omits the desktop app row for a remote host even with the desktop bridge", async () => {

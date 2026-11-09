@@ -15,8 +15,12 @@ import { CONSEQUENCES_WORDING_VERSION } from "@/lib/sandboxes/sandbox-strings";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   consequencesShown,
+  consequencesShownKey,
   useTeamHostDisclosureSeenStore,
 } from "@/stores/hosts/team-host-disclosure-seen-store";
+
+const WINDOWS_SANDBOX_LIMITATION =
+  "Windows sandboxes have no desktop or Computer Use.";
 
 const mocks = vi.hoisted(() => ({
   openLink: vi.fn<(url: string, kind: string) => void>(),
@@ -38,7 +42,12 @@ const ACME = { kind: "team", teamId: "team-acme", teamName: "Acme" } as const;
 function input(overrides: Partial<ConsequencesInput>): ConsequencesInput {
   return {
     configuration: ACME,
-    price: { awakeMcPerHour: 120, exact: true },
+    price: {
+      awakeMcPerHour: 120,
+      suspendedMcPerHour: 4,
+      stoppedMcPerHour: 2,
+      exact: true,
+    },
     needsCredits: false,
     billingStarted: false,
     audience: "shared",
@@ -88,7 +97,7 @@ describe("<ConsequencesBlock />", () => {
     render(block(value));
 
     expect(screen.getByTestId("consequences-price").textContent).toBe(
-      "$0.12 an hour while awake",
+      "$0.12 an hour while awake · uses your Acme credits",
     );
     for (const kind of ["audience", "reach", "team", "resting-storage"]) {
       expect(screen.getByTestId(`consequences-clause-${kind}`)).toBeDefined();
@@ -137,16 +146,17 @@ describe("<ConsequencesBlock />", () => {
 
     fireEvent.click(screen.getByTestId("consequences-what-this-means"));
     expect(screen.getByTestId("consequences-price").textContent).toBe(
-      "$0.12 an hour while awake",
+      "$0.12 an hour while awake · uses your Acme credits",
     );
     const fullText = screen.getByTestId("consequences-block").textContent;
     const team = screen.getByTestId("consequences-clause-team").textContent;
     expect(team).toBe(
-      "Everyone in the team can use it while you pay from your team credits; another member's agent can read what yours can.",
+      "Everyone in Acme can use it; another member's agent can read what yours can.",
     );
+    expect(team).not.toMatch(/pay|credit|Paid/);
     expect(fullText.match(/\$0\.12 an hour/g)).toHaveLength(1);
-    expect(fullText.match(/Everyone in the team can use it/g)).toHaveLength(1);
-    expect(fullText.match(/pay from your team credits/g)).toHaveLength(1);
+    expect(fullText.match(/Everyone in Acme can use it/g)).toHaveLength(1);
+    expect(fullText).not.toContain("pay from your team credits");
     expect(fullText.match(/another member's agent can read/g)).toHaveLength(1);
     const storage = screen.getByTestId(
       "consequences-clause-resting-storage",
@@ -179,6 +189,50 @@ describe("<ConsequencesBlock />", () => {
     const summaryText = screen.getByTestId("consequences-block").textContent;
     expect(summaryText.match(/\$0\.12 an hour/g)).toHaveLength(1);
     expect(summaryText.match(/uses your credits/g)).toHaveLength(1);
+  });
+
+  it("states what a setup is charged for in full on the first render and on a collapsed repeat, beside the price rather than instead of it", () => {
+    const value = input({});
+    const expected =
+      "Running the sandbox is charged separately from build work. Build work is charged once, even if the build fails. Keeping the result is charged as storage for as long as you keep it.";
+    const first = render(block(value));
+    expect(screen.getByTestId("consequences-setup-charges").textContent).toBe(
+      expected,
+    );
+    expect(screen.getByTestId("consequences-price").textContent).toBe(
+      "$0.12 an hour while awake · uses your Acme credits",
+    );
+    first.unmount();
+
+    render(block(value));
+    expect(screen.getByTestId("consequences-what-this-means")).toBeDefined();
+    expect(screen.queryByTestId("consequences-clause-team")).toBeNull();
+    expect(screen.getByTestId("consequences-setup-charges").textContent).toBe(
+      expected,
+    );
+    expect(screen.getByTestId("consequences-price").textContent).toBe(
+      "$0.12 an hour while awake · uses your Acme credits",
+    );
+  });
+
+  it("keeps the Windows limitation in view on a collapsed repeat, and says nothing of it for Linux", () => {
+    const windows = input({ os: "windows" });
+    const first = render(block(windows));
+    expect(screen.getByText(WINDOWS_SANDBOX_LIMITATION)).toBeDefined();
+    first.unmount();
+
+    const collapsed = render(block(windows));
+    expect(screen.queryByTestId("consequences-clause-team")).toBeNull();
+    expect(screen.getByTestId("consequences-what-this-means")).toBeDefined();
+    expect(screen.getByText(WINDOWS_SANDBOX_LIMITATION)).toBeDefined();
+    collapsed.unmount();
+
+    render(block(input({ os: "linux" })));
+    expect(screen.queryByText(WINDOWS_SANDBOX_LIMITATION)).toBeNull();
+    cleanup();
+
+    render(block(input({})));
+    expect(screen.queryByText(WINDOWS_SANDBOX_LIMITATION)).toBeNull();
   });
 
   it("renders in full again for a different audience", () => {
@@ -218,7 +272,7 @@ describe("<ConsequencesBlock />", () => {
     render(block(globex));
 
     expect(screen.getByTestId("consequences-clause-team").textContent).toBe(
-      "Everyone in the team can use it while you pay from your team credits; another member's agent can read what yours can.",
+      "Everyone in Globex can use it; another member's agent can read what yours can.",
     );
     expect(
       consequencesShown(
@@ -317,10 +371,62 @@ describe("<ConsequencesBlock />", () => {
   });
 
   it("prefixes `from ` for a price that is only a lower bound", () => {
-    render(block(input({ price: { awakeMcPerHour: 120, exact: false } })));
-    expect(screen.getByTestId("consequences-price").textContent).toBe(
-      "from $0.12 an hour while awake",
+    render(
+      block(
+        input({
+          price: {
+            awakeMcPerHour: 120,
+            suspendedMcPerHour: 4,
+            stoppedMcPerHour: 2,
+            exact: false,
+          },
+        }),
+      ),
     );
+    expect(screen.getByTestId("consequences-price").textContent).toBe(
+      "from $0.12 an hour while awake · uses your Acme credits",
+    );
+  });
+
+  it("stays expanded when a seen receipt was recorded at wording version 3", () => {
+    const value = input({});
+    const older = consequencesShownSubject(
+      value.configuration,
+      value.audience,
+      3,
+    );
+    useTeamHostDisclosureSeenStore
+      .getState()
+      .markSeen(VIEWER, consequencesShownKey(older));
+
+    render(block(value));
+
+    expect(screen.getByTestId("consequences-clause-team").textContent).toBe(
+      "Everyone in Acme can use it; another member's agent can read what yours can.",
+    );
+    expect(screen.queryByTestId("consequences-what-this-means")).toBeNull();
+    expect(screen.getByTestId("consequences-price").textContent).toBe(
+      "$0.12 an hour while awake · uses your Acme credits",
+    );
+  });
+
+  it("shows the hourly rate with its funding context once billing has started", () => {
+    render(
+      block(
+        input({
+          needsCredits: true,
+          billingStarted: true,
+          shortfallMc: 120,
+        }),
+      ),
+    );
+
+    expect(screen.getByTestId("consequences-price").textContent).toBe(
+      "$0.12 an hour while awake · uses your Acme credits",
+    );
+    expect(
+      screen.queryByText(/allowance is short|Not enough credits/),
+    ).toBeNull();
   });
 
   it("offers Move them first beside the move clause only when the surface can move them", () => {

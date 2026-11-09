@@ -3,6 +3,7 @@ import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { getFeatureSettingsBridge } from "@/lib/desktop-feature-settings";
 import { isMobileApp } from "@/lib/mobile-app";
 import { soundtrackOffered } from "@/lib/soundtrack/manifest";
+import { desktopRecordingChannel } from "@/lib/soundtrack/recording-bridge";
 import type { SettingsAvailabilityContext } from "@/lib/settings/settings-availability";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -25,6 +26,7 @@ export function useSettingsAvailabilityContext(): SettingsAvailabilityContext {
   const mobileApp = isMobileApp();
   const phoneLayout = useIsMobileViewport();
   const offered = soundtrackOffered();
+  const recordingOffered = desktopRecordingChannel() !== null;
   const soundtrackOn = useSettingsStore((state) => state.soundtrackEnabled);
   return useMemo(
     () => ({
@@ -33,6 +35,7 @@ export function useSettingsAvailabilityContext(): SettingsAvailabilityContext {
       mobileApp,
       phoneLayout,
       soundtrackOffered: offered,
+      soundtrackRecordingOffered: recordingOffered,
       soundtrackOn,
     }),
     [
@@ -41,6 +44,7 @@ export function useSettingsAvailabilityContext(): SettingsAvailabilityContext {
       mobileApp,
       phoneLayout,
       offered,
+      recordingOffered,
       soundtrackOn,
     ],
   );

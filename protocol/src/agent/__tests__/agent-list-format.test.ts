@@ -3,6 +3,7 @@ import type { AgentSummary, ListAgentsResponse } from "@traycer/protocol/host";
 import {
   agentListUpgradeV100ToV101,
   agentListUpgradeV101ToV102,
+  agentListUpgradeV102ToV103,
   agentListUpgradeV91ToV92,
   agentListUpgradeV92ToV100,
 } from "@traycer/protocol/host/agent/contracts";
@@ -307,10 +308,12 @@ describe("formatAgentListResponse categorization", () => {
     // is what hands the listing to the formatter, and it fills `null`.
     expect(Object.hasOwn(parsed.agents[1], "archived")).toBe(false);
     const output = formatAgentListResponse(
-      agentListUpgradeV101ToV102.upgradeResponse(
-        agentListUpgradeV100ToV101.upgradeResponse(
-          agentListUpgradeV92ToV100.upgradeResponse(
-            agentListUpgradeV91ToV92.upgradeResponse(parsed),
+      agentListUpgradeV102ToV103.upgradeResponse(
+        agentListUpgradeV101ToV102.upgradeResponse(
+          agentListUpgradeV100ToV101.upgradeResponse(
+            agentListUpgradeV92ToV100.upgradeResponse(
+              agentListUpgradeV91ToV92.upgradeResponse(parsed),
+            ),
           ),
         ),
       ),
@@ -489,7 +492,7 @@ describe("formatAgentListResponse categorization", () => {
     expect(output).not.toContain("You:");
   });
 
-  it("renders model/effort/fast on a GUI row after the surface/harness token", () => {
+  it("renders model, effort and tier without a redundant fast token on a GUI row", () => {
     const caller = agent({ id: "caller", isSelf: true });
     const configured = agent({
       id: "done",
@@ -498,6 +501,7 @@ describe("formatAgentListResponse categorization", () => {
         model: { kind: "concrete", slug: "gpt-5.6-sol" },
         reasoningEffort: "high",
         fastMode: true,
+        serviceTier: "priority",
       },
     });
     const output = formatAgentListResponse(
@@ -505,8 +509,9 @@ describe("formatAgentListResponse categorization", () => {
     );
 
     expect(output).toContain(
-      "done gui/claude model: gpt-5.6-sol effort: high fast",
+      "done gui/claude model: gpt-5.6-sol effort: high serviceTier: priority",
     );
+    expect(agentLine(output, "done gui/claude")).not.toContain(" fast");
   });
 
   it("omits null effort and disabled fast tokens", () => {
@@ -516,6 +521,7 @@ describe("formatAgentListResponse categorization", () => {
         model: { kind: "concrete", slug: "gpt-5.6-sol" },
         reasoningEffort: null,
         fastMode: false,
+        serviceTier: null,
       },
     });
     const output = formatAgentListResponse(response([configured], "done"));
@@ -535,6 +541,7 @@ describe("formatAgentListResponse categorization", () => {
         model: { kind: "provider-default" },
         reasoningEffort: null,
         fastMode: null,
+        serviceTier: null,
       },
     });
     const output = formatAgentListResponse(response([configured], "term"));
@@ -990,6 +997,7 @@ describe("formatAgentListPage", () => {
           model: { kind: "concrete", slug: "gpt-5.6-sol" },
           reasoningEffort: "high",
           fastMode: true,
+          serviceTier: null,
         },
       }),
       "connectable",
@@ -1086,6 +1094,7 @@ describe("formatAgentListPage", () => {
               model: { kind: "concrete", slug: "gpt-5.6-sol" },
               reasoningEffort: null,
               fastMode: null,
+              serviceTier: null,
             },
           }
         : {},
@@ -1276,6 +1285,7 @@ describe("formatAgentListPage", () => {
               model: { kind: "concrete", slug: "gpt-5.6-sol" },
               reasoningEffort: "high",
               fastMode: true,
+              serviceTier: null,
             },
           }),
           "offline",
@@ -1487,12 +1497,31 @@ describe("formatAgentSelf", () => {
           model: { kind: "concrete", slug: "gpt-5.6-sol" },
           reasoningEffort: "high",
           fastMode: true,
+          serviceTier: null,
         },
       }),
     );
     expect(output).toContain("model: gpt-5.6-sol");
     expect(output).toContain("effort: high");
     expect(output).toContain("fast: yes");
+  });
+
+  it("reports a selected tier without a redundant GUI fast line", () => {
+    const output = formatAgentSelf(
+      agent({
+        id: "self",
+        isSelf: true,
+        runConfig: {
+          model: { kind: "concrete", slug: "gpt-6.1-sol" },
+          reasoningEffort: "high",
+          fastMode: true,
+          serviceTier: "priority",
+        },
+      }),
+    );
+
+    expect(output).toContain("serviceTier: priority");
+    expect(output).not.toContain("fast:");
   });
 
   it("omits null effort and reports disabled GUI fast mode as no", () => {
@@ -1503,6 +1532,7 @@ describe("formatAgentSelf", () => {
           model: { kind: "concrete", slug: "gpt-5.6-sol" },
           reasoningEffort: null,
           fastMode: false,
+          serviceTier: null,
         },
       }),
     );
@@ -1520,6 +1550,7 @@ describe("formatAgentSelf", () => {
           model: { kind: "provider-default" },
           reasoningEffort: null,
           fastMode: null,
+          serviceTier: null,
         },
       }),
     );
@@ -1552,6 +1583,7 @@ describe("profile and permission mode tokens", () => {
         model: { kind: "concrete", slug: "gpt-5.6-sol" },
         reasoningEffort: "high",
         fastMode: true,
+        serviceTier: null,
       },
       profile: "work",
       permissionMode: "supervised",

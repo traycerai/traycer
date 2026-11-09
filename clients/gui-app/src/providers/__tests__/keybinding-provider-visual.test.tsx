@@ -1,4 +1,10 @@
-import { act, cleanup, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPlatformMock } from "@/__tests__/create-platform-mock";
 
@@ -13,6 +19,9 @@ import { registerDynamicActionHandler } from "@/lib/keybindings/dispatch";
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 import { findPaneById } from "@/stores/epics/canvas/tile-tree";
 import type { KeybindingRouterSource } from "@/lib/keybindings/router-adapter";
+import { ArtifactExpandButton } from "@/components/artifacts/artifact-expand-button";
+import { ArtifactExpansion } from "@/components/artifacts/artifact-expansion";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { KeybindingProvider } from "@/providers/keybinding-provider";
 import { StatusBarKeybindingBridge } from "@/components/layout/status-bar/status-bar-keybinding-bridge";
 import {
@@ -485,6 +494,39 @@ describe("<KeybindingProvider /> visual leader hints", () => {
     expect(calls).toHaveLength(1);
     expect(first.defaultPrevented).toBe(true);
     expect(repeated.defaultPrevented).toBe(true);
+  });
+
+  it("holds app shortcuts back while an artifact is expanded, and lets them through once it is inline again", () => {
+    renderProbeWithExtra(
+      buildMutableRouterSource("/epics/e1").router,
+      <TooltipProvider>
+        <ArtifactExpansion title="Doc">
+          <ArtifactExpandButton />
+        </ArtifactExpansion>
+      </TooltipProvider>,
+    );
+    const calls: Array<string> = [];
+    const unregister = registerDynamicActionHandler(
+      "app.terminal.maximize",
+      () => calls.push("maximize"),
+    );
+    const press = (): void => {
+      keyDown({ code: "KeyJ", key: "j", metaKey: true, altKey: true });
+    };
+
+    press();
+    expect(calls).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand" }));
+    expect(screen.getByRole("dialog", { name: "Doc" })).toBeTruthy();
+    press();
+    expect(calls).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    press();
+    unregister();
+    expect(calls).toHaveLength(2);
   });
 
   it("flips the status-bar placement once while its rebound chord is held", () => {

@@ -5,6 +5,8 @@ import {
   fireEvent,
   render,
   screen,
+  within,
+  waitFor,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -38,11 +40,21 @@ vi.mock("@/components/sandbox/sandbox-frame", () => ({
     useEffect(() => {
       if (frames.bridge !== null) onBridge?.(frames.bridge);
     }, [onBridge]);
-    return <div data-testid="page-frame" />;
+    return (
+      <div
+        data-testid="page-frame"
+        data-path={props.pageNavigation?.path}
+        data-mode={props.displayMode}
+      />
+    );
   },
 }));
 
-import { ArtifactPagesFrame } from "@/components/html-artifact/artifact-pages-frame";
+import { ArtifactExpansion } from "@/components/artifacts/artifact-expansion";
+import {
+  ArtifactPagesFrame,
+  type ProvenPage,
+} from "@/components/html-artifact/artifact-pages-frame";
 
 function manifestOf(pages: readonly string[]): ArtifactManifest {
   const files: Record<string, ArtifactManifest["files"][string]> = {};
@@ -64,8 +76,12 @@ interface PagesOptions {
   readonly height: number | null;
   /** The caller's rows for the chip's "More actions" menu. */
   readonly menuItems: ReactNode;
-  /** The comment tool, which only the entry page is ever put into. */
+  /** The comment tool. An artifact page on show is put into it. */
   readonly commenting: boolean;
+  /** Layers over the page. The frame shows them on every page it is given. */
+  readonly overlay: ReactNode;
+  /** What the frame reports as the page comments go on. */
+  readonly onCommentPage: ((page: ProvenPage | null) => void) | null;
 }
 
 const FILLING_ONE_PAGE: PagesOptions = {
@@ -73,36 +89,44 @@ const FILLING_ONE_PAGE: PagesOptions = {
   height: null,
   menuItems: undefined,
   commenting: false,
+  overlay: null,
+  onCommentPage: null,
 };
 
 function renderPages(overrides: Partial<PagesOptions>) {
   const options = { ...FILLING_ONE_PAGE, ...overrides };
   render(
-    <ArtifactPagesFrame
-      source={{
-        kind: "artifact",
-        artifactId: "artifact-a1",
-        treePath: "site",
-        entryPath: options.pages[0],
-        manifest: manifestOf(options.pages),
-        // Never called: the frame that would mount a server is the stand-in
-        // above. What a refused read SERVES is the artifact server's own test.
-        readSpan: () => Promise.resolve({ unavailable: "failed" }),
-        resolveOutsideReference: () => null,
-      }}
-      title="Report"
-      className=""
-      height={options.height}
-      commenting={options.commenting}
-      onSize={() => undefined}
-      onStatus={() => undefined}
-      onBridge={null}
-      onTextSelection={null}
-      onFrame={null}
-      renderOverlay={null}
-      sourceEquivalent={undefined}
-      menuItems={options.menuItems}
-    />,
+    // The frame is not a surface on its own: every call site renders it inside
+    // the expansion that raises it, and that is what its Expand toggle asks.
+    <ArtifactExpansion title="Report">
+      <ArtifactPagesFrame
+        source={{
+          kind: "artifact",
+          artifactId: "artifact-a1",
+          treePath: "site",
+          entryPath: options.pages[0],
+          manifest: manifestOf(options.pages),
+          // Never called: the frame that would mount a server is the stand-in
+          // above. What a refused read SERVES is the artifact server's own
+          // test.
+          readSpan: () => Promise.resolve({ unavailable: "failed" }),
+          resolveOutsideReference: () => null,
+        }}
+        title="Report"
+        className=""
+        height={options.height}
+        commenting={options.commenting}
+        onSize={() => undefined}
+        onStatus={() => undefined}
+        onBridge={null}
+        onTextSelection={null}
+        onFrame={null}
+        onCommentPage={options.onCommentPage}
+        overlay={options.overlay}
+        sourceEquivalent={undefined}
+        menuItems={options.menuItems}
+      />
+    </ArtifactExpansion>,
   );
   const navigation = (): NonNullable<SandboxFrameProps["pageNavigation"]> => {
     const value = frames.latest?.pageNavigation ?? null;
@@ -122,6 +146,7 @@ function renderPages(overrides: Partial<PagesOptions>) {
 
 const UNREACHABLE = "Couldn't load this page from its host.";
 const MISSING = "This page is not in the artifact.";
+const UNCOMMENTABLE = "Comments can't be added on this page.";
 
 afterEach(() => {
   cleanup();
@@ -222,6 +247,47 @@ function frameProps(): SandboxFrameProps {
   return frames.latest;
 }
 
+it("opens the current page over the task and keeps the reader's place on Escape", async () => {
+  const user = userEvent.setup();
+  const { report } = renderPages({ pages: TWO_PAGES });
+  report((page) => page.onNavigate("report.html"));
+  await user.click(button("Expand"));
+  const dialog = screen.getByRole("dialog", { name: "Report" });
+  const expandedFrame = within(dialog).getByTestId("page-frame");
+  expect(expandedFrame.getAttribute("data-path")).toBe("report.html");
+  expect(expandedFrame.getAttribute("data-mode")).toBe("fullscreen");
+  expect(within(dialog).queryByRole("button", { name: "Expand" })).toBeNull();
+  const back = within(dialog).getByRole("button", { name: "Back" });
+  const home = within(dialog).getByRole("button", { name: "Home" });
+  expect(back.hasAttribute("disabled")).toBe(false);
+  await user.click(home);
+  expect(
+    within(dialog).getByTestId("page-frame").getAttribute("data-path"),
+  ).toBe("index.html");
+  fireEvent.keyDown(dialog, { key: "Escape" });
+  expect(screen.queryByRole("dialog")).toBeNull();
+  // One surface, raised and lowered again: the page the reader moved to while
+  // it was up is the page waiting for them afterwards. The expanded view used
+  // to be a second frame with its own history, which is exactly why it also
+  // had its own, emptier set of controls.
+  await waitFor(() => expect(document.activeElement).toBe(button("Expand")));
+  const inlineFrame = screen.getByTestId("page-frame");
+  expect(inlineFrame.getAttribute("data-path")).toBe("index.html");
+  expect(inlineFrame.getAttribute("data-mode")).toBe("inline");
+});
+
+it("closes on the first Escape immediately after opening and restores focus", async () => {
+  const user = userEvent.setup();
+  renderPages({});
+  await user.click(button("Expand"));
+  expect(screen.getByRole("dialog", { name: "Report" })).toBeTruthy();
+  await user.keyboard("{Escape}");
+  expect(screen.queryByRole("dialog")).toBeNull();
+  // Expand stands down while the surface is up and returns with it, so this is
+  // the restored control rather than the node that was clicked.
+  await waitFor(() => expect(document.activeElement).toBe(button("Expand")));
+});
+
 describe("the floating controls chip", () => {
   it("offers no Back or Home on an artifact with one page", () => {
     renderPages({});
@@ -308,8 +374,9 @@ describe("the More actions menu", () => {
     const toolbar = screen.getByRole("toolbar", {
       name: "HTML artifact controls",
     });
-    // Back and Home end the chip, with no divider left hanging after them.
-    expect(toolbar.querySelector('[data-slot="separator"]')).toBeNull();
+    expect(
+      within(toolbar).getByRole("button", { name: "Expand" }),
+    ).toBeTruthy();
     expect(screen.queryByRole("button", { name: "More actions" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Zoom in" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Zoom out" })).toBeNull();
@@ -406,8 +473,81 @@ describe("the room a filling page keeps for the controls", () => {
   });
 });
 
-describe("commenting on the entry page", () => {
-  it("tells only the entry page to edit, and keeps the served source", async () => {
+const COMMENT_OVERLAY = <div data-testid="comment-overlay">Comment tools</div>;
+
+/** Records each page the frame says comments go on. */
+function watchCommentPage(): {
+  readonly record: (page: ProvenPage | null) => void;
+  readonly last: () => ProvenPage | null;
+} {
+  const reports: (ProvenPage | null)[] = [];
+  return {
+    record: (page) => {
+      reports.push(page);
+    },
+    last: () => reports.at(-1) ?? null,
+  };
+}
+
+describe("commenting on an artifact page", () => {
+  it("reports each artifact page that proves itself", () => {
+    const watched = watchCommentPage();
+    const { report } = renderPages({
+      pages: TWO_PAGES,
+      commenting: true,
+      overlay: COMMENT_OVERLAY,
+      onCommentPage: watched.record,
+    });
+
+    // Nothing has proved itself yet, so comments have no page.
+    expect(watched.last()).toBeNull();
+
+    report((page) => {
+      page.onNavigate("index.html");
+      frameProps().onStatus("ready");
+    });
+    const entry = watched.last();
+    expect(entry?.path).toBe("index.html");
+    expect(screen.getByTestId("comment-overlay")).toBeTruthy();
+    expect(screen.queryByText(UNCOMMENTABLE)).toBeNull();
+
+    report((page) => {
+      page.onNavigate("report.html");
+      frameProps().onStatus("ready");
+    });
+
+    // The overlay belongs to the caller now: a sub page does not lose it,
+    // and it is a page comments can go on.
+    const sub = watched.last();
+    expect(sub?.path).toBe("report.html");
+    expect(sub).not.toBe(entry);
+    expect(screen.getByTestId("comment-overlay")).toBeTruthy();
+
+    report((page) => {
+      page.onNavigate("index.html");
+      frameProps().onStatus("ready");
+    });
+
+    // A fresh object per document, so a page loaded again is not the one
+    // that was on show before.
+    const again = watched.last();
+    expect(again?.path).toBe("index.html");
+    expect(again).not.toBe(entry);
+  });
+
+  it("does not show the comment notice on a sub-page when commenting is off", () => {
+    const { report } = renderPages({ pages: TWO_PAGES });
+
+    report((page) => {
+      page.onNavigate("report.html");
+      frameProps().onStatus("ready");
+    });
+
+    expect(screen.queryByText(UNCOMMENTABLE)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Go home" })).toBeNull();
+  });
+
+  it("tells every artifact page to edit, and the page being left stays out of edit", async () => {
     const user = userEvent.setup();
     const bridge = realBridge();
     frames.bridge = bridge;
@@ -433,18 +573,20 @@ describe("commenting on the entry page", () => {
     report((page) => page.onNavigate("report.html"));
 
     expect(frameProps().source).toBe(source);
-    expect(setMode).toHaveBeenLastCalledWith("play");
+    expect(setMode).toHaveBeenLastCalledWith("edit");
     expect(setHtmlView).toHaveBeenLastCalledWith({
       enabled: true,
       scale: 1,
-      commenting: false,
+      commenting: true,
     });
 
     setMode.mockClear();
     await user.click(button("Back"));
 
-    // The page being left is still the one loaded: it is not put in Edit.
+    // Back has moved the request, but the page being left is still the one
+    // loaded. It is not put in Edit while the destination proves itself.
     expect(setMode).not.toHaveBeenCalledWith("edit");
+    expect(setMode).toHaveBeenLastCalledWith("play");
 
     report((page) => {
       page.onNavigate("index.html");
@@ -461,9 +603,10 @@ describe("commenting on the entry page", () => {
     });
   });
 
-  // A page's own link back to the entry page reports where it landed and that
-  // it is ready in one go. The new document is told the entry page's mode,
-  // with no stale word from the page it left.
+  // A page's own link reports where it landed and that it is ready in one go.
+  // The new document is told that page's mode, with no stale word from the
+  // page it left. Both of the artifact's pages are commentable, so the word
+  // the page being left had is already edit.
   it("tells a page reached by its own link that page's mode, and only that", () => {
     const bridge = realBridge();
     frames.bridge = bridge;
@@ -474,7 +617,7 @@ describe("commenting on the entry page", () => {
       frameProps().onStatus("ready");
     });
     report((page) => page.onNavigate("report.html"));
-    expect(setMode).toHaveBeenLastCalledWith("play");
+    expect(setMode).toHaveBeenLastCalledWith("edit");
     setMode.mockClear();
 
     report((page) => {
@@ -484,5 +627,147 @@ describe("commenting on the entry page", () => {
     });
 
     expect(setMode.mock.calls).toEqual([["edit"]]);
+  });
+});
+
+describe("a page comments cannot go on", () => {
+  function commentingBridge() {
+    const bridge = realBridge();
+    frames.bridge = bridge;
+    return { setMode: vi.spyOn(bridge, "setMode") };
+  }
+
+  it("keeps a missing page on its stand-in and out of comment mode", () => {
+    const { setMode } = commentingBridge();
+    const watched = watchCommentPage();
+    const { report } = renderPages({
+      pages: TWO_PAGES,
+      commenting: true,
+      onCommentPage: watched.record,
+    });
+    report((page) => {
+      page.onNavigate("index.html");
+      frameProps().onStatus("ready");
+    });
+    setMode.mockClear();
+
+    report((page) => {
+      page.onNavigate("gone.html");
+      page.onPageMissing();
+    });
+
+    expect(screen.getByText(MISSING)).toBeTruthy();
+    expect(screen.queryByText(UNCOMMENTABLE)).toBeNull();
+    expect(setMode).toHaveBeenLastCalledWith("play");
+    expect(setMode).not.toHaveBeenCalledWith("edit");
+    expect(watched.last()).toBeNull();
+  });
+
+  it("keeps an unreachable page on its stand-in and out of comment mode", () => {
+    const { setMode } = commentingBridge();
+    const watched = watchCommentPage();
+    const { report } = renderPages({
+      pages: TWO_PAGES,
+      commenting: true,
+      onCommentPage: watched.record,
+    });
+    report((page) => {
+      page.onNavigate("index.html");
+      frameProps().onStatus("ready");
+    });
+    setMode.mockClear();
+
+    report((page) => {
+      page.onNavigate("report.html");
+      page.onPageUnreachable();
+    });
+
+    expect(screen.getByText(UNREACHABLE)).toBeTruthy();
+    expect(screen.queryByText(UNCOMMENTABLE)).toBeNull();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(setMode).toHaveBeenLastCalledWith("play");
+    expect(setMode).not.toHaveBeenCalledWith("edit");
+    expect(watched.last()).toBeNull();
+  });
+
+  it("tells a proven page that is not an artifact page to play, and offers home", async () => {
+    const user = userEvent.setup();
+    const { setMode } = commentingBridge();
+    const watched = watchCommentPage();
+    const { navigation, report } = renderPages({
+      pages: TWO_PAGES,
+      commenting: true,
+      onCommentPage: watched.record,
+    });
+    report((page) => {
+      page.onNavigate("index.html");
+      frameProps().onStatus("ready");
+    });
+    setMode.mockClear();
+
+    report((page) => {
+      page.onNavigate("notes.txt");
+      frameProps().onStatus("ready");
+    });
+
+    expect(screen.getByText(UNCOMMENTABLE)).toBeTruthy();
+    expect(setMode).toHaveBeenLastCalledWith("play");
+    expect(setMode).not.toHaveBeenCalledWith("edit");
+    expect(watched.last()).toBeNull();
+
+    await user.click(button("Go home"));
+
+    expect(navigation().path).toBe("index.html");
+    expect(screen.queryByText(UNCOMMENTABLE)).toBeNull();
+  });
+});
+
+describe("a page that is already showing when the surface is raised or lowered", () => {
+  // A chat row has a fixed height, so its page is not told to take the zoom
+  // view. Raising it makes the page fill, and the page must hear that without
+  // anything else happening - it is already loaded and ready.
+  it("is told its view again when the frame starts and stops filling, keeping the reader's place", async () => {
+    const user = userEvent.setup();
+    const bridge = realBridge();
+    frames.bridge = bridge;
+    const setHtmlView = vi.spyOn(bridge, "setHtmlView");
+    const { report } = renderPages({ pages: TWO_PAGES, height: 240 });
+    report((page) => {
+      page.onNavigate("report.html");
+      frameProps().onStatus("ready");
+    });
+    expect(setHtmlView).toHaveBeenLastCalledWith({
+      enabled: false,
+      scale: 1,
+      commenting: false,
+    });
+
+    await user.click(button("Expand"));
+
+    expect(setHtmlView).toHaveBeenLastCalledWith({
+      enabled: true,
+      scale: 1,
+      commenting: false,
+    });
+    expect(screen.getByTestId("page-frame").getAttribute("data-path")).toBe(
+      "report.html",
+    );
+    expect(screen.getByTestId("page-frame").getAttribute("data-mode")).toBe(
+      "fullscreen",
+    );
+
+    await user.click(button("Close"));
+
+    expect(setHtmlView).toHaveBeenLastCalledWith({
+      enabled: false,
+      scale: 1,
+      commenting: false,
+    });
+    expect(screen.getByTestId("page-frame").getAttribute("data-path")).toBe(
+      "report.html",
+    );
+    expect(screen.getByTestId("page-frame").getAttribute("data-mode")).toBe(
+      "inline",
+    );
   });
 });

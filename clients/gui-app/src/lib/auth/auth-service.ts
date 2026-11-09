@@ -1,3 +1,4 @@
+import type { SandboxCatalogueReadinessRequest } from "@traycer/protocol/host/sandbox-control";
 import type {
   CredentialsMigrationOutcome,
   IRunnerHost,
@@ -3181,14 +3182,16 @@ export class AuthService {
     return this.runnerHost.getSandboxCosts(bearer);
   }
 
-  async getSandboxCatalogue(): Promise<SandboxCatalogueFetchResult> {
+  async getSandboxCatalogue(
+    context: SandboxCatalogueReadinessRequest | null,
+  ): Promise<SandboxCatalogueFetchResult> {
     const refusal = this.sandboxControlRefusal();
     if (refusal !== null) return refusal;
     const bearer = this.cloudBearer();
     if (bearer === null) {
       return { kind: "unauthorized" };
     }
-    return this.runnerHost.getSandboxCatalogue(bearer);
+    return this.runnerHost.getSandboxCatalogue(bearer, context);
   }
 
   async getTraycerModels(): Promise<TraycerModelsFetchResult> {

@@ -673,6 +673,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     selection.harnessId,
     null,
     {
+      profileId: selection.profileId,
       enabled: selectedHarnessRefetchGate,
       subscribed: activityEnabled,
     },
@@ -910,13 +911,6 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     createProfileHostIsLocal,
     createProfileStateByHarnessId.get(resolvedActiveProviderId),
   );
-  const activeProvider = useBrowsedProviderCatalogEntry({
-    runTargetClient,
-    browsedProviderId: resolvedActiveProviderId,
-    catalogHarnesses,
-    catalogActive,
-    cloudTraycer,
-  });
   // The profile browsed/selected within the active provider: prefer the
   // reducer's `activeProfileId` (a strip click or ⌘-digit rail switch) if it
   // belongs to this harness, else the committed selection's profile if it
@@ -939,6 +933,14 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       selection.profileId,
     ],
   );
+  const activeProvider = useBrowsedProviderCatalogEntry({
+    runTargetClient,
+    browsedProviderId: resolvedActiveProviderId,
+    browsedProfileId: activePanelProfileId,
+    catalogHarnesses,
+    catalogActive,
+    cloudTraycer,
+  });
   // `focusTab` is the caller's, not this function's: a CTA that promises a
   // specific destination ("Set up CLI" -> the CLI candidates on General) has to
   // be able to name it. This used to end with an unconditional
@@ -974,6 +976,17 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       hostId: null,
     });
   }
+  function openHostUpdates(): void {
+    closeOnly();
+    openSettings({
+      section: "host",
+      resetToGeneral: false,
+      tab: "updates",
+      draft: null,
+      hostId: runTargetClient?.getActiveHostId() ?? runTargetHostId,
+    });
+  }
+
   // Falls back to the fallback harness list's label while the catalog hasn't
   // resolved the active provider yet (e.g. still loading).
   const activePanelLabel = useMemo(
@@ -1053,11 +1066,15 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   const rows = useMemo(
     () =>
       buildAllHarnessModelRows(
-        catalogHarnesses.flatMap((harness) =>
-          harness.available ? [{ harness, models: harness.models }] : [],
-        ),
+        catalogHarnesses.flatMap((cachedHarness) => {
+          const harness =
+            activeProvider?.id === cachedHarness.id
+              ? activeProvider
+              : cachedHarness;
+          return harness.available ? [{ harness, models: harness.models }] : [];
+        }),
       ),
-    [catalogHarnesses],
+    [activeProvider, catalogHarnesses],
   );
   const providerRows = useMemo(
     () => rows.filter((row) => row.harnessId === resolvedActiveProviderId),
@@ -1433,6 +1450,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         onRefreshCatalog={handleRefreshCatalog}
         hostUnavailableLabel={hostUnavailableLabel}
         onOpenProviderSettings={openProviderSettings}
+        onOpenHostUpdates={openHostUpdates}
         onClosePicker={closeOnly}
         listRef={listRef}
         listKey={listKey}
@@ -1841,10 +1859,17 @@ function modelPickerSelectionSummary(
  * (`isPending` behind the gate covers that optimistic pre-dispatch render),
  * so the panel's spinner shows from the first frame instead of flashing "No
  * models available".
+ *
+ * The models are the browsed PROFILE's: the catalog entry holds the ambient
+ * account's list (the fan-out and the prefetch fill that slot), and a managed
+ * profile can advertise a different one - Codex offers a speed tier per plan.
+ * So a managed profile's rows and footer come from this hook's own query on
+ * that profile's slot, which the entry's ambient list never stands in for.
  */
 function useBrowsedProviderCatalogEntry(input: {
   readonly runTargetClient: HostClient<HostRpcRegistry> | null;
   readonly browsedProviderId: ProviderId;
+  readonly browsedProfileId: string | null;
   readonly catalogHarnesses: ReadonlyArray<GuiHarnessCatalogEntry>;
   readonly catalogActive: boolean;
   /** Traycer's cloud rows, which no host is asked for; `null` off a sandbox. */
@@ -1862,7 +1887,9 @@ function useBrowsedProviderCatalogEntry(input: {
     input.catalogActive &&
     hostListsModels &&
     entry?.available === true &&
-    (!entry.availabilityPending || entry.models.length === 0);
+    (input.browsedProfileId !== null ||
+      !entry.availabilityPending ||
+      entry.models.length === 0);
   const modelsQuery = useGuiHarnessModelsQueryForClient(
     input.runTargetClient,
     input.browsedProviderId,
@@ -1870,13 +1897,32 @@ function useBrowsedProviderCatalogEntry(input: {
     {
       enabled: fetchGate,
       subscribed: input.catalogActive,
+      profileId: input.browsedProfileId,
     },
   );
   const modelsLoading = fetchGate && modelsQuery.isPending;
   return useMemo(() => {
     if (entry === null) return null;
-    return hostListsModels ? { ...entry, modelsLoading } : entry;
-  }, [entry, hostListsModels, modelsLoading]);
+    return hostListsModels
+      ? {
+          ...entry,
+          models:
+            modelsQuery.data?.models ??
+            (input.browsedProfileId === null ? entry.models : []),
+          modelsLoading,
+          modelsError:
+            modelsQuery.error ??
+            (input.browsedProfileId === null ? entry.modelsError : null),
+        }
+      : entry;
+  }, [
+    entry,
+    hostListsModels,
+    input.browsedProfileId,
+    modelsLoading,
+    modelsQuery.data?.models,
+    modelsQuery.error,
+  ]);
 }
 
 // Restrict to harnesses whose adapter advertises a TUI surface. Runtime

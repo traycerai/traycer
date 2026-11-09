@@ -1,5 +1,6 @@
 import {
   alwaysAvailable,
+  isSoundtrackRecordingRowAvailable,
   isPlaybackControlsRowAvailable,
   isSoundtrackRowAvailable,
 } from "@/lib/settings/settings-availability";
@@ -106,5 +107,33 @@ export const APP_NOTIFICATIONS = defineSettingsSection("app-notifications", {
     description: "What the music changes with.",
     availableWhen: isSoundtrackRowAvailable,
     keywords: ["music", "activity"],
+  },
+  soundtrackRecording: {
+    kind: "row",
+    group: "soundtrack",
+    search: { anchor: "sounds-soundtrack-recording" },
+    label: "Record session",
+    description: "Saves the music, and why it changed, to this computer.",
+    availableWhen: isSoundtrackRecordingRowAvailable,
+    keywords: ["recording", "music", "capture", "save", "audio file"],
+  },
+  // Drawn under the switch, and found through it.
+  soundtrackRecordingLimit: {
+    kind: "row",
+    group: "soundtrack",
+    search: { contributesTo: "soundtrackRecording" },
+    label: "Stop after",
+    description: null,
+    availableWhen: isSoundtrackRecordingRowAvailable,
+    keywords: ["length", "duration", "limit"],
+  },
+  soundtrackRecordingQuality: {
+    kind: "row",
+    group: "soundtrack",
+    search: { contributesTo: "soundtrackRecording" },
+    label: "Quality",
+    description: "Compressed uses about 60 MB an hour, lossless about 700 MB.",
+    availableWhen: isSoundtrackRecordingRowAvailable,
+    keywords: ["lossless", "compressed", "wav", "size"],
   },
 });

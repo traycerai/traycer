@@ -93,13 +93,13 @@ function RestoreCheckpointDialogContent(props: RestoreCheckpointDialogProps) {
         // Inline `maxWidth` instead of a Tailwind arbitrary-value class:
         // the comma inside `min(92vw, 32rem)` defeats Tailwind v4's
         // class-extractor regex, so the utility silently never reaches
-        // the stylesheet. `min-w-0` neutralizes the grid's intrinsic
+        // the stylesheet. `min-w-0` neutralizes the body's intrinsic
         // `min-content` minimum so an unbreakable file path can't push
         // the modal past the cap. The default X close button is
         // suppressed - Cancel in the footer already covers dismissal
         // (alongside Esc / overlay click) without the corner-spacing
         // mismatch that comes with the corner-anchored icon.
-        className="w-full min-w-0 overflow-hidden"
+        className="flex w-full min-w-0 flex-col overflow-hidden"
         style={{ maxWidth: "min(92vw, 32rem)" }}
         showCloseButton={false}
         data-testid="restore-checkpoint-dialog"
@@ -114,7 +114,7 @@ function RestoreCheckpointDialogContent(props: RestoreCheckpointDialogProps) {
           </DialogDescription>
         </DialogHeader>
 
-        <div className="min-w-0 space-y-3 px-6 pb-2">
+        <div className="-m-1 min-h-0 min-w-0 space-y-3 overflow-y-auto px-7 pt-1 pb-3">
           <div className="max-h-[min(45vh,22rem)] min-w-0 overflow-y-auto overflow-x-hidden rounded-lg border border-border/60 bg-foreground/3">
             {entries.map((entry) => (
               <RestoreFileRow
@@ -149,14 +149,7 @@ function RestoreCheckpointDialogContent(props: RestoreCheckpointDialogProps) {
           />
         </div>
 
-        <DialogFooter
-        // `mx-0 mb-0` neutralizes shadcn's default `-mx-4 -mb-4` on
-        // DialogFooter - those negatives are tuned for the primitive's
-        // `p-4` content padding, but we use `p-0` here, so they leak
-        // 16px past the bottom edge and get clipped by
-        // `overflow-hidden`. Result: buttons hug the bottom edge with
-        // no breathing room.
-        >
+        <DialogFooter>
           <Button
             type="button"
             variant="ghost"

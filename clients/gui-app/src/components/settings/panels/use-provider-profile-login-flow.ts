@@ -296,6 +296,34 @@ export type ProviderProfileLoginFlowCodePastePhase =
   | "submitting"
   | "verifying";
 
+/** One projection of a sign-in's progress for both add-profile and reauth. */
+export function providerProfileLoginProgress(
+  state: ProviderProfileLoginFlowState,
+): {
+  readonly loginUrl: string | null;
+  readonly userCode: string | null;
+  readonly waiting: boolean;
+  readonly readerCount: number | undefined;
+  readonly cancelRequested: boolean;
+} {
+  if (state.kind === "waiting") {
+    return {
+      loginUrl: state.url,
+      userCode: state.userCode,
+      waiting: true,
+      readerCount: state.readerCount,
+      cancelRequested: false,
+    };
+  }
+  return {
+    loginUrl: null,
+    userCode: null,
+    waiting: false,
+    readerCount: undefined,
+    cancelRequested: state.kind === "starting" && state.cancelRequested,
+  };
+}
+
 export interface ProviderProfileLoginFlowCodePaste {
   /** `false` when the provider has no `codePaste` capability - callers
    *  should render nothing for the paste field in that case. */

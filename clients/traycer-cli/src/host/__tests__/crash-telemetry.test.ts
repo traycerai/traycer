@@ -141,6 +141,10 @@ function sampleTelemetry(
     stopRequested: false,
     stderrEmpty: false,
     stderrFatal: "other",
+    hostLastLine: "none",
+    errorClass: "none",
+    errorCode: "none",
+    stopIntentState: "none",
     reportMemory: NO_REPORT_MEMORY,
     ...overrides,
   };
@@ -210,13 +214,17 @@ describe("buildHostCrashEvent", () => {
         "cli_version",
         "crash_kind",
         "host_environment",
+        "host_error_class",
+        "host_error_code",
         "host_fatal",
+        "host_last_line",
         "host_output",
         "host_phase",
         "host_running_version",
         "host_version",
         "os_release",
         "platform",
+        "stop_intent_state",
         "stop_requested",
         "uptime_bucket",
       ].sort(),
@@ -272,6 +280,10 @@ describe("buildHostCrashEvent", () => {
       stop_requested: "no",
       host_output: "wrote",
       host_fatal: "other",
+      host_last_line: "none",
+      host_error_class: "none",
+      host_error_code: "none",
+      stop_intent_state: "none",
       host_phase: "published",
       uptime_bucket: "lt-10s",
     });
@@ -350,6 +362,24 @@ describe("buildHostCrashEvent", () => {
         expect(JSON.stringify(event)).not.toContain("heap out of memory");
       },
     );
+
+    it("carries the closed-set exit evidence as tags and nothing else of the capture", () => {
+      const event = buildHostCrashEvent(
+        sampleTelemetry({
+          stderrFatal: "node-uncaught",
+          hostLastLine: "layer0-acquired",
+          errorClass: "TypeError",
+          errorCode: "EPERM",
+          stopIntentState: "fresh-served",
+        }),
+        null,
+      );
+      expect(event.tags.host_fatal).toBe("node-uncaught");
+      expect(event.tags.host_last_line).toBe("layer0-acquired");
+      expect(event.tags.host_error_class).toBe("TypeError");
+      expect(event.tags.host_error_code).toBe("EPERM");
+      expect(event.tags.stop_intent_state).toBe("fresh-served");
+    });
 
     it("derives host_phase from whether the child published its own pid.json", () => {
       const published = buildHostCrashEvent(sampleTelemetry({}), {

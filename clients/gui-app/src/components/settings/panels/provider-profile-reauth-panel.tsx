@@ -35,6 +35,7 @@ import {
 } from "./add-provider-profile-dialog";
 import {
   useProviderProfileLoginFlow,
+  providerProfileLoginProgress,
   type ProviderProfileLoginFlow,
 } from "./use-provider-profile-login-flow";
 import { CredentialRefusalNote } from "@/components/providers/credential-refusal-note";
@@ -272,21 +273,13 @@ function ProviderProfileReauthState({
     <>
       {showWaiting ? (
         <AddProfileWaitingStep
-          loginUrl={flow.state.kind === "waiting" ? flow.state.url : null}
-          userCode={flow.state.kind === "waiting" ? flow.state.userCode : null}
+          {...providerProfileLoginProgress(flow.state)}
           loginCapability={loginCapability}
           isLocalHost={isLocalHost}
           queuePending={flow.startPending}
           startingCopy={flow.startingCopy}
-          cancelRequested={
-            flow.state.kind === "starting" && flow.state.cancelRequested
-          }
           cancelPending={flow.cancelPending}
           cancelDisabled={flow.commitPending}
-          waiting={flow.state.kind === "waiting"}
-          readerCount={
-            flow.state.kind === "waiting" ? flow.state.readerCount : undefined
-          }
           codePaste={flow.codePaste}
           onOpenExternalLink={onOpenExternalLink}
           onCancel={onCancel}

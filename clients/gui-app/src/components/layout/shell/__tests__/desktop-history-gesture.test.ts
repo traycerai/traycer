@@ -1,6 +1,14 @@
 import "../../../../../__tests__/test-browser-apis";
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
 import {
   DESKTOP_HISTORY_GESTURE,
   installDesktopHistoryGesture,
@@ -8,6 +16,11 @@ import {
   type DesktopHistoryGestureView,
 } from "@/components/layout/shell/desktop-history-gesture";
 import { claimBlockingLayer } from "@/components/layout/shell/blocking-layer-claim";
+import {
+  registerHistoryGestureFrame,
+  reportHistoryGestureFrameWheel,
+} from "@/components/layout/shell/desktop-history-frame-wheel";
+import type { SandboxWheel } from "@/lib/sandbox/bridge-host";
 import type {
   DesktopTrackpadScrollEvent,
   DesktopTrackpadScrollKind,
@@ -588,8 +601,41 @@ describe("Chromium wheel-scroll latching: the opening tick is canceled up front"
     });
     mounted.signal("ended");
 
-    expect(after.defaultPrevented).toBe(true);
+    // The armed opening outlives the late `began`; the tick after it is an
+    // ordinary pending tick and scrolls like one.
+    expect(after.defaultPrevented).toBe(false);
     expect(mounted.probe.navigations).toEqual(["back"]);
+  });
+
+  // An opening that was canceled belongs to a sequence this window never saw
+  // lift; a later tick nobody could cancel proves the sequence moved on.
+  it("drops an armed opening once an uncancelable tick shows its sequence already scrolls", () => {
+    const mounted = mountGesture(DEFAULT_MOUNT);
+    const staleOpening = horizontalWheel(-0.8, document.body, true);
+    horizontalWheel(-ACTIVATION_PX, document.body, false);
+
+    mounted.signal("began");
+    horizontalWheel(-ACTIVATION_PX, document.body, false);
+    mounted.send("changed", { ...PLAIN_TICK, x: ACTIVATION_PX });
+    mounted.send("changed", {
+      ...PLAIN_TICK,
+      x: DESKTOP_HISTORY_GESTURE.commitPx,
+    });
+    mounted.signal("ended");
+
+    expect(staleOpening.defaultPrevented).toBe(true);
+    expect(mounted.probe.navigations).toEqual([]);
+    expect(hasRenderedView(mounted)).toBe(false);
+  });
+
+  it("cancels the next sequence's opening afresh after a stale arm was dropped", () => {
+    mountGesture(DEFAULT_MOUNT);
+    horizontalWheel(-0.8, document.body, true);
+    horizontalWheel(-ACTIVATION_PX, document.body, false);
+
+    expect(horizontalWheel(-0.8, document.body, true).defaultPrevented).toBe(
+      true,
+    );
   });
 });
 
@@ -665,6 +711,7 @@ describe("blocked from the start: modal layers, modifier keys, and line-mode whe
       value: 300,
       configurable: true,
     });
+    rail.scrollLeft = 150;
 
     const mounted = mountGesture(DEFAULT_MOUNT);
     mounted.signal("began");
@@ -1358,20 +1405,124 @@ describe("wheel ownership decides who gets the whole sequence", () => {
     return mounted;
   }
 
-  it.each([0, 300])(
-    "leaves an overflowing surface's sequence to content scroll entirely at scrollLeft %i",
-    (scrollLeft) => {
-      const rail = appendRail({
-        className: "",
-        scrollWidth: 600,
-        clientWidth: 300,
-        touchAction: undefined,
-      });
-      rail.scrollLeft = scrollLeft;
-      const mounted = pullOver(rail, "back");
+  function appendOverflowingRail(scrollLeft: number): HTMLElement {
+    const rail = appendRail({
+      className: "",
+      scrollWidth: 600,
+      clientWidth: 300,
+      touchAction: undefined,
+    });
+    rail.scrollLeft = scrollLeft;
+    return rail;
+  }
+
+  it.each<DesktopHistoryDirection>(["back", "forward"])(
+    "leaves a scroller with room on both sides to content when pulling %s",
+    (direction) => {
+      const mounted = pullOver(appendOverflowingRail(150), direction);
 
       expect(mounted.probe.navigations).toEqual([]);
       expect(hasRenderedView(mounted)).toBe(false);
+    },
+  );
+
+  it.each<{
+    readonly scrollLeft: number;
+    readonly direction: DesktopHistoryDirection;
+    readonly navigations: DesktopHistoryDirection[];
+  }>([
+    { scrollLeft: 0, direction: "back", navigations: ["back"] },
+    { scrollLeft: 0, direction: "forward", navigations: [] },
+    { scrollLeft: 300, direction: "forward", navigations: ["forward"] },
+    { scrollLeft: 300, direction: "back", navigations: [] },
+  ])(
+    "at scrollLeft $scrollLeft pulling $direction navigates $navigations",
+    ({ scrollLeft, direction, navigations }) => {
+      expect(
+        pullOver(appendOverflowingRail(scrollLeft), direction).probe
+          .navigations,
+      ).toEqual(navigations);
+    },
+  );
+
+  it("never turns a scroll that reaches its edge mid-sequence into navigation", () => {
+    const rail = appendOverflowingRail(5);
+    const mounted = mountGesture(DEFAULT_MOUNT);
+    mounted.signal("began");
+    // Chromium latches the sequence to scrolling once its opening tick, which
+    // the scroller owned, passes uncanceled; every later tick is uncancelable.
+    const opening = horizontalWheel(deltaXToward("back", 0.8), rail, true);
+    rail.scrollLeft = 0;
+    horizontalWheel(deltaXToward("back", ACTIVATION_PX), rail, false);
+    mounted.send("changed", {
+      ...PLAIN_TICK,
+      x: scrollingDeltaXToward("back", ACTIVATION_PX),
+    });
+    mounted.send("changed", {
+      ...PLAIN_TICK,
+      x: scrollingDeltaXToward("back", DESKTOP_HISTORY_GESTURE.commitPx),
+    });
+    mounted.signal("ended");
+
+    expect(opening.defaultPrevented).toBe(false);
+    expect(mounted.probe.navigations).toEqual([]);
+    expect(hasRenderedView(mounted)).toBe(false);
+  });
+
+  it.each([
+    { scrollLeft: 150, navigations: [] },
+    { scrollLeft: 0, navigations: ["back"] },
+  ])(
+    "reads the scrollable ancestor of a target that cannot scroll: at scrollLeft $scrollLeft pulling back navigates $navigations",
+    ({ scrollLeft, navigations }) => {
+      const target = appendOverflowingRail(scrollLeft).appendChild(
+        document.createElement("span"),
+      );
+
+      expect(pullOver(target, "back").probe.navigations).toEqual(navigations);
+    },
+  );
+
+  it("lets an inner scroller at its edge yield to an ancestor that still has room", () => {
+    const inner = appendOverflowingRail(150).appendChild(
+      document.createElement("div"),
+    );
+    inner.style.overflowX = "auto";
+    Object.defineProperty(inner, "scrollWidth", { value: 600 });
+    Object.defineProperty(inner, "clientWidth", { value: 300 });
+    inner.scrollLeft = 0;
+
+    expect(pullOver(inner, "back").probe.navigations).toEqual([]);
+  });
+
+  it.each<DesktopHistoryDirection>(["back", "forward"])(
+    "leaves an overflowing text field to editing when pulling %s from the start of its value",
+    (direction) => {
+      const input = document.body.appendChild(document.createElement("input"));
+      Object.defineProperty(input, "scrollWidth", { value: 600 });
+      Object.defineProperty(input, "clientWidth", { value: 300 });
+      input.scrollLeft = 0;
+
+      expect(pullOver(input, direction).probe.navigations).toEqual([]);
+    },
+  );
+
+  it.each<{
+    readonly scrollLeft: number;
+    readonly direction: DesktopHistoryDirection;
+    readonly navigations: DesktopHistoryDirection[];
+  }>([
+    { scrollLeft: 0, direction: "forward", navigations: ["forward"] },
+    { scrollLeft: 0, direction: "back", navigations: [] },
+    { scrollLeft: -300, direction: "back", navigations: ["back"] },
+    { scrollLeft: -300, direction: "forward", navigations: [] },
+  ])(
+    "in a right-to-left scroller at scrollLeft $scrollLeft pulling $direction navigates $navigations",
+    ({ scrollLeft, direction, navigations }) => {
+      const rail = appendOverflowingRail(scrollLeft);
+      rail.style.direction = "rtl";
+
+      expect(pullOver(rail, direction).probe.navigations).toEqual(navigations);
     },
   );
 
@@ -1472,6 +1623,7 @@ describe("wheel events originating inside an open shadow root", () => {
       value: 300,
       configurable: true,
     });
+    inner.scrollLeft = 150;
     return inner;
   }
 
@@ -1511,5 +1663,182 @@ describe("wheel events originating inside an open shadow root", () => {
 
     expect(mounted.probe.navigations).toEqual([]);
     expect(hasRenderedView(mounted)).toBe(false);
+  });
+});
+
+describe("an HTML artifact frame relays the wheels its page could not use", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  interface FramePull {
+    readonly direction: DesktopHistoryDirection;
+    readonly travelPx: number;
+    readonly pageOwns: Pick<SandboxWheel, "ownsBack" | "ownsForward">;
+  }
+
+  const FREE_FRAME = { ownsBack: false, ownsForward: false };
+
+  function freePull(
+    direction: DesktopHistoryDirection,
+    travelPx: number,
+  ): FramePull {
+    return { direction, travelPx, pageOwns: FREE_FRAME };
+  }
+
+  function registeredFrame(parent: Element): {
+    readonly frame: HTMLIFrameElement;
+    readonly hold: Mock<(held: boolean) => void>;
+  } {
+    const frame = parent.appendChild(document.createElement("iframe"));
+    const hold = vi.fn<(held: boolean) => void>();
+    laterListenerCleanups.push(registerHistoryGestureFrame(frame, hold));
+    return { frame, hold };
+  }
+
+  /** `began`, the frame's opening wheel, then trackpad travel up to `travelPx`. Returns whether the opening wheel was consumed. */
+  function pullOverFrame(
+    mounted: MountedGesture,
+    frame: HTMLIFrameElement,
+    pull: FramePull,
+  ): boolean {
+    mounted.signal("began");
+    const consumed = reportHistoryGestureFrameWheel(frame, {
+      deltaX: deltaXToward(pull.direction, ACTIVATION_PX),
+      deltaY: 0,
+      cancelable: true,
+      ...pull.pageOwns,
+    });
+    mounted.send("changed", {
+      ...PLAIN_TICK,
+      x: scrollingDeltaXToward(pull.direction, ACTIVATION_PX),
+    });
+    mounted.send("changed", {
+      ...PLAIN_TICK,
+      x: scrollingDeltaXToward(pull.direction, pull.travelPx - ACTIVATION_PX),
+      t: trackpadClockSeconds + SLOW_STEP_SECONDS,
+    });
+    return consumed;
+  }
+
+  it("holds the page still for a pull over a free frame, consumes its wheels meanwhile, and releases it at the commit", () => {
+    const mounted = mountGesture(DEFAULT_MOUNT);
+    const { frame, hold } = registeredFrame(document.body);
+
+    const openingConsumed = pullOverFrame(
+      mounted,
+      frame,
+      freePull("back", DESKTOP_HISTORY_GESTURE.commitPx),
+    );
+
+    expect(openingConsumed).toBe(false);
+    expect(hold.mock.calls).toEqual([[true]]);
+    expect(
+      reportHistoryGestureFrameWheel(frame, {
+        deltaX: -6,
+        deltaY: 0,
+        cancelable: false,
+        ...FREE_FRAME,
+      }),
+    ).toBe(true);
+
+    mounted.signal("ended");
+
+    expect(mounted.probe.navigations).toEqual(["back"]);
+    expect(hold.mock.calls).toEqual([[true], [false]]);
+  });
+
+  it("releases the page too when the pull is lifted short of the commit", () => {
+    const mounted = mountGesture(DEFAULT_MOUNT);
+    const { frame, hold } = registeredFrame(document.body);
+
+    pullOverFrame(mounted, frame, freePull("forward", 90));
+    mounted.signal("ended");
+
+    expect(mounted.probe.navigations).toEqual([]);
+    expect(hold.mock.calls).toEqual([[true], [false]]);
+  });
+
+  it("consumes a committed gesture's horizontal momentum from the frame and leaves vertical momentum to the page", () => {
+    const mounted = mountGesture(DEFAULT_MOUNT);
+    const { frame } = registeredFrame(document.body);
+    pullOverFrame(
+      mounted,
+      frame,
+      freePull("back", DESKTOP_HISTORY_GESTURE.commitPx),
+    );
+    mounted.signal("ended");
+
+    const momentum = (deltaX: number, deltaY: number): boolean =>
+      reportHistoryGestureFrameWheel(frame, {
+        deltaX,
+        deltaY,
+        cancelable: false,
+        ...FREE_FRAME,
+      });
+    expect(momentum(-30, 2)).toBe(true);
+    expect(momentum(1, 30)).toBe(false);
+
+    mounted.signal("momentum-ended");
+    expect(momentum(-30, 2)).toBe(false);
+  });
+
+  it("ignores the wheels of a frame that never registered", () => {
+    const mounted = mountGesture(DEFAULT_MOUNT);
+    const stranger = document.body.appendChild(
+      document.createElement("iframe"),
+    );
+
+    const openingConsumed = pullOverFrame(
+      mounted,
+      stranger,
+      freePull("back", DESKTOP_HISTORY_GESTURE.commitPx),
+    );
+    mounted.signal("ended");
+
+    expect(openingConsumed).toBe(false);
+    expect(mounted.probe.navigations).toEqual([]);
+    expect(hasRenderedView(mounted)).toBe(false);
+  });
+
+  it.each<{
+    readonly direction: DesktopHistoryDirection;
+    readonly navigations: DesktopHistoryDirection[];
+  }>([
+    { direction: "back", navigations: [] },
+    { direction: "forward", navigations: ["forward"] },
+  ])(
+    "when the page still scrolls back, pulling $direction navigates $navigations",
+    ({ direction, navigations }) => {
+      const mounted = mountGesture(DEFAULT_MOUNT);
+      const { frame, hold } = registeredFrame(document.body);
+
+      pullOverFrame(mounted, frame, {
+        direction,
+        travelPx: DESKTOP_HISTORY_GESTURE.commitPx,
+        pageOwns: { ownsBack: true, ownsForward: false },
+      });
+      mounted.signal("ended");
+
+      expect(mounted.probe.navigations).toEqual(navigations);
+      expect(hold.mock.calls).toHaveLength(navigations.length * 2);
+    },
+  );
+
+  it("leaves the sequence to content when the frame sits inside a surface that owns swipes", () => {
+    const mounted = mountGesture(DEFAULT_MOUNT);
+    const owner = document.body.appendChild(document.createElement("div"));
+    owner.setAttribute("data-history-gesture-owner", "");
+    const { frame, hold } = registeredFrame(owner);
+
+    pullOverFrame(
+      mounted,
+      frame,
+      freePull("back", DESKTOP_HISTORY_GESTURE.commitPx),
+    );
+    mounted.signal("ended");
+
+    expect(mounted.probe.navigations).toEqual([]);
+    expect(hold).not.toHaveBeenCalled();
   });
 });

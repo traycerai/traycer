@@ -496,6 +496,24 @@ describe("wakeSandboxOnPick", () => {
     expect(findWakes()).toEqual([]);
   });
 
+  it("keeps a wake pending beyond 120 seconds until the row provider's 300 second budget", async () => {
+    const binding = createFakeSandboxBinding();
+    mocks.binding = binding;
+    binding.auth.listSandboxes.mockImplementation(
+      listOf({ state: "suspended", wakeBudgetMs: 300_000 }),
+    );
+    hangVerbUntilItsTimeout(binding, 0);
+    wakeSandboxOnPick(sandboxOption("suspended", false), null);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(mocks.toastError).not.toHaveBeenCalled();
+    expect(wakeMutations()).toBeGreaterThan(0);
+    await vi.advanceTimersByTimeAsync(179_999);
+    expect(mocks.toastError).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(mocks.toastError).toHaveBeenCalledTimes(1);
+    expect(wakeMutations()).toBe(0);
+  });
+
   it("fails a wake whose lifecycle verb never answers once the 120 s budget is spent, then lets the next pick start afresh", async () => {
     const binding = createFakeSandboxBinding();
     mocks.binding = binding;

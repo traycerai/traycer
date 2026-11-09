@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { grantedEnvironmentRole } from "@traycer/protocol/host/environment/contracts";
 import { ConfigurationConflict } from "@/components/settings/environment/configuration-conflict";
 import { ConfigurationSourceContext } from "@/components/settings/environment/configuration-source";
 import { ConfigurationWriteFeedback } from "@/components/settings/environment/configuration-write-feedback";
@@ -72,6 +73,102 @@ describe("PlansCard", () => {
     renderPlans({ canAdminister: true, plans: [] });
 
     expect(screen.getByText("No plans linked.")).toBeTruthy();
+    const link = screen.getByRole("button", { name: "Link a plan" });
+    expect(link.getAttribute("data-size")).toBe("xs");
+    expect(link.getAttribute("data-variant")).toBe("outline");
+    expect(screen.queryByRole("button", { name: "Unlink" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Details" })).toBeNull();
+  });
+
+  it("names the linked plan with a right single quotation mark, and a plan with no owner by its provider", () => {
+    render(
+      <PlansCard
+        teamName="Acme"
+        plans={[
+          {
+            id: "plan-owned",
+            linkedBy: "Ada",
+            status: "linked",
+            providerLabel: "Claude Code",
+          },
+          {
+            id: "plan-open",
+            linkedBy: null,
+            status: "expired",
+            providerLabel: "Claude Code",
+          },
+        ]}
+        canAdminister
+        adminNames={["Ada"]}
+        isPending={false}
+        onLink={() => undefined}
+        onPreviewUnlink={() => undefined}
+      />,
+    );
+
+    expect(screen.getByRole("combobox", { name: "Linked plan" })).toBeTruthy();
+    expect(screen.getByText("Ada’s Claude Code plan")).toBeTruthy();
+    expect(screen.getByText("Signed in")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Shared Claude Code quota. Sandbox charges use Acme credits.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/unlinks if they leave/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Details" })).toBeNull();
+    const unlink = screen.getByRole("button", { name: "Unlink" });
+    expect(unlink.getAttribute("data-size")).toBe("xs");
+    expect(unlink.getAttribute("data-variant")).toBe("outline");
+  });
+
+  it("stands a pending plan as pending and an expired plan as expired, with no quota", () => {
+    render(
+      <PlansCard
+        teamName="Acme"
+        plans={[
+          {
+            id: "plan-pending",
+            linkedBy: null,
+            status: "pending",
+            providerLabel: "Claude Code",
+          },
+        ]}
+        canAdminister={false}
+        adminNames={["Ada"]}
+        isPending={false}
+        onLink={() => undefined}
+        onPreviewUnlink={() => undefined}
+      />,
+    );
+    expect(screen.getByText("Claude Code plan")).toBeTruthy();
+    expect(screen.getByText("Sign-in is pending.")).toBeTruthy();
+    expect(screen.queryByText(/Shared Claude Code quota/)).toBeNull();
+    expect(
+      screen.getByText("Only an admin can link a plan: ask Ada."),
+    ).toBeTruthy();
+    cleanup();
+
+    render(
+      <PlansCard
+        teamName="Acme"
+        plans={[
+          {
+            id: "plan-expired",
+            linkedBy: "Ada",
+            status: "expired",
+            providerLabel: "Claude Code",
+          },
+        ]}
+        canAdminister
+        adminNames={["Ada"]}
+        isPending={false}
+        onLink={() => undefined}
+        onPreviewUnlink={() => undefined}
+      />,
+    );
+    expect(screen.getByText("Ada’s Claude Code plan")).toBeTruthy();
+    expect(screen.getByText("Sign-in expired.")).toBeTruthy();
+    expect(screen.queryByText(/Shared Claude Code quota/)).toBeNull();
   });
 
   it("hands the plan to the preview callback when an admin clicks Unlink", () => {
@@ -150,7 +247,7 @@ describe("ConfigurationWriteFeedback", () => {
           environmentId: "env-a",
           roomId: "room-a",
           providerHandle: null,
-          effectiveRole: role,
+          effectiveRole: grantedEnvironmentRole(role),
         }}
       >
         <ConfigurationWriteFeedback issue={issue} />

@@ -306,6 +306,10 @@ import {
   readPersistedDeliveryRestoreAck,
   writePersistedDeliveryRestoreAck,
 } from "@/lib/chats/delivery-restore-ack-persistence";
+import {
+  EVICTED_SEND_FAILED_MESSAGE,
+  isEvictedChatRefusal,
+} from "@/lib/chats/evicted-chat-refusal";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
 
 import type {
@@ -1808,6 +1812,8 @@ export interface ChatSessionState {
   readonly acceptedActions: Readonly<Record<string, AcceptedChatAction>>;
   readonly pendingUserMessages: ReadonlyArray<PendingUserMessage>;
   readonly errorNotices: ReadonlyArray<ChatErrorNotice>;
+  /** Last evicted-send refusal, independent of the prompt restoration slot. */
+  readonly evictedSendRefusal: { readonly clientActionId: string } | null;
   /**
    * Notices the toast layer has actually SHOWN, by `clientActionId`.
    *
@@ -2998,7 +3004,13 @@ function rejectionSurfaces(input: {
   ChatSessionState,
   "failedSendRestoration" | "errorNotices" | "lastCopyPrompts"
 > {
-  const { state, pending, frame, account } = input;
+  const { state, pending, account } = input;
+  // A send the host refused for an evicted chat fails in the words of any
+  // failed send, whichever surface ends up saying it.
+  const frame =
+    pending?.action === "send" && isEvictedChatRefusal(input.frame.code)
+      ? { ...input.frame, reason: EVICTED_SEND_FAILED_MESSAGE }
+      : input.frame;
   if (
     (pending?.action === "send" &&
       messageDeliveryNames(state.messageDelivery, pending.messageId)) ||
@@ -7155,6 +7167,27 @@ export function createChatSessionStoreWithNotificationDependencies(
       noticesSuppressedAfterDispatch.delete(clientActionId);
       return true;
     };
+    /**
+     * Whether a rejected ack speaks for its action, so the `errorNotice` the
+     * host follows it with must not speak again. For a frame of a queue-edit
+     * submission the record states the refusal, with the text or the settings
+     * it concerns, and may be gone by the time that notice lands. A send
+     * refused for an evicted chat is stated by the rejection's own surfaces,
+     * and the notice would repeat it in the host's words. Asked at the ack,
+     * while the record and the pending action still answer for the id.
+     */
+    const ackStatesItsRefusal = (frame: ChatActionAckFrame): boolean => {
+      if (frame.status !== "rejected") return false;
+      const { clientActionId } = frame;
+      if (
+        queueEditRecordForAction(get().queueEditRecords, clientActionId) !==
+        null
+      ) {
+        return true;
+      }
+      const pending = pendingActionForId(get().pendingActions, clientActionId);
+      return pending?.action === "send" && isEvictedChatRefusal(frame.code);
+    };
     const clearSuppressedNotices = (): void => {
       for (const timer of noticesSuppressedAfterDispatch.values()) {
         window.clearTimeout(timer);
@@ -8950,18 +8983,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           frame.status,
         );
         retireSweptEvidenceOnAck(frame);
-        // The host follows a rejected ack with its own `errorNotice` for the
-        // same action. For a frame of a queue-edit submission the record
-        // states the refusal, with the text or the settings it concerns, and
-        // may be gone by the time that notice lands - so it is named here,
-        // while the record still answers for the id.
-        if (
-          frame.status === "rejected" &&
-          queueEditRecordForAction(
-            get().queueEditRecords,
-            frame.clientActionId,
-          ) !== null
-        ) {
+        if (ackStatesItsRefusal(frame)) {
           suppressNoticeAfterDispatch(frame.clientActionId);
         }
         holdSteerRestartRefusal(frame);
@@ -9237,6 +9259,10 @@ export function createChatSessionStoreWithNotificationDependencies(
               connectionEpoch,
             ),
             unconfirmedSendActionIds: nextUnconfirmedSends,
+            evictedSendRefusal:
+              pending?.action === "send" && isEvictedChatRefusal(frame.code)
+                ? { clientActionId: frame.clientActionId }
+                : state.evictedSendRefusal,
             // The rejection's own surfaces first, then whatever this refusal
             // settles of a queue-edit submission laid over them - one slot,
             // one contest, in the order the two were decided.
@@ -10611,6 +10637,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       acceptedActions: {},
       pendingUserMessages: [],
       errorNotices: [],
+      evictedSendRefusal: null,
       deliveredNoticeActionIds: new Set<string>(),
       deliveredLastCopyActionIds: new Set<string>(),
       lastCopyPrompts: {},
@@ -12674,7 +12701,7 @@ function isUnauthorizedClose(
  * discarded like every other cancelled row.
  */
 const CANCELLED_AFTER_SETUP_FAILED_REASON =
-  "Workspace setup failed, so this message was never sent. It's back in the composer.";
+  "Folder setup failed, so this message was never sent. It's back in the composer.";
 
 /**
  * The same cause, for a prompt that did NOT reach the composer.
@@ -12687,7 +12714,7 @@ const CANCELLED_AFTER_SETUP_FAILED_REASON =
  * {@link FailedSendRestorationState} existing for a reason.
  */
 const CANCELLED_AFTER_SETUP_FAILED_DISPLACED_REASON =
-  "Workspace setup failed, so this message was never sent.";
+  "Folder setup failed, so this message was never sent.";
 
 /**
  * How this prompt died, phrased to open an {@link unrecoverableSendNotice}
@@ -12696,7 +12723,7 @@ const CANCELLED_AFTER_SETUP_FAILED_DISPLACED_REASON =
  * in the composer."; the stash prompt's `reason` appends "." and the account.
  */
 const CANCELLED_AFTER_SETUP_FAILED_CIRCUMSTANCE =
-  "Workspace setup failed, so a cancelled message was never sent";
+  "Folder setup failed, so a cancelled message was never sent";
 
 /** The three ways one hand-back is told, depending on where the prompt lands. */
 interface HandBackCopy {

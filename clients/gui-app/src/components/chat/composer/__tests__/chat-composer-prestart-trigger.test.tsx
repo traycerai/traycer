@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import {
   act,
@@ -204,7 +205,10 @@ vi.mock("@/hooks/composer/use-composer-dictation", () => ({
     dictationPreparing: false,
   }),
 }));
-vi.mock("@/hooks/composer/use-composer-paste", () => ({
+vi.mock("@/hooks/composer/use-composer-paste", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/composer/use-composer-paste")
+  >()),
   isAttachmentIngestPending: () => false,
   useComposerHashPaste: () => ({
     onPaste: () => undefined,
@@ -213,9 +217,11 @@ vi.mock("@/hooks/composer/use-composer-paste", () => ({
     onDragEnter: () => undefined,
     onDragLeave: () => undefined,
     attachImageFiles: () => undefined,
+    attachFiles: () => undefined,
     dragOverlayVariant: null,
     isIngestingImages: false,
     isResolvingFilePaths: false,
+    isAttachingFiles: false,
     runPendingImageJob: () => undefined,
   }),
 }));
@@ -351,46 +357,56 @@ afterEach(() => {
   cleanup();
 });
 
+// The composer's file put is a mutation, so it needs a query client; one per
+// test, kept across a test's rerenders.
+let queryClient = new QueryClient();
+beforeEach(() => {
+  queryClient = new QueryClient();
+});
+
 function mountComposer() {
   return render(composerElement());
 }
 
 function composerElement() {
   return (
-    <ChatComposer
-      taskId="chat-1"
-      isActive
-      sendDisabled={false}
-      sendDisabledHint={null}
-      mentionRoots={["/repo"]}
-      fallbackToGlobalMentionRoots={false}
-      currentEpicId="epic-1"
-      viewTabId={null}
-      settingsSeed={null}
-      fallbackSettingsSeed={null}
-      providerFallback={NO_PROVIDER_FALLBACK}
-      onSubmitMessage={null}
-      onSideChat={null}
-      onSettingsChange={null}
-      activeTurnStatus={null}
-      steerCapable={false}
-      steerProtocolSupported={false}
-      autoPermissionModeProtocolSupported={null}
-      ultracodeProtocolSupported={false}
-      getDraftBlobBridgeSupported={() => false}
-      getActiveTurnForSteer={() => null}
-      editingQueueItemId={null}
-      onCancelQueueEdit={null}
-      hasPendingApprovals={false}
-      stopDisabled={false}
-      onStopTurn={null}
-      workspaceControls={null}
-      workspaceAvailability={{ status: "ready", disabledHint: null }}
-      topSpacing="normal"
-      topSlot={null}
-      suggestedPrompt={undefined}
-      restingSandbox={captured.resting}
-    />
+    <QueryClientProvider client={queryClient}>
+      <ChatComposer
+        taskId="chat-1"
+        isActive
+        sendDisabled={false}
+        sendDisabledHint={null}
+        mentionRoots={["/repo"]}
+        runWorkingDirectory={null}
+        fallbackToGlobalMentionRoots={false}
+        currentEpicId="epic-1"
+        viewTabId={null}
+        settingsSeed={null}
+        fallbackSettingsSeed={null}
+        providerFallback={NO_PROVIDER_FALLBACK}
+        onSubmitMessage={null}
+        onSideChat={null}
+        onSettingsChange={null}
+        activeTurnStatus={null}
+        steerCapable={false}
+        steerProtocolSupported={false}
+        autoPermissionModeProtocolSupported={null}
+        ultracodeProtocolSupported={false}
+        getDraftBlobBridgeSupported={() => false}
+        getActiveTurnForSteer={() => null}
+        editingQueueItemId={null}
+        onCancelQueueEdit={null}
+        hasPendingApprovals={false}
+        stopDisabled={false}
+        onStopTurn={null}
+        workspaceControls={null}
+        workspaceAvailability={{ status: "ready", disabledHint: null }}
+        topSpacing="normal"
+        topSlot={null}
+        suggestedPrompt={undefined}
+        restingSandbox={captured.resting}
+      />
+    </QueryClientProvider>
   );
 }
 

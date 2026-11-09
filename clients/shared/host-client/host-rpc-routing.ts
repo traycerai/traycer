@@ -47,8 +47,9 @@ import { isRemoteHostDirectoryEntry } from "./remote-fetcher";
  * - `addressed-peer` - `host.status` and `host.getRuntimeCapabilities`: the
  *   session-level floor every peer genuinely serves, the pool included, so
  *   they go to whichever peer the requester names.
- * - `target-host-live-pool-at-rest` - a chat's transcript: the team sandbox
- *   serves it while it is live, the pool at rest. Which one is the caller's
+ * - `target-host-live-pool-at-rest` - a chat's transcript: its host serves
+ *   it while it is live, the pool at rest (a team sandbox that is not awake,
+ *   or a machine that dropped the chat's records). Which one is the caller's
  *   choice ({@link chatServingHostId}); both are allowed here. The
  *   whole-download pair (`epic.resolveCloudChatHead`,
  *   `epic.readCloudChatPart`) too: the pool serves it for a chat at rest that
@@ -226,6 +227,20 @@ export function isTeamSandboxHostDirectoryEntry(
   );
 }
 
+/**
+ * Whether `entry` is a machine: a host that is neither a sandbox nor the pool.
+ * A machine holds its chats' records itself, and the serving witness answers
+ * `live` for them until the machine reports one it dropped (cold eviction).
+ */
+export function isMachineHostDirectoryEntry(
+  entry: HostDirectoryEntry,
+): boolean {
+  if (entry.kind === "local" || entry.kind === "mock") {
+    return true;
+  }
+  return isRemoteHostDirectoryEntry(entry) && entry.sandbox === null;
+}
+
 /** One chat, as the readiness witness is asked about it. */
 export interface ChatServingKey {
   /** The host that runs the chat (the tab's host). */
@@ -258,29 +273,30 @@ export interface ChatServingWitness {
  * opened on. A change of answer is a resubscribe to the other peer, as on a
  * reconnect.
  *
- * Only a TEAM SANDBOX's chat ever moves. A personal host's chat, local or
- * remote, and a personal sandbox's, is always served by its own host: that
- * host holds the chat (D8), and cross-host continuation is a clone, never a
- * move. That is an invariant, not a default, and holds whatever the witness
- * says.
+ * Only a chat the caller asks the witness about ever moves, and the caller
+ * asks about two kinds: a team sandbox's chat, which is at rest while its
+ * sandbox is not awake, and a machine's chat the caller has reason to think
+ * the machine dropped the records of (cold eviction). A machine's chat moves
+ * only on the machine's own eviction fact: the witness answers `live` for it
+ * until the machine has reported the chat evicted, and again once the machine
+ * has brought it back, which a caller may learn from the machine's own answer
+ * before the witness does and pass as `live`. It never moves on
+ * reachability, and a personal
+ * sandbox's chat is never asked about, so it stays on its own host.
+ * Cross-host continuation is a clone, never a move.
  *
- * `verdict` is the witness's answer for `chat`, `null` with no witness. It is
- * the value and never the witness: a compiled caller memoizes on what it
- * passes, and the witness keeps one identity while its verdicts move, so a
- * caller handed the witness kept its first answer for good.
+ * `verdict` is the witness's answer for `chat`, `null` when the caller does
+ * not ask the witness about it (or has none). It is the value and never the
+ * witness: a compiled caller memoizes on what it passes, and the witness keeps
+ * one identity while its verdicts move, so a caller handed the witness kept
+ * its first answer for good.
  */
 export function chatServingHostId(
   chat: ChatServingKey,
-  chatHost: HostDirectoryEntry | null,
   verdict: ChatServingVerdict | null,
   plan: HostRpcTierPlan,
 ): string {
-  if (
-    verdict === null ||
-    plan.pool === null ||
-    chatHost === null ||
-    !isTeamSandboxHostDirectoryEntry(chatHost)
-  ) {
+  if (verdict === null || plan.pool === null) {
     return chat.hostId;
   }
   return verdict === "live" ? chat.hostId : POOL_HOST_ID;
@@ -350,6 +366,7 @@ export const HOST_UNARY_RPC_ROUTES = {
   "bot.readCursor.read": "target-host",
   "bot.readCursor.advance": "target-host",
   "bot.turn.locate": "target-host",
+  "bot.updateAppearance": "target-host",
   "bot.updateDirective": "target-host",
   "bot.updateReplyMode": "target-host",
   "bot.updateRunSettings": "target-host",
@@ -384,6 +401,8 @@ export const HOST_UNARY_RPC_ROUTES = {
   "comments.setThreadStatus": "target-host",
   "config.browser.get": "target-host",
   "config.browser.set": "target-host",
+  "config.agentMemories.get": "target-host",
+  "config.agentMemories.set": "target-host",
   "config.catalog.get": "target-host",
   "config.catalog.set": "target-host",
   "config.env.delete": "target-host",
@@ -546,6 +565,8 @@ export const HOST_UNARY_RPC_ROUTES = {
   "epic.getTaskContexts": "target-host",
   "epic.getWorkspaceContext": "target-host",
   "epic.grantAccess": "target-host",
+  // On the chat's own host: the pool holds the copy, never the records.
+  "epic.hydrateChat": "target-host",
   "epic.listChatPublicationTargets": "target-host",
   "epic.listChatRecords": "target-host",
   "epic.listCloudChatPayloads": "target-host",
@@ -570,6 +591,7 @@ export const HOST_UNARY_RPC_ROUTES = {
   "epic.prepareArtifactImage": "target-host",
   "epic.readArtifactObject": "target-host",
   "epic.readChatAttachment": "target-host",
+  "epic.readChatFile": "target-host",
   // The whole-download pair: a host the device holds reads them as a byte
   // pipe, and the pool serves them for a chat its index cannot open
   // (`CHAT_INDEX_UNAVAILABLE` on `chat.subscribe`).
@@ -712,6 +734,7 @@ export const HOST_UNARY_RPC_ROUTES = {
   "providers.profileSync.overview": "target-host",
   "providers.profileSync.setKeepInSync": "target-host",
   "providers.profileSync.syncNow": "target-host",
+  "providers.readModelRoutes": "target-host",
   "providers.refreshPackDiscovery": "target-host",
   "providers.refreshProfileStatus": "target-host",
   "providers.removeCustomPath": "target-host",

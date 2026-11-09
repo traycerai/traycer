@@ -17,6 +17,12 @@ export interface OutputGain {
   createChild(initial: number, pan: number | null): OutputGain;
   /** Starts `buffer` at clock time `when`, fading in, feeding this gain. */
   play(buffer: AudioBuffer, when: number, fadeInSeconds: number): OutputVoice;
+  playRecording(
+    buffer: AudioBuffer,
+    when: number,
+    offset: number,
+    ended: () => void,
+  ): OutputVoice;
 }
 
 /** All a player asks of Web Audio. */
@@ -92,7 +98,38 @@ class WebAudioGain implements OutputGain {
   }
 
   play(buffer: AudioBuffer, when: number, fadeInSeconds: number): OutputVoice {
+    return this.playSource(buffer, when, {
+      fadeInSeconds,
+      offset: 0,
+      ended: null,
+    });
+  }
+
+  playRecording(
+    buffer: AudioBuffer,
+    when: number,
+    offset: number,
+    ended: () => void,
+  ): OutputVoice {
+    return this.playSource(buffer, when, {
+      fadeInSeconds: 0.01,
+      offset,
+      ended,
+    });
+  }
+
+  private playSource(
+    buffer: AudioBuffer,
+    when: number,
+    options: {
+      fadeInSeconds: number;
+      offset: number;
+      ended: (() => void) | null;
+    },
+  ): OutputVoice {
+    const { fadeInSeconds, offset, ended } = options;
     const { context } = this;
+    let cancelled = false;
     const source = context.createBufferSource();
     source.buffer = buffer;
     const fade = context.createGain();
@@ -106,10 +143,18 @@ class WebAudioGain implements OutputGain {
       source.disconnect();
       fade.disconnect();
     };
-    source.addEventListener("ended", disconnect, { once: true });
-    source.start(when);
+    source.addEventListener(
+      "ended",
+      () => {
+        disconnect();
+        if (!cancelled) ended?.();
+      },
+      { once: true },
+    );
+    source.start(when, offset);
     return {
       cut: (fadeSeconds) => {
+        cancelled = true;
         const now = context.currentTime;
         // Not started yet: a ramp would replace its fade-in, and the source
         // would then start at whatever the ramp had reached, as a click.
@@ -253,6 +298,17 @@ export class WebAudioDimFilter {
     this.filter.Q.value = q;
     this.filter.connect(destination);
     this.input = this.filter;
+  }
+
+  /**
+   * Sends what leaves the filter to `node` too, which is what the volume and
+   * a chime's duck take in, until the answer is called.
+   */
+  tap(node: AudioNode): () => void {
+    this.filter.connect(node);
+    return () => {
+      this.filter.disconnect(node);
+    };
   }
 
   /** A plan restates this every few seconds; only a change moves the filter. */

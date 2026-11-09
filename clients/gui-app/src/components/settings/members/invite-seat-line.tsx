@@ -19,7 +19,6 @@ import type { HostRpcRegistry } from "@/lib/host";
 export function InviteSeatLine(props: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly environmentId: string;
-  readonly teamName: string;
   /** Whether the host serves `environment.members.seats`. */
   readonly supported: boolean;
 }): ReactNode {
@@ -39,7 +38,7 @@ export function InviteSeatLine(props: {
         role="status"
         data-testid="members-invite-seats-failed"
       >
-        {inviteSeatsReadFailed(props.teamName)}
+        {inviteSeatsReadFailed()}
         <Button
           type="button"
           variant="link"
@@ -54,9 +53,7 @@ export function InviteSeatLine(props: {
     );
   }
   const copy =
-    query.data === undefined
-      ? null
-      : inviteSeatCopy(props.teamName, query.data.seats);
+    query.data === undefined ? null : inviteSeatCopy(query.data.seats);
   if (copy === null) return null;
   return (
     <p

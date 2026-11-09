@@ -1,10 +1,10 @@
 import {
   act,
   cleanup,
+  fireEvent,
   render,
   screen,
   waitFor,
-  within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -207,16 +207,11 @@ describe("the team page chip", () => {
     await waitFor(() => {
       expect(chipText()).toBe("✓ On Mac mini");
     });
-    await userEvent.click(
-      await screen.findByRole("button", { name: "Edit NODE_ENV value" }),
-    );
-    await userEvent.type(screen.getByLabelText("NODE_ENV value"), "!");
-    await userEvent.click(
-      within(screen.getByRole("region", { name: "NODE_ENV" })).getByRole(
-        "button",
-        { name: "Save" },
-      ),
-    );
+    const editor = await screen.findByRole("textbox", {
+      name: "Value for NODE_ENV",
+    });
+    await userEvent.type(editor, "!");
+    fireEvent.blur(editor);
 
     await waitFor(() => {
       expect(chipText()).toBe("1 not applied on Mac mini");

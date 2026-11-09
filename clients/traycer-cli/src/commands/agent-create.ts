@@ -1,11 +1,17 @@
 import path from "node:path";
 import {
-  createAgentRequestSchemaV31,
+  createAgentRequestSchemaV32,
   createAgentResponseSchema,
+  canReceiveA2AMessages,
   type CreateAgentWorkspace,
+  guiHarnessIdSchema,
+  tuiHarnessIdSchema,
 } from "@traycer/protocol/host/agent/shared";
+import { AGENT_CREATE_SERVICE_TIER_REQUIRED_HOST_VERSION } from "@traycer/protocol/host/registry";
 import {
   callHostRpc,
+  callHostRpcWithDispatch,
+  PLAIN_DISPATCH,
   parseCanonicalHostResponse,
   parseUserInput,
   toAgentCliError,
@@ -44,6 +50,9 @@ import type { CommandFn } from "../runner/runner";
  * guide explicitly directs them to do so. The choice is carried by
  * `agent.create@3.0`; transport downgrade to released v1/v2 hosts fails with
  * upgrade guidance rather than discarding it.
+ *
+ * `--service-tier` names a tier advertised for the selected profile/model and
+ * takes precedence over `--fast`; requests naming it require `3.2`.
  */
 export function buildAgentCreateCommand(opts: {
   readonly epicId: string | null;
@@ -54,6 +63,7 @@ export function buildAgentCreateCommand(opts: {
   readonly model: string | null;
   readonly reasoningEffort: string | null;
   readonly fast: boolean;
+  readonly serviceTier: string | null;
   readonly permissionMode: string | null;
   readonly profile: string | null;
   readonly cwd: string | null;
@@ -67,7 +77,7 @@ export function buildAgentCreateCommand(opts: {
     // Validate the full request locally so a bad --surface / --harness
     // fails fast with a clear E_INVALID_ARGUMENT (listing the allowed harness
     // values) instead of round-tripping or leaking a raw ZodError stack.
-    const request = parseUserInput(createAgentRequestSchemaV31, {
+    const request = parseUserInput(createAgentRequestSchemaV32, {
       senderAgentId,
       epicId,
       name: opts.name,
@@ -79,6 +89,7 @@ export function buildAgentCreateCommand(opts: {
       agentMode: "regular",
       reasoningEffort: opts.reasoningEffort,
       fastMode: opts.fast ? true : null,
+      serviceTier: opts.serviceTier ?? undefined,
       permissionMode: opts.permissionMode ?? "full_access",
       workspace: parseAgentCreateWorkspace({
         cwd: opts.cwd,
@@ -89,7 +100,16 @@ export function buildAgentCreateCommand(opts: {
       // The CLI has no routing flag: the agent follows the device's routing.
       routing: null,
     });
-    const result = await toAgentCliError(callHostRpc("agent.create", request));
+    assertSurfaceHarnessPair(request.surface, request.harnessId);
+    const result = await toAgentCliError(
+      request.serviceTier === undefined
+        ? callHostRpc("agent.create", request)
+        : callHostRpcWithDispatch("agent.create", request, {
+            ...PLAIN_DISPATCH,
+            requiredHostMethodVersion:
+              AGENT_CREATE_SERVICE_TIER_REQUIRED_HOST_VERSION,
+          }),
+    );
     const { agentId, warnings } = parseCanonicalHostResponse(
       "agent.create",
       createAgentResponseSchema,
@@ -101,6 +121,41 @@ export function buildAgentCreateCommand(opts: {
         : `${agentId}\nWarnings:\n${warnings.map((warning) => `- ${warning}`).join("\n")}`;
     return { data: { agentId, warnings }, human, exitCode: 0 };
   };
+}
+
+// The host refuses these requests with an untyped error, which a caller sees
+// (and Sentry records) as an unexpected failure. They are a mistake in the
+// flags, so they fail here with the allowed values instead. The terminal set
+// is the host's own admission rule: a terminal child must be able to receive
+// agent messages, which leaves the other ids in `tuiHarnessIdSchema` (kept for
+// persisted records) unusable here.
+function assertSurfaceHarnessPair(
+  surface: "gui" | "tui" | null,
+  harnessId: string | null,
+): void {
+  if (surface === null) return;
+  const supported: readonly string[] =
+    surface === "gui"
+      ? guiHarnessIdSchema.options
+      : tuiHarnessIdSchema.options.filter((id) =>
+          canReceiveA2AMessages({ surface: "tui", harnessId: id }),
+        );
+  if (harnessId === null) {
+    throw cliError({
+      code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+      message: `traycer: --surface ${surface} requires --harness (one of: ${supported.join(", ")}).`,
+      details: null,
+      exitCode: 1,
+    });
+  }
+  if (!supported.includes(harnessId)) {
+    throw cliError({
+      code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+      message: `traycer: harness '${harnessId}' does not support the ${surface} surface (one of: ${supported.join(", ")}).`,
+      details: null,
+      exitCode: 1,
+    });
+  }
 }
 
 export function parseAgentCreateWorkspace(input: {

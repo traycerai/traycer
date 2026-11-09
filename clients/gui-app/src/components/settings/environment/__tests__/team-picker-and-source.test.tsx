@@ -291,7 +291,7 @@ describe("ConfigurationSourceBoundary", () => {
     expect(screen.queryByTestId("probe")).toBeNull();
   });
 
-  it.each(["admin", "editor", "viewer"] as const)(
+  it.each(["admin", "editor"] as const)(
     "gives the child the pool context for a resolved team (role %s)",
     async (role) => {
       const { Wrapper } = mountClient(() =>
@@ -312,7 +312,27 @@ describe("ConfigurationSourceBoundary", () => {
     },
   );
 
-  it("gives an @1.0 host's team the viewer role", async () => {
+  it("gives a team naming the retired viewer role no role", async () => {
+    const { Wrapper } = mountClient(() =>
+      Promise.resolve({
+        environments: [personal, team("a", "Acme", "viewer")],
+      }),
+    );
+    render(
+      <ConfigurationSourceBoundary
+        section={null}
+        target={{ kind: "team", environmentId: "env-a" }}
+      >
+        <Probe />
+      </ConfigurationSourceBoundary>,
+      { wrapper: Wrapper },
+    );
+    expect((await screen.findByTestId("probe")).textContent).toBe(
+      "env-a|room-a|handle-a|null|team",
+    );
+  });
+
+  it("gives an @1.0 host's team no role", async () => {
     const { Wrapper } = mountClient(() =>
       Promise.resolve(legacyTeamList("a", "Acme")),
     );
@@ -326,7 +346,7 @@ describe("ConfigurationSourceBoundary", () => {
       { wrapper: Wrapper },
     );
     expect((await screen.findByTestId("probe")).textContent).toBe(
-      "env-a|room-a|null|viewer|team",
+      "env-a|room-a|null|null|team",
     );
   });
 
