@@ -55,6 +55,7 @@ import {
   HostTransportFailureError,
   markMayHaveReachedHost,
   negotiatedVersionMeetsRequirement,
+  transportFailureBeforeSend,
   RetryableTransportError,
   type RequestOfMethod,
   type RequiredHostMethodVersion,
@@ -2128,17 +2129,15 @@ export class RemoteSession<
       // connection deduplicates the key. This connection does not - either
       // the caller never had a key, or the re-dial landed on a host
       // incarnation whose handshake omits the capability - so dispatching
-      // would execute a mutation the host may already have run. Ambiguous
-      // (`HostTransportFailureError`, not the retryable subclass) is the
-      // honest answer: the first attempt genuinely may have committed, and
-      // this session must not turn "may have" into "did, twice".
+      // would execute a mutation the host may already have run. Non-retryable,
+      // and this attempt sent nothing, so it reads as not reached. An earlier
+      // attempt's uncertainty is the retry messenger's wrapper, which engages
+      // because these details are non-null.
       return Promise.reject(
-        new HostTransportFailureError({
-          code: "RPC_ERROR",
+        transportFailureBeforeSend({
           message: `Remote session cannot honour the idempotency key a replay of '${method}' requires`,
           requestId,
           method,
-          fatalDetails: null,
         }),
       );
     }
