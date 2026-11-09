@@ -73,6 +73,7 @@ describe("describeTreeDeleteDisclosure", () => {
     return describeTreeDeleteDisclosure({
       tree,
       kind: "agent",
+      includeNestedAgents: false,
       nodeIds,
       nestedAgentsKnown: true,
     });
@@ -366,6 +367,7 @@ describe("describeTreeDeleteDisclosure", () => {
       return describeTreeDeleteDisclosure({
         tree,
         kind: "agent",
+        includeNestedAgents: false,
         nodeIds,
         nestedAgentsKnown: false,
       });

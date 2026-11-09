@@ -176,9 +176,9 @@ export interface TreeDeleteDisclosure {
  * Deleting an AGENT keeps its nested agents by default; callers offering a
  * subtree delete can opt in to counting every descendant instead. Those rows
  * come from the chat/terminal-agent record planes, so whether they have all
- * arrived is a real question. Deleting an
- * ARTIFACT takes its subtree with it, and - the projected tree being
- * family-separated - that subtree is artifacts only, which are doc-sourced.
+ * arrived is a real question. Deleting an ARTIFACT takes its subtree with it.
+ * The projected tree is family-separated, so that subtree holds only
+ * doc-sourced artifacts.
  * There is no artifact record plane to lag behind, so the artifact arm has no
  * readiness input to take and always states its exact count.
  */
@@ -186,8 +186,8 @@ export type TreeDeleteDisclosureInput =
   | {
       readonly tree: TreeSlice;
       readonly kind: "agent";
-      /** Omitted preserves the single-agent delete and promotion behavior. */
-      readonly includeNestedAgents?: boolean;
+      /** False preserves the single-agent delete and promotion behavior. */
+      readonly includeNestedAgents: boolean;
       /** Read as a set, so a repeated id cannot count a child twice. */
       readonly nodeIds: readonly string[];
       /**
@@ -199,9 +199,9 @@ export type TreeDeleteDisclosureInput =
        * until then a persisted child of that family can be absent from the
        * tree, so a number read off it would be low. The sentence then names
        * the consequence and states no number, which costs the reader the count
-       * and never tells them a child does not exist. Deliberately not a gate for single-agent deletion:
-       * a row that is visible and selectable, with a working delete beside it,
-       * must stay deletable.
+       * and never tells them a child does not exist. This does not gate a
+       * single-agent deletion: a visible, selectable row with a working Delete
+       * action must stay deletable.
        */
       readonly nestedAgentsKnown: boolean;
     }

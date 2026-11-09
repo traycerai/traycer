@@ -1,5 +1,7 @@
-import { act, renderHook, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { type ReactNode } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useEpicDeleteAgentSubtree } from "@/hooks/epic/use-epic-delete-agent-subtree";
 
 const deletionRuntime = vi.hoisted(() => {
@@ -8,10 +10,14 @@ const deletionRuntime = vi.hoisted(() => {
     id: string;
     hostId: string;
   }> = [];
+  const preparedIds: string[] = [];
+  const rolledBackIds: string[] = [];
   let releaseFirst: (() => void) | null = null;
   let shouldHoldFirstChat = false;
   let failureChatId: string | null = null;
   let failureTuiAgentId: string | null = null;
+  let blockedReason: string | null = null;
+  let blockedReasonAfterFirstDelete: string | null = null;
 
   const node = (
     id: string,
@@ -58,6 +64,8 @@ const deletionRuntime = vi.hoisted(() => {
 
   return {
     calls,
+    preparedIds,
+    rolledBackIds,
     get state() {
       return state;
     },
@@ -73,20 +81,39 @@ const deletionRuntime = vi.hoisted(() => {
     setTuiAgentFailure(id: string | null) {
       failureTuiAgentId = id;
     },
+    setBlockedReason(reason: string | null) {
+      blockedReason = reason;
+    },
+    setBlockedReasonAfterFirstDelete(reason: string | null) {
+      blockedReasonAfterFirstDelete = reason;
+    },
     releaseFirst() {
       releaseFirst?.();
     },
+    blockedReasonForState(current: typeof state): string | null {
+      if (
+        !current.chatRecordListAuthoritative ||
+        !current.tuiAgentRecordListAuthoritative
+      ) {
+        return "Nested agents are still loading.";
+      }
+      return calls.length > 0 && blockedReasonAfterFirstDelete !== null
+        ? blockedReasonAfterFirstDelete
+        : blockedReason;
+    },
+    prepare(id: string): () => void {
+      preparedIds.push(id);
+      return () => rolledBackIds.push(id);
+    },
     deleteChat: async (input: { chatId: string; hostId: string }) => {
       calls.push({ kind: "chat", id: input.chatId, hostId: input.hostId });
-      if (calls.length === 1) {
-        if (shouldHoldFirstChat) {
-          await new Promise<void>((resolve) => {
-            releaseFirst = resolve;
-          });
-        }
+      if (calls.length === 1 && shouldHoldFirstChat) {
+        await new Promise<void>((resolve) => {
+          releaseFirst = resolve;
+        });
       }
       if (input.chatId === failureChatId) throw new Error("delete rejected");
-      return { deleted: true };
+      return { deleted: true, outcome: "applied" as const };
     },
     deleteTuiAgent: (input: { tuiAgentId: string; hostId: string }) => {
       calls.push({
@@ -96,6 +123,7 @@ const deletionRuntime = vi.hoisted(() => {
       });
       return Promise.resolve({
         deleted: input.tuiAgentId !== failureTuiAgentId,
+        outcome: "applied" as const,
       });
     },
   };
@@ -113,52 +141,94 @@ vi.mock("@/hooks/epic/use-epic-session-host-id", () => ({
 }));
 
 vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
-  useEpicDeleteChat: () => ({ mutateAsync: deletionRuntime.deleteChat }),
+  useEpicDeleteChatInBatch: () => ({ mutateAsync: deletionRuntime.deleteChat }),
 }));
 
 vi.mock("@/hooks/epic/use-epic-tui-agent-mutations", () => ({
-  useEpicDeleteTuiAgent: () => ({
+  useEpicDeleteTuiAgentInBatch: () => ({
     mutateAsync: deletionRuntime.deleteTuiAgent,
   }),
 }));
 
-vi.mock("@/hooks/epic/use-chat-write-route", () => ({
-  resolveChatWriteRoute: () => "registry-rpc",
+vi.mock("@/lib/epics/agent-subtree-delete", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/lib/epics/agent-subtree-delete")>();
+  return {
+    ...actual,
+    agentSubtreeDeleteBlockedReason: (state: typeof deletionRuntime.state) =>
+      deletionRuntime.blockedReasonForState(state),
+  };
+});
+
+vi.mock("@/lib/epics/prepare-agent-delete", () => ({
+  prepareAgentDelete: (_handle: unknown, id: string) =>
+    deletionRuntime.prepare(id),
 }));
 
-vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
+const queryClient = new QueryClient({
+  defaultOptions: { mutations: { retry: false } },
+});
+
+function wrapper({ children }: { readonly children: ReactNode }): ReactNode {
+  return (
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  );
+}
+
+const CONFIRMED_IDS = [
+  "chat-grandchild",
+  "chat-child",
+  "terminal-child",
+  "root",
+] as const;
 
 describe("useEpicDeleteAgentSubtree", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
   beforeEach(() => {
+    queryClient.clear();
     deletionRuntime.calls.length = 0;
+    deletionRuntime.preparedIds.length = 0;
+    deletionRuntime.rolledBackIds.length = 0;
     deletionRuntime.setHoldFirstChat(false);
     deletionRuntime.setFailureChatId(null);
     deletionRuntime.setTuiAgentFailure(null);
+    deletionRuntime.setBlockedReason(null);
+    deletionRuntime.setBlockedReasonAfterFirstDelete(null);
     deletionRuntime.resetState();
   });
 
-  it("deletes the all-depth mixed-host snapshot leaf-first", async () => {
-    const { result } = renderHook(() => useEpicDeleteAgentSubtree());
-
-    await act(async () => {
-      await result.current.deleteSubtree("root");
+  it("deletes the confirmed all-depth mixed-host snapshot leaf-first", async () => {
+    const { result } = renderHook(() => useEpicDeleteAgentSubtree(), {
+      wrapper,
     });
 
+    let deleted = false;
+    await act(async () => {
+      deleted = await result.current.deleteSubtree("root", CONFIRMED_IDS);
+    });
+
+    expect(deleted).toBe(true);
     expect(deletionRuntime.calls).toEqual([
       { kind: "chat", id: "chat-grandchild", hostId: "host-grandchild" },
       { kind: "chat", id: "chat-child", hostId: "host-child" },
       { kind: "terminal-agent", id: "terminal-child", hostId: "host-terminal" },
       { kind: "chat", id: "root", hostId: "host-root" },
     ]);
+    expect(deletionRuntime.preparedIds).toEqual([...CONFIRMED_IDS]);
   });
 
-  it("keeps the membership and host snapshot while earlier deletes are pending", async () => {
+  it("keeps membership and host snapshots while earlier deletes are pending", async () => {
     deletionRuntime.setHoldFirstChat(true);
-    const { result } = renderHook(() => useEpicDeleteAgentSubtree());
-    let deletion: Promise<void> | null = null;
+    const { result } = renderHook(() => useEpicDeleteAgentSubtree(), {
+      wrapper,
+    });
+    let deletion: Promise<boolean> | null = null;
 
     act(() => {
-      deletion = result.current.deleteSubtree("root");
+      deletion = result.current.deleteSubtree("root", CONFIRMED_IDS);
     });
     await waitFor(() => expect(deletionRuntime.calls).toHaveLength(1));
     deletionRuntime.state.tree.childrenByParent.root = [];
@@ -181,63 +251,140 @@ describe("useEpicDeleteAgentSubtree", () => {
     expect(deletionRuntime.calls[1]?.hostId).toBe("host-child");
   });
 
-  it("stops on the first rejected delete and leaves its parents and remaining rows unattempted", async () => {
+  it("stops on the first rejected delete and rolls back that member", async () => {
     deletionRuntime.setFailureChatId("chat-child");
-    const { result } = renderHook(() => useEpicDeleteAgentSubtree());
-
-    await act(async () => {
-      await expect(result.current.deleteSubtree("root")).rejects.toThrow(
-        "delete rejected",
-      );
+    const { result } = renderHook(() => useEpicDeleteAgentSubtree(), {
+      wrapper,
     });
 
+    let deleted = true;
+    await act(async () => {
+      deleted = await result.current.deleteSubtree("root", CONFIRMED_IDS);
+    });
+    await waitFor(() =>
+      expect(result.current.error).toContain("Deleted 1 of 4 agents"),
+    );
+
+    expect(deleted).toBe(false);
     expect(deletionRuntime.calls).toEqual([
       { kind: "chat", id: "chat-grandchild", hostId: "host-grandchild" },
       { kind: "chat", id: "chat-child", hostId: "host-child" },
     ]);
+    expect(deletionRuntime.rolledBackIds).toEqual(["chat-child"]);
     expect(result.current.isPending).toBe(false);
   });
 
   it("stops when a terminal-agent delete reports false after an earlier delete succeeds", async () => {
     deletionRuntime.setTuiAgentFailure("terminal-child");
-    const { result } = renderHook(() => useEpicDeleteAgentSubtree());
-
-    await act(async () => {
-      await expect(result.current.deleteSubtree("root")).rejects.toThrow(
-        "Couldn't delete agent.",
-      );
+    const { result } = renderHook(() => useEpicDeleteAgentSubtree(), {
+      wrapper,
     });
 
-    expect(deletionRuntime.calls).toEqual([
-      { kind: "chat", id: "chat-grandchild", hostId: "host-grandchild" },
-      { kind: "chat", id: "chat-child", hostId: "host-child" },
-      { kind: "terminal-agent", id: "terminal-child", hostId: "host-terminal" },
+    let deleted = true;
+    await act(async () => {
+      deleted = await result.current.deleteSubtree("root", CONFIRMED_IDS);
+    });
+    await waitFor(() =>
+      expect(result.current.error).toContain("Deleted 2 of 4 agents"),
+    );
+
+    expect(deleted).toBe(false);
+    expect(deletionRuntime.calls.map(({ id }) => id)).toEqual([
+      "chat-grandchild",
+      "chat-child",
+      "terminal-child",
+    ]);
+    expect(deletionRuntime.rolledBackIds).toEqual(["terminal-child"]);
+  });
+
+  it("refuses a confirmation snapshot that no longer matches the tree", async () => {
+    const { result } = renderHook(() => useEpicDeleteAgentSubtree(), {
+      wrapper,
+    });
+
+    let deleted = true;
+    await act(async () => {
+      deleted = await result.current.deleteSubtree("root", ["root"]);
+    });
+    await waitFor(() =>
+      expect(result.current.error).toContain("nested agents changed"),
+    );
+
+    expect(deleted).toBe(false);
+    expect(deletionRuntime.calls).toEqual([]);
+  });
+
+  it("refuses a blocker before dispatch and reports the blocking reason", async () => {
+    deletionRuntime.setBlockedReason("“chat-child” is working.");
+    const { result } = renderHook(() => useEpicDeleteAgentSubtree(), {
+      wrapper,
+    });
+
+    let deleted = true;
+    await act(async () => {
+      deleted = await result.current.deleteSubtree("root", CONFIRMED_IDS);
+    });
+    await waitFor(() => expect(result.current.error).toContain("chat-child"));
+
+    expect(deleted).toBe(false);
+    expect(deletionRuntime.calls).toEqual([]);
+  });
+
+  it("rechecks blockers before each delete and leaves remaining parents untouched", async () => {
+    deletionRuntime.setBlockedReasonAfterFirstDelete(
+      "“chat-child” is working.",
+    );
+    const { result } = renderHook(() => useEpicDeleteAgentSubtree(), {
+      wrapper,
+    });
+
+    let deleted = true;
+    await act(async () => {
+      deleted = await result.current.deleteSubtree("root", CONFIRMED_IDS);
+    });
+    await waitFor(() =>
+      expect(result.current.error).toContain("Deleted 1 of 4 agents"),
+    );
+
+    expect(deleted).toBe(false);
+    expect(deletionRuntime.calls.map(({ id }) => id)).toEqual([
+      "chat-grandchild",
     ]);
   });
 
   it("refuses an incomplete chat-record snapshot before attempting any row", async () => {
     deletionRuntime.state.chatRecordListAuthoritative = false;
-    const { result } = renderHook(() => useEpicDeleteAgentSubtree());
-
-    await act(async () => {
-      await expect(result.current.deleteSubtree("root")).rejects.toThrow(
-        "Nested agents are still loading",
-      );
+    const { result } = renderHook(() => useEpicDeleteAgentSubtree(), {
+      wrapper,
     });
 
+    let deleted = true;
+    await act(async () => {
+      deleted = await result.current.deleteSubtree("root", CONFIRMED_IDS);
+    });
+    await waitFor(() =>
+      expect(result.current.error).toContain("Nested agents are still loading"),
+    );
+
+    expect(deleted).toBe(false);
     expect(deletionRuntime.calls).toEqual([]);
   });
 
   it("refuses an incomplete terminal-agent record snapshot before attempting any row", async () => {
     deletionRuntime.state.tuiAgentRecordListAuthoritative = false;
-    const { result } = renderHook(() => useEpicDeleteAgentSubtree());
-
-    await act(async () => {
-      await expect(result.current.deleteSubtree("root")).rejects.toThrow(
-        "Nested agents are still loading",
-      );
+    const { result } = renderHook(() => useEpicDeleteAgentSubtree(), {
+      wrapper,
     });
 
+    let deleted = true;
+    await act(async () => {
+      deleted = await result.current.deleteSubtree("root", CONFIRMED_IDS);
+    });
+    await waitFor(() =>
+      expect(result.current.error).toContain("Nested agents are still loading"),
+    );
+
+    expect(deleted).toBe(false);
     expect(deletionRuntime.calls).toEqual([]);
   });
 });

@@ -1,93 +1,126 @@
-import { useRef, useState } from "react";
-import { toast } from "sonner";
-import { useEpicDeleteChat } from "@/hooks/epic/use-epic-chat-mutations";
-import { useEpicDeleteTuiAgent } from "@/hooks/epic/use-epic-tui-agent-mutations";
+import { useRef } from "react";
+import { useMutation } from "@tanstack/react-query";
+import { useEpicDeleteChatInBatch } from "@/hooks/epic/use-epic-chat-mutations";
+import { useEpicDeleteTuiAgentInBatch } from "@/hooks/epic/use-epic-tui-agent-mutations";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
-import { resolveChatWriteRoute } from "@/hooks/epic/use-chat-write-route";
+import { agentSubtreeDeleteIds } from "@/lib/epic-tree-cascade";
 import {
-  agentSubtreeDeleteIds,
-  selectNestedAgentsKnown,
-} from "@/lib/epic-tree-cascade";
+  agentSubtreeDeleteBlockedReason,
+  agentSubtreeDeleteTargets,
+} from "@/lib/epics/agent-subtree-delete";
+import { prepareAgentDelete } from "@/lib/epics/prepare-agent-delete";
+import { epicMutationKeys } from "@/lib/query-keys";
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
-import { CHAT_NOT_ADOPTED_COPY } from "@/stores/epics/open-epic/chat-write-routing";
 
-/** Reuse single-agent deletes so every member keeps its cleanup and refusals. */
+interface SubtreeDeleteInput {
+  readonly nodeId: string;
+  readonly confirmedIds: readonly string[];
+}
+
+/**
+ * Reuse the single-agent mutations and bookkeeping in child-before-parent order.
+ * The dialog renders one progress error; members suppress individual error toasts.
+ */
 export function useEpicDeleteAgentSubtree() {
   const handle = useOpenEpicHandle();
   const sessionHostId = useEpicSessionHostId();
-  const deleteChat = useEpicDeleteChat();
-  const deleteTuiAgent = useEpicDeleteTuiAgent();
+  const deleteChat = useEpicDeleteChatInBatch();
+  const deleteTuiAgent = useEpicDeleteTuiAgentInBatch();
   const running = useRef(false);
-  const [isPending, setIsPending] = useState(false);
-
-  const deleteSubtree = async (nodeId: string): Promise<void> => {
-    if (running.current) throw new Error("Agent deletion is already running.");
-    const state = handle.store.getState();
-    if (!selectNestedAgentsKnown(state)) {
-      const message =
-        "Nested agents are still loading. Try again when they have loaded.";
-      toast.error(message);
-      throw new Error(message);
-    }
-    // Snapshot both membership and destination before any deletion can promote
-    // children or refresh a record list. The full tree includes hidden agents.
-    const targets = agentSubtreeDeleteIds(state.tree, nodeId).map((id) => {
-      const kind = state.tree.nodeById[id].type;
-      let ownerHostId: string | null = null;
-      if (kind === "chat" && Object.hasOwn(state.chats.byId, id)) {
-        ownerHostId = state.chats.byId[id].hostId;
-      } else if (
-        kind === "terminal-agent" &&
-        Object.hasOwn(state.tuiAgents.byId, id)
+  const mutation = useMutation<void, Error, SubtreeDeleteInput>({
+    mutationKey: epicMutationKeys.deleteAgentSubtree(),
+    retry: false,
+    mutationFn: async ({ nodeId, confirmedIds }) => {
+      const state = handle.store.getState();
+      const ids = agentSubtreeDeleteIds(state.tree, nodeId);
+      const confirmed = new Set(confirmedIds);
+      if (
+        ids.length !== confirmed.size ||
+        ids.some((id) => !confirmed.has(id))
       ) {
-        ownerHostId = state.tuiAgents.byId[id].hostId;
+        throw new Error(
+          "The nested agents changed. Review the updated count and try again.",
+        );
       }
-      const hostId = ownerHostId ?? sessionHostId;
-      return { id, kind, hostId };
-    });
-    running.current = true;
-    setIsPending(true);
-    try {
+      const blockedReason = agentSubtreeDeleteBlockedReason(
+        state,
+        handle.epicId,
+        ids,
+        sessionHostId,
+      );
+      if (blockedReason !== null) throw new Error(blockedReason);
+      const targets = agentSubtreeDeleteTargets(state, ids, sessionHostId);
+      let deletedCount = 0;
       for (const target of targets) {
-        let deleted: boolean;
-        if (target.kind === "chat") {
-          if (
-            resolveChatWriteRoute({
-              chatsById: handle.store.getState().chats.byId,
-              isChatRow: true,
-              nodeId: target.id,
-              sessionHostId,
-            }) === "unavailable"
-          ) {
-            toast.error(CHAT_NOT_ADOPTED_COPY);
-            throw new Error(CHAT_NOT_ADOPTED_COPY);
-          }
-          deleted = (
-            await deleteChat.mutateAsync({
-              epicId: handle.epicId,
-              chatId: target.id,
-              hostId: target.hostId,
-            })
-          ).deleted;
-        } else {
-          deleted = (
-            await deleteTuiAgent.mutateAsync({
-              epicId: handle.epicId,
-              tuiAgentId: target.id,
-              hostId: target.hostId,
-            })
-          ).deleted;
+        // A member can start working or lose its route while an earlier delete waits.
+        const reason = agentSubtreeDeleteBlockedReason(
+          handle.store.getState(),
+          handle.epicId,
+          ids.slice(deletedCount),
+          sessionHostId,
+        );
+        if (reason !== null) {
+          throw new Error(
+            `Deleted ${deletedCount} of ${targets.length} agents; stopped at “${target.name}”: ${reason}`,
+          );
         }
-        if (!deleted) {
-          const message = "Couldn't delete agent.";
-          toast.error(message);
-          throw new Error(message);
+        const rollback = prepareAgentDelete(handle, target.id, target.kind);
+        const progress = `Deleted ${deletedCount} of ${targets.length} agents; stopped at “${target.name}”: `;
+        // Results are dependent: never delete a parent after a child's refusal.
+        const response = await (
+          target.kind === "chat"
+            ? deleteChat.mutateAsync({
+                epicId: handle.epicId,
+                chatId: target.id,
+                hostId: target.hostId,
+              })
+            : deleteTuiAgent.mutateAsync({
+                epicId: handle.epicId,
+                tuiAgentId: target.id,
+                hostId: target.hostId,
+              })
+        ).catch((error: unknown) => {
+          rollback();
+          const reason =
+            error instanceof Error
+              ? error.message
+              : "Couldn't confirm deletion.";
+          throw new Error(`${progress}${reason}`);
+        });
+        if (response.outcome === "requested") {
+          if (!response.deleted) rollback();
+          throw new Error(
+            `${progress}Deletion was requested on its host and is not confirmed yet.`,
+          );
         }
+        if (!response.deleted) {
+          rollback();
+          throw new Error(`${progress}Deletion was refused.`);
+        }
+        deletedCount += 1;
       }
-    } finally {
-      running.current = false;
-      setIsPending(false);
-    }
+    },
+  });
+  const deleteSubtree = (
+    nodeId: string,
+    confirmedIds: readonly string[],
+  ): Promise<boolean> => {
+    if (running.current) return Promise.resolve(false);
+    running.current = true;
+    return mutation
+      .mutateAsync({ nodeId, confirmedIds })
+      .then(
+        () => true,
+        () => false,
+      )
+      .finally(() => {
+        running.current = false;
+      });
   };
-  return { deleteSubtree, isPending };
+  return {
+    deleteSubtree,
+    isPending: mutation.isPending,
+    error: mutation.error?.message ?? null,
+    resetError: mutation.reset,
+  };
 }

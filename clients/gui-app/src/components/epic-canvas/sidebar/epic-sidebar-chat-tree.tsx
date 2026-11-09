@@ -42,6 +42,7 @@ import {
   TaskHostsViewContext,
   useChatSandboxRowLine,
 } from "@/hooks/sandboxes/use-chat-sandbox-row-line";
+import { prepareAgentDelete } from "@/lib/epics/prepare-agent-delete";
 import { settleDetachedEpicMutation } from "@/lib/artifacts/detached-epic-mutation";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { chatOpensPublishedCopy } from "@/lib/chats/chat-open-tile-ref";
@@ -1615,12 +1616,6 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   // Non-null only where this tree is mounted on a surface that cannot express
   // the desktop open gestures - see `ChatTreeSurface`.
   const surface = useChatTreeSurface();
-  const markArtifactSelfDeleted = useEpicCanvasStore(
-    (s) => s.markArtifactSelfDeleted,
-  );
-  const unmarkArtifactSelfDeleted = useEpicCanvasStore(
-    (s) => s.unmarkArtifactSelfDeleted,
-  );
   const epicHandle = useOpenEpicHandle();
 
   const deleteChat = useEpicDeleteChat();
@@ -1652,6 +1647,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       describeTreeDeleteDisclosure({
         tree: state.tree,
         kind: "agent",
+        includeNestedAgents: false,
         nodeIds: [nodeId],
         nestedAgentsKnown: selectNestedAgentsKnown(state),
       }),
@@ -1988,30 +1984,23 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   };
 
   const confirmDelete = () => {
-    // Detached: the delete is a round trip now. The surface below reacts to
-    // the PROJECTION, not to this promise, so nothing here waits on it - and
-    // nothing here would otherwise hear it fail.
-    settleDetachedEpicMutation(
-      epicHandle.store.getState().deleteArtifact(nodeId),
-      "sidebar tree",
-      "local delete projection",
+    const rollback = prepareAgentDelete(
+      epicHandle,
+      nodeId,
+      artifactType === "chat" ? "chat" : "terminal-agent",
     );
-    if (artifactType !== "terminal-agent") markArtifactSelfDeleted(nodeId);
     const handleDeleteSuccess = () => {
       setConfirmDeleteOpen(false);
-    };
-    const handleDeleteError = () => {
-      if (artifactType !== "terminal-agent") unmarkArtifactSelfDeleted(nodeId);
     };
     if (artifactType === "chat") {
       deleteChat.mutate(
         { epicId, chatId: nodeId, hostId: mutationHostId },
-        { onSuccess: handleDeleteSuccess, onError: handleDeleteError },
+        { onSuccess: handleDeleteSuccess, onError: rollback },
       );
     } else if (artifactType === "terminal-agent") {
       deleteTerminalAgent.mutate(
         { epicId, tuiAgentId: nodeId, hostId: mutationHostId },
-        { onSuccess: handleDeleteSuccess, onError: handleDeleteError },
+        { onSuccess: handleDeleteSuccess, onError: rollback },
       );
     }
   };

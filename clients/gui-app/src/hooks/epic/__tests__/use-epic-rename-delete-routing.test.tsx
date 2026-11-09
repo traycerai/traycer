@@ -35,17 +35,20 @@ import type { ChatRecordSummaryV14 } from "@traycer/protocol/host/epic/chat-reco
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type {
+  DeleteChatRequest,
   DeleteTuiAgentRequest,
   RenameChatRequest,
   RenameTuiAgentRequest,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import { useEpicRenameChat } from "@/hooks/epic/use-epic-chat-mutations";
+import { useEpicDeleteAgentSubtree } from "@/hooks/epic/use-epic-delete-agent-subtree";
 import {
   useEpicDeleteTuiAgent,
   useEpicDeleteTuiAgentInBatch,
   useEpicRenameTuiAgent,
 } from "@/hooks/epic/use-epic-tui-agent-mutations";
 import { useEpicSyncChatRecords } from "@/hooks/chats/use-epic-chat-records";
+import { useEpicSyncTuiAgentRecords } from "@/hooks/chats/use-epic-tui-agent-records";
 import { resolveChatWriteRoute } from "@/hooks/epic/use-chat-write-route";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
@@ -53,6 +56,7 @@ import {
   __getOpenEpicRegistryForTests,
   EpicSessionContext,
   EpicSessionHostClientContext,
+  handleHostIds,
 } from "@/lib/registries/epic-session-registry";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
@@ -61,7 +65,18 @@ import {
   type OpenedStoreForTest,
 } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  __resetAgentActivityStoreForTests,
+  __setAgentActivityStateForTests,
+} from "@/stores/agent-activity-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { hostQueryKeys } from "@/lib/query-keys";
+import {
+  recordNegotiatedHostManifest,
+  recordNegotiatedHostMethods,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { readRecordWriteServingHostId } from "@/hooks/epic/use-epic-record-mutation-client";
 
 vi.mock("sonner", () => ({
   toast: { message: vi.fn(), error: vi.fn(), success: vi.fn() },
@@ -76,6 +91,8 @@ const REMOTE_CHAT_ID = "chat-remote";
 const LOCAL_CHAT_ID = "chat-local";
 const REMOTE_TUI_ID = "tui-remote";
 const LOCAL_TUI_ID = "tui-local";
+const SUBTREE_PARENT_ID = "chat-subtree-parent";
+const SUBTREE_CHILD_ID = "chat-subtree-child";
 
 const spineRef = vi.hoisted<{
   value: HostClient<HostRpcRegistry> | null;
@@ -124,6 +141,8 @@ interface RoutingFixture {
   readonly renameChatCalls: MutationCall[];
   readonly renameTuiCalls: MutationCall[];
   readonly deleteTuiCalls: MutationCall[];
+  readonly deleteChatCalls: MutationCall[];
+  readonly selfDeletedAtChatDelete: Record<string, boolean>;
   readonly listCallsByHost: Record<string, number>;
   /**
    * Held open until resolved, so a test can unmount its `renderHook` while
@@ -133,6 +152,8 @@ interface RoutingFixture {
   holdDeleteTuiAgent: Promise<unknown> | null;
   /** Thrown by the host's `epic.deleteTuiAgent` handler when set. */
   failDeleteTuiAgent: Error | null;
+  failDeleteChatId: string | null;
+  requestedDeleteChatId: string | null;
   readonly wrapper: (props: { readonly children: ReactNode }) => ReactNode;
   readonly dispose: () => void;
 }
@@ -243,13 +264,19 @@ function createRoutingFixture(): RoutingFixture {
   const renameChatCalls: MutationCall[] = [];
   const renameTuiCalls: MutationCall[] = [];
   const deleteTuiCalls: MutationCall[] = [];
+  const deleteChatCalls: MutationCall[] = [];
+  const selfDeletedAtChatDelete: Record<string, boolean> = {};
   const listCallsByHost: Record<string, number> = {};
   const mutable: {
     holdDeleteTuiAgent: Promise<unknown> | null;
     failDeleteTuiAgent: Error | null;
+    failDeleteChatId: string | null;
+    requestedDeleteChatId: string | null;
   } = {
     holdDeleteTuiAgent: null,
     failDeleteTuiAgent: null,
+    failDeleteChatId: null,
+    requestedDeleteChatId: null,
   };
 
   const requestSeq = { value: 0 };
@@ -285,6 +312,11 @@ function createRoutingFixture(): RoutingFixture {
         }
         return { kind: "snapshot" as const, listStamp: null, chats: [] };
       },
+      "epic.listTuiAgents": () => ({
+        kind: "snapshot" as const,
+        listStamp: null,
+        tuiAgents: [],
+      }),
       // `ChatRegistryWriter.commitMetadata` returns early on an absent row
       // rather than failing the call, and `epic.renameChat`'s resolver still
       // answers `updated: true` - a missing row is a no-op, not an error.
@@ -311,6 +343,39 @@ function createRoutingFixture(): RoutingFixture {
         if (target === undefined) return { updated: false };
         target.title = request.title;
         return { updated: true };
+      },
+      "epic.deleteChat": (request: DeleteChatRequest) => {
+        const hostId = lastCallHost(messengerRef.current ?? messenger);
+        deleteChatCalls.push({ hostId, params: request });
+        selfDeletedAtChatDelete[request.chatId] = useEpicCanvasStore
+          .getState()
+          .selfDeletedArtifactIds.has(request.chatId);
+        if (request.chatId === mutable.failDeleteChatId) {
+          throw new Error("chat deletion failed");
+        }
+        const pool = hostId === REMOTE.hostId ? remoteRecords : localRecords;
+        const index = pool.findIndex((row) => row.chatId === request.chatId);
+        if (index < 0) {
+          return {
+            deleted: false,
+            publicationChatId: null,
+            outcome: "applied" as const,
+          };
+        }
+        if (request.chatId === mutable.requestedDeleteChatId) {
+          return {
+            deleted: true,
+            publicationChatId: request.chatId,
+            outcome: "requested" as const,
+            ownerHostId: REMOTE.hostId,
+          };
+        }
+        pool.splice(index, 1);
+        return {
+          deleted: true,
+          publicationChatId: null,
+          outcome: "applied" as const,
+        };
       },
       "epic.deleteTuiAgent": (request: DeleteTuiAgentRequest) => {
         const hostId = lastCallHost(messengerRef.current ?? messenger);
@@ -358,6 +423,7 @@ function createRoutingFixture(): RoutingFixture {
   const registry = __getOpenEpicRegistryForTests();
   registry.disposeAll();
   const handle = newSession();
+  handleHostIds.set(handle, LOCAL.hostId);
   registry.acquireMounted(EPIC_ID, () => handle);
 
   // The session client is fixed for this suite's lifetime - no
@@ -374,6 +440,7 @@ function createRoutingFixture(): RoutingFixture {
 
   const dispose = (): void => {
     registry.disposeAll();
+    handleHostIds.delete(handle);
     handle.store.getState().dispose();
     spine.dispose();
     spineRef.value = null;
@@ -390,6 +457,8 @@ function createRoutingFixture(): RoutingFixture {
     renameChatCalls,
     renameTuiCalls,
     deleteTuiCalls,
+    deleteChatCalls,
+    selfDeletedAtChatDelete,
     listCallsByHost,
     get holdDeleteTuiAgent() {
       return mutable.holdDeleteTuiAgent;
@@ -403,6 +472,18 @@ function createRoutingFixture(): RoutingFixture {
     set failDeleteTuiAgent(value: Error | null) {
       mutable.failDeleteTuiAgent = value;
     },
+    get failDeleteChatId() {
+      return mutable.failDeleteChatId;
+    },
+    set failDeleteChatId(value: string | null) {
+      mutable.failDeleteChatId = value;
+    },
+    get requestedDeleteChatId() {
+      return mutable.requestedDeleteChatId;
+    },
+    set requestedDeleteChatId(value: string | null) {
+      mutable.requestedDeleteChatId = value;
+    },
     wrapper: Wrapper,
     dispose,
   };
@@ -411,6 +492,9 @@ function createRoutingFixture(): RoutingFixture {
 let fixture: RoutingFixture;
 
 beforeEach(() => {
+  resetNegotiatedManifests();
+  __resetAgentActivityStoreForTests();
+  useSelectionAuthorityStore.getState().reset();
   useAuthStore.getState().setSignedIn(
     {
       userId: VIEWER_ID,
@@ -427,6 +511,9 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   fixture.dispose();
+  __resetAgentActivityStoreForTests();
+  useSelectionAuthorityStore.getState().reset();
+  resetNegotiatedManifests();
   useAuthStore.getState().setSignedOut();
 });
 
@@ -445,6 +532,66 @@ function seedLocalChat(): void {
   fixture.localRecords.push(
     record({ chatId: LOCAL_CHAT_ID, title: "Local chat" }),
   );
+}
+
+function seedLocalChatSubtree(parentDocResident: boolean): void {
+  fixture.localRecords.push(
+    record({
+      chatId: SUBTREE_PARENT_ID,
+      title: "Parent chat",
+      docResident: parentDocResident,
+    }),
+    record({
+      chatId: SUBTREE_CHILD_ID,
+      title: "Child chat",
+      parentChatId: SUBTREE_PARENT_ID,
+      docResident: false,
+    }),
+  );
+}
+
+function setSubtreeSelectionFleet(remoteIsDead: boolean): void {
+  useSelectionAuthorityStore.setState((state) => ({
+    ...state,
+    attached: true,
+    preferredHostId: LOCAL.hostId,
+    targetHostId: LOCAL.hostId,
+    effectiveHostId: LOCAL.hostId,
+    leases: [
+      { hostId: LOCAL.hostId, status: "ready", dead: null },
+      remoteIsDead
+        ? { hostId: REMOTE.hostId, status: "dead", dead: { reason: "offline" } }
+        : { hostId: REMOTE.hostId, status: "ready", dead: null },
+    ],
+  }));
+}
+
+function mountSubtreeDelete(remoteIsDead: boolean) {
+  setSubtreeSelectionFleet(remoteIsDead);
+  return renderHook(
+    () => {
+      useEpicSyncChatRecords(EPIC_ID);
+      useEpicSyncTuiAgentRecords(EPIC_ID);
+      return useEpicDeleteAgentSubtree();
+    },
+    { wrapper: fixture.wrapper },
+  );
+}
+
+async function settleSubtreeLists(): Promise<void> {
+  await settleViewerList();
+  await waitFor(() => {
+    expect(
+      fixture.handle.store.getState().tuiAgentRecordListAuthoritative,
+    ).toBe(true);
+  });
+  await waitFor(() => {
+    const tree = fixture.handle.store.getState().tree;
+    expect(tree.rootIds).toContain(SUBTREE_PARENT_ID);
+    expect(tree.childrenByParent[SUBTREE_PARENT_ID]).toContain(
+      SUBTREE_CHILD_ID,
+    );
+  });
 }
 
 async function settleViewerList(): Promise<void> {
@@ -1032,5 +1179,186 @@ describe("useEpicDeleteTuiAgent routing", () => {
       expect(tab2Tiles[instanceId]).toBeUndefined();
     }
     expect(tab1Tiles["inst-a-live"]).toBeDefined();
+  });
+});
+
+describe("useEpicDeleteAgentSubtree preflight and progress", () => {
+  it.each([SUBTREE_PARENT_ID, SUBTREE_CHILD_ID])(
+    "does not dispatch when %s has raw working activity",
+    async (workingAgentId) => {
+      seedLocalChatSubtree(false);
+      __setAgentActivityStateForTests(
+        { [EPIC_ID]: { working: [workingAgentId], turn: [] } },
+        "local",
+        null,
+      );
+      const { result } = mountSubtreeDelete(false);
+      await settleSubtreeLists();
+
+      await act(async () => {
+        await result.current.deleteSubtree(SUBTREE_PARENT_ID, [
+          SUBTREE_CHILD_ID,
+          SUBTREE_PARENT_ID,
+        ]);
+      });
+
+      expect(fixture.deleteChatCalls).toEqual([]);
+      await waitFor(() => expect(result.current.error).toContain("working"));
+    },
+  );
+
+  it("refuses a confirmation snapshot that no longer matches the subtree", async () => {
+    seedLocalChatSubtree(false);
+    const { result } = mountSubtreeDelete(false);
+    await settleSubtreeLists();
+
+    await act(async () => {
+      await result.current.deleteSubtree(SUBTREE_PARENT_ID, [SUBTREE_CHILD_ID]);
+    });
+
+    expect(fixture.deleteChatCalls).toEqual([]);
+    await waitFor(() =>
+      expect(result.current.error).toContain("nested agents changed"),
+    );
+  });
+
+  it("preflights every chat adoption route before deleting the first leaf", async () => {
+    seedLocalChatSubtree(true);
+    recordNegotiatedHostMethods(LOCAL.hostId, ["epic.listChatRecords"]);
+    const { result } = mountSubtreeDelete(false);
+    await settleSubtreeLists();
+    expect(
+      resolveChatWriteRoute({
+        chatsById: fixture.handle.store.getState().chats.byId,
+        isChatRow: true,
+        nodeId: SUBTREE_PARENT_ID,
+        sessionHostId: LOCAL.hostId,
+      }),
+    ).toBe("unavailable");
+
+    await act(async () => {
+      await result.current.deleteSubtree(SUBTREE_PARENT_ID, [
+        SUBTREE_CHILD_ID,
+        SUBTREE_PARENT_ID,
+      ]);
+    });
+
+    expect(fixture.deleteChatCalls).toEqual([]);
+    await waitFor(() => expect(result.current.error).toContain("Parent chat"));
+  });
+
+  it("refuses an offline owner that would be deleted through a stand-in host", async () => {
+    fixture.localRecords.push(
+      record({
+        chatId: SUBTREE_PARENT_ID,
+        title: "Parent chat",
+      }),
+    );
+    const remoteChild = record({
+      chatId: SUBTREE_CHILD_ID,
+      originHostId: REMOTE.hostId,
+      title: "Remote child",
+      parentChatId: SUBTREE_PARENT_ID,
+    });
+    fixture.remoteRecords.push(remoteChild);
+    fixture.viewerForeign.push({ ...remoteChild, origin: "foreign" });
+    const { result } = mountSubtreeDelete(true);
+    await settleSubtreeLists();
+    recordNegotiatedHostManifest(LOCAL.hostId, {
+      "epic.deleteChat": { major: 1, minor: 2 },
+    });
+    expect(
+      fixture.handle.store.getState().chats.byId[SUBTREE_CHILD_ID]?.hostId,
+    ).toBe(REMOTE.hostId);
+    expect(
+      readRecordWriteServingHostId(
+        REMOTE.hostId,
+        "epic.deleteChat",
+        LOCAL.hostId,
+      ),
+    ).toBe(LOCAL.hostId);
+
+    await act(async () => {
+      await result.current.deleteSubtree(SUBTREE_PARENT_ID, [
+        SUBTREE_CHILD_ID,
+        SUBTREE_PARENT_ID,
+      ]);
+    });
+
+    expect(fixture.deleteChatCalls).toEqual([]);
+    await waitFor(() => expect(result.current.error).toContain("offline"));
+  });
+
+  it("stops and reports progress when a later member's real delete fails", async () => {
+    seedLocalChatSubtree(false);
+    fixture.failDeleteChatId = SUBTREE_PARENT_ID;
+    const { result } = mountSubtreeDelete(false);
+    await settleSubtreeLists();
+
+    await act(async () => {
+      await result.current.deleteSubtree(SUBTREE_PARENT_ID, [
+        SUBTREE_CHILD_ID,
+        SUBTREE_PARENT_ID,
+      ]);
+    });
+
+    expect(fixture.deleteChatCalls.map(({ params }) => params)).toEqual([
+      { epicId: EPIC_ID, chatId: SUBTREE_CHILD_ID },
+      { epicId: EPIC_ID, chatId: SUBTREE_PARENT_ID },
+    ]);
+    expect(fixture.localRecords.map(({ chatId }) => chatId)).toEqual([
+      SUBTREE_PARENT_ID,
+    ]);
+    await waitFor(() => {
+      expect(result.current.error).toContain("Deleted 1 of 2 agents");
+      expect(result.current.error).toContain("Parent chat");
+    });
+  });
+
+  it("marks a chat self-deleted before its RPC and rolls the marker back on refusal", async () => {
+    seedLocalChatSubtree(false);
+    fixture.failDeleteChatId = SUBTREE_CHILD_ID;
+    const { result } = mountSubtreeDelete(false);
+    await settleSubtreeLists();
+
+    await act(async () => {
+      await result.current.deleteSubtree(SUBTREE_PARENT_ID, [
+        SUBTREE_CHILD_ID,
+        SUBTREE_PARENT_ID,
+      ]);
+    });
+
+    expect(fixture.deleteChatCalls.map(({ params }) => params)).toEqual([
+      { epicId: EPIC_ID, chatId: SUBTREE_CHILD_ID },
+    ]);
+    expect(fixture.selfDeletedAtChatDelete[SUBTREE_CHILD_ID]).toBe(true);
+    expect(
+      useEpicCanvasStore
+        .getState()
+        .selfDeletedArtifactIds.has(SUBTREE_CHILD_ID),
+    ).toBe(false);
+  });
+
+  it("stops when a mutation unexpectedly returns requested", async () => {
+    seedLocalChatSubtree(false);
+    fixture.requestedDeleteChatId = SUBTREE_CHILD_ID;
+    const { result } = mountSubtreeDelete(false);
+    await settleSubtreeLists();
+
+    await act(async () => {
+      await result.current.deleteSubtree(SUBTREE_PARENT_ID, [
+        SUBTREE_CHILD_ID,
+        SUBTREE_PARENT_ID,
+      ]);
+    });
+
+    expect(fixture.deleteChatCalls.map(({ params }) => params)).toEqual([
+      { epicId: EPIC_ID, chatId: SUBTREE_CHILD_ID },
+    ]);
+    expect(fixture.localRecords.map(({ chatId }) => chatId)).toEqual([
+      SUBTREE_PARENT_ID,
+      SUBTREE_CHILD_ID,
+    ]);
+    await waitFor(() => expect(result.current.error).toContain("Child chat"));
   });
 });
