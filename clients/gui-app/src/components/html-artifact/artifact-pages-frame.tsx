@@ -282,7 +282,7 @@ interface ArtifactPagesFrameProps {
    * Whether a press on the entry page picks an element to comment on instead
    * of acting on the page. The page stays loaded either way - this is a mode
    * the loaded page is told to take - so its scroll, zoom and own state
-   * outlast the switch. Other pages are read as usual.
+   * outlast the switch. Other pages show a notice while commenting is on.
    */
   readonly commenting: boolean;
   readonly onSize: (size: SandboxSize) => void;
@@ -549,7 +549,14 @@ export function ArtifactPagesFrame(props: ArtifactPagesFrameProps) {
           ref={attachFrame}
         />
         {renderOverlay?.(onEntryPage)}
-        {standIn}
+        {standIn ??
+          (commenting && !onEntryPage ? (
+            <PageStandIn
+              sentence="Comments can only be added on the first page."
+              action="Go home"
+              onAct={goHome}
+            />
+          ) : null)}
       </div>
     </div>
   );
@@ -589,7 +596,7 @@ function pageStandIn(
   return null;
 }
 
-/** Both answers replace the page, so both are announced where one is read. */
+/** A stand-in replaces the page and is announced where the page is read. */
 function PageStandIn(props: {
   readonly sentence: string;
   readonly action: string;

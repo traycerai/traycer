@@ -75,6 +75,8 @@ interface PagesOptions {
   readonly menuItems: ReactNode;
   /** The comment tool, which only the entry page is ever put into. */
   readonly commenting: boolean;
+  /** The visible comment layer the caller places over the entry page. */
+  readonly renderOverlay: ((onEntryPage: boolean) => ReactNode) | null;
 }
 
 const FILLING_ONE_PAGE: PagesOptions = {
@@ -82,6 +84,7 @@ const FILLING_ONE_PAGE: PagesOptions = {
   height: null,
   menuItems: undefined,
   commenting: false,
+  renderOverlay: null,
 };
 
 function renderPages(overrides: Partial<PagesOptions>) {
@@ -112,7 +115,7 @@ function renderPages(overrides: Partial<PagesOptions>) {
         onBridge={null}
         onTextSelection={null}
         onFrame={null}
-        renderOverlay={null}
+        renderOverlay={options.renderOverlay}
         sourceEquivalent={undefined}
         menuItems={options.menuItems}
       />
@@ -463,6 +466,64 @@ describe("the room a filling page keeps for the controls", () => {
 });
 
 describe("commenting on the entry page", () => {
+  it("offers Home from a commented sub-page and restores the entry overlay after its proof", async () => {
+    const user = userEvent.setup();
+    const { navigation, report } = renderPages({
+      pages: TWO_PAGES,
+      commenting: true,
+      renderOverlay: (onEntryPage) =>
+        onEntryPage ? (
+          <div data-testid="comment-overlay">Comment tools</div>
+        ) : null,
+    });
+
+    report((page) => {
+      page.onNavigate("index.html");
+      frameProps().onStatus("ready");
+    });
+    expect(screen.getByTestId("comment-overlay")).toBeTruthy();
+    expect(
+      screen.queryByText("Comments can only be added on the first page."),
+    ).toBeNull();
+
+    report((page) => {
+      page.onNavigate("report.html");
+      frameProps().onStatus("ready");
+    });
+
+    expect(screen.queryByTestId("comment-overlay")).toBeNull();
+    expect(
+      screen.getByText("Comments can only be added on the first page."),
+    ).toBeTruthy();
+    await user.click(button("Go home"));
+
+    expect(navigation().path).toBe("index.html");
+    expect(
+      screen.queryByText("Comments can only be added on the first page."),
+    ).toBeNull();
+
+    report((page) => {
+      page.onNavigate("index.html");
+      frameProps().onStatus("ready");
+    });
+
+    expect(screen.getByTestId("comment-overlay")).toBeTruthy();
+  });
+
+  it("does not show the comment notice on a sub-page when commenting is off", () => {
+    const { report } = renderPages({ pages: TWO_PAGES });
+
+    report((page) => {
+      page.onNavigate("report.html");
+      frameProps().onStatus("ready");
+    });
+
+    expect(
+      screen.queryByText("Comments can only be added on the first page."),
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Go home" })).toBeNull();
+  });
+
   it("tells only the entry page to edit, and keeps the served source", async () => {
     const user = userEvent.setup();
     const bridge = realBridge();
