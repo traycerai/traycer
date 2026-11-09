@@ -6,7 +6,7 @@ import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentStatusResponseV20 } from "@traycer/protocol/host/environment-schemas";
 import { LocalRowNote } from "@/components/settings/environment/local-row-note";
 import {
   buildEnvironmentClient,
@@ -31,7 +31,7 @@ vi.mock("@/components/settings/details/overview-card-details-line", () => ({
   OverviewCardDetailsLine: () => <button type="button">Details</button>,
 }));
 
-function renderNote(status: EnvironmentStatusResponseV11): void {
+function renderNote(status: EnvironmentStatusResponseV20): void {
   const { client } = buildEnvironmentClient({
     hostId: HOST_ID,
     handlers: { "environment.status": () => status },

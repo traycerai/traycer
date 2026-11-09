@@ -4,7 +4,7 @@ import {
   useQueries,
   type UseQueryResult,
 } from "@tanstack/react-query";
-import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentStatusResponseV20 } from "@traycer/protocol/host/environment-schemas";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
@@ -39,14 +39,14 @@ export function useRegisteredHostEnvironmentStatuses(
     readonly hostId: string;
     readonly connectable: boolean;
   }>,
-): ReadonlyMap<string, EnvironmentStatusResponseV11 | null> {
+): ReadonlyMap<string, EnvironmentStatusResponseV20 | null> {
   const binding = useHostBinding();
   const combine = useCallback(
     (
       results: Array<
-        UseQueryResult<EnvironmentStatusResponseV11, HostRpcError>
+        UseQueryResult<EnvironmentStatusResponseV20, HostRpcError>
       >,
-    ): ReadonlyMap<string, EnvironmentStatusResponseV11 | null> =>
+    ): ReadonlyMap<string, EnvironmentStatusResponseV20 | null> =>
       new Map(
         results.map((result, index) => [
           hosts[index]?.hostId ?? "",
@@ -60,13 +60,13 @@ export function useRegisteredHostEnvironmentStatuses(
       // `binding` only resolves the requester, whose host the key already
       // names; adding it would refetch on binding identity drift alone.
       // eslint-disable-next-line @tanstack/query/exhaustive-deps
-      queryOptions<EnvironmentStatusResponseV11, HostRpcError>({
+      queryOptions<EnvironmentStatusResponseV20, HostRpcError>({
         queryKey: queryKeys.hostMethod<HostRpcRegistry, typeof METHOD>(
           host.hostId,
           METHOD,
           EMPTY_PARAMS,
         ),
-        queryFn: ({ signal }): Promise<EnvironmentStatusResponseV11> =>
+        queryFn: ({ signal }): Promise<EnvironmentStatusResponseV20> =>
           withHostQueryErrorBoundary(METHOD, async () => {
             const client = resolveNamedHostClient(binding, host.hostId);
             if (client === null) throw hostClientUnavailableError(METHOD);

@@ -9,6 +9,8 @@ import {
   type SchemaVersion,
 } from "@traycer/protocol/framework/index";
 import {
+  downgradeRequestAcrossMajors,
+  downgradeResponseAcrossMajors,
   upgradeRequestToVersion,
   upgradeResponseToVersion,
 } from "@traycer/protocol/framework/versioned-rpc";
@@ -234,17 +236,19 @@ describe("new methods are off every released floor", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("registers each in hostRpcRegistry as unsupported-degrade, major 1 only, with @1.0 alone, @1.0 and @1.1, or @1.0 to @1.2", () => {
+  it("registers the frozen environment lines and the bridged status major as unsupported-degrade", () => {
     const shapes = ENVIRONMENT_METHOD_NAMES.map(
       (name) => `${name}: ${registryShapeOf(hostRpcRegistry[name])}`,
     );
     expect(shapes).toEqual(
       ENVIRONMENT_METHOD_NAMES.map((name) =>
-        ENVIRONMENT_METHODS_WITH_MINOR_1_2.has(name)
-          ? `${name}: degrade=unsupported majors=1 latestMinor=2 minors=0,1,2`
-          : ENVIRONMENT_METHODS_WITH_MINOR_1_1.has(name)
-            ? `${name}: degrade=unsupported majors=1 latestMinor=1 minors=0,1`
-            : `${name}: degrade=unsupported majors=1 latestMinor=0 minors=0`,
+        name === "environment.status"
+          ? `${name}: degrade=unsupported majors=1,2 latestMinor=1 minors=0,1`
+          : ENVIRONMENT_METHODS_WITH_MINOR_1_2.has(name)
+            ? `${name}: degrade=unsupported majors=1 latestMinor=2 minors=0,1,2`
+            : ENVIRONMENT_METHODS_WITH_MINOR_1_1.has(name)
+              ? `${name}: degrade=unsupported majors=1 latestMinor=1 minors=0,1`
+              : `${name}: degrade=unsupported majors=1 latestMinor=0 minors=0`,
       ),
     );
     expect(hostRpcRegistry["environment.status"].degrade).toEqual({
@@ -1722,7 +1726,7 @@ describe("secret versions, Undo, Destroy, rotation and consent shapes, field for
 const ONE_ZERO = { major: 1, minor: 0 } as const;
 const ONE_ONE = { major: 1, minor: 1 } as const;
 
-const STATUS_V10 = {
+const STATUS_V10: env.EnvironmentStatusResponse = {
   principal: { kind: "team", teamName: "acme" },
   reachability: "connected",
   bindingGeneration: 2,
@@ -1764,9 +1768,6 @@ describe("environment.status@1.1 and environment.review@1.1 upgrade from @1.0 to
       planes: { records: "moved", broker: "moved", room: "moved" },
       returnedFromTeam: null,
       stoppedAt: null,
-      // A `@1.0` host acknowledges no queued edit, which reads the same as a
-      // host that has none: an empty list is never evidence either way.
-      acceptedUploads: [],
     });
     // The upgrade lands on a value the @1.1 contract itself accepts.
     expect(
@@ -1787,8 +1788,8 @@ describe("environment.status@1.1 and environment.review@1.1 upgrade from @1.0 to
     ).toEqual({});
   });
 
-  it("parses a status answer that names the move's consent, a stopped plane and a stop time", () => {
-    const answer = {
+  it("bridges receipt status to frozen hosts while preserving the move state", () => {
+    const answer: env.EnvironmentStatusResponseV20 = {
       ...STATUS_V10,
       setup: { stage: "moving_settings", state: "awaiting_consent" },
       consent: { acceptedAt: 1_700_000_000_000, planHash: "h1" },
@@ -1816,8 +1817,41 @@ describe("environment.status@1.1 and environment.review@1.1 upgrade from @1.0 to
     expect(
       hostRpcRegistry[
         "environment.status"
-      ][1].versions[1].contract.responseSchema.parse(answer),
+      ][2].versions[0].contract.responseSchema.parse(answer),
     ).toEqual(answer);
+    const { acceptedUploads: _receipts, ...frozenAnswer } = answer;
+    expect(
+      downgradeResponseAcrossMajors(
+        hostRpcRegistry["environment.status"],
+        2,
+        1,
+        answer,
+      ),
+    ).toEqual({ ok: true, value: frozenAnswer });
+    expect(
+      downgradeRequestAcrossMajors(
+        hostRpcRegistry["environment.status"],
+        2,
+        1,
+        {},
+      ),
+    ).toEqual({ ok: true, value: {} });
+    expect(
+      upgradeResponseToVersion(
+        hostRpcRegistry["environment.status"],
+        ONE_ONE,
+        { major: 2, minor: 0 },
+        frozenAnswer,
+      ),
+    ).toEqual({ ...frozenAnswer, acceptedUploads: [] });
+    expect(
+      upgradeRequestToVersion(
+        hostRpcRegistry["environment.status"],
+        ONE_ONE,
+        { major: 2, minor: 0 },
+        {},
+      ),
+    ).toEqual({});
     expect(
       hostRpcRegistry[
         "environment.status"

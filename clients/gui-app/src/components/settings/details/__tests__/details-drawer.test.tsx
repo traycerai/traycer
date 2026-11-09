@@ -40,7 +40,7 @@ import type { ReactNode } from "react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EnvironmentHistoryResponse } from "@traycer/protocol/host/environment/configuration-contracts";
-import { environmentStatusResponseSchemaV11 } from "@traycer/protocol/host/environment-schemas";
+import { environmentStatusResponseSchemaV20 } from "@traycer/protocol/host/environment-schemas";
 import type {
   EnvironmentSecretRemovalV12,
   EnvironmentSecretsListResponseV12,
@@ -906,7 +906,7 @@ describe("a sandbox's unused settings", () => {
     at: AT,
     lastReportedAt: AT,
   };
-  const status = environmentStatusResponseSchemaV11.parse({
+  const status = environmentStatusResponseSchemaV20.parse({
     principal: { kind: "personal" },
     reachability: "connected",
     bindingGeneration: 1,
@@ -980,7 +980,7 @@ describe("a sandbox's unused settings", () => {
     }
 
     // The guest is fine; only a settings item failed to apply.
-    const environmentFailed = environmentStatusResponseSchemaV11.parse({
+    const environmentFailed = environmentStatusResponseSchemaV20.parse({
       ...status,
       items: [
         {

@@ -3,17 +3,17 @@ import {
   readProcessHostRpcTierPlan,
 } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { useEffect, useRef } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { type Query, useQueryClient } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
   EnvironmentLocalOverridesResponse,
   EnvironmentNoticesResponse,
   EnvironmentReviewResponse,
-  EnvironmentStatusResponseV11,
+  EnvironmentStatusResponseV20,
 } from "@traycer/protocol/host/environment-schemas";
 import {
   CONFIGURATION_READS,
-  invalidateConfigurationReads,
+  configurationReadMatches,
 } from "@/hooks/environment/environment-host-list-key";
 import { usePersonalEnvironment } from "@/hooks/environment/use-addressed-environment";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
@@ -47,7 +47,7 @@ export function useEnvironmentStatusRead(
   client: HostClient<HostRpcRegistry> | null,
   hostId: string | null,
   enabled: boolean,
-): EnvironmentRead<EnvironmentStatusResponseV11> {
+): EnvironmentRead<EnvironmentStatusResponseV20> {
   const supported = useHostMethodSupport(hostId, "environment.status");
   const query = useHostQuery<HostRpcRegistry, "environment.status">({
     cacheKeyIdentity: undefined,
@@ -74,7 +74,7 @@ export function useEnvironmentStatusRead(
  */
 function useRereadOnRevision(
   hostId: string | null,
-  status: EnvironmentStatusResponseV11 | null,
+  status: EnvironmentStatusResponseV20 | null,
   personalEnvironmentId: string | null,
 ): void {
   const queryClient = useQueryClient();
@@ -92,31 +92,34 @@ function useRereadOnRevision(
     seen.current = { hostId, revision };
     if (previous === null || previous.hostId !== hostId) return;
     if (previous.revision === revision) return;
-    for (const method of DELTA_FED_READS) {
-      const filters = {
-        queryKey: hostQueryKeys.methodScope(
-          hostRpcServingTierHostId(
-            method,
-            hostId,
-            readProcessHostRpcTierPlan(),
-            null,
-          ),
+    const scopes = DELTA_FED_READS.map((method) =>
+      hostQueryKeys.methodScope(
+        hostRpcServingTierHostId(
           method,
+          hostId,
+          readProcessHostRpcTierPlan(),
+          null,
         ),
-      };
-      // Invalidation alone can join an initial GET with no cached data.
-      // Retire that older response before starting the revision's read.
-      void queryClient
-        .cancelQueries(filters)
-        .then(() => queryClient.invalidateQueries(filters))
-        .catch(ignoreError);
-    }
-    if (personalEnvironmentId !== null)
-      invalidateConfigurationReads(
-        queryClient,
-        personalEnvironmentId,
-        CONFIGURATION_READS,
-      );
+        method,
+      ),
+    );
+    const filters = {
+      predicate: (query: Query) =>
+        scopes.some((scope) =>
+          scope.every((part, index) => query.queryKey[index] === part),
+        ) ||
+        (personalEnvironmentId !== null &&
+          configurationReadMatches(
+            query.queryKey,
+            personalEnvironmentId,
+            CONFIGURATION_READS,
+          )),
+    };
+    // Retire an initial GET before refreshing; overlapping read sets must refresh once.
+    void queryClient
+      .cancelQueries(filters)
+      .then(() => queryClient.invalidateQueries(filters))
+      .catch(ignoreError);
   }, [hostId, revision, personalEnvironmentId, queryClient]);
 }
 

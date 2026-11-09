@@ -1,4 +1,8 @@
-import { defineRpcContract, defineUpgradePath } from "../framework/index";
+import {
+  defineRpcContract,
+  defineUpgradePath,
+  defineDowngradePath,
+} from "../framework/index";
 import * as schemas from "./environment-schemas";
 import { RETIRED_PROVIDER_VARIABLES } from "./released-wire-rows";
 
@@ -217,9 +221,36 @@ export const environmentStatusUpgradeV10ToV11 = defineUpgradePath<
     planes: { records: "moved", broker: "moved", room: "moved" },
     returnedFromTeam: null,
     stoppedAt: null,
-    // A host answering `@1.0` acknowledges no queued edit, which reads the same
-    // as one that has none: no receipt is never evidence either way.
-    acceptedUploads: [],
+  }),
+});
+
+export const environmentStatusV20 = defineRpcContract({
+  method: "environment.status",
+  schemaVersion: { major: 2, minor: 0 } as const,
+  requestSchema: schemas.environmentStatusRequestSchema,
+  responseSchema: schemas.environmentStatusResponseSchemaV20,
+});
+
+export const environmentStatusUpgradeV11ToV20 = defineUpgradePath<
+  typeof environmentStatusV11,
+  typeof environmentStatusV20
+>({
+  from: environmentStatusV11.schemaVersion,
+  to: environmentStatusV20.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({ ...response, acceptedUploads: [] }),
+});
+
+export const environmentStatusDowngradeV20ToV11 = defineDowngradePath<
+  typeof environmentStatusV20,
+  typeof environmentStatusV11
+>({
+  from: environmentStatusV20.schemaVersion,
+  to: environmentStatusV11.schemaVersion,
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: schemas.environmentStatusResponseSchemaV11.parse(response),
   }),
 });
 
@@ -834,6 +865,16 @@ export const ENVIRONMENT_RPC_METHODS = {
         },
       },
       downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentStatusV20,
+          upgradeFromPreviousVersion: environmentStatusUpgradeV11ToV20,
+        },
+      },
+      downgradePathsFromLatest: { 1: environmentStatusDowngradeV20ToV11 },
     },
   },
   "environment.notices": {

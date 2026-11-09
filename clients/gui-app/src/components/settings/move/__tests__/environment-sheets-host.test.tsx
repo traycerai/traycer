@@ -17,7 +17,7 @@ import {
 import type {
   EnvironmentItemStatus,
   EnvironmentReviewResponseV12,
-  EnvironmentStatusResponseV11,
+  EnvironmentStatusResponseV20,
 } from "@traycer/protocol/host/environment-schemas";
 import { EnvironmentSheetsHost } from "@/components/settings/move/environment-sheets-host";
 import type { ThisComputer } from "@/components/settings/move/this-computer";
@@ -76,7 +76,7 @@ interface Reads {
 }
 
 function thisComputerAnswering(
-  status: EnvironmentStatusResponseV11,
+  status: EnvironmentStatusResponseV20,
   shownAt: number | null,
 ): Reads {
   const reads: { status: number; review: number; recorded: string[] } = {

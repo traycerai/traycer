@@ -91,7 +91,7 @@ import type {
   ConfigEnvLocalOverrideResponse,
   EnvironmentReviewEntry,
   EnvironmentSecretV12,
-  EnvironmentStatusResponseV11,
+  EnvironmentStatusResponseV20,
   LocalOverride,
 } from "@traycer/protocol/host/environment-schemas";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
@@ -117,7 +117,7 @@ import {
 } from "@traycer/protocol/host/released-wire-rows";
 
 const HOST_ID = "host-a";
-const READY_STATUS: EnvironmentStatusResponseV11 = environmentStatusFixture({
+const READY_STATUS: EnvironmentStatusResponseV20 = environmentStatusFixture({
   // Pending, so a ready page says so ("Applying EXISTING on host-a."), which
   // is how a test knows the status was read and rendered.
   items: [
@@ -166,7 +166,7 @@ interface Rendered {
 
 function renderShellPage(options: {
   /** `null`: the host's `environment.status` read never resolves. */
-  readonly status: EnvironmentStatusResponseV11 | null;
+  readonly status: EnvironmentStatusResponseV20 | null;
   /** The methods the host advertises; the config family is always there. */
   readonly environmentMethods: readonly string[];
   readonly existingVariables: readonly { key: string; value: string }[];

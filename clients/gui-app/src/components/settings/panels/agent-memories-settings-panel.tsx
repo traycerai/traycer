@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { ConfigAgentMemoriesResponse } from "@traycer/protocol/host/config/schemas";
-import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentStatusResponseV20 } from "@traycer/protocol/host/environment-schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -264,7 +264,7 @@ function AgentMemoriesRow(): ReactNode {
   const confirmationStatus = useHostQueryWithResponseMap<
     HostRpcRegistry,
     "environment.status",
-    ConfirmationSnapshot<EnvironmentStatusResponseV11>,
+    ConfirmationSnapshot<EnvironmentStatusResponseV20>,
     symbol | null
   >({
     cacheKeyIdentity: confirmationIdentity,
