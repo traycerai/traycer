@@ -71,6 +71,9 @@ vi.mock(
       ...actual,
       WsRpcClient: class {
         request = socketRequest;
+        // The CLI finally calls this after every real send. A missing method
+        // throws and replaces the call's result.
+        releaseIdleLocalSessions(): void {}
       },
     };
   },

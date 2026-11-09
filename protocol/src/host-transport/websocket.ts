@@ -47,10 +47,12 @@ export interface WebSocketLike {
 }
 
 /**
- * Creates a fresh `WebSocketLike` connection bound to the given URL. Each
- * `WsRpcClient.request` call obtains exactly one connection through this
- * factory and discards it on completion - no long-lived socket state crosses
- * requests.
+ * Creates a fresh `WebSocketLike` connection bound to the given URL.
+ *
+ * A host that does not advertise `unary.persistentSession` is dialed once
+ * per call, and that socket is discarded when the call settles. A host that
+ * does advertise it is dialed once per host and signed-in identity; later
+ * calls reuse that socket. The factory itself stays one socket per `create`.
  *
  * `priority` says whether anything rendered is waiting on this call, so the
  * production factory's dial gate can let it past the boot flood

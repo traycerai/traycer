@@ -76,10 +76,13 @@ function latestStreamServerFrameSchema<
 // `requestMock` is declared via `vi.hoisted` so it exists when the hoisted
 // `vi.mock` factory below captures it. `WsRpcClient` is mocked as a class so
 // `new WsRpcClient(...)` is constructable; every instance shares `requestMock`.
-const { requestMock, rpcClientConstructorMock } = vi.hoisted(() => ({
-  requestMock: vi.fn(),
-  rpcClientConstructorMock: vi.fn(),
-}));
+const { requestMock, rpcClientConstructorMock, releaseIdleMock } = vi.hoisted(
+  () => ({
+    requestMock: vi.fn(),
+    rpcClientConstructorMock: vi.fn(),
+    releaseIdleMock: vi.fn(),
+  }),
+);
 
 const loggerMock = vi.hoisted(() => ({
   debug: vi.fn(),
@@ -114,6 +117,7 @@ vi.mock(
         }
 
         request = requestMock;
+        releaseIdleLocalSessions = releaseIdleMock;
       },
     };
   },
@@ -237,6 +241,7 @@ describe("callHostRpc", () => {
     // The per-run store is always disposed on the success path (finally), so a
     // `commit-failed` continuation timer can't outlive the command.
     expect(fakeStore.dispose).toHaveBeenCalledTimes(1);
+    expect(releaseIdleMock).toHaveBeenCalledTimes(1);
   });
 
   it("dials with an attestation window that outlasts the host's post-openAck deadline", async () => {
