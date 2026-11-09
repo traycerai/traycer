@@ -539,7 +539,13 @@ describe("local unary session", () => {
     respondEcho(secondSocket.socket, secondRequest, "two");
     await expect(second).resolves.toEqual({ echoed: "two" });
     expect(openFrames(firstSocket)).toHaveLength(1);
+    expect(openFrames(firstSocket)[0]?.capabilities).toContain(
+      UNARY_CAPABILITY_PERSISTENT_SESSION,
+    );
     expect(openFrames(secondSocket)).toHaveLength(1);
+    expect(openFrames(secondSocket)[0]?.capabilities ?? []).not.toContain(
+      UNARY_CAPABILITY_PERSISTENT_SESSION,
+    );
     expect(requestFrames(firstSocket)).toHaveLength(1);
     expect(requestFrames(secondSocket)).toHaveLength(1);
   });
@@ -1062,5 +1068,307 @@ describe("local unary session", () => {
     );
     expect(sockets).toHaveLength(1);
     expect(discovering.socket.closed).toBeNull();
+  });
+
+  it("aborts a caller waiting on discovery without waiting for the handshake", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory, 0);
+    const bearer = new MutableBearerLease("token-a", USER_A);
+    const discoveringCall = client.request(
+      "host.echo",
+      { message: "discover" },
+      optionsFor(bearer, new AbortController().signal, null, false, null),
+    );
+    const controller = new AbortController();
+    const waiting = captureRejection(
+      client.request(
+        "host.echo",
+        { message: "wait" },
+        optionsFor(bearer, controller.signal, null, false, null),
+      ),
+    );
+    await flush();
+    controller.abort();
+    const error = await waiting;
+    expect(error).toBeInstanceOf(HostRequestAbortedError);
+    if (!(error instanceof HostRequestAbortedError)) {
+      throw new Error("expected the waiting call to abort");
+    }
+    expect(error.mayHaveDispatched).toBe(false);
+    expect(sockets).toHaveLength(1);
+
+    const discovering = sockets[0];
+    if (discovering === undefined) {
+      throw new Error("expected the discovering socket");
+    }
+    await classify(discovering, sessionAck(true));
+    const sent = requestFrames(discovering);
+    expect(sent).toHaveLength(1);
+    const discoveringRequest = sent[0];
+    if (discoveringRequest === undefined) {
+      throw new Error("expected the discovering request");
+    }
+    respondEcho(discovering.socket, discoveringRequest, "discover");
+    await expect(discoveringCall).resolves.toEqual({ echoed: "discover" });
+  });
+
+  it("lets the next call dial when discovery fails before the socket exists", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory, 0);
+    const owner = captureRejection(
+      client.request(
+        "host.echo",
+        { message: "owner" },
+        optionsFor(
+          new MutableBearerLease("", USER_A),
+          new AbortController().signal,
+          null,
+          false,
+          null,
+        ),
+      ),
+    );
+    const waiter = client.request(
+      "host.echo",
+      { message: "waiter" },
+      optionsFor(
+        new MutableBearerLease("token-a", USER_A),
+        new AbortController().signal,
+        null,
+        false,
+        null,
+      ),
+    );
+    const ownerError = await owner;
+    expect(ownerError).toBeInstanceOf(HostRpcError);
+    await flush();
+    expect(sockets).toHaveLength(1);
+    const socket = sockets[0];
+    if (socket === undefined) {
+      throw new Error("expected the waiter to dial");
+    }
+    await classify(socket, sessionAck(true));
+    const sent = requestFrames(socket);
+    expect(sent).toHaveLength(1);
+    const frame = sent[0];
+    if (frame === undefined) {
+      throw new Error("expected the waiter request");
+    }
+    respondEcho(socket.socket, frame, "waiter");
+    await expect(waiter).resolves.toEqual({ echoed: "waiter" });
+  });
+
+  it("dials again after an incompatible discovery instead of keeping the failure", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory, 0);
+    const bearer = new MutableBearerLease("token-a", USER_A);
+    const first = captureRejection(
+      client.request(
+        "host.echo",
+        { message: "first" },
+        optionsFor(bearer, new AbortController().signal, null, false, null),
+      ),
+    );
+    const discovering = sockets[0];
+    if (discovering === undefined) {
+      throw new Error("expected the discovering socket");
+    }
+    discovering.socket.fireOpen();
+    await flush();
+    discovering.socket.fireMessage({
+      kind: "fatalError",
+      details: {
+        code: "INCOMPATIBLE",
+        reason: "host build is incompatible",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+    const error = await first;
+    expect(error).toBeInstanceOf(HostRpcError);
+    if (!(error instanceof HostRpcError)) {
+      throw new Error("expected the incompatible handshake");
+    }
+    expect(error.code).toBe("INCOMPATIBLE");
+
+    const second = client.request(
+      "host.echo",
+      { message: "second" },
+      optionsFor(bearer, new AbortController().signal, null, false, null),
+    );
+    await flush();
+    expect(sockets).toHaveLength(2);
+    const retried = sockets[1];
+    if (retried === undefined) {
+      throw new Error("expected a new dial");
+    }
+    await classify(retried, sessionAck(true));
+    const sent = requestFrames(retried);
+    const frame = sent[0];
+    if (frame === undefined) {
+      throw new Error("expected the retried request");
+    }
+    respondEcho(retried.socket, frame, "second");
+    await expect(second).resolves.toEqual({ echoed: "second" });
+  });
+
+  it("does not write a later queued request after a fatal frame", async () => {
+    const bearer = new MutableBearerLease("token-a", USER_A);
+    const sent: ClientFrame[] = [];
+    let session: LocalUnarySession<typeof testRegistry> | null = null;
+    const socket: MultiplexSocket = {
+      send(frame: ClientFrame): void {
+        sent.push(frame);
+        if (
+          frame.kind !== "request" ||
+          session === null ||
+          sent.filter((item) => item.kind === "request").length !== 1
+        ) {
+          return;
+        }
+        session.handlers.onFrame({
+          kind: "fatalError",
+          details: {
+            code: "UNAUTHORIZED",
+            reason: "session rejected",
+            incompatibleMethods: null,
+            upgradeGuidance: null,
+          },
+        });
+      },
+      close(): void {},
+    };
+    session = openDirectSession(async () => {
+      return { kind: "legacy" };
+    });
+    const options = optionsFor(
+      bearer,
+      new AbortController().signal,
+      null,
+      false,
+      null,
+    );
+    const first = captureRejection(
+      session.call({
+        requestId: "req-1",
+        method: "host.echo",
+        params: { message: "one" },
+        responseTimeoutMs: 5_000,
+        options,
+      }),
+    );
+    const second = captureRejection(
+      session.call({
+        requestId: "req-2",
+        method: "host.echo",
+        params: { message: "two" },
+        responseTimeoutMs: 5_000,
+        options,
+      }),
+    );
+    session.attach({
+      socket,
+      clientManifest: ECHO_MANIFEST,
+      hostManifest: ECHO_MANIFEST,
+      idempotency: true,
+    });
+    const third = captureRejection(
+      session.call({
+        requestId: "req-3",
+        method: "host.echo",
+        params: { message: "three" },
+        responseTimeoutMs: 5_000,
+        options,
+      }),
+    );
+    const firstError = await first;
+    const secondError = await second;
+    const thirdError = await third;
+    expect(sent.filter((frame) => frame.kind === "request")).toEqual([
+      expect.objectContaining({ kind: "request", requestId: "req-1" }),
+    ]);
+    expect(firstError).toBeInstanceOf(HostRpcError);
+    expect(firstError).not.toBeInstanceOf(RetryableTransportError);
+    expect(secondError).toBeInstanceOf(RetryableTransportError);
+    expect(thirdError).toBeInstanceOf(RetryableTransportError);
+  });
+
+  it("keeps a queued call when the redial opener is aborted during the handshake", async () => {
+    const bearer = new MutableBearerLease("token-a", USER_A);
+    let releaseDial: (() => void) | null = null;
+    let dials = 0;
+    const recorded = recordingSocket();
+    const session = openDirectSession(async () => {
+      dials += 1;
+      if (dials === 1) {
+        await new Promise<void>((resolve) => {
+          releaseDial = resolve;
+        });
+        throw new Error("handshake failed");
+      }
+      const attached: ReplacementDialResult = {
+        kind: "persistent",
+        attached: {
+          socket: recorded.socket,
+          clientManifest: ECHO_MANIFEST,
+          hostManifest: ECHO_MANIFEST,
+          idempotency: true,
+        },
+      };
+      return attached;
+    });
+    const openerController = new AbortController();
+    const opener = captureRejection(
+      session.call({
+        requestId: "req-opener",
+        method: "host.echo",
+        params: { message: "opener" },
+        responseTimeoutMs: 5_000,
+        options: optionsFor(
+          bearer,
+          openerController.signal,
+          "opener-key",
+          false,
+          null,
+        ),
+      }),
+    );
+    const kept = session.call({
+      requestId: "req-kept",
+      method: "host.echo",
+      params: { message: "kept" },
+      responseTimeoutMs: 5_000,
+      options: optionsFor(
+        bearer,
+        new AbortController().signal,
+        "kept-key",
+        false,
+        null,
+      ),
+    });
+    session.handlers.onTransportClosed("peer-dropped", false);
+    await flush();
+    expect(dials).toBe(1);
+    openerController.abort();
+    if (releaseDial === null) {
+      throw new Error("expected the replacement dial to be waiting");
+    }
+    releaseDial();
+    await flush();
+    const openerError = await opener;
+    expect(openerError).toBeInstanceOf(HostRequestAbortedError);
+    expect(dials).toBe(2);
+    expect(recorded.sent).toEqual([
+      expect.objectContaining({ kind: "request", requestId: "req-kept" }),
+    ]);
+    session.handlers.onFrame({
+      kind: "response",
+      requestId: "req-kept",
+      method: "host.echo",
+      schemaVersion: { major: 1, minor: 0 },
+      result: { echoed: "kept" },
+      error: null,
+    });
+    await expect(kept).resolves.toEqual({ echoed: "kept" });
   });
 });

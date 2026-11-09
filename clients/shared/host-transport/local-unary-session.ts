@@ -458,7 +458,7 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
         { once: true },
       );
       if (call.options.authority.abortSignal.aborted) {
-        this.cancelSent(call.requestId);
+        this.rejectInFlight(entry, abortedCall(call, false));
         return;
       }
       try {
@@ -549,6 +549,9 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
   }
 
   private onFatal(frame: HostFatalErrorFrame): void {
+    // rejectInFlight pumps the queue. Drop the socket first so that pump
+    // cannot write another request after the fatal frame.
+    this.closeSocket();
     const pending = Array.from(this.inFlight.values());
     for (const entry of pending) {
       const error = hostFatalError(
@@ -576,21 +579,10 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
           ),
         );
       }
-      const first = queued[0];
-      this.directory.fail(
-        this.key,
-        this,
-        hostFatalError(
-          frame,
-          first === undefined ? "session" : first.requestId,
-          first === undefined ? "session" : first.method,
-          "beforeRequest",
-        ),
-      );
+      this.directory.fail(this.key, this);
     } else {
       this.failQueued(null);
     }
-    this.closeSocket();
     this.retireIfIdle();
   }
 
@@ -676,14 +668,17 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
           return;
         }
         if (isIncompatibleHandshake(cause)) {
-          this.directory.fail(this.key, this, cause);
+          this.directory.fail(this.key, this);
           this.failQueued(cause);
           this.redialing = false;
           this.retireIfIdle();
           return;
         }
-        this.queue.shift();
         this.clearAbortListener(opener);
+        const openerIndex = this.queue.indexOf(opener);
+        if (openerIndex >= 0) {
+          this.queue.splice(openerIndex, 1);
+        }
         opener.fail(
           cause instanceof Error
             ? cause
@@ -857,7 +852,6 @@ export type SessionGateResult<Registry extends VersionedRpcRegistry> =
 export type SessionAdmission<Registry extends VersionedRpcRegistry> =
   | { readonly kind: "ready"; readonly session: LocalUnarySession<Registry> }
   | { readonly kind: "legacy" }
-  | { readonly kind: "failed"; readonly error: HostRpcError }
   | {
       readonly kind: "wait";
       readonly settled: Promise<SessionGateResult<Registry>>;
@@ -872,9 +866,8 @@ export interface SessionPublisher<Registry extends VersionedRpcRegistry> {
 }
 
 interface SessionSlot<Registry extends VersionedRpcRegistry> {
-  phase: "dialing" | "ready" | "legacy" | "failed";
+  phase: "dialing" | "ready" | "legacy";
   session: LocalUnarySession<Registry> | null;
-  error: HostRpcError | null;
   waiters: Array<(result: SessionGateResult<Registry>) => void>;
 }
 
@@ -908,13 +901,6 @@ export class LocalUnarySessionDirectory<Registry extends VersionedRpcRegistry> {
     if (existing.phase === "legacy") {
       return { kind: "legacy" };
     }
-    if (existing.phase === "failed" && existing.error !== null) {
-      return { kind: "failed", error: existing.error };
-    }
-    if (existing.phase === "failed") {
-      this.slots.delete(key);
-      return this.beginDial(key);
-    }
     return {
       kind: "wait",
       settled: new Promise((resolve) => {
@@ -943,25 +929,18 @@ export class LocalUnarySessionDirectory<Registry extends VersionedRpcRegistry> {
     slot.session = null;
   }
 
-  fail(
-    key: string,
-    session: LocalUnarySession<Registry>,
-    error: HostRpcError,
-  ): void {
+  fail(key: string, session: LocalUnarySession<Registry>): void {
     const slot = this.slots.get(key);
     if (slot === undefined || slot.session !== session) {
       return;
     }
-    slot.phase = "failed";
-    slot.session = null;
-    slot.error = error;
+    this.slots.delete(key);
   }
 
   private beginDial(key: string): SessionAdmission<Registry> {
     const slot: SessionSlot<Registry> = {
       phase: "dialing",
       session: null,
-      error: null,
       waiters: [],
     };
     this.slots.set(key, slot);
@@ -998,8 +977,9 @@ export class LocalUnarySessionDirectory<Registry extends VersionedRpcRegistry> {
         if (slot.phase !== "dialing") {
           return;
         }
-        slot.phase = "failed";
-        slot.error = error;
+        if (this.slots.get(key) === slot) {
+          this.slots.delete(key);
+        }
         finish({ kind: "failed", error });
       },
       retry: () => {

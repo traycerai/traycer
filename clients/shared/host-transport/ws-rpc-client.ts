@@ -143,13 +143,24 @@ const ATTESTATION_DELIVERY_SLACK_MS = 5_000;
 const SUSPENSION_OVERSHOOT_TOLERANCE_MS = 1_000;
 
 /**
- * Named on every local `open`. The persistent-session name is an opt-in:
- * a host that does not advertise it on `openAck` is kept on one socket per
- * call. An older host ignores a capability name it does not know.
+ * Named on an `open` that can be adopted as a session. The persistent-session
+ * name is an opt-in: a host that does not advertise it on `openAck` is kept
+ * on one socket per call. An older host ignores a capability name it does not
+ * know.
  */
 const LOCAL_UNARY_OPEN_CAPABILITIES: readonly string[] = [
   CLIENT_CAPABILITY_EPIC_WRITE_PATH_V1,
   UNARY_CAPABILITY_PERSISTENT_SESSION,
+];
+
+/**
+ * A socket this client will use as one-shot. Omitting the session name keeps
+ * an upgraded host on one socket per call: the process-lifetime legacy latch
+ * does not re-probe, and advertising the name would make that host require a
+ * bearer the one-shot request does not send.
+ */
+const LOCAL_UNARY_ONE_SHOT_CAPABILITIES: readonly string[] = [
+  CLIENT_CAPABILITY_EPIC_WRITE_PATH_V1,
 ];
 
 /**
@@ -388,11 +399,13 @@ export class WsRpcClient<
           sessionKey,
         );
       }
-      if (admission.kind === "failed") {
-        throw admission.error;
-      }
       if (admission.kind === "wait") {
-        const settled = await admission.settled;
+        const settled = await waitForSessionAdmission(
+          admission.settled,
+          options.authority,
+          requestId,
+          method,
+        );
         if (settled.kind === "ready") {
           return settled.session.call({
             requestId,
@@ -441,29 +454,35 @@ export class WsRpcClient<
   ): Promise<ResponseOfMethod<Registry, Method>> {
     const { idempotencyKey, authority } = options;
     const selected = authority.endpoint;
-
-    throwIfAuthorityAborted(authority, requestId, method);
-
-    if (selected.websocketUrl === null) {
-      throw new HostRpcError({
-        code: "RPC_ERROR",
-        message: `Host '${selected.hostId}' does not expose a WebSocket endpoint`,
-        requestId,
-        method,
-        fatalDetails: null,
-      });
-    }
-
-    const clientManifest = this.buildManifest();
-    const token = extractBearerOrThrowRpcError(
-      authority.bearer,
+    let published = false;
+    const settleUnpublished = (cause: unknown): void => {
+      if (publish === null || published) {
+        return;
+      }
+      if (
+        cause instanceof HostRpcError &&
+        cause.code === "INCOMPATIBLE" &&
+        cause.fatalDetails !== null
+      ) {
+        publish.failed(cause);
+      } else {
+        publish.retry();
+      }
+      published = true;
+    };
+    const discovery = prepareDiscoveryOpen(
+      authority,
       requestId,
       method,
+      settleUnpublished,
     );
+
+    const clientManifest = this.buildManifest();
+    const token = discovery.token;
 
     const session = openSession({
       socket: this.webSocketFactory.create(
-        selected.websocketUrl,
+        discovery.websocketUrl,
         // Classified here because here is where the method is known: the
         // factory sees a URL. A one-shot host is dialed once per call, and
         // the discovering dial of a persistent session uses this call's
@@ -485,7 +504,6 @@ export class WsRpcClient<
     if (authority.abortSignal.aborted) {
       onAbort();
     }
-    let published = false;
     let adopted = false;
 
     try {
@@ -496,7 +514,10 @@ export class WsRpcClient<
         token,
         manifest: clientManifest.manifest,
         optionalManifest: clientManifest.optionalManifest,
-        capabilities: LOCAL_UNARY_OPEN_CAPABILITIES,
+        capabilities:
+          publish === null
+            ? LOCAL_UNARY_ONE_SHOT_CAPABILITIES
+            : LOCAL_UNARY_OPEN_CAPABILITIES,
         clientIdentity: this.clientIdentity,
         // Additive and needs no negotiation to send: an older host's copy of
         // the open-frame schema strips the key (zod objects are non-strict) and
@@ -721,18 +742,7 @@ export class WsRpcClient<
         wireIdempotencyKey,
       );
     } catch (cause) {
-      if (publish !== null && !published) {
-        if (
-          cause instanceof HostRpcError &&
-          cause.code === "INCOMPATIBLE" &&
-          cause.fatalDetails !== null
-        ) {
-          publish.failed(cause);
-        } else {
-          publish.retry();
-        }
-        published = true;
-      }
+      settleUnpublished(cause);
       throw cause;
     } finally {
       authority.abortSignal.removeEventListener("abort", onAbort);
@@ -2228,6 +2238,81 @@ export function extractBearerOrThrowRpcError(
         fatalDetails: null,
       });
     }
+    throw cause;
+  }
+}
+
+function waitForSessionAdmission<T>(
+  settled: Promise<T>,
+  authority: HostRequestAuthority,
+  requestId: string,
+  method: string,
+): Promise<T> {
+  throwIfAuthorityAborted(authority, requestId, method);
+  const signal = authority.abortSignal;
+  return new Promise((resolve, reject) => {
+    let done = false;
+    const finish = (settle: () => void): void => {
+      if (done) {
+        return;
+      }
+      done = true;
+      signal.removeEventListener("abort", onAbort);
+      settle();
+    };
+    const onAbort = (): void => {
+      finish(() => {
+        reject(
+          new HostRequestAbortedError({
+            message:
+              "Host request authority was aborted before the WebSocket dial",
+            requestId,
+            method,
+            mayHaveDispatched: false,
+          }),
+        );
+      });
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    settled.then(
+      (value) => {
+        finish(() => {
+          resolve(value);
+        });
+      },
+      (error: unknown) => {
+        finish(() => {
+          reject(error);
+        });
+      },
+    );
+  });
+}
+
+function prepareDiscoveryOpen(
+  authority: HostRequestAuthority,
+  requestId: string,
+  method: string,
+  settleUnpublished: (cause: unknown) => void,
+): { readonly token: string; readonly websocketUrl: string } {
+  try {
+    throwIfAuthorityAborted(authority, requestId, method);
+    const websocketUrl = authority.endpoint.websocketUrl;
+    if (websocketUrl === null) {
+      throw new HostRpcError({
+        code: "RPC_ERROR",
+        message: `Host '${authority.endpoint.hostId}' does not expose a WebSocket endpoint`,
+        requestId,
+        method,
+        fatalDetails: null,
+      });
+    }
+    return {
+      token: extractBearerOrThrowRpcError(authority.bearer, requestId, method),
+      websocketUrl,
+    };
+  } catch (cause) {
+    settleUnpublished(cause);
     throw cause;
   }
 }
