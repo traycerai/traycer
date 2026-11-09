@@ -12,6 +12,17 @@ import { ManifestStemSource, type StemManifest } from "./stems";
 const DRAIN_AFTER_FADE_SECONDS = 0.5;
 
 /**
+ * The rate the mix runs at, asked for rather than taken from the device.
+ *
+ * A recording encodes Opus, which is a 48 kHz codec, and the capture refuses
+ * any other rate instead of resampling behind the file's back: 48 kHz here is
+ * what makes a captured frame and an encoded sample the same thing. The device
+ * may well be at 44.1 kHz, in which case the context resamples on its way to
+ * the speakers, which is the right place for it to happen.
+ */
+const MIX_SAMPLE_RATE = 48_000;
+
+/**
  * Opens the audio device: speakers ← volume ← a chime's duck ← low-pass ← the
  * mix. A recording takes its copy where the low-pass hands over. Only ever call
  * this from a gesture of the person's, because the `AudioContext` constructor
@@ -23,7 +34,7 @@ export function openWebAudioPorts(
   stems: StemManifest,
   volume: number,
 ): SoundtrackPorts {
-  const context = new AudioContext();
+  const context = new AudioContext({ sampleRate: MIX_SAMPLE_RATE });
   const level = new WebAudioLevel(context, context.destination, volume);
   const dim = new WebAudioDimFilter(context, level.input);
   const output = new WebAudioOutput(context, dim.input);
@@ -39,19 +50,6 @@ export function openWebAudioPorts(
     if (suspending !== null) window.clearTimeout(suspending);
     suspending = null;
   };
-  const clockStarting = new Set<() => void>();
-  const clockStopped = new Set<() => void>();
-  // Counts the starts asked for, so a stop that takes hold can tell whether one
-  // came after it.
-  let clockStarts = 0;
-  const listenTo =
-    (listeners: Set<() => void>) =>
-    (listener: () => void): (() => void) => {
-      listeners.add(listener);
-      return () => {
-        listeners.delete(listener);
-      };
-    };
   return {
     output,
     stems: new ManifestStemSource(stems, output, reissueStemManifest),
@@ -67,42 +65,24 @@ export function openWebAudioPorts(
     log: new SoundtrackLogRelay(),
     captureMix: async (quality) => {
       const { openMixCapture } = await import("./mix-capture");
-      return openMixCapture(
-        context,
-        (node) => dim.tap(node),
-        {
-          onStart: listenTo(clockStarting),
-          onStop: listenTo(clockStopped),
-        },
-        quality,
-      );
+      return openMixCapture(context, (node) => dim.tap(node), quality);
     },
     pause: () => {
       level.setAudible(false);
       suspending = window.setTimeout(
         () => {
           suspending = null;
-          const starts = clockStarts;
-          void context.suspend().then(
-            () => {
-              if (starts !== clockStarts) return;
-              for (const listener of clockStopped) listener();
-            },
-            (error: unknown) => {
-              appLogger.warn(
-                "[soundtrack] could not suspend the audio context",
-                { error: describeLogError(error) },
-              );
-            },
-          );
+          void context.suspend().catch((error: unknown) => {
+            appLogger.warn("[soundtrack] could not suspend the audio context", {
+              error: describeLogError(error),
+            });
+          });
         },
         (MIX_TUNING.pauseFadeSeconds + DRAIN_AFTER_FADE_SECONDS) * 1000,
       );
     },
     resume: (onRefused) => {
       cancelSuspending();
-      clockStarts += 1;
-      for (const listener of clockStarting) listener();
       void context.resume().catch((error: unknown) => {
         appLogger.warn("[soundtrack] could not resume the audio context", {
           error: describeLogError(error),
