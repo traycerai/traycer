@@ -9,6 +9,7 @@ export const botMutationKeys = {
   updateTitle: () => ["bot.updateTitle"] as const,
   updateRunSettings: () => ["bot.updateRunSettings"] as const,
   updateReplyMode: () => ["bot.updateReplyMode"] as const,
+  updateAppearance: () => ["bot.updateAppearance"] as const,
   setNotificationLevel: () => ["bot.notificationLevel.set"] as const,
   setThreadFollow: () => ["bot.threadFollow.set"] as const,
   advanceReadCursor: () => ["bot.readCursor.advance"] as const,

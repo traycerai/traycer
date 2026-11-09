@@ -18,7 +18,10 @@ import type {
   FakeSandboxAuth,
   FakeSandboxBinding,
 } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
-import type { BotOpenResponse } from "@traycer/protocol/host/bot/schemas";
+import type {
+  BotAppearance,
+  BotOpenResponse,
+} from "@traycer/protocol/host/bot/schemas";
 import type { BotOnboardingSetup } from "@traycer/protocol/host/bot/onboarding-schemas";
 import type { ListTaskLight } from "@traycer/protocol/host/epic/unary-schemas";
 import type { BotSubscriptionSnapshot } from "@/hooks/bots/use-bot-subscription";
@@ -131,6 +134,8 @@ export const mocks = {
     listedBotIds: undefined as string[] | undefined,
     /** Titles the list gives its bots; a bot not named is titled by its id. */
     listTitles: new Map<string, string>(),
+    /** The appearance the list gives a bot; a bot not named has none. */
+    listAppearance: new Map<string, BotAppearance>(),
     mainBotIds: null as Record<string, string> | null,
     support: null as boolean | null,
     /** Whether the host advertises `bot.onboarding.read`; `null` while unknown. */
@@ -417,6 +422,9 @@ export const botListQueryMock = {
                 title: mocks.state.listTitles.get(botId) ?? botId,
                 environmentId: "env-team",
                 archivedAt: null,
+                ...(mocks.state.listAppearance.has(botId)
+                  ? { appearance: mocks.state.listAppearance.get(botId) }
+                  : {}),
               })),
               mainBotIds: mocks.state.mainBotIds,
             },

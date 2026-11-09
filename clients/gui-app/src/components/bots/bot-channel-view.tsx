@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type CSSProperties,
   type ReactNode,
 } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
@@ -136,6 +137,7 @@ import {
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type { MobileTileCount } from "@/lib/layout/mobile-layout-form";
 import { cn } from "@/lib/utils";
+import { useChannelBackground } from "@/hooks/bots/use-bot-appearance";
 
 const EMPTY_THREADS: ReadonlyArray<BotThreadSummary> = [];
 const NO_EXCHANGES: ReadonlyArray<BotExchange> = [];
@@ -343,6 +345,7 @@ export function BotChannelView(props: {
   } = props;
   const openThreadPostId = open?.anchorMessageId ?? null;
   const client = useTabHostClient();
+  const background = useChannelBackground(botId);
   const conversations = useBotConversationListQuery(client, botId, true);
   const channel = useMemo(
     () =>
@@ -819,26 +822,39 @@ export function BotChannelView(props: {
                 railOpen ? channelBesideRailClass(tiles) : "flex",
               )}
             >
-              <ChannelSearchBack
-                botId={botId}
-                shown={search.showing}
-                on="channel"
-              />
-              <BotExchangeLinesContext value={exchangeLines.channel}>
-                <BotChatTranscript
+              {/* The message area: where a chosen background tints the
+                  channel. The dock below it (the replying strip, the
+                  routing card and the box) keeps the page's own. */}
+              <div
+                data-testid="bot-channel-messages"
+                data-channel-background={background.swatch}
+                style={{ "--channel-tint": background.color } as CSSProperties}
+                className={cn(
+                  "flex min-h-0 flex-1 flex-col",
+                  background.className,
+                )}
+              >
+                <ChannelSearchBack
                   botId={botId}
-                  chatId={channel.conversationId}
-                  hostId={hostId}
-                  title={botTitle}
-                  instanceId={`bot-channel:${botId}`}
-                  surface={surface}
-                  resolveMember={resolveMember}
-                  showConnecting
-                  header={null}
-                  landOn={landing}
-                  flow={null}
+                  shown={search.showing}
+                  on="channel"
                 />
-              </BotExchangeLinesContext>
+                <BotExchangeLinesContext value={exchangeLines.channel}>
+                  <BotChatTranscript
+                    botId={botId}
+                    chatId={channel.conversationId}
+                    hostId={hostId}
+                    title={botTitle}
+                    instanceId={`bot-channel:${botId}`}
+                    surface={surface}
+                    resolveMember={resolveMember}
+                    showConnecting
+                    header={null}
+                    landOn={landing}
+                    flow={null}
+                  />
+                </BotExchangeLinesContext>
+              </div>
               <BotReplyingStrip
                 botTitle={botTitle}
                 activity={trunkReply}

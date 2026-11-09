@@ -258,6 +258,7 @@ export function resetBotTabSurfaceMocks(): void {
   // The bot is listed, in a team that has bots: nothing is to be set up.
   mocks.state.listedBotIds = [BOT_ID];
   mocks.state.listTitles = new Map([[BOT_ID, "Release Bot"]]);
+  mocks.state.listAppearance = new Map();
   mocks.state.mainBotIds = null;
   mocks.state.support = true;
   mocks.state.onboardingSupport = true;
