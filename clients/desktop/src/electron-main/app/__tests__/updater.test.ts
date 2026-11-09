@@ -2760,12 +2760,36 @@ describe("implicit RC-line following", () => {
     );
   });
 
-  it("reports up-to-date rather than jumping lines when its own line has nothing newer", async () => {
+  it("moves straight to the newest stable on any line, past its own line's stable", async () => {
+    // The one-hop guarantee: an RC whose line's stable has already been
+    // superseded takes the newest stable directly, rather than its own `2.0.0`
+    // and then, relaunched as a stable build, `2.1.0`. The newer line's RC is
+    // still not a candidate.
     const { autoUpdater, updater } = await loadUpdaterForVersion(
       NOT_LINUX_GUIDANCE,
       RC_APP_VERSION,
     );
-    stubReleases(["desktop-v2.1.0", "desktop-v2.1.0-rc.1", "desktop-v1.9.0"]);
+    stubReleases([
+      "desktop-v2.1.0-rc.1",
+      "desktop-v2.1.0",
+      "desktop-v2.0.0",
+      "desktop-v2.0.0-rc.2",
+    ]);
+    await updater.installAutoUpdater(true, makeDeps(true));
+
+    await updater.checkForUpdatesNow(false, "manual");
+
+    expect(selectedFeedUrl(autoUpdater)).toBe(
+      "https://github.com/traycerai/traycer/releases/download/desktop-v2.1.0/",
+    );
+  });
+
+  it("reports up-to-date rather than taking another line's RC when nothing stable is newer", async () => {
+    const { autoUpdater, updater } = await loadUpdaterForVersion(
+      NOT_LINUX_GUIDANCE,
+      RC_APP_VERSION,
+    );
+    stubReleases(["desktop-v2.1.0-rc.1", "desktop-v1.9.0"]);
     await updater.installAutoUpdater(true, makeDeps(true));
 
     await updater.checkForUpdatesNow(false, "manual");
