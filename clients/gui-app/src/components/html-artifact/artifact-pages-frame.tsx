@@ -36,6 +36,7 @@ import type {
 } from "@/lib/sandbox/bridge-host";
 import type { CanvasTextSelection } from "@/lib/sandbox/canvas-bridge";
 import { cn } from "@/lib/utils";
+import { registerHistoryGestureFrame } from "@/components/layout/shell/desktop-history-frame-wheel";
 
 const NO_PERMISSIONS = [] as const;
 const noop = (): void => undefined;
@@ -343,6 +344,21 @@ export function ArtifactPagesFrame(props: ArtifactPagesFrameProps) {
   const expanded = useArtifactExpanded();
   const entryPath = source.entryPath === "" ? "index.html" : source.entryPath;
   const bridgeRef = useRef<SandboxBridgeHost | null>(null);
+  // A wheel the page could not use reaches the app's back/forward swipe
+  // before it moves the transcript, as it would over a Markdown artifact.
+  const unregisterFrame = useRef<(() => void) | null>(null);
+  const attachFrame = (frame: HTMLIFrameElement | null): void => {
+    unregisterFrame.current?.();
+    unregisterFrame.current =
+      frame === null
+        ? null
+        : registerHistoryGestureFrame(frame, (held) =>
+            bridgeRef.current?.notify("traycer/history-gesture/hold", {
+              held,
+            }),
+          );
+    onFrame?.(frame);
+  };
   const [controlsElement, setControlsElement] = useState<HTMLDivElement | null>(
     null,
   );
@@ -530,7 +546,7 @@ export function ArtifactPagesFrame(props: ArtifactPagesFrameProps) {
           onTextSelection={(selection) => onTextSelection?.(selection)}
           pageNavigation={pageNavigation}
           sourceEquivalent={sourceEquivalent}
-          ref={onFrame}
+          ref={attachFrame}
         />
         {renderOverlay?.(onEntryPage)}
         {standIn}
