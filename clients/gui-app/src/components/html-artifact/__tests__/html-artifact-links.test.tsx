@@ -181,20 +181,48 @@ describe("HtmlArtifactLinks", () => {
     );
   });
 
-  it("hands an href that is an artifact's path on disk to the opener as written, with the entry renamed", async () => {
+  const DISK_SIBLING =
+    "/Users/u/.traycer/epics/epic-1/artifacts/a/sibling/index.html";
+
+  it("reads an href that is an artifact's path on disk as the tree path it names", async () => {
     mocks.resolveArtifactByPath.mockResolvedValue(FOUND);
     const open = mountFrame({ viewTabId: "tab-1", tileHost: "tab-host" });
 
-    open(
-      linkOn("/Users/u/.traycer/epics/epic-1/artifacts/a/sibling/index.html"),
-    );
+    open(linkOn(DISK_SIBLING));
     await vi.waitFor(() => expect(mocks.openTile).toHaveBeenCalled());
 
     expect(mocks.resolveArtifactByPath).toHaveBeenCalledWith(
       expect.objectContaining({
-        filePath: "/Users/u/.traycer/epics/epic-1/artifacts/a/sibling/index.md",
+        filePath: "epics/epic-1/artifacts/a/sibling/index.md",
       }),
     );
+  });
+
+  it("toasts for an artifact's path on disk that the tree lacks, without a disk-file or workspace fallback", async () => {
+    mocks.fetchWorkspaceFileExists.mockResolvedValue(true);
+    const open = mountFrame({ viewTabId: "tab-1", tileHost: "tab-host" });
+
+    open(linkOn(DISK_SIBLING));
+    await vi.waitFor(() =>
+      expect(mocks.toast).toHaveBeenCalledWith("Couldn't open link"),
+    );
+
+    expect(mocks.fetchWorkspaceFileExists).not.toHaveBeenCalled();
+    expect(mocks.openTile).not.toHaveBeenCalled();
+  });
+
+  it("toasts for another Epic's artifact on disk, without a lookup or probe", async () => {
+    mocks.fetchWorkspaceFileExists.mockResolvedValue(true);
+    const open = mountFrame({ viewTabId: "tab-1", tileHost: "tab-host" });
+
+    open(linkOn("/Users/u/.traycer/epics/epic-2/artifacts/x/index.html"));
+    await vi.waitFor(() =>
+      expect(mocks.toast).toHaveBeenCalledWith("Couldn't open link"),
+    );
+
+    expect(mocks.resolveArtifactByPath).not.toHaveBeenCalled();
+    expect(mocks.fetchWorkspaceFileExists).not.toHaveBeenCalled();
+    expect(mocks.openTile).not.toHaveBeenCalled();
   });
 
   it("toasts when the link names nothing in the tree", async () => {
@@ -305,15 +333,33 @@ describe("HtmlArtifactLinks", () => {
     },
   );
 
-  it("opens the workspace file an in-tree relative href names when no artifact folder does", async () => {
+  it("toasts for a plain file the tree lacks, without racing a workspace file of that name", async () => {
+    mocks.fetchWorkspaceFileExists.mockResolvedValue(true);
+    const open = mountFrame({ viewTabId: "tab-1", tileHost: "tab-host" });
+
+    open(linkOn("../sibling/notes.txt"));
+    await vi.waitFor(() =>
+      expect(mocks.toast).toHaveBeenCalledWith("Couldn't open link"),
+    );
+
+    expect(mocks.fetchWorkspaceFileExists).not.toHaveBeenCalled();
+    expect(mocks.openTile).not.toHaveBeenCalled();
+  });
+
+  it("opens a plain file that is an artifact of the tree, without probing the workspace", async () => {
+    mocks.resolveArtifactByPath.mockResolvedValue(FOUND);
     mocks.fetchWorkspaceFileExists.mockResolvedValue(true);
     const open = mountFrame({ viewTabId: "tab-1", tileHost: "tab-host" });
 
     open(linkOn("../sibling/notes.txt"));
     await vi.waitFor(() => expect(mocks.openTile).toHaveBeenCalled());
 
-    expect(mocks.fetchWorkspaceFileExists).toHaveBeenCalled();
-    expect(mocks.toast).not.toHaveBeenCalled();
+    expect(mocks.resolveArtifactByPath).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filePath: "epics/epic-1/artifacts/a/sibling/notes.txt/index.md",
+      }),
+    );
+    expect(mocks.fetchWorkspaceFileExists).not.toHaveBeenCalled();
   });
 
   it("toasts for a href that names no file", () => {

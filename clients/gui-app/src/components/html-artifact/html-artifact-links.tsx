@@ -1,14 +1,15 @@
 import { use, useCallback, type ReactNode } from "react";
 import { toast } from "sonner";
-import { EPIC_ARTIFACT_INDEX_FILENAME } from "@traycer/protocol/common/artifact-path";
+import {
+  artifactLinkPathRootAgnostic,
+  EPIC_ARTIFACT_INDEX_FILENAME,
+} from "@traycer/protocol/common/artifact-path";
 import { TabHostContext } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useArtifactTreeLinkOpener } from "@/components/epic-canvas/renderers/use-artifact-link-opener";
 import type { OpenableArtifactLink } from "@/editor-core";
 import type { LinkClickEvent } from "@/lib/links/open-link";
 import type { SandboxArtifactLink } from "@/lib/sandbox/bridge-host";
-import { artifactEpicIdFromLinkPath } from "@/markdown/links/artifact-link-path";
 import { classifyHref } from "@/markdown/links/classify-href";
-import { resolveArtifactRelativeLinkPath } from "@/markdown/links/resolve-artifact-relative-link";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { HtmlArtifactLinkContext } from "./html-artifact-link-context";
 
@@ -59,17 +60,21 @@ function rootedOnPageOrigin(href: string, pageUrl: string): string {
 }
 
 /**
- * The opener's view of a page's link: the authored href, and the folder it is
- * read from. A relative href is read from the page's own folder in the tree.
- * A rooted one (`/research/`), or one written out in full on the page's own
- * origin, is read from the tree's root, as the frame's own URL space reads it.
- * An href that names an artifact on disk (`…/epics/<id>/artifacts/…`) goes to
- * the opener as written, the way a markdown link's does, with no folder
- * (`null`). The result is `null` for an href that names no file.
+ * The place in the artifacts tree a page's link names: a path, and the folder
+ * it is read from. A relative href is read from the page's own folder in the
+ * tree. A rooted one (`/research/`), or one written out in full on the page's
+ * own origin, is read from the tree's root, as the frame's own URL space reads
+ * it. An href that names an artifact of this Epic on disk
+ * (`…/epics/<id>/artifacts/…`, by markdown's rule) is read as the tree path it
+ * names. The result is `null` for an href that names no place in this Epic's
+ * tree: one that names no file, or another Epic's artifact.
  */
-function treeLinkFor(link: SandboxArtifactLink): {
+function treeLinkFor(
+  link: SandboxArtifactLink,
+  epicId: string,
+): {
   readonly link: Extract<OpenableArtifactLink, { readonly kind: "file" }>;
-  readonly folderChain: readonly string[] | null;
+  readonly folderChain: readonly string[];
 } | null {
   const href = rootedOnPageOrigin(link.href, link.pageUrl);
   // A query or fragment addresses a place inside the target; the tile opens
@@ -81,8 +86,14 @@ function treeLinkFor(link: SandboxArtifactLink): {
     ENTRY_DOCUMENT,
     `$1${EPIC_ARTIFACT_INDEX_FILENAME}`,
   );
-  if (artifactEpicIdFromLinkPath(path) !== null)
-    return { link: { ...classified, path }, folderChain: null };
+  const onDisk = artifactLinkPathRootAgnostic(path, null);
+  if (onDisk !== null) {
+    if (onDisk.epicId !== epicId) return null;
+    return {
+      link: { ...classified, path: onDisk.segments.join("/") },
+      folderChain: [],
+    };
+  }
   if (path.startsWith("/")) {
     return {
       link: { ...classified, path: path.replace(/^\/+/u, "") },
@@ -123,25 +134,18 @@ function TreeLinks(props: {
   readonly viewTabId: string;
   readonly children: ReactNode;
 }) {
+  // A page runs script of its own, so its links reach the artifacts tree and
+  // nothing else: no workspace file is raced, as a markdown link's would be,
+  // and a path above the tree's root names nothing.
   const openTreeLink = useArtifactTreeLinkOpener({
     epicId: props.epicId,
     viewTabId: props.viewTabId,
+    workspaceFiles: false,
   });
   const openPageLink = useCallback(
     (link: SandboxArtifactLink): void => {
-      const target = treeLinkFor(link);
-      // A page is an artifact, so a path it reads from the tree that walks
-      // above the tree's root, or names the root itself, is a dead end: no
-      // workspace file is probed in its place, as a markdown link's would be.
-      if (
-        target === null ||
-        (target.folderChain !== null &&
-          resolveArtifactRelativeLinkPath(
-            props.epicId,
-            target.folderChain,
-            target.link.path,
-          ) === null)
-      ) {
+      const target = treeLinkFor(link, props.epicId);
+      if (target === null) {
         toast("Couldn't open link");
         return;
       }

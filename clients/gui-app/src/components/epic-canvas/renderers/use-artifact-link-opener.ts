@@ -81,6 +81,8 @@ function resolveAndOpenArtifactRelativeHref(
   context: {
     readonly epicId: string;
     readonly selfFolderChain: readonly string[] | null;
+    /** `false` races the folder candidate alone, for a link that may name only the artifacts tree. */
+    readonly workspaceFiles: boolean;
   },
 ): Promise<void> {
   const { epicId, selfFolderChain } = context;
@@ -93,12 +95,13 @@ function resolveAndOpenArtifactRelativeHref(
   }
   const hostId = deps.hostId;
   const workspaceClient = deps.workspaceClient;
-  const fileCandidates =
-    candidateWorkspaceFileRefsForRelativeLinkPath(
-      hostId,
-      deps.workspaceRoots,
-      link.path,
-    ) ?? [];
+  const fileCandidates = context.workspaceFiles
+    ? (candidateWorkspaceFileRefsForRelativeLinkPath(
+        hostId,
+        deps.workspaceRoots,
+        link.path,
+      ) ?? [])
+    : [];
   const fileProbes = fileCandidates.map((ref) =>
     fetchWorkspaceFileExists({
       queryClient: deps.queryClient,
@@ -186,6 +189,7 @@ export function useArtifactLinkOpener(args: {
   const openTreeLink = useArtifactTreeLinkOpener({
     epicId: args.epicId,
     viewTabId: args.viewTabId,
+    workspaceFiles: true,
   });
   const openLink = useCallback(
     (link: OpenableArtifactLink, event: LinkClickEvent): void =>
@@ -198,6 +202,8 @@ export function useArtifactLinkOpener(args: {
 export function useArtifactTreeLinkOpener(args: {
   readonly epicId: string;
   readonly viewTabId: string;
+  /** Whether a relative href also races the workspace files it could name. */
+  readonly workspaceFiles: boolean;
 }): ArtifactTreeLinkOpener {
   const tabHostId = useTabHostId();
   const tabHostClient = useTabHostClient();
@@ -341,11 +347,13 @@ export function useArtifactTreeLinkOpener(args: {
         {
           epicId: args.epicId,
           selfFolderChain: folderChain,
+          workspaceFiles: args.workspaceFiles,
         },
       );
     },
     [
       args.epicId,
+      args.workspaceFiles,
       chatDeps,
       openFile,
       openUrl,
