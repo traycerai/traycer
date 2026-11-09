@@ -45,6 +45,7 @@ import type {
 import { conversationRequestMessageId } from "@traycer/protocol/persistence/epic/messages";
 import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
 import type { MobileLevel2Form } from "@/lib/layout/mobile-layout-form";
+import type { TabNavigationIntent } from "@/lib/tab-navigation/intents";
 import { BotTestRunnerHost } from "@/components/bots/__tests__/bot-test-runner-host";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -196,12 +197,23 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@tanstack/react-router")>()),
   useNavigate: () => vi.fn(),
 }));
-vi.mock("@/lib/tab-navigation", () => ({
-  activateTabIntent: (_navigate: unknown, intent: unknown) => {
-    mocks.activateTabIntent(intent);
-    return true;
-  },
-}));
+// An accepted navigation commits the channel it arrives at, as the tab's
+// controller does once the path is acknowledged; the landing staged for it is
+// then the channel's to spend.
+vi.mock("@/lib/tab-navigation", async (importOriginal) => {
+  const { useTracySurfaceStore: surfaceStore } =
+    await import("@/stores/bots/tracy-surface-store");
+  return {
+    ...(await importOriginal<typeof import("@/lib/tab-navigation")>()),
+    activateTabIntent: (_navigate: unknown, intent: TabNavigationIntent) => {
+      mocks.activateTabIntent(intent);
+      if (intent.kind === "tracy") {
+        surfaceStore.getState().selectChannel(intent.botId);
+      }
+      return true;
+    },
+  };
+});
 vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
   useConnectableHostIds: () => ({ hostIds: ["host-1"], resolved: true }),
 }));
