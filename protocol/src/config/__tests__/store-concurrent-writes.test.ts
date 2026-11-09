@@ -25,6 +25,15 @@ interface ParkSeam {
   readonly markParked: () => void;
 }
 
+// Resolves when settings-lock unlink number `nth` (1-based, failures included)
+// has fulfilled or rejected. The count moves first; this waits until that
+// call's filesystem work is done.
+interface LockUnlinkSettle {
+  readonly nth: number;
+  readonly promise: Promise<void>;
+  readonly resolve: () => void;
+}
+
 const h = vi.hoisted(() => ({
   home: "",
   platform: process.platform as NodeJS.Platform,
@@ -41,6 +50,8 @@ const h = vi.hoisted(() => ({
   lockLinkFailures: [] as string[],
   // Counts unlinks of the settings lock, failed or not.
   lockUnlinks: 0,
+  // Armed by a test that must observe one of those unlinks finishing.
+  lockUnlinkSettle: null as LockUnlinkSettle | null,
   // Fails the next unlinks of the settings lock, one code per call.
   unlinkFailures: [] as string[],
   // Fails the next removals of the lock's temp record file, one code per call.
@@ -159,12 +170,20 @@ vi.mock("node:fs/promises", async (importActual) => {
       return actual.rm(...args);
     },
     unlink: async (path: string) => {
-      if (path === `${cliConfigPath()}.lock`) {
-        h.lockUnlinks += 1;
-        const code = h.unlinkFailures.shift();
-        if (code !== undefined) throw simulatedError(code);
+      if (path !== `${cliConfigPath()}.lock`) {
+        await actual.unlink(path);
+        return;
       }
-      await actual.unlink(path);
+      h.lockUnlinks += 1;
+      const nth = h.lockUnlinks;
+      const code = h.unlinkFailures.shift();
+      try {
+        if (code !== undefined) throw simulatedError(code);
+        await actual.unlink(path);
+      } finally {
+        const settle = h.lockUnlinkSettle;
+        if (settle !== null && settle.nth === nth) settle.resolve();
+      }
     },
     writeFile: async (...args: Parameters<typeof actual.writeFile>) => {
       const options = args[2];
@@ -255,6 +274,15 @@ function armLockReadPark(): ParkSeam {
   return seam;
 }
 
+function armLockUnlinkSettle(nth: number): Promise<void> {
+  let resolve: () => void = () => {};
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  h.lockUnlinkSettle = { nth, promise, resolve };
+  return promise;
+}
+
 /** Writes config.json straight to disk, bypassing the store under test. */
 async function seed(overrides: Partial<CliConfig>): Promise<void> {
   const config: CliConfig = { ...EMPTY_CLI_CONFIG, ...overrides };
@@ -335,6 +363,7 @@ beforeEach(async () => {
   h.lockLinks = 0;
   h.renameFailure = null;
   h.lockUnlinks = 0;
+  h.lockUnlinkSettle = null;
   h.linkFailure = null;
   h.lockLinkFailures = [];
   h.unlinkFailures = [];
@@ -357,6 +386,7 @@ afterEach(async () => {
   h.linkFailure = null;
   h.lockLinkFailures = [];
   h.unlinkFailures = [];
+  h.lockUnlinkSettle = null;
   h.lockTmpRmFailures = [];
   h.tokenRmFailures = [];
   h.tokenRmReplacement = null;
@@ -962,6 +992,10 @@ describe("concurrent config writers", () => {
       setCliConfigLockTimingForTests({ backgroundReleaseDelaysMs: [0] });
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       h.unlinkFailures = ["EBUSY", "EBUSY", "EBUSY"];
+      // The fourth unlink is the background retry. Its promise resolves from
+      // the mock's `finally`, after that call fulfills or rejects, so the
+      // assertion waits on the unlink itself.
+      const fourthUnlinkSettled = armLockUnlinkSettle(4);
 
       await setEnvOverride("ONLY", "1");
 
@@ -971,12 +1005,9 @@ describe("concurrent config writers", () => {
       expect(h.unlinkFailures).toEqual([]);
       expect(existsSync(lockPath())).toBe(true);
 
+      // Releases the already-due unref'd retry. It does not wait for I/O.
       await delay(0);
-      for (let i = 0; i < 10 && existsSync(lockPath()); i += 1) {
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
-      }
+      await fourthUnlinkSettled;
 
       expect(existsSync(lockPath())).toBe(false);
       expect(h.lockUnlinks).toBe(4);
