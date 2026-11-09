@@ -482,6 +482,22 @@ describe("<ProviderSkillsTab /> skill detail", () => {
     ).toBe(true);
   });
 
+  it("draws no Updates writer in a plain provider skill's dialog, which has no configuration policy to set", () => {
+    // `ProviderSkillsTab` hardcodes `policyControl`/`policyFeedback` to
+    // `null`: a skill opened here is the provider's own, with no environment
+    // configuration behind it to carry a sync policy, unlike the one the
+    // Skills page's own detail opens with a live `policyControl`.
+    renderTab();
+
+    fireEvent.click(screen.getByRole("button", { name: /^Open find-skills/ }));
+
+    const dialog = screen.getByRole("dialog");
+    expect(
+      within(dialog).queryByRole("group", { name: /^Updates for/ }),
+    ).toBeNull();
+    expect(within(dialog).queryByText("Updates")).toBeNull();
+  });
+
   it("reports a readFile that resolves with an error instead of rendering blank", () => {
     skillMocks.readFile = {
       data: { content: null, truncated: false, error: "File is unavailable." },

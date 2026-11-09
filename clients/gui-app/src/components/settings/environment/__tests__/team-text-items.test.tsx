@@ -78,7 +78,7 @@ const shell = configurationItem({
 
 async function editVariable(value: string): Promise<void> {
   await userEvent.click(
-    await screen.findByRole("button", { name: "Edit NODE_ENV value" }),
+    await screen.findByRole("textbox", { name: "NODE_ENV value" }),
   );
   const field = screen.getByLabelText("NODE_ENV value");
   await userEvent.clear(field);
@@ -87,10 +87,9 @@ async function editVariable(value: string): Promise<void> {
 
 async function expectRecovered(): Promise<void> {
   await waitFor(() => {
-    expect(screen.getByRole("button", { name: "Add variable" })).toHaveProperty(
-      "disabled",
-      false,
-    );
+    expect(
+      screen.getByRole("textbox", { name: "Variable name" }),
+    ).toHaveProperty("disabled", false);
     expect(screen.queryByRole("status")).toBeNull();
   });
 }
@@ -106,7 +105,9 @@ describe("TeamTextItems accepted writes", () => {
       }),
     });
     render(<TextItemsPage />, { wrapper: harness.Wrapper });
-    await userEvent.click(screen.getByRole("button", { name: "Add variable" }));
+    await userEvent.click(
+      screen.getByRole("textbox", { name: "Variable name" }),
+    );
     await userEvent.type(screen.getByLabelText("Variable name"), "shell");
     await userEvent.type(
       screen.getByLabelText("New variable value"),
@@ -118,7 +119,10 @@ describe("TeamTextItems accepted writes", () => {
     expect(
       await screen.findByText("Saved, but latest settings haven't refreshed."),
     ).toBeTruthy();
-    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(screen.getByLabelText("Variable name")).toHaveProperty(
+      "disabled",
+      true,
+    );
     expect(screen.getByText("custom-shell")).toBeTruthy();
     items = [
       shell,
@@ -132,9 +136,7 @@ describe("TeamTextItems accepted writes", () => {
     ];
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));
     await expectRecovered();
-    await userEvent.click(
-      screen.getByRole("button", { name: "Edit shell value" }),
-    );
+    await userEvent.click(screen.getByRole("textbox", { name: "shell value" }));
     expect(screen.getByLabelText("shell value")).toHaveProperty(
       "value",
       "custom-shell",
@@ -162,7 +164,9 @@ describe("TeamTextItems accepted writes", () => {
       },
     });
     render(<TextItemsPage />, { wrapper: harness.Wrapper });
-    await userEvent.click(screen.getByRole("button", { name: "Add variable" }));
+    await userEvent.click(
+      screen.getByRole("textbox", { name: "Variable name" }),
+    );
     await userEvent.type(screen.getByLabelText("Variable name"), "OLD_NAME");
     await userEvent.type(screen.getByLabelText("New variable value"), "draft");
     await userEvent.click(
@@ -175,10 +179,10 @@ describe("TeamTextItems accepted writes", () => {
       screen.getByRole("button", { name: "Add a variable" }),
     );
     await expectRecovered();
-    expect(screen.queryByLabelText("Variable name")).toBeNull();
+    expect(screen.getByLabelText("Variable name")).toHaveProperty("value", "");
     expect(
-      screen.getByRole("button", { name: "Edit NEW_NAME value" }),
-    ).toHaveProperty("textContent", "draft");
+      screen.getByRole("textbox", { name: "NEW_NAME value" }),
+    ).toHaveProperty("value", "draft");
     expect(
       harness.paramsOf("environment.configuration.items.put"),
     ).toMatchObject([
@@ -203,9 +207,11 @@ describe("TeamTextItems accepted writes", () => {
     });
     render(<TextItemsPage />, { wrapper: harness.Wrapper });
     await userEvent.click(
-      await screen.findByRole("button", { name: "More for shell" }),
+      within(await screen.findByRole("region", { name: "shell" })).getByRole(
+        "button",
+        { name: "Delete" },
+      ),
     );
-    await userEvent.click(screen.getByRole("menuitem", { name: "Delete" }));
     items = [shell];
     await act(async () => {
       await harness.queryClient.refetchQueries();
@@ -213,7 +219,7 @@ describe("TeamTextItems accepted writes", () => {
     expect(
       within(screen.getByRole("region", { name: "shell" })).getByRole(
         "button",
-        { name: "More for shell" },
+        { name: "Delete" },
       ),
     ).toHaveProperty("disabled", true);
     expect(screen.getByRole("status").textContent).toBe("shell · Removing");
@@ -223,7 +229,9 @@ describe("TeamTextItems accepted writes", () => {
     });
     await expectRecovered();
     expect(screen.queryByRole("region", { name: "shell" })).toBeNull();
-    await userEvent.click(screen.getByRole("button", { name: "Add variable" }));
+    await userEvent.click(
+      screen.getByRole("textbox", { name: "Variable name" }),
+    );
     expect(screen.getByLabelText("Variable name")).toBeTruthy();
   });
 
@@ -241,7 +249,12 @@ describe("TeamTextItems accepted writes", () => {
     });
     render(<TextItemsPage />, { wrapper: harness.Wrapper });
     await editVariable("production");
-    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await userEvent.click(
+      within(screen.getByRole("region", { name: "NODE_ENV" })).getByRole(
+        "button",
+        { name: "Save" },
+      ),
+    );
     items = [variable("staging", 3)];
     await act(async () => {
       await harness.queryClient.refetchQueries();
@@ -264,7 +277,12 @@ describe("TeamTextItems accepted writes", () => {
       await screen.findByText("Saved. These settings changed again."),
     ).toBeTruthy();
     await editVariable("next-value");
-    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await userEvent.click(
+      within(screen.getByRole("region", { name: "NODE_ENV" })).getByRole(
+        "button",
+        { name: "Save" },
+      ),
+    );
     await waitFor(() => {
       expect(
         harness.paramsOf("environment.configuration.items.put"),
@@ -290,14 +308,16 @@ describe("TeamTextItems accepted writes", () => {
     });
     render(<TextItemsPage />, { wrapper: harness.Wrapper });
     await userEvent.click(
-      await screen.findByRole("button", { name: "More for NODE_ENV" }),
+      within(await screen.findByRole("region", { name: "NODE_ENV" })).getByRole(
+        "button",
+        { name: "Delete" },
+      ),
     );
-    await userEvent.click(screen.getByRole("menuitem", { name: "Delete" }));
     expect(
       await screen.findByText("Removed. These settings changed again."),
     ).toBeTruthy();
     await userEvent.click(
-      screen.getByRole("button", { name: "Edit NODE_ENV value" }),
+      screen.getByRole("textbox", { name: "NODE_ENV value" }),
     );
     expect(screen.getByLabelText("NODE_ENV value")).toHaveProperty(
       "value",
@@ -325,7 +345,12 @@ describe("TeamTextItems accepted writes", () => {
     });
     render(<TextItemsPage />, { wrapper: harness.Wrapper });
     await editVariable("production");
-    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await userEvent.click(
+      within(screen.getByRole("region", { name: "NODE_ENV" })).getByRole(
+        "button",
+        { name: "Save" },
+      ),
+    );
     const submittedField = screen.getByLabelText("NODE_ENV value");
     items = [variable("server-value", 2), linux];
     await act(async () => {
@@ -372,8 +397,8 @@ describe("TeamTextItems accepted writes", () => {
     await expectRecovered();
     expect(screen.queryByRole("alert")).toBeNull();
     expect(
-      screen.getByRole("button", { name: "Edit NODE_ENV value" }),
-    ).toHaveProperty("textContent", "production");
+      screen.getByRole("textbox", { name: "NODE_ENV value" }),
+    ).toHaveProperty("value", "production");
     expect(
       harness.paramsOf("environment.configuration.items.put"),
     ).toHaveLength(2);
@@ -397,13 +422,18 @@ describe("TeamTextItems accepted writes", () => {
     });
     render(<TextItemsPage />, { wrapper: harness.Wrapper });
     await editVariable("production");
-    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await userEvent.click(
+      within(screen.getByRole("region", { name: "NODE_ENV" })).getByRole(
+        "button",
+        { name: "Save" },
+      ),
+    );
     expect(
       await screen.findByText("Saved, but latest settings haven't refreshed."),
     ).toBeTruthy();
     expect(
-      screen.getByRole("button", { name: "Edit NODE_ENV value" }),
-    ).toHaveProperty("textContent", "production");
+      screen.getByRole("textbox", { name: "NODE_ENV value" }),
+    ).toHaveProperty("value", "production");
     expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
     const reads = harness.paramsOf("environment.configuration.items").length;
     failing = false;
@@ -417,10 +447,12 @@ describe("TeamTextItems accepted writes", () => {
       harness.paramsOf("environment.configuration.items.put"),
     ).toHaveLength(1);
     await editVariable("third-value");
-    expect(screen.getByRole("button", { name: "Save" })).toHaveProperty(
-      "disabled",
-      false,
-    );
+    expect(
+      within(screen.getByRole("region", { name: "NODE_ENV" })).getByRole(
+        "button",
+        { name: "Save" },
+      ),
+    ).toHaveProperty("disabled", false);
   });
 
   it("bounds a hanging accepted read and recovers through Retry without another mutation", async () => {
@@ -441,7 +473,12 @@ describe("TeamTextItems accepted writes", () => {
     await editVariable("production");
     vi.useFakeTimers();
     act(() => {
-      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      fireEvent.click(
+        within(screen.getByRole("region", { name: "NODE_ENV" })).getByRole(
+          "button",
+          { name: "Save" },
+        ),
+      );
     });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
@@ -479,13 +516,33 @@ describe("TeamTextItems accepted writes", () => {
 });
 
 describe("TeamTextItems focus", () => {
-  it("puts focus on the name input when a new variable row opens", async () => {
+  it("shows saved and new-variable fields with their actions before an Edit or Add step", async () => {
     const harness = mountTeamPage(poolSource("editor"), {
-      "environment.configuration.items": () => ({ items: [] }),
+      "environment.configuration.items": () => ({ items: [variable("a", 1)] }),
     });
     render(<TextItemsPage />, { wrapper: harness.Wrapper });
-    await userEvent.click(screen.getByRole("button", { name: "Add variable" }));
-    expect(document.activeElement).toBe(screen.getByLabelText("Variable name"));
+    expect(await screen.findByLabelText("NODE_ENV value")).toHaveProperty(
+      "value",
+      "a",
+    );
+    expect(screen.getByLabelText("Variable name")).toBeTruthy();
+    expect(screen.getByLabelText("New variable value")).toBeTruthy();
+    const saved = screen.getByRole("region", { name: "NODE_ENV" });
+    expect(within(saved).getByRole("button", { name: "Save" })).toHaveProperty(
+      "disabled",
+      true,
+    );
+    expect(
+      within(saved).getByRole("button", { name: "Delete" }),
+    ).toHaveProperty("disabled", false);
+    expect(
+      screen.getByRole("button", { name: "Add a variable" }),
+    ).toHaveProperty("disabled", true);
+    expect(
+      screen.queryByRole("button", {
+        name: /^Edit |^More for |^Add variable$/,
+      }),
+    ).toBeNull();
   });
 
   it("puts focus on the value input when an existing variable is edited", async () => {
@@ -494,7 +551,7 @@ describe("TeamTextItems focus", () => {
     });
     render(<TextItemsPage />, { wrapper: harness.Wrapper });
     await userEvent.click(
-      await screen.findByRole("button", { name: "Edit NODE_ENV value" }),
+      await screen.findByRole("textbox", { name: "NODE_ENV value" }),
     );
     expect(document.activeElement).toBe(
       screen.getByLabelText("NODE_ENV value"),

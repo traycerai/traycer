@@ -122,8 +122,8 @@ function useRowDialog(
 }
 
 /**
- * One primary button and a More menu, including Details and, inside the
- * warning lead, Give it another <period>.
+ * One primary button, inline recovery and Details controls, and a More menu.
+ * Give it another <period> appears before the retention deadline.
  * Interrupting and ending actions confirm in their dialogs; a wake is one click
  * after the row says who pays.
  */
@@ -182,6 +182,15 @@ function SandboxLifecycleRowActions(
   });
   const primary = useSandboxSettingsPrimaryAction(summary, actions.primary);
   const giveAnother = sandboxGiveAnotherLabel(summary, now);
+  const inlineActions = settingsFailureInlineActions(
+    actions.menu,
+    props.settingsFailure,
+    pendingVerb,
+  );
+  const menuActions =
+    pendingVerb === null
+      ? actions.menu.filter((action) => !inlineActions.includes(action))
+      : [];
   const offered = (action: SandboxRowAction): boolean =>
     actions.primary === action || actions.menu.includes(action);
   const [dialog, setDialog] = useRowDialog(offered);
@@ -234,7 +243,7 @@ function SandboxLifecycleRowActions(
   };
 
   return (
-    <div className="flex max-w-full min-w-0 shrink-0 flex-wrap items-center gap-2">
+    <div className="flex max-w-full min-w-0 flex-wrap items-center gap-2">
       {openAutomationTerminal.failure ? (
         <p role="alert" className="text-ui-xs text-destructive">
           {openAutomationTerminal.failure}
@@ -251,88 +260,76 @@ function SandboxLifecycleRowActions(
         dialogOpen={dialog !== null}
         run={run}
       />
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label={`More actions for ${summary.displayName}`}
-            data-testid="sandbox-row-menu"
-          >
-            <MoreHorizontal className="size-3.5" aria-hidden />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" data-testid="sandbox-row-menu-content">
-          {giveAnother === null ? null : (
-            <DropdownMenuItem
-              disabled={busy}
-              data-testid="sandbox-row-give-another"
-              onSelect={() =>
-                patch.mutate(
-                  {
-                    displayName: null,
-                    idleMinutes: null,
-                    destroyAfterRestingMinutes:
-                      summary.destroyAfterRestingMinutes,
-                  },
-                  {
-                    onSuccess: (outcome) => {
-                      if (outcome === "gone") {
-                        toast.info(alreadyDestroyedLine(summary.displayName));
-                      }
-                    },
-                  },
-                )
-              }
-            >
-              {patch.isPending ? (
-                <AgentSpinningDots
-                  className={undefined}
-                  testId={undefined}
-                  variant={undefined}
-                />
-              ) : null}
-              {giveAnother}
-            </DropdownMenuItem>
-          )}
-          {actions.menu
-            .filter((action) => pendingVerb === null && action !== "destroy")
-            .map((action) => (
-              <DropdownMenuItem
-                key={action}
-                disabled={busy}
-                data-testid={`sandbox-row-menu-${action}`}
-                onSelect={() => run(action)}
-              >
-                {sandboxRowActionLabel(action)}
-              </DropdownMenuItem>
-            ))}
-          {props.settingsFailure ? (
-            <DropdownMenuItem onSelect={chooseAnother}>
-              Choose another host
-            </DropdownMenuItem>
+      {giveAnother === null ? null : (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={busy}
+          data-testid="sandbox-row-give-another"
+          onClick={() =>
+            patch.mutate(
+              {
+                displayName: null,
+                idleMinutes: null,
+                destroyAfterRestingMinutes: summary.destroyAfterRestingMinutes,
+              },
+              {
+                onSuccess: (outcome) => {
+                  if (outcome === "gone") {
+                    toast.info(alreadyDestroyedLine(summary.displayName));
+                  }
+                },
+              },
+            )
+          }
+        >
+          {patch.isPending ? (
+            <AgentSpinningDots
+              className={undefined}
+              testId={undefined}
+              variant={undefined}
+            />
           ) : null}
-          <DropdownMenuItem
-            data-testid="sandbox-row-menu-details"
-            onSelect={() => openSandboxDetails(summary.id)}
-          >
-            {DETAILS}
-          </DropdownMenuItem>
-          {pendingVerb === null && actions.menu.includes("destroy") ? (
-            <>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                variant="destructive"
-                data-testid="sandbox-row-menu-destroy"
-                onSelect={() => run("destroy")}
-              >
-                {sandboxRowActionLabel("destroy")}
-              </DropdownMenuItem>
-            </>
-          ) : null}
-        </DropdownMenuContent>
-      </DropdownMenu>
+          {giveAnother}
+        </Button>
+      )}
+      {inlineActions.map((action) => (
+        <Button
+          key={action}
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={busy}
+          onClick={() => run(action)}
+        >
+          {sandboxRowActionLabel(action)}
+        </Button>
+      ))}
+      {props.settingsFailure ? (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={chooseAnother}
+        >
+          Choose another host
+        </Button>
+      ) : null}
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={() => openSandboxDetails(summary.id)}
+      >
+        {DETAILS}
+      </Button>
+      <SandboxRowMenu
+        actions={menuActions}
+        name={summary.displayName}
+        busy={busy}
+        run={run}
+      />
       <SandboxOperationFailure
         sandboxId={summary.id}
         name={summary.displayName}
@@ -381,6 +378,69 @@ function SandboxLifecycleRowActions(
         onOpenChange={(open) => setDialog(open ? "idle" : null)}
       />
     </div>
+  );
+}
+
+/** Setup remedies stay inline only while the lifecycle still offers them. */
+function settingsFailureInlineActions(
+  menu: readonly SandboxRowAction[],
+  settingsFailure: boolean,
+  pendingVerb: SandboxRowVerb | null,
+): readonly SandboxRowAction[] {
+  if (!settingsFailure || pendingVerb !== null) return [];
+  return menu.filter(
+    (action) => action === "open-terminal" || action === "stop",
+  );
+}
+
+/** The secondary actions that have no inline control on this row. */
+function SandboxRowMenu(props: {
+  readonly actions: readonly SandboxRowAction[];
+  readonly name: string;
+  readonly busy: boolean;
+  readonly run: (action: SandboxRowAction) => void;
+}): ReactNode {
+  if (props.actions.length === 0) return null;
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          aria-label={`More actions for ${props.name}`}
+          data-testid="sandbox-row-menu"
+        >
+          <MoreHorizontal className="size-3.5" aria-hidden />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" data-testid="sandbox-row-menu-content">
+        {props.actions
+          .filter((action) => action !== "destroy")
+          .map((action) => (
+            <DropdownMenuItem
+              key={action}
+              disabled={props.busy}
+              data-testid={`sandbox-row-menu-${action}`}
+              onSelect={() => props.run(action)}
+            >
+              {sandboxRowActionLabel(action)}
+            </DropdownMenuItem>
+          ))}
+        {props.actions.includes("destroy") ? (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              variant="destructive"
+              data-testid="sandbox-row-menu-destroy"
+              onSelect={() => props.run("destroy")}
+            >
+              {sandboxRowActionLabel("destroy")}
+            </DropdownMenuItem>
+          </>
+        ) : null}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 

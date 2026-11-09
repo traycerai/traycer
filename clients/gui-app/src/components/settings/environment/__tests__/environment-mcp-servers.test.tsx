@@ -16,7 +16,10 @@ import type { ProviderMcpServer } from "@traycer/protocol/host/provider-native-s
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { EnvironmentMcpServersPage } from "@/components/settings/environment/environment-mcp-servers";
 import type { HostRpcRegistry } from "@/lib/host";
-import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
+import {
+  providerDisplayName,
+  providerIdToGuiHarnessId,
+} from "@/lib/provider-ordering";
 import {
   declaredServer,
   hostMcpServer,
@@ -171,21 +174,19 @@ function offFor(providers: readonly ProviderId[]): string[] {
 }
 
 async function openRemoveForGithub(): Promise<void> {
-  await userEvent.click(
-    await screen.findByRole("button", { name: "More for github" }),
-  );
-  await userEvent.click(
-    await screen.findByRole("menuitem", { name: "Remove" }),
-  );
+  await userEvent.click(await screen.findByRole("button", { name: "Remove" }));
 }
 
 describe("The MCP servers page", () => {
-  it("keeps Add a server in the page header and puts row actions in More", async () => {
+  it("keeps Add a server in the page header and Edit and Remove on each row", async () => {
     negotiateMethods(ALL_METHODS);
     const harness = mountTeamPage(
       poolSource("editor"),
       handlers({
-        servers: () => [declaredServer({ serverId: "srv-1", name: "github" })],
+        servers: () => [
+          declaredServer({ serverId: "srv-1", name: "github" }),
+          declaredServer({ serverId: "srv-2", name: "docs", item: null }),
+        ],
         hostServers: [],
       }),
     );
@@ -195,11 +196,24 @@ describe("The MCP servers page", () => {
       await screen.findByRole("button", { name: "Add a server" }),
     ).toBeTruthy();
     expect(screen.queryByRole("heading", { name: "Servers" })).toBeNull();
-    await userEvent.click(
-      screen.getByRole("button", { name: "More for github" }),
+    const rows = screen.getAllByRole("listitem");
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(within(row).getByRole("button", { name: "Edit" })).toBeTruthy();
+      expect(within(row).getByRole("button", { name: "Remove" })).toBeTruthy();
+      expect(
+        within(row).queryByRole("button", { name: /^More for / }),
+      ).toBeNull();
+    }
+    const github = rows.find(
+      (row) => within(row).queryByText("github") !== null,
     );
-    expect(await screen.findByRole("menuitem", { name: "Edit" })).toBeTruthy();
-    expect(screen.getByRole("menuitem", { name: "Remove" })).toBeTruthy();
+    const docs = rows.find((row) => within(row).queryByText("docs") !== null);
+    if (github === undefined || docs === undefined) {
+      throw new Error("Each server renders a row.");
+    }
+    expect(within(github).getByRole("button", { name: "Tools" })).toBeTruthy();
+    expect(within(docs).queryByRole("button", { name: "Tools" })).toBeNull();
   });
 
   it.each([
@@ -460,12 +474,21 @@ describe("The MCP servers page", () => {
       description: "Mixed",
     });
     expect(sharedSearch.getAttribute("aria-checked")).toBe("false");
-    await userEvent.click(screen.getByText("Differs by provider"));
-    const codexSearch = await screen.findByRole("switch", {
-      name: "github Codex search",
-    });
-    expect(codexSearch.getAttribute("aria-describedby")).toBeNull();
-    expect(codexSearch.getAttribute("aria-checked")).toBe("false");
+    expect(screen.queryByText("Differs by provider")).toBeNull();
+    for (const providerId of CAPABLE) {
+      const label = providerDisplayName(providerId);
+      const providerSearch = screen.getByRole("switch", {
+        name: `github ${label} search`,
+      });
+      expect(providerSearch.getAttribute("aria-describedby")).toBeNull();
+      expect(providerSearch.getAttribute("aria-checked")).toBe(
+        providerId === "codex" ? "false" : "true",
+      );
+      const providerOpen = screen.getByRole("switch", {
+        name: `github ${label} open`,
+      });
+      expect(providerOpen.getAttribute("aria-checked")).toBe("true");
+    }
     const ordinaryOpen = screen.getByRole("switch", { name: "github open" });
     expect(ordinaryOpen.getAttribute("aria-describedby")).toBeNull();
     expect(ordinaryOpen.getAttribute("aria-checked")).toBe("true");
@@ -511,10 +534,14 @@ describe("The MCP servers page", () => {
     expect(
       screen.getAllByRole("switch", { name: "github search" }),
     ).toHaveLength(1);
-    await userEvent.click(screen.getByText("Differs by provider"));
-    expect(
-      await screen.findByRole("switch", { name: "github Codex search" }),
-    ).toBeTruthy();
+    expect(screen.queryByText("Differs by provider")).toBeNull();
+    for (const providerId of CAPABLE) {
+      expect(
+        screen.getByRole("switch", {
+          name: `github ${providerDisplayName(providerId)} search`,
+        }),
+      ).toBeTruthy();
+    }
 
     await userEvent.click(sharedSwitch);
     const writes = harness.paramsOf("environment.configuration.items.put");
@@ -568,8 +595,13 @@ describe("The MCP servers page", () => {
     render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
 
     await userEvent.click(await screen.findByRole("button", { name: "Tools" }));
+    expect(screen.queryByText("Differs by provider")).toBeNull();
+    expect(
+      await screen.findByRole("switch", { name: "github Codex search" }),
+    ).toBeTruthy();
+    expect(screen.getByText("Claude Code · Not listed")).toBeTruthy();
     await userEvent.click(
-      await screen.findByRole("switch", { name: "github search" }),
+      screen.getByRole("switch", { name: "github search" }),
     );
 
     const writes = harness.paramsOf("environment.configuration.items.put");
@@ -825,9 +857,10 @@ describe("The MCP servers page", () => {
     render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
 
     expect(await screen.findByText("github")).toBeTruthy();
-    for (const verb of ["Add a server", "More for github"]) {
+    for (const verb of ["Add a server", "Edit", "Remove"]) {
       expect(screen.queryByRole("button", { name: verb })).toBeNull();
     }
+    expect(screen.queryByRole("button", { name: /^More for / })).toBeNull();
     expect(screen.queryByRole("switch")).toBeNull();
   });
 

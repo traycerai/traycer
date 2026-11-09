@@ -9,6 +9,7 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
+import { useShallow } from "zustand/react/shallow";
 import type { UseQueryResult } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -68,6 +69,7 @@ import {
   handTracyLandingToChannel,
   useTracySurfaceStore,
 } from "@/stores/bots/tracy-surface-store";
+import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import { TRACY_TAB_LABEL } from "@/stores/tabs/kinds/tracy";
 import {
   useBotTabLandingStore,
@@ -386,8 +388,9 @@ function useSenderLandingSpentOnDeparture(botId: string | null): void {
 
 /**
  * Keeps the visited channels' state in step with the bots that exist, and a
- * channel selected: forgets each visited bot once a list that answered no
- * longer carries it after carrying it, and returns the way the selected
+ * channel selected: forgets each visited bot, and each bot a box holds a
+ * draft for, once a list that answered no longer carries it after carrying
+ * it, and returns the way the selected
  * channel's own pane reports one gone. With no channel selected, or the
  * selected one gone, `select`s the default channel once the lists answered.
  *
@@ -443,20 +446,25 @@ function useTracyChannelUpkeep(input: {
     [groups, listedAt, select, unavailable],
   );
   const visitedBotIds = useTracySurfaceStore((state) => state.visitedBotIds);
+  // A box's draft outlives the visit (Tracy Bots T158): its bot is kept in
+  // step with the list too.
+  const draftBotIds = useBotDraftsStore(
+    useShallow((state) => Object.keys(state.threadBoxes)),
+  );
   const seenListedRef = useRef(new Set<string>());
   useEffect(() => {
     if (listed === null) return;
     const listedIds = new Set(listed.map((bot) => bot.botId));
     const seen = seenListedRef.current;
-    for (const visited of visitedBotIds) {
-      if (listedIds.has(visited)) {
-        seen.add(visited);
-      } else if (seen.has(visited)) {
-        seen.delete(visited);
-        forget(visited);
+    for (const kept of new Set([...visitedBotIds, ...draftBotIds])) {
+      if (listedIds.has(kept)) {
+        seen.add(kept);
+      } else if (seen.has(kept)) {
+        seen.delete(kept);
+        forget(kept);
       }
     }
-  }, [forget, listed, visitedBotIds]);
+  }, [draftBotIds, forget, listed, visitedBotIds]);
   const defaultBotId =
     groups === null ? null : defaultTracyChannelOf(groups, unavailable);
   const navigationPending = useSyncExternalStore(

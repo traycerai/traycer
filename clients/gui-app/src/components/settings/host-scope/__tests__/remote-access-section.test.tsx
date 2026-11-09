@@ -126,11 +126,13 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
     ).toBeTruthy();
     expect(
       within(section).getByTestId("remote-access-question").textContent,
-    ).toBe("Not set");
+    ).toBe(
+      "Allow other devices and agents on your account to reach this computer?",
+    );
     expect(within(section).queryByTestId("remote-access-state")).toBeNull();
-    expect(
-      within(section).getAllByRole("button", { name: "Turn on" }),
-    ).toHaveLength(1);
+    expect(within(section).getAllByRole("button", { name: "On" })).toHaveLength(
+      1,
+    );
     expect(
       within(section).getByRole("button", { name: "Not now" }),
     ).toBeTruthy();
