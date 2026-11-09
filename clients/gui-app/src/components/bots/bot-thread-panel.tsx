@@ -12,10 +12,8 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ChatBotMessage } from "@/components/chat/chat-bot-message";
 import { BotAvatar } from "@/components/bots/bot-avatars";
-import {
-  BotChatTranscript,
-  BotTranscriptImageScope,
-} from "@/components/bots/bot-chat-transcript";
+import { BotChatTranscript } from "@/components/bots/bot-chat-transcript";
+import { BotTranscriptImageScope } from "@/components/bots/bot-transcript-image-scope";
 import { useBotFailedRecovery } from "@/components/bots/bot-failed-recovery";
 import { BotRoutingCard } from "@/components/bots/bot-routing-card";
 import { useBotTurnLocateQuery } from "@/hooks/bots/use-bot-turn-locate-query";

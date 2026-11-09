@@ -35,6 +35,7 @@ import {
   artifactOperationBlockSchema,
   artifactOperationBlockSchemaPreHtml,
   autonomousResumeBlockSchema,
+  autonomousResumeBlockSchemaPreConversationMessage,
   commandBlockSchema,
   compactionBlockSchema,
   compactionBlockSchemaPreNotApplied,
@@ -163,7 +164,7 @@ export const openContentBlockSchemaPreHtml = lazySchema(() =>
     openPlanBlockSchema,
     errorBlockSchema,
     compactionBlockSchemaPreNotApplied,
-    autonomousResumeBlockSchema,
+    autonomousResumeBlockSchemaPreConversationMessage,
     openSteerBlockSchema,
     interviewBlockSchema,
     artifactOperationBlockSchemaPreHtml,
@@ -183,7 +184,7 @@ export const openContentBlockSchemaPreArtifact = lazySchema(() =>
     openPlanBlockSchema,
     errorBlockSchema,
     compactionBlockSchemaPreNotApplied,
-    autonomousResumeBlockSchema,
+    autonomousResumeBlockSchemaPreConversationMessage,
     openSteerBlockSchema,
     interviewBlockSchema,
     artifactOperationBlockSchema,
@@ -203,7 +204,7 @@ export const openContentBlockSchemaPreNotApplied = lazySchema(() =>
     openPlanBlockSchema,
     errorBlockSchema,
     compactionBlockSchemaPreNotApplied,
-    autonomousResumeBlockSchema,
+    autonomousResumeBlockSchemaPreConversationMessage,
     openSteerBlockSchema,
     interviewBlockSchema,
     artifactOperationBlockSchema,
@@ -236,6 +237,30 @@ export const openContentBlockSchema = lazySchema(() =>
 );
 export type OpenContentBlock = z.infer<typeof openContentBlockSchema>;
 
+/**
+ * Open blocks `chat.subscribe@1.42` ships: the live union with the resume
+ * divider before `1.43`'s member's message on a trigger.
+ */
+export const openContentBlockSchemaPreConversationMessage = lazySchema(() =>
+  z.discriminatedUnion("type", [
+    openTextBlockSchema,
+    reasoningBlockSchema,
+    toolCallBlockSchema,
+    fileChangeBlockSchema,
+    commandBlockSchema,
+    subAgentBlockSchema,
+    approvalBlockSchema,
+    todoBlockSchema,
+    openPlanBlockSchema,
+    errorBlockSchema,
+    compactionBlockSchema,
+    autonomousResumeBlockSchemaPreConversationMessage,
+    openSteerBlockSchema,
+    interviewBlockSchema,
+    artifactOperationBlockSchema,
+  ]),
+);
+
 /** Open blocks through `chat.subscribe@1.41`, before the feedback-draft stamp. */
 export const openContentBlockSchemaPreFeedbackDraft = lazySchema(() =>
   z.discriminatedUnion("type", [
@@ -250,7 +275,7 @@ export const openContentBlockSchemaPreFeedbackDraft = lazySchema(() =>
     openPlanBlockSchema,
     errorBlockSchema,
     compactionBlockSchema,
-    autonomousResumeBlockSchema,
+    autonomousResumeBlockSchemaPreConversationMessage,
     openSteerBlockSchema,
     interviewBlockSchema,
     artifactOperationBlockSchema,
@@ -276,7 +301,7 @@ export const openContentBlockSchemaPreDelivery = lazySchema(() =>
     openPlanBlockSchema,
     errorBlockSchema,
     compactionBlockSchemaPreNotApplied,
-    autonomousResumeBlockSchema,
+    autonomousResumeBlockSchemaPreConversationMessage,
     openSteerBlockSchema,
     interviewBlockSchema,
     artifactOperationBlockSchemaPreHtml,
@@ -375,11 +400,14 @@ export const openAssistantMessageSchema = lazySchema(() =>
 );
 export type OpenAssistantMessage = z.infer<typeof openAssistantMessageSchema>;
 
-/** The open assistant row `chat.subscribe@1.42` ships: its questions say no `multiSelect`. */
+/**
+ * The open assistant row `chat.subscribe@1.42` ships: its questions say no
+ * `multiSelect`, and its resume dividers' triggers no `conversationMessage`.
+ */
 const openAssistantMessageSchemaPreMultiSelect = lazySchema(() =>
   assistantMessageSchemaPreMultiSelect.extend({
     sender: openAgentSenderSchema,
-    blocks: z.array(openContentBlockSchema),
+    blocks: z.array(openContentBlockSchemaPreConversationMessage),
   }),
 );
 
@@ -422,7 +450,8 @@ export const openMessageSchemaPreFeedbackDraft = lazySchema(() =>
 );
 /**
  * The open row `chat.subscribe@1.42` ships: `tool_call.feedbackDraft`, no
- * `slack` user row, no `multiSelect` on a question.
+ * `slack` user row, no `multiSelect` on a question, no `conversationMessage`
+ * on a resume trigger.
  */
 export const openMessageSchemaPreSlack = lazySchema(() =>
   z.discriminatedUnion("role", [

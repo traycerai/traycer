@@ -1641,6 +1641,7 @@ function monitorDeliverySegment(
     outputFile: null,
     mcp: null,
     managedCommand: null,
+    conversationMessage: null,
   };
   return {
     id,
@@ -1669,6 +1670,7 @@ function managedShellDeliverySegment(
       monitoring: false,
       hostId: null,
     },
+    conversationMessage: null,
   };
   return {
     id,

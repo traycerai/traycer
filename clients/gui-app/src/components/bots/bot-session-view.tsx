@@ -142,6 +142,8 @@ export function BotSessionView(props: {
       ...names,
       botId,
       hostId,
+      memberAvatarUrl: (userId: string) =>
+        resolveMember(userId)?.avatarUrl ?? null,
       thread:
         session.threadId === null
           ? null

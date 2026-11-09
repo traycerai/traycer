@@ -9091,6 +9091,12 @@ export const chatSubscribeV142 = defineStreamRpcContract({
  * picked. Optional, so a peer below 1.43 strips it on decode and draws the
  * question as one pick; `1.42` and every older line bind the assistant row
  * without it (`assistantMessageSchemaPreMultiSelect`).
+ *
+ * A resume divider's trigger may carry `conversationMessage`, the member's
+ * message a bot conversation delivery carried. Defaulted `null`, so a peer
+ * below 1.43 drops it on decode and draws the divider it always did; `1.42`
+ * and every older line bind the trigger without it
+ * (`autonomousResumeTriggerSchemaPreConversationMessage`).
  */
 export const chatSubscribeV143 = defineStreamRpcContract({
   method: "chat.subscribe",

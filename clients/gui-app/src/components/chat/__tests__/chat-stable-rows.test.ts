@@ -98,6 +98,7 @@ describe("computeStableChatTimelineRows", () => {
       outputFile: null,
       mcp: null,
       managedCommand: null,
+      conversationMessage: null,
     };
     const original: ChatMessage = {
       ...makeMessage(0, "assistant"),

@@ -427,6 +427,7 @@ describe("chat.subscribe@1.2 server frames", () => {
       // A fired schedule is not a managed command; there is nothing to open.
       managedCommand: null,
       live: false,
+      conversationMessage: null,
     });
   });
 

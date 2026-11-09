@@ -581,6 +581,7 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
           mcp: null,
           managedCommand: null,
           live: false,
+          conversationMessage: null,
         },
       ],
       wakeTriggers: undefined,
@@ -672,6 +673,7 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
         mcp: null,
         managedCommand: null,
         live: false,
+        conversationMessage: null,
       },
     ]);
     expect("wakeTriggers" in parsed).toBe(false);
@@ -705,6 +707,7 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
       mcp: null,
       managedCommand: null,
       live: false,
+      conversationMessage: null,
     });
     expect("wakeTriggers" in parsed).toBe(false);
   });
@@ -746,6 +749,7 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
           mcp: null,
           managedCommand: null,
           live: false,
+          conversationMessage: null,
         },
       ],
     };
@@ -773,6 +777,7 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
           mcp: null,
           managedCommand: null,
           live: false,
+          conversationMessage: null,
         },
         {
           kind: "wakeup",
@@ -784,6 +789,7 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
           mcp: null,
           managedCommand: null,
           live: false,
+          conversationMessage: null,
         },
       ],
     };
@@ -820,6 +826,7 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
           mcp: null,
           managedCommand: null,
           live: false,
+          conversationMessage: null,
         },
       ],
     };
@@ -842,6 +849,7 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
           mcp: null,
           managedCommand: null,
           live: false,
+          conversationMessage: null,
         },
       ],
     };
