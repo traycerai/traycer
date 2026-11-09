@@ -910,9 +910,10 @@ Account; the rest is the app itself.
   is only on the current row's timeline. Created and last seen sit on that same
   timeline. The icon keeps the client kind as its accessible name.
 - **Environment** (group id `personal`) - Providers, MCP servers, Skills,
-  Permissions, Agents (id `agents`: tabs Selection guide and Definitions),
-  Model routing, Variables & shells (id `shell`), Secrets, Sandboxes,
-  Storage, and Members on a team; a Local row shows only Providers, Permissions, Agents,
+  Permissions, Agent memories (id `agent-memories`), Agents (id `agents`:
+  tabs Selection guide and Definitions), Model routing, Variables & shells
+  (id `shell`), Secrets, Sandboxes, Storage, and Members on a team; a Local
+  row shows only Providers, Permissions, Agents,
   Model routing, Variables & shells and Secrets. Browser agent access is the
   Browser tab of Permissions (a region below the policy on a team, whose page
   has no tabs). `agent-definitions`,
@@ -921,6 +922,46 @@ Account; the rest is the app itself.
   Permissions (`RETIRED_SECTION_REPLACEMENTS`, and their routes). These pages
   read through the window's own host (`usePersonalHostScope()`), never
   through the picker.
+  - **Agent memories** is one switch: whether the configuration's agents are
+    shown its shared memories and keep them current (`agent_memory`, key
+    `memory`). Its own page rather than a Permissions tab, because
+    Permissions is what an agent may do inside a task and this is what it
+    carries between tasks. Read from the configuration on its own pages and
+    from `config.agentMemories.get` otherwise, the same two sources as
+    Browser agent access; the switch sits behind `useHostMethodSupport` on
+    both `config.agentMemories.get` and `.set`, so a host that cannot honour
+    it shows a disabled row rather than a flip that fails. Editing follows
+    the configuration's own authority (`useCanEditConfiguration()`), which is
+    what the item-write route enforces; a viewer reads On/Off as text.
+    `.set` answers `{enabled, state, revision, environmentId, uploadId}`.
+    `applied` means this host has received that write and the switch shows it;
+    `saved` means the configuration holds it and this host has not read it
+    back yet; `queued` means this computer is still holding the edit to send,
+    so it is saved nowhere, has no revision, and carries the `uploadId` the
+    row recognises it by later. The row says which rather than letting the
+    switch snap back unexplained.
+    Both halves carry the same correspondence, because the setting arrives by
+    projection and a read taken right after a write can be behind it: `.get`
+    answers `{enabled, revision, environmentId}`, where `revision` is how far
+    this host's projection has got, and the row keeps the line up until a
+    read's `revision` reaches the one the write was saved as FOR THE SAME
+    `environmentId`. Both halves matter. A value match is not proof - an
+    earlier revision can carry the asked-for value while a revision this host
+    has not received yet overturns it - and neither is a revision from another
+    configuration, which a rebind can serve without the host's id changing.
+    The host applies the same test before it says `applied`.
+    The host row observes each write for at most 60 seconds from submission.
+    One single-flight loop reads the getter, and while queued reads
+    `environment.status@1.1` for an exact upload id, environment and item
+    address. It rechecks the getter after status to reject a rebind during
+    the read. An accepted receipt latches its revision floor; missing receipts
+    keep waiting and never acknowledge a write. Confirmation requires the same
+    non-null environment, a revision at or above that floor, and the requested
+    value. A later opposite value is unconfirmed. Explicit queue refusals are
+    distinguished from transport failures. Terminal outcomes, supersession,
+    unmount and the independent deadline stop observation. Null environment
+    reads remain unavailable evidence; another environment silently ends it.
+
 - **Host** - headed by THE host picker (`host-scope/host-switcher.tsx`).
   Its popup is headed "Look at another host", with the caption "Changes what this
   window shows. Nothing is created."

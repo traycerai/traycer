@@ -774,6 +774,7 @@ const EXPECTED_SECTION_GROUPS: ReadonlyArray<
   ["mcp-servers", "personal"],
   ["skills", "personal"],
   ["permissions", "personal"],
+  ["agent-memories", "personal"],
   ["agents", "personal"],
   ["fallback", "personal"],
   ["shell", "personal"],
@@ -1019,6 +1020,7 @@ describe("<SettingsSidebar /> scope groups", () => {
       "usage",
       "credits",
       "permissions",
+      "agent-memories",
       "sandboxes",
       "notifications",
     ]) {
@@ -1098,6 +1100,7 @@ describe("<SettingsSidebar /> Environment pick", () => {
     "MCP servers",
     "Skills",
     "Permissions",
+    "Agent memories",
     "Agents",
     "Model routing",
     "Variables & shells",
@@ -1126,6 +1129,7 @@ describe("<SettingsSidebar /> Environment pick", () => {
     expect(environmentRows()).toEqual([
       "Providers",
       "Permissions",
+      "Agent memories",
       "Agents",
       "Model routing",
       "Variables & shells",

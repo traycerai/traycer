@@ -3,6 +3,7 @@ import {
   Activity,
   Bell,
   Bot,
+  BrainCircuit,
   Boxes,
   Cloud,
   Coins,
@@ -58,6 +59,7 @@ export type SettingsSectionId =
   | "machine-setup"
   | "notifications"
   | "permissions"
+  | "agent-memories"
   | "agents"
   | "fallback"
   | "keybindings"
@@ -359,6 +361,16 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     // A key, the common permissions glyph; a gavel at sidebar size read as a
     // broom.
     icon: KeyRound,
+    group: "personal",
+  },
+  // What agents carry from one task to the next. Its own page rather than a
+  // tab of Permissions: Permissions is what an agent may do in a task, and
+  // this is what it keeps across them. Under Environment because the memories
+  // are the configuration's, whichever computer the agent runs on.
+  {
+    id: "agent-memories",
+    label: "Agent memories",
+    icon: BrainCircuit,
     group: "personal",
   },
   // Two tabs over room files: the selection guide agents read to pick a
