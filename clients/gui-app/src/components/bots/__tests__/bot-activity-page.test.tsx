@@ -855,6 +855,13 @@ describe("<BotActivityPage /> shells in open sessions", () => {
       act(() => session.setConnectionStatus("closed"));
       expect(screen.getByText("Shells unavailable")).toBeTruthy();
       expect(screen.queryByText("deploy watcher")).toBeNull();
+      act(() => session.setConnectionStatus("open"));
+      expect(screen.getByText("Shells unavailable")).toBeTruthy();
+      expect(screen.queryByText("deploy watcher")).toBeNull();
+      act(() => session.sendSnapshot([{ ...command, monitoring: false }]));
+      expect(screen.getByText("deploy watcher")).toBeTruthy();
+      expect(screen.getByText("Monitor off")).toBeTruthy();
+      expect(screen.queryByText("Shells unavailable")).toBeNull();
     } finally {
       cleanup();
       session.dispose();

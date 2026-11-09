@@ -3,16 +3,23 @@ import { create, useStore } from "zustand";
 import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
 import { useExistingChatSessionHandle } from "@/lib/registries/chat-session-registry";
 import type { BotSessionOpen } from "@/stores/bots/bot-open-thread-store";
+import { NO_TRANSCRIPT_BASELINE } from "@/stores/chats/chat-announcements";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
 
 type ShellState = Pick<
   ChatSessionState,
-  "managedCommands" | "snapshotLoaded" | "connectionStatus"
+  | "managedCommands"
+  | "snapshotLoaded"
+  | "connectionStatus"
+  | "connectionEpoch"
+  | "transcriptBaselineEpoch"
 >;
 const unavailable = create<ShellState>()(() => ({
   managedCommands: [],
   snapshotLoaded: false,
   connectionStatus: "connecting",
+  connectionEpoch: 0,
+  transcriptBaselineEpoch: NO_TRANSCRIPT_BASELINE,
 }));
 
 /** Reads existing sessions only: opening Activity must not start chat streams. */
@@ -76,7 +83,11 @@ function SessionShells(props: {
   const commands = useStore(store, (state) => state.managedCommands);
   const loaded = useStore(store, (state) => state.snapshotLoaded);
   const status = useStore(store, (state) => state.connectionStatus);
-  const known = loaded && status === "open";
+  const fresh = useStore(
+    store,
+    (state) => state.connectionEpoch === state.transcriptBaselineEpoch,
+  );
+  const known = loaded && status === "open" && fresh;
   if (props.threadId !== null && handle === null) return null;
   return (
     <div className="text-ui-xs">

@@ -10,6 +10,7 @@ import {
   useExistingChatSessionHandle,
 } from "@/lib/registries/chat-session-registry";
 import { reconcileStoreSubscriptions } from "@/lib/registries/reconcile-store-subscriptions";
+import { NO_TRANSCRIPT_BASELINE } from "@/stores/chats/chat-announcements";
 import type {
   ChatSessionState,
   ChatSessionStoreHandle,
@@ -34,7 +35,12 @@ import type {
 
 type ManagedCommandsChatSlice = Pick<
   ChatSessionState,
-  "managedCommands" | "heldUpdates" | "connectionStatus" | "snapshotLoaded"
+  | "managedCommands"
+  | "heldUpdates"
+  | "connectionStatus"
+  | "snapshotLoaded"
+  | "connectionEpoch"
+  | "transcriptBaselineEpoch"
 >;
 
 // Stable stand-in for a chat with no live session (its tile is not mounted, or
@@ -44,6 +50,8 @@ const emptyChatSlice = create<ManagedCommandsChatSlice>()(() => ({
   heldUpdates: [],
   connectionStatus: "connecting",
   snapshotLoaded: false,
+  connectionEpoch: 0,
+  transcriptBaselineEpoch: NO_TRANSCRIPT_BASELINE,
 }));
 
 function useChatSliceStore(epicId: string, chatId: string, hostId: string) {
@@ -200,9 +208,9 @@ export function useManagedCommandOnHost(args: {
  * A proven absence does not depend on connection status. A shell the host
  * has already said nothing about does not come back when the socket blips, so
  * demoting a proven deletion to `unknown` for the length of a reconnect would
- * re-arm doors onto a shell whose log is gone. `snapshotLoaded` is the honest
- * gate at both ends: it is false before the first word and false again after a
- * re-subscribe, when the new stream has yet to speak.
+ * re-arm doors onto a shell whose log is gone. `snapshotLoaded` records that
+ * an answer was received, while the connection and baseline epochs determine
+ * whether a present command is fresh on the current subscription.
  *
  * Anything less is `unknown`, and a surface treats unknown as "still there" -
  * the door stays open, and the output window it opens has its own honest
@@ -263,7 +271,10 @@ function useCommandFreshness(
   const store = useChatSliceStore(epicId, chatId, hostId);
   return useStore(
     store,
-    (state) => state.connectionStatus === "open" && state.snapshotLoaded,
+    (state) =>
+      state.connectionStatus === "open" &&
+      state.snapshotLoaded &&
+      state.transcriptBaselineEpoch === state.connectionEpoch,
   );
 }
 
