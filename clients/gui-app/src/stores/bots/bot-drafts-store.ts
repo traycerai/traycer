@@ -46,7 +46,7 @@ export interface BotAnswerDraft {
  * before.
  */
 export interface BotTranscriptBaseline {
-  /** The session store, numbered in the order this window first drew it. */
+  /** The session's `sessionGeneration`. */
   readonly store: number;
   /** `NO_TRANSCRIPT_BASELINE` until the store seats one. */
   readonly epoch: number;

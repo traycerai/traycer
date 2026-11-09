@@ -233,22 +233,6 @@ interface SendMarker {
 const sendMarkers = new WeakMap<ChatSessionStoreHandle, SendMarker>();
 
 /**
- * Each session store a transcript was drawn from, numbered in order. The
- * registry replaces a store it evicted with a new one whose epochs start
- * again, so a card's baseline names its store as well as its epoch.
- */
-const storeNumbers = new WeakMap<ChatSessionStoreHandle, number>();
-let storesNumbered = 0;
-
-function storeNumberOf(handle: ChatSessionStoreHandle): number {
-  const known = storeNumbers.get(handle);
-  if (known !== undefined) return known;
-  storesNumbered += 1;
-  storeNumbers.set(handle, storesNumbered);
-  return storesNumbered;
-}
-
-/**
  * Re-subscribes once a send to `chatId` succeeds while the view `waiting`
  * on a chat the host had not created: the send is the write that creates it.
  * A send that lands while the subscription is still connecting, or while the
@@ -619,7 +603,9 @@ function BotChatTranscriptBody(props: {
     messages,
     surface,
   });
-  const store = storeNumberOf(handle);
+  // A store the registry built to replace an evicted one starts its epochs
+  // again: a card's baseline names the session as well as its epoch.
+  const store = handle.sessionGeneration;
   const baselineEpoch = state.transcriptBaselineEpoch;
   const presentation = useMemo<ChatBotPresentation | null>(() => {
     if (surface === null) return null;

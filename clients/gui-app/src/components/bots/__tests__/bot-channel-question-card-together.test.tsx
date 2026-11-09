@@ -380,9 +380,16 @@ interface Transcript {
   readonly resync: (next: ReadonlyArray<Message>) => void;
 }
 
+/** Each session gets the next number, as the real factory numbers each store it builds. */
+let sessionsBuilt = 0;
+
 function session(chatId: string, messages: ReadonlyArray<Message>): Transcript {
   const store = createStore(messages);
-  mocks.handles.set(chatId, { store } as ChatSessionStoreHandle);
+  sessionsBuilt += 1;
+  mocks.handles.set(chatId, {
+    sessionGeneration: sessionsBuilt,
+    store,
+  } as ChatSessionStoreHandle);
   let epoch = 0;
   return {
     write: (next) => act(() => store.setState({ messages: next })),
@@ -1206,6 +1213,7 @@ describe("<BotChannelView tiles={null} /> a card's answers held while the channe
     session(CHANNEL_ID, [OPEN_THREE()]);
     const replacement = mocks.handles.get(CHANNEL_ID);
     expect(replacement).not.toBe(evicted);
+    expect(replacement?.sessionGeneration).not.toBe(evicted?.sessionGeneration);
     expect(
       [evicted, replacement].map(
         (handle) => handle?.store.getState().transcriptBaselineEpoch,
