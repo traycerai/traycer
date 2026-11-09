@@ -683,6 +683,33 @@ describe("TeamTextItems editor", () => {
     ).toHaveLength(0);
   });
 
+  it("writes a saved row's typed value when its revision changes before blur", async () => {
+    let items = [variable("development", 1)];
+    const harness = mountEditor(
+      () => ({ items }),
+      () => {
+        items = [variable("typed-value", 3)];
+        return { outcome: "saved", revision: 3 };
+      },
+    );
+    render(<TextItemsPage />, { wrapper: harness.Wrapper });
+    await editVariable("typed-value");
+    expect(
+      harness.paramsOf("environment.configuration.items.put"),
+    ).toHaveLength(0);
+    items = [variable("server-value", 2)];
+    await act(async () => {
+      await harness.queryClient.refetchQueries();
+    });
+    await expectUnlocked();
+    expect(
+      harness.paramsOf("environment.configuration.items.put"),
+    ).toMatchObject([
+      { key: "NODE_ENV", revision: 1, value: { value: "typed-value" } },
+    ]);
+    expect(nodeValue()).toHaveProperty("value", "typed-value");
+  });
+
   it("commits a changed saved value on blur", async () => {
     let items = [variable("development", 1)];
     const harness = mountEditor(

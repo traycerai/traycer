@@ -71,8 +71,6 @@ export interface HostSettingsRowOption {
   readonly label: string;
   /** The sentence under the name in the menu. Hidden in the closed trigger. */
   readonly detail: string;
-  /** The Local badge, on the option whose settings stay on this computer. */
-  readonly local: boolean;
   readonly action: "move" | "stop_sharing";
 }
 
@@ -87,14 +85,12 @@ function hostSettingsOptions(
       value: "personal",
       label: "Personal",
       detail: RUNS_PERSONAL,
-      local: false,
       action: "move",
     },
     {
       value: "local",
       label: hostName,
       detail: "its own settings, not in Personal yet",
-      local: true,
       action: "stop_sharing",
     },
   ];
@@ -132,7 +128,7 @@ export function hostSettingsRowModel(
     return {
       kind: "team",
       label: binding.environment.label,
-      description: "Runs the team's settings.",
+      description: `Runs ${binding.environment.label}`,
     };
   }
   const state = hostSettingsCardState(status);

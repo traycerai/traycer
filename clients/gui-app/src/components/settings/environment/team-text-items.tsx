@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { EnvironmentOs } from "@traycer/protocol/host/environment-schemas";
 import { Check, Plus, Trash2, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -137,6 +137,11 @@ export function TeamTextItems(props: {
   );
 }
 
+/**
+ * Revision stays in the key so a quiet row adopts a newer pool value.
+ * That remount does not blur the field, so a dirty value is committed
+ * from the editor's unmount instead of being dropped with the old row.
+ */
 function savedRowKey(
   item: ConfigurationItem,
   pending: ConfigurationItemWrite | null,
@@ -422,21 +427,33 @@ function TeamTextEditor(props: {
     if (props.draft !== null)
       props.onDraftChange({ ...props.draft, value: { value: next } });
   };
-  const commitSaved = (): void => {
-    if (props.item === null) return;
-    if (name.trim() !== displayName) setName(displayName);
-    if (props.busy || value === saved) return;
-    putText({
-      kind: props.kind,
-      draft: props.draft,
-      onDiscardDraft: props.onDiscardDraft,
-      onWrite: props.onWrite,
-      key: props.item.key,
-      os: props.item.os,
-      value,
-      original: props.currentItem,
-    });
+  const snapshot: SavedTextCommit = {
+    item: props.item,
+    currentItem: props.currentItem,
+    draft: props.draft,
+    busy: props.busy,
+    name,
+    value,
+    saved,
+    displayName,
+    kind: props.kind,
+    onDiscardDraft: props.onDiscardDraft,
+    onWrite: props.onWrite,
+    snapName: setName,
   };
+  const snapRef = useRef(snapshot);
+  useEffect(() => {
+    snapRef.current = snapshot;
+  });
+  const commitSaved = (): void => {
+    commitSavedText(snapshot, true);
+  };
+  useEffect(
+    () => () => {
+      commitSavedText(snapRef.current, false);
+    },
+    [],
+  );
   return (
     <section
       className={cn(
@@ -509,6 +526,44 @@ function TeamTextEditor(props: {
       )}
     </section>
   );
+}
+
+interface SavedTextCommit {
+  readonly item: ConfigurationItem | null;
+  readonly currentItem: ConfigurationItem | null;
+  readonly draft: ConfigurationItemWrite | null;
+  readonly busy: boolean;
+  readonly name: string;
+  readonly value: string;
+  readonly saved: string;
+  readonly displayName: string;
+  readonly kind: "variable" | "env_override";
+  readonly onDiscardDraft: ConfigurationItemWrites["discardDraft"];
+  readonly onWrite: (write: ConfigurationItemWrite) => Promise<void>;
+  readonly snapName: (name: string) => void;
+}
+
+/**
+ * A saved row's value, on blur and when the row unmounts. A revision change
+ * remounts the row without a blur, so the unmount writes a dirty value.
+ * The name snap stays on blur: a saved name is not a rename.
+ */
+function commitSavedText(snap: SavedTextCommit, snapName: boolean): void {
+  if (snap.item === null) return;
+  if (snapName && snap.name.trim() !== snap.displayName) {
+    snap.snapName(snap.displayName);
+  }
+  if (snap.busy || snap.value === snap.saved) return;
+  putText({
+    kind: snap.kind,
+    draft: snap.draft,
+    onDiscardDraft: snap.onDiscardDraft,
+    onWrite: snap.onWrite,
+    key: snap.item.key,
+    os: snap.item.os,
+    value: snap.value,
+    original: snap.currentItem,
+  });
 }
 
 function putText(input: {

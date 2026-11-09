@@ -453,6 +453,7 @@ describe("<HostSettingsPanel /> Overview identity card — window binding", () =
     // one boolean, which is what made the badge and the button read as
     // unrelated controls.
     expect(button.textContent).toBe("Activate");
+    expect(screen.queryByTestId("host-active-in-window")).toBeNull();
     fireEvent.click(button);
     expect(makeActive).toHaveBeenCalledWith("host-a");
   });
@@ -569,7 +570,7 @@ describe("<HostSettingsPanel /> Overview identity card — window binding", () =
     expect(within(menu).getByTestId("host-make-active")).not.toBeNull();
   });
 
-  it("host.isActive: true renders no Activate button", async () => {
+  it("host.isActive: true shows Active in the header row and More has no Active item", async () => {
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,
@@ -581,12 +582,20 @@ describe("<HostSettingsPanel /> Overview identity card — window binding", () =
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel(undefined);
 
-    await screen.findByText("Studio Mac");
-    fireEvent.pointerDown(await screen.findByTestId("host-overview-menu"), {
+    const card = await screen.findByTestId("host-identity-card");
+    const active = within(card).getByTestId("host-active-in-window");
+    expect(active.textContent).toBe("Active");
+    expect(active.getAttribute("data-slot")).toBe("badge");
+    expect(screen.queryByRole("button", { name: "Activate" })).toBeNull();
+    expect(screen.queryByTestId("host-make-active")).toBeNull();
+
+    fireEvent.pointerDown(within(card).getByTestId("host-overview-menu"), {
       button: 0,
     });
-    await screen.findByRole("menu");
-    expect(screen.queryByTestId("host-make-active")).toBeNull();
+    const menu = await screen.findByRole("menu");
+    expect(within(menu).queryByText("Active")).toBeNull();
+    expect(within(menu).queryByTestId("host-active-in-window")).toBeNull();
+    expect(within(menu).getByTestId("host-overview-restart")).not.toBeNull();
   });
 });
 

@@ -272,13 +272,38 @@ export function sandboxDestroyAllIdleOffered(
 
 // ── Who ─────────────────────────────────────────────────────────────────────
 
+/**
+ * `you`, or the member's name. Null when this viewer is not them and the
+ * server sends no name: row copy leaves the person out rather than saying
+ * `a member`.
+ */
+function facingMemberName(
+  member: SandboxMember,
+  viewerUserId: string | null,
+): string | null {
+  if (viewerUserId !== null && member.userId === viewerUserId) return "you";
+  return member.displayName;
+}
+
+/**
+ * A team payer who is someone else and whom the server names. An unnamed
+ * payer is not one: the `a member` fallback is not a name, and it is not `you`.
+ */
+function namedOtherPayer(
+  payer: SandboxMember | null,
+  viewerUserId: string | null,
+): boolean {
+  if (payer === null) return false;
+  const name = facingMemberName(payer, viewerUserId);
+  return name !== null && name !== "you";
+}
+
 /** `you`, the member's name, or `a member` when they have none to show. */
 export function sandboxMemberName(
   member: SandboxMember,
   viewerUserId: string | null,
 ): string {
-  if (viewerUserId !== null && member.userId === viewerUserId) return "you";
-  return member.displayName ?? "a member";
+  return facingMemberName(member, viewerUserId) ?? "a member";
 }
 
 /**
@@ -297,16 +322,17 @@ export function sandboxStartedByLabel(
     return startedByLine(summary.createdByAgentName ?? "an agent");
   }
   if (summary.createdBy === null) return startedByLine("you");
-  return startedByLine(sandboxMemberName(summary.createdBy, viewerUserId));
+  const name = facingMemberName(summary.createdBy, viewerUserId);
+  return name === null ? null : startedByLine(name);
 }
 
 export function sandboxKeptByLabel(
   summary: SandboxSummary,
   viewerUserId: string | null,
 ): string | null {
-  return summary.keptBy === null
-    ? null
-    : keptByLine(sandboxMemberName(summary.keptBy, viewerUserId));
+  if (summary.keptBy === null) return null;
+  const name = facingMemberName(summary.keptBy, viewerUserId);
+  return name === null ? null : keptByLine(name);
 }
 
 /**
@@ -339,7 +365,8 @@ export function sandboxShapeLine(summary: SandboxSummary): string {
 
 /**
  * The row's second line: the shape, then the cost line. An agent sandbox
- * names the agent that created it and its task. A resting team row whose
+ * names the agent that created it and its task. A kept row is not burst and
+ * still carries that task, in the same clause. A resting team row whose
  * payer is someone else says that waking it changes the payer.
  */
 export function sandboxShapeAndCostLine(
@@ -352,8 +379,7 @@ export function sandboxShapeAndCostLine(
   const resting = summary.state === "suspended" || summary.state === "stopped";
   const teamNonPayer =
     configuration.kind === "team" &&
-    summary.wakePayer !== null &&
-    sandboxMemberName(summary.wakePayer, viewerUserId) !== "you";
+    namedOtherPayer(summary.wakePayer, viewerUserId);
   const wakeWarning =
     !summary.frozen && teamNonPayer && resting
       ? "waking it makes you the payer"
@@ -362,8 +388,9 @@ export function sandboxShapeAndCostLine(
     return joinParts(sandboxShapeLine(summary), wakeWarning, creator);
   }
   const hourly = `${formatSandboxDollars(summary.priceMcPerHour.awakeMc)} an hour while awake`;
+  // A burst creator replaces the funding clause. A kept row's task does not.
   const cost =
-    creator !== null || teamNonPayer
+    (summary.burst && creator !== null) || teamNonPayer
       ? hourly
       : costLine(
           summary.priceMcPerHour.awakeMc,
@@ -372,14 +399,22 @@ export function sandboxShapeAndCostLine(
   return joinParts(sandboxShapeLine(summary), cost, wakeWarning, creator);
 }
 
-/** `created by Planner for Sandbox setup`, on an agent sandbox. */
+/**
+ * `created by Planner for Sandbox setup` on an agent sandbox, and the same
+ * clause on a kept row that still names its task. A kept row is not burst.
+ * With a task and no agent name, the clause is `for <task>`.
+ */
 function agentCreatorClause(summary: SandboxSummary): string | null {
   const agent = summary.createdByAgentName;
-  if (!summary.burst || agent === null) return null;
   const task = summary.createdByTaskTitle;
-  return task === null
-    ? `created by ${agent}`
-    : `created by ${agent} for ${task}`;
+  if (summary.burst) {
+    if (agent === null) return null;
+    return task === null
+      ? `created by ${agent}`
+      : `created by ${agent} for ${task}`;
+  }
+  if (task === null) return null;
+  return agent === null ? `for ${task}` : `created by ${agent} for ${task}`;
 }
 
 /** The payer consequence sits on its own line before the row's actions. */
@@ -396,7 +431,7 @@ export function sandboxWakePayerConsequence(
     summary.state === "stopped" ||
     summary.state === "suspending" ||
     summary.state === "stopping";
-  return resting && sandboxMemberName(summary.wakePayer, viewerUserId) !== "you"
+  return resting && namedOtherPayer(summary.wakePayer, viewerUserId)
     ? "Resuming changes the payer to you."
     : null;
 }
@@ -527,7 +562,9 @@ export function sandboxDestroyedLine(
   },
   viewerUserId: string | null,
 ): string {
-  return `${ended.name} was destroyed by ${sandboxMemberName(ended.actor, viewerUserId)} at ${formatSandboxTime(ended.at)}.`;
+  const who = facingMemberName(ended.actor, viewerUserId);
+  const by = who === null ? "" : ` by ${who}`;
+  return `${ended.name} was destroyed${by} at ${formatSandboxTime(ended.at)}.`;
 }
 
 /**
@@ -822,8 +859,8 @@ function awakeClockLine(input: SandboxClockInput): string {
 }
 
 /**
- * Whose credits a resting row's storage draws on. A team row with no payer
- * leaves the clause out rather than naming the wrong member.
+ * Whose credits a resting row's storage draws on. A team row with no payer,
+ * or a payer the server does not name, leaves the clause out.
  */
 function storageCreditClause(
   summary: SandboxSummary,
@@ -832,7 +869,8 @@ function storageCreditClause(
 ): string | null {
   if (configuration.kind === "personal") return "storage uses your credits";
   if (summary.wakePayer === null) return null;
-  const who = sandboxMemberName(summary.wakePayer, viewerUserId);
+  const who = facingMemberName(summary.wakePayer, viewerUserId);
+  if (who === null) return null;
   const scope = who === "you" ? "your" : `${who}'s`;
   return `storage uses ${scope} ${configuration.teamName} credits`;
 }
@@ -878,7 +916,9 @@ function stoppedLead(
   if (operation.outcomeCause === "failure")
     return `${word} after a failed wake`;
   if (operation.actor === null) return word;
-  return `${word} by ${sandboxMemberName(operation.actor, viewerUserId)}`;
+  const who = facingMemberName(operation.actor, viewerUserId);
+  if (who === null) return word;
+  return `${word} by ${who}`;
 }
 
 /** The failed-create sentence shared by the row and its chat. */

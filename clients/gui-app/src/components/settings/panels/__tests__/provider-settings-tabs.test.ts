@@ -292,24 +292,14 @@ describe("tabsForView", () => {
 });
 
 describe("providerKeyTab", () => {
-  it("keeps the key on Account when usage is also advertised", () => {
-    expect(
-      providerKeyTab({ apiKeySupported: true, usageAdvertised: true }),
-    ).toEqual({ tab: "account", label: "Account" });
-  });
-
-  it("keeps the key on Account when the provider has no usage tab", () => {
-    expect(
-      providerKeyTab({ apiKeySupported: true, usageAdvertised: false }),
-    ).toEqual({ tab: "account", label: "Account" });
+  it("keeps the key on Account when a key is supported", () => {
+    expect(providerKeyTab({ apiKeySupported: true })).toEqual({
+      tab: "account",
+      label: "Account",
+    });
   });
 
   it("names no tab when the provider has no key", () => {
-    expect(
-      providerKeyTab({ apiKeySupported: false, usageAdvertised: true }),
-    ).toBeNull();
-    expect(
-      providerKeyTab({ apiKeySupported: false, usageAdvertised: false }),
-    ).toBeNull();
+    expect(providerKeyTab({ apiKeySupported: false })).toBeNull();
   });
 });

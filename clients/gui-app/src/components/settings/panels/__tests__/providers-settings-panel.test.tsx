@@ -1782,9 +1782,9 @@ vi.mock(
   }),
 );
 
-// The panel's LocalRowNote owns the move affordance, which has its own suite.
-// Keep its status read independent of the host runtime and real environment
-// queries in this providers-focused harness.
+// MCP and Skills still mount LocalRowNote, which has its own suite. Keep its
+// status read independent of the host runtime and real environment queries
+// in this harness. Providers itself no longer mounts the note.
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
 }));
@@ -3722,6 +3722,52 @@ describe("<ProvidersSettingsPanel />", () => {
       expect(screen.queryByText(personal)).toBeNull();
     } finally {
       useSettingsEnvironmentPickStore.setState({ pick: null });
+    }
+  });
+
+  it("shows no move guidance while the host runs its own settings, on the phone and on the desktop", () => {
+    const previousWidth = window.innerWidth;
+    const expectNoMoveGuidance = (): void => {
+      expect(screen.queryByTestId("local-row-note")).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: "Move to Personal" }),
+      ).toBeNull();
+      expect(screen.queryByText(/not in Personal yet/)).toBeNull();
+      expect(screen.queryByText(/Move them to Personal/)).toBeNull();
+    };
+    try {
+      Object.defineProperty(window, "innerWidth", {
+        configurable: true,
+        value: 1024,
+      });
+      const desktop = render(
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>,
+      );
+      expect(screen.getByRole("heading", { name: "Providers" })).toBeDefined();
+      expect(screen.getByRole("tablist")).toBeDefined();
+      expectNoMoveGuidance();
+      desktop.unmount();
+
+      Object.defineProperty(window, "innerWidth", {
+        configurable: true,
+        value: 390,
+      });
+      render(
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>,
+      );
+      expect(screen.getByRole("heading", { name: "Providers" })).toBeDefined();
+      expect(screen.getByRole("combobox", { name: "Section" })).toBeDefined();
+      expect(screen.queryByRole("tablist")).toBeNull();
+      expectNoMoveGuidance();
+    } finally {
+      Object.defineProperty(window, "innerWidth", {
+        configurable: true,
+        value: previousWidth,
+      });
     }
   });
 

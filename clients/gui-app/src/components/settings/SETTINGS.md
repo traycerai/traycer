@@ -6736,9 +6736,9 @@ set-state-in-effect` forbids the effect form, and an effect would also
        existing personal/local choices, move sheet and stop-sharing confirmation.
        Progress replaces the description while a move runs or has stopped, with
        the select disabled. Details retains dates and the sharing history. A team
-       source stays visible in the disabled select and the row says "Runs the team's settings."; the team's name is that select's value. Transfer choices appear only
+       source stays visible in the disabled select and the row says "Runs <label>", the same label the select shows, as "Runs Personal" does. Transfer choices appear only
        when a host supports them. A sandbox retains its known source in the same
-       disabled control while its host is unreachable, with that same sentence when the source is a team.
+       disabled control while its host is unreachable, with "Runs <label>" when the source is a team.
        The create-bot form's "Set one up in Settings" link opens this
        page. The sidebar's host list shows each host's environment label
        beside its name (`HostOptionRow`'s `environmentLabel`, resolved by

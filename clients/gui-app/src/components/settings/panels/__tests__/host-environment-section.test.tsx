@@ -160,7 +160,7 @@ describe("HostEnvironmentSection", () => {
     const selector = screen.getByRole("combobox", { name: "Environment" });
     expect(selector.textContent).toBe("Acme");
     expect(selector.hasAttribute("disabled")).toBe(true);
-    expect(screen.getByText("Runs the team's settings.")).toBeTruthy();
+    expect(screen.getByText("Runs Acme")).toBeTruthy();
   });
 
   it("shows move progress instead of another source line while settings move", () => {
@@ -176,7 +176,10 @@ describe("HostEnvironmentSection", () => {
     ).toBeTruthy();
     const selector = screen.getByRole("combobox", { name: "Environment" });
     expect(within(selector).getByText("Mac mini")).toBeTruthy();
-    expect(within(selector).getByText("Local")).toBeTruthy();
+    expect(within(selector).queryByText("Local")).toBeNull();
+    expect(
+      within(selector).getByText("its own settings, not in Personal yet"),
+    ).toBeTruthy();
   });
 
   it("shows nothing on a sandbox when no settings status or binding is available", () => {

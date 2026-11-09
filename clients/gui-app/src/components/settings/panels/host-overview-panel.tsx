@@ -1683,8 +1683,12 @@ export function HostOverviewPanel(props: {
       teamOwned={host.sandbox?.teamOwned === true}
       activateBusy={scope.isActivating}
       onCopyHostId={() => hostIdCopy.copy(host.hostId)}
-      // Sandbox lifecycle and failure remedies own the single primary slot.
-      activateInMenu={host.sandbox !== null || primaryAction !== null}
+      // A sandbox's lifecycle owns the inline slot, so its binding stays in
+      // More. An unbound computer with Update now keeps Activate there too.
+      // The bound computer keeps Active inline, beside Update now.
+      activateInMenu={
+        host.sandbox !== null || (primaryAction !== null && !host.isActive)
+      }
     />
   );
   let headerActions: ReactNode = null;

@@ -1403,6 +1403,17 @@ function ProviderEnablementControl(props: {
   );
 }
 
+/**
+ * The move note above a provider's tabs. Providers omits it: the enclosing
+ * environment already determines reach, and these settings move with the
+ * host. MCP and Skills keep the note.
+ */
+function LocalRowNoteForView(): ReactNode {
+  const view = useContext(ProvidersPanelViewContext);
+  if (view === "providers") return null;
+  return <LocalRowNote />;
+}
+
 function ProviderDetail({
   state,
   providers,
@@ -1609,13 +1620,13 @@ function ProviderDetail({
         }
       />
       <div className="flex flex-1 flex-col md:min-h-0">
-        {/* Nothing renders between the provider header and the tab rail but
-            the Local row's note, which says whose settings these are. The
+        {/* Nothing renders between the provider header and the tab rail on
+            Providers. MCP and Skills keep the Local row's move note. The
             key is the first block of Profiles & Limits when that tab exists,
             and the whole body of Account when that is the only key home.
             The rail is PINNED: a block parked here would occupy fixed height
             at the top of the pane forever, not just until you scrolled. */}
-        <LocalRowNote />
+        <LocalRowNoteForView />
         <Tabs
           value={activeTab}
           onValueChange={(value) => {
@@ -1834,7 +1845,6 @@ function ProviderEnvTab(props: {
   const configurationKey = useConfigurationKey();
   const keyTab = providerKeyTab({
     apiKeySupported: state.apiKey.supported,
-    usageAdvertised: state.nativeCapabilities.supportedTabs.includes("usage"),
   });
   return (
     <ProviderEnvOverridesSection

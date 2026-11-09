@@ -340,7 +340,7 @@ function ServerLetter(props: { readonly name: string }): ReactNode {
   return (
     <span
       aria-hidden
-      className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted/50 text-ui-sm font-semibold text-muted-foreground"
+      className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-foreground/6 text-ui-sm font-semibold text-muted-foreground"
     >
       {props.name.trim().slice(0, 1).toUpperCase()}
     </span>
@@ -637,21 +637,34 @@ function McpOpenEditor(props: {
   const save = (): void => {
     if (source.kind !== "pool" || !canSave) return;
     const item = props.server.item;
+    // mcpServers.put writes the item's toggles itself. Sending the stored
+    // toggles beside a parallel items.put loses whichever lands last.
     if (endpointDirty) {
       const request = endpointPutRequest(
         props.server,
         endpoint,
         source.environmentId,
       );
-      if (request !== null)
-        put.mutate(request, {
+      const saved =
+        request === null || !toolsDirty || item === null
+          ? request
+          : {
+              ...request,
+              toolToggles: togglesFromDraft(
+                item.toolToggles,
+                groups,
+                draft.value,
+              ),
+            };
+      if (saved !== null)
+        put.mutate(saved, {
           onSuccess: (result) =>
             props.onIssue(
               typedWriteIssue(result, "Couldn't save this server."),
             ),
         });
     }
-    if (toolsDirty && item !== null)
+    if (toolsDirty && item !== null && !endpointDirty)
       putItem.mutate(
         {
           environmentId: source.environmentId,
@@ -719,7 +732,7 @@ function McpServerDetails(props: {
   const label = props.server.transport === "http" ? "Endpoint URL" : "Command";
   const fieldId = `mcp-endpoint-${props.server.serverId}`;
   return (
-    <div className="flex flex-col gap-3 rounded-lg bg-muted/30 p-4">
+    <div className="flex flex-col gap-3 rounded-lg bg-foreground/5 p-4">
       <h3 className="text-ui-sm font-medium">Server details</h3>
       <div className="flex flex-col gap-1.5">
         <Label htmlFor={fieldId} variant="muted">

@@ -707,6 +707,61 @@ describe("The MCP servers page", () => {
     ).toHaveLength(0);
   });
 
+  it("saves an endpoint edit and a tool edit on the one server put", async () => {
+    negotiateMethods(ALL_METHODS);
+    const harness = mountTeamPage(
+      poolSource("editor"),
+      handlers({
+        servers: () => [
+          declaredServer({
+            serverId: "srv-1",
+            name: "github",
+            item: {
+              key: "github",
+              revision: 4,
+              toolToggles: {},
+              offFor: [],
+            },
+          }),
+        ],
+        hostServers: [],
+        hostServersByProvider: {
+          codex: [hostMcpServer("github", ["search"])],
+        },
+      }),
+    );
+    render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
+
+    await screen.findByText("github");
+    await openServerCard("github");
+    const endpoint = await screen.findByLabelText("Endpoint URL for github");
+    expect(endpoint).toHaveProperty("value", "https://github.invalid/mcp");
+    await userEvent.type(endpoint, "x");
+    await userEvent.click(
+      await screen.findByRole("switch", { name: "github search" }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => {
+      expect(
+        harness.paramsOf("environment.configuration.mcpServers.put"),
+      ).toHaveLength(1);
+    });
+    expect(
+      harness.paramsOf("environment.configuration.items.put"),
+    ).toHaveLength(0);
+    expect(
+      harness.paramsOf("environment.configuration.mcpServers.put")[0],
+    ).toMatchObject({
+      environmentId: "env-a",
+      serverId: "srv-1",
+      name: "github",
+      url: "https://github.invalid/mcpx",
+      toolToggles: { codex: { search: false } },
+      offFor: [],
+    });
+  });
+
   it("writes a shared tool setting only to providers that listed it", async () => {
     negotiateMethods(ALL_METHODS);
     const harness = mountTeamPage(

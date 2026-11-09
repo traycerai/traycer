@@ -365,7 +365,10 @@ describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
     );
     const trigger = screen.getByRole("combobox", { name: "Environment" });
     expect(within(trigger).getByText("host-a")).toBeTruthy();
-    expect(within(trigger).getByText("Local")).toBeTruthy();
+    expect(within(trigger).queryByText("Local")).toBeNull();
+    expect(
+      within(trigger).getByText("its own settings, not in Personal yet"),
+    ).toBeTruthy();
     expect(within(row).getByText("Details")).toBeTruthy();
     expect(activeTabTestId()).toBe("host-overview-tab-installation");
     const tabList = screen.getAllByRole("tab")[0].closest("[role='tablist']");

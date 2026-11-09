@@ -1,9 +1,12 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
 import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
-import { LOCAL_BADGE_TOOLTIP } from "@/components/settings/environment/environment-picker-model";
 import { OverviewCardDetailsLine } from "@/components/settings/details/overview-card-details-line";
+import {
+  isStaleLocalPick,
+  localPickerRow,
+} from "@/components/settings/environment/environment-picker-model";
 import { MoveProgressLine } from "@/components/settings/move/move-progress-line";
 import { StopSharingSession } from "@/components/settings/move/stop-sharing-session";
 import {
@@ -13,7 +16,6 @@ import {
 } from "@/components/settings/panels/host-overview-settings-card-model";
 import { HOST_OVERVIEW } from "@/components/settings/panels/host-overview.definitions";
 import { SettingsRow } from "@/components/settings/settings-row";
-import { Badge } from "@/components/ui/badge";
 import {
   Select,
   SelectContent,
@@ -26,6 +28,10 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useEnvironmentHostReadQuery } from "@/hooks/bots/use-environment-host-read-query";
 import { readsHostBindingsFromPool } from "@/hooks/bots/use-host-environment-bindings-query";
 import { useEnvironmentStatusRead } from "@/hooks/environment/use-environment-reads";
+import {
+  useHostNegotiatedMethodVersions,
+  type NegotiatedMethodVersion,
+} from "@/hooks/host/use-host-negotiated-method-version";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
@@ -46,15 +52,27 @@ export function HostOverviewSettingsCard(props: {
 }): ReactNode {
   const openMoveSheet = useMoveSheetStore((state) => state.openSheet);
   const [stopOpen, setStopOpen] = useState(false);
+  const hostIds = useMemo(() => [props.hostId], [props.hostId]);
+  const statusVersion =
+    useHostNegotiatedMethodVersions(hostIds, "environment.status").get(
+      props.hostId,
+    ) ?? null;
   const model = hostSettingsRowModel(
     props.status,
     props.binding,
     props.hostName,
   );
   const railPick =
-    model.kind === "loading" || props.binding === null
+    model.kind === "loading" || props.binding === null || props.status === null
       ? null
-      : settingsRailPick(model, props.hostId, props.hostName, props.binding);
+      : settingsRailPick({
+          model,
+          hostId: props.hostId,
+          hostName: props.hostName,
+          binding: props.binding,
+          status: props.status,
+          version: statusVersion,
+        });
   useMatchEnvironmentRail(railPick);
   if (model.kind === "loading" || props.status === null) {
     return (
@@ -86,7 +104,7 @@ export function HostOverviewSettingsCard(props: {
             <OverviewCardDetailsLine {...lineProps} />
           </div>
         }
-        control={<FixedSettingsSource value={model.label} local={false} />}
+        control={<FixedSettingsSource value={model.label} />}
       />
     );
   }
@@ -107,7 +125,6 @@ export function HostOverviewSettingsCard(props: {
             value={
               model.progress.kind === "moving" ? "Personal" : props.hostName
             }
-            local={model.progress.kind === "move_stopped"}
           />
         }
       />
@@ -154,10 +171,7 @@ export function HostOverviewSettingsCard(props: {
 }
 
 /** Keep the settings value in the same control while it cannot be changed. */
-function FixedSettingsSource(props: {
-  readonly value: string;
-  readonly local: boolean;
-}): ReactNode {
+function FixedSettingsSource(props: { readonly value: string }): ReactNode {
   return (
     <Select value={props.value} disabled>
       <TooltipWrapper
@@ -178,11 +192,7 @@ function FixedSettingsSource(props: {
       </TooltipWrapper>
       <SelectContent align="end">
         <SelectItem value={props.value}>
-          <EnvironmentOptionLabel
-            label={props.value}
-            detail={null}
-            local={props.local}
-          />
+          <EnvironmentOptionLabel label={props.value} detail={null} />
         </SelectItem>
       </SelectContent>
     </Select>
@@ -226,7 +236,6 @@ function EnvironmentSourceSelect(props: {
             <EnvironmentOptionLabel
               label={option.label}
               detail={option.detail}
-              local={option.local}
             />
           </SelectItem>
         ))}
@@ -238,25 +247,10 @@ function EnvironmentSourceSelect(props: {
 function EnvironmentOptionLabel(props: {
   readonly label: string;
   readonly detail: string | null;
-  readonly local: boolean;
 }): ReactNode {
   return (
     <span className="flex min-w-0 flex-col items-start gap-0.5">
-      <span className="flex min-w-0 items-center gap-1.5">
-        <span className="truncate">{props.label}</span>
-        {props.local ? (
-          <TooltipWrapper
-            label={LOCAL_BADGE_TOOLTIP}
-            side="top"
-            sideOffset={undefined}
-            align={undefined}
-          >
-            <Badge variant="secondary" size="xs">
-              Local
-            </Badge>
-          </TooltipWrapper>
-        ) : null}
-      </span>
+      <span className="truncate">{props.label}</span>
       {props.detail === null ? null : (
         <span className="text-ui-xs text-muted-foreground in-data-[slot=select-trigger]:hidden">
           {props.detail}
@@ -278,9 +272,10 @@ function railFollowKey(pick: EnvironmentPick): string {
 }
 
 /**
- * Writes the host's source into the rail once. A second write of the same
- * key is skipped, so a Local pick the dropdown drops (a host that needs an
- * update) is not put back on the next render.
+ * Writes the host's source into the rail once. A key already showing, or a
+ * key this effect already wrote, is left alone: clearing the remembered key
+ * when the two matched let a pick the dropdown had just removed get written
+ * again on the next render.
  */
 function useMatchEnvironmentRail(pick: EnvironmentPick | null): void {
   const setPick = useSettingsEnvironmentPickStore((state) => state.setPick);
@@ -292,35 +287,59 @@ function useMatchEnvironmentRail(pick: EnvironmentPick | null): void {
   const held = useRef<string | null>(null);
   useEffect(() => {
     if (pick === null || nextKey === null) return;
-    if (nextKey === currentKey) {
-      held.current = null;
-      return;
-    }
-    if (held.current === nextKey) return;
+    if (nextKey === currentKey || held.current === nextKey) return;
     held.current = nextKey;
     setPick(pick);
   }, [pick, nextKey, currentKey, setPick]);
 }
 
-function settingsRailPick(
-  model: Exclude<HostSettingsRowModel, { kind: "loading" }>,
+/**
+ * A Local pick the Environment dropdown would keep. One it would drop
+ * (`isStaleLocalPick`: no Local row, or a row that needs an update) is not
+ * written. The stopped-move row still shows the computer's name; the rail
+ * stays where it is, because Personal is not what that row shows.
+ */
+function selectableLocalPick(
   hostId: string,
   hostName: string,
-  binding: EnvironmentHostBinding,
-): EnvironmentPick {
+  status: EnvironmentStatusResponseV11,
+  version: NegotiatedMethodVersion,
+): EnvironmentPick | null {
+  const pick: EnvironmentPick = { kind: "local", hostId, hostName };
+  const row = localPickerRow({ hostId, name: hostName }, status, version);
+  const stale = isStaleLocalPick(
+    pick,
+    {
+      localRows: row === null ? [] : [row],
+      defaultPick: PERSONAL_PICK,
+    },
+    new Map([[hostId, status]]),
+  );
+  return stale ? null : pick;
+}
+
+function settingsRailPick(input: {
+  readonly model: Exclude<HostSettingsRowModel, { kind: "loading" }>;
+  readonly hostId: string;
+  readonly hostName: string;
+  readonly binding: EnvironmentHostBinding;
+  readonly status: EnvironmentStatusResponseV11;
+  readonly version: NegotiatedMethodVersion;
+}): EnvironmentPick | null {
+  const { model, hostId, hostName, status, version } = input;
   if (model.kind === "team") {
     return {
       kind: "team",
-      environmentId: binding.environment.environmentId,
+      environmentId: input.binding.environment.environmentId,
     };
   }
   if (model.kind === "progress") {
     return model.progress.kind === "moving"
       ? PERSONAL_PICK
-      : { kind: "local", hostId, hostName };
+      : selectableLocalPick(hostId, hostName, status, version);
   }
   return model.value === "local"
-    ? { kind: "local", hostId, hostName }
+    ? selectableLocalPick(hostId, hostName, status, version)
     : PERSONAL_PICK;
 }
 

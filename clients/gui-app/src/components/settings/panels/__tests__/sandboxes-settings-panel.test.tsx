@@ -1972,8 +1972,8 @@ describe("<SandboxesSettingsPanel />", () => {
     );
     expect(within(kept).getByText("Started by Planner")).toBeTruthy();
     expect(within(kept).getByText("Kept by you")).toBeTruthy();
-    expect(within(kept).queryByText("For task")).toBeNull();
-    expect(kept.textContent).not.toContain("created by");
+    expect(kept.textContent).toContain("created by Planner for Sandbox setup");
+    expect(kept.textContent).not.toContain("For task");
     await userEvent.click(
       within(kept).getByRole("button", { name: "Details" }),
     );
@@ -2405,6 +2405,45 @@ describe("<SandboxesSettingsPanel />", () => {
       expect(within(rowOf(unnamed.id)).queryByText(/Paid by/)).toBeNull();
       expect(within(rowOf(unnamed.id)).queryByText(/a member/)).toBeNull();
       expect(shapeOf(unnamed.id)).not.toContain("paid by");
+      expect(shapeOf(unnamed.id)).toBe(
+        "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake · uses your Acme credits",
+      );
+    });
+
+    it("omits an unnamed resting payer and keeps the funding clause for an unnamed awake payer", () => {
+      viewAs("user-other");
+      const resting = row("sbx-unnamed-rest", {
+        state: "suspended",
+        environmentId: TEAM_ENV,
+        wakePayer: { userId: "user-hidden", displayName: null },
+      });
+      renderPanel([resting]);
+      expect(clockOf(resting.id)).not.toContain("storage uses");
+      expect(clockOf(resting.id)).not.toContain("a member");
+      expect(shapeOf(resting.id)).toBe(
+        "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake · uses your Acme credits",
+      );
+      expect(shapeOf(resting.id)).not.toContain(
+        "waking it makes you the payer",
+      );
+      expect(
+        within(rowOf(resting.id)).queryByTestId(
+          "sandboxes-row-payer-consequence",
+        ),
+      ).toBeNull();
+      cleanup();
+
+      const awake = row("sbx-unnamed-awake", {
+        state: "awake",
+        environmentId: TEAM_ENV,
+        wakePayer: { userId: "user-hidden", displayName: null },
+      });
+      renderPanel([awake]);
+      expect(within(rowOf(awake.id)).queryByText(/Paid by/)).toBeNull();
+      expect(within(rowOf(awake.id)).queryByText(/a member/)).toBeNull();
+      expect(shapeOf(awake.id)).toBe(
+        "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake · uses your Acme credits",
+      );
     });
 
     it("tells only a member who isn't the payer that resuming makes them the payer", () => {
