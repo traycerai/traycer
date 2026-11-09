@@ -331,6 +331,7 @@ describe("served artifact page links", () => {
     readonly followed: boolean;
     readonly target: string | null;
     readonly linkRequests: readonly unknown[];
+    readonly artifactLinks: readonly unknown[];
   } {
     const composed = buildDocument({
       html: "",
@@ -375,14 +376,20 @@ describe("served artifact page links", () => {
     const target = anchor.getAttribute("target");
     window.close();
     // The bootstrap posts other notifications too; only link requests matter here.
-    const linkRequests = posted.filter(
-      (message) =>
-        typeof message === "object" &&
-        message !== null &&
-        "method" in message &&
-        message.method === "ui/open-link",
-    );
-    return { followed, target, linkRequests };
+    const sentWith = (method: string): unknown[] =>
+      posted.filter(
+        (message) =>
+          typeof message === "object" &&
+          message !== null &&
+          "method" in message &&
+          message.method === method,
+      );
+    return {
+      followed,
+      target,
+      linkRequests: sentWith("ui/open-link"),
+      artifactLinks: sentWith("traycer/notifications/artifact-link"),
+    };
   }
 
   it.each([
@@ -423,6 +430,84 @@ describe("served artifact page links", () => {
         params: { url: "https://example.com/docs" },
       }),
     ]);
+  });
+
+  function clickOnPage(
+    href: string,
+    artifactPage: ArtifactPageRole,
+  ): {
+    readonly followed: boolean;
+    readonly linkRequests: readonly unknown[];
+    readonly artifactLinks: readonly unknown[];
+  } {
+    return clickLink({
+      artifactPage,
+      href,
+      artifactRootPath: "/site/",
+      anchorTarget: null,
+      baseTarget: null,
+    });
+  }
+
+  it.each(["../other/index.html", "../../top/", "/elsewhere/page.html"])(
+    "reports %s, a link out of the artifact root, to the app as authored and does not navigate",
+    (href) => {
+      const clicked = clickOnPage(href, "found");
+
+      expect(clicked.followed).toBe(false);
+      expect(clicked.linkRequests).toEqual([]);
+      expect(clicked.artifactLinks).toEqual([
+        expect.objectContaining({
+          method: "traycer/notifications/artifact-link",
+          params: {
+            nonce: "n-1",
+            href,
+            page: "traycer-artifact://artifact-a1--m1/site/index.html",
+          },
+        }),
+      ]);
+    },
+  );
+
+  it("sends nothing for a link to another page inside the root, which the frame follows", () => {
+    const clicked = clickOnPage("about.html", "found");
+
+    expect(clicked.followed).toBe(true);
+    expect(clicked.artifactLinks).toEqual([]);
+    expect(clicked.linkRequests).toEqual([]);
+  });
+
+  it("leaves an https link on ui/open-link and off the artifact-link report", () => {
+    const clicked = clickOnPage("https://example.com/docs", "found");
+
+    expect(clicked.linkRequests).toHaveLength(1);
+    expect(clicked.artifactLinks).toEqual([]);
+  });
+
+  it("leaves a hash link to the browser", () => {
+    const clicked = clickOnPage("#section", "found");
+
+    expect(clicked.followed).toBe(true);
+    expect(clicked.linkRequests).toEqual([]);
+    expect(clicked.artifactLinks).toEqual([]);
+  });
+
+  it.each(["?x=1", "#", "index.html?x=1"])(
+    "drops %s, a link to this same page, without reporting or opening it",
+    (href) => {
+      const clicked = clickOnPage(href, "found");
+
+      expect(clicked.followed).toBe(false);
+      expect(clicked.linkRequests).toEqual([]);
+      expect(clicked.artifactLinks).toEqual([]);
+    },
+  );
+
+  it("never sends the artifact-link report from a document that is not an artifact page", () => {
+    const clicked = clickOnPage("../other/index.html", null);
+
+    expect(clicked.artifactLinks).toEqual([]);
+    expect(clicked.linkRequests).toEqual([]);
   });
 
   it("follows a link to another page of the artifact only on a served artifact page that knows its root", () => {
