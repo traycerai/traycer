@@ -12,7 +12,9 @@ import { describe, expect, it } from "vitest";
 import { bundledHostArchiveNames } from "../../../traycer-cli/src/installer/bundled-host";
 
 const require = createRequire(import.meta.url);
-const { bundledHostSiblingNames } = require("../prepack/check-cli-resource.cjs");
+const {
+  bundledHostSiblingNames,
+} = require("../prepack/check-cli-resource.cjs");
 
 const DESKTOP_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -45,9 +47,7 @@ describe("bundled host layout beside the CLI", () => {
               `cli/${platform}-${arch}/host-runtime-${platform}-${arch}.tar.gz`,
               `cli/${platform}-${arch}/host-runtime-${platform}-${arch}.zip`,
             ]
-          : [
-              `cli/${platform}-${arch}/host-runtime-${platform}-${arch}.tar.gz`,
-            ];
+          : [`cli/${platform}-${arch}/host-runtime-${platform}-${arch}.tar.gz`];
       expect(
         archives.map((archive) => `cli/${platform}-${arch}/${archive}`),
       ).toEqual(stagedArchives);
