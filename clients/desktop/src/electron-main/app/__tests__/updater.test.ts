@@ -103,9 +103,26 @@ let lastChannelManifest: {
   readonly url: string;
   readonly channelFile: string;
 } | null = null;
+let unstubbedFetchCalls: string[] = [];
 
 beforeEach(() => {
   lastChannelManifest = null;
+  unstubbedFetchCalls = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const rawUrl =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.href
+            : input.url;
+      const url = new URL(rawUrl);
+      const target = `${url.origin}${url.pathname}`;
+      unstubbedFetchCalls.push(target);
+      throw new Error(`Unstubbed fetch in updater test: ${target}`);
+    }),
+  );
   Reflect.deleteProperty(process.env, "VITE_TRAYCER_DESKTOP_UPDATE_REPO");
   Reflect.deleteProperty(process.env, "VITE_TRAYCER_DESKTOP_UPDATE_TOKEN");
   Object.defineProperty(process, "resourcesPath", {
@@ -152,6 +169,7 @@ afterEach(() => {
   // Only the architecture-selection test sets this; clean up unconditionally
   // so it can never leak into a later test's `platformChannelFile()` call.
   Reflect.deleteProperty(process.env, "TEST_UPDATER_ARCH");
+  expect(unstubbedFetchCalls).toEqual([]);
 });
 
 describe("desktop app updater", () => {
@@ -787,21 +805,17 @@ describe("desktop app updater", () => {
   });
 
   it("surfaces a stable-feed 'no production release' 404 as a service error", async () => {
-    // The removed fallback (§"Compatibility recovery and dead paths"): this
-    // 404 used to be swallowed as "up to date" for any build whose version
-    // contained a `-`. A canonical RC build can no longer reach the stable
-    // feed at all - it derives `implicit-rc-line` and resolves through the
-    // namespaced selector - so the only builds that still see this error are
-    // ones for which a 404 from the release feed IS a service problem.
     const { autoUpdater, updater } =
       await loadUpdaterWithoutPrivateToken(NOT_LINUX_GUIDANCE);
-    autoUpdater.checkForUpdates.mockImplementation(() => {
-      const err = new Error(
-        "Unable to find latest version on GitHub (https://api.github.com/repos/o/r/releases/latest), please ensure a production release exists: HttpError: 404",
-      );
-      autoUpdater.emit("error", err);
-      return Promise.reject(err);
-    });
+    const requests: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = new URL(String(input));
+        requests.push(`${url.origin}${url.pathname}`);
+        return new Response("Not Found", { status: 404 });
+      }),
+    );
     await updater.installAutoUpdater(true, makeDeps(true));
 
     await updater.checkForUpdatesNow(false, "manual");
@@ -811,6 +825,11 @@ describe("desktop app updater", () => {
       errorMessage:
         "Traycer couldn't reach the update service right now. Please try again in a little while.",
     });
+    expect(
+      requests.some((url) => url.endsWith("/desktop/stable/index.json")),
+    ).toBe(true);
+    expect(requests.some((url) => url.endsWith("/releases/latest"))).toBe(true);
+    expect(autoUpdater.checkForUpdates).not.toHaveBeenCalled();
   });
 
   it("never queries the stable feed from a canonical RC build", async () => {
@@ -3382,10 +3401,12 @@ describe("staging updater release authentication and channel", () => {
     process.env.TRAYCER_STAGING_RELEASE_TOKEN = "first-token";
     const { updater } = await loadStagingUpdater();
     const tag = "desktop-v2.0.0-staging.1.gabcdef0";
+    const requests: string[] = [];
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: unknown) => {
         const url = new URL(String(input));
+        requests.push(`${url.origin}${url.pathname}`);
         if (url.searchParams.has("per_page")) {
           return new Response(
             JSON.stringify([stagingReleaseFixture(tag, true)]),
@@ -3405,7 +3426,16 @@ describe("staging updater release authentication and channel", () => {
     await updater.installAutoUpdater(true, makeDeps(true));
     await updater.checkForUpdatesNow(false, "manual");
 
-    expect(updater.getAppUpdateSnapshot().status).toBe("error");
+    expect(updater.getAppUpdateSnapshot()).toMatchObject({
+      status: "error",
+      errorMessage:
+        "Traycer couldn't reach the update service right now. Please try again in a little while.",
+    });
+    expect(
+      requests.filter((url) =>
+        url.endsWith("/repos/traycerai/traycer-internal"),
+      ),
+    ).toHaveLength(1);
 
     // And the lease survives: nothing rejected it.
     process.env.TRAYCER_STAGING_RELEASE_TOKEN = "second-token";
@@ -3422,6 +3452,61 @@ describe("staging updater release authentication and channel", () => {
       "token first-token",
     );
   });
+
+  it("reports a CDN and exact-tag manifest 404 as a service error after an unreachable probe, preserving the token lease", async () => {
+    await expectManifest404ProbeFailure(new TypeError("fetch failed"));
+  });
+
+  it("reports a CDN and exact-tag manifest 404 as a service error after a timed-out probe, preserving the token lease", async () => {
+    const timeout = new Error("repository probe timed out");
+    timeout.name = "TimeoutError";
+    await expectManifest404ProbeFailure(timeout);
+  });
+
+  async function expectManifest404ProbeFailure(
+    probeError: Error,
+  ): Promise<void> {
+    process.env.TRAYCER_STAGING_RELEASE_TOKEN = "first-token";
+    const { updater } = await loadStagingUpdater();
+    const trace: StagingFetchTraceEntry[] = [];
+    vi.stubGlobal("fetch", stagingManifest404Fetch(probeError, trace));
+    await updater.installAutoUpdater(true, makeDeps(true));
+
+    await updater.checkForUpdatesNow(false, "manual");
+
+    const failedCheck = updater.getAppUpdateSnapshot();
+    process.env.TRAYCER_STAGING_RELEASE_TOKEN = "second-token";
+    await updater.checkForUpdatesNow(false, "manual");
+
+    const firstCheckTrace: StagingFetchTraceEntry[] = [
+      {
+        url: "https://releases.dev.traycer.ai/desktop/staging/index.json",
+        authorization: null,
+      },
+      {
+        url: "https://releases.dev.traycer.ai/desktop/2.0.0-staging.2.gabcdef1/latest-mac.yml",
+        authorization: null,
+      },
+      {
+        url: "https://api.github.com/repos/traycerai/traycer-internal/releases/tags/desktop-v2.0.0-staging.2.gabcdef1",
+        authorization: "token first-token",
+      },
+      {
+        url: "https://api.github.com/repos/traycerai/traycer-internal/releases/assets/desktop-v2.0.0-staging.2.gabcdef1-manifest",
+        authorization: "token first-token",
+      },
+      {
+        url: "https://api.github.com/repos/traycerai/traycer-internal",
+        authorization: "token first-token",
+      },
+    ];
+    expect(trace).toEqual([...firstCheckTrace, ...firstCheckTrace]);
+    expect(failedCheck).toMatchObject({
+      status: "error",
+      errorMessage:
+        "Traycer couldn't reach the update service right now. Please try again in a little while.",
+    });
+  }
 
   // GitHub answers 403 for BOTH "your token is no good" and "slow down", and
   // reading the second as the first discards a WORKING credential and puts a
@@ -4628,6 +4713,78 @@ function fetchRouter(
     lastChannelManifest = { raw, url: url.href, channelFile };
     return Promise.resolve(new Response(raw, { status: 200 }));
   });
+}
+
+interface StagingFetchTraceEntry {
+  readonly url: string;
+  readonly authorization: string | null;
+}
+
+function stagingManifest404Fetch(
+  probeError: Error,
+  trace: StagingFetchTraceEntry[],
+): Mock {
+  const version = "2.0.0-staging.2.gabcdef1";
+  const tag = `desktop-v${version}`;
+  const channelFile = platformChannelFile();
+  const installerName = macZipAssetName(tag);
+  const cdnVersionBase = `https://releases.dev.traycer.ai/desktop/${encodeURIComponent(version)}/`;
+  const index = {
+    schemaVersion: 1,
+    channel: "staging",
+    generatedAt: "2026-01-01T00:00:00.000Z",
+    stableHead: null,
+    versions: [
+      {
+        version,
+        tag,
+        channel: "staging",
+        publishedAt: "2026-01-01T00:00:00.000Z",
+        draft: false,
+        assets: [channelFile, installerName].map((name) => ({
+          name,
+          url: new URL(encodeURIComponent(name), cdnVersionBase).href,
+          size: 1024,
+        })),
+      },
+    ],
+  };
+  const exactTagPath = `/repos/traycerai/traycer-internal/releases/tags/${encodeURIComponent(tag)}`;
+  const apiManifestPath = `/repos/traycerai/traycer-internal/releases/assets/${tag}-manifest`;
+  return vi.fn(
+    async (input: RequestInfo | URL, init: RequestInit | undefined) => {
+      const url = new URL(String(input));
+      const authorization = new Headers(init?.headers).get("authorization");
+      trace.push({ url: url.href, authorization });
+      if (url.hostname === "api.github.com") {
+        if (url.pathname === exactTagPath) {
+          return new Response(
+            JSON.stringify(stagingReleaseFixture(tag, true)),
+            {
+              status: 200,
+            },
+          );
+        }
+        if (url.pathname === apiManifestPath) {
+          return new Response("Not Found", { status: 404 });
+        }
+        if (url.pathname === "/repos/traycerai/traycer-internal") {
+          throw probeError;
+        }
+        return new Response("Not Found", { status: 404 });
+      }
+      if (url.pathname === "/desktop/staging/index.json") {
+        return new Response(JSON.stringify(index), { status: 200 });
+      }
+      if (
+        url.pathname ===
+        new URL(encodeURIComponent(channelFile), cdnVersionBase).pathname
+      ) {
+        return new Response("Not Found", { status: 404 });
+      }
+      return new Response("Not Found", { status: 404 });
+    },
+  );
 }
 
 function exactTagReleaseResponse(url: URL, tag: string): Response | null {
