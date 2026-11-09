@@ -8,6 +8,8 @@ import {
   type ChatAttachmentScopeValue,
 } from "@/components/chat/chat-attachment-scope-context";
 import { ArtifactPagesFrame } from "@/components/html-artifact/artifact-pages-frame";
+import { HtmlArtifactLinks } from "@/components/html-artifact/html-artifact-links";
+import { useEpicViewTabId } from "@/components/epic-canvas/view-tab-context";
 import { HtmlArtifactDownloadButton } from "@/components/html-artifact/html-artifact-download-button";
 import type { SandboxSource } from "@/components/sandbox/sandbox-frame";
 import { useEpicStore } from "@/hooks/use-epic-store";
@@ -97,6 +99,7 @@ function ShownArtifact(props: {
   readonly scope: ChatAttachmentScopeValue;
 }) {
   const { stamp, scope } = props;
+  const viewTabId = useEpicViewTabId();
   const artifacts = useEpicStore((state) => state.artifacts);
   const artifact = Object.hasOwn(artifacts.byId, stamp.artifactId)
     ? artifacts.byId[stamp.artifactId]
@@ -236,34 +239,36 @@ function ShownArtifact(props: {
             Showing latest
           </figcaption>
         ) : null}
-        <ArtifactPagesFrame
-          key={generation}
-          source={source}
-          title={stamp.title}
-          className="w-full"
-          height={height}
-          commenting={false}
-          onSize={handleSize}
-          onStatus={handleStatus}
-          onBridge={null}
-          onTextSelection={null}
-          onFrame={null}
-          renderOverlay={null}
-          sourceEquivalent={undefined}
-          toolbarControls={
-            <InlineArtifactActions
-              source={source}
-              scope={scope}
-              title={stamp.title}
-              htmlVersion={expandedHtmlVersion(
-                state.kind === "latest",
-                source,
-                stamp,
-                resolved,
-              )}
-            />
-          }
-        />
+        <HtmlArtifactLinks epicId={scope.epicId} viewTabId={viewTabId}>
+          <ArtifactPagesFrame
+            key={generation}
+            source={source}
+            title={stamp.title}
+            className="w-full"
+            height={height}
+            commenting={false}
+            onSize={handleSize}
+            onStatus={handleStatus}
+            onBridge={null}
+            onTextSelection={null}
+            onFrame={null}
+            renderOverlay={null}
+            sourceEquivalent={undefined}
+            toolbarControls={
+              <InlineArtifactActions
+                source={source}
+                scope={scope}
+                title={stamp.title}
+                htmlVersion={expandedHtmlVersion(
+                  state.kind === "latest",
+                  source,
+                  stamp,
+                  resolved,
+                )}
+              />
+            }
+          />
+        </HtmlArtifactLinks>
       </ArtifactExpansion>
     );
   }

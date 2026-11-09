@@ -37,6 +37,7 @@ import type {
 import type { CanvasTextSelection } from "@/lib/sandbox/canvas-bridge";
 import { cn } from "@/lib/utils";
 import { registerHistoryGestureFrame } from "@/components/layout/shell/desktop-history-frame-wheel";
+import { useHtmlArtifactLinkOpener } from "./html-artifact-link-context";
 
 const NO_PERMISSIONS = [] as const;
 const noop = (): void => undefined;
@@ -342,6 +343,9 @@ export function ArtifactPagesFrame(props: ArtifactPagesFrameProps) {
     sourceEquivalent,
   } = props;
   const expanded = useArtifactExpanded();
+  // A link out of the artifact opens its target in a tile, through whatever
+  // the surface around this frame provides (`HtmlArtifactLinks`).
+  const openArtifactLink = useHtmlArtifactLinkOpener();
   const entryPath = source.entryPath === "" ? "index.html" : source.entryPath;
   const bridgeRef = useRef<SandboxBridgeHost | null>(null);
   // A wheel the page could not use reaches the app's back/forward swipe
@@ -544,6 +548,7 @@ export function ArtifactPagesFrame(props: ArtifactPagesFrameProps) {
             setScale(next);
           }}
           onTextSelection={(selection) => onTextSelection?.(selection)}
+          onArtifactLink={openArtifactLink}
           pageNavigation={pageNavigation}
           sourceEquivalent={sourceEquivalent}
           ref={attachFrame}

@@ -38,7 +38,8 @@ export interface ArtifactLinkOpener {
 
 /**
  * Races the ARTIFACT-FOLDER interpretation of a relative href (resolved
- * against THIS artifact's own folder chain, confirmed via the read-only
+ * against the folder chain it was written in - a markdown artifact's own
+ * folder, or an html page's folder - confirmed via the read-only
  * `epic.resolveArtifactByPath` RPC) against its plain WORKSPACE-FILE
  * interpretation (resolved against the chat's bound roots, existence-probed
  * the same way a chat link is) - whichever resolves first, BY PRIORITY,
@@ -163,13 +164,42 @@ function resolveAndOpenArtifactRelativeHref(
   });
 }
 
+/**
+ * Opens a link authored somewhere in the artifacts tree. A relative href
+ * resolves against `folderChain`, the root-to-leaf folder names of the place
+ * it was written; `null` gives it no folder candidate, as for an artifact
+ * whose chain cannot be rebuilt.
+ */
+export type ArtifactTreeLinkOpener = (
+  link: OpenableArtifactLink,
+  event: LinkClickEvent,
+  folderChain: readonly string[] | null,
+) => void;
+
+/** A markdown artifact's links, which are relative to its own folder. */
 export function useArtifactLinkOpener(args: {
   readonly epicId: string;
   readonly artifactId: string;
   readonly viewTabId: string;
 }): ArtifactLinkOpener {
-  const tabHostId = useTabHostId();
   const selfFolderChain = useArtifactFolderChain(args.artifactId);
+  const openTreeLink = useArtifactTreeLinkOpener({
+    epicId: args.epicId,
+    viewTabId: args.viewTabId,
+  });
+  const openLink = useCallback(
+    (link: OpenableArtifactLink, event: LinkClickEvent): void =>
+      openTreeLink(link, event, selfFolderChain),
+    [openTreeLink, selfFolderChain],
+  );
+  return { openLink };
+}
+
+export function useArtifactTreeLinkOpener(args: {
+  readonly epicId: string;
+  readonly viewTabId: string;
+}): ArtifactTreeLinkOpener {
+  const tabHostId = useTabHostId();
   const tabHostClient = useTabHostClient();
   const activeHostId = tabHostId;
   const worktrees = useWorktreeListBindingsForEpicForClient({
@@ -249,8 +279,12 @@ export function useArtifactLinkOpener(args: {
     [chatDeps],
   );
 
-  const openLink = useCallback(
-    (link: OpenableArtifactLink, event: LinkClickEvent): void => {
+  return useCallback(
+    (
+      link: OpenableArtifactLink,
+      event: LinkClickEvent,
+      folderChain: readonly string[] | null,
+    ): void => {
       if (link.kind === "external") {
         if (urlOpenPending) return;
         supersedePending();
@@ -306,7 +340,7 @@ export function useArtifactLinkOpener(args: {
         markdownLink,
         {
           epicId: args.epicId,
-          selfFolderChain,
+          selfFolderChain: folderChain,
         },
       );
     },
@@ -315,12 +349,9 @@ export function useArtifactLinkOpener(args: {
       chatDeps,
       openFile,
       openUrl,
-      selfFolderChain,
       supersedePending,
       urlOpenPending,
       worktrees.isError,
     ],
   );
-
-  return { openLink };
 }
