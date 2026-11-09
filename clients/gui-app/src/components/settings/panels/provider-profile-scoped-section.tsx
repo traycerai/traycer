@@ -56,6 +56,7 @@ import {
   duplicateProfileLabel,
   profileEligibilityToggleDisabledReason,
   profileInventoryNotice,
+  profileInventoryAttributes,
   profileCommitId,
   profileDisplayLabel,
 } from "@/components/providers/provider-profile-model";
@@ -337,7 +338,11 @@ export function ProviderProfileScopedSection(
   };
 
   return (
-    <section className="flex flex-col gap-3">
+    <section
+      className="flex flex-col gap-3"
+      data-settings-provider-id={state.providerId}
+      {...profileInventoryAttributes(selectedProfile)}
+    >
       <div className="flex flex-col gap-3 rounded-lg border border-border/60 p-3">
         <div className="flex items-center justify-between gap-2">
           <div className="text-ui-sm font-medium text-foreground">Profiles</div>

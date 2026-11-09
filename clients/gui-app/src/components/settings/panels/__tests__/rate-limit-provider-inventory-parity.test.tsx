@@ -1,4 +1,3 @@
-import { useEffect } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   cleanup,
@@ -15,10 +14,7 @@ import type {
   ProvidersListResponse,
 } from "@traycer/protocol/host/provider-schemas";
 import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
-import {
-  PROVIDER_DISPLAY_NAMES,
-  providersListResponseSchema,
-} from "@traycer/protocol/host/provider-schemas";
+import { providersListResponseSchema } from "@traycer/protocol/host/provider-schemas";
 import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-native-schemas";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
 import { HostRuntime } from "@traycer-clients/shared/host-client/host-runtime";
@@ -46,18 +42,10 @@ import { Popover, PopoverTrigger } from "@/components/ui/popover";
 import { RateLimitPopover } from "@/components/layout/header/rate-limit-popover";
 import { ProvidersSettingsPanel } from "@/components/settings/panels/providers-settings-panel";
 import type { RateLimitProfileSelection } from "@/hooks/rate-limits/use-rate-limit-profile-selection";
-import {
-  useVisibleRateLimitProviders,
-  type VisibleRateLimitProvider,
-} from "@/hooks/rate-limits/use-configured-rate-limit-providers";
 import type { ProviderRateLimitEnvelope } from "@/lib/rate-limits/rate-limit-envelope";
 import { NO_EPISODE } from "@/lib/rate-limits/rate-limit-envelope";
+import { isRateLimitCapableProvider } from "@/lib/rate-limit-providers";
 import { queryKeys } from "@/lib/query-keys";
-import {
-  profileAuthStatusText,
-  profileDisplayLabel,
-  profileInventoryNotice,
-} from "@/components/providers/provider-profile-model";
 import {
   NO_NOTICES,
   NO_OVERRIDES,
@@ -69,15 +57,8 @@ const HOST_ID = "provider-inventory-host";
 const HOST_NAME = "dev-box";
 const UNREADABLE_REASON = "Profile row uses an unsupported or invalid shape";
 
-interface ProviderProfilesSnapshot {
-  readonly providerId: ProviderId;
-  readonly profiles: ReadonlyArray<ProviderProfile>;
-}
-
 const spyState = vi.hoisted(() => ({
   scope: null as HostScope | null,
-  settingsProfiles: [] as ProviderProfilesSnapshot[],
-  visibleProviders: null as ReadonlyArray<VisibleRateLimitProvider> | null,
 }));
 
 vi.mock(
@@ -117,38 +98,6 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
     useNavigate: () => () => undefined,
   };
 });
-
-function VisibleRateLimitProviderRecorder(): null {
-  const providers = useVisibleRateLimitProviders();
-  useEffect(() => {
-    spyState.visibleProviders = providers;
-  }, [providers]);
-  return null;
-}
-
-// This wrapper records the actual props and still renders the real Settings
-// consumer. It observes the parsed inventory without replacing its row UI.
-vi.mock(
-  "@/components/settings/panels/provider-profile-scoped-section",
-  async (importOriginal) => {
-    const actual =
-      await importOriginal<
-        typeof import("@/components/settings/panels/provider-profile-scoped-section")
-      >();
-    return {
-      ...actual,
-      ProviderProfileScopedSection: (
-        props: Parameters<typeof actual.ProviderProfileScopedSection>[0],
-      ) => {
-        spyState.settingsProfiles.push({
-          providerId: props.state.providerId,
-          profiles: [...props.state.profiles],
-        });
-        return <actual.ProviderProfileScopedSection {...props} />;
-      },
-    };
-  },
-);
 
 interface ProfileFixture {
   readonly profileId: string;
@@ -190,7 +139,7 @@ function profileFixture(input: ProfileFixture): Record<string, unknown> {
 
 function providerFixture(
   providerId: ProviderId,
-  usageReporting: boolean,
+  usageReporting: boolean | undefined,
   profiles: ReadonlyArray<Record<string, unknown>>,
 ): Record<string, unknown> {
   return {
@@ -220,11 +169,13 @@ function providerFixture(
     managedInstallState: null,
     versionVisibility: null,
     advisory: null,
-    usageReporting,
+    ...(usageReporting === undefined ? {} : { usageReporting }),
   };
 }
 
-function providersResponse(): ProvidersListResponse {
+function providersResponse(oldHost: boolean): ProvidersListResponse {
+  const reporting = (value: boolean): boolean | undefined =>
+    oldHost ? undefined : value;
   const qwenProfiles = [
     profileFixture({
       profileId: "ambient",
@@ -303,8 +254,8 @@ function providersResponse(): ProvidersListResponse {
   ];
   return providersListResponseSchema.parse({
     providers: [
-      providerFixture("qwen", true, qwenProfiles),
-      providerFixture("opencode", true, [
+      providerFixture("qwen", reporting(true), qwenProfiles),
+      providerFixture("opencode", reporting(true), [
         profileFixture({
           profileId: "mapped-unavailable-profile",
           label: "Mapped unavailable account",
@@ -322,7 +273,7 @@ function providersResponse(): ProvidersListResponse {
           usageUpdatedAt: 1_800_000_000_000,
         }),
       ]),
-      providerFixture("codex", false, [
+      providerFixture("codex", reporting(false), [
         profileFixture({
           profileId: "settings-only-profile",
           label: "Settings-only account",
@@ -342,6 +293,7 @@ interface Harness {
   readonly binding: HostRuntimeBinding<HostRpcRegistry>;
   readonly scope: HostScope;
   readonly providersListCalls: { value: number };
+  readonly rateLimitUsageRequests: Array<ProviderId | undefined>;
 }
 
 async function createHarness(
@@ -377,6 +329,7 @@ async function createHarness(
   });
   await directory.startSeeded();
   const providersListCalls = { value: 0 };
+  const rateLimitUsageRequests: Array<ProviderId | undefined> = [];
   let requestSeq = 0;
   const runtime = new HostRuntime<HostRpcRegistry>({
     runnerHost,
@@ -388,6 +341,14 @@ async function createHarness(
         "providers.list": () => {
           providersListCalls.value += 1;
           return response;
+        },
+        "host.getRateLimitUsage": (params) => {
+          rateLimitUsageRequests.push(params.providerId);
+          return {
+            totalTokens: 0,
+            remainingTokens: 0,
+            providerRateLimits: null,
+          };
         },
       },
     }),
@@ -427,6 +388,7 @@ async function createHarness(
     binding,
     scope,
     providersListCalls,
+    rateLimitUsageRequests,
   };
 }
 
@@ -440,8 +402,6 @@ afterEach(() => {
     harness.auth.dispose();
   }
   spyState.scope = null;
-  spyState.settingsProfiles = [];
-  spyState.visibleProviders = null;
   useSettingsEnvironmentPickStore.setState({ pick: null });
   useProvidersFocusStore.setState({
     focusHarnessId: null,
@@ -452,17 +412,6 @@ afterEach(() => {
     focusTab: null,
   });
 });
-
-function profileInventory(profiles: ReadonlyArray<ProviderProfile>) {
-  return profiles.map((profile) => ({
-    id: profile.profileId,
-    kind: profile.kind,
-    label: profileDisplayLabel(profile),
-    authStatus: profile.auth.status,
-    standing: profile.credentialHome?.standing ?? null,
-    notice: profileInventoryNotice(profile),
-  }));
-}
 
 function openCodeLastGoodEnvelope(): ProviderRateLimitEnvelope {
   const lastGood = {
@@ -511,28 +460,318 @@ function requireProvider(
   return provider;
 }
 
-function latestSettingsSnapshot(
-  providerId: ProviderId,
-): ProviderProfilesSnapshot {
-  const snapshot = [...spyState.settingsProfiles]
-    .reverse()
-    .find((candidate) => candidate.providerId === providerId);
-  if (snapshot === undefined) {
-    throw new Error(`Settings did not render ${providerId}'s profile section.`);
-  }
-  return snapshot;
+interface RenderedProfileInventoryRow {
+  readonly providerId: string;
+  readonly id: string;
+  readonly kind: string;
+  readonly label: string;
+  readonly authStatus: string;
+  readonly standing: string;
+  readonly presence: string;
+  readonly readability: string;
 }
 
-function visibleSnapshot(providerId: ProviderId): VisibleRateLimitProvider {
-  const snapshot = spyState.visibleProviders?.find(
-    (candidate) => candidate.providerId === providerId,
+interface SettingsProviderRailEntry {
+  readonly enabled: boolean;
+  readonly button: HTMLElement;
+}
+
+function requiredAttribute(element: Element, name: string): string {
+  const value = element.getAttribute(name);
+  if (value === null) {
+    throw new Error(`Rendered inventory element is missing ${name}.`);
+  }
+  return value;
+}
+
+function htmlElements(root: ParentNode, selector: string): HTMLElement[] {
+  return [...root.querySelectorAll(selector)].map((element) => {
+    if (!(element instanceof HTMLElement)) {
+      throw new Error(`Expected an HTMLElement for selector ${selector}.`);
+    }
+    return element;
+  });
+}
+
+function renderedProfileInventoryRow(
+  element: HTMLElement,
+  providerId: string,
+): RenderedProfileInventoryRow {
+  return {
+    providerId,
+    id: requiredAttribute(element, "data-provider-profile-id"),
+    kind: requiredAttribute(element, "data-provider-profile-kind"),
+    label: requiredAttribute(element, "data-provider-profile-label"),
+    authStatus: requiredAttribute(element, "data-provider-profile-auth-status"),
+    standing: requiredAttribute(element, "data-provider-profile-standing"),
+    presence: requiredAttribute(element, "data-provider-profile-presence"),
+    readability: requiredAttribute(
+      element,
+      "data-provider-profile-readability",
+    ),
+  };
+}
+
+function settingsProviderRail(
+  settings: HTMLElement,
+): Map<string, SettingsProviderRailEntry> {
+  const providers = new Map<string, SettingsProviderRailEntry>();
+  for (const button of htmlElements(
+    settings,
+    "button[data-settings-provider-id]",
+  )) {
+    const providerId = requiredAttribute(button, "data-settings-provider-id");
+    const enabledValue = requiredAttribute(
+      button,
+      "data-settings-provider-enabled",
+    );
+    if (enabledValue !== "true" && enabledValue !== "false") {
+      throw new Error(
+        `Settings provider ${providerId} has invalid enabled data.`,
+      );
+    }
+    const enabled = enabledValue === "true";
+    const previous = providers.get(providerId);
+    if (previous !== undefined) {
+      expect(previous.enabled).toBe(enabled);
+      continue;
+    }
+    providers.set(providerId, { enabled, button });
+  }
+  return providers;
+}
+
+function selectedSettingsProfileSection(
+  settings: HTMLElement,
+  providerId: string,
+): HTMLElement {
+  const section = settings.querySelector(
+    `section[data-settings-provider-id="${providerId}"][data-provider-profile-id]`,
   );
-  if (snapshot === undefined) {
-    throw new Error(
-      `The real visible-provider hook did not return ${providerId}.`,
+  if (!(section instanceof HTMLElement)) {
+    throw new Error(`Settings has no selected profile row for ${providerId}.`);
+  }
+  return section;
+}
+
+function selectedSettingsProfile(
+  settings: HTMLElement,
+  providerId: string,
+): RenderedProfileInventoryRow {
+  return renderedProfileInventoryRow(
+    selectedSettingsProfileSection(settings, providerId),
+    providerId,
+  );
+}
+
+function profileMenuTrigger(
+  settings: HTMLElement,
+  providerId: string,
+): HTMLElement {
+  const trigger = selectedSettingsProfileSection(
+    settings,
+    providerId,
+  ).querySelector('button[aria-label*=" profile:"]');
+  if (!(trigger instanceof HTMLElement)) {
+    throw new Error(`Settings has no profile menu trigger for ${providerId}.`);
+  }
+  return trigger;
+}
+
+function assertManagedProfileLabelIsVisible(
+  settings: HTMLElement,
+  providerId: string,
+  profile: RenderedProfileInventoryRow,
+): void {
+  if (profile.kind === "ambient") return;
+  const trigger = profileMenuTrigger(settings, providerId);
+  const visibleLabel = `${trigger.getAttribute("aria-label") ?? ""} ${trigger.textContent}`;
+  expect(visibleLabel).toContain(profile.label);
+}
+
+function settingsProfileMenuOptions(menu: HTMLElement): Array<{
+  readonly label: string;
+  readonly disabled: boolean;
+  readonly current: boolean;
+}> {
+  return htmlElements(
+    menu,
+    '[role="group"][aria-label$=" profile controls"]',
+  ).map((group) => {
+    const item = group.querySelector('[role="menuitem"]');
+    if (!(item instanceof HTMLElement)) {
+      throw new Error(
+        "A profile controls group has no selectable profile row.",
+      );
+    }
+    return {
+      label: requiredAttribute(item, "aria-label"),
+      disabled:
+        item.getAttribute("aria-disabled") === "true" ||
+        item.hasAttribute("data-disabled"),
+      current: item.getAttribute("aria-current") === "true",
+    };
+  });
+}
+
+async function collectSettingsProfileInventory(
+  settings: HTMLElement,
+  user: UserEvent,
+): Promise<{
+  readonly providers: Map<string, SettingsProviderRailEntry>;
+  readonly profiles: Map<string, ReadonlyArray<RenderedProfileInventoryRow>>;
+}> {
+  const providers = settingsProviderRail(settings);
+  const profilesByProvider = new Map<
+    string,
+    ReadonlyArray<RenderedProfileInventoryRow>
+  >();
+  const initiallySelected = settings.querySelector(
+    "section[data-settings-provider-id][data-provider-profile-id]",
+  );
+  if (!(initiallySelected instanceof HTMLElement)) {
+    throw new Error("Settings did not render its initially selected profile.");
+  }
+  const initialProviderId = requiredAttribute(
+    initiallySelected,
+    "data-settings-provider-id",
+  );
+  const initialRow = renderedProfileInventoryRow(
+    initiallySelected,
+    initialProviderId,
+  );
+  profilesByProvider.set(initialProviderId, [initialRow]);
+  assertManagedProfileLabelIsVisible(settings, initialProviderId, initialRow);
+  for (const [providerId, entry] of providers) {
+    if (entry.button.getAttribute("aria-current") !== "true") {
+      await user.click(entry.button);
+    }
+    const rows = [...(profilesByProvider.get(providerId) ?? [])];
+    const currentRow = selectedSettingsProfile(settings, providerId);
+    if (!rows.some((row) => row.id === currentRow.id)) rows.push(currentRow);
+    assertManagedProfileLabelIsVisible(settings, providerId, currentRow);
+    const section = selectedSettingsProfileSection(settings, providerId);
+    const trigger = section.querySelector('button[aria-label*=" profile:"]');
+    if (trigger instanceof HTMLElement) {
+      await user.click(trigger);
+      const menu = screen.getByRole("menu");
+      const options = settingsProfileMenuOptions(menu);
+      expect(new Set(options.map((option) => option.label)).size).toBe(
+        options.length,
+      );
+      await user.click(profileMenuTrigger(settings, providerId));
+      for (const option of options) {
+        if (option.current) continue;
+        if (option.disabled) {
+          expect(rows.some((row) => row.readability !== "null")).toBe(true);
+          continue;
+        }
+        await user.click(profileMenuTrigger(settings, providerId));
+        const currentMenu = screen.getByRole("menu");
+        await user.click(
+          within(currentMenu).getByRole("menuitem", { name: option.label }),
+        );
+        const selectedProfile = selectedSettingsProfile(settings, providerId);
+        assertManagedProfileLabelIsVisible(
+          settings,
+          providerId,
+          selectedProfile,
+        );
+        rows.push(selectedProfile);
+      }
+      expect(rows).toHaveLength(options.length);
+    }
+    expect(new Set(rows.map((row) => row.id)).size).toBe(rows.length);
+    profilesByProvider.set(providerId, rows);
+  }
+  return { providers, profiles: profilesByProvider };
+}
+
+function collectPopoverProfileInventory(
+  popover: HTMLElement,
+): Map<string, ReadonlyArray<RenderedProfileInventoryRow>> {
+  const providers = new Map<
+    string,
+    ReadonlyArray<RenderedProfileInventoryRow>
+  >();
+  for (const group of htmlElements(popover, "[data-usage-provider-id]")) {
+    const providerId = requiredAttribute(group, "data-usage-provider-id");
+    if (providers.has(providerId)) {
+      throw new Error(
+        `Usage rendered more than one provider group for ${providerId}.`,
+      );
+    }
+    const rows = htmlElements(group, "[data-provider-profile-id]").map(
+      (card) => {
+        const row = renderedProfileInventoryRow(card, providerId);
+        expect(within(card).getByText(row.label, { exact: true })).toBeTruthy();
+        return row;
+      },
+    );
+    providers.set(providerId, rows);
+  }
+  return providers;
+}
+
+function expectedUsageProviderIds(
+  response: ProvidersListResponse,
+  settingsProviders: ReadonlyMap<string, SettingsProviderRailEntry>,
+): string[] {
+  const capability = new Map<string, boolean>(
+    response.providers.map((provider) => [
+      provider.providerId,
+      provider.usageReporting ??
+        isRateLimitCapableProvider(provider.providerId),
+    ]),
+  );
+  return [...settingsProviders]
+    .filter(
+      ([providerId, entry]) =>
+        entry.enabled && capability.get(providerId) === true,
+    )
+    .map(([providerId]) => providerId)
+    .sort();
+}
+
+function sortedInventoryRows(
+  rows: ReadonlyArray<RenderedProfileInventoryRow>,
+): RenderedProfileInventoryRow[] {
+  return [...rows].sort((left, right) => left.id.localeCompare(right.id));
+}
+
+function assertRenderedInventoryParity(
+  response: ProvidersListResponse,
+  settingsProviders: ReadonlyMap<string, SettingsProviderRailEntry>,
+  settingsProfiles: ReadonlyMap<
+    string,
+    ReadonlyArray<RenderedProfileInventoryRow>
+  >,
+  popoverProfiles: ReadonlyMap<
+    string,
+    ReadonlyArray<RenderedProfileInventoryRow>
+  >,
+): void {
+  const responseProviderIds = response.providers
+    .map((provider) => provider.providerId)
+    .sort();
+  expect([...settingsProviders.keys()].sort()).toEqual(responseProviderIds);
+  const expectedProviderIds = expectedUsageProviderIds(
+    response,
+    settingsProviders,
+  );
+  const actualProviderIds = [...popoverProfiles.keys()].sort();
+  expect(actualProviderIds).toEqual(expectedProviderIds);
+  expect(popoverProfiles.size).toBe(expectedProviderIds.length);
+  for (const providerId of expectedProviderIds) {
+    const settingsRows = settingsProfiles.get(providerId);
+    const popoverRows = popoverProfiles.get(providerId);
+    if (settingsRows === undefined || popoverRows === undefined) {
+      throw new Error(`A rendered profile inventory is missing ${providerId}.`);
+    }
+    expect(sortedInventoryRows(popoverRows)).toEqual(
+      sortedInventoryRows(settingsRows),
     );
   }
-  return snapshot;
 }
 
 function assertParserRetainsProfileFacts(
@@ -561,44 +800,21 @@ function assertParserRetainsProfileFacts(
   });
 }
 
-function assertProfileInventoryParity(
-  sourceProfiles: ReadonlyArray<ProviderProfile>,
-  settingsProfiles: ReadonlyArray<ProviderProfile>,
-  visibleProfiles: ReadonlyArray<ProviderProfile>,
-): void {
-  const settingsInventory = profileInventory(settingsProfiles);
-  expect(settingsInventory).toEqual(profileInventory(sourceProfiles));
-  expect(profileInventory(visibleProfiles)).toEqual(settingsInventory);
-}
-
-function assertPopoverInventoryCards(
-  popover: HTMLElement,
-  profiles: ReadonlyArray<ProviderProfile>,
-): void {
-  for (const profile of profiles) {
-    const profileId = profile.kind === "ambient" ? "" : profile.profileId;
-    const card = popover.querySelector(
-      `[data-testid="rate-limit-profile-card-qwen-${profileId}"]`,
-    );
-    if (!(card instanceof HTMLElement)) {
-      throw new Error(`Usage did not render the Qwen card for ${profileId}.`);
-    }
-    expect(within(card).getByText(profileDisplayLabel(profile))).toBeTruthy();
-    const notice =
-      profileInventoryNotice(profile) ?? profileAuthStatusText(profile);
-    expect(within(card).getByText(notice)).toBeTruthy();
-  }
-}
-
 function assertMappedUnhealthyProfilesRetainUsage(popover: HTMLElement): void {
   const profiles = [
-    ["mapped-unavailable-profile", "Unavailable"],
-    ["mapped-unknown-profile", "Unknown"],
-    ["mapped-signed-out-profile", "Signed out"],
+    ["mapped-unavailable-profile", "Unavailable", "unavailable"],
+    ["mapped-unknown-profile", "Unknown", "unknown"],
+    ["mapped-signed-out-profile", "Signed out", "unauthenticated"],
   ] as const;
-  for (const [profileId, authLabel] of profiles) {
-    const card = within(popover).getByTestId(
-      `rate-limit-profile-card-opencode-${profileId}`,
+  for (const [profileId, authLabel, authStatus] of profiles) {
+    const card = popover.querySelector(
+      `[data-usage-provider-id="opencode"] [data-provider-profile-id="${profileId}"]`,
+    );
+    if (!(card instanceof HTMLElement)) {
+      throw new Error(`Usage did not render OpenCode account ${profileId}.`);
+    }
+    expect(card.getAttribute("data-provider-profile-auth-status")).toBe(
+      authStatus,
     );
     expect(within(card).getByText(authLabel)).toBeTruthy();
     expect(within(card).getByText("4% used")).toBeTruthy();
@@ -620,91 +836,21 @@ function assertUnreadableProfileNotice(
   expect(within(summary).getByText(notice)).toBeTruthy();
 }
 
-async function selectAndAssertQwenProfiles(
-  settings: HTMLElement,
-  profiles: ReadonlyArray<ProviderProfile>,
-  user: UserEvent,
-): Promise<void> {
-  const trigger = within(settings).getByRole("button", {
-    name: /^Qwen Code profile:/,
-  });
-  await user.click(trigger);
-  const menu = screen.getByRole("menu");
-  for (const profile of profiles) {
-    const label =
-      profile.kind === "ambient"
-        ? `${PROVIDER_DISPLAY_NAMES.qwen}'s own login on ${HOST_NAME}`
-        : profileDisplayLabel(profile);
-    expect(within(menu).getByText(label)).toBeTruthy();
-  }
-  await user.click(trigger);
-
-  for (const profile of profiles.filter(
-    (candidate) =>
-      candidate.enabled && candidate.profileId !== "unreadable-profile",
-  )) {
-    await user.click(trigger);
-    const label =
-      profile.kind === "ambient"
-        ? `${PROVIDER_DISPLAY_NAMES.qwen}'s own login on ${HOST_NAME}`
-        : profileDisplayLabel(profile);
-    const profileLabel = within(screen.getByRole("menu")).getByText(label);
-    const item = profileLabel.closest('[role="menuitem"]');
-    if (item === null) {
-      throw new Error(
-        `The profile menu item for ${profile.profileId} is missing.`,
-      );
-    }
-    await user.click(item);
-    expect(trigger.getAttribute("aria-label")).toContain(label);
-    const notice = profileInventoryNotice(profile);
-    if (notice === null) continue;
-    const summary = settings.querySelector(
-      '[data-slot="profile-summary-actions"]',
-    );
-    if (!(summary instanceof HTMLElement)) {
-      throw new Error("Settings did not render the selected profile summary.");
-    }
-    expect(within(summary).getByText(notice)).toBeTruthy();
-  }
+interface MountedInventoryConsumers {
+  readonly harness: Harness;
+  readonly popover: HTMLElement;
+  readonly settings: HTMLElement;
 }
 
-async function selectCodexAndAssertSettingsOnlyProfile(
-  settings: HTMLElement,
-  codex: ProvidersListResponse["providers"][number],
-  user: UserEvent,
-): Promise<void> {
-  const codexProviderButton = within(settings)
-    .getAllByRole("button", {
-      name: /^Codex\d+ profile$/,
-    })
-    .at(0);
-  if (codexProviderButton === undefined) {
-    throw new Error("Settings did not render Codex in the provider rail.");
-  }
-  await user.click(codexProviderButton);
-  expect(
-    within(settings).getByRole("button", {
-      name: "Codex profile: Settings-only account",
-    }),
-  ).toBeTruthy();
-  expect(
-    latestSettingsSnapshot("codex").profiles.map(
-      (profile) => profile.profileId,
-    ),
-  ).toEqual(codex.profiles.map((profile) => profile.profileId));
-}
-
-describe("provider inventory shared by Usage and Settings", () => {
-  it("renders the parsed host inventory in both consumers and fetches it once", async () => {
-    const response = providersResponse();
-    const qwen = requireProvider(response, "qwen");
-    const codex = requireProvider(response, "codex");
-    const openCode = requireProvider(response, "opencode");
-    assertParserRetainsProfileFacts(qwen.profiles);
-
-    const harness = await createHarness(response);
-    builtHarnesses.push(harness);
+async function mountInventoryConsumers(
+  response: ProvidersListResponse,
+): Promise<MountedInventoryConsumers> {
+  const harness = await createHarness(response);
+  builtHarnesses.push(harness);
+  const openCode = response.providers.find(
+    (provider) => provider.providerId === "opencode",
+  );
+  if (openCode !== undefined) {
     const cachedUsage = openCodeLastGoodEnvelope();
     for (const profile of openCode.profiles) {
       harness.queryClient.setQueryData(
@@ -721,102 +867,146 @@ describe("provider inventory shared by Usage and Settings", () => {
         { updatedAt: Date.now() },
       );
     }
-    spyState.scope = harness.scope;
-    useSettingsEnvironmentPickStore.setState({
-      pick: { kind: "local", hostId: HOST_ID, hostName: HOST_NAME },
-    });
-    useProvidersFocusStore.setState({
-      focusHarnessId: "qwen",
-      focusHostId: null,
-      focusTargetHostId: null,
-      focusProfileId: "unreadable-profile",
-      startSignIn: false,
-      focusTab: "usage",
-    });
+  }
+  spyState.scope = harness.scope;
+  useSettingsEnvironmentPickStore.setState({
+    pick: { kind: "local", hostId: HOST_ID, hostName: HOST_NAME },
+  });
+  useProvidersFocusStore.setState({
+    focusHarnessId: "qwen",
+    focusHostId: null,
+    focusTargetHostId: null,
+    focusProfileId: "unreadable-profile",
+    startSignIn: false,
+    focusTab: "usage",
+  });
 
-    const profileSelection: RateLimitProfileSelection = {
-      shownProfiles: {},
-      lastProfileByHarness: {},
-    };
-    const settingsProfiles = (
-      <div data-testid="providers-settings-panel">
-        <PersonalPageContext.Provider
-          value={{
-            section: "providers",
-            pick: { kind: "local", hostId: HOST_ID, hostName: HOST_NAME },
-            state: {
-              kind: "ready",
-              status: environmentStatusFixture({}),
-            },
-            line: null,
-            hostName: HOST_NAME,
-            localOverrides: NO_OVERRIDES,
-            hostId: HOST_ID,
-            client: harness.binding.hostClient,
-            notices: NO_NOTICES,
-            review: NO_REVIEW,
-          }}
-        >
-          <ProvidersSettingsPanel />
-        </PersonalPageContext.Provider>
-      </div>
-    );
-    render(
-      <RunnerHostProvider runnerHost={harness.runnerHost}>
-        <QueryClientProvider client={harness.queryClient}>
-          <HostRuntimeContext.Provider value={harness.binding}>
-            <TooltipProvider>
-              <VisibleRateLimitProviderRecorder />
-              <Popover open>
-                <PopoverTrigger asChild>
-                  <button type="button">Open usage</button>
-                </PopoverTrigger>
-                <RateLimitPopover
-                  onClose={() => undefined}
-                  profileSelection={profileSelection}
-                  scope={harness.scope}
-                  hasExplicitPick={false}
-                  side="bottom"
-                  align="end"
-                />
-              </Popover>
-              {settingsProfiles}
-            </TooltipProvider>
-          </HostRuntimeContext.Provider>
-        </QueryClientProvider>
-      </RunnerHostProvider>,
-    );
+  const profileSelection: RateLimitProfileSelection = {
+    shownProfiles: {},
+    lastProfileByHarness: {},
+  };
+  render(
+    <RunnerHostProvider runnerHost={harness.runnerHost}>
+      <QueryClientProvider client={harness.queryClient}>
+        <HostRuntimeContext.Provider value={harness.binding}>
+          <TooltipProvider>
+            <Popover open>
+              <PopoverTrigger asChild>
+                <button type="button">Open usage</button>
+              </PopoverTrigger>
+              <RateLimitPopover
+                onClose={() => undefined}
+                profileSelection={profileSelection}
+                scope={harness.scope}
+                hasExplicitPick={false}
+                side="bottom"
+                align="end"
+              />
+            </Popover>
+            <div data-testid="providers-settings-panel">
+              <PersonalPageContext.Provider
+                value={{
+                  section: "providers",
+                  pick: { kind: "local", hostId: HOST_ID, hostName: HOST_NAME },
+                  state: {
+                    kind: "ready",
+                    status: environmentStatusFixture({}),
+                  },
+                  line: null,
+                  hostName: HOST_NAME,
+                  localOverrides: NO_OVERRIDES,
+                  hostId: HOST_ID,
+                  client: harness.binding.hostClient,
+                  notices: NO_NOTICES,
+                  review: NO_REVIEW,
+                }}
+              >
+                <ProvidersSettingsPanel />
+              </PersonalPageContext.Provider>
+            </div>
+          </TooltipProvider>
+        </HostRuntimeContext.Provider>
+      </QueryClientProvider>
+    </RunnerHostProvider>,
+  );
 
-    const popover = await screen.findByRole("dialog", { name: "Usage limits" });
-    const settings = screen.getByTestId("providers-settings-panel");
-    await waitFor(() => {
-      expect(
-        spyState.settingsProfiles.some(
-          (snapshot) => snapshot.providerId === "qwen",
-        ),
-      ).toBe(true);
-      expect(
-        spyState.visibleProviders?.some(
-          (provider) => provider.providerId === "qwen",
-        ),
-      ).toBe(true);
-      expect(harness.providersListCalls.value).toBe(1);
-    });
+  const popover = await screen.findByRole("dialog", { name: "Usage limits" });
+  const settings = screen.getByTestId("providers-settings-panel");
+  await waitFor(() => {
+    expect(
+      settings.querySelectorAll("button[data-settings-provider-id]").length,
+    ).toBeGreaterThan(0);
+    expect(harness.providersListCalls.value).toBe(1);
+  });
+  return { harness, popover, settings };
+}
 
-    const settingsProfilesForQwen = latestSettingsSnapshot("qwen").profiles;
-    assertProfileInventoryParity(
-      qwen.profiles,
-      settingsProfilesForQwen,
-      visibleSnapshot("qwen").profiles,
-    );
-    assertPopoverInventoryCards(popover, settingsProfilesForQwen);
-    expect(within(popover).queryByRole("tab", { name: "Codex" })).toBeNull();
+describe("provider inventory shared by Usage and Settings", () => {
+  it("renders all reporting inventory rows from the shared host response", async () => {
+    const response = providersResponse(false);
+    const qwen = requireProvider(response, "qwen");
+    assertParserRetainsProfileFacts(qwen.profiles);
+    const { harness, popover, settings } =
+      await mountInventoryConsumers(response);
+
     assertMappedUnhealthyProfilesRetainUsage(popover);
     assertUnreadableProfileNotice(popover, settings);
-    const user = userEvent.setup();
-    await selectAndAssertQwenProfiles(settings, settingsProfilesForQwen, user);
-    await selectCodexAndAssertSettingsOnlyProfile(settings, codex, user);
+    const { providers, profiles } = await collectSettingsProfileInventory(
+      settings,
+      userEvent.setup(),
+    );
+    const popoverProfiles = collectPopoverProfileInventory(popover);
+    assertRenderedInventoryParity(
+      response,
+      providers,
+      profiles,
+      popoverProfiles,
+    );
 
+    expect(providers.has("codex")).toBe(true);
+    expect(profiles.get("codex")).toHaveLength(1);
+    expect(popoverProfiles.has("codex")).toBe(false);
+    expect(popoverProfiles.has("qwen")).toBe(true);
+    expect(popoverProfiles.has("opencode")).toBe(true);
+    expect(harness.rateLimitUsageRequests).not.toContain("qwen");
+    for (const group of htmlElements(popover, "[data-usage-provider-id]")) {
+      expect(
+        within(group).queryByText("Usage reporting unconfirmed."),
+      ).toBeNull();
+    }
+    await waitFor(() => expect(harness.providersListCalls.value).toBe(1));
+  });
+
+  it("marks mapped provider rows unconfirmed for an old enum-only host response", async () => {
+    const response = providersResponse(true);
+    expect(
+      response.providers.every(
+        (provider) => provider.usageReporting === undefined,
+      ),
+    ).toBe(true);
+    const { harness, popover, settings } =
+      await mountInventoryConsumers(response);
+
+    const { providers, profiles } = await collectSettingsProfileInventory(
+      settings,
+      userEvent.setup(),
+    );
+    const popoverProfiles = collectPopoverProfileInventory(popover);
+    assertRenderedInventoryParity(
+      response,
+      providers,
+      profiles,
+      popoverProfiles,
+    );
+
+    expect(providers.has("qwen")).toBe(true);
+    expect(popoverProfiles.has("qwen")).toBe(false);
+    expect([...popoverProfiles.keys()].sort()).toEqual(["codex", "opencode"]);
+    for (const group of htmlElements(popover, "[data-usage-provider-id]")) {
+      expect(
+        within(group).getByText("Usage reporting unconfirmed."),
+      ).toBeTruthy();
+    }
     await waitFor(() => expect(harness.providersListCalls.value).toBe(1));
   });
 });

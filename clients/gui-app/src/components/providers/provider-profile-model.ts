@@ -89,6 +89,23 @@ export function profileInventoryNotice(
     : `${CREDENTIAL_STANDING_LABELS[standing.material]}${cause}`;
 }
 
+/** Semantic identity of a rendered inventory row, shared across both surfaces. */
+export function profileInventoryAttributes(profile: ProviderProfile) {
+  return {
+    "data-provider-profile-id": profile.profileId,
+    "data-provider-profile-kind": profile.kind,
+    "data-provider-profile-label": profile.label,
+    "data-provider-profile-auth-status": profile.auth.status,
+    "data-provider-profile-standing": JSON.stringify(
+      profile.credentialHome?.standing ?? null,
+    ),
+    "data-provider-profile-presence": JSON.stringify(profile.presence ?? null),
+    "data-provider-profile-readability": JSON.stringify(
+      profile.readability ?? null,
+    ),
+  };
+}
+
 // Dropdown row status suffix: null for a healthy profile (nothing to announce
 // beyond its name), else the same wording the Settings profile row uses
 // (`profileAuthStatusText`) so every surface stays consistent.

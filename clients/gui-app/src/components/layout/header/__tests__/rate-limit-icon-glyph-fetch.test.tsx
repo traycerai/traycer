@@ -147,7 +147,6 @@ function configuredProvider(
   return {
     providerId,
     lane,
-    authStatus: "authenticated",
     profiles: [],
     fetchEligibility: { ambient: true, managedProfiles: true },
   };

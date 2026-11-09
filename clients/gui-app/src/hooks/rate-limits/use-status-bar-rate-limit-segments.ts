@@ -23,6 +23,7 @@ import {
   useRateLimitAccountInventory,
   useVisibleRateLimitProviders,
   type ConfiguredRateLimitProvider,
+  type MappedVisibleRateLimitProvider,
 } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
 import {
   resolveStatusBarProfileIds,
@@ -310,7 +311,7 @@ export function useStatusBarWindowedProviders(): ReadonlyArray<ConfiguredRateLim
   const visibleProviders = useVisibleRateLimitProviders();
   return sortProviderStatesByProviderOrder(
     visibleProviders.filter(
-      (provider): provider is ConfiguredRateLimitProvider =>
+      (provider): provider is MappedVisibleRateLimitProvider =>
         provider.lane !== null &&
         isWindowedRateLimitProvider(provider.providerId),
     ),

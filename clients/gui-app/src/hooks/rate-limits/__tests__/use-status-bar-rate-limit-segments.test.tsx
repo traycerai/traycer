@@ -321,7 +321,6 @@ function configuredProvider(input: {
   return {
     providerId: input.providerId,
     lane: input.lane,
-    authStatus: "authenticated",
     profiles: input.profiles ?? [],
     fetchEligibility: input.fetchEligibility ?? {
       ambient: true,
@@ -1280,7 +1279,7 @@ describe("useStatusBarRateLimitSegments", () => {
     expect(result.current.retryTargets).toEqual([]);
   });
 
-  it("keeps a spent account episode outside the current display projection", () => {
+  it("keeps the spent episode of an account the display list drops with its provider", () => {
     const key = rateLimitAccountLedgerKey(RETRY_HOST_ID, "opencode", "work");
     recordScheduledTransientRead(key, 7);
     // Both OpenCode accounts remain in the host inventory although only Codex

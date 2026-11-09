@@ -1,7 +1,6 @@
 import { useMemo } from "react";
 import type {
   ProviderId,
-  ProviderCliState,
   ProviderAuthStatus,
   ProvidersListResponse,
   ProviderProfile,
@@ -21,19 +20,25 @@ import {
 export interface ConfiguredRateLimitProvider {
   readonly providerId: RateLimitProviderId;
   readonly lane: RateLimitFetchLane;
-  readonly authStatus: ProviderAuthStatus;
   readonly profiles: ReadonlyArray<ProviderProfile>;
   /** Target-scoped credential eligibility, independent from display/cache state. */
   readonly fetchEligibility: RateLimitFetchEligibility;
 }
 
+/** Display facts belong to the usage inventory, not the polling targets. */
+export interface MappedVisibleRateLimitProvider extends ConfiguredRateLimitProvider {
+  readonly authStatus: ProviderAuthStatus;
+  readonly usageReportingConfirmed: boolean;
+}
+
 /** An adapter may report usage before this client has a fetch arm for it. */
 export type VisibleRateLimitProvider =
-  | ConfiguredRateLimitProvider
+  | MappedVisibleRateLimitProvider
   | {
       readonly providerId: Exclude<ProviderId, RateLimitProviderId>;
       readonly lane: null;
       readonly authStatus: ProviderAuthStatus;
+      readonly usageReportingConfirmed: boolean;
       readonly profiles: ReadonlyArray<ProviderProfile>;
       readonly fetchEligibility: RateLimitFetchEligibility;
     };
@@ -69,15 +74,16 @@ function hasEligibleFetchTarget(
 }
 
 function rateLimitProviderCandidate(
-  state: ProviderCliState,
+  state: ProvidersListResponse["providers"][number],
 ): VisibleRateLimitProvider {
   const common = {
     authStatus: state.auth.status,
+    usageReportingConfirmed: state.usageReporting !== undefined,
     profiles: state.profiles,
     fetchEligibility: resolveRateLimitFetchEligibility(state),
   };
   const providerId = state.providerId;
-  // The protocol enum chooses a fetch arm, never inventory membership.
+  // The enum chooses the fetch arm; old-host membership is handled below.
   return isRateLimitCapableProvider(providerId)
     ? { ...common, providerId, lane: rateLimitFetchLane(providerId) }
     : { ...common, providerId, lane: null };
@@ -87,8 +93,24 @@ function rateLimitProviderCandidates(
   providers: ProvidersListResponse["providers"],
 ): ReadonlyArray<VisibleRateLimitProvider> {
   return providers
-    .filter((state) => state.enabled && state.usageReporting === true)
+    .filter(
+      (state) =>
+        state.enabled &&
+        (state.usageReporting ?? isRateLimitCapableProvider(state.providerId)),
+    )
     .map(rateLimitProviderCandidate);
+}
+
+/** Fetch consumers carry account identity and eligibility, not display metadata. */
+function configuredRateLimitProvider(
+  provider: MappedVisibleRateLimitProvider,
+): ConfiguredRateLimitProvider {
+  return {
+    providerId: provider.providerId,
+    lane: provider.lane,
+    profiles: provider.profiles,
+    fetchEligibility: provider.fetchEligibility,
+  };
 }
 
 /** Adapter-reporting providers with a mapped, eligible usage fetch target. */
@@ -99,7 +121,7 @@ export function useConfiguredRateLimitProviders(): ReadonlyArray<ConfiguredRateL
     if (providers === undefined) return [];
     return rateLimitProviderCandidates(providers).flatMap((provider) =>
       provider.lane !== null && hasEligibleFetchTarget(provider)
-        ? [provider]
+        ? [configuredRateLimitProvider(provider)]
         : [],
     );
   }, [providers]);
@@ -142,9 +164,10 @@ export function useRateLimitAccountInventory(): RateLimitAccountInventory {
               .filter((state) => state.enabled)
               .map(rateLimitProviderCandidate)
               .filter(
-                (provider): provider is ConfiguredRateLimitProvider =>
+                (provider): provider is MappedVisibleRateLimitProvider =>
                   provider.lane !== null,
-              ),
+              )
+              .map(configuredRateLimitProvider),
     }),
     [providers],
   );
@@ -152,7 +175,9 @@ export function useRateLimitAccountInventory(): RateLimitAccountInventory {
 
 /**
  * One providers.list inventory, filtered only by enablement and the adapter's
- * usage capability. Reachability, auth and usage observations belong to rows;
+ * usage capability. Older hosts omit it, so their fetch-arm enum is the
+ * compatibility fallback and the row is marked unconfirmed. Reachability,
+ * auth and usage observations belong to rows;
  * they never decide whether a provider or its sibling accounts exist.
  */
 export function useVisibleRateLimitProviders(): ReadonlyArray<VisibleRateLimitProvider> {

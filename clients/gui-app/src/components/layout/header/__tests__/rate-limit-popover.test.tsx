@@ -96,6 +96,7 @@ type MockState = {
     providerId: string;
     lane: string | null;
     authStatus?: ProviderAuthStatus;
+    usageReportingConfirmed?: boolean;
     profiles: ReadonlyArray<ProviderProfile> | undefined;
     fetchEligibility?: RateLimitFetchEligibility;
   }>;
@@ -218,6 +219,7 @@ vi.mock("@/hooks/rate-limits/use-configured-rate-limit-providers", () => ({
     mocks.configured.map((provider) => ({
       ...provider,
       authStatus: provider.authStatus ?? "authenticated",
+      usageReportingConfirmed: provider.usageReportingConfirmed ?? true,
       fetchEligibility: provider.fetchEligibility ?? {
         ambient: true,
         managedProfiles: true,
@@ -2785,6 +2787,7 @@ describe("<RateLimitPopover /> per-provider states", () => {
     const provider: VisibleRateLimitProvider = {
       providerId: "qwen",
       lane: null,
+      usageReportingConfirmed: true,
       profiles,
       fetchEligibility: { ambient: false, managedProfiles: false },
       authStatus: "authenticated",

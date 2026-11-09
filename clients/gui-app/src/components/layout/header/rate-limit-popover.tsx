@@ -42,6 +42,7 @@ import { AccentDot } from "@/components/providers/accent-dot";
 import {
   profileDisplayLabel,
   profileInventoryNotice,
+  profileInventoryAttributes,
   profileAuthStatusText,
   profileEligibilityToggleDisabledReason,
   profileEnablementTooltipText,
@@ -80,6 +81,7 @@ import type {
 import {
   useVisibleRateLimitProviders,
   type ConfiguredRateLimitProvider,
+  type MappedVisibleRateLimitProvider,
   type VisibleRateLimitProvider,
 } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
 import { useProviderRateLimitFetchScope } from "@/hooks/rate-limits/use-provider-rate-limit-fetch-scope";
@@ -920,7 +922,7 @@ function RateLimitPopoverScopedBody({
   const windowedProviders = useMemo(
     () =>
       providers.filter(
-        (provider): provider is ConfiguredRateLimitProvider =>
+        (provider): provider is MappedVisibleRateLimitProvider =>
           provider.lane !== null &&
           isWindowedRateLimitProvider(provider.providerId),
       ),
@@ -1431,6 +1433,10 @@ function RateLimitDetailPane({
   ) : (
     <RateLimitProviderBlock
       providerId={tab}
+      usageReportingConfirmed={
+        providers.find((provider) => provider.providerId === tab)
+          ?.usageReportingConfirmed ?? false
+      }
       authStatus={
         providers.find((provider) => provider.providerId === tab)?.authStatus ??
         "unknown"
@@ -1686,6 +1692,11 @@ function RateLimitOverview({
             ) : (
               <RateLimitProviderBlock
                 providerId={tab.providerId}
+                usageReportingConfirmed={
+                  providers.find(
+                    (provider) => provider.providerId === tab.providerId,
+                  )?.usageReportingConfirmed ?? false
+                }
                 authStatus={
                   providers.find(
                     (provider) => provider.providerId === tab.providerId,
@@ -1798,7 +1809,7 @@ function RateLimitRefreshAllButton({
     traycerRefreshTarget.rateLimitAccountContexts,
   );
   const httpFetchProviders = providers.filter(
-    (provider): provider is ConfiguredRateLimitProvider =>
+    (provider): provider is MappedVisibleRateLimitProvider =>
       provider.lane === "httpFetch",
   );
   const httpFetchRequests = httpFetchProviders.flatMap((provider) =>
@@ -1809,7 +1820,7 @@ function RateLimitRefreshAllButton({
   );
   const ephemeralProcessRequests = providers
     .filter(
-      (provider): provider is ConfiguredRateLimitProvider =>
+      (provider): provider is MappedVisibleRateLimitProvider =>
         provider.lane === "ephemeralProcess",
     )
     .flatMap((provider) =>
@@ -1960,6 +1971,7 @@ type PopoverBlockVariant = "popover-detail" | "popover-overview";
 /** Keeps adapter-reported providers visible even without a client fetch arm. */
 function RateLimitProviderBlock(props: {
   readonly providerId: ProviderId;
+  readonly usageReportingConfirmed: boolean;
   readonly authStatus: ProviderAuthStatus;
   readonly profiles: ReadonlyArray<ProviderProfile>;
   readonly fetchEligibility: RateLimitFetchEligibility;
@@ -1971,10 +1983,20 @@ function RateLimitProviderBlock(props: {
   readonly manageProvider: (providerId: ProviderId) => void;
 }): ReactNode {
   const { providerId } = props;
-  if (isRateLimitCapableProvider(providerId)) {
-    return <MappedRateLimitProviderBlock {...props} providerId={providerId} />;
-  }
-  return <UnmappedRateLimitProviderBlock {...props} />;
+  return (
+    <div className="contents" data-usage-provider-id={providerId}>
+      {props.usageReportingConfirmed ? null : (
+        <p className="text-ui-xs text-muted-foreground">
+          Usage reporting unconfirmed.
+        </p>
+      )}
+      {isRateLimitCapableProvider(providerId) ? (
+        <MappedRateLimitProviderBlock {...props} providerId={providerId} />
+      ) : (
+        <UnmappedRateLimitProviderBlock {...props} />
+      )}
+    </div>
+  );
 }
 
 /** No fetch arm yet: keep the adapter's provider and every account visible. */
@@ -2007,6 +2029,7 @@ function UnmappedRateLimitProviderBlock(props: {
           <div
             key={profile.profileId}
             className="flex flex-col gap-2 rounded-lg border border-border/60 bg-background/40 p-2"
+            {...profileInventoryAttributes(profile)}
             data-testid={`rate-limit-profile-card-${props.providerId}-${rateLimitProfileId(profile) ?? ""}`}
           >
             <span className="text-ui-sm font-medium">
@@ -2819,6 +2842,7 @@ function RateLimitProviderProfileRow({
         shownOnStrip && "border-primary/60 bg-primary/5",
         !profile.enabled && "opacity-60",
       )}
+      {...profileInventoryAttributes(profile)}
       data-testid={`rate-limit-profile-card-${providerId}-${profileId ?? ""}`}
       aria-current={shownOnStrip ? "true" : undefined}
     >

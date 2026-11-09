@@ -481,7 +481,6 @@ describe("<AppStatusBar />", () => {
       {
         providerId: "codex",
         lane: "ephemeralProcess",
-        authStatus: "authenticated",
         profiles: [],
         fetchEligibility: { ambient: true, managedProfiles: true },
       },
@@ -689,14 +688,12 @@ describe("<AppStatusBar /> right-click visibility menu", () => {
       {
         providerId: "codex",
         lane: "ephemeralProcess",
-        authStatus: "authenticated",
         profiles: [],
         fetchEligibility: { ambient: true, managedProfiles: true },
       },
       {
         providerId: "claude-code",
         lane: "ephemeralProcess",
-        authStatus: "authenticated",
         profiles: [],
         fetchEligibility: { ambient: true, managedProfiles: true },
       },
@@ -905,14 +902,12 @@ describe("<AppStatusBar /> on a mobile viewport", () => {
       {
         providerId: "codex",
         lane: "ephemeralProcess",
-        authStatus: "authenticated",
         profiles: [],
         fetchEligibility: { ambient: true, managedProfiles: true },
       },
       {
         providerId: "claude-code",
         lane: "ephemeralProcess",
-        authStatus: "authenticated",
         profiles: [],
         fetchEligibility: { ambient: true, managedProfiles: true },
       },

@@ -167,7 +167,6 @@ const CODEX: ConfiguredRateLimitProvider = {
   providerId: "codex",
   profiles: [],
   lane: "ephemeralProcess",
-  authStatus: "authenticated",
   fetchEligibility: { ambient: true, managedProfiles: true },
 };
 
@@ -176,7 +175,6 @@ const GROK: ConfiguredRateLimitProvider = {
   providerId: "grok",
   profiles: [],
   lane: "ephemeralProcess",
-  authStatus: "authenticated",
   fetchEligibility: { ambient: true, managedProfiles: true },
 };
 
@@ -212,7 +210,6 @@ const OPENCODE: ConfiguredRateLimitProvider = {
   providerId: "opencode",
   profiles: [managedProfile("work"), managedProfile("personal")],
   lane: "httpFetch",
-  authStatus: "authenticated",
   fetchEligibility: { ambient: true, managedProfiles: true },
 };
 
@@ -221,7 +218,6 @@ const OPENCODE_AMBIENT: ConfiguredRateLimitProvider = {
   providerId: "opencode",
   profiles: [],
   lane: "httpFetch",
-  authStatus: "authenticated",
   fetchEligibility: { ambient: true, managedProfiles: true },
 };
 

@@ -56,7 +56,6 @@ function provider(input: {
   return {
     providerId: input.providerId,
     lane: input.lane ?? "ephemeralProcess",
-    authStatus: "authenticated",
     profiles: input.profiles ?? [],
     fetchEligibility: {
       ambient: input.ambientEligible ?? true,

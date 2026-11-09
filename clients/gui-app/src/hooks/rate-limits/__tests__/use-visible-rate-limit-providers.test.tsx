@@ -70,7 +70,7 @@ function auth(status: ProviderAuthStatus): ProviderCliState["auth"] {
 }
 
 function providerState(args: {
-  readonly providerId: RateLimitProviderId;
+  readonly providerId: ProviderId;
   readonly status: ProviderAuthStatus;
   readonly enabled: boolean;
   readonly authPending: boolean;
@@ -102,7 +102,9 @@ function providerState(args: {
     managedInstallState: null,
     versionVisibility: null,
     advisory: null,
-    usageReporting: args.usageReporting,
+    ...(args.usageReporting === undefined
+      ? {}
+      : { usageReporting: args.usageReporting }),
   };
 }
 
@@ -173,7 +175,7 @@ describe("useVisibleRateLimitProviders", () => {
     expect(result.current).toEqual([]);
   });
 
-  it("includes usage-reporting providers without consulting account-status or cache state", () => {
+  it("includes a signed-in provider with cached usage data when account-status probing is unavailable", () => {
     mocks.providers = [
       providerState({
         providerId: "codex",
@@ -196,13 +198,14 @@ describe("useVisibleRateLimitProviders", () => {
         providerId: "codex",
         lane: "ephemeralProcess",
         authStatus: "unavailable",
+        usageReportingConfirmed: true,
         profiles: [],
         fetchEligibility: { ambient: false, managedProfiles: true },
       },
     ]);
   });
 
-  it("includes an enabled usage-reporting provider before usage is cached", () => {
+  it("includes a configured provider even when no usage cache entry exists", () => {
     mocks.providers = [
       providerState({
         providerId: "codex",
@@ -221,13 +224,14 @@ describe("useVisibleRateLimitProviders", () => {
         providerId: "codex",
         lane: "ephemeralProcess",
         authStatus: "authenticated",
+        usageReportingConfirmed: true,
         profiles: [],
         fetchEligibility: { ambient: true, managedProfiles: true },
       },
     ]);
   });
 
-  it("keeps an enabled usage-reporting provider visible when its usage fetch failed", () => {
+  it("includes a signed-in provider with a cached fetch error so the popover can show refreshable error state", () => {
     mocks.providers = [
       providerState({
         providerId: "codex",
@@ -247,6 +251,7 @@ describe("useVisibleRateLimitProviders", () => {
         providerId: "codex",
         lane: "ephemeralProcess",
         authStatus: "unavailable",
+        usageReportingConfirmed: true,
         profiles: [],
         fetchEligibility: { ambient: false, managedProfiles: true },
       },
@@ -296,6 +301,7 @@ describe("useVisibleRateLimitProviders", () => {
         providerId: "qwen",
         lane: null,
         authStatus: "authenticated",
+        usageReportingConfirmed: true,
         profiles: [],
         fetchEligibility: { ambient: true, managedProfiles: true },
       },
@@ -303,7 +309,7 @@ describe("useVisibleRateLimitProviders", () => {
     expect(configured.result.current).toEqual([]);
   });
 
-  it("uses usage reporting for visibility while keeping polling gated by fetch eligibility", () => {
+  it("keeps a signed-out provider visible from its last cached usage without making it poll-eligible", () => {
     mocks.providers = [
       providerState({
         providerId: "codex",
@@ -327,6 +333,7 @@ describe("useVisibleRateLimitProviders", () => {
         providerId: "codex",
         lane: "ephemeralProcess",
         authStatus: "unauthenticated",
+        usageReportingConfirmed: true,
         profiles: [],
         fetchEligibility: { ambient: false, managedProfiles: true },
       },
@@ -379,11 +386,19 @@ describe("useVisibleRateLimitProviders", () => {
         providerId: "codex",
         lane: "ephemeralProcess",
         authStatus: "unauthenticated",
+        usageReportingConfirmed: true,
         profiles: [ambient, managed],
         fetchEligibility: { ambient: false, managedProfiles: true },
       },
     ]);
-    expect(configured.result.current).toEqual(visible.result.current);
+    expect(configured.result.current).toEqual([
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [ambient, managed],
+        fetchEligibility: { ambient: false, managedProfiles: true },
+      },
+    ]);
   });
 
   it("preserves every profile when usage reports limits unavailable", () => {
@@ -455,29 +470,22 @@ describe("useVisibleRateLimitProviders", () => {
         providerId: "opencode",
         lane: "httpFetch",
         authStatus: "authenticated",
+        usageReportingConfirmed: true,
         profiles,
         fetchEligibility: { ambient: true, managedProfiles: true },
       },
     ]);
   });
 
-  it("excludes enabled providers without usage reporting", () => {
+  it("excludes explicitly false and disabled providers", () => {
     mocks.providers = [
       providerState({
-        providerId: "codex",
+        providerId: "qwen",
         status: "authenticated",
         enabled: true,
         authPending: false,
         availabilityPending: false,
         usageReporting: false,
-      }),
-      providerState({
-        providerId: "opencode",
-        status: "authenticated",
-        enabled: true,
-        authPending: false,
-        availabilityPending: false,
-        usageReporting: undefined,
       }),
       {
         ...providerState({
@@ -488,13 +496,55 @@ describe("useVisibleRateLimitProviders", () => {
           availabilityPending: false,
           usageReporting: true,
         }),
-        providerId: "qwen",
       },
     ];
 
     const { result } = renderHook(() => useVisibleRateLimitProviders());
 
     expect(result.current).toEqual([]);
+  });
+
+  it("uses enum membership and marks usage reporting unconfirmed for old hosts", () => {
+    mocks.providers = [
+      providerState({
+        providerId: "codex",
+        status: "authenticated",
+        enabled: true,
+        authPending: false,
+        availabilityPending: false,
+        usageReporting: undefined,
+      }),
+      providerState({
+        providerId: "qwen",
+        status: "authenticated",
+        enabled: true,
+        authPending: false,
+        availabilityPending: false,
+        usageReporting: undefined,
+      }),
+    ];
+
+    const visible = renderHook(() => useVisibleRateLimitProviders());
+    const configured = renderHook(() => useConfiguredRateLimitProviders());
+
+    expect(visible.result.current).toEqual([
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        authStatus: "authenticated",
+        usageReportingConfirmed: false,
+        profiles: [],
+        fetchEligibility: { ambient: true, managedProfiles: true },
+      },
+    ]);
+    expect(configured.result.current).toEqual([
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [],
+        fetchEligibility: { ambient: true, managedProfiles: true },
+      },
+    ]);
   });
 
   it("keeps OpenCode visible for insufficient_permissions", () => {
@@ -531,6 +581,7 @@ describe("useVisibleRateLimitProviders", () => {
         providerId: "opencode",
         lane: "httpFetch",
         authStatus: "authenticated",
+        usageReportingConfirmed: true,
         profiles: [],
         fetchEligibility: { ambient: true, managedProfiles: true },
       },
@@ -593,16 +644,33 @@ describe("useRateLimitAccountInventory", () => {
       visible: useVisibleRateLimitProviders(),
       inventory: useRateLimitAccountInventory(),
     }));
+    const expectedInventoryProvider = {
+      providerId: "codex",
+      lane: "ephemeralProcess",
+      profiles,
+      fetchEligibility: { ambient: true, managedProfiles: true },
+    };
     expect(
       result.current.visible.map((provider) => provider.providerId),
     ).toEqual(["codex"]);
-    expect(result.current.inventory.providers[0]?.profiles).toEqual(profiles);
+    expect(result.current.inventory.providers).toEqual([
+      expectedInventoryProvider,
+    ]);
 
     for (const usageReporting of [false, undefined]) {
       setCapability(usageReporting);
       rerender();
-      expect(result.current.visible).toEqual([]);
-      expect(result.current.inventory.providers[0]?.profiles).toEqual(profiles);
+      if (usageReporting === false) {
+        expect(result.current.visible).toEqual([]);
+      } else {
+        expect(
+          result.current.visible.map((provider) => provider.providerId),
+        ).toEqual(["codex"]);
+        expect(result.current.visible[0]?.usageReportingConfirmed).toBe(false);
+      }
+      expect(result.current.inventory.providers).toEqual([
+        expectedInventoryProvider,
+      ]);
     }
 
     setCapability(true);
@@ -610,7 +678,9 @@ describe("useRateLimitAccountInventory", () => {
     expect(
       result.current.visible.map((provider) => provider.providerId),
     ).toEqual(["codex"]);
-    expect(result.current.inventory.providers[0]?.profiles).toEqual(profiles);
+    expect(result.current.inventory.providers).toEqual([
+      expectedInventoryProvider,
+    ]);
   });
 
   it("says nothing while the host has not answered", () => {
