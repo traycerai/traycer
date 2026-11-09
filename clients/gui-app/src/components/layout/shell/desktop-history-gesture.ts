@@ -2,10 +2,17 @@ import type {
   DesktopTrackpadScrollEvent,
   DesktopTrackpadScrollPhaseBridge,
 } from "@/lib/windows/types";
+import type { SandboxWheel } from "@/lib/sandbox/bridge-host";
 import {
   desktopHistoryLayerBlocksNavigation,
-  ownsDesktopHorizontalWheel,
+  ownershipUnion,
+  readDesktopHorizontalWheelOwnership,
+  type DesktopHorizontalWheelOwnership,
 } from "./desktop-history-gesture-ownership";
+import {
+  attachHistoryGestureFrameSink,
+  holdHistoryGestureFrame,
+} from "./desktop-history-frame-wheel";
 
 export type DesktopHistoryDirection = "back" | "forward";
 
@@ -36,7 +43,8 @@ interface DesktopHistoryGestureOptions {
 // claimed gesture and left to scroll after content.
 //
 // The DOM `wheel` stream has two jobs only: it names the element under the
-// pointer (ownership) and it is where content scrolling is suppressed.
+// pointer (ownership) and it is where content scrolling is suppressed. Over
+// a sandboxed frame the frame's own document relays that stream.
 //
 // Keep the feel constants together so trackpad trials can tune them. These
 // are finger pixels, not the mobile recognizer's touch travel: a stronger
@@ -70,6 +78,8 @@ interface NavigationSequence {
   readonly direction: DesktopHistoryDirection;
   readonly destination: string;
   readonly origin: string;
+  /** The sandboxed frame holding its page still for this pull, if any. */
+  readonly frame: HTMLIFrameElement | null;
   travel: number;
   /** Inward travel per tick, trackpad timestamps in seconds; feeds the flick rule. */
   readonly recent: Array<{ readonly at: number; readonly inward: number }>;
@@ -90,6 +100,21 @@ type Sequence =
   | NavigationSequence
   | ContentSequence
   | DrainingSequence;
+
+/**
+ * The opening wheel tick of the current scroll sequence was canceled. Chromium
+ * lets a page cancel only the FIRST wheel of a scroll sequence (wheel scroll
+ * latching, Chrome 65+): once it passes uncanceled every later tick arrives
+ * `cancelable === false` and a claimed gesture could no longer stop the page
+ * scrolling under it. So that tick is where ownership is read, before any
+ * content has moved, and it is read once for the whole sequence: a scroll
+ * that reaches its edge mid-sequence never becomes navigation.
+ */
+interface ArmedOpening {
+  readonly ownership: DesktopHorizontalWheelOwnership;
+  /** The sandboxed frame whose document canceled the tick, or null for this document. */
+  readonly frame: HTMLIFrameElement | null;
+}
 
 function modifiedWheel(event: WheelEvent): boolean {
   return event.ctrlKey || event.metaKey || event.altKey || event.shiftKey;
@@ -129,20 +154,16 @@ export function installDesktopHistoryGesture(
   options: DesktopHistoryGestureOptions,
 ): () => void {
   let sequence: Sequence | null = null;
-  // What the DOM wheel stream last reported. `domArmed` means this sequence's
-  // opening tick was canceled, so Chromium keeps every later tick cancelable
-  // (wheel scroll latching, Chrome 65+); without it a claimed gesture could
-  // not stop the page from scrolling too.
+  // What the DOM wheel stream last reported.
   let domTicks = 0;
-  let domTarget: EventTarget | null = null;
   let domTickAlreadyCanceled = false;
-  let domArmed = false;
+  let armed: ArmedOpening | null = null;
   let tailTimer: number | undefined;
 
   /** Only ever reached after `cancel()`, so no live pull is dropped unseen. */
   const reset = (): void => {
     window.clearTimeout(tailTimer);
-    domArmed = false;
+    armed = null;
     sequence = null;
   };
   // The tail is whatever the same finger sequence still delivers after the
@@ -154,9 +175,10 @@ export function installDesktopHistoryGesture(
   };
   const settle = (commit: boolean): void => {
     if (sequence?.stage !== "navigation") return;
-    const { direction, travel } = sequence;
+    const { direction, travel, frame } = sequence;
     sequence = { stage: "draining", consume: true };
-    domArmed = false;
+    armed = null;
+    if (frame !== null) holdHistoryGestureFrame(frame, false);
     options.render({
       direction,
       progress: commit
@@ -189,9 +211,11 @@ export function installDesktopHistoryGesture(
 
   const begin = (): void => {
     // Fresh fingers end whatever came before: a draining tail, a content
-    // sequence whose lift was lost, even a live pull.
+    // sequence whose lift was lost, even a live pull. An armed opening is
+    // kept: the DOM tick that armed it may be this very sequence's, delivered
+    // ahead of the native `began` that crosses an IPC hop.
     cancel();
-    reset();
+    window.clearTimeout(tailTimer);
     sequence = {
       stage: "pending",
       x: 0,
@@ -244,9 +268,9 @@ export function installDesktopHistoryGesture(
     const destination = options.destination(direction);
     if (
       destination === null ||
-      !domArmed ||
+      armed === null ||
       domTickAlreadyCanceled ||
-      ownsDesktopHorizontalWheel(domTarget)
+      armed.ownership[direction]
     )
       return { stage: "content" };
     return {
@@ -254,6 +278,7 @@ export function installDesktopHistoryGesture(
       direction,
       destination,
       origin: pending.origin,
+      frame: armed.frame,
       travel: Math.min(x, DESKTOP_HISTORY_GESTURE.maxTravelPx),
       recent: [{ at: event.timestamp, inward: x }],
     };
@@ -275,11 +300,14 @@ export function installDesktopHistoryGesture(
       return;
     }
     sequence = decide(sequence, event);
-    if (sequence.stage === "navigation") updateView();
+    if (sequence.stage === "navigation") {
+      if (sequence.frame !== null)
+        holdHistoryGestureFrame(sequence.frame, true);
+      updateView();
+    }
   };
   // The fingers left the trackpad: the one moment the pull is decided.
   const lift = (mayCommit: boolean): void => {
-    domArmed = false;
     if (sequence === null || sequence.stage === "draining") return;
     if (sequence.stage === "navigation") {
       settle(
@@ -294,6 +322,7 @@ export function installDesktopHistoryGesture(
     }
     // A content scroll or an undecided start: its momentum must scroll, and
     // must not open a gesture of its own.
+    armed = null;
     sequence = { stage: "draining", consume: false };
     armTail();
   };
@@ -324,33 +353,48 @@ export function installDesktopHistoryGesture(
     }
   };
 
-  const consume = (event: WheelEvent): void => {
-    if (event.cancelable) {
-      event.preventDefault();
-      domArmed = true;
+  /**
+   * Idle or pending, with the tick's facts. Arms on the opening tick of a
+   * scroll sequence with somewhere to navigate; says whether it did, so the
+   * caller cancels that tick. A trackpad's first tick carries under a pixel,
+   * far short of `intentPx`, so a scroll that follows loses only that.
+   */
+  const arm = (
+    tick: { readonly cancelable: boolean; readonly eligible: boolean },
+    ownership: () => DesktopHorizontalWheelOwnership,
+    frame: HTMLIFrameElement | null,
+  ): boolean => {
+    if (armed !== null) {
+      // A tick nobody could cancel belongs to a sequence whose opening passed
+      // uncanceled, so whatever armed earlier was a sequence that never
+      // reached its lift here. Keeping it would claim a scroll already under way.
+      if (!tick.cancelable) armed = null;
+      return false;
     }
+    if (!tick.cancelable || !tick.eligible) return false;
+    const owned = ownership();
+    const somewhereToGo = (["back", "forward"] as const).some(
+      (direction) =>
+        !owned[direction] && options.destination(direction) !== null,
+    );
+    if (!somewhereToGo) return false;
+    armed = { ownership: owned, frame };
+    return true;
+  };
+  const consume = (event: WheelEvent): void => {
+    if (event.cancelable) event.preventDefault();
     // xterm and custom scrollers have their own wheel listeners. A claimed
     // horizontal gesture must not also deliver its diagonal noise to them.
     event.stopImmediatePropagation();
   };
-  // Idle or pending. Chromium lets a page cancel only the FIRST wheel event of
-  // a scroll sequence: once that one passes uncanceled, every later event of
-  // the same swipe arrives with `cancelable === false`, and a claimed gesture
-  // could no longer stop the page scrolling under it. A trackpad's first tick
-  // carries under a pixel, far short of `intentPx`, so the opening tick is
-  // canceled whenever there is somewhere to navigate; a scroll that follows
-  // loses only that sub-pixel tick.
-  const opensCancelableSequence = (event: WheelEvent): boolean =>
-    !domArmed &&
-    event.cancelable &&
-    !wheelBlocksNavigation(event) &&
-    !ownsDesktopHorizontalWheel(domTarget) &&
-    (options.destination("back") !== null ||
-      options.destination("forward") !== null);
+  /** After a claimed gesture its momentum, its late ticks, and the opening ticks of the next sequence when they outrun its `began` are all swallowed; after content, momentum flows. */
+  const drainConsumes = (deltaX: number, deltaY: number): boolean =>
+    sequence?.stage === "draining" &&
+    sequence.consume &&
+    Math.abs(deltaX) > Math.abs(deltaY);
   const onWheel = (event: WheelEvent): void => {
     if (event.deltaX === 0 && event.deltaY === 0) return;
     domTicks++;
-    domTarget = event.composedPath()[0] ?? event.target;
     domTickAlreadyCanceled = event.defaultPrevented;
     const stage = sequence === null ? "idle" : sequence.stage;
     if (stage === "navigation") {
@@ -358,23 +402,51 @@ export function installDesktopHistoryGesture(
       return;
     }
     if (stage === "draining") {
-      // After a claimed gesture: its momentum, its late ticks, and the opening
-      // ticks of the next sequence when they outrun its `began`, all swallowed.
-      // After content: its momentum flows.
-      if (
-        sequence?.stage === "draining" &&
-        sequence.consume &&
-        Math.abs(event.deltaX) > Math.abs(event.deltaY) &&
-        !modifiedWheel(event)
-      )
+      if (drainConsumes(event.deltaX, event.deltaY) && !modifiedWheel(event))
         consume(event);
       return;
     }
     if (stage === "content") return;
-    if (opensCancelableSequence(event)) {
+    const target = event.composedPath()[0] ?? event.target;
+    if (
+      arm(
+        {
+          cancelable: event.cancelable,
+          eligible: !wheelBlocksNavigation(event),
+        },
+        () => readDesktopHorizontalWheelOwnership(target),
+        null,
+      )
+    )
       event.preventDefault();
-      domArmed = true;
-    }
+  };
+  // A frame relays only the wheels its page could not use, each already
+  // canceled where it could be; the frame's own horizontal room is folded
+  // with whatever the frame sits inside. Returns whether the app must leave
+  // the wheel alone instead of scrolling by it.
+  const onFrameWheel = (
+    frame: HTMLIFrameElement,
+    wheel: SandboxWheel,
+  ): boolean => {
+    domTicks++;
+    domTickAlreadyCanceled = false;
+    const stage = sequence === null ? "idle" : sequence.stage;
+    if (stage === "navigation") return true;
+    if (stage === "draining") return drainConsumes(wheel.deltaX, wheel.deltaY);
+    if (stage === "content") return false;
+    arm(
+      {
+        cancelable: wheel.cancelable,
+        eligible: !desktopHistoryLayerBlocksNavigation(),
+      },
+      () =>
+        ownershipUnion(
+          { back: wheel.ownsBack, forward: wheel.ownsForward },
+          readDesktopHorizontalWheelOwnership(frame.parentElement),
+        ),
+      frame,
+    );
+    return false;
   };
   const onKey = (event: KeyboardEvent): void => {
     if (sequence?.stage !== "navigation") return;
@@ -389,6 +461,7 @@ export function installDesktopHistoryGesture(
     if (document.hidden) cancel();
   };
   const trackpad = options.trackpad.onEvent(onTrackpad);
+  const frames = attachHistoryGestureFrameSink(onFrameWheel);
   document.addEventListener("wheel", onWheel, {
     capture: true,
     passive: false,
@@ -402,6 +475,7 @@ export function installDesktopHistoryGesture(
     cancel();
     reset();
     trackpad.dispose();
+    frames();
     document.removeEventListener("wheel", onWheel, true);
     document.removeEventListener("pointerdown", cancel, true);
     document.removeEventListener("keydown", onKey, true);

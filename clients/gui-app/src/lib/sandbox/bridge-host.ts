@@ -116,6 +116,15 @@ export const SANDBOX_SCROLL_GESTURE_EVENT = "traycer:sandbox-scroll-gesture";
 export interface SandboxWheel {
   readonly deltaX: number;
   readonly deltaY: number;
+  /**
+   * The page's cancel of this wheel took, so its content stays still. False
+   * once Chromium has latched the sequence to scrolling, which it does when a
+   * sequence's opening wheel passes uncanceled.
+   */
+  readonly cancelable: boolean;
+  /** The page still has horizontal room toward what is left (back) or right (forward). */
+  readonly ownsBack: boolean;
+  readonly ownsForward: boolean;
 }
 
 /** One wheel event never moves the app further than this, whatever a page sends. */
@@ -1462,5 +1471,13 @@ function parseWheel(params: unknown): SandboxWheel | null {
   if (deltaMode === 2) scale = WHEEL_LINE_PX * 20;
   const clamp = (delta: number): number =>
     Math.max(-MAX_WHEEL_DELTA_PX, Math.min(MAX_WHEEL_DELTA_PX, delta * scale));
-  return { deltaX: clamp(deltaX), deltaY: clamp(deltaY) };
+  // A page can only ever under-claim a gesture: a missing or forged flag
+  // reads as content it cannot hold still, never as room it does not have.
+  return {
+    deltaX: clamp(deltaX),
+    deltaY: clamp(deltaY),
+    cancelable: params.cancelable === true,
+    ownsBack: params.ownsBack !== false,
+    ownsForward: params.ownsForward !== false,
+  };
 }
