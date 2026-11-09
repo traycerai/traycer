@@ -464,18 +464,32 @@ type RecordedSocket = {
 function makeFactory(): {
   readonly factory: IWebSocketFactory;
   readonly sockets: RecordedSocket[];
+  readonly nextSocket: () => Promise<void>;
 } {
   const sockets: RecordedSocket[] = [];
+  const socketWaiters: Array<() => void> = [];
   const factory: IWebSocketFactory = {
     create(url: string, priority: DialPriority): WebSocketLike {
       void url;
       void priority;
       const socket = new StubWebSocket();
       sockets.push({ socket, sent: socket.sentFrames });
+      const waiters = socketWaiters.splice(0, socketWaiters.length);
+      for (const resolve of waiters) {
+        resolve();
+      }
       return socket;
     },
   };
-  return { factory, sockets };
+  return {
+    factory,
+    sockets,
+    nextSocket(): Promise<void> {
+      return new Promise((resolve) => {
+        socketWaiters.push(resolve);
+      });
+    },
+  };
 }
 
 function captureRejection(pending: Promise<unknown>): Promise<unknown> {
@@ -661,10 +675,10 @@ class RecordingSocket implements MultiplexSocket {
   failSend: "request" | "cancel" | null = null;
 
   send(frame: ClientFrame): void {
+    this.sent.push(frame);
     if (this.failSend === frame.kind) {
       throw new Error(`send ${frame.kind} failed`);
     }
-    this.sent.push(frame);
   }
 
   close(code: number, reason: string): void {
@@ -815,8 +829,9 @@ function makeTimedClient(
 async function completeReplacementOnFakeClock(
   sockets: RecordedSocket[],
   waiter: Promise<{ readonly echoed: string }>,
+  created: Promise<void>,
 ): Promise<void> {
-  await vi.advanceTimersByTimeAsync(0);
+  await created;
   expect(sockets).toHaveLength(2);
   const retried = sockets[1];
   if (retried === undefined) {
@@ -824,18 +839,15 @@ async function completeReplacementOnFakeClock(
   }
   const opened = retried.socket.nextSend();
   retried.socket.fireOpen();
-  await vi.advanceTimersByTimeAsync(0);
   await opened;
   const requested = retried.socket.nextSend();
   retried.socket.fireMessage(sessionAck(true));
-  await vi.advanceTimersByTimeAsync(0);
   await requested;
   const frame = requestFrames(retried)[0];
   if (frame === undefined) {
     throw new Error("expected the waiter request on the replacement");
   }
   respondEcho(retried.socket, frame, "waiter");
-  await vi.advanceTimersByTimeAsync(0);
   await expect(waiter).resolves.toEqual({ echoed: "waiter" });
   expect(retried.socket.closed).toEqual({
     code: 1000,
@@ -1000,11 +1012,6 @@ describe("local unary session", () => {
   });
 
   it("does not rotate the session when the reported host status changes", async () => {
-    const endpoint: HostTransportEndpoint = {
-      hostId: HOST_ID,
-      websocketUrl: SOCKET_URL,
-    };
-    expect(endpoint).not.toHaveProperty("status");
     expect(localUnarySessionKey(HOST_ID, USER_A, SOCKET_URL)).toBe(
       `${HOST_ID}\u0000${USER_A}\u0000${SOCKET_URL}`,
     );
@@ -1471,7 +1478,6 @@ describe("local unary session", () => {
       clearTimeout(timer);
     }
 
-    expect(outcome).not.toBe("still-waiting");
     expect(outcome).toBeInstanceOf(HostTransportFailureError);
     expect(outcome).not.toBeInstanceOf(RetryableTransportError);
     if (!(outcome instanceof HostTransportFailureError)) {
@@ -3412,7 +3418,7 @@ describe("local unary session", () => {
   });
 
   it("dials the next caller when the handed waiter aborts before it claims", async () => {
-    const { factory, sockets } = makeFactory();
+    const { factory, sockets, nextSocket } = makeFactory();
     const client = makeClient(factory, 0);
     const bearer = new MutableBearerLease("token-a", USER_A);
     const waiterController = new AbortController();
@@ -3431,6 +3437,7 @@ describe("local unary session", () => {
       ),
     );
     const discovering = await openDiscoveringSocket(sockets);
+    const replacement = nextSocket();
     client.releaseIdleLocalSessions();
     let follower: Promise<{ readonly echoed: string }> | null = null;
     discovering.socket.fireClose(1006, "peer-dropped", false);
@@ -3445,8 +3452,7 @@ describe("local unary session", () => {
     await owner;
     const waiterError = await waiter;
     expect(waiterError).toBeInstanceOf(HostRequestAbortedError);
-    await Promise.resolve();
-    await Promise.resolve();
+    await replacement;
     const next = follower;
     if (next === null) {
       throw new Error("expected the next caller");
@@ -3497,11 +3503,12 @@ describe("local unary session", () => {
   it("carries a dial release onto the socket opened after a dial timeout", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: false });
     try {
-      const { factory, sockets } = makeFactory();
+      const { factory, sockets, nextSocket } = makeFactory();
       const client = makeTimedClient(factory, 5_000, 5_000);
       const { owner, waiter } = admittedPair(client);
       expect(sockets).toHaveLength(1);
       client.releaseIdleLocalSessions();
+      const replacement = nextSocket();
       await vi.advanceTimersByTimeAsync(5_000);
       const outcome = await owner;
       expect(outcome).toBeInstanceOf(RetryableTransportError);
@@ -3509,7 +3516,7 @@ describe("local unary session", () => {
         throw new Error("expected the dial timeout");
       }
       expect(outcome.message).toContain("WebSocket dial timed out");
-      await completeReplacementOnFakeClock(sockets, waiter);
+      await completeReplacementOnFakeClock(sockets, waiter, replacement);
     } finally {
       vi.useRealTimers();
     }
@@ -3518,7 +3525,7 @@ describe("local unary session", () => {
   it("carries a dial release onto the socket opened after an ack timeout", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: false });
     try {
-      const { factory, sockets } = makeFactory();
+      const { factory, sockets, nextSocket } = makeFactory();
       const client = makeTimedClient(factory, 5_000, 5_000);
       const { owner, waiter } = admittedPair(client);
       const discovering = sockets[0];
@@ -3527,9 +3534,9 @@ describe("local unary session", () => {
       }
       const opened = discovering.socket.nextSend();
       discovering.socket.fireOpen();
-      await vi.advanceTimersByTimeAsync(0);
       await opened;
       client.releaseIdleLocalSessions();
+      const replacement = nextSocket();
       await vi.advanceTimersByTimeAsync(5_000);
       const outcome = await owner;
       expect(outcome).toBeInstanceOf(RetryableTransportError);
@@ -3537,7 +3544,7 @@ describe("local unary session", () => {
         throw new Error("expected the ack timeout");
       }
       expect(outcome.message).toContain("WebSocket frame timed out");
-      await completeReplacementOnFakeClock(sockets, waiter);
+      await completeReplacementOnFakeClock(sockets, waiter, replacement);
     } finally {
       vi.useRealTimers();
     }
@@ -3795,7 +3802,7 @@ describe("local unary session", () => {
       throw new Error("expected the send failure");
     }
     expect(error.message).toContain("send request failed");
-    expect(socket.sent).toHaveLength(0);
+    expect(socket.sent.map((frame) => frame.kind)).toEqual(["request"]);
     expect(socket.closed).toEqual({ code: 1000, reason: "session-closed" });
   });
 
@@ -4148,9 +4155,9 @@ describe("local unary session", () => {
       }
       expect(error.message).toBe("WebSocket frame timed out after 5000ms");
       expect(mayHaveReachedHost(error)).toBe(true);
-      expect(socket.sent.filter((frame) => frame.kind === "cancel")).toEqual(
-        [],
-      );
+      expect(
+        socket.sent.filter((frame) => frame.kind === "cancel"),
+      ).toHaveLength(1);
       expect(socket.closed).toEqual({ code: 1000, reason: "session-closed" });
     } finally {
       vi.useRealTimers();
