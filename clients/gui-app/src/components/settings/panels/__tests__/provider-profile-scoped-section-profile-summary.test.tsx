@@ -176,13 +176,9 @@ function renderProfile(profile: ProviderProfile) {
   renderSection({ state: { ...opencodeState(), profiles: [profile] } });
 }
 
-// The row's own inventory attributes sit beside the badge row, inside the summary.
-function summaryAttributes(badge: HTMLElement): HTMLElement | null {
-  return (
-    badge.parentElement?.parentElement?.querySelector<HTMLElement>(
-      "[data-provider-profile-id]",
-    ) ?? null
-  );
+// The status badge's row and the cause line below it share one summary column.
+function summaryColumn(badge: HTMLElement): HTMLElement | null {
+  return badge.parentElement?.parentElement ?? null;
 }
 
 function renderSection(
@@ -436,7 +432,7 @@ describe("<ProviderProfileScopedSection /> profile summary email reveal", () => 
 
     const badge = screen.getByText("Signed in");
     expect(badge.getAttribute("data-slot")).toBe("badge");
-    expect(summaryAttributes(badge)?.querySelector("p")).toBeNull();
+    expect(summaryColumn(badge)?.querySelector("p")).toBeNull();
   });
 
   it("keeps the whole revoking notice on the detail line beside the status badge", () => {
@@ -451,7 +447,7 @@ describe("<ProviderProfileScopedSection /> profile summary email reveal", () => 
     expect(screen.getByText("Disconnecting: signed out.")).toBeTruthy();
   });
 
-  it("keeps the data inventory attributes on the secondary line", () => {
+  it("carries the inventory attributes on the root section and the cause below the badge", () => {
     renderProfile({
       ...profileWithStanding(
         { material: "stale", cause: "session expired" },
@@ -460,16 +456,23 @@ describe("<ProviderProfileScopedSection /> profile summary email reveal", () => 
       presence: { kind: "admitted", bindingVersion: 1 },
     });
 
-    const attributes = summaryAttributes(screen.getByText("Stale"));
-    expect(attributes?.getAttribute("data-provider-profile-id")).toBe(
+    const badge = screen.getByText("Stale");
+    const section = badge.closest("section[data-settings-provider-id]");
+    expect(section?.getAttribute("data-provider-profile-id")).toBe(
       "profile-managed",
     );
-    expect(attributes?.getAttribute("data-provider-profile-presence")).toBe(
+    expect(section?.getAttribute("data-provider-profile-presence")).toBe(
       JSON.stringify({ kind: "admitted", bindingVersion: 1 }),
     );
+    expect(section?.getAttribute("data-provider-profile-standing")).toContain(
+      '"material":"stale"',
+    );
+    expect(section?.querySelector("[data-provider-profile-id]")).toBeNull();
+
+    const cause = screen.getByText("session expired");
+    expect(summaryColumn(badge)?.contains(cause)).toBe(true);
     expect(
-      attributes?.getAttribute("data-provider-profile-standing"),
-    ).toContain('"material":"stale"');
-    expect(attributes?.textContent).toBe("session expired");
+      badge.compareDocumentPosition(cause) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 });

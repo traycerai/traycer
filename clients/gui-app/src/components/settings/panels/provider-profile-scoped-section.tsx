@@ -324,6 +324,7 @@ export function ProviderProfileScopedSection(
     <section
       className="flex flex-col gap-3"
       data-settings-provider-id={state.providerId}
+      {...profileInventoryAttributes(selectedProfile)}
     >
       <div className="flex flex-col gap-3 rounded-lg border border-border/60 p-3">
         <div className="flex items-center justify-between gap-2">
@@ -642,7 +643,7 @@ function ProfileSummary({
           </TooltipWrapper>
         ) : null}
       </div>
-      <div {...profileInventoryAttributes(profile)}>
+      <div>
         {inventory.detail === null ? null : (
           <p className="min-w-0 whitespace-normal break-words">
             {inventory.detail}
