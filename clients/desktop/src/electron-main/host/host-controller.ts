@@ -958,15 +958,18 @@ function parseAvailableSnapshot(raw: unknown): AvailableSnapshotShape {
 
 // Resolve the host-runtime archive bundled beside the desktop's CLI binary
 // (`resources/cli/win32-<arch>/host-runtime-win32-<arch>.tar.gz`, or `.zip`
-// when that is the signed asset). Windows-only: on POSIX the per-user slot
-// CLI is a symlink into the app bundle, so `process.execPath` resolves
-// beside the archive and the CLI's own `resolveBundledHostArchive` finds it.
-// On Windows the slot CLI is a copy outside the bundle, so this passes
-// `--bundled <archive>`. A pinned CLI then verifies the sibling descriptor
-// and records registry provenance. An unpinned CLI treats the same path as
-// a local file. `--from` would record every install as unsigned.
-// Returns null when there is no packaged archive (dev builds, CLI-only
-// installs). `host ensure` then uses its normal resolution.
+// when that is the signed asset). Windows-only. Host ensure spawns the
+// in-bundle CLI (`resolveBundledCliPath`), so on POSIX `process.execPath`
+// already sits in that directory and the CLI's `resolveBundledHostArchive`
+// finds the archive. The per-user slot (`~/.traycer/cli/.../bin/traycer`)
+// is a copy on every platform, including POSIX, and is not the process
+// ensure runs. On Windows that copy is also what a terminal would run, and
+// the in-bundle path is still passed here as `--bundled` because a Windows
+// slot copy does not sit beside the archive. A pinned CLI then verifies the
+// sibling descriptor and records registry provenance. An unpinned CLI treats
+// the same path as a local file. `--from` would record every install as
+// unsigned. Returns null when there is no packaged archive (dev builds,
+// CLI-only installs). `host ensure` then uses its normal resolution.
 async function resolveWindowsBundledHostArchive(): Promise<string | null> {
   if (process.platform !== "win32") return null;
   const bundledCli = await resolveBundledCliPath();
