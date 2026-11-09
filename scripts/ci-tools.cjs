@@ -25,6 +25,11 @@ function readLock(lockPath) {
     ) {
       throw new Error("Malformed CI tools lock entry");
     }
+    if (
+      entry.name === "better-sqlite3" &&
+      !/^[a-f0-9]{64}$/.test(entry.binarySha256)
+    )
+      throw new Error("Missing pinned native prebuild binary digest");
     const filename = decodeURIComponent(
       new URL(entry.upstreamUrl).pathname.split("/").at(-1),
     );
@@ -303,6 +308,33 @@ function main(args) {
   ) {
     throw new Error("Bun version does not match CI tool lock");
   }
+  if (command === "verify-native") {
+    const entry = select(
+      lock,
+      "better-sqlite3",
+      process.platform,
+      process.arch,
+    );
+    if (process.versions.modules !== "137")
+      throw new Error("Native prebuild requires the pinned Node ABI 137");
+    const packagePath = require.resolve("better-sqlite3/package.json", {
+      paths: [path.dirname(path.resolve(lockPath))],
+    });
+    const binary = require.resolve(
+      path.join(path.dirname(packagePath), "build/Release/better_sqlite3.node"),
+    );
+    require(binary);
+    const actual = sha256(binary);
+    console.log(
+      `[ci-tools] better-sqlite3 loaded prebuild SHA256 expected=${entry.binarySha256} actual=${actual}`,
+    );
+    if (actual !== entry.binarySha256)
+      throw new Error(
+        "Loaded better-sqlite3 binary differs from the upstream prebuild",
+      );
+    append(process.env.GITHUB_OUTPUT, "better-sqlite3-provenance=verified");
+    return;
+  }
   if (command === "cache-paths") {
     append(process.env.GITHUB_OUTPUT, `lock-digest=${sha256(lockPath)}`);
     if (!names.every((name) => /^[a-z0-9-]+$/.test(name)))
@@ -455,7 +487,34 @@ function main(args) {
         `ELECTRON_CUSTOM_DIR=${path.posix.basename(remote.pathname)}`,
       );
     } else {
-      install(entry, archive, path.join(cache, "installed"));
+      const installed = install(entry, archive, path.join(cache, "installed"));
+      if (name === "better-sqlite3") {
+        const binary = path.join(
+          installed,
+          "build/Release/better_sqlite3.node",
+        );
+        if (sha256(binary) !== entry.binarySha256)
+          throw new Error(
+            "Native prebuild binary does not match its lock digest",
+          );
+        const localPrebuilds = path.join(cache, "prebuilds", name);
+        fs.mkdirSync(localPrebuilds, { recursive: true });
+        fs.copyFileSync(
+          archive,
+          path.join(localPrebuilds, path.basename(objectKey(entry))),
+        );
+        const host = mirror
+          ? `${mirror.replace(/\/$/, "")}/tools/${name}`
+          : entry.upstreamUrl.slice(0, entry.upstreamUrl.lastIndexOf("/v"));
+        append(
+          process.env.GITHUB_ENV,
+          `npm_config_better_sqlite3_binary_host_mirror=${host}`,
+        );
+        append(
+          process.env.GITHUB_ENV,
+          `npm_config_better_sqlite3_local_prebuilds=${localPrebuilds}`,
+        );
+      }
     }
     append(process.env.GITHUB_OUTPUT, `${name}=executed`);
     if (name === "bun")

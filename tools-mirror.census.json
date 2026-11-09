@@ -537,5 +537,176 @@
     "coldOrigin": "GitHub release assets; optional prepared hook mirror",
     "decision": "lock: verify mirror first and bounded upstream second; hooks restore from digest-verified mirror archive, else build from config-pinned repositories (output mirror/cache/fallback). No consumer reads prepare-run artifacts.",
     "mirrorSource": "${{ inputs.mirror_base_url || vars.CI_TOOLS_MIRROR_BASE_URL }}"
+  },
+  {
+    "workflow": ".github/workflows/test.yml",
+    "job": "test/helper source sweep",
+    "step": "traycer/clients/desktop/scripts/__tests__/release-target-electron-builder.test.ts",
+    "gate": true,
+    "fetches": "GitHub-host reference at source lines 55",
+    "coldOrigin": "fixture data, injected transport or loopback",
+    "decision": "GitHub URL is a pure contract/source/fixture value; no live acquisition in this consumer"
+  },
+  {
+    "workflow": ".github/workflows/test.yml",
+    "job": "test/helper source sweep",
+    "step": "traycer/clients/desktop/scripts/__tests__/release-target-stamp.test.ts",
+    "gate": true,
+    "fetches": "GitHub-host reference at source lines 55",
+    "coldOrigin": "fixture data, injected transport or loopback",
+    "decision": "GitHub URL is a pure contract/source/fixture value; no live acquisition in this consumer"
+  },
+  {
+    "workflow": ".github/workflows/test.yml",
+    "job": "test/helper source sweep",
+    "step": "traycer/clients/desktop/scripts/__tests__/set-deploy-target.test.ts",
+    "gate": true,
+    "fetches": "GitHub-host reference at source lines 47",
+    "coldOrigin": "fixture data, injected transport or loopback",
+    "decision": "GitHub URL is a pure contract/source/fixture value; no live acquisition in this consumer"
+  },
+  {
+    "workflow": ".github/workflows/test.yml",
+    "job": "test/helper source sweep",
+    "step": "traycer/clients/desktop/src/electron-main/app/__tests__/desktop-release-feed.test.ts",
+    "gate": true,
+    "fetches": "GitHub-host reference at source lines 51,55,59,302,303,322,325,335,336,350,523,528,532,536,677,737,739,871,929,931,1014,1036,1038",
+    "coldOrigin": "fixture data, injected transport or loopback",
+    "decision": "GitHub URL is a pure contract/source/fixture value; no live acquisition in this consumer"
+  },
+  {
+    "workflow": ".github/workflows/test.yml",
+    "job": "test/helper source sweep",
+    "step": "traycer/clients/desktop/src/electron-main/app/__tests__/desktop-release-reader.integration.test.ts",
+    "gate": true,
+    "fetches": "GitHub-host reference at source lines 1685,1690,1695",
+    "coldOrigin": "fixture data, injected transport or loopback",
+    "decision": "GitHub transport is injected/stubbed; fixture URLs do not leave the process"
+  },
+  {
+    "workflow": ".github/workflows/test.yml",
+    "job": "test/helper source sweep",
+    "step": "traycer/clients/desktop/src/electron-main/app/__tests__/electron-updater-contract.test.ts",
+    "gate": true,
+    "fetches": "GitHub-host reference at source lines 318,331",
+    "coldOrigin": "fixture data, injected transport or loopback",
+    "decision": "GitHub URL is a pure contract/source/fixture value; no live acquisition in this consumer"
+  },
+  {
+    "workflow": ".github/workflows/test.yml",
+    "job": "test/helper source sweep",
+    "step": "traycer/clients/desktop/src/electron-main/app/__tests__/updater.test.ts",
+    "gate": true,
+    "fetches": "GitHub-host reference at source lines 486,803,966,1169,1278,1571,1645,1680,1710,1828,1865,1896,2693,2715,2759,2811,2833,3491,3495,3499,4492,4498,4502,4544,4548,4584,4588,4634,4638,4883,4887",
+    "coldOrigin": "fixture data, injected transport or loopback",
+    "decision": "GitHub transport is injected/stubbed; fixture URLs do not leave the process"
+  },
+  {
+    "workflow": ".github/workflows/test.yml",
+    "job": "test/helper source sweep",
+    "step": "traycer/clients/desktop/src/electron-main/host/__tests__/host-controller.test.ts",
+    "gate": true,
+    "fetches": "GitHub-host reference at source lines 699",
+    "coldOrigin": "fixture data, injected transport or loopback",
+    "decision": "GitHub URL is a pure contract/source/fixture value; no live acquisition in this consumer"
+  },
+  {
+    "workflow": ".github/workflows/test.yml",
+    "job": "test/helper source sweep",
+    "step": "traycer/clients/gui-app/src/components/host/__tests__/client-update-required-action.test.tsx",
+    "gate": true,
+    "fetches": "GitHub-host reference at source lines 326",
+    "coldOrigin": "fixture data, injected transport or loopback",
+    "decision": "GitHub URL is a pure contract/source/fixture value; no live acquisition in this consumer"
+  },
+  {
+    "workflow": ".github/workflows/test.yml",
+    "job": "test/helper source sweep",
+    "step": "traycer/clients/gui-app/src/components/layout/__tests__/app-update-ui.test.tsx",
+    "gate": true,
+    "fetches": "GitHub-host reference at source lines 108",
+    "coldOrigin": "fixture data, injected transport or loopback",
+    "decision": "GitHub URL is a pure contract/source/fixture value; no live acquisition in this consumer"
+  },
+  {
+    "workflow": ".github/workflows/test.yml",
+    "job": "test/helper source sweep",
+    "step": "traycer/clients/shared/github-release-auth/__tests__/release-asset.test.ts",
+    "gate": true,
+    "fetches": "GitHub-host reference at source lines 17,19,67,117,176,177,274",
+    "coldOrigin": "fixture data, injected transport or loopback",
+    "decision": "GitHub transport is injected/stubbed; fixture URLs do not leave the process"
+  },
+  {
+    "workflow": ".github/workflows/test.yml",
+    "job": "test/helper source sweep",
+    "step": "traycer/clients/shared/github-release-auth/__tests__/staging-auth.test.ts",
+    "gate": true,
+    "fetches": "GitHub-host reference at source lines 19,288,295,302,308,347,359",
+    "coldOrigin": "fixture data, injected transport or loopback",
+    "decision": "GitHub transport is injected/stubbed; fixture URLs do not leave the process"
+  },
+  {
+    "workflow": ".github/workflows/test.yml",
+    "job": "test/helper source sweep",
+    "step": "traycer/clients/traycer-cli/src/__tests__/config-dev-backend-urls.test.ts",
+    "gate": true,
+    "fetches": "GitHub-host reference at source lines 32",
+    "coldOrigin": "fixture data, injected transport or loopback",
+    "decision": "GitHub URL is a pure contract/source/fixture value; no live acquisition in this consumer"
+  },
+  {
+    "workflow": ".github/workflows/test.yml",
+    "job": "test/helper source sweep",
+    "step": "traycer/clients/traycer-cli/src/commands/__tests__/host-available.test.ts",
+    "gate": true,
+    "fetches": "GitHub-host reference at source lines 67,71,80,240,265,726,729",
+    "coldOrigin": "fixture data, injected transport or loopback",
+    "decision": "GitHub URL is a pure contract/source/fixture value; no live acquisition in this consumer"
+  },
+  {
+    "workflow": ".github/workflows/test.yml",
+    "job": "test/helper source sweep",
+    "step": "traycer/clients/traycer-cli/src/host/__tests__/compat-recovery.test.ts",
+    "gate": true,
+    "fetches": "GitHub-host reference at source lines 191,209,230",
+    "coldOrigin": "fixture data, injected transport or loopback",
+    "decision": "GitHub URL is a pure contract/source/fixture value; no live acquisition in this consumer"
+  },
+  {
+    "workflow": ".github/workflows/test.yml",
+    "job": "test/helper source sweep",
+    "step": "traycer/clients/traycer-cli/src/registry/__tests__/manifest-url.test.ts",
+    "gate": true,
+    "fetches": "GitHub-host reference at source lines 21,44",
+    "coldOrigin": "fixture data, injected transport or loopback",
+    "decision": "GitHub URL is a pure contract/source/fixture value; no live acquisition in this consumer"
+  },
+  {
+    "workflow": ".github/workflows/test.yml",
+    "job": "test/helper source sweep",
+    "step": "traycer/clients/traycer-cli/src/registry/__tests__/staging-release-auth.test.ts",
+    "gate": true,
+    "fetches": "GitHub-host reference at source lines 63,98,109,115,120",
+    "coldOrigin": "fixture data, injected transport or loopback",
+    "decision": "GitHub transport is injected/stubbed; fixture URLs do not leave the process"
+  },
+  {
+    "workflow": ".github/workflows/test.yml",
+    "job": "test/helper source sweep",
+    "step": "traycer/protocol/src/crypto/noise/__tests__/noise-nk-vectors.test.ts",
+    "gate": true,
+    "fetches": "GitHub-host reference at source lines 12",
+    "coldOrigin": "fixture data, injected transport or loopback",
+    "decision": "URL is attribution for inlined official vectors; no runtime request"
+  },
+  {
+    "workflow": ".github/workflows/test.yml",
+    "job": "test/helper source sweep",
+    "step": "traycer/scripts/__tests__/publish-desktop-windows-manifests.test.mjs",
+    "gate": true,
+    "fetches": "GitHub-host reference at source lines 21,108,142,205",
+    "coldOrigin": "fixture data, injected transport or loopback",
+    "decision": "GitHub URL is a pure contract/source/fixture value; no live acquisition in this consumer"
   }
 ]
