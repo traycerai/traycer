@@ -16,6 +16,7 @@ import {
   type MediaSessionHandlers,
   type SoundtrackMediaSession,
 } from "@/lib/soundtrack/media-session";
+import { desktopSoundtrackBridge } from "@/lib/soundtrack/desktop-set";
 import { MIX_TUNING } from "@/lib/soundtrack/mix-tuning";
 import type {
   RecordingQuality,
@@ -129,6 +130,9 @@ interface SoundtrackState {
   readonly setDirector: (directorId: MixDirectorId) => void;
   readonly setVolume: (volume: number) => void;
   readonly setPaused: (paused: boolean) => void;
+  /** Staging listening choice, reset when this window reloads. */
+  readonly setPiecesEnabled: boolean;
+  readonly setSetPiecesEnabled: (enabled: boolean) => void;
   /** Ignored while off, so a publisher need not know. */
   readonly setSignals: (signals: MixSignals) => void;
   /** Ignored while off, so a chime need not know. */
@@ -246,6 +250,7 @@ export function createSoundtrackStore(
           get().disable();
         },
       });
+      session.setSetPiecesEnabled(get().setPiecesEnabled);
       if (get().paused) {
         session.pause();
         mediaSession?.setPaused(true);
@@ -282,6 +287,7 @@ export function createSoundtrackStore(
       directorId: DEFAULT_MIX_DIRECTOR,
       volume: MIX_TUNING.volume.initial,
       paused: false,
+      setPiecesEnabled: true,
       soundingView: null,
       lastPlan: null,
       resumePositions: {},
@@ -343,6 +349,11 @@ export function createSoundtrackStore(
         if (paused) session?.pause();
         else session?.play();
         mediaSession?.setPaused(paused);
+      },
+      setSetPiecesEnabled: (enabled) => {
+        if (desktopSoundtrackBridge() === null) return;
+        set({ setPiecesEnabled: enabled });
+        session?.setSetPiecesEnabled(enabled);
       },
       setSignals: (signals) => {
         session?.setSignals(signals);
