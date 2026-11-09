@@ -761,12 +761,17 @@ function bootstrapMain(config: BootstrapConfig): void {
     // walked above the tree's root. A link to this same page (`#`, `?tab=2`)
     // leads nowhere else and is dropped. Either way it never reaches
     // `ui/open-link`, whose `https:` it shares on Android.
+    //
+    // The app opens the target with no confirm, so only the reader's own
+    // click counts: page script can click an anchor (`click()`,
+    // `dispatchEvent`) but cannot make that event trusted, and its click is
+    // dropped. Enter on a focused link is a trusted click.
     if (
       config.artifactPage !== null &&
       url.protocol === location.protocol &&
       url.host === location.host
     ) {
-      if (url.pathname !== location.pathname) {
+      if (url.pathname !== location.pathname && event.isTrusted) {
         notify("traycer/notifications/artifact-link", {
           nonce: config.nonce,
           href,

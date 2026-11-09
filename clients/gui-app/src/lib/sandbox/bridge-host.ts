@@ -136,6 +136,8 @@ export interface SandboxArtifactLink {
   readonly href: string;
   /** The clicked page, from the artifacts tree root. */
   readonly pagePath: string;
+  /** The clicked page's address, whose origin an href written out in full may share. */
+  readonly pageUrl: string;
 }
 
 /** One wheel event never moves the app further than this, whatever a page sends. */
@@ -1216,6 +1218,7 @@ export class SandboxBridgeHost {
     this.options.events.onArtifactLink?.({
       href: params.href,
       pagePath: page.path,
+      pageUrl: params.page,
     });
   }
 

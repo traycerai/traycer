@@ -678,6 +678,7 @@ describe("a link on a page that leads out of the artifact", () => {
   const LINK: SandboxArtifactLink = {
     href: "../sibling/index.html",
     pagePath: "site/index.html",
+    pageUrl: "traycer-artifact://artifact-a1--m1/site/index.html",
   };
   function clickLink(): void {
     const onArtifactLink = frames.latest?.onArtifactLink;

@@ -317,6 +317,7 @@ describe("served artifact page links", () => {
       artifactRootPath,
       anchorTarget: null,
       baseTarget: null,
+      activation: "dispatch",
     }).followed;
   }
 
@@ -327,6 +328,8 @@ describe("served artifact page links", () => {
     readonly artifactRootPath: string | undefined;
     readonly anchorTarget: string | null;
     readonly baseTarget: string | null;
+    /** How the click is made: `dispatchEvent`, or the anchor's own `click()`. */
+    readonly activation: "dispatch" | "click";
   }): {
     readonly followed: boolean;
     readonly target: string | null;
@@ -370,9 +373,19 @@ describe("served artifact page links", () => {
     if (input.anchorTarget !== null)
       anchor.setAttribute("target", input.anchorTarget);
     window.document.body.append(anchor);
-    const followed = anchor.dispatchEvent(
-      new window.MouseEvent("click", { bubbles: true, cancelable: true }),
-    );
+    let followed = true;
+    if (input.activation === "dispatch") {
+      followed = anchor.dispatchEvent(
+        new window.MouseEvent("click", { bubbles: true, cancelable: true }),
+      );
+    } else {
+      // `click()` returns nothing: a click that was cancelled is read off the
+      // event once the bootstrap's listener on the window has run.
+      window.addEventListener("click", (event) => {
+        followed = !event.defaultPrevented;
+      });
+      anchor.click();
+    }
     const target = anchor.getAttribute("target");
     window.close();
     // The bootstrap posts other notifications too; only link requests matter here.
@@ -404,6 +417,7 @@ describe("served artifact page links", () => {
         artifactRootPath: "/site/",
         anchorTarget,
         baseTarget,
+        activation: "dispatch",
       });
 
       // The sandbox has no popup permission, so a blank target would do nothing.
@@ -420,6 +434,7 @@ describe("served artifact page links", () => {
       artifactRootPath: "/site/",
       anchorTarget: "_blank",
       baseTarget: null,
+      activation: "dispatch",
     });
 
     expect(clicked.followed).toBe(false);
@@ -434,43 +449,48 @@ describe("served artifact page links", () => {
 
   function clickOnPage(
     href: string,
-    artifactPage: ArtifactPageRole,
+    activation: "dispatch" | "click",
   ): {
     readonly followed: boolean;
     readonly linkRequests: readonly unknown[];
     readonly artifactLinks: readonly unknown[];
   } {
     return clickLink({
-      artifactPage,
+      artifactPage: "found",
       href,
       artifactRootPath: "/site/",
       anchorTarget: null,
       baseTarget: null,
+      activation,
     });
   }
 
-  it.each(["../other/index.html", "../../top/", "/elsewhere/page.html"])(
-    "reports %s, a link out of the artifact root, to the app as authored and does not navigate",
-    (href) => {
-      const clicked = clickOnPage(href, "found");
+  // The app opens the target with no confirm, so only the reader's click is
+  // reported; jsdom cannot make one, so what it can show is that a click the
+  // page's script makes is dropped. The reader's own click, by mouse and by
+  // Enter, is in the browser spec.
+  it.each([
+    ["a dispatched click", "dispatch"],
+    ["the anchor's own click()", "click"],
+  ] as const)(
+    "drops %s on a link out of the artifact root: nothing is reported or opened, and the frame does not navigate",
+    (_label, activation) => {
+      for (const href of [
+        "../other/index.html",
+        "../../top/",
+        "/elsewhere/page.html",
+      ]) {
+        const clicked = clickOnPage(href, activation);
 
-      expect(clicked.followed).toBe(false);
-      expect(clicked.linkRequests).toEqual([]);
-      expect(clicked.artifactLinks).toEqual([
-        expect.objectContaining({
-          method: "traycer/notifications/artifact-link",
-          params: {
-            nonce: "n-1",
-            href,
-            page: "traycer-artifact://artifact-a1--m1/site/index.html",
-          },
-        }),
-      ]);
+        expect(clicked.followed).toBe(false);
+        expect(clicked.linkRequests).toEqual([]);
+        expect(clicked.artifactLinks).toEqual([]);
+      }
     },
   );
 
   it("sends nothing for a link to another page inside the root, which the frame follows", () => {
-    const clicked = clickOnPage("about.html", "found");
+    const clicked = clickOnPage("about.html", "dispatch");
 
     expect(clicked.followed).toBe(true);
     expect(clicked.artifactLinks).toEqual([]);
@@ -478,36 +498,18 @@ describe("served artifact page links", () => {
   });
 
   it("leaves an https link on ui/open-link and off the artifact-link report", () => {
-    const clicked = clickOnPage("https://example.com/docs", "found");
+    const clicked = clickOnPage("https://example.com/docs", "dispatch");
 
     expect(clicked.linkRequests).toHaveLength(1);
     expect(clicked.artifactLinks).toEqual([]);
   });
 
   it("leaves a hash link to the browser", () => {
-    const clicked = clickOnPage("#section", "found");
+    const clicked = clickOnPage("#section", "dispatch");
 
     expect(clicked.followed).toBe(true);
     expect(clicked.linkRequests).toEqual([]);
     expect(clicked.artifactLinks).toEqual([]);
-  });
-
-  it.each(["?x=1", "#", "index.html?x=1"])(
-    "drops %s, a link to this same page, without reporting or opening it",
-    (href) => {
-      const clicked = clickOnPage(href, "found");
-
-      expect(clicked.followed).toBe(false);
-      expect(clicked.linkRequests).toEqual([]);
-      expect(clicked.artifactLinks).toEqual([]);
-    },
-  );
-
-  it("never sends the artifact-link report from a document that is not an artifact page", () => {
-    const clicked = clickOnPage("../other/index.html", null);
-
-    expect(clicked.artifactLinks).toEqual([]);
-    expect(clicked.linkRequests).toEqual([]);
   });
 
   it("follows a link to another page of the artifact only on a served artifact page that knows its root", () => {

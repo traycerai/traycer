@@ -65,6 +65,19 @@ vi.mock("@/lib/links/open-link", () => ({
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
 vi.mock("sonner", () => ({ toast: mocks.toast }));
 
+const PAGE_PATH = "a/b/index.html";
+const TRAYCER_PAGE = "traycer-artifact://artifact-a1--m1/a/b/index.html";
+const ANDROID_PAGE =
+  "https://artifact-a1--m1.traycer-artifact.invalid/a/b/index.html";
+
+/** A link clicked on page a/b/index.html, served at `pageUrl`. */
+const linkAt = (href: string, pageUrl: string) => ({
+  href,
+  pagePath: PAGE_PATH,
+  pageUrl,
+});
+const linkOn = (href: string) => linkAt(href, TRAYCER_PAGE);
+
 const epicSession = {} as React.ContextType<typeof EpicSessionContext>;
 
 /** Renders the provider around a frame stand-in and returns what the frame calls on a click. */
@@ -136,7 +149,7 @@ describe("HtmlArtifactLinks", () => {
       mocks.resolveArtifactByPath.mockResolvedValue(FOUND);
       const open = mountFrame({ viewTabId: "tab-1", tileHost: "tab-host" });
 
-      open({ href, pagePath: "a/b/index.html" });
+      open(linkOn(href));
       await vi.waitFor(() => expect(mocks.openTile).toHaveBeenCalled());
 
       expect(mocks.resolveArtifactByPath).toHaveBeenCalledWith(
@@ -154,10 +167,40 @@ describe("HtmlArtifactLinks", () => {
     },
   );
 
+  it("reads a rooted href from the tree root, not from the page's folder", async () => {
+    mocks.resolveArtifactByPath.mockResolvedValue(FOUND);
+    const open = mountFrame({ viewTabId: "tab-1", tileHost: "tab-host" });
+
+    open(linkOn("/top/index.html"));
+    await vi.waitFor(() => expect(mocks.openTile).toHaveBeenCalled());
+
+    expect(mocks.resolveArtifactByPath).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filePath: "epics/epic-1/artifacts/top/index.md",
+      }),
+    );
+  });
+
+  it("hands an href that is an artifact's path on disk to the opener as written, with the entry renamed", async () => {
+    mocks.resolveArtifactByPath.mockResolvedValue(FOUND);
+    const open = mountFrame({ viewTabId: "tab-1", tileHost: "tab-host" });
+
+    open(
+      linkOn("/Users/u/.traycer/epics/epic-1/artifacts/a/sibling/index.html"),
+    );
+    await vi.waitFor(() => expect(mocks.openTile).toHaveBeenCalled());
+
+    expect(mocks.resolveArtifactByPath).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filePath: "/Users/u/.traycer/epics/epic-1/artifacts/a/sibling/index.md",
+      }),
+    );
+  });
+
   it("toasts when the link names nothing in the tree", async () => {
     const open = mountFrame({ viewTabId: "tab-1", tileHost: "tab-host" });
 
-    open({ href: "../missing/index.html", pagePath: "a/b/index.html" });
+    open(linkOn("../missing/index.html"));
     await vi.waitFor(() =>
       expect(mocks.toast).toHaveBeenCalledWith("Couldn't open link"),
     );
@@ -165,22 +208,118 @@ describe("HtmlArtifactLinks", () => {
     expect(mocks.openTile).not.toHaveBeenCalled();
   });
 
-  it("toasts without asking the resolver when the link walks above the artifacts root", async () => {
+  it("opens an href written out in full on the page's own origin, read from the tree root", async () => {
+    mocks.resolveArtifactByPath.mockResolvedValue(FOUND);
     const open = mountFrame({ viewTabId: "tab-1", tileHost: "tab-host" });
 
-    open({ href: "../../../x/", pagePath: "a/b/index.html" });
-    await vi.waitFor(() =>
-      expect(mocks.toast).toHaveBeenCalledWith("Couldn't open link"),
-    );
+    open(linkOn("traycer-artifact://artifact-a1--m1/a/sibling/index.html"));
+    await vi.waitFor(() => expect(mocks.openTile).toHaveBeenCalled());
 
-    expect(mocks.resolveArtifactByPath).not.toHaveBeenCalled();
-    expect(mocks.openTile).not.toHaveBeenCalled();
+    expect(mocks.resolveArtifactByPath).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filePath: "epics/epic-1/artifacts/a/sibling/index.md",
+      }),
+    );
+  });
+
+  it("opens the same on the Android origin", async () => {
+    mocks.resolveArtifactByPath.mockResolvedValue(FOUND);
+    const open = mountFrame({ viewTabId: "tab-1", tileHost: "tab-host" });
+
+    open(
+      linkAt(
+        "https://artifact-a1--m1.traycer-artifact.invalid/a/sibling/",
+        ANDROID_PAGE,
+      ),
+    );
+    await vi.waitFor(() => expect(mocks.openTile).toHaveBeenCalled());
+
+    expect(mocks.resolveArtifactByPath).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filePath: "epics/epic-1/artifacts/a/sibling/index.md",
+      }),
+    );
+  });
+
+  it("opens a protocol-relative href on the page's own origin", async () => {
+    mocks.resolveArtifactByPath.mockResolvedValue(FOUND);
+    const open = mountFrame({ viewTabId: "tab-1", tileHost: "tab-host" });
+
+    open(linkOn("//artifact-a1--m1/a/sibling/"));
+    await vi.waitFor(() => expect(mocks.openTile).toHaveBeenCalled());
+
+    expect(mocks.resolveArtifactByPath).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filePath: "epics/epic-1/artifacts/a/sibling/index.md",
+      }),
+    );
+  });
+
+  it.each([
+    [
+      "another artifact's address",
+      "traycer-artifact://artifact-zz--m1/a/sibling/index.html",
+      TRAYCER_PAGE,
+    ],
+    [
+      "another artifact's Android address",
+      "https://artifact-zz--m1.traycer-artifact.invalid/a/sibling/",
+      ANDROID_PAGE,
+    ],
+    [
+      "a full URL that walks above the root",
+      "traycer-artifact://artifact-a1--m1/../x/",
+      TRAYCER_PAGE,
+    ],
+  ])(
+    "toasts for %s, with no probe, lookup or tile",
+    async (_label, href, pageUrl) => {
+      mocks.fetchWorkspaceFileExists.mockResolvedValue(true);
+      const open = mountFrame({ viewTabId: "tab-1", tileHost: "tab-host" });
+
+      open(linkAt(href, pageUrl));
+      await vi.waitFor(() =>
+        expect(mocks.toast).toHaveBeenCalledWith("Couldn't open link"),
+      );
+
+      expect(mocks.resolveArtifactByPath).not.toHaveBeenCalled();
+      expect(mocks.fetchWorkspaceFileExists).not.toHaveBeenCalled();
+      expect(mocks.openTile).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["../../../x/", "/../x/"])(
+    "toasts %s, which walks above the artifacts root, without the resolver or a workspace probe, even where a file of that name exists",
+    async (href) => {
+      mocks.fetchWorkspaceFileExists.mockResolvedValue(true);
+      const open = mountFrame({ viewTabId: "tab-1", tileHost: "tab-host" });
+
+      open(linkOn(href));
+      await vi.waitFor(() =>
+        expect(mocks.toast).toHaveBeenCalledWith("Couldn't open link"),
+      );
+
+      expect(mocks.fetchWorkspaceFileExists).not.toHaveBeenCalled();
+      expect(mocks.resolveArtifactByPath).not.toHaveBeenCalled();
+      expect(mocks.openTile).not.toHaveBeenCalled();
+    },
+  );
+
+  it("opens the workspace file an in-tree relative href names when no artifact folder does", async () => {
+    mocks.fetchWorkspaceFileExists.mockResolvedValue(true);
+    const open = mountFrame({ viewTabId: "tab-1", tileHost: "tab-host" });
+
+    open(linkOn("../sibling/notes.txt"));
+    await vi.waitFor(() => expect(mocks.openTile).toHaveBeenCalled());
+
+    expect(mocks.fetchWorkspaceFileExists).toHaveBeenCalled();
+    expect(mocks.toast).not.toHaveBeenCalled();
   });
 
   it("toasts for a href that names no file", () => {
     const open = mountFrame({ viewTabId: "tab-1", tileHost: "tab-host" });
 
-    open({ href: "#", pagePath: "a/b/index.html" });
+    open(linkOn("#"));
 
     expect(mocks.toast).toHaveBeenCalledWith("Couldn't open link");
     expect(mocks.resolveArtifactByPath).not.toHaveBeenCalled();
@@ -194,7 +333,7 @@ describe("HtmlArtifactLinks", () => {
     (_l, viewTabId, tileHost) => {
       const open = mountFrame({ viewTabId, tileHost });
 
-      open({ href: "../sibling/index.html", pagePath: "a/b/index.html" });
+      open(linkOn("../sibling/index.html"));
 
       expect(mocks.toast).toHaveBeenCalledWith("Couldn't open link");
       expect(mocks.resolveArtifactByPath).not.toHaveBeenCalled();

@@ -1516,6 +1516,7 @@ describe("artifact links from a served html artifact page", () => {
     expect(harness.onArtifactLink).toHaveBeenCalledExactlyOnceWith({
       href: "../sibling/index.html",
       pagePath: "a/b/index.html",
+      pageUrl: PAGE,
     });
   });
 
