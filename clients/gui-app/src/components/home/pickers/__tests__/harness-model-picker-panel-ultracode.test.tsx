@@ -173,6 +173,7 @@ function renderPanel(
     onRefreshCatalog: () => Promise.resolve(),
     hostUnavailableLabel: null,
     onOpenProviderSettings: noop,
+    onOpenHostUpdates: noop,
     onClosePicker: noop,
     listRef,
     listKey: "list",

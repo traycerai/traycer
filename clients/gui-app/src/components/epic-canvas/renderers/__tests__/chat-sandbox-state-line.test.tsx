@@ -96,7 +96,6 @@ function FailedChatLine(props: { readonly summary: SandboxSummary }) {
     { kind: "failed", sandbox: props.summary },
     {
       reachable: false,
-      canEdit: true,
       ownedByViewer: true,
       environmentOwned: true,
     },
@@ -211,12 +210,14 @@ describe("a failed sandbox's chat actions", () => {
       await userEvent.click(screen.getByRole("button", { name: "Retry" }));
       expect(binding.auth.createSandbox).not.toHaveBeenCalled();
 
+      expect(screen.queryByRole("menu")).toBeNull();
+      expect(screen.getByRole("button", { name: "Details" })).toBeTruthy();
       const menu = await openMenu();
       expect(
         within(menu)
           .getAllByRole("menuitem")
           .map((item) => item.textContent),
-      ).toEqual(["Details", "Destroy"]);
+      ).toEqual(["Destroy"]);
       await userEvent.keyboard("{Escape}");
       mocks.configurations = [{ kind: "personal" }, TEAM];
       mounted.rerender(
@@ -253,14 +254,14 @@ describe("a failed sandbox's chat actions", () => {
     if (binding === null) throw new Error("expected the signed-in binding");
     mount(summary);
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
-
-    let menu = await openMenu();
-    await userEvent.click(
-      within(menu).getByRole("menuitem", { name: "Details" }),
-    );
+    expect(screen.queryByRole("menu")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Details" }));
     expect(useSandboxDetailsStore.getState().sandboxId).toBe(summary.id);
 
-    menu = await openMenu();
+    const menu = await openMenu();
+    expect(
+      within(menu).queryByRole("menuitem", { name: "Details" }),
+    ).toBeNull();
     await userEvent.click(
       within(menu).getByRole("menuitem", { name: "Destroy" }),
     );

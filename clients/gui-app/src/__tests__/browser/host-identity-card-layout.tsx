@@ -1,8 +1,14 @@
 import type { ReactElement } from "react";
 import { createRoot } from "react-dom/client";
+import type { HostListItem } from "@traycer/protocol/host/host-status";
 import { MoreHorizontal, Pencil } from "lucide-react";
 import { HostIdentityCard } from "@/components/settings/host-scope/host-identity-card";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
+import { HostOverviewAboutThisHost } from "@/components/settings/panels/host-overview-about-this-host";
+import {
+  InstallRecordGroup,
+  type InstallationDetailsRecord,
+} from "@/components/settings/panels/host-settings-installation-details";
 import { Button } from "@/components/ui/button";
 import "@/lib/theme-applier";
 import "@/index.css";
@@ -24,6 +30,7 @@ export function HostCard(props: { readonly failed: boolean }): ReactElement {
       <HostIdentityCard
         host={host}
         displayName={name}
+        version={host.version}
         nameAction={
           <Button
             type="button"
@@ -70,12 +77,63 @@ export function HostCard(props: { readonly failed: boolean }): ReactElement {
   );
 }
 
+function accountItem(): HostListItem {
+  return {
+    hostId: "8f14e45fceea167a5a36dedd4bea2543c9a2",
+    displayName: null,
+    platform: "darwin-arm64",
+    kind: "personal",
+    publicKey: "pk",
+    createdAt: "2026-03-03T12:00:00Z",
+    status: {
+      connectivity: "connectable",
+      viewerReachability: "unknown",
+      clientCloud: "ok",
+      updateState: "current",
+      appVersion: "1.5.0",
+      lastSeenAt: "2026-11-08T00:00:00Z",
+    },
+    updatePolicy: "manual",
+  };
+}
+
+function InstallationFacts(): ReactElement {
+  const record: InstallationDetailsRecord = {
+    version:
+      "local-runtime-2026-11-08-release-integration-with-a-long-build-identifier",
+    runtimeVersion: "1.5.0",
+    installedAt: "2026-11-08T00:00:00Z",
+    source: { kind: "registry", value: "1.5.0" },
+    archiveSha256: "a".repeat(64),
+    signatureVerifiedAt: null,
+    signatureKeyId: "local-file:unsigned",
+    platform: "darwin",
+    arch: "arm64",
+  };
+  return (
+    <>
+      <HostOverviewAboutThisHost
+        item={accountItem()}
+        nowMs={Date.parse("2026-11-09T12:00:00Z")}
+      />
+      <InstallRecordGroup
+        hostName="Windows runner for long release integration and deployment checks"
+        degrade={null}
+        record={record}
+        loading={false}
+        readFailed={false}
+      />
+    </>
+  );
+}
+
 const container = document.getElementById("root");
 if (container !== null) {
   createRoot(container).render(
     <main className="w-full space-y-4">
       <HostCard failed={false} />
       <HostCard failed />
+      <InstallationFacts />
     </main>,
   );
 }

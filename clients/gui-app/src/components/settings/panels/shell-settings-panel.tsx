@@ -85,12 +85,12 @@ import { TeamVariablesAndShells } from "@/components/settings/environment/team-v
 const PANEL_DESCRIPTION =
   "How Traycer launches terminals, the host, and provider harnesses. New terminals pick up shell changes immediately; variable changes apply on restart.";
 const PERSONAL_PANEL_DESCRIPTION =
-  "Plain values every computer and sandbox running these settings gets, and the shell agents run in.";
+  "Plain values every computer and sandbox running Personal gets, and the shell agents run in.";
 const SAVED_FLASH_MS = 1600;
 
 function variablesEmptyLabel(personal: boolean): string {
   return personal
-    ? "Variables are plain values every computer and sandbox running these settings gets."
+    ? "Variables are plain values every computer and sandbox running Personal gets."
     : "Variables are plain values every host gets.";
 }
 type ShellSaveTarget = "program" | "flags";

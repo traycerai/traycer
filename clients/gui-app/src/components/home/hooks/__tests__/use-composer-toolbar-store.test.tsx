@@ -54,6 +54,9 @@ const modelsData: {
       }
     | undefined;
 } = { value: undefined };
+type ToolbarModelsData = NonNullable<typeof modelsData.value>;
+const modelsDataByProfile = new Map<string, ToolbarModelsData | undefined>();
+const failedModelProfiles = new Set<string>();
 const harnessQueryCalls: Array<{
   readonly enabled: boolean;
   readonly subscribed: boolean;
@@ -61,6 +64,7 @@ const harnessQueryCalls: Array<{
 const modelQueryCalls: Array<{
   readonly harnessId: string;
   readonly workingDirectory: string | null;
+  readonly profileId?: string | null;
   readonly enabled: boolean;
   readonly subscribed: boolean;
 }> = [];
@@ -72,6 +76,11 @@ const modelQueryCalls: Array<{
 const harnessClientCalls: Array<HostClient<HostRpcRegistry> | null> = [];
 const modelClientCalls: Array<HostClient<HostRpcRegistry> | null> = [];
 const registeredComposerKinds: Array<FocusedComposerKind | null> = [];
+const registeredComposerControls: ComposerControls[] = [];
+const registeredComposerCatalogSelections: Array<{
+  readonly harnessId: string;
+  readonly profileId: string | null;
+}> = [];
 // Records the `hostClient` each registration was made with, so a test can
 // assert the store registers the palette's composer subpages against the
 // SAME client its own catalog reads through (`catalog.hostClient`), and
@@ -107,27 +116,45 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
     client: HostClient<HostRpcRegistry> | null,
     harnessId: string,
     workingDirectory: string | null,
-    activity: { enabled: boolean; subscribed: boolean },
+    activity: {
+      enabled: boolean;
+      subscribed: boolean;
+      profileId?: string | null;
+    },
   ) => {
     modelClientCalls.push(client);
     modelQueryCalls.push({
       harnessId,
       workingDirectory,
+      profileId: activity.profileId,
       enabled: activity.enabled,
       subscribed: activity.subscribed,
     });
-    return { data: client === null ? undefined : modelsData.value };
+    const profileKey = activity.profileId ?? "<ambient>";
+    const scopedData = modelsDataByProfile.has(profileKey)
+      ? modelsDataByProfile.get(profileKey)
+      : modelsData.value;
+    return {
+      data: client === null ? undefined : scopedData,
+      isError: client !== null && failedModelProfiles.has(profileKey),
+    };
   },
 }));
 
 vi.mock("@/hooks/command-palette/use-register-composer-controls", () => ({
   useRegisterFocusedComposerControls: (
     kind: FocusedComposerKind | null,
-    _controls: ComposerControls,
+    controls: ComposerControls,
     hostClient: HostClient<HostRpcRegistry> | null,
+    catalogSelection: {
+      readonly harnessId: string;
+      readonly profileId: string | null;
+    },
   ) => {
     registeredComposerKinds.push(kind);
+    registeredComposerControls.push(controls);
     registeredComposerHostClients.push(hostClient);
+    registeredComposerCatalogSelections.push(catalogSelection);
   },
 }));
 
@@ -264,11 +291,15 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     // Default to the LOADING window (no model data yet); tests that need a
     // resolved catalog assign `modelsData.value = { models: [...] }` explicitly.
     modelsData.value = undefined;
+    modelsDataByProfile.clear();
+    failedModelProfiles.clear();
     harnessQueryCalls.length = 0;
     modelQueryCalls.length = 0;
     harnessClientCalls.length = 0;
     modelClientCalls.length = 0;
     registeredComposerKinds.length = 0;
+    registeredComposerControls.length = 0;
+    registeredComposerCatalogSelections.length = 0;
     registeredComposerHostClients.length = 0;
     // Reset the sticky tier default so a tier-normalization test can't leak its
     // preference into a later test's seeded values.
@@ -862,6 +893,244 @@ describe("useComposerToolbarStore selection reconciliation", () => {
       }),
     );
   });
+
+  it("defers account-switch tier normalization until that profile catalog loads and keeps the profile on palette picks", async () => {
+    const modelSlug = "gpt-shared-model";
+    const profileAModel = {
+      ...modelOption("codex", modelSlug),
+      supportedServiceTiers: [
+        { id: "ultrafast", label: "Ultrafast", description: null },
+      ],
+    };
+    const profileBModel = {
+      ...modelOption("codex", modelSlug),
+      supportedServiceTiers: [
+        { id: "priority", label: "Priority", description: null },
+      ],
+    };
+    harnessesData.value = {
+      harnesses: [{ id: "codex", available: true }],
+    };
+    useSettingsStore.setState({
+      defaultSelection: {
+        harnessId: "codex",
+        modelSlug,
+        profileId: "profile-a",
+      },
+      defaultServiceTier: "ultrafast",
+    });
+    modelsDataByProfile.set("profile-a", { models: [profileAModel] });
+    // The newly selected profile has no warm catalog yet.
+    modelsDataByProfile.set("profile-b", undefined);
+    const onSettingsChange = vi.fn();
+    const { result, rerender } = renderHook(() =>
+      useComposerToolbarStore(
+        "landing",
+        { kind: "none" },
+        onSettingsChange,
+        catalogScope(false),
+      ),
+    );
+
+    await waitFor(() => {
+      expect(result.current.getState().catalog.modelsProfileId).toBe(
+        "profile-a",
+      );
+      expect(result.current.getState().serviceTier).toBe("ultrafast");
+    });
+    expect(onSettingsChange).not.toHaveBeenCalled();
+
+    act(() => {
+      result.current.getState().applyComposerSelection({
+        selection: { harnessId: "codex", modelSlug, profileId: "profile-b" },
+        reasoning: "",
+        serviceTier: "priority",
+      });
+    });
+    expect(result.current.getState().pendingSettingsEmit).toBe(true);
+    expect(onSettingsChange).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(
+        modelQueryCalls.some((call) => call.profileId === "profile-b"),
+      ).toBe(true);
+    });
+    expect(onSettingsChange).not.toHaveBeenCalled();
+
+    modelsDataByProfile.set("profile-b", { models: [profileBModel] });
+    rerender();
+
+    await waitFor(() => {
+      expect(onSettingsChange).toHaveBeenCalledTimes(1);
+    });
+    expect(onSettingsChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        model: modelSlug,
+        profileId: "profile-b",
+        serviceTier: "priority",
+      }),
+    );
+    expect(result.current.getState().serviceTier).toBe("priority");
+    expect(registeredComposerCatalogSelections.at(-1)).toEqual({
+      harnessId: "codex",
+      profileId: "profile-b",
+    });
+
+    act(() => {
+      registeredComposerControls.at(-1)?.selectModel("codex", modelSlug);
+    });
+    expect(onSettingsChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        model: modelSlug,
+        profileId: "profile-b",
+      }),
+    );
+  });
+
+  it("releases a failed account switch without carrying its prior tier into recovery", async () => {
+    const modelSlug = "gpt-shared-model";
+    const profileAModel = {
+      ...modelOption("codex", modelSlug),
+      supportedServiceTiers: [
+        { id: "ultrafast", label: "Ultrafast", description: null },
+      ],
+    };
+    const recoveredProfileBModel = {
+      ...modelOption("codex", modelSlug),
+      supportedServiceTiers: [
+        { id: "ultrafast", label: "Ultrafast", description: null },
+      ],
+    };
+    harnessesData.value = {
+      harnesses: [{ id: "codex", available: true }],
+    };
+    useSettingsStore.setState({
+      defaultSelection: {
+        harnessId: "codex",
+        modelSlug,
+        profileId: "profile-a",
+      },
+      defaultServiceTier: "ultrafast",
+    });
+    modelsDataByProfile.set("profile-a", { models: [profileAModel] });
+    modelsDataByProfile.set("profile-b", undefined);
+    failedModelProfiles.add("profile-b");
+    const onSettingsChange = vi.fn();
+    const { result, rerender } = renderHook(() =>
+      useComposerToolbarStore(
+        "landing",
+        { kind: "none" },
+        onSettingsChange,
+        catalogScope(false),
+      ),
+    );
+
+    await waitFor(() => {
+      expect(result.current.getState().catalog.modelsProfileId).toBe(
+        "profile-a",
+      );
+      expect(result.current.getState().serviceTier).toBe("ultrafast");
+    });
+    act(() => {
+      result.current.getState().applyComposerSelection({
+        selection: { harnessId: "codex", modelSlug, profileId: "profile-b" },
+        reasoning: "",
+        serviceTier: "priority",
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.getState().pendingSettingsEmit).toBe(false);
+      expect(onSettingsChange).toHaveBeenCalledTimes(1);
+    });
+    expect(result.current.getState().catalog.modelsFailed).toBe(true);
+    expect(result.current.getState().selection.profileId).toBe("profile-b");
+    expect(result.current.getState().values.serviceTier).toBe("");
+    expect(onSettingsChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        model: modelSlug,
+        profileId: "profile-b",
+        serviceTier: null,
+      }),
+    );
+
+    failedModelProfiles.delete("profile-b");
+    modelsDataByProfile.set("profile-b", { models: [recoveredProfileBModel] });
+    rerender();
+
+    await waitFor(() => {
+      expect(result.current.getState().catalog.modelsLoaded).toBe(true);
+      expect(result.current.getState().selectedModel?.slug).toBe(modelSlug);
+    });
+    expect(result.current.getState().values.serviceTier).toBe("");
+    expect(result.current.getState().serviceTier).toBe("");
+    expect(onSettingsChange).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      result.current.getState().setPermission("auto_accept_edits");
+    });
+    expect(onSettingsChange).toHaveBeenCalledTimes(2);
+    expect(onSettingsChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        model: modelSlug,
+        profileId: "profile-b",
+        serviceTier: null,
+        permissionMode: "auto_accept_edits",
+      }),
+    );
+  });
+
+  it.each([
+    { account: "ambient", profileId: null, profileKey: "<ambient>" },
+    { account: "managed", profileId: "profile-a", profileKey: "profile-a" },
+  ])(
+    "preserves a seeded $account tier after a cold catalog failure and a permission edit",
+    async ({ profileId, profileKey }) => {
+      useSettingsStore.setState({
+        defaultSelection: {
+          harnessId: "codex",
+          modelSlug: "saved-model",
+          profileId,
+        },
+        defaultServiceTier: "ultrafast",
+      });
+      modelsDataByProfile.set(profileKey, undefined);
+      failedModelProfiles.add(profileKey);
+      const onSettingsChange = vi.fn();
+      const { result } = renderHook(() =>
+        useComposerToolbarStore(
+          "landing",
+          { kind: "none" },
+          onSettingsChange,
+          catalogScope(false),
+        ),
+      );
+
+      await waitFor(() => {
+        expect(result.current.getState().catalog.modelsFailed).toBe(true);
+        expect(result.current.getState().catalog.modelsProfileId).toBe(
+          profileId,
+        );
+      });
+      expect(result.current.getState().values.serviceTier).toBe("ultrafast");
+      expect(result.current.getState().serviceTier).toBe("ultrafast");
+      expect(onSettingsChange).not.toHaveBeenCalled();
+
+      act(() => {
+        result.current.getState().setPermission("auto_accept_edits");
+      });
+
+      expect(result.current.getState().values.serviceTier).toBe("ultrafast");
+      expect(result.current.getState().serviceTier).toBe("ultrafast");
+      expect(onSettingsChange).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          model: "saved-model",
+          profileId,
+          serviceTier: "ultrafast",
+          permissionMode: "auto_accept_edits",
+        }),
+      );
+    },
+  );
 
   it("commits a (harness,model) selection in a single emit", async () => {
     // The combined action must patch selection + reasoning + tier in one
@@ -1633,6 +1902,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     });
     expect(modelQueryCalls.at(-1)).toEqual({
       harnessId: "codex",
+      profileId: null,
       workingDirectory: null,
       enabled: false,
       subscribed: false,

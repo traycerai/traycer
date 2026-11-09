@@ -41,6 +41,7 @@
  * epoch was doing. That is what this adapter remembers, and it is the whole of
  * its state.
  */
+import { grantedRole } from "@traycer/protocol/common/permission-role";
 import type {
   AdapterDescriptor,
   AdapterDetachReason,
@@ -306,14 +307,14 @@ export function createEpicStatusLaneAdapter(
         // drain never runs, for the life of the session.
         emit({
           kind: "control-snapshot-complete",
-          role: frame.permissionRole,
+          role: grantedRole(frame.permissionRole),
         });
         // Every field, restated, in the order a consumer needs them: the
         // permission verdict gates what the rest may do, so it lands first.
         emit({
           kind: "permission-changed",
-          role: frame.permissionRole,
-          canWrite: isWritablePermissionRole(frame.permissionRole),
+          role: grantedRole(frame.permissionRole),
+          canWrite: isWritablePermissionRole(grantedRole(frame.permissionRole)),
           securityEpoch: frame.securityEpoch,
         });
         emit({
@@ -371,8 +372,10 @@ export function createEpicStatusLaneAdapter(
             foldSecurityEpoch(frame.securityEpoch);
             emit({
               kind: "permission-changed",
-              role: frame.permissionRole,
-              canWrite: isWritablePermissionRole(frame.permissionRole),
+              role: grantedRole(frame.permissionRole),
+              canWrite: isWritablePermissionRole(
+                grantedRole(frame.permissionRole),
+              ),
               securityEpoch: frame.securityEpoch,
             });
             return;

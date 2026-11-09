@@ -1,11 +1,21 @@
 import "../../../../../__tests__/test-browser-apis";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { settleProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { poolEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import type { EnvironmentConfigurationItem } from "@traycer/protocol/host/environment/configuration-contracts";
-import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
+import type {
+  EnvironmentMembersResponseV12,
+  EnvironmentDescriptorV11,
+} from "@traycer/protocol/host/environment/contracts";
 import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
 import {
   configurationItem,
@@ -120,18 +130,23 @@ const MEMBERS = [
   invitedAddress: null,
 }));
 
+const MEMBERS_RESPONSE: EnvironmentMembersResponseV12 = {
+  members: MEMBERS,
+  nextCursor: null,
+  legacyRoleNoticeSeenAt: null,
+  legacyMembers: [],
+};
+
 function mountViewer(
   readItems: () => { readonly items: EnvironmentConfigurationItem[] },
+  readMembers: () =>
+    | EnvironmentMembersResponseV12
+    | Promise<EnvironmentMembersResponseV12>,
 ): TeamPageHarness {
   const harness = mountTeamPageOnPoolBuild(poolSource("viewer"), {
     "environment.list": () => ({ environments: [TEAM_ENVIRONMENT] }),
     "environment.configuration.items": readItems,
-    "environment.members": () => ({
-      members: MEMBERS,
-      nextCursor: null,
-      legacyRoleNoticeSeenAt: null,
-      legacyMembers: [],
-    }),
+    "environment.members": readMembers,
   });
   render(
     <SandboxDefaultsSection
@@ -157,30 +172,86 @@ function everyRequestWentToThePool(
 
 describe("<SandboxDefaultsSection /> on a build with a server pool", () => {
   it("shows the item's values, read through the server pool", async () => {
-    const harness = mountViewer(() => ({ items: [SANDBOX_DEFAULTS_ITEM] }));
+    const harness = mountViewer(
+      () => ({ items: [SANDBOX_DEFAULTS_ITEM] }),
+      () => MEMBERS_RESPONSE,
+    );
 
     await waitFor(() => {
-      expect(
-        screen.getByTestId("sandboxes-defaults-summary").textContent,
-      ).toContain("Linux · 4 vCPU · 8 GB · suspends after 45 minutes");
+      expect(screen.getByTestId("sandboxes-defaults-shape").textContent).toBe(
+        "Shape · Linux · 4 vCPU · 8 GB · from $0.12/h · Suspend keeps memory",
+      );
+      expect(screen.getByTestId("sandboxes-defaults-idle").textContent).toBe(
+        "Idle · 45 minutes",
+      );
+      expect(screen.getByTestId("sandboxes-defaults-resting").textContent).toBe(
+        "Destruction · kept until you destroy it",
+      );
     });
     everyRequestWentToThePool(harness, "environment.configuration.items");
   });
 
-  it("shows the Members link without loading a viewer roster", async () => {
-    const harness = mountViewer(() => ({ items: [SANDBOX_DEFAULTS_ITEM] }));
+  it("shows the editor roster read through the pool and the Members link", async () => {
+    const harness = mountViewer(
+      () => ({ items: [SANDBOX_DEFAULTS_ITEM] }),
+      () => MEMBERS_RESPONSE,
+    );
 
     expect(
-      (await screen.findByTestId("sandboxes-defaults-editors")).textContent,
-    ).toContain("Editors and admins can change defaults · Members");
+      await screen.findByText("Ada, Bo can change defaults."),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Members" })).toBeTruthy();
+    everyRequestWentToThePool(harness, "environment.members");
+  });
+
+  it("shows roster loading until the members read answers", async () => {
+    let finish: (value: EnvironmentMembersResponseV12) => void = () =>
+      undefined;
+    const response = new Promise<EnvironmentMembersResponseV12>((resolve) => {
+      finish = resolve;
+    });
+    mountViewer(
+      () => ({ items: [SANDBOX_DEFAULTS_ITEM] }),
+      () => response,
+    );
+    expect(await screen.findByText("Loading editors and admins…")).toBeTruthy();
+    await act(async () => {
+      finish(MEMBERS_RESPONSE);
+      await response;
+    });
+    expect(
+      await screen.findByText("Ada, Bo can change defaults."),
+    ).toBeTruthy();
+  });
+
+  it("reports a failed membership read and retries without showing stale names", async () => {
+    let failing = true;
+    mountViewer(
+      () => ({ items: [SANDBOX_DEFAULTS_ITEM] }),
+      () => {
+        if (failing) throw new Error("Could not read members");
+        return MEMBERS_RESPONSE;
+      },
+    );
+    expect(
+      await screen.findByText("Couldn't read who can change defaults."),
+    ).toBeTruthy();
     expect(screen.queryByText(/Ada|Bo/u)).toBeNull();
-    expect(hostIdsOf(harness, "environment.members")).toHaveLength(0);
+    failing = false;
+    fireEvent.click(screen.getByRole("button", { name: "Retry members" }));
+    expect(
+      await screen.findByText("Ada, Bo can change defaults."),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Save defaults" })).toBeNull();
   });
 
   it("says the defaults could not be read, with Retry and none of the value rows", async () => {
-    mountViewer(() => {
-      throw new Error("the host could not read the item");
-    });
+    mountViewer(
+      () => {
+        throw new Error("the host could not read the item");
+      },
+      () => MEMBERS_RESPONSE,
+    );
 
     expect(
       await screen.findByText("Couldn't read these defaults."),

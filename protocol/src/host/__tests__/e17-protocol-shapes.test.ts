@@ -7,15 +7,18 @@ import {
 import {
   agentListDowngradeV10ToV9,
   agentListUpgradeV101ToV102,
+  agentListUpgradeV102ToV103,
   agentListV100,
   agentListV101,
   agentListV102,
+  agentListV103,
 } from "@traycer/protocol/host/agent/contracts";
 import {
-  agentSummarySchema,
+  agentSummarySchemaV102,
   listAgentsResponseSchema,
   listAgentsResponseSchemaV100,
   listAgentsResponseSchemaV101,
+  listAgentsResponseSchemaV102,
 } from "@traycer/protocol/host/agent/shared";
 import { epicListTaskHostsV10 } from "@traycer/protocol/host/epic/contracts";
 import { hostRpcRegistry } from "@traycer/protocol/host/registry";
@@ -40,11 +43,11 @@ import {
 
 /**
  * Wire shapes for the team host: the `principal_mismatch` error code,
- * `agent.list@10.2`, the host list `owner`, the sandbox card's member names,
- * the task host row and `epic.listTaskHosts`, and the member-credential
- * handoff on the `CREDENTIAL_UPDATE` frame. Each case reads the shape through
- * the schema a peer would, so a missing key, a loosened arm or a wrong default
- * fails here rather than on a released client.
+ * the `agent.list@10.2` freeze and `@10.3` head, the host list `owner`, the
+ * sandbox card's member names, the task host row and `epic.listTaskHosts`, and
+ * the member-credential handoff on the `CREDENTIAL_UPDATE` frame. Each case
+ * reads the shape through the schema a peer would, so a missing key, a
+ * loosened arm or a wrong default fails here rather than on a released client.
  */
 
 describe("principal_mismatch error code", () => {
@@ -59,7 +62,7 @@ describe("principal_mismatch error code", () => {
   });
 });
 
-describe("agent.list@10.2", () => {
+describe("agent.list@10.2 and @10.3", () => {
   const BASE_ROW = {
     id: "agent-1",
     parentId: null,
@@ -82,7 +85,7 @@ describe("agent.list@10.2", () => {
   };
   const CALLER = { agentId: "agent-1", canSendMessages: true };
 
-  const V102_RESPONSE = listAgentsResponseSchema.parse({
+  const V102_RESPONSE = listAgentsResponseSchemaV102.parse({
     caller: CALLER,
     scope: "user",
     agents: [
@@ -112,38 +115,54 @@ describe("agent.list@10.2", () => {
     ],
   });
 
+  const V103_RESPONSE = listAgentsResponseSchema.parse({
+    ...V102_RESPONSE,
+    agents: V102_RESPONSE.agents.map((row) => ({
+      ...row,
+      runConfig: {
+        model: { kind: "concrete", slug: "gpt-6.1-sol" },
+        reasoningEffort: "high",
+        fastMode: null,
+        serviceTier: "priority",
+      },
+    })),
+  });
+
   const V101_RESPONSE = listAgentsResponseSchemaV101.parse({
     caller: CALLER,
     scope: "user",
     agents: [BASE_ROW, { ...BASE_ROW, id: "agent-2", isSelf: false }],
   });
 
-  it("keeps reach and hostConnectivity on the head schema", () => {
-    expect(V102_RESPONSE.agents.map((row) => row.reach)).toEqual([
+  it("keeps reach, hostConnectivity and serviceTier on the head schema", () => {
+    expect(V103_RESPONSE.agents.map((row) => row.reach)).toEqual([
       "same_principal",
       "other_principal",
       null,
     ]);
-    expect(V102_RESPONSE.agents[1].hostConnectivity).toEqual({
+    expect(V103_RESPONSE.agents[1].hostConnectivity).toEqual({
       kind: "known",
       connectivity: "offline",
       observedAt: 1_791_000_000_000,
     });
+    expect(V103_RESPONSE.agents[0].runConfig).toMatchObject({
+      serviceTier: "priority",
+    });
   });
 
-  it("requires both keys on the head row, so a 10.1 row cannot ride as a 10.2 one", () => {
-    expect(agentSummarySchema.safeParse(BASE_ROW).success).toBe(false);
+  it("requires the reach pair on the frozen 10.2 row, so a 10.1 row cannot ride as one", () => {
+    expect(agentSummarySchemaV102.safeParse(BASE_ROW).success).toBe(false);
     expect(
-      agentSummarySchema.safeParse({ ...BASE_ROW, reach: null }).success,
+      agentSummarySchemaV102.safeParse({ ...BASE_ROW, reach: null }).success,
     ).toBe(false);
     expect(
-      agentSummarySchema.safeParse({
+      agentSummarySchemaV102.safeParse({
         ...BASE_ROW,
         hostConnectivity: UNKNOWN_CONNECTIVITY,
       }).success,
     ).toBe(false);
     expect(
-      agentSummarySchema.safeParse({
+      agentSummarySchemaV102.safeParse({
         ...BASE_ROW,
         reach: "other_principal",
         hostConnectivity: UNKNOWN_CONNECTIVITY,
@@ -153,7 +172,7 @@ describe("agent.list@10.2", () => {
 
   it("refuses a reach value outside same_principal, other_principal and null", () => {
     expect(
-      agentSummarySchema.safeParse({
+      agentSummarySchemaV102.safeParse({
         ...BASE_ROW,
         reach: "someone_else",
         hostConnectivity: UNKNOWN_CONNECTIVITY,
@@ -177,11 +196,13 @@ describe("agent.list@10.2", () => {
     });
   });
 
-  it("names the frozen schemas on the @10.0 and @10.1 contracts and the canonical one on the head", () => {
+  it("keeps @10.2 frozen and names the canonical schema on @10.3", () => {
     expect(agentListV100.responseSchema).toBe(listAgentsResponseSchemaV100);
     expect(agentListV101.responseSchema).toBe(listAgentsResponseSchemaV101);
-    expect(agentListV102.responseSchema).toBe(listAgentsResponseSchema);
+    expect(agentListV102.responseSchema).toBe(listAgentsResponseSchemaV102);
     expect(agentListV102.schemaVersion).toEqual({ major: 10, minor: 2 });
+    expect(agentListV103.responseSchema).toBe(listAgentsResponseSchema);
+    expect(agentListV103.schemaVersion).toEqual({ major: 10, minor: 3 });
   });
 
   it("upgrades a 10.1 response by stamping reach: null and hostConnectivity: unknown on every row", () => {
@@ -200,6 +221,27 @@ describe("agent.list@10.2", () => {
       "agent-1",
       "agent-2",
     ]);
+    expect(() => listAgentsResponseSchemaV102.parse(upgraded)).not.toThrow();
+  });
+
+  it("upgrades a 10.2 response by filling serviceTier with null", () => {
+    const v102WithRunConfig = listAgentsResponseSchemaV102.parse({
+      ...V102_RESPONSE,
+      agents: V102_RESPONSE.agents.map((row) => ({
+        ...row,
+        runConfig: {
+          model: { kind: "concrete", slug: "gpt-6.1-sol" },
+          reasoningEffort: "high",
+          fastMode: null,
+        },
+      })),
+    });
+    const upgraded =
+      agentListUpgradeV102ToV103.upgradeResponse(v102WithRunConfig);
+
+    expect(
+      upgraded.agents.every((row) => row.runConfig?.serviceTier === null),
+    ).toBe(true);
     expect(() => listAgentsResponseSchema.parse(upgraded)).not.toThrow();
   });
 
@@ -214,21 +256,22 @@ describe("agent.list@10.2", () => {
     expect(agentListUpgradeV101ToV102.upgradeRequest(request)).toEqual(request);
   });
 
-  it("registers 10.2 as the latest minor of major 10, over the 10.0 and 10.1 contracts", () => {
+  it("registers 10.3 as the latest minor of major 10, over the frozen 10.0-10.2 contracts", () => {
     const line = hostRpcRegistry["agent.list"][10];
 
-    expect(line.latestMinor).toBe(2);
+    expect(line.latestMinor).toBe(3);
     expect(line.versions[0].contract).toBe(agentListV100);
     expect(line.versions[1].contract).toBe(agentListV101);
     expect(line.versions[2].contract).toBe(agentListV102);
+    expect(line.versions[3].contract).toBe(agentListV103);
   });
 
-  it("starts the 10 -> 9 bridge at 10.2 and drops both keys on the way out", () => {
-    expect(agentListDowngradeV10ToV9.from).toEqual({ major: 10, minor: 2 });
+  it("starts the 10 -> 9 bridge at 10.3 and drops later keys on the way out", () => {
+    expect(agentListDowngradeV10ToV9.from).toEqual({ major: 10, minor: 3 });
     expect(agentListDowngradeV10ToV9.to).toEqual({ major: 9, minor: 2 });
 
     const downgraded =
-      agentListDowngradeV10ToV9.downgradeResponse(V102_RESPONSE);
+      agentListDowngradeV10ToV9.downgradeResponse(V103_RESPONSE);
 
     expect(downgraded.ok).toBe(true);
     if (!downgraded.ok) throw new Error("expected the downgrade to succeed");
@@ -236,16 +279,19 @@ describe("agent.list@10.2", () => {
     for (const row of downgraded.value.agents) {
       expect(Object.hasOwn(row, "reach")).toBe(false);
       expect(Object.hasOwn(row, "hostConnectivity")).toBe(false);
+      if (row.runConfig !== null) {
+        expect(Object.hasOwn(row.runConfig, "serviceTier")).toBe(false);
+      }
       expect(row.archived).toBe(false);
     }
   });
 
-  it("carries a 10.2 answer down to a major-9 caller through the registry without either key", () => {
+  it("carries a 10.3 answer down to a major-9 caller through the registry without later keys", () => {
     const result = downgradeResponseAcrossMajors(
       hostRpcRegistry["agent.list"],
       10,
       9,
-      V102_RESPONSE,
+      V103_RESPONSE,
     );
 
     expect(result.ok).toBe(true);
@@ -253,6 +299,9 @@ describe("agent.list@10.2", () => {
     for (const row of result.value.agents) {
       expect(Object.hasOwn(row, "reach")).toBe(false);
       expect(Object.hasOwn(row, "hostConnectivity")).toBe(false);
+      if (row.runConfig !== null) {
+        expect(Object.hasOwn(row.runConfig, "serviceTier")).toBe(false);
+      }
     }
   });
 });

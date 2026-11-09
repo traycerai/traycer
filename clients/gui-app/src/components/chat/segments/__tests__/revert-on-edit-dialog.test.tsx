@@ -1,6 +1,10 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RevertOnEditDialog } from "@/components/chat/segments/revert-on-edit-dialog";
+import {
+  expectFocusRingInset,
+  expectScrollableDialogLayout,
+} from "@/components/ui/__tests__/dialog-scroll-layout-assertions";
 
 const onOpenChange = vi.fn();
 const onRevert = vi.fn();
@@ -82,6 +86,10 @@ describe("<RevertOnEditDialog /> queued-messages note", () => {
 
   it("omits the note when the queue is empty", () => {
     render(renderDialog(true));
+    const body = expectScrollableDialogLayout(
+      screen.getByTestId("revert-on-edit-dialog"),
+    );
+    expectFocusRingInset(body, ["-m-1", "px-6", "py-5"]);
     expect(screen.getByRole("dialog").textContent).not.toMatch(
       /queued message/i,
     );

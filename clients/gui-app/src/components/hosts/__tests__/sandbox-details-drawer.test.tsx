@@ -5,6 +5,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
 } from "@testing-library/react";
 import { SandboxDetailsDrawerHost } from "@/components/hosts/sandbox-details-drawer";
 import type {
@@ -51,13 +52,6 @@ vi.mock("@/hooks/sandboxes/use-sandbox-operation", () => ({
 vi.mock("@/hooks/sandboxes/use-sandbox-settings-status", () => ({
   useSandboxSettingsStatus: () => ({ data: undefined }),
 }));
-vi.mock("@/hooks/sandboxes/use-sandbox-session-report", () => ({
-  useSandboxRowSessionReport: () => ({
-    report: { kind: "unknown" },
-    failed: false,
-  }),
-}));
-
 afterEach(() => {
   act(() => {
     closeSandboxDetails();
@@ -80,7 +74,7 @@ describe("<SandboxDetailsDrawerHost />", () => {
     expect(list.refetch).toHaveBeenCalledTimes(1);
   });
 
-  it("shows the agent, task purpose, sessions and setup evidence kept out of the list", () => {
+  it("keeps lifecycle details and setup diagnostics available in the drawer", () => {
     const summary: SandboxSummary = sandboxSummaryFixture({
       id: "sbx-details",
       displayName: "Sandbox details fixture",
@@ -105,13 +99,19 @@ describe("<SandboxDetailsDrawerHost />", () => {
       openSandboxDetails(summary.id);
     });
 
-    expect(screen.getByText("Created by")).toBeTruthy();
-    expect(screen.getByText("Planner")).toBeTruthy();
-    expect(screen.getByText("For task")).toBeTruthy();
-    expect(screen.getByText("Sandbox setup")).toBeTruthy();
-    expect(screen.getByRole("region", { name: "Sessions" })).toBeTruthy();
-    // The list row no longer shows the setup failure's reference, so Details
-    // names it even when the failure carries no code of its own.
+    const status = screen.getByTestId("sandbox-details-status");
+    expect(within(status).queryByText("Created by")).toBeNull();
+    expect(within(status).queryByText("For task")).toBeNull();
+    expect(within(status).getByText("Started by")).toBeTruthy();
+    expect(within(status).getByText("An agent")).toBeTruthy();
+    expect(within(status).getByText("State")).toBeTruthy();
+    expect(within(status).getByText("Awake")).toBeTruthy();
+    expect(
+      within(status).getByText("destroys itself after 30 idle min"),
+    ).toBeTruthy();
+    const history = screen.getByTestId("sandbox-details-history");
+    expect(history.textContent).toContain("Created");
+    expect(history.textContent).toContain("by an agent");
     expect(
       screen.getByRole("region", { name: "Settings delivery" }).textContent,
     ).toBe(
@@ -121,7 +121,10 @@ describe("<SandboxDetailsDrawerHost />", () => {
     act(() => {
       openSandboxDetails(startedByAgent.id);
     });
-    expect(screen.getByText("Started by")).toBeTruthy();
-    expect(screen.getByText("Planner")).toBeTruthy();
+    const kept = screen.getByTestId("sandbox-details-status");
+    expect(within(kept).getByText("Started by")).toBeTruthy();
+    expect(within(kept).getByText("Planner")).toBeTruthy();
+    expect(within(kept).queryByText("For task")).toBeNull();
+    expect(within(kept).queryByText("Created by")).toBeNull();
   });
 });

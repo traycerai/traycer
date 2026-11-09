@@ -1,5 +1,4 @@
 import { cleanup, render, screen, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EnvironmentPlan } from "@traycer/protocol/host/environment/configuration-contracts";
@@ -239,7 +238,7 @@ describe("TeamProviderLiveFacts", () => {
     expect(screen.queryByText("Details")).toBeNull();
   });
 
-  it("discloses the binary the viewing host reported, outside the rate-limit card", async () => {
+  it("shows the binary the viewing host reported inside Rate limits", () => {
     reads.providers = [
       {
         ...claude(
@@ -255,26 +254,15 @@ describe("TeamProviderLiveFacts", () => {
     ];
     renderFacts();
 
-    expect(rateCard().textContent).not.toContain("uses:");
-    expect(rateCard().textContent).not.toContain("Executable");
-    expect(rateCard().textContent).not.toContain("/usr/local/bin/claude");
-    await userEvent.click(screen.getByText("Details"));
-    const details = screen.getByText("Details").closest("details");
-    if (!(details instanceof HTMLElement)) {
-      throw new Error("binary details missing");
-    }
     expect(
-      within(details).getByText("Executable: /usr/local/bin/claude"),
+      within(rateCard()).getByText(
+        "Studio uses: /usr/local/bin/claude · 1.2.3.",
+      ),
     ).toBeTruthy();
-    expect(within(details).getByText("Version: 1.2.3")).toBeTruthy();
-    expect(within(details).getByText("as reported by Studio")).toBeTruthy();
-    expect(details.textContent).not.toContain("path");
-    expect(details.textContent).not.toContain("bundled");
-    expect(details.textContent).not.toContain("managed");
-    expect(details.textContent).not.toContain("custom");
+    expect(screen.queryByText("Details")).toBeNull();
   });
 
-  it("names the included agent and omits a null version", async () => {
+  it("names the included agent and omits a null version", () => {
     reads.providers = [
       {
         ...claude([], "unknown"),
@@ -283,19 +271,13 @@ describe("TeamProviderLiveFacts", () => {
     ];
     renderFacts();
 
-    await userEvent.click(screen.getByText("Details"));
-    const details = screen.getByText("Details").closest("details");
-    if (!(details instanceof HTMLElement)) {
-      throw new Error("binary details missing");
-    }
     expect(
-      within(details).getByText("Executable: Included agent"),
+      within(rateCard()).getByText("Studio uses: Included agent."),
     ).toBeTruthy();
-    expect(within(details).queryByText(/^Version:/)).toBeNull();
-    expect(within(details).getByText("as reported by Studio")).toBeTruthy();
+    expect(screen.queryByText("Details")).toBeNull();
   });
 
-  it("omits the disclosure when the host reported no binary", () => {
+  it("omits the binary line when the host reported no binary", () => {
     reads.providers = [
       {
         ...claude([], "unknown"),
@@ -308,7 +290,7 @@ describe("TeamProviderLiveFacts", () => {
     expect(screen.queryByText("Details")).toBeNull();
   });
 
-  it("omits the disclosure when no viewing host is bound", () => {
+  it("omits the binary line when no viewing host is bound", () => {
     reads.bound = false;
     reads.providers = [
       {
@@ -324,6 +306,6 @@ describe("TeamProviderLiveFacts", () => {
 
     expect(screen.getByRole("heading", { name: "Rate limits" })).toBeTruthy();
     expect(screen.queryByText("Details")).toBeNull();
-    expect(screen.queryByText(/Executable/)).toBeNull();
+    expect(screen.queryByText(/Studio uses:/)).toBeNull();
   });
 });

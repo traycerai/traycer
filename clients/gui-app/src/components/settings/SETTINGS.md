@@ -645,18 +645,23 @@ resolving one that is not offered. Three surfaces present a choice and so read
 the offered list: the sidebar, the palette's settings sub-page
 (`navigation.source.ts`), and the leader digits (`keybindings/dispatch.ts`,
 which indexes positionally and must walk the same list the sidebar badges).
-Three more can arrive holding an id and each resolves it: the route (each
-unoffered section's own `beforeLoad` redirects to `/settings/general` with
-`replace` - `settings.keybindings.tsx`, `settings.link-phone.tsx`,
-`settings.delete-account.tsx`), the modal (falls back to General for any
-section the build does not offer, since its section is persisted across
-launches), and the palette's `help:keybindings` row, which is dropped rather
-than left as the one entry point that routes around the rest. Only Keybindings
-needs that last one; nothing navigates directly to Link mobile app or Delete
-account, so neither gets machinery it does not need.
+Three more can arrive holding an id and each resolves it: the route, the modal,
+and the palette. Keybindings, Link mobile app and Delete account each redirect
+in `beforeLoad` to `/settings/general` with `replace`
+(`settings.keybindings.tsx`, `settings.link-phone.tsx`,
+`settings.delete-account.tsx`). Application Diagnostics does not. The phone's
+offered list drops it, and `/settings/app-diagnostics` still renders the panel:
+one sentence when this shell has none of the desktop bridges, and only the
+groups whose bridges exist when one does. The modal falls back to General for
+any section the build does not offer, since its section is persisted across
+launches. The palette's `help:keybindings` row is dropped rather than left as
+the one entry point that routes around the rest. Only Keybindings needs that
+last one; nothing navigates directly to Link mobile app or Delete account, so
+neither gets machinery it does not need.
 
 **The list differs in both directions.** `MOBILE_APP_OMITTED_SECTION_IDS` names
-what the phone drops; `MOBILE_APP_ONLY_SECTION_IDS` names what only the phone
+what the phone drops (Keybindings, Link mobile app, and Application
+Diagnostics); `MOBILE_APP_ONLY_SECTION_IDS` names what only the phone
 has, which today is Delete account (see its entry under § Sections). Both lists
 are applied once at module load, so each build's offered list keeps ONE identity
 for the process's life - consumers memoize on it. That guarantee used to come
@@ -717,11 +722,9 @@ Supporting pieces, all viewport-agnostic where possible:
   slot holds a labelled button, so focus and screen-reader order would then
   reach Reset before the field it acts on (WCAG 2.4.3 / 1.3.2). No `order-*`
   on interactive content: source order is the only order.
-- Below `md` the Providers rail is a wrapping list of provider buttons above
-  the detail pane, the same names the pointer-width rail draws: configured
-  providers first, each name wrapping, with its profile count and a not-usable
-  word when the row has one, and the rest behind Add provider. It is not a
-  `Select`, and search does not narrow it. The detail pane's tab rail still
+- Below `md` the Providers rail is one full-width `SettingsMasterSelect`
+  labelled **Provider**, listing every ordered provider. Search does not
+  narrow it. The detail pane's tab rail still
   collapses into a `Select` (`provider-section-select.tsx`). Both tab arms
   read the same `tabs` list and the same `PROVIDER_TAB_LABELS`; only the
   container differs, and `Tabs` stays controlled by the panel, so exactly one
@@ -744,6 +747,10 @@ Supporting pieces, all viewport-agnostic where possible:
     `ui/select.tsx`'s `SelectItem` and on all four of `ui/dropdown-menu.tsx`'s
     row types (item, checkbox, radio, sub-trigger - keep them in step). Reach
     for a scope rule only for a control that renders in place.
+
+Host Diagnostics keeps its Info/Debug/reproduce/reset guidance inline on narrow
+screens; the return action retains its wrapping layout. Ports keeps the full
+name, endpoint route and active byte counters inline with wrapping rows.
 
 ## Key Files
 
@@ -873,12 +880,17 @@ First edits of an absent model-routing item
 start from the named host's seeded policy; Reset and Restore default tiers
 delete the team item. Host-source panels preserve their existing behavior.
 
-Providers, on a cloud-backed Personal or a team, lists configured providers
-first and folds the rest behind Add provider. The header links to Secrets.
-The selected provider's pane holds its own key when that provider takes one,
-then Plans, then its profiles, then rate limits.
-The executable path and version sit in Details under the rate-limit card.
-Plans replace Add a profile, with an unlink preview.
+Providers, on cloud-backed Personal or a team, lists every provider in the
+rail from `lg` up. Below `lg` that rail is one full-width `SettingsMasterSelect`
+labelled **Provider**. The header does not link to Secrets, and the pane has
+no keys list. Tabs are **Plans & limits**, **Env**, **MCP**, **Skills**, and
+**Pack version** when the provider has pack ids. Plans is one **Linked plan**
+picker, plus **Link a plan** and **Unlink** when the viewer can administer, and
+**No plans linked.** when none are. Profiles is one **Profile** picker under
+**Profiles**; the selected profile's account name stays under it, and Use is a
+switch when the person can edit, otherwise On or Off as text. The executable
+path and version stay inside the rate-limit card. A rail subtitle reads **key**
+only when a live team key is set; a linked plan and "no plan" show no subtitle.
 Only controls with a persisted team store are rendered. MCP rows expose the
 server id and tool toggles; declarations and Add are absent. Provider Details
 uses the persisted kind and key. Personal rows offer it only when applied-item
@@ -896,14 +908,21 @@ Account; the rest is the app itself.
   Alerts, Keybindings, Layout, Diagnostics.
 - **Account** - Sessions, Link mobile app, Usage, Credits, Notifications,
   and Delete account on mobile. Read through the window's own host, never
-  through the picker. A session row leads with the device or host name, then
-  platform and location; "This session" is only on the current row's status
-  line. App version and when the session was created sit in that row's
-  Details. The icon keeps the client kind as its accessible name.
+  through the picker. The list is headed **Signed-in sessions**, with "Browser,
+  desktop, CLI, extension, and host access for this account." A row's heading
+  is **This session** or **Session**. The client kind is an outline badge
+  (**Web**, **Desktop**, **CLI**, **Extension**, **Mobile app**, **Host**, or
+  **Unknown client**), and a revoked row adds **Signed out**. The next line
+  joins the display label, platform, **App** version and location with slashes,
+  or reads **Session details unavailable** when none of those are present. The
+  timeline is **Created** {relative} · **Last seen** {relative}, **Signed out**
+  {relative}, or **Signing out**. The icon is decorative. **Sign out** is on
+  the row; **Sign out everywhere** is on the list.
 - **Environment** (group id `personal`) - Providers, MCP servers, Skills,
-  Permissions, Agents (id `agents`: tabs Selection guide and Definitions),
-  Model routing, Variables & shells (id `shell`), Secrets, Sandboxes, and
-  Members on a team; a Local row shows only Providers, Permissions, Agents,
+  Permissions, Agent memories (id `agent-memories`), Agents (id `agents`:
+  tabs Selection guide and Definitions), Model routing, Variables & shells
+  (id `shell`), Secrets, Sandboxes, Storage, and Members on a team; a Local
+  row shows only Providers, Permissions, Agents,
   Model routing, Variables & shells and Secrets. Browser agent access is the
   Browser tab of Permissions (a region below the policy on a team, whose page
   has no tabs). `agent-definitions`,
@@ -912,8 +931,51 @@ Account; the rest is the app itself.
   Permissions (`RETIRED_SECTION_REPLACEMENTS`, and their routes). These pages
   read through the window's own host (`usePersonalHostScope()`), never
   through the picker.
+  - **Agent memories** is one switch: whether the configuration's agents are
+    shown its shared memories and keep them current (`agent_memory`, key
+    `memory`). Its own page rather than a Permissions tab, because
+    Permissions is what an agent may do inside a task and this is what it
+    carries between tasks. Read from the configuration on its own pages and
+    from `config.agentMemories.get` otherwise, the same two sources as
+    Browser agent access; the switch sits behind `useHostMethodSupport` on
+    both `config.agentMemories.get` and `.set`, so a host that cannot honour
+    it shows a disabled row rather than a flip that fails. Editing follows
+    the configuration's own authority (`useCanEditConfiguration()`), which is
+    what the item-write route enforces; a viewer reads On/Off as text.
+    `.set` answers `{enabled, state, revision, environmentId, uploadId}`.
+    `applied` means this host has received that write and the switch shows it;
+    `saved` means the configuration holds it and this host has not read it
+    back yet; `queued` means this computer is still holding the edit to send,
+    so it is saved nowhere, has no revision, and carries the `uploadId` the
+    row recognises it by later. The row says which rather than letting the
+    switch snap back unexplained.
+    Both halves carry the same correspondence, because the setting arrives by
+    projection and a read taken right after a write can be behind it: `.get`
+    answers `{enabled, revision, environmentId}`, where `revision` is how far
+    this host's projection has got, and the row keeps the line up until a
+    read's `revision` reaches the one the write was saved as FOR THE SAME
+    `environmentId`. Both halves matter. A value match is not proof - an
+    earlier revision can carry the asked-for value while a revision this host
+    has not received yet overturns it - and neither is a revision from another
+    configuration, which a rebind can serve without the host's id changing.
+    The host applies the same test before it says `applied`.
+    The host row observes each write for at most 60 seconds from submission.
+    One single-flight loop reads the getter, and while queued reads
+    `environment.status` for an exact upload id, environment and item
+    address. Version 1.2 carries accepted receipts; a 1.1 host can report
+    refusals in `pendingUploads` but supplies no accepted receipt. It rechecks
+    the getter after status to reject a rebind during the read. An accepted
+    receipt latches its revision floor; missing receipts
+    keep waiting and never acknowledge a write. Confirmation requires the same
+    non-null environment, a revision at or above that floor, and the requested
+    value. A later opposite value is unconfirmed. Explicit queue refusals are
+    distinguished from transport failures. Terminal outcomes, supersession,
+    unmount and the independent deadline stop observation. Null environment
+    reads remain unavailable evidence; another environment silently ends it.
+
 - **Host** - headed by THE host picker (`host-scope/host-switcher.tsx`).
-  Its popup is titled “View host”, without an introductory caption.
+  Its popup is headed "Look at another host", with the caption "Changes what this
+  window shows. Nothing is created."
   Everything under it - Overview, Worktrees, Diagnostics - is scoped by that
   one selection.
 
@@ -923,53 +985,122 @@ Notifications left the Host group; only their group did. Browser agent access
 moved out of Browser into its own section, `browser-agent-access`, and then
 into Permissions; agent definitions became the Agents page's Definitions tab.
 
-Sandboxes (`sandboxes`) names the environment once in its header. Defaults
-start as one summary; **Edit defaults** reveals the existing form in place.
-Viewers get a **Members** link instead of an editor roster. The list starts
-with its count and today's cost, search and filters. Each row gives the full
-name its own wrapping line, then state, resources/rate/payer and the clock.
-A payer change is a separate line before the short primary action. Every
-other action lives once in **More**, including **Details**; a setup failure
-leads with **Retry setup**. Details holds the starter, agent/task purpose,
-sessions and setup evidence. Keep states the actual wake payer once, and the
-Size picker leaves pricing to its consequences line. The out-of-credits chat
-footer uses the list's payer sentence on a wrapping line above **Resume**.
+Sandboxes (`sandboxes`) names the environment once in its header. Editors see
+the shape, idle and removal controls with **Save defaults** on arrival; viewers
+see read-only defaults. Viewers see the named editors and admins, with loading,
+failure and retry states, plus **Members**. The list heading is **Your
+sandboxes**, or **{team}'s sandboxes**. The line under it is the count and
+today's cost (UTC day), or the filter summary while a filter applies. Each row
+gives the full name its own wrapping line, then starter, keeper and, while a
+team row is awake and has a payer, **Paid by you** or **Paid by {name}**. The
+next line is **{Linux|Windows} · {n} vCPU · {memory}**, then **{rate} an hour
+while awake** when a price is known, **waking it makes you the payer** on a
+resting team row whose payer is someone else, and **created by {agent}** or
+**created by {agent} for {task}** on an agent sandbox. A resting clock appends
+**storage uses your credits** on Personal, or **storage uses your {team}
+credits** / **storage uses {name}'s {team} credits** on a team when a wake
+payer exists. **Resuming changes the payer to you.** is its own line before
+the actions when that team row is resting and the payer is not the viewer.
+**Give it another {period}** is offered on a resting row inside its warning
+lead and precedes the primary action. **Details** stays inline. Setup failures
+show **Retry setup**,
+applicable **Open terminal** and **Stop** controls, **Choose another host**, and
+**Details** once; remaining secondary actions stay in **More**. Rows show
+starter and keeper, agent/task purpose, session counts and names, and setup
+evidence with support references. **Details** retains lifecycle status, settings
+diagnostics, history and export. Keep states the actual wake payer once. A size option carries its hourly rate
+(`from` unless the catalogue prices that shape exactly), and the sheet states
+the suspended and stopped rates beside the selection. The defaults shape
+control is the operating system, the resources, that rate, and how waking
+behaves (**Suspend keeps memory**, or **Suspend keeps the disk; processes
+restart on resume**). The out-of-credits chat
+footer keeps the lifecycle state beside **Out of credits**, then the list's
+payer sentence and a dated **Will be removed on** line above **Resume** or **Add
+credits**. Blocking lifecycle overlays on other tiles hide the underlying body
+without unmounting it, so its status and buttons do not show through and
+terminal history returns on wake. Their frozen state also keeps the lifecycle
+word beside **Out of credits** and gives a future removal date.
+
+The composer's expanded sandbox settings failure shows each applicable remedy
+inline: Retry applying, Repair setup, Open terminal, Stop, the host choice,
+Cancel the message and Details. Stop appears once and stays available when the
+failure is collapsed. A failure's support reference is visible in its heading,
+with Copy support reference among the inline remedies; the copied value includes
+the sandbox id when one exists. Retry controls stay visible and disabled while
+their work is pending.
+
+Folder groups in the fork, terminal, file-tree, Git Diff and History pickers are
+**Folders**, including accessible names, search and empty states, and the
+sentences that name the pick: **Select folder**, **Choose a bound folder**,
+**Choose a folder**, **No git folders available**, **Add folders to the agent to
+get started**, and **the folder you pick here**. The stacked fork chooser heads
+the host list **Host** and the folder section **Folders**. While a sandbox is
+staged, the workspace summary reads **Empty sandbox**. Every fork says **Makes
+a second chat there. This one stays where it is.** under the harness and above
+the host and folder pick. A fork onto another computer
+shows, at rest under the chooser: **Folder paths don't travel between
+computers - pick this host's folder for the fork.** When that fork would have carried
+uncommitted changes, it also shows **Uncommitted changes stay on the source
+computer, so this fork starts from the folder you pick here.** It also shows
+**The fork copies the transcript; the provider session stays on the source
+computer.** A new sandbox shows **This fork starts in an empty sandbox, with no
+files.** instead of the folder-pick sentences, and **Uncommitted changes stay on
+the source computer.** when uncommitted changes would have been carried. Forking
+the latest point is the dialog description: **The fork uses the latest saved
+checkpoint available when you click Fork. The original agent continues
+working.** on this computer, or **The fork uses the latest usable cloud backup
+available when you click Fork. Work still in progress may not be included. The
+original agent continues working.** on another computer. A fork from one turn
+has no snapshot sentence. Code identifiers remain workspace-based. Invitation review,
+Invite, Link a plan and Add an MCP server name the team or environment once in
+the heading; subsequent copy uses the team or this environment and keeps every
+grant, seat and sharing consequence. The first tab a member opens on a team
+host is three paragraphs at rest: agents here run as the host and can read what
+another member's agent can, browser sign-ins included, and they work with that
+team's hosts only, with a browser-using agent running its browser in the
+sandbox; another member's agent here can act and be charged as you while you
+are attached; a copy of your sign-in to this host, taken by anyone who was
+root here, keeps working against that team's hosts until this host sleeps.
+When people outside the team can read chats in the open task, a further
+paragraph says so and names the team. While that reader list is loading the
+notice is withheld.
 
 MCP servers (`mcp-servers`) and Skills (`skills`) are pages of the
-configuration, read from the cloud on Personal and on a team alike, whatever
-the window's host runs (`CLOUD_ONLY_SECTIONS` in `PersonalPageFrame`). In a
-pool build, configuration read families use the pool requester's readiness,
+configuration, read from the cloud on Personal and on a team alike, whatever the
+window's host runs (`CLOUD_ONLY_SECTIONS` in `PersonalPageFrame`). In a pool
+build, configuration read families use the pool requester's readiness,
 capabilities and cache identity even with no selected computer. This includes
 running computers, items, MCP servers, plans, secrets and member dialogs;
-host-owned status, local values and held-item reviews retain their target
-host. The MCP servers page
-(`environment-mcp-servers.tsx`) lists every server once from
-`environment.configuration.mcpServers.list`, with its transport, the tool
-count the viewing host reports, the providers that use it, Tools, a More
-menu (Edit and Remove), and an Enabled switch (`mcpServers.setEnabled`: off keeps the tool
-toggles on the server and takes its `mcp_server` item away; on puts it back,
-on for every provider). Add a server sits in the page header, with no repeated
-Servers heading. Tools merges the viewing host's provider inventories into one
-row per tool. A shared switch writes all represented harness toggles in one
-existing item write; mixed states are labelled and retain their per-provider
-switches behind “Differs by provider”. Reading never changes a toggle. Each
-provider keeps its existing cache and discovery polling. Add and Edit (`mcp-server-dialog.tsx`) write
-`mcpServers.put@1.1`; a remote server's Secret is picked from the
-configuration's secrets or typed, and a command server is refused one. The
-Skills page has Check for updates and Add skill in its header, with no repeated
-Skills heading. Add skill opens the existing upload and import controls in a
-dialog. The page (`environment-skills.tsx`) lists the configuration's room through
-its serving tier (`environment.configuration.skills.list`), with the providers
-that use each ("Built-in" before them for Traycer's own; the configuration's
-own carry no source word). A pool build uses the pool requester's readiness,
-cache and capabilities even with no selected or viewing host. Preview or Edit
-needs a viewing host; Remove and provider switches use the configuration's
-serving tier. A built-in is only switched off per provider. On a
-provider's Skills tab and in the skill's dialog, where sources mix, a
-configuration's own skill is named by the configuration ("Personal" or the
-team's name). Remove asks first, naming where
-the entry goes from; a server's confirm also says whether its secret stays on
-Secrets (picked) or is deleted with it (added with the server,
+host-owned status, local values and held-item reviews retain their target host.
+The MCP servers page (`environment-mcp-servers.tsx`) lists every server once
+from `environment.configuration.mcpServers.list`. The list is headed **Connected
+servers**, with **Add a server** at the end of that heading, including on the
+empty page. A row still shows its transport and an Enabled switch
+(`mcpServers.setEnabled`). Remove is a trash button that confirms. There is no
+Edit button and no Tools button. Opening a card stages one switch per tool
+until **Save changes**. Providers are named in the **Server details** line.
+There is no shared Mixed switch. Tool names on this page truncate, with the
+full name on hover; a provider tab's tool names still wrap. Reading never
+changes a toggle. Each provider keeps its existing cache and discovery polling.
+Add (`mcp-server-dialog.tsx`) writes `mcpServers.put@1.1`; a remote server's
+Secret is picked from the configuration's secrets or typed, and a command
+server is refused one. An h2 **Skills** sits on the skills list with **Check
+for updates** beside it, and is absent when the list is empty and there is
+nothing to check. Skill name, the skill folder archive, the archive-size
+sentence, and
+Add a skill sit under the list. Import from source sits with them and opens the
+existing import sheet. The page (`environment-skills.tsx`) lists the
+configuration's room through its serving tier
+(`environment.configuration.skills.list`), with the providers that use each
+("Built-in" before them for Traycer's own; the configuration's own carry no
+source word). A pool build uses the pool requester's readiness, cache and
+capabilities even with no selected or viewing host. Preview or Edit needs a
+viewing host; Remove and provider switches use the configuration's serving tier.
+A built-in is only switched off per provider. On a provider's Skills tab and in
+the skill's dialog, where sources mix, a configuration's own skill is named by
+the configuration ("Personal" or the team's name). Remove asks first, naming
+where the entry goes from; a server's confirm also says whether its secret stays
+on Secrets (picked) or is deleted with it (added with the server,
 `credential.owned`).
 
 Each provider keeps its MCP and Skills tabs (`tabsForView` no longer drops
@@ -993,30 +1124,34 @@ item's delete, so its confirmation asks "Remove “<name>” from every provider
 every host?" (`personalRemoveText`); a local entry's keeps its own config or disk
 text.
 
-Variables and shells uses compact key/value rows. Values become inputs on
-click, with Save only while editing; each existing row's More menu holds its
-removal action. Add variable opens its editor on demand. The shell's program
-and arguments follow the same edit-in-place layout. One “Applied on <host> ·
-Details” line identifies the live read; Details holds the full inventory and
-host picker. Only a value that differs from its setting gets “This host uses
-<value>” beneath it, and only a setting that applies to the viewed host: one
-for all operating systems, or for the host's own (`comparesWithHost`). A
-setting for another OS is never compared, a host that reported no OS is
-compared on universal settings only, and a universal setting is not compared
-where a setting for the same item exists for the host's OS (or, with the OS
-unknown, for any OS), because the host runs that one instead. No separate Live
-values card is rendered.
+Variables and shells, on Personal and on a team (`team-text-items.tsx`),
+keeps a saved row as the name, the value, and Remove. The value is labelled
+"Value for {name}" and commits on blur. A saved name does not rename: a change
+to it snaps back to the stored name. **Add a variable** reveals a row whose
+value is labelled "New variable value", with Apply and Discard. A Local host's
+own variables (`EnvOverrideEditor`) stay the name, Set or Unset, the value, and
+a trash control. Shell path and arguments stay editable
+with Save, Reset and applicable Remove. A separate Live values card names the
+viewing host, offers the host switch when available, and lists its shell and all
+applied variable values. Applied values are not repeated beside each editor. OS
+selection, role gates and accepted/refused write handling remain.
 
-Agents has one purpose sentence at its editor, shared by the room-backed and
-legacy editor surfaces, with no page description or tab caption repeating it.
+Agents shows the page description "How agents are picked, and the agents each
+coding agent can start." under the title. The Selection guide tab shows one
+caption, "The guide agents read when they pick a coding agent, model and effort
+for work they hand off.", and the editor heading "Agent selection guide". That
+caption is not repeated inside the editor. The room-backed and legacy editors
+share the heading and the full-height editor.
 
-Secret rows summarize destinations by count. The full addresses remain in
-Details with Verify and versions. Recovery steps are collapsed under “Secret
-leaked?”, together with the offline fallback; their actions are unchanged.
+Secret rows name every address they are sent to: "Set · sent to api.stripe.com",
+or several addresses joined with commas, and the line wraps. Details holds
+Verify and versions. The leak-response order is open there, beside the versions:
+"If this secret leaked", the four steps, and the offline fallback. There is no
+"Secret leaked?" disclosure. Their actions are unchanged.
 
 **Personal ▸ Empty states and words.** Each page opens empty to what it
 holds and one action: Variables and shells "Variables are plain values every
-host gets. Add a variable."; MCP servers "MCP servers give agents tools." with
+computer and sandbox running Personal gets."; MCP servers "MCP servers give agents tools." with
 Add a server, and under it, while a provider holds servers on this computer
 that Personal does not, "1 server on this computer only, not in Personal ·
 See it on <Provider> ▸ MCP" (`OnHostOnlyServersLine`); Skills "Skills give agents instructions for a kind of task."
@@ -1028,86 +1163,82 @@ desktop string a person reads; a value a shell provides is a "shell
 variable". The one exception is the auto-mode policy file's own
 "Environment" heading, which people type and the host parses.
 
-**Personal ▸ Secrets** (`panels/secrets-settings-panel.tsx`,
-`secrets/`). Read through the window's own host, and every
-`environment.secrets.*` call names its environment
-(`hooks/environment/use-addressed-environment.ts`): a team's id on its
-pages, Personal's own id on the Personal pick (from `environment.list`,
-`ownerKind: "user"`, the resolver Details shares), and the host's own only on
-a Local pick, so a host that has not moved its settings still reads
-Personal's. A read waits for Personal's id. A provider's sign-in
-(`providers.link`, `providers.linkComplete`) names the same environment, and
-its Continue waits for Personal's id. Each row reads
-"STRIPE_KEY · Set · 1 destination · added by you 24 Oct"
-("replaced by you" after a replacement, from the current version) with
-**Replace**, **Remove** and **Details**; Details holds **Verify**
-(`environment.secrets.verify` by id), the rotation, **Versions** (Undo,
-Restore on a revoked secret sent with `regrant`, Destroy behind a
-confirmation, refusals read by `secretChangeRefusalLine`) and the recovery
-order for a leaked secret. Empty, it reads "Values and logins your agents use. On your computers
-they are set as values; on sandboxes agents use them without seeing them."
-with Add a secret, and the page has no subtitle, which would say it twice.
-A failed read shows only "Couldn't read Personal's secrets." with Retry,
-never the empty state. A team's empty state reads "Values and logins Acme's
-agents use, on its sandboxes without being seen." A removed secret keeps a
-row until it is destroyed (`list@1.1`'s `removed`): "Removing · no longer
-usable · waiting for dev-box to delete its copy · Retry", or "waiting for 2
-hosts to delete their copies". A failed cleanup reads "dev-box couldn't delete
-its copy". Retry on the row, Secrets Details and the single-secret drawer
-uses Remove again on the current version. While host cleanup is pending, it
-publishes a revision-only delta to retry failed host work immediately; a
-completed cleanup publishes nothing. The delta also retries the environment's
-other failed items, just as any configuration change does. It never rewrites
-a declaration, so a replacement secret using the same name survives.
-The page's own `Details` sits beside its chip: its Now reads "Applied on 2
-hosts" (or "Not applied on dev-box", "Applying on dev-box…"), and a removal
-under way reads "Cleanup requested · waiting for dev-box · Retry". A
-Details that cannot load reads "Couldn't load details." with Retry.
-**Add a secret** offers API key and database login, with "Provider keys are
-set on each provider's page, under Providers." where Providers opens
-that page (`lib/sandboxes/secret-intake-form.ts`: server address, port,
-login, database, variables, mode, "Every sandbox gets it", the database's
-plaintext lines and their disclosure version). The server address's hint is
-"Where this key is sent, e.g. api.stripe.com. Separate several with
-commas."; the mode is "Agents use it without seeing it (recommended)" or
-"Agents can read it", the second with its warning. A kind none of whose
-protocols is brokered is greyed with the catalogue's own line. The form and
-Save's confirmation carry "Stored encrypted in Traycer's cloud. Computers
-running Personal receive the value, readable by their tools and agents;
-sandboxes use it without seeing it." and How Traycer handles this, and
-nothing else before Save. A value a Variables or provider-variable row refused
-opens it with the name and value filled in (`prefill`). The typed value is
-sent by a direct `client.request`, never through a query or mutation, so it
-reaches no cache, and closing the dialog drops it. A refusal shows the host's
-words (`Connect to manage secrets.` with no session on this computer) or the
-`secretChangeRefusalLine` for a create refusal's code;
+**Personal ▸ Secrets** (`panels/secrets-settings-panel.tsx`, `secrets/`). Read
+through the window's own host, and every `environment.secrets.*` call names its
+environment (`hooks/environment/use-addressed-environment.ts`): a team's id on
+its pages, Personal's own id on the Personal pick (from `environment.list`,
+`ownerKind: "user"`, the resolver Details shares), and the host's own only on a
+Local pick, so a host that has not moved its settings still reads Personal's. A
+read waits for Personal's id. A provider's sign-in (`providers.link`,
+`providers.linkComplete`) names the same environment, and its Continue waits for
+Personal's id. Each row reads "STRIPE_KEY · Set · sent to api.stripe.com · added
+by you 24 Oct" ("replaced by you" after a replacement, from the current version)
+with **Replace**, **Remove** and **Details**; Details holds **Verify**
+(`environment.secrets.verify` by id), the rotation, **Versions** (Undo, Restore
+on a revoked secret sent with `regrant`, Destroy behind a confirmation, refusals
+read by `secretChangeRefusalLine`) and the recovery order for a leaked secret,
+open beside the versions: "If this secret leaked", four steps, and "If Traycer
+can't be reached, stopping the sandbox ends its sessions." Empty, it reads
+"Values and logins your agents use. On your computers they are set as values; on
+sandboxes agents use them without seeing them." with Add a secret, and the page
+has no subtitle, which would say it twice. A failed read shows only "Couldn't
+read Personal's secrets." with Retry, never the empty state. A team's empty
+state reads "Values and logins Acme's agents use, on its sandboxes without being
+seen." A removed secret keeps a row until it is destroyed (`list@1.1`'s
+`removed`): "Removing · no longer usable · waiting for dev-box to delete its
+copy · Retry", or "waiting for 2 hosts to delete their copies". A failed cleanup
+reads "dev-box couldn't delete its copy". Retry on the row, Secrets Details and
+the single-secret drawer uses Remove again on the current version. While host
+cleanup is pending, it publishes a revision-only delta to retry failed host work
+immediately; a completed cleanup publishes nothing. The delta also retries the
+environment's other failed items, just as any configuration change does. It
+never rewrites a declaration, so a replacement secret using the same name
+survives. The page's own `Details` sits beside its chip: its Now reads "Applied
+on 2 hosts" (or "Not applied on dev-box", "Applying on dev-box…"), and a removal
+under way reads "Cleanup requested · waiting for dev-box · Retry". A Details
+that cannot load reads "Couldn't load details." with Retry. **Add a secret**
+offers API key and database login, with "Provider keys are set on each
+provider's page, under Providers." where Providers opens that page
+(`lib/sandboxes/secret-intake-form.ts`: server address, port, login, database,
+variables, mode, "Every sandbox gets it", the database's plaintext lines and
+their disclosure version). The server address's hint is "Where this key is sent,
+e.g. api.stripe.com. Separate several with commas."; the mode is "Agents use it
+without seeing it (recommended)" or "Agents can read it", the second with its
+warning. A kind none of whose protocols is brokered is greyed with the
+catalogue's own line. The form and Save's confirmation carry "Stored encrypted
+in Traycer's cloud. Computers running Personal receive the value, readable by
+their tools and agents; sandboxes use it without seeing it." and How Traycer
+handles this, and nothing else before Save. A value a Variables or
+provider-variable row refused opens it with the name and value filled in
+(`prefill`). The typed value is sent by a direct `client.request`, never through
+a query or mutation, so it reaches no cache, and closing the dialog drops it. A
+refusal shows the host's words (`Connect to manage secrets.` with no session on
+this computer) or the `secretChangeRefusalLine` for a create refusal's code;
 `destination_unresolvable` reads "Couldn't reach <address>. Check the server
-address, then save again." On a team's host the page is the team line, no
-list; on a host whose version predates the page, "Update this host to use
-your secrets here." **Replace** (`environment.secrets.replaceValue`,
-compare-and-set on the version the list showed; a stale answer asks to look
-again) adds "Tools already running keep the old value until they restart.",
-and the row then reads the rotation (`environment.secrets.rotation`, polled
-every 3 s only while it moves): "New value accepted, closing old sessions."
-until every worker class and host has proved the old value out of use, then
-"New value enforced." with each one's proof
-(`lib/sandboxes/secret-rotation-line.ts`, shared with the sandbox card's
-per-grant line). **Remove** confirms with "Added by you on 24 Oct. Version 1.
-On dev-box and laptop. Tools already running keep it until they restart."
-(`secretRemovePreview`), each of the first three clauses only when it is
-known. On Personal the hosts are the computers running Personal, as the page
-chip counts and names them (`useHostsRunningPersonal`, `namedHosts`: "<A> and
-<B>", "<A>, <B> and 1 more", "<n> computers"), and the clause is left out
-when none does; a team's computers and every sandbox hold no copy. A secret
-MCP servers use (`environment.configuration.mcpServers.list`, each server's
-`credential.secretId`, read once Remove opens, never on a Local row) leads
-the preview with "Used by github. Removing it leaves github without a
-credential; if the server needs one, it stops working until you pick another
-secret on MCP servers." ("Used by <A> and <B>." or "<A>, <B> and <n> more",
-then "Removing it leaves them without a credential; any that need one stop
-working until you pick another secret on MCP servers."), whose "MCP servers"
-opens that page (`secretUsedByLine`). A held secret's
-row keeps its "Waiting for you" badge.
+address, then save again." On a team's host the page is the team line, no list;
+on a host whose version predates the page, "Update this host to use your secrets
+here." **Replace** (`environment.secrets.replaceValue`, compare-and-set on the
+version the list showed; a stale answer asks to look again) adds "Tools already
+running keep the old value until they restart.", and the row then reads the
+rotation (`environment.secrets.rotation`, polled every 3 s only while it moves):
+"New value accepted, closing old sessions." until every worker class and host
+has proved the old value out of use, then "New value enforced." with each one's
+proof (`lib/sandboxes/secret-rotation-line.ts`, shared with the sandbox card's
+per-grant line). **Remove** confirms with "Added by you on 24 Oct. Version 1. On
+dev-box and laptop. Tools already running keep it until they restart."
+(`secretRemovePreview`), each of the first three clauses only when it is known.
+On Personal the hosts are the computers running Personal, as the page chip
+counts and names them (`useHostsRunningPersonal`, `namedHosts`: "<A> and <B>",
+"<A>, <B> and 1 more", "<n> computers"), and the clause is left out when none
+does; a team's computers and every sandbox hold no copy. A secret MCP servers
+use (`environment.configuration.mcpServers.list`, each server's
+`credential.secretId`, read once Remove opens, never on a Local row) leads the
+preview with "Used by github. Removing it leaves github without a credential; if
+the server needs one, it stops working until you pick another secret on MCP
+servers." ("Used by <A> and <B>." or "<A>, <B> and <n> more", then "Removing it
+leaves them without a credential; any that need one stop working until you pick
+another secret on MCP servers."), whose "MCP servers" opens that page
+(`secretUsedByLine`).
 
 **Environment ▸ Retrospective sheet and Stop using Personal.** On a 1.1
 host, Overview shows `Shared by an earlier version` / `This computer stopped
@@ -1124,10 +1255,9 @@ Local picker row's subtitle (`its own settings, not in Personal yet`,
 `partly in Personal`, `stopped using Personal`) and `Move to Personal` /
 `Finish moving` verb come from those planes (E4's slot); the row's `Local`
 badge reads "Settings on this computer only" on hover. The Secrets page's
-`N values from {host} are on hold until you choose · Review them` line
-(`1 value … is on hold until you choose · Review it`) opens the same sheet
-for that host's held rows. `Keep as a secret` collects Add-secret's binding (kind, protocol,
-hosts, port, swap sites, gateway consent) with no value field, then
+`N commands from {host} are on hold until you choose · Review them` line
+(`1 command … is on hold until you choose · Review it`) opens the same sheet
+for that host's held rows, where Approve and Discard answer one row through
 `environment.review.heldApply`. Stop using Personal opens the preview
 (`environment.move.stopPreview`) and confirm (`environment.move.stop`) after
 every needs-choice row has Keep locally, Remove from this computer, or
@@ -1140,25 +1270,21 @@ kinds the page edits: each convergence notice from `environment.notices`
 with Undo (`environment.undo`, with the grant) while `undoAvailable`, and each
 "needs you" row from `environment.review` ("LOG_LEVEL is waiting for you:
 runs a command / was changed without your confirmation.") with Review, which
-opens Secrets. A value held because it looks like a key reads
-"LOG_LEVEL looks like a key and is on hold until you choose · Review", and
-its Variables or provider-variable row reads "LOG_LEVEL · on hold until you
-choose · Review" with no value; both Reviews open the retrospective sheet for
-that value. A value typed there that looks like a key (`classifyCredential`) is
+opens Secrets. A value typed there that looks like a key (`classifyCredential`) is
 refused in its row with "This looks like a key. Add it as a secret.", whose
 link opens Add a secret with the name and value filled in; nothing is stored
 as a variable. A provider's own key variable typed on its Env tab
 (`envNamePlaceholder`, for every provider whose key has a tab) is refused
-instead with "This is Kiro's key. Set it on Kiro's Profiles & Limits." when
-that tab is Profiles & Limits, or "This is Amp's key. Set it on Amp's Account."
-when the provider has a key and no usage tab. The link opens that same tab
-(`providerKeyTab`); the typed value is cleared and nothing is saved. A
-provider without a key tab, such as Claude Code, keeps the first line. A name one
+instead with "This is Kiro's key. Set it on Kiro's Account." The key's home is
+Account whenever the provider takes a key (`providerKeyTab`), including when
+Profiles & Limits is also shown. The link opens that tab; the typed value is
+cleared and nothing is saved. A provider without a key tab, such as Claude
+Code, keeps the first line. A name one
 of Personal's secrets is set under (`environment.secrets.list@1.2` rows'
-`variables` and `providerVariables`: a moved key's secret is bound to the item
-it came from) reads "ENV_E2E_SERVICE_TOKEN · from the secret
-ENV_E2E_SERVICE_TOKEN · Secrets" on Variables or that provider's Env, with no
-value and nothing to edit there. A value
+`variables`) reads "ENV_E2E_SERVICE_TOKEN · from the secret
+ENV_E2E_SERVICE_TOKEN · Secrets" on Variables, with no value and nothing to
+edit there. A provider's Env has no such name: nothing binds a secret to a
+name in one provider's env. A value
 already saved that looks like a key shows as dots with Remove, never in a
 field, on every Variables and Env list (Personal, a team, a Local row), with
 the same line beneath where the page has one; its link carries the saved
@@ -1217,14 +1343,19 @@ footer adds one, and everything else about a host lives on that host's Overview
 beside the local controller's own region in the SAME card).
 
 **Every host picker shares one row anatomy** (`host-scope/host-option-row.tsx`):
-a kind glyph and a full wrapping name, with state and environment marks below
-it. Supplemental composer and in-task facts (shape, rate, payer and
-compatibility) sit in Details; opening it never picks or wakes the host.
-The selected-host trigger also wraps its full name, with exceptional status
-below and no kind label. The rail keeps the “Viewing — the active host is …”
-note. The account menu states the activation consequence once in its section
-header; its rows only offer a tooltip if a name is cut off. Search appears
-from six hosts up; below that it is one more thing to skip past.
+a kind glyph and a one-line name beside its state and environment marks; a
+cut-off name remains available in full. Supplemental composer and in-task facts
+(shape, rate, payer, compatibility, and a computer's platform, status, and
+reach) sit under the name and wrap. Showing them does not pick or wake the host.
+A selectable row's own pick still does, and an unavailable row stays unpicked.
+The rail trigger keeps icon, name, status and chevron on one row. Its name stays
+one line, and the full name is in a tooltip, the same as every other trigger. A
+staged sandbox's shape gear stays beside its trigger. The rail keeps the
+“Viewing — the active host is …” note. The account menu's Host list scrolls
+within the available menu height, keeping account actions visible; a pickable
+row's tooltip explains the activation consequence, and an unavailable row's
+tooltip reveals a cut-off name. Search appears from six hosts up; below that it
+is one more thing to skip past.
 
 Environment picker names also wrap in full. An outdated computer's row reads
 “Update to view these settings.” Its disabled state and Move sheet are unchanged.
@@ -1793,8 +1924,17 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
   chrome carries the soundtrack; then its volume and what it follows, which stay
   editable while it is off. Pause is a setting (`soundtrackPaused`), so it holds
   across windows and restarts. Music cannot be left silent with no way back:
-  turning Music on, or these controls off, clears it. The id still says
-  notifications: the OS and push rows moved to Alerts, and ids do not change.
+  turning Music on, or these controls off, clears it. Last, on a dev or staging
+  desktop build (its bridge carries `soundtrackRecording`), **Record session**
+  (`panels/soundtrack-recording-row.tsx`): a switch that saves this window's
+  music and a log of what the engine decided into the desktop's own folder, with
+  **Stop after** and **Quality** under it. Those two persist and lock while it
+  records; the recording itself never persists, so every start of the app finds
+  it off. The switch is disabled until this window holds a session, which a
+  launch that kept the pause does not until Play, and the line under it counts
+  the audio time, holding through a pause, then names the saved session with
+  **Show in folder**. The id still says notifications: the OS and push rows moved
+  to Alerts, and ids do not change.
 - `Alerts` (`panels/alerts-settings-panel.tsx`, `/settings/alerts`): one
   group, **Notifications** (anchor `alerts-notifications`), where the alerts
   themselves are configured. **OS notifications** on a desktop with the
@@ -2164,7 +2304,7 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     The Tabs card was called "Top bar"; its id is still `topBar`, and search still finds it by "top bar" and "title bar".
     Wherever a label names the place, it is the tab strip: "Tab strip - left of the tabs", a reading's `Position` of Status bar or Tab strip, and "Tab strip, left" in the index.
   - **Composer, Chat and Sidebar details.**
-    The phone layout's toolbar lists are what it draws, unordered: Attach image on the left, Model (Reasoning control; Style applies on wider windows) and the Microphone on the right; a list with no member is not drawn.
+    The phone layout's toolbar lists are what it draws, unordered: Attach on the left, Model (Reasoning control; Style applies on wider windows) and the Microphone on the right; a list with no member is not drawn.
     Model's Style and Reasoning control say they matter only for models with several effort levels; the Compact conversation button says it shows only for harnesses that can compact.
     While General > Voice input is off, the Microphone row is dimmed and disabled with "Turn on Voice input in General settings to use this." (C4).
     Context usage opens with Pin breakdown, then under it Chip style (disabled while pinned) and Breakdown rows (disabled while not pinned); its state word is "Pinned" while pinned (C1).
@@ -2951,7 +3091,10 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
   the viewport so a tall provider config never overflows the modal. The header
   also shows
   host-reported account metadata when the selected provider can expose it (for
-  example Codex/Claude email and subscription label). Backed by the host
+  example Codex/Claude email and subscription label). The selected managed profile
+  exposes Details, conditional Sign in and Manage profile inline; the tool's own
+  login exposes its applicable Sign in, Retry or Sign in to use everywhere
+  inline. Backed by the host
   `providers.*` RPC (`providers.list` / `providers.setSelection` /
   `providers.addCustomPath` / `providers.removeCustomPath` /
   `providers.setEnabled` / `providers.detectVersion` /
@@ -3023,9 +3166,10 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
     provider header and its config.** Order is `account` · `usage` · `general` ·
     `env` · `modelProviders` · `mcp` · `plugins` · `skills`, filtered per provider through
     `supportedTabsFor` (`provider-settings-tabs.ts` - pure, so the rule is
-    tested without rendering the panel). `viewTabs` then drops `account` when
-    `usage` is also supported: the key is the first block of Profiles & Limits,
-    so it has one place. A key provider with no usage tab keeps Account.
+    tested without rendering the panel). `viewTabs` keeps `account` whenever
+    the provider takes a key, including when `usage` is also supported: the
+    key has one place, Account. Profiles & Limits stays the profiles and usage
+    tab and does not take the key.
     - **The provider header and the rail are PINNED rows; only the active tab's
       body scrolls.** `ProvidersRailLayout`'s detail column used to carry
       `overflow-y-auto p-5` around the whole of `ProviderDetail`, so the rail
@@ -3075,11 +3219,10 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
       provider authenticate?" vs "which account is running, and how much of it
       is left?"), and a provider can have either without the other - amp takes
       a key but advertises no `usage` tab at all, claude-code has profiles and
-      limits but no key field. When both tabs would show, `viewTabs` keeps
-      `usage` and the key form is the first block of that tab (still replaced
-      by the account-managed line on a sandbox host). A preferred `account`
-      deep link resolves onto that tab. Amp still shows Account as the key's
-      whole body. Nothing about "does this take a key?" needs the host to say
+      limits but no key field. When both would show, both stay: Account holds
+      the key (still replaced by the account-managed line on a sandbox host)
+      and Profiles & Limits holds profiles and usage. Amp still shows Account
+      as the key's whole body. Nothing about "does this take a key?" needs the host to say
       so, and adding an id to the enum would risk the whole-object `.catch`
       above for zero gain.
     - **The visible set is the host's advertisement, PLUS client-derived
@@ -3377,10 +3520,9 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
       moving. The Judge tab's model controls hold no echo and never lock.
   - **API-key providers (Cursor).** Cursor authenticates with an API key rather
     than a CLI login, so it renders an `ApiKeySection` (masked input +
-    Save/Clear) when `state.apiKey.supported` — **as the first block of
-    Profiles & Limits, titled Key**, because Cursor also has a usage tab. A
-    provider with a key and no usage tab still uses the client-derived
-    `account` tab as that block's whole body. The key used to sit ABOVE the tab
+    Save/Clear) when `state.apiKey.supported` — **as the body of Account**
+    (`ProviderApiKeySection` inside `CredentialsManagedInAccountOr`). Cursor
+    also has a usage tab; that tab does not hold the key. The key used to sit ABOVE the tab
     bar as its own pre-tab region, which put a provider's only real setting
     outside the tabs that were supposed to hold its settings. Nothing renders
     between the provider header and the tab rail. Also a "Create an API key" link
@@ -3468,7 +3610,7 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
       STATIC TEXT, so the most common case never looked like a choice. And both
       labelled folders by basename only, which cannot distinguish two worktrees
       of one repo.
-    - **Rows.** `Global` ("Every workspace on this host") sits above one row
+    - **Rows.** `Global` ("Every folder on this host") sits above one row
       per target. Targets come from `useMcpScope`: the resolved workspace
       folders, PLUS every worktree the host reports for them
       (`useWorktreeListByWorkspacePathsForClient`), deduped by path since a repo
@@ -3492,8 +3634,8 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
       legitimately empty on a fresh install or a host whose work happens
       elsewhere - and then the picker offered Global and nothing else, with no
       way to reach a project config at all. The list now says
-      "No workspaces added on this host yet." and carries an **Add a workspace
-      folder…** row driving the same `pickAndPrepareFolders` the Home workspace
+      "No folders added on this host yet." and carries an **Add a folder…**
+      row driving the same `pickAndPrepareFolders` the Home workspace
       selector uses, bound to the SETTINGS-selected client so a folder picked
       while viewing host B is prepared on B. The added folder becomes the
       selection; a cancelled pick changes nothing.
@@ -3507,7 +3649,7 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
       renders as a selected control that can be changed, rather than a
       sentence. With more than one candidate there is still no auto-pick.
     - A provider advertising only one `list` scope gets a plain "Applies to
-      every workspace on this host." line instead of a picker holding one dead
+      every folder on this host." line instead of a picker holding one dead
       option; the wording matches the Global row so the two never disagree.
       Plugins and Skills remain hardcoded global-scope and get no picker.
     - The OAuth resume key is `{providerId, scope, workspaceRoot, hostId}`
@@ -4230,7 +4372,7 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
 - `Permissions` (section id `permissions`, route `/settings/permissions`,
   `panels/permissions-settings-panel.tsx`) How much an agent may do on its own,
   and who reviews the rest; on Personal its subtitle reads "What your agents
-  may do without asking, on every computer and sandbox running these settings."
+  may do without asking, on every computer and sandbox running Personal."
   Rules carries **Reset to default**, which saves the empty policy after a
   confirm (the custom rules go; the built-in ones stay). The confirmation
   stays blocked if the current policy cannot be read freshly, its opening
@@ -4917,8 +5059,11 @@ min`): "The judge didn't finish in time, so it's asking you instead."
   provider-native subagents, which follow the provider's configuration and have
   no separate Traycer agent IDs. OpenCode's native task uses the named agent's
   configured model, or inherits the parent model when none is configured. The
-  panel description explains this scope; the shared guide output and host prompt
-  carry the same distinction. The host prompt also describes the existing
+  page description is "How agents are picked, and the agents each coding agent
+  can start." The Selection guide tab captions what the guide is for, and the
+  editor is headed "Agent selection guide". The native-subagent distinction
+  stays in the shared guide output and the host prompt; it is not a second page
+  description. The host prompt also describes the existing
   `traycer_list_harness_models` → `traycer_create_agent` (explicit `harnessId`
   and `model`) → `traycer_send_message` path for routing to a Traycer child.
   A full-height CodeMirror Markdown source editor provides syntax
@@ -5019,14 +5164,24 @@ min`): "The judge didn't finish in time, so it's asking you instead."
     honestly, with a one-way `Add this step back` link - there is deliberately
     no path from here to turning it off, so nothing implies the
     always-published error card is something the user switched on.
-  - The ladder has one consequence sentence. Step explanations, session/history
-    mechanics and reorder instructions sit behind Help. Behavior's timing and
-    return explanations also sit behind Help; their controls keep accessible
-    descriptions linked to that text. Per-problem settings summarize
-    inherited rows as “N problems follow the main plan”, followed by “M custom”
-    when applicable. Every problem row remains visible with its own chain and
-    routing or disabled prefixes; only Custom and Check save badges remain.
-    Clicking a row expands its controls. There is no separate Customize toggle.
+  - The ladder states the session/history, blocked-message retry and queued-message
+    consequences once above the steps. Each step has its own inline explanation,
+    with reorder, disable and reopen instructions below the list. Behavior's
+    timing explanations are inline beside their controls; the return-session
+    consequence is beside the setting and the queued-message consequence is
+    beside automatic return. Controls keep accessible descriptions linked to the
+    visible text. Per-problem settings sit under **When a problem happens**.
+    The strip is labelled **Your main plan** and shows the ladder. Inherited
+    rows read **1 problem follows the main plan** or **{N} problems follow the
+    main plan**, and **· {M} custom** when any row is custom. Each problem
+    row's badge is **Main plan** or **Custom**. **Reset all to main plan**
+    clears every override. The profile step reads "Switches to a different
+    account you're signed in to. Starts a fresh session from this transcript."
+    The tier step reads "Tries a backup model from the Equivalent models tab.
+    Starts a fresh session from this transcript." Their chips are **other
+    account** and **equivalent model**. Every problem row remains visible with
+    its own chain. Clicking a row expands its controls. There is no separate
+    Customize toggle.
   - **Enablement is PRESENCE in the stored `ladder`**, which cannot represent
     where a turned-off step sat. The panel therefore holds the four-row display
     order in its draft and persists only the enabled subset; a step turned off
@@ -5779,6 +5934,66 @@ wrap`). Each row names the account its first usable match runs on, the
   - **No per-chat and no per-task control exists anywhere in the app**, by
     decision. The harness/model picker and the composer gain nothing from this
     feature; per-chat intervention is the actions on the cards themselves.
+- `Storage` (Environment, section id `storage`, route `/settings/storage`,
+  `environment/storage-settings-panel.tsx`): what the picked configuration's
+  hosts keep on disk. It is offered for Personal and teams, and not on a
+  Local row (`PAGES_HIDDEN_BY_PICK`), since its settings are an environment
+  item. Later storage rows go here too.
+  - **The storage policy** (`panels/storage-policy-section.tsx`,
+    `data-testid="storage-policy"`), two groups:
+    - **Tasks you haven't used lately**, a card of three rows:
+      - **Chats**, a switch: "Keep them in the cloud instead of on disk."
+      - **Artifacts**, a switch, with the same description.
+      - **When**, a select: "When to clean up a task nobody has used."
+        Options "When the disk is getting full" (no window), "After 7 days",
+        "After 14 days", "After 30 days", "After 90 days". Disabled only while
+        both switches are off, since the window cleans whichever kinds are on.
+    - **Archived chats**, a card of one row:
+      - **When**, a select: "Counted from the chat's last activity." Options
+        "Never", "After 4 hours", "After 1 day", "After 7 days", "After 30
+        days". It is independent of both switches, so no switch disables it.
+    - A stored window that is not one of the options is listed too, so the
+      select shows what is in force: "After N days" for idle tasks, and for
+      archived chats "After N hours" below 24 or when it is not a whole
+      number of days, else "After N days" ("After 1 hour", "After 1 day"
+      for one).
+    - Each select's accessible name adds its group ("Archived chats: When"),
+      since both rows read "When".
+    - A line under the groups says what applies. "Applies on every host in
+      this environment." shows while anything can be cleaned, and "A chat
+      comes back when an agent continues it." follows it only while Chats is
+      on or Archived chats is not Never. With nothing cleanable there is no
+      line.
+  - It is the configuration's `storage_policy` item (key `storage`, value
+    `{ chats, artifacts, idleTaskDays, archivedChatHours }`, the idle window
+    in whole days and the archived-chat window in whole hours, each or
+    `null`; `hooks/environment/use-storage-policy.ts`), read through the pool
+    tier like the sandbox defaults. The pick names the environment:
+    Personal's own, or the team's. **No item reads as the defaults**, both
+    switches on, no idle window and archived chats after 4 hours. An item
+    whose value does not parse reads as nothing cleanable, both switches off
+    and Archived chats Never, because the hosts then clean up nothing.
+  - Every control writes the whole value through
+    `environment.configuration.items.put` with the revision it read (`null`
+    creates the item), so a concurrent edit of one field cannot lose
+    another. While the write is pending, every control shows the value being
+    saved, is disabled, and the changed control has a spinner beside it. A
+    refused write drops back to the value read, and the shared mutation's
+    toast says why. A stale or refused outcome shows
+    `ConfigurationWriteFeedback` under the groups. A viewer of a team
+    configuration sees every control disabled. A failed read says so on the
+    Chats row, with Retry.
+  - The section draws nothing on a host that does not advertise the item
+    write (`useHostSupportsMethod`, asked of the host the write goes
+    through). It is keyed by the viewer, like the auto-archive row, so a
+    pending save never outlives an account switch.
+  - The item changes nothing a host reports (`UNREPORTED_ITEM_KINDS`), so
+    the page carries no status chip, like Sandboxes. Search folds both groups
+    and every row into the Storage page entry (`contributesTo: "page"`): they
+    are gated on the host, which no search shell can decide, so none is an
+    anchored entry and none has a search fixture. The two "When" rows share
+    that one entry, whose page shows both, and their keywords keep "idle" and
+    "archived" apart.
 - `Keybindings` Keyboard shortcut customization.
 - `Shell` Shell binary + args used for every terminal PTY
   (`TerminalSessionManager` reads the effective config per spawn, file-watched,
@@ -6205,19 +6420,24 @@ set-state-in-effect` forbids the effect form, and an effect would also
     `useHostReachability`, which is the tab-binding check and can call a host
     reachable that this scope cannot dial. A disk-truth list -
     so orphaned worktrees whose owning agent was deleted still appear -
-    grouped by repo under quiet, collapsible headers (`WorktreeRepoHeader`).
-    A worktree owned by exactly one Task joins a Task group of that repo:
-    the header names the Task (wrapping, and a button when the title is
-    known) with the repo under it, and that Task's merge caption once. Rows
-    in the group keep their own PR state and drop the Task title. A worktree
-    with no Task, or with more than one, stays in the repo's other group and
-    keeps one Task label. Names wrap rather than truncating. On a narrow
-    window (under 768px, and in the installed phone app) the list toolbar
-    keeps search and one **Filter and sort** control; select-all, expand or
-    collapse all, refresh, the policy chips, and the updated-ago line move
-    into the list's **More** menu (`List actions`). Wider windows keep the
-    two-row toolbar. A list-less toolbar (offline, empty, still loading)
-    stays the wide layout at every width. The selected host is reached
+    grouped by repository under quiet, collapsible headers
+    (`WorktreeRepoHeader`). Each header is one sticky divider on the page
+    background: the repository name in muted regular-weight text, and the
+    count at the right. The whole header collapses that repository. There is
+    no Task group. A row leads with the branch, or **detached HEAD**, or
+    **unreadable**. Under that sit the tier pill, every pull-request chip,
+    an unmerged-submodule
+    chip when the submodule has unmerged commits, the secondary facts, last
+    active when a timestamp is present, and the Task association. Names wrap
+    rather than truncating. On every width, including a narrow window and
+    the installed phone app, one toolbar keeps the policy chips, select-all,
+    expand or collapse all, and Refresh on the action row, with
+    **Updated {ago}** beside Refresh (the stamp does not break mid-phrase).
+    Search is its own row at every width, placeholder **Search repo, branch,
+    path, PR, or Task**. Filter and sort share the row under search. A
+    list-less toolbar, while the scope has hosts and the list is offline,
+    empty, still loading, or unread, still shows the policy chips and
+    refresh, without selection, search, filter, or sort. The selected host is reached
     through a **transient per-host client** (`useHostClientFor`) so picking a
     host never swaps the app-wide active host or reloads the Epic list (and
     never affects the branch-prefix default above). Backed by the host
@@ -6297,24 +6517,41 @@ set-state-in-effect` forbids the effect form, and an effect would also
     inline.
   - Background delete progress renders as a non-intrusive strip
     (`WorktreeDeleteProgressStrip`) that stays visible through partial
-    failures until dismissed. A Task group header carries that Task's merge
-    caption once (`Merged` or `Merged N/M`, `TaskMergeRollupBadge`), plain
-    muted text with no "Task" prefix because the header already names the
-    Task. A worktree outside any Task group keeps its Task label, and the
-    caption beside that label still leads with `Task` so it is not read as
-    the row's tier pill. The caption is never a colored badge.
+    failures until dismissed. The merge caption sits on the row beside a
+    resolved Task chip (`TaskMergeRollupBadge`): plain muted text, **Task
+    Merged** or **Task Merged N/M**, so it is not read as the row's tier
+    pill. It is never a colored badge, and it is absent when there is no
+    merged progress to claim. A row nothing in Traycer references says **Not
+    used by any Task**. A Task whose title is unknown is muted **Owner
+    unresolved** text, not a chip. A named Task is a chip that opens it.
 - `Host` **Overview**: ONE page about one host - the scoped one - and the same
   page whether that host is on this desk or in a datacenter. The cross-device
   **My Hosts** list and the separate **This machine** section are both gone; the
   sidebar switcher is the collection, and every lifecycle verb lives on the
   Overview of the host it describes.
 
-  **One pinned host header and tab body** (`host-overview-tabs.tsx`). The
-  page title is Overview, without a host subtitle. `HostIdentityCard` names
-  the host once, with its kind glyph and rename pencil; the name wraps in full
-  on desktop and phone. One state word, kind, Idle or Busy and a sandbox's
-  current rate share the second line. Only a personal sandbox adds today's cost.
-  Architecture and build version live in Installation Details.
+  **One pinned host header and tab body** (`host-overview-tabs.tsx`). The page
+  title is Overview. On a phone, under that title and before the description,
+  `SettingsPhoneScopeLine` shows the environment — Personal, the local host's
+  name, or the team label — and, on a host page, `›` plus the host name and,
+  when its kind is known, `·` plus Computer, Sandbox, or Team machine. A
+  vanished selection reads `{name} is no longer here.` The line is absent on
+  desktop and on every section that is not host or personal. The description
+  is "Status, updates and maintenance for the selected host." when no host is
+  in scope, and "Status, updates and maintenance for {name}." otherwise.
+  `HostIdentityCard` names the host once, with its kind glyph and rename
+  pencil; the name wraps in full on desktop and phone. The kind word
+  (Computer, Sandbox, or Team machine, or Host when the kind is unknown) is a
+  tag on the name row. The fact line is the sandbox state word, or the health
+  label when there is no sandbox or that word yields to health; **Out of
+  credits** when the sandbox is frozen; platform · architecture · version
+  when any of those is known; the work fact (a named breakdown with the
+  trailing "working" dropped, otherwise Idle or Busy); a health detail when
+  the host is not live, or when it needs an update; this computer's lifecycle
+  line; and the cost. A team sandbox's header cost is the rate only. A
+  personal sandbox adds "{amount} today", or **Free today** for an automation,
+  when a ledger row exists. The rate itself reads Free, Not billing, the
+  hourly rate, or Not priced here.
 
   The header offers one primary action and one More menu. A sandbox's existing
   lifecycle verbs move here from the former sandbox card: Suspend while awake,
@@ -6327,30 +6564,43 @@ set-state-in-effect` forbids the effect form, and an effect would also
 
   Exceptions sit below the state: offline, update required, settings failure,
   out of credits with the payer and removal date, withdrawal and update progress.
-  One line states `Settings: <source>`, with Change opening the existing choices
-  where available and the existing Details link. Team sources remain read-only.
-  The separate Runs line is gone.
+  The Environment row is omitted when the host is not usable, there is no
+  client, the status read is unsupported or failed, or the binding read is
+  unsupported or failed. When it shows, the label is **Environment** and
+  Details stays beside the description. A team binding is a disabled select
+  whose value is the team name and whose description is "Runs the team's
+  settings." A personal or local host is a select. Its description is "Runs
+  Personal" or "Runs its own settings, not in Personal yet." The options are
+  **Personal** (detail "Runs Personal") and the host's own name with a
+  **Local** badge, tooltip "Settings on this computer only", detail "its own
+  settings, not in Personal yet." Choosing Personal opens the move; choosing
+  the local option opens stop sharing. A move in progress keeps a disabled
+  **Personal**; a stopped move keeps a disabled select of the host's name.
+  Out of credits sits beside a frozen sandbox's lifecycle state. The separate
+  Runs line is gone.
 
-  Tabs follow immediately: **Sandbox** (only for sandbox hosts), then
-  **Installation · Updates · Access and setup · Data · Ports · Mobile simulators**.
-  The Sandbox body holds size, region, idle policy and suspend fidelity, last
-  activity, creator and team wake payer/capacity. Its other rate appears here:
-  resting while awake, awake while asleep. Secrets show only a count and health,
-  with Manage opening that environment's Secrets page. A closed Details
-  disclosure retains each grant's routes, source and rotation and the sandbox's
-  GitHub access; See why opens it on a failure, with Manage still available.
-  Blocked requests
-  show a count and a See events disclosure. Personal Cost details contains the
-  ledger, pending charges, balance and runway; teams have no personal ledger.
+  Tabs follow immediately: **Installation · Updates · Access and setup ·
+  Data · Ports**, then **Secrets** and **Costs** only when the host is a
+  sandbox, then **Mobile simulators**. A sandbox
+  host's Installation opens with a titled **Sandbox** group (size, region
+  when known, the other rate — awake rate while resting, storage rate
+  otherwise — idle policy including what a suspend keeps, last active,
+  and, on a team sandbox, created by and wake payer, plus the team pod's
+  room line). Secrets holds the grants, readiness and network events, and
+  **Manage** opens that environment's Secrets page. Costs holds the awake
+  rate and the storage rate, and, for a personal sandbox, today's charge
+  and the ledger. A team's sandbox keeps the rate lines and skips the
+  ledger.
 
   - **Frame.** The header, notices, settings source, tab bar and active body
     share one surface. On desktop only the active tab body scrolls; no wrapper
     clips the header's actions. On phone the full page scrolls and the Section
     select follows the header. Visited tabs retain their drafts until the host
     changes or the page closes; unvisited bodies do not mount.
-  - **Every tab, every state.** All four render for every host in every
-    state - connecting, restarting to finish an update, unreachable,
-    stopped, not installed, update required - so the header, the strip and
+  - **Every tab, every state.** The tabs that exist for that host render in
+    every state - connecting, restarting to finish an update, unreachable,
+    stopped, not installed, update required. Secrets and Costs are drawn
+    only for a sandbox host. The header, the strip and
     the bar sit outside anything that withholds a body, and each body decides
     what it can show (the per-region `usable` gates it carried before the
     split). While the host connects, Updates shows the version list's loading
@@ -6362,16 +6612,17 @@ set-state-in-effect` forbids the effect form, and an effect would also
     The two page states with NO header and no tabs are unchanged too - a host
     removed from the account while you look at it, and an account with no
     host but Traycer installed (`LocalRecoveryDangerZone`).
-  - **Tab state.** A sandbox host opens on Sandbox; an ordinary host opens on
-    Installation (`DEFAULT_HOST_OVERVIEW_TAB`). An explicit selection carries
-    across host changes, except Sandbox falls back to Installation for a
+  - **Tab state.** Every host opens on Installation
+    (`DEFAULT_HOST_OVERVIEW_TAB`). An explicit selection carries across host
+    changes, except Secrets and Costs fall back to Installation for a
     non-sandbox host.
     `OpenSettingsModalOpts.tab` opens the named tab (read through
     `useSettingsOpenIntent("host")`, acknowledged with
     `acknowledgeSettingsOpenIntent`, and its `hostId` carried into the
     Settings scope before paint, as Permissions does); a tab this page does
     not have is ignored, except a RETIRED name, which selects its replacement
-    (`hostOverviewTabForIntent`: `"status"` opens Updates). The four links
+    (`hostOverviewTabForIntent`: `"status"` opens Updates, and `"sandbox"`
+    opens Installation). The four links
     into `section: "host"` (the resource monitor's and the rate-limit
     popover's Manage hosts, the composer's host section, the chat tile's host
     update) name `tab: "updates"`, so an Overview already open on another tab
@@ -6418,7 +6669,8 @@ set-state-in-effect` forbids the effect form, and an effect would also
        reports `off` (`shownRemoteAccess`), even when a status read still says
        `on`.
     4. **Terminal account**, one row per provider with an ambient profile,
-       visibly labelled by provider name only, with its switch named
+       visibly labelled by provider name with Terminal account beneath it, with
+       its switch named
        "<Provider> terminal account" for screen readers,
        under "This computer's own sign-in, which stays on this computer. Sign
        in on Providers to use one everywhere." (a team host: "This host's own
@@ -6444,11 +6696,14 @@ set-state-in-effect` forbids the effect form, and an effect would also
        downloading update to v1.5.1. Auto-update settings still apply at its
        next check-in; everything else here needs a connection."
        (`describeHostOfflineNotice`). The phase clause comes from
-       `describeLastSeenUpdateClause` and drops when no update was in flight;
-       the header alone shows the last-seen time. The auto-update half drops
-       for a host the account does not know. It is the strip's ONLY unreachable
-       wording, so the update card is withheld under
-       it and its retained "Last seen: …" rides in the clause instead.
+       `describeLastSeenUpdateClause` and drops when no update was in flight.
+       That clause is the retained update phase only (`— last seen {phase}`).
+       The account's own last-seen time is About's Last seen row, and, while
+       the host is offline, the header's health detail (`Last seen …`, or
+       nothing when the account has no stamp). The auto-update half drops
+       for a host the account does not know: the tail is then "Everything
+       here needs a connection." It is the strip's ONLY unreachable wording,
+       so the update card is withheld under it.
     2. **The update card** (`HostOverviewOperationCard`), the host's own
        report: progress with measured bytes, the restart phases, a wait on
        work, failure, success. Info while it runs, warning while it waits on
@@ -6471,16 +6726,19 @@ set-state-in-effect` forbids the effect form, and an effect would also
        says it with Force update…, and while the host can't be reached,
        because it names live work. Its confirm and its refusal when the work
        changes under the open dialog are unchanged.
-       The unanswered Remote access question now lives in Access and setup's
-       Remote access row: Not set, Turn on and Not now. Its capability and ownership
+       The unanswered Remote access question lives in Access and setup's Remote access
+       row: Allow other devices and agents on your account to reach this
+       computer?, with On and Not now. Its capability and ownership
        gates, mutation and per-host remembered choice are unchanged. Once answered,
        the same row shows On, Off or Turning off. It no longer occupies the header.
-       `HostEnvironmentSection` mounts the single Settings source line described above.
+       `HostEnvironmentSection` mounts the standard Settings row described above.
        The settings source (`panels/host-overview-settings-card.tsx`) uses the
        existing personal/local choices, move sheet and stop-sharing confirmation.
-       Progress replaces the source while a move runs or has stopped. The existing
-       Details link retains dates and the sharing history. A team's source is
-       read-only. A sandbox retains its known source while its host is unreachable.
+       Progress replaces the description while a move runs or has stopped, with
+       the select disabled. Details retains dates and the sharing history. A team
+       source stays visible in the disabled select and the row says "Runs <label>", the same label the select shows, as "Runs Personal" does. Transfer choices appear only
+       when a host supports them. A sandbox retains its known source in the same
+       disabled control while its host is unreachable, with "Runs <label>" when the source is a team.
        The create-bot form's "Set one up in Settings" link opens this
        page. The sidebar's host list shows each host's environment label
        beside its name (`HostOptionRow`'s `environmentLabel`, resolved by
@@ -6501,7 +6759,7 @@ set-state-in-effect` forbids the effect form, and an effect would also
   - **Updates ▸ Answer card** (`HostOverviewAnswerCard` in
     `host-overview-updates.tsx`), first on Updates, and ONLY when the update
     answer has news or an action. There is no version heading and no tag: the
-    running version is in Installation Details, and "latest" is the version
+    running version is in Installation's inline facts, and "latest" is the version
     list's installed row (`latest` beside `installed`). So a current host,
     the FIRST check (no answer in hand yet; the version list says it is
     asking), a host that can't be reached or is still connecting (the offline
@@ -6606,27 +6864,27 @@ set-state-in-effect` forbids the effect form, and an effect would also
       remote host's page says nothing about the app in this window, and a
       browser has no app to update. It needs no route to the host, so it
       stays while the host cannot be reached. Nothing is drawn until the
-      updater's first snapshot names a version.
+      updater's first snapshot names a version. Quiet states (idle, checking,
+      up to date and unavailable) draw no row.
     - **One snapshot, no machinery.** It reads the snapshot the header's
       update button and the update toast read, and runs the same download
       (`bridge.downloadUpdate()`) and the same guarded restart
       (`requestAppUpdateInstall`), so the three cannot disagree.
 
-      | Updater state                                         | State line            | Control                             |
-      | ----------------------------------------------------- | --------------------- | ----------------------------------- |
-      | a finished check found nothing                        | `Up to date (vX)`     | none                                |
-      | `available`                                           | `vY available`        | Download                            |
-      | `downloading`                                         | `Downloading N%`      | Download, waiting, with a spinner   |
-      | `ready`                                               | `vY ready`            | Restart                             |
-      | `ready` with `installGuidance`                        | `vY ready`            | Finish update (the guidance dialog) |
-      | `error` with `installGuidance`                        | `Update not finished` | Finish update (the guidance dialog) |
-      | anything else (checking, a plain error, no check yet) | `vX`                  | none                                |
+      | Updater state                           | State line            | Control                             |
+      | --------------------------------------- | --------------------- | ----------------------------------- |
+      | `available`                             | `vY available`        | Download                            |
+      | `downloading`                           | `Downloading N%`      | Download, waiting, with a spinner   |
+      | `ready`                                 | `vY ready`            | Restart                             |
+      | `ready` with `installGuidance`          | `vY ready`            | Finish update (the guidance dialog) |
+      | `error` with `installGuidance`          | `Update not finished` | Finish update (the guidance dialog) |
+      | `error` without guidance                | `Update failed`       | none                                |
+      | idle, checking, up to date, unavailable | no row                | none                                |
 
-    - **"Up to date" is a claim about a check.** The updater publishes
-      `up-to-date` only for a check the user asked for; an automatic check
-      that finds nothing returns to `idle` with the check time and the feed's
-      latest version set. Both read "Up to date". An `idle` without them, and
-      every other state, shows the version and claims nothing.
+    - **Failures stay visible.** An error without install guidance shows
+      the failure message without an action. Available and downloading updates
+      keep the running version as their detail; no row explains the relationship
+      between the app and host updates.
     - **An `error` carrying `installGuidance` keeps Finish update, and
       names no version.** A Linux deb/rpm install whose privilege prompt
       failed reports the failure AND the steps that finish the downloaded
@@ -6648,12 +6906,12 @@ set-state-in-effect` forbids the effect form, and an effect would also
       return it (measured in the app's engine; jsdom keeps it, so no Vitest
       case can see the difference). Native `disabled` is only the blocked
       install. When the control does go (a failed download, a withdrawn
-      candidate) while it holds the focus, the row itself takes it. The
-      row's `role="status"` region is always mounted and empty when quiet,
+      candidate) while it holds the focus, the row takes it if still present.
+      The row's `role="status"` region stays mounted while an update is present,
       for the reason the answer card's is; it says the download began (never
       its percentage), that the update is ready (and, when it is, that
-      finishing needs a manual step), and that the restart began. A failure
-      is the update toast's to report, here as everywhere.
+      finishing needs a manual step), and that the restart began. Failures
+      remain visible in the row as well as the update toast.
   - **The restart offer** that opens by itself (`deriveActivationAutoOpen`)
     stays at panel level, so it opens over whichever tab is showing.
   - **One component per tab**, each drawing what the panel hands it; the
@@ -6669,8 +6927,8 @@ set-state-in-effect` forbids the effect form, and an effect would also
 
     | Tab               | File                                 | What lives there                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
     | ----------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-    | Installation      | `host-overview-installation-tab.tsx` | About this host (`host-overview-about-this-host.tsx`, known account facts only, so it reads offline), a compact line when there is no install record or the record's remaining facts, Details (platform, architecture, the running build version, the registry version only when it differs, Host ID, service identifier and manifest path), OS service (`host-overview-os-service-section.tsx`) - both replaced by one needs-a-connection line when unreachable - then Command-line tools (this computer only, `host-settings-package-manager-upgrade-hint.tsx`, which also draws the trigger's dot), the Danger zone last                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-    | Updates           | `host-overview-updates-tab.tsx`      | The answer card, only when the answer has news or an action (`host-overview-updates.tsx`: icon, title, the update answer, Update now or the command-line-tools fix, the failed-attempt footer), the Traycer Desktop row (`host-overview-desktop-app-row.tsx`: the app's own update, desktop app and this machine's host only), a single-row auto-update group without a drawn label, then Install a different version (`host-overview-version-picker.tsx`) with Check now on its heading, its release-candidate choice, version list and inline refusal                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+    | Installation      | `host-overview-installation-tab.tsx` | Sandbox facts when this host is one (titled Sandbox, above About), then About this host (Host ID with copy, Added to account, Last seen, Last reported version, Platform) when the account has a record; while connecting, the loading shape; when unreachable, one needs-a-connection line replaces the install record and OS service while About remains; when both reads are unsupported, one update sentence replaces both; otherwise the Install record group and OS service (`host-overview-os-service-section.tsx`, identifier and manifest path); then Command-line tools (this computer only, `host-settings-package-manager-upgrade-hint.tsx`, which also draws the trigger's dot), the Danger zone last                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+    | Updates           | `host-overview-updates-tab.tsx`      | The answer card, only when the answer has news or an action (`host-overview-updates.tsx`: icon, title, the update answer, Update now or the command-line-tools fix, the failed-attempt footer), the Traycer Desktop row (`host-overview-desktop-app-row.tsx`: the app's available, downloading, ready or failed update, desktop app and this machine's host only), a single-row auto-update group without a drawn label, then Install a different version (`host-overview-version-picker.tsx`) with Check now on its heading, its release-candidate choice, version list and inline refusal                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
     | Data              | `host-overview-data-tab.tsx`         | Import & migration (`HostImportMigrationSection`), Version history (`ArtifactVersionSettingsSection`), then an unlabeled File edit snapshots group (`HostFileEditSnapshotsSection`); one disk connection line replaces all groups when unreachable                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
     | Ports             | `host-overview-ports-tab.tsx`        | `HostPortForwardsCard`, on every host: one sentence when there is no list (connecting, unreachable, older host, failed read, nothing forwarded), else Forwards on this host and Ports other machines hold here, then Refresh; the trigger's count                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
     | Mobile simulators | `host-overview-simulators-tab.tsx`   | One card: the **Use mobile simulators** switch (`config.simulator.get`/`.set`; one sentence in its place while the host has not advertised them or cannot), with the platform status folded into its description while off; **Platforms** only while on; **Check again** (`useSimulatorRecheck`: asks this host's `simulator.status`, `simulator.list` and `simulator.instances` (which holds the palette's inventory) again, and the host probes for Xcode and the Android SDK on each read) whenever a platform is unavailable, beside the switch while off and on Platforms while on, so a toolchain installed after the first read shows without a restart; **Simulator tools** while on (Installing with a bar, Installed with the version, Failed with Try again, Not needed), and while off only when the tools are still downloaded ("Downloaded, N MB. Mobile simulators are off." with Remove, behind a confirm). No agent row: the one switch grants agents the device too. On a `@1.1` host, while on: **Running now** (`host-overview-simulator-instances.tsx`, `simulator.instances` polled every 10 s while shown): every instance booted on the machine, with its OS version, "Copy of …" for a clone, a link to each task holding it that the viewer can see (its title from the app's task lists, else the short id) and "+N other" for the rest, the Agent badge while an agent drives it and the idle countdown; **Power off** (`simulator.powerOff`, first with `confirm: false`; a `confirm-required` answer, a mid-turn agent on it, asks before sending `confirm: true`) and, for an instance Traycer booted, **Keep running** (`simulator.setKeepRunning`); and **Power off when idle**, the idle window in minutes, written as `{ enabled: null, idleMinutes }` so it never flips the switch. The tab trigger carries the running count (`HostOverviewSimulatorsCount`) |
@@ -6691,11 +6949,13 @@ set-state-in-effect` forbids the effect form, and an effect would also
     groups. **Forwards on this host** (`owned`) lists the preview name (it wraps),
     port, state and one direction line with the connection count: Forwarding →
     Stop, Starting keeps "requested :port" and "Nothing is listening yet",
-    Interrupted or Stopped → Clear. Endpoints and, while forwarding, the byte
-    counters sit in that row's Details. **Ports other machines hold here**
+    Interrupted or Stopped → Clear. Endpoints and, while forwarding, byte
+    counters appear inline below the row's
+    identity and state, and wrap with the full preview name. **Ports other
+    machines hold here**
     (`held`) is one direction line ("To laptop" or "From laptop") with the
-    connection count and Cut, confirmed with the same dialog as before. A
-    held lease has no endpoint pair and no byte counters, so it has no Details.
+    connection count and Cut, confirmed with the same dialog as before. A held
+    lease has no endpoint pair or byte counters.
     A group with no rows isn't
     drawn. **Refresh** sits below the lists and re-reads them at once. The
     Stop and Cut mutations and the Cut confirm stay in the card, where they
@@ -6834,10 +7094,11 @@ set-state-in-effect` forbids the effect form, and an effect would also
     The row works while the host is unreachable because it writes the account,
     and says the setting is applied at the host's next check-in (within about
     10 minutes, when no sessions are running).
-    - **Install a different version** is a separate group. It has no generic
-      introduction; the Include release candidates checkbox is its own label,
-      re-asks the host, and explains when the host chose inclusion from its
-      installed release-candidate line.
+    - **Install a different version** is a separate group. It explains that a
+      specific version can be a release candidate, hotfix or
+      earlier release. The Include release candidates checkbox explains that it
+      shows RC host versions, re-asks the host, and still explains when the host
+      chose inclusion from its installed release-candidate line.
       Above older rows that cannot open newer chat stores, it warns about the
       access lost until this host updates again. The list can say it is asking,
       say no versions are available, or say the host returned no list; Check
@@ -7329,44 +7590,48 @@ set-state-in-effect` forbids the effect form, and an effect would also
       than disabled, since the card reports the park and the header's menu
       item carries the reason - and an open confirm closes when its method
       is withdrawn or its region retires.
-  - **Installation**, top to bottom: About this host, the install line or
-    record, Details, OS service, Command-line tools, Danger zone.
-    - **About this host** (`host-overview-about-this-host.tsx`) reads the
-      ACCOUNT's host record - the `HostListItem` the panel already holds
-      (`scope.host.item`), never a host RPC - so it reads the same while the
-      host connects or cannot be reached. It shows only facts the account has:
-      Added to account (`createdAt`), and, when `lastSeenAt` is null,
-      "Not seen since it was added". The header owns the last-seen time.
-      A host the account has no record of gets no group, as it gets no Danger
-      zone.
-    - **Details** holds platform, architecture, build version, the registry's
-      last-reported version when that display differs from the build version,
-      and Host ID (shortened, with copy; Copy host ID stays in the `⋯` menu
-      too). Build version is `view.hostVersion ?? host.version`, labelled
-      "from this host now" only while the tab has a route. The registry line
-      is "No version received by the account" when `status.appVersion` is
-      null. Architecture is shown whenever it is known. The OS service
-      identifier and manifest path also live here, when the host can report
-      them.
-    - **Install record** is one line when the host has none — "Running from a
-      checkout or unpacked tree · no installation record" — not a bordered
-      group. A record that arrived keeps Build (only when the install id
-      differs from the runtime version), Source, Installed, Verification and
-      SHA-256 (shortened, with copy). Version and platform are not repeated
-      here. A failed read and an unsupported host each keep their own sentence
-      (`host-settings-installation-details.tsx`). `unmanaged` is a real state,
-      not an error.
+  - **Installation**, top to bottom: sandbox facts when this host is one,
+    About this host, the install record, OS service, Command-line tools,
+    Danger zone.
+    - **Sandbox facts** (`SandboxInstallationGroup`, test id
+      `host-overview-sandbox-facts`) are a titled **Sandbox** group, and only
+      on a sandbox host. They sit above About, including while the host is
+      connecting or unreachable. Grants and the ledger are not in this group.
+    - **About this host** (`host-overview-about-this-host.tsx`) is a titled
+      group. It reads the ACCOUNT's host record - the `HostListItem` the
+      panel already holds (`scope.host.item`), never a host RPC - so it reads
+      the same while the host connects or cannot be reached. The rows are
+      always Host ID (shortened, with **Copy host ID**), Added to account,
+      Last seen, Last reported version, and Platform. Last seen is "Not seen
+      yet" when `lastSeenAt` is null, "Unknown" when the stamp does not
+      parse, and elapsed words otherwise. It never reads "Online now". Last
+      reported version is the account's `status.appVersion`, or "Not reported
+      yet". Platform is the account's platform and architecture joined by
+      `·`, or "Not reported yet". Copy host ID stays in the `⋯` menu too.
+      A host the account has no record of gets no About group.
+    - **Install record** (`host-settings-installation-details.tsx`) is its own
+      titled group. With no record the group says "{host} is running from a
+      checkout or an unpacked tree, so it has no installation record." A read
+      still in flight says "Reading install record…". A failed read says
+      "Couldn't read {host}'s installation record." A record keeps Version
+      (`v` plus the runtime version, or the record version when there is no
+      runtime version), Build only when the runtime version is present and
+      differs from the record version, Source, Installed, Verification,
+      SHA-256 when the digest is present (shortened, with copy), and Platform
+      as `{platform}/{arch}`.
     - **OS service** (`host-overview-os-service-section.tsx`) is its own
       group: the registration sentence, Re-register and Deregister with their
-      confirms. Its identifier and manifest path are in Details. A host that
+      confirms. Its identifier and manifest path are visible beneath the
+      registration sentence. A host that
       cannot report its service gets the standard unsupported sentence in place of the group's
       contents, under its label.
     - The install record and the OS service are the tab's host reads. While
       the host connects they are the loading shape; when it cannot be reached
       one line replaces both - "The install record and OS service are read
-      from <host>, so they need a connection." - and About this host, Details
-      (from the account, not labelled live), Command-line tools and the Danger
-      zone stay.
+      from <host>, so they need a connection." When both the install record
+      and the OS service are unsupported, one line replaces both: "Update
+      <host> to see its activity here." About, Command-line tools and the
+      Danger zone stay.
     - **Command-line tools** (this computer only, behind the panel's
       `hasLocalBridge`) is the package-manager upgrade hint with its command
       and a copy button. The tab trigger and the phone Select's Installation
@@ -7501,9 +7766,15 @@ level`, `Host log level` and the host's log tails described the selected host.
   own `App log level` row, the **Memory** heap capture, and the **Desktop Log**
   entry. Takes no host scope, mounts no `HostScopeGate`, and stands up no
   `HostClient` - if any of that becomes necessary to render it, something
-  host-varying has moved back on. Its two bridges are independent
-  (`platform.logLevels` and `platform.diagnostics`), so each states its own
-  unavailability and a shell missing one still gets the other.
+  host-varying has moved back on. Its bridges are independent
+  (`platform.logLevels`, the heap bridges, and `platform.diagnostics`), so a
+  shell that has one still draws that one. On the desktop and in a browser the
+  page stays in the rail, and a missing bridge is stated inside its own group
+  so the search anchors stay on the page. The installed mobile app drops the
+  rail, search and palette entry, because that shell has none of those bridges.
+  The route does not redirect. A direct link renders one sentence, "App
+  diagnostics are available on the desktop app.", and no placeholder cards. A
+  bridge that is present still draws only its own group.
 
 - `Diagnostics` (Host, `diagnostics-settings-panel.tsx`) `CLI log level`,
   `Host log level` and that host's own log files, over its
@@ -7512,16 +7783,19 @@ level`, `Host log level` and the host's log tails described the selected host.
   resolved
   (`log-level-controls.ts`), so `LogLevelRow` stays presentational and the sweep
   walks RPC and bridge rows without knowing which is which.
-  - **Log detail.** The page's purpose line is "Logs from this host, for
-    support." Beside the heading, "Use Debug while capturing a problem." The
-    longer capture steps sit behind **How to capture a problem** (collapsed):
-    raise the relevant level to Debug, reproduce, then set it back to Info;
-    this app's own log and memory capture live under Application › Diagnostics.
+  - **Log detail.** The introduction shows the purpose, default Info levels, and
+    capture steps
+    inline: raise the relevant level to Debug, reproduce, then set it back to
+    Info. It points to Application › Diagnostics for this app's own log and
+    memory capture. There is no shared applicability line above the controls.
     Two rows (`LogLevelRow`, a `Select` over the full
     `trace/debug/info/warn/error` scale, `info` labelled "Info (default)") - all
     default Info and apply immediately. The CLI/host thresholds are
-    machine-user-global (`~/.traycer/cli/config.json`). One shared line beside
-    the controls says they apply to every Traycer host on this computer. When
+    machine-user-global (`~/.traycer/cli/config.json`). Each row carries its
+    own description: the CLI row says "Verbosity of the Traycer CLI's logs.
+    Applies to every Traycer host on this computer." and the host row says
+    "Verbosity of the background host process's logs. Applies to every
+    Traycer host on this computer." When
     any level differs from Info, the group grows a further row: a quiet reminder plus a **Reset all to Info** button that resets only
     the non-default scopes (any level different from Info, not just Warn/Error -
     Trace/Debug count too; sequentially, not in parallel).
@@ -7553,9 +7827,12 @@ level`, `Host log level` and the host's log tails described the selected host.
     ("Log level controls are only available on the desktop app") was a claim
     about the SHELL, and after the split it would have been the host page's only
     empty state - telling someone whose host is merely too old to install an app
-    they are already running. The app page keeps that copy, because there it is
-    the real reason; the host page states the host's version instead, or renders
-    no card when the logs region is already stating it. A zero-log response is
+    they are already running. The desktop app page keeps that copy inside the
+    group, because there it is the real reason and the search anchor has to land
+    on the card. The installed mobile app does not draw those cards at all (see
+    the Application entry above). The host page states the host's version
+    instead, or renders no card when the logs region is already stating it. A
+    zero-log response is
     likewise explicit ("No log files on &lt;host&gt;.") rather than an empty card.
 - `Usage` (`usage-settings-panel.tsx`, in the **Account** group beside
   Sessions - see "Scope: the organising idea" above for why it is not under

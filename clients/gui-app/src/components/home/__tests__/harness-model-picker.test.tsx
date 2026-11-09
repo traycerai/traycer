@@ -155,6 +155,7 @@ interface CatalogHarness extends HarnessOption {
 interface QueryActivity {
   readonly enabled: boolean;
   readonly subscribed: boolean;
+  readonly profileId?: string | null;
 }
 
 interface MockHostClient {
@@ -173,6 +174,7 @@ const queryMock = vi.hoisted(() => ({
   harnesses: [] as HarnessOption[],
   catalogHarnesses: [] as CatalogHarness[],
   selectedModelsByHarness: new Map<string, ReadonlyArray<ModelOption>>(),
+  selectedModelsByProfile: new Map<string, ReadonlyArray<ModelOption>>(),
   harnessesLoading: false,
   harnessesError: null as Error | null,
   catalogHarnessesLoading: false,
@@ -232,6 +234,11 @@ const queryMock = vi.hoisted(() => ({
       readonly subscribed: boolean;
     }>,
     modelClients: [] as Array<string | null>,
+    modelProfiles: [] as Array<{
+      readonly harnessId: string;
+      readonly profileId?: string | null;
+      readonly enabled: boolean;
+    }>,
     providers: [] as Array<{
       readonly enabled: boolean;
       readonly subscribed: boolean;
@@ -591,6 +598,11 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
     workingDirectory: string | null,
     activity: QueryActivity,
   ) => {
+    queryMock.calls.modelProfiles.push({
+      harnessId,
+      profileId: activity.profileId,
+      enabled: activity.enabled,
+    });
     queryMock.calls.models.push({
       harnessId,
       workingDirectory,
@@ -616,11 +628,14 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
       ? (queryMock.modelsByClient.get(clientKey) ??
         queryMock.selectedModelsByHarness)
       : queryMock.selectedModelsByHarness;
+    const profileModels = queryMock.selectedModelsByProfile.get(
+      `${harnessId}:${activity.profileId ?? "<ambient>"}`,
+    );
     return {
       data: activity.enabled
         ? {
             harnessId,
-            models: modelsByHarness.get(harnessId) ?? [],
+            models: profileModels ?? modelsByHarness.get(harnessId) ?? [],
           }
         : undefined,
       isPending: false,
@@ -1056,6 +1071,8 @@ interface RenderPickerInput {
    * query catalog above, which drives the rows/rail/trigger.
    */
   readonly storeModels?: ReadonlyArray<ModelOption>;
+  /** Account the injected store catalog actually came from; defaults ambient. */
+  readonly storeModelsProfileId?: string | null;
   readonly withServiceTier?: boolean;
   readonly withReasoning?: boolean;
   readonly tuiOnly?: boolean;
@@ -1132,8 +1149,10 @@ function pickerHarnessWith(
       hostId,
       harnesses: undefined,
       modelsHarnessId: selection.harnessId,
+      modelsProfileId: resolvedInput.storeModelsProfileId ?? null,
       models: resolvedInput.storeModels,
       modelsLoaded: true,
+      modelsFailed: false,
       tuiOnly: resolvedInput.tuiOnly ?? false,
       chatLineCarriesAutoMode: null,
       ultracodeCarried: surface.carried,
@@ -1251,6 +1270,7 @@ describe("<HarnessModelPicker />", () => {
     queryMock.providerStatesByClient = new Map();
     queryMock.harnessesByClient = new Map();
     queryMock.modelsByClient = new Map();
+    queryMock.selectedModelsByProfile = new Map();
     queryMock.catalogHarnessesByClient = new Map();
     queryMock.unresolvedHostIds = new Set();
     queryMock.endpointAbsentHostIds = new Set();
@@ -1263,6 +1283,7 @@ describe("<HarnessModelPicker />", () => {
     queryMock.calls.catalogClients = [];
     queryMock.calls.models = [];
     queryMock.calls.modelClients = [];
+    queryMock.calls.modelProfiles = [];
     queryMock.calls.providers = [];
     queryMock.calls.commands = [];
     queryMock.calls.ensurePack = [];
@@ -1442,6 +1463,7 @@ describe("<HarnessModelPicker />", () => {
       reasoning: "high",
       serviceTier: "fast",
       withServiceTier: true,
+      storeModelsProfileId: "work-profile",
       storeModels: [
         model({
           slug: "gpt-5.5",
@@ -1582,14 +1604,17 @@ describe("<HarnessModelPicker />", () => {
     store: ComposerToolbarStore,
     modelsHarnessId: ProviderId,
     models: ReadonlyArray<ModelOption>,
+    modelsProfileId: string | null,
   ): void {
     act(() => {
       store.getState().setCatalog({
         hostId: TEST_HOST_ID,
         harnesses: undefined,
         modelsHarnessId,
+        modelsProfileId,
         models,
         modelsLoaded: true,
+        modelsFailed: false,
         tuiOnly: false,
         chatLineCarriesAutoMode: null,
         ultracodeCarried: false,
@@ -1669,6 +1694,49 @@ describe("<HarnessModelPicker />", () => {
     fireEvent.click(claudeRail);
     expect(screen.getByText("Claude Sonnet 4.6")).not.toBeNull();
     expect(claudeRail.getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("loads a browsed managed profile catalog while the ambient catalog is pending with cached rows", async () => {
+    const ambientModels = codexModels();
+    const managedModels = [
+      model({ slug: "gpt-work-only", label: "GPT Work only" }),
+    ];
+    const pendingCodex = { ...CODEX_HARNESS, availabilityPending: true };
+    queryMock.harnesses = [pendingCodex, CLAUDE_HARNESS];
+    queryMock.catalogHarnesses = [
+      catalogHarness(pendingCodex, ambientModels),
+      catalogHarness(CLAUDE_HARNESS, claudeModels()),
+    ];
+    queryMock.selectedModelsByHarness = new Map([
+      ["codex", ambientModels],
+      ["claude", claudeModels()],
+    ]);
+    queryMock.selectedModelsByProfile.set("codex:work-profile", managedModels);
+    queryMock.providerStates = [
+      providerCliStateWithProfiles({
+        providerId: "codex",
+        profiles: claudeProfilesForDropdown(),
+      }),
+    ];
+    renderPicker(undefined);
+
+    await openPicker();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("option", { name: /^GPT Work only/ }),
+      ).not.toBeNull();
+    });
+    expect(
+      queryMock.calls.modelProfiles.some(
+        (call) =>
+          call.harnessId === "codex" &&
+          call.profileId === "work-profile" &&
+          call.enabled,
+      ),
+    ).toBe(true);
+    expect(screen.queryByRole("option", { name: /GPT-5\.5/ })).toBeNull();
   });
 
   it("shows 'Loading models' - never the Add API key CTA - for a cold, still-pending API-key provider with no settled verdict yet", async () => {
@@ -4654,18 +4722,23 @@ describe("<HarnessModelPicker />", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
     // Hook reloads Claude's catalog post-switch; the committed (empty) slug
     // resolves to the first Claude model, which exposes thinking levels.
-    pushStoreCatalog(store, "claude", [
-      model({
-        harnessId: "claude",
-        slug: "claude-opus-4-7",
-        label: "Claude Opus 4.7",
-        defaultReasoningEffort: "low",
-        supportedReasoningEfforts: [
-          { id: "low", label: "Low", description: null },
-          { id: "high", label: "High", description: null },
-        ],
-      }),
-    ]);
+    pushStoreCatalog(
+      store,
+      "claude",
+      [
+        model({
+          harnessId: "claude",
+          slug: "claude-opus-4-7",
+          label: "Claude Opus 4.7",
+          defaultReasoningEffort: "low",
+          supportedReasoningEfforts: [
+            { id: "low", label: "Low", description: null },
+            { id: "high", label: "High", description: null },
+          ],
+        }),
+      ],
+      null,
+    );
     act(() => {
       fireLeaderDigit(2, "alt", false);
     });
@@ -5003,13 +5076,18 @@ describe("<HarnessModelPicker />", () => {
       profileId: null,
     });
 
-    pushStoreCatalog(store, "claude", [
-      model({
-        harnessId: "claude",
-        slug: "claude-opus-4-7",
-        label: "Claude Opus 4.7",
-      }),
-    ]);
+    pushStoreCatalog(
+      store,
+      "claude",
+      [
+        model({
+          harnessId: "claude",
+          slug: "claude-opus-4-7",
+          label: "Claude Opus 4.7",
+        }),
+      ],
+      null,
+    );
 
     // Catalog loaded WITHOUT the stale slug -> resolves to the first model.
     expect(store.getState().selection).toEqual({
@@ -5839,8 +5917,10 @@ describe("<HarnessModelPicker />", () => {
             hostId: TEST_HOST_ID,
             harnesses: catalogHarnesses,
             modelsHarnessId: "claude",
+            modelsProfileId: null,
             models: CLAUDE_MODELS,
             modelsLoaded: true,
+            modelsFailed: false,
             tuiOnly: false,
             chatLineCarriesAutoMode: null,
             ultracodeCarried: true,

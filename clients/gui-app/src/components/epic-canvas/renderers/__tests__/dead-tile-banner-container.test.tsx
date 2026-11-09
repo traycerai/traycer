@@ -34,7 +34,6 @@ import {
   __getOpenEpicRegistryForTests,
   EpicSessionHostClientContext,
 } from "@/lib/registries/epic-session-registry";
-import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import type { EnvironmentListResponse } from "@traycer/protocol/host/environment/contracts";
 import {
   installHostConnectionRegistrySource,
@@ -49,15 +48,15 @@ import {
 /**
  * THE OWNERSHIP WIRING, against the REAL container.
  *
- * The banner unit tests inject `ownedByViewer` / `cloneAllowed` directly and
+ * The banner unit tests inject `ownedByViewer` directly and
  * the published tile's suite stubs this container, so before this file a
  * regression in the container's own resolution - the auth-store identity
- * read, the owner comparison, the role gate, the fail-open default - would
+ * read, the owner comparison, the fail-open default - would
  * leave every touched suite green. Here the real
  * `ChatDeadTileBannerContainer` resolves everything itself: the source owner
  * from the epic doc's chat record (the same local tier
- * `useCloneSourceOwnerUserId` consults first), the viewer from the auth
- * store, and the role from the epic session snapshot.
+ * `useCloneSourceOwnerUserId` consults first) and the viewer from the auth
+ * store.
  *
  * The host-hook mock set mirrors `bounded-loading-catalog.test.tsx`, which
  * already mounts this container the same way: the clone offer's host-runtime
@@ -327,14 +326,13 @@ function renderContainer(input: {
    * passes `undefined` and exercises exactly that local tier.
    */
   readonly providedOwnerUserId: string | undefined;
-  readonly permissionRole: PermissionRole | null;
   readonly showsPublishedCopy: boolean;
   readonly reason: ChatDeadTileBannerReason;
 }) {
   const epicId = `epic-banner-container-${++epicSeq}`;
   const harness = createEpicSessionTestHarness(epicId);
   activeHarness = harness;
-  harness.install(seedChatOwnedBy(input.ownerUserId), input.permissionRole);
+  harness.install(seedChatOwnedBy(input.ownerUserId), "editor");
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
@@ -425,12 +423,11 @@ afterEach(() => {
   resetHostConnectionRegistryForTest();
 });
 
-describe("ChatDeadTileBannerContainer - ownership + role resolution", () => {
-  it("resolves a collaborator's chat to the foreign copy and keeps Clone for an editor", async () => {
+describe("ChatDeadTileBannerContainer - ownership resolution", () => {
+  it("resolves a collaborator's chat to the foreign copy and keeps Clone", async () => {
     renderContainer({
       ownerUserId: COLLABORATOR_USER_ID,
       providedOwnerUserId: COLLABORATOR_USER_ID,
-      permissionRole: "editor",
       showsPublishedCopy: true,
       reason: "host-offline",
     });
@@ -445,47 +442,10 @@ describe("ChatDeadTileBannerContainer - ownership + role resolution", () => {
     expect(screen.getByRole("button", { name: "Clone agent" })).toBeTruthy();
   });
 
-  it("withholds Clone for a viewer role on a collaborator's chat, and says why", async () => {
-    renderContainer({
-      ownerUserId: COLLABORATOR_USER_ID,
-      providedOwnerUserId: COLLABORATOR_USER_ID,
-      permissionRole: "viewer",
-      showsPublishedCopy: true,
-      reason: "host-offline",
-    });
-    await settleEpicSession();
-
-    // `waitFor`, not a fixed settle: the role lands with the harness's
-    // snapshot, whose delivery timing varies under load, and this is the one
-    // assertion in the file that cannot pass until it has.
-    await waitFor(() => {
-      expect(screen.getByTestId("banner-under-test").textContent).toContain(
-        "view-only access",
-      );
-    });
-    const text = screen.getByTestId("banner-under-test").textContent;
-    expect(text).toContain("belongs to another collaborator");
-    expect(screen.queryByRole("button", { name: "Clone agent" })).toBeNull();
-  });
-
-  it("fails open on an unresolved role - the host's editor gate is the backstop", async () => {
-    renderContainer({
-      ownerUserId: COLLABORATOR_USER_ID,
-      providedOwnerUserId: COLLABORATOR_USER_ID,
-      permissionRole: null,
-      showsPublishedCopy: true,
-      reason: "host-offline",
-    });
-    await settleEpicSession();
-
-    expect(screen.getByRole("button", { name: "Clone agent" })).toBeTruthy();
-  });
-
   it("keeps the own-chat copy when the record's owner IS the signed-in user", async () => {
     renderContainer({
       ownerUserId: VIEWER_USER_ID,
       providedOwnerUserId: undefined,
-      permissionRole: "editor",
       showsPublishedCopy: false,
       reason: "host-offline",
     });
@@ -502,7 +462,6 @@ describe("ChatDeadTileBannerContainer - ownership + role resolution", () => {
     renderContainer({
       ownerUserId: COLLABORATOR_USER_ID,
       providedOwnerUserId: COLLABORATOR_USER_ID,
-      permissionRole: "editor",
       showsPublishedCopy: true,
       reason: "host-offline",
     });
@@ -518,7 +477,6 @@ describe("ChatDeadTileBannerContainer - ownership + role resolution", () => {
     renderContainer({
       ownerUserId: COLLABORATOR_USER_ID,
       providedOwnerUserId: COLLABORATOR_USER_ID,
-      permissionRole: "editor",
       showsPublishedCopy: true,
       reason: "host-offline",
     });
@@ -552,7 +510,6 @@ describe("ChatDeadTileBannerContainer - ownership + role resolution", () => {
     renderContainer({
       ownerUserId: COLLABORATOR_USER_ID,
       providedOwnerUserId: COLLABORATOR_USER_ID,
-      permissionRole: "editor",
       showsPublishedCopy: true,
       reason: "host-offline",
     });
@@ -569,7 +526,6 @@ describe("ChatDeadTileBannerContainer - ownership + role resolution", () => {
     renderContainer({
       ownerUserId: COLLABORATOR_USER_ID,
       providedOwnerUserId: COLLABORATOR_USER_ID,
-      permissionRole: "editor",
       showsPublishedCopy: false,
       reason: "host-offline",
     });
@@ -590,7 +546,6 @@ describe("ChatDeadTileBannerContainer - an owner not yet told apart", () => {
     renderContainer({
       ownerUserId: COLLABORATOR_USER_ID,
       providedOwnerUserId: COLLABORATOR_USER_ID,
-      permissionRole: "editor",
       showsPublishedCopy: false,
       reason: "host-offline",
     });
@@ -609,7 +564,6 @@ describe("ChatDeadTileBannerContainer - an owner not yet told apart", () => {
     renderContainer({
       ownerUserId: COLLABORATOR_USER_ID,
       providedOwnerUserId: COLLABORATOR_USER_ID,
-      permissionRole: "editor",
       showsPublishedCopy: false,
       reason: "host-offline",
     });
@@ -634,7 +588,6 @@ describe("ChatDeadTileBannerContainer - an owner not yet told apart", () => {
     renderContainer({
       ownerUserId: COLLABORATOR_USER_ID,
       providedOwnerUserId: COLLABORATOR_USER_ID,
-      permissionRole: "editor",
       showsPublishedCopy: true,
       reason: "host-offline",
     });
@@ -657,7 +610,6 @@ describe("ChatDeadTileBannerContainer - the sandbox's own state", () => {
     renderContainer({
       ownerUserId: VIEWER_USER_ID,
       providedOwnerUserId: undefined,
-      permissionRole: "editor",
       showsPublishedCopy,
       reason: "host-offline",
     });
@@ -734,7 +686,6 @@ describe("ChatDeadTileBannerContainer - answered-host reasons", () => {
       renderContainer({
         ownerUserId: VIEWER_USER_ID,
         providedOwnerUserId: undefined,
-        permissionRole: "editor",
         showsPublishedCopy: true,
         reason,
       });

@@ -66,29 +66,37 @@ export function hostSettingsCardState(
     : { kind: "moved", acceptedAt: status.consent.acceptedAt };
 }
 
-interface HostSettingsRowOption {
+export interface HostSettingsRowOption {
   readonly value: "personal" | "local";
   readonly label: string;
-  readonly description: string;
+  /** The sentence under the name in the menu. Hidden in the closed trigger. */
+  readonly detail: string;
   readonly action: "move" | "stop_sharing";
 }
 
-const HOST_SETTINGS_OPTIONS: readonly HostSettingsRowOption[] = [
-  {
-    value: "personal",
-    label: "Personal",
-    description: "Your Personal settings reach this computer.",
-    action: "move",
-  },
-  {
-    value: "local",
-    label: "This computer only",
-    description: "Uses the settings stored here.",
-    action: "stop_sharing",
-  },
-];
+const RUNS_PERSONAL = "Runs Personal";
+const RUNS_OWN_SETTINGS = "Runs its own settings, not in Personal yet";
 
-type HostSettingsRowModel =
+function hostSettingsOptions(
+  hostName: string,
+): readonly HostSettingsRowOption[] {
+  return [
+    {
+      value: "personal",
+      label: "Personal",
+      detail: RUNS_PERSONAL,
+      action: "move",
+    },
+    {
+      value: "local",
+      label: hostName,
+      detail: "its own settings, not in Personal yet",
+      action: "stop_sharing",
+    },
+  ];
+}
+
+export type HostSettingsRowModel =
   | { readonly kind: "loading" }
   | {
       readonly kind: "team";
@@ -113,12 +121,15 @@ type HostSettingsRowModel =
 export function hostSettingsRowModel(
   status: EnvironmentStatusResponseV11 | null,
   binding: EnvironmentHostBinding | null,
+  hostName: string,
 ): HostSettingsRowModel {
   if (status === null || binding === null) return { kind: "loading" };
   if (binding.explicit && binding.environment.ownerKind === "organization") {
-    const label = binding.environment.label;
-    const possessive = label.endsWith("s") ? `${label}'` : `${label}'s`;
-    return { kind: "team", label, description: `Runs ${possessive} settings.` };
+    return {
+      kind: "team",
+      label: binding.environment.label,
+      description: `Runs ${binding.environment.label}`,
+    };
   }
   const state = hostSettingsCardState(status);
   if (state.kind === "moving" || state.kind === "move_stopped")
@@ -128,11 +139,8 @@ export function hostSettingsRowModel(
   return {
     kind: "select",
     value,
-    description:
-      value === "local"
-        ? "Uses the settings stored on this computer. Changes stay here."
-        : "Your Personal providers, keys, variables and skills reach this computer.",
-    options: HOST_SETTINGS_OPTIONS.filter(
+    description: value === "local" ? RUNS_OWN_SETTINGS : RUNS_PERSONAL,
+    options: hostSettingsOptions(hostName).filter(
       (option) =>
         option.value === value || option.action === "move" || offerStop,
     ),

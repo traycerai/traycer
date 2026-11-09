@@ -43,6 +43,10 @@ import {
   sandboxFrozenClock,
 } from "@/lib/sandboxes/sandbox-row-lines";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  HOST_FROZEN_WORD,
+  hostSandboxStateWord,
+} from "@traycer/protocol/host/host-status";
 
 function render(ui: ReactNode) {
   const queryClient = new QueryClient({
@@ -79,7 +83,6 @@ function resting(
 function lineOf(state: ChatSandboxState): ChatSandboxLine | null {
   return resolveChatSandbox(state, {
     reachable: false,
-    canEdit: true,
     ownedByViewer: true,
     environmentOwned: false,
   }).line;
@@ -196,14 +199,40 @@ describe("<ChatSandboxFooter /> a frozen sandbox", () => {
     render(<ChatSandboxFooter line={lineOf(frozen(false))} />);
 
     const text = document.body.textContent;
+    const stateLine = `${hostSandboxStateWord("suspended")} · ${HOST_FROZEN_WORD}`;
+    expect(screen.getByText(stateLine).textContent).toBe(stateLine);
     const consequence = screen.getByText("Your credits ran out.");
     expect(consequence.className).toContain("wrap-anywhere");
-    expect(text).toContain(sandboxFrozenClock(FROZEN_AT));
+    const clock = sandboxFrozenClock(FROZEN_AT);
+    if (clock === null) throw new Error("expected a removal clock");
+    const removal = screen.getByText(clock);
+    expect(removal.textContent).toBe(clock);
+    expect(removal.textContent).not.toContain(" at ");
     expect(text).not.toContain("your next message resumes it");
     expect(
       screen.queryByRole("link", { name: /add credits/i }) ??
         screen.queryByRole("button", { name: /add credits/i }),
     ).not.toBeNull();
+  });
+
+  it("omits the removal paragraph when the server sent no frozenAt", () => {
+    const base = resting("suspended", { team: false, wakeChangesPayer: false });
+    if (base.kind !== "resting") throw new Error("expected a resting state");
+    render(
+      <ChatSandboxFooter
+        line={lineOf({
+          ...base,
+          sandbox: { ...base.sandbox, frozen: true, frozenAt: null },
+        })}
+      />,
+    );
+
+    const stateLine = `${hostSandboxStateWord("suspended")} · ${HOST_FROZEN_WORD}`;
+    const stateParagraph = screen.getByText(stateLine);
+    expect(stateParagraph.textContent).toBe(stateLine);
+    const footer = stateParagraph.parentElement;
+    if (footer === null) throw new Error("expected the frozen footer");
+    expect(footer.querySelectorAll("p")).toHaveLength(2);
   });
 
   it("shows the actual payer consequence on its own wrapping line and offers a short Resume", () => {

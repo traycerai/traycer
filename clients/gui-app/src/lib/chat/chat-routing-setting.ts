@@ -1,7 +1,7 @@
 import type { SchemaVersion } from "@traycer/protocol/framework/index";
 import type { ChatRouting } from "@traycer/protocol/persistence/epic/foundation";
 import type { ChatRunSettings } from "@traycer/protocol/persistence/epic/schemas";
-import type { AgentConfigureRequestV71 } from "@traycer/protocol/host/index";
+import type { AgentConfigureRequestV72 } from "@traycer/protocol/host/index";
 
 /** The label of the per-agent setting, as the menu and its tests print it. */
 export const CHAT_ROUTING_SETTING_LABEL = "On a usage limit or error";
@@ -27,14 +27,18 @@ export function chatRoutingOf(chat: {
 
 /**
  * Whether a host's negotiated `agent.configure` carries the routing field,
- * which arrived with 7.1. An older host would refuse the request body, so the
- * setting is not offered to it.
+ * which arrived with 7.1. Restating a named service tier also requires 7.2,
+ * so the setting is offered only when the host can preserve the whole tuple.
  */
 export function agentConfigureCarriesRouting(
   version: SchemaVersion | null,
+  serviceTier: string | null,
 ): boolean {
   if (version === null) return false;
-  return version.major > 7 || (version.major === 7 && version.minor >= 1);
+  const requiredMinor = serviceTier === null ? 1 : 2;
+  return (
+    version.major > 7 || (version.major === 7 && version.minor >= requiredMinor)
+  );
 }
 
 /**
@@ -52,7 +56,7 @@ export function buildRoutingConfigureRequest(input: {
   readonly chatId: string;
   readonly settings: ChatRunSettings | null;
   readonly routing: ChatRouting;
-}): AgentConfigureRequestV71 | null {
+}): AgentConfigureRequestV72 | null {
   const { settings } = input;
   if (settings === null) return null;
   return {
@@ -67,6 +71,7 @@ export function buildRoutingConfigureRequest(input: {
         : { kind: "profile", profileId: settings.profileId },
     reasoningEffort: settings.reasoningEffort,
     fastMode: settings.serviceTier !== null,
+    serviceTier: settings.serviceTier,
     permissionMode: null,
     routing: input.routing,
   };

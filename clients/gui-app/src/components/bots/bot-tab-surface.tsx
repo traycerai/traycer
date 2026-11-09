@@ -7,8 +7,10 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type CSSProperties,
   type ReactNode,
 } from "react";
+import { useShallow } from "zustand/react/shallow";
 import type { UseQueryResult } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -41,6 +43,11 @@ import {
   type BotSubscriptionSnapshot,
 } from "@/hooks/bots/use-bot-subscription";
 import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
+import {
+  BotLooksContext,
+  botLooksOf,
+  useChannelBackground,
+} from "@/hooks/bots/use-bot-appearance";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import { useBotListChangedSubscriptionForHost } from "@/hooks/bots/use-bot-list-changed-subscription";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
@@ -68,6 +75,7 @@ import {
   handTracyLandingToChannel,
   useTracySurfaceStore,
 } from "@/stores/bots/tracy-surface-store";
+import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import { TRACY_TAB_LABEL } from "@/stores/tabs/kinds/tracy";
 import {
   useBotTabLandingStore,
@@ -116,7 +124,6 @@ import { BotChannelSettingsPanel } from "@/components/bots/bot-settings-panel";
 import {
   BotIdentityContext,
   type BotIdentity,
-  type BotOwner,
 } from "@/components/bots/bot-identity-context";
 import {
   BotMemoryContext,
@@ -126,14 +133,11 @@ import { BotSettingsOpenerContext } from "@/components/bots/bot-settings-opener-
 import { BotAvatar } from "@/components/bots/bot-avatars";
 import { BotIdentityTrigger } from "@/components/bots/bot-identity-popover";
 import { MainBotBadge } from "@/components/bots/main-bot-badge";
-import { botMemberName } from "@/lib/bots/bot-member-names";
-import { useAuthStore } from "@/stores/auth/auth-store";
+import { BotMentionsContext } from "@/components/bots/bot-mentions-context";
 import {
-  BotMentionsContext,
-  type BotMentionDirectory,
-  type BotMentioned,
-} from "@/components/bots/bot-mentions-context";
-import { useBotMentionTargets } from "@/components/bots/use-bot-mention-targets";
+  useBotMentionDirectory,
+  useBotOwner,
+} from "@/components/bots/use-bot-surface-scope";
 import { isMainBot, type MainBotIds } from "@/lib/bots/bot-main";
 import {
   botPausedCopy,
@@ -223,6 +227,11 @@ function TracySurfaceShell(props: {
   // surface) without waiting for focus, through the surface's own host.
   useBotListChangedSubscriptionForHost(hostId, true);
   const groups = useBotsGroups(botList.data, environments.data);
+  // Every picture on the surface draws what its own host's list chose.
+  const looks = useMemo(
+    () => (botList.data === undefined ? null : botLooksOf(botList.data.bots)),
+    [botList.data],
+  );
 
   // Threads, from the column, in place of the channel; any move to one of
   // the channel's views ends it, and so does selecting a channel.
@@ -267,62 +276,64 @@ function TracySurfaceShell(props: {
   }, [refetchBots, refetchEnvironments]);
 
   return (
-    <div
-      className="@container flex h-full min-h-0"
-      data-testid="bot-tab"
-      data-bot-surface=""
-    >
-      <BotChannelColumn
-        level2={level2}
-        activeBotId={botId}
-        hostId={hostId}
-        threadsView={threadsView}
-      />
+    <BotLooksContext value={looks}>
       <div
-        className="relative flex min-h-0 min-w-0 flex-1 md:bg-canvas"
-        data-testid="bot-tab-content-pane"
+        className="@container flex h-full min-h-0"
+        data-testid="bot-tab"
+        data-bot-surface=""
       >
-        {/* Threads, from the column, takes the place of the channel's
+        <BotChannelColumn
+          level2={level2}
+          activeBotId={botId}
+          hostId={hostId}
+          threadsView={threadsView}
+        />
+        <div
+          className="relative flex min-h-0 min-w-0 flex-1 md:bg-canvas"
+          data-testid="bot-tab-content-pane"
+        >
+          {/* Threads, from the column, takes the place of the channel's
             views and of a session. */}
-        {threadsShown ? (
-          <BotThreadsView
-            hostId={hostId}
-            channelTitle={channelTitle}
-            onBack={leaveThreads}
-            level2={level2}
-          />
-        ) : null}
-        {botId === null && !threadsShown ? (
-          <BotUnselectedLevel2Pane
-            level2={level2}
-            title={TRACY_TAB_LABEL}
-            hostId={hostId}
-            threadsView={threadsView}
-          >
-            <TracyUnselected
-              groups={groups}
-              unavailable={unavailable}
-              listsFailed={
-                botList.status === "error" || environments.status === "error"
-              }
-              onRetry={retryLists}
+          {threadsShown ? (
+            <BotThreadsView
+              hostId={hostId}
+              channelTitle={channelTitle}
+              onBack={leaveThreads}
+              level2={level2}
             />
-          </BotUnselectedLevel2Pane>
-        ) : null}
-        {botId === null ? null : (
-          <TracyChannelPane
-            key={botId}
-            botId={botId}
-            hostId={hostId}
-            level2={level2}
-            tiles={tiles}
-            onRailDrawn={onRailDrawn}
-            threadsView={threadsView}
-            onGone={forgetChannel}
-          />
-        )}
+          ) : null}
+          {botId === null && !threadsShown ? (
+            <BotUnselectedLevel2Pane
+              level2={level2}
+              title={TRACY_TAB_LABEL}
+              hostId={hostId}
+              threadsView={threadsView}
+            >
+              <TracyUnselected
+                groups={groups}
+                unavailable={unavailable}
+                listsFailed={
+                  botList.status === "error" || environments.status === "error"
+                }
+                onRetry={retryLists}
+              />
+            </BotUnselectedLevel2Pane>
+          ) : null}
+          {botId === null ? null : (
+            <TracyChannelPane
+              key={botId}
+              botId={botId}
+              hostId={hostId}
+              level2={level2}
+              tiles={tiles}
+              onRailDrawn={onRailDrawn}
+              threadsView={threadsView}
+              onGone={forgetChannel}
+            />
+          )}
+        </div>
       </div>
-    </div>
+    </BotLooksContext>
   );
 }
 
@@ -386,8 +397,9 @@ function useSenderLandingSpentOnDeparture(botId: string | null): void {
 
 /**
  * Keeps the visited channels' state in step with the bots that exist, and a
- * channel selected: forgets each visited bot once a list that answered no
- * longer carries it after carrying it, and returns the way the selected
+ * channel selected: forgets each visited bot, and each bot a box holds a
+ * draft for, once a list that answered no longer carries it after carrying
+ * it, and returns the way the selected
  * channel's own pane reports one gone. With no channel selected, or the
  * selected one gone, `select`s the default channel once the lists answered.
  *
@@ -443,20 +455,25 @@ function useTracyChannelUpkeep(input: {
     [groups, listedAt, select, unavailable],
   );
   const visitedBotIds = useTracySurfaceStore((state) => state.visitedBotIds);
+  // A box's draft outlives the visit (Tracy Bots T158): its bot is kept in
+  // step with the list too.
+  const draftBotIds = useBotDraftsStore(
+    useShallow((state) => Object.keys(state.threadBoxes)),
+  );
   const seenListedRef = useRef(new Set<string>());
   useEffect(() => {
     if (listed === null) return;
     const listedIds = new Set(listed.map((bot) => bot.botId));
     const seen = seenListedRef.current;
-    for (const visited of visitedBotIds) {
-      if (listedIds.has(visited)) {
-        seen.add(visited);
-      } else if (seen.has(visited)) {
-        seen.delete(visited);
-        forget(visited);
+    for (const kept of new Set([...visitedBotIds, ...draftBotIds])) {
+      if (listedIds.has(kept)) {
+        seen.add(kept);
+      } else if (seen.has(kept)) {
+        seen.delete(kept);
+        forget(kept);
       }
     }
-  }, [forget, listed, visitedBotIds]);
+  }, [draftBotIds, forget, listed, visitedBotIds]);
   const defaultBotId =
     groups === null ? null : defaultTracyChannelOf(groups, unavailable);
   const navigationPending = useSyncExternalStore(
@@ -1250,7 +1267,7 @@ function useSpendTabLanding(args: {
         chatId,
         threadId: session?.threadId ?? null,
         messageId,
-        sendPostId: null,
+        sendPostId: landing.sendPostId,
       });
     }
   }, [
@@ -1304,19 +1321,6 @@ function useChannelSetupHistory(input: {
       history={history}
     />
   );
-}
-
-/**
- * Whether a bot's environment is the viewer's personal one; `null` while the
- * environment list has not answered. The list holds only the viewer's own
- * environments, so its one personal entry is theirs.
- */
-function viewerOwnsEnvironment(
-  unread: boolean,
-  environment: EnvironmentListResponseV11["environments"][number] | null,
-): boolean | null {
-  if (unread) return null;
-  return environment !== null && environment.ownerKind === "user";
 }
 
 /**
@@ -1520,26 +1524,7 @@ function BotTabContent(props: {
   const closeSettings = useCallback(() => setSettingsOpen(false), []);
   // A link inside the tab (the switcher's "Bot settings") opens them too.
   const openSettings = useCallback(() => setSettingsOpen(true), []);
-  const viewer = useAuthStore((s) => s.profile);
-  const owner = useMemo((): BotOwner | null => {
-    if (environment === null) return null;
-    if (environment.ownerKind === "organization") {
-      return {
-        kind: "team",
-        name: environment.label,
-        members: directory.members,
-      };
-    }
-    // A personal environment the list names is the viewer's own.
-    if (viewer === null) return null;
-    const name = viewer.userName.trim();
-    return {
-      kind: "person",
-      userId: viewer.userId,
-      name: name.length > 0 ? name : "You",
-      avatarUrl: viewer.avatarUrl ?? null,
-    };
-  }, [directory.members, environment, viewer]);
+  const owner = useBotOwner(environment, directory.members);
   const identity = useMemo(
     (): BotIdentity => ({
       botId,
@@ -1548,42 +1533,13 @@ function BotTabContent(props: {
     }),
     [botId, owner, snapshot.bot.title],
   );
-  // A mention names the viewer, or a member the directory lists; anyone
-  // else's token stays as written. A bot or a task is one of the
-  // environment's (decision 177).
-  const mentionTargets = useBotMentionTargets({
+  const mentioned = useBotMentionDirectory({
     environmentId: snapshot.bot.environmentId,
     tasks: snapshot.tasks,
-    personal: viewerOwnsEnvironment(
-      environments.data === undefined,
-      environment,
-    ),
-  });
-  const mentioned = useMemo((): BotMentionDirectory => {
-    const person = (userId: string): BotMentioned | null => {
-      if (viewer !== null && viewer.userId === userId) {
-        return {
-          name: botMemberName(userId, viewer, resolveMember),
-          self: true,
-        };
-      }
-      const member = resolveMember(userId);
-      if (member === null) return null;
-      return { name: member.displayName ?? "member", self: false };
-    };
-    return {
-      person,
-      bots: mentionTargets.bots,
-      tasks: mentionTargets.tasks,
-      tasksAnswered: mentionTargets.tasksAnswered,
-    };
-  }, [
-    mentionTargets.bots,
-    mentionTargets.tasks,
-    mentionTargets.tasksAnswered,
+    environmentsRead: environments.data !== undefined,
+    environment,
     resolveMember,
-    viewer,
-  ]);
+  });
 
   return (
     <BotMentionsContext value={mentioned}>
@@ -1816,6 +1772,7 @@ function BotChannelHeader(props: {
   readonly activityCount: number;
 }): ReactNode {
   const { settingsOpen } = props;
+  const background = useChannelBackground(props.botId);
   // With the keyboard up on a short viewport: the name row alone while the
   // channel's box has the focus, and nothing while a thread's does, since the
   // thread's own header is the identity row then. Only a box under this header
@@ -1836,9 +1793,13 @@ function BotChannelHeader(props: {
     <header
       ref={setHeader}
       hidden={threadHasFocus}
+      data-testid="bot-channel-header"
+      data-channel-background={background.swatch}
+      style={{ "--channel-tint": background.color } as CSSProperties}
       className={cn(
         "flex shrink-0 flex-col gap-1 px-4",
         focusOwner === null && "pt-3",
+        background.className,
       )}
     >
       <div

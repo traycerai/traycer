@@ -1,14 +1,9 @@
 import { useState, type ReactNode } from "react";
+import { toast } from "sonner";
 import { sandboxSupportReference } from "@traycer/protocol/host/sandbox-control";
 import { AlertCircle, Check, ChevronDown, ChevronRight } from "lucide-react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { useConfigurationBillingUrl } from "@/hooks/sandboxes/use-configuration-billing-url";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { useElapsedSeconds } from "@/hooks/use-elapsed-seconds";
@@ -157,7 +152,7 @@ export interface SandboxSetupLineActions {
   readonly onChangeShape: (() => void) | null;
   /** Repairs the settings on the new host, then waits again. */
   readonly onRetryApplying: (() => void) | null;
-  /** Guest-only repair on an older host; it does not acknowledge settings. */
+  /** Repairs an older sandbox without acknowledging its settings. */
   readonly onRepairSetup: (() => void) | null;
   readonly repairSetupPending?: boolean;
   readonly applyingPending?: boolean;
@@ -174,6 +169,7 @@ export interface SandboxSetupLineActions {
 
 /** The facts the line reads beyond the stage. */
 export interface SandboxSetupLineFacts {
+  readonly readinessLine?: string | null;
   /** The cost line of the staged shape, shown when the line is expanded. */
   readonly costLine: string;
   /** The region and shape, for the shape refusal. */
@@ -241,7 +237,17 @@ export function SandboxSetupLine(props: {
       />
     );
   }
-  if (stage.phase === "staged" || stage.startedAt === null) return null;
+  if (stage.phase === "staged" || stage.startedAt === null) {
+    const readinessLine = props.facts.readinessLine ?? null;
+    return stage.target.kind !== "new" || readinessLine === null ? null : (
+      <p
+        className="m-0 text-ui-xs text-muted-foreground"
+        data-testid="sandbox-staged-readiness"
+      >
+        {readinessLine}
+      </p>
+    );
+  }
   // A sandbox that rested on its own is said by its state footer, never by
   // a create still on its way. A send this window can't give back stays
   // here, with the person's way to wake it.
@@ -562,7 +568,7 @@ function SandboxProgressLine(props: {
         <LineButton
           label={STOP}
           testId="sandbox-setup-stop"
-          // Expanded, the settings failure's own More menu carries Stop; collapsed, this is the only one.
+          // Expanded settings failures carry Stop in their remedy row.
           onClick={
             failure?.kind === "settings" && expanded
               ? null
@@ -648,6 +654,7 @@ function ProgressHead(props: {
 }): ReactNode {
   const { failure } = props.view;
   const waiting = stillWaiting(failure);
+  const reference = sandboxSupportReference(supportFailureCode(failure));
   const retryAfterAt = props.view.stage.rateLimit?.retryAfterAt;
   // A failure's title already names the sandbox.
   const namesSandbox =
@@ -670,6 +677,7 @@ function ProgressHead(props: {
         {progressTitle(props.view, props.name)}
       </span>
       {namesSandbox ? <HeadPart text={props.name} /> : null}
+      {reference === null ? null : <HeadPart text={reference} />}
       {props.view.queued &&
       retryAfterAt !== null &&
       retryAfterAt !== undefined ? (
@@ -701,10 +709,11 @@ function ProgressDetail(props: {
   readonly actions: SandboxSetupLineActions;
 }): ReactNode {
   const { stage, failure, resuming, configuration } = props.view;
+  const supportCode = supportFailureCode(failure);
   return (
     // muted-fill-ok: the line renders on the composer's canvas, not a raised surface
     <div
-      className="mx-auto flex w-full flex-col gap-2 rounded-md border border-border/60 bg-muted/30 p-3 text-ui-xs text-muted-foreground"
+      className="mx-auto flex w-full min-w-0 flex-col gap-2 rounded-md border border-border/60 bg-muted/30 p-3 text-ui-xs text-muted-foreground wrap-anywhere"
       data-testid="sandbox-setup-line-detail"
     >
       {failure?.kind === "settings" ? null : (
@@ -741,33 +750,48 @@ function ProgressDetail(props: {
         configuration={configuration}
         onOpenTerminal={failure === null ? props.actions.onOpenTerminal : null}
       />
-      <StageSupportReference failure={failure} />
       <div className="flex flex-wrap gap-2">
         <ProgressBranchButtons view={props.view} actions={props.actions} />
+        {supportCode === null ? null : (
+          <CopySupportReference
+            code={supportCode}
+            sandboxId={stage.createdSandboxId}
+          />
+        )}
       </div>
     </div>
   );
 }
 
-/** The stage may hold a failure that the sandbox list has not recorded. */
-function StageSupportReference(props: {
-  readonly failure: StagedSandboxFailure | null;
-}): ReactNode {
-  const { failure } = props;
-  let reference: string | null = null;
+/** Settings failures use the settings reference even on older hosts. */
+function supportFailureCode(
+  failure: StagedSandboxFailure | null,
+): string | null {
   if (failure?.kind === "settings") {
-    reference = sandboxSupportReference(failure.code) ?? "SBX-0520";
-  } else if (failure?.kind === "failed") {
-    reference = sandboxSupportReference(failure.code);
+    return sandboxSupportReference(failure.code) === null
+      ? "envelope-delivery"
+      : failure.code;
   }
-  if (reference === null) return null;
+  return failure?.kind === "failed" ? failure.code : null;
+}
+
+function CopySupportReference(props: {
+  readonly code: string;
+  readonly sandboxId: string | null;
+}): ReactNode {
+  const clipboard = useClipboardCopy({
+    resetMs: 1500,
+    onSuccess: null,
+    onError: () => toast.error("Couldn't copy the diagnostics."),
+  });
   return (
-    <details className="min-w-0" data-testid="sandbox-setup-support-reference">
-      <summary className="cursor-pointer text-primary">
-        Support reference
-      </summary>
-      <p className="mt-1 wrap-anywhere">{reference}</p>
-    </details>
+    <LineButton
+      label={COPY_SUPPORT_REFERENCE}
+      testId="sandbox-setup-copy-reference"
+      onClick={() =>
+        clipboard.copy(sandboxSupportReferenceLine(props.code, props.sandboxId))
+      }
+    />
   );
 }
 
@@ -792,7 +816,6 @@ function ProgressBranchButtons(props: {
     return (
       <FailedButtons
         stage={props.view.stage}
-        failure={failure}
         resuming={resuming}
         actions={actions}
       />
@@ -849,96 +872,61 @@ function SettingsFailureButtons(props: {
   const sandboxId = props.stage.createdSandboxId;
   return (
     <>
-      {sandboxId === null || actions.onRetryApplying === null ? null : (
-        <Button
-          type="button"
-          size="xs"
-          data-testid="sandbox-setup-retry-applying"
-          onClick={actions.onRetryApplying}
-          disabled={actions.applyingPending}
-        >
-          {RETRY_APPLYING}
-          {actions.applyingPending ? (
-            <AgentSpinningDots
-              className={undefined}
-              testId={undefined}
-              variant={undefined}
-            />
-          ) : null}
-        </Button>
+      {sandboxId === null ? null : (
+        <>
+          <LineButton
+            label={RETRY_APPLYING}
+            testId="sandbox-setup-retry-applying"
+            onClick={actions.onRetryApplying}
+            pending={actions.applyingPending}
+          />
+          <LineButton
+            label="Repair setup"
+            testId="sandbox-setup-repair-setup"
+            onClick={actions.onRepairSetup}
+            pending={actions.repairSetupPending}
+          />
+        </>
       )}
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button type="button" variant="outline" size="xs">
-            More <ChevronDown aria-hidden className="size-3" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="w-max">
-          {sandboxId === null ? null : (
-            <SetupMenuItem
-              label="Repair setup"
-              testId="sandbox-setup-repair-setup"
-              onSelect={actions.onRepairSetup}
-              pending={actions.repairSetupPending}
-            />
-          )}
-          <SetupMenuItem
-            label={OPEN_TERMINAL}
-            testId="sandbox-setup-open-terminal"
-            onSelect={actions.onOpenTerminal}
-            pending={false}
-          />
-          <SetupMenuItem
-            label={STOP}
-            testId="sandbox-setup-stop"
-            onSelect={actions.onStop}
-            pending={false}
-          />
-          <SetupMenuItem
-            label={actions.chooseAnotherHostLabel}
-            testId="sandbox-setup-choose-another-host"
-            onSelect={actions.onChooseAnotherHost}
-            pending={false}
-          />
-          {props.stage.sendTaken ? (
-            <SetupMenuItem
-              label={CANCEL_THE_MESSAGE}
-              testId="sandbox-setup-cancel"
-              onSelect={actions.onCancel}
-              pending={false}
-            />
-          ) : null}
-          {sandboxId === null ? null : (
-            <SetupMenuItem
-              label={DETAILS}
-              testId="sandbox-setup-details"
-              onSelect={() => openSandboxDetails(sandboxId)}
-              pending={false}
-            />
-          )}
-        </DropdownMenuContent>
-      </DropdownMenu>
+      <LineButton
+        label={OPEN_TERMINAL}
+        testId="sandbox-setup-open-terminal"
+        onClick={actions.onOpenTerminal}
+      />
+      <LineButton
+        label={STOP}
+        testId="sandbox-setup-stop"
+        onClick={actions.onStop}
+      />
+      <LineButton
+        label={actions.chooseAnotherHostLabel}
+        testId="sandbox-setup-choose-another-host"
+        onClick={actions.onChooseAnotherHost}
+      />
+      {props.stage.sendTaken ? (
+        <LineButton
+          label={CANCEL_THE_MESSAGE}
+          testId="sandbox-setup-cancel"
+          onClick={actions.onCancel}
+        />
+      ) : null}
+      {sandboxId === null ? null : (
+        <LineButton
+          label={DETAILS}
+          testId="sandbox-setup-details"
+          onClick={() => openSandboxDetails(sandboxId)}
+        />
+      )}
     </>
   );
 }
 
 function FailedButtons(props: {
   readonly stage: StagedSandbox;
-  readonly failure: Extract<StagedSandboxFailure, { readonly kind: "failed" }>;
   readonly resuming: boolean;
   readonly actions: SandboxSetupLineActions;
 }): ReactNode {
   const { actions, resuming } = props;
-  const clipboard = useClipboardCopy({
-    resetMs: 1500,
-    onSuccess: null,
-    onError: null,
-  });
-  // The failed row's id goes in the reference, for support to find it.
-  const supportReference = sandboxSupportReferenceLine(
-    props.failure.code,
-    props.stage.createdSandboxId,
-  );
   return (
     <>
       {resuming ? (
@@ -959,39 +947,7 @@ function FailedButtons(props: {
         actions={actions}
         prefix="sandbox-setup"
       />
-      <LineButton
-        label={COPY_SUPPORT_REFERENCE}
-        testId="sandbox-setup-copy-reference"
-        onClick={() => clipboard.copy(supportReference)}
-      />
     </>
-  );
-}
-
-function SetupMenuItem(props: {
-  readonly label: string;
-  readonly testId: string;
-  readonly onSelect: (() => void) | null;
-  readonly pending: boolean | undefined;
-}): ReactNode {
-  if (props.onSelect === null) return null;
-  return (
-    <DropdownMenuItem
-      data-testid={props.testId}
-      onSelect={props.onSelect}
-      disabled={props.pending}
-    >
-      <span className="min-w-0 whitespace-normal wrap-anywhere">
-        {props.label}
-      </span>
-      {props.pending ? (
-        <AgentSpinningDots
-          className={undefined}
-          testId={undefined}
-          variant={undefined}
-        />
-      ) : null}
-    </DropdownMenuItem>
   );
 }
 
@@ -1118,7 +1074,7 @@ function LineButton(props: {
     <Button
       type="button"
       variant="link"
-      size="inline-xs"
+      size="inline-xs-wrap"
       data-testid={props.testId}
       onClick={props.onClick}
       disabled={props.pending}

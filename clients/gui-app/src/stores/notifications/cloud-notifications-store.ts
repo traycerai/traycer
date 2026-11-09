@@ -5,8 +5,8 @@ import type {
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import {
-  hostNotificationsCloudFeedSubscribeServerFrameSchemaV17,
-  type HostNotificationsCloudFeedRowV17,
+  hostNotificationsCloudFeedSubscribeServerFrameSchemaV18,
+  type HostNotificationsCloudFeedRowV18,
   type HostNotificationsCloudFeedSummary,
   type HostNotificationsEntityRef,
 } from "@traycer/protocol/host/notifications/contracts";
@@ -39,7 +39,7 @@ export interface CloudNotificationsState {
    * activation still asks for it.
    */
   readonly rows: Readonly<
-    Partial<Record<string, HostNotificationsCloudFeedRowV17>>
+    Partial<Record<string, HostNotificationsCloudFeedRowV18>>
   >;
   readonly summary: HostNotificationsCloudFeedSummary | null;
   /** The cloud's per-user change sequence, as of the last snapshot. This is
@@ -77,10 +77,10 @@ export interface CloudNotificationsState {
   >;
   readonly connectionState: CloudNotificationsConnectionState;
   applySnapshot(input: {
-    readonly rows: ReadonlyArray<HostNotificationsCloudFeedRowV17>;
+    readonly rows: ReadonlyArray<HostNotificationsCloudFeedRowV18>;
     readonly summary: HostNotificationsCloudFeedSummary;
     readonly version: number;
-  }): ReadonlyArray<HostNotificationsCloudFeedRowV17> | null;
+  }): ReadonlyArray<HostNotificationsCloudFeedRowV18> | null;
   /**
    * Paints the replica tier's copy of the feed before this session's first
    * snapshot. A no-op once a snapshot landed. It leaves `hasSnapshot` false
@@ -90,7 +90,7 @@ export interface CloudNotificationsState {
    */
   seedFromReplica(input: {
     readonly accountId: string;
-    readonly rows: ReadonlyArray<HostNotificationsCloudFeedRowV17>;
+    readonly rows: ReadonlyArray<HostNotificationsCloudFeedRowV18>;
     readonly summary: HostNotificationsCloudFeedSummary;
   }): void;
   /** The replica no longer admits its page: drop the rows it seeded. A live
@@ -215,30 +215,30 @@ export function cloudNotificationFeedId(entryId: string): string {
 }
 
 function rowKey(
-  row: Pick<HostNotificationsCloudFeedRowV17, "entryId">,
+  row: Pick<HostNotificationsCloudFeedRowV18, "entryId">,
 ): string {
   return cloudNotificationFeedId(row.entryId);
 }
 
 /** The relay summary's `attentionCount` predicate (the seam's `needsAttention`). */
-function isUnreadAttention(row: HostNotificationsCloudFeedRowV17): boolean {
+function isUnreadAttention(row: HostNotificationsCloudFeedRowV18): boolean {
   return notificationSummaryContribution(row.entry).attention === 1;
 }
 
-function isDroppedCloudRow(row: HostNotificationsCloudFeedRowV17): boolean {
+function isDroppedCloudRow(row: HostNotificationsCloudFeedRowV18): boolean {
   return isDroppedNotification(row.entry, row.entryId);
 }
 
 /** The rows this client keeps, and the summary less what the dropped ones
  * counted, so the bell never counts a row the center will not show. */
 function keptCloudFeed(input: {
-  readonly rows: ReadonlyArray<HostNotificationsCloudFeedRowV17>;
+  readonly rows: ReadonlyArray<HostNotificationsCloudFeedRowV18>;
   readonly summary: HostNotificationsCloudFeedSummary;
 }): {
-  readonly rows: ReadonlyArray<HostNotificationsCloudFeedRowV17>;
+  readonly rows: ReadonlyArray<HostNotificationsCloudFeedRowV18>;
   readonly summary: HostNotificationsCloudFeedSummary;
 } {
-  const rows: HostNotificationsCloudFeedRowV17[] = [];
+  const rows: HostNotificationsCloudFeedRowV18[] = [];
   let { totalCount, unreadCount, attentionCount } = input.summary;
   for (const row of input.rows) {
     if (!isDroppedCloudRow(row)) {
@@ -263,8 +263,8 @@ function keptCloudFeed(input: {
 /** The rows a snapshot frame carries that this client keeps: what the
  * replica remembers, so a seed from it carries the summary it was stored with. */
 function keptCloudFeedRows(
-  rows: ReadonlyArray<HostNotificationsCloudFeedRowV17>,
-): ReadonlyArray<HostNotificationsCloudFeedRowV17> {
+  rows: ReadonlyArray<HostNotificationsCloudFeedRowV18>,
+): ReadonlyArray<HostNotificationsCloudFeedRowV18> {
   return rows.filter((row) => !isDroppedCloudRow(row));
 }
 
@@ -285,10 +285,10 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
       // uses accepted snapshots to drive cross-plane completion reconciliation.
       if (currentVersion !== null && input.version < currentVersion)
         return null;
-      const arrivals: HostNotificationsCloudFeedRowV17[] = [];
+      const arrivals: HostNotificationsCloudFeedRowV18[] = [];
       const kept = keptCloudFeed(input);
       set((state) => {
-        const rows: Partial<Record<string, HostNotificationsCloudFeedRowV17>> =
+        const rows: Partial<Record<string, HostNotificationsCloudFeedRowV18>> =
           {};
         for (const row of kept.rows) {
           const key = rowKey(row);
@@ -315,7 +315,7 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
         )
           return state;
         const kept = keptCloudFeed(input);
-        const rows: Partial<Record<string, HostNotificationsCloudFeedRowV17>> =
+        const rows: Partial<Record<string, HostNotificationsCloudFeedRowV18>> =
           {};
         for (const row of kept.rows) rows[rowKey(row)] = row;
         return {
@@ -479,8 +479,8 @@ export function openCloudNotificationsStream(
   onAuthError: (() => void) | null,
   onSnapshot:
     | ((input: {
-        readonly rows: ReadonlyArray<HostNotificationsCloudFeedRowV17>;
-        readonly arrivals: ReadonlyArray<HostNotificationsCloudFeedRowV17>;
+        readonly rows: ReadonlyArray<HostNotificationsCloudFeedRowV18>;
+        readonly arrivals: ReadonlyArray<HostNotificationsCloudFeedRowV18>;
       }) => void)
     | null,
 ): () => void {
@@ -529,7 +529,7 @@ export function openCloudNotificationsStream(
         return;
       }
       const parsed =
-        hostNotificationsCloudFeedSubscribeServerFrameSchemaV17.safeParse(
+        hostNotificationsCloudFeedSubscribeServerFrameSchemaV18.safeParse(
           envelope,
         );
       if (!parsed.success) {

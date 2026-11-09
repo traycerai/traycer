@@ -17,7 +17,7 @@ describe("buildQueuedInviteBatches", () => {
     const newInvite: QueuedInvite = {
       identifier: "new-user",
       identifierType: "github_handle",
-      role: "viewer",
+      role: "editor",
     };
 
     const batches = buildQueuedInviteBatches({

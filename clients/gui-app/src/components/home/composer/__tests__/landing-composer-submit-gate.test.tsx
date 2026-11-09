@@ -310,11 +310,23 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", () => {
     },
     get catalog() {
       return testState.catalogHostId === null
-        ? { hostId: null, harnesses: undefined, modelsLoaded: false }
+        ? {
+            hostId: null,
+            harnesses: undefined,
+            modelsHarnessId: testState.displayedHarness,
+            modelsProfileId: null,
+            models: [],
+            modelsLoaded: false,
+            modelsFailed: false,
+          }
         : {
             hostId: testState.catalogHostId,
             harnesses: [],
+            modelsHarnessId: testState.displayedHarness,
+            modelsProfileId: null,
+            models: [],
             modelsLoaded: true,
+            modelsFailed: false,
           };
     },
     // The raw pick; `selection` above is what this host's catalog shows.
@@ -495,6 +507,7 @@ vi.mock("@/components/chat/composer/picker/use-composer-picker-items", () => ({
 }));
 vi.mock("@/hooks/composer/use-workspace-mention-roots", () => ({
   useLandingComposerMentionRoots: () => [],
+  useLandingRunWorkingDirectory: () => null,
 }));
 vi.mock("@/hooks/providers/use-provider-pack-gate", () => ({
   // Same treatment as `use-composer-dictation` above: a host-backed readiness
@@ -589,14 +602,20 @@ vi.mock("@/hooks/host/use-composer-placement", () => ({
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   useAuthUser: () => ({ data: null, refetch: testState.refetchAuthUser }),
 }));
-vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
-  useSandboxCatalogue: () => ({
-    data: testState.catalogue,
-    isFetching: testState.catalogueFetching,
-    isError: false,
-    refetch: testState.refetchCatalogue,
+vi.mock(
+  "@/hooks/sandboxes/use-sandbox-catalogue-query",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/sandboxes/use-sandbox-catalogue-query")
+    >()),
+    useSandboxCatalogue: () => ({
+      data: testState.catalogue,
+      isFetching: testState.catalogueFetching,
+      isError: false,
+      refetch: testState.refetchCatalogue,
+    }),
   }),
-}));
+);
 vi.mock("@/hooks/sandboxes/use-sandbox-defaults", () => ({
   useSandboxDefaultsLookup: () => () => null,
 }));
@@ -973,7 +992,11 @@ describe("LandingComposer direct submit gate", () => {
         catalog: {
           hostId: "host-test",
           harnesses: [{ id: "claude", available: true, modes: ["gui", "tui"] }],
+          modelsHarnessId: "claude",
+          modelsProfileId: null,
+          models: [],
           modelsLoaded: true,
+          modelsFailed: false,
         },
       });
       useStagedSandboxStore.getState().report("landing:window-test", {
@@ -1216,7 +1239,11 @@ describe("LandingComposer direct submit gate", () => {
         catalog: {
           hostId: "host-test",
           harnesses: [{ id: "claude", available: true, modes: ["gui", "tui"] }],
+          modelsHarnessId: "claude",
+          modelsProfileId: null,
+          models: [],
           modelsLoaded: true,
+          modelsFailed: false,
         },
       });
       useStagedSandboxStore.getState().report("landing:window-test", {
@@ -1294,7 +1321,11 @@ describe("LandingComposer direct submit gate", () => {
           catalog: {
             hostId: "host-test",
             harnesses: [{ id: "claude", ...harness }],
+            modelsHarnessId: "claude",
+            modelsProfileId: null,
+            models: [],
             modelsLoaded: true,
+            modelsFailed: false,
           },
         });
         useStagedSandboxStore.getState().report("landing:window-test", {
@@ -1456,13 +1487,19 @@ describe("LandingComposer direct submit gate", () => {
       // is sent there, through the composer's ordinary submit.
       act(() => {
         testState.catalogHostId = "host-test";
+        testState.displayedHarness = "codex";
+        testState.modelSlug = "gpt-6.1-sol";
         testState.toolbarStore?.setState({
           catalog: {
             hostId: "host-test",
             harnesses: [
               { id: "codex", available: true, modes: ["gui", "tui"] },
             ],
+            modelsHarnessId: "codex",
+            modelsProfileId: null,
+            models: [],
             modelsLoaded: true,
+            modelsFailed: false,
           },
         });
         useStagedSandboxStore.getState().report("landing:window-test", {
@@ -2076,6 +2113,8 @@ function editorHandle(): ComposerPromptEditorHandle {
     clear: testState.clearEditor,
     setContent: () => undefined,
     syncContent: () => undefined,
+    insertFileAttachment: () => false,
+    settleFileAttachment: () => false,
     insertImageAttachments: () => undefined,
     insertMentionAttachment: () => false,
     beginPathInsertion: () => null,

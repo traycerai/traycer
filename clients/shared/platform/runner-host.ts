@@ -1,3 +1,4 @@
+import type { SandboxCatalogueReadinessRequest } from "@traycer/protocol/host/sandbox-control";
 import type { SandboxArtifactBridge } from "./sandbox-artifacts";
 import type {
   NotificationFeedDeliveryResult,
@@ -425,6 +426,7 @@ export interface IRunnerHost {
   getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult>;
   getSandboxCatalogue(
     bearerToken: string,
+    context: SandboxCatalogueReadinessRequest | null,
   ): Promise<SandboxCatalogueFetchResult>;
   /** `GET /api/traycer/models`: the Traycer models every sandbox runs. */
   getTraycerModels(bearerToken: string): Promise<TraycerModelsFetchResult>;

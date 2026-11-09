@@ -1,9 +1,23 @@
 import type { MixDirector, MixPlan } from "./directors";
-import type { SoundtrackManifest } from "./manifest";
+import type { SoundtrackManifest, SoundtrackTrack } from "./manifest";
+import { ComposedPlayer } from "./composed-player";
 import { MIX_TUNING } from "./mix-tuning";
 import type { SoundtrackOutput } from "./output";
-import { CROSSFADE_SECONDS, crossfadePlayers, TrackPlayer } from "./player";
-import type { RandomSource } from "./scheduler";
+import {
+  CROSSFADE_SECONDS,
+  crossfadePlayers,
+  TrackPlayer,
+  type PlaybackLifecycle,
+} from "./player";
+import type { MixCapture, RecordingQuality } from "./recording";
+import { drawSeconds, type RandomSource } from "./scheduler";
+import type {
+  PauseCause,
+  PlayCause,
+  SkipCause,
+  SkipDirection,
+  SoundtrackLogRelay,
+} from "./session-log";
 import {
   sameMixSignals,
   type MixSignals,
@@ -24,6 +38,15 @@ export interface SoundtrackPorts {
   duck(chimeSeconds: number): void;
   /** Lets go of the audio device once `afterSeconds` have gone by. */
   close(afterSeconds: number): void;
+  /** Where the engine says what it does; nothing listens until a recording. */
+  readonly log: SoundtrackLogRelay;
+  /**
+   * A copy of the mix as it leaves the low-pass, ahead of the volume and a
+   * chime's duck, encoded as `quality` asks. Nothing is added to the graph
+   * until this is called, and the speakers' path never changes. Rejects where
+   * the capture cannot be made.
+   */
+  captureMix(quality: RecordingQuality): Promise<MixCapture>;
   /**
    * Fades the mix out, then stops the output's clock, and every voice and ramp
    * on it with it, until `resume`.
@@ -49,7 +72,8 @@ export type ResumePositions = Readonly<
 /** What is sounding now; null while the view in front has no track. */
 interface SoundingMix {
   readonly view: SoundtrackView;
-  readonly plan: MixPlan;
+  readonly track: SoundtrackTrack;
+  readonly plan: MixPlan | null;
 }
 
 interface SoundtrackSessionOptions {
@@ -65,7 +89,7 @@ interface SoundtrackSessionOptions {
 
 /** The tracks a view has been on, as a browser keeps its pages. */
 interface TrackHistory {
-  readonly tracks: readonly VariableTrack[];
+  readonly tracks: readonly SoundtrackTrack[];
   /** Where in `tracks` the view is. */
   readonly at: number;
 }
@@ -73,8 +97,8 @@ interface TrackHistory {
 /** The track a view is on, the track's player, and how it got there. */
 interface ViewPlayer {
   readonly view: SoundtrackView;
-  readonly track: VariableTrack;
-  readonly player: TrackPlayer;
+  readonly track: SoundtrackTrack;
+  readonly player: PlaybackLifecycle;
   readonly history: TrackHistory;
 }
 
@@ -84,26 +108,35 @@ interface ViewPlayer {
  */
 type PendingStart =
   | {
-      readonly player: TrackPlayer;
+      readonly player: PlaybackLifecycle;
       readonly timer: number;
       readonly endsAt: number;
     }
   | {
-      readonly player: TrackPlayer;
+      readonly player: PlaybackLifecycle;
       readonly timer: null;
       readonly secondsLeft: number;
     };
 
-function startFromSilence(player: TrackPlayer): void {
-  player.start(player.elapsed(), MIX_TUNING.fadeInSeconds);
+function startFromSilence(player: PlaybackLifecycle): void {
+  player.start(
+    player.elapsed(),
+    player instanceof ComposedPlayer ? 0.01 : MIX_TUNING.fadeInSeconds,
+  );
 }
 
 /** `track` next after where `history` is, which clears anything ahead of it. */
-function visited(history: TrackHistory, track: VariableTrack): TrackHistory {
+function visited(history: TrackHistory, track: SoundtrackTrack): TrackHistory {
   const tracks = [...history.tracks.slice(0, history.at + 1), track].slice(
     -MIX_TUNING.trackHistoryLength,
   );
   return { tracks, at: tracks.length - 1 };
+}
+
+interface AppliedPlan {
+  readonly view: SoundtrackView;
+  readonly track: VariableTrack;
+  readonly plan: MixPlan;
 }
 
 function pickRandom<T>(
@@ -186,7 +219,7 @@ export class SoundtrackSession {
   /** The track each view is on. */
   private readonly players = new Map<SoundtrackView, ViewPlayer>();
   /** By track name. */
-  private readonly trackPlayers = new Map<string, TrackPlayer>();
+  private readonly trackPlayers = new Map<string, PlaybackLifecycle>();
   private timer: number;
   private director: MixDirector;
   private signals: MixSignals | null = null;
@@ -198,6 +231,8 @@ export class SoundtrackSession {
   private paused = false;
   /** Moves on at each Play, pause and end, so a refusal answers only the latest. */
   private resumeAttempt = 0;
+  /** The plan last applied, and the view and track it was for. */
+  private applied: AppliedPlan | null = null;
 
   constructor(options: SoundtrackSessionOptions) {
     this.manifest = options.manifest;
@@ -214,7 +249,31 @@ export class SoundtrackSession {
     const previous = this.signals;
     if (previous !== null && sameMixSignals(previous, signals)) return;
     this.signals = signals;
+    this.logSignals(signals);
     if (!this.paused) this.followSignals();
+  }
+
+  /**
+   * Tells the log what drives the mix, what it is sounding and the plan last
+   * applied: for a recording starting now, whose first minute would otherwise
+   * be events about things it never saw begin. It only reads, so the music
+   * goes on exactly as it would have without a recording.
+   */
+  logNow(): void {
+    const { log } = this.ports;
+    if (!log.listening()) return;
+    const { signals, inFront, applied } = this;
+    if (signals !== null) this.logSignals(signals);
+    log.write({
+      type: "sounding",
+      t: this.ports.output.currentTime(),
+      view: this.frontView,
+      paused: this.paused,
+      player: inFront?.player.describe() ?? null,
+    });
+    if (applied !== null) {
+      this.logPlan(applied.view, applied.track, applied.plan);
+    }
   }
 
   setDirector(director: MixDirector): void {
@@ -230,6 +289,7 @@ export class SoundtrackSession {
   /** Holds everything where it is, the rest of a silence included, until `play`. */
   pause(): void {
     if (this.paused) return;
+    this.logPause("person");
     this.paused = true;
     this.resumeAttempt += 1;
     window.clearInterval(this.timer);
@@ -248,20 +308,7 @@ export class SoundtrackSession {
 
   /** Goes on from where a pause held it, with what arrived meanwhile. */
   play(): void {
-    if (!this.paused) return;
-    this.paused = false;
-    this.resumeAttempt += 1;
-    const attempt = this.resumeAttempt;
-    this.ports.resume(() => {
-      if (attempt === this.resumeAttempt) this.onResumeRefused();
-    });
-    for (const player of this.trackPlayers.values()) player.release();
-    const pending = this.pendingStart;
-    if (pending !== null && pending.timer === null) {
-      this.waitOutSilence(pending.player, pending.secondsLeft);
-    }
-    this.timer = this.startReplanning();
-    this.followSignals();
+    this.playFor("person");
   }
 
   /**
@@ -271,21 +318,28 @@ export class SoundtrackSession {
    * the run's end picked is the one to go to, and it starts at once.
    */
   next(): void {
-    this.play();
+    this.playFor("skip");
     const { inFront, pendingStart } = this;
     if (inFront === null) return;
     if (pendingStart !== null) {
+      this.logSkip("next", inFront.track, "silence");
       this.cancelPendingStart();
       startFromSilence(pendingStart.player);
       return;
     }
     const { history } = inFront;
     if (history.at + 1 < history.tracks.length) {
-      this.skipTo(inFront, { ...history, at: history.at + 1 });
+      this.skipTo(
+        inFront,
+        { ...history, at: history.at + 1 },
+        "next",
+        "history",
+      );
       return;
     }
     const track = this.anotherTrack(inFront);
-    this.skipTo(inFront, track === null ? history : visited(history, track));
+    if (track === null) this.skipTo(inFront, history, "next", "restart");
+    else this.skipTo(inFront, visited(history, track), "next", "pick");
   }
 
   /**
@@ -293,14 +347,20 @@ export class SoundtrackSession {
    * paused, or with none earlier goes back to the top of this one.
    */
   previous(): void {
-    this.play();
+    this.playFor("skip");
     const { inFront } = this;
     if (inFront === null) return;
     const { history } = inFront;
-    this.skipTo(
-      inFront,
-      history.at > 0 ? { ...history, at: history.at - 1 } : history,
-    );
+    if (history.at > 0) {
+      this.skipTo(
+        inFront,
+        { ...history, at: history.at - 1 },
+        "previous",
+        "history",
+      );
+    } else {
+      this.skipTo(inFront, history, "previous", "restart");
+    }
   }
 
   /** Stops every player and answers where each one got to. */
@@ -323,6 +383,27 @@ export class SoundtrackSession {
     }
     this.ports.close(MIX_TUNING.stopFadeSeconds);
     return positions;
+  }
+
+  private playFor(cause: PlayCause): void {
+    if (!this.paused) return;
+    this.logPlay(cause);
+    this.paused = false;
+    this.resumeAttempt += 1;
+    const attempt = this.resumeAttempt;
+    this.ports.resume(() => {
+      if (attempt !== this.resumeAttempt) return;
+      // Ahead of the end it brings, which a recording stops listening at.
+      this.logPause("refused-resume");
+      this.onResumeRefused();
+    });
+    for (const player of this.trackPlayers.values()) player.release();
+    const pending = this.pendingStart;
+    if (pending !== null && pending.timer === null) {
+      this.waitOutSilence(pending.player, pending.secondsLeft);
+    }
+    this.timer = this.startReplanning();
+    this.followSignals();
   }
 
   private startReplanning(): number {
@@ -355,9 +436,15 @@ export class SoundtrackSession {
   }
 
   /** Moves the view to the track `history` is at, from its top, crossfading. */
-  private skipTo(from: ViewPlayer, history: TrackHistory): void {
+  private skipTo(
+    from: ViewPlayer,
+    history: TrackHistory,
+    direction: SkipDirection,
+    cause: SkipCause,
+  ): void {
     this.cancelPendingStart();
     const track = history.tracks[history.at];
+    this.logSkip(direction, track, cause);
     const to: ViewPlayer = {
       view: from.view,
       track,
@@ -371,6 +458,9 @@ export class SoundtrackSession {
     this.players.set(to.view, to);
     this.inFront = to;
     crossfadePlayers(from.player, to.player);
+    // The person asked for this track, so what is reported as sounding follows
+    // at once rather than at the next tick.
+    this.replan();
   }
 
   private playerFor(view: SoundtrackView): ViewPlayer | null {
@@ -393,14 +483,42 @@ export class SoundtrackSession {
   }
 
   /** The track's player, or a new one from `resumeAt` if it has none yet. */
-  private trackPlayer(track: VariableTrack, resumeAt: number): TrackPlayer {
+  private trackPlayer(
+    track: SoundtrackTrack,
+    resumeAt: number,
+  ): PlaybackLifecycle {
     const existing = this.trackPlayers.get(track.name);
     if (existing !== undefined) return existing;
+    if (track.kind === "composed") {
+      const player = new ComposedPlayer({
+        track,
+        output: this.ports.output,
+        stems: this.ports.stems,
+        position: resumeAt,
+        onEnd: () => {
+          if (this.inFront?.player !== player) return;
+          const next = this.anotherTrack(this.inFront);
+          if (next !== null)
+            this.runEnded(
+              player,
+              drawSeconds(MIX_TUNING.silenceSeconds, this.random),
+            );
+          else
+            this.waitOutSilence(
+              player,
+              drawSeconds(MIX_TUNING.silenceSeconds, this.random),
+            );
+        },
+      });
+      this.trackPlayers.set(track.name, player);
+      return player;
+    }
     const player: TrackPlayer = new TrackPlayer({
       track,
       output: this.ports.output,
       stems: this.ports.stems,
       random: this.random,
+      log: this.ports.log,
       silenceSeconds: MIX_TUNING.silenceSeconds,
       resumeAt,
       onRunStart: () => {
@@ -414,13 +532,13 @@ export class SoundtrackSession {
     return player;
   }
 
-  private poolOf(view: SoundtrackView): readonly VariableTrack[] {
+  private poolOf(view: SoundtrackView): readonly SoundtrackTrack[] {
     const names = this.manifest.views[view];
     return this.manifest.tracks.filter((track) => names.includes(track.name));
   }
 
   /** The track it was on if the view is resuming, else one from its pool. */
-  private trackFor(view: SoundtrackView): VariableTrack | null {
+  private trackFor(view: SoundtrackView): SoundtrackTrack | null {
     const pool = this.poolOf(view);
     const resumed = pool.find(
       (track) => track.name === this.resumePositions[view]?.trackName,
@@ -442,7 +560,7 @@ export class SoundtrackSession {
    * A view whose pool has another track moves on to it, from its top once the
    * silence is over; one with a single track plays it again after the silence.
    */
-  private runEnded(player: TrackPlayer, silenceSeconds: number): void {
+  private runEnded(player: PlaybackLifecycle, silenceSeconds: number): void {
     const { inFront } = this;
     if (inFront?.player !== player) return;
     const track = this.anotherTrack(inFront);
@@ -465,7 +583,7 @@ export class SoundtrackSession {
   }
 
   /** Another track of the view's pool, picked at random; null if it has none. */
-  private anotherTrack(from: ViewPlayer): VariableTrack | null {
+  private anotherTrack(from: ViewPlayer): SoundtrackTrack | null {
     const others = this.poolOf(from.view).filter(
       (track) => track !== from.track,
     );
@@ -473,7 +591,7 @@ export class SoundtrackSession {
     return track;
   }
 
-  private waitOutSilence(player: TrackPlayer, seconds: number): void {
+  private waitOutSilence(player: PlaybackLifecycle, seconds: number): void {
     const timer = window.setTimeout(() => {
       this.pendingStart = null;
       startFromSilence(player);
@@ -496,14 +614,23 @@ export class SoundtrackSession {
     const { signals, inFront } = this;
     if (signals === null) return;
     if (inFront === null) {
+      this.applied = null;
       this.onSounding(null);
       return;
     }
     const { player, track, view } = inFront;
+    if (track.kind === "composed" || !(player instanceof TrackPlayer)) {
+      this.applied = null;
+      this.ports.setDimmed(false);
+      this.onSounding({ view, track, plan: null });
+      return;
+    }
     const plan = this.director.plan(signals, {
       track,
       state: player.currentState(),
     });
+    this.applied = { view, track, plan };
+    this.logPlan(view, track, plan);
     // First, because moving state rolls the layers the rest of the plan adjusts.
     if (plan.state !== null) player.enterState(plan.state);
     player.setPauseMultiplier(plan.pauseMultiplier);
@@ -512,6 +639,77 @@ export class SoundtrackSession {
     });
     settleEnabledLayers(player, plan, this.random);
     this.ports.setDimmed(plan.dim);
-    this.onSounding({ view, plan });
+    this.onSounding({ view, track, plan });
+  }
+
+  private logPause(cause: PauseCause): void {
+    const { log, output } = this.ports;
+    if (!log.listening()) return;
+    log.write({ type: "pause", t: output.currentTime(), cause });
+  }
+
+  private logPlay(cause: PlayCause): void {
+    const { log, output } = this.ports;
+    if (!log.listening()) return;
+    log.write({ type: "play", t: output.currentTime(), cause });
+  }
+
+  private logSkip(
+    direction: SkipDirection,
+    to: SoundtrackTrack,
+    cause: SkipCause,
+  ): void {
+    const { log, output } = this.ports;
+    if (!log.listening()) return;
+    log.write({
+      type: "skip",
+      t: output.currentTime(),
+      direction,
+      to: to.name,
+      cause,
+    });
+  }
+
+  /** The five values a director reads, copied one by one and nothing else. */
+  private logSignals(signals: MixSignals): void {
+    const { log } = this.ports;
+    if (!log.listening()) return;
+    log.write({
+      type: "signals",
+      t: this.ports.output.currentTime(),
+      view: signals.view,
+      working: signals.working,
+      blocking: signals.blocking,
+      failure: signals.failure,
+      done: signals.done,
+    });
+  }
+
+  private logPlan(
+    view: SoundtrackView,
+    track: VariableTrack,
+    plan: MixPlan,
+  ): void {
+    const { log } = this.ports;
+    if (!log.listening()) return;
+    const layerName = (layerIndex: number): string =>
+      track.layers[layerIndex].name;
+    log.write({
+      type: "plan",
+      t: this.ports.output.currentTime(),
+      view,
+      track: track.name,
+      state: plan.state,
+      layerCount: plan.enabledLayerCount,
+      heldLayers: plan.heldLayers.map(layerName),
+      pauseMultiplier: plan.pauseMultiplier,
+      layerGains: Object.fromEntries(
+        plan.layerGains.map((gain, layerIndex) => [
+          layerName(layerIndex),
+          gain,
+        ]),
+      ),
+      dim: plan.dim,
+    });
   }
 }

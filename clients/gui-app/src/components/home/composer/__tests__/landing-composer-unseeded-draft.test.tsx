@@ -177,6 +177,7 @@ vi.mock("@/components/chat/composer/picker/use-composer-picker-items", () => ({
 }));
 vi.mock("@/hooks/composer/use-workspace-mention-roots", () => ({
   useLandingComposerMentionRoots: () => [],
+  useLandingRunWorkingDirectory: () => null,
 }));
 vi.mock("@/hooks/providers/use-provider-pack-gate", () => ({
   useProviderPackGate: () => ({ blocked: false, hint: null, preparing: null }),
@@ -213,14 +214,20 @@ vi.mock("@/hooks/auth/use-auth-user-query", () => ({
     refetch: () => Promise.resolve({ data: null, isError: false }),
   }),
 }));
-vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
-  useSandboxCatalogue: () => ({
-    data: { providers: [] },
-    isFetching: false,
-    isError: false,
-    refetch: vi.fn(),
+vi.mock(
+  "@/hooks/sandboxes/use-sandbox-catalogue-query",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/sandboxes/use-sandbox-catalogue-query")
+    >()),
+    useSandboxCatalogue: () => ({
+      data: { providers: [] },
+      isFetching: false,
+      isError: false,
+      refetch: vi.fn(),
+    }),
   }),
-}));
+);
 vi.mock("@/hooks/sandboxes/use-sandbox-defaults", () => ({
   useSandboxDefaultsLookup: () => () => null,
 }));

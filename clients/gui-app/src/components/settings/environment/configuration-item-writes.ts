@@ -17,7 +17,6 @@ export interface ConfigurationItemWrite {
   readonly key: string;
   readonly os: ConfigurationItem["os"];
   readonly action: "put" | "remove";
-  readonly draftField: "value" | "path" | "args" | null;
   readonly value: ConfigurationItem["value"];
   readonly original: ConfigurationItem | null;
 }

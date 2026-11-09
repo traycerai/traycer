@@ -29,13 +29,14 @@ import {
 
 const hoisted = vi.hoisted(() => ({
   mutate: vi.fn(),
+  schemaVersion: { major: 7, minor: 1 },
 }));
 
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
 }));
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
-  useHostMethodSchemaVersion: () => ({ major: 7, minor: 1 }),
+  useHostMethodSchemaVersion: () => hoisted.schemaVersion,
 }));
 vi.mock("@/hooks/agent/use-configure-agent-mutation", () => ({
   useAgentConfigure: () => ({ mutate: hoisted.mutate, isPending: false }),
@@ -103,20 +104,35 @@ describe("the agent.configure request that changes only the routing", () => {
       profileSelection: { kind: "profile", profileId: "work" },
       reasoningEffort: "high",
       fastMode: false,
+      serviceTier: null,
       permissionMode: null,
       routing: "hold",
     });
   });
 
-  it("carries a fast tier as fast mode and an unpinned account as ambient", () => {
+  it("preserves a named service tier and an unpinned account", () => {
     const request = buildRoutingConfigureRequest({
       epicId: "epic-1",
       chatId: "chat-1",
-      settings: { ...SETTINGS, serviceTier: "fast", profileId: null },
+      settings: { ...SETTINGS, serviceTier: "priority", profileId: null },
       routing: "policy",
     });
     expect(request?.fastMode).toBe(true);
+    expect(request?.serviceTier).toBe("priority");
     expect(request?.profileSelection).toEqual({ kind: "ambient" });
+    expect(request).toEqual({
+      epicId: "epic-1",
+      senderAgentId: "chat-1",
+      agentId: "chat-1",
+      harnessId: "claude",
+      model: "claude-sonnet-4-5",
+      profileSelection: { kind: "ambient" },
+      reasoningEffort: "high",
+      fastMode: true,
+      serviceTier: "priority",
+      permissionMode: null,
+      routing: "policy",
+    });
   });
 
   it("has nothing to restate before the chat has a run tuple", () => {
@@ -130,11 +146,23 @@ describe("the agent.configure request that changes only the routing", () => {
     ).toBeNull();
   });
 
-  it("is offered only to a host whose agent.configure carries the field", () => {
-    expect(agentConfigureCarriesRouting(null)).toBe(false);
-    expect(agentConfigureCarriesRouting({ major: 7, minor: 0 })).toBe(false);
-    expect(agentConfigureCarriesRouting({ major: 7, minor: 1 })).toBe(true);
-    expect(agentConfigureCarriesRouting({ major: 8, minor: 0 })).toBe(true);
+  it("requires 7.1 for an unpinned tier and 7.2 to preserve a named tier", () => {
+    expect(agentConfigureCarriesRouting(null, null)).toBe(false);
+    expect(agentConfigureCarriesRouting({ major: 7, minor: 0 }, null)).toBe(
+      false,
+    );
+    expect(agentConfigureCarriesRouting({ major: 7, minor: 1 }, null)).toBe(
+      true,
+    );
+    expect(
+      agentConfigureCarriesRouting({ major: 7, minor: 1 }, "priority"),
+    ).toBe(false);
+    expect(
+      agentConfigureCarriesRouting({ major: 7, minor: 2 }, "priority"),
+    ).toBe(true);
+    expect(
+      agentConfigureCarriesRouting({ major: 8, minor: 0 }, "priority"),
+    ).toBe(true);
   });
 });
 
@@ -197,11 +225,15 @@ describe("the setting for an open chat", () => {
   afterEach(() => {
     cleanup();
     hoisted.mutate.mockReset();
+    hoisted.schemaVersion = { major: 7, minor: 1 };
     registry.disposeAll();
   });
 
   /** A chat session the way the tab's tile holds it, over a stream that goes nowhere. */
-  function openSession(role: "owner" | "viewer"): void {
+  function openSession(
+    role: "owner" | "viewer",
+    settings: ChatRunSettings,
+  ): void {
     const handle = registry.acquire(
       {
         epicId: "epic-1",
@@ -231,7 +263,7 @@ describe("the setting for an open chat", () => {
         }),
     );
     handle.store.setState({
-      chat: chatRecordSchema.parse(CHAT_RECORD),
+      chat: chatRecordSchema.parse({ ...CHAT_RECORD, settings }),
       access: { role, ownerUserId: "user-1", canAct: role === "owner" },
     });
   }
@@ -251,7 +283,7 @@ describe("the setting for an open chat", () => {
   }
 
   it("sends the chat's own restated tuple with the new routing when its owner picks it", async () => {
-    openSession("owner");
+    openSession("owner", SETTINGS);
     openMenu();
 
     const trigger = await screen.findByText("On a usage limit or error");
@@ -269,13 +301,29 @@ describe("the setting for an open chat", () => {
       profileSelection: { kind: "profile", profileId: "work" },
       reasoningEffort: "high",
       fastMode: false,
+      serviceTier: null,
       permissionMode: null,
       routing: "hold",
     });
   });
 
+  it("hides the setting when 7.1 cannot preserve a named tier", () => {
+    openSession("owner", { ...SETTINGS, serviceTier: "priority" });
+    openMenu();
+
+    expect(screen.queryByText("On a usage limit or error")).toBeNull();
+  });
+
+  it("offers the setting when 7.2 can preserve a named tier", async () => {
+    hoisted.schemaVersion = { major: 7, minor: 2 };
+    openSession("owner", { ...SETTINGS, serviceTier: "priority" });
+    openMenu();
+
+    expect(await screen.findByText("On a usage limit or error")).toBeTruthy();
+  });
+
   it("cannot be changed from a chat shared with the person as a viewer", async () => {
-    openSession("viewer");
+    openSession("viewer", SETTINGS);
     openMenu();
 
     const trigger = await screen.findByText("On a usage limit or error");
@@ -288,7 +336,7 @@ describe("the setting for an open chat", () => {
     openMenu();
     expect(screen.queryByText("On a usage limit or error")).toBeNull();
 
-    act(() => openSession("owner"));
+    act(() => openSession("owner", SETTINGS));
 
     expect(screen.getByText("On a usage limit or error")).toBeDefined();
   });

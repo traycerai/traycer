@@ -12,6 +12,7 @@ import {
   upgradeRequestToVersion,
   upgradeResponseToVersion,
 } from "@traycer/protocol/framework/versioned-rpc";
+import { decodeResponsePayload } from "@traycer/protocol/host-transport/remote/rpc-codec";
 import {
   configEnvSetUpgradeV10ToV11,
   configEnvSetV10,
@@ -86,6 +87,7 @@ const ENVIRONMENT_METHOD_NAMES = Object.keys(ENVIRONMENT_RPC_METHODS).filter(
 /** The family's methods that carry a `@1.2` MINOR over their `@1.1`. */
 const ENVIRONMENT_METHODS_WITH_MINOR_1_2: ReadonlySet<string> = new Set([
   "environment.review",
+  "environment.status",
   "environment.secrets.list",
 ]);
 
@@ -234,7 +236,7 @@ describe("new methods are off every released floor", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("registers each in hostRpcRegistry as unsupported-degrade, major 1 only, with @1.0 alone, @1.0 and @1.1, or @1.0 to @1.2", () => {
+  it("registers the frozen environment lines and status minor as unsupported-degrade", () => {
     const shapes = ENVIRONMENT_METHOD_NAMES.map(
       (name) => `${name}: ${registryShapeOf(hostRpcRegistry[name])}`,
     );
@@ -1722,7 +1724,7 @@ describe("secret versions, Undo, Destroy, rotation and consent shapes, field for
 const ONE_ZERO = { major: 1, minor: 0 } as const;
 const ONE_ONE = { major: 1, minor: 1 } as const;
 
-const STATUS_V10 = {
+const STATUS_V10: env.EnvironmentStatusResponse = {
   principal: { kind: "team", teamName: "acme" },
   reachability: "connected",
   bindingGeneration: 2,
@@ -1784,8 +1786,8 @@ describe("environment.status@1.1 and environment.review@1.1 upgrade from @1.0 to
     ).toEqual({});
   });
 
-  it("parses a status answer that names the move's consent, a stopped plane and a stop time", () => {
-    const answer = {
+  it("upgrades frozen status without inventing receipts and preserves the move state", () => {
+    const answer: env.EnvironmentStatusResponseV12 = {
       ...STATUS_V10,
       setup: { stage: "moving_settings", state: "awaiting_consent" },
       consent: { acceptedAt: 1_700_000_000_000, planHash: "h1" },
@@ -1796,12 +1798,58 @@ describe("environment.status@1.1 and environment.review@1.1 upgrade from @1.0 to
       },
       returnedFromTeam: { at: 1_700_000_000_001 },
       stoppedAt: 1_700_000_000_002,
+      // One acknowledgement for a queued edit the configuration took, which
+      // is how the caller that forwarded it learns the revision to wait for.
+      acceptedUploads: [
+        {
+          uploadId: "u1",
+          kind: "agent_memory",
+          key: "memory",
+          os: "any",
+          environmentId: "env-a",
+          revision: 7,
+          acceptedAt: 1_700_000_000_003,
+        },
+      ],
     };
     expect(
       hostRpcRegistry[
         "environment.status"
-      ][1].versions[1].contract.responseSchema.parse(answer),
+      ][1].versions[2].contract.responseSchema.parse(answer),
     ).toEqual(answer);
+    // A newer minor's response passes through to an older client unchanged.
+    expect(
+      decodeResponsePayload(
+        hostRpcRegistry["environment.status"],
+        ONE_ONE,
+        { major: 1, minor: 2 },
+        answer,
+        "status-minor",
+        "environment.status",
+      ),
+    ).toEqual(answer);
+    const { acceptedUploads: _receipts, ...frozenAnswer } = answer;
+    expect(
+      hostRpcRegistry[
+        "environment.status"
+      ][1].versions[1].contract.responseSchema.parse(answer),
+    ).toEqual(frozenAnswer);
+    expect(
+      upgradeResponseToVersion(
+        hostRpcRegistry["environment.status"],
+        ONE_ONE,
+        { major: 1, minor: 2 },
+        frozenAnswer,
+      ),
+    ).toEqual({ ...frozenAnswer, acceptedUploads: [] });
+    expect(
+      upgradeRequestToVersion(
+        hostRpcRegistry["environment.status"],
+        ONE_ONE,
+        { major: 1, minor: 2 },
+        {},
+      ),
+    ).toEqual({});
     expect(
       hostRpcRegistry[
         "environment.status"

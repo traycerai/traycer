@@ -134,7 +134,7 @@ const surfaceCapture = vi.hoisted(() => ({
         provenance: NestedFocusProvenance,
       ) => void)
     | null,
-  onRequestClose: null as (() => void) | null,
+  onRequestClose: null as ((provenance: NestedFocusProvenance) => void) | null,
   onConvertToPip: null as (() => void) | null,
   onNativeTileFocused: null as (() => void) | null,
   persistViewportPreset: null as ((preset: string) => void) | null,
@@ -288,7 +288,7 @@ vi.mock("@/components/browser-tile/agent-browser-tile", () => ({
     readonly visible: boolean;
     readonly placement: BrowserTilePlacement;
     readonly node: BrowserTileNode;
-    readonly onRequestClose: () => void;
+    readonly onRequestClose: (provenance: NestedFocusProvenance) => void;
     readonly onConvertToPip: (() => void) | null;
     readonly onNativeTileFocused: (() => void) | null;
     readonly persistViewportPreset: ((preset: string) => void) | null;
@@ -558,7 +558,9 @@ describe("BrowserSessionTile lifecycle projection", () => {
     );
 
     await waitFor(() => {
-      expect(harness.closeCanvasTile).toHaveBeenCalledTimes(1);
+      expect(harness.closeCanvasTile).toHaveBeenCalledExactlyOnceWith(
+        "automatic",
+      );
     });
   });
 
@@ -568,7 +570,9 @@ describe("BrowserSessionTile lifecycle projection", () => {
     renderTile();
 
     await waitFor(() => {
-      expect(harness.closeCanvasTile).toHaveBeenCalledTimes(1);
+      expect(harness.closeCanvasTile).toHaveBeenCalledExactlyOnceWith(
+        "automatic",
+      );
     });
   });
 
@@ -2035,8 +2039,8 @@ describe("BrowserSessionTile adapter props", () => {
   it("routes the close and viewport-preset callbacks to the canvas", () => {
     renderTile();
 
-    surfaceCapture.onRequestClose?.();
-    expect(harness.closeCanvasTile).toHaveBeenCalledOnce();
+    surfaceCapture.onRequestClose?.("user");
+    expect(harness.closeCanvasTile).toHaveBeenCalledExactlyOnceWith("user");
 
     surfaceCapture.persistViewportPreset?.("mobile");
     expect(

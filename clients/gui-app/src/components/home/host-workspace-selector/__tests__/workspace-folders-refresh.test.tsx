@@ -221,7 +221,7 @@ describe("folder-mapping refresh affordance", () => {
   it("labels the footer stamp as a workspace snapshot, not a fresh GitHub check", async () => {
     // Same host-derived `resolvedAt` claim as the hover card's
     // `OwnerMetadataCheckedAtText`, which already reads
-    // "Workspace snapshot · {relative}" - "Checked" implies a freshness this
+    // "Folder snapshot · {relative}" - "Checked" implies a freshness this
     // TTL-cached value never had.
     const fixture = renderControl({
       checkedAt: Date.now() - 3.5 * 60_000,
@@ -231,7 +231,7 @@ describe("folder-mapping refresh affordance", () => {
     await fixture.openPicker();
 
     const checked = await screen.findByTestId("workspace-folders-checked-at");
-    expect(checked.textContent).toMatch(/^Workspace snapshot · /u);
+    expect(checked.textContent).toMatch(/^Folder snapshot · /u);
     expect(checked.textContent).not.toMatch(/^Checked/);
   });
 

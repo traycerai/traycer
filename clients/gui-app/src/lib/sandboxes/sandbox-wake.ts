@@ -29,8 +29,7 @@ import {
 /** How often the sandbox list is re-read while a wake is under way. */
 const WAKE_POLL_INTERVAL_MS = 2_000;
 /**
- * A resume is single-digit seconds and a cold start tens; past this it failed.
- * The budget covers the whole wake, the lifecycle verb's own request included.
+ * The minimum wait, also used for a server that predates row wake budgets.
  */
 const WAKE_TIMEOUT_MS = 120_000;
 
@@ -77,7 +76,11 @@ interface SandboxWakeRun {
  */
 type SandboxFactsRead =
   | { readonly kind: "unread" }
-  | { readonly kind: "listed"; readonly facts: SandboxDialFacts | null };
+  | {
+      readonly kind: "listed";
+      readonly facts: SandboxDialFacts | null;
+      readonly wakeBudgetMs: number;
+    };
 
 /**
  * The account a wake started under is no longer the one signed in. The wake
@@ -117,6 +120,7 @@ async function readSandboxFacts(
   const row = result.response.sandboxes.find((s) => s.hostId === hostId);
   return {
     kind: "listed",
+    wakeBudgetMs: Math.max(WAKE_TIMEOUT_MS, row?.wakeBudgetMs ?? 0),
     facts:
       row === undefined
         ? null
@@ -180,7 +184,7 @@ async function wakeSandboxHost(
     sleep,
     now: () => Date.now(),
     pollIntervalMs: WAKE_POLL_INTERVAL_MS,
-    timeoutMs: WAKE_TIMEOUT_MS,
+    timeoutMs: first.wakeBudgetMs,
     startBudget,
   });
 }

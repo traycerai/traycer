@@ -291,10 +291,8 @@ export function skillsReadFailed(name: string): string {
   return `Couldn't read ${name}'s skills.`;
 }
 
-export function addServerReach(personal: boolean, name: string): string {
-  return personal
-    ? "It reaches every provider on every computer and sandbox running Personal."
-    : `It reaches every provider on every host running ${name}.`;
+export function addServerReach(): string {
+  return "It reaches every provider on every host running this environment.";
 }
 
 /** The Secret option's line: Pick needs `put@1.1`; a 1.0 host takes Add only. */

@@ -159,20 +159,17 @@ export function LandingDraftSurface() {
           narrow viewport (or the space left beside the terminal panel) and
           the outer overflow-clip would clip the right edge instead of
           letting content reflow. */}
-      {/* Row 2 bottom-aligns the hero and row 3 top-anchors the composer, so
-          the boundary between them is where the pair sits. An even 1fr/1fr
-          split (desktop, where the epics list fills row 3) centres it; below md
-          the list is gone, so row 3 is weighted heavier to lift the pair just
-          above the midpoint, where it reads better on a tall phone. Both rows
-          have an intrinsic minimum so a grown composer (attachments, several
-          folders, keyboard open) extends the scrolling body instead of clipping.
-          With both the greeting and the recent list off there is no pair to
-          balance, so row 2 collapses outright and the composer centres itself
-          inside the whole remainder. */}
+      {/* Desktop splits the window between the greeting and the composer row.
+          Current tasks share that composer row and scroll inside it.
+          Below md the body scrolls, and the composer track keeps its own
+          height so a grown composer and an expanded setup failure stay
+          reachable. With both the greeting and the recent list off there is
+          no pair to balance, so the hero row collapses and the composer
+          centres itself in the remainder. */}
       <div
         ref={appearanceSurfaceRef}
         className={cn(
-          "landing-appearance-surface relative isolate grid min-h-0 min-w-0 flex-1 grid-cols-[minmax(0,1fr)] overflow-y-auto max-md:short-landscape:content-start",
+          "landing-appearance-surface relative isolate grid min-h-0 min-w-0 flex-1 grid-cols-[minmax(0,1fr)] overflow-hidden max-md:overflow-y-auto max-md:short-landscape:content-start",
           layout.rows,
         )}
       >
@@ -191,9 +188,8 @@ export function LandingDraftSurface() {
           <HomeHero workspaceFolders={workspaceFolders} />
         </section>
 
-        {/* Composer + recent epics share one row so the composer is top-anchored:
-            adding a folder grows it downward into the (scrollable) epics list
-            below instead of recentering and shoving the hero up. */}
+        {/* Composer and Current tasks share this row, so adding a folder grows
+            the composer downward into the scrollable task list. */}
         <div
           data-composer-placement={layout.placement}
           className={cn(
@@ -285,6 +281,10 @@ function usePendingDraftId(draftId: string | null): string {
  * would reconcile the composer against its slot and remount the editor) and
  * the composer centres itself in the whole remainder. Any other combination
  * keeps the fractional two-row split described at the grid itself.
+ *
+ * Desktop is that split from `md` up, and Current tasks share the composer
+ * row. Below md there is no list, the body scrolls, and the composer's row
+ * keeps its own height so a grown composer is not clipped.
  */
 function startPageLayout(
   showGreeting: boolean,
@@ -297,13 +297,19 @@ function startPageLayout(
 } {
   return showGreeting || showRecentHistory
     ? {
-        rows: "grid-rows-[auto_minmax(min-content,1fr)_minmax(min-content,1fr)] max-md:grid-rows-[auto_minmax(min-content,1fr)_minmax(min-content,1.4fr)] max-md:short-landscape:grid-rows-[auto_0_auto]",
+        rows: cn(
+          "md:grid-rows-[auto_minmax(0,1fr)_minmax(0,1fr)]",
+          "max-md:grid-rows-[auto_minmax(0,1fr)_minmax(min-content,1.4fr)] max-md:short-landscape:grid-rows-[auto_0_auto]",
+        ),
         hero: "",
-        composer: "",
+        composer: "md:min-h-0",
         placement: "top",
       }
     : {
-        rows: "grid-rows-[auto_0_minmax(min-content,1fr)] max-md:short-landscape:grid-rows-[auto_0_auto]",
+        rows: cn(
+          "md:grid-rows-[auto_minmax(0,0fr)_minmax(0,1fr)]",
+          "max-md:grid-rows-[auto_0_minmax(min-content,1fr)] max-md:short-landscape:grid-rows-[auto_0_auto]",
+        ),
         hero: "h-0 overflow-hidden",
         composer: "justify-center",
         placement: "centered",

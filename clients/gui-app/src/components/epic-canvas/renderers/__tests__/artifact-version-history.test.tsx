@@ -98,7 +98,7 @@ const state = vi.hoisted(() => ({
   } satisfies ArtifactVersionsRestoreResponse,
   preflightError: false,
   restoreExecute: null as ArtifactVersionsRestoreResponse | null,
-  permissionRole: "owner" as PermissionRole,
+  permissionRole: "owner" as PermissionRole | null,
 }));
 
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
@@ -669,8 +669,9 @@ describe("<ArtifactVersionHistoryEntryPoint />", () => {
     ).toBeTruthy();
   });
 
-  it("keeps version history browsable but disables restore for viewers", () => {
-    state.permissionRole = "viewer";
+  it("keeps version history browsable but disables restore without a role", () => {
+    // A stored viewer seat is retired and decodes to no role at all.
+    state.permissionRole = null;
     state.historyEntries = [
       observation("observation-viewer", "Viewer snapshot"),
     ];

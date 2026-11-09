@@ -176,8 +176,8 @@ function TeamProviderLinkDialogFor(props: {
 
   return (
     <LinkDialogFrame
-      title="Link a plan"
-      intro={personal ? LINK_INTRO : teamLinkIntro(teamName)}
+      title={personal ? "Link a plan" : `Link a plan to ${teamName}`}
+      intro={personal ? LINK_INTRO : teamLinkIntro()}
       state={shown}
       target={target}
       code={code}

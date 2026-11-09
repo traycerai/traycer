@@ -138,7 +138,15 @@ describe("TeamPlans", () => {
       wrapper: harness.Wrapper,
     });
 
-    expect(await screen.findByText(/Ada.s .* plan/)).toBeTruthy();
+    expect(await screen.findByText("Ada’s Claude Code plan")).toBeTruthy();
+    expect(screen.getByText("Signed in")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Shared Claude Code quota. Sandbox charges use Acme credits.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Details" })).toBeNull();
+    expect(screen.queryByText(/unlinks if they leave/)).toBeNull();
     expect(harness.paramsOf("environment.plans.list")).toEqual([
       { environmentId: "env-a" },
     ]);

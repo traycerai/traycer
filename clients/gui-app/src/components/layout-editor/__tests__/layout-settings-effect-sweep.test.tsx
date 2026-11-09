@@ -43,6 +43,7 @@ import {
   getLayoutSnapshot,
   useLayoutStore,
 } from "@/stores/layout/layout-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 
 /**
  * EVERY LAYOUT SETTING CHANGES THE APP COLUMN, in jsdom.
@@ -86,6 +87,7 @@ const AVAILABILITY: SettingsAvailabilityContext = {
   // drawn, so the rows only it draws (the small-screen footer) have no control.
   phoneLayout: false,
   soundtrackOffered: false,
+  soundtrackRecordingOffered: false,
   soundtrackOn: false,
 };
 
@@ -311,6 +313,7 @@ async function sweepWindow(windowKind: SweepWindow): Promise<WindowRun> {
 }
 
 let releaseClocks: (() => void) | null = null;
+let priorVoiceInputEnabled: boolean | null = null;
 const runs = new Map<SweepWindow, WindowRun>();
 
 function runOf(windowKind: SweepWindow): WindowRun {
@@ -321,6 +324,8 @@ function runOf(windowKind: SweepWindow): WindowRun {
 
 beforeAll(async () => {
   releaseClocks = holdClocksStill();
+  priorVoiceInputEnabled = useSettingsStore.getState().voiceInputEnabled;
+  useSettingsStore.getState().setVoiceInputEnabled(true);
   for (const windowKind of WINDOWS) {
     runs.set(windowKind, await sweepWindow(windowKind));
   }
@@ -328,6 +333,9 @@ beforeAll(async () => {
 
 afterAll(() => {
   releaseClocks?.();
+  if (priorVoiceInputEnabled !== null) {
+    useSettingsStore.getState().setVoiceInputEnabled(priorVoiceInputEnabled);
+  }
 });
 
 /** One entry across both windows: what it changed anywhere. */

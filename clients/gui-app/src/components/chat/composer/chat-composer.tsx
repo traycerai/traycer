@@ -34,9 +34,21 @@ import type {
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 
 import {
-  isAttachmentIngestPending,
+  composerAttachmentsHoldSend,
+  useComposerFileRoute,
   useComposerHashPaste,
 } from "@/hooks/composer/use-composer-paste";
+import {
+  containsFileAttachments,
+  containsPendingFileAttachment,
+  settleFileNodeInContent,
+} from "@/lib/composer/file-attachments";
+import type { FileNodeSettle } from "@/lib/composer/file-attachment-upload";
+import {
+  readComposerDraftSnapshot,
+  useComposerDraftStore,
+} from "@/stores/composer/composer-draft-store";
+import { useDraftsPutFileBlob } from "@/hooks/drafts/use-drafts-put-file-blob-mutation";
 import { useComposerPendingImageIngest } from "@/hooks/composer/use-composer-pending-image-ingest";
 import { useComposerDictation } from "@/hooks/composer/use-composer-dictation";
 import { useWorkspaceMentionRoots } from "@/hooks/composer/use-workspace-mention-roots";
@@ -186,6 +198,11 @@ interface ChatComposerProps {
    */
   readonly sendDisabledHint: string | null | undefined;
   readonly mentionRoots: ReadonlyArray<string> | null;
+  /**
+   * The folder this chat's next run starts its CLI in, or `null` when it cannot
+   * be known before the send (see `runDirectoryFromWorktreeBindingAndIntent`).
+   */
+  readonly runWorkingDirectory: string | null;
   readonly fallbackToGlobalMentionRoots: boolean;
   readonly currentEpicId: string | null;
   /**
@@ -481,6 +498,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     sendDisabled,
     sendDisabledHint,
     mentionRoots,
+    runWorkingDirectory,
     fallbackToGlobalMentionRoots,
     currentEpicId,
     viewTabId,
@@ -523,6 +541,27 @@ function ChatComposerImpl(props: ChatComposerProps) {
   // providers, packs, profiles and limits say nothing about that send.
   const resting = restingSandbox !== null;
   const runHostClient = resting ? null : hostClient;
+  const putFileBlob = useDraftsPutFileBlob();
+  const settleDraftFile = useCallback<FileNodeSettle>(
+    (id, settlement) => {
+      const draft = readComposerDraftSnapshot(taskId);
+      const next = settleFileNodeInContent(draft.content, id, settlement);
+      if (next === null) return;
+      useComposerDraftStore
+        .getState()
+        .setSnapshot(taskId, next, draft.selection);
+    },
+    [taskId],
+  );
+  // Files go to the tab's host, the host that holds this draft, as its images
+  // do - a resting sandbox's chat included. A send on another host pulls them
+  // by hash from the cloud copy that host publishes.
+  const fileRoute = useComposerFileRoute({
+    hostId: tabHostId,
+    client: hostClient,
+    putFileBlob,
+    settleDraft: settleDraftFile,
+  });
   const guideRef = useRef<HTMLDivElement | null>(null);
   const submitWithGuide = useFirstTaskSubmit(
     onSubmitMessage,
@@ -616,6 +655,14 @@ function ChatComposerImpl(props: ChatComposerProps) {
     chatTitle,
     epicTitle,
   });
+  const draftHasFiles = useMemo(
+    () => containsFileAttachments(draftContent),
+    [draftContent],
+  );
+  const draftHasPendingFile = useMemo(
+    () => containsPendingFileAttachment(draftContent),
+    [draftContent],
+  );
 
   const { dictationControl, dictationPreparing } = useComposerDictation({
     editorRef,
@@ -753,7 +800,9 @@ function ChatComposerImpl(props: ChatComposerProps) {
     harnessId,
     profileId,
     selectedModel,
+    workingDirectory: runWorkingDirectory,
     active: focused,
+    hostId: tabHostId,
     client: runHostClient,
   });
   // ONE value for both readers: the chain's `rateLimitVisible` below and the
@@ -836,14 +885,17 @@ function ChatComposerImpl(props: ChatComposerProps) {
     onDragEnter,
     onDragLeave,
     attachImageFiles,
+    attachFiles,
     dragOverlayVariant,
     isIngestingImages,
     isResolvingFilePaths,
+    isAttachingFiles,
     runPendingImageJob,
   } = useComposerHashPaste(
     editorRef,
     runnerHost.fileDrops,
     resolvedMentionRoots,
+    fileRoute,
   );
   // The rich-clipboard channel and the mount-time restart. A file paste is
   // already hashed before insertion; these two cover the HTML paste (whose
@@ -868,10 +920,10 @@ function ChatComposerImpl(props: ChatComposerProps) {
     editorReadyTick,
     reingestPendingImages,
   });
-  const pastePending = isAttachmentIngestPending({
-    isIngestingImages,
-    isResolvingFilePaths,
-  });
+  const pastePending = composerAttachmentsHoldSend(
+    { isIngestingImages, isResolvingFilePaths, isAttachingFiles },
+    draftHasPendingFile,
+  );
 
   const authority = useChatComposerDraftAuthority({
     chatId: taskId,
@@ -1001,6 +1053,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     attachmentPreparationPending: attachmentPending,
     draftHasText,
     draftHasImages,
+    draftHasFiles,
   });
   // Sending drops the phone sheet back to the compact card: an empty
   // full-screen editor over a reply that just started is the wrong thing to
@@ -1163,6 +1216,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
                     <ChatComposerToolbarSlot
                       store={toolbarStore}
                       onAttachImages={attachImageFiles}
+                      onAttachFiles={attachFiles}
                       canSubmit={canSubmit}
                       attachmentPending={attachmentPending}
                       onSubmit={handleSubmitFromButton}
@@ -1290,6 +1344,7 @@ interface CanSubmitDraftArgs {
   readonly attachmentPreparationPending: boolean;
   readonly draftHasText: boolean;
   readonly draftHasImages: boolean;
+  readonly draftHasFiles: boolean;
 }
 
 /**
@@ -1377,7 +1432,7 @@ function canSubmitDraft(args: CanSubmitDraftArgs): boolean {
     !args.workspaceBlocked &&
     !args.imagesUnsupported &&
     !args.attachmentPreparationPending &&
-    (args.draftHasText || args.draftHasImages)
+    (args.draftHasText || args.draftHasImages || args.draftHasFiles)
   );
 }
 

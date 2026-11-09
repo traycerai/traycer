@@ -613,9 +613,9 @@ describe("<CurrentTasksSection />", () => {
       expect(testState.openItem).not.toHaveBeenCalled();
     });
 
-    it("lets a viewer read a task's labels but not edit them", () => {
+    it("lets a row with no granted role read a task's labels but not edit them", () => {
       setGroups({
-        open: [task("a", { permissionRole: "viewer", ownership: "shared" })],
+        open: [task("a", { permissionRole: null, ownership: "shared" })],
       });
       renderSectionWithOrganization(organizationView({}));
 
@@ -1422,7 +1422,55 @@ describe("<CurrentTasksSection />", () => {
       expect(
         screen.queryByRole("button", { name: /Show \d+ more/ }),
       ).toBeNull();
+      expect(screen.queryByRole("button", { name: "Show less" })).toBeNull();
       expect(within(group("Open")).getAllByRole("listitem")).toHaveLength(5);
+    });
+
+    it("offers no 'Show less' for a group of fewer than five", () => {
+      setGroups({ pinned: tasks("p", 3) });
+      renderSection();
+
+      expect(screen.queryByRole("button", { name: "Show less" })).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: /Show \d+ more/ }),
+      ).toBeNull();
+      expect(within(group("Pinned")).getAllByRole("listitem")).toHaveLength(3);
+    });
+
+    it("expands a group once and removes the control", () => {
+      setGroups({ open: tasks("o", 6), inProgress: tasks("i", 7) });
+      renderSection();
+
+      expect(within(group("Open")).getAllByRole("listitem")).toHaveLength(5);
+      expect(screen.queryByRole("button", { name: "Show less" })).toBeNull();
+      expect(screen.queryByRole("button", { expanded: true })).toBeNull();
+
+      fireEvent.click(screen.getByRole("button", { name: "Show 1 more" }));
+
+      expect(within(group("Open")).getAllByRole("listitem")).toHaveLength(6);
+      expect(screen.queryByRole("button", { name: "Show 1 more" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Show less" })).toBeNull();
+      expect(screen.queryByRole("button", { expanded: true })).toBeNull();
+      expect(screen.queryByRole("button", { expanded: false })).toBeNull();
+      expect(
+        within(group("In progress")).getAllByRole("listitem"),
+      ).toHaveLength(5);
+      expect(
+        screen.getByRole("button", { name: "Show 2 more" }),
+      ).not.toBeNull();
+    });
+
+    it("keeps the list scroller inside the section", () => {
+      setGroups({ open: tasks("o", 7) });
+      renderSection();
+
+      const section = screen.getByTestId("current-tasks-section");
+      const list = within(group("Open")).getByRole("list");
+      const scroller = list.parentElement?.parentElement ?? null;
+      if (scroller === null) {
+        throw new Error("the list has no scroller");
+      }
+      expect(section.contains(scroller)).toBe(true);
     });
   });
 

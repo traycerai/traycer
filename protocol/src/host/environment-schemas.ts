@@ -51,6 +51,7 @@ export const ENVIRONMENT_ITEM_KINDS = [
   "member",
   "secret",
   "sandbox_defaults",
+  "storage_policy",
 ] as const;
 export const environmentItemKindSchema = lazySchema(() =>
   z.string().min(1).max(64),
@@ -203,6 +204,51 @@ export type EnvironmentPendingUpload = z.infer<
   typeof environmentPendingUploadSchema
 >;
 
+/**
+ * One queued edit the configuration took, which the caller that made it
+ * recognises by `uploadId` - the operation id its write carried.
+ *
+ * The acknowledgement a queued write has no other way to get. A live write
+ * learns the revision it was saved as from its own answer; a queued one is
+ * sent later by the host's drain, so without this nothing could say WHICH
+ * revision to wait for, and a caller watching the value alone would accept an
+ * older revision's answer.
+ *
+ * Deliberately NOT a row in `pendingUploads`: that list is outstanding WORK,
+ * counted as such by its readers and used by the host to route a later write,
+ * and an acknowledgement is neither.
+ *
+ * **Finding one is evidence; finding none is not evidence of anything.** This
+ * is a bounded, recent, best-effort witness rather than a history: a restart,
+ * a later write of the same item, or the size bound can drop a receipt before
+ * a caller sees it. A caller that finds no receipt keeps waiting until its
+ * observation bound, without inferring success or refusal. Once seen, the
+ * caller keeps the revision itself, because the receipt can go afterwards.
+ *
+ * `revision` is the revision authn answered the write with, and it is a FLOOR
+ * on the configuration's revision rather than necessarily this operation's
+ * own: a replayed write is answered with the address's latest revision, which
+ * may be a later writer's. So a caller concludes "the projection has reached
+ * at least this" and checks the value and the environment too. `null` where
+ * the answer named no revision this host could read - unconfirmable, which is
+ * not the same as zero.
+ */
+export const environmentUploadReceiptSchema = lazySchema(() =>
+  z.object({
+    uploadId: z.string().min(1),
+    kind: environmentItemKindSchema,
+    key: z.string().min(1),
+    os: environmentOsSchema,
+    /** Scoped: a receipt never answers for a configuration it was not saved in. */
+    environmentId: z.string().min(1),
+    revision: z.number().int().nonnegative().nullable(),
+    acceptedAt: z.number(),
+  }),
+);
+export type EnvironmentUploadReceipt = z.infer<
+  typeof environmentUploadReceiptSchema
+>;
+
 export const environmentStatusRequestSchema = emptyRequestSchema;
 export type EnvironmentStatusRequest = z.infer<
   typeof environmentStatusRequestSchema
@@ -288,6 +334,17 @@ export const environmentStatusResponseSchemaV11 = lazySchema(() =>
 );
 export type EnvironmentStatusResponseV11 = z.infer<
   typeof environmentStatusResponseSchemaV11
+>;
+
+/** Upload receipts require @1.2; the published @1.1 response stays frozen. */
+export const environmentStatusResponseSchemaV12 = lazySchema(() =>
+  environmentStatusResponseSchemaV11.extend({
+    /** One receipt is evidence of acceptance; its absence is not evidence of rejection. */
+    acceptedUploads: z.array(environmentUploadReceiptSchema).default([]),
+  }),
+);
+export type EnvironmentStatusResponseV12 = z.infer<
+  typeof environmentStatusResponseSchemaV12
 >;
 
 // ── environment.notices / .undo / .review ───────────────────────────────────

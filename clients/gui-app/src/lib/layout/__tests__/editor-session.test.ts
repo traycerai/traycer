@@ -22,6 +22,7 @@ import { emptyTabStripLayout, tabItemId } from "@/stores/tabs/layout";
 import { setSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import type { SystemModalActive } from "@/stores/tabs/system-overlay-types";
 import { useCommandPaletteStore } from "@/stores/command-palette/command-palette-store";
+import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
 import type { SurfaceGroupId } from "@/components/layout-editor/regions/region-grammar";
 import {
   useLayoutEditorStore,
@@ -203,6 +204,7 @@ beforeEach(() => {
   navigateToTabIntent.mockReset();
   publishModalApi(null);
   useCommandPaletteStore.setState({ open: false });
+  useNotificationsPopoverStore.setState({ open: false });
   setViewportWidth(1440);
   useLayoutStore.setState({
     ...DEFAULT_LAYOUT_SNAPSHOT,
@@ -444,6 +446,43 @@ describe("the command palette the door was reached from (L-134)", () => {
     expect(open(null)).toBe(false);
 
     expect(useCommandPaletteStore.getState().open).toBe(true);
+  });
+});
+
+describe("the notification center the door opens under", () => {
+  it("closes an open center once the lease is acquired", () => {
+    useNotificationsPopoverStore.getState().setOpen(true);
+
+    expect(open(null)).toBe(true);
+
+    expect(useNotificationsPopoverStore.getState().open).toBe(false);
+  });
+
+  it("leaves the width-gate redirect without closing the center", () => {
+    // Below the gate the door returns before the lease, and the center is
+    // not a layer that redirect has to put down.
+    useNotificationsPopoverStore.getState().setOpen(true);
+    setViewportWidth(700);
+
+    expect(open(null)).toBe(false);
+
+    expect(useNotificationsPopoverStore.getState().open).toBe(true);
+  });
+
+  it("leaves a refused lease without closing the center", () => {
+    window.localStorage.setItem(
+      LAYOUT_EDITOR_LEASE_KEY,
+      JSON.stringify({
+        token: "another-window",
+        expiresAt: Date.now() + 5000,
+      }),
+    );
+    useNotificationsPopoverStore.getState().setOpen(true);
+
+    expect(open(null)).toBe(false);
+
+    expect(useNotificationsPopoverStore.getState().open).toBe(true);
+    expect(useLayoutEditorStore.getState().session).toBeNull();
   });
 });
 

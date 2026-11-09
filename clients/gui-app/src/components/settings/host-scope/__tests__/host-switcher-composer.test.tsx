@@ -9,6 +9,7 @@ import {
 } from "@testing-library/react";
 import { HostSwitcher } from "@/components/settings/host-scope/host-switcher";
 import type { HostSwitcherComposerMode } from "@/components/settings/host-scope/host-switcher";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import type { HostPickIntent } from "@/components/settings/host-scope/host-option-model";
 import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
@@ -167,6 +168,48 @@ function row(hostId: string): HTMLElement {
   return screen.getByTestId(`settings-host-switcher-option-${hostId}`);
 }
 
+/**
+ * jsdom paints no layout. Report one label as cut off so the trigger's
+ * tooltip opens, and put the prototype back for the tests that follow.
+ */
+function stubStagedLabelOverflow(label: string): () => void {
+  const originalScrollWidth = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "scrollWidth",
+  );
+  const originalClientWidth = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "clientWidth",
+  );
+  Object.defineProperty(HTMLElement.prototype, "scrollWidth", {
+    configurable: true,
+    get(this: HTMLElement) {
+      return this.textContent === label ? 240 : 0;
+    },
+  });
+  Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+    configurable: true,
+    get(this: HTMLElement) {
+      return this.textContent === label ? 100 : 0;
+    },
+  });
+  return () => {
+    restoreMeasuredProperty("scrollWidth", originalScrollWidth);
+    restoreMeasuredProperty("clientWidth", originalClientWidth);
+  };
+}
+
+function restoreMeasuredProperty(
+  name: "scrollWidth" | "clientWidth",
+  descriptor: PropertyDescriptor | undefined,
+): void {
+  if (descriptor === undefined) {
+    Reflect.deleteProperty(HTMLElement.prototype, name);
+    return;
+  }
+  Object.defineProperty(HTMLElement.prototype, name, descriptor);
+}
+
 describe("<HostSwitcher /> composer mode picks", () => {
   it.each(["pin", "bind"] as const)(
     "stages a suspended sandbox on a %s pick: the composer hears it, then the surface, and nothing wakes",
@@ -299,7 +342,7 @@ describe("<HostSwitcher /> composer mode groups", () => {
     ).toBeNull();
   });
 
-  it("keeps a host's supplemental lines collapsed outside its option", () => {
+  it("shows a host's local line under its name before any disclosure", () => {
     renderSwitcher({
       hosts: [LAPTOP],
       composer: composerMode({
@@ -310,10 +353,13 @@ describe("<HostSwitcher /> composer mode groups", () => {
     });
 
     const option = row("laptop");
-    const details = option.parentElement?.querySelector("details");
-    expect(details?.open).toBe(false);
-    expect(details?.textContent).toContain("Local · runs its own settings");
-    expect(option.textContent).not.toContain("Local · runs its own settings");
+    expect(
+      within(option).getByText("Local · runs its own settings"),
+    ).toBeDefined();
+    expect(option.querySelector("details")).toBeNull();
+    expect(onPickHost).not.toHaveBeenCalled();
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(wakeSandboxOnPick).not.toHaveBeenCalled();
   });
 
   it("heads the New group with the defining line and lists a row per configuration", () => {
@@ -478,6 +524,68 @@ describe("<HostSwitcher /> composer mode New rows", () => {
     expect(onPickNew).not.toHaveBeenCalled();
     expect(onSelect).not.toHaveBeenCalled();
     expect(wakeSandboxOnPick).not.toHaveBeenCalled();
+  });
+
+  // Inline and field share this row. Whether the gear stays inside a
+  // narrow container, and whether the label actually truncates, is layout:
+  // browser-tests/host-switcher-staged-gear.spec.ts.
+  it("keeps the staged shape gear beside the named trigger", async () => {
+    const stagedLabel = "New Personal sandbox";
+    const restore = stubStagedLabelOverflow(stagedLabel);
+    try {
+      render(
+        <TooltipProvider delayDuration={0}>
+          <HostSwitcher
+            refusalByHostId={NO_HOST_OPTION_REFUSALS}
+            inertExceptHostId={null}
+            hosts={[LAPTOP]}
+            selected={LAPTOP}
+            activeHostId={LAPTOP.hostId}
+            onSelect={onSelect}
+            action={null}
+            surface="inline"
+            intent="pin"
+            consequence={null}
+            disabled={false}
+            isLoading={false}
+            listsFailed={false}
+            onRetryLists={() => undefined}
+            updateViewForHost={null}
+            environmentLabelForHost={null}
+            composer={composerMode({
+              stagedConfigurationKey: "personal",
+              stagedLabel,
+            })}
+          />
+        </TooltipProvider>,
+      );
+
+      const trigger = screen.getByRole("button", {
+        name: `Host: ${stagedLabel}`,
+      });
+      const gear = screen.getByTestId("host-switcher-staged-gear");
+      const triggerWrapper = trigger.parentElement;
+      const row = triggerWrapper?.parentElement ?? null;
+      expect(row).not.toBeNull();
+      expect(row).toBe(gear.parentElement);
+      expect(triggerWrapper?.nextElementSibling).toBe(gear);
+      expect(trigger.getAttribute("aria-label")).toBe(`Host: ${stagedLabel}`);
+      expect(gear.getAttribute("aria-label")).toBe(
+        "Change the staged sandbox's shape",
+      );
+
+      fireEvent.focus(trigger);
+      expect((await screen.findByRole("tooltip")).textContent).toBe(
+        stagedLabel,
+      );
+
+      fireEvent.click(gear);
+      expect(onOpenShape).toHaveBeenCalledWith("personal");
+      expect(onPickNew).not.toHaveBeenCalled();
+      expect(onSelect).not.toHaveBeenCalled();
+    } finally {
+      restore();
+    }
   });
 
   it("marks the staged row picked", () => {
@@ -738,7 +846,7 @@ describe("<HostSwitcher /> composer mode computers", () => {
     });
   }
 
-  it("uses the local machine's name on the chip and row, with platform and status in Details", () => {
+  it("uses the local machine's name on the chip and row, with platform and status under the name", () => {
     renderPicker({
       hosts: [WINDOWS_LOCAL],
       selected: WINDOWS_LOCAL,
@@ -751,18 +859,8 @@ describe("<HostSwitcher /> composer mode computers", () => {
     expect(chip.textContent).toBe("windows-test-machine");
     const local = row("local-win");
     expect(within(local).getByText("windows-test-machine")).toBeDefined();
-    const details = local.parentElement?.querySelector("details");
-    if (details === null || details === undefined) {
-      throw new Error("local computer Details are missing");
-    }
-    expect(details.open).toBe(false);
-    expect(details.closest("[cmdk-item]")).toBeNull();
-    expect(details.textContent).toContain("Windows · Active");
-    expect(local.textContent).not.toContain("Windows · Active");
-
-    fireEvent.click(within(details).getByText("Details"));
-
-    expect(details.open).toBe(true);
+    expect(within(local).getByText("Windows · Active")).toBeDefined();
+    expect(local.querySelector("details")).toBeNull();
     expect(onPickHost).not.toHaveBeenCalled();
     expect(onSelect).not.toHaveBeenCalled();
     expect(wakeSandboxOnPick).not.toHaveBeenCalled();
@@ -787,7 +885,7 @@ describe("<HostSwitcher /> composer mode computers", () => {
     ).toBeDefined();
   });
 
-  it("keeps another computer's OS and Active in Details, drawn as a monitor", () => {
+  it("keeps another computer's OS and Active under its name, drawn as a monitor", () => {
     const linux = remoteComputer({
       hostId: "remote-linux",
       name: "build-box",
@@ -801,9 +899,8 @@ describe("<HostSwitcher /> composer mode computers", () => {
 
     const box = row("remote-linux");
     expect(within(box).getByText("build-box")).toBeDefined();
-    expect(box.parentElement?.querySelector("details")?.textContent).toContain(
-      "Linux · Active",
-    );
+    expect(within(box).getByText("Linux · Active")).toBeDefined();
+    expect(box.querySelector("details")).toBeNull();
     expect(box.querySelector("svg.lucide-monitor")).not.toBeNull();
     expect(box.querySelector("svg.lucide-cloud")).toBeNull();
   });
@@ -848,21 +945,27 @@ describe("<HostSwitcher /> composer mode computers", () => {
 
     const mac = row("remote-mac");
     expect(mac.textContent).toMatch(/offline/i);
-    expect(mac.parentElement?.querySelector("details")?.textContent).toContain(
-      "macOS · Offline since Tue 09:12 · picking it waits for it",
-    );
+    expect(
+      within(mac).getByText(
+        "macOS · Offline since Tue 09:12 · picking it waits for it",
+      ),
+    ).toBeDefined();
+    expect(mac.querySelector("details")).toBeNull();
   });
 
-  it("keeps frozen sandbox facts readable and expandable without picking or waking the row", () => {
+  it("shows an unavailable sandbox's resources, rate and refusal under the name without picking or waking", () => {
     const frozen = sandboxHost("sbx-frozen", "awake", { frozen: true });
+    const resources =
+      "Linux · 2 vCPU · 4 GB · $0.21 an hour while awake · paid by Acme";
+    const compatibility = "Acme pays · Linux compatibility facts";
+    const refusal =
+      "Agents here cannot work with the agents on your hosts; the task still shares its files and chats.";
     renderSwitcher({
       hosts: [LAPTOP, frozen],
       composer: composerMode({
         inThisTask: [frozen],
         subLinesFor: (hostId) =>
-          hostId === frozen.hostId
-            ? ["Acme pays · Linux compatibility facts"]
-            : [],
+          hostId === frozen.hostId ? [resources, compatibility, refusal] : [],
         tagFor: (hostId) => (hostId === frozen.hostId ? "Acme Robotics" : null),
       }),
       intent: "pin",
@@ -870,29 +973,25 @@ describe("<HostSwitcher /> composer mode computers", () => {
 
     const option = row("sbx-frozen");
     expect(option.getAttribute("aria-disabled")).toBe("true");
-    const details = option.parentElement?.querySelector("details");
-    if (details === null || details === undefined) {
-      throw new Error("frozen sandbox Details are missing");
-    }
-    expect(details.open).toBe(false);
-    fireEvent.click(within(details).getByText("Details"));
-
-    expect(details.open).toBe(true);
+    expect(within(option).getByText(resources)).toBeDefined();
+    expect(within(option).getByText(compatibility)).toBeDefined();
+    expect(within(option).getByText(refusal)).toBeDefined();
+    expect(option.querySelector("details")).toBeNull();
     expect(
       within(option).getByTestId("host-option-environment-sbx-frozen")
         .textContent,
     ).toBe("Acme Robotics");
-    expect(details.textContent).toContain(
-      "Acme pays · Linux compatibility facts",
-    );
+
+    fireEvent.click(within(option).getByText(resources));
+
     expect(onPickHost).not.toHaveBeenCalled();
     expect(onSelect).not.toHaveBeenCalled();
     expect(wakeSandboxOnPick).not.toHaveBeenCalled();
   });
 });
 
-describe("<HostSwitcher /> composer Details follow search results", () => {
-  it("hides a computer's supplemental Details when search removes its option", () => {
+describe("<HostSwitcher /> composer facts follow search results", () => {
+  it("hides a computer's supplemental facts when search removes its option", () => {
     const computer = hostScopeOptionFixture({
       hostId: "detail-computer",
       name: "Detail computer",
@@ -912,9 +1011,9 @@ describe("<HostSwitcher /> composer Details follow search results", () => {
       intent: "pin",
     });
 
-    const detailElement =
-      row("detail-computer").parentElement?.querySelector("details");
-    expect(detailElement).not.toBeNull();
+    expect(
+      within(row("detail-computer")).getByText("Windows · Active"),
+    ).toBeDefined();
     fireEvent.change(screen.getByPlaceholderText("Search hosts"), {
       target: { value: "no matching host" },
     });
@@ -922,15 +1021,11 @@ describe("<HostSwitcher /> composer Details follow search results", () => {
     expect(
       screen.queryByTestId("settings-host-switcher-option-detail-computer"),
     ).toBeNull();
-    expect(
-      detailElement?.parentElement?.classList.contains(
-        "not-has-[[cmdk-item]]:hidden",
-      ),
-    ).toBe(true);
+    expect(screen.queryByText("Windows · Active")).toBeNull();
   });
 });
 
-describe("<HostSwitcher /> composer mode row titles wrap", () => {
+describe("<HostSwitcher /> composer mode host names truncate", () => {
   const LOCAL = hostScopeOptionFixture({
     hostId: "local-win",
     name: "windows-test-machine",
@@ -942,12 +1037,12 @@ describe("<HostSwitcher /> composer mode row titles wrap", () => {
   const LONG_NAMED = sandboxHost("sbx-long", "awake", {});
   const NAMED = { ...LONG_NAMED, name: ROW_TITLE };
 
-  // jsdom paints no layout, so this checks the classes the title carries for
-  // wrapping and for the absence of truncation.
-  function expectWraps(title: HTMLElement): void {
-    expect(title.classList.contains("truncate")).toBe(false);
-    expect(title.classList.contains("whitespace-normal")).toBe(true);
-    expect(title.classList.contains("wrap-anywhere")).toBe(true);
+  // jsdom paints no layout, so assert the merged utility classes that express
+  // the compact row behavior instead of trying to measure rendered geometry.
+  function expectTruncates(name: HTMLElement): void {
+    expect(name.classList.contains("truncate")).toBe(true);
+    expect(name.classList.contains("whitespace-normal")).toBe(false);
+    expect(name.classList.contains("wrap-anywhere")).toBe(false);
   }
 
   it("wraps the New row's label in full", () => {
@@ -975,31 +1070,33 @@ describe("<HostSwitcher /> composer mode row titles wrap", () => {
     expect(title.classList.contains("wrap-break-word")).toBe(true);
   });
 
-  it("wraps the computer row's title", () => {
+  it("truncates the computer row's name without losing its text", () => {
     renderSwitcher({
       hosts: [LOCAL],
       composer: composerMode({}),
       intent: "pin",
     });
 
-    expectWraps(within(row("local-win")).getByText("windows-test-machine"));
+    const name = within(row("local-win")).getByText("windows-test-machine");
+    expectTruncates(name);
+    expect(name.textContent).toBe("windows-test-machine");
   });
 
-  it("wraps a sandbox row's name", () => {
+  it("truncates a sandbox row's name", () => {
     renderSwitcher({
       hosts: [LAPTOP, NAMED],
       composer: composerMode({ inThisTask: [NAMED] }),
       intent: "pin",
     });
 
-    expectWraps(within(row("sbx-long")).getByText(ROW_TITLE));
+    expectTruncates(within(row("sbx-long")).getByText(ROW_TITLE));
   });
 
-  it("wraps a sandbox's name in a list that is not the composer's", () => {
+  it("truncates a sandbox name in a list that is not the composer's", () => {
     renderSwitcher({ hosts: [LAPTOP, NAMED], composer: null, intent: "pin" });
 
     const title = within(row("sbx-long")).getByText(ROW_TITLE);
-    expectWraps(title);
+    expectTruncates(title);
   });
 });
 

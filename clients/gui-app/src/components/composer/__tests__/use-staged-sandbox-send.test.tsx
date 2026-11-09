@@ -31,6 +31,7 @@ import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import {
   SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT,
   type SandboxCatalogue,
+  type SandboxCatalogueReadinessRequest,
   type SandboxCreateRequest,
   type SandboxSummary,
   type SandboxVerbGesture,
@@ -43,7 +44,10 @@ import type {
   SandboxCreateFetchResult,
   SandboxListFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
-import type { SandboxWakeOutcome } from "@traycer-clients/shared/host-client/sandbox-control";
+import type {
+  SandboxCatalogueFetchResult,
+  SandboxWakeOutcome,
+} from "@traycer-clients/shared/host-client/sandbox-control";
 import type { TerminalLaunchTarget } from "@/components/epic-canvas/sidebar/new-terminal-tile-ref";
 import {
   openLandingStagedTerminal,
@@ -101,6 +105,13 @@ const mocks = vi.hoisted(() => ({
   createSandbox:
     vi.fn<
       (request: SandboxCreateRequest) => Promise<SandboxCreateFetchResult>
+    >(),
+  /** The control plane's catalogue, read by the run's preflight and the setup line's readiness. */
+  getSandboxCatalogue:
+    vi.fn<
+      (
+        context: SandboxCatalogueReadinessRequest | null,
+      ) => Promise<SandboxCatalogueFetchResult>
     >(),
   /** The control plane's sandbox list, read while a create settles. */
   listSandboxes: vi.fn<() => Promise<SandboxListFetchResult>>(),
@@ -186,6 +197,7 @@ vi.mock("@/lib/host", () => ({
     auth: {
       createSandbox: mocks.createSandbox,
       listSandboxes: mocks.listSandboxes,
+      getSandboxCatalogue: mocks.getSandboxCatalogue,
     },
     directory: { refresh: () => Promise.resolve(), findById: mocks.findById },
   }),
@@ -193,9 +205,17 @@ vi.mock("@/lib/host", () => ({
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   useAuthUser: () => ({ data: mocks.user }),
 }));
-vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
-  useSandboxCatalogue: () => ({ data: mocks.catalogue }),
-}));
+// The real query options stay, so the run's preflight and the setup line's
+// readiness read the catalogue through the fake control plane above.
+vi.mock(
+  "@/hooks/sandboxes/use-sandbox-catalogue-query",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/sandboxes/use-sandbox-catalogue-query")
+    >()),
+    useSandboxCatalogue: () => ({ data: mocks.catalogue }),
+  }),
+);
 // The list the setup line prices a resting sandbox from: the real query unless
 // a case names the rows, so the cases that run a create keep the reads it makes.
 vi.mock("@/hooks/sandboxes/use-sandbox-list-query", async (importOriginal) => {
@@ -362,12 +382,6 @@ function mount(
   );
 }
 
-function openSettingsMoreMenu(): void {
-  fireEvent.pointerDown(screen.getByRole("button", { name: "More" }), {
-    button: 0,
-  });
-}
-
 function unsupportedEnvironmentStatus(): HostRpcError {
   return new HostRpcError({
     code: "E_HOST_UNSUPPORTED",
@@ -401,6 +415,12 @@ beforeEach(() => {
   mocks.runStagedSandbox.mockImplementation(() => Promise.resolve());
   mocks.createSandbox.mockReset();
   mocks.listSandboxes.mockReset();
+  // The control plane serves this file's ladder whenever a case names no
+  // catalogue of its own, so the run's preflight reads a catalogue and goes on.
+  mocks.getSandboxCatalogue.mockReset();
+  mocks.getSandboxCatalogue.mockImplementation(() =>
+    Promise.resolve({ kind: "ok", catalogue: mocks.catalogue ?? LADDER }),
+  );
   mocks.findById.mockReset();
   mocks.repairMutate.mockClear();
   mocks.repairHostIds.length = 0;
@@ -532,7 +552,6 @@ describe("useStagedSandboxSend's setup line", () => {
     mount(vi.fn());
 
     expect(screen.queryByTestId("sandbox-setup-retry-applying")).toBeNull();
-    openSettingsMoreMenu();
     expect(screen.getByTestId("sandbox-setup-stop")).toBeTruthy();
   });
 
@@ -555,7 +574,6 @@ describe("useStagedSandboxSend's setup line", () => {
       mountLegacy(false);
 
       expect(screen.queryByTestId("sandbox-setup-retry-applying")).toBeNull();
-      openSettingsMoreMenu();
       fireEvent.click(screen.getByTestId("sandbox-setup-repair-setup"));
 
       expect(mocks.legacyHostIds).toContain(NEW_HOST);
@@ -572,7 +590,6 @@ describe("useStagedSandboxSend's setup line", () => {
       (_name, guestConfigured) => {
         mountLegacy(guestConfigured);
 
-        openSettingsMoreMenu();
         expect(screen.queryByTestId("sandbox-setup-repair-setup")).toBeNull();
         expect(screen.queryByTestId("sandbox-setup-retry-applying")).toBeNull();
       },
@@ -585,7 +602,6 @@ describe("useStagedSandboxSend's setup line", () => {
       stageCreated("applying", { kind: "settings", code: "SBX-0520" });
       mount(vi.fn());
 
-      openSettingsMoreMenu();
       expect(screen.queryByTestId("sandbox-setup-repair-setup")).toBeNull();
     });
 
@@ -599,7 +615,6 @@ describe("useStagedSandboxSend's setup line", () => {
       mount(vi.fn());
 
       expect(screen.getByTestId("sandbox-setup-retry-applying")).toBeTruthy();
-      openSettingsMoreMenu();
       expect(screen.queryByTestId("sandbox-setup-repair-setup")).toBeNull();
     });
   });

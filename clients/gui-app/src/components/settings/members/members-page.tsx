@@ -171,8 +171,12 @@ export function MembersPage(props: MembersPageProps): ReactNode {
   const viewerFromList = members.find(
     (member) => member.userId === currentUserId,
   );
+  // The listed seat is authoritative, including `null` for no seat authority.
+  // Fall back to the descriptor only when the members read has no own row.
   const viewerRole =
-    viewerFromList?.effectiveRole ?? team.viewerRole ?? "viewer";
+    viewerFromList === undefined
+      ? team.viewerRole
+      : viewerFromList.effectiveRole;
   const teamName = team.teamName ?? teamLabel ?? FALLBACK_TEAM_NAME;
 
   const onNoticeSeen = useCallback((): void => {

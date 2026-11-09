@@ -23,6 +23,7 @@ function shellTrigger(
     outputFile: null,
     mcp: null,
     managedCommand: { commandId, monitoring: false, hostId: "host-1" },
+    conversationMessage: null,
     ...overrides,
   };
 }
@@ -41,6 +42,7 @@ function monitorTrigger(
     outputFile: null,
     mcp: null,
     managedCommand: null,
+    conversationMessage: null,
     ...overrides,
   };
 }

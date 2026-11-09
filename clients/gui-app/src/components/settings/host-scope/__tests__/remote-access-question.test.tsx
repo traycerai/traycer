@@ -71,6 +71,7 @@ function renderQuestion(options: {
         client={options.host.client}
         hostId={options.hostId}
         enabled={options.enabled}
+        children={null}
       />
     </QueryClientProvider>,
   );
@@ -99,9 +100,11 @@ describe("<RemoteAccessQuestion />", () => {
     });
 
     const question = await screen.findByTestId("remote-access-question");
-    expect(question.textContent).toContain("Not set");
+    expect(question.textContent).toContain(
+      "Allow other devices and agents on your account to reach this computer?",
+    );
     expect(screen.getByRole("button", { name: "Not now" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Turn on" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "On" })).toBeTruthy();
   });
 
   it("Not now hides it and records the answer for that host only", async () => {
@@ -141,7 +144,7 @@ describe("<RemoteAccessQuestion />", () => {
     expect(await screen.findByTestId("remote-access-question")).toBeTruthy();
   });
 
-  it("Turn on sends enabled: true, records the answer and stops asking", async () => {
+  it("On sends enabled: true, records the answer and stops asking", async () => {
     const host = askingHost({});
     renderQuestion({
       host,
@@ -151,7 +154,7 @@ describe("<RemoteAccessQuestion />", () => {
     });
     await screen.findByTestId("remote-access-question");
 
-    fireEvent.click(screen.getByRole("button", { name: "Turn on" }));
+    fireEvent.click(screen.getByRole("button", { name: "On" }));
 
     await waitFor(() => {
       expect(host.paramsOf("host.remoteAccess.set")).toEqual([

@@ -108,6 +108,7 @@ import { buildHostDownloadCommand } from "./commands/host-download";
 import { hostDoctorCommand } from "./commands/host-doctor";
 import { buildHostEnsureCommand } from "./commands/host-ensure";
 import { buildHostJoinCommand } from "./commands/host-join";
+import { readInstallToken } from "./commands/host-join-token";
 import { buildHostFreePortCommand } from "./commands/host-free-port";
 import { buildHostFreePortAndRestartCommand } from "./commands/host-free-port-and-restart";
 import { buildHostInstallCommand } from "./commands/host-install";
@@ -1675,12 +1676,12 @@ function registerHostCommands(program: Command): void {
     host
       .command("join")
       .description(
-        "Make this machine a team's host with the one-time install token from the app, then install and start the host. Refused on a machine that already has a Traycer host.",
-      )
-      .argument("<token>", "The install token shown in the app"),
-    (_opts, args) =>
+        "Make this machine a team's host with the one-time install token from the app, then install and start the host. Asks for the token, or reads it from stdin. Refused on a machine that already has a Traycer host.",
+      ),
+    () =>
       buildHostJoinCommand({
-        token: expectRequiredPositional(args[0], "token"),
+        readToken: (canPrompt) =>
+          readInstallToken(process.stdin, process.stderr, canPrompt),
       }),
   );
 
@@ -3297,6 +3298,10 @@ function registerAgentCommands(
         "--fast",
         "Request fast mode for supported models. Only available for gui surface. May consume additional credits - set it only when the user asks for it or the agent selection guide recommends it.",
       )
+      .option(
+        "--service-tier <id>",
+        "Service tier id from 'traycer agent list-harness-models <harness>'. Overrides --fast and may cost more.",
+      )
       .option("--profile <ambient|id>", profileHelp)
       .option(
         "--cwd <path>",
@@ -3333,6 +3338,8 @@ function registerAgentCommands(
             ? opts.reasoningEffort
             : null,
         fast: opts.fast === true,
+        serviceTier:
+          typeof opts.serviceTier === "string" ? opts.serviceTier : null,
         profile: typeof opts.profile === "string" ? opts.profile : null,
         cwd: typeof opts.cwd === "string" ? opts.cwd : null,
         workspacePaths: Array.isArray(opts.workspacePath)
@@ -3365,6 +3372,18 @@ function registerAgentCommands(
       )
       .option("--profile <ambient|id>", forkProfileHelp)
       .option(
+        "--service-tier <id>",
+        "Service tier id from 'traycer agent list-harness-models <harness>'. Overrides --fast and may cost more. Omit both to inherit the source's speed.",
+      )
+      .option(
+        "--fast",
+        "Request fast mode for supported models. May cost more. Omit --fast/--no-fast to inherit the source's speed.",
+      )
+      .option(
+        "--no-fast",
+        "Use default speed when no service tier is specified",
+      )
+      .option(
         "--cwd <path>",
         `Primary working directory for the forked agent.${worktreeCreateCwdHint} Omit --cwd/--workspace-path/--workspace-entry entirely to inherit the source agent's workspace binding.`,
       )
@@ -3389,6 +3408,9 @@ function registerAgentCommands(
         permissionMode:
           typeof opts.permissionMode === "string" ? opts.permissionMode : null,
         profile: typeof opts.profile === "string" ? opts.profile : null,
+        serviceTier:
+          typeof opts.serviceTier === "string" ? opts.serviceTier : null,
+        fast: typeof opts.fast === "boolean" ? opts.fast : null,
         cwd: typeof opts.cwd === "string" ? opts.cwd : null,
         workspacePaths: Array.isArray(opts.workspacePath)
           ? opts.workspacePath.filter(
@@ -3427,12 +3449,17 @@ function registerAgentCommands(
     agent
       .command("list-harness-models", readonlyHidden)
       .description("List available models (and params) for one harness.")
-      .argument("<harness>", harnessHelp),
+      .argument("<harness>", harnessHelp)
+      .option(
+        "--profile <ambient|id>",
+        "Provider profile whose models and service tiers to list. Omit to use the ambient login.",
+      ),
     (opts, args) =>
       buildAgentListHarnessModelsCommand({
         epicId: null,
         senderAgentId: null,
         harnessId: expectRequiredPositional(args[0], "harness"),
+        profileId: typeof opts.profile === "string" ? opts.profile : null,
       }),
   );
 
@@ -3487,6 +3514,10 @@ function registerAgentCommands(
         "Enable fast mode for supported models. Omitting it disables fast mode. May consume additional credits - turn it on only when the user asks for it or the agent selection guide recommends it.",
       )
       .option(
+        "--service-tier <id>",
+        "Service tier id from 'traycer agent list-harness-models <harness>'. Overrides --fast and may cost more.",
+      )
+      .option(
         "--permission-mode <mode>",
         `Permission mode for future turns. ${A2A_PERMISSION_MODE_INSTRUCTION} Omit this flag to use \`full_access\`.`,
       ),
@@ -3505,6 +3536,8 @@ function registerAgentCommands(
             ? opts.reasoningEffort
             : null,
         fast: opts.fast === true,
+        serviceTier:
+          typeof opts.serviceTier === "string" ? opts.serviceTier : null,
       }),
   );
 

@@ -83,9 +83,16 @@ import {
   usePrimaryActionShortcut,
 } from "@/hooks/use-primary-action-shortcut";
 import {
-  isAttachmentIngestPending,
+  composerAttachmentsHoldSend,
+  useComposerFileRoute,
   useComposerHashPaste,
 } from "@/hooks/composer/use-composer-paste";
+import {
+  containsPendingFileAttachment,
+  settleFileNodeInContent,
+} from "@/lib/composer/file-attachments";
+import type { FileNodeSettle } from "@/lib/composer/file-attachment-upload";
+import { useDraftsPutFileBlob } from "@/hooks/drafts/use-drafts-put-file-blob-mutation";
 import { useComposerPendingImageIngest } from "@/hooks/composer/use-composer-pending-image-ingest";
 import {
   mentionRootsFromWorktreeIntent,
@@ -392,6 +399,18 @@ function useHasSubmittableContent(
     (state) => (state.byEpicId[epicId]?.length ?? 0) > 0,
   );
   return hasText || hasCards;
+}
+
+/** A file still uploading holds send, as an image still preparing does. */
+function useHasPendingFileAttachment(
+  epicId: string,
+  seed: NewConversationModalSeed,
+): boolean {
+  return useNewConversationModalStore((state) =>
+    containsPendingFileAttachment(
+      state.draftPatchesByEpicId[epicId]?.content ?? seed.content,
+    ),
+  );
 }
 
 /**
@@ -790,7 +809,7 @@ function NewConversationModalDialog(props: {
         // popovers portal into THIS node (see `DialogOverlayBoundaryContext`)
         // and an overflow container that is also their containing block - this
         // one is, it carries a transform - would clip them.
-        className="flex max-h-[calc(var(--spacing-safe-dvh)-2rem)] w-[min(92vw,48rem)] max-w-[min(92vw,48rem)] flex-col sm:max-w-[min(92vw,48rem)]"
+        className="flex max-h-[calc(var(--spacing-safe-dvh)-2rem)] w-[min(92vw,48rem)] max-w-[min(92vw,48rem,var(--safe-area-width))] flex-col overflow-visible sm:max-w-[min(92vw,48rem)]"
         data-testid="epic-sidebar-new-conversation-modal"
         data-leader-scope={LEADER_SCOPE_NEW_CONVERSATION_MODAL}
         // A pointer-down the body's React tree already saw is the body's own
@@ -830,7 +849,7 @@ function NewConversationModalDialog(props: {
         {open ? (
           <div
             ref={attachBody}
-            className="min-h-0 flex-1 overflow-y-auto"
+            className="-m-1 min-h-0 flex-1 overflow-y-auto p-1"
             data-testid="epic-sidebar-new-conversation-modal-body"
           />
         ) : null}
@@ -1042,6 +1061,7 @@ export function NewConversationModalBody(props: {
     workspace: draftWorkspace,
   } = useNewConversationDraftFields(epicId, seed);
   const hasSubmittableContent = useHasSubmittableContent(epicId, seed);
+  const hasPendingFileAttachment = useHasPendingFileAttachment(epicId, seed);
   const [initialContent] = useState<JsonContent>(
     () =>
       useNewConversationModalStore.getState().draftPatchesByEpicId[epicId]
@@ -1268,10 +1288,31 @@ export function NewConversationModalBody(props: {
   const workspaceCanStart = workspaceGate.canStart;
   const draftWorkspaceFolderCount = draftWorkspace.folders.length;
   const runnerHost = useRunnerHost();
+  // Files go to the placement host, the one the chat is created on. A create
+  // on another host (the picker moved) pulls them by hash from the cloud copy
+  // that host publishes.
+  const putFileBlob = useDraftsPutFileBlob();
+  const settleDraftFile = useCallback<FileNodeSettle>(
+    (id, settlement) => {
+      const store = useNewConversationModalStore.getState();
+      const content =
+        store.draftPatchesByEpicId[epicId]?.content ?? seed.content;
+      const next = settleFileNodeInContent(content, id, settlement);
+      if (next !== null) store.setContent(epicId, next);
+    },
+    [epicId, seed.content],
+  );
+  const fileRoute = useComposerFileRoute({
+    hostId: resolvedHostId,
+    client: hostClient,
+    putFileBlob,
+    settleDraft: settleDraftFile,
+  });
   const paste = useComposerHashPaste(
     editorRef,
     runnerHost.fileDrops,
     mentionRoots,
+    fileRoute,
   );
   const {
     ingestPastedComposerImages,
@@ -1282,7 +1323,10 @@ export function NewConversationModalBody(props: {
     runPendingImageJob: paste.runPendingImageJob,
     draftId: null,
   });
-  const attachmentPending = isAttachmentIngestPending(paste);
+  const attachmentPending = composerAttachmentsHoldSend(
+    paste,
+    hasPendingFileAttachment,
+  );
   const pickedModelSlug = useStore(
     toolbarStore,
     (state) => state.values.selection.modelSlug,
@@ -1407,7 +1451,7 @@ export function NewConversationModalBody(props: {
     chooseAnotherHostLabel,
   });
   const composerDisabledHint =
-    mutationDisabledHint(permissionRole, isDisconnected, "make changes") ??
+    mutationDisabledHint(permissionRole, isDisconnected) ??
     workspaceGate.disabledHint ??
     agentHint;
   const epicImagePresence = useEpicAttachmentBytesPresence();

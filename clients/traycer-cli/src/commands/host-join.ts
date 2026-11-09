@@ -1,5 +1,13 @@
 import { randomBytes } from "node:crypto";
-import { chmod, lstat, mkdir, rename, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  lstat,
+  mkdir,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { dirname } from "node:path";
 import { resolveAttemptAdoptionFromNonce } from "../host/update-adoption";
 import { ensureHost, type HostEnsureResult } from "../host/ensure";
@@ -10,14 +18,20 @@ import { formatServiceLifecycleWarning } from "../service";
 import {
   hostEnrollmentRecordPath,
   hostHomeDir,
+  hostIdentityNeedsReauthPath,
   hostTeamInstallTokenPath,
 } from "../store/paths";
+import { MAX_INSTALL_TOKEN_LENGTH } from "./host-join-token";
 
-// `traycer host join <token>` - makes this machine a team's host (Tracy Bots
-// T141). A team member mints the one-time install token in the app; this
-// command leaves it where the host enrolls from, then installs, registers and
-// starts the host like `host ensure`. The host reads the token at boot, which
-// is what makes it a team machine, enrolls as the team's, and deletes it.
+// `traycer host join` - makes this machine a team's host. A team member mints
+// the one-time install token in the app; this command takes it from a prompt
+// or stdin (`host-join-token.ts`), never the command line, leaves it where
+// the host enrolls from, then installs, registers and starts the host like
+// `host ensure`. The host reads the token at boot, which is what makes it a
+// team machine, enrolls as the team's, and deletes it.
+//
+// A team machine that lost its credential joins again the same way: it is
+// paused until a new token arrives, and the coordination loop takes it there.
 //
 // Unlike `host ensure`, it runs no sign-in pre-flight and provisions no
 // person's credential: a team machine holds its own credential and refuses a
@@ -27,18 +41,26 @@ import {
 // echoed or put in an error's details.
 
 export interface HostJoinArgs {
-  readonly token: string;
+  readonly readToken: (canPrompt: boolean) => Promise<string>;
 }
-
-/** Far larger than any install token authn mints; the host's own cap. */
-const MAX_INSTALL_TOKEN_LENGTH = 4096;
 
 /** An install token is one URL-safe line. */
 const INSTALL_TOKEN_SHAPE = /^[A-Za-z0-9._~+/=-]+$/;
 
 export function buildHostJoinCommand(args: HostJoinArgs): CommandFn {
   return async (ctx): Promise<CommandResult> => {
-    const token = args.token.trim();
+    const environment = ctx.runtime.environment;
+    if (!(await mayJoin(environment))) {
+      throw cliError({
+        code: CLI_ERROR_CODES.FORBIDDEN,
+        message:
+          "host join: this machine already has a Traycer host, so it can't join as a team host.",
+        details: null,
+        exitCode: 1,
+      });
+    }
+    const canPrompt = !ctx.runtime.json && !ctx.runtime.nonInteractive;
+    const token = (await args.readToken(canPrompt)).trim();
     if (
       token.length === 0 ||
       token.length > MAX_INSTALL_TOKEN_LENGTH ||
@@ -47,16 +69,6 @@ export function buildHostJoinCommand(args: HostJoinArgs): CommandFn {
       throw cliError({
         code: CLI_ERROR_CODES.INVALID_ARGUMENT,
         message: "host join: that isn't a team host install token.",
-        details: null,
-        exitCode: 1,
-      });
-    }
-    const environment = ctx.runtime.environment;
-    if (await isEnrolled(environment)) {
-      throw cliError({
-        code: CLI_ERROR_CODES.FORBIDDEN,
-        message:
-          "host join: this machine already has a Traycer host, so it can't join as a team host.",
         details: null,
         exitCode: 1,
       });
@@ -101,14 +113,42 @@ export function buildHostJoinCommand(args: HostJoinArgs): CommandFn {
   };
 }
 
-async function isEnrolled(environment: Environment): Promise<boolean> {
+function isMissingFile(error: unknown): boolean {
+  return error instanceof Error && "code" in error && error.code === "ENOENT";
+}
+
+function isTeamMachineRecord(raw: string): boolean {
   try {
-    await lstat(hostEnrollmentRecordPath(environment));
+    const record: unknown = JSON.parse(raw);
+    return (
+      typeof record === "object" &&
+      record !== null &&
+      "kind" in record &&
+      record.kind === "machine"
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A machine with no host yet may join, and so may a team machine paused on
+ * its identity's needs-reauth marker. Any other enrolled host is refused.
+ */
+async function mayJoin(environment: Environment): Promise<boolean> {
+  let record: string;
+  try {
+    record = await readFile(hostEnrollmentRecordPath(environment), "utf8");
+  } catch (error) {
+    if (isMissingFile(error)) return true;
+    throw error;
+  }
+  if (!isTeamMachineRecord(record)) return false;
+  try {
+    await lstat(hostIdentityNeedsReauthPath(environment));
     return true;
   } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
-      return false;
-    }
+    if (isMissingFile(error)) return false;
     throw error;
   }
 }

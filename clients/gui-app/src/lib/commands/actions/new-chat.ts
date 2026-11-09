@@ -30,6 +30,7 @@ import { createReportIssueContext } from "@/lib/report-issue-context";
 import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
 import type { ExplicitTilePlacement } from "@/lib/canvas/tile-open/intent";
 import {
+  commitWithoutNavigation,
   MANUAL_TILE_OPEN,
   openTileWithNavigation,
 } from "@/lib/canvas/tile-open/open-tile";
@@ -202,7 +203,11 @@ export function openNewChatInActiveTile(
 export function openCreatedChatWhenProjected(
   intent: CreatedChatOpenIntent,
 ): CancelFn {
-  return openCreatedChatWhenProjectedInternal(intent, rawNestedFocus, null);
+  return openCreatedChatWhenProjectedInternal(
+    intent,
+    commitWithoutNavigation,
+    null,
+  );
 }
 
 export function openCreatedChatWhenProjectedWithNavigation(
@@ -297,13 +302,6 @@ function reportChatProjectionWaitExpired(intent: CreatedChatOpenIntent): void {
     }),
   );
 }
-
-const rawNestedFocus: NavigateNestedFocus = (
-  _epicId,
-  _tabId,
-  prepare,
-  _provenance,
-) => prepare();
 
 function buildCreateChatRequest(args: {
   readonly epicId: string;

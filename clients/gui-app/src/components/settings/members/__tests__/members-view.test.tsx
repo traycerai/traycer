@@ -69,7 +69,7 @@ afterEach(() => {
 function member(
   userId: string,
   displayName: string,
-  role: TeamRole,
+  role: TeamRole | null,
   overrides: Partial<MembersListMember>,
 ): MembersListMember {
   return {
@@ -88,7 +88,7 @@ function member(
 const ADMIN = member("u-admin", "Ada", "admin", {});
 const SECOND_ADMIN = member("u-admin2", "Grace", "admin", {});
 const EDITOR = member("u-editor", "Priya", "editor", { linkedPlan: true });
-const PENDING = member("u-pending", "", "viewer", {
+const PENDING = member("u-pending", "", null, {
   inviteState: "pending",
   invitedAddress: "new@acme.test",
   email: null,
@@ -132,7 +132,7 @@ function DetailsEntry(props: { readonly subjectKey: string }): ReactNode {
 }
 
 function renderView(options: {
-  readonly viewerRole: TeamRole;
+  readonly viewerRole: TeamRole | null;
   readonly members: readonly MembersListMember[];
   readonly currentUserId: string;
   readonly legacyRoleNoticeSeenAt: number | null;
@@ -325,10 +325,28 @@ describe("MembersView", () => {
     expect(screen.getByRole("button", { name: "Revoke" })).toBeTruthy();
   });
 
+  it("shows a seat holding no role as No access, with Remove and no role picker", () => {
+    const noRole = member("u-norole", "Sam", null, { email: "sam@acme.test" });
+    renderView({
+      ...BASE,
+      viewerRole: "admin",
+      members: [ADMIN, EDITOR, noRole],
+    });
+    const row = rowOf("u-norole");
+    expect(within(row).getByText("No access")).toBeTruthy();
+    expect(within(row).queryByRole("combobox")).toBeNull();
+    expect(within(row).getByRole("button", { name: "Remove" })).toBeTruthy();
+    expect(
+      within(rowOf("u-editor")).getByRole("combobox", {
+        name: "Role for Priya",
+      }),
+    ).toBeTruthy();
+  });
+
   it("shows a non-admin the list without controls and a pending summary, not the address", () => {
     renderView({
       ...BASE,
-      viewerRole: "viewer",
+      viewerRole: null,
       currentUserId: "u-editor",
       members: [ADMIN, EDITOR, PENDING],
     });
@@ -437,11 +455,11 @@ describe("MembersView", () => {
 
   it("tags the member the notice names by name, else by email, and asks a nameless row to retry", async () => {
     const user = userEvent.setup();
-    const emailOnly = member("u-mail", "", "viewer", {
+    const emailOnly = member("u-mail", "", null, {
       displayName: null,
       email: "mail@acme.test",
     });
-    const unloaded = member("u-ghost", "", "viewer", {
+    const unloaded = member("u-ghost", "", null, {
       displayName: null,
       email: null,
     });
@@ -474,54 +492,39 @@ describe("MembersView", () => {
 });
 
 describe("MembersView demotion", () => {
-  it("opens the demotion preview with the lost-powers line instead of changing the role", async () => {
-    const user = userEvent.setup();
-    const { onSetRole } = renderView({
-      ...BASE,
-      viewerRole: "admin",
-      members: [ADMIN, SECOND_ADMIN],
-    });
-    await user.click(screen.getByRole("combobox", { name: "Role for Grace" }));
-    await user.click(await screen.findByRole("option", { name: "Viewer" }));
-    const loss = await screen.findByTestId("members-demotion-loss");
-    expect(loss.textContent).toBe(
-      "Grace can no longer invite people, change roles or edit the approval policy. Grace can no longer change Acme's settings. They can still see them.",
-    );
-    expect(onSetRole).not.toHaveBeenCalled();
-    const dialogText = screen.getByTestId(
-      "members-demotion-preview",
-    ).textContent;
-    expect(dialogText).not.toContain("within a minute");
-    expect(dialogText).not.toContain("next turn");
-  });
-
-  // NEW-154-23: Editor → Viewer is a demotion too, and had no confirm at all.
-  it("confirms an editor's demotion to viewer before writing it", async () => {
+  // Every demotion confirms before it writes - and an admin going to editor is
+  // the only one a team has left.
+  it("confirms an admin's demotion to editor before writing it", async () => {
     const user = userEvent.setup();
     const { onSetRole } = renderView({
       ...BASE,
       viewerRole: "admin",
       members: [ADMIN, SECOND_ADMIN, EDITOR],
     });
-    await user.click(screen.getByRole("combobox", { name: "Role for Priya" }));
-    await user.click(await screen.findByRole("option", { name: "Viewer" }));
+    await user.click(screen.getByRole("combobox", { name: "Role for Grace" }));
+    await user.click(await screen.findByRole("option", { name: "Editor" }));
 
     expect(
-      await screen.findByText("Change Priya's role in Acme to viewer?"),
+      await screen.findByText("Change Grace's role in Acme to editor?"),
     ).toBeTruthy();
     expect(screen.getByTestId("members-demotion-loss").textContent).toBe(
-      "Priya can no longer change Acme's settings. They can still see them.",
+      "Grace can no longer invite people, change roles or edit the approval policy.",
     );
     expect(screen.getByTestId("members-demotion-confirm").textContent).toBe(
-      "Change to viewer",
+      "Change to editor",
     );
+    const dialogText = screen.getByTestId(
+      "members-demotion-preview",
+    ).textContent;
+    expect(dialogText).not.toContain("within a minute");
+    expect(dialogText).not.toContain("next turn");
     expect(onSetRole).not.toHaveBeenCalled();
 
     await user.click(screen.getByTestId("members-demotion-confirm"));
     await waitFor(() =>
       expect(onSetRole).toHaveBeenCalledWith({
-        userId: "u-editor",
-        role: "viewer",
+        userId: "u-admin2",
+        role: "editor",
       }),
     );
   });
@@ -611,8 +614,8 @@ describe("MembersView demotion announcement", () => {
       members: [ADMIN, SECOND_ADMIN, EDITOR],
       preview: () => ({ ...PREVIEW, linkedPlan: "Claude Max" }),
     });
-    await user.click(screen.getByRole("combobox", { name: "Role for Priya" }));
-    await user.click(await screen.findByRole("option", { name: "Viewer" }));
+    await user.click(screen.getByRole("combobox", { name: "Role for Grace" }));
+    await user.click(await screen.findByRole("option", { name: "Editor" }));
 
     let described: string | null = null;
     try {
@@ -625,7 +628,7 @@ describe("MembersView demotion announcement", () => {
     }
     expect(described).not.toBeNull();
     expect(described).toContain(
-      "Priya can no longer change Acme's settings. They can still see them.",
+      "Grace can no longer invite people, change roles or edit the approval policy.",
     );
     expect(described).toContain("Acme's agents stop using this plan.");
   });
@@ -639,66 +642,25 @@ describe("MembersView demotion announcement", () => {
       members: [ADMIN, SECOND_ADMIN, EDITOR],
       preview: previews.answer,
     });
-    await user.click(screen.getByRole("combobox", { name: "Role for Priya" }));
-    await user.click(await screen.findByRole("option", { name: "Viewer" }));
+    await user.click(screen.getByRole("combobox", { name: "Role for Grace" }));
+    await user.click(await screen.findByRole("option", { name: "Editor" }));
 
     await waitFor(() =>
       expect(
-        within(rowOf("u-editor")).getByTestId("members-role-checking"),
+        within(rowOf("u-admin2")).getByTestId("members-role-checking"),
       ).toBeTruthy(),
     );
     expect(screen.queryByTestId("members-demotion-preview")).toBeNull();
 
     await waitFor(() => {
       expect(() => {
-        previews.resolve("u-editor", { ...PREVIEW, linkedPlan: "Claude Max" });
+        previews.resolve("u-admin2", { ...PREVIEW, linkedPlan: "Claude Max" });
       }).not.toThrow();
     });
 
     await screen.findByTestId("members-demotion-preview");
     expect(
-      within(rowOf("u-editor")).queryByTestId("members-role-checking"),
-    ).toBeNull();
-  });
-
-  // While the check is out there is no dialog to cancel, so the next pick is
-  // how the person takes the demotion back. The answer then belongs to a
-  // question nobody is asking any more.
-  it("drops a pending demotion when the person picks another role instead", async () => {
-    const user = userEvent.setup();
-    const previews = deferredPreviews();
-    const { onSetRole, queryClient } = renderView({
-      ...BASE,
-      viewerRole: "admin",
-      members: [ADMIN, SECOND_ADMIN, EDITOR],
-      preview: previews.answer,
-    });
-    await user.click(screen.getByRole("combobox", { name: "Role for Priya" }));
-    await user.click(await screen.findByRole("option", { name: "Viewer" }));
-    await waitFor(() =>
-      expect(
-        within(rowOf("u-editor")).getByTestId("members-role-checking"),
-      ).toBeTruthy(),
-    );
-
-    await user.click(screen.getByRole("combobox", { name: "Role for Priya" }));
-    await user.click(await screen.findByRole("option", { name: "Admin" }));
-    await waitFor(() =>
-      expect(onSetRole).toHaveBeenCalledWith({
-        userId: "u-editor",
-        role: "admin",
-      }),
-    );
-    expect(screen.queryByTestId("members-demotion-preview")).toBeNull();
-
-    await settled(previews, queryClient, "u-editor");
-    // The answer belongs to a question nobody is asking any more, so it opens
-    // nothing. Asserted before the row's own tell on purpose: dropping the
-    // demotion is what both depend on, and this is the consequence that would
-    // put a dialog in front of someone who had moved on.
-    expect(screen.queryByTestId("members-demotion-preview")).toBeNull();
-    expect(
-      within(rowOf("u-editor")).queryByTestId("members-role-checking"),
+      within(rowOf("u-admin2")).queryByTestId("members-role-checking"),
     ).toBeNull();
   });
 
@@ -711,7 +673,7 @@ describe("MembersView demotion announcement", () => {
       opener: "Remove",
       press: async (user: UserEvent) => {
         await user.click(
-          within(rowOf("u-editor")).getByRole("button", { name: "Remove" }),
+          within(rowOf("u-admin2")).getByRole("button", { name: "Remove" }),
         );
       },
       opened: "members-remove-preview",
@@ -738,7 +700,7 @@ describe("MembersView demotion announcement", () => {
       opener: "Details",
       press: async (user: UserEvent) => {
         await user.click(
-          within(rowOf("u-editor")).getByRole("button", { name: "Details" }),
+          within(rowOf("u-admin2")).getByRole("button", { name: "Details" }),
         );
       },
       opened: null,
@@ -755,19 +717,19 @@ describe("MembersView demotion announcement", () => {
         preview: previews.answer,
       });
       await user.click(
-        screen.getByRole("combobox", { name: "Role for Priya" }),
+        screen.getByRole("combobox", { name: "Role for Grace" }),
       );
-      await user.click(await screen.findByRole("option", { name: "Viewer" }));
+      await user.click(await screen.findByRole("option", { name: "Editor" }));
       await waitFor(() =>
         expect(
-          within(rowOf("u-editor")).getByTestId("members-role-checking"),
+          within(rowOf("u-admin2")).getByTestId("members-role-checking"),
         ).toBeTruthy(),
       );
 
       await press(user);
       if (opened !== null) await screen.findByTestId(opened);
 
-      await settled(previews, queryClient, "u-editor");
+      await settled(previews, queryClient, "u-admin2");
       expect(screen.queryByTestId("members-demotion-preview")).toBeNull();
     },
   );
@@ -782,8 +744,8 @@ describe("MembersView demotion announcement", () => {
       where: "another member's row",
       seenAt: 1 as number | null,
       entry: (): HTMLElement =>
-        within(rowOf("u-admin2")).getByRole("button", { name: "Details" }),
-      panel: "details-open-u-admin2",
+        within(rowOf("u-editor")).getByRole("button", { name: "Details" }),
+      panel: "details-open-u-editor",
     },
     {
       where: "the legacy-role notice",
@@ -808,12 +770,12 @@ describe("MembersView demotion announcement", () => {
         preview: previews.answer,
       });
       await user.click(
-        screen.getByRole("combobox", { name: "Role for Priya" }),
+        screen.getByRole("combobox", { name: "Role for Grace" }),
       );
-      await user.click(await screen.findByRole("option", { name: "Viewer" }));
+      await user.click(await screen.findByRole("option", { name: "Editor" }));
       await waitFor(() =>
         expect(
-          within(rowOf("u-editor")).getByTestId("members-role-checking"),
+          within(rowOf("u-admin2")).getByTestId("members-role-checking"),
         ).toBeTruthy(),
       );
 
@@ -822,13 +784,13 @@ describe("MembersView demotion announcement", () => {
 
       // The consequence first: this is the dialog that would land on top of
       // the drawer the press just opened.
-      await settled(previews, queryClient, "u-editor");
+      await settled(previews, queryClient, "u-admin2");
       expect(screen.queryByTestId("members-demotion-preview")).toBeNull();
       // Still open: the entry held its own state through the commit that
       // dropped the pick.
       expect(screen.getByTestId(panel)).toBeTruthy();
       expect(
-        within(rowOf("u-editor")).queryByTestId("members-role-checking"),
+        within(rowOf("u-admin2")).queryByTestId("members-role-checking"),
       ).toBeNull();
     },
   );
@@ -845,14 +807,14 @@ describe("MembersView demotion announcement", () => {
       members: [ADMIN, SECOND_ADMIN, EDITOR],
       preview: previews.answer,
     });
-    await user.click(screen.getByRole("combobox", { name: "Role for Priya" }));
-    await user.click(await screen.findByRole("option", { name: "Viewer" }));
+    await user.click(screen.getByRole("combobox", { name: "Role for Grace" }));
+    await user.click(await screen.findByRole("option", { name: "Editor" }));
 
     const announced = await waitFor(() =>
-      within(rowOf("u-editor")).getByRole("status"),
+      within(rowOf("u-admin2")).getByRole("status"),
     );
     expect(announced.getAttribute("data-testid")).toBe("members-role-checking");
-    expect(announced.textContent).toContain("Checking viewer…");
+    expect(announced.textContent).toContain("Checking editor…");
   });
 
   // The select is controlled on the role the member HOLDS, so picking that
@@ -867,25 +829,25 @@ describe("MembersView demotion announcement", () => {
       members: [ADMIN, SECOND_ADMIN, EDITOR],
       preview: previews.answer,
     });
-    await user.click(screen.getByRole("combobox", { name: "Role for Priya" }));
-    await user.click(await screen.findByRole("option", { name: "Viewer" }));
+    await user.click(screen.getByRole("combobox", { name: "Role for Grace" }));
+    await user.click(await screen.findByRole("option", { name: "Editor" }));
 
     const tell = await waitFor(() =>
-      within(rowOf("u-editor")).getByTestId("members-role-checking"),
+      within(rowOf("u-admin2")).getByTestId("members-role-checking"),
     );
     // It names the role being checked, which the select cannot: that still
-    // shows the role Priya holds.
-    expect(tell.textContent).toContain("Checking viewer…");
+    // shows the role Grace holds.
+    expect(tell.textContent).toContain("Checking editor…");
     await user.click(
       within(tell).getByRole("button", {
-        name: "Cancel the change to viewer for Priya",
+        name: "Cancel the change to editor for Grace",
       }),
     );
 
     expect(
-      within(rowOf("u-editor")).queryByTestId("members-role-checking"),
+      within(rowOf("u-admin2")).queryByTestId("members-role-checking"),
     ).toBeNull();
-    await settled(previews, queryClient, "u-editor");
+    await settled(previews, queryClient, "u-admin2");
     expect(screen.queryByTestId("members-demotion-preview")).toBeNull();
     expect(onSetRole).not.toHaveBeenCalled();
   });
@@ -909,8 +871,8 @@ describe("MembersView demotion announcement", () => {
           : previews.answer(userId);
       },
     });
-    await user.click(screen.getByRole("combobox", { name: "Role for Priya" }));
-    await user.click(await screen.findByRole("option", { name: "Viewer" }));
+    await user.click(screen.getByRole("combobox", { name: "Role for Grace" }));
+    await user.click(await screen.findByRole("option", { name: "Editor" }));
 
     const dialog = await screen.findByTestId("members-demotion-preview");
     await within(dialog).findByTestId("members-demotion-preview-failed");
@@ -928,7 +890,7 @@ describe("MembersView demotion announcement", () => {
     ).toBe(true);
     expect(
       within(dialog).getByTestId("members-demotion-preview-failed").textContent,
-    ).toContain("Couldn't load what changing Priya's role interrupts");
+    ).toContain("Couldn't load what changing Grace's role interrupts");
     expect(
       within(dialog).getByRole<HTMLButtonElement>("button", { name: "Retry" })
         .disabled,
@@ -939,7 +901,7 @@ describe("MembersView demotion announcement", () => {
 
     await waitFor(() => {
       expect(() => {
-        previews.resolve("u-editor", { ...PREVIEW, linkedPlan: "Claude Max" });
+        previews.resolve("u-admin2", { ...PREVIEW, linkedPlan: "Claude Max" });
       }).not.toThrow();
     });
     await within(dialog).findByTestId("members-demotion-preview-table");
@@ -1186,12 +1148,12 @@ describe("MembersView pending writes", () => {
       members: [ADMIN, SECOND_ADMIN, EDITOR],
       handlers: { "environment.members.setRole": host.answer },
       send: (writes) => {
-        void writes.setRole({ userId: "u-editor", role: "viewer" });
+        void writes.setRole({ userId: "u-editor", role: "admin" });
       },
     });
     await user.click(screen.getByRole("button", { name: "Send elsewhere" }));
     await user.click(screen.getByRole("combobox", { name: "Role for Grace" }));
-    await user.click(await screen.findByRole("option", { name: "Viewer" }));
+    await user.click(await screen.findByRole("option", { name: "Editor" }));
     await screen.findByTestId("members-demotion-loss");
     const confirm = screen.getByTestId<HTMLButtonElement>(
       "members-demotion-confirm",

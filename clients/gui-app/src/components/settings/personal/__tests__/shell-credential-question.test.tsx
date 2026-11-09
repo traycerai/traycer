@@ -91,7 +91,7 @@ import type {
   ConfigEnvLocalOverrideResponse,
   EnvironmentReviewEntry,
   EnvironmentSecretV12,
-  EnvironmentStatusResponseV11,
+  EnvironmentStatusResponseV12,
   LocalOverride,
 } from "@traycer/protocol/host/environment-schemas";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
@@ -117,7 +117,7 @@ import {
 } from "@traycer/protocol/host/released-wire-rows";
 
 const HOST_ID = "host-a";
-const READY_STATUS: EnvironmentStatusResponseV11 = environmentStatusFixture({
+const READY_STATUS: EnvironmentStatusResponseV12 = environmentStatusFixture({
   // Pending, so a ready page says so ("Applying EXISTING on host-a."), which
   // is how a test knows the status was read and rendered.
   items: [
@@ -166,7 +166,7 @@ interface Rendered {
 
 function renderShellPage(options: {
   /** `null`: the host's `environment.status` read never resolves. */
-  readonly status: EnvironmentStatusResponseV11 | null;
+  readonly status: EnvironmentStatusResponseV12 | null;
   /** The methods the host advertises; the config family is always there. */
   readonly environmentMethods: readonly string[];
   readonly existingVariables: readonly { key: string; value: string }[];
@@ -592,7 +592,7 @@ describe("the host environment group on a Personal page", () => {
 });
 
 const PERSONAL_SUBTITLE =
-  "Plain values every computer and sandbox running these settings gets, and the shell agents run in.";
+  "Plain values every computer and sandbox running Personal gets, and the shell agents run in.";
 
 describe("the Variables and shells subtitle", () => {
   it("describes what Personal shares under the Personal pick", async () => {
@@ -624,7 +624,7 @@ describe("the Variables empty state", () => {
     await pageIsReady();
     expect(
       screen.getByText(
-        "Variables are plain values every computer and sandbox running these settings gets.",
+        "Variables are plain values every computer and sandbox running Personal gets.",
       ),
     ).toBeTruthy();
     expect(screen.queryByText(/Add a variable\.$/)).toBeNull();

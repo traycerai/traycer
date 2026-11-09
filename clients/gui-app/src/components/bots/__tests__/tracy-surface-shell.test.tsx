@@ -770,6 +770,41 @@ describe("the Tracy surface shell", () => {
     }).toEqual({ pathname: "/bot/bot-notes", botId: "bot-notes" });
   });
 
+  it("forgets a bot that only holds a box draft, never visited, once a successful list no longer carries it after carrying it", async () => {
+    answerList([NOTES, RELEASE, TRIAGE], { "env-me": "bot-notes" });
+    const mounted = await mount(SurfaceHost, "/");
+    open(mounted, "bot-release");
+    await shownChannel("bot-release");
+    useBotDraftsStore
+      .getState()
+      .typeThreadBox("bot-triage", "post-1", "unsent", null);
+    await waitFor(() => {
+      expect(keptState("bot-triage").draft).toBe(true);
+    });
+    expect(keptState("bot-triage").visited).toBe(false);
+
+    act(() => answerList([NOTES, RELEASE], { "env-me": "bot-notes" }));
+
+    await waitFor(() => {
+      expect(keptState("bot-triage").draft).toBe(false);
+    });
+  });
+
+  it("keeps a box draft of a bot that no list has carried since the app started", async () => {
+    useBotDraftsStore
+      .getState()
+      .typeThreadBox("bot-ghost", "post-1", "unsent", null);
+    answerList([NOTES, RELEASE, TRIAGE], { "env-me": "bot-notes" });
+    const mounted = await mount(SurfaceHost, "/");
+    open(mounted, "bot-release");
+    await shownChannel("bot-release");
+
+    act(() => answerList([NOTES, RELEASE], { "env-me": "bot-notes" }));
+    await shownChannel("bot-release");
+
+    expect(keptState("bot-ghost").draft).toBe(true);
+  });
+
   it("deletes nothing while the list read is pending or has failed, only once a list that answered lacks the bot", async () => {
     answerList([NOTES, RELEASE, TRIAGE], { "env-me": "bot-notes" });
     const mounted = await mount(SurfaceHost, "/");

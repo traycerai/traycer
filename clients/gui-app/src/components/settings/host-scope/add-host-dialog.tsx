@@ -6,6 +6,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -88,7 +89,7 @@ export function AddHostDialog(): ReactNode {
           needed, and every row rendered outside the box. Same pairing as the
           other wide dialogs (chat-fork, provider-skill-*). */}
       <DialogContent
-        className="w-[min(92vw,30rem)] sm:max-w-[min(92vw,30rem)]"
+        className="flex w-[min(92vw,30rem)] flex-col sm:max-w-[min(92vw,30rem)]"
         data-testid="add-host-dialog"
       >
         {open ? <AddHostDialogBody /> : null}
@@ -181,46 +182,48 @@ function AddHostDialogBody(): ReactNode {
               : "It's in your account. This window doesn't have a live connection to it, but you can manage it from Settings."}
           </DialogDescription>
         </DialogHeader>
-        <div
-          className="flex items-center gap-3 rounded-lg border border-success/30 bg-success/5 px-4 py-3"
-          data-testid="add-host-arrived"
-        >
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-success/10 text-success-foreground">
-            <HostGlyph host={arrived} className="size-4.5" />
-          </span>
-          <span className="min-w-0 flex-1">
-            <TooltipWrapper
-              label={arrived.name}
-              side="top"
-              sideOffset={undefined}
-              align="start"
-            >
-              <span
-                aria-label={arrived.name}
-                className="line-clamp-2 text-ui-sm font-medium [overflow-wrap:anywhere]"
+        <div className="min-h-0 min-w-0 overflow-y-auto">
+          <div
+            className="flex items-center gap-3 rounded-lg border border-success/30 bg-success/5 px-4 py-3"
+            data-testid="add-host-arrived"
+          >
+            <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-success/10 text-success-foreground">
+              <HostGlyph host={arrived} className="size-4.5" />
+            </span>
+            <span className="min-w-0 flex-1">
+              <TooltipWrapper
+                label={arrived.name}
+                side="top"
+                sideOffset={undefined}
+                align="start"
               >
-                {arrived.name}
-              </span>
-            </TooltipWrapper>
-            <span className="flex min-w-0 items-center gap-1.5 text-ui-xs text-muted-foreground">
-              <HostPresenceDot
-                tone={arrived.health.tone}
-                animate={arrived.health.live}
-                className={undefined}
-              />
-              <span className="truncate">
-                {[arrived.health.label, formatPlatform(arrived.platform)]
-                  .filter((p): p is string => p !== null && p.length > 0)
-                  .join(" · ")}
+                <span
+                  aria-label={arrived.name}
+                  className="line-clamp-2 text-ui-sm font-medium [overflow-wrap:anywhere]"
+                >
+                  {arrived.name}
+                </span>
+              </TooltipWrapper>
+              <span className="flex min-w-0 items-center gap-1.5 text-ui-xs text-muted-foreground">
+                <HostPresenceDot
+                  tone={arrived.health.tone}
+                  animate={arrived.health.live}
+                  className={undefined}
+                />
+                <span className="truncate">
+                  {[arrived.health.label, formatPlatform(arrived.platform)]
+                    .filter((p): p is string => p !== null && p.length > 0)
+                    .join(" · ")}
+                </span>
               </span>
             </span>
-          </span>
-          <Check
-            className="size-4 shrink-0 text-success-foreground"
-            aria-hidden
-          />
+            <Check
+              className="size-4 shrink-0 text-success-foreground"
+              aria-hidden
+            />
+          </div>
         </div>
-        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+        <DialogFooter>
           <Button
             type="button"
             variant="outline"
@@ -241,7 +244,7 @@ function AddHostDialogBody(): ReactNode {
           >
             Set up host
           </Button>
-        </div>
+        </DialogFooter>
       </>
     );
   }
@@ -256,45 +259,47 @@ function AddHostDialogBody(): ReactNode {
         </DialogDescription>
       </DialogHeader>
 
-      <ol className="flex min-w-0 flex-col" data-testid="add-host-steps">
-        <Step index={1} title="Install the Traycer CLI">
-          <Tabs defaultValue="npm" className="gap-1.5">
-            <TabsList
-              variant="line"
-              size="sm"
-              aria-label="Install method"
-              className="justify-start"
-            >
-              <TabsTrigger value="npm" className="flex-none">
-                npm
-              </TabsTrigger>
-              <TabsTrigger value="homebrew" className="flex-none">
-                Homebrew
-              </TabsTrigger>
-            </TabsList>
-            <TabsContent value="npm" className="grid gap-1.5">
-              <CommandBlock command={CLI_NPM_COMMAND} />
-              <StepNote>Requires Node 20.18 or newer.</StepNote>
-            </TabsContent>
-            <TabsContent value="homebrew" className="grid gap-1.5">
-              <CommandBlock command={CLI_HOMEBREW_COMMAND} />
-              <StepNote>Available on macOS and Linux.</StepNote>
-            </TabsContent>
-          </Tabs>
-        </Step>
-        <Step index={2} title="Sign in">
-          <CommandBlock command={LOGIN_COMMAND} />
-          <StepNote>
-            Open the link on any device, enter the code, and approve sign-in.
-          </StepNote>
-        </Step>
-        <Step index={3} title="Install and start the host">
-          <CommandBlock command={HOST_ENSURE_COMMAND} />
-          <StepNote>
-            Installs, registers, and starts the host. Safe to run again.
-          </StepNote>
-        </Step>
-      </ol>
+      <div className="min-h-0 min-w-0 overflow-y-auto">
+        <ol className="flex min-w-0 flex-col" data-testid="add-host-steps">
+          <Step index={1} title="Install the Traycer CLI">
+            <Tabs defaultValue="npm" className="gap-1.5">
+              <TabsList
+                variant="line"
+                size="sm"
+                aria-label="Install method"
+                className="justify-start"
+              >
+                <TabsTrigger value="npm" className="flex-none">
+                  npm
+                </TabsTrigger>
+                <TabsTrigger value="homebrew" className="flex-none">
+                  Homebrew
+                </TabsTrigger>
+              </TabsList>
+              <TabsContent value="npm" className="grid gap-1.5">
+                <CommandBlock command={CLI_NPM_COMMAND} />
+                <StepNote>Requires Node 20.18 or newer.</StepNote>
+              </TabsContent>
+              <TabsContent value="homebrew" className="grid gap-1.5">
+                <CommandBlock command={CLI_HOMEBREW_COMMAND} />
+                <StepNote>Available on macOS and Linux.</StepNote>
+              </TabsContent>
+            </Tabs>
+          </Step>
+          <Step index={2} title="Sign in">
+            <CommandBlock command={LOGIN_COMMAND} />
+            <StepNote>
+              Open the link on any device, enter the code, and approve sign-in.
+            </StepNote>
+          </Step>
+          <Step index={3} title="Install and start the host">
+            <CommandBlock command={HOST_ENSURE_COMMAND} />
+            <StepNote>
+              Installs, registers, and starts the host. Safe to run again.
+            </StepNote>
+          </Step>
+        </ol>
+      </div>
     </>
   );
 }

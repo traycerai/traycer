@@ -1,5 +1,13 @@
 import { EventEmitter } from "node:events";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import {
   RunnerHostEvent,
   RunnerHostInvoke,
@@ -1222,4 +1230,46 @@ describe("an ack/respond must match window AND requestId", () => {
     await flush();
     expect(await settlesWithin(decision)).toBe(false);
   });
+});
+
+it("catalogue IPC forwards context and accepts an older renderer with no context argument", async () => {
+  const urls: URL[] = [];
+  onTestFinished(() => {
+    vi.unstubAllGlobals();
+  });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn<typeof fetch>(async (input) => {
+      urls.push(new URL(String(input)));
+      return new Response(JSON.stringify({ providers: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }),
+  );
+  await newFixture(true);
+  const handler = ipcMainState.handlers.get(
+    RunnerHostInvoke.getSandboxCatalogue,
+  );
+  if (handler === undefined) throw new Error("catalogue handler missing");
+  await handler(sender(101), "test-bearer", {
+    environmentId: null,
+    os: "linux",
+    cpus: 2,
+    memoryMb: 4096,
+    diskMb: null,
+    region: "us-east",
+  });
+  await handler(sender(101), "test-bearer");
+  expect(urls.map((url) => Object.fromEntries(url.searchParams))).toEqual([
+    {
+      environmentId: "",
+      os: "linux",
+      cpus: "2",
+      memoryMb: "4096",
+      diskMb: "",
+      region: "us-east",
+    },
+    {},
+  ]);
 });

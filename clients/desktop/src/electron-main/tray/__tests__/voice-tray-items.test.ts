@@ -7,6 +7,7 @@
  * session, which clears the live flag as the renderer does.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { join, resolve as resolvePath } from "node:path";
 import type { VoiceTrayAction } from "../../../ipc-contracts/host-types";
 import {
   createElectronVoiceTrayView,
@@ -31,10 +32,19 @@ interface RecordedTray {
   toolTip: string | null;
   menu: ReadonlyArray<MenuItemLike>;
   destroyed: boolean;
+  readonly images: string[];
   readonly handlers: Map<string, () => void>;
 }
 
-const electron = vi.hoisted(() => ({ trays: [] as RecordedTray[] }));
+const electron = vi.hoisted(() => ({
+  trays: [] as RecordedTray[],
+  nativeTheme: {
+    shouldUseDarkColorsForSystemIntegratedUI: true,
+    listeners: new Map<string, Array<() => void>>(),
+  },
+  imagePaths: [] as string[],
+  execFileCalls: [] as string[],
+}));
 
 vi.mock("electron", () => {
   class Tray {
@@ -43,6 +53,7 @@ vi.mock("electron", () => {
       toolTip: null,
       menu: [],
       destroyed: false,
+      images: [],
       handlers: new Map(),
     };
     constructor(_image: unknown) {
@@ -57,6 +68,9 @@ vi.mock("electron", () => {
     setToolTip(text: string): void {
       this.record.toolTip = text;
     }
+    setImage(image: { readonly path: string }): void {
+      this.record.images.push(image.path);
+    }
     setContextMenu(menu: { readonly template: MenuItemLike[] }): void {
       this.record.menu = menu.template;
     }
@@ -68,11 +82,56 @@ vi.mock("electron", () => {
     }
   }
   return {
+    app: { getAppPath: (): string => "/unused" },
     Tray,
+    nativeImage: {
+      createFromPath: (path: string) => {
+        electron.imagePaths.push(path);
+        return {
+          path,
+          isEmpty: (): boolean => false,
+          setTemplateImage: (): void => {},
+        };
+      },
+    },
+    nativeTheme: {
+      get shouldUseDarkColorsForSystemIntegratedUI() {
+        return electron.nativeTheme.shouldUseDarkColorsForSystemIntegratedUI;
+      },
+      on: (event: string, listener: () => void): void => {
+        const listeners = electron.nativeTheme.listeners.get(event) ?? [];
+        listeners.push(listener);
+        electron.nativeTheme.listeners.set(event, listeners);
+      },
+      removeListener: (event: string, listener: () => void): void => {
+        electron.nativeTheme.listeners.set(
+          event,
+          (electron.nativeTheme.listeners.get(event) ?? []).filter(
+            (candidate) => candidate !== listener,
+          ),
+        );
+      },
+    },
     Menu: {
       buildFromTemplate: (template: MenuItemLike[]) => ({ template }),
     },
   };
+});
+
+vi.mock("node:child_process", () => {
+  const execFile = (): void => undefined;
+  Object.defineProperty(execFile, Symbol.for("nodejs.util.promisify.custom"), {
+    value: (): Promise<{ stdout: string; stderr: string }> => {
+      electron.execFileCalls.push("reg.exe");
+      return Promise.reject(new Error("registry unavailable in test"));
+    },
+  });
+  return { execFile };
+});
+
+vi.mock("../../../config", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../config")>();
+  return { ...actual, isDevBuild: false };
 });
 
 vi.mock("electron-log", () => ({
@@ -211,6 +270,49 @@ function menuItem(tray: RecordedTray, label: string): MenuItemLike {
 
 beforeEach(() => {
   electron.trays.length = 0;
+  electron.nativeTheme.listeners.clear();
+  electron.nativeTheme.shouldUseDarkColorsForSystemIntegratedUI = true;
+  electron.imagePaths.length = 0;
+  electron.execFileCalls.length = 0;
+  Object.defineProperty(process, "resourcesPath", {
+    configurable: true,
+    value: join(resolvePath(__dirname, "..", "..", "..", ".."), "resources"),
+  });
+});
+
+it("updates the real Windows voice tray icon from the system theme and unregisters on destroy", async () => {
+  const view = createElectronVoiceTrayView({
+    image: {} as Electron.NativeImage,
+    platform: "win32",
+    indicator: { muted: false, pausedForDictation: false },
+    actions: {
+      setMuted: () => undefined,
+      end: () => undefined,
+      returnToTraycer: () => undefined,
+    },
+  });
+  const tray = electron.trays[0];
+  if (tray === undefined) throw new Error("voice tray was not created");
+  expect(electron.execFileCalls).toHaveLength(1);
+  expect(electron.nativeTheme.listeners.get("updated")).toHaveLength(1);
+
+  electron.nativeTheme.shouldUseDarkColorsForSystemIntegratedUI = false;
+  for (const listener of electron.nativeTheme.listeners.get("updated") ?? []) {
+    listener();
+  }
+  await vi.waitFor(() => expect(tray.images).toHaveLength(1));
+  expect(tray.images[0]).toBe(
+    join(
+      resolvePath(__dirname, "..", "..", "..", ".."),
+      "resources",
+      "tray",
+      "tray-dark.png",
+    ),
+  );
+
+  view.destroy();
+  expect(tray.destroyed).toBe(true);
+  expect(electron.nativeTheme.listeners.get("updated")).toHaveLength(0);
 });
 
 describe("the voice item", () => {

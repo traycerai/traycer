@@ -16,17 +16,18 @@ export function isEditableRole(role: PermissionRole | null): boolean {
 /**
  * Tooltip copy for a mutation control that is disabled but still visible
  * ("locked, not hidden" - see the sidebar create actions and the New
- * Conversation modal). Disconnect takes precedence over role: it is the more
- * actionable condition (reconnecting fixes it; waiting for a role change does
- * not).
+ * Conversation modal). Disconnect takes precedence over an unresolved role: it
+ * is the more actionable condition (reconnecting fixes it).
+ *
+ * A role that may open the task may change it, so the only two reasons are
+ * about the connection and about not knowing the role yet - neither of which
+ * varies by what the control does.
  */
 export function mutationDisabledHint(
   role: PermissionRole | null,
   isDisconnected: boolean,
-  action: string,
 ): string | null {
   if (isDisconnected) return "Reconnect to make changes.";
   if (role === null) return "Task permissions are not available yet.";
-  if (!isEditableRole(role)) return `Viewers cannot ${action}.`;
   return null;
 }

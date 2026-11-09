@@ -1212,7 +1212,7 @@ describe("<LandingTerminalPanel />", () => {
     );
   });
 
-  it("isolates resized width between landing pages", () => {
+  it("opens a new landing page at the last width, then keeps each page's own width", () => {
     mocks.activeHostId = "host-a";
     mocks.clientActiveHostId = "host-a";
     mocks.primaryWorkspacePath = "/workspace/project";
@@ -1221,21 +1221,30 @@ describe("<LandingTerminalPanel />", () => {
     const view = render(panelUiForDraft("draft-b"));
 
     fireEvent.click(screen.getByTestId("landing-terminal-toggle"));
-    const resizeHandle = screen.getByTestId("landing-terminal-resize-handle");
-    fireEvent.keyDown(resizeHandle, { key: "ArrowLeft" });
+    fireEvent.keyDown(screen.getByTestId("landing-terminal-resize-handle"), {
+      key: "ArrowLeft",
+    });
     expect(screen.getByTestId("landing-terminal-panel").style.width).toBe(
       "39%",
     );
 
+    // A page that never recorded a layout opens at the width just chosen.
     view.rerender(panelUiForDraft("draft-a"));
     expect(screen.getByTestId("landing-terminal-panel").style.marginRight).toBe(
-      "-36%",
+      "-39%",
     );
     fireEvent.click(screen.getByTestId("landing-terminal-toggle"));
+    expect(screen.getByTestId("landing-terminal-panel").style.width).toBe(
+      "39%",
+    );
+    fireEvent.keyDown(screen.getByTestId("landing-terminal-resize-handle"), {
+      key: "ArrowRight",
+    });
     expect(screen.getByTestId("landing-terminal-panel").style.width).toBe(
       "36%",
     );
 
+    // Resizing that page leaves the other page's recorded width alone.
     view.rerender(panelUiForDraft("draft-b"));
     expect(screen.getByTestId("landing-terminal-panel").style.width).toBe(
       "39%",
@@ -5771,7 +5780,7 @@ describe("<LandingTerminalPanel />", () => {
       "transition-[margin-right,visibility]",
     );
     const pickerInput = screen.getByRole("combobox", {
-      name: "Create terminal in workspace",
+      name: "Create terminal in folder",
     });
     await waitFor(() => {
       expect(document.activeElement).toBe(pickerInput);
@@ -5866,7 +5875,7 @@ describe("<LandingTerminalPanel />", () => {
       dispatchAction("app.terminal.new", fakeKeybindingRouter());
     });
     await screen.findByRole("combobox", {
-      name: "Create terminal in workspace",
+      name: "Create terminal in folder",
     });
     setPrimaryFocusInteractionActive(true);
     fireEvent.click(screen.getByText("/workspace/other"));
@@ -5914,7 +5923,7 @@ describe("<LandingTerminalPanel />", () => {
       dispatchAction("app.terminal.new", fakeKeybindingRouter());
     });
     const pickerInput = await screen.findByRole("combobox", {
-      name: "Create terminal in workspace",
+      name: "Create terminal in folder",
     });
     fireEvent.keyDown(pickerInput, { key: "ArrowDown" });
     fireEvent.keyDown(pickerInput, { key: "Enter" });
@@ -5966,7 +5975,7 @@ describe("<LandingTerminalPanel />", () => {
     });
     await pickTerminalFromChooser();
     const pickerInput = await screen.findByRole("combobox", {
-      name: "Create terminal in workspace",
+      name: "Create terminal in folder",
     });
     pinnedHostId = "host-b";
     fireEvent.keyDown(pickerInput, { key: "ArrowDown" });
@@ -5995,7 +6004,7 @@ describe("<LandingTerminalPanel />", () => {
     });
     await pickTerminalFromChooser();
     const pickerInput = await screen.findByRole("combobox", {
-      name: "Create terminal in workspace",
+      name: "Create terminal in folder",
     });
     mocks.mutableWorkspacePaths.splice(1, 1);
     fireEvent.click(screen.getByText("/workspace/other"));
@@ -6022,7 +6031,7 @@ describe("<LandingTerminalPanel />", () => {
     });
     await pickTerminalFromChooser();
     const pickerInput = await screen.findByRole("combobox", {
-      name: "Create terminal in workspace",
+      name: "Create terminal in folder",
     });
     mocks.queryClient.fetchQuery.mockRejectedValue(new Error("offline"));
     fireEvent.keyDown(pickerInput, { key: "ArrowDown" });
@@ -6057,7 +6066,7 @@ describe("<LandingTerminalPanel />", () => {
     });
     await pickTerminalFromChooser();
     const pickerInput = await screen.findByRole("combobox", {
-      name: "Create terminal in workspace",
+      name: "Create terminal in folder",
     });
     fireEvent.keyDown(pickerInput, { key: "ArrowDown" });
     fireEvent.keyDown(pickerInput, { key: "Enter" });
@@ -6100,7 +6109,7 @@ describe("<LandingTerminalPanel />", () => {
     view.rerender(panelUi());
 
     const pickerInput = screen.getByRole("combobox", {
-      name: "Create terminal in workspace",
+      name: "Create terminal in folder",
     });
     await waitFor(() => {
       expect(
@@ -6171,7 +6180,7 @@ describe("<LandingTerminalPanel />", () => {
       dispatchAction("app.terminal.toggle", router);
     });
     const pickerInput = await screen.findByRole("combobox", {
-      name: "Create terminal in workspace",
+      name: "Create terminal in folder",
     });
     await waitFor(() => {
       expect(document.activeElement).toBe(pickerInput);
@@ -6204,7 +6213,7 @@ describe("<LandingTerminalPanel />", () => {
 
     const createInOther = async (): Promise<void> => {
       const pickerInput = await screen.findByRole("combobox", {
-        name: "Create terminal in workspace",
+        name: "Create terminal in folder",
       });
       await waitFor(() => {
         expect(document.activeElement).toBe(pickerInput);
@@ -6280,7 +6289,7 @@ describe("<LandingTerminalPanel />", () => {
       dispatchAction("app.terminal.new", router);
     });
     const pickerInput = await screen.findByRole("combobox", {
-      name: "Create terminal in workspace",
+      name: "Create terminal in folder",
     });
     fireEvent.keyDown(pickerInput, { key: "Escape" });
 
@@ -6311,7 +6320,7 @@ describe("<LandingTerminalPanel />", () => {
     });
     fireEvent.keyDown(
       await screen.findByRole("combobox", {
-        name: "Create terminal in workspace",
+        name: "Create terminal in folder",
       }),
       { key: "Enter" },
     );
@@ -6329,7 +6338,7 @@ describe("<LandingTerminalPanel />", () => {
       dispatchAction("app.terminal.new", router);
     });
     const pickerInput = await screen.findByRole("combobox", {
-      name: "Create terminal in workspace",
+      name: "Create terminal in folder",
     });
     await waitFor(() => {
       expect(document.activeElement).toBe(pickerInput);
@@ -6364,7 +6373,7 @@ describe("<LandingTerminalPanel />", () => {
 
     await pickTerminalFromChooser();
     const pickerInput = await screen.findByRole("combobox", {
-      name: "Create terminal in workspace",
+      name: "Create terminal in folder",
     });
     // The chooser is still mounted UNDER the picker, hidden. It must not pull
     // the keyboard back out of the picker while it is up.

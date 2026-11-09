@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState, type ReactNode } from "react";
-import { Expand } from "lucide-react";
+import { PanelsTopLeft } from "lucide-react";
+import { ArtifactExpansion } from "@/components/artifacts/artifact-expansion";
 import type { ToolCallArtifactStamp } from "@traycer/protocol/persistence/epic/content-blocks";
 import type { HtmlArtifactVersionSelection } from "@traycer/protocol/host/epic/html-artifact-versions";
 import {
@@ -229,7 +230,7 @@ function ShownArtifact(props: {
     );
   } else {
     content = (
-      <>
+      <ArtifactExpansion title={stamp.title}>
         {state.kind === "latest" ? (
           <figcaption className="mb-2 text-ui-xs text-muted-foreground">
             Showing latest
@@ -263,7 +264,7 @@ function ShownArtifact(props: {
             />
           }
         />
-      </>
+      </ArtifactExpansion>
     );
   }
 
@@ -321,7 +322,7 @@ function InlineArtifactActions(props: {
         hostId={props.scope.hostId}
       />
       <TooltipWrapper
-        label="Expand"
+        label="Open in panel"
         side="top"
         sideOffset={undefined}
         align={undefined}
@@ -330,7 +331,7 @@ function InlineArtifactActions(props: {
           type="button"
           variant="ghost"
           size={coarsePointer ? "icon-touch" : "icon-sm"}
-          aria-label="Expand"
+          aria-label="Open in panel"
           onClick={() => {
             openTile(
               {
@@ -359,7 +360,7 @@ function InlineArtifactActions(props: {
             );
           }}
         >
-          <Expand className="size-4" />
+          <PanelsTopLeft className="size-4" />
         </Button>
       </TooltipWrapper>
     </>

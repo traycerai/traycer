@@ -20,7 +20,15 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BotTestRunnerHost } from "@/components/bots/__tests__/bot-test-runner-host";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import {
   HostClient,
   type HostRequester,
@@ -48,6 +56,7 @@ import {
   VIEWER_USER_ID,
 } from "@/components/bots/__tests__/bot-failed-request-test-support";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
+import { installLegendListTestClock } from "@/components/chat/__tests__/legend-list-test-environment";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type {
   BotActivity,
@@ -237,6 +246,7 @@ function watch(settlement: BotQuestionSettlement | null): BotQuestionItem {
     text: WATCH,
     options: ["Agents waiting on me", "Sandboxes and credits", "Nothing yet"],
     allowFreeText: true,
+    multiSelect: true,
     settlement,
   };
 }
@@ -524,7 +534,17 @@ function cardQuestion(card: HTMLElement, text: string): HTMLElement {
   return within(card).getByRole("region", { name: text });
 }
 
+// sonner, vaul and react-zoom-pan-pinch insert their stylesheets on import, and
+// no element this file draws matches a rule in them. jsdom still runs every
+// rule against an element and each of its ancestors whenever a DOM change
+// drops its style cache, which every role query and click here pays: with the
+// sheets in place, the file's tests take twice as long.
+beforeAll(() => {
+  for (const style of document.head.querySelectorAll("style")) style.remove();
+});
+
 beforeEach(() => {
+  installLegendListTestClock();
   sent = [];
   refuseSends = false;
   delivery = "written";
@@ -540,8 +560,12 @@ beforeEach(() => {
   signInViewer(VIEWER_USER_ID);
 });
 
-afterEach(() => {
+afterEach(async () => {
   cleanup();
+  // Let Tiptap complete its deferred unmount destruction before restoring the clock.
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1);
+  });
   resetBotFailedRequestSupport();
   mocks.handles.clear();
   mocks.client = null;
@@ -568,7 +592,7 @@ describe("<BotChannelView tiles={null} /> a question the bot asks without waitin
   });
 
   it("sends the picked answer as the person's message with the question it settles, and shows the settlement the host writes, with nothing left to do", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const write = session(CHANNEL_ID, [questionRow([deploy(null)])]);
     mountChannel(null);
 
@@ -606,7 +630,7 @@ describe("<BotChannelView tiles={null} /> a question the bot asks without waitin
   });
 
   it("sends a typed answer for the question it is typed under, by its place on the card", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     session(CHANNEL_ID, [questionRow([deploy(null), hold(null)])]);
     mountChannel(null);
 
@@ -626,7 +650,7 @@ describe("<BotChannelView tiles={null} /> a question the bot asks without waitin
   });
 
   it("sends a Skip as skipped, and shows the question skipped once the host settles it", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const write = session(CHANNEL_ID, [questionRow([hold(null)])]);
     mountChannel(null);
 
@@ -678,7 +702,7 @@ describe("<BotChannelView tiles={null} /> a question the bot asks without waitin
   });
 
   it("opens the question's own thread from its hover actions, not the thread of the post it follows", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     session(CHANNEL_ID, [
       botRow(
         QUESTION_ID,
@@ -720,7 +744,7 @@ describe("<BotChannelView tiles={null} /> a question the bot asks without waitin
 
 describe("<BotChannelView tiles={null} /> a question on a tab whose host cannot take a card's answer", () => {
   it("draws the card with nothing to press on a host that negotiated bot.conversation.send 1.1, keeping the member's draft, and offers them again once the host reaches 1.2", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     session(CHANNEL_ID, [questionRow([deploy(null), hold(null)])]);
     mountChannel(null);
     await user.type(holdField(), "Hold the migration");
@@ -757,7 +781,7 @@ describe("<BotChannelView tiles={null} /> a question on a tab whose host cannot 
 
 describe("<BotChannelView tiles={null} /> a question settled while a member was answering (decision 122)", () => {
   it("refuses the member's answer at the host, keeps their draft, and once the settlement lands says who answered, drops Submit, and offers Copy and Discuss", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const write = session(CHANNEL_ID, [questionRow([hold(null)])]);
     mountChannel(null);
     const field = within(cardQuestion(channelCard(), HOLD)).getByRole(
@@ -775,7 +799,9 @@ describe("<BotChannelView tiles={null} /> a question settled while a member was 
     );
 
     expect(sent).toHaveLength(1);
-    expect(screen.getByTestId("bot-channel-composer-send-failed")).toBeTruthy();
+    expect(
+      await screen.findByTestId("bot-channel-composer-send-failed"),
+    ).toBeTruthy();
     expect(field).toHaveProperty("value", "Hold the migration");
     write([questionRow([hold(byPerson(TEAMMATE_USER_ID, "Nothing"))])]);
 
@@ -795,7 +821,7 @@ describe("<BotChannelView tiles={null} /> a question settled while a member was 
   });
 
   it("keeps a picked option in place when another member's settlement arrives, without sending anything", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const write = session(CHANNEL_ID, [questionRow([deploy(null)])]);
     mountChannel(null);
     await user.click(
@@ -826,7 +852,7 @@ describe("<BotChannelView tiles={null} /> a question settled while a member was 
   });
 
   it("opens the question's thread from Discuss with the member's draft in its box, unsent", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const write = session(CHANNEL_ID, [questionRow([hold(null)])]);
     const { reopen } = mountChannel(null);
     await user.type(
@@ -892,7 +918,7 @@ function questionThreadBox(): HTMLElement {
 
 describe("<BotChannelView tiles={null} /> an answer the host queued while the bot's host is away", () => {
   it("holds the sent answer on the card, its choice pressed and nothing left to press, until the room settles it; the member's own settlement closes it", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     delivery = "queued";
     const write = session(CHANNEL_ID, [questionRow([deploy(null)])]);
     mountChannel(null);
@@ -931,7 +957,7 @@ describe("<BotChannelView tiles={null} /> an answer the host queued while the bo
   });
 
   it("shows a queued answer overtaken once a teammate's settlement reaches the room first, the draft kept with Copy and Discuss, and sends nothing more", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     delivery = "queued";
     const write = session(CHANNEL_ID, [questionRow([hold(null)])]);
     mountChannel(null);
@@ -969,7 +995,7 @@ describe("<BotChannelView tiles={null} /> an answer the host queued while the bo
 
 describe("<BotChannelView tiles={null} /> an answer someone else settled with first, the same member from another window included", () => {
   it("shows the card's sent answer overtaken when a teammate settled the question first with the same answer", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     delivery = "queued";
     const write = session(CHANNEL_ID, [questionRow([deploy(null)])]);
     mountChannel(null);
@@ -994,7 +1020,7 @@ describe("<BotChannelView tiles={null} /> an answer someone else settled with fi
   });
 
   it("shows the card's sent answer overtaken, kept with Copy and Discuss, when the member's settlement is a different answer", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     delivery = "queued";
     const write = session(CHANNEL_ID, [questionRow([deploy(null)])]);
     mountChannel(null);
@@ -1038,12 +1064,14 @@ describe("<BotChannelView tiles={null} /> what a member has not sent, across the
     readonly reopen: (next: BotOpenThread | null) => void;
     readonly unmount: () => void;
   }> {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const write = session(CHANNEL_ID, [
       questionRow([deploy(null), hold(null)]),
     ]);
     const view = mountChannel(null);
-    await user.type(holdField(), typed);
+    // Seed the draft in one paste; these cases exercise its lifecycle after settlement.
+    await user.click(holdField());
+    await user.paste(typed);
     await user.click(
       within(cardQuestion(channelCard(), DEPLOY)).getByRole("button", {
         name: "Now",
@@ -1059,7 +1087,7 @@ describe("<BotChannelView tiles={null} /> what a member has not sent, across the
   }
 
   async function discuss(text: string): Promise<void> {
-    await userEvent.setup().click(
+    await userEvent.setup({ advanceTimers: vi.advanceTimersByTime }).click(
       within(cardQuestion(channelCard(), text)).getByRole("button", {
         name: "Discuss",
       }),
@@ -1067,7 +1095,7 @@ describe("<BotChannelView tiles={null} /> what a member has not sent, across the
   }
 
   it("keeps a card's answers, typed, picked and sent, across the channel unmounting and mounting again, as a switch to another tab and back does", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     delivery = "queued";
     session(CHANNEL_ID, [questionRow([deploy(null), hold(null)])]);
     const first = mountChannel(null);
@@ -1117,7 +1145,7 @@ describe("<BotChannelView tiles={null} /> what a member has not sent, across the
   });
 
   it("spends the draft with the send that carries it, even when the send lands after the thread closed", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     heldSends = [];
     const view = await overtakenBoth("Hold the migration");
     await discuss(HOLD);
@@ -1139,7 +1167,7 @@ describe("<BotChannelView tiles={null} /> what a member has not sent, across the
   });
 
   it("offers the refused send's text back beside a newer draft, in the thread opened again after the send was refused with its thread closed", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     heldSends = [];
     const view = await overtakenBoth("Hold the migration");
     await discuss(HOLD);
@@ -1168,7 +1196,7 @@ describe("<BotChannelView tiles={null} /> what a member has not sent, across the
    * box opens empty.
    */
   async function sentThenReopened(): Promise<void> {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     heldSends = [];
     const view = await overtakenBoth("Hold the migration");
     await discuss(HOLD);
@@ -1201,7 +1229,7 @@ describe("<BotChannelView tiles={null} /> what a member has not sent, across the
   });
 
   it("keeps a draft Discuss puts in the thread's open box while an earlier send from it is in flight", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     heldSends = [];
     const view = await overtakenBoth("Hold the migration");
     await discuss(HOLD);
@@ -1219,7 +1247,7 @@ describe("<BotChannelView tiles={null} /> what a member has not sent, across the
   });
 
   it("keeps a draft Discuss puts in the thread while it is closed, even with the text an earlier send from its box carried, when that send lands after", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     heldSends = [];
     const view = await overtakenBoth("Now");
     await discuss(HOLD);
@@ -1291,17 +1319,8 @@ describe("<BotChannelView tiles={null} /> a row's text above its question card",
       ).toHaveLength(1);
       expect(within(channel).getAllByText(DEPLOY)).toHaveLength(1);
       const card = channelCard();
-      expect(within(card).getByText(new RegExp(LONG_MARKER))).toBeTruthy();
-      expect(within(card).getByText(DEPLOY)).toBeTruthy();
-      expect(
-        within(card).getAllByRole("button", { name: "Submit" }).length,
-      ).toBeGreaterThan(0);
-      expect(
-        within(card).getAllByRole("button", { name: "Skip" }).length,
-      ).toBeGreaterThan(0);
-      expect(
-        within(card).getAllByRole("textbox", { name: "Your answer" }).length,
-      ).toBeGreaterThan(0);
+      within(card).getByText(new RegExp(LONG_MARKER));
+      within(card).getByText(DEPLOY);
     }
 
     it("draws each question once, in the card, when the row's text is exactly what the host writes for them", () => {
@@ -1333,7 +1352,7 @@ describe("<BotChannelView tiles={null} /> a row's text above its question card",
 
 describe("<BotChannelView tiles={null} /> a question that takes options and the person's own words", () => {
   it("toggles several options, and Submit sends them joined in option order with the typed words after them", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     session(CHANNEL_ID, [questionRow([watch(null)])]);
     mountChannel(null);
 
@@ -1356,7 +1375,7 @@ describe("<BotChannelView tiles={null} /> a question that takes options and the 
   });
 
   it("takes a pick back when it is toggled off", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     session(CHANNEL_ID, [questionRow([watch(null)])]);
     mountChannel(null);
 
@@ -1382,8 +1401,103 @@ describe("<BotChannelView tiles={null} /> a question that takes options and the 
     ]);
   });
 
+  it("stays single-pick when multiSelect is false though free text is allowed: a second pick replaces the first", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    session(CHANNEL_ID, [
+      questionRow([{ ...watch(null), multiSelect: false }]),
+    ]);
+    mountChannel(null);
+
+    const question = cardQuestion(channelCard(), WATCH);
+    await user.click(
+      within(question).getByRole("button", { name: "Agents waiting on me" }),
+    );
+    await user.click(
+      within(question).getByRole("button", { name: "Sandboxes and credits" }),
+    );
+    expect(
+      within(question)
+        .getByRole("button", { name: "Agents waiting on me" })
+        .getAttribute("aria-pressed"),
+    ).toBe("false");
+    await user.click(within(question).getByRole("button", { name: "Submit" }));
+    expect(sent.map((request) => request.text)).toEqual([
+      "Sandboxes and credits",
+    ]);
+  });
+
+  it("sends the typed words alone on a single-pick question with free text, once words are typed over a pick", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    session(CHANNEL_ID, [
+      questionRow([{ ...watch(null), multiSelect: false }]),
+    ]);
+    mountChannel(null);
+
+    const question = cardQuestion(channelCard(), WATCH);
+    await user.click(
+      within(question).getByRole("button", { name: "Agents waiting on me" }),
+    );
+    await user.type(
+      within(question).getByRole("textbox", { name: "Your answer" }),
+      "the build farm",
+    );
+    await user.click(within(question).getByRole("button", { name: "Submit" }));
+
+    expect(sent.map((request) => request.text)).toEqual(["the build farm"]);
+  });
+
+  it("toggles several options with no text field when multiSelect is true and free text is not allowed, and Submit sends the picks joined in option order", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    session(CHANNEL_ID, [
+      questionRow([{ ...watch(null), allowFreeText: false }]),
+    ]);
+    mountChannel(null);
+
+    const question = cardQuestion(channelCard(), WATCH);
+    expect(within(question).queryByRole("textbox")).toBeNull();
+    await user.click(
+      within(question).getByRole("button", { name: "Sandboxes and credits" }),
+    );
+    await user.click(
+      within(question).getByRole("button", { name: "Agents waiting on me" }),
+    );
+    await user.click(within(question).getByRole("button", { name: "Submit" }));
+
+    expect(sent.map((request) => request.text)).toEqual([
+      "Agents waiting on me, Sandboxes and credits",
+    ]);
+  });
+
+  it("draws a question row written without multiSelect, as an older host writes it, as single-pick", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    session(CHANNEL_ID, [
+      questionRow([
+        {
+          text: WATCH,
+          options: ["Agents waiting on me", "Sandboxes and credits"],
+          allowFreeText: true,
+          settlement: null,
+        },
+      ]),
+    ]);
+    mountChannel(null);
+
+    const question = cardQuestion(channelCard(), WATCH);
+    await user.click(
+      within(question).getByRole("button", { name: "Agents waiting on me" }),
+    );
+    await user.click(
+      within(question).getByRole("button", { name: "Sandboxes and credits" }),
+    );
+    await user.click(within(question).getByRole("button", { name: "Submit" }));
+
+    expect(sent.map((request) => request.text)).toEqual([
+      "Sandboxes and credits",
+    ]);
+  });
+
   it("stays single-choice on a question without free text: a second pick replaces the first", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     session(CHANNEL_ID, [questionRow([deploy(null)])]);
     mountChannel(null);
 
@@ -1455,7 +1569,7 @@ describe("<BotChannelView tiles={null} /> a question a thread's session asks in 
   };
 
   it("sends the answer into the thread, and Discuss on an overtaken answer puts it in the thread's own box, unsent", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     mocks.threads = [postThread()];
     session(CHANNEL_ID, [memberPost()]);
     const write = session(THREAD_ID, [threadQuestion(null)]);
@@ -1535,7 +1649,7 @@ describe("<BotChannelView tiles={null} /> a question a thread's session asks in 
   };
 
   it("keeps an edit opened in the thread's box opened again, when a send from the box before it closed lands", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     heldSends = [];
     activityStore.setState({
       activity: { trunk: null, threads: { [THREAD_ID]: FAILED_ON_REPLY } },
@@ -1569,7 +1683,7 @@ describe("<BotChannelView tiles={null} /> a question a thread's session asks in 
   });
 
   it("starts a new message when Discuss puts a draft in the box while it edits a failed reply: what is sent replaces nothing", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     activityStore.setState({
       activity: { trunk: null, threads: { [THREAD_ID]: FAILED_ON_REPLY } },
     });

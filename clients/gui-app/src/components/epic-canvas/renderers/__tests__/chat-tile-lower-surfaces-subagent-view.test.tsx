@@ -169,6 +169,7 @@ function props(
       nodeId: "chat-1",
       isActive: true,
       mentionRoots: [],
+      runWorkingDirectory: null,
       fallbackToGlobalMentionRoots: true,
       currentEpicId: "epic-1",
       onSubmitMessage: () => false,

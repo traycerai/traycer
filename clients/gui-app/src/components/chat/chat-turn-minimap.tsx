@@ -58,6 +58,13 @@ export interface ChatTurnMinimapProps {
    */
   readonly senderFirst: boolean;
   readonly listRef: RefObject<LegendListRef | null>;
+  /**
+   * Whether the timeline is at its end: the owner's mirror of its follow
+   * mode, which the jump-to-latest pill shows from. Read at each refresh, not
+   * captured at render, so a scroll's refresh sees the mode that scroll just
+   * set. The owner calls `inViewRefreshRef` when the mode flips without one.
+   */
+  readonly atEndRef: RefObject<boolean>;
   readonly topOffsetAdjustmentRef: RefObject<number>;
   readonly viewportRef: RefObject<HTMLElement | null>;
   readonly bottomInset: number;
@@ -98,6 +105,7 @@ function hasRouterHistory(
 export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
   const { ref } = props;
   const {
+    atEndRef,
     bottomInset,
     inViewRefreshRef,
     listRef,
@@ -166,12 +174,13 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
           rawState.scrollLength - Math.max(0, bottomInset),
         ),
         topOffsetAdjustment: topOffsetAdjustmentRef.current,
+        atEnd: atEndRef.current,
       },
       items,
     );
     if (next !== null)
       setCurrentIndex((current) => (current === next ? current : next));
-  }, [bottomInset, items, listRef, topOffsetAdjustmentRef]);
+  }, [atEndRef, bottomInset, items, listRef, topOffsetAdjustmentRef]);
 
   useEffect(() => {
     inViewRefreshRef.current = refreshCurrent;

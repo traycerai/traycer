@@ -127,7 +127,7 @@ describe("formatWorktreeFolderDisabledReason", () => {
   });
 
   it("is null for a row that is merely mid-setup", () => {
-    // Both call sites render this as "Workspace unavailable: <reason>", so a
+    // Both call sites render this as "Folder unavailable: <reason>", so a
     // setup state leaking through here would tell the user a usable worktree
     // is gone.
     expect(

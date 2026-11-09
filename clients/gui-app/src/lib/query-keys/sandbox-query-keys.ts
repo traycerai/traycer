@@ -1,3 +1,5 @@
+import type { SandboxCatalogueReadinessRequest } from "@traycer/protocol/host/sandbox-control";
+
 /**
  * Query and mutation keys for the sandbox control plane (`/api/sandboxes`),
  * read through `AuthService` like the host registry.
@@ -59,7 +61,14 @@ export const sandboxQueryKeys = {
   catalogue: (
     authService: object,
     userId: string | null,
-  ): readonly unknown[] => ["auth", "sandbox-catalogue", authService, userId],
+    context: SandboxCatalogueReadinessRequest | null,
+  ): readonly unknown[] => [
+    "auth",
+    "sandbox-catalogue",
+    authService,
+    userId,
+    context,
+  ],
   catalogueMissing: (): readonly unknown[] => [
     "auth",
     "sandbox-catalogue",

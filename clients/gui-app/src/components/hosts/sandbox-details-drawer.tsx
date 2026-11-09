@@ -9,7 +9,6 @@ import {
   sandboxSettingsFailed,
   sandboxSettingsStepsLine,
 } from "@traycer/protocol/host/sandbox-settings";
-import { useSandboxRowSessionReport } from "@/hooks/sandboxes/use-sandbox-session-report";
 import { unusedSettingLabel } from "@/components/settings/details/details-unused-setting";
 import { Button } from "@/components/ui/button";
 import {
@@ -34,11 +33,7 @@ import {
   sandboxDetailsEntry,
   type SandboxDetailsExport,
 } from "@/lib/sandboxes/sandbox-details-provider";
-import {
-  formatSandboxDate,
-  sandboxSessionPills,
-  sandboxSessionsLine,
-} from "@/lib/sandboxes/sandbox-row-lines";
+import { formatSandboxDate } from "@/lib/sandboxes/sandbox-row-lines";
 import {
   SANDBOX_LIST_FAILED,
   sandboxVerbFailureLine,
@@ -184,26 +179,8 @@ function SandboxDetailsSections(props: {
               <dd className="wrap-anywhere">{row.value}</dd>
             </div>
           ))}
-          {summary.burst && summary.createdByAgentName !== null ? (
-            <>
-              <dt className="text-muted-foreground">Created by</dt>
-              <dd className="wrap-anywhere">{summary.createdByAgentName}</dd>
-              {summary.createdByTaskTitle === null ? null : (
-                <>
-                  <dt className="text-muted-foreground">For task</dt>
-                  <dd className="wrap-anywhere">
-                    {summary.createdByTaskTitle}
-                  </dd>
-                </>
-              )}
-            </>
-          ) : null}
         </dl>
       </section>
-      <p className="px-4 pb-4 text-ui-xs text-muted-foreground">
-        Today’s costs use the UTC day.
-      </p>
-      <SandboxDetailsSessions summary={summary} now={now} />
       <SandboxSettingsDeliverySection summary={summary} />
       <section
         aria-label="History"
@@ -278,43 +255,6 @@ function SandboxDetailsSections(props: {
         </Button>
       </section>
     </>
-  );
-}
-
-/** Session reports stay in Details so the list shows lifecycle facts once. */
-function SandboxDetailsSessions(props: {
-  readonly summary: SandboxSummary;
-  readonly now: number;
-}): ReactNode {
-  const { report } = useSandboxRowSessionReport(props.summary);
-  if (props.summary.state !== "awake") return null;
-  return (
-    <section
-      aria-label="Sessions"
-      className="flex flex-col gap-2 border-t border-border/60 px-4 py-4"
-    >
-      <h3 className="text-ui-sm font-medium">Sessions</h3>
-      <p className="text-ui-xs text-muted-foreground wrap-anywhere">
-        {sandboxSessionsLine(report, props.now)}
-      </p>
-      <ul className="flex min-w-0 flex-col gap-1.5 text-ui-xs">
-        {sandboxSessionPills(report).map((pill) => (
-          <li
-            key={pill.key}
-            className="flex min-w-0 items-start gap-1.5 wrap-anywhere"
-            data-testid="sandbox-details-session-pill"
-          >
-            {pill.working ? (
-              <span
-                aria-hidden
-                className="mt-1 size-1.5 shrink-0 rounded-full bg-success"
-              />
-            ) : null}
-            <span className="min-w-0">{pill.label}</span>
-          </li>
-        ))}
-      </ul>
-    </section>
   );
 }
 

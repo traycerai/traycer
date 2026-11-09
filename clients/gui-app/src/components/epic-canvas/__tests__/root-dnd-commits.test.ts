@@ -235,12 +235,8 @@ const TERMINAL_TILE = {
   cwd: "/repo",
 } as const;
 
-const rawNestedFocus: NavigateNestedFocus = (
-  _epicId,
-  _tabId,
-  prepare,
-  _provenance,
-) => prepare();
+const rawNestedFocus: NavigateNestedFocus = (_epicId, _tabId, prepare) =>
+  prepare();
 
 /**
  * A canvas whose `group-a` already holds `TERMINAL_TILE`, so a drop of the

@@ -1,18 +1,10 @@
-import { cn } from "@/lib/utils";
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   PaneFocusProbeContext,
   PanePortalContainerContext,
   PaneSurfaceActivityContext,
   PaneVisibilityContext,
-  runPresentationLossBlur,
+  usePanePortalHostPresentation,
 } from "@/components/epic-tabs/pane-visibility-context";
 
 /**
@@ -28,7 +20,10 @@ import {
  *   - actively blurred (an already-focused descendant keeps `document.active-
  *     Element` even under `inert`/`visibility:hidden` in Chrome, so keyboard
  *     would otherwise still target it).
- * Portals keep their typed state (no unmount).
+ * Portals keep their typed state (no unmount). Those three are
+ * `usePanePortalHostPresentation`, which the expanded artifact's own comment
+ * host takes as well - its surface is in the top layer, out of this host's
+ * reach, so it carries a host of its own under the same rules.
  *
  * Modal-family Radix primitives (Dialog/Popover/Select/Dropdown/Context) instead
  * un-present by unmounting their content when unfocused (the only way to drop
@@ -57,21 +52,9 @@ export function SurfacePresentationBoundary(props: {
     [props.visible, props.focused],
   );
 
-  // An already-focused descendant of the portal host keeps DOM focus even after
-  // the host is hidden + made inert (Chrome does not blur on hide/inert), so
-  // keyboard would still target the background pane. Blur it explicitly, without
-  // unmounting (typed draft state survives). The blur runs under
-  // `runPresentationLossBlur` so a blur-as-commit consumer (e.g. the artifact-
-  // link editor) can tell this synthetic relinquish-blur from a real user blur
-  // and NOT commit/close/refocus — otherwise backgrounding would destroy its
-  // in-progress draft.
-  useEffect(() => {
-    if (props.focused) return;
-    const active = document.activeElement;
-    if (active instanceof HTMLElement && container?.contains(active)) {
-      runPresentationLossBlur(() => active.blur());
-    }
-  }, [props.focused, container]);
+  // The concealment and the blur that goes with it, in one place: the expanded
+  // artifact's comment host takes the same ones.
+  const hostProps = usePanePortalHostPresentation(container, activity);
 
   return (
     <PaneFocusProbeContext.Provider value={isPaneFocused}>
@@ -88,10 +71,7 @@ export function SurfacePresentationBoundary(props: {
             <div
               ref={setContainer}
               data-slot="pane-portal-host"
-              aria-hidden={!props.focused}
-              inert={!props.focused}
-              hidden={!props.visible}
-              className={cn(!props.focused && "invisible pointer-events-none")}
+              {...hostProps}
             />
           </PanePortalContainerContext.Provider>
         </PaneVisibilityContext.Provider>

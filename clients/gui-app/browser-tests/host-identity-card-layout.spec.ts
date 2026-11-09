@@ -54,3 +54,60 @@ test("on desktop host actions remain beside the name", async ({ page }) => {
     expect(actions.y + actions.height).toBeGreaterThan(nameRow.y);
   }
 });
+
+test("at 390px About this host and the install record wrap within the pane", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openCards(page);
+
+  const about = page.getByTestId("host-overview-about");
+  const record = page.getByTestId("host-overview-install-record");
+  await expect(
+    about.getByRole("heading", { name: "About this host" }),
+  ).toBeVisible();
+  for (const label of [
+    "Host ID",
+    "Added to account",
+    "Last seen",
+    "Last reported version",
+    "Platform",
+  ]) {
+    await expect(about.getByText(label, { exact: true })).toBeVisible();
+  }
+  await expect(
+    record.getByRole("heading", { name: "Install record" }),
+  ).toBeVisible();
+  for (const label of ["Version", "Build", "SHA-256", "Platform"]) {
+    await expect(record.getByText(label, { exact: true })).toBeVisible();
+  }
+  await expect(
+    record.getByText(
+      "local-runtime-2026-11-08-release-integration-with-a-long-build-identifier",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  await expect(
+    record.getByText("Unsigned local build", { exact: true }),
+  ).toBeVisible();
+
+  for (const group of [about, record]) {
+    for (const value of await group.locator("dd").all()) {
+      const rect = await box(value);
+      expect(rect.x).toBeGreaterThanOrEqual(0);
+      expect(rect.x + rect.width).toBeLessThanOrEqual(390);
+      expect(
+        await value.evaluate(
+          (element) => element.scrollWidth <= element.clientWidth,
+        ),
+      ).toBe(true);
+    }
+  }
+  for (const name of ["Copy host ID", "Copy SHA-256"]) {
+    const button = page.getByRole("button", { name });
+    await expect(button).toBeVisible();
+    const control = await box(button);
+    expect(control.x).toBeGreaterThanOrEqual(0);
+    expect(control.x + control.width).toBeLessThanOrEqual(390);
+  }
+});

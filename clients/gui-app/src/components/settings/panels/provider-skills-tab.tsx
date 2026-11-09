@@ -497,6 +497,8 @@ function ProviderSkillsTabBody({
 
         {openSkill === null ? null : (
           <ProviderSkillDetailDialog
+            policyControl={null}
+            policyFeedback={null}
             skill={openSkill}
             sourceLabel={skillSourceLabel(openSkill.source, providerLabel)}
             removal={
@@ -603,7 +605,7 @@ function ProviderSkillsTabBody({
                 providerLabel={providerLabel}
               />
             ) : (
-              "Applies to every workspace on this host."
+              "Applies to every folder on this host."
             )}
           </p>
         ) : (
@@ -969,12 +971,12 @@ function SkillsListBody({
     return (
       <div className="flex flex-col gap-1 rounded-lg border border-border/60 p-4">
         <div className="text-ui-sm font-medium text-foreground">
-          {workspacesLoading ? "Resolving workspaces…" : "Select a workspace"}
+          {workspacesLoading ? "Resolving folders…" : "Select a folder"}
         </div>
         <p className="text-ui-xs text-muted-foreground">
           {workspacesLoading
-            ? "Resolving workspaces on this host."
-            : "Choose a project workspace above to manage project-scoped skills on this host."}
+            ? "Resolving folders on this host."
+            : "Choose a project folder above to manage project-scoped skills on this host."}
         </p>
       </div>
     );

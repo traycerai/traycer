@@ -300,7 +300,9 @@ describe("useAutoJudgeBilling", () => {
     autoJudgeGetData = { selection: null };
     providersListData = { providers: [] };
 
-    renderHook(() => useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""));
+    renderHook(() =>
+      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, "", null),
+    );
 
     expect(useAddressableHostIdMock).not.toHaveBeenCalled();
   });
@@ -309,7 +311,9 @@ describe("useAutoJudgeBilling", () => {
     autoJudgeGetData = { selection: null };
     providersListData = { providers: [] };
 
-    renderHook(() => useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""));
+    renderHook(() =>
+      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, "", null),
+    );
 
     expect(useHostSupportsMethodMock).toHaveBeenCalledWith(
       "host-b",
@@ -325,7 +329,7 @@ describe("useAutoJudgeBilling", () => {
     autoJudgeGetData = { selection: null };
     providersListData = { providers: [] };
 
-    renderHook(() => useAutoJudgeBilling(null, CLAUDE_HARNESS_ID, ""));
+    renderHook(() => useAutoJudgeBilling(null, CLAUDE_HARNESS_ID, "", null));
 
     expect(useHostSupportsMethodMock).toHaveBeenCalledWith(
       FOLLOWING_HOST_ID,
@@ -342,7 +346,7 @@ describe("useAutoJudgeBilling", () => {
     providersListData = { providers: [] };
 
     const { result } = renderHook(() =>
-      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
+      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, "", null),
     );
 
     expect(result.current).toBeNull();
@@ -355,7 +359,7 @@ describe("useAutoJudgeBilling", () => {
     };
 
     const { result } = renderHook(() =>
-      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
+      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, "", null),
     );
 
     expect(result.current).toEqual({
@@ -380,7 +384,7 @@ describe("useAutoJudgeBilling", () => {
     harnessesData = { harnesses: [harnessRow(false, null)] };
 
     const { result } = renderHook(() =>
-      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
+      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, "", null),
     );
 
     expect(result.current).toEqual({
@@ -403,7 +407,7 @@ describe("useAutoJudgeBilling", () => {
     providersListData = { providers: [] };
 
     const { result } = renderHook(() =>
-      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
+      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, "", null),
     );
 
     expect(result.current).toEqual({ kind: "blocked" });
@@ -423,7 +427,7 @@ describe("useAutoJudgeBilling", () => {
     providersListData = { providers: [] };
 
     const { result } = renderHook(() =>
-      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
+      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, "", null),
     );
 
     expect(result.current).toEqual({ kind: "blocked" });
@@ -445,7 +449,7 @@ describe("useAutoJudgeBilling", () => {
     };
 
     const { result } = renderHook(() =>
-      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
+      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, "", null),
     );
 
     expect(result.current).toEqual({ kind: "blocked" });
@@ -467,7 +471,7 @@ describe("useAutoJudgeBilling", () => {
     };
 
     const { result } = renderHook(() =>
-      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
+      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, "", null),
     );
 
     expect(result.current).toEqual({
@@ -497,7 +501,7 @@ describe("useAutoJudgeBilling", () => {
     );
 
     const { result } = renderHook(() =>
-      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
+      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, "", null),
     );
 
     expect(result.current).toEqual({ kind: "blocked" });
@@ -520,7 +524,7 @@ describe("useAutoJudgeBilling", () => {
     );
 
     const { result } = renderHook(() =>
-      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
+      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, "", null),
     );
 
     expect(result.current).toEqual({
@@ -558,7 +562,7 @@ describe("useAutoJudgeBilling", () => {
       }));
 
       const { result, rerender } = renderHook(() =>
-        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
+        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, "", null),
       );
 
       expect(result.current).toBeNull();
@@ -586,7 +590,7 @@ describe("useAutoJudgeBilling", () => {
       }));
 
       const { result } = renderHook(() =>
-        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
+        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, "", null),
       );
 
       expect(result.current).toEqual({
@@ -605,7 +609,7 @@ describe("useAutoJudgeBilling", () => {
       }));
 
       const { result, rerender } = renderHook(() =>
-        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
+        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, "", null),
       );
 
       expect(result.current).toBeNull();
@@ -648,7 +652,7 @@ describe("useAutoJudgeBilling", () => {
       }));
 
       const { result, rerender } = renderHook(() =>
-        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
+        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, "", null),
       );
 
       expect(result.current).toBeNull();
@@ -679,7 +683,7 @@ describe("useAutoJudgeBilling", () => {
       }));
 
       const { result, rerender } = renderHook(() =>
-        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
+        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, "", null),
       );
 
       expect(result.current).toBeNull();
@@ -709,7 +713,7 @@ describe("useAutoJudgeBilling", () => {
     providersListData = { providers: [providerState({})] };
 
     const { result } = renderHook(() =>
-      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
+      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, "", null),
     );
 
     expect(result.current).toBeNull();
@@ -725,7 +729,7 @@ describe("useAutoJudgeBilling", () => {
       providersListVersion.current = { major: 9, minor: 0 };
 
       const { result } = renderHook(() =>
-        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
+        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, "", null),
       );
 
       expect(result.current).toBeNull();
@@ -747,7 +751,7 @@ describe("useAutoJudgeBilling", () => {
       providersListVersion.current = { major: 9, minor: 0 };
 
       const { result } = renderHook(() =>
-        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
+        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, "", null),
       );
 
       expect(result.current).toEqual({
@@ -767,7 +771,7 @@ describe("useAutoJudgeBilling", () => {
       harnessesData = { harnesses: [harnessRow(true, null)] };
 
       const { result } = renderHook(() =>
-        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
+        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, "", null),
       );
 
       expect(result.current).toEqual({
@@ -793,7 +797,7 @@ describe("useAutoJudgeBilling", () => {
       harnessesData = { harnesses: [harnessRow(false, null)] };
 
       const { result } = renderHook(() =>
-        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
+        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, "", null),
       );
 
       expect(result.current).toBeNull();
@@ -821,7 +825,7 @@ describe("useAutoJudgeBilling", () => {
       });
 
       const { result } = renderHook(() =>
-        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
+        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, "", null),
       );
 
       expect(result.current).toBeNull();
@@ -842,7 +846,7 @@ describe("useAutoJudgeBilling", () => {
       );
 
       const { result } = renderHook(() =>
-        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
+        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, "", null),
       );
 
       expect(result.current).toEqual({
@@ -874,7 +878,7 @@ describe("useAutoJudgeBilling", () => {
       });
 
       const { result } = renderHook(() =>
-        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
+        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, "", null),
       );
 
       expect(result.current).toEqual({
@@ -896,7 +900,7 @@ describe("useAutoJudgeBilling", () => {
       providersListData = { providers: [] };
 
       const { result } = renderHook(() =>
-        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
+        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, "", null),
       );
 
       expect(result.current).toEqual({
@@ -920,7 +924,7 @@ describe("useAutoJudgeBilling", () => {
       providersListData = { providers: [] };
 
       const { result } = renderHook(() =>
-        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
+        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, "", null),
       );
 
       expect(result.current).toEqual({
@@ -945,7 +949,7 @@ describe("useAutoJudgeBilling", () => {
       providersListData = { providers: [] };
 
       const { result } = renderHook(() =>
-        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
+        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, "", null),
       );
 
       expect(result.current).toEqual({ kind: "blocked" });
@@ -970,7 +974,12 @@ describe("useAutoJudgeBilling", () => {
       );
 
       const { result } = renderHook(() =>
-        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, "composer-model"),
+        useAutoJudgeBilling(
+          "host-b",
+          CLAUDE_HARNESS_ID,
+          "composer-model",
+          null,
+        ),
       );
 
       expect(result.current).toEqual({
@@ -995,7 +1004,12 @@ describe("useAutoJudgeBilling", () => {
       );
 
       const { result } = renderHook(() =>
-        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, "composer-model"),
+        useAutoJudgeBilling(
+          "host-b",
+          CLAUDE_HARNESS_ID,
+          "composer-model",
+          null,
+        ),
       );
 
       expect(result.current).toEqual({
@@ -1016,7 +1030,7 @@ describe("useAutoJudgeBilling", () => {
       providersListData = { providers: [] };
 
       const { result } = renderHook(() =>
-        useAutoJudgeBilling("host-b", null, "composer-model"),
+        useAutoJudgeBilling("host-b", null, "composer-model", null),
       );
 
       expect(result.current).toBeNull();
@@ -1046,7 +1060,7 @@ describe("useAutoJudgeBilling", () => {
       );
 
       const { result } = renderHook(() =>
-        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
+        useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, "", null),
       );
 
       expect(result.current).toEqual({
@@ -1083,7 +1097,7 @@ describe("useAutoJudgeBilling", () => {
         );
 
         const { result } = renderHook(() =>
-          useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
+          useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, "", null),
         );
 
         expect(result.current).toEqual({
@@ -1164,7 +1178,7 @@ describe("useAutoJudgeBilling - Max Mode", () => {
 
   function billingMaxMode(runModelSlug: string): boolean | null {
     const { result } = renderHook(() =>
-      useAutoJudgeBilling("host-b", CURSOR_HARNESS_ID, runModelSlug),
+      useAutoJudgeBilling("host-b", CURSOR_HARNESS_ID, runModelSlug, null),
     );
     const billing = result.current;
     if (billing === null) return null;
@@ -1277,7 +1291,7 @@ describe("useAutoJudgeBilling - Max Mode", () => {
     );
 
     const { result } = renderHook(() =>
-      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
+      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, "", null),
     );
     expect(result.current).toEqual({
       kind: "traycer",
@@ -1296,7 +1310,7 @@ describe("useAutoJudgeBilling - Max Mode", () => {
     );
 
     const { result } = renderHook(() =>
-      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
+      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, "", null),
     );
     expect(result.current).toEqual({
       kind: "provider-native",

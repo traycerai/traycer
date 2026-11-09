@@ -60,7 +60,6 @@ import { buildEnvironmentClient } from "@/lib/environment/__tests__/environment-
 import type { HostRpcRegistry } from "@/lib/host";
 import type { OpenLink } from "@/lib/links/open-link";
 import {
-  SECRET_RECOVERY_STEPS,
   SECRET_RESTART_LINE,
   SECRET_SAVED_OFFLINE,
   SECRETS_EMPTY_TEXT,
@@ -612,15 +611,18 @@ describe("a secret's versions", () => {
     await openVersions();
 
     const recovery = screen.getByTestId("secret-recovery");
-    expect(within(recovery).getByText("Secret leaked?")).toBeTruthy();
-    expect(recovery).toHaveProperty("open", false);
-    fireEvent.click(within(recovery).getByText("Secret leaked?"));
+    expect(within(recovery).queryByText("Secret leaked?")).toBeNull();
     const steps = within(recovery).getAllByRole("listitem");
     expect(steps.map((step) => step.textContent)).toEqual([
-      ...SECRET_RECOVERY_STEPS,
+      "Remove it first: every sandbox stops using the old value, and each computer that holds it as a value keeps it until its tools restart.",
+      "Rotate the credential at the service it belongs to.",
+      "Replace the value here.",
+      "Grant it again.",
     ]);
-    expect(steps).toHaveLength(4);
-    expect(recovery).toHaveProperty("open", true);
+    expect(recovery.textContent).toContain("If this secret leaked");
+    expect(recovery.textContent).toContain(
+      "If Traycer can't be reached, stopping the sandbox ends its sessions.",
+    );
   });
 
   it("undoes a replaced version without re-granting, and re-reads the list and versions", async () => {

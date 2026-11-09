@@ -16,11 +16,13 @@ export type EnvironmentPageId =
   | "mcp-servers"
   | "skills"
   | "permissions"
+  | "agent-memories"
   | "agents"
   | "model-routing"
   | "variables"
   | "secrets"
   | "sandboxes"
+  | "storage"
   | "members";
 
 /**
@@ -71,11 +73,13 @@ const PAGE_SECTIONS: Readonly<Record<EnvironmentPageId, SettingsSectionId>> = {
   "mcp-servers": "mcp-servers",
   skills: "skills",
   permissions: "permissions",
+  "agent-memories": "agent-memories",
   agents: "agents",
   "model-routing": "fallback",
   variables: "shell",
   secrets: "secrets",
   sandboxes: "sandboxes",
+  storage: "storage",
   members: "members",
 };
 
@@ -100,8 +104,9 @@ function isEnvironmentPageId(value: string): value is EnvironmentPageId {
 
 /**
  * Pages a kind of configuration does not offer. Personal and a Local row have
- * no members. A Local row has no MCP servers, Skills or Sandboxes pages: those
- * are a cloud configuration's, and a computer that has not moved has none.
+ * no members. A Local row has no MCP servers, Skills, Sandboxes or Storage
+ * pages: those are a cloud configuration's, and a computer that has not moved
+ * has none.
  * A team offers every page; the sandboxes plan adds `sandboxes` here for a
  * team if a team without one should not show it.
  */
@@ -109,7 +114,7 @@ const PAGES_HIDDEN_BY_PICK: Readonly<
   Record<EnvironmentPick["kind"], ReadonlySet<EnvironmentPageId>>
 > = {
   personal: new Set(["members"]),
-  local: new Set(["mcp-servers", "skills", "sandboxes", "members"]),
+  local: new Set(["mcp-servers", "skills", "sandboxes", "storage", "members"]),
   team: new Set(),
 };
 

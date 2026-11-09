@@ -144,9 +144,9 @@ describe("registry shape: the epic lane surface installs at the versions the spl
     }
   });
 
-  it("installs epic.listChatRecords with @1.0-@1.3 minors, latestMinor 3", () => {
+  it("installs epic.listChatRecords with @1.0-@1.4 minors, latestMinor 4", () => {
     const majorLine = hostRpcRegistry["epic.listChatRecords"][1];
-    expect(majorLine.latestMinor).toBe(3);
+    expect(majorLine.latestMinor).toBe(4);
     expect(majorLine.versions[0].contract.schemaVersion).toEqual({
       major: 1,
       minor: 0,
@@ -169,6 +169,11 @@ describe("registry shape: the epic lane surface installs at the versions the spl
     expect(majorLine.versions[3].contract.schemaVersion).toEqual({
       major: 1,
       minor: 3,
+    });
+    // @1.4 says on each row whether the host dropped the chat's records.
+    expect(majorLine.versions[4].contract.schemaVersion).toEqual({
+      major: 1,
+      minor: 4,
     });
   });
 });

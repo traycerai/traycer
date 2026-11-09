@@ -20,7 +20,7 @@ function permissionChanged(role: string | null): ControlEvent {
     role,
     // What the ADAPTER computed, fail-closed, from the same value.
     canWrite: isWritablePermissionRole(
-      role === "owner" || role === "editor" || role === "viewer" ? role : null,
+      role === "owner" || role === "editor" ? role : null,
     ),
     securityEpoch: 1,
   };
@@ -36,10 +36,10 @@ describe("permission role: the seam widened it, so the translation narrows it ba
     }
   });
 
-  it("passes viewer through - unwritable is not the same as unattributable", () => {
+  it("narrows the retired viewer role to null - it grants nothing and is never promoted", () => {
     expect(legacyControlEventOf(permissionChanged("viewer"))).toEqual({
       kind: "permission-changed",
-      role: "viewer",
+      role: null,
     });
   });
 

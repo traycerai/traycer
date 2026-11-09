@@ -45,7 +45,7 @@ const MINTED_TOKEN_KEPT_MS = 30 * 60_000;
 
 /**
  * `POST /api/environments/{id}/team-host/install-token`: mints the one-time
- * token a team's own computer joins with (`traycer host join <token>`). The
+ * token a team's own computer joins with (`traycer host join`). The
  * token is a credential: the answer lives only on this mutation, in memory,
  * never persisted and never logged; it outlives the card that sent it for
  * its window (`MINTED_TOKEN_KEPT_MS`), so the card shows the mint in flight
