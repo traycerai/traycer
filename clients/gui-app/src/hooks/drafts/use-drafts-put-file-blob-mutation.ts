@@ -16,8 +16,9 @@ import { draftsMutationKeys } from "@/lib/query-keys";
 /**
  * One file's `drafts.putBlob`, on the host the variables name.
  *
- * - The digest is the idempotency key: a transport replay of the same body
- *   stores the same bytes under the same address.
+ * - The idempotency key is the put's whole identity
+ *   ({@link filePutIdempotencyKey}), so a replay reuses it and another put of
+ *   the same bytes does not collide with it.
  * - The `@1.2` floor refuses the frame on an older host before it is sent,
  *   rather than letting that host strip `kind` and keep the bytes as an image.
  * - The two-minute budget is the one the policy table declares for the
@@ -43,7 +44,7 @@ export function useDraftsPutFileBlob(): UseMutationResult<
     method: "drafts.putBlob",
     responseTimeoutMs: DRAFT_BLOB_PUT_RESPONSE_TIMEOUT_MS,
     signalFor: (variables) => variables.signal,
-    idempotencyKey: (variables) => variables.request.sha256,
+    idempotencyKey: (variables) => filePutIdempotencyKey(variables.request),
     requiredHostMethodVersion: () => PUT_BLOB_FILE_FLOOR,
     mapVariables: (variables) => variables.request,
     options: {
@@ -51,6 +52,29 @@ export function useDraftsPutFileBlob(): UseMutationResult<
       gcTime: 0,
     },
   });
+}
+
+/** The host's ceiling on a retained idempotency key, in characters. */
+const HOST_IDEMPOTENCY_KEY_MAX_LENGTH = 512;
+
+/**
+ * The key for one file put: kind, digest, type and name. The host refuses a
+ * reused key whose params differ, so a digest alone collided with a second
+ * file of the same bytes under another name, or with the image path's put of
+ * them, and the second attachment was removed. Null past the host's ceiling
+ * (a very long name): the put is content-addressed, so an unkeyed replay only
+ * stores the same bytes again.
+ */
+export function filePutIdempotencyKey(
+  request: PutFileBlobVariables["request"],
+): string | null {
+  const key = JSON.stringify([
+    "file",
+    request.sha256,
+    request.mediaType,
+    request.fileName,
+  ]);
+  return key.length <= HOST_IDEMPOTENCY_KEY_MAX_LENGTH ? key : null;
 }
 
 /**

@@ -22,6 +22,7 @@ import {
   cancelFileAttachmentUpload,
   readFileAttachmentUploadStatus,
   refuseFileAttachment,
+  showTooManyFilesToast,
   type FileInsertion,
   type FileNodeSettle,
   type PutFileBlob,
@@ -120,6 +121,15 @@ describe("refuseFileAttachment", () => {
       "drafts.putBlob": { major: 1, minor: 2 },
     });
     expect(refuseFileAttachment(file, targetFor(hostId))).toBeNull();
+  });
+});
+
+describe("showTooManyFilesToast", () => {
+  it("names a refused file that has no name by the placeholder", () => {
+    toasts.error.mockClear();
+    showTooManyFilesToast([""]);
+    expect(toasts.error).toHaveBeenCalledTimes(1);
+    expect(toasts.error.mock.calls[0][0]).toBe("Couldn't attach file.");
   });
 });
 

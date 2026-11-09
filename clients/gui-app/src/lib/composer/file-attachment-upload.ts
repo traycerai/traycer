@@ -189,7 +189,7 @@ export function showTooManyFilesToast(
   if (first === undefined) return;
   reportableErrorToast(
     refusedNames.length === 1
-      ? `Couldn't attach ${first}.`
+      ? `Couldn't attach ${first.length > 0 ? first : "file"}.`
       : `Couldn't attach ${String(refusedNames.length)} files.`,
     { description: TOO_MANY_FILES_DESCRIPTION },
     {

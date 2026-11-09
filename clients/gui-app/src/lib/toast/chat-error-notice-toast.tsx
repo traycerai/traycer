@@ -23,6 +23,13 @@ export const CHAT_ACTION_REPORT_CONTEXT = createReportIssueContext({
 
 export function showErrorNoticeToast(notice: ChatErrorNotice): void {
   const text = notice.message.length > 0 ? notice.message : "Action failed.";
+  // A send or a queued message over the per-message file cap. The person's
+  // message is over a limit, not something broken, so it is said plainly and
+  // offers no report; the host's text says how many and what to do.
+  if (notice.code === TOO_MANY_ATTACHMENTS_CODE) {
+    toast.warning("Too many files attached", { description: text });
+    return;
+  }
   // A last-copy notice's newlines and indentation ARE the guarantee - the
   // store went to some trouble to keep the bytes verbatim, and default HTML
   // whitespace collapsing undoes all of it on screen and on copy. Rendering
@@ -51,13 +58,6 @@ export function showErrorNoticeToast(notice: ChatErrorNotice): void {
   // shows the previous account's draft to the next person on the machine. The
   // id is registered so the identity boundary can take it down, and dropped
   // again when the toast goes on its own.
-  // A send or a queued message over the per-message file cap. The person's
-  // message is over a limit, not something broken, so it is said plainly and
-  // offers no report; the host's text says how many and what to do.
-  if (notice.code === TOO_MANY_ATTACHMENTS_CODE) {
-    toast.warning("Too many files attached", { description: text });
-    return;
-  }
   const retained = noticeCarriesOnlyCopy(notice);
   const options: ExternalToast | undefined = retained
     ? {

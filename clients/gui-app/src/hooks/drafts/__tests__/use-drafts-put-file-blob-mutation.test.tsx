@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  filePutIdempotencyKey,
   useDraftsPutFileBlob,
   usePutFileBlob,
 } from "@/hooks/drafts/use-drafts-put-file-blob-mutation";
@@ -65,7 +66,7 @@ describe("useDraftsPutFileBlob", () => {
     expect(response).toEqual({ ok: true });
     expect(requestWithOptions).toHaveBeenCalledTimes(1);
     expect(requestWithOptions).toHaveBeenCalledWith("drafts.putBlob", REQUEST, {
-      idempotencyKey: REQUEST.sha256,
+      idempotencyKey: filePutIdempotencyKey(REQUEST),
       requiredHostMethodVersion: {
         method: "drafts.putBlob",
         version: { major: 1, minor: 2 },
@@ -77,5 +78,27 @@ describe("useDraftsPutFileBlob", () => {
     await waitFor(() => {
       expect(result.current.mutation.variables).toBeUndefined();
     });
+  });
+});
+
+describe("filePutIdempotencyKey", () => {
+  it("is the same for a replay and apart for the same bytes under another name or type, or the image put's digest key", () => {
+    const key = filePutIdempotencyKey(REQUEST);
+
+    expect(filePutIdempotencyKey({ ...REQUEST })).toBe(key);
+    expect(key).not.toBe(REQUEST.sha256);
+    expect(
+      filePutIdempotencyKey({ ...REQUEST, fileName: "copy.txt" }),
+    ).not.toBe(key);
+    expect(
+      filePutIdempotencyKey({ ...REQUEST, mediaType: "text/markdown" }),
+    ).not.toBe(key);
+  });
+
+  it("is null past the host's 512-character key ceiling, and within it otherwise", () => {
+    expect(
+      filePutIdempotencyKey({ ...REQUEST, fileName: "n".repeat(600) }),
+    ).toBeNull();
+    expect(filePutIdempotencyKey(REQUEST)?.length).toBeLessThanOrEqual(512);
   });
 });
