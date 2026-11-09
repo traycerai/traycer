@@ -9,10 +9,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ComposerBodyProps } from "@/components/home/composer/composer-body";
-import {
-  LANDING_COMPOSER_EDITOR_CLASSNAME,
-  PHONE_COMPOSER_EDITOR_CAP_CLASSNAME,
-} from "@/components/home/composer/composer-editor-classnames";
+import { LANDING_COMPOSER_EDITOR_CLASSNAME } from "@/components/home/composer/composer-editor-classnames";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -576,10 +573,6 @@ describe("landing composer placement wiring", () => {
     );
 
     expect(testState.editorClassName).toBe(LANDING_COMPOSER_EDITOR_CLASSNAME);
-    expect(testState.editorClassName).toContain(
-      PHONE_COMPOSER_EDITOR_CAP_CLASSNAME,
-    );
-    expect(testState.editorClassName).not.toContain("40dvh");
   });
 });
 

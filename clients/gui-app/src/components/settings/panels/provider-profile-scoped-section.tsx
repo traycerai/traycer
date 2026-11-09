@@ -41,6 +41,7 @@ import {
   profileCommitId,
   profileDisplayLabel,
 } from "@/components/providers/provider-profile-model";
+import { isProviderAmbientSignedOut } from "@/lib/providers/provider-ambient-auth";
 import {
   isRateLimitProfileFetchEligible,
   resolveRateLimitFetchEligibility,
@@ -386,6 +387,7 @@ export function ProviderProfileScopedSection(
           profileId={selectedProfile.profileId}
         />
         <SelectedProfileRow
+          state={state}
           profile={selectedProfile}
           canAddProfile={canAddProfile}
           signInUnavailableHint={signInUnavailableHint}
@@ -453,6 +455,7 @@ export function ProviderProfileScopedSection(
  * row. Details is not on this row.
  */
 function SelectedProfileRow(props: {
+  readonly state: ProviderCliState;
   readonly profile: ProviderProfile;
   readonly canAddProfile: boolean;
   readonly signInUnavailableHint: string | null;
@@ -471,7 +474,11 @@ function SelectedProfileRow(props: {
       // instead, keeping every chip whole.
       className="flex min-w-0 flex-wrap items-center justify-end gap-2"
     >
-      <ProfileSummary key={profile.profileId} profile={profile} />
+      <ProfileSummary
+        key={profile.profileId}
+        state={props.state}
+        profile={profile}
+      />
       {profile.auth.status === "unauthenticated" ? (
         <TooltipWrapper
           label={props.canAddProfile ? null : props.signInUnavailableHint}
@@ -523,9 +530,25 @@ function SelectedProfileRow(props: {
   );
 }
 
+/**
+ * An ambient row can lag an `unauthenticated` stamped on the provider itself,
+ * so its badge reads the same reconciled signed-out the rail word reads.
+ */
+function profileBadgeText(
+  state: ProviderCliState,
+  profile: ProviderProfile,
+): string {
+  if (profile.kind === "ambient" && isProviderAmbientSignedOut(state)) {
+    return "Signed out";
+  }
+  return profileAuthStatusText(profile);
+}
+
 function ProfileSummary({
+  state,
   profile,
 }: {
+  readonly state: ProviderCliState;
   readonly profile: ProviderProfile;
 }): ReactNode {
   const [emailRevealed, setEmailRevealed] = useState(false);
@@ -579,7 +602,7 @@ function ProfileSummary({
         ) : null}
       </div>
       <Badge variant="outline" size="xs" className="shrink-0">
-        {profileAuthStatusText(profile)}
+        {profileBadgeText(state, profile)}
       </Badge>
       {planText !== null ? (
         <TooltipWrapper

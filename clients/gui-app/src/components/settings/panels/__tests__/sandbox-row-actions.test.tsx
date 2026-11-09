@@ -1334,7 +1334,9 @@ describe("<SandboxRowActions /> a sandbox whose settings did not apply", () => {
         false,
       );
 
-      const giveAnother = screen.getByTestId("sandbox-row-give-another");
+      const giveAnother = screen.getByRole("button", {
+        name: "Give it another 1 hour",
+      });
       const start = screen.getByRole("button", { name: "Start" });
       expect(giveAnother.textContent).toContain("Give it another 1 hour");
       expect(

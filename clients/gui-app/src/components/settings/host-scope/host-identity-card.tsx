@@ -104,7 +104,10 @@ function HostIdentityFactLine(props: {
 }): ReactNode {
   const { host } = props;
   return (
-    <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-1 gap-y-1 text-ui-xs text-muted-foreground">
+    <div
+      className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-1 gap-y-1 text-ui-xs text-muted-foreground"
+      data-testid="host-identity-fact-line"
+    >
       <HostIdentityState host={host} />
       {host.sandbox?.frozen === true ? (
         <span className="text-warning-foreground">{HOST_FROZEN_WORD}</span>

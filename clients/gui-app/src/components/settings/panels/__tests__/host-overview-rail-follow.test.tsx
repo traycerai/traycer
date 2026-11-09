@@ -196,3 +196,24 @@ describe("the Overview row and the Environment dropdown on a stopped move", () =
     unsubscribe();
   });
 });
+
+describe("the Overview row when the rail already shows the host source", () => {
+  it("keeps a later environment pick", async () => {
+    mount(environmentStatusFixture({}));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(useSettingsEnvironmentPickStore.getState().pick).toBeNull();
+    expect(
+      screen.getByTestId("environment-picker-trigger").textContent,
+    ).toContain("Personal");
+
+    const chosen = { kind: "team" as const, environmentId: "env-other" };
+    act(() => {
+      useSettingsEnvironmentPickStore.getState().setPick(chosen);
+    });
+
+    expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(chosen);
+  });
+});

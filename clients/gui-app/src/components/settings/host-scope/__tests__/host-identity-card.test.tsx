@@ -185,12 +185,7 @@ describe("<HostIdentityCard /> the name row and the fact line", () => {
   }
 
   function factLine(): HTMLElement {
-    const line = screen.getByTestId("host-identity-health").parentElement
-      ?.parentElement;
-    if (line === null || line === undefined) {
-      throw new Error("expected the health word inside the fact line");
-    }
-    return line;
+    return screen.getByTestId("host-identity-fact-line");
   }
 
   it("puts the kind tag on the name row", () => {

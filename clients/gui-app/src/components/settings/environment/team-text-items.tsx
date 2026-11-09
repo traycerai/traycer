@@ -727,7 +727,7 @@ function NewTextActions(props: {
         aria-label="Apply variable"
         onClick={props.onApply}
       >
-        <Check className="size-4 text-[var(--term-ansi-green)]" />
+        <Check className="size-4 text-success-foreground" />
       </Button>
       <Button
         type="button"

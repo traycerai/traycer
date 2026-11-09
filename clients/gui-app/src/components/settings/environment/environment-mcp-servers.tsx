@@ -627,13 +627,11 @@ function McpOpenEditor(props: {
     !pending && (toolsDirty || endpointDirty) && (!endpointDirty || ready);
   const { onDetail, toolsKnown } = props;
   const enabledCount = enabledInDraft(groups, draft.value);
+  const line =
+    toolsKnown && groups.length > 0 ? enabledToolsLine(enabledCount) : null;
   useEffect(() => {
-    if (!toolsKnown || groups.length === 0) {
-      onDetail(null);
-      return;
-    }
-    onDetail(enabledToolsLine(enabledCount));
-  }, [onDetail, toolsKnown, groups, enabledCount]);
+    onDetail(line);
+  }, [onDetail, line]);
   const save = (): void => {
     if (source.kind !== "pool" || !canSave) return;
     const item = props.server.item;

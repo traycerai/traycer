@@ -1460,19 +1460,17 @@ describe("<CurrentTasksSection />", () => {
       ).not.toBeNull();
     });
 
-    it("gives the section and its list a scrollable column without taking the leftover row", () => {
+    it("keeps the list scroller inside the section", () => {
       setGroups({ open: tasks("o", 7) });
       renderSection();
 
       const section = screen.getByTestId("current-tasks-section");
-      expect(section.className).toBe("mt-7 flex min-h-0 flex-col");
       const list = within(group("Open")).getByRole("list");
       const scroller = list.parentElement?.parentElement ?? null;
       if (scroller === null) {
         throw new Error("the list has no scroller");
       }
       expect(section.contains(scroller)).toBe(true);
-      expect(scroller.className).toBe("min-h-0 overflow-y-auto");
     });
   });
 

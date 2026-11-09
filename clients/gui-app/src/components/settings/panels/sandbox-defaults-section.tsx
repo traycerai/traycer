@@ -313,7 +313,7 @@ function defaultsFacts(
     destruction:
       resting === null || resting === 0
         ? KEPT_UNTIL_YOU_DESTROY_IT
-        : `removed after ${sandboxPeriodLabel(resting)}`,
+        : `removed after ${sandboxPeriodLabel(resting)} idle`,
   };
 }
 

@@ -285,4 +285,39 @@ describe("<ProviderProfileScopedSection /> profile summary email reveal", () => 
     renderSection({});
     expect(screen.queryByRole("button", { name: "Details" })).toBeNull();
   });
+
+  it("badges an ambient row Signed out when the provider is unauthenticated", () => {
+    const unauthenticated = {
+      status: "unauthenticated" as const,
+      badgeText: null,
+      label: null,
+      detail: null,
+    };
+    renderSection({
+      selectedProfileId: null,
+      state: {
+        ...opencodeState(),
+        auth: unauthenticated,
+        profiles: [
+          {
+            ...managedProfile(),
+            profileId: "ambient",
+            kind: "ambient",
+            label: "Terminal account",
+            auth: {
+              status: "authenticated",
+              badgeText: null,
+              label: null,
+              detail: null,
+            },
+          },
+        ],
+      },
+    });
+
+    const badge = screen.getByText("Signed out");
+    expect(badge.getAttribute("data-slot")).toBe("badge");
+    expect(badge.getAttribute("data-variant")).toBe("outline");
+    expect(screen.queryByText("Signed in")).toBeNull();
+  });
 });

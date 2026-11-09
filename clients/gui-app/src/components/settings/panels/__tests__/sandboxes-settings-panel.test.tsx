@@ -704,7 +704,7 @@ describe("<SandboxesSettingsPanel />", () => {
         "Idle · 30 minutes",
       );
       expect(screen.getByTestId("sandboxes-defaults-resting").textContent).toBe(
-        "Destruction · removed after 7 days",
+        "Destruction · removed after 7 days idle",
       );
     });
 
@@ -723,7 +723,7 @@ describe("<SandboxesSettingsPanel />", () => {
       expect(
         screen.getByTestId("sandboxes-defaults-idle-input"),
       ).toHaveProperty("value", "30");
-      const shape = screen.getByTestId("sandboxes-defaults-shape-select");
+      const shape = screen.getByRole("combobox", { name: "Shape" });
       const shapeLine =
         "Linux · 2 vCPU · 4 GB · from $0.12/h · Suspend keeps memory";
       expect(shape.textContent).toContain(shapeLine);
@@ -771,7 +771,7 @@ describe("<SandboxesSettingsPanel />", () => {
         screen.queryByText("Each new sandbox starts with these"),
       ).toBeNull();
       expect(screen.queryByText("aren't destroyed when idle")).toBeNull();
-      const shape = screen.getByTestId("sandboxes-defaults-shape-select");
+      const shape = screen.getByRole("combobox", { name: "Shape" });
       expect(shape.textContent).toContain(
         "Linux · 4 vCPU · 8 GB · from $0.12/h · Suspend keeps memory",
       );
@@ -842,7 +842,7 @@ describe("<SandboxesSettingsPanel />", () => {
       ).toBeDefined();
       expect(idle).toHaveProperty("value", "45");
       expect(
-        screen.getByTestId("sandboxes-defaults-shape-select").textContent,
+        screen.getByRole("combobox", { name: "Shape" }).textContent,
       ).toContain("4 vCPU");
       fireEvent.change(idle, { target: { value: "2" } });
       fireEvent.click(screen.getByRole("button", { name: "Save defaults" }));

@@ -272,10 +272,10 @@ function railFollowKey(pick: EnvironmentPick): string {
 }
 
 /**
- * Writes the host's source into the rail once. A key already showing, or a
- * key this effect already wrote, is left alone: clearing the remembered key
- * when the two matched let a pick the dropdown had just removed get written
- * again on the next render.
+ * Writes the host's source into the rail once per source. The source is
+ * remembered even when the rail already shows it, so a pick made afterwards
+ * is never replaced by it. A stale Local pick arrives as null and is never
+ * written.
  */
 function useMatchEnvironmentRail(pick: EnvironmentPick | null): void {
   const setPick = useSettingsEnvironmentPickStore((state) => state.setPick);
@@ -287,9 +287,9 @@ function useMatchEnvironmentRail(pick: EnvironmentPick | null): void {
   const held = useRef<string | null>(null);
   useEffect(() => {
     if (pick === null || nextKey === null) return;
-    if (nextKey === currentKey || held.current === nextKey) return;
+    if (held.current === nextKey) return;
     held.current = nextKey;
-    setPick(pick);
+    if (nextKey !== currentKey) setPick(pick);
   }, [pick, nextKey, currentKey, setPick]);
 }
 

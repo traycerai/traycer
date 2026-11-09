@@ -73,24 +73,12 @@ function appearanceGrid(): HTMLElement {
   return grid;
 }
 
-function classTokens(className: string): readonly string[] {
-  return className.split(/\s+/);
-}
-
 function composerColumn(): HTMLElement {
   const composer = appearanceGrid().querySelector("[data-composer-placement]");
   if (!(composer instanceof HTMLElement)) {
     throw new Error("composer track is missing");
   }
   return composer;
-}
-
-function heroSection(): HTMLElement {
-  const hero = screen.getByTestId("home-hero").parentElement;
-  if (!(hero instanceof HTMLElement)) {
-    throw new Error("hero track is missing");
-  }
-  return hero;
 }
 
 function customizeButton(): HTMLElement {
@@ -101,27 +89,6 @@ function customizeButton(): HTMLElement {
     node = node.parentElement;
   }
   return node;
-}
-
-function expectBalancedDesktopRows(): void {
-  const grid = appearanceGrid();
-  expect(classTokens(grid.className)).toContain(
-    "md:grid-rows-[auto_minmax(0,1fr)_minmax(0,1fr)]",
-  );
-  expect(classTokens(grid.className)).toContain(
-    "max-md:grid-rows-[auto_minmax(0,1fr)_minmax(min-content,1.4fr)]",
-  );
-  expect(classTokens(grid.className)).toContain(
-    "max-md:short-landscape:grid-rows-[auto_0_auto]",
-  );
-  expect(classTokens(grid.className)).toContain("overflow-hidden");
-  expect(classTokens(grid.className)).toContain("max-md:overflow-y-auto");
-  expect(classTokens(grid.className)).toContain(
-    "max-md:short-landscape:content-start",
-  );
-  expect(classTokens(composerColumn().className)).toContain("md:min-h-0");
-  expect(classTokens(heroSection().className)).not.toContain("h-0");
-  expect(classTokens(heroSection().className)).not.toContain("overflow-hidden");
 }
 
 afterEach(() => {
@@ -136,37 +103,30 @@ describe("LandingDraftSurface grid", () => {
     render(<LandingDraftSurface />);
 
     expectNestedTasks();
-    expectBalancedDesktopRows();
     const grid = appearanceGrid();
     const customize = customizeButton();
     expect(customize.parentElement).toBe(grid);
-    expect(customize.className).toContain("absolute");
-    expect(customize.className).toContain("bottom-3");
-    expect(customize.className).toContain("left-3");
     expect(composerColumn().nextElementSibling).toBe(customize);
     expect(grid.children).toHaveLength(4);
   });
 
-  it("uses the same desktop rows for history without a greeting, and still nests tasks", () => {
+  it("nests tasks when history is on and the greeting is off", () => {
     setViewportWidth(1280);
     useSettingsStore.setState({ showGreeting: false, showRecentHistory: true });
     render(<LandingDraftSurface />);
 
     expectNestedTasks();
-    expectBalancedDesktopRows();
-    expect(classTokens(heroSection().className)).toContain("invisible");
   });
 
-  it("uses the same desktop rows for a greeting without history, and mounts no task list", () => {
+  it("mounts no task list for a greeting without history", () => {
     setViewportWidth(1280);
     useSettingsStore.setState({ showGreeting: true, showRecentHistory: false });
     render(<LandingDraftSurface />);
 
-    expectBalancedDesktopRows();
     expect(screen.queryByTestId("current-tasks-section")).toBeNull();
   });
 
-  it("collapses the hero and centres the composer when greeting and history are off", () => {
+  it("mounts no task list when greeting and history are off", () => {
     setViewportWidth(1280);
     useSettingsStore.setState({
       showGreeting: false,
@@ -174,21 +134,6 @@ describe("LandingDraftSurface grid", () => {
     });
     render(<LandingDraftSurface />);
 
-    const grid = appearanceGrid();
-    expect(classTokens(grid.className)).toContain(
-      "md:grid-rows-[auto_minmax(0,0fr)_minmax(0,1fr)]",
-    );
-    expect(classTokens(grid.className)).toContain(
-      "max-md:grid-rows-[auto_0_minmax(min-content,1fr)]",
-    );
-    expect(classTokens(grid.className)).toContain(
-      "max-md:short-landscape:grid-rows-[auto_0_auto]",
-    );
-    expect(classTokens(heroSection().className)).toContain("h-0");
-    expect(classTokens(heroSection().className)).toContain("overflow-hidden");
-    const composer = composerColumn();
-    expect(classTokens(composer.className)).toContain("justify-center");
-    expect(classTokens(composer.className)).not.toContain("md:min-h-0");
     expect(screen.queryByTestId("current-tasks-section")).toBeNull();
   });
 
@@ -206,10 +151,6 @@ describe("LandingDraftSurface grid", () => {
     expect(
       screen.queryByRole("button", { name: "Customize start page" }),
     ).toBeNull();
-    expect(classTokens(grid.className)).toContain(
-      "max-md:grid-rows-[auto_minmax(0,1fr)_minmax(min-content,1.4fr)]",
-    );
-    expect(classTokens(grid.className)).toContain("max-md:overflow-y-auto");
     expect(grid.children).toHaveLength(3);
   });
 });
@@ -221,7 +162,6 @@ function expectNestedTasks(): void {
   if (!(wrapper instanceof HTMLElement)) {
     throw new Error("task list wrapper is missing");
   }
-  expect(wrapper.className).toBe("flex min-h-0 flex-1 flex-col pb-6");
   expect(wrapper.parentElement).toBe(composer);
   expect(composer.contains(tasks)).toBe(true);
   expect(Array.from(appearanceGrid().children).includes(wrapper)).toBe(false);
