@@ -302,6 +302,44 @@ describe("<EnvironmentPicker />", () => {
     );
   });
 
+  it("shows the full name in a tooltip on the closed trigger", async () => {
+    const user = userEvent.setup();
+    answer("mac", running, V11);
+    renderPicker("mac");
+    await user.hover(
+      within(screen.getByTestId("environment-picker-trigger")).getByText(
+        "Personal",
+      ),
+    );
+    expect((await screen.findByRole("tooltip")).textContent).toBe("Personal");
+    cleanup();
+
+    answer("old", awaiting, V11);
+    renderPicker("old");
+    await user.hover(
+      within(screen.getByTestId("environment-picker-trigger")).getByText(
+        "Old laptop",
+      ),
+    );
+    expect((await screen.findByRole("tooltip")).textContent).toBe("Old laptop");
+    cleanup();
+
+    reads.environments = [
+      { environmentId: "env-a", ownerKind: "organization", label: "Acme" },
+    ];
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "team", environmentId: "env-a" },
+    });
+    answer("mac", running, V11);
+    renderPicker("mac");
+    await user.hover(
+      within(screen.getByTestId("environment-picker-trigger")).getByText(
+        "Acme",
+      ),
+    );
+    expect((await screen.findByRole("tooltip")).textContent).toBe("Acme");
+  });
+
   it("draws a host whose consent is recorded as partly moved, and finish moving opens its Overview", () => {
     answer("old", partlyMoved, V11);
     renderPicker("mac");

@@ -24,6 +24,7 @@ export function TeamPermissions(props: {
   readonly children: ReactNode;
 }): ReactNode {
   const personal = useConfigurationIsPersonal();
+  const name = useConfigurationName();
   const query = useConfigurationPolicyQuery();
   const read = useBoundedRead(query);
   const [conflict, setConflict] = useState(false);
@@ -32,8 +33,8 @@ export function TeamPermissions(props: {
       title="Permissions"
       description={
         personal
-          ? "What your agents may do without asking, on every computer and sandbox running these settings."
-          : "What agents may do without asking, on every host running these settings."
+          ? "What your agents may do without asking, on every computer and sandbox running Personal."
+          : `What agents may do without asking, on every host running ${name}.`
       }
       bodyClassName="flex flex-col gap-3 overflow-visible rounded-none border-none bg-transparent"
     >
@@ -145,7 +146,7 @@ function TeamPolicyEditor(props: {
         title="Reset the approval policy?"
         description={
           personal
-            ? "This removes your custom rules and goes back to the default approval policy on every computer and sandbox running these settings."
+            ? "This removes your custom rules and goes back to the default approval policy on every computer and sandbox running Personal."
             : `This removes ${teamName}'s custom rules and goes back to the default approval policy for every member's agents.`
         }
         cascadeSummary={null}

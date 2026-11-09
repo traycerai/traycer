@@ -598,7 +598,7 @@ describe("sandboxClockLine, a resting row", () => {
 
   it("promises the next wake and dates the removal in the reader's locale", () => {
     expect(line({ destroyAt: DESTROY_AT }, 50)).toBe(
-      `Suspended since 09:49 · Suspend keeps memory · resumes on your next action · Will be removed on ${formatSandboxDate(DESTROY_AT, false)} · $0.05 today`,
+      `Suspended since 09:49 · Suspend keeps memory · resumes on your next action · Will be removed on ${formatSandboxDate(DESTROY_AT, false)} · storage uses your credits · $0.05 today`,
     );
   });
 
@@ -608,7 +608,7 @@ describe("sandboxClockLine, a resting row", () => {
       50,
     );
     expect(waiting).toBe(
-      "Suspended since 09:49 · Suspend keeps memory · resumes on your next action · $0.05 today",
+      "Suspended since 09:49 · Suspend keeps memory · resumes on your next action · storage uses your credits · $0.05 today",
     );
     expect(waiting).not.toContain("kept until you destroy it");
   });
@@ -617,7 +617,7 @@ describe("sandboxClockLine, a resting row", () => {
     expect(
       line({ destroyAt: null, destroyAfterRestingMinutes: null }, 50),
     ).toBe(
-      "Suspended since 09:49 · Suspend keeps memory · resumes on your next action · kept until you destroy it · $0.05 today",
+      "Suspended since 09:49 · Suspend keeps memory · resumes on your next action · kept until you destroy it · storage uses your credits · $0.05 today",
     );
   });
 
@@ -632,13 +632,13 @@ describe("sandboxClockLine, a resting row", () => {
         50,
       ),
     ).toBe(
-      "Suspended since 09:49 · Suspend keeps memory · resumes on your next action · $0.05 today",
+      "Suspended since 09:49 · Suspend keeps memory · resumes on your next action · storage uses your credits · $0.05 today",
     );
   });
 
   it("dates a stopped row's destroy unless it is started", () => {
     expect(line({ state: "stopped", destroyAt: DESTROY_AT }, 0)).toBe(
-      `Stopped since 09:49 · Will be removed on ${formatSandboxDate(DESTROY_AT, false)}`,
+      `Stopped since 09:49 · Will be removed on ${formatSandboxDate(DESTROY_AT, false)} · storage uses your credits`,
     );
   });
 
@@ -841,7 +841,7 @@ describe("sandboxTodayCost", () => {
 });
 
 describe("sandboxShapeAndCostLine", () => {
-  it("keeps starter and task purpose out of the list's cost line", () => {
+  it("puts the agent and its task on an agent sandbox's shape line", () => {
     const line = sandboxShapeAndCostLine(
       sandboxSummaryFixture({
         burst: true,
@@ -853,10 +853,23 @@ describe("sandboxShapeAndCostLine", () => {
       "viewer",
     );
     expect(line).toBe(
-      "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake · paid by you",
+      "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake · created by Planner for Sandbox setup",
     );
-    expect(line).not.toContain("Planner");
-    expect(line).not.toContain("Sandbox setup");
+    expect(line).not.toContain("paid by");
+    expect(
+      sandboxShapeAndCostLine(
+        sandboxSummaryFixture({
+          burst: true,
+          createdByAgentId: "agent-1",
+          createdByAgentName: "Planner",
+          createdByTaskTitle: null,
+        }),
+        { kind: "personal" },
+        "viewer",
+      ),
+    ).toBe(
+      "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake · created by Planner",
+    );
   });
 });
 
@@ -1074,34 +1087,54 @@ describe("team payer in the resource line", () => {
     wakePayer: { userId: "payer", displayName: "Priya" },
     priceMcPerHour: { awakeMc: 210, suspendedMc: 1, stoppedMc: 1 },
   });
-  it("names the actual wake payer for both the payer and another member", () => {
-    expect(sandboxShapeAndCostLine(summary, team, "payer")).toBe(
-      "Linux · 2 vCPU · 4 GB · $0.21 an hour while awake · paid by you",
-    );
-    expect(sandboxShapeAndCostLine(summary, team, "other")).toBe(
-      "Linux · 2 vCPU · 4 GB · $0.21 an hour while awake · paid by Priya",
+  const HOURLY = "Linux · 2 vCPU · 4 GB · $0.21 an hour while awake";
+  const CREDITS = `${HOURLY} · uses your Acme credits`;
+  const WAKE = "waking it makes you the payer";
+
+  it("names whose credits pay when the viewer is not a team non-payer", () => {
+    expect(sandboxShapeAndCostLine(summary, team, "payer")).toBe(CREDITS);
+    expect(sandboxShapeAndCostLine(summary, team, "other")).toBe(HOURLY);
+    expect(sandboxShapeAndCostLine(summary, team, "other")).not.toContain(
+      "paid by",
     );
   });
-  it("names the storage payer without mixing the wake consequence into the line", () => {
+  it("warns a resting team non-payer that waking changes the payer", () => {
     expect(
       sandboxShapeAndCostLine(
         { ...summary, state: "suspended" },
         team,
         "other",
       ),
-    ).toBe(
-      "Linux · 2 vCPU · 4 GB · $0.21 an hour while awake · storage paid by Priya",
-    );
+    ).toBe(`${HOURLY} · ${WAKE}`);
+    expect(
+      sandboxShapeAndCostLine({ ...summary, state: "stopped" }, team, "other"),
+    ).toBe(`${HOURLY} · ${WAKE}`);
   });
-  it("keeps the incumbent payer's storage line when it rests", () => {
+  it("keeps the payer's credit line, with no wake warning, when that row rests", () => {
     expect(
       sandboxShapeAndCostLine(
         { ...summary, state: "suspended" },
         team,
         "payer",
       ),
+    ).toBe(CREDITS);
+  });
+  it("leaves the wake warning off a frozen row and off a personal resting row", () => {
+    expect(
+      sandboxShapeAndCostLine(
+        { ...summary, state: "suspended", frozen: true },
+        team,
+        "other",
+      ),
+    ).toBe(HOURLY);
+    expect(
+      sandboxShapeAndCostLine(
+        { ...summary, state: "suspended" },
+        { kind: "personal" },
+        "other",
+      ),
     ).toBe(
-      "Linux · 2 vCPU · 4 GB · $0.21 an hour while awake · storage paid by you",
+      "Linux · 2 vCPU · 4 GB · $0.21 an hour while awake · uses your credits",
     );
   });
   describe("an agent-created team row", () => {
@@ -1116,30 +1149,32 @@ describe("team payer in the resource line", () => {
     });
 
     it.each(["suspended", "stopped"] as const)(
-      "keeps creator and task details out of a %s row's cost line",
+      "puts the creator on a %s row beside the wake warning",
       (state) => {
-        const text = sandboxShapeAndCostLine(
-          agentRow({ state }),
-          team,
-          "other",
-        );
-
-        expect(text).not.toContain(CREATOR);
-        expect(text).toContain("storage paid by Priya");
-        expect(text).toContain("$0.21 an hour while awake");
+        expect(
+          sandboxShapeAndCostLine(agentRow({ state }), team, "other"),
+        ).toBe(`${HOURLY} · ${WAKE} · ${CREATOR}`);
       },
     );
 
-    it("keeps creator and task details out of awake, team and personal cost lines", () => {
-      const resting = agentRow({ state: "suspended" });
-
-      for (const text of [
-        sandboxShapeAndCostLine(resting, team, "payer"),
+    it("puts the creator on awake and personal rows without a wake warning", () => {
+      expect(
+        sandboxShapeAndCostLine(
+          agentRow({ state: "suspended" }),
+          team,
+          "payer",
+        ),
+      ).toBe(`${HOURLY} · ${CREATOR}`);
+      expect(
         sandboxShapeAndCostLine(agentRow({ state: "awake" }), team, "other"),
-        sandboxShapeAndCostLine(resting, { kind: "personal" }, "other"),
-      ]) {
-        expect(text).not.toContain(CREATOR);
-      }
+      ).toBe(`${HOURLY} · ${CREATOR}`);
+      expect(
+        sandboxShapeAndCostLine(
+          agentRow({ state: "suspended" }),
+          { kind: "personal" },
+          "other",
+        ),
+      ).toBe(`${HOURLY} · ${CREATOR}`);
     });
   });
   describe("a resting team row the server does not price", () => {
@@ -1150,7 +1185,7 @@ describe("team payer in the resource line", () => {
       ...overrides,
     });
 
-    it("names a known storage payer without inventing a rate or including the creator", () => {
+    it("names the wake change and the creator without inventing a rate", () => {
       expect(
         sandboxShapeAndCostLine(
           unpriced({
@@ -1163,21 +1198,23 @@ describe("team payer in the resource line", () => {
           team,
           "other",
         ),
-      ).toBe(`${SHAPE} · storage paid by Priya`);
+      ).toBe(`${SHAPE} · ${WAKE} · created by Planner for Sandbox setup`);
     });
 
-    it("names a storage payer on an unpriced row", () => {
+    it("warns that waking changes the payer on an unpriced stopped row", () => {
       expect(
         sandboxShapeAndCostLine(unpriced({ state: "stopped" }), team, "other"),
-      ).toBe(`${SHAPE} · storage paid by Priya`);
+      ).toBe(`${SHAPE} · ${WAKE}`);
     });
 
-    it("shows the personal payer even when no rate is available", () => {
-      const resting = unpriced({ state: "suspended" });
-
+    it("leaves a personal resting row as the shape alone when no rate is available", () => {
       expect(
-        sandboxShapeAndCostLine(resting, { kind: "personal" }, "other"),
-      ).toBe(`${SHAPE} · paid by you`);
+        sandboxShapeAndCostLine(
+          unpriced({ state: "suspended" }),
+          { kind: "personal" },
+          "other",
+        ),
+      ).toBe(SHAPE);
     });
   });
 });

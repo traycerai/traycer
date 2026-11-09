@@ -18,7 +18,9 @@ import { frozenDestroyAt } from "@/lib/sandboxes/sandbox-balance";
 import { formatMemory } from "@/lib/sandboxes/sandbox-pricing";
 import {
   AGENT_SANDBOX,
+  costLine,
   keptByLine,
+  paidByLine,
   startedByLine,
   KEPT_UNTIL_YOU_DESTROY_IT,
   LESS_THAN_A_CENT_SO_FAR,
@@ -289,7 +291,7 @@ export function sandboxStartedByLabel(
   summary: SandboxSummary,
   viewerUserId: string | null,
 ): string | null {
-  if (summary.kind === "automation") return null;
+  if (summary.kind === "automation") return "Automations";
   if (summary.burst) return AGENT_SANDBOX;
   if (summary.createdByAgentId !== null) {
     return startedByLine(summary.createdByAgentName ?? "an agent");
@@ -307,6 +309,26 @@ export function sandboxKeptByLabel(
     : keptByLine(sandboxMemberName(summary.keptBy, viewerUserId));
 }
 
+/**
+ * `Paid by you` to the payer, `Paid by Priya` to anyone else, on an awake
+ * team row only. A payer the server does not name is never `a member`.
+ */
+export function sandboxPaidByLabel(
+  summary: SandboxSummary,
+  configuration: SandboxPageConfiguration,
+  viewerUserId: string | null,
+): string | null {
+  if (configuration.kind !== "team") return null;
+  if (sandboxPublicState(summary) !== "awake" || summary.wakePayer === null) {
+    return null;
+  }
+  const payer = summary.wakePayer;
+  if (viewerUserId !== null && payer.userId === viewerUserId) {
+    return paidByLine("you");
+  }
+  return payer.displayName === null ? null : paidByLine(payer.displayName);
+}
+
 // ── The shape and cost line ─────────────────────────────────────────────────
 
 /** `Linux · 2 vCPU · 4 GB`. */
@@ -315,32 +337,49 @@ export function sandboxShapeLine(summary: SandboxSummary): string {
   return `${os} · ${summary.cpus} vCPU · ${formatMemory(summary.memoryMb)}`;
 }
 
-/** The row's resources, awake rate and current payer, without lifecycle history. */
+/**
+ * The row's second line: the shape, then the cost line. An agent sandbox
+ * names the agent that created it and its task. A resting team row whose
+ * payer is someone else says that waking it changes the payer.
+ */
 export function sandboxShapeAndCostLine(
   summary: SandboxSummary,
   configuration: SandboxPageConfiguration,
   viewerUserId: string | null,
 ): string {
   if (summary.kind === "automation") return automationsShapeLine(configuration);
-  const resting =
-    summary.state === "suspended" ||
-    summary.state === "stopped" ||
-    summary.state === "suspending" ||
-    summary.state === "stopping";
-  let payer: string | null = null;
-  if (configuration.kind === "personal") payer = "you";
-  else if (summary.wakePayer !== null) {
-    payer = sandboxMemberName(summary.wakePayer, viewerUserId);
+  const creator = agentCreatorClause(summary);
+  const resting = summary.state === "suspended" || summary.state === "stopped";
+  const teamNonPayer =
+    configuration.kind === "team" &&
+    summary.wakePayer !== null &&
+    sandboxMemberName(summary.wakePayer, viewerUserId) !== "you";
+  const wakeWarning =
+    !summary.frozen && teamNonPayer && resting
+      ? "waking it makes you the payer"
+      : null;
+  if (summary.priceMcPerHour === null) {
+    return joinParts(sandboxShapeLine(summary), wakeWarning, creator);
   }
-  return joinParts(
-    sandboxShapeLine(summary),
-    summary.priceMcPerHour === null
-      ? null
-      : `${formatSandboxDollars(summary.priceMcPerHour.awakeMc)} an hour while awake`,
-    summary.frozen || summary.state === "destroying" || payer === null
-      ? null
-      : `${resting && configuration.kind === "team" ? "storage paid" : "paid"} by ${payer}`,
-  );
+  const hourly = `${formatSandboxDollars(summary.priceMcPerHour.awakeMc)} an hour while awake`;
+  const cost =
+    creator !== null || teamNonPayer
+      ? hourly
+      : costLine(
+          summary.priceMcPerHour.awakeMc,
+          configurationCopy(configuration),
+        );
+  return joinParts(sandboxShapeLine(summary), cost, wakeWarning, creator);
+}
+
+/** `created by Planner for Sandbox setup`, on an agent sandbox. */
+function agentCreatorClause(summary: SandboxSummary): string | null {
+  const agent = summary.createdByAgentName;
+  if (!summary.burst || agent === null) return null;
+  const task = summary.createdByTaskTitle;
+  return task === null
+    ? `created by ${agent}`
+    : `created by ${agent} for ${task}`;
 }
 
 /** The payer consequence sits on its own line before the row's actions. */
@@ -373,10 +412,11 @@ export function automationsShapeLine(
 
 const RELEASED_CLAUSE = "files kept · the next shell starts it";
 /**
- * The Automations host at rest, or not created yet: the next shell starts it.
- * Its badge and line read Not running; its files are kept.
+ * The Automations host before its first shell creates it. The badge reads
+ * Not running; this line says the files stay and a shell starts the host.
  */
-export const AUTOMATIONS_RELEASED_LINE = `${hostSandboxStateWord("released")} · ${RELEASED_CLAUSE}`;
+export const AUTOMATIONS_RELEASED_LINE =
+  "Files are kept; starts when you open a shell.";
 
 /** The released row's line with the sandbox as its subject, for its chat. */
 export function sandboxReleasedChatLine(name: string): string {
@@ -781,11 +821,27 @@ function awakeClockLine(input: SandboxClockInput): string {
   );
 }
 
+/**
+ * Whose credits a resting row's storage draws on. A team row with no payer
+ * leaves the clause out rather than naming the wrong member.
+ */
+function storageCreditClause(
+  summary: SandboxSummary,
+  configuration: SandboxPageConfiguration,
+  viewerUserId: string | null,
+): string | null {
+  if (configuration.kind === "personal") return "storage uses your credits";
+  if (summary.wakePayer === null) return null;
+  const who = sandboxMemberName(summary.wakePayer, viewerUserId);
+  const scope = who === "you" ? "your" : `${who}'s`;
+  return `storage uses ${scope} ${configuration.teamName} credits`;
+}
+
 function restingClockLine(
   input: SandboxClockInput,
   state: "suspended" | "stopped",
 ): string {
-  const { summary, cost, now } = input;
+  const { summary, configuration, cost, now } = input;
   const since = summary.restingSince ?? summary.lastTransitionAt;
   const resting =
     state === "suspended"
@@ -801,6 +857,7 @@ function restingClockLine(
         );
   return joinParts(
     resting,
+    storageCreditClause(summary, configuration, input.viewerUserId),
     cost !== null && cost.todayMillicredits > 0
       ? `${formatSandboxCost(cost.todayMillicredits)} today`
       : null,

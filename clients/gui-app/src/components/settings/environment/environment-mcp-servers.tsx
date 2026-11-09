@@ -1,17 +1,22 @@
 import { useConfigurationKey } from "@/components/settings/environment/use-configuration-key";
-import { useId, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import { Server, Trash2 } from "lucide-react";
 import type { McpListData } from "@/hooks/providers/native-response-map";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import type { EnvironmentConfigurationWriteResponse } from "@traycer/protocol/host/environment/configuration-contracts";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { useProvidersMcpList } from "@/hooks/providers/use-providers-mcp-list-query";
 import { useHostNegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated-method-version";
+import { useIsTextTruncated } from "@/hooks/ui/use-is-text-truncated";
 import {
   useConfigurationMcpServerMutations,
   useConfigurationMcpServersQuery,
@@ -19,6 +24,7 @@ import {
 } from "@/hooks/environment/team/use-mcp-servers";
 import { useHostClient } from "@/lib/host";
 import { toastFromHostError } from "@/lib/host-error-toast";
+import { cn } from "@/lib/utils";
 import {
   providerDisplayName,
   providerIdToGuiHarnessId,
@@ -34,7 +40,15 @@ import {
   typedWriteIssue,
   type ConfigurationWriteIssue,
 } from "./configuration-write-issue";
+import { McpIntroduction } from "./configuration-introduction";
 import { McpServerDialog } from "./mcp-server-dialog";
+import {
+  initialMcpServerForm,
+  mcpServerCredential,
+  mcpServerPutRequest,
+  mcpServerReady,
+  type McpServerForm,
+} from "./mcp-server-form";
 import { OnHostOnlyServersLine } from "./on-host-only-entries";
 import {
   mcpItemValue,
@@ -45,7 +59,6 @@ import {
 import {
   DISABLED_SERVER_PHRASE,
   REMOVE_SERVER_LABEL,
-  MCP_PAGE_DESCRIPTION,
   mcpReadFailed,
   providersPhrase,
   removeReach,
@@ -65,15 +78,11 @@ export function EnvironmentMcpServersPage(): ReactNode {
   return <EnvironmentMcpServers key={configurationKey} />;
 }
 
-function McpPage(props: {
-  readonly children: ReactNode;
-  readonly action: ReactNode;
-}): ReactNode {
+function McpPage(props: { readonly children: ReactNode }): ReactNode {
   return (
     <SettingsPanelShell
       title="MCP servers"
-      description={MCP_PAGE_DESCRIPTION}
-      headerAction={props.action}
+      description={<McpIntroduction />}
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >
       {props.children}
@@ -88,13 +97,13 @@ function EnvironmentMcpServers(): ReactNode {
   );
   if (version === null)
     return (
-      <McpPage action={null}>
+      <McpPage>
         <MutedAgentSpinner />
       </McpPage>
     );
   if (version === false)
     return (
-      <McpPage action={null}>
+      <McpPage>
         <TeamMcpItems providerId={null} />
       </McpPage>
     );
@@ -106,19 +115,17 @@ function McpServerList(): ReactNode {
   const providers = useMcpProviders();
   const canEdit = useCanEditConfiguration();
   const name = useConfigurationName();
-  const [editing, setEditing] = useState<EnvironmentMcpServer | "new" | null>(
-    null,
-  );
+  const [adding, setAdding] = useState(false);
   const [issue, setIssue] = useState<ConfigurationWriteIssue>(null);
   if (query.isPending)
     return (
-      <McpPage action={null}>
+      <McpPage>
         <MutedAgentSpinner />
       </McpPage>
     );
   if (query.isError)
     return (
-      <McpPage action={null}>
+      <McpPage>
         <TeamReadFailed
           message={mcpReadFailed(name)}
           onRetry={() => void query.refetch()}
@@ -126,17 +133,13 @@ function McpServerList(): ReactNode {
       </McpPage>
     );
   return (
-    <McpPage
-      action={
-        canEdit ? (
-          <Button type="button" size="sm" onClick={() => setEditing("new")}>
-            Add a server
-          </Button>
-        ) : null
-      }
-    >
+    <McpPage>
       <section className="flex flex-col gap-3" aria-label="Servers">
         <ConfigurationWriteFeedback issue={issue} />
+        <ConnectedServersHeading
+          canEdit={canEdit}
+          onAdd={() => setAdding(true)}
+        />
         {query.data.length === 0 ? (
           <>
             <p className="text-ui-sm text-muted-foreground">
@@ -157,20 +160,34 @@ function McpServerList(): ReactNode {
                 server={server}
                 providers={providers}
                 canEdit={canEdit}
-                onEdit={() => setEditing(server)}
                 onIssue={setIssue}
               />
             ))}
           </ul>
         )}
-        {editing === null ? null : (
-          <McpServerDialog
-            server={editing === "new" ? null : editing}
-            onClose={() => setEditing(null)}
-          />
-        )}
+        {adding ? (
+          <McpServerDialog server={null} onClose={() => setAdding(false)} />
+        ) : null}
       </section>
     </McpPage>
+  );
+}
+
+function ConnectedServersHeading(props: {
+  readonly canEdit: boolean;
+  readonly onAdd: () => void;
+}): ReactNode {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <Server className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+      <h2 className="text-ui-sm font-medium">Connected servers</h2>
+      <span className="h-px min-w-4 flex-1 bg-border" />
+      {props.canEdit ? (
+        <Button type="button" size="sm" onClick={props.onAdd}>
+          Add a server
+        </Button>
+      ) : null}
+    </div>
   );
 }
 
@@ -193,13 +210,12 @@ function McpServerRow(props: {
   readonly server: EnvironmentMcpServer;
   readonly providers: readonly ProviderId[];
   readonly canEdit: boolean;
-  readonly onEdit: () => void;
   readonly onIssue: (issue: ConfigurationWriteIssue) => void;
 }): ReactNode {
   const { server } = props;
   const source = useConfigurationSource();
   const name = useConfigurationName();
-  const { remove, putItem, setEnabled } = useConfigurationMcpServerMutations();
+  const { remove, setEnabled } = useConfigurationMcpServerMutations();
   const client = useHostClient();
   const removable =
     useHostNegotiatedMethodVersion(
@@ -211,103 +227,79 @@ function McpServerRow(props: {
       client,
       "environment.configuration.mcpServers.setEnabled",
     ) !== false;
-  const [toolsOpen, setToolsOpen] = useState(false);
+  const [open, setOpen] = useState(false);
+  const [detail, setDetail] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const using = providersUsing(server, props.providers);
   const enabled = server.item !== null;
-  const pending = putItem.isPending || setEnabled.isPending || remove.isPending;
-  const toolHost = using.at(0) ?? null;
+  const pending = setEnabled.isPending || remove.isPending;
+  const status =
+    open && detail !== null
+      ? detail
+      : collapsedServerStatus(server, using, props.providers.length);
   return (
-    <li className="flex flex-col gap-2 rounded-lg border border-border/60 p-3">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="min-w-0">
-          <div className="wrap-anywhere text-ui-sm font-medium">
-            {server.name}
-          </div>
-          <TeamViewingHostBinding
-            unavailable={
-              <McpServerLine
-                server={server}
-                using={using}
-                total={props.providers.length}
-                toolCount={null}
-              />
-            }
-          >
-            <McpServerLineWithTools
-              server={server}
-              using={using}
-              total={props.providers.length}
-              toolHost={toolHost}
+    <li className="rounded-lg border border-border/60">
+      <div className="flex items-center justify-between gap-3 p-3">
+        <button
+          type="button"
+          className="flex min-w-0 flex-1 items-center gap-3 text-left"
+          aria-expanded={open}
+          onClick={() => {
+            setDetail(null);
+            setOpen((current) => !current);
+          }}
+        >
+          <ServerLetter name={server.name} />
+          <span className="min-w-0">
+            <span className="block truncate text-ui-sm font-medium">
+              {server.name}
+            </span>
+            <ServerStatus enabled={enabled} line={status} />
+          </span>
+        </button>
+        <div className="flex shrink-0 items-center gap-2">
+          {props.canEdit && switchable ? (
+            <Switch
+              aria-label={server.name}
+              checked={enabled}
+              disabled={pending}
+              onCheckedChange={(next) => {
+                if (source.kind !== "pool") return;
+                setEnabled.mutate(
+                  {
+                    environmentId: source.environmentId,
+                    serverId: server.serverId,
+                    enabled: next,
+                  },
+                  {
+                    // A switch answers a configuration write, not an item
+                    // write: it has no conflict to show.
+                    onSuccess: (result) =>
+                      props.onIssue(
+                        switchIssue(result, name, server.name, next),
+                      ),
+                    onError: (error) =>
+                      toastFromHostError(
+                        error,
+                        serverSwitchFailed(server.name, next),
+                      ),
+                  },
+                );
+              }}
             />
-          </TeamViewingHostBinding>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {enabled ? (
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              aria-expanded={toolsOpen}
-              onClick={() => setToolsOpen((open) => !open)}
-            >
-              Tools
-            </Button>
-          ) : null}
-          {props.canEdit ? (
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={props.onEdit}
-            >
-              Edit
-            </Button>
           ) : null}
           {props.canEdit && removable ? (
             <Button
               type="button"
+              size="icon-sm"
               variant="ghost"
-              size="sm"
               disabled={pending}
+              aria-label={`Remove ${server.name}`}
               onClick={() => setConfirming(true)}
             >
-              Remove
+              <Trash2 className="size-4" />
             </Button>
           ) : null}
-          <span className="flex flex-wrap items-center gap-2 text-ui-xs text-muted-foreground">
-            {serverSwitchLabel(enabled)}
-            {props.canEdit && switchable ? (
-              <Switch
-                aria-label={server.name}
-                checked={enabled}
-                disabled={pending}
-                onCheckedChange={(next) => {
-                  if (source.kind !== "pool") return;
-                  setEnabled.mutate(
-                    {
-                      environmentId: source.environmentId,
-                      serverId: server.serverId,
-                      enabled: next,
-                    },
-                    {
-                      // A switch answers a configuration write, not an item
-                      // write: it has no conflict to show.
-                      onSuccess: (result) =>
-                        props.onIssue(
-                          switchIssue(result, name, server.name, next),
-                        ),
-                      onError: (error) =>
-                        toastFromHostError(
-                          error,
-                          serverSwitchFailed(server.name, next),
-                        ),
-                    },
-                  );
-                }}
-              />
-            ) : null}
-          </span>
         </div>
       </div>
       <RemoveServerDialog
@@ -330,18 +322,64 @@ function McpServerRow(props: {
           );
         }}
       />
-      {toolsOpen && enabled ? (
-        <TeamViewingHostBinding unavailable={null}>
-          <SharedMcpServerTools
-            server={server}
-            providers={using}
-            canEdit={props.canEdit}
-            onIssue={props.onIssue}
-          />
-        </TeamViewingHostBinding>
+      {open ? (
+        <McpServerCardBody
+          server={server}
+          using={using}
+          total={props.providers.length}
+          canEdit={props.canEdit}
+          onIssue={props.onIssue}
+          onDetail={setDetail}
+        />
       ) : null}
     </li>
   );
+}
+
+function ServerLetter(props: { readonly name: string }): ReactNode {
+  return (
+    <span
+      aria-hidden
+      className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted/50 text-ui-sm font-semibold text-muted-foreground"
+    >
+      {props.name.trim().slice(0, 1).toUpperCase()}
+    </span>
+  );
+}
+
+function ServerStatus(props: {
+  readonly enabled: boolean;
+  readonly line: string;
+}): ReactNode {
+  return (
+    <span className="flex min-w-0 items-center gap-1.5 text-ui-xs text-muted-foreground">
+      <span
+        aria-hidden
+        className={cn(
+          "size-1.5 shrink-0 rounded-full",
+          props.enabled ? "bg-success" : "bg-muted-foreground/30",
+        )}
+      />
+      <span className="truncate">{props.line}</span>
+    </span>
+  );
+}
+
+function collapsedServerStatus(
+  server: EnvironmentMcpServer,
+  using: readonly ProviderId[],
+  total: number,
+): string {
+  if (server.item === null)
+    return [server.transport, DISABLED_SERVER_PHRASE].join(" · ");
+  return [
+    serverSwitchLabel(true),
+    server.transport,
+    providersPhrase(
+      using.map((id) => providerDisplayName(id)),
+      total,
+    ),
+  ].join(" · ");
 }
 
 /** Remove's confirm: where the server goes from, and what its secret does. */
@@ -373,59 +411,6 @@ function RemoveServerDialog(props: {
         </p>
       ) : null}
     </ConfirmDestructiveDialog>
-  );
-}
-
-function McpServerLine(props: {
-  readonly server: EnvironmentMcpServer;
-  readonly using: readonly ProviderId[];
-  readonly total: number;
-  readonly toolCount: number | null;
-}): ReactNode {
-  const parts =
-    props.server.item === null
-      ? [props.server.transport, DISABLED_SERVER_PHRASE]
-      : [
-          props.server.transport,
-          ...(props.toolCount === null
-            ? []
-            : [toolCountPhrase(props.toolCount)]),
-          providersPhrase(
-            props.using.map((id) => providerDisplayName(id)),
-            props.total,
-          ),
-        ];
-  return (
-    <div className="text-ui-xs text-muted-foreground">{parts.join(" · ")}</div>
-  );
-}
-
-/** The line with the tool count a host running the configuration reports. */
-function McpServerLineWithTools(props: {
-  readonly server: EnvironmentMcpServer;
-  readonly using: readonly ProviderId[];
-  readonly total: number;
-  readonly toolHost: ProviderId | null;
-}): ReactNode {
-  const list = useProvidersMcpList({
-    providerId: props.toolHost ?? "claude-code",
-    scope: "global",
-    workspaceRoot: null,
-    enabled: props.toolHost !== null && props.server.item !== null,
-    pollWhilePending: false,
-  });
-  const key = props.server.item?.key ?? props.server.name;
-  const reported =
-    props.toolHost === null
-      ? undefined
-      : list.data?.servers.find((row) => row.name === key);
-  return (
-    <McpServerLine
-      server={props.server}
-      using={props.using}
-      total={props.total}
-      toolCount={reported === undefined ? null : reported.tools.length}
-    />
   );
 }
 
@@ -551,228 +536,531 @@ function McpToolReads(props: {
   );
 }
 
-interface McpToolProviderState {
+interface McpToolListing {
   readonly providerId: ProviderId;
   readonly enabled: boolean;
 }
 
-/**
- * Provider switches for one tool. A single provider that is the only one
- * using the server keeps the switch beside the tool name.
- */
-function McpToolProviderControls(props: {
-  readonly serverName: string;
-  readonly toolName: string;
-  readonly providers: readonly ProviderId[];
-  readonly states: readonly McpToolProviderState[];
+interface McpToolGroup {
+  readonly name: string;
+  readonly listed: readonly McpToolListing[];
+}
+
+type ToolDraft = Readonly<Record<string, boolean>>;
+
+function McpServerCardBody(props: {
+  readonly server: EnvironmentMcpServer;
+  readonly using: readonly ProviderId[];
+  readonly total: number;
+  readonly canEdit: boolean;
+  readonly onIssue: (issue: ConfigurationWriteIssue) => void;
+  readonly onDetail: (line: string | null) => void;
+}): ReactNode {
+  if (props.server.item === null) {
+    return (
+      <McpOpenEditor
+        server={props.server}
+        using={props.using}
+        total={props.total}
+        lists={[]}
+        toolsKnown={false}
+        canEdit={props.canEdit}
+        onIssue={props.onIssue}
+        onDetail={props.onDetail}
+      />
+    );
+  }
+  return (
+    <TeamViewingHostBinding
+      unavailable={
+        <McpOpenEditor
+          server={props.server}
+          using={props.using}
+          total={props.total}
+          lists={[]}
+          toolsKnown={false}
+          canEdit={props.canEdit}
+          onIssue={props.onIssue}
+          onDetail={props.onDetail}
+        />
+      }
+    >
+      <McpToolReads providers={props.using} enabled lists={[]}>
+        {(lists) => (
+          <McpOpenEditor
+            server={props.server}
+            using={props.using}
+            total={props.total}
+            lists={lists}
+            toolsKnown
+            canEdit={props.canEdit}
+            onIssue={props.onIssue}
+            onDetail={props.onDetail}
+          />
+        )}
+      </McpToolReads>
+    </TeamViewingHostBinding>
+  );
+}
+
+function McpOpenEditor(props: {
+  readonly server: EnvironmentMcpServer;
+  readonly using: readonly ProviderId[];
+  readonly total: number;
+  readonly lists: readonly ToolListQuery[];
+  readonly toolsKnown: boolean;
+  readonly canEdit: boolean;
+  readonly onIssue: (issue: ConfigurationWriteIssue) => void;
+  readonly onDetail: (line: string | null) => void;
+}): ReactNode {
+  const source = useConfigurationSource();
+  const { put, putItem } = useConfigurationMcpServerMutations();
+  const initial = endpointInitial(props.server);
+  const [endpoint, setEndpoint] = useState(initial);
+  const groups = groupServerTools(props.server, props.using, props.lists);
+  const draft = useToolDraft(groups);
+  const endpointDirty = endpoint !== initial;
+  const toolsDirty = toolDraftDirty(groups, draft.value);
+  const ready = endpointReady(props.server, endpoint);
+  const pending = put.isPending || putItem.isPending;
+  const canSave =
+    !pending && (toolsDirty || endpointDirty) && (!endpointDirty || ready);
+  const { onDetail, toolsKnown } = props;
+  const enabledCount = enabledInDraft(groups, draft.value);
+  useEffect(() => {
+    if (!toolsKnown || groups.length === 0) {
+      onDetail(null);
+      return;
+    }
+    onDetail(enabledToolsLine(enabledCount));
+  }, [onDetail, toolsKnown, groups, enabledCount]);
+  const save = (): void => {
+    if (source.kind !== "pool" || !canSave) return;
+    const item = props.server.item;
+    if (endpointDirty) {
+      const request = endpointPutRequest(
+        props.server,
+        endpoint,
+        source.environmentId,
+      );
+      if (request !== null)
+        put.mutate(request, {
+          onSuccess: (result) =>
+            props.onIssue(
+              typedWriteIssue(result, "Couldn't save this server."),
+            ),
+        });
+    }
+    if (toolsDirty && item !== null)
+      putItem.mutate(
+        {
+          environmentId: source.environmentId,
+          kind: "mcp_server",
+          key: item.key,
+          os: null,
+          value: mcpItemValue(
+            props.server,
+            togglesFromDraft(item.toolToggles, groups, draft.value),
+            item.offFor,
+          ),
+          revision: item.revision,
+        },
+        {
+          onSuccess: (result) => props.onIssue(configurationWriteIssue(result)),
+        },
+      );
+  };
+  return (
+    <div className="flex flex-col gap-4 border-t border-border/60 px-3 py-4">
+      <McpServerDetails
+        server={props.server}
+        endpoint={endpoint}
+        using={props.using}
+        total={props.total}
+        toolCount={toolsKnown && groups.length > 0 ? groups.length : null}
+        canEdit={props.canEdit}
+        pending={pending}
+        onEndpoint={setEndpoint}
+      />
+      <ToolReadNotices
+        serverKey={props.server.item?.key ?? props.server.name}
+        providers={props.using}
+        lists={props.lists}
+      />
+      <McpToolGrid
+        serverName={props.server.name}
+        groups={groups}
+        draft={draft.value}
+        canEdit={props.canEdit}
+        pending={pending}
+        onToggle={draft.setTool}
+        onEnableAll={() => draft.setAll(true)}
+        onDisableAll={() => draft.setAll(false)}
+      />
+      <div className="flex justify-end">
+        <Button type="button" size="sm" disabled={!canSave} onClick={save}>
+          Save changes
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function McpServerDetails(props: {
+  readonly server: EnvironmentMcpServer;
+  readonly endpoint: string;
+  readonly using: readonly ProviderId[];
+  readonly total: number;
+  readonly toolCount: number | null;
   readonly canEdit: boolean;
   readonly pending: boolean;
-  readonly onToggle: (providerId: ProviderId, next: boolean) => void;
+  readonly onEndpoint: (value: string) => void;
 }): ReactNode {
-  const named =
-    props.providers.length > 1 ||
-    props.states.length !== props.providers.length;
-  if (!named) return null;
+  const label = props.server.transport === "http" ? "Endpoint URL" : "Command";
+  const fieldId = `mcp-endpoint-${props.server.serverId}`;
   return (
-    <div className="flex flex-col gap-2">
-      {props.providers.map((providerId) => {
-        const state = props.states.find(
-          (entry) => entry.providerId === providerId,
-        );
+    <div className="flex flex-col gap-3 rounded-lg bg-muted/30 p-4">
+      <h3 className="text-ui-sm font-medium">Server details</h3>
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor={fieldId} variant="muted">
+          {label}
+        </Label>
+        <Input
+          id={fieldId}
+          value={props.endpoint}
+          disabled={!props.canEdit || props.pending}
+          spellCheck={false}
+          aria-label={`${label} for ${props.server.name}`}
+          onChange={(event) => props.onEndpoint(event.target.value)}
+          font="mono"
+          size="xs"
+        />
+      </div>
+      <p className="text-ui-xs text-muted-foreground">
+        {serverDetailsMeta(
+          props.server,
+          props.using,
+          props.total,
+          props.toolCount,
+        )}
+      </p>
+    </div>
+  );
+}
+
+function serverDetailsMeta(
+  server: EnvironmentMcpServer,
+  using: readonly ProviderId[],
+  total: number,
+  toolCount: number | null,
+): string {
+  const names = using.map((id) => providerDisplayName(id));
+  const phrase = providersPhrase(names, total);
+  const parts: string[] = [server.transport];
+  if (toolCount !== null) parts.push(toolCountPhrase(toolCount));
+  parts.push(phrase);
+  if (phrase === "all providers" && names.length > 0)
+    parts.push(names.join(", "));
+  return parts.join(" · ");
+}
+
+function endpointInitial(server: EnvironmentMcpServer): string {
+  return server.transport === "http"
+    ? (server.url ?? "")
+    : (server.command ?? "");
+}
+
+function formForEndpoint(
+  server: EnvironmentMcpServer,
+  endpoint: string,
+): McpServerForm {
+  const form = initialMcpServerForm(server);
+  if (server.transport === "http") return { ...form, url: endpoint };
+  return { ...form, command: endpoint };
+}
+
+function endpointReady(
+  server: EnvironmentMcpServer,
+  endpoint: string,
+): boolean {
+  const form = formForEndpoint(server, endpoint);
+  return mcpServerReady(form, mcpServerCredential(form, true, false));
+}
+
+function endpointPutRequest(
+  server: EnvironmentMcpServer,
+  endpoint: string,
+  environmentId: string,
+) {
+  const form = formForEndpoint(server, endpoint);
+  const credential = mcpServerCredential(form, true, false);
+  if (credential === null || !mcpServerReady(form, credential)) return null;
+  return mcpServerPutRequest(form, server, environmentId, credential);
+}
+
+function ToolReadNotices(props: {
+  readonly serverKey: string;
+  readonly providers: readonly ProviderId[];
+  readonly lists: readonly ToolListQuery[];
+}): ReactNode {
+  return (
+    <>
+      {props.lists.some((list) => list.isPending) ? (
+        <MutedAgentSpinner />
+      ) : null}
+      {props.lists.map((list, index) => {
+        const providerId = props.providers.at(index);
+        if (providerId === undefined) return null;
         return (
-          <McpToolProviderControl
+          <ToolReadNotice
             key={providerId}
-            serverName={props.serverName}
-            toolName={props.toolName}
             providerId={providerId}
-            enabled={state === undefined ? null : state.enabled}
-            canEdit={props.canEdit}
-            pending={props.pending}
-            onToggle={(next) => props.onToggle(providerId, next)}
+            serverKey={props.serverKey}
+            list={list}
           />
         );
       })}
-    </div>
+    </>
   );
 }
 
-function McpToolProviderControl(props: {
-  readonly serverName: string;
-  readonly toolName: string;
+function ToolReadNotice(props: {
   readonly providerId: ProviderId;
-  readonly enabled: boolean | null;
-  readonly canEdit: boolean;
-  readonly pending: boolean;
-  readonly onToggle: (next: boolean) => void;
+  readonly serverKey: string;
+  readonly list: ToolListQuery;
 }): ReactNode {
   const label = providerDisplayName(props.providerId);
-  const listed = props.enabled !== null;
+  if (props.list.isError && !props.list.isFetching)
+    return (
+      <TeamReadFailed
+        message={`Couldn't read ${label}'s tools for this server.`}
+        onRetry={() => void props.list.refetch()}
+      />
+    );
+  if (
+    props.list.data !== undefined &&
+    !props.list.data.servers.some((server) => server.name === props.serverKey)
+  )
+    return (
+      <p role="status" className="text-ui-xs text-muted-foreground">
+        {`${label} hasn't listed this server's tools yet.`}
+      </p>
+    );
+  return null;
+}
+
+function McpToolGrid(props: {
+  readonly serverName: string;
+  readonly groups: readonly McpToolGroup[];
+  readonly draft: ToolDraft;
+  readonly canEdit: boolean;
+  readonly pending: boolean;
+  readonly onToggle: (name: string, next: boolean) => void;
+  readonly onEnableAll: () => void;
+  readonly onDisableAll: () => void;
+}): ReactNode {
+  if (props.groups.length === 0) return null;
+  const enabled = enabledInDraft(props.groups, props.draft);
+  const total = props.groups.length;
   return (
-    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-      <span className="min-w-0 wrap-anywhere text-ui-xs text-muted-foreground">
-        {listed ? label : `${label} · Not listed`}
-      </span>
-      {listed ? (
-        <Switch
-          aria-label={`${props.serverName} ${label} ${props.toolName}`}
-          checked={props.enabled}
-          disabled={!props.canEdit || props.pending}
-          onCheckedChange={props.onToggle}
-        />
-      ) : null}
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-ui-sm font-medium">
+          {"Available tools "}
+          <span className="font-normal text-muted-foreground">
+            {`(${enabled} of ${total})`}
+          </span>
+        </h3>
+        <div className="flex items-center gap-1.5">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={!props.canEdit || props.pending || enabled === total}
+            onClick={props.onEnableAll}
+          >
+            Enable all
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={!props.canEdit || props.pending || enabled === 0}
+            onClick={props.onDisableAll}
+          >
+            Disable all
+          </Button>
+        </div>
+      </div>
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        {props.groups.map((group) => (
+          <div
+            key={group.name}
+            className="flex items-center justify-between gap-2 rounded-md border border-border/60 px-3 py-2"
+          >
+            <McpToolName name={group.name} />
+            <Switch
+              aria-label={`${props.serverName} ${group.name}`}
+              checked={props.draft[group.name]}
+              disabled={!props.canEdit || props.pending}
+              onCheckedChange={(next) => props.onToggle(group.name, next)}
+            />
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
 
-/**
- * One name per tool. The switch beside the name writes every provider that
- * listed the tool. Each of those providers keeps its own switch on the row.
- */
-function SharedMcpServerTools(props: {
-  readonly server: EnvironmentMcpServer;
-  readonly providers: readonly ProviderId[];
-  readonly canEdit: boolean;
-  readonly onIssue: (issue: ConfigurationWriteIssue) => void;
-}): ReactNode {
+function McpToolName(props: { readonly name: string }): ReactNode {
+  const { ref, isTruncated } = useIsTextTruncated<HTMLSpanElement>(props.name);
   return (
-    <McpToolReads
-      providers={props.providers}
-      enabled={props.server.item !== null}
-      lists={[]}
-    >
-      {(lists) => <SharedMcpToolInventory {...props} lists={lists} />}
-    </McpToolReads>
+    <div className="min-w-0 flex-1">
+      <TooltipWrapper
+        label={isTruncated ? props.name : null}
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
+      >
+        <span ref={ref} className="block truncate text-ui-sm">
+          {props.name}
+        </span>
+      </TooltipWrapper>
+    </div>
   );
 }
 
-function SharedMcpToolInventory(props: {
-  readonly server: EnvironmentMcpServer;
-  readonly providers: readonly ProviderId[];
-  readonly canEdit: boolean;
-  readonly onIssue: (issue: ConfigurationWriteIssue) => void;
-  readonly lists: readonly ToolListQuery[];
-}): ReactNode {
-  const mixedDescriptionId = useId();
-  const source = useConfigurationSource();
-  const { putItem } = useConfigurationMcpServerMutations();
-  const item = props.server.item;
-  const lists = props.lists;
-  if (item === null) return null;
-  const tools = new Map<
-    string,
-    { readonly providerId: ProviderId; readonly enabled: boolean }[]
-  >();
+function groupServerTools(
+  server: EnvironmentMcpServer,
+  providers: readonly ProviderId[],
+  lists: readonly ToolListQuery[],
+): readonly McpToolGroup[] {
+  const item = server.item;
+  if (item === null) return [];
+  const tools = new Map<string, McpToolListing[]>();
   lists.forEach((list, index) => {
-    const providerId = props.providers.at(index);
+    const providerId = providers.at(index);
     if (providerId === undefined) return;
     const harness = providerIdToGuiHarnessId(providerId);
     list.data?.servers
-      .find((server) => server.name === item.key)
+      .find((row) => row.name === item.key)
       ?.tools.forEach((tool) => {
-        const states = tools.get(tool.name) ?? [];
-        states.push({
+        const listed = tools.get(tool.name) ?? [];
+        listed.push({
           providerId,
           enabled: item.toolToggles[harness]?.[tool.name] ?? tool.enabled,
         });
-        tools.set(tool.name, states);
+        tools.set(tool.name, listed);
       });
   });
-  const toggle = (
-    name: string,
-    providers: readonly ProviderId[],
-    next: boolean,
-  ): void => {
-    if (source.kind !== "pool") return;
-    const toggles = { ...item.toolToggles };
-    providers.forEach((id) => {
-      const harness = providerIdToGuiHarnessId(id);
-      toggles[harness] = { ...toggles[harness], [name]: next };
-    });
-    putItem.mutate(
-      {
-        environmentId: source.environmentId,
-        kind: "mcp_server",
-        key: item.key,
-        os: null,
-        value: mcpItemValue(props.server, toggles, item.offFor),
-        revision: item.revision,
-      },
-      { onSuccess: (result) => props.onIssue(configurationWriteIssue(result)) },
-    );
+  return [...tools].map(([name, listed]) => ({ name, listed }));
+}
+
+function useToolDraft(groups: readonly McpToolGroup[]): {
+  readonly value: ToolDraft;
+  readonly setTool: (name: string, next: boolean) => void;
+  readonly setAll: (next: boolean) => void;
+} {
+  const signature = groups
+    .map(
+      (group) =>
+        `${group.name}:${group.listed.every((entry) => entry.enabled)}`,
+    )
+    .join("|");
+  const [held, setHeld] = useState(signature);
+  const [value, setValue] = useState<ToolDraft>(() => initialToolDraft(groups));
+  const [edited, setEdited] = useState<ReadonlySet<string>>(() => new Set());
+  if (held !== signature) {
+    setHeld(signature);
+    setValue(adoptToolDraft(groups, value, edited));
+  }
+  return {
+    value,
+    setTool: (name, next) => {
+      setEdited((current) => {
+        const names = new Set(current);
+        names.add(name);
+        return names;
+      });
+      setValue((current) => ({ ...current, [name]: next }));
+    },
+    setAll: (next) => {
+      setEdited(new Set(groups.map((group) => group.name)));
+      setValue(draftAll(groups, next));
+    },
   };
-  const ready = lists.every((list) => list.isSuccess);
-  return (
-    <div className="flex flex-col gap-3">
-      {lists.some((list) => list.isPending) ? <MutedAgentSpinner /> : null}
-      {lists.map((list, index) => {
-        const id = props.providers.at(index);
-        if (id === undefined) return null;
-        const label = providerDisplayName(id);
-        if (list.isError && !list.isFetching)
-          return (
-            <TeamReadFailed
-              key={id}
-              message={`Couldn't read ${label}'s tools for this server.`}
-              onRetry={() => void list.refetch()}
-            />
-          );
-        if (
-          list.data !== undefined &&
-          !list.data.servers.some((server) => server.name === item.key)
-        )
-          return (
-            <p
-              key={id}
-              role="status"
-              className="text-ui-xs text-muted-foreground"
-            >
-              {label} hasn't listed this server's tools yet.
-            </p>
-          );
-        return null;
-      })}
-      {[...tools].map(([name, states]) => {
-        const enabled = states.every((state) => state.enabled);
-        const mixed = !enabled && states.some((state) => state.enabled);
-        const descriptionId = `${mixedDescriptionId}-${encodeURIComponent(name)}`;
-        return (
-          <div key={name} className="flex flex-col gap-2">
-            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-              <span className="min-w-0 wrap-anywhere text-ui-sm">{name}</span>
-              {mixed ? (
-                <span
-                  id={descriptionId}
-                  className="ml-auto text-ui-xs text-muted-foreground"
-                >
-                  Mixed
-                </span>
-              ) : null}
-              <Switch
-                aria-label={`${props.server.name} ${name}`}
-                aria-describedby={mixed ? descriptionId : undefined}
-                checked={enabled}
-                disabled={!props.canEdit || putItem.isPending || !ready}
-                onCheckedChange={(next) =>
-                  toggle(
-                    name,
-                    states.map((state) => state.providerId),
-                    next,
-                  )
-                }
-              />
-            </div>
-            <McpToolProviderControls
-              serverName={props.server.name}
-              toolName={name}
-              providers={props.providers}
-              states={states}
-              canEdit={props.canEdit}
-              pending={putItem.isPending}
-              onToggle={(providerId, next) => toggle(name, [providerId], next)}
-            />
-          </div>
-        );
-      })}
-    </div>
+}
+
+/**
+ * A key the person has not changed is not an edit, including one filled in
+ * while the tool list was still loading. Keep only names they set, and take
+ * the rest from the lists that just arrived.
+ */
+function adoptToolDraft(
+  groups: readonly McpToolGroup[],
+  draft: ToolDraft,
+  edited: ReadonlySet<string>,
+): ToolDraft {
+  const next: { [name: string]: boolean } = { ...initialToolDraft(groups) };
+  for (const group of groups) {
+    if (!edited.has(group.name)) continue;
+    next[group.name] = draft[group.name];
+  }
+  return next;
+}
+
+function initialToolDraft(groups: readonly McpToolGroup[]): ToolDraft {
+  const draft: { [name: string]: boolean } = {};
+  for (const group of groups) {
+    draft[group.name] = group.listed.every((entry) => entry.enabled);
+  }
+  return draft;
+}
+
+function draftAll(groups: readonly McpToolGroup[], next: boolean): ToolDraft {
+  const draft: { [name: string]: boolean } = {};
+  for (const group of groups) draft[group.name] = next;
+  return draft;
+}
+
+function toolDraftDirty(
+  groups: readonly McpToolGroup[],
+  draft: ToolDraft,
+): boolean {
+  return groups.some(
+    (group) =>
+      draft[group.name] !== group.listed.every((entry) => entry.enabled),
   );
+}
+
+function enabledInDraft(
+  groups: readonly McpToolGroup[],
+  draft: ToolDraft,
+): number {
+  return groups.filter((group) => draft[group.name]).length;
+}
+
+function enabledToolsLine(count: number): string {
+  return count === 1 ? "1 tool enabled" : `${count} tools enabled`;
+}
+
+function togglesFromDraft(
+  stored: { [harness: string]: { [tool: string]: boolean } },
+  groups: readonly McpToolGroup[],
+  draft: ToolDraft,
+): { [harness: string]: { [tool: string]: boolean } } {
+  const toggles: { [harness: string]: { [tool: string]: boolean } } = {};
+  for (const [harness, tools] of Object.entries(stored)) {
+    toggles[harness] = { ...tools };
+  }
+  for (const group of groups) {
+    const next = draft[group.name];
+    const current = group.listed.every((entry) => entry.enabled);
+    if (next === current) continue;
+    for (const entry of group.listed) {
+      const harness = providerIdToGuiHarnessId(entry.providerId);
+      toggles[harness] = { ...toggles[harness], [group.name]: next };
+    }
+  }
+  return toggles;
 }

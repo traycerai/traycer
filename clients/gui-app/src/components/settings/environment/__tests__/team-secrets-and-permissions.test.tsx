@@ -221,7 +221,7 @@ describe("SecretsPage on a team", () => {
     render(<SecretsSettingsPanel />, { wrapper: harness.Wrapper });
     expect(
       await screen.findByText(
-        "Values and logins agents use, on sandboxes without being seen.",
+        "Values and logins Acme's agents use, on its sandboxes without being seen.",
       ),
     ).toBeTruthy();
     cleanup();
@@ -663,7 +663,7 @@ describe("TeamPermissions", () => {
     );
     expect(
       await screen.findByText(
-        "What agents may do without asking, on every host running these settings.",
+        "What agents may do without asking, on every host running Acme.",
       ),
     ).toBeTruthy();
     const reads = harness.paramsOf("environment.configuration.items").length;
@@ -693,7 +693,7 @@ describe("TeamPermissions", () => {
     [
       "Personal",
       personalPoolSource(),
-      "This removes your custom rules and goes back to the default approval policy on every computer and sandbox running these settings.",
+      "This removes your custom rules and goes back to the default approval policy on every computer and sandbox running Personal.",
     ],
   ])(
     "confirms a reset for %s in that configuration's words",

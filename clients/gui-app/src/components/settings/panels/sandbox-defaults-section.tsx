@@ -68,23 +68,41 @@ function configurationEnvironmentKey(
 }
 
 /**
- * A shape's wake time and price (`from` unless it is the region's smallest,
- * the one shape the catalogue prices).
+ * One shape option: operating system, resources, hourly rate (`from` unless
+ * the catalogue prices that shape exactly) and how waking it behaves.
  */
-function shapeConsequenceLine(
+function shapePricePart(
   catalogue: SandboxCatalogue,
   shape: StageSize,
-): string {
-  const provider = stageProviderFor(catalogue, shape.os);
+): string | null {
   const price = stagePrice(catalogue, shape);
-  const priceLabel =
-    price === null ? null : shortPriceLabel(price.awakeMcPerHour);
+  if (price === null) return null;
+  const label = shortPriceLabel(price.awakeMcPerHour);
+  return price.exact ? label : `from ${label}`;
+}
+
+function shapeLine(catalogue: SandboxCatalogue, shape: StageSize): string {
+  const provider = stageProviderFor(catalogue, shape.os);
+  const wake = provider === null ? null : wakeString(provider.suspendFidelity);
   return [
-    price === null || price.exact ? priceLabel : `from ${priceLabel}`,
-    provider === null ? null : wakeString(provider.suspendFidelity),
+    shape.os === "linux" ? "Linux" : "Windows",
+    sandboxShapeLabel(shape.cpus, shape.memoryMb),
+    shapePricePart(catalogue, shape),
+    wake,
   ]
     .filter((part): part is string => part !== null)
     .join(" · ");
+}
+
+/** Who these defaults apply to, under the short Defaults heading. */
+function defaultsScopeSentence(
+  configuration: SandboxPageConfiguration,
+): string {
+  if (configuration.kind === "team") {
+    const name = configuration.teamName;
+    return `New ${name} sandboxes use these defaults. Shared by ${name}, not a spending limit. Existing sandboxes keep their Idle settings.`;
+  }
+  return "New Personal sandboxes use these defaults. Existing sandboxes keep their Idle settings.";
 }
 
 /** A size's option key, at the same geometry as its quote and saved defaults. */
@@ -168,6 +186,9 @@ export function SandboxDefaultsSection(props: {
       data-testid="sandboxes-defaults"
     >
       <h2 className="text-ui font-medium">Defaults</h2>
+      <p className="text-ui-xs text-muted-foreground wrap-anywhere">
+        {defaultsScopeSentence(props.configuration)}
+      </p>
       {body.kind === "list" ? (
         <SandboxDefaultsList catalogue={body.catalogue} shape={body.shape} />
       ) : null}
@@ -269,40 +290,48 @@ function DefaultsEditors(props: { readonly environmentId: string }): ReactNode {
   );
 }
 
-const KEPT_UNTIL_IDLE_CHANGED =
-  "Sandboxes you already have aren't destroyed when idle until you change their Idle settings.";
+/** Labelled Shape, idle and destruction facts, including while they load. */
+function defaultsFacts(
+  catalogue: SandboxCatalogue | null,
+  shape: StageShape | null,
+): {
+  readonly shape: string;
+  readonly idle: string;
+  readonly destruction: string;
+} {
+  if (catalogue === null || shape === null) {
+    return {
+      shape: catalogue === null ? "…" : SANDBOXES_CANT_BE_CREATED,
+      idle: "…",
+      destruction: "…",
+    };
+  }
+  const resting = shape.destroyAfterRestingMinutes;
+  return {
+    shape: shapeLine(catalogue, shape),
+    idle: sandboxPeriodLabel(shape.idleMinutes),
+    destruction:
+      resting === null || resting === 0
+        ? KEPT_UNTIL_YOU_DESTROY_IT
+        : `removed after ${sandboxPeriodLabel(resting)}`,
+  };
+}
 
-/** The defaults as text, including while the catalogue is loading. */
+/** The defaults as labelled facts, including while the catalogue is loading. */
 function SandboxDefaultsList(props: {
   readonly catalogue: SandboxCatalogue | null;
   readonly shape: StageShape | null;
 }): ReactNode {
-  const { catalogue, shape } = props;
-  if (catalogue === null) {
-    return (
-      <p className="text-ui-sm text-muted-foreground">Loading defaults…</p>
-    );
-  }
-  if (shape === null) {
-    return (
-      <p className="text-ui-sm text-muted-foreground">
-        {SANDBOXES_CANT_BE_CREATED}
-      </p>
-    );
-  }
-  const resting = shape.destroyAfterRestingMinutes;
+  const facts = defaultsFacts(props.catalogue, props.shape);
   return (
-    <p
-      className="min-w-0 text-ui-sm text-muted-foreground wrap-anywhere"
+    <div
+      className="flex min-w-0 flex-col gap-1 text-ui-sm text-muted-foreground wrap-anywhere"
       data-testid="sandboxes-defaults-summary"
     >
-      {shape.os === "linux" ? "Linux" : "Windows"} ·{" "}
-      {sandboxShapeLabel(shape.cpus, shape.memoryMb)}
-      {` · suspends after ${sandboxPeriodLabel(shape.idleMinutes)} · `}
-      {resting === null || resting === 0
-        ? KEPT_UNTIL_YOU_DESTROY_IT
-        : `removed after ${sandboxPeriodLabel(resting)}`}
-    </p>
+      <p data-testid="sandboxes-defaults-shape">{`Shape · ${facts.shape}`}</p>
+      <p data-testid="sandboxes-defaults-idle">{`Idle · ${facts.idle}`}</p>
+      <p data-testid="sandboxes-defaults-resting">{`Destruction · ${facts.destruction}`}</p>
+    </div>
   );
 }
 
@@ -396,9 +425,6 @@ function SandboxDefaultsForm(props: {
         if ("defaults" in result) props.onSave(result.defaults);
       }}
     >
-      <p className="text-ui-xs text-muted-foreground wrap-anywhere">
-        {`Each new sandbox starts with these. These defaults are not a spending limit. ${KEPT_UNTIL_IDLE_CHANGED}`}
-      </p>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div className="flex flex-col gap-1.5 sm:col-span-2">
           <Label htmlFor={`${ids}-shape`}>Shape</Label>
@@ -406,13 +432,10 @@ function SandboxDefaultsForm(props: {
             <SelectTrigger
               id={`${ids}-shape`}
               className="w-full"
-              aria-describedby={`${ids}-shape-consequence`}
               data-testid="sandboxes-defaults-shape-select"
             >
               <SelectValue>
-                {picked === null
-                  ? null
-                  : `${picked.os === "linux" ? "Linux" : "Windows"} · ${sandboxShapeLabel(picked.cpus, picked.memoryMb)}`}
+                {picked === null ? null : shapeLine(catalogue, picked)}
               </SelectValue>
             </SelectTrigger>
             <SelectContent>
@@ -422,20 +445,12 @@ function SandboxDefaultsForm(props: {
                   value={sizeKey(catalogue, option)}
                 >
                   <span className="min-w-0 wrap-anywhere">
-                    {`${option.os === "linux" ? "Linux" : "Windows"} · ${sandboxShapeLabel(option.cpus, option.memoryMb)} · ${shapeConsequenceLine(catalogue, option)}`}
+                    {shapeLine(catalogue, option)}
                   </span>
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
-          {picked === null ? null : (
-            <p
-              id={`${ids}-shape-consequence`}
-              className="text-ui-xs text-muted-foreground wrap-anywhere"
-            >
-              {shapeConsequenceLine(catalogue, picked)}
-            </p>
-          )}
         </div>
         <PeriodInput
           id={`${ids}-idle`}

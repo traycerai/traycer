@@ -292,10 +292,10 @@ describe("tabsForView", () => {
 });
 
 describe("providerKeyTab", () => {
-  it("puts the key on Profiles & Limits when that tab is also supported", () => {
+  it("keeps the key on Account when usage is also advertised", () => {
     expect(
       providerKeyTab({ apiKeySupported: true, usageAdvertised: true }),
-    ).toEqual({ tab: "usage", label: "Profiles & Limits" });
+    ).toEqual({ tab: "account", label: "Account" });
   });
 
   it("keeps the key on Account when the provider has no usage tab", () => {

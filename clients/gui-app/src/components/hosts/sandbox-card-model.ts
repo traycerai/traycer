@@ -338,7 +338,7 @@ export function sandboxStateLine(
   return STATE_LINE[state];
 }
 
-/** Operational facts stay on the Sandbox tab; the header owns state and rate. */
+/** Operational facts stay on Installation; the header owns state and rate. */
 export function sandboxOperationalLine(
   state: HostSandboxState | null,
   frozen: boolean,

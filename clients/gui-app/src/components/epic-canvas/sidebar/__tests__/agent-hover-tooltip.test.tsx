@@ -50,6 +50,12 @@ import {
  * RPCs, auth and the tile/panel openers. The projection choice and the host
  * section are the real ones.
  */
+interface HoverEpicChat {
+  readonly id: string;
+  readonly hostId: string;
+  readonly title: string;
+}
+
 const h = vi.hoisted(() => {
   const NO_CONFIGURATIONS: SandboxConfigurations = {
     configurations: [{ kind: "personal" }],
@@ -76,6 +82,7 @@ const h = vi.hoisted(() => {
     setPanel: Mock;
     openDetails: Mock;
     openTile: Mock;
+    chats: Record<string, HoverEpicChat>;
   } = {
     sandboxes: [],
     taskHosts: { kind: "none" },
@@ -96,6 +103,11 @@ const h = vi.hoisted(() => {
     setPanel: vi.fn(),
     openDetails: vi.fn(),
     openTile: vi.fn(),
+    chats: {
+      "agent-1": { id: "agent-1", hostId: "host-t", title: "Reviewer" },
+      "agent-2": { id: "agent-2", hostId: "host-t", title: "Planner" },
+      "agent-3": { id: "agent-3", hostId: "host-sbx", title: "Creator" },
+    },
   };
   return state;
 });
@@ -178,17 +190,13 @@ vi.mock("@/hooks/host/use-host-query", () => ({
 }));
 vi.mock("@/hooks/use-epic-store", () => ({
   useMaybeEpicStore: (
-    selector: (state: unknown) => unknown,
-    _fallback: unknown,
+    selector: (state: {
+      readonly chats: { readonly byId: Record<string, HoverEpicChat> };
+      readonly tuiAgents: { readonly byId: Record<string, HoverEpicChat> };
+    }) => unknown,
   ) =>
     selector({
-      chats: {
-        byId: {
-          "agent-1": { id: "agent-1", hostId: "host-t", title: "Reviewer" },
-          "agent-2": { id: "agent-2", hostId: "host-t", title: "Planner" },
-          "agent-3": { id: "agent-3", hostId: "host-sbx", title: "Creator" },
-        },
-      },
+      chats: { byId: h.chats },
       tuiAgents: { byId: {} },
     }),
 }));
@@ -346,6 +354,11 @@ afterEach(() => {
   h.setPanel.mockClear();
   h.openDetails.mockClear();
   h.openTile.mockClear();
+  h.chats = {
+    "agent-1": { id: "agent-1", hostId: "host-t", title: "Reviewer" },
+    "agent-2": { id: "agent-2", hostId: "host-t", title: "Planner" },
+    "agent-3": { id: "agent-3", hostId: "host-sbx", title: "Creator" },
+  };
   useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
 });
 
@@ -662,37 +675,13 @@ function renderAgent(
   });
 }
 
-/**
- * Closed `<details>` stays readable in jsdom, so the count is the summary's
- * own text and `open` is the closed state. A click on the summary does not
- * open it here; callers set `open` when they read the body.
- */
-function sessionSummary(details: HTMLDetailsElement): HTMLElement {
-  const summary = details.querySelector("summary");
-  if (!(summary instanceof HTMLElement)) {
-    throw new Error("session disclosure has no summary");
+function sameTaskNamesBox(card: HTMLElement): HTMLElement {
+  const box = card.querySelector("div.max-h-40.overflow-y-auto");
+  if (!(box instanceof HTMLElement)) {
+    throw new Error("same-task names are not in a scrolling box");
   }
-  return summary;
-}
-
-function closedSessionDisclosure(count: string): HTMLDetailsElement {
-  const node = screen.getByTestId("agent-host-sessions");
-  if (!(node instanceof HTMLDetailsElement)) {
-    throw new Error("agent-host-sessions is not a details element");
-  }
-  expect(node.tagName).toBe("DETAILS");
-  expect(node.open).toBe(false);
-  expect(sessionSummary(node).textContent).toBe(count);
-  return node;
-}
-
-function openedSessionBody(details: HTMLDetailsElement): HTMLElement {
-  details.open = true;
-  const body = details.querySelector(":scope > div");
-  if (!(body instanceof HTMLDivElement)) {
-    throw new Error("session disclosure has no body");
-  }
-  return body;
+  expect(box.querySelector("details")).toBeNull();
+  return box;
 }
 
 /** A host's Files open in File Tree, which the shipped layout leaves off. */
@@ -1131,12 +1120,13 @@ describe("AgentHoverTooltip host section", () => {
     expect(text).toContain("team-box");
     expect(text).toContain(hoverTaskConfiguration("acme"));
     expect(text).toContain(reachSentence(REACH_UNNAMED_HOSTS));
-    // Closed, the count is the summary. Names stay in the disclosure until it opens.
-    const sessions = closedSessionDisclosure(hoverAlsoInTask(1));
-    expect(card.contains(sessions)).toBe(true);
-    expect(sessionSummary(sessions).textContent).not.toContain("Planner");
-    const otherAgents = openedSessionBody(sessions);
-    expect(otherAgents.textContent).toBe("Planner");
+    const names = sameTaskNamesBox(card);
+    expect(card.contains(names)).toBe(true);
+    expect(names.className).toContain("max-h-40");
+    expect(names.className).toContain("overflow-y-auto");
+    expect(names.textContent).toBe(hoverAlsoInTask("Planner"));
+    expect(card.querySelector("details")).toBeNull();
+    expect(screen.queryByTestId("agent-host-sessions")).toBeNull();
 
     expect(screen.getByRole("button", { name: TASK_FILES })).toBeDefined();
     for (const name of ["Open terminal", "Details", KEEP_THIS_SANDBOX]) {
@@ -1146,6 +1136,43 @@ describe("AgentHoverTooltip host section", () => {
 
     await userEvent.click(screen.getByRole("button", { name: TASK_FILES }));
     expect(h.setPanel).toHaveBeenCalledWith("tab-1", "artifacts");
+  });
+
+  it("keeps a long same-task name list scrolling inside the inline box", async () => {
+    const titles = [
+      "Planner alpha with a long name",
+      "Planner beta with a long name",
+      "Planner gamma with a long name",
+      "Planner delta with a long name",
+      "Planner epsilon with a long name",
+      "Planner zeta with a long name",
+      "Planner eta with a long name",
+      "Planner theta with a long name",
+    ];
+    const chats: Record<string, HoverEpicChat> = {
+      "agent-1": { id: "agent-1", hostId: "host-t", title: "Reviewer" },
+    };
+    for (const [index, title] of titles.entries()) {
+      const id = `agent-extra-${index}`;
+      chats[id] = { id, hostId: "host-t", title };
+    }
+    h.chats = chats;
+    h.teams = [{ teamId: "team-1", slug: "acme" }];
+    h.taskHosts = tasksView(taskHostRow({ reach: "other_principal" }));
+    renderAgent({
+      hostId: "host-t",
+      ownerKind: "chat",
+      ownerHostUnreachable: false,
+    });
+
+    await userEvent.hover(screen.getByRole("button", { name: "Reviewer" }));
+    const card = await screen.findByRole("dialog", { name: "Reviewer" });
+    const names = sameTaskNamesBox(card);
+    expect(names.textContent).toBe(hoverAlsoInTask(titles.join(", ")));
+    expect(names.className).toContain("max-h-40");
+    expect(names.className).toContain("overflow-y-auto");
+    expect(card.querySelector("details")).toBeNull();
+    expect(screen.queryByTestId("agent-host-sessions")).toBeNull();
   });
 
   it("reads a destroyed task-only host as destroyed, with Details, and offers no host actions", async () => {

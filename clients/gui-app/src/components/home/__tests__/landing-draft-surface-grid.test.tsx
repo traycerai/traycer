@@ -65,12 +65,63 @@ function setViewportWidth(width: number): void {
   });
 }
 
-function appearanceGrid(): Element {
+function appearanceGrid(): HTMLElement {
   const grid = document.querySelector(".landing-appearance-surface");
-  if (grid === null) {
+  if (!(grid instanceof HTMLElement)) {
     throw new Error("landing appearance surface is missing");
   }
   return grid;
+}
+
+function classTokens(className: string): readonly string[] {
+  return className.split(/\s+/);
+}
+
+function composerColumn(): HTMLElement {
+  const composer = appearanceGrid().querySelector("[data-composer-placement]");
+  if (!(composer instanceof HTMLElement)) {
+    throw new Error("composer track is missing");
+  }
+  return composer;
+}
+
+function heroSection(): HTMLElement {
+  const hero = screen.getByTestId("home-hero").parentElement;
+  if (!(hero instanceof HTMLElement)) {
+    throw new Error("hero track is missing");
+  }
+  return hero;
+}
+
+function customizeButton(): HTMLElement {
+  const button = screen.getByRole("button", { name: "Customize start page" });
+  const grid = appearanceGrid();
+  let node: HTMLElement | null = button;
+  while (node.parentElement !== null && node.parentElement !== grid) {
+    node = node.parentElement;
+  }
+  return node;
+}
+
+function expectBalancedDesktopRows(): void {
+  const grid = appearanceGrid();
+  expect(classTokens(grid.className)).toContain(
+    "md:grid-rows-[auto_minmax(0,1fr)_minmax(0,1fr)]",
+  );
+  expect(classTokens(grid.className)).toContain(
+    "max-md:grid-rows-[auto_minmax(0,1fr)_minmax(min-content,1.4fr)]",
+  );
+  expect(classTokens(grid.className)).toContain(
+    "max-md:short-landscape:grid-rows-[auto_0_auto]",
+  );
+  expect(classTokens(grid.className)).toContain("overflow-hidden");
+  expect(classTokens(grid.className)).toContain("max-md:overflow-y-auto");
+  expect(classTokens(grid.className)).toContain(
+    "max-md:short-landscape:content-start",
+  );
+  expect(classTokens(composerColumn().className)).toContain("md:min-h-0");
+  expect(classTokens(heroSection().className)).not.toContain("h-0");
+  expect(classTokens(heroSection().className)).not.toContain("overflow-hidden");
 }
 
 afterEach(() => {
@@ -79,42 +130,43 @@ afterEach(() => {
 });
 
 describe("LandingDraftSurface grid", () => {
-  it("places the task list after the composer, and on a phone offers history from the composer", () => {
+  it("nests current tasks in the composer column when greeting and history are on", () => {
     setViewportWidth(1280);
     useSettingsStore.setState({ showGreeting: true, showRecentHistory: true });
-    const view = render(<LandingDraftSurface />);
-
-    const grid = appearanceGrid();
-    const composer = grid.querySelector("[data-composer-placement]");
-    if (composer === null) {
-      throw new Error("composer track is missing");
-    }
-
-    const tasks = screen.getByTestId("current-tasks-section");
-    const wrapper = tasks.parentElement;
-    if (wrapper === null) {
-      throw new Error("task list wrapper is missing");
-    }
-    expect(wrapper.parentElement).toBe(grid);
-    expect(composer.parentElement).toBe(grid);
-    expect(composer.contains(tasks)).toBe(false);
-    expect(composer.nextElementSibling).toBe(wrapper);
-
-    // Below md the section is not mounted. Recent tasks are the history
-    // control in the composer column.
-    view.unmount();
-    setViewportWidth(390);
     render(<LandingDraftSurface />);
-    const phoneComposer = appearanceGrid().querySelector(
-      "[data-composer-placement]",
-    );
-    expect(screen.queryByTestId("current-tasks-section")).toBeNull();
-    expect(
-      phoneComposer?.contains(screen.getByTestId("home-view-history")),
-    ).toBe(true);
+
+    expectNestedTasks();
+    expectBalancedDesktopRows();
+    const grid = appearanceGrid();
+    const customize = customizeButton();
+    expect(customize.parentElement).toBe(grid);
+    expect(customize.className).toContain("absolute");
+    expect(customize.className).toContain("bottom-3");
+    expect(customize.className).toContain("left-3");
+    expect(composerColumn().nextElementSibling).toBe(customize);
+    expect(grid.children).toHaveLength(4);
   });
 
-  it("omits the task list on the empty start page", () => {
+  it("uses the same desktop rows for history without a greeting, and still nests tasks", () => {
+    setViewportWidth(1280);
+    useSettingsStore.setState({ showGreeting: false, showRecentHistory: true });
+    render(<LandingDraftSurface />);
+
+    expectNestedTasks();
+    expectBalancedDesktopRows();
+    expect(classTokens(heroSection().className)).toContain("invisible");
+  });
+
+  it("uses the same desktop rows for a greeting without history, and mounts no task list", () => {
+    setViewportWidth(1280);
+    useSettingsStore.setState({ showGreeting: true, showRecentHistory: false });
+    render(<LandingDraftSurface />);
+
+    expectBalancedDesktopRows();
+    expect(screen.queryByTestId("current-tasks-section")).toBeNull();
+  });
+
+  it("collapses the hero and centres the composer when greeting and history are off", () => {
     setViewportWidth(1280);
     useSettingsStore.setState({
       showGreeting: false,
@@ -122,6 +174,55 @@ describe("LandingDraftSurface grid", () => {
     });
     render(<LandingDraftSurface />);
 
+    const grid = appearanceGrid();
+    expect(classTokens(grid.className)).toContain(
+      "md:grid-rows-[auto_minmax(0,0fr)_minmax(0,1fr)]",
+    );
+    expect(classTokens(grid.className)).toContain(
+      "max-md:grid-rows-[auto_0_minmax(min-content,1fr)]",
+    );
+    expect(classTokens(grid.className)).toContain(
+      "max-md:short-landscape:grid-rows-[auto_0_auto]",
+    );
+    expect(classTokens(heroSection().className)).toContain("h-0");
+    expect(classTokens(heroSection().className)).toContain("overflow-hidden");
+    const composer = composerColumn();
+    expect(classTokens(composer.className)).toContain("justify-center");
+    expect(classTokens(composer.className)).not.toContain("md:min-h-0");
     expect(screen.queryByTestId("current-tasks-section")).toBeNull();
   });
+
+  it("on a phone keeps history in the composer and omits tasks and customize", () => {
+    setViewportWidth(390);
+    useSettingsStore.setState({ showGreeting: true, showRecentHistory: true });
+    render(<LandingDraftSurface />);
+
+    const grid = appearanceGrid();
+    const composer = composerColumn();
+    expect(screen.queryByTestId("current-tasks-section")).toBeNull();
+    expect(composer.contains(screen.getByTestId("home-view-history"))).toBe(
+      true,
+    );
+    expect(
+      screen.queryByRole("button", { name: "Customize start page" }),
+    ).toBeNull();
+    expect(classTokens(grid.className)).toContain(
+      "max-md:grid-rows-[auto_minmax(0,1fr)_minmax(min-content,1.4fr)]",
+    );
+    expect(classTokens(grid.className)).toContain("max-md:overflow-y-auto");
+    expect(grid.children).toHaveLength(3);
+  });
 });
+
+function expectNestedTasks(): void {
+  const composer = composerColumn();
+  const tasks = screen.getByTestId("current-tasks-section");
+  const wrapper = tasks.parentElement;
+  if (!(wrapper instanceof HTMLElement)) {
+    throw new Error("task list wrapper is missing");
+  }
+  expect(wrapper.className).toBe("flex min-h-0 flex-1 flex-col pb-6");
+  expect(wrapper.parentElement).toBe(composer);
+  expect(composer.contains(tasks)).toBe(true);
+  expect(Array.from(appearanceGrid().children).includes(wrapper)).toBe(false);
+}

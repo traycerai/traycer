@@ -336,11 +336,7 @@ function NotificationRowMain(props: {
   const body = (
     <NotificationRowBody
       title={title}
-      body={
-        (props.row.secrets ?? null) !== null && props.row.resolvedAt === null
-          ? "Waiting for your decision"
-          : props.row.body
-      }
+      body={props.row.body}
       isRead={props.isRead}
     />
   );

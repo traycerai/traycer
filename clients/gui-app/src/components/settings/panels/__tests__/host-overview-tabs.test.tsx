@@ -359,10 +359,13 @@ describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
     renderPanel();
 
     const row = await screen.findByTestId("host-settings-source");
-    expect(row.textContent).toContain("Settings");
-    expect(
-      screen.getByRole("combobox", { name: "Settings source" }).textContent,
-    ).toBe("This computer only");
+    expect(row.textContent).toContain("Environment");
+    expect(row.textContent).toContain(
+      "Runs its own settings, not in Personal yet",
+    );
+    const trigger = screen.getByRole("combobox", { name: "Environment" });
+    expect(within(trigger).getByText("host-a")).toBeTruthy();
+    expect(within(trigger).getByText("Local")).toBeTruthy();
     expect(within(row).getByText("Details")).toBeTruthy();
     expect(activeTabTestId()).toBe("host-overview-tab-installation");
     const tabList = screen.getAllByRole("tab")[0].closest("[role='tablist']");
@@ -381,17 +384,50 @@ describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
 
     expect(activeTabTestId()).toBe("host-overview-tab-installation");
     expect(HOST_OVERVIEW_TABS).toEqual([
-      "sandbox",
       "installation",
       "updates",
       "access",
       "data",
       "ports",
+      "secrets",
+      "costs",
       "simulators",
     ]);
   });
 
-  it("opens a sandbox host on its first Sandbox tab", async () => {
+  it("says whose host the page is for, and a generic line when none is selected", () => {
+    const fixture = buildFixture("host-a");
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = bindingWith(fixture.client);
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    const view = renderPanel();
+
+    expect(
+      screen.getByText("Status, updates and maintenance for host-a."),
+    ).toBeTruthy();
+
+    scopeOverrides.current = { host: null };
+    view.rerender(
+      <QueryClientProvider
+        client={
+          new QueryClient({
+            defaultOptions: { queries: { retry: false, gcTime: 0 } },
+          })
+        }
+      >
+        <RunnerHostProvider runnerHost={makeRunnerHost()}>
+          <HostSettingsPanel />
+        </RunnerHostProvider>
+      </QueryClientProvider>,
+    );
+    expect(
+      screen.getByText(
+        "Status, updates and maintenance for the selected host.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("opens a sandbox host on Installation, with Secrets and Costs and no Sandbox tab", async () => {
     const fixture = buildFixture("host-a");
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
     hostBindingMock.current = bindingWith(fixture.client);
@@ -411,9 +447,62 @@ describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
     };
     renderPanel();
 
-    expect(await screen.findByTestId("host-overview-tab-sandbox")).toBeTruthy();
-    expect(activeTabTestId()).toBe("host-overview-tab-sandbox");
-    expect(screen.getByTestId("host-overview-tab-panel-sandbox")).toBeTruthy();
+    expect(
+      await screen.findByTestId("host-overview-tab-installation"),
+    ).toBeTruthy();
+    expect(activeTabTestId()).toBe("host-overview-tab-installation");
+    expect(screen.queryByTestId("host-overview-tab-sandbox")).toBeNull();
+    expect(
+      screen.getAllByRole("tab").map((tab) => tab.getAttribute("data-testid")),
+    ).toEqual([
+      "host-overview-tab-installation",
+      "host-overview-tab-updates",
+      "host-overview-tab-access",
+      "host-overview-tab-data",
+      "host-overview-tab-ports",
+      "host-overview-tab-secrets",
+      "host-overview-tab-costs",
+      "host-overview-tab-simulators",
+    ]);
+    expect(
+      screen
+        .getByTestId("host-overview-tab-secrets")
+        .getAttribute("data-settings-anchor"),
+    ).toBeNull();
+    expect(
+      screen
+        .getByTestId("host-overview-tab-costs")
+        .getAttribute("data-settings-anchor"),
+    ).toBeNull();
+  });
+
+  it("keeps Secrets and Costs off a computer", () => {
+    const fixture = buildFixture("host-a");
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = bindingWith(fixture.client);
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    expect(screen.queryByTestId("host-overview-tab-secrets")).toBeNull();
+    expect(screen.queryByTestId("host-overview-tab-costs")).toBeNull();
+  });
+
+  it("an open intent naming the retired 'sandbox' tab opens Installation", () => {
+    const fixture = buildFixture("host-a");
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = bindingWith(fixture.client);
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    armSettingsOpenIntent({
+      section: "host",
+      resetToGeneral: false,
+      tab: "sandbox",
+      draft: null,
+      hostId: null,
+    });
+    renderPanel();
+
+    expect(activeTabTestId()).toBe("host-overview-tab-installation");
+    expect(useSettingsOpenIntentStore.getState().intent).toBeNull();
   });
 
   it("a tab named in the open intent opens that tab, and spends the intent", () => {
@@ -510,7 +599,7 @@ describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
 
   describe("a settings-search landing", () => {
     for (const tab of HOST_OVERVIEW_TABS.filter(
-      (value) => value !== "sandbox",
+      (value) => value !== "secrets" && value !== "costs",
     )) {
       it(`selects ${tab} for its trigger's anchor`, () => {
         const fixture = buildFixture("host-a");
@@ -529,6 +618,58 @@ describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
         expect(activeTabTestId()).toBe(`host-overview-tab-${tab}`);
       });
     }
+
+    it("stays on Installation when a computer is asked for Secrets or Costs", () => {
+      const fixture = buildFixture("host-a");
+      recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+      hostBindingMock.current = bindingWith(fixture.client);
+      scopeOverrides.current = scopeFrom("host-a", fixture);
+      for (const anchor of [
+        "host-overview-tab-secrets",
+        "host-overview-tab-costs",
+      ]) {
+        useSettingsSearchStore.setState({
+          pendingReveal: { section: "host", anchor, requestedAt: 1 },
+        });
+        const view = renderPanel();
+        expect(activeTabTestId()).toBe("host-overview-tab-installation");
+        view.unmount();
+      }
+    });
+
+    it("a search naming the old Secrets or Costs anchors stays on Overview, and a sandbox still draws those tabs", () => {
+      const fixture = buildFixture("host-a");
+      recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+      hostBindingMock.current = bindingWith(fixture.client);
+      scopeOverrides.current = {
+        ...scopeFrom("host-a", fixture),
+        host: hostScopeOptionFixture({
+          hostId: "host-a",
+          name: "Sandbox host",
+          kind: "sandbox",
+          sandbox: {
+            state: "awake",
+            frozen: false,
+            summary: sandboxSummaryFixture({ hostId: "host-a" }),
+            teamOwned: false,
+          },
+        }),
+      };
+      for (const tab of ["secrets", "costs"] as const) {
+        useSettingsSearchStore.setState({
+          pendingReveal: {
+            section: "host",
+            anchor: `host-overview-tab-${tab}`,
+            requestedAt: 2,
+          },
+        });
+        const view = renderPanel();
+        expect(activeTabTestId()).toBe("host-overview-tab-installation");
+        expect(screen.getByTestId("host-overview-tab-secrets")).toBeTruthy();
+        expect(screen.getByTestId("host-overview-tab-costs")).toBeTruthy();
+        view.unmount();
+      }
+    });
   });
 
   it("keeps a typed value on a visited tab across a switch away and back", async () => {
@@ -586,6 +727,57 @@ describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
 
     expect(activeTabTestId()).toBe("host-overview-tab-installation");
     expect(screen.queryByRole("button", { name: "Restart host" })).toBeNull();
+  });
+
+  it("keeps Secrets selected only while the host is a sandbox", async () => {
+    const fixtureA = buildFixture("host-a");
+    const fixtureB = buildFixture("host-b");
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    recordNegotiatedHostMethods("host-b", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = bindingWith(fixtureA.client);
+    scopeOverrides.current = {
+      ...scopeFrom("host-a", fixtureA),
+      host: hostScopeOptionFixture({
+        hostId: "host-a",
+        name: "Sandbox host",
+        kind: "sandbox",
+        sandbox: {
+          state: "awake",
+          frozen: false,
+          summary: sandboxSummaryFixture({ hostId: "host-a" }),
+          teamOwned: false,
+        },
+      }),
+    };
+    const view = renderPanelPersistent(null);
+    await selectHostOverviewTab("secrets");
+    expect(activeTabTestId()).toBe("host-overview-tab-secrets");
+
+    hostBindingMock.current = bindingWith(fixtureB.client);
+    scopeOverrides.current = scopeFrom("host-b", fixtureB);
+    view.rerender();
+
+    expect(activeTabTestId()).toBe("host-overview-tab-installation");
+    expect(screen.queryByTestId("host-overview-tab-secrets")).toBeNull();
+
+    hostBindingMock.current = bindingWith(fixtureA.client);
+    scopeOverrides.current = {
+      ...scopeFrom("host-a", fixtureA),
+      host: hostScopeOptionFixture({
+        hostId: "host-a",
+        name: "Sandbox host",
+        kind: "sandbox",
+        sandbox: {
+          state: "awake",
+          frozen: false,
+          summary: sandboxSummaryFixture({ hostId: "host-a" }),
+          teamOwned: false,
+        },
+      }),
+    };
+    view.rerender();
+
+    expect(activeTabTestId()).toBe("host-overview-tab-secrets");
   });
 
   describe("on a phone", () => {
@@ -659,7 +851,9 @@ describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
     scopeOverrides.current = coldConnectingScope();
     renderPanel();
 
-    const tabs = HOST_OVERVIEW_TABS.filter((tab) => tab !== "sandbox");
+    const tabs = HOST_OVERVIEW_TABS.filter(
+      (tab) => tab !== "secrets" && tab !== "costs",
+    );
     expect(tabs).toHaveLength(6);
     for (const tab of tabs) {
       expect(
