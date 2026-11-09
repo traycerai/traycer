@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useEffectEvent,
   useMemo,
   useRef,
   useState,
@@ -223,28 +224,44 @@ function HtmlArtifactCommentFrame(
     events.onCanvasView?.(view);
     return () => events.onCanvasView?.(null);
   }, [events, view]);
+  // A new `events` (a renamed artifact, another host client) still files into
+  // the same registry, so the board is told through the latest one rather
+  // than filed again: filing again would drop the page's bridge for a moment,
+  // and with it the revision its live document adopted.
+  const tell = useEffectEvent(
+    (call: (latest: CanvasFrameEvents) => void): void => call(events),
+  );
   useEffect(() => {
     if (page === null) return;
-    events.onSource?.(page, boardSource);
-    events.onServedSource?.(page, servedSha256);
-    events.onBoardPage?.(page, null);
-    return () => {
-      events.onSource?.(page, null);
-      events.onServedSource?.(page, null);
-    };
-  }, [events, page, boardSource, servedSha256]);
+    tell((latest) => {
+      latest.onSource?.(page, boardSource);
+      latest.onServedSource?.(page, servedSha256);
+      latest.onBoardPage?.(page, null);
+    });
+    return () =>
+      tell((latest) => {
+        latest.onSource?.(page, null);
+        latest.onServedSource?.(page, null);
+      });
+  }, [page, boardSource, servedSha256]);
   // Keyed by the proof, not the path: every document that proves itself is
-  // filed afresh, so a page loaded again never keeps what the provider held
-  // for the document before it, such as an adopted revision.
+  // filed afresh and told it is ready, so a page loaded again never keeps
+  // what the provider held for the document before it, such as an adopted
+  // revision.
   useEffect(() => {
     if (board === null) return;
-    events.onFrame?.(board.path, frameRef.current);
-    events.onBridge(board.path, bridgeRef.current);
-    return () => {
-      events.onBridge(board.path, null);
-      events.onFrame?.(board.path, null);
-    };
-  }, [events, board]);
+    const { path } = board;
+    tell((latest) => {
+      latest.onFrame?.(path, frameRef.current);
+      latest.onBridge(path, bridgeRef.current);
+      latest.onStatus(path, "ready");
+    });
+    return () =>
+      tell((latest) => {
+        latest.onBridge(path, null);
+        latest.onFrame?.(path, null);
+      });
+  }, [board]);
   return (
     // Around the draft as well as the frame: the draft is a sibling of the
     // frame, so an expansion raised inside the frame would leave it outside
@@ -261,9 +278,9 @@ function HtmlArtifactCommentFrame(
         commenting={commenting}
         onCommentPage={setBoard}
         onSize={noop}
-        onStatus={(status) => {
-          if (page !== null) events.onStatus(page, status);
-        }}
+        // A page says it is ready before it becomes the board, so the board
+        // effect above tells the comment machinery instead.
+        onStatus={noop}
         onBridge={(bridge) => {
           bridgeRef.current = bridge;
         }}

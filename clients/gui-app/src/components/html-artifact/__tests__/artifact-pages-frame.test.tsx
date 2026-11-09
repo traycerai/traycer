@@ -147,7 +147,6 @@ function renderPages(overrides: Partial<PagesOptions>) {
 const UNREACHABLE = "Couldn't load this page from its host.";
 const MISSING = "This page is not in the artifact.";
 const UNCOMMENTABLE = "Comments can't be added on this page.";
-const FIRST_PAGE_NOTICE = "Comments can only be added on the first page.";
 
 afterEach(() => {
   cleanup();
@@ -491,7 +490,7 @@ function watchCommentPage(): {
 }
 
 describe("commenting on an artifact page", () => {
-  it("reports each artifact page that proves itself, and never the old first-page notice", () => {
+  it("reports each artifact page that proves itself", () => {
     const watched = watchCommentPage();
     const { report } = renderPages({
       pages: TWO_PAGES,
@@ -502,7 +501,6 @@ describe("commenting on an artifact page", () => {
 
     // Nothing has proved itself yet, so comments have no page.
     expect(watched.last()).toBeNull();
-    expect(screen.queryByText(FIRST_PAGE_NOTICE)).toBeNull();
 
     report((page) => {
       page.onNavigate("index.html");
@@ -511,7 +509,6 @@ describe("commenting on an artifact page", () => {
     const entry = watched.last();
     expect(entry?.path).toBe("index.html");
     expect(screen.getByTestId("comment-overlay")).toBeTruthy();
-    expect(screen.queryByText(FIRST_PAGE_NOTICE)).toBeNull();
     expect(screen.queryByText(UNCOMMENTABLE)).toBeNull();
 
     report((page) => {
@@ -525,7 +522,6 @@ describe("commenting on an artifact page", () => {
     expect(sub?.path).toBe("report.html");
     expect(sub).not.toBe(entry);
     expect(screen.getByTestId("comment-overlay")).toBeTruthy();
-    expect(screen.queryByText(FIRST_PAGE_NOTICE)).toBeNull();
 
     report((page) => {
       page.onNavigate("index.html");
@@ -547,7 +543,6 @@ describe("commenting on an artifact page", () => {
       frameProps().onStatus("ready");
     });
 
-    expect(screen.queryByText(FIRST_PAGE_NOTICE)).toBeNull();
     expect(screen.queryByText(UNCOMMENTABLE)).toBeNull();
     expect(screen.queryByRole("button", { name: "Go home" })).toBeNull();
   });
@@ -663,7 +658,6 @@ describe("a page comments cannot go on", () => {
 
     expect(screen.getByText(MISSING)).toBeTruthy();
     expect(screen.queryByText(UNCOMMENTABLE)).toBeNull();
-    expect(screen.queryByText(FIRST_PAGE_NOTICE)).toBeNull();
     expect(setMode).toHaveBeenLastCalledWith("play");
     expect(setMode).not.toHaveBeenCalledWith("edit");
     expect(watched.last()).toBeNull();
@@ -717,7 +711,6 @@ describe("a page comments cannot go on", () => {
     });
 
     expect(screen.getByText(UNCOMMENTABLE)).toBeTruthy();
-    expect(screen.queryByText(FIRST_PAGE_NOTICE)).toBeNull();
     expect(setMode).toHaveBeenLastCalledWith("play");
     expect(setMode).not.toHaveBeenCalledWith("edit");
     expect(watched.last()).toBeNull();

@@ -98,7 +98,7 @@ body{font:16px/1.4 sans-serif}
 button,a,summary{font:inherit}
 #note{width:200px}
 section{min-height:140px;padding:12px 16px;border-top:1px solid #ddd}
-#deep,#marked{display:block;margin:0;padding:12px 16px;background:#e8eef8}
+#deep,#marked,#top{display:block;margin:0;padding:12px 16px;background:#e8eef8}
 #fresh{margin:0;padding:12px 16px;background:#f4f0e6}
 .rows{margin:0;padding:0;list-style:none}
 .rows li{margin:0;padding:0;font-size:12px;line-height:14px}
@@ -139,7 +139,9 @@ function pageDocument(body: string): string {
   return `<!doctype html><html><head><meta charset="utf-8">${PAGE_STYLE}</head><body>${body}${PAGE_BEHAVIOR}</body></html>`;
 }
 
-const PAGE_HTML = pageDocument(`${PAGE_CONTROLS}${sections}`);
+const PAGE_HTML = pageDocument(
+  `<p id="top" data-tid="top">On the entry page.</p>${PAGE_CONTROLS}${sections}`,
+);
 const DETAIL_HTML = pageDocument(
   `${PAGE_CONTROLS}<p id="marked" data-tid="marked">Marked on the detail page.</p>`,
 );
@@ -333,6 +335,38 @@ const artifact: ArtifactProjection = {
   head: { files, capturedAt: 0 },
 };
 
+const TOP_THREAD: CommentThreadWire = {
+  threadId: "thread-top",
+  resolved: false,
+  createdAt: 0,
+  comments: [
+    {
+      commentId: "thread-top-c1",
+      content: {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [
+              { type: "text", text: "about the top of the entry page" },
+            ],
+          },
+        ],
+      },
+      createdAt: 0,
+      updatedAt: null,
+      author: { userId: "user-1", fallbackHandle: "You" },
+    },
+  ],
+  data: {
+    createdByUserId: "user-1",
+    anchorKind: "element",
+    artboard: ENTRY_PATH,
+    elementId: "top",
+    label: "Top",
+  },
+};
+
 const DEEP_THREAD: CommentThreadWire = {
   threadId: "thread-deep",
   resolved: false,
@@ -393,7 +427,7 @@ const MARKED_THREAD: CommentThreadWire = {
   },
 };
 
-let threads: CommentThreadWire[] = [DEEP_THREAD, MARKED_THREAD];
+let threads: CommentThreadWire[] = [TOP_THREAD, DEEP_THREAD, MARKED_THREAD];
 
 useAuthStore
   .getState()

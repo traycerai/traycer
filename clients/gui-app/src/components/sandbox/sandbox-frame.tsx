@@ -243,17 +243,16 @@ export interface SandboxFrameProps {
    * When a replacement source is declared equivalent to the one on screen -
    * the served bytes are unchanged, or the live document already adopted the
    * change in place - the frame keeps its mounted document instead of
-   * reloading. The stale server mount is refreshed by the next real change.
+   * reloading, and its mount serves the replacement's manifest from then on.
    */
   readonly sourceEquivalent?: (
     previous: SandboxSource,
     next: SandboxSource,
   ) => boolean;
   /**
-   * Changing this value forces a fresh mount even when the source is
-   * equivalent: an adopted document that must reload (a query navigation)
-   * needs a server mount built from the CURRENT manifest, not the one the
-   * retained document was served from.
+   * Changing this value forces a fresh mount, and so a fresh document, even
+   * when the source is equivalent: a canvas board whose play stopped comes
+   * back as its own page rather than wherever the played document went.
    */
   readonly remountKey?: string;
   /**

@@ -29,6 +29,8 @@ import {
   disposeBridges,
   realBridge,
 } from "@/components/canvas-artifact/__tests__/canvas-edit-test-support";
+import type { CanvasFrameEvents } from "@/components/canvas-artifact/canvas-frame";
+import { CanvasFrameEventsContext } from "@/components/canvas-artifact/canvas-surface-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { HtmlArtifactCommentSurface } from "../html-artifact-comment-surface";
 
@@ -101,6 +103,7 @@ const SOURCE = {
 function treeOn(
   client: QueryClient,
   source: SandboxSource & { kind: "artifact" },
+  title: string,
 ) {
   return (
     <QueryClientProvider client={client}>
@@ -108,7 +111,7 @@ function treeOn(
         <HtmlArtifactCommentSurface
           epicId="epic-1"
           artifactId="html-1"
-          artifactTitle="Site"
+          artifactTitle={title}
           hostId="host-1"
           viewTabId="tab-1"
           source={source}
@@ -121,7 +124,7 @@ function treeOn(
 }
 
 function tree(source: SandboxSource & { kind: "artifact" }) {
-  return treeOn(new QueryClient(), source);
+  return treeOn(new QueryClient(), source, "Site");
 }
 
 function mount() {
@@ -322,11 +325,11 @@ describe("<HtmlArtifactCommentSurface /> keeping the page through a first commen
     return { ...withStyles, manifest: { files } };
   }
 
-  async function commentOnFirstElement(): Promise<void> {
+  async function commentOnFirstElement(client: QueryClient) {
     frames.bridge = realBridge();
     vi.spyOn(frames.bridge, "stampTid").mockResolvedValue(true);
     vi.spyOn(frames.bridge, "shiftMarkers").mockResolvedValue(true);
-    render(tree(withStyles));
+    const view = render(treeOn(client, withStyles, "Site"));
     // Until a page has proved itself, every file counts as another file, so
     // the entry page's own stamp would reload it.
     markReady();
@@ -344,6 +347,7 @@ describe("<HtmlArtifactCommentSurface /> keeping the page through a first commen
         splices: [{ start: 3, end: 3, replacement: ' data-tid="t1"' }],
       });
     });
+    return view;
   }
 
   function equivalent(next: { readonly manifest: ArtifactManifest }): boolean {
@@ -359,19 +363,32 @@ describe("<HtmlArtifactCommentSurface /> keeping the page through a first commen
   }
 
   it("keeps the page when only the entry page moved to the revision the document adopted", async () => {
-    await commentOnFirstElement();
+    await commentOnFirstElement(new QueryClient());
+    expect(equivalent(revised({ "index.html": AFTER }))).toBe(true);
+  });
+
+  it("keeps that adopted revision when the artifact is renamed", async () => {
+    const client = new QueryClient();
+    const view = await commentOnFirstElement(client);
+    expect(equivalent(revised({ "index.html": AFTER }))).toBe(true);
+
+    // A new title rebuilds the provider's events. Filing the board again
+    // would drop the live document's bridge, and with it the revision it
+    // just adopted, so the stamped file list would reload the page.
+    view.rerender(treeOn(client, withStyles, "Renamed site"));
+
     expect(equivalent(revised({ "index.html": AFTER }))).toBe(true);
   });
 
   it("reloads when another file in the folder changed too", async () => {
-    await commentOnFirstElement();
+    await commentOnFirstElement(new QueryClient());
     expect(
       equivalent(revised({ "index.html": AFTER, "style.css": "d".repeat(64) })),
     ).toBe(false);
   });
 
   it("reloads when the entry page changed to a revision nobody adopted", async () => {
-    await commentOnFirstElement();
+    await commentOnFirstElement(new QueryClient());
     expect(equivalent(revised({ "index.html": "e".repeat(64) }))).toBe(false);
   });
 
@@ -449,18 +466,22 @@ describe("<HtmlArtifactCommentSurface /> pages", () => {
       elementThread("thread-z", "z.html"),
     ];
     render(
-      treeOn(client, {
-        ...SOURCE,
-        entryPath: "middle.html",
-        manifest: {
-          files: {
-            "z.html": htmlFile("c".repeat(64)),
-            "a.html": htmlFile("b".repeat(64)),
-            "middle.html": htmlFile("a".repeat(64)),
-            "style.css": file("d".repeat(64), "text/css"),
+      treeOn(
+        client,
+        {
+          ...SOURCE,
+          entryPath: "middle.html",
+          manifest: {
+            files: {
+              "z.html": htmlFile("c".repeat(64)),
+              "a.html": htmlFile("b".repeat(64)),
+              "middle.html": htmlFile("a".repeat(64)),
+              "style.css": file("d".repeat(64), "text/css"),
+            },
           },
         },
-      }),
+        "Site",
+      ),
     );
 
     const sources = client
@@ -568,6 +589,51 @@ describe("<HtmlArtifactCommentSurface /> pages", () => {
     expect(frames.latest?.pageNavigation?.path).toBe("report.html");
     expect(frames.latest?.pageNavigation?.visit).toBe(visit + 1);
     expect(screen.queryByText("This page is not in the artifact.")).toBeNull();
+  });
+
+  it("tells the provider the page that just proved itself is ready", () => {
+    // The provider forwards status to its parent, which is what a tile observes.
+    // A page says ready before that page is the board, so the name has to be
+    // the page that proved itself and not the one still on show.
+    const loads: string[][] = [];
+    const parent: CanvasFrameEvents = {
+      onBridge: () => undefined,
+      onEditPointer: () => undefined,
+      onStatus: (path, status) => {
+        if (status !== "ready") return;
+        const load = loads.at(-1);
+        if (load === undefined)
+          throw new Error("ready before a page was proved");
+        load.push(path);
+      },
+    };
+    // A bridge has to be in place before the page proves itself. The frame
+    // treats a missing bridge as not ready and drops the page it just showed.
+    frames.bridge = realBridge();
+    render(
+      <CanvasFrameEventsContext value={parent}>
+        {treeOn(
+          new QueryClient(),
+          {
+            ...SOURCE,
+            manifest: {
+              files: {
+                "index.html": file("a".repeat(64), "text/html"),
+                "report.html": file("b".repeat(64), "text/html"),
+              },
+            },
+          },
+          "Site",
+        )}
+      </CanvasFrameEventsContext>,
+    );
+
+    loads.push([]);
+    prove("index.html");
+    loads.push([]);
+    prove("report.html");
+
+    expect(loads).toEqual([["index.html"], ["report.html"]]);
   });
 });
 

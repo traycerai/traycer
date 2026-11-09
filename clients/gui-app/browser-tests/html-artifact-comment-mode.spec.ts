@@ -435,9 +435,9 @@ test("zoom and wheel scroll keep working while Comments is on", async ({
 });
 
 async function pinOffset(page: Page, selector: string): Promise<number> {
-  const pinBox = await page
-    .getByRole("button", { name: "Open comment 1" })
-    .boundingBox();
+  // The deep section's own pin. Its number follows document order, so it is
+  // not the comment labelled 1 once another thread sits above it.
+  const pinBox = await pin(page, "thread-deep").boundingBox();
   if (pinBox === null) return Number.POSITIVE_INFINITY;
   const target = await elementBoxInPage(page, selector);
   // The pin hangs off the element's top-right: its right edge on the
@@ -663,10 +663,13 @@ async function commentOn(page: Page, selector: string): Promise<string> {
   return threadId;
 }
 
-async function expectOnlyPin(page: Page, threadId: string): Promise<void> {
-  await expect(pin(page, threadId)).toBeVisible();
-  const other = threadId === "thread-deep" ? "thread-marked" : "thread-deep";
-  await expect(pin(page, other)).toHaveCount(0);
+async function expectOnlyPin(
+  page: Page,
+  shown: string,
+  hidden: string,
+): Promise<void> {
+  await expect(pin(page, shown)).toBeVisible();
+  await expect(pin(page, hidden)).toHaveCount(0);
 }
 
 test("a comment on the other page is adopted without reloading it", async ({
@@ -687,9 +690,9 @@ test("a comment on the entry page is adopted without reloading it", async ({
   await setComments(page, true);
 
   await commentOn(page, "#fresh");
-  // The seeded pin is drawn only once its element is on screen.
-  await wheelUntilInside(page, "#deep");
-  await expect(pin(page, "thread-deep")).toBeVisible();
+  // The seeded entry pin sits at the top of the page, so it is on screen
+  // without scrolling down to the deep section.
+  await expect(pin(page, "thread-top")).toBeVisible();
 });
 
 test("each page shows only its own pins, and Back and Home keep that", async ({
@@ -697,34 +700,28 @@ test("each page shows only its own pins, and Back and Home keep that", async ({
 }) => {
   await open(page);
   await setComments(page, true);
-  await wheelUntilInside(page, "#deep");
-  await expectOnlyPin(page, "thread-deep");
+  await expectOnlyPin(page, "thread-top", "thread-marked");
 
   // Comment mode takes the click, so the link is followed with the tool off.
-  // The deep pin's element sits far down the page, so the link is brought back first.
   await setComments(page, false);
-  await wheelUntilInside(page, "#detail");
   await clickInPage(page, "#detail");
   await expect(pageFrame(page).locator("#marked")).toBeVisible();
   await setComments(page, true);
-  await expectOnlyPin(page, "thread-marked");
+  await expectOnlyPin(page, "thread-marked", "thread-top");
 
   await page.getByRole("button", { name: "Back" }).click();
   await expect(pageFrame(page).locator("#counter")).toBeVisible();
   await expect(pageFrame(page).locator("#marked")).toHaveCount(0);
-  await wheelUntilInside(page, "#deep");
-  await expectOnlyPin(page, "thread-deep");
+  await expectOnlyPin(page, "thread-top", "thread-marked");
 
   await setComments(page, false);
-  await wheelUntilInside(page, "#detail");
   await clickInPage(page, "#detail");
   await expect(pageFrame(page).locator("#marked")).toBeVisible();
   await setComments(page, true);
   await page.getByRole("button", { name: "Home" }).click();
   await expect(pageFrame(page).locator("#counter")).toBeVisible();
   await expect(pageFrame(page).locator("#marked")).toHaveCount(0);
-  await wheelUntilInside(page, "#deep");
-  await expectOnlyPin(page, "thread-deep");
+  await expectOnlyPin(page, "thread-top", "thread-marked");
 });
 
 test("a comment stamped on the other page is still there after Home and the link back", async ({

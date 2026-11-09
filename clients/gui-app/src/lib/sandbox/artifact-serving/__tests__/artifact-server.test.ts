@@ -1010,7 +1010,6 @@ describe("ArtifactServer.serve — HTML documents", () => {
     };
     expect(text(first)).not.toContain('data-tid="t1"');
     expect(text(second)).toContain('data-tid="t1"');
-    expect(readSpan.mock.calls.some(([sha]) => sha === shaAfter)).toBe(true);
   });
 
   it("composes the loader document around the raw html, byte for byte matching buildArtifactDocument", async () => {
