@@ -1,3 +1,4 @@
+import { BOT_SWATCH_COUNT } from "@traycer/protocol/host/bot/schemas";
 import { PROVIDER_PROFILE_ACCENT_COLORS } from "@traycer/protocol/host/provider-schemas";
 
 /**
@@ -70,14 +71,12 @@ export interface BotSwatch {
 }
 
 /**
- * A bot's swatch: the profile palette's 12 hues in two tones, so two
- * bots of one name share a swatch half as often as on the 12 alone. A pure
- * function of the bot's id, so a rename never recolours it; a bot keeps the
- * hue it had on the 12 and the hash's next bit picks the tone.
+ * The swatch at `index` of the {@link BOT_SWATCH_COUNT} a bot draws on: the
+ * profile palette's 12 hues in two tones. Indices below 12 are the 500 tones
+ * with dark ink, the rest the 700 tones with white ink, hue for hue.
  */
-export function resolveBotSwatch(botId: string): BotSwatch {
+export function botSwatchAt(index: number): BotSwatch {
   const hues = PROFILE_ACCENT_PALETTE.length;
-  const index = hashProfileIdToColorIndex(botId) % (hues * 2);
   const hue = index % hues;
   return index < hues
     ? {
@@ -85,4 +84,19 @@ export function resolveBotSwatch(botId: string): BotSwatch {
         ink: "dark",
       }
     : { color: BOT_DEEP_TONES[hue] ?? BOT_DEEP_TONES[0], ink: "light" };
+}
+
+/**
+ * A bot's own swatch, as an index of the {@link BOT_SWATCH_COUNT}: so two
+ * bots of one name share a swatch half as often as on the 12 hues alone. A
+ * pure function of the bot's id, so a rename never recolours it; a bot keeps
+ * the hue it had on the 12 and the hash's next bit picks the tone.
+ */
+export function derivedBotSwatchIndex(botId: string): number {
+  return hashProfileIdToColorIndex(botId) % BOT_SWATCH_COUNT;
+}
+
+/** A bot's own swatch, when nothing was chosen. */
+export function resolveBotSwatch(botId: string): BotSwatch {
+  return botSwatchAt(derivedBotSwatchIndex(botId));
 }

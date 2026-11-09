@@ -78,8 +78,6 @@ import {
   sandboxGrantViews,
   sandboxGitHubLine,
   type SandboxGrantView,
-  sandboxSecretsSummary,
-  type SandboxSecretsLine,
 } from "@/lib/sandboxes/sandbox-grants-view";
 import { useSandboxRepairGuestConfiguration } from "@/hooks/sandboxes/use-sandbox-repair-guest-configuration-mutation";
 import {
@@ -108,7 +106,7 @@ export function SandboxCard(props: {
   const operationalLine = sandboxOperationalLine(state, frozen);
   return (
     <div
-      className="flex min-w-0 flex-col gap-5 p-5"
+      className="flex min-w-0 flex-col gap-5 p-5 wrap-anywhere"
       data-testid="sandbox-card"
       data-state={state ?? "unknown"}
       data-frozen={frozen ? "true" : "false"}
@@ -146,12 +144,7 @@ export function SandboxCard(props: {
             teamOwned={teamOwned}
           />
           {sandboxCardShowsCostView(teamOwned) ? (
-            <details className="border-t border-border/50 pt-3">
-              <summary className="cursor-pointer text-ui-xs">
-                Cost details
-              </summary>
-              <SandboxCostView sandboxId={summary.id} frozen={frozen} />
-            </details>
+            <SandboxCostView sandboxId={summary.id} frozen={frozen} />
           ) : null}
         </>
       )}
@@ -603,7 +596,10 @@ function SandboxCostView(props: {
   const balanceMc = sandboxBalanceMc(user);
   const burn = costs.data?.awakeBurnMillicreditsPerHour ?? null;
   return (
-    <div className="mt-3 flex flex-col gap-2" data-testid="sandbox-card-cost">
+    <div
+      className="flex min-w-0 flex-col gap-2 border-t border-border/50 pt-3"
+      data-testid="sandbox-card-cost"
+    >
       <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-ui-xs">
         {cost === null ? (
           <>
@@ -642,7 +638,7 @@ function SandboxCostFacts(props: { readonly cost: SandboxCost }): ReactNode {
   );
 }
 
-/** Counts the grants without listing destinations on the Overview. */
+/** Grants and readiness remain visible together, including while routes are unavailable. */
 function SandboxSecretsSection(props: {
   readonly summary: SandboxSummary;
   readonly state: HostSandboxState | null;
@@ -651,7 +647,6 @@ function SandboxSecretsSection(props: {
   readonly teamOwned: boolean;
 }): ReactNode {
   const { summary } = props;
-  const [detailsOpen, setDetailsOpen] = useState(false);
   const grants = useSandboxGrants(summary.environmentId, summary.hostId);
   const routes = sandboxHostVouches(props.hostState) ? summary.routes : null;
   const readiness = sandboxSecretsReadiness(
@@ -662,72 +657,18 @@ function SandboxSecretsSection(props: {
   );
   const grantsSummary = grants.data ?? null;
   if (summary.phase === null && grantsSummary === null) return null;
-  const line =
-    grantsSummary === null
-      ? null
-      : sandboxSecretsSummary(grantsSummary, routes, readiness?.tone ?? null);
   const configurationId = props.teamOwned
     ? summary.environmentId
     : PERSONAL_CONFIGURATION_ID;
   return (
     <>
-      <SandboxSecretsSummaryRow
-        line={line}
-        failed={grantsSummary === null && grants.isError}
-        configurationId={configurationId}
-        refetching={grants.isFetching}
-        onRetry={() => void grants.refetch()}
-        onSeeWhy={() => setDetailsOpen(true)}
-      />
-      {grantsSummary === null && readiness === null ? null : (
-        <SandboxSecretsDetails
-          summary={grantsSummary}
-          routes={routes}
-          readiness={readiness}
-          open={detailsOpen}
-          onOpenChange={setDetailsOpen}
-        />
-      )}
-      {summary.phase === null ? null : (
-        <SandboxNetworkEvents
-          key={summary.hostId}
-          hostId={summary.hostId}
-          awake={props.state === "awake" && !props.frozen}
-          routeAddresses={sandboxRouteAddresses(grants.data ?? null)}
-        />
-      )}
-    </>
-  );
-}
-
-function SandboxSecretsSummaryRow(props: {
-  readonly line: SandboxSecretsLine | null;
-  readonly failed: boolean;
-  readonly configurationId: string | null;
-  readonly refetching: boolean;
-  readonly onRetry: () => void;
-  readonly onSeeWhy: () => void;
-}): ReactNode {
-  const { line, configurationId } = props;
-  return (
-    <>
-      {" "}
-      {line === null && !props.failed ? null : (
-        <div
-          className="flex min-w-0 flex-wrap items-center justify-between gap-2 border-t border-border/50 pt-3 text-ui-xs"
-          data-testid="sandbox-card-secrets"
-        >
-          <span>{line?.label ?? "Couldn't load this sandbox's secrets"}</span>
-          {line?.notWorking === true ? (
-            <Button
-              type="button"
-              variant="link"
-              size="sm"
-              onClick={props.onSeeWhy}
-            >
-              See why
-            </Button>
-          ) : null}
+      <section
+        className="flex min-w-0 flex-col gap-2 border-t border-border/50 pt-3 text-ui-xs wrap-anywhere"
+        aria-label="Secrets"
+        data-testid="sandbox-card-secrets"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="font-medium">Secrets</h3>
           {configurationId === null ? null : (
             <Button
               type="button"
@@ -740,30 +681,43 @@ function SandboxSecretsSummaryRow(props: {
               Manage
             </Button>
           )}
-          {props.failed ? (
+        </div>
+        {grantsSummary === null && grants.isError ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <p>Couldn't load this sandbox's secrets</p>
             <Button
               type="button"
               variant="outline"
               size="sm"
-              disabled={props.refetching}
-              onClick={props.onRetry}
+              disabled={grants.isFetching}
+              onClick={() => void grants.refetch()}
             >
               Retry
             </Button>
-          ) : null}
-        </div>
+          </div>
+        ) : null}
+        <SandboxGrantsList
+          summary={grantsSummary}
+          routes={routes}
+          readiness={readiness}
+        />
+      </section>
+      {summary.phase === null ? null : (
+        <SandboxNetworkEvents
+          key={summary.hostId}
+          hostId={summary.hostId}
+          awake={props.state === "awake" && !props.frozen}
+          routeAddresses={sandboxRouteAddresses(grantsSummary)}
+        />
       )}
     </>
   );
 }
 
-/** Keeps sandbox-specific grant facts out of the summary. */
-function SandboxSecretsDetails(props: {
+function SandboxGrantsList(props: {
   readonly summary: SandboxGrantsSummary | null;
   readonly readiness: SandboxSecretsReadiness | null;
   readonly routes: SandboxSummary["routes"];
-  readonly open: boolean;
-  readonly onOpenChange: (open: boolean) => void;
 }): ReactNode {
   const views =
     props.summary === null
@@ -771,46 +725,52 @@ function SandboxSecretsDetails(props: {
       : sandboxGrantViews(props.summary, props.routes);
   const github = props.summary?.github ?? null;
   return (
-    <details
-      open={props.open}
-      onToggle={(event) => props.onOpenChange(event.currentTarget.open)}
-      data-testid="sandbox-card-secret-details"
-      className="text-ui-xs"
+    <div
+      className="flex min-w-0 flex-col gap-2"
+      data-testid="sandbox-card-grants"
     >
-      <summary className="cursor-pointer">Details</summary>
-      <div className="mt-3 flex flex-col gap-2">
-        {props.summary !== null && sandboxHasBrokeredGrant(props.summary) ? (
-          <p
-            className="text-muted-foreground"
-            data-testid="sandbox-card-stand-in"
-          >
-            {SANDBOX_STAND_IN_CLAUSE}
-          </p>
-        ) : null}
-        {props.readiness === null ? null : (
-          <p
-            data-testid="sandbox-card-secrets-readiness"
-            data-tone={props.readiness.tone}
-            className="wrap-anywhere text-muted-foreground"
-          >
-            {props.readiness.text}
-          </p>
-        )}
-        <ul className="flex flex-col gap-2">
+      {props.summary !== null && sandboxHasBrokeredGrant(props.summary) ? (
+        <p
+          className="text-muted-foreground"
+          data-testid="sandbox-card-stand-in"
+        >
+          {SANDBOX_STAND_IN_CLAUSE}
+        </p>
+      ) : null}
+      {props.readiness === null ? null : (
+        <p
+          data-testid="sandbox-card-secrets-readiness"
+          data-tone={props.readiness.tone}
+          className={cn(
+            "wrap-anywhere",
+            props.readiness.tone === "ready" && "text-success-foreground",
+            props.readiness.tone === "pending" && "text-muted-foreground",
+            props.readiness.tone === "degraded" && "text-warning-foreground",
+          )}
+        >
+          {props.readiness.text}
+        </p>
+      )}
+      {props.summary !== null && views.length === 0 ? (
+        <p className="text-muted-foreground">
+          No secrets are granted to this sandbox.
+        </p>
+      ) : (
+        <ul className="flex min-w-0 flex-col gap-2">
           {views.map((view) => (
             <SandboxGrantRow key={view.secretName} view={view} />
           ))}
         </ul>
-        {github === null ? null : (
-          <p
-            className="wrap-anywhere text-muted-foreground"
-            data-testid="sandbox-card-github"
-          >
-            {sandboxGitHubLine(github)}
-          </p>
-        )}
-      </div>
-    </details>
+      )}
+      {github === null ? null : (
+        <p
+          className="wrap-anywhere text-muted-foreground"
+          data-testid="sandbox-card-github"
+        >
+          {sandboxGitHubLine(github)}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -892,19 +852,14 @@ function SandboxNetworkEvents(props: {
 }): ReactNode {
   const events = useSandboxEgressEvents(props.awake ? props.hostId : null);
   const lines = sandboxCardEgressEventLines(events);
-  const blocked = lines.filter((line) => line.tone === "refused").length;
   if (lines.length === 0) return null;
   return (
-    <details
-      className="border-t border-border/50 pt-3 text-ui-xs"
+    <section
+      className="min-w-0 border-t border-border/50 pt-3 text-ui-xs"
+      aria-label="Recent network events"
       data-testid="sandbox-card-egress-events"
     >
-      <summary className="cursor-pointer">
-        {blocked === 0
-          ? "Recent network events"
-          : `${blocked} recent blocked ${blocked === 1 ? "request" : "requests"}`}
-        {" · See events"}
-      </summary>
+      <h3 className="font-medium">Recent network events</h3>
       <ul className="mt-3 flex flex-col gap-2">
         {lines.map((line) => (
           <SandboxEgressEventRow
@@ -918,7 +873,7 @@ function SandboxNetworkEvents(props: {
           />
         ))}
       </ul>
-    </details>
+    </section>
   );
 }
 

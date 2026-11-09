@@ -275,6 +275,7 @@ function ChatMessageImpl(props: ChatMessageProps) {
         message={message}
         presentation={botPresentation}
         hoverActions
+        timeLink={null}
       />
     );
   }

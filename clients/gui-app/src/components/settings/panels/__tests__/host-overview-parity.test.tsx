@@ -460,7 +460,7 @@ describe("<HostSettingsPanel /> Overview local/remote parity", () => {
     );
 
     // The Installation tab's shared half is INSIDE that equality, not beside
-    // it: the account facts (the date and unseen line), Details (platform,
+    // it: the account facts (the date and unseen line), inline rows (platform,
     // architecture, the running version, the registry version, and the host
     // id), the unmanaged install line, and the OS service group. Pinned on
     // `local` — `remote` equals it — so the comparison cannot pass by both
@@ -470,7 +470,7 @@ describe("<HostSettingsPanel /> Overview local/remote parity", () => {
     expect(local.testIds).toEqual(
       expect.arrayContaining([
         "host-overview-about-added",
-        "host-overview-installation-details",
+        "host-overview-about-facts",
         "host-overview-about-host-id",
         "host-overview-about-version",
         "host-overview-about-platform",
@@ -548,7 +548,7 @@ describe("<HostSettingsPanel /> Overview local/remote parity", () => {
     expect(local.removalTestIds).toEqual([]);
   });
 
-  it("keeps build versions out of the header and shows the registry version only in Installation Details", async () => {
+  it("keeps build versions out of the header and shows the registry version in inline Installation facts", async () => {
     // The defect: both a `host.status.hostVersion` and the
     // registry row's `version` used to render as the host's version at once.
     // The registry says "1.4.2" here twice over — the scope row's `version`
@@ -556,7 +556,7 @@ describe("<HostSettingsPanel /> Overview local/remote parity", () => {
     // `status.appVersion` (`registryItemFor`) — against the RPC's "1.5.0".
     //
     // The account's figure has ONE sanctioned place now: Installation ▸
-    // Details shows what the account last heard, labelled "Last reported
+    // Installation shows what the account last heard, labelled "Last reported
     // version", and only because it differs from the running version. The
     // header states no version at all, for both variants, and "1.4.2" must
     // appear nowhere but that one labelled row, whichever tab it is on.
@@ -632,7 +632,7 @@ function localOnlyNodes(root: HTMLElement): readonly Element[] {
  * RPC's `running` version nor the registry's `reported` one is on the
  * header's health line, and `reported` appears exactly once on the whole page
  * (every tab is mounted, the Updates tab's answer card and version list
- * included) — as the value of Details' "Last reported version" row.
+ * included) — as the value of Installation's "Last reported version" row.
  *
  * The scope fixture's clock is `nowMs: 0` and the registry stamp is
  * `2026-01-01`, so the elapsed words are "just now".

@@ -394,15 +394,15 @@ test.describe("below md, the area select", () => {
 const PROVIDERS_PAGE_QUERY =
   "settings=1&pane=full&panel=providers&account=1&hosts=1&readings=both";
 
-/** The Providers page's phone configured-provider rail. */
+/** The Providers page's phone rail. */
 function providerRail(page: Page): Locator {
   return page
     .locator(PANE)
-    .getByRole("navigation", { name: "Configured providers", exact: true });
+    .getByRole("navigation", { name: "Providers", exact: true });
 }
 
-test.describe("below md, the Providers page's configured-provider rail", () => {
-  test("selects a configured provider and shows its pane", async ({
+test.describe("below md, the Providers page's rail", () => {
+  test("selects a provider and shows its pane", async ({
     browser,
     baseURL,
   }) => {
@@ -422,10 +422,7 @@ test.describe("below md, the Providers page's configured-provider rail", () => {
       );
       await page.waitForFunction("window.__layoutCanvasProbe?.ready === true");
       const rail = providerRail(page);
-      await expect(
-        rail,
-        "the configured-provider rail is not drawn",
-      ).toBeVisible();
+      await expect(rail, "the provider rail is not drawn").toBeVisible();
       await expect(
         rail.getByRole("button", { name: "Codex", exact: true }),
       ).toHaveAttribute("aria-current", "true");
@@ -433,17 +430,13 @@ test.describe("below md, the Providers page's configured-provider rail", () => {
         name: "Claude Code",
         exact: true,
       });
-      await expect(
-        next,
-        "the configured Claude Code row is missing",
-      ).toBeVisible();
+      await expect(next, "the Claude Code row is missing").toBeVisible();
       await next.click();
       await expect(next).toHaveAttribute("aria-current", "true");
       await expect(
-        page
-          .locator("[data-settings-panel-body] div.font-medium.text-foreground")
-          .filter({ hasText: /^Claude Code$/ })
-          .last(),
+        page.locator(PANE).getByText("Anthropic's Claude Code CLI.", {
+          exact: true,
+        }),
         "selecting Claude Code does not show its detail pane",
       ).toBeVisible();
       expect(

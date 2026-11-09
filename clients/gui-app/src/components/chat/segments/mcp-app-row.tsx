@@ -290,6 +290,10 @@ function LiveMcpApp(props: LiveMcpAppProps) {
         row?.getAttribute("data-row-key") ??
         row?.getAttribute("data-message-id") ??
         null,
+      // Nothing about this surface is exempt: the approval and download
+      // confirms are siblings of it, not children, so every dialog in the
+      // document must keep blocking the app.
+      surface: null,
     };
     if (!claimFullscreen(claim)) return false;
     claimRef.current = claim;

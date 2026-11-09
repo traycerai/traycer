@@ -450,6 +450,7 @@ function TerminalAccountRow(props: {
     >
       <div className="min-w-0">
         <div className="font-medium text-foreground">{name}</div>
+        <div className="text-ui-xs text-muted-foreground">Terminal account</div>
       </div>
       <Switch
         checked={props.enabled}

@@ -23,7 +23,8 @@ type ChannelPostProps = {
   /**
    * Renders with the post's row, `null` while the channel has none for it;
    * `missing` once a cold fetch has ended without it (the host has no such
-   * row, or could not be asked), after which nothing more arrives.
+   * row, or could not be asked), after which nothing more arrives, and while
+   * the channel's stream has ended, until a reconnect.
    */
   readonly children: (post: OpenMessage | null, missing: boolean) => ReactNode;
 };
@@ -57,6 +58,10 @@ function ChannelPostFromStore(
       s.messages.find((message) => message.messageId === messageId) ?? null,
   );
   const epoch = useStore(store, (s) => s.transcriptWindow.epoch);
+  // A row located but not yet hydrated never arrives over a stream that has
+  // ended, fatally or by the host's close (a failure it retries is
+  // `reconnecting`); a reconnect ends this, and the row it brings in shows.
+  const closed = useStore(store, (s) => s.connectionStatus === "closed");
   const holdTranscriptOrdinal = useStore(store, (s) => s.holdTranscriptOrdinal);
   const client = useTabHostClient();
   // Latched once the row was missing: the row the hold brings in must stay
@@ -79,5 +84,8 @@ function ChannelPostFromStore(
     if (located === null) return undefined;
     return holdTranscriptOrdinal(located);
   }, [holdTranscriptOrdinal, located]);
-  return props.children(post, post === null && answer.status === "missing");
+  return props.children(
+    post,
+    post === null && (answer.status === "missing" || (cold && closed)),
+  );
 }

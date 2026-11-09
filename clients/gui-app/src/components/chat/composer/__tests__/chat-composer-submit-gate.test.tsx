@@ -149,10 +149,11 @@ describe("chat-composer submit gate (path resolution)", () => {
   it("treats pure isResolvingFilePaths as attachment-pending (chat-composer composition)", () => {
     const paste: Pick<
       UseComposerPasteResult,
-      "isIngestingImages" | "isResolvingFilePaths"
+      "isIngestingImages" | "isResolvingFilePaths" | "isAttachingFiles"
     > = {
       isIngestingImages: false,
       isResolvingFilePaths: true,
+      isAttachingFiles: false,
     };
     // Mirrors chat-composer.tsx:
     //   isAttachmentIngestPending({ isIngestingImages, isResolvingFilePaths })

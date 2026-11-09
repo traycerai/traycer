@@ -171,6 +171,7 @@ function trigger(
     outputFile: null,
     mcp: null,
     managedCommand: null,
+    conversationMessage: null,
     ...over,
   };
 }

@@ -1,7 +1,7 @@
 import { useSandboxesPageStore } from "@/stores/sandboxes/sandboxes-page-store";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useEffect } from "react";
-import { QueryClient } from "@tanstack/react-query";
+import { useEffect, useState, type ReactElement, type ReactNode } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AuthService } from "@/lib/auth/auth-service";
 import { HostDirectoryService } from "@/lib/host";
 import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
@@ -28,7 +28,8 @@ import {
   act,
   cleanup,
   fireEvent,
-  render,
+  render as renderBare,
+  type RenderResult,
   screen,
   within,
 } from "@testing-library/react";
@@ -102,9 +103,21 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   useAuthUser: () => ({ data: mocks.user }),
 }));
-vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
-  useSandboxCatalogue: () => ({ data: mocks.catalogue }),
-}));
+// The real query options stay: the shape sheet's readiness and the run's
+// preflight read the catalogue through them. Only the hook that serves the
+// fixture catalogue is replaced, as the query it stands for would answer.
+vi.mock(
+  "@/hooks/sandboxes/use-sandbox-catalogue-query",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/sandboxes/use-sandbox-catalogue-query")
+    >()),
+    useSandboxCatalogue: () =>
+      mocks.catalogue === null
+        ? { isPending: true, isError: false, data: undefined }
+        : { isPending: false, isError: false, data: mocks.catalogue },
+  }),
+);
 vi.mock("@/hooks/sandboxes/use-sandbox-costs-query", () => ({
   useSandboxCosts: () => ({ data: mocks.costs }),
 }));
@@ -154,6 +167,18 @@ vi.mock("@/components/settings/host-scope/use-host-options", async () => {
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
   useSystemTabModalActions: () => ({ openSettings: mocks.openSettings }),
 }));
+
+/** The query client the shape sheet's readiness read needs, one per mounted tree. */
+function QueryProviders(props: { readonly children: ReactNode }): ReactNode {
+  const [client] = useState(() => new QueryClient());
+  return (
+    <QueryClientProvider client={client}>{props.children}</QueryClientProvider>
+  );
+}
+
+function render(ui: ReactElement): RenderResult {
+  return renderBare(ui, { wrapper: QueryProviders });
+}
 
 const SURFACE = "landing:window-test";
 const MEMORY_HOST = "laptop";
@@ -402,6 +427,11 @@ describe("a staged name at create", () => {
       credentialGeneration: null,
       localHostIdSeeder: () => Promise.resolve(null),
     });
+    // The run's preflight reads the catalogue for this shape before it creates.
+    vi.spyOn(auth, "getSandboxCatalogue").mockResolvedValue({
+      kind: "ok",
+      catalogue: CATALOGUE,
+    });
     const create = vi
       .spyOn(auth, "createSandbox")
       .mockResolvedValue(
@@ -586,8 +616,11 @@ describe("useSandboxStaging New rows", () => {
       "New Personal sandbox · 2 vCPU · 4 GB",
     );
     expect(staging().composer.stagedLabel).not.toContain("$");
+    // The catalogue's from price names all three rates, rest rates included.
     expect(staging().consequences?.price).toEqual({
       awakeMcPerHour: 120,
+      suspendedMcPerHour: 4,
+      stoppedMcPerHour: 2,
       exact: false,
     });
     const stage = readStagedSandbox(SURFACE);
@@ -607,6 +640,24 @@ describe("useSandboxStaging New rows", () => {
       ],
     ).toBe("personal");
     expect(staging().composer.stagedConfigurationKey).toBe("personal");
+  });
+
+  it("states what a setup is charged for under a new stage that is still only staged, before anything launches", () => {
+    const { composer } = mount([LAPTOP]);
+
+    act(() => composer.onPickNew("personal"));
+    renderStagedConsequences();
+
+    expect(readStagedSandbox(SURFACE)).toMatchObject({
+      phase: "staged",
+      clientRequestId: null,
+    });
+    expect(screen.getByTestId("consequences-setup-charges").textContent).toBe(
+      "Running the sandbox is charged separately from build work. Build work is charged once, even if the build fails. Keeping the result is charged as storage for as long as you keep it.",
+    );
+    expect(screen.getByTestId("consequences-price").textContent).toContain(
+      "an hour while awake",
+    );
   });
 
   it("hands the block a Linux OS, and no Windows limitation, for a new Linux stage", () => {

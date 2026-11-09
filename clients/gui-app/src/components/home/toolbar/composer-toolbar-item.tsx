@@ -21,6 +21,7 @@ import type { ToolbarRegionId } from "@/lib/layout/region-id";
 export interface ComposerToolbarItemsProps {
   readonly presentation?: boolean;
   readonly onAttachImages: (files: ReadonlyArray<File>) => void;
+  readonly onAttachFiles: (files: ReadonlyArray<File>) => void;
   readonly permission: PermissionMode;
   readonly onPermissionChange: (next: PermissionMode) => void;
   readonly supportedPermissionModes: ReadonlyArray<PermissionMode> | null;
@@ -57,7 +58,10 @@ export function renderToolbarItem(
   switch (id) {
     case "attachImage":
       return (
-        <ComposerAttachImageButton onAttachImages={props.onAttachImages} />
+        <ComposerAttachImageButton
+          onAttachImages={props.onAttachImages}
+          onAttachFiles={props.onAttachFiles}
+        />
       );
     case "access":
       return (

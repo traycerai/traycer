@@ -1,3 +1,14 @@
+import { sandboxReadinessLine } from "@/lib/sandboxes/sandbox-readiness";
+import {
+  durationSentence,
+  READY_SENTENCE,
+  readinessCatalogue,
+  servedMinutes,
+} from "@/lib/sandboxes/__tests__/sandbox-catalogue-fixture";
+import type {
+  StageConfiguration,
+  StageSize,
+} from "@/lib/sandboxes/sandbox-stage-model";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import {
   cleanup,
@@ -19,6 +30,7 @@ import {
   userWith,
 } from "@/lib/sandboxes/__tests__/auth-user-fixture";
 import {
+  shortPriceLabel,
   USE_THIS_SHAPE,
   CHANGE_LABEL,
   idleAndRestingLine,
@@ -42,6 +54,7 @@ const CATALOGUE: SandboxCatalogue = {
         memoryMaxMb: 65536,
         memoryStepMb: 512,
         diskMinMb: 10240,
+        diskStepMb: 1024,
         diskMaxMb: 102400,
         diskDefaultMb: 20480,
       },
@@ -65,6 +78,10 @@ const CATALOGUE: SandboxCatalogue = {
 };
 
 let catalogueInUse: SandboxCatalogue = CATALOGUE;
+const SETTLED = { isSuccess: true, isFetching: false };
+let readinessState = SETTLED;
+/** Every shape the sheet has asked the readiness query about, in render order. */
+let readinessAsked: (StageSize | null)[] = [];
 let authUser: AuthenticatedUser | null = null;
 
 const GIB = 1024;
@@ -86,6 +103,22 @@ vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
     data: catalogueInUse,
   }),
 }));
+// The query's state is a case's to set; its data is the sentence the
+// catalogue in use reads as, as the real hook's select would answer. The
+// sheet's own guard on that state is what each case observes.
+vi.mock("@/hooks/sandboxes/use-sandbox-get-readiness-query", () => ({
+  useSandboxGetReadiness: (
+    _configuration: StageConfiguration | null,
+    shape: StageSize | null,
+  ) => {
+    readinessAsked.push(shape);
+    return {
+      isSuccess: readinessState.isSuccess,
+      isFetching: readinessState.isFetching,
+      data: sandboxReadinessLine(catalogueInUse, shape),
+    };
+  },
+}));
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   useAuthUser: () => ({ data: authUser }),
 }));
@@ -99,6 +132,8 @@ vi.mock("@/lib/links/open-link", () => ({
 afterEach(() => {
   cleanup();
   catalogueInUse = CATALOGUE;
+  readinessState = SETTLED;
+  readinessAsked = [];
   authUser = null;
 });
 
@@ -126,6 +161,106 @@ function renderSheet(onUseShape: Mock) {
 }
 
 describe("<SandboxShapeSheet />", () => {
+  const SERVED_MS = servedMinutes(7);
+
+  /** This file's provider carrying the readiness and duration a server would serve. */
+  function servedReadiness(input: {
+    readonly warm: number | null;
+    readonly coldCreateMeasuredMs: number | null | undefined;
+  }): SandboxCatalogue {
+    const [served] = readinessCatalogue(input).providers;
+    const [provider] = CATALOGUE.providers;
+    return {
+      providers: [
+        {
+          ...provider,
+          ...(served.coldCreateMeasuredMs === undefined
+            ? {}
+            : { coldCreateMeasuredMs: served.coldCreateMeasuredMs }),
+          readiness: served.readiness,
+        },
+      ],
+    };
+  }
+
+  it.each([
+    { warm: 2, measured: SERVED_MS, text: READY_SENTENCE },
+    { warm: 0, measured: SERVED_MS, text: durationSentence(SERVED_MS) },
+    { warm: null, measured: SERVED_MS, text: durationSentence(SERVED_MS) },
+    { warm: 0, measured: null, text: null },
+    { warm: 0, measured: undefined, text: null },
+  ])(
+    "renders the sentence a served warm count $warm and duration $measured read as",
+    ({ warm, measured, text }) => {
+      catalogueInUse = servedReadiness({
+        warm,
+        coldCreateMeasuredMs: measured,
+      });
+      renderSheet(vi.fn());
+      const line = screen.queryByTestId("sandbox-shape-sheet-readiness");
+      if (text === null) expect(line).toBeNull();
+      else expect(line?.textContent).toBe(text);
+    },
+  );
+
+  it.each([
+    { name: "refetching", state: { isSuccess: true, isFetching: true } },
+    {
+      name: "errored on its last read",
+      state: { isSuccess: false, isFetching: false },
+    },
+  ])(
+    "shows no readiness while the query is $name, though it still holds a sentence",
+    ({ state }) => {
+      catalogueInUse = servedReadiness({
+        warm: 2,
+        coldCreateMeasuredMs: SERVED_MS,
+      });
+      readinessState = state;
+      renderSheet(vi.fn());
+      expect(screen.queryByTestId("sandbox-shape-sheet-readiness")).toBeNull();
+    },
+  );
+
+  it("renders all three billed hourly rates for the selected shape", () => {
+    const [provider] = CATALOGUE.providers;
+    catalogueInUse = {
+      providers: [
+        {
+          ...provider,
+          regions: [
+            {
+              ...provider.regions[0],
+              pricing: {
+                vcpuHourMillicredits: 50,
+                memoryGbHourMillicredits: 25,
+                diskGbHourMillicredits: 0.5,
+                suspendedMemoryGbHourMillicredits: 30,
+                awakeDiskGbHourMillicredits: 2,
+                multiplier: 1.25,
+              },
+            },
+          ],
+        },
+      ],
+    };
+    renderSheet(vi.fn());
+    const price = screen.getByTestId("sandbox-shape-sheet-price");
+    expect(price.textContent).toContain("$0.30 an hour while awake");
+    expect(price.textContent).toContain(
+      `Suspended: ${shortPriceLabel(163)} · Stopped: ${shortPriceLabel(13)}`,
+    );
+  });
+
+  it("labels resting rates as From when older pricing only quotes the smallest shape", () => {
+    renderSheet(vi.fn());
+    expect(
+      screen.getByTestId("sandbox-shape-sheet-price").textContent,
+    ).toContain(
+      `From Suspended: ${shortPriceLabel(4)} · Stopped: ${shortPriceLabel(2)}`,
+    );
+  });
+
   it("insets focusable controls inside the shape form scroll area", () => {
     renderSheet(vi.fn());
 
@@ -242,6 +377,86 @@ describe("<SandboxShapeSheet />", () => {
       screen.getByRole("combobox", { name: "Size" }).textContent,
     ).toContain("4 vCPU · 8 GB · 40 GB");
     expect(screen.getByText(idleAndRestingLine(2, 120))).toBeDefined();
+  });
+
+  it("opens a nondefault rung with unset disk at its own geometry, price and readiness and submits it", () => {
+    const [provider] = catalogueWithShapes().providers;
+    catalogueInUse = {
+      providers: [
+        {
+          ...provider,
+          readiness: {
+            request: {
+              os: "linux",
+              shape: { cpus: 4, memoryMb: 8192, diskMb: 40960 },
+              region: "us-east",
+              generationId: null,
+              launchForm: {
+                kind: "template",
+                object: "gs://templates/platform-v1/manifest.json",
+                digest: "a".repeat(64),
+              },
+            },
+            result: { warm: 2 },
+          },
+          regions: [
+            {
+              ...provider.regions[0],
+              pricing: {
+                vcpuHourMillicredits: 50,
+                memoryGbHourMillicredits: 25,
+                diskGbHourMillicredits: 1,
+                suspendedMemoryGbHourMillicredits: 30,
+                awakeDiskGbHourMillicredits: 2,
+                multiplier: 1,
+              },
+            },
+          ],
+        },
+      ],
+    };
+    const onUseShape = vi.fn();
+    render(
+      <SandboxShapeSheet
+        open
+        onOpenChange={() => undefined}
+        configuration={{ kind: "personal" }}
+        defaults={null}
+        initialShape={{
+          os: "linux",
+          cpus: 4,
+          memoryMb: 8192,
+          diskMb: null,
+          region: "us-east",
+          idleMinutes: 30,
+          destroyAfterRestingMinutes: 120,
+        }}
+        initialName=""
+        context={{
+          audience: "private",
+          reachHost: null,
+          unmovedComputer: null,
+        }}
+        onUseShape={onUseShape}
+      />,
+    );
+    expect(
+      screen.getByRole("combobox", { name: "Size" }).textContent,
+    ).toContain("4 vCPU · 8 GB · 40 GB");
+    expect(
+      screen.getByTestId("sandbox-shape-sheet-readiness").textContent,
+    ).toBe(READY_SENTENCE);
+    expect(
+      screen.getByTestId("sandbox-shape-sheet-price").textContent,
+    ).toContain("$0.48 an hour while awake");
+    const use = screen.getByRole("button", { name: USE_THIS_SHAPE });
+    expect(use.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(use);
+    expect(onUseShape.mock.calls[0]?.[0]).toMatchObject({
+      cpus: 4,
+      memoryMb: 8192,
+      diskMb: 40960,
+    });
   });
 
   it("uses the listed shape that was picked, disk included", () => {
@@ -582,6 +797,106 @@ describe("<SandboxShapeSheet />", () => {
       expect(
         screen.queryByTestId("sandbox-shape-sheet-add-credits"),
       ).toBeNull();
+    });
+  });
+
+  describe("the shape the readiness query is asked about", () => {
+    /**
+     * The distinct sizes asked about in order; a repeat of the last is one
+     * question. The sheet hands over its whole shape, of which only the size
+     * is what the query keys on.
+     */
+    function questions(): StageSize[] {
+      const asked: StageSize[] = [];
+      for (const shape of readinessAsked) {
+        if (shape === null) continue;
+        const size: StageSize = {
+          os: shape.os,
+          region: shape.region,
+          cpus: shape.cpus,
+          memoryMb: shape.memoryMb,
+          diskMb: shape.diskMb,
+        };
+        const last = asked.at(-1);
+        if (last !== undefined && JSON.stringify(last) === JSON.stringify(size))
+          continue;
+        asked.push(size);
+      }
+      return asked;
+    }
+
+    function type(testId: string, value: string): HTMLElement {
+      const input = screen.getByTestId(testId);
+      fireEvent.change(input, { target: { value } });
+      return input;
+    }
+
+    it("asks nothing new while a number is typed, then asks once about the last valid value on blur", () => {
+      renderSheet(vi.fn());
+      expect(questions().map((shape) => shape.cpus)).toEqual([2]);
+
+      type("sandbox-shape-sheet-cpus", "3");
+      const input = type("sandbox-shape-sheet-cpus", "4");
+
+      expect(questions().map((shape) => shape.cpus)).toEqual([2]);
+      expect(screen.queryByTestId("sandbox-shape-sheet-readiness")).toBeNull();
+
+      fireEvent.blur(input);
+
+      expect(questions().map((shape) => shape.cpus)).toEqual([2, 4]);
+    });
+
+    it("asks about a typed number on Enter without a blur", () => {
+      renderSheet(vi.fn());
+
+      const input = type("sandbox-shape-sheet-memory", "8");
+      expect(questions().map((shape) => shape.memoryMb)).toEqual([4096]);
+
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      expect(questions().map((shape) => shape.memoryMb)).toEqual([4096, 8192]);
+    });
+
+    it("asks about a picked region at once", () => {
+      const [provider] = CATALOGUE.providers;
+      const [us] = provider.regions;
+      catalogueInUse = {
+        providers: [
+          { ...provider, regions: [us, { ...us, id: "eu", label: "Europe" }] },
+        ],
+      };
+      renderSheet(vi.fn());
+
+      fireEvent.click(screen.getByRole("combobox", { name: "Sandbox region" }));
+      fireEvent.click(screen.getByRole("option", { name: "Europe" }));
+
+      expect(questions().map((shape) => shape.region)).toEqual([
+        "us-east",
+        "eu",
+      ]);
+    });
+
+    it("asks about a picked size at once", () => {
+      catalogueInUse = catalogueWithShapes();
+      renderSheet(vi.fn());
+
+      fireEvent.click(screen.getByRole("combobox", { name: "Size" }));
+      fireEvent.click(
+        screen.getByRole("option", { name: /4 vCPU · 8 GB · 40 GB/ }),
+      );
+
+      expect(questions().map((shape) => shape.cpus)).toEqual([2, 4]);
+    });
+
+    it("asks nothing new when the name or an idle period is edited", () => {
+      renderSheet(vi.fn());
+
+      type("sandbox-shape-sheet-name", "My sandbox");
+      fireEvent.click(screen.getByRole("button", { name: CHANGE_LABEL }));
+      const resting = type("sandbox-shape-sheet-resting", "5");
+      fireEvent.blur(resting);
+
+      expect(questions().map((shape) => shape.cpus)).toEqual([2]);
     });
   });
 });

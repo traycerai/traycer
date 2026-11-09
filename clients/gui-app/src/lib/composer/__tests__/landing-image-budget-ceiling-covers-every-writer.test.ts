@@ -42,6 +42,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
+import { BOT_CONVERSATION_ATTACHMENT_MAX_BYTES } from "@traycer/protocol/host/bot/conversation-schemas";
 import {
   LANDING_IMAGE_MAX_BYTES_PER_IMAGE,
   LEGACY_STASH_IMAGE_MAX_BYTES,
@@ -165,6 +166,16 @@ const WRITERS = [
     path: "src/lib/composer/landing-image-move.ts",
     bound: PREPARED_IMAGE_POLICY.byteCeiling,
     why: "re-writes bytes another writer already admitted",
+  },
+  {
+    path: "src/lib/bots/bot-box-draft-storage.ts",
+    // No ceiling of its own: it stores the inline images a bot message box
+    // holds, so its bound is what the box's ingest (`use-bot-box-images.ts`)
+    // admits. A paste or drop prepares under PREPARED_IMAGE_POLICY. An image
+    // node copied in whole is not prepared, and is refused above the bot
+    // attachment cap.
+    bound: BOT_CONVERSATION_ATTACHMENT_MAX_BYTES,
+    why: "stores a bot box's inline images, which its ingest admits up to the bot attachment cap",
   },
 ] as const;
 

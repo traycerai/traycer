@@ -66,6 +66,7 @@ import type { BotOnboardingSetup } from "@traycer/protocol/host/bot/onboarding-s
 
 import type { BotTurnRef } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { BotChannelLanding } from "@/components/bots/bot-channel-view";
+import { botSwatchAt } from "@/lib/providers/profile-accent-color";
 import { readFocusedHostNotificationPresence } from "@/lib/notifications/notification-presence";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { makeOpenableNodeRef } from "@/stores/epics/canvas/types";
@@ -1836,5 +1837,73 @@ describe("<BotTabSurface /> focused notification presence", () => {
       epicId: "epic-behind",
       chatId: "chat-behind",
     });
+  });
+});
+describe("<BotTabSurface /> channel background", () => {
+  const TINT_CLASS = "bg-(--channel-tint)/10";
+
+  function header(): HTMLElement {
+    return screen.getByTestId("bot-channel-header");
+  }
+
+  function chooseBackground(background: number | null): void {
+    mocks.state.listAppearance = new Map([
+      [BOT_ID, { mark: null, swatch: null, background }],
+    ]);
+  }
+
+  afterEach(() => {
+    document.documentElement.classList.remove("dark");
+  });
+
+  it.each([false, true])(
+    "tints the header with the chosen swatch at one low opacity (dark: %s)",
+    (dark) => {
+      document.documentElement.classList.toggle("dark", dark);
+      chooseBackground(7);
+      render(surface());
+
+      expect(header().classList.contains(TINT_CLASS)).toBe(true);
+      expect(header().getAttribute("data-channel-background")).toBe("7");
+      expect(header().style.getPropertyValue("--channel-tint")).toBe(
+        botSwatchAt(7).color,
+      );
+    },
+  );
+
+  it("tints neither the bot column nor the composer nor the thread panel", () => {
+    chooseBackground(7);
+    render(surface());
+
+    for (const region of [
+      screen.getByTestId("stub-sidebar"),
+      screen.getByTestId("stub-channel"),
+    ]) {
+      expect(region.hasAttribute("data-channel-background")).toBe(false);
+      expect(region.querySelector(`[data-channel-background]`)).toBeNull();
+      expect(region.classList.contains(TINT_CLASS)).toBe(false);
+    }
+    expect(
+      screen
+        .getByRole("textbox", { name: "Channel box" })
+        .closest(`.${CSS.escape(TINT_CLASS)}`),
+    ).toBeNull();
+    expect(
+      screen
+        .getByRole("textbox", { name: "Thread box" })
+        .closest(`.${CSS.escape(TINT_CLASS)}`),
+    ).toBeNull();
+  });
+
+  it.each([
+    ["names no appearance", null],
+    ["chose none", "none"],
+  ] as const)("keeps the page's own header when the bot %s", (_name, how) => {
+    if (how === "none") chooseBackground(null);
+    render(surface());
+
+    expect(header().classList.contains(TINT_CLASS)).toBe(false);
+    expect(header().hasAttribute("data-channel-background")).toBe(false);
+    expect(header().style.getPropertyValue("--channel-tint")).toBe("");
   });
 });

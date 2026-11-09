@@ -238,7 +238,7 @@ describe("what a depiction draws", () => {
         DEFAULT_ARRANGEMENT,
       ),
     );
-    expect(screen.getByLabelText("Attach image")).toBeTruthy();
+    expect(screen.getByLabelText("Attach")).toBeTruthy();
   });
 
   it("draws one rail icon per panel, from the sidebar's own definition", () => {

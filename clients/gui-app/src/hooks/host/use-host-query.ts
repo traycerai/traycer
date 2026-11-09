@@ -653,6 +653,12 @@ export function useHostMutation<
  * of that one's answer. `null` for a caller with nothing to cancel: its call
  * stays on `requestWithResponseTimeout`, the entry point the local
  * maintenance fallback client intercepts.
+ *
+ * `idempotencyKey` and `requiredHostMethodVersion` are honoured here as they
+ * are on {@link useHostMutation}: a dispatch that names either, or a signal,
+ * goes through `requestWithOptions`, the one entry point that carries all
+ * four. A long upload needs its digest key and its version floor as much as
+ * its budget.
  */
 export function useHostMutationWithResponseTimeout<
   Registry extends VersionedRpcRegistry,
@@ -693,8 +699,12 @@ export function useHostMutationWithResponseTimeout<
         }
         const signal =
           args.signalFor === null ? undefined : args.signalFor(variables);
+        const idempotencyKey = args.idempotencyKey?.(variables) ?? null;
+        const requirement = args.requiredHostMethodVersion?.(variables) ?? null;
         const response =
-          signal === undefined
+          signal === undefined &&
+          idempotencyKey === null &&
+          requirement === null
             ? await client.requestWithResponseTimeout(
                 args.method,
                 args.mapVariables(variables),
@@ -705,8 +715,8 @@ export function useHostMutationWithResponseTimeout<
                 args.mapVariables(variables),
                 {
                   responseTimeoutMs: args.responseTimeoutMs,
-                  idempotencyKey: null,
-                  requiredHostMethodVersion: null,
+                  idempotencyKey,
+                  requiredHostMethodVersion: requirement,
                   signal,
                 },
               );

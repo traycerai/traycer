@@ -1,4 +1,5 @@
 import type { JsonContent } from "./registry";
+import { fileAttachmentAttrsSchema } from "./file-attachment";
 import { isDefaultGithubMentionHost } from "./github-mention-host";
 
 export enum ContextType {
@@ -1170,6 +1171,14 @@ function serializeSlashCommand(
   return `/${commandName}`;
 }
 
+// The file's name in place, in both mention formats. A node whose attrs are
+// not a file attachment's renders as an unknown node would.
+function serializeFileAttachment(node: JsonContent): string {
+  const attrs = fileAttachmentAttrsSchema.safeParse(node.attrs);
+  if (!attrs.success) return extractTextFromNode(node);
+  return `[file: ${attrs.data.fileName}]`;
+}
+
 function serializeText(node: JsonContent): string {
   if (node.type !== "text" || !node.text) return "";
   return serializeTextRun([node]);
@@ -2127,6 +2136,8 @@ function serializeNode(node: JsonContent, ctx: SerializerContext): string {
       return serializeMention(node, ctx);
     case "slashCommand":
       return serializeSlashCommand(node, ctx);
+    case "fileAttachment":
+      return serializeFileAttachment(node);
     default:
       return extractTextFromNode(node);
   }

@@ -1212,6 +1212,62 @@ describe("<UserMessageBody /> agent messages", () => {
     ]);
   });
 
+  it.each([
+    ["pending", "pending", true],
+    ["stored", null, false],
+  ] as const)(
+    "holds Send edit while an edited message's file is %s",
+    async (_label, uploadState, held) => {
+      const actions = editingUserActions(INLINE_EDIT_INITIAL_CONTENT);
+      const baseEditing = actions.editing;
+      if (baseEditing === null) throw new Error("expected editing actions");
+      const withFile: JsonContent = {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [
+              {
+                type: "fileAttachment",
+                attrs: {
+                  id: "file-1",
+                  hash: "a".repeat(64),
+                  fileName: "report.pdf",
+                  mediaType: "application/pdf",
+                  size: 10,
+                  uploadState,
+                },
+              },
+            ],
+          },
+        ],
+      };
+      render(
+        <TooltipProvider>
+          <UserMessageBody
+            message={{
+              ...plainUserMessage("Edit this message"),
+              structuredContent: INLINE_EDIT_INITIAL_CONTENT,
+            }}
+            actions={{
+              ...actions,
+              editing: {
+                ...baseEditing,
+                currentContent: withFile,
+                canSubmit: true,
+              },
+            }}
+          />
+        </TooltipProvider>,
+      );
+
+      const send = await screen.findByRole("button", { name: "Send edit" });
+      await waitFor(() => {
+        expect(send.getAttribute("disabled") !== null).toBe(held);
+      });
+    },
+  );
+
   it("adds a dropped image to the inline edit attachment strip", async () => {
     render(<InlineEditAttachmentHarness onSubmit={() => undefined} />);
     const editor = await screen.findByRole("textbox", { name: "Edit message" });

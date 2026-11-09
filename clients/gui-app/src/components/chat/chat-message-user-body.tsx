@@ -111,9 +111,10 @@ import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import type { ProviderId } from "@/components/home/data/landing-options";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import {
-  isAttachmentIngestPending,
+  composerAttachmentsHoldSend,
   useComposerHashPaste,
 } from "@/hooks/composer/use-composer-paste";
+import { containsPendingFileAttachment } from "@/lib/composer/file-attachments";
 import { useComposerPendingImageIngest } from "@/hooks/composer/use-composer-pending-image-ingest";
 import { useWorkspaceMentionRoots } from "@/hooks/composer/use-workspace-mention-roots";
 import { useEpicAttachmentBytesPresence } from "@/lib/attachments/use-attachment-blob-src";
@@ -794,11 +795,14 @@ function InlineUserMessageEditor({
     attachImageFiles,
     isIngestingImages,
     isResolvingFilePaths,
+    isAttachingFiles,
     runPendingImageJob,
   } = useComposerHashPaste(
     editorRef,
     runnerHost.fileDrops,
     resolvedMentionRoots,
+    // An edit keeps the files its message already carries; it attaches none.
+    null,
   );
   const {
     ingestPastedComposerImages,
@@ -809,10 +813,12 @@ function InlineUserMessageEditor({
     runPendingImageJob,
     draftId: null,
   });
-  const attachmentPending = isAttachmentIngestPending({
-    isIngestingImages,
-    isResolvingFilePaths,
-  });
+  // An edit attaches no files, but the message it edits can carry one that a
+  // rich paste brought in unconfirmed; it holds the send as on any composer.
+  const attachmentPending = composerAttachmentsHoldSend(
+    { isIngestingImages, isResolvingFilePaths, isAttachingFiles },
+    containsPendingFileAttachment(editing.currentContent),
+  );
 
   // Without this, the picker opens empty - nothing writes items into the store.
   useComposerPickerItems({

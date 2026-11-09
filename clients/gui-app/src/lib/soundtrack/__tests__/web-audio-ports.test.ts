@@ -5,7 +5,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { appLogger } from "@/lib/logger";
-import type { ClockRequests, MixTap } from "../mix-capture";
+import type { MixTap } from "../mix-capture";
 import { MIX_TUNING } from "../mix-tuning";
 import type { MixCapture, RecordingQuality } from "../recording";
 import type { SoundtrackPorts } from "../session";
@@ -19,12 +19,19 @@ const capture = vi.hoisted(() => ({
       (
         context: AudioContext,
         tap: MixTap,
-        clock: ClockRequests,
         quality: RecordingQuality,
       ) => Promise<MixCapture>
     >(),
 }));
 vi.mock("../mix-capture", () => ({ openMixCapture: capture.opened }));
+
+const MIX_SAMPLE_RATE = 48_000;
+// Deliberately NOT `MIX_SAMPLE_RATE`: a context the real constructor call
+// never asked for a rate from would come back at this rate instead, so the
+// "opens at the recording's rate" test can actually fail if production stops
+// requesting it. If this matched `MIX_SAMPLE_RATE`, that test would pass
+// whether or not `openWebAudioPorts` ever passed a `sampleRate` option.
+const DEFAULT_FAKE_SAMPLE_RATE = 44_100;
 
 const NO_CAPTURE: MixCapture = {
   sampleRate: 48_000,
@@ -74,6 +81,7 @@ class FakeAudioContext {
   readonly currentTime = 0;
   state: "running" | "suspended" | "closed" = "running";
   readonly destination = {};
+  readonly sampleRate: number;
   /** In the order made: the pause's own gain is the first. */
   readonly gains: FakeGainNode[] = [];
   readonly suspend = vi.fn<() => Promise<void>>(() => {
@@ -89,7 +97,8 @@ class FakeAudioContext {
     return Promise.resolve();
   });
 
-  constructor() {
+  constructor(options: { readonly sampleRate: number } | undefined) {
+    this.sampleRate = options?.sampleRate ?? DEFAULT_FAKE_SAMPLE_RATE;
     FakeAudioContext.instances.push(this);
   }
 
@@ -229,67 +238,20 @@ describe("openWebAudioPorts pause", () => {
   });
 });
 
-describe("openWebAudioPorts clock requests", () => {
-  it("runs a capture's start listeners ahead of the context's resume, and not after it unlistens", async () => {
-    capture.opened.mockResolvedValue(NO_CAPTURE);
-    const { ports, context } = openPorts();
-    await ports.captureMix("compressed");
-    const clock = capture.opened.mock.calls[0][2];
-    const listener = vi.fn<() => void>();
-    const unlisten = clock.onStart(listener);
-
-    ports.pause();
-    await advance(SUSPEND_AFTER_MS);
-    ports.resume(() => undefined);
-
-    expect(listener).toHaveBeenCalledTimes(1);
-    expect(listener.mock.invocationCallOrder[0]).toBeLessThan(
-      context.resume.mock.invocationCallOrder[0],
-    );
-
-    unlisten();
-    ports.pause();
-    ports.resume(() => undefined);
-    expect(listener).toHaveBeenCalledTimes(1);
-    expect(context.resume).toHaveBeenCalledTimes(2);
+describe("openWebAudioPorts captureMix", () => {
+  it("opens the context at the recording's rate, so a captured frame and an encoded sample are the same thing", () => {
+    const { context } = openPorts();
+    expect(context.sampleRate).toBe(MIX_SAMPLE_RATE);
   });
 
-  it("runs a capture's stop listeners once the suspend has taken hold, and not after it unlistens", async () => {
+  it("opens a capture with the context and a tap, and nothing else", async () => {
     capture.opened.mockResolvedValue(NO_CAPTURE);
     const { ports, context } = openPorts();
     await ports.captureMix("compressed");
-    const clock = capture.opened.mock.calls[0][2];
-    const listener = vi.fn<() => void>();
-    const unlisten = clock.onStop(listener);
 
-    ports.pause();
-    await advance(SUSPEND_AFTER_MS);
-    expect(listener).toHaveBeenCalledTimes(1);
-
-    unlisten();
-    ports.resume(() => undefined);
-    ports.pause();
-    await advance(SUSPEND_AFTER_MS);
-    expect(context.suspend).toHaveBeenCalledTimes(2);
-    expect(listener).toHaveBeenCalledTimes(1);
-  });
-
-  it("runs no stop listener, and logs it, when the context will not suspend", async () => {
-    const warn = vi.spyOn(appLogger, "warn").mockReturnValue(undefined);
-    capture.opened.mockResolvedValue(NO_CAPTURE);
-    const { ports, context } = openPorts();
-    await ports.captureMix("compressed");
-    const listener = vi.fn<() => void>();
-    capture.opened.mock.calls[0][2].onStop(listener);
-    context.suspend.mockImplementationOnce(() =>
-      Promise.reject(new Error("the context is closed")),
-    );
-
-    ports.pause();
-    await advance(SUSPEND_AFTER_MS);
-
-    expect(listener).not.toHaveBeenCalled();
-    expect(warn).toHaveBeenCalledTimes(1);
-    warn.mockRestore();
+    expect(capture.opened).toHaveBeenCalledTimes(1);
+    const [calledContext, , quality] = capture.opened.mock.calls[0];
+    expect(calledContext).toBe(context);
+    expect(quality).toBe("compressed");
   });
 });

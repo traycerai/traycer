@@ -2,7 +2,10 @@ import path from "node:path";
 import {
   createAgentRequestSchemaV32,
   createAgentResponseSchema,
+  canReceiveA2AMessages,
   type CreateAgentWorkspace,
+  guiHarnessIdSchema,
+  tuiHarnessIdSchema,
 } from "@traycer/protocol/host/agent/shared";
 import { AGENT_CREATE_SERVICE_TIER_REQUIRED_HOST_VERSION } from "@traycer/protocol/host/registry";
 import {
@@ -97,6 +100,7 @@ export function buildAgentCreateCommand(opts: {
       // The CLI has no routing flag: the agent follows the device's routing.
       routing: null,
     });
+    assertSurfaceHarnessPair(request.surface, request.harnessId);
     const result = await toAgentCliError(
       request.serviceTier === undefined
         ? callHostRpc("agent.create", request)
@@ -117,6 +121,41 @@ export function buildAgentCreateCommand(opts: {
         : `${agentId}\nWarnings:\n${warnings.map((warning) => `- ${warning}`).join("\n")}`;
     return { data: { agentId, warnings }, human, exitCode: 0 };
   };
+}
+
+// The host refuses these requests with an untyped error, which a caller sees
+// (and Sentry records) as an unexpected failure. They are a mistake in the
+// flags, so they fail here with the allowed values instead. The terminal set
+// is the host's own admission rule: a terminal child must be able to receive
+// agent messages, which leaves the other ids in `tuiHarnessIdSchema` (kept for
+// persisted records) unusable here.
+function assertSurfaceHarnessPair(
+  surface: "gui" | "tui" | null,
+  harnessId: string | null,
+): void {
+  if (surface === null) return;
+  const supported: readonly string[] =
+    surface === "gui"
+      ? guiHarnessIdSchema.options
+      : tuiHarnessIdSchema.options.filter((id) =>
+          canReceiveA2AMessages({ surface: "tui", harnessId: id }),
+        );
+  if (harnessId === null) {
+    throw cliError({
+      code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+      message: `traycer: --surface ${surface} requires --harness (one of: ${supported.join(", ")}).`,
+      details: null,
+      exitCode: 1,
+    });
+  }
+  if (!supported.includes(harnessId)) {
+    throw cliError({
+      code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+      message: `traycer: harness '${harnessId}' does not support the ${surface} surface (one of: ${supported.join(", ")}).`,
+      details: null,
+      exitCode: 1,
+    });
+  }
 }
 
 export function parseAgentCreateWorkspace(input: {

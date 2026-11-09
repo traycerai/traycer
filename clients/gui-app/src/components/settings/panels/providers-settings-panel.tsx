@@ -42,7 +42,6 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
-import { Plus } from "lucide-react";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { useProvidersSetEnabled } from "@/hooks/providers/use-providers-set-enabled-mutation";
 import { useProvidersSettingsFileStatus } from "@/hooks/providers/use-providers-settings-file-status-query";
@@ -70,14 +69,8 @@ import {
 } from "@/components/settings/host-scope/use-host-scope";
 import { LocalRowNote } from "@/components/settings/environment/local-row-note";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
-import {
-  ambientLoginConfigured,
-  providerRailStateWord,
-} from "./provider-rail-state-word";
-import {
-  isProviderAmbientAuthenticated,
-  isProviderAmbientSignedOut,
-} from "@/lib/providers/provider-ambient-auth";
+import { providerRailStateWord } from "./provider-rail-state-word";
+
 import type { HostRpcRegistry } from "@/lib/host";
 import { HostRuntimeContext } from "@/lib/host/runtime";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
@@ -120,7 +113,6 @@ import { ProviderRailControls } from "./provider-rail-controls";
 import {
   DEFAULT_PROVIDER_RAIL_VIEW,
   filterProviderRail,
-  isProviderRailViewActive,
   type ProviderRailView,
 } from "./provider-rail-filter";
 import { TerminalAgentArgsSection } from "./terminal-agent-args-section";
@@ -1143,13 +1135,6 @@ function ProvidersRailLayout({
     () => filterProviderRail(orderedProviders, railView),
     [orderedProviders, railView],
   );
-  const railFiltered = isProviderRailViewActive(railView);
-  // One disclosure for both widths. Both lists stay mounted: the master-detail
-  // shell shows one with `md:` and hides the other, including on a wide window
-  // of the installed phone layout, where the viewport hook and that class
-  // would disagree.
-  const [addProviderOpen, setAddProviderOpen] = useState(false);
-
   const onSelectProvider = (providerId: ProviderId): void => {
     setInitialFocus({ harnessId: null, profileId: null, startSignIn: false });
     setActiveId(providerId);
@@ -1169,21 +1154,13 @@ function ProvidersRailLayout({
     // Below md the same wrapping list stacks above the detail pane. It lists
     // `orderedProviders`, not the rail's filtered `visibleProviders` — search
     // is a pointer affordance and must never narrow what a phone can reach.
-    // A search that is active shows its matches flat; an idle rail groups
-    // unconfigured providers behind Add provider.
     <SettingsMasterDetail
-      railLabel="Configured providers"
+      railLabel="Providers"
       mobileSelect={
-        <nav
-          aria-label="Configured providers"
-          className="flex min-w-0 flex-col gap-1"
-        >
+        <nav aria-label="Providers" className="flex min-w-0 flex-col gap-1">
           <HostProviderRailList
             providers={orderedProviders}
             activeId={active.providerId}
-            grouped
-            addOpen={addProviderOpen}
-            onToggleAdd={() => setAddProviderOpen((open) => !open)}
             onSelect={onSelectProvider}
           />
         </nav>
@@ -1208,9 +1185,6 @@ function ProvidersRailLayout({
               <HostProviderRailList
                 providers={visibleProviders}
                 activeId={active.providerId}
-                grouped={!railFiltered}
-                addOpen={addProviderOpen}
-                onToggleAdd={() => setAddProviderOpen((open) => !open)}
                 onSelect={onSelectProvider}
               />
             )}
@@ -1237,27 +1211,6 @@ function ProvidersRailLayout({
   );
 }
 
-/**
- * A provider already has something on this computer: it is off, it has a
- * profile or a key, its own login has a verdict, or that check is still
- * running. Anything else (nothing known, or a check that did not answer)
- * sits behind Add provider.
- */
-function hostProviderConfigured(state: ProviderCliState): boolean {
-  if (!state.enabled) return true;
-  if (state.profiles.some((profile) => profile.kind === "managed")) return true;
-  if (state.apiKey.configured) return true;
-  if (isProviderAmbientSignedOut(state)) return true;
-  if (
-    state.providerId !== "traycer" &&
-    (isProviderAmbientAuthenticated(state) || ambientLoginConfigured(state))
-  ) {
-    return true;
-  }
-  if (state.authPending) return true;
-  return false;
-}
-
 function managedProfileCountWord(managed: number): string | null {
   if (managed === 0) return null;
   if (managed === 1) return "1 profile";
@@ -1282,25 +1235,11 @@ function hostRailSubtitle(state: ProviderCliState): string | null {
 function HostProviderRailList(props: {
   readonly providers: readonly ProviderCliState[];
   readonly activeId: ProviderId;
-  readonly grouped: boolean;
-  readonly addOpen: boolean;
-  readonly onToggleAdd: () => void;
   readonly onSelect: (providerId: ProviderId) => void;
 }): ReactNode {
-  const primary = props.grouped
-    ? props.providers.filter((state) => hostProviderConfigured(state))
-    : props.providers;
-  const unconfigured = props.grouped
-    ? props.providers.filter((state) => !hostProviderConfigured(state))
-    : [];
-  const selectedFolded =
-    unconfigured.find((state) => state.providerId === props.activeId) ?? null;
-  const behindAdd = unconfigured.filter(
-    (state) => state.providerId !== props.activeId,
-  );
   return (
     <div className="flex min-w-0 flex-col gap-1">
-      {primary.map((state) => (
+      {props.providers.map((state) => (
         <HostProviderRailButton
           key={state.providerId}
           state={state}
@@ -1308,38 +1247,6 @@ function HostProviderRailList(props: {
           onSelect={props.onSelect}
         />
       ))}
-      {selectedFolded === null ? null : (
-        <HostProviderRailButton
-          state={selectedFolded}
-          selected
-          onSelect={props.onSelect}
-        />
-      )}
-      {behindAdd.length === 0 ? null : (
-        <button
-          type="button"
-          aria-expanded={props.addOpen}
-          className={hostRailButtonClass(false)}
-          onClick={props.onToggleAdd}
-        >
-          <span className="flex min-w-0 items-start gap-1.5">
-            <Plus className="mt-0.5 size-3.5 shrink-0" />
-            <span className="min-w-0 whitespace-normal break-words">
-              Add provider
-            </span>
-          </span>
-        </button>
-      )}
-      {props.addOpen
-        ? behindAdd.map((state) => (
-            <HostProviderRailButton
-              key={state.providerId}
-              state={state}
-              selected={false}
-              onSelect={props.onSelect}
-            />
-          ))
-        : null}
     </div>
   );
 }

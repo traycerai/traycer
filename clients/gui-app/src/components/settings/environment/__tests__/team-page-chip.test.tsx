@@ -207,10 +207,10 @@ describe("the team page chip", () => {
     await waitFor(() => {
       expect(chipText()).toBe("✓ On Mac mini");
     });
-    await userEvent.click(
-      await screen.findByRole("button", { name: "Edit NODE_ENV value" }),
-    );
-    await userEvent.type(screen.getByLabelText("NODE_ENV value"), "!");
+    const editor = await screen.findByRole("textbox", {
+      name: "NODE_ENV value",
+    });
+    await userEvent.type(editor, "!");
     await userEvent.click(
       within(screen.getByRole("region", { name: "NODE_ENV" })).getByRole(
         "button",

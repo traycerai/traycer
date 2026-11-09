@@ -30,8 +30,8 @@ import { SettingsGroup } from "@/components/settings/settings-group";
 
 /**
  * Overview ▸ Installation: what the account knows about this host, how it is
- * installed and started, and removing it - a compact install line or the
- * install record, Details including account facts, the OS service, this computer's
+ * installed and started, and removing it - the
+ * install record and account facts, the OS service, this computer's
  * command-line tools hint, and the Danger zone, last.
  */
 export interface HostOverviewInstallationTabProps {
@@ -41,7 +41,7 @@ export interface HostOverviewInstallationTabProps {
   /**
    * The account's record of this host, or `null` for a host the account has
    * no record of (reachable, but not in the account), which gets no account
-   * facts in Details - as it gets no Danger zone.
+   * facts - as it gets no Danger zone.
    */
   readonly about: HostOverviewAboutSource | null;
   /** `host.getInstallationInfo` support, or why it is missing. */
@@ -101,15 +101,7 @@ export function HostOverviewInstallationTab(
           runningVersion={props.runningVersion}
         />
       ) : null}
-      <InstallationDetails
-        about={props.about}
-        rows={detailRows}
-        serviceManifestLine={
-          live && props.service?.degrade === null
-            ? props.service.manifestLine
-            : null
-        }
-      />
+      <InstallationFacts about={props.about} rows={detailRows} />
       <HostOverviewInstallationHostGroups {...props} />
       {/* A bridge fact about THIS computer's CLI, not a host read, so it
           stays while the host is down. */}
@@ -128,9 +120,8 @@ export function HostOverviewInstallationTab(
 }
 
 /**
- * A missing install record is one line. A record that arrived keeps the facts
- * that did not move into Details (source, when it was installed, verification,
- * the digest, and the install id when that id is not the running version).
+ * A missing install record is one line. A record that arrived shows its source,
+ * installation date, verification, digest and differing install id.
  */
 function HostOverviewInstallStatus(props: {
   readonly record: InstallationDetailsRecord | null;
@@ -167,45 +158,24 @@ function HostOverviewInstallStatus(props: {
   );
 }
 
-function InstallationDetails(props: {
+function InstallationFacts(props: {
   readonly about: HostOverviewAboutSource | null;
   readonly rows: readonly InstallationDetailRow[];
-  readonly serviceManifestLine: string | null;
 }): ReactNode {
-  if (
-    props.about === null &&
-    props.rows.length === 0 &&
-    props.serviceManifestLine === null
-  ) {
+  if (props.about === null && props.rows.length === 0) {
     return null;
   }
   return (
-    <details
-      className="min-w-0"
-      data-testid="host-overview-installation-details"
-    >
-      <summary className="cursor-pointer text-ui-sm font-medium text-foreground">
-        Details
-      </summary>
-      <dl className="mt-2 flex min-w-0 flex-col gap-3">
+    <section className="min-w-0" aria-label="About this host">
+      <HostOverviewFacts testId="host-overview-about-facts">
         {props.about === null ? null : (
           <HostOverviewAboutThisHost {...props.about} />
         )}
         {props.rows.map((row) => (
           <InstallationFact key={row.testId} row={row} />
         ))}
-        {props.serviceManifestLine === null ? null : (
-          <HostOverviewFact
-            label="OS service"
-            value={props.serviceManifestLine}
-            kind="code"
-            tone="default"
-            copy={null}
-            testId="host-overview-service-manifest"
-          />
-        )}
-      </dl>
-    </details>
+      </HostOverviewFacts>
+    </section>
   );
 }
 
@@ -232,7 +202,7 @@ function InstallationFact(props: {
  * cards or a second "can't reach" notice under the header's. A version that
  * answers neither is one line too, saying what an update brings back.
  *
- * A record that loaded is drawn above Details. This function still owns the
+ * A record that loaded is drawn above the account facts. This function still owns the
  * failure notices, which are not "no record".
  */
 function HostOverviewInstallationHostGroups(

@@ -11,6 +11,8 @@ export interface BotSessionAccess extends BotSendNames {
   readonly botId: string;
   /** The host serving the tab: a thread's post is read through it. */
   readonly hostId: string;
+  /** A member's picture, as the channel shows it; `null` where the directory has none. */
+  readonly memberAvatarUrl: (userId: string) => string | null;
   /**
    * The thread a thread's session answers in, and its post in the channel
    * (`null` while the thread list does not name it); `null` for the trunk,

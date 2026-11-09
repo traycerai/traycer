@@ -314,21 +314,8 @@ function installationPane(): HTMLElement {
   return screen.getByTestId("host-overview-tab-panel-installation");
 }
 
-function installationDetails(): HTMLDetailsElement {
-  const details = within(installationPane()).getByTestId(
-    "host-overview-installation-details",
-  );
-  if (!(details instanceof HTMLDetailsElement)) {
-    throw new Error("expected the Installation details disclosure");
-  }
-  return details;
-}
-
-/** Closed `<details>` content stays in the DOM, but a role query skips it. */
-function openInstallationDetails(): HTMLDetailsElement {
-  const details = installationDetails();
-  details.open = true;
-  return details;
+function inlineAbout(): HTMLElement {
+  return within(installationPane()).getByTestId("host-overview-about-facts");
 }
 
 const initialInnerWidth = window.innerWidth;
@@ -352,7 +339,7 @@ afterEach(() => {
 });
 
 describe("Overview ▸ Installation — account facts", () => {
-  it("shows the Added to account fact inside Details and copies the full host id", async () => {
+  it("shows Added to account and Host ID inline and copies the full id", async () => {
     const item = registryItem({});
     setReadyScope({
       isLocalMachine: false,
@@ -364,8 +351,13 @@ describe("Overview ▸ Installation — account facts", () => {
     mount(null);
     await selectHostOverviewTab("installation");
 
-    const details = installationDetails();
-    expect(details.open).toBe(false);
+    const details = inlineAbout();
+    expect(screen.queryByText("Details", { exact: true })).toBeNull();
+    expect(
+      within(details)
+        .getByRole("button", { name: "Copy host ID" })
+        .closest("details:not([open])"),
+    ).toBeNull();
     expect(within(details).getByText("Added to account")).toBeTruthy();
     const added = formatSettingsDate(Date.parse(item.createdAt), false);
     expect(
@@ -375,7 +367,7 @@ describe("Overview ▸ Installation — account facts", () => {
       within(details).getByTestId("host-overview-about-last-seen").textContent,
     ).toBe("Not seen since it was added");
 
-    const openDetails = openInstallationDetails();
+    const openDetails = inlineAbout();
     const hostId = within(openDetails).getByTestId(
       "host-overview-about-host-id",
     );
@@ -471,7 +463,7 @@ describe("Overview ▸ Installation — account facts", () => {
     mount(null);
     await selectHostOverviewTab("installation");
 
-    const details = openInstallationDetails();
+    const details = inlineAbout();
     expect(screen.queryByRole("tooltip")).toBeNull();
     // The copy button is the row's one focusable stop; focus alone, no
     // pointer, has to be enough to read the value the row shows shortened.
@@ -517,7 +509,7 @@ describe("Overview ▸ Installation — account facts", () => {
       "Offline",
     );
     expect(screen.getAllByText(/last seen/i)).toHaveLength(1);
-    const details = installationDetails();
+    const details = inlineAbout();
     expect(
       within(details).queryByTestId("host-overview-about-last-seen"),
     ).toBeNull();
@@ -561,7 +553,7 @@ describe("Overview ▸ Installation — account facts", () => {
     mount(null);
     await selectHostOverviewTab("installation");
 
-    const details = installationDetails();
+    const details = inlineAbout();
     expect(
       within(details).getByTestId("host-overview-about-last-seen").textContent,
     ).toBe("Not seen since it was added");
@@ -575,8 +567,8 @@ describe("Overview ▸ Installation — account facts", () => {
       within(details).getByTestId("host-overview-about-version").textContent,
     ).toBe("No version received by the account");
     expect(
-      within(details).queryByTestId("host-overview-about-platform"),
-    ).toBeNull();
+      within(details).getByTestId("host-overview-about-platform").textContent,
+    ).toBe("Not reported to the account");
     expect(
       within(details).queryByTestId("host-overview-about-architecture"),
     ).toBeNull();
@@ -707,7 +699,7 @@ describe("Overview ▸ Installation — Install record, open with no click", () 
     expect(screen.queryByTestId("host-overview-installation-empty")).toBeNull();
   });
 
-  it("withholds a cached install record after a failed refetch and uses account platform facts in Details", async () => {
+  it("withholds a cached install record after a failed refetch and uses inline account platform facts", async () => {
     let installationReads = 0;
     readyRemote(
       {
@@ -748,7 +740,7 @@ describe("Overview ▸ Installation — Install record, open with no click", () 
     expect(
       screen.queryByTestId("host-overview-install-record-facts"),
     ).toBeNull();
-    const details = openInstallationDetails();
+    const details = inlineAbout();
     expect(
       within(details).getByTestId("host-overview-about-platform").textContent,
     ).toBe("macOS · last account report");
@@ -893,13 +885,14 @@ describe("Overview ▸ Installation — OS service group", () => {
     expect(service.textContent).toContain("OS service");
     await waitFor(() => {
       expect(
-        within(openInstallationDetails()).getByTestId(
-          "host-overview-service-manifest",
-        ).textContent,
+        within(service).getByTestId("host-overview-service-manifest")
+          .textContent,
       ).toBe("ai.traycer.host · /tmp/ai.traycer.host.plist");
     });
     expect(
-      within(service).queryByTestId("host-overview-service-manifest"),
+      within(service)
+        .getByTestId("host-overview-service-manifest")
+        .closest("details:not([open])"),
     ).toBeNull();
     expect(
       within(service).getByTestId("host-overview-service-description")
@@ -940,9 +933,7 @@ describe("Overview ▸ Installation — OS service group", () => {
       within(service).queryByTestId("host-overview-service-deregister"),
     ).toBeNull();
     expect(
-      within(installationDetails()).queryByTestId(
-        "host-overview-service-manifest",
-      ),
+      within(service).queryByTestId("host-overview-service-manifest"),
     ).toBeNull();
   });
 });

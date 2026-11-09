@@ -51,7 +51,8 @@ vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostBinding: () => mocks.binding,
 }));
-vi.mock("@/providers/use-runner-host", () => ({
+vi.mock("@/providers/use-runner-host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/providers/use-runner-host")>()),
   useRunnerHost: () => ({
     refreshHostFleet: mocks.refreshHostFleet,
     signInUrl: "https://example.test",
@@ -76,9 +77,15 @@ vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   useAuthUser: () => ({ data: null }),
 }));
-vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
-  useSandboxCatalogue: () => ({ data: null }),
-}));
+vi.mock(
+  "@/hooks/sandboxes/use-sandbox-catalogue-query",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/sandboxes/use-sandbox-catalogue-query")
+    >()),
+    useSandboxCatalogue: () => ({ data: null }),
+  }),
+);
 vi.mock("@/hooks/sandboxes/use-sandbox-settings-status", () => ({
   useSandboxSettingsStatus: () => ({ ready: true, data: null }),
 }));
@@ -240,7 +247,6 @@ describe("pending chat Stop failures", () => {
     seedPendingMessage();
     renderPendingMessage();
 
-    await userEvent.click(await screen.findByRole("button", { name: "More" }));
     await userEvent.click(await screen.findByTestId("sandbox-setup-stop"));
 
     const alert = await screen.findByRole("alert");

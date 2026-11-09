@@ -27,6 +27,9 @@ export const CONSEQUENCES_WORDING_VERSION = 3;
 export const WINDOWS_SANDBOX_LIMITATION =
   "Windows sandboxes have no desktop or Computer Use.";
 
+export const SANDBOX_SETUP_CHARGES =
+  "Running the sandbox is charged separately from build work. Build work is charged once, even if the build fails. Keeping the result is charged as storage for as long as you keep it.";
+
 /** A configuration as copy reads it: Personal, or a team by its name. */
 export type SandboxConfigurationCopy =
   | { readonly kind: "personal" }
@@ -693,11 +696,6 @@ export const TASK_FILES = "Task files";
 
 export const HOST_LABEL = "Host";
 export const SESSIONS_UNKNOWN = "Sessions unknown · no report yet";
-
-/** The hover's session summary: how many, never their names. */
-export function hoverSessionCount(count: number): string {
-  return count === 1 ? "1 session" : `${count} sessions`;
-}
 
 /** A team sandbox to a reader authorized only over the task. */
 export function hoverTaskConfiguration(teamName: string | null): string {

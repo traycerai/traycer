@@ -1,12 +1,5 @@
 import { useConfigurationKey } from "@/components/settings/environment/use-configuration-key";
 import { useId, useState, type ReactNode } from "react";
-import { MoreHorizontal } from "lucide-react";
-import {
-  DropdownMenu,
-  DropdownMenuTrigger,
-  DropdownMenuContent,
-  DropdownMenuItem,
-} from "@/components/ui/dropdown-menu";
 import type { McpListData } from "@/hooks/providers/native-response-map";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -250,7 +243,39 @@ function McpServerRow(props: {
           </TeamViewingHostBinding>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <span className="flex items-center gap-2 text-ui-xs text-muted-foreground">
+          {enabled ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              aria-expanded={toolsOpen}
+              onClick={() => setToolsOpen((open) => !open)}
+            >
+              Tools
+            </Button>
+          ) : null}
+          {props.canEdit ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={props.onEdit}
+            >
+              Edit
+            </Button>
+          ) : null}
+          {props.canEdit && removable ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={pending}
+              onClick={() => setConfirming(true)}
+            >
+              Remove
+            </Button>
+          ) : null}
+          <span className="flex flex-wrap items-center gap-2 text-ui-xs text-muted-foreground">
             {serverSwitchLabel(enabled)}
             {props.canEdit && switchable ? (
               <Switch
@@ -283,44 +308,6 @@ function McpServerRow(props: {
               />
             ) : null}
           </span>
-          {enabled ? (
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              aria-expanded={toolsOpen}
-              onClick={() => setToolsOpen((open) => !open)}
-            >
-              Tools
-            </Button>
-          ) : null}
-          {props.canEdit ? (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label={`More for ${server.name}`}
-                >
-                  <MoreHorizontal />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem onSelect={props.onEdit}>
-                  Edit
-                </DropdownMenuItem>
-                {removable ? (
-                  <DropdownMenuItem
-                    disabled={pending}
-                    onSelect={() => setConfirming(true)}
-                  >
-                    Remove
-                  </DropdownMenuItem>
-                ) : null}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          ) : null}
         </div>
       </div>
       <RemoveServerDialog
@@ -564,7 +551,83 @@ function McpToolReads(props: {
   );
 }
 
-/** One tool inventory, with provider-specific settings disclosed only when they differ. */
+interface McpToolProviderState {
+  readonly providerId: ProviderId;
+  readonly enabled: boolean;
+}
+
+/**
+ * Provider switches for one tool. A single provider that is the only one
+ * using the server keeps the switch beside the tool name.
+ */
+function McpToolProviderControls(props: {
+  readonly serverName: string;
+  readonly toolName: string;
+  readonly providers: readonly ProviderId[];
+  readonly states: readonly McpToolProviderState[];
+  readonly canEdit: boolean;
+  readonly pending: boolean;
+  readonly onToggle: (providerId: ProviderId, next: boolean) => void;
+}): ReactNode {
+  const named =
+    props.providers.length > 1 ||
+    props.states.length !== props.providers.length;
+  if (!named) return null;
+  return (
+    <div className="flex flex-col gap-2">
+      {props.providers.map((providerId) => {
+        const state = props.states.find(
+          (entry) => entry.providerId === providerId,
+        );
+        return (
+          <McpToolProviderControl
+            key={providerId}
+            serverName={props.serverName}
+            toolName={props.toolName}
+            providerId={providerId}
+            enabled={state === undefined ? null : state.enabled}
+            canEdit={props.canEdit}
+            pending={props.pending}
+            onToggle={(next) => props.onToggle(providerId, next)}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+function McpToolProviderControl(props: {
+  readonly serverName: string;
+  readonly toolName: string;
+  readonly providerId: ProviderId;
+  readonly enabled: boolean | null;
+  readonly canEdit: boolean;
+  readonly pending: boolean;
+  readonly onToggle: (next: boolean) => void;
+}): ReactNode {
+  const label = providerDisplayName(props.providerId);
+  const listed = props.enabled !== null;
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+      <span className="min-w-0 wrap-anywhere text-ui-xs text-muted-foreground">
+        {listed ? label : `${label} · Not listed`}
+      </span>
+      {listed ? (
+        <Switch
+          aria-label={`${props.serverName} ${label} ${props.toolName}`}
+          checked={props.enabled}
+          disabled={!props.canEdit || props.pending}
+          onCheckedChange={props.onToggle}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * One name per tool. The switch beside the name writes every provider that
+ * listed the tool. Each of those providers keeps its own switch on the row.
+ */
 function SharedMcpServerTools(props: {
   readonly server: EnvironmentMcpServer;
   readonly providers: readonly ProviderId[];
@@ -671,11 +734,10 @@ function SharedMcpToolInventory(props: {
       {[...tools].map(([name, states]) => {
         const enabled = states.every((state) => state.enabled);
         const mixed = !enabled && states.some((state) => state.enabled);
-        const differs = mixed || states.length !== props.providers.length;
         const descriptionId = `${mixedDescriptionId}-${encodeURIComponent(name)}`;
         return (
-          <div key={name} className="flex flex-col gap-1">
-            <div className="flex items-start justify-between gap-3">
+          <div key={name} className="flex flex-col gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
               <span className="min-w-0 wrap-anywhere text-ui-sm">{name}</span>
               {mixed ? (
                 <span
@@ -699,39 +761,15 @@ function SharedMcpToolInventory(props: {
                 }
               />
             </div>
-            {differs ? (
-              <details className="text-ui-xs text-muted-foreground">
-                <summary className="cursor-pointer">
-                  Differs by provider
-                </summary>
-                <div className="flex flex-col gap-2 pt-2">
-                  {props.providers.map((id) => {
-                    const state = states.find(
-                      (entry) => entry.providerId === id,
-                    );
-                    return (
-                      <div
-                        key={id}
-                        className="flex items-center justify-between gap-3"
-                      >
-                        <span className="min-w-0 wrap-anywhere">
-                          {providerDisplayName(id)}
-                          {state === undefined ? " · Not listed" : ""}
-                        </span>
-                        {state === undefined ? null : (
-                          <Switch
-                            aria-label={`${props.server.name} ${providerDisplayName(id)} ${name}`}
-                            checked={state.enabled}
-                            disabled={!props.canEdit || putItem.isPending}
-                            onCheckedChange={(next) => toggle(name, [id], next)}
-                          />
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </details>
-            ) : null}
+            <McpToolProviderControls
+              serverName={props.server.name}
+              toolName={name}
+              providers={props.providers}
+              states={states}
+              canEdit={props.canEdit}
+              pending={putItem.isPending}
+              onToggle={(providerId, next) => toggle(name, [providerId], next)}
+            />
           </div>
         );
       })}

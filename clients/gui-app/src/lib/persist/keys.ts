@@ -519,6 +519,15 @@ export const PERSIST_STORES = [
     leaf: "bot-pane-widths",
     kind: "static",
   },
+  // What each bot channel's and thread's message box holds unsent, kept on
+  // this device across closing Tracy and restarting (`bot-drafts-store.ts`).
+  // Image bytes live in the composer image store; the drafts name their
+  // hashes.
+  {
+    camelName: "botBoxDrafts",
+    leaf: "bot-box-drafts",
+    kind: "static",
+  },
   // The channel column's arrangement, one per device: the sections' order,
   // each section's channels' order, the collapsed sections
   // (`bot-column-layout-store.ts`).

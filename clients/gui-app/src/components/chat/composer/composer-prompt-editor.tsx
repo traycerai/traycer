@@ -25,6 +25,10 @@ import {
   type ComposerEditorIncarnation,
 } from "@/lib/composer/composer-editor-incarnation";
 import type { MentionAttachment } from "@/lib/composer/types";
+import type {
+  ComposerFileAttachmentAttrs,
+  FileNodeSettlement,
+} from "@/lib/composer/file-attachments";
 import { isMobileApp } from "@/lib/mobile-app";
 import { cn } from "@/lib/utils";
 import {
@@ -177,6 +181,23 @@ export interface ComposerPromptEditorHandle {
    */
   readonly beginPathInsertion: () => PathInsertionCommit | null;
   readonly removeImageAttachmentById: (id: string) => void;
+  /**
+   * Insert one pending file node at the caret. `false` when the editor is gone,
+   * so the caller uploads nothing. The node's later life (stored, or removed on
+   * a failed upload) is its node view's, not the handle's.
+   */
+  readonly insertFileAttachment: (
+    attrs: ComposerFileAttachmentAttrs,
+  ) => boolean;
+  /**
+   * Apply an upload's outcome to the file node `id` in the live document.
+   * `false` when the editor is not ready or holds no such node; the caller then
+   * settles the persisted draft instead.
+   */
+  readonly settleFileAttachment: (
+    id: string,
+    settlement: FileNodeSettlement,
+  ) => boolean;
   /**
    * Flip a pending base64 image node (located by `id`) to its stored content
    * hash IN PLACE, preserving its document position. A landing paste inserts
@@ -759,6 +780,22 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     [editor],
   );
 
+  const insertFileAttachment = useCallback(
+    (attrs: ComposerFileAttachmentAttrs): boolean => {
+      if (editor === null || editor.isDestroyed) return false;
+      return editor.chain().focus().insertFileAttachment(attrs).run();
+    },
+    [editor],
+  );
+
+  const settleFileAttachment = useCallback(
+    (id: string, settlement: FileNodeSettlement): boolean => {
+      if (editor === null || editor.isDestroyed) return false;
+      return editor.commands.settleFileAttachmentById(id, settlement);
+    },
+    [editor],
+  );
+
   const rewriteImageAttachmentHashById = useCallback(
     (id: string, rewrite: ImageAttachmentRewrite): boolean => {
       if (editor === null || editor.isDestroyed) return false;
@@ -839,6 +876,8 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
       insertMentionAttachment,
       beginPathInsertion,
       removeImageAttachmentById,
+      insertFileAttachment,
+      settleFileAttachment,
       rewriteImageAttachmentHashById,
       insertDictatedText,
       dismissActiveSuggestion,
@@ -856,11 +895,13 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
       insertImageAttachments,
       insertMentionAttachment,
       insertDictatedText,
+      insertFileAttachment,
       isEmpty,
       isReady,
       removeImageAttachmentById,
       rewriteImageAttachmentHashById,
       setContent,
+      settleFileAttachment,
       syncContent,
     ],
   );

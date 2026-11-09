@@ -774,6 +774,7 @@ const EXPECTED_SECTION_GROUPS: ReadonlyArray<
   ["mcp-servers", "personal"],
   ["skills", "personal"],
   ["permissions", "personal"],
+  ["agent-memories", "personal"],
   ["agents", "personal"],
   ["fallback", "personal"],
   ["shell", "personal"],
@@ -949,7 +950,7 @@ describe("<SettingsSidebar /> scope groups", () => {
     expect(aside.contains(picker)).toBe(true);
   });
 
-  it("keeps the Hosts group and titles the rail picker View host without an introduction", async () => {
+  it("keeps the Hosts group and introduces the rail picker", async () => {
     const { hostScopeOptionFixture } =
       await import("@/components/settings/host-scope/host-scope-fixture");
     const member = hostScopeOptionFixture({
@@ -978,11 +979,11 @@ describe("<SettingsSidebar /> scope groups", () => {
 
     expect(screen.getByRole("heading", { name: "Hosts" })).not.toBeNull();
     fireEvent.click(screen.getByTestId("settings-host-switcher"));
-    expect(screen.getByText("View host")).not.toBeNull();
-    expect(screen.queryByText("Look at another machine")).toBeNull();
+    expect(screen.getByText("Look at another host")).not.toBeNull();
     expect(
-      screen.queryByText("Changes what this window shows. Nothing is created."),
-    ).toBeNull();
+      screen.getByText("Changes what this window shows. Nothing is created."),
+    ).not.toBeNull();
+    expect(screen.queryByText("View host")).toBeNull();
     expect(
       screen.getByTestId("settings-host-switcher-option-host-member"),
     ).not.toBeNull();
@@ -1019,6 +1020,7 @@ describe("<SettingsSidebar /> scope groups", () => {
       "usage",
       "credits",
       "permissions",
+      "agent-memories",
       "sandboxes",
       "notifications",
     ]) {
@@ -1098,6 +1100,7 @@ describe("<SettingsSidebar /> Environment pick", () => {
     "MCP servers",
     "Skills",
     "Permissions",
+    "Agent memories",
     "Agents",
     "Model routing",
     "Variables & shells",
@@ -1126,6 +1129,7 @@ describe("<SettingsSidebar /> Environment pick", () => {
     expect(environmentRows()).toEqual([
       "Providers",
       "Permissions",
+      "Agent memories",
       "Agents",
       "Model routing",
       "Variables & shells",
