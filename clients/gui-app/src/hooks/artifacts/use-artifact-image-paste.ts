@@ -317,11 +317,12 @@ export function useArtifactImagePaste(
     }),
     [beginPathInsertion, runnerHost.fileDrops],
   );
-  const paste = useComposerPasteEvents(
+  const paste = useComposerPasteEvents({
     imageIngest,
     insertAttrs,
     filePaths,
     captureImageInsertion,
-  );
+    fileAttach: null,
+  });
   return { supported: operations.supported, paste };
 }

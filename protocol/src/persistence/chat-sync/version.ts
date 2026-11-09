@@ -192,6 +192,10 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 // still-unreleased-minor rule. Defaulted `null`, so an older record parses
 // unchanged and a block's raw re-emission carries the key through an older
 // reader. No reader floor: an older reader draws the divider it always did.
+// 1.13 also carries `multiSelect` on a bot's question (a `chat.subscribe@1.43`
+// field), on the same rule. Optional, so an older record parses unchanged and
+// reads as one pick, and a row's raw re-emission carries the key through an
+// older reader. No reader floor: an older reader draws a one-pick card.
 export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 13 } as const;
 
 export type ChatSyncSchemaVersion = typeof CHAT_SYNC_SCHEMA_VERSION;

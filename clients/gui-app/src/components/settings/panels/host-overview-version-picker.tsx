@@ -104,6 +104,10 @@ export function VersionPicker(
       </div>
       <div className="overflow-hidden rounded-md border border-border/40">
         <div className="flex flex-col gap-3 px-4 py-3">
+          <p className="wrap-anywhere text-ui-sm text-muted-foreground">
+            Install a specific host version — upgrade to a release candidate or
+            hotfix, or downgrade to an earlier release.
+          </p>
           <div className="flex items-start gap-2 text-ui-sm text-muted-foreground">
             <Checkbox
               id="host-overview-include-pre-releases"
@@ -125,6 +129,7 @@ export function VersionPicker(
               <span className="text-foreground">
                 Include release candidates
               </span>
+              <span>Show RC host versions when choosing a version.</span>
               {/* Provenance, and worded as a fact about the host rather than a
                   setting: there is no stored preference behind this state, so copy
                   implying one would point at a switch that does not exist. */}

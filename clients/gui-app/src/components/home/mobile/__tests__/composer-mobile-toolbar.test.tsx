@@ -81,6 +81,7 @@ function renderToolbar(
     <ComposerMobileToolbar
       store={makeStore(modelSlug, voice.permission ?? "supervised")}
       onAttachImages={vi.fn()}
+      onAttachFiles={vi.fn()}
       canSubmit
       attachmentPending={false}
       onSubmit={onSubmit}
@@ -120,7 +121,7 @@ describe("ComposerMobileToolbar", () => {
       { dictation: null, preparing: null },
       null,
     );
-    expect(screen.getByRole("button", { name: "Attach image" })).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Attach" })).not.toBeNull();
     expect(screen.getByTestId("mock-model-picker")).not.toBeNull();
     expect(screen.getByRole("button", { name: "Send" })).not.toBeNull();
     // Only the agent-mode pill moves out of the row.

@@ -5,8 +5,9 @@ import {
   type Ref,
   type ChangeEvent,
 } from "react";
-import { ImagePlus } from "lucide-react";
+import { Paperclip } from "lucide-react";
 import { ToolbarIconButton } from "@/components/home/toolbar/toolbar-buttons";
+import { isImageFile } from "@/hooks/composer/use-composer-paste";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useRegionShown } from "@/lib/layout-overrides";
 import { useLayoutRegion } from "@/components/layout-editor/use-layout-region";
@@ -14,11 +15,17 @@ import { useComposerTileId } from "@/components/home/composer/composer-tile-hook
 
 interface ComposerAttachImageButtonProps {
   readonly onAttachImages: (files: ReadonlyArray<File>) => void;
+  readonly onAttachFiles: (files: ReadonlyArray<File>) => void;
 }
 
 /**
- * The composer's "Attach image" control and the hidden file input it drives,
- * as one unit. Shared by the desktop toolbar's left group and the phone row.
+ * The composer's "Attach" control and the hidden file input it drives, as one
+ * unit. Shared by the desktop toolbar's left group and the phone row.
+ *
+ * The input takes ANY file: an `accept` filter is what made iOS grey out
+ * everything but photos under "Choose Files". A pick is split with the same
+ * predicate paste and drop use, so images keep their own route unchanged and
+ * everything else goes to the file route.
  *
  * The value reset happens twice on purpose - once before opening the picker and
  * once after reading the selection - so re-picking the same file still fires a
@@ -33,7 +40,7 @@ interface ComposerAttachImageButtonProps {
 export function ComposerAttachImageButton(
   props: ComposerAttachImageButtonProps,
 ) {
-  const { onAttachImages } = props;
+  const { onAttachImages, onAttachFiles } = props;
   const inputRef = useRef<HTMLInputElement>(null);
   const tileId = useComposerTileId();
   const { ref: hotspotRef, ghost } = useLayoutRegion({
@@ -57,9 +64,12 @@ export function ComposerAttachImageButton(
       const files = Array.from(event.currentTarget.files ?? []);
       event.currentTarget.value = "";
       if (files.length === 0) return;
-      onAttachImages(files);
+      const images = files.filter(isImageFile);
+      const others = files.filter((file) => !isImageFile(file));
+      if (images.length > 0) onAttachImages(images);
+      if (others.length > 0) onAttachFiles(others);
     },
-    [onAttachImages],
+    [onAttachFiles, onAttachImages],
   );
 
   if (!shown) return null;
@@ -69,7 +79,6 @@ export function ComposerAttachImageButton(
       <input
         ref={inputRef}
         type="file"
-        accept="image/*"
         multiple
         tabIndex={-1}
         aria-hidden="true"
@@ -77,7 +86,7 @@ export function ComposerAttachImageButton(
         onChange={handleImageChange}
       />
       <TooltipWrapper
-        label="Attach image"
+        label="Attach"
         side="top"
         sideOffset={undefined}
         align={undefined}
@@ -97,8 +106,8 @@ export function ComposerAttachImageTrigger(
   },
 ) {
   return (
-    <ToolbarIconButton aria-label="Attach image" {...props}>
-      <ImagePlus className="size-4" />
+    <ToolbarIconButton aria-label="Attach" {...props}>
+      <Paperclip className="size-4" />
     </ToolbarIconButton>
   );
 }

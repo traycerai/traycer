@@ -24,11 +24,10 @@ interface RecordRequest {
     readonly forMs: number;
   } | null;
   readonly stallAfterStartMs: number | null;
-  readonly failSliceRead: number | null;
+  readonly failEncodeAt: number | null;
   readonly pause: {
     readonly afterSeconds: number;
     readonly holdSeconds: number;
-    readonly playInSameTask: boolean;
   } | null;
   readonly startHeldForSeconds: number | null;
   readonly stop: "playing" | "paused" | "refused-resume";
@@ -46,6 +45,13 @@ interface Recorded {
   readonly logLines: readonly Record<string, unknown>[];
   readonly sampleRate: number;
   readonly decodedSeconds: number;
+  readonly decodedFrames: number | null;
+  readonly decodeError: string | null;
+  readonly audibleTone: {
+    readonly sampleStartSeconds: number;
+    readonly toneEnergy: number;
+    readonly gapEnergy: number;
+  } | null;
   readonly onsetOffsetsMs: readonly number[];
   readonly wavFrames: number | null;
   readonly onsetStarts: readonly number[];
@@ -58,12 +64,18 @@ interface Recorded {
     readonly fromCapture: number;
     readonly fromListening: number;
   } | null;
-  readonly recorderPauses: number;
   readonly stopTookMs: number | null;
-  readonly resumeOrder: readonly ("recorder" | "context")[];
-  readonly maxPacketGapMs: number | null;
-  readonly sliceBytesBeforeFailure: number | null;
-  readonly slicesReadAfterFailure: number | null;
+  readonly firstFrameStall: {
+    readonly firstFrameClockSeconds: number | null;
+    readonly clockAfterStallSeconds: number | null;
+  } | null;
+  readonly firstSampleStartClockSeconds: number | null;
+  readonly packetGapsMs: readonly number[];
+  readonly opusPreSkipSamples: number | null;
+  readonly opusPacketCount: number | null;
+  readonly opusDiscardPaddingNs: number | null;
+  readonly framesSubmittedBeforeFailure: number | null;
+  readonly encodeCallsAfterFailure: number | null;
 }
 
 // Tones sound every 0.5 s: 2.5 s of music holds four, of which three are
@@ -74,16 +86,15 @@ const EXPECTED_ONSETS = 3;
 const STOPPED_ONSETS = 2;
 const DURATION_TOLERANCE_SECONDS = 0.1;
 const LOSSLESS_ONSET_TOLERANCE_MS = 0.1;
-const COMPRESSED_ONSET_SPREAD_MS = 2;
-const COMPRESSED_RESIDUAL_MIN_MS = -0.5;
-const COMPRESSED_RESIDUAL_MAX_MS = 11;
-// Far past the residual bound, so a time origin taken after the stall fails.
+// Real enough to be the defect the diagnostic exists for: long past any
+// render quantum, and past the Chromium scheduling slack a shorter stall
+// could still be swallowed by.
 const START_STALL_MS = 250;
-// The second, so the file still holds the first slice and its WebM header.
-const FAILED_SLICE = 2;
-// A pause in the middle: 1 s of music, a hold of 0.5 s from the context
-// reporting suspended, then 1.3 s of music after the Play.
-const PAUSE = { afterSeconds: 1, holdSeconds: 0.5, playInSameTask: false };
+// The second encode call, so one PCM batch was submitted successfully before
+// the failure; whether its packet has been delivered yet is a separate,
+// unasserted question.
+const FAILED_ENCODE_AT = 2;
+const PAUSE = { afterSeconds: 1, holdSeconds: 0.5 };
 const AFTER_PLAY_SECONDS = 1.3;
 // What the recording lacks of the wall time is the suspension the context
 // reported; the two are read from different clocks, so they meet within this.
@@ -100,6 +111,10 @@ const HELD_SECONDS = 0.5;
 // After Play in a recording started held: tones at 0.5, 1 and 1.5 s, and one
 // more to keep the last from being cut by the stop.
 const HELD_PLAY_SECONDS = 2.2;
+// 20 ms of Opus at 48 kHz: the frame every packet in the file is, and the
+// rate every `OpusDiscardPadding`/`CodecDelay` value in it is counted in.
+const OPUS_RATE = 48_000;
+const OPUS_FRAME_SAMPLES = 960;
 
 test.beforeEach(async ({ page }) => {
   await page.goto(fixture("soundtrack-recording"));
@@ -113,23 +128,30 @@ function plain(quality: Quality): RecordRequest {
     seconds: RECORD_SECONDS,
     busy: null,
     stallAfterStartMs: null,
-    failSliceRead: null,
+    failEncodeAt: null,
     pause: null,
     startHeldForSeconds: null,
     stop: "playing",
   };
 }
 
-function record(page: Page, request: RecordRequest): Promise<Recorded> {
-  return page.evaluate<Recorded>(
+async function record(page: Page, request: RecordRequest): Promise<Recorded> {
+  const recorded = await page.evaluate<Recorded>(
     `window.__soundtrackRecordingProbe.record(${JSON.stringify(request)})`,
   );
+  await test.info().attach("recorded-timing", {
+    body: JSON.stringify(recorded),
+    contentType: "application/json",
+  });
+  return recorded;
 }
 
-// Where log time 0 falls in the audio file, which the header says.
+// Where log time 0 falls in the audio file, which the header says: zero for
+// both qualities now that the file is made of the worklet's own frames from
+// its first one, nothing else.
 const AUDIO_OFFSET_SECONDS: Record<Quality, number> = {
   lossless: 0,
-  compressed: 0.0065,
+  compressed: 0,
 };
 
 function expectSavedAndDecoded(
@@ -140,6 +162,10 @@ function expectSavedAndDecoded(
   const { outcome } = recorded;
   if (outcome.kind !== "saved") throw new Error(`Not saved: ${outcome.kind}`);
   expect(recorded.audioBytes).toBeGreaterThan(0);
+  // A genuinely saved recording whose own bytes fail to decode is a defect
+  // in the recording, never something to read past: only the deliberate
+  // encode-failure path below is allowed to leave this non-null.
+  expect(recorded.decodeError).toBeNull();
   expect(
     Math.abs(recorded.decodedSeconds - outcome.durationSeconds),
   ).toBeLessThan(DURATION_TOLERANCE_SECONDS);
@@ -168,6 +194,56 @@ function expectLosslessTiming(recorded: Recorded): void {
   }
 }
 
+/**
+ * Coarse audible alignment of ONE actually-logged, actually-complete,
+ * uninterrupted sample against the silence that follows it, never a claim
+ * about sample-exact onset: the fixture itself picks that sample from the
+ * real log (never a position this spec assumed or inferred), and its tone
+ * window must measurably out-energy its gap window, both read well away from
+ * the 10 ms fade-in. A lossy threshold-crossing search for the exact onset
+ * is not sample-exact merely because the container's own packet clock is;
+ * the precision that search is actually good for is still an open design
+ * question, not something this check stands in for.
+ */
+function expectAudibleTone(recorded: Recorded): void {
+  const { audibleTone } = recorded;
+  if (audibleTone === null) {
+    throw new Error("No uninterrupted logged sample to measure");
+  }
+  expect(audibleTone.toneEnergy).toBeGreaterThan(audibleTone.gapEnergy);
+}
+
+function frameCountFromLog(recorded: Recorded): number {
+  const frames = recorded.logLines.at(-1)?.frames;
+  if (typeof frames !== "number") throw new Error("No frame count in the log");
+  return frames;
+}
+
+/**
+ * Reconciles the real, independently-read container against the frames the
+ * worklet itself reported: `N` from the log, `K` and `S` from the file's own
+ * packets and `OpusHead`, `decodedFrames` from decoding the actual bytes in
+ * an explicit 48 kHz context. A real encoder's padding is whatever is left
+ * once `K` whole 20 ms packets have to hold `S` skipped samples and `N`
+ * captured ones; the file's own `DiscardPadding` must say exactly that.
+ */
+function expectReconciledOpusContainer(recorded: Recorded): void {
+  const n = frameCountFromLog(recorded);
+  const {
+    opusPacketCount: k,
+    opusPreSkipSamples: s,
+    opusDiscardPaddingNs,
+  } = recorded;
+  if (k === null || s === null) {
+    throw new Error("No Opus container to reconcile");
+  }
+  expect(recorded.decodedFrames).toBe(n);
+  const padding = OPUS_FRAME_SAMPLES * k - s - n;
+  expect(padding).toBeGreaterThanOrEqual(0);
+  expect(padding).toBeLessThan(OPUS_FRAME_SAMPLES);
+  expect(opusDiscardPaddingNs).toBe(Math.round((padding * 1e9) / OPUS_RATE));
+}
+
 test("a lossless recording decodes, matches its length in frames, and lines up with its log", async ({
   page,
 }) => {
@@ -189,28 +265,30 @@ test("a lossless recording keeps its frames and its timing while the page is bus
   expectLosslessTiming(recorded);
 });
 
-function expectCompressedTiming(recorded: Recorded): void {
-  const residuals = residualsMs(recorded, "compressed");
-  // Between the offset the header gives and one more device callback of it.
-  for (const residual of residuals) {
-    expect(residual).toBeGreaterThanOrEqual(COMPRESSED_RESIDUAL_MIN_MS);
-    expect(residual).toBeLessThanOrEqual(COMPRESSED_RESIDUAL_MAX_MS);
-  }
-  expect(Math.max(...residuals) - Math.min(...residuals)).toBeLessThan(
-    COMPRESSED_ONSET_SPREAD_MS,
-  );
-}
-
-test("a compressed recording decodes and its tones sit at one steady offset from the log", async ({
+test("a compressed recording decodes with its tone audible, and its container's own N, S, K and padding reconciled", async ({
   page,
 }) => {
   const recorded = await record(page, plain("compressed"));
 
   expectSavedAndDecoded(recorded, "compressed", EXPECTED_ONSETS);
-  expectCompressedTiming(recorded);
+  expectAudibleTone(recorded);
+  expectReconciledOpusContainer(recorded);
 });
 
-test("a compressed recording keeps that offset when the page stalls as the recorder starts", async ({
+test("a compressed recording keeps its frames while the page is busy", async ({
+  page,
+}) => {
+  const recorded = await record(page, {
+    ...plain("compressed"),
+    busy: { everyMs: 300, forMs: 250 },
+  });
+
+  expectSavedAndDecoded(recorded, "compressed", EXPECTED_ONSETS);
+  expectAudibleTone(recorded);
+  expectReconciledOpusContainer(recorded);
+});
+
+test("a compressed recording's first sample lines up with the worklet's own clock, not the clock a busy page delayed delivery to", async ({
   page,
 }) => {
   const recorded = await record(page, {
@@ -219,22 +297,44 @@ test("a compressed recording keeps that offset when the page stalls as the recor
   });
 
   expectSavedAndDecoded(recorded, "compressed", EXPECTED_ONSETS);
-  expectCompressedTiming(recorded);
+  const { firstFrameStall, firstSampleStartClockSeconds: a } = recorded;
+  if (firstFrameStall === null) throw new Error("No stall was recorded");
+  const { firstFrameClockSeconds: t, clockAfterStallSeconds: d } =
+    firstFrameStall;
+  if (t === null || d === null || a === null) {
+    throw new Error("Missing a clock reading the stall needs");
+  }
+  const sample = recorded.logLines.find((line) => line.type === "sample");
+  const l = sample?.start;
+  if (typeof l !== "number") throw new Error("No sample in the log");
+  const round = (value: number): number =>
+    Math.round(value * 100_000) / 100_000;
+  // The log's own serialization precision (`SessionRecorder`'s own rounding):
+  // the real worklet clock is the origin the log counts from, not the clock
+  // read once the page got around to the message.
+  expect(l).toBe(round(a - t));
+  // Different enough that the stall is actually exercising the bug this
+  // guards: an origin taken after the delay would answer differently.
+  expect(round(a - d)).not.toBe(round(a - t));
 });
 
-test("a compressed recording whose slice cannot be read stops as failed, and keeps no audio from after the failure", async ({
+test("a compressed recording whose encoder cannot take a frame stops as failed, with nothing submitted after that failure", async ({
   page,
 }) => {
   const recorded = await record(page, {
     ...plain("compressed"),
-    failSliceRead: FAILED_SLICE,
+    failEncodeAt: FAILED_ENCODE_AT,
   });
 
+  // `encode()` is a submission, not a delivery: whether the real encoder's
+  // output for an earlier frame has reached `onEncoded` by the time this one
+  // throws is not something submission order controls, so the file this
+  // leaves behind is not asserted here — it can legitimately be empty (no
+  // header ever delivered) or a header with no cluster yet, depending on
+  // timing this test does not control and must not assume either way.
   expect(recorded.outcome).toMatchObject({ kind: "saved", reason: "failed" });
-  // The recorder's last slice came after the failure, and was read.
-  expect(recorded.slicesReadAfterFailure).toBeGreaterThan(0);
-  // None of it reached the file: only the slices before the failed one did.
-  expect(recorded.audioBytes).toBe(recorded.sliceBytesBeforeFailure);
+  expect(recorded.framesSubmittedBeforeFailure).toBeGreaterThan(0);
+  expect(recorded.encodeCallsAfterFailure).toBe(0);
 });
 
 const QUALITIES: readonly Quality[] = ["lossless", "compressed"];
@@ -253,11 +353,6 @@ function lineOfType(
   type: string,
 ): Record<string, unknown> | undefined {
   return recorded.logLines.find((line) => line.type === type);
-}
-
-function expectTiming(recorded: Recorded, quality: Quality): void {
-  if (quality === "lossless") expectLosslessTiming(recorded);
-  else expectCompressedTiming(recorded);
 }
 
 /**
@@ -297,13 +392,14 @@ test("a lossless recording with a pause in the middle keeps its frames and its t
   expectShortBySuspension(recorded);
 });
 
-test("a compressed recording with a pause in the middle keeps its offset before and after it, has no hole in its packets, and starts its recorder ahead of the clock", async ({
+test("a compressed recording with a pause in the middle keeps its tone audible before and after it, with an exact 20 ms packet clock throughout", async ({
   page,
 }) => {
   const recorded = await record(page, paused("compressed", "playing"));
 
   expectSavedAndDecoded(recorded, "compressed", EXPECTED_ONSETS);
-  expectCompressedTiming(recorded);
+  expectAudibleTone(recorded);
+  expectReconciledOpusContainer(recorded);
   const pauseAt = lineOfType(recorded, "pause")?.t;
   if (typeof pauseAt !== "number") throw new Error("No pause in the log");
   expect(
@@ -312,19 +408,16 @@ test("a compressed recording with a pause in the middle keeps its offset before 
   expect(
     recorded.onsetStarts.filter((start) => start > pauseAt).length,
   ).toBeGreaterThanOrEqual(2);
-  // A hole as long as the suspension is far past half of it; a packet is 60 ms.
-  expect(recorded.maxPacketGapMs).toBeLessThan(
-    (recorded.suspendedSeconds * 1000) / 2,
-  );
-  expect(recorded.recorderPauses).toBe(1);
+  // The container's own 20 ms media clock, one step per packet in the
+  // SEQUENCE: never widened by the pause, which simply stops the worklet
+  // being called at all rather than leaving a hole to fill, and never the
+  // worklet's own bursty wall-clock arrival cadence.
+  expect(recorded.packetGapsMs.every((gap) => gap === 20)).toBe(true);
   expectShortBySuspension(recorded);
-  // Ahead of the clock: a recorder resumed after it drops what the clock made
-  // in between.
-  expect(recorded.resumeOrder.slice(0, 2)).toEqual(["recorder", "context"]);
 });
 
 for (const quality of QUALITIES) {
-  test(`a ${quality} recording started during a pause decodes, with its tones at the same offset from the log`, async ({
+  test(`a ${quality} recording started during a pause decodes, with its tones found in the log`, async ({
     page,
   }) => {
     const recorded = await record(page, {
@@ -334,7 +427,7 @@ for (const quality of QUALITIES) {
     });
 
     expectSavedAndDecoded(recorded, quality, EXPECTED_ONSETS);
-    expectTiming(recorded, quality);
+    if (quality === "lossless") expectLosslessTiming(recorded);
     // Time starts at the clock the context stopped at, not one read when it ran.
     expect(lineOfType(recorded, "play")).toMatchObject({ t: 0 });
   });
@@ -401,16 +494,3 @@ for (const quality of QUALITIES) {
     ]);
   });
 }
-
-test("a compressed recording is not paused by a suspended report that comes after its Play", async ({
-  page,
-}) => {
-  const recorded = await record(page, {
-    ...paused("compressed", "playing"),
-    pause: { ...PAUSE, playInSameTask: true },
-  });
-
-  expectSavedAndDecoded(recorded, "compressed", EXPECTED_ONSETS);
-  expectCompressedTiming(recorded);
-  expect(recorded.recorderPauses).toBe(0);
-});

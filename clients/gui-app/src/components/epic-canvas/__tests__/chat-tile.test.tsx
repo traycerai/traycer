@@ -1845,7 +1845,7 @@ function getButtonContainingText(text: string): HTMLButtonElement {
  * about the retired "New mode applies to the next turn" note.
  */
 function getComposerToolbarLeftGroup(): HTMLElement {
-  const attachButton = getButtonByAriaLabel("Attach image");
+  const attachButton = getButtonByAriaLabel("Attach");
   const permissionButton = getButtonByAriaLabel("Full access");
   let node: HTMLElement | null = attachButton.parentElement;
   while (node !== null && !node.contains(permissionButton)) {

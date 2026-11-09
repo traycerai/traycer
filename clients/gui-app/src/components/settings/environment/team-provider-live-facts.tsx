@@ -63,56 +63,34 @@ export function TeamProviderLiveFacts(props: {
             />
           ) : null}
           {state === undefined ? null : (
-            <TeamPlanLimits
-              providerId={props.providerId}
-              state={state}
-              linkedProfileIds={linkedProfileIds}
-              teamName={name}
-            />
+            <>
+              <NextRunBinaryLine state={state} hostName={hostName} />
+              <TeamPlanLimits
+                providerId={props.providerId}
+                state={state}
+                linkedProfileIds={linkedProfileIds}
+                teamName={name}
+              />
+            </>
           )}
         </TeamViewingHostBinding>
       </section>
-      {/* Same host gate as the card, so a missing viewing host does not
-          describe a binary this page cannot read. */}
-      <TeamViewingHostBinding unavailable={null}>
-        {state === undefined ? null : (
-          <NextRunBinaryDetails state={state} hostName={hostName} />
-        )}
-      </TeamViewingHostBinding>
     </div>
   );
 }
 
-/**
- * Path and version of the binary the viewing host will run, outside the
- * usage card. Omitted when the host has not reported one. A null path is the
- * included agent; a null version is left off rather than printed.
- */
-function NextRunBinaryDetails(props: {
+/** The next executable reported by the viewing host. */
+function NextRunBinaryLine(props: {
   readonly state: ProviderCliState;
   readonly hostName: string;
 }): ReactNode {
   const binary = props.state.nextRunBinary;
   if (binary === undefined || binary === null) return null;
   return (
-    <details className="min-w-0">
-      <summary className="cursor-pointer text-ui-sm font-medium">
-        Details
-      </summary>
-      <div className="mt-2 flex min-w-0 flex-col gap-1 text-ui-xs text-muted-foreground">
-        <p className="min-w-0 whitespace-normal break-words">
-          Executable: {binary.path ?? "Included agent"}
-        </p>
-        {binary.version === null ? null : (
-          <p className="min-w-0 whitespace-normal break-words">
-            Version: {binary.version}
-          </p>
-        )}
-        <p className="min-w-0 whitespace-normal break-words">
-          as reported by {props.hostName}
-        </p>
-      </div>
-    </details>
+    <p className="min-w-0 wrap-anywhere text-ui-xs text-muted-foreground">
+      {props.hostName} uses: {binary.path ?? "Included agent"}
+      {binary.version === null ? "" : ` · ${binary.version}`}.
+    </p>
   );
 }
 

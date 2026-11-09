@@ -6609,6 +6609,9 @@ export const chatSyncSchemaSurfaceBaseline = {
                                           "type": "null"
                                         }
                                       ]
+                                    },
+                                    "multiSelect": {
+                                      "type": "boolean"
                                     }
                                   },
                                   "required": [

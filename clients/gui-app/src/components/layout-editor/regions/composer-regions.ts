@@ -2,9 +2,9 @@ import {
   Bot,
   FileDiff,
   History,
-  ImagePlus,
   ListChecks,
   Mic,
+  Paperclip,
   Shield,
   SlidersHorizontal,
 } from "lucide-react";
@@ -163,13 +163,23 @@ export const TODO_REGION: LayoutRegion<"todo"> = {
 
 export const ATTACH_IMAGE_REGION: LayoutRegion<"attachImage"> = {
   id: "attachImage",
-  name: "Attach image",
+  name: "Attach",
   surface: "composer",
-  icon: ImagePlus,
+  icon: Paperclip,
   where: "Composer - toolbar, left",
   whereByHost: null,
   hint: null,
-  keywords: ["attach", "image", "screenshot", "paste", "upload"],
+  // "attach image" is the region's previous name, kept so a search in the
+  // old wording still lands here.
+  keywords: [
+    "attach",
+    "attach image",
+    "image",
+    "file",
+    "screenshot",
+    "paste",
+    "upload",
+  ],
   rows: [TOOLBAR_LEFT_ORDER_ROW],
   shellGate: alwaysAvailable,
   availability: alwaysLive,

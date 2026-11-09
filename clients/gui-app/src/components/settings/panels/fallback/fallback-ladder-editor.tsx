@@ -117,30 +117,10 @@ export function FallbackLadderEditor(
         Try these in order
       </div>
       <p className="text-ui-xs text-muted-foreground">
-        Try another account or model, wait for reset, then notify you if needed.
+        Switching accounts or models starts a new agent session using this
+        chat&apos;s history, and retries the blocked message there. Messages
+        waiting to run use the new account or model too.
       </p>
-      <details className="text-ui-xs text-muted-foreground">
-        <summary className="cursor-pointer">Help</summary>
-        <p>
-          Switching accounts or models starts a new agent session using this
-          chat&apos;s history, and retries the blocked message there. Messages
-          waiting to run use the new account or model too.
-        </p>
-        <p id={instructionsId}>
-          Reorder with Move up and Move down, or drag a step by its handle.
-          Turning a step off leaves it in place. When you reopen this page,
-          steps still off appear just above &ldquo;
-          {FALLBACK_RUNG_COPY.notify.label}&rdquo;.
-        </p>
-        <dl className="space-y-2">
-          {displayOrder.map((rung) => (
-            <div key={rung}>
-              <dt className="font-medium">{FALLBACK_RUNG_COPY[rung].label}</dt>
-              <dd>{FALLBACK_RUNG_COPY[rung].description}</dd>
-            </div>
-          ))}
-        </dl>
-      </details>
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}
@@ -191,6 +171,12 @@ export function FallbackLadderEditor(
           </ul>
         </SortableContext>
       </DndContext>
+      <p id={instructionsId} className="text-ui-xs text-muted-foreground">
+        Reorder with Move up and Move down, or drag a step by its handle.
+        Turning a step off leaves it in place. When you reopen this page, steps
+        still off appear just above &ldquo;
+        {FALLBACK_RUNG_COPY.notify.label}&rdquo;.
+      </p>
     </div>
   );
 }
@@ -385,6 +371,9 @@ function FallbackLadderRow(props: {
         >
           {copy.label}
         </div>
+        <p className="max-w-[72ch] break-words text-pretty text-ui-sm text-muted-foreground">
+          {copy.description}
+        </p>
         {hint}
       </div>
       <div

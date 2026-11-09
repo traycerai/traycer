@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
+import { hostStreamRpcRegistry } from "@traycer/protocol/host/index";
 import {
   assistantMessageSchema,
   assistantMessageSchemaPreMcpApp,
@@ -124,4 +126,88 @@ describe("a bot's question row (decision 121)", () => {
       userMessageSchemaPreConversation.parse(ANSWER_ROW),
     ).not.toHaveProperty("questionAnswer");
   });
+});
+
+describe("a bot question's cardinality", () => {
+  const [first, second] = QUESTION.questions;
+  const MULTI_ROW = {
+    ...BOT_ROW,
+    question: {
+      ...QUESTION,
+      questions: [{ ...first, multiSelect: true }, second],
+    },
+  } as const;
+
+  function rangeFrame(row: object): object {
+    return {
+      kind: "range",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      range: {
+        requestId: "range-1",
+        epoch: 0,
+        fromOrdinal: 0,
+        rowIds: [BOT_ROW.messageId],
+        messages: [row],
+        events: [],
+        reachedStart: true,
+        reachedEnd: true,
+      },
+    };
+  }
+
+  function questionsOnLine(minor: number): ReadonlyArray<unknown> {
+    const version = hostStreamRpcRegistry["chat.subscribe"][1].versions[minor];
+    if (version === undefined) throw new Error(`no chat.subscribe@1.${minor}`);
+    const frame = version.contract.serverFrameSchema.parse(
+      rangeFrame(MULTI_ROW),
+    );
+    const parsed = z
+      .object({
+        range: z.object({
+          messages: z.array(
+            z.object({
+              question: z.object({ questions: z.array(z.unknown()) }),
+            }),
+          ),
+        }),
+      })
+      .parse(frame);
+    const [message] = parsed.range.messages;
+    if (message === undefined) throw new Error("no message in the range");
+    return message.question.questions;
+  }
+
+  it("accepts a question with and without multiSelect, keeping what it says", () => {
+    const parsed = assistantMessageSchema.parse(MULTI_ROW).question;
+    expect(parsed?.questions[0].multiSelect).toBe(true);
+    expect(parsed?.questions[1]).not.toHaveProperty("multiSelect");
+    expect(
+      assistantMessageSchema.parse({
+        ...BOT_ROW,
+        question: {
+          ...QUESTION,
+          questions: [{ ...first, multiSelect: false }, second],
+        },
+      }).question?.questions[0].multiSelect,
+    ).toBe(false);
+  });
+
+  it("keeps multiSelect through chat.subscribe@1.43", () => {
+    expect(questionsOnLine(43)[0]).toMatchObject({ multiSelect: true });
+  });
+
+  it.each([42, 41])(
+    "strips multiSelect on chat.subscribe@1.%i, leaving the rest of the question",
+    (minor) => {
+      const [stripped] = questionsOnLine(minor);
+      expect(stripped).not.toHaveProperty("multiSelect");
+      expect(stripped).toMatchObject({
+        text: first.text,
+        options: first.options,
+        allowFreeText: first.allowFreeText,
+      });
+    },
+  );
 });

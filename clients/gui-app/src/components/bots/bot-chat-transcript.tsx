@@ -6,6 +6,7 @@ import {
   useState,
   useSyncExternalStore,
   type ReactNode,
+  type RefObject,
 } from "react";
 import {
   hashKey,
@@ -58,6 +59,18 @@ import {
   isWindowedTranscript,
   type ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
+import {
+  transcriptListRows,
+  type TranscriptListRow,
+} from "@/stores/chats/transcript-list-rows";
+import type {
+  OrdinalRange,
+  TranscriptWindow,
+} from "@/stores/chats/transcript-window";
+import { Button } from "@/components/ui/button";
+import { ChatMessage as ChatMessageRow } from "@/components/chat/chat-message";
+import { rowPaintsNothing } from "@/components/chat/chat-special-segment";
+import { cn } from "@/lib/utils";
 
 /**
  * What a bot chat is to the person reading it: the bot's channel or one of
@@ -281,6 +294,10 @@ function useResubscribeOnNextSend(input: {
  * surface. A post its session failed on, where that session
  * names the post's turn as its last failed attempt, says so with the agent
  * chat's reason and actions.
+ *
+ * `flow` draws the rows in the page's own flow instead of a list that
+ * scrolls them, as a Threads card does (Tracy Bots T137): the same rows,
+ * under the header, as tall as they are.
  */
 export function BotChatTranscript(props: {
   readonly botId: string;
@@ -294,6 +311,8 @@ export function BotChatTranscript(props: {
   readonly header: ReactNode;
   /** A message the list lands on once it loads; `null` keeps where it opens. */
   readonly landOn: BotTranscriptLanding | null;
+  /** The rows in the page's flow; `null` for a list of their own. */
+  readonly flow: BotTranscriptFlow | null;
 }): ReactNode {
   const {
     botId,
@@ -323,7 +342,12 @@ export function BotChatTranscript(props: {
     );
     if (header === null) return connecting;
     return (
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto pt-3">
+      <div
+        className={cn(
+          "flex flex-col pt-3",
+          props.flow === null && "min-h-0 flex-1 overflow-y-auto",
+        )}
+      >
         {header}
         {connecting}
       </div>
@@ -345,6 +369,7 @@ export function BotChatTranscript(props: {
             resolveMember={resolveMember}
             header={header}
             landOn={props.landOn}
+            flow={props.flow}
           />
         </TracyTranscriptOriginScope>
       </BotTranscriptImageScope>
@@ -398,6 +423,7 @@ function BotChatTranscriptBody(props: {
   readonly resolveMember: BotMemberResolver;
   readonly header: ReactNode;
   readonly landOn: BotTranscriptLanding | null;
+  readonly flow: BotTranscriptFlow | null;
 }): ReactNode {
   const {
     handle,
@@ -410,6 +436,7 @@ function BotChatTranscriptBody(props: {
     resolveMember,
     header,
     landOn,
+    flow,
   } = props;
   const { state, messages } = useBotSessionMessages({
     handle,
@@ -624,54 +651,294 @@ function BotChatTranscriptBody(props: {
   return (
     <ChatContainerContext.Provider value={botId}>
       <ChatBotPresentationContext.Provider value={presentation}>
-        <div
+        <BotTranscriptRows
           ref={transcriptRef}
-          data-chat-keyboard-scroll-scope=""
-          data-active="true"
-          data-testid="bot-chat-transcript"
-          className="flex min-h-0 flex-1 flex-col"
-        >
-          {intro !== null ? (
-            <BotChannelOpening history={listHeader} intro={intro} />
-          ) : (
-            <ChatTimelineHeaderContext value={listHeader}>
-              <TasklessMarkdownLinkProvider
-                tabId={instanceId}
-                tabHostId={hostId}
-              >
-                <ChatMessages
-                  minimapEnabled={props.minimapEnabled}
-                  taskTitle={title}
-                  taskId={chatId}
-                  epicId={botId}
-                  hostId={hostId}
-                  messages={messages}
-                  transcriptWindow={transcriptWindow}
-                  onVisibleOrdinalRangeChange={
-                    state.reportVisibleTranscriptRange
-                  }
-                  onFindReadOrdinalChange={state.requestFindReadOrdinal}
-                  baselineEpoch={state.transcriptBaselineEpoch}
-                  hydrationSequence={state.transcriptHydrationSequence}
-                  coldRewrittenMessageIds={state.coldRewrittenMessageIds}
-                  backgroundItems={state.backgroundItems}
-                  getMessageActions={getMessageActions}
-                  nextStepActions={null}
-                  instanceId={instanceId}
-                  visible
-                  systemOverlayActive={false}
-                  scrollRequest={scrollRequest}
-                  onScrollRequestSettled={onScrollRequestSettled}
-                  composerOverlayHeight={0}
-                  subagentDrillIn={subagentDrillIn}
-                />
-              </TasklessMarkdownLinkProvider>
-            </ChatTimelineHeaderContext>
-          )}
-        </div>
+          flow={flow}
+          intro={intro}
+          header={listHeader}
+          instanceId={instanceId}
+          hostId={hostId}
+          messages={messages}
+          transcriptWindow={transcriptWindow}
+          reportVisibleRange={state.reportVisibleTranscriptRange}
+          list={
+            <ChatMessages
+              minimapEnabled={props.minimapEnabled}
+              taskTitle={title}
+              taskId={chatId}
+              epicId={botId}
+              hostId={hostId}
+              messages={messages}
+              transcriptWindow={transcriptWindow}
+              onVisibleOrdinalRangeChange={state.reportVisibleTranscriptRange}
+              onFindReadOrdinalChange={state.requestFindReadOrdinal}
+              baselineEpoch={state.transcriptBaselineEpoch}
+              hydrationSequence={state.transcriptHydrationSequence}
+              coldRewrittenMessageIds={state.coldRewrittenMessageIds}
+              backgroundItems={state.backgroundItems}
+              getMessageActions={getMessageActions}
+              nextStepActions={null}
+              instanceId={instanceId}
+              visible
+              systemOverlayActive={false}
+              scrollRequest={scrollRequest}
+              onScrollRequestSettled={onScrollRequestSettled}
+              composerOverlayHeight={0}
+              subagentDrillIn={subagentDrillIn}
+            />
+          }
+        />
       </ChatBotPresentationContext.Provider>
     </ChatContainerContext.Provider>
   );
+}
+
+/**
+ * The transcript's rows: an empty channel's opening (`intro`), the rows in
+ * the page's flow (`flow`), or else the list of their own (`list`), whose
+ * first row sits under `header`.
+ */
+function BotTranscriptRows(props: {
+  readonly ref: RefObject<HTMLDivElement | null>;
+  readonly flow: BotTranscriptFlow | null;
+  readonly intro: ChannelIntro | null;
+  readonly header: ReactNode;
+  readonly instanceId: string;
+  readonly hostId: string;
+  readonly messages: ReadonlyArray<ChatMessage>;
+  readonly transcriptWindow: TranscriptWindow | null;
+  readonly reportVisibleRange: (range: OrdinalRange | null) => void;
+  readonly list: ReactNode;
+}): ReactNode {
+  const { ref, flow, intro, header, instanceId, hostId } = props;
+  let rows: ReactNode;
+  if (intro !== null) {
+    rows = <BotChannelOpening history={header} intro={intro} />;
+  } else if (flow === null) {
+    rows = (
+      <ChatTimelineHeaderContext value={header}>
+        <TasklessMarkdownLinkProvider tabId={instanceId} tabHostId={hostId}>
+          {props.list}
+        </TasklessMarkdownLinkProvider>
+      </ChatTimelineHeaderContext>
+    );
+  } else {
+    rows = (
+      <TasklessMarkdownLinkProvider tabId={instanceId} tabHostId={hostId}>
+        <BotTranscriptFlowRows
+          header={header}
+          messages={props.messages}
+          transcriptWindow={props.transcriptWindow}
+          reportVisibleRange={props.reportVisibleRange}
+          fold={flow.fold}
+          mark={flow.mark}
+        />
+      </TasklessMarkdownLinkProvider>
+    );
+  }
+  return (
+    <div
+      ref={ref}
+      data-chat-keyboard-scroll-scope=""
+      data-active="true"
+      data-testid="bot-chat-transcript"
+      className={cn("flex flex-col", flow === null && "min-h-0 flex-1")}
+    >
+      {rows}
+    </div>
+  );
+}
+
+/**
+ * A transcript drawn in the page's flow, which scrolls it (a Threads card):
+ * every row under the header, or, with `fold`, a long one's newest rows under
+ * a line that shows the rest in place.
+ */
+export interface BotTranscriptFlow {
+  readonly fold: BotTranscriptFold | null;
+  /** A mark drawn under one message's row; `null` draws none. */
+  readonly mark: BotTranscriptMark | null;
+}
+
+/**
+ * A mark under the row of `messageId`, drawn once that row is, and anew for
+ * each message, handed to `ref`: for whoever needs to know that message is
+ * in view.
+ */
+export interface BotTranscriptMark {
+  readonly messageId: string;
+  readonly ref: (node: HTMLElement | null) => void;
+}
+
+/**
+ * How a long transcript folds: one of more than `maxRows` rows draws only
+ * its newest `tail` rows, under a line naming how many more there are;
+ * choosing the line calls `onUnfold`, whose caller passes no fold after.
+ */
+export interface BotTranscriptFold {
+  readonly maxRows: number;
+  readonly tail: number;
+  readonly onUnfold: () => void;
+}
+
+const NO_BACKGROUND_TOOL_BLOCKS: ReadonlySet<string> = new Set();
+
+/**
+ * The rows in the page's flow, under `header`: each one the list's own row
+ * (`ChatMessage`), with the list's padding, so a row behaves as it does in
+ * the list. A row the window has not hydrated yet holds its place with a
+ * spinner, one for a run of them. On the windowed line the rows drawn are
+ * reported as the visible range, which is what hydrates them, and withdrawn
+ * when the rows go. `mark` is drawn under its message's row while that row
+ * is drawn.
+ */
+function BotTranscriptFlowRows(props: {
+  readonly header: ReactNode;
+  readonly messages: ReadonlyArray<ChatMessage>;
+  readonly transcriptWindow: TranscriptWindow | null;
+  readonly reportVisibleRange: (range: OrdinalRange | null) => void;
+  readonly fold: BotTranscriptFold | null;
+  readonly mark: BotTranscriptMark | null;
+}): ReactNode {
+  const { header, messages, transcriptWindow, reportVisibleRange, fold, mark } =
+    props;
+  const rows = useMemo(
+    () =>
+      transcriptListRows({
+        window: transcriptWindow,
+        rendered: messages,
+        splitLongTurns: false,
+      }).filter(
+        (row) => row.kind === "placeholder" || !rowPaintsNothing(row.model),
+      ),
+    [messages, transcriptWindow],
+  );
+  const folded = fold !== null && rows.length > fold.maxRows;
+  const shown = folded ? rows.slice(rows.length - fold.tail) : rows;
+  const hidden = rows.length - shown.length;
+  const markRowId =
+    mark === null
+      ? null
+      : replyRowIdFor(
+          shown.flatMap((row) => (row.kind === "hydrated" ? [row.model] : [])),
+          mark.messageId,
+        );
+  const range = ordinalRangeOf(shown);
+  const fromOrdinal = range?.fromOrdinal ?? null;
+  const toOrdinal = range?.toOrdinal ?? null;
+  const windowed = transcriptWindow !== null;
+  useEffect(() => {
+    if (!windowed) return;
+    reportVisibleRange(
+      fromOrdinal === null || toOrdinal === null
+        ? null
+        : { fromOrdinal, toOrdinal },
+    );
+  }, [fromOrdinal, reportVisibleRange, toOrdinal, windowed]);
+  // Withdrawn on unmount only: between two ranges the next report replaces
+  // the last.
+  useEffect(
+    () => () => {
+      if (windowed) reportVisibleRange(null);
+    },
+    [reportVisibleRange, windowed],
+  );
+  return (
+    <div className="flex flex-col" data-testid="bot-chat-transcript-flow">
+      {header}
+      {folded ? (
+        <div className="px-6 py-1">
+          <Button
+            type="button"
+            variant="link"
+            size="inline-xs"
+            data-testid="bot-chat-transcript-unfold"
+            onClick={fold.onUnfold}
+          >
+            {hidden === 1 ? "Show 1 more reply" : `Show ${hidden} more replies`}
+          </Button>
+        </div>
+      ) : null}
+      {flowRowsOf(shown).map((row) =>
+        row.kind === "placeholders" ? (
+          <div
+            key={row.key}
+            className="flex justify-center py-2 text-muted-foreground"
+            aria-busy="true"
+            data-testid="bot-chat-transcript-row-loading"
+          >
+            <AgentSpinningDots
+              className={undefined}
+              testId={undefined}
+              variant={undefined}
+            />
+          </div>
+        ) : (
+          <div
+            key={row.key}
+            data-message-id={row.model.id}
+            className="w-full px-4 pb-0.5"
+          >
+            <ChatMessageRow
+              message={row.model}
+              actions={null}
+              backgroundToolBlockIds={NO_BACKGROUND_TOOL_BLOCKS}
+              nextStepActions={null}
+              part={null}
+            />
+            {mark !== null && row.model.id === markRowId ? (
+              <div
+                key={mark.messageId}
+                ref={mark.ref}
+                aria-hidden="true"
+                data-testid="bot-chat-transcript-mark"
+                data-mark-message-id={mark.messageId}
+              />
+            ) : null}
+          </div>
+        ),
+      )}
+    </div>
+  );
+}
+
+/** The ordinals `rows` cover, end exclusive; `null` where none has one. */
+function ordinalRangeOf(
+  rows: ReadonlyArray<TranscriptListRow>,
+): OrdinalRange | null {
+  let from: number | null = null;
+  let to: number | null = null;
+  for (const row of rows) {
+    if (row.ordinal === null) continue;
+    from = from === null ? row.ordinal : Math.min(from, row.ordinal);
+    to = to === null ? row.ordinal : Math.max(to, row.ordinal);
+  }
+  return from === null || to === null
+    ? null
+    : { fromOrdinal: from, toOrdinal: to + 1 };
+}
+
+/** A flow's rows, each run of placeholders one item. */
+function flowRowsOf(
+  rows: ReadonlyArray<TranscriptListRow>,
+): ReadonlyArray<
+  | Extract<TranscriptListRow, { readonly kind: "hydrated" }>
+  | { readonly kind: "placeholders"; readonly key: string }
+> {
+  const items: Array<
+    | Extract<TranscriptListRow, { readonly kind: "hydrated" }>
+    | { readonly kind: "placeholders"; readonly key: string }
+  > = [];
+  for (const row of rows) {
+    if (row.kind === "hydrated") {
+      items.push(row);
+      continue;
+    }
+    if (items.at(-1)?.kind !== "placeholders") {
+      items.push({ kind: "placeholders", key: row.key });
+    }
+  }
+  return items;
 }
 
 /**

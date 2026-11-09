@@ -247,6 +247,7 @@ export function Page(): ReactElement {
                 message={THREAD_POST}
                 presentation={presentation}
                 hoverActions={false}
+                timeLink={null}
               />
             </div>
             <Rows

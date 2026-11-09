@@ -28,10 +28,10 @@ describe("<AgentsSettingsPanel />", () => {
 
     expect(screen.getByRole("heading", { name: "Agents" })).toBeTruthy();
     expect(
-      screen.queryByText(
+      screen.getByText(
         "How agents are picked, and the agents each coding agent can start.",
       ),
-    ).toBeNull();
+    ).toBeTruthy();
     expect(screen.getByTestId("agents-tab-guide").textContent).toBe(
       "Selection guide",
     );
@@ -42,10 +42,12 @@ describe("<AgentsSettingsPanel />", () => {
     expect(screen.queryByTestId("definitions-body")).toBeNull();
   });
 
-  it("removes the caption layer from the Selection guide tab", async () => {
+  it("captions the Selection guide tab with what agents read, only there", async () => {
     render(<AgentsSettingsPanel />);
 
-    expect(screen.queryByTestId("agents-guide-caption")).toBeNull();
+    expect(screen.getByTestId("agents-guide-caption").textContent).toBe(
+      "The guide agents read when they pick a coding agent, model and effort for work they hand off.",
+    );
 
     await userEvent.click(screen.getByTestId("agents-tab-definitions"));
     expect(screen.queryByTestId("agents-guide-caption")).toBeNull();

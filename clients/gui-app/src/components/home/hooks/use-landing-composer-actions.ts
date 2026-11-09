@@ -96,6 +96,7 @@ import {
   hashOnlyImageHashes,
   inlineHashOnlyImageBytes,
 } from "@/lib/composer/image-atoms";
+import { containsFileAttachments } from "@/lib/composer/file-attachments";
 import { sessionImageBytes } from "@/lib/composer/landing-image-store";
 import { draftImageByteTargetForHost } from "@/lib/drafts/draft-image-byte-target";
 import { openLandingDraft } from "@/lib/drafts/open-landing-draft";
@@ -1207,8 +1208,10 @@ export function useLandingComposerActions(
       );
       const editorContent = normalized.content;
       const text = extractPlainTextFromComposerJSONContent(editorContent);
-      const hasImages = containsImageAtoms(editorContent);
-      if (text.trim().length === 0 && !hasImages) return false;
+      const hasAttachments =
+        containsImageAtoms(editorContent) ||
+        containsFileAttachments(editorContent);
+      if (text.trim().length === 0 && !hasAttachments) return false;
       const draftId = ensureSubmissionDraft(
         args.draftId,
         editorContent,

@@ -69,10 +69,13 @@ describe("ComposerAttachImageButton follows Layout ▸ Composer 'Attach image'",
   it("renders the button and still attaches a picked file when visible", () => {
     const onAttachImages = vi.fn<(files: ReadonlyArray<File>) => void>();
     const { container } = render(
-      <ComposerAttachImageButton onAttachImages={onAttachImages} />,
+      <ComposerAttachImageButton
+        onAttachImages={onAttachImages}
+        onAttachFiles={vi.fn()}
+      />,
     );
 
-    expect(screen.getByRole("button", { name: "Attach image" })).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Attach" })).not.toBeNull();
 
     const input =
       container.querySelector<HTMLInputElement>('input[type="file"]');
@@ -83,6 +86,50 @@ describe("ComposerAttachImageButton follows Layout ▸ Composer 'Attach image'",
     fireEvent.change(input, { target: { files: [file] } });
 
     expect(onAttachImages).toHaveBeenCalledWith([file]);
+  });
+
+  it("has no accept filter and splits a mixed pick: images to onAttachImages, the rest to onAttachFiles", () => {
+    const onAttachImages = vi.fn<(files: ReadonlyArray<File>) => void>();
+    const onAttachFiles = vi.fn<(files: ReadonlyArray<File>) => void>();
+    const { container } = render(
+      <ComposerAttachImageButton
+        onAttachImages={onAttachImages}
+        onAttachFiles={onAttachFiles}
+      />,
+    );
+    const input =
+      container.querySelector<HTMLInputElement>('input[type="file"]');
+    if (input === null) throw new Error("expected the hidden file input");
+    expect(input.hasAttribute("accept")).toBe(false);
+
+    const png = new File(["p"], "shot.png", { type: "image/png" });
+    const mov = new File(["m"], "clip.mov", { type: "video/quicktime" });
+    const pdf = new File(["d"], "doc.pdf", { type: "application/pdf" });
+    fireEvent.change(input, { target: { files: [mov, png, pdf] } });
+
+    expect(onAttachImages).toHaveBeenCalledTimes(1);
+    expect(onAttachImages).toHaveBeenCalledWith([png]);
+    expect(onAttachFiles).toHaveBeenCalledTimes(1);
+    expect(onAttachFiles).toHaveBeenCalledWith([mov, pdf]);
+  });
+
+  it("calls only the route a single-kind pick needs", () => {
+    const onAttachImages = vi.fn<(files: ReadonlyArray<File>) => void>();
+    const onAttachFiles = vi.fn<(files: ReadonlyArray<File>) => void>();
+    const { container } = render(
+      <ComposerAttachImageButton
+        onAttachImages={onAttachImages}
+        onAttachFiles={onAttachFiles}
+      />,
+    );
+    const input =
+      container.querySelector<HTMLInputElement>('input[type="file"]');
+    if (input === null) throw new Error("expected the hidden file input");
+    const zip = new File(["z"], "a.zip", { type: "application/zip" });
+    fireEvent.change(input, { target: { files: [zip] } });
+
+    expect(onAttachImages).not.toHaveBeenCalled();
+    expect(onAttachFiles).toHaveBeenCalledWith([zip]);
   });
 
   // Hidden removes only the toolbar affordance. Paste and drag-drop call
@@ -96,7 +143,10 @@ describe("ComposerAttachImageButton follows Layout ▸ Composer 'Attach image'",
       .getState()
       .setRegionValues("attachImage", { shown: "hidden" });
     const { container } = render(
-      <ComposerAttachImageButton onAttachImages={onAttachImages} />,
+      <ComposerAttachImageButton
+        onAttachImages={onAttachImages}
+        onAttachFiles={vi.fn()}
+      />,
     );
 
     expect(container.firstChild).toBeNull();

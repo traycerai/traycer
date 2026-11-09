@@ -7,6 +7,7 @@ import { usePaneAwareContentGuard } from "@/components/epic-tabs/pane-visibility
 import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
 import { useSafeAreaCollisionPadding } from "@/components/ui/safe-area-collision-padding";
 import { declineListSearchAutoFocus } from "@/hooks/ui/decline-list-search-autofocus";
+import { useSurfaceOverlayContainerEl } from "@/providers/surface-overlay-container-context";
 import { cn } from "@/lib/utils";
 
 function Popover({
@@ -83,9 +84,14 @@ function PopoverContent({
   // default width cap; both are displaceable by a caller (see
   // `safe-area-collision-padding.ts` and `dropdown-menu.tsx`).
   const safeAreaInsets = useSafeAreaCollisionPadding();
+  // A popover opened inside a top-layer surface must portal into it or it
+  // paints beneath it (see `surface-overlay-container-context`).
+  const surfaceContainer = useSurfaceOverlayContainerEl();
   if (!paneFocused || concealed) return null;
   return (
-    <PopoverPrimitive.Portal container={container}>
+    <PopoverPrimitive.Portal
+      container={container ?? surfaceContainer ?? undefined}
+    >
       <PopoverPrimitive.Content
         ref={ref}
         data-slot="popover-content"

@@ -359,7 +359,7 @@ describe.each([
     world.items = [variable("NODE_ENV", 1)];
     const harness = mountVariables(world, environment);
     expect(
-      await screen.findByRole("button", { name: "Edit NODE_ENV value" }),
+      await screen.findByRole("textbox", { name: "NODE_ENV value" }),
     ).toBeTruthy();
     expect(harness.paramsOf("environment.configuration.items")[0]).toEqual({
       environmentId: environment.environmentId,
@@ -369,11 +369,11 @@ describe.each([
     world.items = [variable("NODE_ENV", 1), variable("LOG_LEVEL", 2)];
     world.revision = "11";
     expect(
-      screen.queryByRole("button", { name: "Edit LOG_LEVEL value" }),
+      screen.queryByRole("textbox", { name: "LOG_LEVEL value" }),
     ).toBeNull();
     await pollOnce();
     expect(
-      await screen.findByRole("button", { name: "Edit LOG_LEVEL value" }),
+      await screen.findByRole("textbox", { name: "LOG_LEVEL value" }),
     ).toBeTruthy();
 
     // And deletes NODE_ENV.
@@ -382,11 +382,11 @@ describe.each([
     await pollOnce();
     await vi.waitFor(() => {
       expect(
-        screen.queryByRole("button", { name: "Edit NODE_ENV value" }),
+        screen.queryByRole("textbox", { name: "NODE_ENV value" }),
       ).toBeNull();
     });
     expect(
-      screen.getByRole("button", { name: "Edit LOG_LEVEL value" }),
+      screen.getByRole("textbox", { name: "LOG_LEVEL value" }),
     ).toBeTruthy();
   });
 
@@ -394,7 +394,7 @@ describe.each([
     const world = freshWorld();
     world.items = [variable("NODE_ENV", 1)];
     const harness = mountVariables(world, environment);
-    await screen.findByRole("button", { name: "Edit NODE_ENV value" });
+    await screen.findByRole("textbox", { name: "NODE_ENV value" });
     // The first revision answer may read the items once more, to close the
     // race between the first read and the first answer.
     await pollOnce();
@@ -426,7 +426,7 @@ describe("a Variables page whose items read is held", () => {
     const world = freshWorld();
     world.items = [variable("NODE_ENV", 1)];
     const harness = mountVariables(world, TEAM_ENV);
-    await screen.findByRole("button", { name: "Edit NODE_ENV value" });
+    await screen.findByRole("textbox", { name: "NODE_ENV value" });
     await pollOnce();
 
     const held = deferred<{ items: EnvironmentConfigurationItem[] }>();
@@ -443,7 +443,7 @@ describe("a Variables page whose items read is held", () => {
     // Prior data stays on screen: no blank page, no failure line, no spinner
     // in place of the rows.
     expect(
-      screen.getByRole("button", { name: "Edit NODE_ENV value" }),
+      screen.getByRole("textbox", { name: "NODE_ENV value" }),
     ).toBeTruthy();
     expect(screen.queryByText(/Couldn't read/)).toBeNull();
 
@@ -451,10 +451,10 @@ describe("a Variables page whose items read is held", () => {
       items: [variable("NODE_ENV", 1), variable("LOG_LEVEL", 2)],
     });
     expect(
-      await screen.findByRole("button", { name: "Edit LOG_LEVEL value" }),
+      await screen.findByRole("textbox", { name: "LOG_LEVEL value" }),
     ).toBeTruthy();
     expect(
-      screen.getByRole("button", { name: "Edit NODE_ENV value" }),
+      screen.getByRole("textbox", { name: "NODE_ENV value" }),
     ).toBeTruthy();
   });
 });
@@ -481,13 +481,13 @@ describe("a Variables page on a host that does not advertise the revision method
       </ConfigurationSourceBoundary>,
       { wrapper: harness.Wrapper },
     );
-    await screen.findByRole("button", { name: "Edit NODE_ENV value" });
+    await screen.findByRole("textbox", { name: "NODE_ENV value" });
 
     world.items = [variable("NODE_ENV", 1), variable("LOG_LEVEL", 2)];
     await pollOnce();
 
     expect(
-      await screen.findByRole("button", { name: "Edit LOG_LEVEL value" }),
+      await screen.findByRole("textbox", { name: "LOG_LEVEL value" }),
     ).toBeTruthy();
     expect(harness.paramsOf("environment.configuration.revision")).toEqual([]);
   });
@@ -637,7 +637,7 @@ describe("a Variables page while its own write is in flight", () => {
     return answer;
   }
 
-  it("closes an accepted Add and confirms it through the live revision poll before the next write", async () => {
+  it("keeps the Add form visible and confirms acceptance through the live revision poll before the next write", async () => {
     const world = freshWorld();
     const harness = mountVariables(world, TEAM_ENV);
     await screen.findByText("No variables.");
@@ -647,7 +647,7 @@ describe("a Variables page while its own write is in flight", () => {
       "environment.configuration.items.put",
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Add variable" }));
+    fireEvent.click(screen.getByRole("textbox", { name: "Variable name" }));
     const draft = screen.getByRole("region", { name: "New variable" });
     fireEvent.change(within(draft).getByLabelText("Variable name"), {
       target: { value: "NEW_VAR" },
@@ -686,7 +686,7 @@ describe("a Variables page while its own write is in flight", () => {
       "Saved, but latest settings haven't refreshed.",
     );
     expect(within(status).getByRole("button", { name: "Retry" })).toBeTruthy();
-    expect(screen.queryByRole("region", { name: "New variable" })).toBeNull();
+    expect(screen.getByRole("region", { name: "New variable" })).toBeTruthy();
     expect(screen.getByText("one")).toBeTruthy();
     expect(screen.queryByText("No variables.")).toBeNull();
 
@@ -695,12 +695,12 @@ describe("a Variables page while its own write is in flight", () => {
     world.revision = "11";
     await pollOnce();
     expect(
-      await screen.findByRole("button", { name: "Edit NEW_VAR value" }),
+      await screen.findByRole("textbox", { name: "NEW_VAR value" }),
     ).toBeTruthy();
     await vi.waitFor(() => {
       expect(screen.queryByText(/Adding/)).toBeNull();
     });
-    expect(screen.queryByRole("region", { name: "New variable" })).toBeNull();
+    expect(screen.getByRole("region", { name: "New variable" })).toBeTruthy();
     expect(screen.queryByText(/Saved[.,]/)).toBeNull();
     harness.messenger.setHandlers({
       ...handlersOf(world, TEAM_ENV),
@@ -709,25 +709,30 @@ describe("a Variables page while its own write is in flight", () => {
         return { outcome: "saved", revision: 4 };
       },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Edit NEW_VAR value" }));
+    fireEvent.click(screen.getByRole("textbox", { name: "NEW_VAR value" }));
     fireEvent.change(screen.getByLabelText("NEW_VAR value"), {
       target: { value: "two" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    fireEvent.click(
+      within(screen.getByRole("region", { name: "NEW_VAR" })).getByRole(
+        "button",
+        { name: "Save" },
+      ),
+    );
     await vi.waitFor(() => {
       expect(
         harness.paramsOf("environment.configuration.items.put"),
       ).toHaveLength(2);
       expect(
-        screen.getByRole("button", { name: "Edit NEW_VAR value" }),
+        screen.getByRole("textbox", { name: "NEW_VAR value" }),
       ).toHaveProperty("disabled", false);
     });
     expect(
       harness.paramsOf("environment.configuration.items.put")[1],
     ).toMatchObject({ revision: 3 });
     expect(
-      screen.getByRole("button", { name: "Edit NEW_VAR value" }),
-    ).toHaveProperty("textContent", "two");
+      screen.getByRole("textbox", { name: "NEW_VAR value" }),
+    ).toHaveProperty("value", "two");
   });
 
   it("keeps Delete in flight once, then confirms the accepted removal through the live revision poll", async () => {
@@ -735,7 +740,7 @@ describe("a Variables page while its own write is in flight", () => {
     world.items = [variable("OLD_VAR", 1)];
     const harness = mountVariables(world, TEAM_ENV);
     const user = userEvent.setup();
-    await screen.findByRole("button", { name: "Edit OLD_VAR value" });
+    await screen.findByRole("textbox", { name: "OLD_VAR value" });
     const answer = holdWrite(
       harness,
       world,
@@ -744,10 +749,7 @@ describe("a Variables page while its own write is in flight", () => {
     const row = (): HTMLElement =>
       screen.getByRole("region", { name: "OLD_VAR" });
 
-    await user.click(
-      within(row()).getByRole("button", { name: "More for OLD_VAR" }),
-    );
-    await user.click(await screen.findByRole("menuitem", { name: "Delete" }));
+    await user.click(within(row()).getByRole("button", { name: "Delete" }));
 
     await vi.waitFor(() => {
       expect(
@@ -758,11 +760,9 @@ describe("a Variables page while its own write is in flight", () => {
       "OLD_VAR · Removing",
     );
     expect(
-      within(row()).getByRole("button", { name: "More for OLD_VAR" }),
+      within(row()).getByRole("button", { name: "Delete" }),
     ).toHaveProperty("disabled", true);
-    fireEvent.click(
-      within(row()).getByRole("button", { name: "More for OLD_VAR" }),
-    );
+    fireEvent.click(within(row()).getByRole("button", { name: "Delete" }));
     expect(
       harness.paramsOf("environment.configuration.items.delete"),
     ).toHaveLength(1);
@@ -776,7 +776,7 @@ describe("a Variables page while its own write is in flight", () => {
     );
     expect(within(status).getByRole("button", { name: "Retry" })).toBeTruthy();
     expect(
-      screen.getByRole("button", { name: "Edit OLD_VAR value" }),
+      screen.getByRole("textbox", { name: "OLD_VAR value" }),
     ).toHaveProperty("disabled", true);
     expect(screen.queryByText("No variables.")).toBeNull();
 
@@ -785,14 +785,13 @@ describe("a Variables page while its own write is in flight", () => {
     await pollOnce();
     await vi.waitFor(() => {
       expect(
-        screen.queryByRole("button", { name: "Edit OLD_VAR value" }),
+        screen.queryByRole("textbox", { name: "OLD_VAR value" }),
       ).toBeNull();
     });
     expect(await screen.findByText("No variables.")).toBeTruthy();
     expect(screen.queryByText(/Removed[.,]/)).toBeNull();
-    expect(screen.getByRole("button", { name: "Add variable" })).toHaveProperty(
-      "disabled",
-      false,
-    );
+    expect(
+      screen.getByRole("textbox", { name: "Variable name" }),
+    ).toHaveProperty("disabled", false);
   });
 });
