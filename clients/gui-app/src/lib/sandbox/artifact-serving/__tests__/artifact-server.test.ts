@@ -956,6 +956,63 @@ describe("ArtifactServer.serve — HTML documents", () => {
     });
   }
 
+  it("serves a page again from the manifest replaced after a comment was stamped", async () => {
+    const before = new TextEncoder().encode("<p>before</p>");
+    const after = new TextEncoder().encode('<p data-tid="t1">before</p>');
+    const shaBefore = "a".repeat(64);
+    const shaAfter = "b".repeat(64);
+    const bytesFor = (sha: string): Uint8Array | null => {
+      if (sha === shaBefore) return before;
+      if (sha === shaAfter) return after;
+      return null;
+    };
+    const readSpan = vi.fn(
+      (
+        sha: string,
+        offset: number,
+        length: number,
+      ): Promise<ArtifactReadSpanResult> => {
+        const full = bytesFor(sha);
+        if (full === null) return Promise.resolve({ unavailable: "missing" });
+        return Promise.resolve({
+          bytes: full.slice(offset, offset + length),
+          totalBytes: full.length,
+          mediaType: "text/html; charset=utf-8",
+        });
+      },
+    );
+    const server = new ArtifactServer({
+      treePath: "",
+      manifest: manifestWith(
+        "index.html",
+        htmlEntry(before, { sha256: shaBefore }),
+      ),
+      readSpan,
+      document: DOCUMENT_OPTIONS,
+    });
+    const servePage = () =>
+      server.serve({
+        path: "index.html",
+        offset: 0,
+        length: FOUR_MIB,
+        signal: signal(),
+      });
+
+    const first = await servePage();
+    server.replaceManifest(
+      manifestWith("index.html", htmlEntry(after, { sha256: shaAfter })),
+    );
+    const second = await servePage();
+
+    const text = (result: ArtifactServeResult): string => {
+      if (result.kind !== "bytes") throw new Error("page was not served");
+      return new TextDecoder().decode(result.bytes);
+    };
+    expect(text(first)).not.toContain('data-tid="t1"');
+    expect(text(second)).toContain('data-tid="t1"');
+    expect(readSpan.mock.calls.some(([sha]) => sha === shaAfter)).toBe(true);
+  });
+
   it("composes the loader document around the raw html, byte for byte matching buildArtifactDocument", async () => {
     const rawHtml = new TextEncoder().encode("<p>hi</p>");
     const e = htmlEntry(rawHtml, {});

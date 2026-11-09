@@ -626,6 +626,7 @@ export function SandboxFrame(props: SandboxFrameProps) {
   if (advanced !== null) setFrame(advanced);
   const frameGeneration = frame.generation;
 
+  const mountedServer = useRef<ArtifactServer | null>(null);
   useLayoutEffect(() => {
     const inputs = initialInputs();
     if (
@@ -651,6 +652,7 @@ export function SandboxFrame(props: SandboxFrameProps) {
       },
     });
     const mount = mountArtifact(inputs.runnerHost, server);
+    mountedServer.current = server;
     const origin = inputs.runnerHost.sandboxArtifacts.artifactOrigin({
       artifactId: inputs.source.artifactId,
       mountId: mount.mountId,
@@ -690,9 +692,17 @@ export function SandboxFrame(props: SandboxFrameProps) {
     );
     return () => {
       active = false;
+      mountedServer.current = null;
       mount.dispose();
     };
   }, [frameGeneration]);
+  // An equivalent source keeps the mounted document, and the mount serves its
+  // manifest from then on: a page read again later, after a link or Back, gets
+  // the bytes a comment stamped into it in place, not the ones mounted first.
+  useLayoutEffect(() => {
+    if (source.kind === "artifact")
+      mountedServer.current?.replaceManifest(source.manifest);
+  }, [source]);
 
   const served = currentServedFrame(source, servedFrame, frameGeneration);
 

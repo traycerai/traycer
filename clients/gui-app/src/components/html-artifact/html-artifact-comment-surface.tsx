@@ -1,8 +1,10 @@
 import {
+  Fragment,
   useCallback,
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -12,25 +14,28 @@ import type { CanvasFrameEvents } from "@/components/canvas-artifact/canvas-fram
 import type { CanvasCommentView } from "@/components/canvas-artifact/canvas-frame-registry";
 import { CanvasSelectionProvider } from "@/components/canvas-artifact/canvas-selection-provider";
 import type { SandboxSource } from "@/components/sandbox/sandbox-frame";
-import { ArtifactPagesFrame } from "./artifact-pages-frame";
+import { artifactPagePaths } from "@/lib/sandbox/artifact-serving";
+import type { SandboxBridgeHost } from "@/lib/sandbox/bridge-host";
+import {
+  ArtifactPagesFrame,
+  type ArtifactPagesNavigator,
+  type ProvenPage,
+} from "./artifact-pages-frame";
 
 const noop = (): void => undefined;
 
 type ArtifactSource = Extract<SandboxSource, { kind: "artifact" }>;
 
-function samePageSourceIdentity(
+function sameServedArtifact(
   previous: ArtifactSource,
   next: ArtifactSource,
-  entryPath: string,
 ): boolean {
   return (
     previous.artifactId === next.artifactId &&
     previous.treePath === next.treePath &&
     previous.entryPath === next.entryPath &&
     previous.readSpan === next.readSpan &&
-    previous.resolveOutsideReference === next.resolveOutsideReference &&
-    Object.hasOwn(previous.manifest.files, entryPath) &&
-    Object.hasOwn(next.manifest.files, entryPath)
+    previous.resolveOutsideReference === next.resolveOutsideReference
   );
 }
 
@@ -38,7 +43,7 @@ function samePageSourceIdentity(
 function otherFilesUnchanged(
   previous: ArtifactSource,
   next: ArtifactSource,
-  entryPath: string,
+  page: string | null,
 ): boolean {
   const shaOf = (source: ArtifactSource, file: string): string | null =>
     Object.hasOwn(source.manifest.files, file)
@@ -48,34 +53,59 @@ function otherFilesUnchanged(
     ...Object.keys(previous.manifest.files),
     ...Object.keys(next.manifest.files),
   ])) {
-    if (file !== entryPath && shaOf(previous, file) !== shaOf(next, file))
+    if (file !== page && shaOf(previous, file) !== shaOf(next, file))
       return false;
   }
   return true;
 }
 
 /**
- * Whether a replacement source can keep the mounted page: the entry's own
- * bytes may change only when the live document adopted that revision in
- * place (a first comment's stamped id), which is what the provider's
- * `sourceAdopted` answers. Anything else is a reload.
+ * Whether a replacement source can keep the mounted page: the bytes of the
+ * page on show may change only when its live document adopted that revision
+ * in place (a first comment's stamped id), which is what the provider's
+ * `sourceAdopted` answers. Anything else is a reload, and with none of the
+ * artifact's pages on show, any change at all is.
  */
 function pageSourceEquivalent(
   previous: SandboxSource,
   next: SandboxSource,
-  entryPath: string,
+  page: string | null,
   sourceAdopted: (beforeSha256: string, afterSha256: string) => boolean,
 ): boolean {
   if (
     previous.kind !== "artifact" ||
     next.kind !== "artifact" ||
-    !samePageSourceIdentity(previous, next, entryPath) ||
-    !otherFilesUnchanged(previous, next, entryPath)
+    !sameServedArtifact(previous, next) ||
+    !otherFilesUnchanged(previous, next, page)
   )
     return false;
-  const before = previous.manifest.files[entryPath].sha256;
-  const after = next.manifest.files[entryPath].sha256;
+  if (page === null) return true;
+  if (
+    !Object.hasOwn(previous.manifest.files, page) ||
+    !Object.hasOwn(next.manifest.files, page)
+  )
+    return false;
+  const before = previous.manifest.files[page].sha256;
+  const after = next.manifest.files[page].sha256;
   return before === after || sourceAdopted(before, after);
+}
+
+/**
+ * The artifact's pages, entry first, each read as a board of its own the way
+ * a canvas's boards are: a comment names the page it is on, and the comments
+ * panel numbers and places every page's threads, not only the one on show.
+ */
+function pageSourcesFor(
+  served: ArtifactSource,
+  entryPath: string,
+): ReadonlyMap<string, ArtifactSource> {
+  const pages = artifactPagePaths(served.manifest).toSorted((a, b) =>
+    a.localeCompare(b),
+  );
+  const ordered = pages.includes(entryPath)
+    ? [entryPath, ...pages.filter((page) => page !== entryPath)]
+    : pages;
+  return new Map(ordered.map((page) => [page, { ...served, entryPath: page }]));
 }
 
 export function HtmlArtifactCommentSurface(props: {
@@ -130,9 +160,16 @@ function HtmlArtifactCommentFrame(
   // is on, the toggle goes and the shield must go with it, or the page would
   // stay blocked with nothing on screen to unblock it.
   const commenting = commentingRequested && commentsEnabled;
-  const path = source.entryPath === "" ? "index.html" : source.entryPath;
-  const files = source.manifest.files;
-  const servedSha256 = Object.hasOwn(files, path) ? files[path].sha256 : null;
+  const entryPath = source.entryPath === "" ? "index.html" : source.entryPath;
+  // The board comments go on is the page the frame shows. The tile shows one
+  // page at a time, so there is one board, and following a link moves it.
+  const [board, setBoard] = useState<ProvenPage | null>(null);
+  const page = board?.path ?? null;
+  const pagesFrame = useRef<ArtifactPagesNavigator>(null);
+  // The iframe and its bridge outlast a move between pages, so they are
+  // filed under whichever page is the board.
+  const frameRef = useRef<HTMLIFrameElement | null>(null);
+  const bridgeRef = useRef<SandboxBridgeHost | null>(null);
   // One document for reading and commenting: the comment tool is a mode the
   // loaded page is told to take, so the reader's scroll and zoom and the
   // page's own state outlast turning it on or off.
@@ -140,45 +177,74 @@ function HtmlArtifactCommentFrame(
     () => ({ ...source, canvas: true, canvasLinks: "native" }),
     [source],
   );
+  const pageSources = useMemo(
+    () => pageSourcesFor(served, entryPath),
+    [served, entryPath],
+  );
+  const order = useMemo(() => [...pageSources.keys()], [pageSources]);
   const view = useMemo<CanvasCommentView>(
     () => ({
       tool: commenting ? "comment" : "select",
       play: true,
       commenting,
       setCommenting,
-      order: [path],
-      sourceForBoard: (board) => (board === path ? served : null),
-      // The one page is always showing; a thread's reveal only needs the
-      // mode on, and the pins then mark it.
-      revealBoard: (board) => board === path,
+      order,
+      sourceForBoard: (path) => pageSources.get(path) ?? null,
+      // A thread on another page opens that page as a link would, so Back
+      // returns from it. Its pins and its selection follow once that page has
+      // proved itself and become the board.
+      revealBoard: (path) => {
+        if (!pageSources.has(path)) return false;
+        if (path !== page) pagesFrame.current?.openPage(path);
+        return true;
+      },
       revealCanvasPoint: () => false,
       clearNodeSelection: noop,
     }),
-    [commenting, path, served],
+    [commenting, order, pageSources, page],
   );
+  const boardSource = page === null ? null : (pageSources.get(page) ?? null);
+  const servedSha256 =
+    page === null || boardSource === null
+      ? null
+      : boardSource.manifest.files[page].sha256;
   const sourceEquivalent = useCallback(
     (previous: SandboxSource, next: SandboxSource): boolean =>
       pageSourceEquivalent(
         previous,
         next,
-        path,
-        (before, after) => events.sourceAdopted?.(path, before, after) === true,
+        page,
+        (before, after) =>
+          page !== null && events.sourceAdopted?.(page, before, after) === true,
       ),
-    [events, path],
+    [events, page],
   );
   useEffect(() => {
     events.onCanvasView?.(view);
     return () => events.onCanvasView?.(null);
   }, [events, view]);
   useEffect(() => {
-    events.onSource?.(path, served);
-    events.onServedSource?.(path, servedSha256);
-    events.onBoardPage?.(path, null);
+    if (page === null) return;
+    events.onSource?.(page, boardSource);
+    events.onServedSource?.(page, servedSha256);
+    events.onBoardPage?.(page, null);
     return () => {
-      events.onSource?.(path, null);
-      events.onServedSource?.(path, null);
+      events.onSource?.(page, null);
+      events.onServedSource?.(page, null);
     };
-  }, [events, path, served, servedSha256]);
+  }, [events, page, boardSource, servedSha256]);
+  // Keyed by the proof, not the path: every document that proves itself is
+  // filed afresh, so a page loaded again never keeps what the provider held
+  // for the document before it, such as an adopted revision.
+  useEffect(() => {
+    if (board === null) return;
+    events.onFrame?.(board.path, frameRef.current);
+    events.onBridge(board.path, bridgeRef.current);
+    return () => {
+      events.onBridge(board.path, null);
+      events.onFrame?.(board.path, null);
+    };
+  }, [events, board]);
   return (
     // Around the draft as well as the frame: the draft is a sibling of the
     // frame, so an expansion raised inside the frame would leave it outside
@@ -187,20 +253,32 @@ function HtmlArtifactCommentFrame(
     // the surface, and the menus it raises resolve their container from it.
     <ArtifactExpansion title={props.title}>
       <ArtifactPagesFrame
+        ref={pagesFrame}
         source={served}
         title={props.title}
         className="h-full w-full"
         height={null}
         commenting={commenting}
+        onCommentPage={setBoard}
         onSize={noop}
-        onStatus={(status) => events.onStatus(path, status)}
-        onBridge={(bridge) => events.onBridge(path, bridge)}
-        onTextSelection={(selection) =>
-          events.onTextSelection?.(path, selection)
-        }
-        onFrame={(frame) => events.onFrame?.(path, frame)}
-        renderOverlay={(onEntryPage) =>
-          commenting && onEntryPage ? events.renderOverlay?.(path, true) : null
+        onStatus={(status) => {
+          if (page !== null) events.onStatus(page, status);
+        }}
+        onBridge={(bridge) => {
+          bridgeRef.current = bridge;
+        }}
+        onTextSelection={(selection) => {
+          if (page !== null) events.onTextSelection?.(page, selection);
+        }}
+        onFrame={(frame) => {
+          frameRef.current = frame;
+        }}
+        overlay={
+          commenting && page !== null ? (
+            // A fresh overlay per page: its outlines and pins belong to the
+            // page they were drawn for.
+            <Fragment key={page}>{events.renderOverlay?.(page, true)}</Fragment>
+          ) : null
         }
         sourceEquivalent={sourceEquivalent}
         toolbarControls={
