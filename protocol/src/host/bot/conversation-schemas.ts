@@ -203,7 +203,7 @@ export const BOT_CONVERSATION_IMAGES_ONLY_TEXT = " ";
  * post with the images it has, and with `answer`. Absent for a message that
  * carries none.
  */
-export const botConversationSendRequestSchema = lazySchema(() =>
+export const botConversationSendRequestSchemaV14 = lazySchema(() =>
   botConversationSendRequestSchemaV13.extend({
     attachments: z
       .array(botConversationAttachmentSchema)
@@ -212,8 +212,57 @@ export const botConversationSendRequestSchema = lazySchema(() =>
       .optional(),
   }),
 );
+
+/**
+ * One question's answer in a member's answers to a bot's card: the options
+ * they picked, in the question's order, and their own words. A Skip picks
+ * nothing and says nothing.
+ */
+export const botConversationQuestionAnswerEntrySchema = lazySchema(() =>
+  z.object({
+    /** Which of the row's questions, from 0. */
+    questionIndex: z.number().int().min(0),
+    skipped: z.boolean(),
+    selected: z.array(z.string().min(1)),
+    /** `null` where they wrote nothing. */
+    text: z.string().min(1).max(100_000).nullable(),
+  }),
+);
+export type BotConversationQuestionAnswerEntry = z.infer<
+  typeof botConversationQuestionAnswerEntrySchema
+>;
+
+/**
+ * `bot.conversation.send@1.5`: a member's answers to every open question of a
+ * bot's card at once (T167), each answered or skipped. The bound host settles
+ * them all and writes them as one message, or refuses the whole set and
+ * writes nothing: with `QUESTION_ALREADY_SETTLED` when any of them is already
+ * settled, and as an invalid argument when an open question is missing, an
+ * index is repeated or out of range, or an answer is not one the question
+ * takes. `text` keeps its 1.0 floor and is not read: the host writes the
+ * message's text from the card's questions and the answers
+ * (`botQuestionAnswersText`), which is what a client sends in it. The
+ * message goes where `answer`'s does; one sender's set has one request id, so
+ * the same set sent again lands on the message the first one wrote. Absent
+ * otherwise; never set with `answer`, `announcementId`, `redeliver`,
+ * `supersedes`, `attachments`, `origin` or `spoken`.
+ */
+export const botConversationSendRequestSchema = lazySchema(() =>
+  botConversationSendRequestSchemaV14.extend({
+    answers: z
+      .object({
+        /** The bot's row that asks, by its message id. */
+        questionMessageId: z.string().min(1).max(255),
+        entries: z.array(botConversationQuestionAnswerEntrySchema).min(1),
+      })
+      .optional(),
+  }),
+);
 export type BotConversationSendRequest = z.infer<
   typeof botConversationSendRequestSchema
+>;
+export type BotConversationSendAnswers = NonNullable<
+  BotConversationSendRequest["answers"]
 >;
 
 /** The 1.2 request, frozen by hand: without `origin` and `spoken`. */
@@ -561,6 +610,13 @@ export const BOT_THREAD_ANCHOR_MESSAGE = "message";
  * a client does not know is ignored.
  */
 export const BOT_HOST_TAKES_IMAGES = "images";
+
+/**
+ * The `threadAnchors` value saying the bot's bound host takes a member's
+ * answers to a card as one set (`bot.conversation.send@1.5`), queued for it
+ * by another host. No row, as {@link BOT_HOST_TAKES_IMAGES}.
+ */
+export const BOT_HOST_TAKES_ANSWER_SETS = "answers";
 
 /**
  * The channel rows, beyond a member's post, a question, a proposal and a
