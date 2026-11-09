@@ -153,7 +153,8 @@ export class SessionRecorder {
   private stopWhenOpen: RecordingStopReason | null = null;
   private trackSet: TrackSetSummary | null = null;
   private stopReason: RecordingStopReason | null = null;
-  private stopElapsedSeconds = 0;
+  /** The audio clock as the stop was asked for; null until one is. */
+  private stoppedAtClock: number | null = null;
   /** The first write or capture that failed, kept through the stop. */
   private failure: IoFailure | null = null;
   /** The page is going: nothing more waits, and the close goes now. */
@@ -251,7 +252,7 @@ export class SessionRecorder {
     }
     this.state = "stopping";
     this.stopReason = reason;
-    this.stopElapsedSeconds = this.elapsed();
+    this.stoppedAtClock = this.options.ports.output.currentTime();
     if (this.timer !== null) window.clearTimeout(this.timer);
     this.timer = null;
     this.options.ports.log.unlisten(this.onEvent);
@@ -259,12 +260,42 @@ export class SessionRecorder {
     if (opened === null) return;
     const stopping = opened.capture.stop();
     if (reason === "unload") {
+      // Observed, and nothing more. The files are already being finished and
+      // closed below, so this must not wait for the capture, reopen anything
+      // or finish a second time; it is here because the promise would
+      // otherwise go unanswered and reject into the window.
+      //
+      // It is NOT what decides how a late failure is reported, and does not
+      // make that deterministic: the capture's own `onError` can already have
+      // reached `ioFailed` and set `failure`, and the outcome is published
+      // from `closeFiles`, after this. On an unload, reporting is best-effort
+      // either way.
+      void stopping.catch((error: unknown) => {
+        appLogger.warn("[soundtrack] a capture failed as the page went away", {
+          error: describeLogError(error),
+        });
+      });
       this.finishNow();
       return;
     }
-    void stopping.then((summary) => {
-      this.finish(summary);
-    });
+    // Both ways, and neither silently: a capture that cannot account for its
+    // audio REJECTS, and a rejection left unhandled here would be an unhandled
+    // rejection and a recording that never finishes its files at all, because
+    // nothing else calls `finish`. What it must not become is a clean ending —
+    // the failure is recorded first, so the outcome's reason says the capture
+    // failed rather than naming whatever asked it to stop.
+    void stopping.then(
+      (summary) => {
+        this.finish(summary);
+      },
+      (error: unknown) => {
+        appLogger.warn("[soundtrack] a recording's capture did not finish", {
+          error: describeLogError(error),
+        });
+        this.failure ??= "failed";
+        this.finish(null);
+      },
+    );
   }
 
   /** A stop asked for while the files opened, which any wait there can bring. */
@@ -274,6 +305,21 @@ export class SessionRecorder {
 
   private stopped(): boolean {
     return this.state === "stopping" || this.state === "stopped";
+  }
+
+  /**
+   * Audio time recorded: the clock at the stop, less the origin.
+   *
+   * Kept as the two readings and subtracted here, rather than subtracted at
+   * the stop, because the origin can be set AFTER the stop — the first frame
+   * arrives over a `MessagePort` and the dispatch can lose the race. Measured
+   * at the stop, such a recording reported a duration of zero over a file with
+   * audio in it.
+   */
+  private recordedSeconds(): number {
+    const { stoppedAtClock, firstFrameAt } = this;
+    if (stoppedAtClock === null || firstFrameAt === null) return 0;
+    return Math.max(0, stoppedAtClock - firstFrameAt);
   }
 
   /** Audio time since the first frame. */
@@ -321,7 +367,19 @@ export class SessionRecorder {
   /** The first line of the log, once the first frame says where time starts. */
   private writeHeader(clockSeconds: number): void {
     const { opened, trackSet } = this;
-    if (this.state !== "recording" || this.firstFrameAt !== null) return;
+    // A first frame that arrives while this is STOPPING still sets the origin,
+    // and has to. The capture reports it over a `MessagePort`, so an ordinary
+    // stop can beat the dispatch; refusing it would leave `firstFrameAt` null,
+    // which makes `flush` skip the audio that did arrive and closes a
+    // recording with frames in it as `empty`.
+    //
+    // What refuses is a recording whose files are going or gone, and the test
+    // for that is `closeAsked` rather than the state: `state` only becomes
+    // `stopped` once the close ANSWERS, so a page going away leaves a window
+    // in which it still reads `stopping` and the files have already been told
+    // to close. Nothing may be written in it.
+    if (this.closeAsked || this.state === "opening") return;
+    if (this.firstFrameAt !== null) return;
     if (opened === null || trackSet === null) return;
     this.firstFrameAt = clockSeconds;
     const { director, quality } = this.options;
@@ -489,7 +547,7 @@ export class SessionRecorder {
           kind: "saved",
           recordingId: opened.recordingId,
           name: opened.name,
-          durationSeconds: this.stopElapsedSeconds,
+          durationSeconds: this.recordedSeconds(),
           reason: closedReason,
         });
         return;

@@ -50,6 +50,7 @@ export { resourcesMutationKeys } from "@/lib/query-keys/resources-mutation-keys"
 export { chatContinueMutationKeys } from "@/lib/query-keys/chat-continue-mutation-keys";
 export { chatHydrateMutationKeys } from "@/lib/query-keys/chat-hydrate-mutation-keys";
 export { feedbackDraftMutationKeys } from "@/lib/query-keys/feedback-draft-mutation-keys";
+export { draftsMutationKeys } from "@/lib/query-keys/drafts-mutation-keys";
 export { chatFallbackMutationKeys } from "@/lib/query-keys/chat-fallback-mutation-keys";
 export { managedCommandMutationKeys } from "@/lib/query-keys/managed-command-mutation-keys";
 export { agentMutationKeys } from "@/lib/query-keys/agent-mutation-keys";

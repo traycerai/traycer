@@ -27,6 +27,7 @@ interface ComposerToolbarProps {
    *  left group renders, leaves stay presentational. */
   store: ComposerToolbarStore;
   onAttachImages: (files: ReadonlyArray<File>) => void;
+  onAttachFiles: (files: ReadonlyArray<File>) => void;
   canSubmit: boolean;
   attachmentPending: boolean;
   onSubmit: () => void;
@@ -125,6 +126,7 @@ function ComposerToolbarView(
   const {
     store,
     onAttachImages,
+    onAttachFiles,
     canSubmit,
     attachmentPending,
     onSubmit,
@@ -183,6 +185,7 @@ function ComposerToolbarView(
   const itemProps = {
     presentation: props.presentation === true,
     onAttachImages,
+    onAttachFiles,
     permission,
     onPermissionChange: setPermission,
     supportedPermissionModes,

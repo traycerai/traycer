@@ -11,6 +11,7 @@ import type { Editor } from "@tiptap/core";
 import { closeHistory } from "@tiptap/pm/history";
 import { v4 as uuidv4 } from "uuid";
 import type { IFileDropHost } from "@traycer-clients/shared/platform/runner-host";
+import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import type { ImageAttachmentAttrs } from "@/components/chat/composer/editor/extensions/image-attachment-extension";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
@@ -52,6 +53,32 @@ import {
   getBasename,
   relativizeToWorkspaceRoot,
 } from "@/lib/path/cross-platform-path";
+import { MAX_FILE_ATTACHMENTS_PER_MESSAGE } from "@traycer/protocol/common/file-attachment";
+import {
+  fileAttachmentIdentities,
+  fileAttachmentIdentity,
+  type ComposerFileAttachmentAttrs,
+  type FileNodeSettlement,
+} from "@/lib/composer/file-attachments";
+import type { ComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
+import {
+  attachFileAttachment,
+  refuseFileAttachment,
+  showFileTooLargeToast,
+  showHostOutdatedForFilesToast,
+  showNoHostForFilesToast,
+  showTooManyFilesToast,
+  type FileAttachmentUploadClient,
+  type FileAttachmentUploadTarget,
+  type FileInsertion,
+  type FileNodeSettle,
+  type PutFileBlob,
+  type PutFileBlobVariables,
+} from "@/lib/composer/file-attachment-upload";
+import type { UseMutationResult } from "@tanstack/react-query";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { DraftsPutBlobResponseV12 } from "@traycer/protocol/host/drafts/schemas";
+import { usePutFileBlob } from "@/hooks/drafts/use-drafts-put-file-blob-mutation";
 
 export const IMAGE_MIME_PREFIX = "image/";
 /**
@@ -392,6 +419,12 @@ export interface UseComposerPasteResult {
   onDragLeave: (event: DragEvent<HTMLElement>) => void;
   attachImageFiles: (files: ReadonlyArray<File>) => void;
   /**
+   * Attach non-image files through the file route: each one is hashed,
+   * inserted as a pending `fileAttachment` node and uploaded to the composer's
+   * host. A no-op on a surface that has no file route (`fileAttach: null`).
+   */
+  attachFiles: (files: ReadonlyArray<File>) => void;
+  /**
    * Run a caller-provided async image job under the SAME pending accounting as
    * `attachImageFiles` (so it counts toward `isIngestingImages`/submit gating)
    * and abort signal (fired on unmount). Landing's in-place b64 paste uses this
@@ -409,6 +442,12 @@ export interface UseComposerPasteResult {
    * surfaces that gate submit on attachment activity must check both.
    */
   isResolvingFilePaths: boolean;
+  /**
+   * True while picked files are being read and hashed, before their nodes are
+   * in the document. From insertion on, the node's own pending state holds
+   * send (`containsPendingFileAttachment`).
+   */
+  isAttachingFiles: boolean;
 }
 
 interface ComposerDragState {
@@ -428,10 +467,31 @@ const IDLE_COMPOSER_DRAG_STATE: ComposerDragState = {
 export function isAttachmentIngestPending(
   paste: Pick<
     UseComposerPasteResult,
-    "isIngestingImages" | "isResolvingFilePaths"
+    "isIngestingImages" | "isResolvingFilePaths" | "isAttachingFiles"
   >,
 ): boolean {
-  return paste.isIngestingImages || paste.isResolvingFilePaths;
+  return (
+    paste.isIngestingImages ||
+    paste.isResolvingFilePaths ||
+    paste.isAttachingFiles
+  );
+}
+
+/**
+ * Whether a file-taking composer's attachments hold its send: an ingest still
+ * running, or a file node in the draft whose bytes the host has not confirmed
+ * (`containsPendingFileAttachment`). The second outlives the job that inserted
+ * the node - a tab switch, a reload, another device's upload - so it is read
+ * off the document rather than off this hook's counters.
+ */
+export function composerAttachmentsHoldSend(
+  paste: Pick<
+    UseComposerPasteResult,
+    "isIngestingImages" | "isResolvingFilePaths" | "isAttachingFiles"
+  >,
+  draftHasUnconfirmedFile: boolean,
+): boolean {
+  return isAttachmentIngestPending(paste) || draftHasUnconfirmedFile;
 }
 
 /** Commits resolved paths at the position captured when the paste began. */
@@ -458,7 +518,34 @@ export interface ComposerFilePathIngestArgs {
   readonly beginPathInsertion: () => PathInsertionCommit | null;
 }
 
-function isImageFile(file: File): boolean {
+/**
+ * A surface's file route: where its files are uploaded, and how a pending node
+ * gets into its editor. Passed as `null` by a surface that sends no files (the
+ * bot box, an inline message edit, an artifact); its non-image pastes keep
+ * resolving to paths only.
+ */
+export interface ComposerFileAttachArgs {
+  /** The composer's own host; `null` while it has none to upload to. */
+  readonly target: FileAttachmentUploadTarget | null;
+  readonly put: PutFileBlob;
+  /** Settles a node wherever it now lives: the live editor, else the draft. */
+  readonly settle: FileNodeSettle;
+  /**
+   * Fences a pick to the draft the editor holds now, returning the insertion
+   * to commit once a file is hashed, or `null` when the editor is not ready.
+   * Called at the GESTURE - the picker's change, the paste, the drop - so a
+   * paste whose paths take a while to resolve is still fenced to the draft it
+   * was pasted into.
+   */
+  readonly beginInsertion: () => FileInsertion | null;
+}
+
+/**
+ * The one image/non-image split: paste, drop and the attach picker all route
+ * through it, so a file never goes down a different channel depending on how
+ * it arrived.
+ */
+export function isImageFile(file: File): boolean {
   return file.type.startsWith(IMAGE_MIME_PREFIX);
 }
 
@@ -469,14 +556,21 @@ function isNonImageFile(file: File): boolean {
 interface FilePathResolution {
   readonly name: string;
   readonly path: string | null;
+  /** The pasted `File` behind this entry; `null` for a URI-only entry. */
+  readonly file: File | null;
 }
 
 function resolutionFromPaths(
   name: string,
   resolved: readonly string[],
+  file: File | null,
 ): FilePathResolution {
   const path = resolved.at(0);
-  return { name, path: path !== undefined && path.length > 0 ? path : null };
+  return {
+    name,
+    path: path !== undefined && path.length > 0 ? path : null,
+    file,
+  };
 }
 
 /**
@@ -496,9 +590,9 @@ async function resolveFileToPath(
       FILE_PATH_RESOLUTION_TIMEOUT_MS,
       () => [] as readonly string[],
     );
-    return resolutionFromPaths(name, resolved);
+    return resolutionFromPaths(name, resolved, file);
   } catch {
-    return { name, path: null };
+    return { name, path: null, file };
   }
 }
 
@@ -514,9 +608,9 @@ async function resolveUrlPathToPath(
       FILE_PATH_RESOLUTION_TIMEOUT_MS,
       () => [] as readonly string[],
     );
-    return resolutionFromPaths(name, resolved);
+    return resolutionFromPaths(name, resolved, null);
   } catch {
-    return { name, path: null };
+    return { name, path: null, file: null };
   }
 }
 
@@ -562,7 +656,7 @@ function showFilePathResolutionToast(
 
 interface ResolvedFilePaths {
   readonly resolvedPaths: ReadonlyArray<string>;
-  readonly failedNames: ReadonlyArray<string>;
+  readonly unresolved: ReadonlyArray<FilePathResolution>;
 }
 
 async function resolveFilePaths(
@@ -580,23 +674,38 @@ async function resolveFilePaths(
   const resolvedPaths = results.flatMap((result) =>
     result.path === null ? [] : [result.path],
   );
-  const failedNames = results
-    .filter((result) => result.path === null)
-    .map((result) => result.name);
-  return { resolvedPaths, failedNames };
+  const unresolved = results.filter((result) => result.path === null);
+  return { resolvedPaths, unresolved };
 }
 
-async function resolveAndInsertFilePaths(
-  files: ReadonlyArray<File>,
-  fileUrlPaths: ReadonlyArray<string>,
-  filePaths: ComposerFilePathIngestArgs,
-  commit: PathInsertionCommit,
-): Promise<void> {
-  const { resolvedPaths, failedNames } = await resolveFilePaths(
+/**
+ * Resolves pasted files to paths and inserts them as path spans. A FILE that
+ * resolves to no path - every file on web and on the phone, where there is no
+ * local disk the host can read - goes to `attachUnresolved` instead when the
+ * surface has a file route, and is not reported as a failure.
+ */
+async function resolveAndInsertFilePaths(input: {
+  readonly files: ReadonlyArray<File>;
+  readonly fileUrlPaths: ReadonlyArray<string>;
+  readonly filePaths: ComposerFilePathIngestArgs;
+  readonly commit: PathInsertionCommit;
+  readonly attachUnresolved: ((files: ReadonlyArray<File>) => void) | null;
+}): Promise<void> {
+  const { files, fileUrlPaths, filePaths, commit, attachUnresolved } = input;
+  const { resolvedPaths, unresolved } = await resolveFilePaths(
     files,
     fileUrlPaths,
     filePaths.fileDrops,
   );
+  const uploadable =
+    attachUnresolved === null
+      ? []
+      : unresolved.flatMap((result) =>
+          result.file === null ? [] : [result.file],
+        );
+  const failedNames = unresolved
+    .filter((result) => attachUnresolved === null || result.file === null)
+    .map((result) => result.name);
   const displayPaths = resolvedPaths.map((path) =>
     displayPathForInsertion(path, filePaths.mentionRoots),
   );
@@ -605,7 +714,13 @@ async function resolveAndInsertFilePaths(
   // it already skipped internally and the toast, since there's no longer a
   // composer surface for either to land on.
   if (!commit(displayPaths)) return;
-  showFilePathResolutionToast(resolvedPaths.length, failedNames);
+  if (attachUnresolved !== null && uploadable.length > 0) {
+    attachUnresolved(uploadable);
+  }
+  showFilePathResolutionToast(
+    resolvedPaths.length + uploadable.length,
+    failedNames,
+  );
 }
 
 async function resolveAndInsertNativeClipboardFilePaths(
@@ -636,17 +751,28 @@ async function resolveAndInsertNativeClipboardFilePaths(
  * Non-image file/URL entries resolve through `filePaths`, while images keep
  * their existing independent ingest behavior.
  */
-export function useComposerPasteEvents<Attrs>(
-  imageIngest: ComposerImageIngest<Attrs>,
-  insertAttrs: (attrs: ReadonlyArray<Attrs>) => number,
-  filePaths: ComposerFilePathIngestArgs,
-  captureImageInsertion: ComposerImageInsertionFactory<Attrs> | undefined,
-): UseComposerPasteResult {
+export function useComposerPasteEvents<Attrs>(args: {
+  readonly imageIngest: ComposerImageIngest<Attrs>;
+  readonly insertAttrs: (attrs: ReadonlyArray<Attrs>) => number;
+  readonly filePaths: ComposerFilePathIngestArgs;
+  readonly captureImageInsertion:
+    | ComposerImageInsertionFactory<Attrs>
+    | undefined;
+  readonly fileAttach: ComposerFileAttachArgs | null;
+}): UseComposerPasteResult {
+  const {
+    imageIngest,
+    insertAttrs,
+    filePaths,
+    captureImageInsertion,
+    fileAttach,
+  } = args;
   const [dragState, setDragState] = useState<ComposerDragState>(
     IDLE_COMPOSER_DRAG_STATE,
   );
   const [pendingImageCount, setPendingImageCount] = useState(0);
   const [pendingPathCount, setPendingPathCount] = useState(0);
+  const [pendingFileCount, setPendingFileCount] = useState(0);
   const activeRef = useRef(true);
   const controllersRef = useRef(new Set<AbortController>());
 
@@ -690,23 +816,100 @@ export function useComposerPasteEvents<Attrs>(
     [captureImageInsertion, imageIngest, insertAttrs, trackPendingImageJob],
   );
 
+  // Admits `files` and attaches them through `insert`, the fence the gesture
+  // captured.
+  const attachFencedFiles = useCallback(
+    (files: ReadonlyArray<File>, insert: FileInsertion) => {
+      if (files.length === 0 || fileAttach === null) return;
+      const admitted: File[] = [];
+      let hostRefusal: "no-host" | "host-outdated" | null = null;
+      for (const file of files) {
+        const refusal = refuseFileAttachment(file, fileAttach.target);
+        if (refusal === "too-large") showFileTooLargeToast(file);
+        else if (refusal !== null) hostRefusal = refusal;
+        else admitted.push(file);
+      }
+      // Once per pick: every file in it was refused for the same reason.
+      if (hostRefusal === "no-host") showNoHostForFilesToast();
+      if (hostRefusal === "host-outdated") showHostOutdatedForFilesToast();
+      const target = fileAttach.target;
+      if (admitted.length === 0 || target === null) return;
+      setPendingFileCount((count) => count + 1);
+      void (async () => {
+        const overCap: string[] = [];
+        // In pick order, so the chips land in the order the files were
+        // chosen, and so only one file's bytes are read for hashing at once.
+        for (const file of admitted) {
+          try {
+            const placed = await attachFileAttachment({
+              file,
+              target,
+              put: fileAttach.put,
+              insert,
+              settle: fileAttach.settle,
+            });
+            if (placed === "over-cap") overCap.push(file.name);
+          } catch {
+            reportableErrorToast(
+              "Couldn't attach the file.",
+              { description: "Please try adding it again." },
+              {
+                title: "Could not read file attachment",
+                message: null,
+                code: null,
+                source: "Chat composer",
+              },
+            );
+          }
+        }
+        showTooManyFilesToast(overCap);
+      })().finally(() => {
+        if (!activeRef.current) return;
+        setPendingFileCount((count) => Math.max(0, count - 1));
+      });
+    },
+    [fileAttach],
+  );
+
+  const attachFiles = useCallback(
+    (files: ReadonlyArray<File>) => {
+      // Fenced NOW, before any byte is read: the pick belongs to the draft the
+      // editor holds at this moment, and a file hashed after a send or a
+      // switch must not land in whatever draft holds the editor then.
+      const insert = fileAttach?.beginInsertion() ?? null;
+      if (insert === null) return;
+      attachFencedFiles(files, insert);
+    },
+    [attachFencedFiles, fileAttach],
+  );
+
   const attachFilePaths = useCallback(
     (files: ReadonlyArray<File>, fileUrlPaths: ReadonlyArray<string>) => {
       if (files.length === 0 && fileUrlPaths.length === 0) return;
       const commit = filePaths.beginPathInsertion();
       if (commit === null) return;
+      // Both fences at the gesture, before the paths resolve: a file that
+      // resolves to no path is attached to the draft it was pasted into, not
+      // to whatever draft the editor holds once resolution answers.
+      const fileInsert = fileAttach?.beginInsertion() ?? null;
       setPendingPathCount((count) => count + 1);
-      void resolveAndInsertFilePaths(
+      void resolveAndInsertFilePaths({
         files,
         fileUrlPaths,
         filePaths,
         commit,
-      ).finally(() => {
+        attachUnresolved:
+          fileInsert === null
+            ? null
+            : (unresolved) => {
+                attachFencedFiles(unresolved, fileInsert);
+              },
+      }).finally(() => {
         if (!activeRef.current) return;
         setPendingPathCount((count) => Math.max(0, count - 1));
       });
     },
-    [filePaths],
+    [attachFencedFiles, fileAttach, filePaths],
   );
 
   const attachNativeClipboardFilePaths = useCallback(() => {
@@ -812,11 +1015,13 @@ export function useComposerPasteEvents<Attrs>(
     onDragEnter,
     onDragLeave,
     attachImageFiles,
+    attachFiles,
     runPendingImageJob: trackPendingImageJob,
     isDraggingFiles: dragState.depth > 0,
     dragOverlayVariant: dragState.depth > 0 ? dragState.overlayVariant : null,
     isIngestingImages: pendingImageCount > 0,
     isResolvingFilePaths: pendingPathCount > 0,
+    isAttachingFiles: pendingFileCount > 0,
   };
 }
 
@@ -871,7 +1076,13 @@ export function useComposerPasteAdapter(
     }),
     [preparationSession],
   );
-  return useComposerPasteEvents(imageIngest, insertAttrs, filePaths, undefined);
+  return useComposerPasteEvents({
+    imageIngest,
+    insertAttrs,
+    filePaths,
+    captureImageInsertion: undefined,
+    fileAttach: null,
+  });
 }
 
 function hostStorableImage(file: File): boolean {
@@ -1110,6 +1321,7 @@ async function hashImageAttrsFromFiles(
 export function useComposerHashPasteAdapter(
   insertAttrs: (attrs: ReadonlyArray<ImageAttachmentAttrs>) => number,
   filePaths: ComposerFilePathIngestArgs,
+  fileAttach: ComposerFileAttachArgs | null,
 ): UseComposerPasteResult {
   // One session per mount, for the reason the base64 adapter has one.
   const preparationSession = useMemo(
@@ -1164,7 +1376,13 @@ export function useComposerHashPasteAdapter(
     }),
     [preparationSession],
   );
-  return useComposerPasteEvents(imageIngest, insertAttrs, filePaths, undefined);
+  return useComposerPasteEvents({
+    imageIngest,
+    insertAttrs,
+    filePaths,
+    captureImageInsertion: undefined,
+    fileAttach,
+  });
 }
 
 export interface ComposerPasteEditorHandle {
@@ -1172,8 +1390,20 @@ export interface ComposerPasteEditorHandle {
   readonly insertImageAttachments: (
     attrs: ReadonlyArray<ImageAttachmentAttrs>,
   ) => void;
+  readonly insertFileAttachment: (
+    attrs: ComposerFileAttachmentAttrs,
+  ) => boolean;
+  readonly settleFileAttachment: (
+    id: string,
+    settlement: FileNodeSettlement,
+  ) => boolean;
   readonly beginPathInsertion: () => PathInsertionCommit | null;
   readonly focus: () => void;
+  /** Read once per hashed file, for the per-message file count. */
+  readonly getJSON: () => JsonContent;
+  /** With `draftGeneration`, what a file pick is fenced to. */
+  readonly getEditorIncarnation: () => ComposerEditorIncarnation | null;
+  readonly draftGeneration: () => number;
 }
 
 export function useComposerPaste(
@@ -1206,6 +1436,105 @@ export function useComposerPaste(
 }
 
 /**
+ * Whether a surface takes file attachments, and where they go. `null` is a
+ * surface with no file route; a route whose `target` is `null` has one but no
+ * host to upload to yet, and refuses a pick with a toast.
+ */
+export interface ComposerFileRoute {
+  readonly target: FileAttachmentUploadTarget | null;
+  readonly put: PutFileBlob;
+  /**
+   * Settles a file node in this surface's PERSISTED draft. Reached when the
+   * live editor no longer holds the node - the composer unmounted while the
+   * upload ran - so the stored draft says what the upload did before a
+   * restart can lose the registry that knows it.
+   */
+  readonly settleDraft: FileNodeSettle;
+}
+
+/** A surface's file route to `hostId`, stable while the host and client are. */
+export function useComposerFileRoute(input: {
+  readonly hostId: string | null;
+  readonly client: FileAttachmentUploadClient | null;
+  readonly putFileBlob: UseMutationResult<
+    DraftsPutBlobResponseV12,
+    HostRpcError,
+    PutFileBlobVariables
+  >;
+  readonly settleDraft: FileNodeSettle;
+}): ComposerFileRoute {
+  const { hostId, client, settleDraft } = input;
+  const put = usePutFileBlob(input.putFileBlob);
+  return useMemo(
+    () => ({
+      target: hostId === null || client === null ? null : { hostId, client },
+      put,
+      settleDraft,
+    }),
+    [client, hostId, put, settleDraft],
+  );
+}
+
+/**
+ * The editor half of a surface's file route, from the same handle its images
+ * are inserted through.
+ */
+export function useComposerFileAttachArgs(
+  editorRef: {
+    readonly current: ComposerPasteEditorHandle | null;
+  },
+  fileRoute: ComposerFileRoute | null,
+): ComposerFileAttachArgs | null {
+  const beginInsertion = useCallback((): FileInsertion | null => {
+    const handle = editorRef.current;
+    if (handle === null || !handle.isReady()) return null;
+    const incarnation = handle.getEditorIncarnation();
+    const generation = handle.draftGeneration();
+    return (attrs) => {
+      const live = editorRef.current;
+      if (
+        live === null ||
+        !live.isReady() ||
+        live.getEditorIncarnation() !== incarnation ||
+        live.draftGeneration() !== generation
+      ) {
+        return "dropped";
+      }
+      // Counted on the hashed identity: a file the draft already carries adds
+      // no line to the agent's list, so only a NEW one can be over the cap.
+      const identities = fileAttachmentIdentities(live.getJSON());
+      if (
+        !identities.has(fileAttachmentIdentity(attrs)) &&
+        identities.size >= MAX_FILE_ATTACHMENTS_PER_MESSAGE
+      ) {
+        return "over-cap";
+      }
+      return live.insertFileAttachment(attrs) ? "inserted" : "dropped";
+    };
+  }, [editorRef]);
+  const settleDraft = fileRoute?.settleDraft ?? null;
+  const settle = useCallback<FileNodeSettle>(
+    (id, settlement) => {
+      // The live editor first: while the composer is mounted its document IS
+      // the draft, and writing the store underneath it would be overwritten by
+      // the next keystroke. Only a node the editor does not hold - the
+      // composer unmounted while the upload ran - is settled in the store.
+      if (editorRef.current?.settleFileAttachment(id, settlement) === true) {
+        return;
+      }
+      settleDraft?.(id, settlement);
+    },
+    [editorRef, settleDraft],
+  );
+  const target = fileRoute?.target ?? null;
+  const put = fileRoute?.put ?? null;
+  return useMemo(
+    () => (put === null ? null : { target, put, settle, beginInsertion }),
+    [beginInsertion, put, settle, target],
+  );
+}
+
+/**
  * {@link useComposerPaste}'s hash-only twin, for the three chat surfaces. Same
  * editor handle, same file-path ingest, same events - only the image channel
  * differs, which is the whole point of the `ComposerImageIngest` seam.
@@ -1216,6 +1545,7 @@ export function useComposerHashPaste(
   },
   fileDrops: IFileDropHost,
   mentionRoots: ReadonlyArray<string>,
+  fileRoute: ComposerFileRoute | null,
 ): UseComposerPasteResult {
   const insertAttrs = useCallback(
     (attrs: ReadonlyArray<ImageAttachmentAttrs>): number => {
@@ -1236,7 +1566,8 @@ export function useComposerHashPaste(
     () => ({ fileDrops, mentionRoots, beginPathInsertion }),
     [fileDrops, mentionRoots, beginPathInsertion],
   );
-  return useComposerHashPasteAdapter(insertAttrs, filePaths);
+  const fileAttach = useComposerFileAttachArgs(editorRef, fileRoute);
+  return useComposerHashPasteAdapter(insertAttrs, filePaths, fileAttach);
 }
 
 export function insertImageAttachmentsCommand(
