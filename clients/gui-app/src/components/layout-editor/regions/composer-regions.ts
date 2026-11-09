@@ -169,7 +169,17 @@ export const ATTACH_IMAGE_REGION: LayoutRegion<"attachImage"> = {
   where: "Composer - toolbar, left",
   whereByHost: null,
   hint: null,
-  keywords: ["attach", "image", "file", "screenshot", "paste", "upload"],
+  // "attach image" is the region's previous name, kept so a search in the
+  // old wording still lands here.
+  keywords: [
+    "attach",
+    "attach image",
+    "image",
+    "file",
+    "screenshot",
+    "paste",
+    "upload",
+  ],
   rows: [TOOLBAR_LEFT_ORDER_ROW],
   shellGate: alwaysAvailable,
   availability: alwaysLive,
