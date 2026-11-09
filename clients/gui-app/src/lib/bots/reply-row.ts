@@ -170,6 +170,10 @@ function loadedOriginRow(
     {
       ...originRowBase(post.messageId, "user", post.timestamp, text),
       attachments: buildAttachmentsFromJSONContent(post.message.content),
+      // A card's answers sent together draw as the channel draws them.
+      ...(post.questionAnswers === undefined
+        ? {}
+        : { questionAnswers: post.questionAnswers }),
     },
     userId,
     post.conversationRequest ?? null,
