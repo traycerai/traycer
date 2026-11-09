@@ -24,6 +24,7 @@ const recorded = vi.hoisted(() => ({
   notificationSupported: true,
   trays: [] as TrayEventHandle[],
   notificationHandles: [] as NotificationEventHandle[],
+  nativeThemeListeners: new Map<string, Array<() => void>>(),
 }));
 
 vi.mock("electron", () => {
@@ -101,7 +102,34 @@ vi.mock("electron", () => {
       createFromPath: (): unknown => ({}),
       createEmpty: (): unknown => ({}),
     },
+    nativeTheme: {
+      shouldUseDarkColorsForSystemIntegratedUI: true,
+      on(event: string, listener: () => void): void {
+        const listeners = recorded.nativeThemeListeners.get(event) ?? [];
+        listeners.push(listener);
+        recorded.nativeThemeListeners.set(event, listeners);
+      },
+      removeListener(event: string, listener: () => void): void {
+        recorded.nativeThemeListeners.set(
+          event,
+          (recorded.nativeThemeListeners.get(event) ?? []).filter(
+            (candidate) => candidate !== listener,
+          ),
+        );
+      },
+    },
   };
+});
+
+vi.mock("node:child_process", () => {
+  const execFile = (): void => undefined;
+  Object.defineProperty(execFile, Symbol.for("nodejs.util.promisify.custom"), {
+    value: (): Promise<{ stdout: string; stderr: string }> => {
+      // Keep the icon refresh pending: notice tests need no image decoding.
+      return new Promise(() => undefined);
+    },
+  });
+  return { execFile };
 });
 
 vi.mock("electron-log", () => ({
@@ -154,6 +182,7 @@ afterEach(() => {
   recorded.notificationSupported = true;
   recorded.trays.length = 0;
   recorded.notificationHandles.length = 0;
+  recorded.nativeThemeListeners.clear();
 });
 
 describe("DesktopTrayController.showNotice", () => {
