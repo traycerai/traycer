@@ -34,12 +34,13 @@ import type {
   ConfigAgentMemoriesSetResponse,
 } from "@traycer/protocol/host/config/schemas";
 import type {
-  EnvironmentStatusResponseV11,
+  EnvironmentStatusResponseV12,
   EnvironmentUploadReceipt,
 } from "@traycer/protocol/host/environment-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
   mountTeamPage,
+  mountTeamPageNegotiating,
   requireTeamHostClient,
   resetTeamPageHarness,
   type TeamPageHarness,
@@ -121,8 +122,8 @@ function receipt(
 const script: {
   reads: ConfigAgentMemoriesResponse[];
   get: (() => Promise<ConfigAgentMemoriesResponse>) | null;
-  statuses: EnvironmentStatusResponseV11[];
-  status: (() => Promise<EnvironmentStatusResponseV11>) | null;
+  statuses: EnvironmentStatusResponseV12[];
+  status: (() => Promise<EnvironmentStatusResponseV12>) | null;
   set: (request: {
     readonly enabled: boolean;
   }) =>
@@ -882,7 +883,7 @@ describe("Agent memories ▸ the host row's write", () => {
   );
 
   it("retires an active observation when a new client serves the same host", async () => {
-    let resolveStatus: (value: EnvironmentStatusResponseV11) => void = () => {
+    let resolveStatus: (value: EnvironmentStatusResponseV12) => void = () => {
       throw new Error("status was not started");
     };
     script.set = () => queuedAnswer(UPLOAD);
@@ -1072,7 +1073,10 @@ describe("Agent memories ▸ the host row's write", () => {
       read(false, 5),
       read(true, 7),
     ];
-    mount();
+    const harness = mountTeamPageNegotiating({ kind: "host" }, handlers(), {
+      "environment.status": { major: 1, minor: 2 },
+    });
+    render(<AgentMemoriesSettingsPanel />, { wrapper: harness.Wrapper });
     await flipOn();
 
     await waitFor(async () =>
@@ -1081,6 +1085,33 @@ describe("Agent memories ▸ the host row's write", () => {
     await vi.advanceTimersByTimeAsync(10_000);
     await waitFor(async () =>
       expect(await line()).toContain("Running agents pick this up"),
+    );
+  });
+
+  it("shows a queued edit's stale refusal from a negotiated 1.1 host", async () => {
+    script.set = () => queuedAnswer(UPLOAD);
+    script.reads = [read(false, 5)];
+    script.statuses = [
+      environmentStatusFixture({
+        pendingUploads: [
+          pendingUploadFixture({
+            kind: "agent_memory",
+            key: "memory",
+            uploadId: UPLOAD,
+            receipt: "refused",
+            code: "ENVIRONMENT_WRITE_STALE",
+          }),
+        ],
+      }),
+    ];
+    const harness = mountTeamPageNegotiating({ kind: "host" }, handlers(), {
+      "environment.status": { major: 1, minor: 1 },
+    });
+    render(<AgentMemoriesSettingsPanel />, { wrapper: harness.Wrapper });
+    await flipOn();
+
+    await waitFor(async () =>
+      expect(await line()).toContain("Someone else changed this setting first"),
     );
   });
 
@@ -1355,7 +1386,7 @@ describe("Agent memories ▸ the host row's write", () => {
   });
 
   it("stands down when the configuration switches while status is in flight", async () => {
-    let resolveStatus: (value: EnvironmentStatusResponseV11) => void = () => {
+    let resolveStatus: (value: EnvironmentStatusResponseV12) => void = () => {
       throw new Error("status was not started");
     };
     script.set = () => queuedAnswer(UPLOAD);
@@ -1387,7 +1418,7 @@ describe("Agent memories ▸ the host row's write", () => {
   });
 
   it("ignores an older held status after a newer write supersedes it", async () => {
-    let resolveStatus: (value: EnvironmentStatusResponseV11) => void = () => {
+    let resolveStatus: (value: EnvironmentStatusResponseV12) => void = () => {
       throw new Error("status was not started");
     };
     script.set = () => queuedAnswer(UPLOAD);
@@ -1429,7 +1460,7 @@ describe("Agent memories ▸ the host row's write", () => {
   });
 
   it("ignores a status response after the row unmounts", async () => {
-    let resolveStatus: (value: EnvironmentStatusResponseV11) => void = () => {
+    let resolveStatus: (value: EnvironmentStatusResponseV12) => void = () => {
       throw new Error("status was not started");
     };
     script.set = () => queuedAnswer(UPLOAD);
