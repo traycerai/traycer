@@ -144,6 +144,7 @@ function harness(manifest: SoundtrackManifest, random: () => number) {
     openPorts,
     random,
     recordingChannel: () => null,
+    openMediaSession: () => null,
   });
   return { store, openPorts, opened };
 }
@@ -516,6 +517,7 @@ describe("soundtrack store: reading the manifest and the volume", () => {
       openPorts: openFakePorts,
       random: mulberry32(1),
       recordingChannel: () => null,
+      openMediaSession: () => null,
     });
     return {
       store,

@@ -626,7 +626,7 @@ export const useSettingsStore = create<SettingsState>()(
       artifactIconColorMode: "byType",
       artifactIconColors: DEFAULT_EPIC_NODE_ICON_COLORS,
       defaultEditor: "vscode",
-      voiceInputEnabled: true,
+      voiceInputEnabled: false,
       voiceLanguage: "auto",
       worktreeBranchPrefix: DEFAULT_WORKTREE_BRANCH_PREFIX,
       quoteReplyEnabled: true,

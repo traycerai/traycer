@@ -25,6 +25,7 @@ import {
   hashOnlyImageHashes,
   inlineHashOnlyImageBytes,
 } from "@/lib/composer/image-atoms";
+import { containsFileAttachments } from "@/lib/composer/file-attachments";
 import { NO_HOST_HELD_HASHES } from "@/lib/composer/host-held-image-hashes";
 import { submitHostHeldImageHashes } from "@/lib/composer/submit-host-held-image-hashes";
 import { captureComposerSubmitGeneration } from "@/lib/composer/composer-submit-generation";
@@ -1315,6 +1316,7 @@ function isEmptyComposerSubmit(input: {
   return (
     input.contentText.trim().length === 0 &&
     !containsImageAtoms(input.editorContent) &&
+    !containsFileAttachments(input.editorContent) &&
     input.annotationRecords.length === 0
   );
 }

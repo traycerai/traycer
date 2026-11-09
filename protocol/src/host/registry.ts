@@ -594,6 +594,8 @@ import {
   lifecycleReleaseShutdownV10,
 } from "@traycer/protocol/host/lifecycle/contracts";
 import {
+  configAgentMemoriesGetV10,
+  configAgentMemoriesSetV10,
   configBrowserGetV10,
   configBrowserSetV10,
   configEnvDeleteV10,
@@ -730,9 +732,13 @@ import {
   botMemorySubscribeV10,
   botListV10,
   botListV11,
+  botListV12,
   botListUpgradeV10ToV11,
+  botListUpgradeV11ToV12,
   botOpenV10,
   botReadV10,
+  botReadV11,
+  botReadUpgradeV10ToV11,
   botSubscribeV10,
   botSubscribeV11,
   botSubscribeV12,
@@ -744,6 +750,7 @@ import {
   botUpdateRunSettingsV10,
   botUpdateDirectiveV10,
   botUpdateReplyModeV10,
+  botUpdateAppearanceV10,
   botUpdateTitleV10,
   botNotificationLevelReadV10,
   botNotificationLevelSetV10,
@@ -759,8 +766,10 @@ import {
   draftsListUpgradeV10ToV20,
   draftsListDowngradeV20ToV10,
   draftsPutBlobUpgradeV10ToV11,
+  draftsPutBlobUpgradeV11ToV12,
   draftsPutBlobV10,
   draftsPutBlobV11,
+  draftsPutBlobV12,
   draftsReadBlobUpgradeV10ToV11,
   draftsReadBlobV10,
   draftsReadBlobV11,
@@ -952,6 +961,7 @@ import {
   epicReadChatAttachmentUpgradeV10ToV11,
   epicReadChatAttachmentV10,
   epicReadChatAttachmentV11,
+  epicReadChatFileV10,
   epicReadCloudChatPartV10,
   epicReadCloudChatPayloadV10,
   epicResolveCloudChatHeadV10,
@@ -6788,6 +6798,32 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  "config.agentMemories.get": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: configAgentMemoriesGetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "config.agentMemories.set": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: configAgentMemoriesSetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "config.visualization.get": {
     degrade: { kind: "unsupported" },
     1: {
@@ -9439,13 +9475,19 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   "bot.list": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: { contract: botListV10, upgradeFromPreviousVersion: null },
         // @1.1 carries each environment's main bot (`mainBotIds`, T44b).
         1: {
           contract: botListV11,
           upgradeFromPreviousVersion: botListUpgradeV10ToV11,
+        },
+        // @1.2 carries each row's appearance (T147); @1.0 and @1.1 bind the
+        // row without it, so an older peer's re-parse strips it.
+        2: {
+          contract: botListV12,
+          upgradeFromPreviousVersion: botListUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},
@@ -9454,9 +9496,14 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   "bot.read": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: { contract: botReadV10, upgradeFromPreviousVersion: null },
+        // @1.1 carries the row's appearance (T147); @1.0 binds it without.
+        1: {
+          contract: botReadV11,
+          upgradeFromPreviousVersion: botReadUpgradeV10ToV11,
+        },
       },
       downgradePathsFromLatest: {},
     },
@@ -9504,6 +9551,19 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: botUpdateReplyModeV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "bot.updateAppearance": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: botUpdateAppearanceV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -10798,6 +10858,24 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         1: {
           contract: epicReadChatAttachmentV11,
           upgradeFromPreviousVersion: epicReadChatAttachmentUpgradeV10ToV11,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  // One chat FILE attachment's bytes, the non-image sibling of the read above:
+  // same request, same chat gate, same `missing` arm, but it returns the bytes
+  // alone and sniffs nothing; the node carries the name and media type.
+  // Optional and off the floor because a new method name is handshake-fatal against a released
+  // peer; a host without it has no file attachments to serve.
+  "epic.readChatFile": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicReadChatFileV10,
+          upgradeFromPreviousVersion: null,
         },
       },
       downgradePathsFromLatest: {},
@@ -13612,10 +13690,15 @@ const HOST_RPC_DRAFTS_REGISTRY_DEFINITION = {
   // declaration, not the enforcement - the upgrade path does not re-parse, so
   // an over-cap `@1.0` body still reaches the resolver and is refused by the
   // host store's own version-independent decoded cap.
+  // `@1.2` adds `kind: "file"` (absent `kind` is still an image): a file may
+  // carry 16 MiB with its declared name and media type, and a stored file is
+  // answered with its path on the host. Request growth plus one optional
+  // response key, which an older peer's frozen response strips; both upgrades
+  // are identity.
   "drafts.putBlob": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: draftsPutBlobV10,
@@ -13624,6 +13707,10 @@ const HOST_RPC_DRAFTS_REGISTRY_DEFINITION = {
         1: {
           contract: draftsPutBlobV11,
           upgradeFromPreviousVersion: draftsPutBlobUpgradeV10ToV11,
+        },
+        2: {
+          contract: draftsPutBlobV12,
+          upgradeFromPreviousVersion: draftsPutBlobUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},

@@ -105,11 +105,15 @@ interface UseHostScopedMutationArgs<
         captured: Captured,
       ) => void)
     | undefined;
+  /** Settlement work tied to the captured request, including a lost reply. */
+  readonly onSettled?:
+    | ((hostId: string | null, captured: Captured) => void)
+    | undefined;
   /**
-   * Per-request state to hand `onSuccess` alongside the host id. Runs inside
+   * Per-request state to hand `onSuccess` and `onSettled` alongside the host id. Runs inside
    * `onMutate` - before the request is dispatched, once per `mutate()`, in
    * the order the `mutate()`s were called - and its answer travels with THAT
-   * mutation to its own `onSuccess`. A caller that stashes per-press state in
+   * mutation to its own callbacks. A caller that stashes per-press state in
    * a ref and reads it back in `onSuccess` gets the LAST press's value
    * instead: the mutation-level callback closes over the ref, not over the
    * call, and nothing serializes two `mutate()`s on one observer.
@@ -220,6 +224,7 @@ export function useHostScopedMutationForClient<
       // throw inside it settles the mutation too), and a null host id is a
       // reason to skip the invalidation rather than to guess a key for it.
       onSettled: (_data, _error, _variables, ctx) => {
+        if (ctx !== undefined) args.onSettled?.(ctx.hostId, ctx.captured);
         const sentOn = ctx?.hostId ?? null;
         if (sentOn === null) return;
         for (const method of args.invalidateMethods) {

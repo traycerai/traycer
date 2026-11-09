@@ -43,6 +43,7 @@ import {
   type ForwardedShortcut,
 } from "@/lib/sandbox/forwarded-shortcuts";
 import { useFullscreenBlocker } from "@/lib/sandbox/overlay-owner";
+import { reportHistoryGestureFrameWheel } from "@/components/layout/shell/desktop-history-frame-wheel";
 import {
   artifactContentPolicy,
   mcpAppContentPolicy,
@@ -575,6 +576,7 @@ export function SandboxFrame(props: SandboxFrameProps) {
   const onWheel = useEffectEvent((wheel: SandboxWheel) => {
     const iframe = frameRef.current;
     if (iframe === null) return;
+    if (reportHistoryGestureFrameWheel(iframe, wheel)) return;
     if (wheel.deltaY !== 0) {
       onScrollGesture(wheel.deltaY > 0 ? "toward-end" : "away-from-end");
     }

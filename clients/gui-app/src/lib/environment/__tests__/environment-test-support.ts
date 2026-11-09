@@ -8,7 +8,7 @@ import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtur
 import type {
   EnvironmentItemStatus,
   EnvironmentPendingUpload,
-  EnvironmentStatusResponseV11,
+  EnvironmentStatusResponseV12,
 } from "@traycer/protocol/host/environment-schemas";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
@@ -96,8 +96,8 @@ export function pendingUploadFixture(
 }
 
 export function environmentStatusFixture(
-  overrides: Partial<EnvironmentStatusResponseV11>,
-): EnvironmentStatusResponseV11 {
+  overrides: Partial<EnvironmentStatusResponseV12>,
+): EnvironmentStatusResponseV12 {
   return {
     consent: null,
     planes: { records: "moved", broker: "moved", room: "moved" },
@@ -112,6 +112,7 @@ export function environmentStatusFixture(
     receiptAgeMs: 0,
     items: [],
     pendingUploads: [],
+    acceptedUploads: [],
     setup: null,
     remoteAccess: "off",
     ...overrides,

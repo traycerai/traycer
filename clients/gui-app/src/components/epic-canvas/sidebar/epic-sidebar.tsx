@@ -1801,6 +1801,7 @@ function SidebarBulkDeleteController(props: {
       ? describeTreeDeleteDisclosure({
           tree,
           kind: "agent",
+          includeNestedAgents: false,
           nodeIds,
           nestedAgentsKnown,
         })

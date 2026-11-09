@@ -15,6 +15,7 @@ import { chatPublicationDefinitiveReason } from "@/lib/chats/chat-publication-de
 import { DRAFT_BLOB_PUT_RESPONSE_TIMEOUT_MS } from "@/lib/drafts/draft-blob-transport-budget";
 import { moveIsRunning } from "@/lib/environment/move-in-progress";
 import { CATALOG_LIST_RESPONSE_TIMEOUT_MS } from "@/lib/host-rpc-policy/catalog-list-response-timeout";
+import { CHAT_FILE_READ_RESPONSE_TIMEOUT_MS } from "@/lib/host-rpc-policy/chat-file-read-response-timeout";
 import { PROVIDER_PACK_DISCOVERY_CHECK_TIMEOUT_MS } from "@/lib/host-rpc-policy/provider-pack-discovery-check-timeout";
 import { SIMULATOR_OPEN_RESPONSE_TIMEOUT_MS } from "@/lib/host-rpc-policy/simulator-open-response-timeout";
 import { RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS } from "@/lib/rate-limits/rate-limit-timing";
@@ -1585,6 +1586,14 @@ export const HOST_METHOD_POLL_TABLE = {
   // cache's own retry ladder (`use-image-blob-url.ts`), not by a cadence. An
   // interval here would re-fetch megabytes to re-learn a constant.
   "epic.readChatAttachment": { ...LATEST_SCHEDULING, poll: null },
+  // A file attachment's bytes, fetched when its chip is opened. Content-addressed
+  // like the image read, so nothing polls it. Up to 16 MiB in one response, so
+  // it declares the same two-minute budget `drafts.putBlob` does.
+  "epic.readChatFile": {
+    ...LATEST_SCHEDULING,
+    joinResponseTimeoutMs: CHAT_FILE_READ_RESPONSE_TIMEOUT_MS,
+    poll: null,
+  },
   // Like the chat attachment read, artifact attachment bytes are addressed by
   // their content hash and the image cache owns retry after a transient miss.
   // Polling this unary method would only re-fetch immutable bytes.
@@ -1757,6 +1766,11 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   "bot.updateReplyMode": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "bot.updateAppearance": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,
@@ -2854,6 +2868,13 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   "config.browser.get": { ...LATEST_SCHEDULING, poll: null },
+  // The Settings write observer owns its bounded, single-flight refresh loop.
+  "config.agentMemories.get": { ...LATEST_SCHEDULING, poll: null },
+  "config.agentMemories.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "config.browser.set": {
     mode: "fifo",
     joinResponseTimeoutMs: null,

@@ -9086,6 +9086,17 @@ export const chatSubscribeV142 = defineStreamRpcContract({
  * A user row may also say `spoken`, a member's message spoken on a call.
  * Optional, so a peer below 1.43 strips it on decode and reads the row as the
  * plain message it is.
+ *
+ * A bot's question may say `multiSelect`: several of its options may be
+ * picked. Optional, so a peer below 1.43 strips it on decode and draws the
+ * question as one pick; `1.42` and every older line bind the assistant row
+ * without it (`assistantMessageSchemaPreMultiSelect`).
+ *
+ * A resume divider's trigger may carry `conversationMessage`, the member's
+ * message a bot conversation delivery carried. Defaulted `null`, so a peer
+ * below 1.43 drops it on decode and draws the divider it always did; `1.42`
+ * and every older line bind the trigger without it
+ * (`autonomousResumeTriggerSchemaPreConversationMessage`).
  */
 export const chatSubscribeV143 = defineStreamRpcContract({
   method: "chat.subscribe",

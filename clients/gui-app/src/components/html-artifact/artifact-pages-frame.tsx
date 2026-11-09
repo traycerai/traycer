@@ -36,6 +36,7 @@ import type {
 } from "@/lib/sandbox/bridge-host";
 import type { CanvasTextSelection } from "@/lib/sandbox/canvas-bridge";
 import { cn } from "@/lib/utils";
+import { registerHistoryGestureFrame } from "@/components/layout/shell/desktop-history-frame-wheel";
 
 const NO_PERMISSIONS = [] as const;
 const noop = (): void => undefined;
@@ -270,14 +271,7 @@ function commentsOnLoadedEntryPage(
   return commenting && onEntryPage && provenPage?.path === entryPath;
 }
 
-/**
- * A served plain-html artifact: a folder of pages the reader moves between
- * inside one frame. The app keeps its own page stack, so Back and Home work
- * whatever the page does, and a link to a page the folder lacks says so
- * instead of leaving a blank frame. Every surface that shows such an
- * artifact (the canvas tile, the chat row) renders it through here.
- */
-export function ArtifactPagesFrame(props: {
+interface ArtifactPagesFrameProps {
   readonly initialHistory?: PageHistory;
   readonly source: Extract<SandboxSource, { kind: "artifact" }>;
   readonly title: string;
@@ -316,7 +310,23 @@ export function ArtifactPagesFrame(props: {
   readonly toolbarControls?: ReactNode;
   /** Rows for the chip's "More actions" menu, after Actual size. */
   readonly menuItems?: ReactNode;
-}) {
+}
+
+/**
+ * A served plain-html artifact: a folder of pages the reader moves between
+ * inside one frame. The app keeps its own page stack, so Back and Home work
+ * whatever the page does, and a link to a page the folder lacks says so
+ * instead of leaving a blank frame. Every surface that shows such an
+ * artifact (the canvas tile, the chat row) renders it through here.
+ *
+ * The expansion is NOT raised here. It belongs to whoever composes the whole
+ * surface, because the comment draft and the selection overlay are siblings of
+ * this frame, not children of it: an expansion starting inside the frame would
+ * leave the draft outside the raised surface, behind an inert document.
+ * `html-artifact-comment-surface.tsx`, `html-artifact-frame.tsx` and the chat
+ * row each raise one around everything that belongs to their surface.
+ */
+export function ArtifactPagesFrame(props: ArtifactPagesFrameProps) {
   const {
     source,
     title,
@@ -334,6 +344,21 @@ export function ArtifactPagesFrame(props: {
   const expanded = useArtifactExpanded();
   const entryPath = source.entryPath === "" ? "index.html" : source.entryPath;
   const bridgeRef = useRef<SandboxBridgeHost | null>(null);
+  // A wheel the page could not use reaches the app's back/forward swipe
+  // before it moves the transcript, as it would over a Markdown artifact.
+  const unregisterFrame = useRef<(() => void) | null>(null);
+  const attachFrame = (frame: HTMLIFrameElement | null): void => {
+    unregisterFrame.current?.();
+    unregisterFrame.current =
+      frame === null
+        ? null
+        : registerHistoryGestureFrame(frame, (held) =>
+            bridgeRef.current?.notify("traycer/history-gesture/hold", {
+              held,
+            }),
+          );
+    onFrame?.(frame);
+  };
   const [controlsElement, setControlsElement] = useState<HTMLDivElement | null>(
     null,
   );
@@ -427,7 +452,11 @@ export function ArtifactPagesFrame(props: {
   };
 
   const standIn = pageStandIn(current, { goHome, readAgain });
-  const fills = height === null;
+  // An expanded surface fills its panel whatever sizing the inline row asked
+  // for - the same substitution the detached copy used to make for itself by
+  // passing `height={null}` and `h-full w-full`. It carries the zoom controls
+  // and keeps the controls on show for the same reason it did.
+  const fills = height === null || expanded;
   const onEntryPage = currentPath === entryPath && standIn === null;
   const commentingHere = commentsOnLoadedEntryPage(
     commenting,
@@ -453,7 +482,11 @@ export function ArtifactPagesFrame(props: {
   });
   useEffect(() => {
     tellReadyPage();
-  }, [provenPage, commentingHere]);
+    // `fills` too: it follows `expanded`, and an already-ready page that is not
+    // told its new view keeps the old one - a surface expanded from a fixed-height
+    // row would stay zoom-disabled until something else happened to send a view.
+    // `tellReadyPage` reads the live scale, so the reader keeps theirs.
+  }, [provenPage, commentingHere, fills]);
   const pages = pageNavigationFor(source.manifest, current);
   const zoom = fills ? { ready, scale } : null;
   const pageInsetTop = useControlsInset(controlsElement, fills, coarsePointer);
@@ -476,24 +509,7 @@ export function ArtifactPagesFrame(props: {
         toolbarControls={
           <>
             {props.toolbarControls}
-            <ArtifactExpandButton title={title}>
-              <ArtifactPagesFrame
-                source={source}
-                initialHistory={current}
-                title={title}
-                className="h-full w-full"
-                height={null}
-                commenting={false}
-                onSize={noop}
-                onStatus={noop}
-                onBridge={null}
-                onTextSelection={null}
-                onFrame={null}
-                renderOverlay={null}
-                sourceEquivalent={sourceEquivalent}
-                menuItems={props.menuItems}
-              />
-            </ArtifactExpandButton>
+            <ArtifactExpandButton />
           </>
         }
         menuItems={props.menuItems}
@@ -509,8 +525,8 @@ export function ArtifactPagesFrame(props: {
           appCsp={null}
           permissions={NO_PERMISSIONS}
           appRequests={null}
-          className={className}
-          height={height}
+          className={expanded ? "h-full w-full" : className}
+          height={fills ? null : height}
           onSize={onSize}
           onStatus={(status) => {
             setReady(status === "ready");
@@ -530,7 +546,7 @@ export function ArtifactPagesFrame(props: {
           onTextSelection={(selection) => onTextSelection?.(selection)}
           pageNavigation={pageNavigation}
           sourceEquivalent={sourceEquivalent}
-          ref={onFrame}
+          ref={attachFrame}
         />
         {renderOverlay?.(onEntryPage)}
         {standIn}

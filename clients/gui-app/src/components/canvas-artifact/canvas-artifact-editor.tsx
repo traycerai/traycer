@@ -1,5 +1,6 @@
 import { useArtifactEscape } from "@/components/artifacts/artifact-expanded-context";
 import { ArtifactExpandButton } from "@/components/artifacts/artifact-expand-button";
+import { ArtifactExpansion } from "@/components/artifacts/artifact-expansion";
 import type { CanvasPageError } from "@/lib/sandbox/canvas-bridge";
 import { resolveCanvasBoardLink } from "./canvas-links";
 import {
@@ -130,7 +131,6 @@ interface NodeInteraction {
   readonly selected?: boolean;
 }
 export interface CanvasArtifactEditorProps {
-  readonly initialView?: { readonly page: string; readonly viewport: Viewport };
   readonly viewOnly?: boolean;
   readonly onAddError?: (path: string, error: CanvasPageError) => void;
   readonly artifactId: string;
@@ -319,8 +319,21 @@ function canvasCommentSurfaces(
   };
 }
 
-export function CanvasArtifactEditor({
-  initialView,
+/**
+ * The expansion wraps the editor instead of living inside it, because the
+ * editor READS it - `useArtifactEscape` registers the canvas's own Escape
+ * modes with it - and a component cannot consume a context it renders the
+ * provider for.
+ */
+export function CanvasArtifactEditor(props: CanvasArtifactEditorProps) {
+  return (
+    <ArtifactExpansion title="Canvas">
+      <CanvasEditorSurface {...props} />
+    </ArtifactExpansion>
+  );
+}
+
+function CanvasEditorSurface({
   artifactId,
   store,
   awareness,
@@ -333,7 +346,9 @@ export function CanvasArtifactEditor({
   viewOnly,
   onAddError,
 }: CanvasArtifactEditorProps) {
-  const startingView = initialView ?? DEFAULT_VIEW;
+  // One instance now serves inline and expanded alike, so there is no second
+  // editor to seed with the first one's page and viewport.
+  const startingView = DEFAULT_VIEW;
   const readOnly = viewOnly === true;
   const activeStore = useRef<CanvasLayoutStore | null>(null);
   useLayoutEffect(() => {
@@ -1146,6 +1161,10 @@ export function CanvasArtifactEditor({
             role="application"
             tabIndex={-1}
             aria-label="Canvas"
+            // The whole canvas, fullscreen header included, keeps horizontal
+            // swipes: the gesture must not change meaning between the board
+            // and the chrome beside it.
+            data-history-gesture-owner=""
             className="relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden bg-canvas text-foreground outline-none"
             onPointerDownCapture={(event) => {
               // A relayed board press dismisses overlays without taking the
@@ -1413,22 +1432,7 @@ export function CanvasArtifactEditor({
                           trailing={
                             <>
                               {frameEvents?.renderToolbarControls?.()}
-                              <ArtifactExpandButton title="Canvas">
-                                <CanvasArtifactEditor
-                                  artifactId={artifactId}
-                                  store={store}
-                                  awareness={null}
-                                  user={user}
-                                  sourceForBoard={sourceForBoard}
-                                  boardFiles={boardFiles}
-                                  frameEvents={null}
-                                  liveSlotBudget={liveSlotBudget}
-                                  boardByteLengths={boardByteLengths}
-                                  viewOnly={viewOnly}
-                                  onAddError={onAddError}
-                                  initialView={{ page, viewport }}
-                                />
-                              </ArtifactExpandButton>
+                              <ArtifactExpandButton />
                             </>
                           }
                           undo={store.undo}

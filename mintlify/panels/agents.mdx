@@ -44,7 +44,7 @@ The composer is the prompt area for an agent on the Chat interface. See [Compose
 | **Thinking effort**      | Choose reasoning depth when the selected model supports it.                                              |
 | **Fast mode**            | Use a faster service tier when the selected model offers one.                                            |
 | **Ultracode**            | Request Claude Code's multi-agent mode for this chat, where offered. See [Ultracode](#ultracode). |
-| **Attach image**         | Attach images. Add files and folders with `@` mentions, drag and drop, or paste. See [Attachments and voice](#attachments-and-voice). |
+| **Attach**               | Attach images and files. Add files and folders with `@` mentions, drag and drop, or paste. See [Attachments and voice](#attachments-and-voice). |
 | **Skills and commands**  | Type `/` or `$` to use the coding agent's commands and skills. See [Artifact workflow](/concepts/artifact-workflow) for Traycer's planning skills. |
 | **Voice**                | Dictate a prompt instead of typing.                                                                      |
 | **Send / Stop**          | Start the next turn or stop the active one.                                                              |
@@ -120,13 +120,13 @@ The choice belongs to this chat, not to every new chat. Changes apply from the n
 
 ## Attachments And Voice
 
-The **Attach image** button attaches images only. Pasting or dropping an image on the composer attaches it too. If the selected model can't read images, the composer says so; remove the images or switch models.
+The **Attach** button attaches images and other files, videos included, up to 16 MiB each. Pasting or dropping an image on the composer attaches it too. In the browser and the phone app, pasting or dropping any other file attaches it as well. An attached file shows in the conversation by name; select it to download it. If the selected model can't read images, the composer says so; remove the images or switch models.
 
 To give the agent files or folders:
 
 - Mention them with `@`. See [Mention context](/panels/agents/composer#mention-context).
 - Drag a file or folder from the **File Tree** into the composer. It becomes an inline `@` mention, just like one picked from the mention picker.
-- Paste or drop files from your computer. Traycer inserts each file's path, relative to the workspace when it can.
+- In the desktop app, paste or drop files from your computer. Traycer inserts each file's path, relative to the workspace when it can, and attaches a file it can't find a path for.
 
 <FeatureVideo src="https://assets.traycer.ai/docs/videos/dnd-file-to-composer.mp4" label="Drag a File Tree item into the composer" />
 
@@ -312,7 +312,11 @@ Open an agent row's ⋯ menu, or right-click the row:
 | **Archive** / **Unarchive**         | Hides the agent, or brings it back. See [Archiving](#archiving).                                  |
 | **Share with task** / **Make private** | Controls whether people you share the Task with can see this agent. Not shown for Terminal-interface agents. See [Sharing](/panels/sharing). |
 | **Copy ID**                         | Copies the agent's ID.                                                                            |
-| **Delete**                          | Deletes the agent after you confirm. Agents nested under it are kept, and the ones directly under it move to the top level. |
+| **Delete**                          | Deletes the agent after you confirm. By default, agents nested under it are kept, and the ones directly under it move to the top level. |
+
+In the Agents panel, deleting a single agent with nested agents offers an unchecked **Also delete all … nested agents** option. Select it to include every level of nested agents; the confirmation button shows the total number to delete. This option is unavailable while the list is loading, any included agent is working, or a required host is offline or unavailable.
+
+If deletion stops partway through, the dialog reports how many agents were deleted and where it stopped. Agents already deleted are not restored.
 
 ### Archiving
 

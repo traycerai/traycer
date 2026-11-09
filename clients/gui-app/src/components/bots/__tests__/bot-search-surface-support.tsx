@@ -437,11 +437,13 @@ vi.mock("@/components/bots/bot-threads-view", () => ({
 vi.mock("@/components/bots/bot-settings-panel", () => ({
   BotChannelSettingsPanel: () => <div data-testid="stub-settings" />,
 }));
+vi.mock("@/components/bots/bot-transcript-image-scope", () => ({
+  BotTranscriptImageScope: (props: { children: ReactNode }) => props.children,
+}));
 vi.mock("@/components/bots/bot-chat-transcript", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/components/bots/bot-chat-transcript")
   >()),
-  BotTranscriptImageScope: (props: { children: ReactNode }) => props.children,
   BotChatTranscript: (props: {
     chatId: string;
     surface: { kind: string } | null;

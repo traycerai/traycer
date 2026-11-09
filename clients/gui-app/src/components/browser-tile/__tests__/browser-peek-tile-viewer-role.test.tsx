@@ -140,6 +140,14 @@ describe("BrowserPeekTile viewer role", () => {
     expect(screen.getByText("View only")).not.toBeNull();
   });
 
+  it("leaves horizontal swipes to the read-only screencast", () => {
+    renderTile();
+
+    expect(readOnlySurface().hasAttribute("data-history-gesture-owner")).toBe(
+      true,
+    );
+  });
+
   it("sends nothing and shows nothing when a gesture lands on the surface", () => {
     renderTile();
     const stream = liveStream();

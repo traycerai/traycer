@@ -35,6 +35,7 @@ import {
   artifactOperationBlockSchema,
   artifactOperationBlockSchemaPreHtml,
   autonomousResumeBlockSchema,
+  autonomousResumeBlockSchemaPreConversationMessage,
   commandBlockSchema,
   compactionBlockSchema,
   compactionBlockSchemaPreNotApplied,
@@ -57,6 +58,7 @@ import {
 } from "@traycer/protocol/persistence/epic/content-blocks";
 import {
   assistantMessageSchema,
+  assistantMessageSchemaPreMultiSelect,
   userMessageSchema,
   userMessageSchemaPreCanvas,
   userMessageSchemaPreConversation,
@@ -162,7 +164,7 @@ export const openContentBlockSchemaPreHtml = lazySchema(() =>
     openPlanBlockSchema,
     errorBlockSchema,
     compactionBlockSchemaPreNotApplied,
-    autonomousResumeBlockSchema,
+    autonomousResumeBlockSchemaPreConversationMessage,
     openSteerBlockSchema,
     interviewBlockSchema,
     artifactOperationBlockSchemaPreHtml,
@@ -182,7 +184,7 @@ export const openContentBlockSchemaPreArtifact = lazySchema(() =>
     openPlanBlockSchema,
     errorBlockSchema,
     compactionBlockSchemaPreNotApplied,
-    autonomousResumeBlockSchema,
+    autonomousResumeBlockSchemaPreConversationMessage,
     openSteerBlockSchema,
     interviewBlockSchema,
     artifactOperationBlockSchema,
@@ -202,7 +204,7 @@ export const openContentBlockSchemaPreNotApplied = lazySchema(() =>
     openPlanBlockSchema,
     errorBlockSchema,
     compactionBlockSchemaPreNotApplied,
-    autonomousResumeBlockSchema,
+    autonomousResumeBlockSchemaPreConversationMessage,
     openSteerBlockSchema,
     interviewBlockSchema,
     artifactOperationBlockSchema,
@@ -235,6 +237,30 @@ export const openContentBlockSchema = lazySchema(() =>
 );
 export type OpenContentBlock = z.infer<typeof openContentBlockSchema>;
 
+/**
+ * Open blocks `chat.subscribe@1.42` ships: the live union with the resume
+ * divider before `1.43`'s member's message on a trigger.
+ */
+export const openContentBlockSchemaPreConversationMessage = lazySchema(() =>
+  z.discriminatedUnion("type", [
+    openTextBlockSchema,
+    reasoningBlockSchema,
+    toolCallBlockSchema,
+    fileChangeBlockSchema,
+    commandBlockSchema,
+    subAgentBlockSchema,
+    approvalBlockSchema,
+    todoBlockSchema,
+    openPlanBlockSchema,
+    errorBlockSchema,
+    compactionBlockSchema,
+    autonomousResumeBlockSchemaPreConversationMessage,
+    openSteerBlockSchema,
+    interviewBlockSchema,
+    artifactOperationBlockSchema,
+  ]),
+);
+
 /** Open blocks through `chat.subscribe@1.41`, before the feedback-draft stamp. */
 export const openContentBlockSchemaPreFeedbackDraft = lazySchema(() =>
   z.discriminatedUnion("type", [
@@ -249,7 +275,7 @@ export const openContentBlockSchemaPreFeedbackDraft = lazySchema(() =>
     openPlanBlockSchema,
     errorBlockSchema,
     compactionBlockSchema,
-    autonomousResumeBlockSchema,
+    autonomousResumeBlockSchemaPreConversationMessage,
     openSteerBlockSchema,
     interviewBlockSchema,
     artifactOperationBlockSchema,
@@ -275,7 +301,7 @@ export const openContentBlockSchemaPreDelivery = lazySchema(() =>
     openPlanBlockSchema,
     errorBlockSchema,
     compactionBlockSchemaPreNotApplied,
-    autonomousResumeBlockSchema,
+    autonomousResumeBlockSchemaPreConversationMessage,
     openSteerBlockSchema,
     interviewBlockSchema,
     artifactOperationBlockSchemaPreHtml,
@@ -360,7 +386,7 @@ export const openUserMessageSchemaPreConversation = lazySchema(() =>
 
 /** Assistant rows carried by stream minors through 1.35. */
 export const openAssistantMessageSchemaPreNotApplied = lazySchema(() =>
-  assistantMessageSchema.extend({
+  assistantMessageSchemaPreMultiSelect.extend({
     sender: openAgentSenderSchema,
     blocks: z.array(openContentBlockSchemaPreNotApplied),
   }),
@@ -374,9 +400,20 @@ export const openAssistantMessageSchema = lazySchema(() =>
 );
 export type OpenAssistantMessage = z.infer<typeof openAssistantMessageSchema>;
 
+/**
+ * The open assistant row `chat.subscribe@1.42` ships: its questions say no
+ * `multiSelect`, and its resume dividers' triggers no `conversationMessage`.
+ */
+const openAssistantMessageSchemaPreMultiSelect = lazySchema(() =>
+  assistantMessageSchemaPreMultiSelect.extend({
+    sender: openAgentSenderSchema,
+    blocks: z.array(openContentBlockSchemaPreConversationMessage),
+  }),
+);
+
 /** The open assistant row `chat.subscribe@1.37` through `@1.41` ship. */
 export const openAssistantMessageSchemaPreFeedbackDraft = lazySchema(() =>
-  assistantMessageSchema.extend({
+  assistantMessageSchemaPreMultiSelect.extend({
     sender: openAgentSenderSchema,
     blocks: z.array(openContentBlockSchemaPreFeedbackDraft),
   }),
@@ -384,7 +421,7 @@ export const openAssistantMessageSchemaPreFeedbackDraft = lazySchema(() =>
 
 /** The open assistant row `chat.subscribe@1.23` through `@1.28` ship. */
 export const openAssistantMessageSchemaPreDelivery = lazySchema(() =>
-  assistantMessageSchema.extend({
+  assistantMessageSchemaPreMultiSelect.extend({
     sender: openAgentSenderSchema,
     blocks: z.array(openContentBlockSchemaPreDelivery),
   }),
@@ -411,11 +448,15 @@ export const openMessageSchemaPreFeedbackDraft = lazySchema(() =>
     openAssistantMessageSchemaPreFeedbackDraft,
   ]),
 );
-/** The open row `chat.subscribe@1.42` ships: `tool_call.feedbackDraft`, no `slack` user row. */
+/**
+ * The open row `chat.subscribe@1.42` ships: `tool_call.feedbackDraft`, no
+ * `slack` user row, no `multiSelect` on a question, no `conversationMessage`
+ * on a resume trigger.
+ */
 export const openMessageSchemaPreSlack = lazySchema(() =>
   z.discriminatedUnion("role", [
     openUserMessageSchemaPreSlack,
-    openAssistantMessageSchema,
+    openAssistantMessageSchemaPreMultiSelect,
   ]),
 );
 export const openMessageSchemaPreCanvas = lazySchema(() =>
@@ -427,7 +468,7 @@ export const openMessageSchemaPreCanvas = lazySchema(() =>
 export type OpenMessage = z.infer<typeof openMessageSchema>;
 
 export const openAssistantMessageSchemaPreArtifact = lazySchema(() =>
-  openAssistantMessageSchema.extend({
+  openAssistantMessageSchemaPreMultiSelect.extend({
     blocks: z.array(openContentBlockSchemaPreArtifact),
   }),
 );
@@ -439,7 +480,7 @@ export const openMessageSchemaPreArtifact = lazySchema(() =>
 );
 
 export const openAssistantMessageSchemaPreHtml = lazySchema(() =>
-  openAssistantMessageSchema.extend({
+  openAssistantMessageSchemaPreMultiSelect.extend({
     blocks: z.array(openContentBlockSchemaPreHtml),
   }),
 );

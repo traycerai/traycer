@@ -1,3 +1,5 @@
+import { BOT_CREATURE_SEED_MAX } from "@traycer/protocol/host/bot/schemas";
+
 /**
  * A bot's creature mark: a 5×5 pixel creature, mirrored
  * left to right, with two eyes, drawn in the swatch's ink on the bot's
@@ -11,6 +13,11 @@
  * tried. A separately salted hash picks the silhouette, the cells outside
  * the grid: none, ears above the top corners, feet below the bottom corners,
  * or a crest above the centre.
+ *
+ * A person may choose another creature in the bot's settings: a family and a
+ * seed ({@link CreatureChoice}), from which the same generator grows the mask.
+ * The settings offer a sheet of them at a time, and "Regenerate patterns"
+ * offers the next sheet ({@link nextCreatureSheet}).
  *
  * The tests pin fixed ids to their masks so a bot keeps its creature.
  */
@@ -131,15 +138,121 @@ function isAcceptedMask(rows: readonly number[]): boolean {
   );
 }
 
-export function creatureMark(botId: string): CreatureMark {
-  const silhouette =
-    SILHOUETTES[saltedHash("creature-silhouette", botId) % SILHOUETTES.length];
+/**
+ * A creature the person chose for a bot: its silhouette and the seed its body
+ * grows from. Seed 0 is the bot's own body; every other seed grows another
+ * body from the bot's id. The mask is grown again from these each time, never
+ * stored.
+ */
+export interface CreatureChoice {
+  readonly family: CreatureSilhouette;
+  readonly seed: number;
+}
+
+/** The string a seed's hashes read: the bot's id itself for seed 0. */
+function seedSource(botId: string, seed: number): string {
+  return seed === 0 ? botId : `${botId}#${String(seed)}`;
+}
+
+function familyOf(source: string): CreatureSilhouette {
+  return SILHOUETTES[
+    saltedHash("creature-silhouette", source) % SILHOUETTES.length
+  ];
+}
+
+/** The creature of a chosen family and seed. */
+export function chosenCreatureMark(
+  botId: string,
+  choice: CreatureChoice,
+): CreatureMark {
+  const source = seedSource(botId, choice.seed);
+  const silhouette = choice.family;
   for (let roll = 0; roll < MAX_ROLLS; roll++) {
-    const bits = saltedHash(`creature-body-${String(roll)}`, botId);
+    const bits = saltedHash(`creature-body-${String(roll)}`, source);
     const rows = withAnchors(mirroredRows(bits), silhouette);
     if (isAcceptedMask(rows)) return { rows, silhouette };
   }
   return { rows: withAnchors(FALLBACK_ROWS, silhouette), silhouette };
+}
+
+/** The creature a bot shows when nothing was chosen: its own body, seed 0. */
+export function ownCreature(botId: string): CreatureChoice {
+  return { family: familyOf(botId), seed: 0 };
+}
+
+/** The bot's own creature, grown from its id when nothing was chosen. */
+export function creatureMark(botId: string): CreatureMark {
+  return chosenCreatureMark(botId, ownCreature(botId));
+}
+
+/** How many creatures the settings offer a bot, its own first. */
+export const CREATURE_SHEET_SIZE = 12;
+/** Seeds tried for a sheet before it is cut short; duplicates are skipped. */
+const MAX_SHEET_SEEDS = 64;
+
+/** The seed after `seed`: past the largest it wraps to 1, never to the bot's own 0. */
+function nextSeed(seed: number): number {
+  return seed >= BOT_CREATURE_SEED_MAX ? 1 : seed + 1;
+}
+
+function sameMark(a: CreatureMark, b: CreatureMark): boolean {
+  return (
+    a.silhouette === b.silhouette &&
+    a.rows.every((row, index) => row === b.rows[index])
+  );
+}
+
+/**
+ * A sheet from `firstSeed` on: each seed's creature in the family its seed
+ * hashes to, skipping any that looks like one in `avoid` or one already on
+ * the sheet.
+ */
+function scanSheet(
+  botId: string,
+  firstSeed: number,
+  avoid: readonly CreatureMark[],
+): readonly CreatureChoice[] {
+  const sheet: CreatureChoice[] = [];
+  const marks: CreatureMark[] = [...avoid];
+  let seed = firstSeed;
+  for (
+    let tried = 0;
+    tried < MAX_SHEET_SEEDS && sheet.length < CREATURE_SHEET_SIZE;
+    tried++, seed = nextSeed(seed)
+  ) {
+    const choice = { family: familyOf(seedSource(botId, seed)), seed };
+    const mark = chosenCreatureMark(botId, choice);
+    if (marks.some((offered) => sameMark(offered, mark))) continue;
+    sheet.push(choice);
+    marks.push(mark);
+  }
+  return sheet;
+}
+
+/**
+ * The creatures a bot's settings offer first, the same every time for one
+ * bot: its own first, then the next seeds' creatures.
+ */
+export function creatureSheet(botId: string): readonly CreatureChoice[] {
+  return scanSheet(botId, 0, []);
+}
+
+/**
+ * The sheet "Regenerate patterns" offers after `previous`: the creatures of
+ * the seeds after its last, none looking like one `previous` offered or like
+ * `current`, the creature the bot shows now. The same for the same sheet, so
+ * it never offers the sheet it replaces.
+ */
+export function nextCreatureSheet(
+  botId: string,
+  previous: readonly CreatureChoice[],
+  current: CreatureChoice,
+): readonly CreatureChoice[] {
+  const last = previous.at(-1)?.seed ?? 0;
+  const avoid = [...previous, current].map((choice) =>
+    chosenCreatureMark(botId, choice),
+  );
+  return scanSheet(botId, nextSeed(last), avoid);
 }
 
 /** The avatar sizes a creature is drawn at, in CSS pixels. */

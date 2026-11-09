@@ -1024,6 +1024,16 @@ describe("CommGraphTile", () => {
     });
   });
 
+  it("owns horizontal swipes across the whole graph", async () => {
+    await renderTile();
+
+    const canvas = await screen.findByTestId("comm-graph-canvas");
+
+    expect(
+      canvas.parentElement?.hasAttribute("data-history-gesture-owner"),
+    ).toBe(true);
+  });
+
   it("opens one relay subscription covering every host the epic's agents reference", async () => {
     await renderTile();
 

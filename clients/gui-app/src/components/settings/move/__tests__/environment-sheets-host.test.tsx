@@ -17,7 +17,7 @@ import {
 import type {
   EnvironmentItemStatus,
   EnvironmentReviewResponseV12,
-  EnvironmentStatusResponseV11,
+  EnvironmentStatusResponseV12,
 } from "@traycer/protocol/host/environment-schemas";
 import { EnvironmentSheetsHost } from "@/components/settings/move/environment-sheets-host";
 import type { ThisComputer } from "@/components/settings/move/this-computer";
@@ -76,7 +76,7 @@ interface Reads {
 }
 
 function thisComputerAnswering(
-  status: EnvironmentStatusResponseV11,
+  status: EnvironmentStatusResponseV12,
   shownAt: number | null,
 ): Reads {
   const reads: { status: number; review: number; recorded: string[] } = {
@@ -144,17 +144,25 @@ afterEach(() => {
 });
 
 describe("<EnvironmentSheetsHost /> show-once", () => {
-  it("opens the retrospective by itself for a shared computer whose review was never shown, and records shown once", async () => {
-    const reads = thisComputerAnswering(SHARED, null);
-    renderHost();
+  it.each([1, 2])(
+    "opens the retrospective and records shown once with environment.status@1.%i",
+    async (minor) => {
+      const reads = thisComputerAnswering(SHARED, null);
+      recordNegotiatedHostManifest("old", {
+        "environment.status": { major: 1, minor },
+        "environment.review": { major: 1, minor: 2 },
+        "environment.review.record": { major: 1, minor: 0 },
+      });
+      renderHost();
 
-    expect(await screen.findByTestId("retrospective-sheet")).toBeTruthy();
-    await waitFor(() => expect(reads.recorded).toEqual(["shown"]));
-    expect(useRetrospectiveSheetStore.getState().target).toEqual({
-      hostId: "old",
-      hostName: "Old laptop",
-    });
-  });
+      expect(await screen.findByTestId("retrospective-sheet")).toBeTruthy();
+      await waitFor(() => expect(reads.recorded).toEqual(["shown"]));
+      expect(useRetrospectiveSheetStore.getState().target).toEqual({
+        hostId: "old",
+        hostName: "Old laptop",
+      });
+    },
+  );
 
   it("opens nothing once the review says it was shown", async () => {
     const reads = thisComputerAnswering(SHARED, Date.UTC(2026, 9, 15, 12));

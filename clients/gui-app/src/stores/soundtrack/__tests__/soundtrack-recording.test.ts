@@ -12,6 +12,7 @@ import {
   vi,
   type Mock,
 } from "vitest";
+import { appLogger } from "@/lib/logger";
 import type { MixDirectorId } from "@/lib/soundtrack/directors";
 import type { SoundtrackManifest } from "@/lib/soundtrack/manifest";
 import type {
@@ -113,6 +114,10 @@ class FakeCapture implements MixCapture {
   stops = 0;
   /** While set, `stop` answers only once this resolves. */
   stopGate: Promise<void> | null = null;
+  /** What `stop` resolves with, once the gate lets go. */
+  stopSummary: CaptureSummary = { frames: null, droppedFrames: null };
+  /** Set, `stop` rejects with this instead of resolving. */
+  stopFailure: Error | null = null;
 
   start(handlers: MixCaptureHandlers): void {
     this.handlers = handlers;
@@ -121,7 +126,8 @@ class FakeCapture implements MixCapture {
   async stop(): Promise<CaptureSummary> {
     this.stops += 1;
     await this.stopGate;
-    return { frames: null, droppedFrames: null };
+    if (this.stopFailure !== null) throw this.stopFailure;
+    return this.stopSummary;
   }
 
   firstFrame(clockSeconds: number): void {
@@ -312,6 +318,7 @@ function harness(
     openPorts: () => ports,
     random: mulberry32(1),
     recordingChannel: () => channel,
+    openMediaSession: () => null,
   });
   store.getState().enable();
   store.getState().setSignals({
@@ -441,6 +448,30 @@ const STOP_PATHS: readonly StopPath[] = [
       return advance(0.1);
     },
     reason: "failed",
+    problem: "error",
+    bytes: 600,
+    answer: () => OK,
+  },
+  {
+    // Distinct from "a capture error" above: no `onError` ever fires here,
+    // only `capture.stop()` itself rejecting on an ordinary (non-unload)
+    // stop. This is the `.then`'s own rejection handler, not `onError`'s —
+    // removing that handler would leave this path with no close at all.
+    //
+    // The log's own `recording-end.reason` stays "switch" — it is
+    // `stopRecording()`'s own stop reason, written regardless of the
+    // failure; only the STORE's `problem` comes from `this.failure`
+    // ("error"), a separate field this same close also sets.
+    name: "the capture's own stop rejecting, with no separate capture error",
+    limitSeconds: 100,
+    trigger: (h) => {
+      h.capture.stopFailure = new Error(
+        "the capture could not account for its audio",
+      );
+      h.store.getState().stopRecording();
+      return advance(0.1);
+    },
+    reason: "switch",
     problem: "error",
     bytes: 600,
     answer: () => OK,
@@ -845,6 +876,143 @@ describe("session recorder: the page going while it saves", () => {
 
     expect(h.channel.closes).toHaveLength(1);
     expect(h.store.getState().recording).toMatchObject({ kind: "saved" });
+  });
+});
+
+/**
+ * Rejections are asserted through Node's own `process` event rather than
+ * `window.addEventListener("unhandledrejection")`: `vitest.config.ts` sets
+ * `dangerouslyIgnoreUnhandledErrors`, so an empty-array assertion taken off
+ * the DOM event would read the same whether nothing rejected or nothing
+ * fired at all.
+ */
+function captureUnhandledRejections(): {
+  readonly seen: unknown[];
+  readonly stop: () => void;
+} {
+  const seen: unknown[] = [];
+  const onUnhandled = (reason: unknown): void => {
+    seen.push(reason);
+  };
+  process.on("unhandledRejection", onUnhandled);
+  return {
+    seen,
+    stop: () => {
+      process.off("unhandledRejection", onUnhandled);
+    },
+  };
+}
+
+describe("session recorder: a late first frame, raced against the stop", () => {
+  it("still sets the origin when it arrives during an ordinary stop's drain, writes the audio that follows it, and reports the real duration it recorded", async () => {
+    const h = harness(100, "lossless", MANIFEST);
+    await h.startHeld();
+    await advance(1);
+
+    const stopGate = Promise.withResolvers<void>();
+    h.capture.stopGate = stopGate.promise;
+    h.capture.stopSummary = { frames: null, droppedFrames: null };
+    // Read synchronously, in the same tick `stopRecording` reads it for
+    // `stoppedAtClock`: `startHeld`'s own `vi.waitFor` already advanced the
+    // fake clock by its polling interval before this test's explicit
+    // `advance(1)`, so the clock here is not exactly the literal 1 second
+    // this test asks for — only ever what the clock actually reads.
+    const clockAtStop = h.output.currentTime();
+    h.store.getState().stopRecording();
+    // The message dispatch lost the race: the first frame arrives only now,
+    // reporting the clock time it was really taken at, well before the stop.
+    h.capture.firstFrame(0);
+    // Real audio arriving in the same drain, after the origin is set but
+    // before the capture's own stop answers: `finish()`'s own flush is what
+    // writes it, not the origin being set, so this has to still land.
+    h.capture.chunk(400);
+    const appendGate = Promise.withResolvers<void>();
+    h.channel.appendGate = appendGate.promise;
+    stopGate.resolve();
+    await advance(0);
+    // The capture's stop has answered, but the write that drain triggered is
+    // still held: the close that only follows a real flush must not have
+    // run ahead of it.
+    expect(h.channel.closes).toHaveLength(0);
+    appendGate.resolve();
+    await advance(1);
+
+    const audio = h.channel.appends.filter((call) => call.file === "audio");
+    expect(audio.length).toBeGreaterThan(0);
+    // The 44-byte WAV header plus the 400-byte chunk: both genuinely written,
+    // not merely buffered and then dropped by the close that follows them.
+    expect(audio.reduce((sum, call) => sum + call.bytes.length, 0)).toBe(
+      44 + 400,
+    );
+    expect(h.channel.closes).toHaveLength(1);
+    expect(h.store.getState().recording).toMatchObject({
+      kind: "saved",
+      problem: null,
+      // The origin landed at 0, so the duration is exactly whatever the
+      // clock read when the stop was asked for. The defect this regresses
+      // measured this at the stop, while the origin was still null, and
+      // always reported zero.
+      durationSeconds: clockAtStop,
+    });
+  });
+
+  it("is refused once the files have been told to close, from an unload that already decided the outcome", async () => {
+    const h = harness(100, "lossless", MANIFEST);
+    await h.startHeld();
+    await advance(1);
+
+    window.dispatchEvent(new Event("pagehide"));
+    // `closeAsked` is set synchronously inside the dispatch above, ahead of
+    // any wait: a first frame landing right after is still too late.
+    h.capture.firstFrame(0);
+    await advance(1);
+
+    expect(h.channel.appends).toEqual([]);
+    expect(h.store.getState().recording).toEqual({ kind: "off" });
+  });
+});
+
+describe("session recorder: a capture that fails as the page goes away", () => {
+  it("in this controlled sequence, where nothing else fails, logs the capture's own rejection under its own message and leaves finishNow's outcome unmutated by it", async () => {
+    // This pins ONE sequence: a capture whose stop() rejects, and nothing
+    // else. It is not a claim that an unload's outcome is always "unload" —
+    // `finishNow` answers asynchronously, and an `onError` arriving on its
+    // own (a write failure, a later capture error) can still set `failure`
+    // through its own path. What this sequence rules out is only the
+    // rejection this test induces changing anything by itself.
+    const warn = vi.spyOn(appLogger, "warn").mockReturnValue(undefined);
+    const rejections = captureUnhandledRejections();
+    const h = harness(100, "lossless", MANIFEST);
+    await h.record();
+    h.capture.chunk(400);
+    await advance(0.1);
+    h.capture.stopFailure = new Error(
+      "the capture could not account for its audio",
+    );
+
+    window.dispatchEvent(new Event("pagehide"));
+    await advance(1);
+    await advance(0);
+    await advance(0);
+
+    expect(warn).toHaveBeenCalledWith(
+      "[soundtrack] a capture failed as the page went away",
+      expect.anything(),
+    );
+    expect(warn).not.toHaveBeenCalledWith(
+      "[soundtrack] a recording's capture did not finish",
+      expect.anything(),
+    );
+    // Not mutated to "failed" by this test's own rejection: the unload path
+    // never reads `capture.stop()`'s outcome at all, so nothing here could
+    // have mutated `failure` from it in the first place.
+    expect(h.store.getState().recording).toMatchObject({
+      kind: "saved",
+      problem: null,
+    });
+    expect(rejections.seen).toEqual([]);
+    rejections.stop();
+    warn.mockRestore();
   });
 });
 

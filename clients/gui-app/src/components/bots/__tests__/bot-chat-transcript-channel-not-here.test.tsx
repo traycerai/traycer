@@ -191,6 +191,7 @@ function mountTranscript(surface: BotTranscriptSurface): {
         showConnecting
         header={null}
         landOn={null}
+        flow={null}
       />
     </QueryClientProvider>
   );
