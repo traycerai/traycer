@@ -183,7 +183,7 @@
     "gate": true,
     "fetches": "workspace packages and official on-demand Electron install",
     "coldOrigin": "npm registry; GitHub Electron release assets; native package registries",
-    "decision": "registry packages keep integrity from bun.lock; bootstrap verifies Electron archive and checksum file into the documented mirror/cache; official install-electron runs after dependency install before any lazy import. No GitHub fetch remains in mirror mode.",
+    "decision": "registry packages keep integrity from bun.lock; bootstrap verifies Electron archive and checksum file into the documented mirror/cache; the official install-electron binary runs from its owning clients/desktop workspace after OSS dependency install and before any lazy import. No GitHub fetch remains in mirror mode.",
     "mirrorSource": "independent origin / explicit workflow CI_TOOLS_MIRROR for direct script consumers"
   },
   {
@@ -227,7 +227,7 @@
     "gate": true,
     "fetches": "workspace packages and official on-demand Electron install",
     "coldOrigin": "npm registry; GitHub Electron release assets; native package registries",
-    "decision": "registry packages keep integrity from bun.lock; bootstrap verifies Electron archive and checksum file into the documented mirror/cache; official install-electron runs after dependency install before any lazy import. No GitHub fetch remains in mirror mode.",
+    "decision": "registry packages keep integrity from bun.lock; bootstrap verifies Electron archive and checksum file into the documented mirror/cache; the official install-electron binary runs from its owning clients/desktop workspace after OSS dependency install and before any lazy import. No GitHub fetch remains in mirror mode.",
     "mirrorSource": "independent origin / explicit workflow CI_TOOLS_MIRROR for direct script consumers"
   },
   {
@@ -247,9 +247,9 @@
     "step": "Obtain every released baseline's protocol surface (published asset, else reconstruct from tag)",
     "index": 7,
     "gate": false,
-    "fetches": "workspace packages and official on-demand Electron install",
-    "coldOrigin": "npm registry; GitHub Electron release assets; native package registries",
-    "decision": "registry packages keep integrity from bun.lock; bootstrap verifies Electron archive and checksum file into the documented mirror/cache; official install-electron runs after dependency install before any lazy import. No GitHub fetch remains in mirror mode.",
+    "fetches": "workspace registry packages",
+    "coldOrigin": "npm registry; native package registries",
+    "decision": "package integrity remains pinned by bun.lock. Internal root-only installs have no Electron dependency; desktop consumers are acquired in the OSS workspace and read the bootstrap-verified mirror/cache.",
     "mirrorSource": "independent origin / explicit workflow CI_TOOLS_MIRROR for direct script consumers"
   },
   {
@@ -280,9 +280,9 @@
     "step": "Install workspace dependencies",
     "index": 5,
     "gate": false,
-    "fetches": "workspace packages and official on-demand Electron install",
-    "coldOrigin": "npm registry; GitHub Electron release assets; native package registries",
-    "decision": "registry packages keep integrity from bun.lock; bootstrap verifies Electron archive and checksum file into the documented mirror/cache; official install-electron runs after dependency install before any lazy import. No GitHub fetch remains in mirror mode.",
+    "fetches": "workspace registry packages",
+    "coldOrigin": "npm registry; native package registries",
+    "decision": "package integrity remains pinned by bun.lock. Internal root-only installs have no Electron dependency; desktop consumers are acquired in the OSS workspace and read the bootstrap-verified mirror/cache.",
     "mirrorSource": "independent origin / explicit workflow CI_TOOLS_MIRROR for direct script consumers"
   },
   {

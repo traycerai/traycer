@@ -314,7 +314,7 @@ jobs:
       - id: ci_acquisition_1
         run: |
           bun install --frozen-lockfile
-          bunx --no-install install-electron
+          bun run --cwd clients/desktop install-electron
           echo "executed=true" >> "$GITHUB_OUTPUT"
       # The host-v1.1.5 oracle in `provider-native-schemas.test.ts` regenerates
       # the checked-in fixture straight from the tag and deep-equals the two.
@@ -594,7 +594,7 @@ jobs:
         shell: bash
         run: |
           bun install --frozen-lockfile
-          bunx --no-install install-electron
+          bun run --cwd clients/desktop install-electron
           echo "executed=true" >> "$GITHUB_OUTPUT"
       - name: Build the CLI SEA
         run: bun run --filter @traycer-clients/traycer-cli build:sea
@@ -827,7 +827,7 @@ jobs:
       - id: ci_acquisition_1
         run: |
           bun install --frozen-lockfile
-          bunx --no-install install-electron
+          bun run --cwd clients/desktop install-electron
           echo "executed=true" >> "$GITHUB_OUTPUT"
       - name: Read the installed Electron version
         id: electron

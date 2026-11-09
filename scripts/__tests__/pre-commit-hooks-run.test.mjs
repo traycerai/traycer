@@ -254,7 +254,7 @@ describe("every pre-commit hook runs in a pre-commit.yml job that can execute it
           if (installIndex === -1) continue;
 
           const electronIndex = lines.indexOf(
-            "bunx --no-install install-electron",
+            "bun run --cwd clients/desktop install-electron",
           );
           const executedIndex = lines.indexOf(
             'echo "executed=true" >> "$GITHUB_OUTPUT"',
