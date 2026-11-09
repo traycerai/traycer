@@ -1,10 +1,11 @@
 # `resources/host/` - empty placeholder for legacy `extraResources` entry
 
-> **Empty by design.** Desktop **never** bundles a host binary. Host
-> install/update/uninstall is owned by the **Traycer CLI** and backed by the
-> hosted registry (`versions.json` + minisign). See
-> [`clients/traycer-cli/README.md`](../../../traycer-cli/README.md) for the
-> CLI-driven host lifecycle.
+> **Empty by design.** This directory is not where a host archive is staged.
+> The archive, its signature, the descriptor, and the descriptor signature
+> sit beside the CLI binary under `resources/cli/<platform>-<arch>/` and
+> travel through that directory's existing `extraResources` mapping. Host
+> install/update/uninstall is still owned by the **Traycer CLI**. See
+> [`clients/traycer-cli/README.md`](../../../traycer-cli/README.md).
 
 This directory exists only because `package.json`'s `build.extraResources`
 references it; the `electron-builder` filter is restricted to the explanatory
@@ -18,10 +19,10 @@ runtime through **PID metadata** written by the CLI-installed host at
 ## Do not stage host binaries or wrapper scripts here
 
 The Desktop release pipeline does **not** download a host archive into this
-directory; `traycer host install` (invoked by the Setup splash at first
-launch) is the single source of truth for host install, update, and uninstall.
-It installs the latest registry version by default; a specific version is
-`traycer host install --release <version>`.
+directory. It stages the archive beside the CLI. `traycer host ensure`
+installs from that bundle.
+`traycer host install` installs the latest registry version by default. A
+specific version is `traycer host install --release <version>`.
 
 If you need to side-load a local host archive (instead of the released one),
 install it through the CLI's `--from <path>` option:
@@ -36,8 +37,7 @@ traycer host install --from /absolute/path/to/host.tgz
   removing the directory without also removing the `extraResources` entry would
   break `bun run package`.
 - The placeholder is the cheapest way to keep the packaging job deterministic
-  while making it clear at a glance that Desktop has no business shipping host
-  bytes.
+  while making it clear that host bytes are not staged in this directory.
 
 ## What about `resolveHostBinaryPath` / `TRAYCER_HOST_BINARY`?
 

@@ -24,6 +24,7 @@ import type { HostCredentialProvisionOutcome } from "../host/credential-provisio
 export interface HostEnsureArgs {
   readonly versionRequest: string | null;
   readonly fromPath: string | null;
+  readonly bundledPath?: string | null;
   readonly enableLinger: boolean;
   readonly allowSelfInvocation: boolean;
   // Install the host bytes only; leave OS-service registration to the
@@ -89,6 +90,7 @@ export function buildHostEnsureCommand(args: HostEnsureArgs): CommandFn {
       runtime: ctx.runtime,
       versionRequest: args.versionRequest,
       fromPath: args.fromPath,
+      bundledPath: args.bundledPath ?? null,
       enableLinger: args.enableLinger,
       allowSelfInvocation: args.allowSelfInvocation,
       noServiceRegister: args.noServiceRegister,

@@ -89,8 +89,8 @@ export function modeAllowsPrerelease(mode: DesktopUpdateChannelMode): boolean {
  *     the remedy for an abandoned line is to publish its stable or to reinstall.
  *   - `explicit-prerelease` keeps the existing broad behavior (the newest
  *     usable stable or RC release, whatever its line).
- *   - `stable-only` never reaches the namespaced selector at all - it uses the
- *     ordinary stable feed - so it is answered here only for totality.
+ *   - `stable-only` follows the published stable head and explicitly refuses
+ *     prereleases: generic providers do not enforce `allowPrerelease`.
  */
 export function isSelectableCandidate(input: {
   readonly mode: DesktopUpdateChannelMode;
@@ -98,6 +98,9 @@ export function isSelectableCandidate(input: {
   readonly candidateVersion: string;
   readonly isStrictlyNewer: boolean;
 }): boolean {
+  if (input.mode === "stable-only") {
+    return /^((?:0|[1-9]\d*)\.){2}(?:0|[1-9]\d*)$/.test(input.candidateVersion);
+  }
   if (input.mode !== "implicit-rc-line") {
     return true;
   }
