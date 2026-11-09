@@ -992,6 +992,32 @@ describe("fetch watchdogs and heartbeat semantics", () => {
     expect(globalThis.fetch).toHaveBeenCalledTimes(4);
   });
 
+  it("waits before the second attempt on the same origin", async () => {
+    vi.useFakeTimers();
+    const heartbeats: string[] = [];
+    let calls = 0;
+    globalThis.fetch = vi.fn(async () => {
+      calls += 1;
+      return calls === 1
+        ? response("slow down", 429, {})
+        : response("ok", 200, {});
+    }) as typeof globalThis.fetch;
+
+    const pending = fetchText(RESOURCE_URL, {
+      signal: null,
+      onHeartbeat: (heartbeat) => heartbeats.push(heartbeat.phase),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toBe(1);
+    await vi.advanceTimersByTimeAsync(749);
+    expect(calls).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(pending).resolves.toBe("ok");
+    expect(calls).toBe(2);
+    expect(heartbeats).toEqual(["attempt", "backoff", "attempt"]);
+  });
+
   it("resets the gap watchdog after each received chunk", async () => {
     vi.useFakeTimers();
     const heartbeats: string[] = [];

@@ -159,6 +159,15 @@ export async function fetchTextFromOrigins<T>(
         if (cycle > 0 && !retryable.has(url)) continue;
         for (let local = 0; local < 2; local += 1) {
           if (signal.aborted) throw networkError(url, lastError);
+          if (local > 0) {
+            emitHeartbeat(
+              opts.onHeartbeat,
+              "backoff",
+              attempt,
+              urls.length * 4,
+            );
+            await waitForRetry(NETWORK_RETRY_BACKOFF_MS);
+          }
           attempt += 1;
           emitHeartbeat(opts.onHeartbeat, "attempt", attempt, urls.length * 4);
           let body: string;

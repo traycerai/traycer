@@ -74,6 +74,7 @@ jobs:
         with:
           mirror-base-url: ${{ inputs.mirror_base_url || vars.CI_TOOLS_MIRROR_BASE_URL }}
           cold: ${{ inputs.cold }}
+          no-cache: ${{ inputs.blackhole_github }}
           tools: python-312 hooks
       - uses: ./.github/actions/bootstrap-ci-tools
         id: ci_tool_2

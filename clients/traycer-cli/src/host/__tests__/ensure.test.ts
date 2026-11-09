@@ -1006,6 +1006,116 @@ describe("ensureHost", () => {
       );
     });
 
+    it("keeps a stable bundle off a newer release candidate", async () => {
+      prepareWithdrawnInstalledBundle();
+      const platformKey = currentHostPlatformKey();
+      mocks.fetchManifestMock.mockResolvedValue({
+        versions: [
+          {
+            version: "1.8.0",
+            yanked: false,
+            platforms: { [platformKey]: { available: true } },
+          },
+          {
+            version: "1.9.0-rc.1",
+            yanked: false,
+            platforms: { [platformKey]: { available: true } },
+          },
+        ],
+      });
+
+      await ensureHost(makeOpts({}));
+
+      expect(stageHostInstallSourceMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source: { kind: "registry", versionRequest: "1.8.0" },
+        }),
+      );
+    });
+
+    it("keeps the running host when every newer candidate is a release candidate", async () => {
+      prepareWithdrawnInstalledBundle();
+      const platformKey = currentHostPlatformKey();
+      mocks.fetchManifestMock.mockResolvedValue({
+        versions: [
+          {
+            version: "1.9.0-rc.1",
+            yanked: false,
+            platforms: { [platformKey]: { available: true } },
+          },
+        ],
+      });
+
+      const result = await ensureHost(makeOpts({}));
+
+      expect(result.action).toBe("noop");
+      expect(stageHostInstallSourceMock).not.toHaveBeenCalled();
+    });
+
+    it("repairs a release-candidate bundle to a newer release candidate", async () => {
+      prepareWithdrawnInstalledBundle();
+      config.supportedHostVersion = "1.7.2-rc.1";
+      readHostInstallRecordMock.mockResolvedValue({
+        version: "1.7.2-rc.1",
+        source: { kind: "registry", value: "1.7.2-rc.1" },
+      });
+      readBundledHostDescriptorMock.mockResolvedValue({
+        version: "1.7.2-rc.1",
+        platformKey: "darwin-arm64",
+        sha256: "a".repeat(64),
+        sizeBytes: 1024,
+        publicKeyId: "0123456789abcdef",
+        requiredCliVersion: null,
+        minimumEpoch: 2,
+        storeFormats: { chatDb: 22 },
+        canonicalUrl:
+          "https://releases.example.invalid/host/1.7.2-rc.1/runtime.tar.gz",
+      });
+      const platformKey = currentHostPlatformKey();
+      mocks.fetchManifestMock.mockResolvedValue({
+        versions: [
+          {
+            version: "1.7.2-rc.2",
+            yanked: false,
+            platforms: { [platformKey]: { available: true } },
+          },
+        ],
+      });
+
+      await ensureHost(makeOpts({}));
+
+      expect(stageHostInstallSourceMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source: { kind: "registry", versionRequest: "1.7.2-rc.2" },
+        }),
+      );
+    });
+
+    it("repairs a stable bundle to a newer staging version", async () => {
+      prepareWithdrawnInstalledBundle();
+      const platformKey = currentHostPlatformKey();
+      mocks.fetchManifestMock.mockResolvedValue({
+        versions: [
+          {
+            version: "1.8.0-staging.1.gabcdef1",
+            yanked: false,
+            platforms: { [platformKey]: { available: true } },
+          },
+        ],
+      });
+
+      await ensureHost(makeOpts({}));
+
+      expect(stageHostInstallSourceMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source: {
+            kind: "registry",
+            versionRequest: "1.8.0-staging.1.gabcdef1",
+          },
+        }),
+      );
+    });
+
     it("keeps the running host when the registry cannot provide a repair", async () => {
       prepareWithdrawnInstalledBundle();
       mocks.fetchManifestMock.mockRejectedValue(

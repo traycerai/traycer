@@ -108,6 +108,16 @@ describe("bundled host layout beside the CLI", () => {
     expect([...(placeholder?.filter ?? [])].sort()).toEqual(
       [".gitkeep", "README.md"].sort(),
     );
+    const readme = readFileSync(
+      path.join(DESKTOP_ROOT, "resources/host/README.md"),
+      "utf8",
+    );
+    expect(readme).toContain(
+      "`traycer host ensure`\ninstalls from that bundle.\n`traycer host install` installs the latest registry version by default.",
+    );
+    expect(readme).not.toContain(
+      "installs from that bundle.\nIt installs the latest registry version",
+    );
     for (const section of [
       parsed.build.mac,
       parsed.build.win,

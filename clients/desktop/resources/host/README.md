@@ -21,8 +21,8 @@ runtime through **PID metadata** written by the CLI-installed host at
 The Desktop release pipeline does **not** download a host archive into this
 directory. It stages the archive beside the CLI. `traycer host ensure`
 installs from that bundle.
-It installs the latest registry version by default; a specific version is
-`traycer host install --release <version>`.
+`traycer host install` installs the latest registry version by default. A
+specific version is `traycer host install --release <version>`.
 
 If you need to side-load a local host archive (instead of the released one),
 install it through the CLI's `--from <path>` option:

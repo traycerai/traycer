@@ -371,6 +371,9 @@ jobs:
         with:
           name: desktop-windows-manifests
           path: manifests
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
       - name: Validate with winget
         env:
           VERSION: ${{ needs.render.outputs.version }}
@@ -428,6 +431,10 @@ jobs:
         with:
           name: desktop-windows-manifests
           path: manifests
+      - if: ${{ steps.gate.outputs.enabled == 'true' }}
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
       - name: Submit the manifest
         if: ${{ steps.gate.outputs.enabled == 'true' }}
         env:

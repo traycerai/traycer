@@ -10,6 +10,7 @@ import {
 } from "../registry";
 import { createRegistryYankLookup } from "../registry/client";
 import { compareHostVersions } from "@traycer-clients/shared/host-version/compare-host-versions";
+import { isHiddenFromDefaultCatalog } from "@traycer-clients/shared/host-version/release-line";
 import { CLI_ERROR_CODES, CliError, cliError } from "../runner/errors";
 import type { RegistryYankLookup } from "../registry/client";
 import type { ProgressInfo } from "../runner/output";
@@ -297,9 +298,15 @@ async function newestBundledRepair(
     opts.onProgress,
   );
   const manifest = await client.fetchManifest();
+  // A stable floor uses the default catalog, so repair cannot move onto an
+  // RC. An RC floor is already outside that catalog and may repair to a newer
+  // RC. Staging stays eligible on a stable floor: the default catalog shows it.
+  const allowHiddenCatalog = isHiddenFromDefaultCatalog(minimumVersion);
   let newest: string | null = null;
   for (const entry of manifest.versions) {
     if (entry.yanked || !entry.platforms[currentHostPlatformKey()]?.available)
+      continue;
+    if (!allowHiddenCatalog && isHiddenFromDefaultCatalog(entry.version))
       continue;
     const minimum = compareHostVersions(entry.version, minimumVersion);
     if (!minimum.comparable || minimum.ordering === "less") continue;

@@ -167,6 +167,9 @@ describe("every pre-commit hook runs in a pre-commit.yml job that can execute it
     );
     expect(bootstrapStep.id).toBe("ci_tool_1");
     expect(bootstrapStep.with?.tools).toBe("python-312 hooks");
+    expect(bootstrapStep.with?.["no-cache"]).toBe(
+      "${{ inputs.blackhole_github }}",
+    );
     expect(fallbackInstallStep.if).toBe(
       "steps.ci_tool_1.outputs.hooks == 'fallback'",
     );
@@ -174,6 +177,34 @@ describe("every pre-commit hook runs in a pre-commit.yml job that can execute it
     expect(hookJob.steps.indexOf(fallbackInstallStep)).toBeLessThan(
       hookJob.steps.indexOf(hookRunStep),
     );
+  });
+
+  it("checks out the repository before any job runs scripts/ci-tools.cjs", () => {
+    const workflowDir = join(REPO_ROOT, ".github", "workflows");
+    const callers = readdirSync(workflowDir)
+      .filter((fileName) => /\.ya?ml$/u.test(fileName))
+      .flatMap((fileName) => {
+        const document = parse(
+          readFileSync(join(workflowDir, fileName), "utf8"),
+        );
+        return Object.entries(document.jobs ?? {}).flatMap(([jobId, job]) =>
+          (job.steps ?? []).flatMap((step, index) =>
+            String(step.run ?? "").includes("scripts/ci-tools.cjs")
+              ? [{ fileName, jobId, steps: job.steps, index, step }]
+              : [],
+          ),
+        );
+      });
+
+    expect(callers.length).toBeGreaterThan(0);
+    for (const { fileName, jobId, steps, index, step } of callers) {
+      const checkout = steps
+        .slice(0, index)
+        .find(({ uses }) => String(uses ?? "").startsWith("actions/checkout@"));
+      expect(checkout, `${fileName}:${jobId} checkout`).toBeDefined();
+      expect(checkout.with?.["persist-credentials"]).toBe(false);
+      expect(normalize(checkout.if ?? "")).toBe(normalize(step.if ?? ""));
+    }
   });
 
   it("passes a mirror source to every workflow tool bootstrap", () => {
