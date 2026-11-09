@@ -332,12 +332,6 @@ function optionsFor(
   };
 }
 
-function nextTurn(): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, 0);
-  });
-}
-
 function makeClient(
   factory: IWebSocketFactory,
   hostAttestationWindowMs: number,
@@ -1666,7 +1660,6 @@ describe("local unary session", () => {
     }
     client.releaseIdleLocalSessions();
     await classify(discovering, sessionAck(true));
-    await nextTurn();
     expect(discovering.socket.closed).toBeNull();
     const frame = requestFrames(discovering)[0];
     if (frame === undefined) {
@@ -1718,7 +1711,6 @@ describe("local unary session", () => {
     const requested = discovering.socket.nextSend();
     discovering.socket.fireMessage(sessionAck(true));
     await requested;
-    await nextTurn();
     expect(requestFrames(discovering)).toHaveLength(1);
     expect(discovering.socket.closed).toBeNull();
     const frame = requestFrames(discovering)[0];
@@ -1733,7 +1725,7 @@ describe("local unary session", () => {
     });
   });
 
-  it("keeps the socket when a call starts after a dial-time release", async () => {
+  it("keeps the socket when a call claims the session after publish", async () => {
     const { factory, sockets } = makeFactory();
     const client = makeClient(factory, 0);
     const bearer = new MutableBearerLease("token-a", USER_A);
@@ -1748,7 +1740,6 @@ describe("local unary session", () => {
     }
     client.releaseIdleLocalSessions();
     await classify(discovering, sessionAck(true));
-    await nextTurn();
     const secondWrite = discovering.socket.nextSend();
     const second = client.request(
       "host.echo",
@@ -1768,6 +1759,92 @@ describe("local unary session", () => {
     await expect(first).resolves.toEqual({ echoed: "first" });
     await expect(second).resolves.toEqual({ echoed: "second" });
     expect(discovering.socket.closed).toBeNull();
+  });
+
+  it("closes the socket after both calls admitted before openAck settle when release arrives during the dial", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory, 0);
+    const bearer = new MutableBearerLease("token-a", USER_A);
+    const owner = client.request(
+      "host.echo",
+      { message: "owner" },
+      optionsFor(bearer, new AbortController().signal, null, false, null),
+    );
+    const waiter = client.request(
+      "host.echo",
+      { message: "waiter" },
+      optionsFor(bearer, new AbortController().signal, null, false, null),
+    );
+    const discovering = sockets[0];
+    if (discovering === undefined) {
+      throw new Error("expected the discovering socket");
+    }
+    expect(sockets).toHaveLength(1);
+    client.releaseIdleLocalSessions();
+    await classify(discovering, sessionAck(true));
+    const sent = requestFrames(discovering);
+    const ownerFrame = sent[0];
+    const waiterFrame = sent[1];
+    if (ownerFrame === undefined || waiterFrame === undefined) {
+      throw new Error("expected both requests on the discovering socket");
+    }
+    expect(sockets).toHaveLength(1);
+    expect(discovering.socket.closed).toBeNull();
+    respondEcho(discovering.socket, ownerFrame, "owner");
+    await expect(owner).resolves.toEqual({ echoed: "owner" });
+    expect(discovering.socket.closed).toBeNull();
+    respondEcho(discovering.socket, waiterFrame, "waiter");
+    await expect(waiter).resolves.toEqual({ echoed: "waiter" });
+    expect(discovering.socket.closed).toEqual({
+      code: 1000,
+      reason: "session-closed",
+    });
+  });
+
+  it("closes the socket when the waiting call runs after publish records the dial release", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory, 0);
+    const bearer = new MutableBearerLease("token-a", USER_A);
+    const owner = client.request(
+      "host.echo",
+      { message: "owner" },
+      optionsFor(bearer, new AbortController().signal, null, false, null),
+    );
+    const waiter = client.request(
+      "host.echo",
+      { message: "waiter" },
+      optionsFor(bearer, new AbortController().signal, null, false, null),
+    );
+    const discovering = sockets[0];
+    if (discovering === undefined) {
+      throw new Error("expected the discovering socket");
+    }
+    const opened = discovering.socket.nextSend();
+    discovering.socket.fireOpen();
+    await opened;
+    client.releaseIdleLocalSessions();
+    const ownerSent = discovering.socket.nextSend();
+    discovering.socket.fireMessage(sessionAck(true));
+    await ownerSent;
+    const waiterSent = discovering.socket.nextSend();
+    await waiterSent;
+    const sent = requestFrames(discovering);
+    const ownerFrame = sent[0];
+    const waiterFrame = sent[1];
+    if (ownerFrame === undefined || waiterFrame === undefined) {
+      throw new Error("expected the waiter request after publish");
+    }
+    expect(sockets).toHaveLength(1);
+    expect(discovering.socket.closed).toBeNull();
+    respondEcho(discovering.socket, ownerFrame, "owner");
+    await expect(owner).resolves.toEqual({ echoed: "owner" });
+    expect(discovering.socket.closed).toBeNull();
+    respondEcho(discovering.socket, waiterFrame, "waiter");
+    await expect(waiter).resolves.toEqual({ echoed: "waiter" });
+    expect(discovering.socket.closed).toEqual({
+      code: 1000,
+      reason: "session-closed",
+    });
   });
 
   it("lets a waiter with a valid bearer dial after the owner's open credential is refused", async () => {

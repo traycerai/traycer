@@ -139,7 +139,11 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
   private readonly queue: QueuedCall<Registry>[] = [];
   private readonly inFlight = new Map<string, InFlightCall>();
   private retired = false;
-  /** Set by `releaseIfIdle`. A later call clears it; otherwise the socket closes once it is idle. */
+  /**
+   * A release arrived. A call that claims this session after publish clears
+   * it. A call admitted on the dial leaves it set, so the socket closes
+   * once those calls settle, in whatever order their continuations run.
+   */
   private closeWhenIdle = false;
   /** Set around a close this session initiated, so that close is not a peer drop. */
   private suppressClose = false;
@@ -185,6 +189,12 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
     readonly params: RequestOfMethod<Registry, Method>;
     readonly responseTimeoutMs: number;
     readonly options: HostRequestOptions;
+    /**
+     * True for the discovering call and for a caller already waiting when
+     * publish runs. Those calls keep a dial-time release. A call that
+     * claims the session after publish passes false and clears it.
+     */
+    readonly boundToDialRelease: boolean;
   }): Promise<ResponseOfMethod<Registry, Method>> {
     if (this.retired) {
       return Promise.reject(
@@ -195,7 +205,9 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
         ),
       );
     }
-    this.closeWhenIdle = false;
+    if (!input.boundToDialRelease) {
+      this.closeWhenIdle = false;
+    }
     const methodRegistry = this.registry[input.method];
     return new Promise((resolve, reject) => {
       const queued: QueuedCall<Registry> = {
@@ -773,6 +785,15 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
     }
   }
 
+  /**
+   * Records a release that arrived before publish. The discovering call
+   * is queued immediately after this, so the session stays up until the
+   * calls admitted on this dial settle.
+   */
+  retainDialRelease(): void {
+    this.closeWhenIdle = true;
+  }
+
   releaseIfIdle(): void {
     this.closeWhenIdle = true;
     this.retireIfIdle();
@@ -833,9 +854,8 @@ interface SessionSlot<Registry extends VersionedRpcRegistry> {
   session: LocalUnarySession<Registry> | null;
   waiters: Array<(result: SessionGateResult<Registry>) => void>;
   /**
-   * Set when `releaseIdle` runs while this slot is still dialing. Consumed
-   * after the discovering call has queued, so that call closes the socket
-   * once it settles.
+   * Set when `releaseIdle` runs while this slot is still dialing. Taken at
+   * publish and stored on the session before any admitted call runs.
    */
   releaseBeforeReady: boolean;
 }
@@ -891,8 +911,9 @@ export class LocalUnarySessionDirectory<Registry extends VersionedRpcRegistry> {
   }
 
   /**
-   * Takes the dial-time release for `session`, once. False when this slot
-   * was not released, or when `session` is no longer the one it published.
+   * Takes the dial-time release for `session`, once, at publish. False
+   * when this slot was not released, or when `session` is no longer the
+   * one it published.
    */
   consumeReleaseBeforeReady(
     key: string,

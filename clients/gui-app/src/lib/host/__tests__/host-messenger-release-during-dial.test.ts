@@ -57,17 +57,43 @@ interface EventLike {
   readonly wasClean?: boolean;
 }
 
+interface CloseInfo {
+  readonly code: number;
+  readonly reason: string;
+}
+
 class FakeWebSocket {
   static instances: FakeWebSocket[] = [];
+  private static instanceWaiters: Array<(socket: FakeWebSocket) => void> = [];
+
   readonly sent: string[] = [];
-  closed: { readonly code: number; readonly reason: string } | null = null;
+  closed: CloseInfo | null = null;
   private readonly listeners = new Map<
     string,
     Set<(event: EventLike) => void>
   >();
+  private readonly sendWaiters: Array<
+    (frame: Record<string, unknown>) => void
+  > = [];
+  private readonly closeWaiters: Array<(closed: CloseInfo) => void> = [];
+
+  static nextInstance(): Promise<FakeWebSocket> {
+    return new Promise((resolve) => {
+      FakeWebSocket.instanceWaiters.push(resolve);
+    });
+  }
+
+  static reset(): void {
+    FakeWebSocket.instances = [];
+    FakeWebSocket.instanceWaiters = [];
+  }
 
   constructor(_url: string) {
     FakeWebSocket.instances.push(this);
+    const resolve = FakeWebSocket.instanceWaiters.shift();
+    if (resolve !== undefined) {
+      resolve(this);
+    }
   }
 
   addEventListener(type: string, handler: (event: EventLike) => void): void {
@@ -84,18 +110,43 @@ class FakeWebSocket {
   }
 
   send(data: string): void {
+    const frame = JSON.parse(data) as Record<string, unknown>;
     this.sent.push(data);
+    const waiters = this.sendWaiters.splice(0, this.sendWaiters.length);
+    for (const resolve of waiters) {
+      resolve(frame);
+    }
+  }
+
+  nextSend(): Promise<Record<string, unknown>> {
+    return new Promise((resolve) => {
+      this.sendWaiters.push(resolve);
+    });
   }
 
   close(code: number, reason: string): void {
     if (this.closed !== null) {
       return;
     }
-    this.closed = { code, reason };
+    const closed = { code, reason };
+    this.closed = closed;
     this.emit("close", {
       code,
       reason,
       wasClean: true,
+    });
+    const waiters = this.closeWaiters.splice(0, this.closeWaiters.length);
+    for (const resolve of waiters) {
+      resolve(closed);
+    }
+  }
+
+  whenClosed(): Promise<CloseInfo> {
+    if (this.closed !== null) {
+      return Promise.resolve(this.closed);
+    }
+    return new Promise((resolve) => {
+      this.closeWaiters.push(resolve);
     });
   }
 
@@ -106,24 +157,40 @@ class FakeWebSocket {
   }
 }
 
-function nextTurn(): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, 0);
+function openAckFor(open: Record<string, unknown>): string {
+  return JSON.stringify({
+    kind: "openAck",
+    manifest: open.manifest,
+    ...(open.optionalManifest === undefined
+      ? {}
+      : { optionalManifest: open.optionalManifest }),
+    capabilities: [UNARY_CAPABILITY_PERSISTENT_SESSION],
   });
 }
 
-async function until(ready: () => boolean, label: string): Promise<void> {
-  for (let attempt = 0; attempt < 30; attempt += 1) {
-    if (ready()) {
-      return;
-    }
-    await nextTurn();
-  }
-  throw new Error(`timed out waiting for ${label}`);
+function responseFor(
+  request: Record<string, unknown>,
+  echoed: string,
+): string {
+  return JSON.stringify({
+    kind: "response",
+    requestId: request.requestId,
+    method: request.method,
+    schemaVersion: request.schemaVersion,
+    result: { echoed },
+    error: null,
+  });
 }
 
-function parsedSent(socket: FakeWebSocket): Array<Record<string, unknown>> {
-  return socket.sent.map((raw) => JSON.parse(raw) as Record<string, unknown>);
+function authority() {
+  return {
+    endpoint: {
+      hostId: localEntry.hostId,
+      websocketUrl: localEntry.websocketUrl ?? "",
+    },
+    bearer,
+    abortSignal: new AbortController().signal,
+  };
 }
 
 describe("runtime host messenger release during dial", () => {
@@ -134,7 +201,7 @@ describe("runtime host messenger release during dial", () => {
         socket.close(1000, "test-cleanup");
       }
     }
-    FakeWebSocket.instances = [];
+    FakeWebSocket.reset();
     vi.unstubAllGlobals();
   });
 
@@ -146,7 +213,8 @@ describe("runtime host messenger release during dial", () => {
     let issued = 0;
     const binding = buildRuntimeHostMessenger<typeof registry>({
       registry,
-      resolveTarget: (hostId) => (hostId === localEntry.hostId ? localEntry : null),
+      resolveTarget: (hostId) =>
+        hostId === localEntry.hostId ? localEntry : null,
       auth: null,
       authnBaseUrl: "https://authn.invalid",
       requestId: () => {
@@ -156,72 +224,60 @@ describe("runtime host messenger release during dial", () => {
       onRemoteAvailabilityRecovered: () => undefined,
       onRemoteSessionTerminal: () => undefined,
     });
-    const options = {
-      replayMustBeKeyed: false,
-      requiredHostMethodVersion: null,
-      idempotencyKey: null,
-      authority: {
-        endpoint: {
-          hostId: localEntry.hostId,
-          websocketUrl: localEntry.websocketUrl ?? "",
-        },
-        bearer,
-        abortSignal: new AbortController().signal,
+    const arrived = FakeWebSocket.nextInstance();
+    const pending = binding.messenger.request(
+      "host.echo",
+      { message: "one" },
+      {
+        replayMustBeKeyed: false,
+        requiredHostMethodVersion: null,
+        idempotencyKey: null,
+        authority: authority(),
       },
-    };
-    const pending = binding.messenger.request("host.echo", { message: "one" }, options);
+    );
     if (release === "dispose") {
       binding.dispose();
     } else {
       binding.reset();
     }
-    await until(
-      () => FakeWebSocket.instances.length === 1,
-      "the dialed socket",
-    );
-    const socket = FakeWebSocket.instances[0];
-    if (socket === undefined) {
-      throw new Error("expected the dialed socket");
-    }
+    const socket = await arrived;
+    const openSent = socket.nextSend();
     socket.emit("open", { type: "open" });
-    await until(() => parsedSent(socket).some((frame) => frame.kind === "open"), "the open frame");
-    const open = parsedSent(socket).find((frame) => frame.kind === "open");
-    if (open === undefined) {
+    const open = await openSent;
+    if (open.kind !== "open") {
       throw new Error("expected the open frame");
     }
-    socket.emit("message", {
-      data: JSON.stringify({
-        kind: "openAck",
-        manifest: open.manifest,
-        ...(open.optionalManifest === undefined
-          ? {}
-          : { optionalManifest: open.optionalManifest }),
-        capabilities: [UNARY_CAPABILITY_PERSISTENT_SESSION],
-      }),
-    });
-    await until(
-      () => parsedSent(socket).some((frame) => frame.kind === "request"),
-      "the request frame",
-    );
-    await nextTurn();
-    const request = parsedSent(socket).find((frame) => frame.kind === "request");
-    if (request === undefined) {
+    const requestSent = socket.nextSend();
+    socket.emit("message", { data: openAckFor(open) });
+    const request = await requestSent;
+    if (request.kind !== "request") {
       throw new Error("expected the request frame");
     }
     expect(socket.closed).toBeNull();
-    socket.emit("message", {
-      data: JSON.stringify({
-        kind: "response",
-        requestId: request.requestId,
-        method: request.method,
-        schemaVersion: request.schemaVersion,
-        result: { echoed: "one" },
-        error: null,
-      }),
-    });
+    const closed = socket.whenClosed();
+    socket.emit("message", { data: responseFor(request, "one") });
     await expect(pending).resolves.toEqual({ echoed: "one" });
-    expect(socket.closed).toEqual({ code: 1000, reason: "session-closed" });
+    await expect(closed).resolves.toEqual({
+      code: 1000,
+      reason: "session-closed",
+    });
     return { socket, binding };
+  }
+
+  async function answer(socket: FakeWebSocket, echoed: string): Promise<void> {
+    const openSent = socket.nextSend();
+    socket.emit("open", { type: "open" });
+    const open = await openSent;
+    if (open.kind !== "open") {
+      throw new Error("expected the open frame");
+    }
+    const requestSent = socket.nextSend();
+    socket.emit("message", { data: openAckFor(open) });
+    const request = await requestSent;
+    if (request.kind !== "request") {
+      throw new Error("expected the request frame");
+    }
+    socket.emit("message", { data: responseFor(request, echoed) });
   }
 
   it("closes the socket after dispose during the dial once the call settles", async () => {
@@ -231,14 +287,7 @@ describe("runtime host messenger release during dial", () => {
         replayMustBeKeyed: false,
         requiredHostMethodVersion: null,
         idempotencyKey: null,
-        authority: {
-          endpoint: {
-            hostId: localEntry.hostId,
-            websocketUrl: localEntry.websocketUrl ?? "",
-          },
-          bearer,
-          abortSignal: new AbortController().signal,
-        },
+        authority: authority(),
       }),
     ).rejects.toThrow("Host messenger has been disposed");
     expect(FakeWebSocket.instances).toHaveLength(1);
@@ -246,7 +295,7 @@ describe("runtime host messenger release during dial", () => {
 
   it("closes the socket after reset during the dial and keeps a later call's socket", async () => {
     const { binding } = await drive("reset");
-    const started = FakeWebSocket.instances.length;
+    const arrived = FakeWebSocket.nextInstance();
     const pending = binding.messenger.request(
       "host.echo",
       { message: "later" },
@@ -254,61 +303,11 @@ describe("runtime host messenger release during dial", () => {
         replayMustBeKeyed: false,
         requiredHostMethodVersion: null,
         idempotencyKey: null,
-        authority: {
-          endpoint: {
-            hostId: localEntry.hostId,
-            websocketUrl: localEntry.websocketUrl ?? "",
-          },
-          bearer,
-          abortSignal: new AbortController().signal,
-        },
+        authority: authority(),
       },
     );
-    await until(
-      () => FakeWebSocket.instances.length === started + 1,
-      "the later socket",
-    );
-    const socket = FakeWebSocket.instances[started];
-    if (socket === undefined) {
-      throw new Error("expected the later socket");
-    }
-    socket.emit("open", { type: "open" });
-    await until(
-      () => parsedSent(socket).some((frame) => frame.kind === "open"),
-      "the later open frame",
-    );
-    const open = parsedSent(socket).find((frame) => frame.kind === "open");
-    if (open === undefined) {
-      throw new Error("expected the later open frame");
-    }
-    socket.emit("message", {
-      data: JSON.stringify({
-        kind: "openAck",
-        manifest: open.manifest,
-        ...(open.optionalManifest === undefined
-          ? {}
-          : { optionalManifest: open.optionalManifest }),
-        capabilities: [UNARY_CAPABILITY_PERSISTENT_SESSION],
-      }),
-    });
-    await until(
-      () => parsedSent(socket).some((frame) => frame.kind === "request"),
-      "the later request",
-    );
-    const request = parsedSent(socket).find((frame) => frame.kind === "request");
-    if (request === undefined) {
-      throw new Error("expected the later request");
-    }
-    socket.emit("message", {
-      data: JSON.stringify({
-        kind: "response",
-        requestId: request.requestId,
-        method: request.method,
-        schemaVersion: request.schemaVersion,
-        result: { echoed: "later" },
-        error: null,
-      }),
-    });
+    const socket = await arrived;
+    await answer(socket, "later");
     await expect(pending).resolves.toEqual({ echoed: "later" });
     expect(socket.closed).toBeNull();
   });

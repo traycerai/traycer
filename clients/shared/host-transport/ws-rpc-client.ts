@@ -396,6 +396,7 @@ export class WsRpcClient<
           params,
           responseTimeoutMs,
           options,
+          boundToDialRelease: false,
         });
       }
       if (admission.kind === "legacy") {
@@ -423,6 +424,7 @@ export class WsRpcClient<
             params,
             responseTimeoutMs,
             options,
+            boundToDialRelease: true,
           });
         }
         if (settled.kind === "failed") {
@@ -647,24 +649,21 @@ export class WsRpcClient<
         published = true;
         adopted = true;
         authority.abortSignal.removeEventListener("abort", onAbort);
-        const admitted = local.call({
+        // Publish is the boundary. A release during the dial is session
+        // state before this call and before any waiter continuation. Both
+        // are bound to it. A later claim sees the published session and
+        // clears it.
+        if (this.sessions.consumeReleaseBeforeReady(sessionKey, local)) {
+          local.retainDialRelease();
+        }
+        return local.call({
           requestId,
           method,
           params,
           responseTimeoutMs,
           options,
+          boundToDialRelease: true,
         });
-        // Waiters admitted by `ready` run as microtasks queued before this
-        // one, so their calls clear `closeWhenIdle` first. A release that
-        // arrived during the dial then sticks, and the outstanding calls
-        // close the socket when they settle. A call that starts after this
-        // microtask clears the release and keeps the socket.
-        queueMicrotask(() => {
-          if (this.sessions.consumeReleaseBeforeReady(sessionKey, local)) {
-            local.releaseIfIdle();
-          }
-        });
-        return admitted;
       }
       if (publish !== null) {
         publish.legacy();
