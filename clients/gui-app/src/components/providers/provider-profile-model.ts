@@ -57,10 +57,14 @@ const CREDENTIAL_STANDING_LABELS = {
 };
 
 /** Host-reported inventory health, independent of whether usage is observable. */
-export function profileInventoryNotice(profile: ProviderProfile): string | null {
+export function profileInventoryNotice(
+  profile: ProviderProfile,
+): string | null {
   if (profile.readability?.kind === "unreadable") {
     const reason = profile.readability.reason;
-    return reason === null ? "Unreadable profile" : `Unreadable profile: ${reason}`;
+    return reason === null
+      ? "Unreadable profile"
+      : `Unreadable profile: ${reason}`;
   }
   if (profile.presence?.kind === "revoking") {
     return profile.presence.cause === null
@@ -69,14 +73,20 @@ export function profileInventoryNotice(profile: ProviderProfile): string | null 
   }
   const standing = profile.credentialHome?.standing;
   if (standing === undefined) {
-    if (profile.auth.status === "authenticated" || profile.auth.status === "configured") return null;
+    if (
+      profile.auth.status === "authenticated" ||
+      profile.auth.status === "configured"
+    )
+      return null;
     return profileAuthStatusText(profile);
   }
   const cause = standing.cause === null ? "" : `: ${standing.cause}`;
   if (standing.observation.status === "unknown" || standing.material === null) {
     return `Status unknown${cause}`;
   }
-  return standing.material === "usable" ? null : `${CREDENTIAL_STANDING_LABELS[standing.material]}${cause}`;
+  return standing.material === "usable"
+    ? null
+    : `${CREDENTIAL_STANDING_LABELS[standing.material]}${cause}`;
 }
 
 // Dropdown row status suffix: null for a healthy profile (nothing to announce

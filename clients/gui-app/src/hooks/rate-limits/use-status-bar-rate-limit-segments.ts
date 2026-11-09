@@ -311,7 +311,8 @@ export function useStatusBarWindowedProviders(): ReadonlyArray<ConfiguredRateLim
   return sortProviderStatesByProviderOrder(
     visibleProviders.filter(
       (provider): provider is ConfiguredRateLimitProvider =>
-        provider.lane !== null && isWindowedRateLimitProvider(provider.providerId),
+        provider.lane !== null &&
+        isWindowedRateLimitProvider(provider.providerId),
     ),
   );
 }

@@ -67,8 +67,7 @@ import {
 
 const HOST_ID = "provider-inventory-host";
 const HOST_NAME = "dev-box";
-const UNREADABLE_REASON =
-  "Profile row uses an unsupported or invalid shape";
+const UNREADABLE_REASON = "Profile row uses an unsupported or invalid shape";
 
 interface ProviderProfilesSnapshot {
   readonly providerId: ProviderId;
@@ -81,20 +80,24 @@ const spyState = vi.hoisted(() => ({
   visibleProviders: null as ReadonlyArray<VisibleRateLimitProvider> | null,
 }));
 
-vi.mock("@/components/settings/host-scope/use-host-scope", async (importOriginal) => {
-  const actual = await importOriginal<
-    typeof import("@/components/settings/host-scope/use-host-scope")
-  >();
-  return {
-    ...actual,
-    usePersonalHostScope: () => {
-      if (spyState.scope === null) {
-        throw new Error("The inventory parity fixture has no host scope.");
-      }
-      return spyState.scope;
-    },
-  };
-});
+vi.mock(
+  "@/components/settings/host-scope/use-host-scope",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/settings/host-scope/use-host-scope")
+      >();
+    return {
+      ...actual,
+      usePersonalHostScope: () => {
+        if (spyState.scope === null) {
+          throw new Error("The inventory parity fixture has no host scope.");
+        }
+        return spyState.scope;
+      },
+    };
+  },
+);
 
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
   useSystemTabModalActions: () => ({ openSettings: () => undefined }),
@@ -107,7 +110,9 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
   return {
     ...actual,
     useRouterState: (args: {
-      select: (state: { location: { pathname: string; search: string } }) => unknown;
+      select: (state: {
+        location: { pathname: string; search: string };
+      }) => unknown;
     }) => args.select({ location: { pathname: "/settings", search: "" } }),
     useNavigate: () => () => undefined,
   };
@@ -123,29 +128,38 @@ function VisibleRateLimitProviderRecorder(): null {
 
 // This wrapper records the actual props and still renders the real Settings
 // consumer. It observes the parsed inventory without replacing its row UI.
-vi.mock("@/components/settings/panels/provider-profile-scoped-section", async (importOriginal) => {
-  const actual = await importOriginal<
-    typeof import("@/components/settings/panels/provider-profile-scoped-section")
-  >();
-  return {
-    ...actual,
-    ProviderProfileScopedSection: (
-      props: Parameters<typeof actual.ProviderProfileScopedSection>[0],
-    ) => {
-      spyState.settingsProfiles.push({
-        providerId: props.state.providerId,
-        profiles: [...props.state.profiles],
-      });
-      return <actual.ProviderProfileScopedSection {...props} />;
-    },
-  };
-});
+vi.mock(
+  "@/components/settings/panels/provider-profile-scoped-section",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/settings/panels/provider-profile-scoped-section")
+      >();
+    return {
+      ...actual,
+      ProviderProfileScopedSection: (
+        props: Parameters<typeof actual.ProviderProfileScopedSection>[0],
+      ) => {
+        spyState.settingsProfiles.push({
+          providerId: props.state.providerId,
+          profiles: [...props.state.profiles],
+        });
+        return <actual.ProviderProfileScopedSection {...props} />;
+      },
+    };
+  },
+);
 
 interface ProfileFixture {
   readonly profileId: string;
   readonly kind?: "ambient" | "managed";
   readonly label: string;
-  readonly authStatus?: "authenticated" | "configured" | "unauthenticated" | "unavailable" | "unknown";
+  readonly authStatus?:
+    | "authenticated"
+    | "configured"
+    | "unauthenticated"
+    | "unavailable"
+    | "unknown";
   readonly usageUpdatedAt?: number | null;
   readonly fields?: Readonly<Record<string, unknown>>;
 }
@@ -330,7 +344,9 @@ interface Harness {
   readonly providersListCalls: { value: number };
 }
 
-async function createHarness(response: ProvidersListResponse): Promise<Harness> {
+async function createHarness(
+  response: ProvidersListResponse,
+): Promise<Harness> {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
@@ -512,7 +528,9 @@ function visibleSnapshot(providerId: ProviderId): VisibleRateLimitProvider {
     (candidate) => candidate.providerId === providerId,
   );
   if (snapshot === undefined) {
-    throw new Error(`The real visible-provider hook did not return ${providerId}.`);
+    throw new Error(
+      `The real visible-provider hook did not return ${providerId}.`,
+    );
   }
   return snapshot;
 }
@@ -562,8 +580,9 @@ function assertPopoverInventoryCards(
     const card = popover.querySelector(
       `[data-testid="rate-limit-profile-card-qwen-${profileId}"]`,
     );
-    expect(card).not.toBeNull();
-    if (card === null) continue;
+    if (!(card instanceof HTMLElement)) {
+      throw new Error(`Usage did not render the Qwen card for ${profileId}.`);
+    }
     expect(within(card).getByText(profileDisplayLabel(profile))).toBeTruthy();
     const notice =
       profileInventoryNotice(profile) ?? profileAuthStatusText(profile);
@@ -592,9 +611,10 @@ function assertUnreadableProfileNotice(
 ): void {
   const notice = `Unreadable profile: ${UNREADABLE_REASON}`;
   expect(within(popover).getByText(notice)).toBeTruthy();
-  const summary = settings.querySelector('[data-slot="profile-summary-actions"]');
-  expect(summary).not.toBeNull();
-  if (summary === null) {
+  const summary = settings.querySelector(
+    '[data-slot="profile-summary-actions"]',
+  );
+  if (!(summary instanceof HTMLElement)) {
     throw new Error("Settings did not render the selected profile summary.");
   }
   expect(within(summary).getByText(notice)).toBeTruthy();
@@ -620,7 +640,8 @@ async function selectAndAssertQwenProfiles(
   await user.click(trigger);
 
   for (const profile of profiles.filter(
-    (candidate) => candidate.enabled && candidate.profileId !== "unreadable-profile",
+    (candidate) =>
+      candidate.enabled && candidate.profileId !== "unreadable-profile",
   )) {
     await user.click(trigger);
     const label =
@@ -630,15 +651,18 @@ async function selectAndAssertQwenProfiles(
     const profileLabel = within(screen.getByRole("menu")).getByText(label);
     const item = profileLabel.closest('[role="menuitem"]');
     if (item === null) {
-      throw new Error(`The profile menu item for ${profile.profileId} is missing.`);
+      throw new Error(
+        `The profile menu item for ${profile.profileId} is missing.`,
+      );
     }
     await user.click(item);
     expect(trigger.getAttribute("aria-label")).toContain(label);
     const notice = profileInventoryNotice(profile);
     if (notice === null) continue;
-    const summary = settings.querySelector('[data-slot="profile-summary-actions"]');
-    expect(summary).not.toBeNull();
-    if (summary === null) {
+    const summary = settings.querySelector(
+      '[data-slot="profile-summary-actions"]',
+    );
+    if (!(summary instanceof HTMLElement)) {
       throw new Error("Settings did not render the selected profile summary.");
     }
     expect(within(summary).getByText(notice)).toBeTruthy();
@@ -650,9 +674,11 @@ async function selectCodexAndAssertSettingsOnlyProfile(
   codex: ProvidersListResponse["providers"][number],
   user: UserEvent,
 ): Promise<void> {
-  const codexProviderButton = within(settings).getAllByRole("button", {
-    name: /^Codex\d+ profile$/,
-  }).at(0);
+  const codexProviderButton = within(settings)
+    .getAllByRole("button", {
+      name: /^Codex\d+ profile$/,
+    })
+    .at(0);
   if (codexProviderButton === undefined) {
     throw new Error("Settings did not render Codex in the provider rail.");
   }
@@ -663,7 +689,9 @@ async function selectCodexAndAssertSettingsOnlyProfile(
     }),
   ).toBeTruthy();
   expect(
-    latestSettingsSnapshot("codex").profiles.map((profile) => profile.profileId),
+    latestSettingsSnapshot("codex").profiles.map(
+      (profile) => profile.profileId,
+    ),
   ).toEqual(codex.profiles.map((profile) => profile.profileId));
 }
 
@@ -763,10 +791,14 @@ describe("provider inventory shared by Usage and Settings", () => {
     const settings = screen.getByTestId("providers-settings-panel");
     await waitFor(() => {
       expect(
-        spyState.settingsProfiles.some((snapshot) => snapshot.providerId === "qwen"),
+        spyState.settingsProfiles.some(
+          (snapshot) => snapshot.providerId === "qwen",
+        ),
       ).toBe(true);
       expect(
-        spyState.visibleProviders?.some((provider) => provider.providerId === "qwen"),
+        spyState.visibleProviders?.some(
+          (provider) => provider.providerId === "qwen",
+        ),
       ).toBe(true);
       expect(harness.providersListCalls.value).toBe(1);
     });
@@ -778,17 +810,11 @@ describe("provider inventory shared by Usage and Settings", () => {
       visibleSnapshot("qwen").profiles,
     );
     assertPopoverInventoryCards(popover, settingsProfilesForQwen);
-    expect(
-      within(popover).queryByRole("tab", { name: "Codex" }),
-    ).toBeNull();
+    expect(within(popover).queryByRole("tab", { name: "Codex" })).toBeNull();
     assertMappedUnhealthyProfilesRetainUsage(popover);
     assertUnreadableProfileNotice(popover, settings);
     const user = userEvent.setup();
-    await selectAndAssertQwenProfiles(
-      settings,
-      settingsProfilesForQwen,
-      user,
-    );
+    await selectAndAssertQwenProfiles(settings, settingsProfilesForQwen, user);
     await selectCodexAndAssertSettingsOnlyProfile(settings, codex, user);
 
     await waitFor(() => expect(harness.providersListCalls.value).toBe(1));

@@ -921,7 +921,8 @@ function RateLimitPopoverScopedBody({
     () =>
       providers.filter(
         (provider): provider is ConfiguredRateLimitProvider =>
-          provider.lane !== null && isWindowedRateLimitProvider(provider.providerId),
+          provider.lane !== null &&
+          isWindowedRateLimitProvider(provider.providerId),
       ),
     [providers],
   );
@@ -1430,7 +1431,10 @@ function RateLimitDetailPane({
   ) : (
     <RateLimitProviderBlock
       providerId={tab}
-      authStatus={providers.find((provider) => provider.providerId === tab)?.authStatus ?? "unknown"}
+      authStatus={
+        providers.find((provider) => provider.providerId === tab)?.authStatus ??
+        "unknown"
+      }
       profiles={configuredProviderProfiles(providers, tab)}
       fetchEligibility={providerFetchEligibility(providers, tab)}
       variant="popover-detail"
@@ -1528,7 +1532,10 @@ function RateLimitRail({
               label={providerDisplayName(tab.providerId)}
               selected={activeTab === tab.providerId}
               onSelect={() => onSelect(tab.providerId)}
-              limited={isRateLimitCapableProvider(tab.providerId) && limitedProviders.has(tab.providerId)}
+              limited={
+                isRateLimitCapableProvider(tab.providerId) &&
+                limitedProviders.has(tab.providerId)
+              }
               icon={
                 <HarnessIcon
                   harnessId={providerIdToGuiHarnessId(tab.providerId)}
@@ -1679,7 +1686,11 @@ function RateLimitOverview({
             ) : (
               <RateLimitProviderBlock
                 providerId={tab.providerId}
-                authStatus={providers.find((provider) => provider.providerId === tab.providerId)?.authStatus ?? "unknown"}
+                authStatus={
+                  providers.find(
+                    (provider) => provider.providerId === tab.providerId,
+                  )?.authStatus ?? "unknown"
+                }
                 profiles={configuredProviderProfiles(providers, tab.providerId)}
                 fetchEligibility={providerFetchEligibility(
                   providers,
@@ -1787,7 +1798,8 @@ function RateLimitRefreshAllButton({
     traycerRefreshTarget.rateLimitAccountContexts,
   );
   const httpFetchProviders = providers.filter(
-    (provider): provider is ConfiguredRateLimitProvider => provider.lane === "httpFetch",
+    (provider): provider is ConfiguredRateLimitProvider =>
+      provider.lane === "httpFetch",
   );
   const httpFetchRequests = httpFetchProviders.flatMap((provider) =>
     refreshTargetsForProvider(provider).map((profileId) => ({
@@ -1796,7 +1808,10 @@ function RateLimitRefreshAllButton({
     })),
   );
   const ephemeralProcessRequests = providers
-    .filter((provider): provider is ConfiguredRateLimitProvider => provider.lane === "ephemeralProcess")
+    .filter(
+      (provider): provider is ConfiguredRateLimitProvider =>
+        provider.lane === "ephemeralProcess",
+    )
     .flatMap((provider) =>
       refreshTargetsForProvider(provider).map((profileId) => ({
         providerId: provider.providerId,
@@ -1970,28 +1985,49 @@ function UnmappedRateLimitProviderBlock(props: {
   readonly manageProvider: (providerId: ProviderId) => void;
 }): ReactNode {
   const { onReady } = props;
-  useEffect(() => { onReady?.(); }, [onReady]);
+  useEffect(() => {
+    onReady?.();
+  }, [onReady]);
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-center gap-1.5">
         <HarnessIcon harnessId={providerIdToGuiHarnessId(props.providerId)} />
-        <span className="text-ui-sm font-medium">{providerDisplayName(props.providerId)}</span>
-        <ManageProviderLink providerId={props.providerId} onManage={props.manageProvider} />
+        <span className="text-ui-sm font-medium">
+          {providerDisplayName(props.providerId)}
+        </span>
+        <ManageProviderLink
+          providerId={props.providerId}
+          onManage={props.manageProvider}
+        />
       </div>
-      {props.profiles.length === 0 ? <NotReportingUsageMessage /> : props.profiles.map((profile) => (
-        <div key={profile.profileId} className="flex flex-col gap-2 rounded-lg border border-border/60 bg-background/40 p-2"
-          data-testid={`rate-limit-profile-card-${props.providerId}-${rateLimitProfileId(profile) ?? ""}`}>
-          <span className="text-ui-sm font-medium">{profileDisplayLabel(profile)}</span>
-          <p className="text-ui-xs text-muted-foreground">{profileInventoryNotice(profile) ?? profileAuthStatusText(profile)}</p>
-          <NotReportingUsageMessage />
-        </div>
-      ))}
+      {props.profiles.length === 0 ? (
+        <NotReportingUsageMessage />
+      ) : (
+        props.profiles.map((profile) => (
+          <div
+            key={profile.profileId}
+            className="flex flex-col gap-2 rounded-lg border border-border/60 bg-background/40 p-2"
+            data-testid={`rate-limit-profile-card-${props.providerId}-${rateLimitProfileId(profile) ?? ""}`}
+          >
+            <span className="text-ui-sm font-medium">
+              {profileDisplayLabel(profile)}
+            </span>
+            <p className="text-ui-xs text-muted-foreground">
+              {profileInventoryNotice(profile) ??
+                profileAuthStatusText(profile)}
+            </p>
+            <NotReportingUsageMessage />
+          </div>
+        ))
+      )}
     </div>
   );
 }
 
 function NotReportingUsageMessage(): ReactNode {
-  return <p className="text-ui-xs text-muted-foreground">Not reporting usage yet.</p>;
+  return (
+    <p className="text-ui-xs text-muted-foreground">Not reporting usage yet.</p>
+  );
 }
 
 function MappedRateLimitProviderBlock({
@@ -2488,10 +2524,14 @@ function ProfileInventoryUsage(props: {
 }): ReactNode {
   const { profile } = props;
   const notice = profileInventoryNotice(profile);
-  const blocked = profile.readability?.kind === "unreadable" || profile.presence?.kind === "revoking";
+  const blocked =
+    profile.readability?.kind === "unreadable" ||
+    profile.presence?.kind === "revoking";
   return (
     <>
-      {notice === null ? null : <p className="text-ui-xs text-muted-foreground">{notice}</p>}
+      {notice === null ? null : (
+        <p className="text-ui-xs text-muted-foreground">{notice}</p>
+      )}
       {blocked ? null : <RateLimitProviderProfileUsageMessage {...props} />}
     </>
   );
@@ -2655,7 +2695,11 @@ function RateLimitProviderProfileActions({
   readonly profileEnablementDisabledReason: string | null;
   readonly onSetProfileEnabled: (enabled: boolean) => void;
 }): ReactNode {
-  if (profile.readability?.kind === "unreadable" || profile.presence?.kind === "revoking") return null;
+  if (
+    profile.readability?.kind === "unreadable" ||
+    profile.presence?.kind === "revoking"
+  )
+    return null;
   return (
     <div className="flex shrink-0 items-center gap-1">
       {!profile.enabled ? (
@@ -3092,9 +3136,7 @@ function isSignedOutWithoutCachedUsage(
   signedOut: boolean,
   envelope: ProviderRateLimitEnvelope | undefined,
 ): boolean {
-  return (
-    signedOut && (envelope === undefined || envelope.lastGood === null)
-  );
+  return signedOut && (envelope === undefined || envelope.lastGood === null);
 }
 
 function resolveSingleProfilePlanLabel(

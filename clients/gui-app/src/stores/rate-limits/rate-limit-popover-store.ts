@@ -1,7 +1,11 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
-import { providerIdSchema, type ProviderId } from "@traycer/protocol/host/provider-schemas";
+import {
+  providerIdSchema,
+  type ProviderId,
+} from "@traycer/protocol/host/provider-schemas";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
+import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
 
 /**
  * The Overview tab, one tab per connected host-RPC provider, and - when the
@@ -21,7 +25,7 @@ interface RateLimitPopoverSize {
  * is `null` for the provider's ambient card.
  */
 export interface RateLimitPopoverRevealTarget {
-  readonly providerId: ProviderId;
+  readonly providerId: RateLimitProviderId;
   readonly profileId: string | null;
 }
 

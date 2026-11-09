@@ -267,7 +267,9 @@ describe("useVisibleRateLimitProviders", () => {
 
     const { result } = renderHook(() => useVisibleRateLimitProviders());
 
-    expect(result.current.map((provider) => provider.providerId)).toEqual(["codex"]);
+    expect(result.current.map((provider) => provider.providerId)).toEqual([
+      "codex",
+    ]);
   });
 
   it("keeps an enabled reporting provider visible when the fetch map has no lane", () => {
@@ -591,9 +593,9 @@ describe("useRateLimitAccountInventory", () => {
       visible: useVisibleRateLimitProviders(),
       inventory: useRateLimitAccountInventory(),
     }));
-    expect(result.current.visible.map((provider) => provider.providerId)).toEqual([
-      "codex",
-    ]);
+    expect(
+      result.current.visible.map((provider) => provider.providerId),
+    ).toEqual(["codex"]);
     expect(result.current.inventory.providers[0]?.profiles).toEqual(profiles);
 
     for (const usageReporting of [false, undefined]) {
@@ -605,9 +607,9 @@ describe("useRateLimitAccountInventory", () => {
 
     setCapability(true);
     rerender();
-    expect(result.current.visible.map((provider) => provider.providerId)).toEqual([
-      "codex",
-    ]);
+    expect(
+      result.current.visible.map((provider) => provider.providerId),
+    ).toEqual(["codex"]);
     expect(result.current.inventory.providers[0]?.profiles).toEqual(profiles);
   });
 
@@ -671,9 +673,9 @@ describe("useRateLimitAccountInventory", () => {
     const visible = renderHook(() => useVisibleRateLimitProviders());
     const inventory = renderHook(() => useRateLimitAccountInventory());
 
-    expect(visible.result.current.map((provider) => provider.providerId)).toEqual([
-      "opencode",
-    ]);
+    expect(
+      visible.result.current.map((provider) => provider.providerId),
+    ).toEqual(["opencode"]);
     expect(inventory.result.current.answered).toBe(true);
     expect(
       inventory.result.current.providers.map((provider) => provider.providerId),

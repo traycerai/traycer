@@ -6,9 +6,7 @@ import type {
   ProvidersListResponse,
   ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
-import {
-  type ProviderRateLimitTanstackOptions,
-} from "@/hooks/host/provider-rate-limit-query-options";
+import { type ProviderRateLimitTanstackOptions } from "@/hooks/host/provider-rate-limit-query-options";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import {
   isRateLimitCapableProvider,
@@ -70,7 +68,9 @@ function hasEligibleFetchTarget(
   );
 }
 
-function rateLimitProviderCandidate(state: ProviderCliState): VisibleRateLimitProvider {
+function rateLimitProviderCandidate(
+  state: ProviderCliState,
+): VisibleRateLimitProvider {
   const common = {
     authStatus: state.auth.status,
     profiles: state.profiles,
@@ -98,7 +98,9 @@ export function useConfiguredRateLimitProviders(): ReadonlyArray<ConfiguredRateL
   return useMemo(() => {
     if (providers === undefined) return [];
     return rateLimitProviderCandidates(providers).flatMap((provider) =>
-      provider.lane !== null && hasEligibleFetchTarget(provider) ? [provider] : [],
+      provider.lane !== null && hasEligibleFetchTarget(provider)
+        ? [provider]
+        : [],
     );
   }, [providers]);
 }
@@ -139,7 +141,10 @@ export function useRateLimitAccountInventory(): RateLimitAccountInventory {
           : providers
               .filter((state) => state.enabled)
               .map(rateLimitProviderCandidate)
-              .filter((provider): provider is ConfiguredRateLimitProvider => provider.lane !== null),
+              .filter(
+                (provider): provider is ConfiguredRateLimitProvider =>
+                  provider.lane !== null,
+              ),
     }),
     [providers],
   );
@@ -154,7 +159,8 @@ export function useVisibleRateLimitProviders(): ReadonlyArray<VisibleRateLimitPr
   const providersQuery = useProvidersList({ enabled: true, subscribed: true });
   const providers = providersQuery.data?.providers;
   return useMemo(
-    () => providers === undefined ? [] : rateLimitProviderCandidates(providers),
+    () =>
+      providers === undefined ? [] : rateLimitProviderCandidates(providers),
     [providers],
   );
 }
