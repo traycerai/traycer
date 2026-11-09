@@ -1,3 +1,4 @@
+import type { ProcessMetricsSnapshot } from "../../ipc-contracts/platform-types";
 import { app, shell } from "electron";
 import { randomUUID } from "node:crypto";
 import {
@@ -1533,7 +1534,7 @@ function watchSentrySendOutcome(eventId: string): {
  * not just this one.
  */
 function flattenAppMetricsForSentry(
-  appMetrics: ReadonlyArray<Electron.ProcessMetric>,
+  appMetrics: ProcessMetricsSnapshot["appMetrics"],
 ): Record<string, unknown> {
   // Spread into a fresh object literal (numeric-string keys: "0", "1", ...)
   // rather than returning the mapped array directly - Sentry's `Contexts`
@@ -1546,7 +1547,7 @@ function flattenAppMetricsForSentry(
       type: metric.type,
       pid: metric.pid,
       name: metric.name ?? metric.serviceName ?? null,
-      cpuPercent: metric.cpu.percentCPUUsage,
+      cpuSharePercent: metric.cpu.cpuSharePercent,
       cpuIdleWakeupsPerSecond: metric.cpu.idleWakeupsPerSecond,
       memoryWorkingSetKb: metric.memory.workingSetSize,
       memoryPeakWorkingSetKb: metric.memory.peakWorkingSetSize,

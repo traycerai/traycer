@@ -20,18 +20,19 @@ const GIB = 1024 * 1024 * 1024;
 /** This computer's Electron shell, as the diagnostics bridge samples it. */
 const DESKTOP_APP: DesktopAppResourceUsage = {
   sampledAt: 1,
-  cpuPercent: 3,
+  cpuSharePercent: 3,
   rssBytes: GIB / 2,
   processCount: 6,
-  main: { cpuPercent: 1, rssBytes: GIB / 8, processCount: 1 },
-  renderer: { cpuPercent: 2, rssBytes: GIB / 4, processCount: 2 },
-  other: { cpuPercent: 0, rssBytes: GIB / 8, processCount: 3 },
+  main: { cpuSharePercent: 1, rssBytes: GIB / 8, processCount: 1 },
+  renderer: { cpuSharePercent: 2, rssBytes: GIB / 4, processCount: 2 },
+  other: { cpuSharePercent: 0, rssBytes: GIB / 8, processCount: 3 },
 };
 
 function appSnapshot(overrides: Partial<AppResourceUsage>): AppResourceUsage {
   return {
     sampledAt: 1,
     hostTotalMemoryBytes: 16 * GIB,
+    hostCpuCount: 16,
     process: null,
     processCount: 3,
     cpuPercent: 4,
@@ -108,7 +109,7 @@ function valueOf(
 }
 
 describe("statusBarResourceReading", () => {
-  it("reads the watched host's whole tree", () => {
+  it("reads the watched host's whole tree as a share of its processors", () => {
     const reading = statusBarResourceReading(
       projection({
         hostTree: hostTreeSnapshot({}),
@@ -117,7 +118,9 @@ describe("statusBarResourceReading", () => {
       null,
     );
 
-    expect(reading.cpuPercent).toBe(12);
+    // 12 of one core's worth, divided by the host's 16 processors.
+    expect(reading.cpuPercent).toBeCloseTo(0.75, 5);
+    expect(reading.cpuCoresLabel).toBe("0.1 of 16 cores");
     expect(reading.memoryBytes).toBe(GIB);
     expect(reading.processCount).toBe(14);
     expect(reading.ramSharePercent).toBeCloseTo(6.25, 5);
@@ -137,10 +140,36 @@ describe("statusBarResourceReading", () => {
       DESKTOP_APP,
     );
 
-    expect(reading.cpuPercent).toBe(15);
+    expect(reading.cpuPercent).toBeCloseTo(3.75, 5);
     expect(reading.memoryBytes).toBe(GIB + GIB / 2);
     expect(reading.processCount).toBe(20);
     expect(reading.ramSharePercent).toBeCloseTo(9.375, 5);
+  });
+
+  it("adds the host and desktop shares and expresses both in the cores detail", () => {
+    const reading = statusBarResourceReading(
+      projection({
+        hostTree: hostTreeSnapshot({ cpuPercent: 100 }),
+        app: appSnapshot({}),
+      }),
+      { ...DESKTOP_APP, cpuSharePercent: 6.25 },
+    );
+
+    expect(reading.cpuPercent).toBeCloseTo(12.5, 5);
+    expect(reading.cpuCoresLabel).toBe("2.0 of 16 cores");
+  });
+
+  it("reads one busy core on a 16-processor host as 6.25% and names the core", () => {
+    const reading = statusBarResourceReading(
+      projection({
+        hostTree: hostTreeSnapshot({ cpuPercent: 100 }),
+        app: appSnapshot({}),
+      }),
+      null,
+    );
+
+    expect(reading.cpuPercent).toBeCloseTo(6.25, 5);
+    expect(reading.cpuCoresLabel).toBe("1.0 of 16 cores");
   });
 
   it("is no reading at all when only the shell was sampled", () => {
@@ -152,6 +181,7 @@ describe("statusBarResourceReading", () => {
     );
 
     expect(reading.cpuPercent).toBeNull();
+    expect(reading.cpuCoresLabel).toBeNull();
     expect(reading.memoryBytes).toBeNull();
     expect(reading.processCount).toBeNull();
   });
@@ -162,7 +192,7 @@ describe("statusBarResourceReading", () => {
       null,
     );
 
-    expect(reading.cpuPercent).toBe(4);
+    expect(reading.cpuPercent).toBeCloseTo(4 / 16, 5);
     expect(reading.memoryBytes).toBe(256 * 1024 * 1024);
     expect(reading.processCount).toBe(3);
     // Numerator and denominator describe the same (narrower) set, which is the
@@ -183,7 +213,7 @@ describe("statusBarResourceReading", () => {
       DESKTOP_APP,
     );
 
-    expect(reading.cpuPercent).toBe(15);
+    expect(reading.cpuPercent).toBeCloseTo(3.75, 5);
     expect(reading.processCount).toBe(20);
     expect(reading.memoryBytes).toBeNull();
     expect(reading.ramSharePercent).toBeNull();
@@ -200,6 +230,26 @@ describe("statusBarResourceReading", () => {
 
     expect(reading.ramSharePercent).toBeNull();
   });
+
+  it("has no CPU share, and no per-core stand-in, when the host sent no processor count", () => {
+    // The wire stays per-core and a share needs the machine's size: a host
+    // that sends none yields no CPU reading at all, never the raw 12 under a
+    // percent sign. The desktop shell cannot fill the hole either.
+    const reading = statusBarResourceReading(
+      projection({
+        hostTree: hostTreeSnapshot({}),
+        app: appSnapshot({ hostCpuCount: undefined }),
+      }),
+      DESKTOP_APP,
+    );
+
+    expect(reading.cpuPercent).toBeNull();
+    expect(reading.cpuCoresLabel).toBeNull();
+    // The other readings are independent of it.
+    expect(reading.memoryBytes).toBe(GIB + GIB / 2);
+    expect(reading.processCount).toBe(20);
+    expect(reading.ramSharePercent).toBeCloseTo(9.375, 5);
+  });
 });
 
 describe("statusBarResourceMetricViews", () => {
@@ -214,8 +264,25 @@ describe("statusBarResourceMetricViews", () => {
 
     expect(rendered.map((view) => view.metric)).toEqual(["memory", "cpu"]);
     expect(rendered.map((view) => view.label)).toEqual(["mem", "cpu"]);
-    expect(valueOf(rendered, "cpu")).toBe("12%");
+    expect(valueOf(rendered, "cpu")).toBe("0.75%");
     expect(valueOf(rendered, "memory")).toBe("1.0 GB");
+  });
+
+  it("carries the cores figure on the CPU view alone", () => {
+    const rendered = views({
+      projection: projection({
+        hostTree: hostTreeSnapshot({ cpuPercent: 100 }),
+        app: appSnapshot({}),
+      }),
+    });
+
+    expect(valueOf(rendered, "cpu")).toBe("6.3%");
+    expect(rendered.map((view) => [view.metric, view.cpuCoresLabel])).toEqual([
+      ["cpu", "1.0 of 16 cores"],
+      ["memory", null],
+      ["processes", null],
+      ["ramShare", null],
+    ]);
   });
 
   it("formats process counts and the RAM share", () => {
@@ -263,7 +330,7 @@ describe("statusBarResourceMetricViews", () => {
       }),
     });
 
-    expect(valueOf(rendered, "cpu")).toBe("12%");
+    expect(valueOf(rendered, "cpu")).toBe("0.75%");
     expect(valueOf(rendered, "processes")).toBe("14");
     const memory = rendered.find((view) => view.metric === "memory");
     expect(memory?.unavailableReason).toBe(
@@ -296,6 +363,58 @@ describe("statusBarResourceMetricViews", () => {
     );
     // The metrics that did arrive are untouched by it.
     expect(valueOf(rendered, "memory")).toBe("1.0 GB");
+  });
+
+  it("speaks of a missing processor count as the host's property, never this sample's", () => {
+    // A host either reports how many processors it has or never does, so the
+    // CPU view gets its own sentence: not "in this sample", which promises a
+    // next sample that reads no differently, and not the older-host sentence,
+    // which the host is not (it streams resources fine).
+    const rendered = views({
+      projection: projection({
+        hostId: "host-b",
+        sampledAt: 1,
+        hostTree: hostTreeSnapshot({}),
+        app: appSnapshot({ hostCpuCount: undefined }),
+      }),
+    });
+
+    const cpu = rendered.find((view) => view.metric === "cpu");
+    expect(cpu?.value).toBeNull();
+    expect(cpu?.cpuCoresLabel).toBeNull();
+    expect(cpu?.unavailableReason).toBe(
+      "Office Linux doesn't report how many processors it has, so there is no total to take a CPU share of.",
+    );
+    // The metrics that did arrive are untouched by it, RAM share included.
+    expect(valueOf(rendered, "memory")).toBe("1.0 GB");
+    expect(valueOf(rendered, "processes")).toBe("14");
+    expect(valueOf(rendered, "ramShare")).toBe("6.3%");
+  });
+
+  it("still names the host's age ahead of the processor-count sentence", () => {
+    const rendered = views({
+      projection: projection({
+        hostId: "host-b",
+        sampledAt: 1,
+        hostTree: hostTreeSnapshot({}),
+        app: appSnapshot({ hostCpuCount: undefined }),
+      }),
+      watchedHostId: "host-b",
+      hasExplicitPick: true,
+      globalStreamUnsupported: true,
+    });
+
+    expect(
+      rendered.find((view) => view.metric === "cpu")?.unavailableReason,
+    ).toContain("older Traycer host");
+  });
+
+  it("does not blame the processor count for a missing sample", () => {
+    const rendered = views({});
+
+    expect(
+      rendered.find((view) => view.metric === "cpu")?.unavailableReason,
+    ).toBe("Waiting for resource data.");
   });
 });
 
@@ -341,7 +460,7 @@ describe("statusBarResourceMetricViews · host attribution", () => {
       hasExplicitPick: true,
     });
 
-    expect(valueOf(rendered, "cpu")).toBe("12%");
+    expect(valueOf(rendered, "cpu")).toBe("0.75%");
     expect(valueOf(rendered, "processes")).toBe("14");
   });
 
@@ -353,7 +472,7 @@ describe("statusBarResourceMetricViews · host attribution", () => {
       projection: liveProjection(null),
       watchedHostId: "host-b",
     });
-    expect(valueOf(unattributed, "cpu")).toBe("12%");
+    expect(valueOf(unattributed, "cpu")).toBe("0.75%");
 
     const foreign = views({
       projection: liveProjection("host-a"),

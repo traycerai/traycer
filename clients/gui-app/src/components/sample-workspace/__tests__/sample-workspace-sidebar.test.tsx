@@ -279,6 +279,11 @@ describe("the sample sidebar's body", () => {
       '[data-slot="resource-usage-chip"]',
     );
     expect(chips).toHaveLength(SAMPLE_SIDEBAR_AGENTS.length);
+    // The sample machine has one processor, so a sample agent's per-core
+    // figure reads as itself rather than as a dash.
+    expect(chips[0]?.querySelector('[data-metric="cpu"]')?.textContent).toBe(
+      "7.0%",
+    );
   });
 
   it("shows no resource usage chip when agent rows readings are off (the default)", () => {
