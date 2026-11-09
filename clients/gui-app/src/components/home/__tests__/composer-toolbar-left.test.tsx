@@ -35,7 +35,7 @@ describe("<ComposerToolbarLeft />", () => {
     cleanup();
   });
 
-  it("opens an images-only file picker from the attachment button", () => {
+  it("opens a file picker that takes any file from the attachment button", () => {
     const onAttachImages = vi.fn<(files: ReadonlyArray<File>) => void>();
     const { container } = renderToolbar(
       onAttachImages,
@@ -48,9 +48,9 @@ describe("<ComposerToolbarLeft />", () => {
       return undefined;
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Attach image" }));
+    fireEvent.click(screen.getByRole("button", { name: "Attach" }));
 
-    expect(input.getAttribute("accept")).toBe("image/*");
+    expect(input.hasAttribute("accept")).toBe(false);
     expect(input.multiple).toBe(true);
     expect(clickSpy).toHaveBeenCalledTimes(1);
   });
@@ -95,6 +95,7 @@ describe("<ComposerToolbarLeft />", () => {
       <TooltipProvider>
         <ComposerToolbarLeft
           onAttachImages={vi.fn<(files: ReadonlyArray<File>) => void>()}
+          onAttachFiles={vi.fn<(files: ReadonlyArray<File>) => void>()}
           permission="supervised"
           onPermissionChange={vi.fn<(next: PermissionMode) => void>()}
           supportedPermissionModes={[
@@ -171,6 +172,7 @@ function renderToolbar(
     <TooltipProvider>
       <ComposerToolbarLeft
         onAttachImages={onAttachImages}
+        onAttachFiles={vi.fn()}
         permission="supervised"
         onPermissionChange={onPermissionChange}
         supportedPermissionModes={null}

@@ -159,6 +159,7 @@ describe("analytics", () => {
       "keybindings",
       "notifications",
       "permissions",
+      "agent-memories",
       "providers",
       "mcp-servers",
       "skills",

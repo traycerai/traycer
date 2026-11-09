@@ -9,15 +9,20 @@ import {
 import { computeInitials } from "@/lib/auth/compute-initials";
 import {
   type BotSwatch,
+  botSwatchAt,
   resolveBotSwatch,
   resolveProfileAccentColor,
 } from "@/lib/providers/profile-accent-color";
 import { useBotIdentity } from "@/components/bots/bot-identity-context";
 import {
+  type CreatureChoice,
+  type CreatureMark,
   type CreatureMarkSize,
+  chosenCreatureMark,
   creatureMark,
   drawCreatureMark,
 } from "@/lib/bots/creature-mark";
+import { useBotLook } from "@/hooks/bots/use-bot-appearance";
 
 type IdentityAvatarSize = "xs" | "sm" | "default" | "lg";
 
@@ -31,10 +36,12 @@ const CREATURE_SIZE: Readonly<Record<IdentityAvatarSize, CreatureMarkSize>> = {
 /**
  * Who a picture is of, in a bot's channel and everywhere a bot appears:
  * a person is a circle, a bot a squircle. A bot is its creature mark on a
- * swatch, both from its id alone, so a rename changes neither. A person
- * without a picture shows their initials on a colour hashed from who they
- * are; the smallest size has room for one letter. The picture is decoration
- * beside the name, which every surface shows or labels its control with.
+ * swatch, both from its id alone, so a rename changes neither, unless a
+ * person chose another creature or swatch in its settings. A
+ * person without a picture shows their initials on a colour hashed from who
+ * they are; the smallest size has room for one letter. The picture is
+ * decoration beside the name, which every surface shows or labels its
+ * control with.
  */
 function IdentityAvatar(
   props: (
@@ -51,32 +58,88 @@ function IdentityAvatar(
     readonly testId: string;
   },
 ): ReactElement {
-  const { size, testId } = props;
-  let swatch: BotSwatch;
-  let picture: ReactNode;
   if (props.kind === "bot") {
-    swatch = resolveBotSwatch(props.botId);
-    picture = (
-      <CreatureMarkSvg botId={props.botId} size={CREATURE_SIZE[size]} />
+    return (
+      <BotIdentityAvatar
+        botId={props.botId}
+        size={props.size}
+        testId={props.testId}
+      />
     );
-  } else {
-    swatch = {
-      color: resolveProfileAccentColor(props.seed, null),
-      ink: "dark",
-    };
-    const initials = computeInitials(props.name, "");
-    picture = size === "xs" ? initials.slice(0, 1) : initials;
   }
+  const initials = computeInitials(props.name, "");
+  return (
+    <AvatarFrame
+      kind="person"
+      size={props.size}
+      testId={props.testId}
+      swatch={{
+        color: resolveProfileAccentColor(props.seed, null),
+        ink: "dark",
+      }}
+      image={
+        props.avatarUrl === null ? null : (
+          <AvatarImage src={props.avatarUrl} alt="" />
+        )
+      }
+    >
+      {props.size === "xs" ? initials.slice(0, 1) : initials}
+    </AvatarFrame>
+  );
+}
+
+/**
+ * A bot's picture: what its settings chose, each choice falling back to the
+ * one derived from its id.
+ */
+function BotIdentityAvatar(props: {
+  readonly botId: string;
+  readonly size: IdentityAvatarSize;
+  readonly testId: string;
+}): ReactElement {
+  const { botId, size, testId } = props;
+  const look = useBotLook(botId);
+  const mark = look?.mark ?? null;
+  const swatchIndex = look?.swatch ?? null;
+  const creature =
+    mark === null
+      ? creatureMark(botId)
+      : chosenCreatureMark(botId, { family: mark.family, seed: mark.seed });
+  return (
+    <AvatarFrame
+      kind="bot"
+      size={size}
+      testId={testId}
+      swatch={
+        swatchIndex === null
+          ? resolveBotSwatch(botId)
+          : botSwatchAt(swatchIndex)
+      }
+      image={null}
+    >
+      <CreatureMarkSvg mark={creature} size={CREATURE_SIZE[size]} />
+    </AvatarFrame>
+  );
+}
+
+/** The clipped picture: an image when there is one, over its fallback. */
+function AvatarFrame(props: {
+  readonly kind: "bot" | "person";
+  readonly size: IdentityAvatarSize;
+  readonly testId: string;
+  readonly swatch: BotSwatch;
+  readonly image: ReactNode;
+  readonly children: ReactNode;
+}): ReactElement {
+  const { kind, size, testId, swatch } = props;
   return (
     <Avatar
-      shape={props.kind === "bot" ? "squircle" : "circle"}
+      shape={kind === "bot" ? "squircle" : "circle"}
       size={size}
       data-testid={testId}
-      data-identity={props.kind}
+      data-identity={kind}
     >
-      {props.kind === "person" && props.avatarUrl !== null ? (
-        <AvatarImage src={props.avatarUrl} alt="" />
-      ) : null}
+      {props.image}
       <AvatarFallback
         style={
           {
@@ -89,7 +152,7 @@ function IdentityAvatar(
             : "bg-[var(--swatch)] font-semibold text-neutral-950"
         }
       >
-        {picture}
+        {props.children}
       </AvatarFallback>
     </Avatar>
   );
@@ -101,10 +164,10 @@ function IdentityAvatar(
  * avatar's own size, and scaled with it only where the root font is not 16px.
  */
 function CreatureMarkSvg(props: {
-  readonly botId: string;
+  readonly mark: CreatureMark;
   readonly size: CreatureMarkSize;
 }): ReactElement {
-  const drawing = drawCreatureMark(creatureMark(props.botId), props.size);
+  const drawing = drawCreatureMark(props.mark, props.size);
   return (
     <svg
       viewBox={drawing.viewBox}
@@ -116,6 +179,32 @@ function CreatureMarkSvg(props: {
     >
       <path d={drawing.path} fill="currentColor" fillRule="evenodd" />
     </svg>
+  );
+}
+
+/**
+ * One creature a bot's settings offer, on a swatch, as the bot would draw it
+ * if chosen.
+ */
+export function BotCreaturePreview(props: {
+  readonly botId: string;
+  readonly choice: CreatureChoice;
+  readonly swatch: BotSwatch;
+  readonly size: IdentityAvatarSize;
+}): ReactElement {
+  return (
+    <AvatarFrame
+      kind="bot"
+      size={props.size}
+      testId="bot-creature-preview"
+      swatch={props.swatch}
+      image={null}
+    >
+      <CreatureMarkSvg
+        mark={chosenCreatureMark(props.botId, props.choice)}
+        size={CREATURE_SIZE[props.size]}
+      />
+    </AvatarFrame>
   );
 }
 

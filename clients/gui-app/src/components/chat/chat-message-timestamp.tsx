@@ -1,14 +1,7 @@
-import {
-  useLayoutRegion,
-  useRegionGhost,
-} from "@/components/layout-editor/use-layout-region";
+import { useLayoutRegion } from "@/components/layout-editor/use-layout-region";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import { useRegionShown } from "@/lib/layout-overrides";
-import {
-  formatFullTimestamp,
-  hasRenderableMessageTime,
-  useMessageTime,
-} from "@/lib/relative-time";
+import { formatFullTimestamp, useMessageTime } from "@/lib/relative-time";
+import { useTimestampDrawn } from "./use-timestamp-drawn";
 
 /**
  * The clock time a transcript row was sent, rendered beside its sender label.
@@ -44,12 +37,7 @@ export function ChatMessageTimestamp(props: {
   /** Names this stamp for the editor's canvas; a message or card id. */
   readonly instanceId: string;
 }) {
-  // Drawn while the editor points at a hidden stamp too, as a ghost (L-14).
-  const shown = useRegionShown("timestamps");
-  const ghost = useRegionGhost("timestamps");
-  if (!(shown || ghost) || !hasRenderableMessageTime(props.timestamp)) {
-    return null;
-  }
+  if (!useTimestampDrawn(props.timestamp)) return null;
   return <ShownTimestamp {...props} />;
 }
 

@@ -18,6 +18,7 @@ import {
 import { AttachmentGroupNode } from "./extensions/attachment-group-extension";
 import { ComposerSourcedQuote } from "./extensions/sourced-quote-extension";
 import { ImageAttachmentNode } from "./extensions/image-attachment-extension";
+import { FileAttachmentNode } from "./extensions/file-attachment-extension";
 import { ChatListKeymap } from "./extensions/chat-list-keymap";
 import {
   createChatPasteHandler,
@@ -120,6 +121,7 @@ export function buildComposerExtensions(
       : [createSlashSuggestionExtension({ pickerStore: args.pickerStore })]),
     AttachmentGroupNode,
     ImageAttachmentNode,
+    FileAttachmentNode,
     ChatListKeymap.configure({
       onSubmit: args.onSubmit,
       pickerStore: args.pickerStore,

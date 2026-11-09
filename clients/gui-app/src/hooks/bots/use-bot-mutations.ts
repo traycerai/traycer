@@ -10,6 +10,8 @@ import type {
   BotDeleteResponse,
   BotOpenRequest,
   BotOpenResponse,
+  BotUpdateAppearanceRequest,
+  BotUpdateAppearanceResponse,
   BotUpdateReplyModeRequest,
   BotUpdateResponse,
   BotUpdateRunSettingsRequest,
@@ -144,6 +146,31 @@ export function useBotUpdateReplyModeMutation(
     mapVariables: (variables) => variables,
     options: {
       mutationKey: botMutationKeys.updateReplyMode(),
+      onSuccess: () => {
+        invalidateBotLists(queryClient);
+      },
+    },
+  });
+}
+
+/**
+ * The bot's icon, swatch or channel background, each key left out kept and
+ * each `null` cleared. No toast: the panel states a refusal under the control.
+ */
+export function useBotUpdateAppearanceMutation(
+  client: HostClient<HostRpcRegistry> | null,
+): UseMutationResult<
+  BotUpdateAppearanceResponse,
+  HostRpcError,
+  BotUpdateAppearanceRequest
+> {
+  const queryClient = useQueryClient();
+  return useHostMutation<HostRpcRegistry, "bot.updateAppearance">({
+    client,
+    method: "bot.updateAppearance",
+    mapVariables: (variables) => variables,
+    options: {
+      mutationKey: botMutationKeys.updateAppearance(),
       onSuccess: () => {
         invalidateBotLists(queryClient);
       },

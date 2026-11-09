@@ -5,8 +5,10 @@ import { create } from "zustand";
  * `messageId` names one:
  *  - `thread` (a tapped push): a thread beside the channel, or the channel
  *    itself (`threadId` `null`);
- *  - `chat` (a chat search hit, a session link): one of the bot's chats by
- *    its id, which the tab resolves to its channel, a thread, or a session;
+ *  - `chat` (a chat search hit, a session link, a Threads card's receipt):
+ *    one of the bot's chats by its id, which the tab resolves to its
+ *    channel, a thread, or a session; a session lands on the card of the
+ *    send that wrote `sendPostId` where it has one (T94);
  *  - `sender` (a message's sender chip): the session that sent it, whose
  *    thread shows beside the channel, or the channel for the trunk.
  */
@@ -20,6 +22,7 @@ export type BotTabLanding =
       readonly kind: "chat";
       readonly chatId: string;
       readonly messageId: string | null;
+      readonly sendPostId: string | null;
     }
   | { readonly kind: "sender"; readonly chatId: string };
 

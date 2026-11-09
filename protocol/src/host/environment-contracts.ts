@@ -217,6 +217,9 @@ export const environmentStatusUpgradeV10ToV11 = defineUpgradePath<
     planes: { records: "moved", broker: "moved", room: "moved" },
     returnedFromTeam: null,
     stoppedAt: null,
+    // A host answering `@1.0` acknowledges no queued edit, which reads the same
+    // as one that has none: no receipt is never evidence either way.
+    acceptedUploads: [],
   }),
 });
 

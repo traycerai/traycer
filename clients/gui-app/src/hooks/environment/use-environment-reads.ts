@@ -93,18 +93,22 @@ function useRereadOnRevision(
     if (previous === null || previous.hostId !== hostId) return;
     if (previous.revision === revision) return;
     for (const method of DELTA_FED_READS) {
-      void queryClient
-        .invalidateQueries({
-          queryKey: hostQueryKeys.methodScope(
-            hostRpcServingTierHostId(
-              method,
-              hostId,
-              readProcessHostRpcTierPlan(),
-              null,
-            ),
+      const filters = {
+        queryKey: hostQueryKeys.methodScope(
+          hostRpcServingTierHostId(
             method,
+            hostId,
+            readProcessHostRpcTierPlan(),
+            null,
           ),
-        })
+          method,
+        ),
+      };
+      // Invalidation alone can join an initial GET with no cached data.
+      // Retire that older response before starting the revision's read.
+      void queryClient
+        .cancelQueries(filters)
+        .then(() => queryClient.invalidateQueries(filters))
         .catch(ignoreError);
     }
     if (personalEnvironmentId !== null)

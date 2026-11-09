@@ -1764,6 +1764,9 @@ describe("environment.status@1.1 and environment.review@1.1 upgrade from @1.0 to
       planes: { records: "moved", broker: "moved", room: "moved" },
       returnedFromTeam: null,
       stoppedAt: null,
+      // A `@1.0` host acknowledges no queued edit, which reads the same as a
+      // host that has none: an empty list is never evidence either way.
+      acceptedUploads: [],
     });
     // The upgrade lands on a value the @1.1 contract itself accepts.
     expect(
@@ -1796,6 +1799,19 @@ describe("environment.status@1.1 and environment.review@1.1 upgrade from @1.0 to
       },
       returnedFromTeam: { at: 1_700_000_000_001 },
       stoppedAt: 1_700_000_000_002,
+      // One acknowledgement for a queued edit the configuration took, which
+      // is how the caller that forwarded it learns the revision to wait for.
+      acceptedUploads: [
+        {
+          uploadId: "u1",
+          kind: "agent_memory",
+          key: "memory",
+          os: "any",
+          environmentId: "env-a",
+          revision: 7,
+          acceptedAt: 1_700_000_000_003,
+        },
+      ],
     };
     expect(
       hostRpcRegistry[

@@ -20,7 +20,15 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BotTestRunnerHost } from "@/components/bots/__tests__/bot-test-runner-host";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import {
   HostClient,
   type HostRequester,
@@ -238,6 +246,7 @@ function watch(settlement: BotQuestionSettlement | null): BotQuestionItem {
     text: WATCH,
     options: ["Agents waiting on me", "Sandboxes and credits", "Nothing yet"],
     allowFreeText: true,
+    multiSelect: true,
     settlement,
   };
 }
@@ -524,6 +533,15 @@ function channelCard(): HTMLElement {
 function cardQuestion(card: HTMLElement, text: string): HTMLElement {
   return within(card).getByRole("region", { name: text });
 }
+
+// sonner, vaul and react-zoom-pan-pinch insert their stylesheets on import, and
+// no element this file draws matches a rule in them. jsdom still runs every
+// rule against an element and each of its ancestors whenever a DOM change
+// drops its style cache, which every role query and click here pays: with the
+// sheets in place, the file's tests take twice as long.
+beforeAll(() => {
+  for (const style of document.head.querySelectorAll("style")) style.remove();
+});
 
 beforeEach(() => {
   installLegendListTestClock();
@@ -1378,6 +1396,101 @@ describe("<BotChannelView tiles={null} /> a question that takes options and the 
         .getAttribute("aria-pressed"),
     ).toBe("false");
     await user.click(within(question).getByRole("button", { name: "Submit" }));
+    expect(sent.map((request) => request.text)).toEqual([
+      "Sandboxes and credits",
+    ]);
+  });
+
+  it("stays single-pick when multiSelect is false though free text is allowed: a second pick replaces the first", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    session(CHANNEL_ID, [
+      questionRow([{ ...watch(null), multiSelect: false }]),
+    ]);
+    mountChannel(null);
+
+    const question = cardQuestion(channelCard(), WATCH);
+    await user.click(
+      within(question).getByRole("button", { name: "Agents waiting on me" }),
+    );
+    await user.click(
+      within(question).getByRole("button", { name: "Sandboxes and credits" }),
+    );
+    expect(
+      within(question)
+        .getByRole("button", { name: "Agents waiting on me" })
+        .getAttribute("aria-pressed"),
+    ).toBe("false");
+    await user.click(within(question).getByRole("button", { name: "Submit" }));
+    expect(sent.map((request) => request.text)).toEqual([
+      "Sandboxes and credits",
+    ]);
+  });
+
+  it("sends the typed words alone on a single-pick question with free text, once words are typed over a pick", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    session(CHANNEL_ID, [
+      questionRow([{ ...watch(null), multiSelect: false }]),
+    ]);
+    mountChannel(null);
+
+    const question = cardQuestion(channelCard(), WATCH);
+    await user.click(
+      within(question).getByRole("button", { name: "Agents waiting on me" }),
+    );
+    await user.type(
+      within(question).getByRole("textbox", { name: "Your answer" }),
+      "the build farm",
+    );
+    await user.click(within(question).getByRole("button", { name: "Submit" }));
+
+    expect(sent.map((request) => request.text)).toEqual(["the build farm"]);
+  });
+
+  it("toggles several options with no text field when multiSelect is true and free text is not allowed, and Submit sends the picks joined in option order", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    session(CHANNEL_ID, [
+      questionRow([{ ...watch(null), allowFreeText: false }]),
+    ]);
+    mountChannel(null);
+
+    const question = cardQuestion(channelCard(), WATCH);
+    expect(within(question).queryByRole("textbox")).toBeNull();
+    await user.click(
+      within(question).getByRole("button", { name: "Sandboxes and credits" }),
+    );
+    await user.click(
+      within(question).getByRole("button", { name: "Agents waiting on me" }),
+    );
+    await user.click(within(question).getByRole("button", { name: "Submit" }));
+
+    expect(sent.map((request) => request.text)).toEqual([
+      "Agents waiting on me, Sandboxes and credits",
+    ]);
+  });
+
+  it("draws a question row written without multiSelect, as an older host writes it, as single-pick", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    session(CHANNEL_ID, [
+      questionRow([
+        {
+          text: WATCH,
+          options: ["Agents waiting on me", "Sandboxes and credits"],
+          allowFreeText: true,
+          settlement: null,
+        },
+      ]),
+    ]);
+    mountChannel(null);
+
+    const question = cardQuestion(channelCard(), WATCH);
+    await user.click(
+      within(question).getByRole("button", { name: "Agents waiting on me" }),
+    );
+    await user.click(
+      within(question).getByRole("button", { name: "Sandboxes and credits" }),
+    );
+    await user.click(within(question).getByRole("button", { name: "Submit" }));
+
     expect(sent.map((request) => request.text)).toEqual([
       "Sandboxes and credits",
     ]);

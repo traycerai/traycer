@@ -107,6 +107,7 @@ describe("Layout section placement and digit reassignment", () => {
       "MCP servers",
       "Skills",
       "Permissions",
+      "Agent memories",
       "Agents",
       "Model routing",
       "Variables & shells",
@@ -138,11 +139,11 @@ describe("Layout section placement and digit reassignment", () => {
     ).toBe("personal");
   });
 
-  it("pushes host (Overview) to index 28, past the single-digit leader limit", () => {
+  it("pushes host (Overview) to index 29, past the single-digit leader limit", () => {
     setMobileApp(false);
     const sections = visibleSettingsSections();
     const hostIndex = sections.findIndex((section) => section.id === "host");
-    expect(hostIndex).toBe(28);
+    expect(hostIndex).toBe(29);
   });
 
   it("keeps the first ten sections within the single-digit range", () => {

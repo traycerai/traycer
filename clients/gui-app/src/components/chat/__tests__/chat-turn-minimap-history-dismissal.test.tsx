@@ -113,6 +113,7 @@ function renderMinimap() {
         bottomInset={0}
         inViewRefreshRef={{ current: () => undefined }}
         listRef={makeListRef({ scroll: 1050, scrollLength: 160 })}
+        atEndRef={{ current: false }}
         rows={transcriptListRows({
           splitLongTurns: true,
           window: null,
