@@ -617,6 +617,9 @@ export class WsRpcClient<
             fatalDetails: sessionCompat.details,
           });
         }
+        if (session.isClosed()) {
+          throw closedBeforeAdopt(requestId, method);
+        }
         const local = this.adoptDiscoveredSession(
           session,
           sessionKey,
@@ -927,6 +930,9 @@ export class WsRpcClient<
           method,
           fatalDetails: compat.details,
         });
+      }
+      if (socketSession.isClosed()) {
+        throw closedBeforeAdopt(requestId, method);
       }
       const attached: AttachedPersistentSocket = {
         socket: {
@@ -1604,6 +1610,8 @@ interface Session {
    * instead of the single-request `next` wait. The socket stays open.
    */
   adoptMultiplex(handlers: PersistentSocketHandlers): void;
+  /** True once `onclose` has run. Adoption must not publish that socket. */
+  isClosed(): boolean;
 }
 
 /**
@@ -1772,6 +1780,7 @@ function openSession(options: SessionOptions): Session {
   const buffer: HostFrame[] = [];
   let multiplex: PersistentSocketHandlers | null = null;
   let multiplexNotified = false;
+  let closeNotice: { message: string; selfInitiated: boolean } | null = null;
   const notifyMultiplex = (message: string, selfInitiated: boolean): void => {
     if (multiplex === null || multiplexNotified) {
       return;
@@ -2071,7 +2080,13 @@ function openSession(options: SessionOptions): Session {
           `WebSocket closed before next frame (code=${event.code}, reason='${event.reason}')`,
         ),
       );
+      return;
     }
+    const message = `WebSocket closed (code=${event.code}, reason='${event.reason}')`;
+    // The ack was already delivered and adoption has not installed handlers.
+    // Remember the close so adoption cannot publish a socket whose `send`
+    // would discard every later request.
+    closeNotice = { message, selfInitiated };
   };
 
   return {
@@ -2182,8 +2197,29 @@ function openSession(options: SessionOptions): Session {
       for (const frame of pending) {
         handlers.onFrame(frame);
       }
+      if (closeNotice !== null) {
+        notifyMultiplex(closeNotice.message, closeNotice.selfInitiated);
+      }
+    },
+
+    isClosed(): boolean {
+      return closed;
     },
   };
+}
+
+function closedBeforeAdopt(
+  requestId: string,
+  method: string,
+): RetryableTransportError {
+  return new RetryableTransportError({
+    code: "RPC_ERROR",
+    message: "WebSocket closed before the persistent session was adopted",
+    requestId,
+    method,
+    fatalDetails: null,
+    replaySafetyFromKey: false,
+  });
 }
 
 function truncate(raw: string): string {

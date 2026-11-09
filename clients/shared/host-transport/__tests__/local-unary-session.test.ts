@@ -122,6 +122,9 @@ class StubWebSocket implements WebSocketLike {
     this.onopen?.({ type: "open" });
   }
 
+  /** When set, an `openAck` closes the socket before `fireMessage` returns. */
+  closeOnAck = false;
+
   fireMessage(
     frame:
       | HostOpenAckFrame
@@ -145,6 +148,9 @@ class StubWebSocket implements WebSocketLike {
         },
   ): void {
     this.onmessage?.({ data: JSON.stringify(frame) });
+    if (this.closeOnAck && frame.kind === "openAck") {
+      this.fireClose(1006, "peer-dropped", false);
+    }
   }
 
   fireClose(code: number, reason: string, wasClean: boolean): void {
@@ -1489,5 +1495,140 @@ describe("local unary session", () => {
     }
     respondEcho(retried.socket, frame, "second");
     await expect(second).resolves.toEqual({ echoed: "second" });
+  });
+
+  it("does not publish a socket that closed before adoption, and the next call dials", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory, 0);
+    const bearer = new MutableBearerLease("token-a", USER_A);
+    const first = captureRejection(
+      client.request(
+        "host.echo",
+        { message: "first" },
+        optionsFor(bearer, new AbortController().signal, null, false, null),
+      ),
+    );
+    const discovering = sockets[0];
+    if (discovering === undefined) {
+      throw new Error("expected the discovering socket");
+    }
+    const opened = discovering.socket.nextSend();
+    discovering.socket.fireOpen();
+    await opened;
+    discovering.socket.closeOnAck = true;
+    discovering.socket.fireMessage(sessionAck(true));
+
+    const error = await first;
+    expect(error).toBeInstanceOf(RetryableTransportError);
+    if (!(error instanceof RetryableTransportError)) {
+      throw new Error("expected the closed handshake to be retryable");
+    }
+    expect(error.replaySafetyFromKey).toBe(false);
+    expect(mayHaveReachedHost(error)).toBe(false);
+    expect(requestFrames(discovering)).toHaveLength(0);
+
+    const second = client.request(
+      "host.echo",
+      { message: "second" },
+      optionsFor(bearer, new AbortController().signal, null, false, null),
+    );
+    expect(sockets).toHaveLength(2);
+    const retried = sockets[1];
+    if (retried === undefined) {
+      throw new Error("expected the next call to dial");
+    }
+    await classify(retried, sessionAck(true));
+    const frame = requestFrames(retried)[0];
+    if (frame === undefined) {
+      throw new Error("expected the retried request");
+    }
+    respondEcho(retried.socket, frame, "second");
+    await expect(second).resolves.toEqual({ echoed: "second" });
+  });
+
+  it("closes a session released during an in-flight call once that call settles", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory, 0);
+    const bearer = new MutableBearerLease("token-a", USER_A);
+    const first = client.request(
+      "host.echo",
+      { message: "first" },
+      optionsFor(bearer, new AbortController().signal, null, false, null),
+    );
+    const discovering = sockets[0];
+    if (discovering === undefined) {
+      throw new Error("expected the discovering socket");
+    }
+    await classify(discovering, sessionAck(true));
+    const firstRequest = requestFrames(discovering)[0];
+    if (firstRequest === undefined) {
+      throw new Error("expected the first request");
+    }
+    client.releaseIdleLocalSessions();
+    expect(discovering.socket.closed).toBeNull();
+
+    respondEcho(discovering.socket, firstRequest, "first");
+    await expect(first).resolves.toEqual({ echoed: "first" });
+    expect(discovering.socket.closed).toEqual({
+      code: 1000,
+      reason: "session-closed",
+    });
+
+    const second = client.request(
+      "host.echo",
+      { message: "second" },
+      optionsFor(bearer, new AbortController().signal, null, false, null),
+    );
+    expect(sockets).toHaveLength(2);
+    const retried = sockets[1];
+    if (retried === undefined) {
+      throw new Error("expected a new dial after the released call settled");
+    }
+    await classify(retried, sessionAck(true));
+    const frame = requestFrames(retried)[0];
+    if (frame === undefined) {
+      throw new Error("expected the request on the new socket");
+    }
+    respondEcho(retried.socket, frame, "second");
+    await expect(second).resolves.toEqual({ echoed: "second" });
+  });
+
+  it("keeps the socket when a call starts after a release and before the previous call settles", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory, 0);
+    const bearer = new MutableBearerLease("token-a", USER_A);
+    const first = client.request(
+      "host.echo",
+      { message: "first" },
+      optionsFor(bearer, new AbortController().signal, null, false, null),
+    );
+    const discovering = sockets[0];
+    if (discovering === undefined) {
+      throw new Error("expected the discovering socket");
+    }
+    await classify(discovering, sessionAck(true));
+    const firstRequest = requestFrames(discovering)[0];
+    if (firstRequest === undefined) {
+      throw new Error("expected the first request");
+    }
+    client.releaseIdleLocalSessions();
+    const secondWrite = discovering.socket.nextSend();
+    const second = client.request(
+      "host.echo",
+      { message: "second" },
+      optionsFor(bearer, new AbortController().signal, null, false, null),
+    );
+    await secondWrite;
+    const secondRequest = requestFrames(discovering)[1];
+    if (secondRequest === undefined) {
+      throw new Error("expected the second request on the same socket");
+    }
+    expect(sockets).toHaveLength(1);
+
+    respondEcho(discovering.socket, firstRequest, "first");
+    respondEcho(discovering.socket, secondRequest, "second");
+    await expect(first).resolves.toEqual({ echoed: "first" });
+    await expect(second).resolves.toEqual({ echoed: "second" });
+    expect(discovering.socket.closed).toBeNull();
   });
 });

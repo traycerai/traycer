@@ -150,6 +150,8 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
   private readonly inFlight = new Map<string, InFlightCall>();
   private redialing = false;
   private retired = false;
+  /** Set by `releaseIfIdle`. A later call clears it; otherwise the socket closes once it is idle. */
+  private closeWhenIdle = false;
   /** Set around a close this session initiated, so that close is not a peer drop. */
   private suppressClose = false;
 
@@ -198,6 +200,7 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
         ),
       );
     }
+    this.closeWhenIdle = false;
     const methodRegistry = this.registry[input.method];
     return new Promise((resolve, reject) => {
       const queued: QueuedCall<Registry> = {
@@ -742,6 +745,7 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
     }
     entry.resolve(value);
     this.pump();
+    this.retireIfReleased();
   }
 
   private rejectInFlight(entry: InFlightCall, error: unknown): void {
@@ -750,6 +754,7 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
     }
     entry.reject(error);
     this.pump();
+    this.retireIfReleased();
   }
 
   private releaseInFlight(entry: InFlightCall): boolean {
@@ -822,7 +827,14 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
   }
 
   releaseIfIdle(): void {
+    this.closeWhenIdle = true;
     this.retireIfIdle();
+  }
+
+  private retireIfReleased(): void {
+    if (this.closeWhenIdle) {
+      this.retireIfIdle();
+    }
   }
 
   private retireIfIdle(): void {
