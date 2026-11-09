@@ -117,8 +117,7 @@ vi.mock("@/hooks/host/use-host-queries", () => ({
 
 // What the host says it has, which is the only thing that ends an entry's
 // life. Deliberately not the list a row hands the cluster: that one is the
-// display projection, and `useVisibleRateLimitProviders` drops a whole
-// provider from it for reasons that are not an account ceasing to exist.
+// display projection, which can be narrower than the host's account inventory.
 vi.mock(
   "@/hooks/rate-limits/use-configured-rate-limit-providers",
   async (importOriginal) => {
@@ -168,6 +167,7 @@ const CODEX: ConfiguredRateLimitProvider = {
   providerId: "codex",
   profiles: [],
   lane: "ephemeralProcess",
+  authStatus: "authenticated",
   fetchEligibility: { ambient: true, managedProfiles: true },
 };
 
@@ -176,6 +176,7 @@ const GROK: ConfiguredRateLimitProvider = {
   providerId: "grok",
   profiles: [],
   lane: "ephemeralProcess",
+  authStatus: "authenticated",
   fetchEligibility: { ambient: true, managedProfiles: true },
 };
 
@@ -204,14 +205,14 @@ function managedProfile(profileId: string): ProviderProfile {
 
 /**
  * Two OpenCode accounts on the host. One account answering
- * `rate_limits_not_available` takes the WHOLE provider out of the display list
- * (`use-configured-rate-limit-providers.ts`, `hideOpenCode`), which is how a
- * display act can look like an account ceasing to exist.
+ * `rate_limits_not_available` must leave the provider and its sibling account
+ * in the display list, even when that account has no usage row.
  */
 const OPENCODE: ConfiguredRateLimitProvider = {
   providerId: "opencode",
   profiles: [managedProfile("work"), managedProfile("personal")],
   lane: "httpFetch",
+  authStatus: "authenticated",
   fetchEligibility: { ambient: true, managedProfiles: true },
 };
 
@@ -220,6 +221,7 @@ const OPENCODE_AMBIENT: ConfiguredRateLimitProvider = {
   providerId: "opencode",
   profiles: [],
   lane: "httpFetch",
+  authStatus: "authenticated",
   fetchEligibility: { ambient: true, managedProfiles: true },
 };
 

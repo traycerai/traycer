@@ -321,6 +321,7 @@ function configuredProvider(input: {
   return {
     providerId: input.providerId,
     lane: input.lane,
+    authStatus: "authenticated",
     profiles: input.profiles ?? [],
     fetchEligibility: input.fetchEligibility ?? {
       ambient: true,
@@ -1279,13 +1280,12 @@ describe("useStatusBarRateLimitSegments", () => {
     expect(result.current.retryTargets).toEqual([]);
   });
 
-  it("keeps the spent episode of an account the display list drops with its provider", () => {
+  it("keeps a spent account episode outside the current display projection", () => {
     const key = rateLimitAccountLedgerKey(RETRY_HOST_ID, "opencode", "work");
     recordScheduledTransientRead(key, 7);
-    // What `useVisibleRateLimitProviders` does when ONE OpenCode account
-    // answers `rate_limits_not_available`: the whole provider leaves the
-    // display list, siblings included. The host still has both accounts, and
-    // each is in the run of failures it was in.
+    // Both OpenCode accounts remain in the host inventory although only Codex
+    // is in the current display projection. Their retry episodes stay owned
+    // by the host inventory rather than the rendered segment list.
     mocks.inventory = {
       answered: true,
       providers: [

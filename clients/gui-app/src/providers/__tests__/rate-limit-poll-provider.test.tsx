@@ -46,6 +46,7 @@ vi.mock("@/hooks/rate-limits/use-configured-rate-limit-providers", () => ({
   useConfiguredRateLimitProviders: () =>
     mocks.configured.map((provider) => ({
       ...provider,
+      authStatus: "authenticated",
       profiles: provider.profiles ?? [],
       fetchEligibility: provider.fetchEligibility ?? {
         ambient: true,

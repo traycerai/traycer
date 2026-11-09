@@ -1,16 +1,14 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
-import { rateLimitCapableProviderIdSchema } from "@traycer/protocol/host/rate-limit";
+import { providerIdSchema, type ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
-import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
 
 /**
  * The Overview tab, one tab per connected host-RPC provider, and - when the
  * account is eligible - the GUI-sourced "traycer" tab. `"traycer"` is a
- * synthetic entry: it is NOT a `RateLimitProviderId` and does not flow through
- * `useConfiguredRateLimitProviders()`.
+ * subscription entry with its own account query, outside the adapter inventory.
  */
-export type RateLimitPopoverTab = "overview" | RateLimitProviderId | "traycer";
+export type RateLimitPopoverTab = "overview" | ProviderId;
 
 interface RateLimitPopoverSize {
   readonly widthPx: number;
@@ -23,7 +21,7 @@ interface RateLimitPopoverSize {
  * is `null` for the provider's ambient card.
  */
 export interface RateLimitPopoverRevealTarget {
-  readonly providerId: RateLimitProviderId;
+  readonly providerId: ProviderId;
   readonly profileId: string | null;
 }
 
@@ -56,7 +54,7 @@ function persistedActiveTab(persistedState: unknown): RateLimitPopoverTab {
   if (!("activeTab" in persistedState)) return "overview";
   const activeTab = persistedState.activeTab;
   if (activeTab === "overview" || activeTab === "traycer") return activeTab;
-  const result = rateLimitCapableProviderIdSchema.safeParse(activeTab);
+  const result = providerIdSchema.safeParse(activeTab);
   return result.success ? result.data : "overview";
 }
 

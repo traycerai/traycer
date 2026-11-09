@@ -1,15 +1,15 @@
 import { useMemo } from "react";
 import type {
+  ProviderId,
   ProviderCliState,
+  ProviderAuthStatus,
+  ProvidersListResponse,
   ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
-import { useHostQueriesWithResponseMap } from "@/hooks/host/use-host-queries";
 import {
-  providerRateLimitQueryOptions,
   type ProviderRateLimitTanstackOptions,
 } from "@/hooks/host/provider-rate-limit-query-options";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
-import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import {
   isRateLimitCapableProvider,
   isRateLimitProfileFetchEligible,
@@ -20,23 +20,25 @@ import {
   type RateLimitFetchLane,
   type RateLimitProviderId,
 } from "@/lib/rate-limit-providers";
-import {
-  mapResponseToProviderRateLimitEnvelope,
-  type ProviderRateLimitEnvelope,
-} from "@/lib/rate-limits/rate-limit-envelope";
-
 export interface ConfiguredRateLimitProvider {
   readonly providerId: RateLimitProviderId;
   readonly lane: RateLimitFetchLane;
+  readonly authStatus: ProviderAuthStatus;
   readonly profiles: ReadonlyArray<ProviderProfile>;
   /** Target-scoped credential eligibility, independent from display/cache state. */
   readonly fetchEligibility: RateLimitFetchEligibility;
 }
 
-interface ProviderRateLimitCacheState {
-  readonly data: ProviderRateLimitEnvelope | undefined;
-  readonly isError: boolean;
-}
+/** An adapter may report usage before this client has a fetch arm for it. */
+export type VisibleRateLimitProvider =
+  | ConfiguredRateLimitProvider
+  | {
+      readonly providerId: Exclude<ProviderId, RateLimitProviderId>;
+      readonly lane: null;
+      readonly authStatus: ProviderAuthStatus;
+      readonly profiles: ReadonlyArray<ProviderProfile>;
+      readonly fetchEligibility: RateLimitFetchEligibility;
+    };
 
 /**
  * Cache-only observation: never `enabled`, so mounting this options object
@@ -44,7 +46,7 @@ interface ProviderRateLimitCacheState {
  * whatever `fetchProviderRateLimits` or another lane's active query already
  * wrote into that exact cache key. Exported for other picker-only surfaces
  * (`use-profile-usage-comparison.ts`) that need the same "observe, never
- * fetch" contract this module's own `useVisibleRateLimitProviders` uses.
+ * fetch" contract.
  */
 export const PASSIVE_PROVIDER_RATE_LIMIT_OPTIONS: ProviderRateLimitTanstackOptions =
   {
@@ -55,16 +57,6 @@ export const PASSIVE_PROVIDER_RATE_LIMIT_OPTIONS: ProviderRateLimitTanstackOptio
     staleTime: PROVIDER_RATE_LIMITS_STALE_TIME_MS,
     refetchOnMount: false,
   };
-
-function hasProviderRateLimitCacheState(
-  query: ProviderRateLimitCacheState | undefined,
-): boolean {
-  if (query === undefined) return false;
-  if (query.isError) return true;
-  const envelope = query.data;
-  if (envelope === undefined) return false;
-  return envelope.latest !== null || envelope.lastGood !== null;
-}
 
 /** True when at least one ambient or managed target can safely pull usage. */
 function hasEligibleFetchTarget(
@@ -78,47 +70,35 @@ function hasEligibleFetchTarget(
   );
 }
 
-function rateLimitProviderCandidates(
-  providers: readonly ProviderCliState[],
-): ReadonlyArray<ConfiguredRateLimitProvider> {
-  return providers.flatMap((state) => {
-    const providerId = state.providerId;
-    if (!state.enabled) return [];
-    if (!isRateLimitCapableProvider(providerId)) return [];
-    return [
-      {
-        providerId,
-        lane: rateLimitFetchLane(providerId),
-        profiles: state.profiles,
-        fetchEligibility: resolveRateLimitFetchEligibility(state),
-      },
-    ];
-  });
+function rateLimitProviderCandidate(state: ProviderCliState): VisibleRateLimitProvider {
+  const common = {
+    authStatus: state.auth.status,
+    profiles: state.profiles,
+    fetchEligibility: resolveRateLimitFetchEligibility(state),
+  };
+  const providerId = state.providerId;
+  // The protocol enum chooses a fetch arm, never inventory membership.
+  return isRateLimitCapableProvider(providerId)
+    ? { ...common, providerId, lane: rateLimitFetchLane(providerId) }
+    : { ...common, providerId, lane: null };
 }
 
-/**
- * The currently-configured rate-limit-capable providers on the default host,
- * each tagged with its fetch lane. Drives both the interval timer (walks the
- * `ephemeralProcess` entries) and, later, the popover rail.
- *
- * Mounted persistently at the app-shell level (via `RateLimitPollProvider`),
- * so `providers.list` is subscribed for the window's lifetime rather than
- * lazily on Settings open. `subscribed: true` keeps it refreshing so a
- * credential change (login/logout invalidates `providers.list`) re-gates the
- * set - a removed credential drops that target immediately; the provider
- * remains only when another ambient/managed target is still authenticated.
- *
- * TanStack's structural sharing keeps `data.providers` referentially stable
- * across identical polls, so the memoized projection only recomputes on a real
- * list change.
- */
+function rateLimitProviderCandidates(
+  providers: ProvidersListResponse["providers"],
+): ReadonlyArray<VisibleRateLimitProvider> {
+  return providers
+    .filter((state) => state.enabled && state.usageReporting === true)
+    .map(rateLimitProviderCandidate);
+}
+
+/** Adapter-reporting providers with a mapped, eligible usage fetch target. */
 export function useConfiguredRateLimitProviders(): ReadonlyArray<ConfiguredRateLimitProvider> {
   const providersQuery = useProvidersList({ enabled: true, subscribed: true });
   const providers = providersQuery.data?.providers;
   return useMemo(() => {
     if (providers === undefined) return [];
     return rateLimitProviderCandidates(providers).flatMap((provider) =>
-      hasEligibleFetchTarget(provider) ? [provider] : [],
+      provider.lane !== null && hasEligibleFetchTarget(provider) ? [provider] : [],
     );
   }, [providers]);
 }
@@ -133,15 +113,8 @@ export interface RateLimitAccountInventory {
    * reporting that every account is gone, while silence is no report at all.
    */
   readonly answered: boolean;
-  /**
-   * Every rate-limit-capable provider the host reports, with every account it
-   * lists for each - before eligibility, before the cache, before the display
-   * rules. Deliberately NOT `useVisibleRateLimitProviders`: that one drops a
-   * provider for reasons that are not an account ceasing to exist (one
-   * OpenCode account answering `rate_limits_not_available` takes the whole
-   * provider out of the display, siblings included), and a caller that ends an
-   * account's state on this list would be ending it on a display act.
-   */
+  /** Mapped accounts before capability, fetch eligibility or usage observations.
+   * Capability changes cannot retire account-scoped retry episodes. */
   readonly providers: ReadonlyArray<ConfiguredRateLimitProvider>;
 }
 
@@ -161,96 +134,27 @@ export function useRateLimitAccountInventory(): RateLimitAccountInventory {
     () => ({
       answered: providers !== undefined,
       providers:
-        providers === undefined ? [] : rateLimitProviderCandidates(providers),
+        providers === undefined
+          ? []
+          : providers
+              .filter((state) => state.enabled)
+              .map(rateLimitProviderCandidate)
+              .filter((provider): provider is ConfiguredRateLimitProvider => provider.lane !== null),
     }),
     [providers],
   );
 }
 
 /**
- * Rate-limit providers that should be displayed in user-facing surfaces
- * (header glyph / popover). This deliberately has a wider gate than
- * `useConfiguredRateLimitProviders()`: the poll reads only providers with at
- * least one target whose account probe says a usage pull is safe, while display also
- * includes a provider once the shared provider-usage query cache has data or an
- * error for it. Candidate construction deliberately includes signed-out
- * providers: auth still makes `configured` false (so the polling hook above
- * drops them), while this display hook keeps observing their existing cache
- * entry. Ambient sign-out stops only the ambient poll; an authenticated
- * managed profile remains a valid target and keeps the provider visible even
- * before a cache entry exists. This display hook still observes existing
- * profile cache entries for every signed-out target.
- *
- * The cache observers below are passive (`enabled: false`) and only subscribe
- * to the existing `host.getRateLimitUsage` provider-pull keys. They do not
- * spawn extra CLI subprocesses or HTTP fetches.
+ * One providers.list inventory, filtered only by enablement and the adapter's
+ * usage capability. Reachability, auth and usage observations belong to rows;
+ * they never decide whether a provider or its sibling accounts exist.
  */
-export function useVisibleRateLimitProviders(): ReadonlyArray<ConfiguredRateLimitProvider> {
-  const client = useHostClient();
+export function useVisibleRateLimitProviders(): ReadonlyArray<VisibleRateLimitProvider> {
   const providersQuery = useProvidersList({ enabled: true, subscribed: true });
   const providers = providersQuery.data?.providers;
-  const candidates = useMemo(
-    () =>
-      providers === undefined ? [] : rateLimitProviderCandidates(providers),
-    [providers],
-  );
-  const cacheTargets = useMemo(
-    () =>
-      candidates.flatMap((provider) => {
-        if (provider.profiles.length === 0) {
-          return [{ providerId: provider.providerId, profileId: null }];
-        }
-        return provider.profiles.map((profile) => ({
-          providerId: provider.providerId,
-          profileId: profile.kind === "ambient" ? null : profile.profileId,
-        }));
-      }),
-    [candidates],
-  );
-
-  const cacheQueries = useHostQueriesWithResponseMap<
-    HostRpcRegistry,
-    "host.getRateLimitUsage",
-    ProviderRateLimitEnvelope
-  >({
-    client,
-    cacheKeyIdentity: undefined,
-    requests: cacheTargets.map((target) => {
-      const { method, params } = providerRateLimitQueryOptions(
-        target.providerId,
-        target.profileId,
-        false,
-      );
-      return { method, params };
-    }),
-    options: PASSIVE_PROVIDER_RATE_LIMIT_OPTIONS,
-    mapResponse: mapResponseToProviderRateLimitEnvelope,
-  });
-
   return useMemo(
-    () =>
-      candidates.flatMap((provider) => {
-        const hideOpenCode =
-          provider.providerId === "opencode" &&
-          cacheTargets.some((target, targetIndex) => {
-            if (target.providerId !== "opencode") return false;
-            const latest = cacheQueries[targetIndex]?.data?.latest;
-            return (
-              latest?.provider === "opencode" &&
-              !latest.available &&
-              latest.reason === "rate_limits_not_available"
-            );
-          });
-        if (hideOpenCode) return [];
-        return hasEligibleFetchTarget(provider) ||
-          cacheTargets.some(
-            (target, targetIndex) =>
-              target.providerId === provider.providerId &&
-              hasProviderRateLimitCacheState(cacheQueries[targetIndex]),
-          )
-          ? [provider]
-          : [];
-      }),
-    [cacheQueries, cacheTargets, candidates],
+    () => providers === undefined ? [] : rateLimitProviderCandidates(providers),
+    [providers],
   );
 }

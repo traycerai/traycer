@@ -309,8 +309,9 @@ export interface StatusBarRateLimitSegments {
 export function useStatusBarWindowedProviders(): ReadonlyArray<ConfiguredRateLimitProvider> {
   const visibleProviders = useVisibleRateLimitProviders();
   return sortProviderStatesByProviderOrder(
-    visibleProviders.filter((provider) =>
-      isWindowedRateLimitProvider(provider.providerId),
+    visibleProviders.filter(
+      (provider): provider is ConfiguredRateLimitProvider =>
+        provider.lane !== null && isWindowedRateLimitProvider(provider.providerId),
     ),
   );
 }

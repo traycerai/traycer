@@ -30,6 +30,7 @@ import type {
 } from "@traycer/protocol/host";
 import type { ProvidersConsumeRateLimitResetCreditRequest } from "@traycer/protocol/host/rate-limit";
 import type {
+  ProviderAuthStatus,
   ProviderCliState,
   ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
@@ -93,7 +94,8 @@ type MockAuthUser = {
 type MockState = {
   configured: ReadonlyArray<{
     providerId: string;
-    lane: string;
+    lane: string | null;
+    authStatus?: ProviderAuthStatus;
     profiles: ReadonlyArray<ProviderProfile> | undefined;
     fetchEligibility?: RateLimitFetchEligibility;
   }>;
@@ -127,6 +129,7 @@ type MockState = {
   // a test can assert the button subscribes to EVERY configured httpFetch
   // provider's query state, not just the first.
   lastUseHostQueriesProviderIds: ReadonlyArray<string> | null;
+  activeProviderUsageRequestIds: ReadonlyArray<string>;
   settingsHost: HostScopeOption | null;
   settingsOverlayActive: boolean;
   routerPathname: string;
@@ -160,6 +163,7 @@ const mocks = vi.hoisted<MockState>(() => ({
   consumeReset: vi.fn(),
   lastUseHostQueriesOptions: null,
   lastUseHostQueriesProviderIds: null,
+  activeProviderUsageRequestIds: [],
   settingsHost: null,
   settingsOverlayActive: false,
   routerPathname: "/",
@@ -203,6 +207,7 @@ vi.mock("@/hooks/rate-limits/use-configured-rate-limit-providers", () => ({
   useConfiguredRateLimitProviders: () =>
     mocks.configured.map((provider) => ({
       ...provider,
+      authStatus: provider.authStatus ?? "authenticated",
       fetchEligibility: provider.fetchEligibility ?? {
         ambient: true,
         managedProfiles: true,
@@ -212,6 +217,7 @@ vi.mock("@/hooks/rate-limits/use-configured-rate-limit-providers", () => ({
   useVisibleRateLimitProviders: () =>
     mocks.configured.map((provider) => ({
       ...provider,
+      authStatus: provider.authStatus ?? "authenticated",
       fetchEligibility: provider.fetchEligibility ?? {
         ambient: true,
         managedProfiles: true,
@@ -255,6 +261,15 @@ function mockUseHostQueriesImpl(args: {
     mocks.lastUseHostQueriesProviderIds = providerRequests.map(
       (request) => request.params.providerId,
     );
+    const queryIsEnabled =
+      args.options === null ||
+      !("enabled" in args.options) ||
+      args.options.enabled;
+    if (queryIsEnabled) {
+      mocks.activeProviderUsageRequestIds = providerRequests.map(
+        (request) => request.params.providerId,
+      );
+    }
   }
   return args.requests.map((request) => {
     if (!("providerId" in request.params)) {
@@ -372,6 +387,7 @@ import { useRateLimitPopoverStore } from "@/stores/rate-limits/rate-limit-popove
 import { useLayoutStore } from "@/stores/layout/layout-store";
 import type { StatusBarShownProfiles } from "@/lib/layout/layout-arrangement";
 import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
+import type { VisibleRateLimitProvider } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
 
 const NOW = Date.now();
 
@@ -1090,6 +1106,7 @@ beforeEach(() => {
   mocks.consumeReset = vi.fn();
   mocks.lastUseHostQueriesOptions = null;
   mocks.lastUseHostQueriesProviderIds = null;
+  mocks.activeProviderUsageRequestIds = [];
   mocks.profileSelection = {
     shownProfiles: {},
     lastProfileByHarness: {},
@@ -2641,7 +2658,7 @@ describe("<RateLimitPopover /> Overview progressive reveal", () => {
     );
   }
 
-  it("shows one centered loading indicator, no per-provider sections, while nothing has resolved yet", () => {
+  it("shows all reporting inventory rows while usage is not yet reported", () => {
     mocks.configured = [
       { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
       {
@@ -2653,10 +2670,13 @@ describe("<RateLimitPopover /> Overview progressive reveal", () => {
     mocks.results = { codex: coldResult(), "claude-code": coldResult() };
     renderPopover();
 
-    expect(screen.getByText("Fetching usage limits")).toBeTruthy();
-    // Neither provider's own reading is visible yet - only the combined loader.
-    expect(screen.queryByText("Current session")).toBeNull();
-    expect(screen.queryByText("4% used")).toBeNull();
+    expect(screen.getByText("Codex")).toBeTruthy();
+    expect(screen.getByText("Claude Code")).toBeTruthy();
+    for (const providerName of ["Codex", "Claude Code"]) {
+      expect(
+        screen.getByText(providerName).closest('[class*="gap-4"]')?.className,
+      ).not.toContain("hidden");
+    }
   });
 
   it("reveals an uncached signed-out provider with its signed-out message instead of leaving Overview loading forever", async () => {
@@ -2670,6 +2690,7 @@ describe("<RateLimitPopover /> Overview progressive reveal", () => {
         providerId: "codex",
         lane: "ephemeralProcess",
         profiles: undefined,
+        authStatus: "unauthenticated",
         fetchEligibility: { ambient: false, managedProfiles: true },
       },
     ];
@@ -2698,7 +2719,7 @@ describe("<RateLimitPopover /> Overview progressive reveal", () => {
     expect(screen.queryByTestId("rate-limit-detail-skeleton")).toBeNull();
   });
 
-  it("reveals a provider in place as it resolves, hiding still-cold siblings, and drops the combined loader", () => {
+  it("keeps a cold sibling visible when another provider reports usage", () => {
     mocks.configured = [
       { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
       {
@@ -2725,11 +2746,11 @@ describe("<RateLimitPopover /> Overview progressive reveal", () => {
     ).not.toContain("hidden");
     expect(screen.getByText("Current session")).toBeTruthy();
     expect(screen.getByText("4% used")).toBeTruthy();
-    // ...but Claude Code's still-cold section is hidden, not painted as its
-    // own blank/loading block.
+    // Claude Code's still-cold section remains in the popover inventory.
+    expect(screen.getByText("Claude Code")).toBeTruthy();
     expect(
       screen.getByText("Claude Code").closest('[class*="gap-4"]')?.className,
-    ).toContain("hidden");
+    ).not.toContain("hidden");
 
     // Claude Code resolves next - both sections are now visible.
     mocks.results = {
@@ -2744,6 +2765,43 @@ describe("<RateLimitPopover /> Overview progressive reveal", () => {
 });
 
 describe("<RateLimitPopover /> per-provider states", () => {
+  it("keeps every reporting account visible for an unmapped provider without requesting usage", () => {
+    const profiles = [
+      providerProfile({
+        profileId: "qwen-account-one",
+        kind: "managed",
+        label: "Qwen One",
+        tier: null,
+        usageUpdatedAt: null,
+      }),
+      providerProfile({
+        profileId: "qwen-account-two",
+        kind: "managed",
+        label: "Qwen Two",
+        tier: null,
+        usageUpdatedAt: null,
+      }),
+    ];
+    const provider: VisibleRateLimitProvider = {
+      providerId: "qwen",
+      lane: null,
+      profiles,
+      fetchEligibility: { ambient: false, managedProfiles: false },
+      authStatus: "authenticated",
+    };
+    mocks.configured = [provider];
+    mocks.fetchProviderRateLimits.mockClear();
+    mocks.lastUseHostQueriesProviderIds = null;
+
+    renderPopover();
+
+    expect(screen.getByText("Qwen One")).toBeTruthy();
+    expect(screen.getByText("Qwen Two")).toBeTruthy();
+    expect(screen.getAllByText("Not reporting usage yet.")).toHaveLength(2);
+    expect(mocks.fetchProviderRateLimits).not.toHaveBeenCalled();
+    expect(mocks.activeProviderUsageRequestIds).not.toContain("qwen");
+  });
+
   it("closes before opening Model Providers for an OpenCode permission failure", () => {
     const events: string[] = [];
     onClose = vi.fn(() => {
@@ -2850,6 +2908,7 @@ describe("<RateLimitPopover /> per-provider states", () => {
       },
     };
     renderPopover();
+    fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
     const skeleton = screen.getByTestId("rate-limit-detail-skeleton");
     expect(skeleton).toBeTruthy();
     // Regression: every dark theme preset sets `--muted` equal to
@@ -2908,12 +2967,31 @@ describe("<RateLimitPopover /> per-provider states", () => {
   it("replaces the picture entirely (no dimmed data) for an authoritative unavailable reason, even with a lastGood on hand", () => {
     // `rate_limits_not_available` (and friends) are account-capability
     // reasons, not transient - they must never be shown alongside a stale
-    // reading the way a transient failure is.
+    // reading the way a transient failure is. The sibling keeps its own
+    // usage row while this account reports that limits are unavailable.
+    const unavailableProfile = providerProfile({
+      profileId: "unavailable-account",
+      kind: "managed",
+      label: "Unavailable account",
+      tier: null,
+      usageUpdatedAt: null,
+    });
+    const siblingProfile = providerProfile({
+      profileId: "sibling-account",
+      kind: "managed",
+      label: "Sibling account",
+      tier: null,
+      usageUpdatedAt: null,
+    });
     mocks.configured = [
-      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [unavailableProfile, siblingProfile],
+      },
     ];
     mocks.results = {
-      codex: {
+      "codex:unavailable-account": {
         data: {
           latest: {
             provider: "codex",
@@ -2932,14 +3010,22 @@ describe("<RateLimitPopover /> per-provider states", () => {
         dataUpdatedAt: NOW - 90_000,
         refetch: vi.fn(() => Promise.resolve({})),
       },
+      "codex:sibling-account": readyResult(codexReady()),
     };
     renderPopover();
+    const unavailableCard = screen.getByTestId(
+      "rate-limit-profile-card-codex-unavailable-account",
+    );
+    const siblingCard = screen.getByTestId(
+      "rate-limit-profile-card-codex-sibling-account",
+    );
     expect(
-      screen.getByText(
+      within(unavailableCard).getByText(
         "Usage limits unavailable - not available for this account",
       ),
     ).toBeTruthy();
-    expect(screen.queryByText("4% used")).toBeNull();
+    expect(within(unavailableCard).queryByText("4% used")).toBeNull();
+    expect(within(siblingCard).getByText("4% used")).toBeTruthy();
     expect(document.querySelectorAll(".opacity-60").length).toBe(0);
   });
 
@@ -3031,6 +3117,7 @@ describe("<RateLimitPopover /> per-provider states", () => {
         providerId: "codex",
         lane: "ephemeralProcess",
         profiles: undefined,
+        authStatus: "unauthenticated",
         fetchEligibility: { ambient: false, managedProfiles: true },
       },
     ];
