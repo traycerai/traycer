@@ -739,4 +739,22 @@ describe("CanvasSelectionProvider tid adoption", () => {
 
     expect(provider.events().sourceAdopted?.(BOARD, SHA, "sha-2")).toBe(false);
   });
+
+  it("forgets an adopted revision when the bridge is cleared, even if the same bridge returns", async () => {
+    const provider = mountProvider("artifact-a");
+    vi.spyOn(provider.host, "stampTid").mockResolvedValue(true);
+    vi.spyOn(provider.host, "shiftMarkers").mockResolvedValue(true);
+
+    await adopt(provider);
+    expect(provider.events().sourceAdopted?.(BOARD, SHA, "sha-2")).toBe(true);
+
+    // An html page reload reports the bridge gone and then the same bridge
+    // again. The document it loads must not inherit the stamp.
+    act(() => {
+      provider.events().onBridge(BOARD, null);
+      provider.events().onBridge(BOARD, provider.host);
+    });
+
+    expect(provider.events().sourceAdopted?.(BOARD, SHA, "sha-2")).toBe(false);
+  });
 });
