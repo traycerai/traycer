@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  agentSubtreeDeleteIds,
   describeTreeDeleteDisclosure,
+  selectNestedAgentsKnown,
   type TreeDeleteDisclosure,
 } from "@/lib/epic-tree-cascade";
 import type { EpicTreeRecord } from "@/lib/epic-selectors";
@@ -393,6 +395,93 @@ describe("describeTreeDeleteDisclosure", () => {
       const tree = treeFromRecords([makeRecord("a", "chat", null)]);
       expect(pendingAgentDelete(tree, []).description).toBe(UNDONE);
     });
+  });
+});
+
+describe("agentSubtreeDeleteIds", () => {
+  it("returns every nested chat and terminal agent deepest first, then the requested row", () => {
+    const tree = treeFromRecords([
+      makeRecord("root", "chat", null),
+      makeRecord("child-chat", "chat", "root"),
+      makeRecord("child-terminal", "terminal-agent", "root"),
+      makeRecord("grandchild", "chat", "child-terminal"),
+      makeRecord("great-grandchild", "terminal-agent", "grandchild"),
+      makeRecord("outside", "chat", null),
+    ]);
+
+    const ids = agentSubtreeDeleteIds(tree, "root");
+    expect([...ids].sort()).toEqual(
+      [
+        "root",
+        "child-chat",
+        "child-terminal",
+        "grandchild",
+        "great-grandchild",
+      ].sort(),
+    );
+    const position = new Map(ids.map((id, index) => [id, index]));
+    for (const [parent, children] of Object.entries(tree.childrenByParent)) {
+      for (const child of children) {
+        const childPosition = position.get(child);
+        const parentPosition = position.get(parent);
+        if (childPosition === undefined || parentPosition === undefined)
+          continue;
+        expect(childPosition).toBeLessThan(parentPosition);
+      }
+    }
+  });
+
+  it("counts every level in the canonical tree", () => {
+    const tree = treeFromRecords([
+      makeRecord("root", "terminal-agent", null),
+      makeRecord("child-chat", "chat", "root"),
+      makeRecord("grandchild-terminal", "terminal-agent", "child-chat"),
+    ]);
+
+    expect(agentSubtreeDeleteIds(tree, "root")).toEqual([
+      "grandchild-terminal",
+      "child-chat",
+      "root",
+    ]);
+    expect(
+      describeTreeDeleteDisclosure({
+        tree,
+        kind: "agent",
+        nodeIds: ["root"],
+        nestedAgentsKnown: true,
+        includeNestedAgents: true,
+      }).description,
+    ).toBe(
+      "This will delete 1 agent and 2 nested agents. This action cannot be undone.",
+    );
+  });
+
+  it("returns the selected row alone when it has no descendants", () => {
+    const tree = treeFromRecords([makeRecord("leaf", "chat", null)]);
+    expect(agentSubtreeDeleteIds(tree, "leaf")).toEqual(["leaf"]);
+  });
+});
+
+describe("selectNestedAgentsKnown", () => {
+  it("requires both chat and terminal-agent record lists to be authoritative", () => {
+    expect(
+      selectNestedAgentsKnown({
+        chatRecordListAuthoritative: true,
+        tuiAgentRecordListAuthoritative: true,
+      }),
+    ).toBe(true);
+    expect(
+      selectNestedAgentsKnown({
+        chatRecordListAuthoritative: false,
+        tuiAgentRecordListAuthoritative: true,
+      }),
+    ).toBe(false);
+    expect(
+      selectNestedAgentsKnown({
+        chatRecordListAuthoritative: true,
+        tuiAgentRecordListAuthoritative: false,
+      }),
+    ).toBe(false);
   });
 });
 

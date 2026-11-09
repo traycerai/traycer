@@ -135,6 +135,26 @@ function countPromotedAgentChildren(
   return count;
 }
 
+/** Full agent subtree in deletion order, with every child before its parent. */
+export function agentSubtreeDeleteIds(
+  tree: TreeSlice,
+  nodeId: string,
+): readonly string[] {
+  const visited = new Set<string>();
+  const preorder: string[] = [];
+  const pending = [nodeId];
+  while (pending.length > 0) {
+    const id = pending.pop();
+    if (id === undefined || visited.has(id) || !isAgentNode(tree, id)) continue;
+    visited.add(id);
+    preorder.push(id);
+    if (Object.hasOwn(tree.childrenByParent, id)) {
+      pending.push(...tree.childrenByParent[id]);
+    }
+  }
+  return preorder.reverse();
+}
+
 /** Both halves of what a delete dialog says about nested rows. */
 export interface TreeDeleteDisclosure {
   /** The dialog's description paragraph. */
@@ -153,9 +173,10 @@ export interface TreeDeleteDisclosure {
  * whatever hangs off them and whether there is a readiness question to ask.
  *
  * The two arms differ in their inputs because they differ in their SOURCE.
- * Deleting an AGENT keeps its nested agents and the tree redraws them at the
- * top level; those nested rows come from the chat/terminal-agent record
- * planes, so whether they have all arrived is a real question. Deleting an
+ * Deleting an AGENT keeps its nested agents by default; callers offering a
+ * subtree delete can opt in to counting every descendant instead. Those rows
+ * come from the chat/terminal-agent record planes, so whether they have all
+ * arrived is a real question. Deleting an
  * ARTIFACT takes its subtree with it, and - the projected tree being
  * family-separated - that subtree is artifacts only, which are doc-sourced.
  * There is no artifact record plane to lag behind, so the artifact arm has no
@@ -165,6 +186,8 @@ export type TreeDeleteDisclosureInput =
   | {
       readonly tree: TreeSlice;
       readonly kind: "agent";
+      /** Omitted preserves the single-agent delete and promotion behavior. */
+      readonly includeNestedAgents?: boolean;
       /** Read as a set, so a repeated id cannot count a child twice. */
       readonly nodeIds: readonly string[];
       /**
@@ -176,7 +199,7 @@ export type TreeDeleteDisclosureInput =
        * until then a persisted child of that family can be absent from the
        * tree, so a number read off it would be low. The sentence then names
        * the consequence and states no number, which costs the reader the count
-       * and never tells them a child does not exist. Deliberately not a GATE:
+       * and never tells them a child does not exist. Deliberately not a gate for single-agent deletion:
        * a row that is visible and selectable, with a working delete beside it,
        * must stay deletable.
        */
@@ -237,6 +260,21 @@ export function describeTreeDeleteDisclosure(
 ): TreeDeleteDisclosure {
   const nodeIds = new Set(input.nodeIds);
   const nestedUnder = nodeIds.size === 1 ? "it" : "them";
+  if (
+    input.kind === "agent" &&
+    input.includeNestedAgents &&
+    input.nestedAgentsKnown
+  ) {
+    const allIds = new Set(
+      [...nodeIds].flatMap((id) => agentSubtreeDeleteIds(input.tree, id)),
+    );
+    const nestedCount = [...allIds].filter((id) => !nodeIds.has(id)).length;
+    return {
+      description: `This will delete ${nodeIds.size} ${nodeIds.size === 1 ? "agent" : "agents"} and ${nestedCount} nested ${nestedCount === 1 ? "agent" : "agents"}. ${DELETE_UNDONE}`,
+      cascadeSummary: null,
+      cascadeNestedUnder: nestedUnder,
+    };
+  }
   const nested = describeNestedRows(input, nodeIds.size, nestedUnder);
   const cost = describeDeleteCost(input, nodeIds.size);
   // The one place the opening sentence is joined to anything. Two call sites

@@ -121,7 +121,7 @@ import type { ProviderId } from "@/components/home/data/landing-options";
 import { ProfileBadgedHarnessIcon } from "@/components/providers/profile-badged-harness-icon";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
-import { LazySidebarConfirmDialog } from "@/components/epic-canvas/sidebar/lazy-sidebar-confirm-dialog";
+import { AgentDeleteConfirmDialog } from "@/components/epic-canvas/sidebar/agent-delete-confirm-dialog";
 import { ContextMenuContent } from "@/components/ui/context-menu";
 import {
   SidebarContent,
@@ -1629,7 +1629,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   const renameTerminalAgent = useEpicRenameTuiAgent();
   const renameArtifactInTab = useEpicCanvasStore((s) => s.renameArtifactInTab);
 
-  // What this row's delete dialog says about the agents nested under it (they
+  // What this row's default delete dialog says about agents nested under it (they
   // are kept and move to the top level), subscribed to its ANSWER rather than
   // to the record list it is computed from.
   //
@@ -2394,7 +2394,8 @@ function ChatNodeShellBody(
         selectedIds={selectedIds}
         onToggleSelection={onToggleSelection}
       />
-      <LazySidebarConfirmDialog
+      <AgentDeleteConfirmDialog
+        nodeId={nodeId}
         blockedReason={null}
         open={confirmDeleteOpen}
         onOpenChange={onConfirmDeleteOpenChange}
