@@ -271,6 +271,7 @@ function mountTranscript(
           showConnecting
           header={null}
           landOn={null}
+          flow={null}
         />
       </QueryClientProvider>
     </StrictMode>,

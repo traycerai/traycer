@@ -242,6 +242,7 @@ export function BotSessionView(props: {
               showConnecting
               header={null}
               landOn={session.landOn}
+              flow={null}
             />
           </QuoteSinkContext>
         </TileFindScope>
