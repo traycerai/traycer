@@ -1,13 +1,12 @@
-import type {
-  ConnectionManifest,
-  MethodVersionRegistry,
-  SchemaVersion,
-  VersionedRpcRegistry,
-} from "@traycer/protocol/framework/index";
-import type {
-  ClientFrame,
-  HostFatalErrorFrame,
-  HostFrame,
+import {
+  isRpcErrorCode,
+  type ClientFrame,
+  type ConnectionManifest,
+  type HostFatalErrorFrame,
+  type HostFrame,
+  type MethodVersionRegistry,
+  type SchemaVersion,
+  type VersionedRpcRegistry,
 } from "@traycer/protocol/framework/index";
 import {
   markMayHaveReachedHost,
@@ -70,10 +69,6 @@ export interface AttachedPersistentSocket {
   readonly idempotency: boolean;
 }
 
-export type ReplacementDialResult =
-  | { readonly kind: "persistent"; readonly attached: AttachedPersistentSocket }
-  | { readonly kind: "legacy" };
-
 export interface LocalUnarySessionOptions<
   Registry extends VersionedRpcRegistry,
 > {
@@ -81,10 +76,6 @@ export interface LocalUnarySessionOptions<
   readonly registry: Registry;
   readonly hostId: string;
   readonly directory: LocalUnarySessionDirectory<Registry>;
-  readonly dialReplacement: (
-    authority: HostRequestAuthority,
-    method: string,
-  ) => Promise<ReplacementDialResult>;
 }
 
 interface QueuedCall<Registry extends VersionedRpcRegistry> {
@@ -119,16 +110,19 @@ interface InFlightCall {
 /**
  * Multiplexed local unary calls on one socket.
  *
- * The remote unary session does not cap how many calls are outstanding:
- * `pendingUnary` is unbounded, and the interactive scheduler queue that
- * carries unary is not credit-gated. This session follows that. A call is
- * sent once the socket is up. A sent call is never written again: a close or
- * a response timeout settles it as uncertain. A call still in the queue,
- * which is a call that arrived while the socket was down, is written on the
- * replacement socket only when it carries an idempotency key; an unkeyed one
- * fails before send so the caller can issue a first send. Aborting a queued
- * call sends nothing. Aborting a sent call writes one `cancel` for that
- * request id and leaves every other call on the socket alone.
+ * No count or byte cap. The remote unary session leaves `pendingUnary`
+ * unbounded, and the owner's ruling is that this session does not invent
+ * one. The real limit is the one trusted local client: each request runs
+ * in its own context, and nothing of it is retained after the response.
+ *
+ * A call is sent once the socket is up. A sent call is never written
+ * again. A close settles it as uncertain. A response timeout settles it
+ * as uncertain after one best-effort `cancel` for that request id. A call
+ * still queued when the socket dies was never written, so it fails before
+ * send and is not written on another socket; the next public call
+ * discovers a new session. Aborting a queued call sends nothing. Aborting
+ * a sent call writes one `cancel` for that request id and leaves every
+ * other call on the socket alone.
  */
 export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
   readonly handlers: PersistentSocketHandlers;
@@ -137,10 +131,6 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
   private readonly registry: Registry;
   private readonly hostId: string;
   private readonly directory: LocalUnarySessionDirectory<Registry>;
-  private readonly dialReplacement: (
-    authority: HostRequestAuthority,
-    method: string,
-  ) => Promise<ReplacementDialResult>;
 
   private connection: MultiplexSocket | null = null;
   private clientManifest: ConnectionManifest | null = null;
@@ -148,7 +138,6 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
   private idempotency = false;
   private readonly queue: QueuedCall<Registry>[] = [];
   private readonly inFlight = new Map<string, InFlightCall>();
-  private redialing = false;
   private retired = false;
   /** Set by `releaseIfIdle`. A later call clears it; otherwise the socket closes once it is idle. */
   private closeWhenIdle = false;
@@ -162,7 +151,6 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
     this.registry = options.registry;
     this.hostId = options.hostId;
     this.directory = options.directory;
-    this.dialReplacement = options.dialReplacement;
     this.handlers = {
       onFrame: (frame) => {
         this.onFrame(frame);
@@ -525,6 +513,32 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
       return;
     }
     if (frame.error !== null) {
+      // A transient bearer check is this call's no-dispatch attestation.
+      // It must not read as a host answer that might have run, and it must
+      // not send the caller through credential recovery.
+      if (frame.error.retryable === true) {
+        const code = isRpcErrorCode(frame.error.code)
+          ? frame.error.code
+          : "RPC_ERROR";
+        this.rejectInFlight(
+          entry,
+          new RetryableTransportError({
+            code,
+            message: frame.error.message,
+            requestId: entry.requestId,
+            method: entry.method,
+            fatalDetails: {
+              code: "UNAUTHORIZED",
+              reason: frame.error.message,
+              incompatibleMethods: null,
+              upgradeGuidance: null,
+              retryable: true,
+            },
+            replaySafetyFromKey: false,
+          }),
+        );
+        return;
+      }
       this.rejectInFlight(
         entry,
         HostRpcError.fromWireEnvelope(
@@ -607,10 +621,12 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
   }
 
   /**
-   * The socket is gone. Sent calls are uncertain and stay that way. Keyed
-   * calls still in the queue are the only ones written on a replacement.
+   * The socket is gone. Sent calls are uncertain and stay that way. Anything
+   * still queued was never written, so it fails before send. The session
+   * retires; the next public call discovers a new one.
    */
   private onPeerLoss(message: string, selfInitiated: boolean): void {
+    void selfInitiated;
     const connection = this.connection;
     this.connection = null;
     if (connection !== null) {
@@ -633,82 +649,7 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
       markMayHaveReachedHost(error);
       this.rejectInFlight(entry, error);
     }
-    if (selfInitiated) {
-      this.failQueued(null);
-      this.retireIfIdle();
-      return;
-    }
-    this.failUnkeyedQueued(message);
-    if (this.queue.length === 0) {
-      this.retireIfIdle();
-      return;
-    }
-    void this.redial();
-  }
-
-  private async redial(): Promise<void> {
-    if (this.redialing || this.retired) {
-      return;
-    }
-    this.redialing = true;
-    const attempts = this.queue.length;
-    for (let index = 0; index < attempts; index += 1) {
-      const opener = this.queue[0];
-      if (opener === undefined) {
-        break;
-      }
-      try {
-        const dialed = await this.dialReplacement(
-          opener.options.authority,
-          opener.method,
-        );
-        if (dialed.kind === "legacy") {
-          this.directory.markLegacy(this.key, this);
-          this.failQueued(null);
-          this.redialing = false;
-          this.retireIfIdle();
-          return;
-        }
-        if (this.retired) {
-          this.redialing = false;
-          return;
-        }
-        this.attach(dialed.attached);
-        this.redialing = false;
-        this.pump();
-        return;
-      } catch (cause) {
-        if (cause instanceof RetryableTransportError) {
-          this.failQueued(null);
-          this.redialing = false;
-          this.retireIfIdle();
-          return;
-        }
-        if (isIncompatibleHandshake(cause)) {
-          this.directory.fail(this.key, this);
-          this.failQueued(cause);
-          this.redialing = false;
-          this.retireIfIdle();
-          return;
-        }
-        this.clearAbortListener(opener);
-        const openerIndex = this.queue.indexOf(opener);
-        if (openerIndex >= 0) {
-          this.queue.splice(openerIndex, 1);
-        }
-        opener.fail(
-          cause instanceof Error
-            ? cause
-            : preSendRetryable(
-                opener.requestId,
-                opener.method,
-                "Persistent session handshake failed",
-              ),
-        );
-        continue;
-      }
-    }
-    this.redialing = false;
+    this.failQueued(null);
     this.retireIfIdle();
   }
 
@@ -741,6 +682,14 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
     const entry = this.inFlight.get(requestId);
     if (entry === undefined) {
       return;
+    }
+    const connection = this.connection;
+    if (connection !== null) {
+      try {
+        connection.send({ kind: "cancel", requestId });
+      } catch (cause) {
+        void cause;
+      }
     }
     const error = new HostTransportFailureError({
       code: "RPC_ERROR",
@@ -794,22 +743,6 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
     return true;
   }
 
-  private failUnkeyedQueued(message: string): void {
-    const kept: QueuedCall<Registry>[] = [];
-    for (const call of this.queue) {
-      if (call.options.idempotencyKey === null) {
-        this.clearAbortListener(call);
-        call.fail(preSendRetryable(call.requestId, call.method, message));
-        continue;
-      }
-      kept.push(call);
-    }
-    this.queue.length = 0;
-    for (const call of kept) {
-      this.queue.push(call);
-    }
-  }
-
   /** `error` null means each call fails as a pre-send retry, because it was never written. */
   private failQueued(error: HostRpcError | null): void {
     const pending = this.queue.splice(0, this.queue.length);
@@ -855,7 +788,7 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
     if (this.retired) {
       return;
     }
-    if (this.queue.length > 0 || this.inFlight.size > 0 || this.redialing) {
+    if (this.queue.length > 0 || this.inFlight.size > 0) {
       return;
     }
     this.retired = true;
@@ -899,6 +832,12 @@ interface SessionSlot<Registry extends VersionedRpcRegistry> {
   phase: "dialing" | "ready" | "legacy";
   session: LocalUnarySession<Registry> | null;
   waiters: Array<(result: SessionGateResult<Registry>) => void>;
+  /**
+   * Set when `releaseIdle` runs while this slot is still dialing. Consumed
+   * after the discovering call has queued, so that call closes the socket
+   * once it settles.
+   */
+  releaseBeforeReady: boolean;
 }
 
 /**
@@ -940,15 +879,35 @@ export class LocalUnarySessionDirectory<Registry extends VersionedRpcRegistry> {
   }
 
   releaseIdle(): void {
-    const sessions = Array.from(
-      this.slots.values(),
-      (slot) => slot.session,
-    );
-    for (const session of sessions) {
-      if (session !== null) {
-        session.releaseIfIdle();
+    for (const slot of this.slots.values()) {
+      if (slot.session !== null) {
+        slot.session.releaseIfIdle();
+        continue;
+      }
+      if (slot.phase === "dialing") {
+        slot.releaseBeforeReady = true;
       }
     }
+  }
+
+  /**
+   * Takes the dial-time release for `session`, once. False when this slot
+   * was not released, or when `session` is no longer the one it published.
+   */
+  consumeReleaseBeforeReady(
+    key: string,
+    session: LocalUnarySession<Registry>,
+  ): boolean {
+    const slot = this.slots.get(key);
+    if (
+      slot === undefined ||
+      slot.session !== session ||
+      !slot.releaseBeforeReady
+    ) {
+      return false;
+    }
+    slot.releaseBeforeReady = false;
+    return true;
   }
 
   release(key: string, session: LocalUnarySession<Registry>): void {
@@ -960,15 +919,6 @@ export class LocalUnarySessionDirectory<Registry extends VersionedRpcRegistry> {
       return;
     }
     this.slots.delete(key);
-  }
-
-  markLegacy(key: string, session: LocalUnarySession<Registry>): void {
-    const slot = this.slots.get(key);
-    if (slot === undefined || slot.session !== session) {
-      return;
-    }
-    slot.phase = "legacy";
-    slot.session = null;
   }
 
   fail(key: string, session: LocalUnarySession<Registry>): void {
@@ -984,6 +934,7 @@ export class LocalUnarySessionDirectory<Registry extends VersionedRpcRegistry> {
       phase: "dialing",
       session: null,
       waiters: [],
+      releaseBeforeReady: false,
     };
     this.slots.set(key, slot);
     return { kind: "owner", publish: this.publisher(key, slot) };
@@ -1064,14 +1015,6 @@ function preSendRetryable(
     fatalDetails: null,
     replaySafetyFromKey: false,
   });
-}
-
-function isIncompatibleHandshake(error: unknown): error is HostRpcError {
-  return (
-    error instanceof HostRpcError &&
-    error.code === "INCOMPATIBLE" &&
-    error.fatalDetails !== null
-  );
 }
 
 function readBearer(

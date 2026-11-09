@@ -576,6 +576,11 @@ export const hostResponseErrorSchema = z.object({
   holdersRevision: holdersRevisionWireFieldSchema,
   // `ENVIRONMENT_WRITE_STALE`'s detail; sanitized to absent like `holders`.
   staleWrite: staleWriteWireFieldSchema,
+  // A persistent-session request whose bearer check failed transiently
+  // (the validator's `NETWORK_ERROR`, the same class `fatalError.retryable`
+  // carries on the open frame). Absent on every other envelope, including
+  // a permanent `UNAUTHORIZED` and any host that predates the field.
+  retryable: z.boolean().optional(),
 });
 
 /** Canonical schema for the host `response` frame. */

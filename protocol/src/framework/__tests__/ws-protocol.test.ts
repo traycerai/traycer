@@ -9,6 +9,7 @@ import {
   hostFrameSchema,
   hostOpenAckFrameSchema,
   hostResponseFrameSchema,
+  hostResponseErrorSchema,
   hostFatalErrorFrameSchema,
   fatalErrorDetailsSchema,
   hostRestartIntentSchema,
@@ -563,6 +564,51 @@ describe("ws-protocol canonical Zod schemas", () => {
         error: null,
       };
       expect(hostFrameSchema.safeParse(frame).success).toBe(false);
+    });
+
+    it("accepts `retryable` on a response error and reads an omission as undefined", () => {
+      const present = hostResponseErrorSchema.safeParse({
+        code: "UNAUTHORIZED",
+        message: "verifier unreachable",
+        retryable: true,
+      });
+      expect(present.success).toBe(true);
+      if (present.success) {
+        expect(present.data.retryable).toBe(true);
+      }
+      const omitted = hostResponseErrorSchema.safeParse({
+        code: "UNAUTHORIZED",
+        message: "Invalid or expired token",
+      });
+      expect(omitted.success).toBe(true);
+      if (omitted.success) {
+        expect(omitted.data.retryable).toBeUndefined();
+      }
+      const framed = hostResponseFrameSchema.safeParse({
+        kind: "response",
+        requestId: "req-1",
+        method: "host.echo",
+        schemaVersion: { major: 1, minor: 0 },
+        result: null,
+        error: {
+          code: "UNAUTHORIZED",
+          message: "verifier unreachable",
+          retryable: true,
+        },
+      });
+      expect(framed.success).toBe(true);
+      if (framed.success) {
+        expect(framed.data.error?.retryable).toBe(true);
+      }
+    });
+
+    it("rejects a non-boolean `retryable` on a response error", () => {
+      const parsed = hostResponseErrorSchema.safeParse({
+        code: "UNAUTHORIZED",
+        message: "verifier unreachable",
+        retryable: "yes",
+      });
+      expect(parsed.success).toBe(false);
     });
   });
 

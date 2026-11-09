@@ -30,13 +30,8 @@ import {
   type HostRequestOptions,
   type HostTransportEndpoint,
 } from "../host-messenger";
-import {
-  LocalUnarySession,
-  LocalUnarySessionDirectory,
-  localUnarySessionKey,
-  type MultiplexSocket,
-  type ReplacementDialResult,
-} from "../local-unary-session";
+import { createAuthAwareMessenger } from "../auth-aware-messenger";
+import { localUnarySessionKey } from "../local-unary-session";
 import { resetNegotiatedManifests } from "../negotiated-manifest-registry";
 import type {
   IWebSocketFactory,
@@ -87,7 +82,6 @@ const HOST_ID = "local-unary-session-host";
 const SOCKET_URL = "ws://127.0.0.1/rpc";
 const USER_A = "user-a";
 const USER_B = "user-b";
-const ECHO_MANIFEST = { "host.echo": { major: 1, minor: 0 } };
 
 class StubWebSocket implements WebSocketLike {
   onopen: ((event: WebSocketOpenEvent) => void) | null = null;
@@ -126,6 +120,12 @@ class StubWebSocket implements WebSocketLike {
   closeOnAck = false;
   /** When set, an `openAck` is followed by a host fatal before `fireMessage` returns. */
   fatalAfterAck = false;
+  /** Raw text delivered synchronously after an `openAck`, before the caller continues. */
+  trailingRaw: string | null = null;
+  /** Transport error delivered synchronously after an `openAck`. */
+  trailingError: string | null = null;
+  /** Runs synchronously after an `openAck`, before the caller continues. */
+  abortOnAck: (() => void) | null = null;
 
   fireMessage(
     frame:
@@ -146,6 +146,7 @@ class StubWebSocket implements WebSocketLike {
           readonly error: {
             readonly code: string;
             readonly message: string;
+            readonly retryable?: boolean;
           } | null;
         },
   ): void {
@@ -167,6 +168,21 @@ class StubWebSocket implements WebSocketLike {
           retryable: false,
         },
       });
+    }
+    if (this.trailingRaw !== null) {
+      const raw = this.trailingRaw;
+      this.trailingRaw = null;
+      this.onmessage?.({ data: raw });
+    }
+    if (this.trailingError !== null) {
+      const message = this.trailingError;
+      this.trailingError = null;
+      this.onerror?.({ message });
+    }
+    const abort = this.abortOnAck;
+    if (abort !== null) {
+      this.abortOnAck = null;
+      abort();
     }
   }
 
@@ -316,45 +332,9 @@ function optionsFor(
   };
 }
 
-function recordingSocket(): {
-  readonly socket: MultiplexSocket;
-  readonly sent: ClientFrame[];
-  nextSend(): Promise<void>;
-} {
-  const sent: ClientFrame[] = [];
-  const waiters: Array<() => void> = [];
-  return {
-    sent,
-    nextSend(): Promise<void> {
-      return new Promise((resolve) => {
-        waiters.push(resolve);
-      });
-    },
-    socket: {
-      send(frame: ClientFrame): void {
-        sent.push(frame);
-        const pending = waiters.splice(0, waiters.length);
-        for (const resolve of pending) {
-          resolve();
-        }
-      },
-      close(): void {},
-    },
-  };
-}
-
-function openDirectSession(
-  dialReplacement: (
-    authority: HostRequestAuthority,
-    method: string,
-  ) => Promise<ReplacementDialResult>,
-): LocalUnarySession<typeof testRegistry> {
-  return new LocalUnarySession({
-    key: localUnarySessionKey(HOST_ID, USER_A, SOCKET_URL),
-    registry: testRegistry,
-    hostId: HOST_ID,
-    directory: new LocalUnarySessionDirectory(),
-    dialReplacement,
+function nextTurn(): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, 0);
   });
 }
 
@@ -687,95 +667,6 @@ describe("local unary session", () => {
     expect(sockets).toHaveLength(1);
   });
 
-  it("fails an unsent unkeyed request without writing it or redialing", async () => {
-    const bearer = new MutableBearerLease("token-a", USER_A);
-    let dials = 0;
-    const session = openDirectSession(async () => {
-      dials += 1;
-      return { kind: "legacy" };
-    });
-    const pending = captureRejection(
-      session.call({
-        requestId: "req-unsent",
-        method: "host.echo",
-        params: { message: "waiting" },
-        responseTimeoutMs: 5_000,
-        options: optionsFor(
-          bearer,
-          new AbortController().signal,
-          null,
-          false,
-          null,
-        ),
-      }),
-    );
-
-    session.handlers.onTransportClosed("peer-dropped", false);
-    const error = await pending;
-    expect(error).toBeInstanceOf(RetryableTransportError);
-    if (!(error instanceof RetryableTransportError)) {
-      throw new Error("expected the unsent call to be retryable");
-    }
-    expect(error.replaySafetyFromKey).toBe(false);
-    expect(error.message).toBe("peer-dropped");
-    expect(mayHaveReachedHost(error)).toBe(false);
-    expect(dials).toBe(0);
-  });
-
-  it("writes an unsent keyed request once on the replacement socket", async () => {
-    const bearer = new MutableBearerLease("token-a", USER_A);
-    const recorded = recordingSocket();
-    let dials = 0;
-    const session = openDirectSession(async () => {
-      dials += 1;
-      const attached: ReplacementDialResult = {
-        kind: "persistent",
-        attached: {
-          socket: recorded.socket,
-          clientManifest: ECHO_MANIFEST,
-          hostManifest: ECHO_MANIFEST,
-          idempotency: true,
-        },
-      };
-      return attached;
-    });
-    const pending = session.call({
-      requestId: "req-keyed",
-      method: "host.echo",
-      params: { message: "replay" },
-      responseTimeoutMs: 5_000,
-      options: optionsFor(
-        bearer,
-        new AbortController().signal,
-        "replay-key",
-        false,
-        null,
-      ),
-    });
-
-    const replayed = recorded.nextSend();
-    session.handlers.onTransportClosed("peer-dropped", false);
-    await replayed;
-    expect(dials).toBe(1);
-    expect(recorded.sent).toHaveLength(1);
-    const written = recorded.sent[0];
-    if (written === undefined || written.kind !== "request") {
-      throw new Error("expected the keyed request to be written once");
-    }
-    expect(written.requestId).toBe("req-keyed");
-    expect(written.idempotencyKey).toBe("replay-key");
-    session.handlers.onFrame({
-      kind: "response",
-      requestId: "req-keyed",
-      method: "host.echo",
-      schemaVersion: { major: 1, minor: 0 },
-      result: { echoed: "replay" },
-      error: null,
-    });
-    await expect(pending).resolves.toEqual({ echoed: "replay" });
-    expect(recorded.sent).toHaveLength(1);
-  });
-
   it("fails replayMustBeKeyed before send when the ack has no idempotency capability", async () => {
     const { factory, sockets } = makeFactory();
     const client = makeClient(factory, 0);
@@ -1017,7 +908,7 @@ describe("local unary session", () => {
     expect(openFrames(discovering)).toHaveLength(1);
   });
 
-  it("times out on the per-call timer without cancelling or closing the session", async () => {
+  it("times out on the per-call timer with one cancel and leaves the session open", async () => {
     const { factory, sockets } = makeFactory();
     const client = makeClient(factory, 5_000);
     const bearer = new MutableBearerLease("token-a", USER_A);
@@ -1059,7 +950,9 @@ describe("local unary session", () => {
     }
     expect(outcome.message).toBe("WebSocket frame timed out after 40ms");
     expect(mayHaveReachedHost(outcome)).toBe(true);
-    expect(cancelFrames(discovering)).toHaveLength(0);
+    expect(cancelFrames(discovering)).toEqual([
+      { kind: "cancel", requestId: "req-1" },
+    ]);
     expect(discovering.socket.closed).toBeNull();
 
     const laterWrite = discovering.socket.nextSend();
@@ -1254,166 +1147,6 @@ describe("local unary session", () => {
     await expect(second).resolves.toEqual({ echoed: "second" });
   });
 
-  it("does not write a later queued request after a fatal frame", async () => {
-    const bearer = new MutableBearerLease("token-a", USER_A);
-    const sent: ClientFrame[] = [];
-    let session: LocalUnarySession<typeof testRegistry> | null = null;
-    const socket: MultiplexSocket = {
-      send(frame: ClientFrame): void {
-        sent.push(frame);
-        if (
-          frame.kind !== "request" ||
-          session === null ||
-          sent.filter((item) => item.kind === "request").length !== 1
-        ) {
-          return;
-        }
-        session.handlers.onFrame({
-          kind: "fatalError",
-          details: {
-            code: "UNAUTHORIZED",
-            reason: "session rejected",
-            incompatibleMethods: null,
-            upgradeGuidance: null,
-          },
-        });
-      },
-      close(): void {},
-    };
-    session = openDirectSession(async () => {
-      return { kind: "legacy" };
-    });
-    const options = optionsFor(
-      bearer,
-      new AbortController().signal,
-      null,
-      false,
-      null,
-    );
-    const first = captureRejection(
-      session.call({
-        requestId: "req-1",
-        method: "host.echo",
-        params: { message: "one" },
-        responseTimeoutMs: 5_000,
-        options,
-      }),
-    );
-    const second = captureRejection(
-      session.call({
-        requestId: "req-2",
-        method: "host.echo",
-        params: { message: "two" },
-        responseTimeoutMs: 5_000,
-        options,
-      }),
-    );
-    session.attach({
-      socket,
-      clientManifest: ECHO_MANIFEST,
-      hostManifest: ECHO_MANIFEST,
-      idempotency: true,
-    });
-    const third = captureRejection(
-      session.call({
-        requestId: "req-3",
-        method: "host.echo",
-        params: { message: "three" },
-        responseTimeoutMs: 5_000,
-        options,
-      }),
-    );
-    const firstError = await first;
-    const secondError = await second;
-    const thirdError = await third;
-    expect(sent.filter((frame) => frame.kind === "request")).toEqual([
-      expect.objectContaining({ kind: "request", requestId: "req-1" }),
-    ]);
-    expect(firstError).toBeInstanceOf(HostRpcError);
-    expect(firstError).not.toBeInstanceOf(RetryableTransportError);
-    expect(secondError).toBeInstanceOf(RetryableTransportError);
-    expect(thirdError).toBeInstanceOf(RetryableTransportError);
-  });
-
-  it("keeps a queued call when the redial opener is aborted during the handshake", async () => {
-    const bearer = new MutableBearerLease("token-a", USER_A);
-    let releaseDial: (() => void) | null = null;
-    let dials = 0;
-    const recorded = recordingSocket();
-    const session = openDirectSession(async () => {
-      dials += 1;
-      if (dials === 1) {
-        await new Promise<void>((resolve) => {
-          releaseDial = resolve;
-        });
-        throw new Error("handshake failed");
-      }
-      const attached: ReplacementDialResult = {
-        kind: "persistent",
-        attached: {
-          socket: recorded.socket,
-          clientManifest: ECHO_MANIFEST,
-          hostManifest: ECHO_MANIFEST,
-          idempotency: true,
-        },
-      };
-      return attached;
-    });
-    const openerController = new AbortController();
-    const opener = captureRejection(
-      session.call({
-        requestId: "req-opener",
-        method: "host.echo",
-        params: { message: "opener" },
-        responseTimeoutMs: 5_000,
-        options: optionsFor(
-          bearer,
-          openerController.signal,
-          "opener-key",
-          false,
-          null,
-        ),
-      }),
-    );
-    const kept = session.call({
-      requestId: "req-kept",
-      method: "host.echo",
-      params: { message: "kept" },
-      responseTimeoutMs: 5_000,
-      options: optionsFor(
-        bearer,
-        new AbortController().signal,
-        "kept-key",
-        false,
-        null,
-      ),
-    });
-    session.handlers.onTransportClosed("peer-dropped", false);
-    expect(dials).toBe(1);
-    openerController.abort();
-    if (releaseDial === null) {
-      throw new Error("expected the replacement dial to be waiting");
-    }
-    const keptWrite = recorded.nextSend();
-    releaseDial();
-    await keptWrite;
-    const openerError = await opener;
-    expect(openerError).toBeInstanceOf(HostRequestAbortedError);
-    expect(dials).toBe(2);
-    expect(recorded.sent).toEqual([
-      expect.objectContaining({ kind: "request", requestId: "req-kept" }),
-    ]);
-    session.handlers.onFrame({
-      kind: "response",
-      requestId: "req-kept",
-      method: "host.echo",
-      schemaVersion: { major: 1, minor: 0 },
-      result: { echoed: "kept" },
-      error: null,
-    });
-    await expect(kept).resolves.toEqual({ echoed: "kept" });
-  });
-
   it("lets the next call dial when socket construction throws", async () => {
     const sockets: RecordedSocket[] = [];
     let creations = 0;
@@ -1542,6 +1275,9 @@ describe("local unary session", () => {
     }
     expect(error.replaySafetyFromKey).toBe(false);
     expect(mayHaveReachedHost(error)).toBe(false);
+    expect(error.message).toBe(
+      "WebSocket closed (code=1006, reason='peer-dropped')",
+    );
     expect(requestFrames(discovering)).toHaveLength(0);
 
     const second = client.request(
@@ -1595,7 +1331,7 @@ describe("local unary session", () => {
     expect(requestFrames(discovering)).toHaveLength(0);
     expect(discovering.socket.closed).toEqual({
       code: 1000,
-      reason: "session-closed",
+      reason: "ok",
     });
 
     const second = client.request(
@@ -1701,5 +1437,610 @@ describe("local unary session", () => {
     await expect(first).resolves.toEqual({ echoed: "first" });
     await expect(second).resolves.toEqual({ echoed: "second" });
     expect(discovering.socket.closed).toBeNull();
+  });
+
+  it("fails discovery on a malformed frame after openAck and dials again", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory, 0);
+    const bearer = new MutableBearerLease("token-a", USER_A);
+    const first = captureRejection(
+      client.request(
+        "host.echo",
+        { message: "first" },
+        optionsFor(bearer, new AbortController().signal, null, false, null),
+      ),
+    );
+    const discovering = sockets[0];
+    if (discovering === undefined) {
+      throw new Error("expected the discovering socket");
+    }
+    const opened = discovering.socket.nextSend();
+    discovering.socket.fireOpen();
+    await opened;
+    discovering.socket.trailingRaw = "not-json";
+    discovering.socket.fireMessage(sessionAck(true));
+
+    const error = await first;
+    expect(error).toBeInstanceOf(HostRpcError);
+    expect(error).not.toBeInstanceOf(RetryableTransportError);
+    if (!(error instanceof HostRpcError)) {
+      throw new Error("expected the malformed frame");
+    }
+    expect(error.code).toBe("RPC_ERROR");
+    expect(error.message).toBe("Malformed host frame: not-json");
+    expect(error.fatalDetails).toBeNull();
+    expect(mayHaveReachedHost(error)).toBe(false);
+    expect(requestFrames(discovering)).toHaveLength(0);
+    expect(discovering.socket.closed).toEqual({ code: 1000, reason: "ok" });
+
+    const second = client.request(
+      "host.echo",
+      { message: "second" },
+      optionsFor(bearer, new AbortController().signal, null, false, null),
+    );
+    expect(sockets).toHaveLength(2);
+    const retried = sockets[1];
+    if (retried === undefined) {
+      throw new Error("expected the next call to dial");
+    }
+    await classify(retried, sessionAck(true));
+    const frame = requestFrames(retried)[0];
+    if (frame === undefined) {
+      throw new Error("expected the retried request");
+    }
+    respondEcho(retried.socket, frame, "second");
+    await expect(second).resolves.toEqual({ echoed: "second" });
+  });
+
+  it("fails discovery on a schema-invalid frame after openAck and dials again", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory, 0);
+    const bearer = new MutableBearerLease("token-a", USER_A);
+    const first = captureRejection(
+      client.request(
+        "host.echo",
+        { message: "first" },
+        optionsFor(bearer, new AbortController().signal, null, false, null),
+      ),
+    );
+    const discovering = sockets[0];
+    if (discovering === undefined) {
+      throw new Error("expected the discovering socket");
+    }
+    const opened = discovering.socket.nextSend();
+    discovering.socket.fireOpen();
+    await opened;
+    discovering.socket.trailingRaw = JSON.stringify({ kind: "nope" });
+    discovering.socket.fireMessage(sessionAck(true));
+
+    const error = await first;
+    expect(error).toBeInstanceOf(HostRpcError);
+    expect(error).not.toBeInstanceOf(RetryableTransportError);
+    if (!(error instanceof HostRpcError)) {
+      throw new Error("expected the invalid frame");
+    }
+    expect(error.message).toBe(
+      `Malformed host frame: ${JSON.stringify({ kind: "nope" })}`,
+    );
+    expect(requestFrames(discovering)).toHaveLength(0);
+    expect(discovering.socket.closed).toEqual({ code: 1000, reason: "ok" });
+
+    const second = client.request(
+      "host.echo",
+      { message: "second" },
+      optionsFor(bearer, new AbortController().signal, null, false, null),
+    );
+    expect(sockets).toHaveLength(2);
+    const retried = sockets[1];
+    if (retried === undefined) {
+      throw new Error("expected the next call to dial");
+    }
+    await classify(retried, sessionAck(true));
+    const frame = requestFrames(retried)[0];
+    if (frame === undefined) {
+      throw new Error("expected the retried request");
+    }
+    respondEcho(retried.socket, frame, "second");
+    await expect(second).resolves.toEqual({ echoed: "second" });
+  });
+
+  it("fails discovery on a transport error after openAck and dials again", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory, 0);
+    const bearer = new MutableBearerLease("token-a", USER_A);
+    const first = captureRejection(
+      client.request(
+        "host.echo",
+        { message: "first" },
+        optionsFor(bearer, new AbortController().signal, null, false, null),
+      ),
+    );
+    const discovering = sockets[0];
+    if (discovering === undefined) {
+      throw new Error("expected the discovering socket");
+    }
+    const opened = discovering.socket.nextSend();
+    discovering.socket.fireOpen();
+    await opened;
+    discovering.socket.trailingError = "socket reset";
+    discovering.socket.fireMessage(sessionAck(true));
+
+    const error = await first;
+    expect(error).toBeInstanceOf(RetryableTransportError);
+    if (!(error instanceof RetryableTransportError)) {
+      throw new Error("expected the transport error");
+    }
+    expect(error.message).toBe("WebSocket transport error: socket reset");
+    expect(error.replaySafetyFromKey).toBe(false);
+    expect(mayHaveReachedHost(error)).toBe(false);
+    expect(requestFrames(discovering)).toHaveLength(0);
+    expect(discovering.socket.closed).toEqual({ code: 1000, reason: "ok" });
+
+    const second = client.request(
+      "host.echo",
+      { message: "second" },
+      optionsFor(bearer, new AbortController().signal, null, false, null),
+    );
+    expect(sockets).toHaveLength(2);
+    const retried = sockets[1];
+    if (retried === undefined) {
+      throw new Error("expected the next call to dial");
+    }
+    await classify(retried, sessionAck(true));
+    const frame = requestFrames(retried)[0];
+    if (frame === undefined) {
+      throw new Error("expected the retried request");
+    }
+    respondEcho(retried.socket, frame, "second");
+    await expect(second).resolves.toEqual({ echoed: "second" });
+  });
+
+  it("fails discovery when the authority aborts after openAck and dials again", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory, 0);
+    const bearer = new MutableBearerLease("token-a", USER_A);
+    const controller = new AbortController();
+    const first = captureRejection(
+      client.request(
+        "host.echo",
+        { message: "first" },
+        optionsFor(bearer, controller.signal, null, false, null),
+      ),
+    );
+    const discovering = sockets[0];
+    if (discovering === undefined) {
+      throw new Error("expected the discovering socket");
+    }
+    const opened = discovering.socket.nextSend();
+    discovering.socket.fireOpen();
+    await opened;
+    discovering.socket.abortOnAck = () => {
+      controller.abort();
+    };
+    discovering.socket.fireMessage(sessionAck(true));
+
+    const error = await first;
+    expect(error).toBeInstanceOf(HostRequestAbortedError);
+    if (!(error instanceof HostRequestAbortedError)) {
+      throw new Error("expected the authority abort");
+    }
+    expect(error.mayHaveDispatched).toBe(false);
+    expect(mayHaveReachedHost(error)).toBe(false);
+    expect(requestFrames(discovering)).toHaveLength(0);
+    expect(discovering.socket.closed).toEqual({
+      code: 1000,
+      reason: "authority-aborted",
+    });
+
+    const second = client.request(
+      "host.echo",
+      { message: "second" },
+      optionsFor(bearer, new AbortController().signal, null, false, null),
+    );
+    expect(sockets).toHaveLength(2);
+    const retried = sockets[1];
+    if (retried === undefined) {
+      throw new Error("expected the next call to dial");
+    }
+    await classify(retried, sessionAck(true));
+    const frame = requestFrames(retried)[0];
+    if (frame === undefined) {
+      throw new Error("expected the retried request");
+    }
+    respondEcho(retried.socket, frame, "second");
+    await expect(second).resolves.toEqual({ echoed: "second" });
+  });
+
+  it("closes the adopted socket when release arrives before the socket opens", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory, 0);
+    const bearer = new MutableBearerLease("token-a", USER_A);
+    const first = client.request(
+      "host.echo",
+      { message: "first" },
+      optionsFor(bearer, new AbortController().signal, null, false, null),
+    );
+    const discovering = sockets[0];
+    if (discovering === undefined) {
+      throw new Error("expected the discovering socket");
+    }
+    client.releaseIdleLocalSessions();
+    await classify(discovering, sessionAck(true));
+    await nextTurn();
+    expect(discovering.socket.closed).toBeNull();
+    const frame = requestFrames(discovering)[0];
+    if (frame === undefined) {
+      throw new Error("expected the discovering request");
+    }
+    respondEcho(discovering.socket, frame, "first");
+    await expect(first).resolves.toEqual({ echoed: "first" });
+    expect(discovering.socket.closed).toEqual({
+      code: 1000,
+      reason: "session-closed",
+    });
+
+    const second = client.request(
+      "host.echo",
+      { message: "second" },
+      optionsFor(bearer, new AbortController().signal, null, false, null),
+    );
+    expect(sockets).toHaveLength(2);
+    const retried = sockets[1];
+    if (retried === undefined) {
+      throw new Error("expected a new dial after the released call settled");
+    }
+    await classify(retried, sessionAck(true));
+    const retriedFrame = requestFrames(retried)[0];
+    if (retriedFrame === undefined) {
+      throw new Error("expected the request on the new socket");
+    }
+    respondEcho(retried.socket, retriedFrame, "second");
+    await expect(second).resolves.toEqual({ echoed: "second" });
+  });
+
+  it("closes the adopted socket when release arrives while openAck is outstanding", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory, 0);
+    const bearer = new MutableBearerLease("token-a", USER_A);
+    const first = client.request(
+      "host.echo",
+      { message: "first" },
+      optionsFor(bearer, new AbortController().signal, null, false, null),
+    );
+    const discovering = sockets[0];
+    if (discovering === undefined) {
+      throw new Error("expected the discovering socket");
+    }
+    const opened = discovering.socket.nextSend();
+    discovering.socket.fireOpen();
+    await opened;
+    client.releaseIdleLocalSessions();
+    const requested = discovering.socket.nextSend();
+    discovering.socket.fireMessage(sessionAck(true));
+    await requested;
+    await nextTurn();
+    expect(requestFrames(discovering)).toHaveLength(1);
+    expect(discovering.socket.closed).toBeNull();
+    const frame = requestFrames(discovering)[0];
+    if (frame === undefined) {
+      throw new Error("expected the discovering request");
+    }
+    respondEcho(discovering.socket, frame, "first");
+    await expect(first).resolves.toEqual({ echoed: "first" });
+    expect(discovering.socket.closed).toEqual({
+      code: 1000,
+      reason: "session-closed",
+    });
+  });
+
+  it("keeps the socket when a call starts after a dial-time release", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory, 0);
+    const bearer = new MutableBearerLease("token-a", USER_A);
+    const first = client.request(
+      "host.echo",
+      { message: "first" },
+      optionsFor(bearer, new AbortController().signal, null, false, null),
+    );
+    const discovering = sockets[0];
+    if (discovering === undefined) {
+      throw new Error("expected the discovering socket");
+    }
+    client.releaseIdleLocalSessions();
+    await classify(discovering, sessionAck(true));
+    await nextTurn();
+    const secondWrite = discovering.socket.nextSend();
+    const second = client.request(
+      "host.echo",
+      { message: "second" },
+      optionsFor(bearer, new AbortController().signal, null, false, null),
+    );
+    await secondWrite;
+    const sent = requestFrames(discovering);
+    const firstRequest = sent[0];
+    const secondRequest = sent[1];
+    if (firstRequest === undefined || secondRequest === undefined) {
+      throw new Error("expected both requests on the released socket");
+    }
+    expect(sockets).toHaveLength(1);
+    respondEcho(discovering.socket, firstRequest, "first");
+    respondEcho(discovering.socket, secondRequest, "second");
+    await expect(first).resolves.toEqual({ echoed: "first" });
+    await expect(second).resolves.toEqual({ echoed: "second" });
+    expect(discovering.socket.closed).toBeNull();
+  });
+
+  it("lets a waiter with a valid bearer dial after the owner's open credential is refused", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory, 0);
+    const ownerBearer = new MutableBearerLease("stale-token", USER_A);
+    const waiterBearer = new MutableBearerLease("fresh-token", USER_A);
+    const revalidated: MutableBearerLease[] = [];
+    const wrapped = createAuthAwareMessenger(
+      client,
+      {
+        revalidateExpectedBearer: (expected) => {
+          if (expected instanceof MutableBearerLease) {
+            revalidated.push(expected);
+          }
+          return Promise.resolve("rejected");
+        },
+      },
+      "always",
+    );
+    const owner = captureRejection(
+      wrapped.request(
+        "host.echo",
+        { message: "owner" },
+        optionsFor(ownerBearer, new AbortController().signal, null, false, null),
+      ),
+    );
+    const waiter = wrapped.request(
+      "host.echo",
+      { message: "waiter" },
+      optionsFor(
+        waiterBearer,
+        new AbortController().signal,
+        null,
+        false,
+        null,
+      ),
+    );
+    expect(sockets).toHaveLength(1);
+    const discovering = sockets[0];
+    if (discovering === undefined) {
+      throw new Error("expected the discovering socket");
+    }
+    const opened = discovering.socket.nextSend();
+    discovering.socket.fireOpen();
+    await opened;
+    expect(openFrames(discovering)[0]?.token).toBe("stale-token");
+    discovering.socket.fireMessage({
+      kind: "fatalError",
+      details: {
+        code: "UNAUTHORIZED",
+        reason: "stale bearer",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+        retryable: false,
+      },
+    });
+
+    const ownerError = await owner;
+    expect(ownerError).toBeInstanceOf(HostRpcError);
+    expect(ownerError).not.toBeInstanceOf(RetryableTransportError);
+    if (!(ownerError instanceof HostRpcError)) {
+      throw new Error("expected the owner's refusal");
+    }
+    expect(ownerError.code).toBe("UNAUTHORIZED");
+    expect(ownerError.requestId).toBe("req-1");
+    expect(ownerError.method).toBe("host.echo");
+    expect(requestFrames(discovering)).toHaveLength(0);
+    expect(revalidated).toEqual([ownerBearer]);
+
+    expect(sockets).toHaveLength(2);
+    const retried = sockets[1];
+    if (retried === undefined) {
+      throw new Error("expected the waiter to dial");
+    }
+    await classify(retried, sessionAck(true));
+    expect(openFrames(retried)[0]?.token).toBe("fresh-token");
+    const frame = requestFrames(retried)[0];
+    if (frame === undefined) {
+      throw new Error("expected the waiter's request");
+    }
+    expect(frame.token).toBe("fresh-token");
+    respondEcho(retried.socket, frame, "waiter");
+    await expect(waiter).resolves.toEqual({ echoed: "waiter" });
+    expect(revalidated).toEqual([ownerBearer]);
+  });
+
+  it("gives each waiter its own error when discovery fails for every caller", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory, 0);
+    const bearer = new MutableBearerLease("token-a", USER_A);
+    const owner = captureRejection(
+      client.request(
+        "host.echo",
+        { message: "owner" },
+        optionsFor(bearer, new AbortController().signal, null, false, null),
+      ),
+    );
+    const statusWaiter = captureRejection(
+      client.request(
+        "host.status",
+        {},
+        optionsFor(bearer, new AbortController().signal, null, false, null),
+      ),
+    );
+    const echoWaiter = captureRejection(
+      client.request(
+        "host.echo",
+        { message: "other" },
+        optionsFor(bearer, new AbortController().signal, null, false, null),
+      ),
+    );
+    const discovering = sockets[0];
+    if (discovering === undefined) {
+      throw new Error("expected the discovering socket");
+    }
+    const opened = discovering.socket.nextSend();
+    discovering.socket.fireOpen();
+    await opened;
+    discovering.socket.fireMessage({
+      kind: "fatalError",
+      details: {
+        code: "INCOMPATIBLE",
+        reason: "host build is incompatible",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+
+    const ownerError = await owner;
+    const statusError = await statusWaiter;
+    const echoError = await echoWaiter;
+    expect(ownerError).toBeInstanceOf(HostRpcError);
+    expect(statusError).toBeInstanceOf(HostRpcError);
+    expect(echoError).toBeInstanceOf(HostRpcError);
+    if (
+      !(ownerError instanceof HostRpcError) ||
+      !(statusError instanceof HostRpcError) ||
+      !(echoError instanceof HostRpcError)
+    ) {
+      throw new Error("expected each discovery caller to fail");
+    }
+    expect(statusError).not.toBe(ownerError);
+    expect(echoError).not.toBe(ownerError);
+    expect(echoError).not.toBe(statusError);
+    expect(ownerError.requestId).toBe("req-1");
+    expect(ownerError.method).toBe("host.echo");
+    expect(statusError.requestId).toBe("req-2");
+    expect(statusError.method).toBe("host.status");
+    expect(echoError.requestId).toBe("req-3");
+    expect(echoError.method).toBe("host.echo");
+    expect(statusError.message).toBe(ownerError.message);
+    expect(echoError.message).toBe(ownerError.message);
+    expect(statusError.code).toBe("INCOMPATIBLE");
+    expect(echoError.code).toBe("INCOMPATIBLE");
+    expect(requestFrames(discovering)).toHaveLength(0);
+    expect(sockets).toHaveLength(1);
+  });
+
+  it("does not refresh a bearer for a retryable session unauthorized, and does for a permanent one", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory, 0);
+    const bearer = new MutableBearerLease("token-a", USER_A);
+    const revalidated: MutableBearerLease[] = [];
+    const wrapped = createAuthAwareMessenger(
+      client,
+      {
+        revalidateExpectedBearer: (expected) => {
+          if (expected instanceof MutableBearerLease) {
+            revalidated.push(expected);
+          }
+          return Promise.resolve("rejected");
+        },
+      },
+      "always",
+    );
+    const transient = captureRejection(
+      wrapped.request(
+        "host.echo",
+        { message: "transient" },
+        optionsFor(bearer, new AbortController().signal, null, false, null),
+      ),
+    );
+    const discovering = sockets[0];
+    if (discovering === undefined) {
+      throw new Error("expected the discovering socket");
+    }
+    await classify(discovering, sessionAck(true));
+    const keptWrite = discovering.socket.nextSend();
+    const kept = wrapped.request(
+      "host.echo",
+      { message: "kept" },
+      optionsFor(bearer, new AbortController().signal, null, false, null),
+    );
+    await keptWrite;
+    const sent = requestFrames(discovering);
+    const transientRequest = sent[0];
+    const keptRequest = sent[1];
+    if (transientRequest === undefined || keptRequest === undefined) {
+      throw new Error("expected both session requests");
+    }
+    discovering.socket.fireMessage({
+      kind: "response",
+      requestId: transientRequest.requestId,
+      method: transientRequest.method,
+      schemaVersion: transientRequest.schemaVersion,
+      result: null,
+      error: {
+        code: "UNAUTHORIZED",
+        message: "verifier unreachable",
+        retryable: true,
+      },
+    });
+    const transientError = await transient;
+    expect(transientError).toBeInstanceOf(RetryableTransportError);
+    if (!(transientError instanceof RetryableTransportError)) {
+      throw new Error("expected the transient unauthorized");
+    }
+    expect(transientError.code).toBe("UNAUTHORIZED");
+    expect(transientError.replaySafetyFromKey).toBe(false);
+    expect(mayHaveReachedHost(transientError)).toBe(false);
+    expect(transientError.fatalDetails?.retryable).toBe(true);
+    expect(revalidated).toEqual([]);
+
+    respondEcho(discovering.socket, keptRequest, "kept");
+    await expect(kept).resolves.toEqual({ echoed: "kept" });
+    expect(discovering.socket.closed).toBeNull();
+    expect(sockets).toHaveLength(1);
+
+    const permanentWrite = discovering.socket.nextSend();
+    const permanent = captureRejection(
+      wrapped.request(
+        "host.echo",
+        { message: "permanent" },
+        optionsFor(bearer, new AbortController().signal, null, false, null),
+      ),
+    );
+    await permanentWrite;
+    const permanentRequest = requestFrames(discovering)[2];
+    if (permanentRequest === undefined) {
+      throw new Error("expected the permanent unauthorized request");
+    }
+    discovering.socket.fireMessage({
+      kind: "response",
+      requestId: permanentRequest.requestId,
+      method: permanentRequest.method,
+      schemaVersion: permanentRequest.schemaVersion,
+      result: null,
+      error: { code: "UNAUTHORIZED", message: "Invalid or expired token" },
+    });
+    const permanentError = await permanent;
+    expect(permanentError).toBeInstanceOf(HostRpcError);
+    expect(permanentError).not.toBeInstanceOf(RetryableTransportError);
+    if (!(permanentError instanceof HostRpcError)) {
+      throw new Error("expected the permanent unauthorized");
+    }
+    expect(permanentError.fatalDetails).toBeNull();
+    expect(revalidated).toEqual([bearer]);
+    expect(discovering.socket.closed).toBeNull();
+
+    const laterWrite = discovering.socket.nextSend();
+    const later = client.request(
+      "host.echo",
+      { message: "later" },
+      optionsFor(bearer, new AbortController().signal, null, false, null),
+    );
+    await laterWrite;
+    const laterRequest = requestFrames(discovering)[3];
+    if (laterRequest === undefined) {
+      throw new Error("expected a later call on the same session");
+    }
+    respondEcho(discovering.socket, laterRequest, "later");
+    await expect(later).resolves.toEqual({ echoed: "later" });
+    expect(sockets).toHaveLength(1);
   });
 });
