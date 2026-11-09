@@ -16,9 +16,9 @@
     "step": "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1",
     "index": 3,
     "gate": false,
-    "fetches": "Node.js 24",
+    "fetches": "Node.js 24.20.0",
     "coldOrigin": "GitHub manifest; nodejs.org distributions",
-    "decision": "independent fallback: keep only after blackhole run proves job budget (pending)",
+    "decision": "outside the gate and unchanged; existing nodejs.org fallback is preserved",
     "mirrorSource": "independent origin / explicit workflow CI_TOOLS_MIRROR for direct script consumers"
   },
   {
@@ -60,9 +60,9 @@
     "step": "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1",
     "index": 3,
     "gate": false,
-    "fetches": "Node.js 24",
+    "fetches": "Node.js 24.20.0",
     "coldOrigin": "GitHub manifest; nodejs.org distributions",
-    "decision": "independent fallback: keep only after blackhole run proves job budget (pending)",
+    "decision": "outside the gate and unchanged; existing nodejs.org fallback is preserved",
     "mirrorSource": "independent origin / explicit workflow CI_TOOLS_MIRROR for direct script consumers"
   },
   {
@@ -82,9 +82,9 @@
     "step": "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1",
     "index": 3,
     "gate": false,
-    "fetches": "Node.js 24",
+    "fetches": "Node.js 24.20.0",
     "coldOrigin": "GitHub manifest; nodejs.org distributions",
-    "decision": "independent fallback: keep only after blackhole run proves job budget (pending)",
+    "decision": "outside the gate and unchanged; existing nodejs.org fallback is preserved",
     "mirrorSource": "independent origin / explicit workflow CI_TOOLS_MIRROR for direct script consumers"
   },
   {
@@ -269,9 +269,9 @@
     "step": "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1",
     "index": 4,
     "gate": false,
-    "fetches": "Node.js 24",
+    "fetches": "Node.js 24.20.0",
     "coldOrigin": "GitHub manifest; nodejs.org distributions",
-    "decision": "independent fallback: keep only after blackhole run proves job budget (pending)",
+    "decision": "outside the gate and unchanged; existing nodejs.org fallback is preserved",
     "mirrorSource": "independent origin / explicit workflow CI_TOOLS_MIRROR for direct script consumers"
   },
   {
@@ -291,9 +291,9 @@
     "step": "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1",
     "index": 3,
     "gate": false,
-    "fetches": "Node.js 24",
+    "fetches": "Node.js 24.20.0",
     "coldOrigin": "GitHub manifest; nodejs.org distributions",
-    "decision": "independent fallback: keep only after blackhole run proves job budget (pending)",
+    "decision": "outside the gate and unchanged; existing nodejs.org fallback is preserved",
     "mirrorSource": "independent origin / explicit workflow CI_TOOLS_MIRROR for direct script consumers"
   },
   {
@@ -302,9 +302,9 @@
     "step": "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1",
     "index": 4,
     "gate": false,
-    "fetches": "Node.js 24",
+    "fetches": "Node.js 24.20.0",
     "coldOrigin": "GitHub manifest; nodejs.org distributions",
-    "decision": "independent fallback: keep only after blackhole run proves job budget (pending)",
+    "decision": "outside the gate and unchanged; existing nodejs.org fallback is preserved",
     "mirrorSource": "independent origin / explicit workflow CI_TOOLS_MIRROR for direct script consumers"
   },
   {
@@ -313,9 +313,9 @@
     "step": "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1",
     "index": 3,
     "gate": false,
-    "fetches": "Node.js 24",
+    "fetches": "Node.js 24.20.0",
     "coldOrigin": "GitHub manifest; nodejs.org distributions",
-    "decision": "independent fallback: keep only after blackhole run proves job budget (pending)",
+    "decision": "outside the gate and unchanged; existing nodejs.org fallback is preserved",
     "mirrorSource": "independent origin / explicit workflow CI_TOOLS_MIRROR for direct script consumers"
   },
   {
@@ -368,9 +368,9 @@
     "step": "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1",
     "index": 3,
     "gate": false,
-    "fetches": "Node.js 24",
+    "fetches": "Node.js 24.20.0",
     "coldOrigin": "GitHub manifest; nodejs.org distributions",
-    "decision": "independent fallback: keep only after blackhole run proves job budget (pending)",
+    "decision": "outside the gate and unchanged; existing nodejs.org fallback is preserved",
     "mirrorSource": "independent origin / explicit workflow CI_TOOLS_MIRROR for direct script consumers"
   },
   {
