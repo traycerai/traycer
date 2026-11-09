@@ -3388,7 +3388,7 @@ describe("performance on large documents", () => {
 
   it("keeps single-element edits linear in document size", () => {
     const bigger = buildDocument(150_000);
-    const smaller = buildDocument(37_500);
+    const smaller = buildDocument(9_375);
     const biggerRow: ElementLocator = {
       kind: "position",
       startTagOffset: bigger.lastIndexOf(`<div class="row"`),
@@ -3399,15 +3399,14 @@ describe("performance on large documents", () => {
       startTagOffset: smaller.lastIndexOf(`<div class="row"`),
       tagName: "div",
     };
-    const sizeRatio = bigger.length / smaller.length;
     // buildDocument stops on the first row past the requested length, so
-    // the documents stay near a four-to-one ratio. The bound is three
-    // times that ratio (about twelve). Quadratic growth is the square
-    // (about sixteen). Samples are process CPU time, so a wait while
-    // the machine is busy is not part of the ratio. The minimum of two
-    // samples drops a stall that hits one sample.
-    expect(sizeRatio).toBeGreaterThan(3);
-    expect(sizeRatio).toBeLessThan(5);
+    // the documents stay near a sixteen-to-one size ratio. A linear edit
+    // grows about sixteenfold; a quadratic edit grows about 256-fold.
+    // The bound is four times the size ratio (about 64), leaving a factor
+    // of four above linear growth and below quadratic growth.
+    const sizeRatio = bigger.length / smaller.length;
+    expect(sizeRatio).toBeGreaterThan(15);
+    expect(sizeRatio).toBeLessThan(17);
 
     const edits: ReadonlyArray<
       (text: string, locator: ElementLocator) => EditResult
@@ -3419,11 +3418,13 @@ describe("performance on large documents", () => {
       (text, locator) => setTextNode(text, locator, 0, "changed"),
       (text, locator) => insertTid(text, locator, "tid"),
     ];
-    const linearBound = sizeRatio * 3;
+    const linearBound = sizeRatio * 4;
+    // Keep the minimum of four CPU samples to reduce incidental GC/JIT
+    // overhead. CPU time excludes waits for another process to run.
     for (const edit of edits) {
       let smallMs = Number.POSITIVE_INFINITY;
       let bigMs = Number.POSITIVE_INFINITY;
-      for (let attempt = 0; attempt < 2; attempt++) {
+      for (let attempt = 0; attempt < 4; attempt++) {
         const small = cpuTimed(() => edit(smaller, smallerRow));
         const big = cpuTimed(() => edit(bigger, biggerRow));
         expect(small.value.ok).toBe(true);
