@@ -67,8 +67,6 @@ export interface NewTerminalPickerBodyProps {
    * rendered in, which this body cannot see.
    */
   readonly autoFocusSearch: boolean;
-  /** Dialog shells supply their own title. */
-  readonly showHeading?: boolean;
   readonly onLaunch: (target: TerminalLaunchTarget) => void;
 }
 
@@ -191,7 +189,7 @@ export function NewTerminalPickerBody(props: NewTerminalPickerBodyProps) {
         className="flex min-h-0 flex-col overflow-y-auto"
         data-testid="new-terminal-picker-scroller"
       >
-        <TerminalPickerIntroduction showHeading={props.showHeading !== false} />
+        <TerminalPickerIntroduction />
         {/*
           The host section renders the RESOLVED host, which is what keeps this
           create surface honest without a banner: a pin whose host died resolves
@@ -265,15 +263,10 @@ export function NewTerminalPickerBody(props: NewTerminalPickerBodyProps) {
   );
 }
 
-/** Standalone pickers have a heading; dialog shells already supply one. */
-function TerminalPickerIntroduction(props: {
-  readonly showHeading: boolean;
-}): ReactNode {
+function TerminalPickerIntroduction(): ReactNode {
   return (
     <div className="border-b p-2.5">
-      {props.showHeading ? (
-        <p className="text-ui-sm font-semibold">Open a terminal</p>
-      ) : null}
+      <p className="text-ui-sm font-semibold">Open a terminal</p>
       <p className="text-ui-xs text-muted-foreground">
         The terminal lives on the machine you pick, for its lifetime.
       </p>

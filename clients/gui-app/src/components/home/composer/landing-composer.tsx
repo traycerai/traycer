@@ -47,7 +47,6 @@ import { useRefreshProvidersListOnTurn } from "@/hooks/providers/use-refresh-pro
 import { commitProfileSelection } from "@/stores/composer/commit-selection";
 import { ComposerBody } from "@/components/home/composer/composer-body";
 import { LANDING_COMPOSER_EDITOR_CLASSNAME } from "@/components/home/composer/composer-editor-classnames";
-import { cn } from "@/lib/utils";
 import { useSurfaceActivity } from "@/components/home/composer/surface-activity-hooks";
 import { useComposerDictation } from "@/hooks/composer/use-composer-dictation";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -1230,11 +1229,8 @@ export function LandingComposer(props: LandingComposerProps) {
         toolbarStore={toolbarStore}
         composerMode={composerMode}
         chatEditorIsActive={chatComposerActive}
-        // Leave room for Current tasks while long prompts scroll in the editor.
-        editorClassName={cn(
-          LANDING_COMPOSER_EDITOR_CLASSNAME,
-          "md:max-h-[40dvh]",
-        )}
+        // Long prompts scroll inside the shared editor cap, min(50vh, 15rem).
+        editorClassName={LANDING_COMPOSER_EDITOR_CLASSNAME}
         initialContent={initialContent}
         initialSelection={initialSelection}
         canSubmit={canSubmit}

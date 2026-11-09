@@ -85,9 +85,9 @@ describe("Variables and shells moving between two teams", () => {
     );
     const view = render(page("env-a"));
     const field = (): HTMLInputElement => {
-      const input = screen.getByLabelText("NODE_ENV value");
+      const input = screen.getByLabelText("Value for NODE_ENV");
       if (!(input instanceof HTMLInputElement)) {
-        throw new Error("NODE_ENV value is not an input");
+        throw new Error("Value for NODE_ENV is not an input");
       }
       return input;
     };

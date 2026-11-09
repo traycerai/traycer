@@ -16,6 +16,7 @@ import type {
 } from "@traycer/protocol/host/environment/configuration-contracts";
 import { TeamTextItems } from "@/components/settings/environment/team-text-items";
 import { useConfigurationItemWrites } from "@/components/settings/environment/configuration-item-writes";
+import { useConfigurationProviderItemsQuery } from "@/hooks/environment/team/use-provider-items-query";
 import { useConfigurationVariablesQuery } from "@/hooks/environment/team/use-variables-query";
 import { READ_BOUND_MS } from "@/hooks/environment/team/use-bounded-read";
 import {
@@ -24,6 +25,7 @@ import {
   poolSource,
   requireTeamHostClient,
   resetTeamPageHarness,
+  type TeamPageHarness,
 } from "./team-configuration-test-support";
 
 vi.mock("@/lib/host", async (importOriginal) => ({
@@ -58,6 +60,36 @@ function TextItemsPage(): ReactNode {
   );
 }
 
+function DetailedItemsPage(): ReactNode {
+  const query = useConfigurationVariablesQuery();
+  const writes = useConfigurationItemWrites(query, () => undefined);
+  return (
+    <TeamTextItems
+      items={query.data ?? []}
+      kind="variable"
+      os="any"
+      providerId={null}
+      writes={writes}
+      renderDetails={(item) => <span>{`Details ${item.key}`}</span>}
+    />
+  );
+}
+
+function ProviderEnvPage(): ReactNode {
+  const query = useConfigurationProviderItemsQuery();
+  const writes = useConfigurationItemWrites(query, () => undefined);
+  return (
+    <TeamTextItems
+      items={query.data ?? []}
+      kind="env_override"
+      os="any"
+      providerId="claude"
+      writes={writes}
+      renderDetails={() => null}
+    />
+  );
+}
+
 const variable = (
   value: string,
   revision: number,
@@ -76,21 +108,51 @@ const shell = configurationItem({
   value: { path: "/bin/zsh", args: [] },
 });
 
+function nodeRegion(): HTMLElement {
+  return screen.getByRole("region", { name: "NODE_ENV" });
+}
+
+function nodeValue(): HTMLElement {
+  return within(nodeRegion()).getByRole("textbox", {
+    name: "Value for NODE_ENV",
+  });
+}
+
 async function editVariable(value: string): Promise<void> {
-  await userEvent.click(
-    await screen.findByRole("textbox", { name: "NODE_ENV value" }),
-  );
-  const field = screen.getByLabelText("NODE_ENV value");
+  const field = await within(
+    await screen.findByRole("region", { name: "NODE_ENV" }),
+  ).findByRole("textbox", { name: "Value for NODE_ENV" });
   await userEvent.clear(field);
   await userEvent.type(field, value);
 }
 
-async function expectRecovered(): Promise<void> {
+function commitNodeValue(): void {
+  fireEvent.blur(nodeValue());
+}
+
+async function openAdd(): Promise<void> {
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Add a variable" }),
+  );
+  await screen.findByRole("region", { name: "New variable" });
+}
+
+async function expectUnlocked(): Promise<void> {
   await waitFor(() => {
     expect(
-      screen.getByRole("textbox", { name: "Variable name" }),
+      screen.getByRole("button", { name: "Add a variable" }),
     ).toHaveProperty("disabled", false);
     expect(screen.queryByRole("status")).toBeNull();
+  });
+}
+
+function mountEditor(
+  items: () => { items: EnvironmentConfigurationItem[] },
+  put: () => EnvironmentConfigurationItemWriteResponse,
+): TeamPageHarness {
+  return mountTeamPage(poolSource("editor"), {
+    "environment.configuration.items": items,
+    "environment.configuration.items.put": put,
   });
 }
 
@@ -105,25 +167,25 @@ describe("TeamTextItems accepted writes", () => {
       }),
     });
     render(<TextItemsPage />, { wrapper: harness.Wrapper });
-    await userEvent.click(
-      screen.getByRole("textbox", { name: "Variable name" }),
-    );
-    await userEvent.type(screen.getByLabelText("Variable name"), "shell");
+    await openAdd();
+    await userEvent.type(screen.getByLabelText("New variable name"), "shell");
     await userEvent.type(
       screen.getByLabelText("New variable value"),
       "custom-shell",
     );
     await userEvent.click(
-      screen.getByRole("button", { name: "Add a variable" }),
+      screen.getByRole("button", { name: "Apply variable" }),
     );
     expect(
       await screen.findByText("Saved, but latest settings haven't refreshed."),
     ).toBeTruthy();
-    expect(screen.getByLabelText("Variable name")).toHaveProperty(
-      "disabled",
-      true,
-    );
-    expect(screen.getByText("custom-shell")).toBeTruthy();
+    expect(screen.queryByLabelText("New variable name")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Add a variable" }),
+    ).toHaveProperty("disabled", true);
+    const pending = screen.getByRole("region", { name: "shell" });
+    expect(within(pending).getByText("custom-shell")).toBeTruthy();
+    expect(within(pending).queryByRole("textbox")).toBeNull();
     items = [
       shell,
       configurationItem({
@@ -135,15 +197,18 @@ describe("TeamTextItems accepted writes", () => {
       }),
     ];
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));
-    await expectRecovered();
-    await userEvent.click(screen.getByRole("textbox", { name: "shell value" }));
-    expect(screen.getByLabelText("shell value")).toHaveProperty(
+    await expectUnlocked();
+    const saved = screen.getByRole("region", { name: "shell" });
+    await userEvent.click(
+      within(saved).getByRole("textbox", { name: "Value for shell" }),
+    );
+    expect(within(saved).getByLabelText("Value for shell")).toHaveProperty(
       "value",
       "custom-shell",
     );
   });
 
-  it("moves a refused new-variable draft when its name changes before a deliberate Save", async () => {
+  it("moves a refused new-variable draft when its name changes before a deliberate Apply", async () => {
     let items: EnvironmentConfigurationItem[] = [];
     let puts = 0;
     const harness = mountTeamPage(poolSource("editor"), {
@@ -164,24 +229,28 @@ describe("TeamTextItems accepted writes", () => {
       },
     });
     render(<TextItemsPage />, { wrapper: harness.Wrapper });
-    await userEvent.click(
-      screen.getByRole("textbox", { name: "Variable name" }),
+    await openAdd();
+    await userEvent.type(
+      screen.getByLabelText("New variable name"),
+      "OLD_NAME",
     );
-    await userEvent.type(screen.getByLabelText("Variable name"), "OLD_NAME");
     await userEvent.type(screen.getByLabelText("New variable value"), "draft");
     await userEvent.click(
-      screen.getByRole("button", { name: "Add a variable" }),
+      screen.getByRole("button", { name: "Apply variable" }),
     );
     await screen.findByRole("alert");
-    await userEvent.clear(screen.getByLabelText("Variable name"));
-    await userEvent.type(screen.getByLabelText("Variable name"), "NEW_NAME");
-    await userEvent.click(
-      screen.getByRole("button", { name: "Add a variable" }),
+    await userEvent.clear(screen.getByLabelText("New variable name"));
+    await userEvent.type(
+      screen.getByLabelText("New variable name"),
+      "NEW_NAME",
     );
-    await expectRecovered();
-    expect(screen.getByLabelText("Variable name")).toHaveProperty("value", "");
+    await userEvent.click(
+      screen.getByRole("button", { name: "Apply variable" }),
+    );
+    await expectUnlocked();
+    expect(screen.queryByLabelText("New variable name")).toBeNull();
     expect(
-      screen.getByRole("textbox", { name: "NEW_NAME value" }),
+      screen.getByRole("textbox", { name: "Value for NEW_NAME" }),
     ).toHaveProperty("value", "draft");
     expect(
       harness.paramsOf("environment.configuration.items.put"),
@@ -209,7 +278,7 @@ describe("TeamTextItems accepted writes", () => {
     await userEvent.click(
       within(await screen.findByRole("region", { name: "shell" })).getByRole(
         "button",
-        { name: "Delete" },
+        { name: "Remove shell" },
       ),
     );
     items = [shell];
@@ -219,7 +288,9 @@ describe("TeamTextItems accepted writes", () => {
     expect(
       within(screen.getByRole("region", { name: "shell" })).getByRole(
         "button",
-        { name: "Delete" },
+        {
+          name: "Remove shell",
+        },
       ),
     ).toHaveProperty("disabled", true);
     expect(screen.getByRole("status").textContent).toBe("shell · Removing");
@@ -227,12 +298,10 @@ describe("TeamTextItems accepted writes", () => {
       deletion.resolve({ outcome: "saved", revision: 2 });
       await deletion.promise;
     });
-    await expectRecovered();
+    await expectUnlocked();
     expect(screen.queryByRole("region", { name: "shell" })).toBeNull();
-    await userEvent.click(
-      screen.getByRole("textbox", { name: "Variable name" }),
-    );
-    expect(screen.getByLabelText("Variable name")).toBeTruthy();
+    await openAdd();
+    expect(screen.getByLabelText("New variable name")).toBeTruthy();
   });
 
   it("adopts a superseding different row across an in-flight editor remount and quotes its revision next", async () => {
@@ -249,25 +318,16 @@ describe("TeamTextItems accepted writes", () => {
     });
     render(<TextItemsPage />, { wrapper: harness.Wrapper });
     await editVariable("production");
-    await userEvent.click(
-      within(screen.getByRole("region", { name: "NODE_ENV" })).getByRole(
-        "button",
-        { name: "Save" },
-      ),
-    );
+    commitNodeValue();
     items = [variable("staging", 3)];
     await act(async () => {
       await harness.queryClient.refetchQueries();
     });
     await waitFor(() => {
-      expect(screen.getByLabelText("NODE_ENV value")).toHaveProperty(
-        "value",
-        "production",
-      );
-      expect(screen.getByLabelText("NODE_ENV value")).toHaveProperty(
-        "disabled",
-        true,
-      );
+      const field = nodeValue();
+      expect(field).toHaveProperty("value", "production");
+      expect(field).toHaveProperty("disabled", true);
+      expect(screen.getByRole("status").textContent).toBe("NODE_ENV · Saving");
     });
     await act(async () => {
       write.resolve({ outcome: "saved", revision: 2 });
@@ -277,12 +337,7 @@ describe("TeamTextItems accepted writes", () => {
       await screen.findByText("Saved. These settings changed again."),
     ).toBeTruthy();
     await editVariable("next-value");
-    await userEvent.click(
-      within(screen.getByRole("region", { name: "NODE_ENV" })).getByRole(
-        "button",
-        { name: "Save" },
-      ),
-    );
+    commitNodeValue();
     await waitFor(() => {
       expect(
         harness.paramsOf("environment.configuration.items.put"),
@@ -291,10 +346,7 @@ describe("TeamTextItems accepted writes", () => {
     expect(
       harness.paramsOf("environment.configuration.items.put")[1],
     ).toMatchObject({ revision: 3, value: { value: "next-value" } });
-    expect(screen.getByLabelText("NODE_ENV value")).toHaveProperty(
-      "value",
-      "next-value",
-    );
+    expect(nodeValue()).toHaveProperty("value", "next-value");
   });
 
   it("adopts a recreated variable newer than an accepted delete receipt", async () => {
@@ -310,19 +362,14 @@ describe("TeamTextItems accepted writes", () => {
     await userEvent.click(
       within(await screen.findByRole("region", { name: "NODE_ENV" })).getByRole(
         "button",
-        { name: "Delete" },
+        { name: "Remove NODE_ENV" },
       ),
     );
     expect(
       await screen.findByText("Removed. These settings changed again."),
     ).toBeTruthy();
-    await userEvent.click(
-      screen.getByRole("textbox", { name: "NODE_ENV value" }),
-    );
-    expect(screen.getByLabelText("NODE_ENV value")).toHaveProperty(
-      "value",
-      "recreated",
-    );
+    await userEvent.click(nodeValue());
+    expect(nodeValue()).toHaveProperty("value", "recreated");
     expect(
       harness.paramsOf("environment.configuration.items.delete"),
     ).toHaveLength(1);
@@ -332,7 +379,13 @@ describe("TeamTextItems accepted writes", () => {
     let puts = 0;
     const firstWrite =
       Promise.withResolvers<EnvironmentConfigurationItemWriteResponse>();
-    const linux = { ...variable("linux-value", 1), os: "linux" as const };
+    const linux = configurationItem({
+      kind: "variable",
+      key: "NODE_ENV",
+      os: "linux",
+      value: { value: "linux-value" },
+      revision: 1,
+    });
     let items = [variable("development", 1), linux];
     const harness = mountTeamPage(poolSource("editor"), {
       "environment.configuration.items": () => ({ items }),
@@ -345,19 +398,14 @@ describe("TeamTextItems accepted writes", () => {
     });
     render(<TextItemsPage />, { wrapper: harness.Wrapper });
     await editVariable("production");
-    await userEvent.click(
-      within(screen.getByRole("region", { name: "NODE_ENV" })).getByRole(
-        "button",
-        { name: "Save" },
-      ),
-    );
-    const submittedField = screen.getByLabelText("NODE_ENV value");
+    commitNodeValue();
+    const submittedField = nodeValue();
     items = [variable("server-value", 2), linux];
     await act(async () => {
       await harness.queryClient.refetchQueries();
     });
     await waitFor(() => {
-      const field = screen.getByLabelText("NODE_ENV value");
+      const field = nodeValue();
       expect(field).not.toBe(submittedField);
       expect(field).toHaveProperty("value", "production");
       expect(field).toHaveProperty("disabled", true);
@@ -366,7 +414,7 @@ describe("TeamTextItems accepted writes", () => {
       firstWrite.reject(new Error("the cloud could not be reached"));
       await firstWrite.promise.catch(() => undefined);
     });
-    const row = screen.getByRole("region", { name: "NODE_ENV" });
+    const row = nodeRegion();
     expect(await within(row).findByRole("alert")).toHaveProperty(
       "textContent",
       "the cloud could not be reached",
@@ -376,29 +424,26 @@ describe("TeamTextItems accepted writes", () => {
         screen.getByRole("region", { name: "NODE_ENV · Linux" }),
       ).queryByRole("alert"),
     ).toBeNull();
-    expect(within(row).getByLabelText("NODE_ENV value")).toHaveProperty(
+    expect(within(row).getByLabelText("Value for NODE_ENV")).toHaveProperty(
       "value",
       "production",
     );
-    expect(within(row).getByLabelText("NODE_ENV value")).toHaveProperty(
+    expect(within(row).getByLabelText("Value for NODE_ENV")).toHaveProperty(
       "disabled",
       false,
     );
-    expect(within(row).getByRole("button", { name: "Save" })).toHaveProperty(
-      "disabled",
-      false,
-    );
+    expect(
+      within(row).getByRole("button", { name: "Remove NODE_ENV" }),
+    ).toHaveProperty("disabled", false);
     expect(screen.queryByText(/Saved[.,]/)).toBeNull();
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
     expect(
       harness.paramsOf("environment.configuration.items.put"),
     ).toHaveLength(1);
-    await userEvent.click(within(row).getByRole("button", { name: "Save" }));
-    await expectRecovered();
+    commitNodeValue();
+    await expectUnlocked();
     expect(screen.queryByRole("alert")).toBeNull();
-    expect(
-      screen.getByRole("textbox", { name: "NODE_ENV value" }),
-    ).toHaveProperty("value", "production");
+    expect(nodeValue()).toHaveProperty("value", "production");
     expect(
       harness.paramsOf("environment.configuration.items.put"),
     ).toHaveLength(2);
@@ -422,24 +467,17 @@ describe("TeamTextItems accepted writes", () => {
     });
     render(<TextItemsPage />, { wrapper: harness.Wrapper });
     await editVariable("production");
-    await userEvent.click(
-      within(screen.getByRole("region", { name: "NODE_ENV" })).getByRole(
-        "button",
-        { name: "Save" },
-      ),
-    );
+    commitNodeValue();
     expect(
       await screen.findByText("Saved, but latest settings haven't refreshed."),
     ).toBeTruthy();
-    expect(
-      screen.getByRole("textbox", { name: "NODE_ENV value" }),
-    ).toHaveProperty("value", "production");
+    expect(nodeValue()).toHaveProperty("value", "production");
     expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
     const reads = harness.paramsOf("environment.configuration.items").length;
     failing = false;
     items = [variable("production", 2)];
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));
-    await expectRecovered();
+    await expectUnlocked();
     expect(harness.paramsOf("environment.configuration.items")).toHaveLength(
       reads + 1,
     );
@@ -447,12 +485,11 @@ describe("TeamTextItems accepted writes", () => {
       harness.paramsOf("environment.configuration.items.put"),
     ).toHaveLength(1);
     await editVariable("third-value");
+    expect(nodeValue()).toHaveProperty("disabled", false);
+    expect(nodeValue()).toHaveProperty("value", "third-value");
     expect(
-      within(screen.getByRole("region", { name: "NODE_ENV" })).getByRole(
-        "button",
-        { name: "Save" },
-      ),
-    ).toHaveProperty("disabled", false);
+      harness.paramsOf("environment.configuration.items.put"),
+    ).toHaveLength(1);
   });
 
   it("bounds a hanging accepted read and recovers through Retry without another mutation", async () => {
@@ -473,12 +510,7 @@ describe("TeamTextItems accepted writes", () => {
     await editVariable("production");
     vi.useFakeTimers();
     act(() => {
-      fireEvent.click(
-        within(screen.getByRole("region", { name: "NODE_ENV" })).getByRole(
-          "button",
-          { name: "Save" },
-        ),
-      );
+      fireEvent.blur(nodeValue());
     });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
@@ -499,7 +531,7 @@ describe("TeamTextItems accepted writes", () => {
       await vi.advanceTimersByTimeAsync(0);
     });
     vi.useRealTimers();
-    await expectRecovered();
+    await expectUnlocked();
     expect(
       harness.paramsOf("environment.configuration.items.put"),
     ).toHaveLength(1);
@@ -508,36 +540,34 @@ describe("TeamTextItems accepted writes", () => {
       stalled.resolve({ items: [variable("development", 1)] });
       await stalled.promise;
     });
-    expect(screen.getByLabelText("NODE_ENV value")).toHaveProperty(
-      "value",
-      "recovered",
-    );
+    expect(nodeValue()).toHaveProperty("value", "recovered");
   });
 });
 
-describe("TeamTextItems focus", () => {
-  it("shows saved and new-variable fields with their actions before an Edit or Add step", async () => {
+describe("TeamTextItems editor", () => {
+  it("shows a saved variable as name, value and remove, with no Set or Unset", async () => {
     const harness = mountTeamPage(poolSource("editor"), {
       "environment.configuration.items": () => ({ items: [variable("a", 1)] }),
     });
     render(<TextItemsPage />, { wrapper: harness.Wrapper });
-    expect(await screen.findByLabelText("NODE_ENV value")).toHaveProperty(
+    const saved = await screen.findByRole("region", { name: "NODE_ENV" });
+    expect(within(saved).getByLabelText("Name for NODE_ENV")).toHaveProperty(
+      "value",
+      "NODE_ENV",
+    );
+    expect(within(saved).getByLabelText("Value for NODE_ENV")).toHaveProperty(
       "value",
       "a",
     );
-    expect(screen.getByLabelText("Variable name")).toBeTruthy();
-    expect(screen.getByLabelText("New variable value")).toBeTruthy();
-    const saved = screen.getByRole("region", { name: "NODE_ENV" });
-    expect(within(saved).getByRole("button", { name: "Save" })).toHaveProperty(
-      "disabled",
-      true,
-    );
+    expect(within(saved).queryByRole("combobox")).toBeNull();
     expect(
-      within(saved).getByRole("button", { name: "Delete" }),
+      within(saved).getByRole("button", { name: "Remove NODE_ENV" }),
     ).toHaveProperty("disabled", false);
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
     expect(
       screen.getByRole("button", { name: "Add a variable" }),
-    ).toHaveProperty("disabled", true);
+    ).toHaveProperty("disabled", false);
+    expect(screen.queryByLabelText("New variable name")).toBeNull();
     expect(
       screen.queryByRole("button", {
         name: /^Edit |^More for |^Add variable$/,
@@ -550,11 +580,313 @@ describe("TeamTextItems focus", () => {
       "environment.configuration.items": () => ({ items: [variable("a", 1)] }),
     });
     render(<TextItemsPage />, { wrapper: harness.Wrapper });
-    await userEvent.click(
-      await screen.findByRole("textbox", { name: "NODE_ENV value" }),
+    const field = await screen.findByRole("textbox", {
+      name: "Value for NODE_ENV",
+    });
+    await userEvent.click(field);
+    expect(document.activeElement).toBe(field);
+  });
+
+  it("reveals an add row from Add a variable and commits it only from Apply", async () => {
+    let items: EnvironmentConfigurationItem[] = [];
+    const harness = mountEditor(
+      () => ({ items }),
+      () => {
+        items = [
+          configurationItem({
+            kind: "variable",
+            key: "FOO",
+            os: "any",
+            value: { value: "one" },
+            revision: 2,
+          }),
+        ];
+        return { outcome: "saved", revision: 2 };
+      },
     );
-    expect(document.activeElement).toBe(
-      screen.getByLabelText("NODE_ENV value"),
+    render(<TextItemsPage />, { wrapper: harness.Wrapper });
+    expect(await screen.findByText("No variables.")).toBeTruthy();
+    await openAdd();
+    expect(screen.queryByText("No variables.")).toBeNull();
+    expect(
+      harness.paramsOf("environment.configuration.items.put"),
+    ).toHaveLength(0);
+    fireEvent.change(screen.getByLabelText("New variable name"), {
+      target: { value: "FOO" },
+    });
+    fireEvent.change(screen.getByLabelText("New variable value"), {
+      target: { value: "one" },
+    });
+    fireEvent.blur(screen.getByLabelText("New variable value"));
+    expect(
+      harness.paramsOf("environment.configuration.items.put"),
+    ).toHaveLength(0);
+    await userEvent.click(
+      screen.getByRole("button", { name: "Apply variable" }),
+    );
+    await expectUnlocked();
+    expect(screen.getByLabelText("Value for FOO")).toHaveProperty(
+      "value",
+      "one",
+    );
+    expect(
+      harness.paramsOf("environment.configuration.items.put"),
+    ).toMatchObject([{ key: "FOO", revision: null, value: { value: "one" } }]);
+  });
+
+  it("discards a new variable without writing", async () => {
+    const harness = mountEditor(
+      () => ({ items: [] }),
+      () => ({ outcome: "saved", revision: 2 }),
+    );
+    render(<TextItemsPage />, { wrapper: harness.Wrapper });
+    await openAdd();
+    fireEvent.change(screen.getByLabelText("New variable name"), {
+      target: { value: "FOO" },
+    });
+    fireEvent.change(screen.getByLabelText("New variable value"), {
+      target: { value: "one" },
+    });
+    await userEvent.click(
+      screen.getByRole("button", { name: "Discard variable" }),
+    );
+    expect(screen.queryByLabelText("New variable name")).toBeNull();
+    expect(screen.getByText("No variables.")).toBeTruthy();
+    expect(
+      harness.paramsOf("environment.configuration.items.put"),
+    ).toHaveLength(0);
+  });
+
+  it("disables Apply until the name is a variable name", async () => {
+    const harness = mountEditor(
+      () => ({ items: [] }),
+      () => ({ outcome: "saved", revision: 2 }),
+    );
+    render(<TextItemsPage />, { wrapper: harness.Wrapper });
+    await openAdd();
+    const apply = screen.getByRole("button", { name: "Apply variable" });
+    expect(apply).toHaveProperty("disabled", true);
+    fireEvent.change(screen.getByLabelText("New variable name"), {
+      target: { value: "1BAD" },
+    });
+    expect(apply).toHaveProperty("disabled", true);
+    fireEvent.change(screen.getByLabelText("New variable name"), {
+      target: { value: "A-B" },
+    });
+    expect(apply).toHaveProperty("disabled", true);
+    fireEvent.change(screen.getByLabelText("New variable name"), {
+      target: { value: "GOOD" },
+    });
+    expect(apply).toHaveProperty("disabled", false);
+    expect(
+      harness.paramsOf("environment.configuration.items.put"),
+    ).toHaveLength(0);
+  });
+
+  it("writes a saved row's typed value when its revision changes before blur", async () => {
+    let items = [variable("development", 1)];
+    const harness = mountEditor(
+      () => ({ items }),
+      () => {
+        items = [variable("typed-value", 3)];
+        return { outcome: "saved", revision: 3 };
+      },
+    );
+    render(<TextItemsPage />, { wrapper: harness.Wrapper });
+    await editVariable("typed-value");
+    expect(
+      harness.paramsOf("environment.configuration.items.put"),
+    ).toHaveLength(0);
+    items = [variable("server-value", 2)];
+    await act(async () => {
+      await harness.queryClient.refetchQueries();
+    });
+    await expectUnlocked();
+    expect(
+      harness.paramsOf("environment.configuration.items.put"),
+    ).toMatchObject([
+      { key: "NODE_ENV", revision: 1, value: { value: "typed-value" } },
+    ]);
+    expect(nodeValue()).toHaveProperty("value", "typed-value");
+  });
+
+  it("commits a changed saved value on blur", async () => {
+    let items = [variable("development", 1)];
+    const harness = mountEditor(
+      () => ({ items }),
+      () => {
+        items = [variable("production", 2)];
+        return { outcome: "saved", revision: 2 };
+      },
+    );
+    render(<TextItemsPage />, { wrapper: harness.Wrapper });
+    await editVariable("production");
+    expect(
+      harness.paramsOf("environment.configuration.items.put"),
+    ).toHaveLength(0);
+    commitNodeValue();
+    await expectUnlocked();
+    expect(nodeValue()).toHaveProperty("value", "production");
+    expect(
+      harness.paramsOf("environment.configuration.items.put"),
+    ).toMatchObject([
+      { key: "NODE_ENV", revision: 1, value: { value: "production" } },
+    ]);
+  });
+
+  it("commits an empty saved value", async () => {
+    let items = [variable("development", 1)];
+    const harness = mountEditor(
+      () => ({ items }),
+      () => {
+        items = [variable("", 2)];
+        return { outcome: "saved", revision: 2 };
+      },
+    );
+    render(<TextItemsPage />, { wrapper: harness.Wrapper });
+    const row = await screen.findByRole("region", { name: "NODE_ENV" });
+    fireEvent.change(within(row).getByLabelText("Value for NODE_ENV"), {
+      target: { value: "" },
+    });
+    fireEvent.blur(within(row).getByLabelText("Value for NODE_ENV"));
+    await expectUnlocked();
+    expect(
+      within(screen.getByRole("region", { name: "NODE_ENV" })).getByLabelText(
+        "Value for NODE_ENV",
+      ),
+    ).toHaveProperty("value", "");
+    expect(
+      harness.paramsOf("environment.configuration.items.put"),
+    ).toMatchObject([{ key: "NODE_ENV", revision: 1, value: { value: "" } }]);
+  });
+
+  it("snaps a saved name back and writes the stored key with a changed value", async () => {
+    let items = [variable("development", 1)];
+    const harness = mountEditor(
+      () => ({ items }),
+      () => {
+        items = [variable("next", 2)];
+        return { outcome: "saved", revision: 2 };
+      },
+    );
+    render(<TextItemsPage />, { wrapper: harness.Wrapper });
+    const row = await screen.findByRole("region", { name: "NODE_ENV" });
+    fireEvent.change(within(row).getByLabelText("Name for NODE_ENV"), {
+      target: { value: "RENAMED" },
+    });
+    fireEvent.blur(within(row).getByLabelText("Name for NODE_ENV"));
+    expect(within(row).getByLabelText("Name for NODE_ENV")).toHaveProperty(
+      "value",
+      "NODE_ENV",
+    );
+    expect(
+      harness.paramsOf("environment.configuration.items.put"),
+    ).toHaveLength(0);
+    fireEvent.change(within(row).getByLabelText("Name for NODE_ENV"), {
+      target: { value: "RENAMED" },
+    });
+    fireEvent.change(within(row).getByLabelText("Value for NODE_ENV"), {
+      target: { value: "next" },
+    });
+    fireEvent.blur(within(row).getByLabelText("Name for NODE_ENV"));
+    await expectUnlocked();
+    const saved = screen.getByRole("region", { name: "NODE_ENV" });
+    expect(within(saved).getByLabelText("Name for NODE_ENV")).toHaveProperty(
+      "value",
+      "NODE_ENV",
+    );
+    expect(
+      harness.paramsOf("environment.configuration.items.put"),
+    ).toMatchObject([
+      { key: "NODE_ENV", revision: 1, value: { value: "next" } },
+    ]);
+  });
+
+  it("strips a provider prefix from the visible name and writes the prefixed key", async () => {
+    let items = [
+      configurationItem({
+        kind: "env_override",
+        key: "claude:ANTHROPIC_BASE_URL",
+        os: "any",
+        value: { value: "https://example.invalid" },
+        revision: 4,
+      }),
+    ];
+    const harness = mountEditor(
+      () => ({ items }),
+      () => {
+        items = [
+          ...items,
+          configurationItem({
+            kind: "env_override",
+            key: "claude:FOO",
+            os: "any",
+            value: { value: "bar" },
+            revision: 5,
+          }),
+        ];
+        return { outcome: "saved", revision: 5 };
+      },
+    );
+    render(<ProviderEnvPage />, { wrapper: harness.Wrapper });
+    const row = await screen.findByRole("region", {
+      name: "claude:ANTHROPIC_BASE_URL",
+    });
+    expect(
+      within(row).getByLabelText("Name for ANTHROPIC_BASE_URL"),
+    ).toHaveProperty("value", "ANTHROPIC_BASE_URL");
+    expect(
+      within(row).getByLabelText("Value for ANTHROPIC_BASE_URL"),
+    ).toHaveProperty("value", "https://example.invalid");
+    await openAdd();
+    fireEvent.change(screen.getByLabelText("New variable name"), {
+      target: { value: "FOO" },
+    });
+    fireEvent.change(screen.getByLabelText("New variable value"), {
+      target: { value: "bar" },
+    });
+    await userEvent.click(
+      screen.getByRole("button", { name: "Apply variable" }),
+    );
+    await expectUnlocked();
+    const saved = screen.getByRole("region", { name: "claude:FOO" });
+    expect(within(saved).getByLabelText("Name for FOO")).toHaveProperty(
+      "value",
+      "FOO",
+    );
+    expect(
+      harness.paramsOf("environment.configuration.items.put"),
+    ).toMatchObject([
+      {
+        key: "claude:FOO",
+        kind: "env_override",
+        revision: null,
+        value: { value: "bar" },
+      },
+    ]);
+  });
+
+  it("keeps the OS badge and the details slot on a saved row", async () => {
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.configuration.items": () => ({
+        items: [
+          configurationItem({
+            kind: "variable",
+            key: "NODE_ENV",
+            os: "linux",
+            value: { value: "linux-value" },
+            revision: 1,
+          }),
+        ],
+      }),
+    });
+    render(<DetailedItemsPage />, { wrapper: harness.Wrapper });
+    const row = await screen.findByRole("region", { name: "NODE_ENV · Linux" });
+    expect(within(row).getByText("Linux")).toBeTruthy();
+    expect(within(row).getByText("Details NODE_ENV")).toBeTruthy();
+    expect(within(row).getByLabelText("Value for NODE_ENV")).toHaveProperty(
+      "value",
+      "linux-value",
     );
   });
 });

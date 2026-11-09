@@ -63,6 +63,27 @@ describe("isSelectableCandidate", () => {
   const installedVersion = "2.0.0-rc.1";
 
   it.each([
+    ["1.0.0", false, true],
+    ["2.0.0", true, true],
+    ["2.0.0-rc.2", true, false],
+    ["2.0.0-beta.1", true, false],
+    ["02.0.0", true, false],
+    ["not-a-version", true, false],
+  ])(
+    "stable-only candidate %s (newer=%s) -> %s",
+    (candidateVersion, isStrictlyNewer, expected) => {
+      expect(
+        isSelectableCandidate({
+          mode: "stable-only",
+          installedVersion,
+          candidateVersion,
+          isStrictlyNewer,
+        }),
+      ).toBe(expected);
+    },
+  );
+
+  it.each([
     // Same line, strictly newer: the two things implicit following may take.
     ["2.0.0-rc.2", true, true],
     ["2.0.0", true, true],

@@ -214,6 +214,33 @@ function listed(
   };
 }
 
+function pageDescription(): HTMLElement {
+  const heading = screen.getByRole("heading", { level: 1 });
+  const header = heading.closest("header");
+  if (header === null) throw new Error("page heading has no header");
+  const paragraph = Array.from(header.querySelectorAll("p")).find(
+    (node) => node.dataset.testid !== "settings-phone-scope-line",
+  );
+  if (paragraph === undefined) {
+    throw new Error("page header has no description");
+  }
+  return paragraph;
+}
+
+async function expectIntroduction(
+  text: string,
+  name: string,
+  split: boolean,
+): Promise<void> {
+  await waitFor(() => {
+    expect(pageDescription().textContent).toBe(text);
+  });
+  if (!split) return;
+  const nameNode = within(pageDescription()).getByText(name);
+  expect(nameNode.tagName).toBe("SPAN");
+  expect(nameNode.className).toContain("truncate");
+}
+
 describe("The Skills page", () => {
   it("shows an uploaded skill without a remount", async () => {
     negotiateMethods({
@@ -439,14 +466,18 @@ describe("The Skills page", () => {
     expect(await screen.findByText("all providers")).toBeTruthy();
     expect(screen.getByText("Built-in · 1.0.0 · all providers")).toBeTruthy();
     expect(screen.queryByText(/written in Settings/)).toBeNull();
-    expect(screen.getByText("review")).toBeTruthy();
-    expect(screen.getByText("Review a change.")).toBeTruthy();
+    expect(screen.getByText("review").className).toContain("wrap-anywhere");
+    expect(screen.getByText("Review a change.").className).toContain(
+      "wrap-anywhere",
+    );
     expect(harness.paramsOf("environment.configuration.skills.list")).toEqual([
       { environmentId: "env-a" },
     ]);
-    expect(
-      await screen.findByText("Instructions agents follow for a kind of task."),
-    ).toBeTruthy();
+    await expectIntroduction(
+      "Instructions agents follow for a kind of task. Acme's skills reach every provider on its hosts.",
+      "Acme",
+      true,
+    );
   });
 
   it("says all providers while the host cannot switch per provider, whatever offFor holds", async () => {
@@ -720,9 +751,11 @@ describe("The Skills page", () => {
     );
     render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
 
-    expect(
-      await screen.findByText("Instructions agents follow for a kind of task."),
-    ).toBeTruthy();
+    await expectIntroduction(
+      "Instructions agents follow for a kind of task. Personal's skills reach every provider on every computer and sandbox running Personal.",
+      "Personal",
+      false,
+    );
     await waitFor(() => {
       expect(harness.paramsOf("environment.configuration.skills.list")).toEqual(
         [{ environmentId: "env-personal" }],
@@ -731,6 +764,9 @@ describe("The Skills page", () => {
     expect(
       await screen.findByText("No skills added to Personal."),
     ).toBeTruthy();
+    expect(
+      screen.queryByRole("heading", { name: "Skills", level: 2 }),
+    ).toBeNull();
   });
 
   it("names no host, and offers no host picker, for a list that came from the room", async () => {
@@ -2761,6 +2797,9 @@ describe("The Skills page's skills from a source", () => {
     expect(
       screen.queryByRole("button", { name: "Check for updates" }),
     ).toBeNull();
+    expect(
+      screen.getByRole("heading", { name: "Skills", level: 2 }),
+    ).toBeTruthy();
     first.unmount();
     cleanup();
 
@@ -2774,7 +2813,12 @@ describe("The Skills page's skills from a source", () => {
     const checkUpdates = await screen.findByRole("button", {
       name: "Check for updates",
     });
-    expect(checkUpdates.closest("header")).not.toBeNull();
+    const skillsHeading = screen.getByRole("heading", {
+      name: "Skills",
+      level: 2,
+    });
+    expect(skillsHeading.parentElement).toBe(checkUpdates.parentElement);
+    expect(checkUpdates.closest("header")).toBeNull();
     await userEvent.click(checkUpdates);
     await waitFor(() => {
       expect(harness.paramsOf(STATE)).toContainEqual({

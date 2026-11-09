@@ -502,7 +502,7 @@ describe("a job that narrows a push run compares against the last green push", (
 
   // Nx writes to `~/.nx` unless told otherwise, and a cache saved from a job that
   // failed on the dirty tree `--fix` leaves would pass that job on its re-run.
-  it("pre-commit.yml: only a passing push saves the directory Nx writes to", () => {
+  it("pre-commit.yml: only a non-cold passing push saves the directory Nx writes to", () => {
     const { workflow } = workflows.find(
       ({ file }) => file === "pre-commit.yml",
     );
@@ -513,7 +513,9 @@ describe("a job that narrows a push run compares against the last green push", (
     );
     // A push runs only on `main`, so nothing a pull request or a dispatched
     // branch run builds becomes an entry `main` restores.
-    expect(save.if).toBe("github.event_name == 'push'");
+    expect(save.if).toBe(
+      "${{ !inputs.cold && (github.event_name == 'push') }}",
+    );
     expect(triggers(workflow).push).toEqual({ branches: ["main"] });
     expect(restore.with.path).toBe("${{ matrix.cache }}");
     expect(save.with.path).toBe(restore.with.path);
@@ -736,18 +738,35 @@ describe("a workflow whose push run decides inside itself", () => {
 describe("test.yml `tests`", () => {
   const { workflow } = workflows.find(({ file }) => file === "test.yml");
   const job = workflow.jobs.tests;
+  const bootstrapProof = workflow.jobs["bootstrap-proof"];
 
   it("is the single check for the whole test matrix", () => {
     expect(job.name).toBe("tests");
-    expect(job.needs).toEqual(["test"]);
+    expect(job.needs).toEqual(["test", "bootstrap-proof"]);
     expect(normalize(job.if).startsWith(`always() && (${GATE})`)).toBe(true);
+  });
+
+  it("gates the optional bootstrap matrix behind the PR gate and explicit dispatch input", () => {
+    expect(gates(normalize(bootstrapProof.if))).toBe(true);
+    expect(normalize(bootstrapProof.if)).toBe(
+      `(${GATE}) && github.event_name == 'workflow_dispatch' && inputs.bootstrap_matrix`,
+    );
   });
 
   it("is one bash step with no checkout, failing unless the matrix passed", () => {
     expect(job.steps).toHaveLength(1);
     expect(job.steps[0].uses).toBeUndefined();
     expect(job.steps[0].env.RESULT).toBe("${{ needs.test.result }}");
+    expect(job.steps[0].env.PROOF_REQUESTED).toBe(
+      "${{ github.event_name == 'workflow_dispatch' && inputs.bootstrap_matrix }}",
+    );
+    expect(job.steps[0].env.PROOF_RESULT).toBe(
+      "${{ needs.bootstrap-proof.result }}",
+    );
     expect(job.steps[0].run).toContain('test "$RESULT" = success');
+    expect(job.steps[0].run).toContain(
+      'if [ "$PROOF_REQUESTED" = true ]; then test "$PROOF_RESULT" = success; fi',
+    );
   });
 });
 

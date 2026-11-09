@@ -11,15 +11,12 @@ import {
   type RefObject,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, Eye, EyeOff, Gauge, Settings } from "lucide-react";
+import { Eye, EyeOff, Gauge, Settings } from "lucide-react";
 import {
   DEFAULT_ACCOUNT_CONTEXT,
   type AccountContext,
 } from "@traycer/protocol/common/schemas";
-import {
-  HOST_FROZEN_WORD,
-  HOST_KIND_WORDS,
-} from "@traycer/protocol/host/host-status";
+import { HOST_KIND_WORDS } from "@traycer/protocol/host/host-status";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
@@ -89,7 +86,6 @@ import {
   type RateLimitProfileSelection,
 } from "@/hooks/rate-limits/use-rate-limit-profile-selection";
 import { fetchProviderRateLimits } from "@/lib/rate-limits/provider-rate-limit-fetch";
-import { HostGlyph } from "@/components/settings/host-scope/host-glyph";
 import { HostSwitcher } from "@/components/settings/host-scope/host-switcher";
 import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
 import { isHostSwitcherListInteraction } from "@/components/settings/host-scope/host-switcher-portal";
@@ -169,11 +165,7 @@ import { useSettingsSearchStore } from "@/stores/settings/settings-search-store"
 import { LAYOUT } from "@/components/settings/panels/layout-settings.definitions";
 import { isMobileApp } from "@/lib/mobile-app";
 import { cn } from "@/lib/utils";
-import {
-  AVAILABLE_HOST_ROW_SURFACE_STATE,
-  hostOptionStatusWord,
-  NO_HOST_OPTION_REFUSALS,
-} from "@/components/settings/host-scope/host-option-model";
+import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
 
 /**
  * A rail/Overview entry, in draw order: either a host-RPC provider or the
@@ -1058,6 +1050,32 @@ function RateLimitPopoverScopedBody({
   );
 }
 
+function RateLimitHostChooser(props: {
+  readonly scope: HostScope;
+  readonly displayedHost: HostScopeOption | null;
+  readonly onClose: () => void;
+  readonly opensList: boolean;
+}): ReactNode {
+  if (props.opensList && props.scope.hosts.length === 0) {
+    return (
+      <RateLimitHostPickerRow
+        scope={props.scope}
+        displayedHost={props.displayedHost}
+        onClose={props.onClose}
+      />
+    );
+  }
+  if (props.opensList) {
+    return (
+      <RateLimitHostNameKindList
+        scope={props.scope}
+        displayedHost={props.displayedHost}
+      />
+    );
+  }
+  return <RateLimitHostIdentity host={props.displayedHost} />;
+}
+
 function RateLimitPopoverHostHeader(props: {
   readonly scope: HostScope;
   readonly displayedHost: HostScopeOption | null;
@@ -1084,20 +1102,12 @@ function RateLimitPopoverHostHeader(props: {
   const opensList = scope.hosts.length > 1 || scope.vanishedHostId !== null;
   return (
     <>
-      {opensList && scope.hosts.length === 0 ? (
-        <RateLimitHostPickerRow
-          scope={scope}
-          displayedHost={displayedHost}
-          onClose={props.onClose}
-        />
-      ) : (
-        <RateLimitHostHeader
-          host={displayedHost}
-          opensList={opensList}
-          scope={scope}
-          onClose={props.onClose}
-        />
-      )}
+      <RateLimitHostChooser
+        scope={scope}
+        displayedHost={displayedHost}
+        onClose={props.onClose}
+        opensList={opensList}
+      />
       {scope.vanishedSelection === null ? null : (
         <div
           className="m-3 flex shrink-0 flex-col gap-2 rounded-md border p-2 text-ui-xs"
@@ -1138,7 +1148,13 @@ function RateLimitSettingsMismatch(props: {
   if (settingsHost === null || settingsHost.hostId === props.usageHost.hostId)
     return null;
   return (
-    <div className="mx-3 mt-3 min-w-0" data-testid="rate-limit-host-mismatch">
+    <div
+      className="mx-3 mt-3 flex min-w-0 flex-col gap-2"
+      data-testid="rate-limit-host-mismatch"
+    >
+      <p className="m-0 rounded-md border p-2 text-ui-xs break-words">
+        Showing {props.usageHost.name}. Settings is showing {settingsHost.name}.
+      </p>
       <Button
         variant="outline"
         size="sm"
@@ -1151,117 +1167,108 @@ function RateLimitSettingsMismatch(props: {
   );
 }
 
-/**
- * The usage popover's host header. One shape whether the account has one
- * host or many: the name wraps, the kind sits under it, and a chevron is
- * drawn only when this header opens the host list. The list is Settings'
- * host switcher, laid over the face so choosing a host stays that picker.
- */
-function RateLimitHostHeader(props: {
+/** One host: the name and its kind on one line. No status, no credit badge. */
+function RateLimitHostIdentity(props: {
   readonly host: HostScopeOption | null;
-  readonly opensList: boolean;
-  readonly scope: HostScope;
-  readonly onClose: () => void;
 }): ReactNode {
-  const face = (
-    <RateLimitHostFace host={props.host} opensList={props.opensList} />
-  );
-  if (!props.opensList) {
-    return (
-      <div className="shrink-0 border-b" data-testid="rate-limit-host-identity">
-        {face}
-      </div>
-    );
-  }
+  const { host } = props;
   return (
     <div
-      className="relative shrink-0 border-b hover:bg-foreground/5 focus-within:ring-3 focus-within:ring-ring/50 focus-within:ring-inset"
-      data-testid="rate-limit-host-header"
+      className="shrink-0 border-b px-3 py-2 text-ui-sm font-medium break-words"
+      data-testid="rate-limit-host-identity"
     >
-      <div className="pointer-events-none" aria-hidden>
-        {face}
-      </div>
-      <div className="absolute inset-0 opacity-0 [&_[data-testid=rate-limit-host-picker-row]]:h-full [&_[data-testid=settings-host-switcher]]:size-full">
-        <RateLimitHostPickerRow
-          scope={props.scope}
-          displayedHost={props.host}
-          onClose={props.onClose}
-        />
-      </div>
+      {host === null ? "No host" : host.name}
+      {host === null || host.kind === null ? null : (
+        <span className="font-normal text-muted-foreground">
+          {" · "}
+          {HOST_KIND_WORDS[host.kind]}
+        </span>
+      )}
     </div>
   );
 }
 
-function RateLimitHostFace(props: {
-  readonly host: HostScopeOption | null;
-  readonly opensList: boolean;
+/**
+ * Several hosts: each name and kind on one line. Choosing one scopes this
+ * popover. A long fleet scrolls. Status and the credit badge stay off this
+ * header.
+ */
+function RateLimitHostNameKindList(props: {
+  readonly scope: HostScope;
+  readonly displayedHost: HostScopeOption | null;
 }): ReactNode {
-  const lines = rateLimitHostHeaderLines(props.host, props.opensList);
   return (
-    <div
-      className="flex w-full min-w-0 items-start gap-3 px-3 py-2 text-start text-ui-sm"
-      data-testid={
-        props.opensList ? "rate-limit-host-face" : "rate-limit-host-header"
-      }
-    >
-      {props.host === null ? null : (
-        <HostGlyph
-          host={props.host}
-          className="mt-0.5 size-4 text-muted-foreground"
-        />
-      )}
-      <span className="min-w-0 flex-1">
-        <span className="block font-medium break-words">{lines.label}</span>
-        {lines.kind === null ? null : (
-          <span className="block text-ui-xs font-normal break-words text-muted-foreground">
-            {lines.kind}
+    <div className="shrink-0 border-b" data-testid="rate-limit-host-list">
+      <div
+        className="max-h-40 overflow-y-auto overscroll-contain"
+        role="group"
+        aria-label="Host"
+      >
+        {props.scope.hosts.map((host) => {
+          const selected = host.hostId === props.displayedHost?.hostId;
+          return (
+            <div
+              key={host.hostId}
+              className={selected ? "bg-foreground/5" : ""}
+            >
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                aria-current={selected ? "true" : "false"}
+                data-testid={`rate-limit-host-option-${host.hostId}`}
+                className="h-auto w-full min-w-0 justify-start text-start whitespace-normal break-words"
+                onClick={() => props.scope.setHostId(host.hostId)}
+              >
+                {host.name}
+                {host.kind === null ? null : (
+                  <span className="font-normal text-muted-foreground">
+                    {" · "}
+                    {HOST_KIND_WORDS[host.kind]}
+                  </span>
+                )}
+              </Button>
+            </div>
+          );
+        })}
+      </div>
+      {props.scope.isLoading ? (
+        <div
+          className="flex items-center gap-2 border-t border-border/60 px-3 py-2"
+          data-testid="rate-limit-host-loading-more"
+        >
+          <AgentSpinningDots
+            className={undefined}
+            testId={undefined}
+            variant={undefined}
+            tone="muted"
+          />
+          <span className="text-ui-xs text-muted-foreground">
+            Loading more hosts…
           </span>
-        )}
-        {lines.status === null ? null : (
-          <span
-            className="block text-ui-xs font-normal break-words text-muted-foreground"
-            data-testid="rate-limit-host-status"
+        </div>
+      ) : null}
+      {props.scope.listsFailed && !props.scope.isLoading ? (
+        <div
+          className="flex items-center justify-between gap-2 border-t border-border/60 px-3 py-2"
+          data-testid="rate-limit-host-lists-failed"
+        >
+          <span className="text-ui-xs text-muted-foreground">
+            Some hosts may be missing
+          </span>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="shrink-0"
+            onClick={props.scope.retryLists}
           >
-            {lines.status}
-          </span>
-        )}
-        {lines.frozen ? (
-          <Badge variant="warning" className="mt-0.5">
-            {HOST_FROZEN_WORD}
-          </Badge>
-        ) : null}
-      </span>
-      {props.opensList ? (
-        <ChevronDown className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+            Try again
+          </Button>
+        </div>
       ) : null}
     </div>
   );
-}
-
-function rateLimitHostHeaderLines(
-  host: HostScopeOption | null,
-  opensList: boolean,
-): {
-  readonly label: string;
-  readonly kind: string | null;
-  readonly status: string | null;
-  readonly frozen: boolean;
-} {
-  if (host === null) {
-    return {
-      label: opensList ? "Select a host" : "No host",
-      kind: null,
-      status: null,
-      frozen: false,
-    };
-  }
-  const status = hostOptionStatusWord(host, AVAILABLE_HOST_ROW_SURFACE_STATE);
-  return {
-    label: host.name,
-    kind: host.kind === null ? null : HOST_KIND_WORDS[host.kind],
-    status,
-    frozen: status !== null && host.sandbox !== null && host.sandbox.frozen,
-  };
 }
 
 /**

@@ -159,21 +159,17 @@ export function LandingDraftSurface() {
           narrow viewport (or the space left beside the terminal panel) and
           the outer overflow-clip would clip the right edge instead of
           letting content reflow. */}
-      {/* Desktop balances the space above the composer with the task track
-          below it. The task track's 12.5rem floor reserves its 1.75rem top
-          margin, 1.75rem header, .75rem header gap, 1.125rem group heading,
-          two 2.75rem task rows with a .125rem gap, and 1.5rem bottom padding.
-          Task count cannot grow that track; only the composer's own height
-          can make the tracks exceed the viewport and scroll this body.
-          Below md the list is gone, so row 3 is weighted heavier to lift the
-          hero/composer pair just above the midpoint on a tall phone.
-          With both the greeting and the recent list off there is no pair to
-          balance, so row 2 collapses outright and the composer centres itself
-          inside the whole remainder, whose minimum is the composer's height. */}
+      {/* Desktop splits the window between the greeting and the composer row.
+          Current tasks share that composer row and scroll inside it.
+          Below md the body scrolls, and the composer track keeps its own
+          height so a grown composer and an expanded setup failure stay
+          reachable. With both the greeting and the recent list off there is
+          no pair to balance, so the hero row collapses and the composer
+          centres itself in the remainder. */}
       <div
         ref={appearanceSurfaceRef}
         className={cn(
-          "landing-appearance-surface relative isolate grid min-h-0 min-w-0 flex-1 grid-cols-[minmax(0,1fr)] overflow-y-auto max-md:short-landscape:content-start",
+          "landing-appearance-surface relative isolate grid min-h-0 min-w-0 flex-1 grid-cols-[minmax(0,1fr)] overflow-hidden max-md:overflow-y-auto max-md:short-landscape:content-start",
           layout.rows,
         )}
       >
@@ -192,8 +188,8 @@ export function LandingDraftSurface() {
           <HomeHero workspaceFolders={workspaceFolders} />
         </section>
 
-        {/* The composer has its own desktop track: attachments cannot consume
-            the task list's minimum height in the next track. */}
+        {/* Composer and Current tasks share this row, so adding a folder grows
+            the composer downward into the scrollable task list. */}
         <div
           data-composer-placement={layout.placement}
           className={cn(
@@ -238,14 +234,14 @@ export function LandingDraftSurface() {
               View history
             </button>
           ) : null}
+          {showRecentHistory && !isMobile ? (
+            <div className="flex min-h-0 flex-1 flex-col pb-6">
+              {!systemModalOpen && activity.visible ? (
+                <CurrentTasksSection />
+              ) : null}
+            </div>
+          ) : null}
         </div>
-        {showRecentHistory && !isMobile ? (
-          <div className="relative mx-auto flex min-h-0 w-full max-w-3xl flex-col overflow-hidden px-6 pb-6">
-            {!systemModalOpen && activity.visible ? (
-              <CurrentTasksSection />
-            ) : null}
-          </div>
-        ) : null}
         <CustomizeStartPageButton />
       </div>
       {draftId === null ? null : (
@@ -284,11 +280,11 @@ function usePendingDraftId(draftId: string | null): string {
  * so the hero row collapses outright (the hero stays MOUNTED - unmounting it
  * would reconcile the composer against its slot and remount the editor) and
  * the composer centres itself in the whole remainder. Any other combination
- * keeps the fractional space described at the grid itself.
+ * keeps the fractional two-row split described at the grid itself.
  *
- * The desktop task list gets a separate bounded track. Below md there is no
- * list, and the composer's row keeps its own height so a grown composer is
- * not clipped.
+ * Desktop is that split from `md` up, and Current tasks share the composer
+ * row. Below md there is no list, the body scrolls, and the composer's row
+ * keeps its own height so a grown composer is not clipped.
  */
 function startPageLayout(
   showGreeting: boolean,
@@ -302,9 +298,7 @@ function startPageLayout(
   return showGreeting || showRecentHistory
     ? {
         rows: cn(
-          showRecentHistory
-            ? "grid-rows-[auto_minmax(0,1fr)_auto_minmax(12.5rem,1fr)]"
-            : "grid-rows-[auto_minmax(0,1fr)_minmax(0,1fr)]",
+          "md:grid-rows-[auto_minmax(0,1fr)_minmax(0,1fr)]",
           "max-md:grid-rows-[auto_minmax(0,1fr)_minmax(min-content,1.4fr)] max-md:short-landscape:grid-rows-[auto_0_auto]",
         ),
         hero: "",
@@ -312,7 +306,10 @@ function startPageLayout(
         placement: "top",
       }
     : {
-        rows: "grid-rows-[auto_0_minmax(min-content,1fr)] max-md:short-landscape:grid-rows-[auto_0_auto]",
+        rows: cn(
+          "md:grid-rows-[auto_minmax(0,0fr)_minmax(0,1fr)]",
+          "max-md:grid-rows-[auto_0_minmax(min-content,1fr)] max-md:short-landscape:grid-rows-[auto_0_auto]",
+        ),
         hero: "h-0 overflow-hidden",
         composer: "justify-center",
         placement: "centered",

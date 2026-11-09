@@ -592,7 +592,7 @@ describe("the host environment group on a Personal page", () => {
 });
 
 const PERSONAL_SUBTITLE =
-  "Plain values every computer and sandbox running these settings gets, and the shell agents run in.";
+  "Plain values every computer and sandbox running Personal gets, and the shell agents run in.";
 
 describe("the Variables and shells subtitle", () => {
   it("describes what Personal shares under the Personal pick", async () => {
@@ -624,7 +624,7 @@ describe("the Variables empty state", () => {
     await pageIsReady();
     expect(
       screen.getByText(
-        "Variables are plain values every computer and sandbox running these settings gets.",
+        "Variables are plain values every computer and sandbox running Personal gets.",
       ),
     ).toBeTruthy();
     expect(screen.queryByText(/Add a variable\.$/)).toBeNull();

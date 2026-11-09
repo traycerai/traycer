@@ -11,6 +11,7 @@ import {
   Undo2,
 } from "lucide-react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -448,6 +449,37 @@ function hostOverviewActivateReason(
 }
 
 /**
+ * Activate's slot. The bound computer shows Active here. `activateInMenu`
+ * leaves the slot empty because a sandbox lifecycle, or Update now on an
+ * unbound computer, already owns it and More carries the binding.
+ */
+function hostOverviewInlineBinding(props: {
+  readonly isActive: boolean;
+  readonly activateInMenu: boolean;
+  readonly available: boolean;
+  readonly activateBusy: boolean;
+  readonly reason: string;
+  readonly onMakeActive: (() => void) | null;
+}): ReactNode {
+  if (props.isActive && !props.activateInMenu) {
+    return (
+      <Badge variant="accent" data-testid="host-active-in-window">
+        Active
+      </Badge>
+    );
+  }
+  if (props.activateInMenu) return null;
+  return (
+    <HostOverviewInlineActivate
+      available={props.available}
+      activateBusy={props.activateBusy}
+      reason={props.reason}
+      onMakeActive={props.onMakeActive}
+    />
+  );
+}
+
+/**
  * The card header's right-hand cluster: the window binding, and everything
  * else behind a `⋯`.
  *
@@ -464,8 +496,9 @@ function hostOverviewActivateReason(
  * button in the footer, so nothing connected them. And the WORD: the verb used
  * to be "Use in this window" while the state said "Active", which named one
  * binding twice and left it to the reader to guess they were the same thing.
- * One root word, one place. It is also not a host RPC and has no degrade
- * reason — it is an
+ * One root word, one place. The bound state is a badge in that slot. More
+ * carries the binding only when `activateInMenu` is set. It is also not a
+ * host RPC and has no degrade reason — it is an
  * account-side selection this shell makes — which is why it sits apart from
  * the capability-gated verbs in the menu and carries only a reachability gate.
  */
@@ -509,9 +542,10 @@ export function HostOverviewHeaderActions(props: {
   readonly activateBusy: boolean;
   readonly onCopyHostId: () => void;
   /**
-   * The window binding goes INTO the menu, as its first item, rather than
-   * beside it. A phone's name row has room for the name, its tag and one icon
-   * trigger; a worded button beside them wraps the row.
+   * The binding lives in More. A sandbox sets this because its lifecycle owns
+   * the inline slot. An unbound computer sets it when Update now owns that
+   * slot, so Activate stays in More. A bound computer passes false: Active is
+   * the inline badge, beside Update now when that button is there.
    */
   readonly activateInMenu: boolean;
 }): ReactNode {
@@ -525,14 +559,14 @@ export function HostOverviewHeaderActions(props: {
   return (
     <div className="flex max-w-full shrink-0 flex-wrap items-center gap-1.5">
       {props.primaryAction}
-      {props.activateInMenu || props.isActive ? null : (
-        <HostOverviewInlineActivate
-          available={activateAvailable}
-          activateBusy={props.activateBusy}
-          reason={activateReason}
-          onMakeActive={props.onMakeActive}
-        />
-      )}
+      {hostOverviewInlineBinding({
+        isActive: props.isActive,
+        activateInMenu: props.activateInMenu,
+        available: activateAvailable,
+        activateBusy: props.activateBusy,
+        reason: activateReason,
+        onMakeActive: props.onMakeActive,
+      })}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button
@@ -548,7 +582,7 @@ export function HostOverviewHeaderActions(props: {
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="min-w-56">
           {props.menuItems}
-          {(props.activateInMenu || props.isActive) &&
+          {props.activateInMenu &&
           (props.isActive || props.onMakeActive !== null) ? (
             <>
               <HostOverviewMenuActivate

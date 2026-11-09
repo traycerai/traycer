@@ -1311,14 +1311,9 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
               </ComposerStagedSurfaceKeyProvider>
             </div>
           </section>
-          <div
-            className="flex min-w-0 flex-col gap-1"
-            aria-label="Run location"
-          >
-            <div className="font-sans text-overline font-medium uppercase text-muted-foreground/70">
-              Run location
-            </div>
-          </div>
+          <p className="min-w-0 break-words text-ui-xs text-muted-foreground">
+            {CHAT_FORK_SECOND_CHAT_NOTICE}
+          </p>
           <ActiveHostWorkspaceControls
             sandboxStaging={sandboxStaging}
             // Locked while the create is in flight, like every other control in
@@ -1331,7 +1326,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
             // silently.
             disabled={createChat.isPending || attachEnvironment.isPending}
             stagingKey={stagingKey}
-            layout="stacked-caller-heading"
+            layout="stacked"
             workspaceSeed={workspaceSeed}
             seedIntent={seedIntent}
             seedIntentOverride={seedIntentOverride}
@@ -1349,9 +1344,6 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
               {TEAM_SANDBOX_HARNESS_UNAVAILABLE}
             </p>
           ) : null}
-          <p className="min-w-0 break-words text-ui-xs text-muted-foreground">
-            {CHAT_FORK_SECOND_CHAT_NOTICE}
-          </p>
           <ChatForkTargetNotices
             isCrossHost={isCrossHost}
             emptySandbox={forkStage !== null && forkStage.target.kind === "new"}
@@ -1409,7 +1401,7 @@ function ChatForkOpenDescription(props: {
   if (!props.latest) {
     return (
       <DialogDescription className="sr-only">
-        Choose the title, harness and run location for the fork.
+        Choose the title, harness, host and folder for the fork.
       </DialogDescription>
     );
   }

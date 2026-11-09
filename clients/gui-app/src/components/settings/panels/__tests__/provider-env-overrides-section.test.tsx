@@ -107,7 +107,10 @@ import {
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import type { EnvOverrideValue } from "../env-override-editor";
-import { ProviderEnvOverridesSection } from "../provider-env-overrides-section";
+import {
+  ProviderEnvOverridesSection,
+  type ProviderKeyHome,
+} from "../provider-env-overrides-section";
 import {
   RETIRED_PROVIDER_VARIABLES,
   RETIRED_SECRET_ROW_FIELDS,
@@ -210,56 +213,52 @@ describe("ProviderEnvOverridesSection — envOverrideScope copy (F1)", () => {
     });
 
     expect(
-      screen.getByText(
-        "Set for Cursor when Traycer sets up its tools, such as MCP servers, on every computer and sandbox running Personal. Cursor's conversations don't get them. Unset removes a variable Cursor would otherwise get from the shell.",
-      ),
+      screen.getByText("Variables for the selected provider."),
     ).toBeTruthy();
+    expect(screen.queryByText(/every computer and sandbox/)).toBeNull();
     expect(screen.queryByText(/but not chat turns/)).toBeNull();
   });
 
-  it("uses the native-config-only copy for any providerId when the descriptor says so", () => {
+  it("uses the same line for any providerId when the descriptor is native-config-only", () => {
     renderSection({
       providerId: "codex",
       envOverrideScope: "native-config-only",
     });
 
     expect(
-      screen.getByText(
-        "Set for Codex when Traycer sets up its tools, such as MCP servers, on every computer and sandbox running Personal. Codex's conversations don't get them. Unset removes a variable Codex would otherwise get from the shell.",
-      ),
+      screen.getByText("Variables for the selected provider."),
     ).toBeTruthy();
+    expect(screen.queryByText(/conversations don't get them/)).toBeNull();
     expect(screen.queryByText(/but not chat turns/)).toBeNull();
   });
 
-  it("says where Personal's variables are set for the default harness-and-native-config scope", () => {
+  it("uses the same line for the default harness-and-native-config scope", () => {
     renderSection({
       providerId: "cursor",
       envOverrideScope: "harness-and-native-config",
     });
 
     expect(
-      screen.getByText(
-        "Set for Cursor each time it starts, on every computer and sandbox running Personal. Unset removes a variable Cursor would otherwise get from the shell.",
-      ),
+      screen.getByText("Variables for the selected provider."),
     ).toBeTruthy();
+    expect(screen.queryByText(/each time it starts/)).toBeNull();
     expect(screen.queryByText(/but not chat turns/)).toBeNull();
   });
 
-  it("says the same when envOverrideScope is omitted (old hosts)", () => {
+  it("uses the same line when envOverrideScope is omitted (old hosts)", () => {
     renderSection({
       providerId: "codex",
       envOverrideScope: undefined,
     });
 
     expect(
-      screen.getByText(
-        "Set for Codex each time it starts, on every computer and sandbox running Personal. Unset removes a variable Codex would otherwise get from the shell.",
-      ),
+      screen.getByText("Variables for the selected provider."),
     ).toBeTruthy();
+    expect(screen.queryByText(/each time it starts/)).toBeNull();
     expect(screen.queryByText(/but not chat turns/)).toBeNull();
   });
 
-  it("limits the reach to this computer on a Local row", () => {
+  it("uses the same line on a Local row", () => {
     useSettingsEnvironmentPickStore.setState({
       pick: { kind: "local", hostId: "host-a", hostName: "dev-box" },
     });
@@ -269,10 +268,9 @@ describe("ProviderEnvOverridesSection — envOverrideScope copy (F1)", () => {
     });
 
     expect(
-      screen.getByText(
-        "Set for Cursor each time it starts, on this computer only. Unset removes a variable Cursor would otherwise get from the shell.",
-      ),
+      screen.getByText("Variables for the selected provider."),
     ).toBeTruthy();
+    expect(screen.queryByText(/this computer only/)).toBeNull();
   });
 });
 
@@ -449,10 +447,7 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
   /** A provider's Env tab on the Personal page, with or without a key tab. */
   function renderProviderEnvTab(
     providerId: ProviderCliState["providerId"],
-    keyHome: {
-      readonly label: "Account" | "Profiles & Limits";
-      readonly open: () => void;
-    } | null,
+    keyHome: ProviderKeyHome | null,
     overrides: readonly EnvOverrideValue[],
   ): RenderResult {
     return mountOnPersonalPage(
@@ -485,7 +480,7 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
       providerId: "cursor",
       name: "Cursor",
       variable: "CURSOR_API_KEY",
-      label: "Profiles & Limits",
+      label: "Account",
     },
     {
       providerId: "amp",
@@ -524,7 +519,7 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
 
   it("still sends any other key-shaped name to Add a secret, with the value kept", async () => {
     const open = vi.fn<() => void>();
-    renderProviderEnvTab("kiro", { label: "Profiles & Limits", open }, []);
+    renderProviderEnvTab("kiro", { label: "Account", open }, []);
 
     await typeVariable("NOTES", HELD_VALUE);
 
@@ -550,7 +545,7 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
 
   it("masks a saved key-shaped own key variable, points it at the key tab, and leaves it saved", async () => {
     const open = vi.fn<() => void>();
-    renderProviderEnvTab("kiro", { label: "Profiles & Limits", open }, [
+    renderProviderEnvTab("kiro", { label: "Account", open }, [
       { key: "KIRO_API_KEY", value: HELD_VALUE },
     ]);
 
@@ -565,11 +560,11 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
     expect(document.body.textContent).not.toContain(HELD_VALUE);
     const line = within(row).getByTestId("env-key-refusal");
     expect(line.textContent).toBe(
-      "This is Kiro's key. Set it on Kiro's Profiles & Limits.",
+      "This is Kiro's key. Set it on Kiro's Account.",
     );
 
     fireEvent.click(
-      within(line).getByRole("button", { name: "Kiro's Profiles & Limits" }),
+      within(line).getByRole("button", { name: "Kiro's Account" }),
     );
 
     expect(open).toHaveBeenCalledTimes(1);

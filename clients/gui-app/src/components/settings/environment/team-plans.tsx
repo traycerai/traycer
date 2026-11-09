@@ -19,7 +19,6 @@ import {
 } from "./configuration-source";
 import { usePickedTeamLabel } from "./team-pick-label";
 import { PlansCard, type ConfigurationPlan } from "./plans-card";
-import { ProviderRowDetails } from "@/components/settings/details/provider-row-details";
 import { PlanUnlinkPreview } from "./plan-unlink-preview";
 import { Button } from "@/components/ui/button";
 import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-host";
@@ -72,13 +71,6 @@ export function TeamPlans(props: {
   return (
     <>
       <PlansCard
-        renderDetails={(plan) => (
-          <ProviderRowDetails
-            kind="plan"
-            itemKey={props.providerId}
-            title={`${plan.providerLabel} plan`}
-          />
-        )}
         teamName={name}
         plans={plans}
         canAdminister={canAdminister}

@@ -18,7 +18,9 @@ import { frozenDestroyAt } from "@/lib/sandboxes/sandbox-balance";
 import { formatMemory } from "@/lib/sandboxes/sandbox-pricing";
 import {
   AGENT_SANDBOX,
+  costLine,
   keptByLine,
+  paidByLine,
   startedByLine,
   KEPT_UNTIL_YOU_DESTROY_IT,
   LESS_THAN_A_CENT_SO_FAR,
@@ -270,13 +272,38 @@ export function sandboxDestroyAllIdleOffered(
 
 // ── Who ─────────────────────────────────────────────────────────────────────
 
+/**
+ * `you`, or the member's name. Null when this viewer is not them and the
+ * server sends no name: row copy leaves the person out rather than saying
+ * `a member`.
+ */
+function facingMemberName(
+  member: SandboxMember,
+  viewerUserId: string | null,
+): string | null {
+  if (viewerUserId !== null && member.userId === viewerUserId) return "you";
+  return member.displayName;
+}
+
+/**
+ * A team payer who is someone else and whom the server names. An unnamed
+ * payer is not one: the `a member` fallback is not a name, and it is not `you`.
+ */
+function namedOtherPayer(
+  payer: SandboxMember | null,
+  viewerUserId: string | null,
+): boolean {
+  if (payer === null) return false;
+  const name = facingMemberName(payer, viewerUserId);
+  return name !== null && name !== "you";
+}
+
 /** `you`, the member's name, or `a member` when they have none to show. */
 export function sandboxMemberName(
   member: SandboxMember,
   viewerUserId: string | null,
 ): string {
-  if (viewerUserId !== null && member.userId === viewerUserId) return "you";
-  return member.displayName ?? "a member";
+  return facingMemberName(member, viewerUserId) ?? "a member";
 }
 
 /**
@@ -289,22 +316,43 @@ export function sandboxStartedByLabel(
   summary: SandboxSummary,
   viewerUserId: string | null,
 ): string | null {
-  if (summary.kind === "automation") return null;
+  if (summary.kind === "automation") return "Automations";
   if (summary.burst) return AGENT_SANDBOX;
   if (summary.createdByAgentId !== null) {
     return startedByLine(summary.createdByAgentName ?? "an agent");
   }
   if (summary.createdBy === null) return startedByLine("you");
-  return startedByLine(sandboxMemberName(summary.createdBy, viewerUserId));
+  const name = facingMemberName(summary.createdBy, viewerUserId);
+  return name === null ? null : startedByLine(name);
 }
 
 export function sandboxKeptByLabel(
   summary: SandboxSummary,
   viewerUserId: string | null,
 ): string | null {
-  return summary.keptBy === null
-    ? null
-    : keptByLine(sandboxMemberName(summary.keptBy, viewerUserId));
+  if (summary.keptBy === null) return null;
+  const name = facingMemberName(summary.keptBy, viewerUserId);
+  return name === null ? null : keptByLine(name);
+}
+
+/**
+ * `Paid by you` to the payer, `Paid by Priya` to anyone else, on an awake
+ * team row only. A payer the server does not name is never `a member`.
+ */
+export function sandboxPaidByLabel(
+  summary: SandboxSummary,
+  configuration: SandboxPageConfiguration,
+  viewerUserId: string | null,
+): string | null {
+  if (configuration.kind !== "team") return null;
+  if (sandboxPublicState(summary) !== "awake" || summary.wakePayer === null) {
+    return null;
+  }
+  const payer = summary.wakePayer;
+  if (viewerUserId !== null && payer.userId === viewerUserId) {
+    return paidByLine("you");
+  }
+  return payer.displayName === null ? null : paidByLine(payer.displayName);
 }
 
 // ── The shape and cost line ─────────────────────────────────────────────────
@@ -315,32 +363,58 @@ export function sandboxShapeLine(summary: SandboxSummary): string {
   return `${os} · ${summary.cpus} vCPU · ${formatMemory(summary.memoryMb)}`;
 }
 
-/** The row's resources, awake rate and current payer, without lifecycle history. */
+/**
+ * The row's second line: the shape, then the cost line. An agent sandbox
+ * names the agent that created it and its task. A kept row is not burst and
+ * still carries that task, in the same clause. A resting team row whose
+ * payer is someone else says that waking it changes the payer.
+ */
 export function sandboxShapeAndCostLine(
   summary: SandboxSummary,
   configuration: SandboxPageConfiguration,
   viewerUserId: string | null,
 ): string {
   if (summary.kind === "automation") return automationsShapeLine(configuration);
-  const resting =
-    summary.state === "suspended" ||
-    summary.state === "stopped" ||
-    summary.state === "suspending" ||
-    summary.state === "stopping";
-  let payer: string | null = null;
-  if (configuration.kind === "personal") payer = "you";
-  else if (summary.wakePayer !== null) {
-    payer = sandboxMemberName(summary.wakePayer, viewerUserId);
+  const creator = agentCreatorClause(summary);
+  const resting = summary.state === "suspended" || summary.state === "stopped";
+  const teamNonPayer =
+    configuration.kind === "team" &&
+    namedOtherPayer(summary.wakePayer, viewerUserId);
+  const wakeWarning =
+    !summary.frozen && teamNonPayer && resting
+      ? "waking it makes you the payer"
+      : null;
+  if (summary.priceMcPerHour === null) {
+    return joinParts(sandboxShapeLine(summary), wakeWarning, creator);
   }
-  return joinParts(
-    sandboxShapeLine(summary),
-    summary.priceMcPerHour === null
-      ? null
-      : `${formatSandboxDollars(summary.priceMcPerHour.awakeMc)} an hour while awake`,
-    summary.frozen || summary.state === "destroying" || payer === null
-      ? null
-      : `${resting && configuration.kind === "team" ? "storage paid" : "paid"} by ${payer}`,
-  );
+  const hourly = `${formatSandboxDollars(summary.priceMcPerHour.awakeMc)} an hour while awake`;
+  // A burst creator replaces the funding clause. A kept row's task does not.
+  const cost =
+    (summary.burst && creator !== null) || teamNonPayer
+      ? hourly
+      : costLine(
+          summary.priceMcPerHour.awakeMc,
+          configurationCopy(configuration),
+        );
+  return joinParts(sandboxShapeLine(summary), cost, wakeWarning, creator);
+}
+
+/**
+ * `created by Planner for Sandbox setup` on an agent sandbox, and the same
+ * clause on a kept row that still names its task. A kept row is not burst.
+ * With a task and no agent name, the clause is `for <task>`.
+ */
+function agentCreatorClause(summary: SandboxSummary): string | null {
+  const agent = summary.createdByAgentName;
+  const task = summary.createdByTaskTitle;
+  if (summary.burst) {
+    if (agent === null) return null;
+    return task === null
+      ? `created by ${agent}`
+      : `created by ${agent} for ${task}`;
+  }
+  if (task === null) return null;
+  return agent === null ? `for ${task}` : `created by ${agent} for ${task}`;
 }
 
 /** The payer consequence sits on its own line before the row's actions. */
@@ -357,7 +431,7 @@ export function sandboxWakePayerConsequence(
     summary.state === "stopped" ||
     summary.state === "suspending" ||
     summary.state === "stopping";
-  return resting && sandboxMemberName(summary.wakePayer, viewerUserId) !== "you"
+  return resting && namedOtherPayer(summary.wakePayer, viewerUserId)
     ? "Resuming changes the payer to you."
     : null;
 }
@@ -373,10 +447,11 @@ export function automationsShapeLine(
 
 const RELEASED_CLAUSE = "files kept · the next shell starts it";
 /**
- * The Automations host at rest, or not created yet: the next shell starts it.
- * Its badge and line read Not running; its files are kept.
+ * The Automations host before its first shell creates it. The badge reads
+ * Not running; this line says the files stay and a shell starts the host.
  */
-export const AUTOMATIONS_RELEASED_LINE = `${hostSandboxStateWord("released")} · ${RELEASED_CLAUSE}`;
+export const AUTOMATIONS_RELEASED_LINE =
+  "Files are kept; starts when you open a shell.";
 
 /** The released row's line with the sandbox as its subject, for its chat. */
 export function sandboxReleasedChatLine(name: string): string {
@@ -487,7 +562,9 @@ export function sandboxDestroyedLine(
   },
   viewerUserId: string | null,
 ): string {
-  return `${ended.name} was destroyed by ${sandboxMemberName(ended.actor, viewerUserId)} at ${formatSandboxTime(ended.at)}.`;
+  const who = facingMemberName(ended.actor, viewerUserId);
+  const by = who === null ? "" : ` by ${who}`;
+  return `${ended.name} was destroyed${by} at ${formatSandboxTime(ended.at)}.`;
 }
 
 /**
@@ -781,11 +858,28 @@ function awakeClockLine(input: SandboxClockInput): string {
   );
 }
 
+/**
+ * Whose credits a resting row's storage draws on. A team row with no payer,
+ * or a payer the server does not name, leaves the clause out.
+ */
+function storageCreditClause(
+  summary: SandboxSummary,
+  configuration: SandboxPageConfiguration,
+  viewerUserId: string | null,
+): string | null {
+  if (configuration.kind === "personal") return "storage uses your credits";
+  if (summary.wakePayer === null) return null;
+  const who = facingMemberName(summary.wakePayer, viewerUserId);
+  if (who === null) return null;
+  const scope = who === "you" ? "your" : `${who}'s`;
+  return `storage uses ${scope} ${configuration.teamName} credits`;
+}
+
 function restingClockLine(
   input: SandboxClockInput,
   state: "suspended" | "stopped",
 ): string {
-  const { summary, cost, now } = input;
+  const { summary, configuration, cost, now } = input;
   const since = summary.restingSince ?? summary.lastTransitionAt;
   const resting =
     state === "suspended"
@@ -801,6 +895,7 @@ function restingClockLine(
         );
   return joinParts(
     resting,
+    storageCreditClause(summary, configuration, input.viewerUserId),
     cost !== null && cost.todayMillicredits > 0
       ? `${formatSandboxCost(cost.todayMillicredits)} today`
       : null,
@@ -821,7 +916,9 @@ function stoppedLead(
   if (operation.outcomeCause === "failure")
     return `${word} after a failed wake`;
   if (operation.actor === null) return word;
-  return `${word} by ${sandboxMemberName(operation.actor, viewerUserId)}`;
+  const who = facingMemberName(operation.actor, viewerUserId);
+  if (who === null) return word;
+  return `${word} by ${who}`;
 }
 
 /** The failed-create sentence shared by the row and its chat. */

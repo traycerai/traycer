@@ -133,9 +133,9 @@ describe("<NotificationRow /> secrets rows", () => {
       within(card).getByTestId("secret-grant-request-secret").textContent,
     ).toBe("DB_PASSWORD");
     expect(within(entry).getByTestId("notification-body").textContent).toBe(
-      "Waiting for your decision",
+      "DB_PASSWORD • Waiting for your decision",
     );
-    expect(entry.textContent.match(/DB_PASSWORD/g)).toHaveLength(1);
+    expect(entry.textContent.match(/DB_PASSWORD/g)).toHaveLength(2);
     expect(
       within(card).getByTestId("secret-grant-request-approve"),
     ).toBeTruthy();
@@ -185,7 +185,7 @@ describe("<NotificationRow /> secrets rows", () => {
     );
   });
 
-  it("uses the waiting status without repeating the secret name for a team request", () => {
+  it("keeps the row body, including the secret name, on an unanswered team request", () => {
     const entry = renderRow(
       buildRow({
         secrets: {
@@ -201,8 +201,9 @@ describe("<NotificationRow /> secrets rows", () => {
       within(card).getByTestId("secret-grant-request-secret").textContent,
     ).toBe("DB_PASSWORD");
     expect(within(entry).getByTestId("notification-body").textContent).toBe(
-      "Waiting for your decision",
+      "DB_PASSWORD • Waiting for your decision",
     );
-    expect(entry.textContent.match(/DB_PASSWORD/g)).toHaveLength(1);
+    expect(entry.textContent.match(/DB_PASSWORD/g)).toHaveLength(2);
+    expect(within(entry).getByTestId("secret-grant-request-card")).toBeTruthy();
   });
 });

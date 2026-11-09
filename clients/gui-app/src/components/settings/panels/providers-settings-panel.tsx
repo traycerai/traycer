@@ -24,6 +24,7 @@ import { ProviderLinkDialog } from "@/components/settings/panels/provider-link-d
 import {
   SettingsDetailHeader,
   SettingsMasterDetail,
+  SettingsMasterSelect,
 } from "@/components/settings/settings-master-detail";
 import { RefreshIconButton } from "@/components/refresh-icon-button";
 import { ProviderCatalogTimeoutGroup } from "@/components/settings/panels/provider-catalog-timeout-group";
@@ -192,27 +193,18 @@ function initialActiveProviderId(
 /**
  * The tabs `state` shows on the page `view` draws.
  *
- * The key has one place. When Profiles & Limits is also supported, the key
- * is that tab's first block and Account is not shown. A key provider with
- * no usage tab (amp) keeps Account.
+ * The key has one place: Account, whenever this provider takes a key.
+ * Profiles & Limits stays the profiles and usage tab and does not take the key.
  */
 function viewTabs(
   state: ProviderCliState,
   permissionsTab: boolean,
   view: ProvidersPanelView,
 ): readonly ProviderTabKey[] {
-  const tabs = tabsForView(
+  return tabsForView(
     resolveSupportedTabs(providerTabInputs(state, permissionsTab)),
     view,
   );
-  const keyTab = providerKeyTab({
-    apiKeySupported: state.apiKey.supported,
-    usageAdvertised: state.nativeCapabilities.supportedTabs.includes("usage"),
-  });
-  if (keyTab !== null && keyTab.tab === "usage") {
-    return tabs.filter((tab) => tab !== "account");
-  }
-  return tabs;
 }
 
 /** Which page this panel is drawn as; Providers unless a section says so. */
@@ -231,7 +223,8 @@ const VIEW_COPY: Readonly<
 > = {
   providers: {
     title: "Providers",
-    description: "Sign-ins, keys and tools for each coding agent.",
+    description:
+      "Sign-ins, keys and tools for each coding agent, on every computer and sandbox running Personal.",
     empty: "No providers on this host.",
   },
   "mcp-servers": {
@@ -1151,19 +1144,28 @@ function ProvidersRailLayout({
     // viewport: on shorter screens it shrinks to fit the modal instead of
     // overflowing it. Below `md` the card is content-sized and the settings
     // surface scrolls, so there is no height to fill and none is claimed.
-    // Below md the same wrapping list stacks above the detail pane. It lists
-    // `orderedProviders`, not the rail's filtered `visibleProviders` — search
-    // is a pointer affordance and must never narrow what a phone can reach.
+    // Below md the rail collapses into one full-width select of every
+    // provider. It lists `orderedProviders`, not the rail's filtered
+    // `visibleProviders` — search is a pointer affordance and must never
+    // narrow what a phone can reach. The detail pane stays the desktop one.
     <SettingsMasterDetail
       railLabel="Providers"
       mobileSelect={
-        <nav aria-label="Providers" className="flex min-w-0 flex-col gap-1">
-          <HostProviderRailList
-            providers={orderedProviders}
-            activeId={active.providerId}
-            onSelect={onSelectProvider}
-          />
-        </nav>
+        <SettingsMasterSelect
+          label="Provider"
+          value={active.providerId}
+          options={orderedProviders.map((provider) => ({
+            value: provider.providerId,
+            label: PROVIDER_DISPLAY_NAMES[provider.providerId],
+            icon: (
+              <HarnessIcon
+                harnessId={providerIdToGuiHarnessId(provider.providerId)}
+              />
+            ),
+            trailing: null,
+          }))}
+          onSelect={onSelectProvider}
+        />
       }
       rail={
         // The search row is a pinned SIBLING of the scroll box rather than the
@@ -1211,25 +1213,9 @@ function ProvidersRailLayout({
   );
 }
 
-function managedProfileCountWord(managed: number): string | null {
-  if (managed === 0) return null;
-  if (managed === 1) return "1 profile";
-  return `${managed} profiles`;
-}
-
-/** Profile count, plus off / signed out / not checked when that is the rail word. */
+/** The rail's one word from `providerRailStateWord`. */
 function hostRailSubtitle(state: ProviderCliState): string | null {
-  const managed = state.profiles.filter(
-    (profile) => profile.kind === "managed",
-  ).length;
-  const count = managedProfileCountWord(managed);
-  const word = providerRailStateWord(state);
-  const standing =
-    word === "off" || word === "signed out" || word === "not checked"
-      ? word
-      : null;
-  if (count !== null && standing !== null) return `${count} · ${standing}`;
-  return count ?? standing;
+  return providerRailStateWord(state);
 }
 
 function HostProviderRailList(props: {
@@ -1415,6 +1401,17 @@ function ProviderEnablementControl(props: {
       />
     </div>
   );
+}
+
+/**
+ * The move note above a provider's tabs. Providers omits it: the enclosing
+ * environment already determines reach, and these settings move with the
+ * host. MCP and Skills keep the note.
+ */
+function LocalRowNoteForView(): ReactNode {
+  const view = useContext(ProvidersPanelViewContext);
+  if (view === "providers") return null;
+  return <LocalRowNote />;
 }
 
 function ProviderDetail({
@@ -1623,13 +1620,13 @@ function ProviderDetail({
         }
       />
       <div className="flex flex-1 flex-col md:min-h-0">
-        {/* Nothing renders between the provider header and the tab rail but
-            the Local row's note, which says whose settings these are. The
+        {/* Nothing renders between the provider header and the tab rail on
+            Providers. MCP and Skills keep the Local row's move note. The
             key is the first block of Profiles & Limits when that tab exists,
             and the whole body of Account when that is the only key home.
             The rail is PINNED: a block parked here would occupy fixed height
             at the top of the pane forever, not just until you scrolled. */}
-        <LocalRowNote />
+        <LocalRowNoteForView />
         <Tabs
           value={activeTab}
           onValueChange={(value) => {
@@ -1848,7 +1845,6 @@ function ProviderEnvTab(props: {
   const configurationKey = useConfigurationKey();
   const keyTab = providerKeyTab({
     apiKeySupported: state.apiKey.supported,
-    usageAdvertised: state.nativeCapabilities.supportedTabs.includes("usage"),
   });
   return (
     <ProviderEnvOverridesSection
@@ -1883,46 +1879,15 @@ function ProviderOffHint(props: {
 }
 
 /**
- * The key on Profiles & Limits. The pane's own inert gate spares this tab for
- * the profile controls, which the key is not, so it takes the Account tab's
- * gate itself: out of reach and dimmed while the provider is off.
+ * Where a sandbox says credentials live, on a provider that has no Account
+ * tab to say it. A provider with a key says it on Account. Any other host
+ * renders nothing.
  */
-function ProviderUsageKeySection(props: {
+function ProviderUsageCredentialsNote(props: {
   readonly state: ProviderCliState;
-  readonly inert: boolean;
-  readonly draft: string;
-  readonly onDraftChange: (draft: string) => void;
 }): ReactNode {
-  if (!props.state.apiKey.supported) {
-    // A sandbox still says where credentials live when this provider has no
-    // key field. On any other host this renders nothing.
-    return (
-      <CredentialsManagedInAccountOr>{null}</CredentialsManagedInAccountOr>
-    );
-  }
-  return (
-    <section className="flex flex-col gap-3" aria-label="Key">
-      {props.inert ? (
-        <ProviderOffHint providerId={props.state.providerId} />
-      ) : null}
-      <div
-        className={cn(
-          "flex flex-col gap-3 transition-opacity duration-150",
-          props.inert && "pointer-events-none opacity-50",
-        )}
-        {...(props.inert ? { inert: true } : {})}
-      >
-        <h2 className="text-ui-sm font-medium">Key</h2>
-        <CredentialsManagedInAccountOr>
-          <ProviderApiKeySection
-            state={props.state}
-            draft={props.draft}
-            onDraftChange={props.onDraftChange}
-          />
-        </CredentialsManagedInAccountOr>
-      </div>
-    </section>
-  );
+  if (props.state.apiKey.supported) return null;
+  return <CredentialsManagedInAccountOr>{null}</CredentialsManagedInAccountOr>;
 }
 
 function ProviderTabBody({
@@ -1984,8 +1949,7 @@ function ProviderTabBody({
       return (
         <ProviderEnvTab state={state} onActiveTabChange={onActiveTabChange} />
       );
-    // Account is the key's place only when Profiles & Limits is absent
-    // (`viewTabs` drops it otherwise). The draft is threaded in because this
+    // Account is the key's place. The draft is threaded in because this
     // body unmounts with the tab (Radix `TabsContent`).
     case "account":
       return (
@@ -2000,12 +1964,7 @@ function ProviderTabBody({
     case "usage":
       return (
         <div className="flex flex-col gap-3">
-          <ProviderUsageKeySection
-            state={state}
-            inert={detailPaneInert}
-            draft={apiKeyDraft}
-            onDraftChange={onApiKeyDraftChange}
-          />
+          <ProviderUsageCredentialsNote state={state} />
           <ProviderProfileScopedSection
             state={state}
             {...profileTab}

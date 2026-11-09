@@ -22,14 +22,21 @@ import { createRegistryClient } from "../client";
 import type { RegistryTransport } from "../client";
 import { CLI_ERROR_CODES, CliError, cliError } from "../../runner/errors";
 import {
+  createFeedSigningKey,
+  signFeedPayload,
+  type FeedSigningKey,
+} from "./signed-feed-test-helpers";
+import {
   closeFaultServer,
   sha256,
   startFaultServer,
 } from "./fault-server-test-helpers";
 
 const manifestUrlMock = vi.hoisted(() => ({
-  url: "https://registry.example.test/versions.json",
+  url: "https://registry.example.test/versions.signed.json",
 }));
+
+const testHomeMock = vi.hoisted(() => ({ path: "" }));
 
 const loggerMock = vi.hoisted(() => ({
   debug: vi.fn(),
@@ -60,6 +67,7 @@ vi.mock("../../store/paths", async () => {
   const cacheDir = (): string => join(tmpRoot, "download-cache");
   return {
     ...actual,
+    cliSharedHomeDir: () => testHomeMock.path,
     hostDownloadCacheDir: () => cacheDir(),
     ensureHostDownloadCacheDir: async () => {
       mkdirSync(cacheDir(), { recursive: true });
@@ -74,10 +82,32 @@ vi.mock("../../store/paths", async () => {
 // `minisign.test.ts`; here we focus on resolution and error mapping.
 
 let tmpRoot: string;
+let signingKey: FeedSigningKey;
+let MANIFEST_BODY: string;
+let FLOORED_MANIFEST_BODY: string;
 const faultServers: Server[] = [];
 
 beforeAll(() => {
   tmpRoot = mkdtempSync(join(tmpdir(), "traycer-registry-client-"));
+  testHomeMock.path = join(tmpRoot, "cli-home");
+  mkdirSync(testHomeMock.path, { recursive: true });
+  signingKey = createFeedSigningKey();
+  writeFileSync(
+    join(testHomeMock.path, "host-trusted-pubkeys"),
+    `${signingKey.publicKeyText}\n`,
+  );
+  MANIFEST_BODY = signedManifest(MANIFEST_DATA);
+  FLOORED_MANIFEST_BODY = signedManifest({
+    ...MANIFEST_DATA,
+    latest: "9.0.0",
+    versions: [
+      {
+        ...MANIFEST_DATA.versions[0],
+        version: "9.0.0",
+        requiredCliVersion: "2.0.0",
+      },
+    ],
+  });
 });
 
 beforeEach(() => {
@@ -85,7 +115,7 @@ beforeEach(() => {
   loggerMock.error.mockClear();
   loggerMock.info.mockClear();
   loggerMock.warn.mockClear();
-  manifestUrlMock.url = "https://registry.example.test/versions.json";
+  manifestUrlMock.url = "https://registry.example.test/versions.signed.json";
 });
 
 afterAll(async () => {
@@ -96,9 +126,25 @@ afterAll(async () => {
   rmSync(tmpRoot, { recursive: true, force: true });
 });
 
-function faultManifest(baseUrl: string) {
-  return JSON.stringify({
-    schemaVersion: 1,
+function signedManifest(data: Record<string, unknown>): string {
+  const now = Date.now();
+  return signFeedPayload(
+    JSON.stringify({
+      ...data,
+      schemaVersion: 2,
+      feed: "host",
+      target: "production",
+      policyRevision: 1,
+      policyDigest: "a".repeat(64),
+      generatedAt: new Date(now).toISOString(),
+      expiresAt: new Date(now + 90 * 24 * 60 * 60 * 1000).toISOString(),
+    }),
+    signingKey,
+  );
+}
+
+function faultManifest(baseUrl: string): string {
+  return signedManifest({
     generatedAt: "2026-05-15T12:00:00Z",
     latest: "1.5.0",
     versions: [
@@ -184,26 +230,12 @@ const MANIFEST_DATA = {
   ],
 };
 
-const MANIFEST_BODY = JSON.stringify(MANIFEST_DATA);
-
 /**
  * A manifest whose only entry declares a client floor. Kept separate from
  * `MANIFEST_DATA` rather than added to it: `latest` there is load-bearing for
  * most of this file, and a floored entry alongside it would be resolvable only
  * by explicit version - which is not the path an automatic update takes.
  */
-const FLOORED_MANIFEST_BODY = JSON.stringify({
-  ...MANIFEST_DATA,
-  latest: "9.0.0",
-  versions: [
-    {
-      ...MANIFEST_DATA.versions[0],
-      version: "9.0.0",
-      requiredCliVersion: "2.0.0",
-    },
-  ],
-});
-
 function flooredTransport(): RegistryTransport {
   return { ...fakeTransport(), fetchText: async () => FLOORED_MANIFEST_BODY };
 }
@@ -235,7 +267,7 @@ describe("registry client", () => {
     const baseUrl = await startFaultServer(() => {
       if (requestReceived !== null) requestReceived();
     }, faultServers);
-    manifestUrlMock.url = `${baseUrl}/versions.json`;
+    manifestUrlMock.url = `${baseUrl}/versions.signed.json`;
     const progress: string[] = [];
     let desktopInactivityExpired = false;
     let desktopInactivityTimer: NodeJS.Timeout | null = null;
@@ -290,7 +322,7 @@ describe("registry client", () => {
     let archiveCompleted = false;
     let baseUrl = "";
     baseUrl = await startFaultServer((request, response) => {
-      if (request.url === "/versions.json") {
+      if (request.url === "/versions.signed.json") {
         response.writeHead(200, { "content-type": "application/json" });
         response.end(faultManifest(baseUrl));
         return;
@@ -306,7 +338,7 @@ describe("registry client", () => {
         if (signatureRequested !== null) signatureRequested();
       }
     }, faultServers);
-    manifestUrlMock.url = `${baseUrl}/versions.json`;
+    manifestUrlMock.url = `${baseUrl}/versions.signed.json`;
     const progress: string[] = [];
     let desktopInactivityExpired = false;
     let desktopInactivityTimer: NodeJS.Timeout | null = null;
@@ -578,7 +610,7 @@ describe("registry client", () => {
     const client = await createRegistryClient({
       environment: "production",
       transport: {
-        fetchText: async () => JSON.stringify(manifestWithDupe),
+        fetchText: async () => signedManifest(manifestWithDupe),
         downloadToFile: async () => ({ downloadedBytes: 0, sha256: "" }),
       },
       onProgress: null,

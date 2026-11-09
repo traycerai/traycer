@@ -467,10 +467,9 @@ type ActiveHostWorkspaceControlsProps = {
    */
   readonly seedIntentOverride: SeedIntentOverride | null;
   // "inline" (landing composer): folder rows with the host chip pushed to the
-  // far right of row 1. "stacked" (terminal-agent launcher, add-node): a
-  // file-tree-style Host list above a Folders section, no trailing chip.
-  // "stacked-caller-heading" (chat fork): the same, under a heading the dialog
-  // draws itself ("Run location"), so the host block adds none.
+  // far right of row 1. "stacked" (terminal-agent launcher, add-node, chat
+  // fork): a file-tree-style Host list above a Folders section, no trailing
+  // chip.
   readonly layout: HostWorkspaceControlsLayout;
   readonly hostScope: HostWorkspaceControlsHostScope;
   readonly disabled: boolean;
@@ -483,19 +482,7 @@ type ActiveHostWorkspaceControlsProps = {
   readonly sandboxStaging: SandboxStagingSurface | null;
 };
 
-type HostWorkspaceControlsLayout =
-  | "inline"
-  | "stacked"
-  | "stacked-caller-heading";
-
-/** The stacked host block's own heading; `null` where nothing or the caller heads it. */
-const STACKED_HOST_HEADING: Readonly<
-  Record<HostWorkspaceControlsLayout, string | null>
-> = {
-  inline: null,
-  stacked: "Host",
-  "stacked-caller-heading": null,
-};
+type HostWorkspaceControlsLayout = "inline" | "stacked";
 
 export function ActiveHostWorkspaceControls(
   props: ActiveHostWorkspaceControlsProps,
@@ -641,7 +628,7 @@ export function ActiveHostWorkspaceControls(
     return (
       <div className="flex w-full max-w-full min-w-0 flex-col gap-3 [--fc-opacity:1] [--fc-text:var(--color-foreground)]">
         <HostSection
-          heading={STACKED_HOST_HEADING[props.layout]}
+          heading="Host"
           hosts={visibleHostOptions}
           activeHostId={activeHostId}
           onSelect={handleSelectHost}
@@ -665,7 +652,6 @@ export function ActiveHostWorkspaceControls(
         />
         <SandboxStagingExtras staging={staging} />
         <section
-          hidden={hasNewSandboxStage(staging)}
           aria-label="Folders"
           data-testid="host-workspace-selector-folders-section"
           className="w-full max-w-full min-w-0"
@@ -731,15 +717,6 @@ export function ActiveHostWorkspaceControls(
       />
       <SandboxStagingExtras staging={staging} />
     </>
-  );
-}
-
-/** A new sandbox has no folders to choose before creation. */
-function hasNewSandboxStage(staging: SandboxStaging | null): boolean {
-  return (
-    staging !== null &&
-    staging.stage !== null &&
-    staging.stage.target.kind === "new"
   );
 }
 

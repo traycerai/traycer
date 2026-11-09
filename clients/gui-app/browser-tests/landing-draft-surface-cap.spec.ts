@@ -3,10 +3,13 @@ import { z } from "zod";
 
 import { fixture, nextFrames } from "./support/fixtures.ts";
 
-// A tall draft on the Start Page must scroll inside the composer. The grid
-// gives the task list its own row with a 12.5rem floor, and the editor caps
-// at 40dvh from md up (15rem below md). jsdom has no boxes, so the class
-// tokens that used to stand in for this live in the Playwright spec instead.
+// A tall draft on the Start Page must scroll inside the composer. From md up
+// the editor's ceiling is the shared 15rem (`max-h-[min(50vh,15rem)]`); below
+// md the phone cap is 15rem as well. On a short desktop window the task list
+// may leave the page, as it does in the released layout; the composer,
+// toolbar and send included, stays on it. Current tasks sit inside the
+// composer column, not on a fourth grid track. jsdom has no boxes, so this
+// spec is the one that measures them.
 //
 // The fixture is the row-scroll page plus `ThemeProvider`. Without that
 // provider the phone toolbar's options sheet throws and the start page never
@@ -14,7 +17,7 @@ import { fixture, nextFrames } from "./support/fixtures.ts";
 
 const DESKTOP = { width: 1280, height: 800 } as const;
 const PHONE = { width: 390, height: 844 } as const;
-const TASK_FLOOR_PX = 200;
+const DESKTOP_EDITOR_CAP_PX = 240;
 const PHONE_EDITOR_CAP_PX = 240;
 const LINE_COUNT = 80;
 
@@ -31,7 +34,9 @@ const BoxSchema = z.object({
   height: z.number(),
 });
 const StackSchema = z.object({
-  wrapper: BoxSchema,
+  tasksInsideComposer: z.boolean(),
+  tasksAreGridChild: z.boolean(),
+  section: BoxSchema,
   composer: BoxSchema,
 });
 type Stack = z.infer<typeof StackSchema>;
@@ -90,31 +95,38 @@ async function readStack(page: Page): Promise<Stack> {
         const section = document.querySelector(selectors.tasks);
         const composer = document.querySelector(selectors.composer);
         const grid = document.querySelector(selectors.grid);
-        if (section === null || composer === null || grid === null) {
+        if (
+          !(section instanceof HTMLElement) ||
+          !(composer instanceof HTMLElement) ||
+          !(grid instanceof HTMLElement)
+        ) {
           throw new Error("the task list, composer or grid is missing");
         }
-        // Providers between the section and its grid row do not have to be
-        // elements. The wrapper is the grid's own child.
-        let wrapper: HTMLElement | null =
-          section.parentElement instanceof HTMLElement
-            ? section.parentElement
-            : null;
-        while (wrapper !== null && wrapper.parentElement !== grid) {
-          wrapper =
-            wrapper.parentElement instanceof HTMLElement
-              ? wrapper.parentElement
-              : null;
+        const editor = composer.querySelector(
+          "[data-testid='composer-editor']",
+        );
+        if (!(editor instanceof HTMLElement)) {
+          throw new Error("the composer editor is missing");
         }
-        if (wrapper === null) {
-          throw new Error("the task list wrapper is missing");
+        // The row's first composer child wraps the editor, the toolbar and
+        // send. Its box is the composer; the row's own box also holds tasks.
+        let wrapper = editor;
+        while (wrapper.parentElement !== composer) {
+          const parent = wrapper.parentElement;
+          if (!(parent instanceof HTMLElement)) {
+            throw new Error("the composer wrapper is missing");
+          }
+          wrapper = parent;
         }
-        const wrapperBox = wrapper.getBoundingClientRect();
-        const composerBox = composer.getBoundingClientRect();
+        const sectionBox = section.getBoundingClientRect();
+        const composerBox = wrapper.getBoundingClientRect();
         return {
-          wrapper: {
-            top: wrapperBox.top,
-            bottom: wrapperBox.bottom,
-            height: wrapperBox.height,
+          tasksInsideComposer: composer.contains(section),
+          tasksAreGridChild: Array.from(grid.children).includes(section),
+          section: {
+            top: sectionBox.top,
+            bottom: sectionBox.bottom,
+            height: sectionBox.height,
           },
           composer: {
             top: composerBox.top,
@@ -150,22 +162,24 @@ async function expectEditorScrollsWithin(
 test.describe("desktop", () => {
   test.use({ viewport: DESKTOP });
 
-  test("a tall draft scrolls inside the editor and leaves the task list on the page", async ({
+  test("a tall draft scrolls inside the editor and keeps the composer on the page", async ({
     page,
   }) => {
     const editor = await openEditor(page);
     await expect(page.locator(TASKS)).toBeVisible();
     const before = await readStack(page);
-    expect(before.wrapper.height).toBeGreaterThan(0);
-    expect(before.wrapper.bottom).toBeLessThanOrEqual(DESKTOP.height);
+    expect(before.tasksInsideComposer).toBe(true);
+    expect(before.tasksAreGridChild).toBe(false);
+    expect(before.section.height).toBeGreaterThan(0);
+    expect(before.section.bottom).toBeLessThanOrEqual(DESKTOP.height);
 
     await typeTallDraft(editor);
-    await expectEditorScrollsWithin(page, DESKTOP.height * 0.4);
+    await expectEditorScrollsWithin(page, DESKTOP_EDITOR_CAP_PX);
 
     const after = await readStack(page);
-    expect(after.wrapper.height).toBeGreaterThanOrEqual(TASK_FLOOR_PX);
-    expect(after.wrapper.bottom).toBeLessThanOrEqual(DESKTOP.height);
-    expect(after.composer.bottom).toBeLessThanOrEqual(after.wrapper.top + 1);
+    expect(after.composer.bottom).toBeLessThanOrEqual(DESKTOP.height);
+    expect(after.tasksInsideComposer).toBe(true);
+    expect(after.tasksAreGridChild).toBe(false);
   });
 });
 
