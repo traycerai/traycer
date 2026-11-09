@@ -55,7 +55,8 @@ import type { FailedProviderProfileAttempt } from "./add-provider-profile-dialog
 import {
   duplicateProfileLabel,
   profileEligibilityToggleDisabledReason,
-  profileAuthStatusText,
+  profileInventoryNotice,
+  profileInventoryAttributes,
   profileCommitId,
   profileDisplayLabel,
 } from "@/components/providers/provider-profile-model";
@@ -337,7 +338,11 @@ export function ProviderProfileScopedSection(
   };
 
   return (
-    <section className="flex flex-col gap-3">
+    <section
+      className="flex flex-col gap-3"
+      data-settings-provider-id={state.providerId}
+      {...profileInventoryAttributes(selectedProfile)}
+    >
       <div className="flex flex-col gap-3 rounded-lg border border-border/60 p-3">
         <div className="flex items-center justify-between gap-2">
           <div className="text-ui-sm font-medium text-foreground">Profiles</div>
@@ -751,16 +756,6 @@ function OwnLoginSummary(props: {
   );
 }
 
-function profileStandingText(profile: ProviderProfile): string | null {
-  if (
-    profile.auth.status === "authenticated" ||
-    profile.auth.status === "configured"
-  ) {
-    return null;
-  }
-  return profileAuthStatusText(profile);
-}
-
 function ProfileSummary({
   profile,
 }: {
@@ -775,7 +770,7 @@ function ProfileSummary({
   const tier = profile.identity?.tier;
   const planText =
     tier === null || tier === undefined || tier.length === 0 ? null : tier;
-  const standing = profileStandingText(profile);
+  const standing = profileInventoryNotice(profile);
 
   return (
     <div className="flex min-w-0 flex-col gap-0.5 text-ui-xs text-muted-foreground">

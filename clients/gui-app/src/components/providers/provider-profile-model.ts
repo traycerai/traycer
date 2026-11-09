@@ -43,6 +43,69 @@ export function profileAuthStatusText(profile: ProviderProfile): string {
   return "Unknown";
 }
 
+const REVOCATION_NOTICES = {
+  "host-left-environment": "Disconnecting: this host left the environment.",
+  "profile-account-changed": "Disconnecting: the profile account changed.",
+  "signed-out-by-person": "Disconnecting: signed out.",
+};
+
+const CREDENTIAL_STANDING_LABELS = {
+  stale: "Stale",
+  "signed-out": "Signed out",
+  rejected: "Credential rejected",
+  "refused-by-provider": "Refused by provider",
+};
+
+/** Host-reported inventory health, independent of whether usage is observable. */
+export function profileInventoryNotice(
+  profile: ProviderProfile,
+): string | null {
+  if (profile.readability?.kind === "unreadable") {
+    const reason = profile.readability.reason;
+    return reason === null
+      ? "Unreadable profile"
+      : `Unreadable profile: ${reason}`;
+  }
+  if (profile.presence?.kind === "revoking") {
+    return profile.presence.cause === null
+      ? "Disconnecting."
+      : REVOCATION_NOTICES[profile.presence.cause];
+  }
+  const standing = profile.credentialHome?.standing;
+  if (standing === undefined) {
+    if (
+      profile.auth.status === "authenticated" ||
+      profile.auth.status === "configured"
+    )
+      return null;
+    return profileAuthStatusText(profile);
+  }
+  const cause = standing.cause === null ? "" : `: ${standing.cause}`;
+  if (standing.observation.status === "unknown" || standing.material === null) {
+    return `Status unknown${cause}`;
+  }
+  return standing.material === "usable"
+    ? null
+    : `${CREDENTIAL_STANDING_LABELS[standing.material]}${cause}`;
+}
+
+/** Semantic identity of a rendered inventory row, shared across both surfaces. */
+export function profileInventoryAttributes(profile: ProviderProfile) {
+  return {
+    "data-provider-profile-id": profile.profileId,
+    "data-provider-profile-kind": profile.kind,
+    "data-provider-profile-label": profile.label,
+    "data-provider-profile-auth-status": profile.auth.status,
+    "data-provider-profile-standing": JSON.stringify(
+      profile.credentialHome?.standing ?? null,
+    ),
+    "data-provider-profile-presence": JSON.stringify(profile.presence ?? null),
+    "data-provider-profile-readability": JSON.stringify(
+      profile.readability ?? null,
+    ),
+  };
+}
+
 // Dropdown row status suffix: null for a healthy profile (nothing to announce
 // beyond its name), else the same wording the Settings profile row uses
 // (`profileAuthStatusText`) so every surface stays consistent.
