@@ -466,6 +466,20 @@ describe("a bot's trunk session, read whole", () => {
       await settleLegendList();
       expect(within(view()).getByText("Monitor · deploy watcher")).toBeTruthy();
       expect(within(view()).getByText("Running")).toBeTruthy();
+      expect(within(view()).getByLabelText("Shell running")).toBeTruthy();
+      act(() => session.setConnectionStatus("reconnecting"));
+      expect(within(view()).queryByText("Running")).toBeNull();
+      expect(within(view()).getByText("Status unavailable")).toBeTruthy();
+      expect(within(view()).queryByLabelText("Shell running")).toBeNull();
+      expect(within(view()).getByText("Monitor · deploy watcher")).toBeTruthy();
+      act(() => session.setConnectionStatus("closed"));
+      expect(within(view()).queryByText("Running")).toBeNull();
+      expect(within(view()).getByText("Status unavailable")).toBeTruthy();
+      expect(within(view()).queryByLabelText("Shell running")).toBeNull();
+      act(() => session.setConnectionStatus("open"));
+      expect(within(view()).getByText("Running")).toBeTruthy();
+      expect(within(view()).getByLabelText("Shell running")).toBeTruthy();
+      expect(within(view()).queryByText("Status unavailable")).toBeNull();
       act(() =>
         session.setCommands([
           {

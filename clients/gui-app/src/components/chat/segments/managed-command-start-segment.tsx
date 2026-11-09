@@ -68,6 +68,10 @@ export function ManagedCommandStartSegment(
     owner: useMaybeChatTranscript(),
   });
   const live = presence.kind === "present" ? presence.command : null;
+  const known =
+    presence.kind === "present" || presence.kind === "stale"
+      ? presence.command
+      : null;
   // A start/restart card only ever names a shell this host runs.
   const openOutput = localManagedCommandDoor(useManagedCommandDoor());
   const openScope = useChatOpenStoreScope();
@@ -83,9 +87,9 @@ export function ManagedCommandStartSegment(
   // see; the door stays open, and the window it opens says what it finds.
   const gone = presence.kind === "absent";
   const monitoring =
-    live === null ? managedCommand.monitoring : live.monitoring;
+    known === null ? managedCommand.monitoring : known.monitoring;
   const description =
-    live === null ? managedCommand.description : live.description;
+    known === null ? managedCommand.description : known.description;
 
   const header = (
     <>
@@ -118,6 +122,11 @@ export function ManagedCommandStartSegment(
           </span>
         </>
       )}
+      {presence.kind === "stale" ? (
+        <span className="text-ui-xs text-muted-foreground">
+          Status unavailable
+        </span>
+      ) : null}
       {/* The live cluster, in the trailing position every other segment uses.
           Only while it runs: a settled shell shows no total, matching
           `CommandSegment`'s density call rather than inventing a duration this

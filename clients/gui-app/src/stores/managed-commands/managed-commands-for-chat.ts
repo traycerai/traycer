@@ -197,7 +197,7 @@ export function useManagedCommandOnHost(args: {
  * snapshot arrives, and a card that read that as "deleted" told every reader,
  * on every chat open, that every shell was gone for the first few frames.
  *
- * The live connection status is deliberately NOT part of it. A shell the host
+ * A proven absence does not depend on connection status. A shell the host
  * has already said nothing about does not come back when the socket blips, so
  * demoting a proven deletion to `unknown` for the length of a reconnect would
  * re-arm doors onto a shell whose log is gone. `snapshotLoaded` is the honest
@@ -210,6 +210,7 @@ export function useManagedCommandOnHost(args: {
  */
 export type ManagedCommandPresence =
   | { readonly kind: "present"; readonly command: ManagedCommand }
+  | { readonly kind: "stale"; readonly command: ManagedCommand }
   | { readonly kind: "absent" }
   | { readonly kind: "unknown" };
 
@@ -219,27 +220,51 @@ export function useManagedCommandPresence(args: {
   readonly owner: { readonly chatId: string; readonly hostId: string } | null;
 }): ManagedCommandPresence {
   const { epicId, commandId, owner } = args;
+  const containerId = epicId ?? "";
+  const hostId = owner?.hostId ?? "";
   // Presence is read across the owner's HOST, not just the owner chat: a
   // same-host fork copies the source transcript's blocks verbatim, so a card
   // there points at a shell the SOURCE chat owns. That shell is alive and its
   // output opens fine on this host, and the fork's own set - which will never
   // hold it - is no evidence about it.
   const live = useManagedCommandOnHost({
-    epicId: epicId ?? "",
-    hostId: owner?.hostId ?? "",
+    epicId: containerId,
+    hostId,
     commandId,
   });
   // ...but only the owner chat's session can date the evidence: its snapshot is
   // the "the host has now spoken" mark this verdict waits for.
   const ownerStore = useChatSliceStore(
-    epicId ?? "",
+    containerId,
     owner?.chatId ?? "",
-    owner?.hostId ?? "",
+    hostId,
   );
   const ownerAnswered = useStore(ownerStore, (state) => state.snapshotLoaded);
+  // A fork can display a shell owned by another chat on the same host. Read
+  // freshness from the session that actually supplied the command.
+  const commandFresh = useCommandFreshness(
+    containerId,
+    live?.chatId ?? "",
+    hostId,
+  );
   if (epicId === null || owner === null) return { kind: "unknown" };
-  if (live !== null) return { kind: "present", command: live };
+  if (live !== null)
+    return commandFresh
+      ? { kind: "present", command: live }
+      : { kind: "stale", command: live };
   return ownerAnswered ? { kind: "absent" } : { kind: "unknown" };
+}
+
+function useCommandFreshness(
+  epicId: string,
+  chatId: string,
+  hostId: string,
+): boolean {
+  const store = useChatSliceStore(epicId, chatId, hostId);
+  return useStore(
+    store,
+    (state) => state.connectionStatus === "open" && state.snapshotLoaded,
+  );
 }
 
 /**
