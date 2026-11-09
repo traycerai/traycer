@@ -20,12 +20,13 @@ export function HtmlArtifactFrame(props: {
         className="h-full w-full"
         height={null}
         commenting={false}
+        onCommentPage={null}
         onSize={noop}
         onStatus={noop}
         onBridge={null}
         onTextSelection={null}
         onFrame={null}
-        renderOverlay={null}
+        overlay={null}
         sourceEquivalent={undefined}
         toolbarControls={props.toolbarControls}
         menuItems={props.menuItems}
