@@ -20,7 +20,15 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BotTestRunnerHost } from "@/components/bots/__tests__/bot-test-runner-host";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import {
   HostClient,
   type HostRequester,
@@ -525,6 +533,15 @@ function channelCard(): HTMLElement {
 function cardQuestion(card: HTMLElement, text: string): HTMLElement {
   return within(card).getByRole("region", { name: text });
 }
+
+// sonner, vaul and react-zoom-pan-pinch insert their stylesheets on import, and
+// no element this file draws matches a rule in them. jsdom still runs every
+// rule against an element and each of its ancestors whenever a DOM change
+// drops its style cache, which every role query and click here pays: with the
+// sheets in place, the file's tests take twice as long.
+beforeAll(() => {
+  for (const style of document.head.querySelectorAll("style")) style.remove();
+});
 
 beforeEach(() => {
   installLegendListTestClock();
