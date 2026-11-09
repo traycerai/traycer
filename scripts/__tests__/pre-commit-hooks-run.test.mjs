@@ -207,6 +207,80 @@ describe("every pre-commit hook runs in a pre-commit.yml job that can execute it
     }
   });
 
+  // actions/checkout removes the workspace contents when it is not yet a git
+  // checkout, so a root checkout after download-artifact deletes that artifact.
+  const usesAction = (step, action) =>
+    String(step.uses ?? "").startsWith(`${action}@`);
+  const isWorkspaceRootCheckout = (step) =>
+    usesAction(step, "actions/checkout") && step.with?.path === undefined;
+  const artifactPathUnderWorkspace = (artifactPath) => {
+    if (artifactPath === undefined || artifactPath === null) return true;
+    const lines = String(artifactPath)
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line !== "");
+    if (lines.length === 0) return true;
+    return lines.some((line) => {
+      if (line.startsWith("/") || /^[A-Za-z]:[\\/]/u.test(line)) return false;
+      let depth = 0;
+      for (const part of line.split(/[\\/]+/u)) {
+        if (part === "" || part === ".") continue;
+        depth += part === ".." ? -1 : 1;
+        if (depth < 0) return false;
+      }
+      return true;
+    });
+  };
+  const isWorkspaceDownload = (step) =>
+    usesAction(step, "actions/download-artifact") &&
+    artifactPathUnderWorkspace(step.with?.path);
+  const rootCheckoutAfterWorkspaceDownload = (steps) => {
+    const checkoutAt = [];
+    const downloadAt = [];
+    steps.forEach((step, index) => {
+      if (isWorkspaceRootCheckout(step)) checkoutAt.push(index);
+      if (isWorkspaceDownload(step)) downloadAt.push(index);
+    });
+    if (checkoutAt.length === 0 || downloadAt.length === 0) return false;
+    return Math.max(...checkoutAt) > Math.min(...downloadAt);
+  };
+
+  it("checks out the workspace root before downloading an artifact into it", () => {
+    const workflowDir = join(REPO_ROOT, ".github", "workflows");
+    const violations = readdirSync(workflowDir)
+      .filter((fileName) => /\.ya?ml$/u.test(fileName))
+      .flatMap((fileName) => {
+        const document = parse(
+          readFileSync(join(workflowDir, fileName), "utf8"),
+        );
+        return Object.entries(document.jobs ?? {}).flatMap(([jobId, job]) =>
+          rootCheckoutAfterWorkspaceDownload(job.steps ?? [])
+            ? [`${fileName}:${jobId}`]
+            : [],
+        );
+      });
+    expect(violations).toEqual([]);
+
+    // Download into the workspace, then a root checkout: the order that deletes it.
+    const reversed = parse(`
+jobs:
+  winget-validate:
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: desktop-windows-manifests
+          path: manifests
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+`);
+    expect(
+      rootCheckoutAfterWorkspaceDownload(
+        reversed.jobs["winget-validate"].steps,
+      ),
+    ).toBe(true);
+  });
+
   it("passes a mirror source to every workflow tool bootstrap", () => {
     const workflowDir = join(REPO_ROOT, ".github", "workflows");
     const variableSource = "${{ vars.CI_TOOLS_MIRROR_BASE_URL }}";
