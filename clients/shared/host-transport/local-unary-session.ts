@@ -85,11 +85,21 @@ interface QueuedCall<Registry extends VersionedRpcRegistry> {
   readonly params: unknown;
   readonly responseTimeoutMs: number;
   readonly options: HostRequestOptions;
-  readonly succeed: (value: unknown) => void;
-  readonly fail: (error: unknown) => void;
+  /** Set by `settle` before the caller is resumed, so a second completion is a no-op. */
+  settled: boolean;
+  readonly resolve: (value: unknown) => void;
+  readonly reject: (error: unknown) => void;
   /** Removes the pre-send abort listener. Null once the call has left the queue. */
   abortListener: (() => void) | null;
 }
+
+type CallOutcome =
+  | { readonly ok: true; readonly value: unknown }
+  | { readonly ok: false; readonly error: unknown };
+
+type PreparedSend =
+  | { readonly accepted: false; readonly error: unknown }
+  | { readonly accepted: true; readonly done: Promise<unknown> };
 
 interface InFlightCall {
   readonly requestId: string;
@@ -123,6 +133,25 @@ interface InFlightCall {
  * discovers a new session. Aborting a queued call sends nothing. Aborting
  * a sent call writes one `cancel` for that request id and leaves every
  * other call on the socket alone.
+ *
+ * Every completion goes through `settle`: it drops the call, retires a
+ * released session once nothing is queued, nothing is in flight, and no
+ * dial hold remains, and only then resolves or rejects the caller.
+ * `releaseIfIdle` uses that same predicate. A peer loss or a host fatal
+ * retires even while a dial hold is outstanding, because the socket is
+ * already gone. A discovery retry keeps its slot while a caller holds the
+ * handoff it can act on. That caller converts the slot and reads the
+ * release. Leaving without claiming passes the handoff on, or drops the
+ * slot when nobody remains to dial it. A dial hold does not keep the slot.
+ * A claim of a live ready session returns it. A claim of a dial still in
+ * progress waits. A claim of a retry that still has a holder waits. A claim
+ * that finds no holder dials that slot when waiters are still registered,
+ * and otherwise starts a fresh dial that does not copy the release.
+ * A connection-wide failure is deleted once nothing is waiting and no dial
+ * hold remains. A later claim of a failed slot that still has a hold
+ * removes it anyway: the failure was already delivered, and waiting would
+ * deadlock. Callers already waiting at publish hold the dial, so this
+ * settlement cannot close the socket before they enter.
  */
 export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
   readonly handlers: PersistentSocketHandlers;
@@ -141,10 +170,19 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
   private retired = false;
   /**
    * A release arrived. A call that claims this session after publish clears
-   * it. A call admitted on the dial leaves it set, so the socket closes
-   * once those calls settle, in whatever order their continuations run.
+   * it. A call admitted on the dial leaves it set. The flag stays on the
+   * dial slot while a caller holds that slot's handoff. A claim of a live
+   * ready slot returns that session. A claim of a dial that is still in
+   * progress waits. A claim of a retry that still has a holder waits. A
+   * claim that finds no holder dials that slot when waiters are still
+   * registered, and otherwise starts a fresh dial that does not read this
+   * flag. The socket closes once the admitted calls settle and every dial
+   * hold has been released. A peer loss or a host fatal closes even while
+   * a hold is still outstanding.
    */
   private closeWhenIdle = false;
+  /** True while `pump` is dispatching, so `settle` cannot re-enter the loop. */
+  private pumping = false;
   /** Set around a close this session initiated, so that close is not a peer drop. */
   private suppressClose = false;
   /** A fatal delivered before any call was queued. The adopter throws this instead of publishing. */
@@ -217,17 +255,15 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
         params: input.params,
         responseTimeoutMs: input.responseTimeoutMs,
         options: input.options,
-        succeed: (value) => {
+        settled: false,
+        resolve: (value) => {
           resolve(value as ResponseOfMethod<Registry, Method>);
         },
-        fail: reject,
+        reject,
         abortListener: null,
       };
       const onAbort = (): void => {
-        if (!this.dropQueued(queued.requestId)) {
-          return;
-        }
-        queued.fail(abortedCall(queued, false));
+        this.settle(queued, { ok: false, error: abortedCall(queued, false) });
       };
       queued.abortListener = onAbort;
       input.options.authority.abortSignal.addEventListener("abort", onAbort, {
@@ -243,23 +279,31 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
   }
 
   private pump(): void {
+    if (this.pumping) {
+      return;
+    }
     const manifest = this.hostManifest;
     const connection = this.connection;
     if (manifest === null || connection === null) {
       return;
     }
-    while (this.queue.length > 0) {
-      const next = this.queue[0];
-      if (next === undefined) {
-        return;
+    this.pumping = true;
+    try {
+      while (this.queue.length > 0) {
+        const next = this.queue[0];
+        if (next === undefined) {
+          return;
+        }
+        this.queue.shift();
+        this.clearAbortListener(next);
+        if (next.options.authority.abortSignal.aborted) {
+          this.settle(next, { ok: false, error: abortedCall(next, false) });
+          continue;
+        }
+        this.dispatch(next, connection, manifest);
       }
-      this.queue.shift();
-      this.clearAbortListener(next);
-      if (next.options.authority.abortSignal.aborted) {
-        next.fail(abortedCall(next, false));
-        continue;
-      }
-      this.dispatch(next, connection, manifest);
+    } finally {
+      this.pumping = false;
     }
   }
 
@@ -270,13 +314,14 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
   ): void {
     const clientManifest = this.clientManifest;
     if (clientManifest === null) {
-      call.fail(
-        preSendRetryable(
+      this.settle(call, {
+        ok: false,
+        error: preSendRetryable(
           call.requestId,
           call.method,
           "Persistent session has no negotiated manifest",
         ),
-      );
+      });
       return;
     }
     const requirement = call.options.requiredHostMethodVersion;
@@ -287,15 +332,16 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
         requirement,
       )
     ) {
-      call.fail(
-        new HostMethodVersionUnsatisfiedError({
+      this.settle(call, {
+        ok: false,
+        error: new HostMethodVersionUnsatisfiedError({
           requirement,
           negotiated: hostManifest[requirement.method],
           requestId: call.requestId,
           method: call.method,
           hostId: this.hostId,
         }),
-      );
+      });
       return;
     }
     const clientCanonical = clientManifest[call.method];
@@ -304,7 +350,7 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
       void this.degrade(call, clientManifest, hostManifest, clientCanonical);
       return;
     }
-    void this.sendPrepared(
+    const sent = this.sendPrepared(
       call,
       connection,
       call.method,
@@ -312,12 +358,25 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
       clientCanonical,
       hostCanonical,
       call.params,
-    ).then(
+    );
+    this.completeDirectSend(call, sent);
+  }
+
+  /** Completes a direct send. A degrade settles itself after adapting. */
+  private completeDirectSend(
+    call: QueuedCall<Registry>,
+    sent: PreparedSend,
+  ): void {
+    if (!sent.accepted) {
+      this.settle(call, { ok: false, error: sent.error });
+      return;
+    }
+    void sent.done.then(
       (value) => {
-        call.succeed(value);
+        this.settle(call, { ok: true, value });
       },
       (error: unknown) => {
-        call.fail(error);
+        this.settle(call, { ok: false, error });
       },
     );
   }
@@ -339,7 +398,7 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
         params: call.params,
         requestId: call.requestId,
         execute: (input) =>
-          this.sendPreparedAsync(
+          this.sendForDegrade(
             call,
             input.method,
             input.methodRegistry,
@@ -348,13 +407,17 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
             input.params,
           ),
       });
-      call.succeed(value);
+      this.settle(call, { ok: true, value });
     } catch (cause) {
-      call.fail(cause);
+      this.settle(call, { ok: false, error: cause });
     }
   }
 
-  private sendPreparedAsync(
+  /**
+   * The degrade helper awaits this and is the call's only completion, so the
+   * caller observes the adapted value. The wire promise is not settled here.
+   */
+  private sendForDegrade(
     call: QueuedCall<Registry>,
     wireMethod: string,
     methodRegistry: MethodVersionRegistry,
@@ -372,7 +435,7 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
         ),
       );
     }
-    return this.sendPrepared(
+    const sent = this.sendPrepared(
       call,
       connection,
       wireMethod,
@@ -381,6 +444,10 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
       hostCanonical,
       params,
     );
+    if (!sent.accepted) {
+      return Promise.reject(sent.error);
+    }
+    return sent.done;
   }
 
   /**
@@ -396,7 +463,7 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
     clientCanonical: SchemaVersion,
     hostCanonical: SchemaVersion,
     params: unknown,
-  ): Promise<unknown> {
+  ): PreparedSend {
     let prepared: { onWireVersion: SchemaVersion; onWirePayload: unknown };
     try {
       prepared = prepareRequestPayload(
@@ -408,92 +475,98 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
         wireMethod,
       );
     } catch (cause) {
-      return Promise.reject(cause);
+      return { accepted: false, error: cause };
     }
     const wireKey =
       call.options.idempotencyKey !== null && this.idempotency
         ? call.options.idempotencyKey
         : null;
     if (call.options.replayMustBeKeyed && wireKey === null) {
-      return Promise.reject(
-        transportFailureBeforeSend({
+      return {
+        accepted: false,
+        error: transportFailureBeforeSend({
           message: `Host '${this.hostId}' cannot honour the idempotency key a replay of '${call.method}' requires`,
           requestId: call.requestId,
           method: call.method,
         }),
-      );
+      };
     }
     let token: string;
     try {
       token = readBearer(call.options.authority, call.requestId, call.method);
     } catch (cause) {
-      return Promise.reject(cause);
+      return { accepted: false, error: cause };
     }
     if (this.inFlight.has(call.requestId)) {
-      return Promise.reject(
-        new HostRpcError({
+      return {
+        accepted: false,
+        error: new HostRpcError({
           code: "RPC_ERROR",
           message: `Duplicate request id '${call.requestId}' on the persistent session`,
           requestId: call.requestId,
           method: call.method,
           fatalDetails: null,
         }),
-      );
+      };
     }
     const abortListener = (): void => {
       this.cancelSent(call.requestId);
     };
-    return new Promise((resolve, reject) => {
-      const entry: InFlightCall = {
-        requestId: call.requestId,
-        method: call.method,
-        wireMethod,
-        methodRegistry,
-        clientCanonical,
-        hostCanonical,
-        onWirePayload: prepared.onWirePayload,
-        responseTimeoutMs: call.responseTimeoutMs,
-        timer: setTimeout(() => {
-          this.timeoutSent(call.requestId);
-        }, call.responseTimeoutMs),
-        abortListener,
-        abortSignal: call.options.authority.abortSignal,
-        resolve,
-        reject,
-      };
-      this.inFlight.set(call.requestId, entry);
-      call.options.authority.abortSignal.addEventListener(
-        "abort",
-        abortListener,
-        { once: true },
-      );
-      if (call.options.authority.abortSignal.aborted) {
-        this.rejectInFlight(entry, abortedCall(call, false));
-        return;
-      }
-      try {
-        connection.send({
-          kind: "request",
+    return {
+      accepted: true,
+      done: new Promise((resolve, reject) => {
+        const entry: InFlightCall = {
           requestId: call.requestId,
-          method: wireMethod,
-          schemaVersion: prepared.onWireVersion,
-          params: prepared.onWirePayload,
-          idempotencyKey: wireKey,
-          token,
-          cloudAuthorized: call.options.authority.cloudAuthorized?.(),
-        });
-      } catch (cause) {
-        const message = cause instanceof Error ? cause.message : String(cause);
-        this.rejectInFlight(
-          entry,
-          preSendRetryable(
-            call.requestId,
-            call.method,
-            `Persistent session failed before the request was sent: ${message}`,
-          ),
+          method: call.method,
+          wireMethod,
+          methodRegistry,
+          clientCanonical,
+          hostCanonical,
+          onWirePayload: prepared.onWirePayload,
+          responseTimeoutMs: call.responseTimeoutMs,
+          timer: setTimeout(() => {
+            this.timeoutSent(call.requestId);
+          }, call.responseTimeoutMs),
+          abortListener,
+          abortSignal: call.options.authority.abortSignal,
+          resolve,
+          reject,
+        };
+        this.inFlight.set(call.requestId, entry);
+        call.options.authority.abortSignal.addEventListener(
+          "abort",
+          abortListener,
+          { once: true },
         );
-      }
-    });
+        if (call.options.authority.abortSignal.aborted) {
+          this.rejectInFlight(entry, abortedCall(call, false));
+          return;
+        }
+        try {
+          connection.send({
+            kind: "request",
+            requestId: call.requestId,
+            method: wireMethod,
+            schemaVersion: prepared.onWireVersion,
+            params: prepared.onWirePayload,
+            idempotencyKey: wireKey,
+            token,
+            cloudAuthorized: call.options.authority.cloudAuthorized?.(),
+          });
+        } catch (cause) {
+          const message =
+            cause instanceof Error ? cause.message : String(cause);
+          this.rejectInFlight(
+            entry,
+            preSendRetryable(
+              call.requestId,
+              call.method,
+              `Persistent session failed before the request was sent: ${message}`,
+            ),
+          );
+        }
+      }),
+    };
   }
 
   private onFrame(frame: HostFrame): void {
@@ -609,20 +682,21 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
       const queued = this.queue.splice(0, this.queue.length);
       for (const queuedCall of queued) {
         this.clearAbortListener(queuedCall);
-        queuedCall.fail(
-          hostFatalError(
+        this.settle(queuedCall, {
+          ok: false,
+          error: hostFatalError(
             frame,
             queuedCall.requestId,
             queuedCall.method,
             "beforeRequest",
           ),
-        );
+        });
       }
       this.directory.fail(this.key, this);
     } else {
       this.failQueued(null);
     }
-    this.retireIfIdle();
+    this.retireIfUnoccupied(true);
   }
 
   private onTransportClosed(message: string, selfInitiated: boolean): void {
@@ -662,7 +736,7 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
       this.rejectInFlight(entry, error);
     }
     this.failQueued(null);
-    this.retireIfIdle();
+    this.retireIfUnoccupied(true);
   }
 
   private cancelSent(requestId: string): void {
@@ -720,7 +794,6 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
     }
     entry.resolve(value);
     this.pump();
-    this.retireIfReleased();
   }
 
   private rejectInFlight(entry: InFlightCall, error: unknown): void {
@@ -729,7 +802,6 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
     }
     entry.reject(error);
     this.pump();
-    this.retireIfReleased();
   }
 
   private releaseInFlight(entry: InFlightCall): boolean {
@@ -755,19 +827,41 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
     return true;
   }
 
+  /**
+   * One completion for `call`. Drops it if it is still queued, then retires
+   * a released session when nothing remains, and only then resumes the caller
+   * so an awaited result observes the closed socket.
+   */
+  private settle(call: QueuedCall<Registry>, outcome: CallOutcome): void {
+    if (call.settled) {
+      return;
+    }
+    call.settled = true;
+    this.dropQueued(call.requestId);
+    this.pump();
+    this.retireIfReleased();
+    if (outcome.ok) {
+      call.resolve(outcome.value);
+    } else {
+      call.reject(outcome.error);
+    }
+  }
+
   /** `error` null means each call fails as a pre-send retry, because it was never written. */
   private failQueued(error: HostRpcError | null): void {
     const pending = this.queue.splice(0, this.queue.length);
     for (const call of pending) {
       this.clearAbortListener(call);
-      call.fail(
-        error ??
+      this.settle(call, {
+        ok: false,
+        error:
+          error ??
           preSendRetryable(
             call.requestId,
             call.method,
             "Persistent session closed before the request was sent",
           ),
-      );
+      });
     }
   }
 
@@ -788,7 +882,7 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
   /**
    * Records a release that arrived before publish. The discovering call
    * is queued immediately after this, so the session stays up until the
-   * calls admitted on this dial settle.
+   * calls admitted on this dial settle and their dial holds drop.
    */
   retainDialRelease(): void {
     this.closeWhenIdle = true;
@@ -796,20 +890,34 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
 
   releaseIfIdle(): void {
     this.closeWhenIdle = true;
-    this.retireIfIdle();
+    this.retireIfUnoccupied(false);
+  }
+
+  /** A waiter admitted before publish released its hold. */
+  onDialHoldReleased(): void {
+    this.retireIfReleased();
   }
 
   private retireIfReleased(): void {
-    if (this.closeWhenIdle) {
-      this.retireIfIdle();
+    if (!this.closeWhenIdle) {
+      return;
     }
+    this.retireIfUnoccupied(false);
   }
 
-  private retireIfIdle(): void {
+  /**
+   * Queue empty, nothing in flight, and — unless `terminal` — no dial hold.
+   * `terminal` is a peer loss or a host fatal: the socket is already gone,
+   * so a hold must not keep the session published.
+   */
+  private retireIfUnoccupied(terminal: boolean): void {
     if (this.retired) {
       return;
     }
     if (this.queue.length > 0 || this.inFlight.size > 0) {
+      return;
+    }
+    if (!terminal && this.directory.dialHoldCount(this.key) > 0) {
       return;
     }
     this.retired = true;
@@ -827,11 +935,21 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
   }
 }
 
+/** The slot a discovery retry handed to the waiter that resumes it. */
+export interface SessionHandoff {
+  readonly identity: object;
+}
+
 export type SessionGateResult<Registry extends VersionedRpcRegistry> =
   | { readonly kind: "ready"; readonly session: LocalUnarySession<Registry> }
   | { readonly kind: "legacy" }
   | { readonly kind: "failed"; readonly error: HostRpcError }
-  | { readonly kind: "retry" };
+  | { readonly kind: "retry"; readonly handoff: SessionHandoff };
+
+/** Releases one dial hold. A second call does nothing. */
+export interface DialHold {
+  release(): void;
+}
 
 export type SessionAdmission<Registry extends VersionedRpcRegistry> =
   | { readonly kind: "ready"; readonly session: LocalUnarySession<Registry> }
@@ -839,6 +957,14 @@ export type SessionAdmission<Registry extends VersionedRpcRegistry> =
   | {
       readonly kind: "wait";
       readonly settled: Promise<SessionGateResult<Registry>>;
+      /** Drops this waiter. An abort calls this, so a dead resolver is not drained. */
+      leave(): void;
+      /**
+       * Drops a handoff this waiter was given and did not claim. An abort
+       * calls this before `leave`. The last such holder passes the handoff
+       * to a waiter that has none, or drops the slot when nobody remains.
+       */
+      relinquish(): void;
     }
   | { readonly kind: "owner"; readonly publish: SessionPublisher<Registry> };
 
@@ -850,28 +976,68 @@ export interface SessionPublisher<Registry extends VersionedRpcRegistry> {
 }
 
 interface SessionSlot<Registry extends VersionedRpcRegistry> {
-  phase: "dialing" | "ready" | "legacy";
+  phase: "dialing" | "ready" | "legacy" | "retry" | "failed";
   session: LocalUnarySession<Registry> | null;
   waiters: Array<(result: SessionGateResult<Registry>) => void>;
+  /** Stable for this object. A handed retry matches it; a later slot does not. */
+  readonly identity: object;
   /**
-   * Set when `releaseIdle` runs while this slot is still dialing. Taken at
-   * publish and stored on the session before any admitted call runs.
+   * Set when `releaseIdle` runs while this slot has no session. The object
+   * stays while a caller holds its handoff. That caller reads the flag
+   * here. A claim that finds no holder, and the claim that drops a failed
+   * slot, start a fresh dial and do not copy it.
    */
   releaseBeforeReady: boolean;
+  /**
+   * Outstanding dial holds. They keep a published session from retiring,
+   * and a failed dial until the last one releases. They do not keep a
+   * retry slot.
+   */
+  dialHolds: number;
+  /**
+   * Callers that were handed this slot's retry and have not claimed or
+   * left. A dial hold is not one of these. The slot stays while this is
+   * non-zero.
+   */
+  handoffHolders: number;
 }
 
 /**
  * Binds a caller to the session for its host and identity synchronously.
  * The first caller in a tick owns the dial; everyone else waits on that
  * dial instead of opening a second socket.
+ *
+ * A discovery retry keeps its slot while a caller holds the handoff it can
+ * act on. Delivery writes that handoff onto the waiter before a later
+ * continuation can observe an abort. That waiter converts the slot when it
+ * claims. If it leaves without claiming, it passes the handoff to a waiter
+ * that has none, or drops the slot when nobody remains to dial it. A dial
+ * hold does not keep the slot. A claim of a live ready session returns it.
+ * A claim of a dial still in progress waits. A claim of a retry that still
+ * has a holder waits. A claim that finds no holder dials this slot when
+ * waiters are still registered, and otherwise starts a fresh dial that does
+ * not copy the release. A connection-wide failure is deleted once nothing
+ * is waiting and no dial hold remains. A later claim of a failed slot that
+ * still has a hold removes it anyway: the failure was already delivered,
+ * and waiting would deadlock.
  */
 export class LocalUnarySessionDirectory<Registry extends VersionedRpcRegistry> {
   private readonly slots = new Map<string, SessionSlot<Registry>>();
 
-  claim(key: string): SessionAdmission<Registry> {
+  claim(
+    key: string,
+    handoff: SessionHandoff | null,
+  ): SessionAdmission<Registry> {
     const existing = this.slots.get(key);
     if (existing === undefined) {
       return this.beginDial(key);
+    }
+    if (
+      handoff !== null &&
+      handoff.identity === existing.identity &&
+      existing.handoffHolders > 0
+    ) {
+      existing.handoffHolders -= 1;
     }
     if (
       existing.phase === "ready" &&
@@ -880,8 +1046,18 @@ export class LocalUnarySessionDirectory<Registry extends VersionedRpcRegistry> {
     ) {
       return { kind: "ready", session: existing.session };
     }
-    if (existing.phase === "ready") {
-      this.slots.delete(key);
+    if (existing.phase === "ready" || existing.phase === "failed") {
+      if (existing.phase === "failed") {
+        existing.releaseBeforeReady = false;
+      }
+      this.deleteIfUnoccupied(key, existing);
+      if (this.slots.get(key) === existing) {
+        // The failure was already delivered, and nobody republishes it.
+        // Waiting here would deadlock the next caller. The flag is cleared
+        // above, so this fresh dial is not armed. Holds still close over
+        // the detached object and cannot remove the replacement.
+        this.slots.delete(key);
+      }
       return this.beginDial(key);
     }
     // openAck carries no host version and no instance id, so a host whose
@@ -890,12 +1066,24 @@ export class LocalUnarySessionDirectory<Registry extends VersionedRpcRegistry> {
     if (existing.phase === "legacy") {
       return { kind: "legacy" };
     }
-    return {
-      kind: "wait",
-      settled: new Promise((resolve) => {
-        existing.waiters.push(resolve);
-      }),
-    };
+    if (existing.phase === "retry") {
+      if (handoff !== null && handoff.identity === existing.identity) {
+        existing.phase = "dialing";
+        existing.session = null;
+        return { kind: "owner", publish: this.publisher(key, existing) };
+      }
+      if (existing.handoffHolders > 0) {
+        return this.wait(key, existing);
+      }
+      if (existing.waiters.length > 0) {
+        existing.phase = "dialing";
+        existing.session = null;
+        return { kind: "owner", publish: this.publisher(key, existing) };
+      }
+      this.slots.delete(key);
+      return this.beginDial(key);
+    }
+    return this.wait(key, existing);
   }
 
   releaseIdle(): void {
@@ -904,7 +1092,11 @@ export class LocalUnarySessionDirectory<Registry extends VersionedRpcRegistry> {
         slot.session.releaseIfIdle();
         continue;
       }
-      if (slot.phase === "dialing") {
+      if (
+        slot.phase === "dialing" ||
+        slot.phase === "retry" ||
+        slot.phase === "failed"
+      ) {
         slot.releaseBeforeReady = true;
       }
     }
@@ -950,12 +1142,137 @@ export class LocalUnarySessionDirectory<Registry extends VersionedRpcRegistry> {
     this.slots.delete(key);
   }
 
+  /** Callers already waiting on `key`. Zero when that slot is gone. */
+  dialHoldCount(key: string): number {
+    return this.slots.get(key)?.dialHolds ?? 0;
+  }
+
+  /**
+   * Holds `key` until `release`. The hold is on this slot object. A retry
+   * keeps the object and does not zero the count, so a second waiter's
+   * release still decrements this dial. The waiter releases the hold
+   * before it claims the replacement, while `session` is still null, so
+   * that release does not retire the replacement.
+   */
+  acquireDialHold(key: string): DialHold {
+    const slot = this.slots.get(key);
+    if (slot === undefined) {
+      return { release: () => {} };
+    }
+    slot.dialHolds += 1;
+    let open = true;
+    return {
+      release: () => {
+        if (!open) {
+          return;
+        }
+        open = false;
+        slot.dialHolds -= 1;
+        if (slot.session !== null) {
+          slot.session.onDialHoldReleased();
+          return;
+        }
+        // A hold does not keep a retry slot. The caller that was handed
+        // the slot claims it, or passes the handoff on when it leaves.
+        // A failed slot has nothing to hand on, so the last release
+        // removes it once nobody is waiting.
+        if (slot.phase === "failed") {
+          this.deleteIfUnoccupied(key, slot);
+        }
+      },
+    };
+  }
+
+  /** No waiter is still registered, and no dial hold is still outstanding. */
+  private deleteIfUnoccupied(
+    key: string,
+    slot: SessionSlot<Registry>,
+  ): boolean {
+    if (slot.waiters.length > 0 || slot.dialHolds > 0) {
+      return false;
+    }
+    if (this.slots.get(key) !== slot) {
+      return false;
+    }
+    this.slots.delete(key);
+    return true;
+  }
+
+  private wait(
+    key: string,
+    slot: SessionSlot<Registry>,
+  ): SessionAdmission<Registry> {
+    let resolveWait: (result: SessionGateResult<Registry>) => void = () => {};
+    const settled = new Promise<SessionGateResult<Registry>>((resolve) => {
+      resolveWait = resolve;
+    });
+    let held = false;
+    const resolver = (result: SessionGateResult<Registry>): void => {
+      if (result.kind === "retry") {
+        held = true;
+        slot.handoffHolders += 1;
+      }
+      resolveWait(result);
+    };
+    slot.waiters.push(resolver);
+    return {
+      kind: "wait",
+      settled,
+      leave: () => {
+        const index = slot.waiters.indexOf(resolver);
+        if (index < 0) {
+          return;
+        }
+        slot.waiters.splice(index, 1);
+      },
+      relinquish: () => {
+        if (!held) {
+          return;
+        }
+        held = false;
+        if (slot.handoffHolders > 0) {
+          slot.handoffHolders -= 1;
+        }
+        this.settleUnheldRetry(key, slot);
+      },
+    };
+  }
+
+  /**
+   * The last holder of a retry left without claiming. Wake a waiter that
+   * has no handoff, or drop the slot when nobody remains to dial it.
+   */
+  private settleUnheldRetry(key: string, slot: SessionSlot<Registry>): void {
+    if (this.slots.get(key) !== slot || slot.phase !== "retry") {
+      return;
+    }
+    if (slot.handoffHolders > 0) {
+      return;
+    }
+    if (slot.waiters.length > 0) {
+      this.deliverRetry(slot);
+      return;
+    }
+    this.slots.delete(key);
+  }
+
+  private deliverRetry(slot: SessionSlot<Registry>): void {
+    const handoff: SessionHandoff = { identity: slot.identity };
+    const waiters = slot.waiters.splice(0, slot.waiters.length);
+    for (const waiter of waiters) {
+      waiter({ kind: "retry", handoff });
+    }
+  }
+
   private beginDial(key: string): SessionAdmission<Registry> {
     const slot: SessionSlot<Registry> = {
       phase: "dialing",
       session: null,
       waiters: [],
+      identity: {},
       releaseBeforeReady: false,
+      dialHolds: 0,
+      handoffHolders: 0,
     };
     this.slots.set(key, slot);
     return { kind: "owner", publish: this.publisher(key, slot) };
@@ -965,15 +1282,23 @@ export class LocalUnarySessionDirectory<Registry extends VersionedRpcRegistry> {
     key: string,
     slot: SessionSlot<Registry>,
   ): SessionPublisher<Registry> {
+    let sealed = false;
     const finish = (result: SessionGateResult<Registry>): void => {
       const waiters = slot.waiters.splice(0, slot.waiters.length);
       for (const waiter of waiters) {
         waiter(result);
       }
     };
+    const accept = (): boolean => {
+      if (sealed || slot.phase !== "dialing") {
+        return false;
+      }
+      sealed = true;
+      return true;
+    };
     return {
       ready: (session) => {
-        if (slot.phase !== "dialing") {
+        if (!accept()) {
           return;
         }
         slot.phase = "ready";
@@ -981,29 +1306,43 @@ export class LocalUnarySessionDirectory<Registry extends VersionedRpcRegistry> {
         finish({ kind: "ready", session });
       },
       legacy: () => {
-        if (slot.phase !== "dialing") {
+        if (!accept()) {
           return;
         }
         slot.phase = "legacy";
         finish({ kind: "legacy" });
       },
       failed: (error) => {
-        if (slot.phase !== "dialing") {
+        if (!accept()) {
           return;
         }
-        if (this.slots.get(key) === slot) {
+        slot.phase = "failed";
+        slot.session = null;
+        finish({ kind: "failed", error });
+        // The failure was delivered. Nothing converts this slot. Drop it
+        // once no hold remains; a hold still on it deletes the slot when
+        // that hold releases.
+        if (slot.dialHolds === 0 && this.slots.get(key) === slot) {
           this.slots.delete(key);
         }
-        finish({ kind: "failed", error });
       },
       retry: () => {
-        if (slot.phase !== "dialing") {
+        if (!accept()) {
           return;
         }
-        if (this.slots.get(key) === slot) {
-          this.slots.delete(key);
+        slot.session = null;
+        // A hold is not a holder. Delivery writes the handoff onto each
+        // waiter before this returns, so an empty waiter list still keeps
+        // the slot while one of those records remains. No holder and no
+        // waiter means nobody can dial this object.
+        if (slot.waiters.length === 0 && slot.handoffHolders === 0) {
+          if (this.slots.get(key) === slot) {
+            this.slots.delete(key);
+          }
+          return;
         }
-        finish({ kind: "retry" });
+        slot.phase = "retry";
+        finish({ kind: "retry", handoff: { identity: slot.identity } });
       },
     };
   }

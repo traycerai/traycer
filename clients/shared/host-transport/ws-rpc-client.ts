@@ -70,6 +70,7 @@ import {
   LocalUnarySessionDirectory,
   type AttachedPersistentSocket,
   type PersistentSocketHandlers,
+  type SessionHandoff,
   type SessionPublisher,
 } from "./local-unary-session";
 
@@ -387,8 +388,10 @@ export class WsRpcClient<
       options.authority.bearer.identity.userId,
       websocketUrl,
     );
+    let handoff: SessionHandoff | null = null;
     for (;;) {
-      const admission = this.sessions.claim(sessionKey);
+      const admission = this.sessions.claim(sessionKey, handoff);
+      handoff = null;
       if (admission.kind === "ready") {
         return admission.session.call({
           requestId,
@@ -411,35 +414,47 @@ export class WsRpcClient<
         );
       }
       if (admission.kind === "wait") {
-        const settled = await waitForSessionAdmission(
-          admission.settled,
-          options.authority,
-          requestId,
-          method,
-        );
-        if (settled.kind === "ready") {
-          return settled.session.call({
+        const hold = this.sessions.acquireDialHold(sessionKey);
+        try {
+          const settled = await waitForSessionAdmission(
+            admission.settled,
+            options.authority,
             requestId,
             method,
-            params,
-            responseTimeoutMs,
-            options,
-            boundToDialRelease: true,
-          });
-        }
-        if (settled.kind === "failed") {
-          throw readdressDiscoveryFailure(settled.error, requestId, method);
-        }
-        if (settled.kind === "legacy") {
-          return this.requestOnFreshSocket(
-            method,
-            params,
-            responseTimeoutMs,
-            options,
-            requestId,
-            null,
-            sessionKey,
           );
+          if (settled.kind === "ready") {
+            return await settled.session.call({
+              requestId,
+              method,
+              params,
+              responseTimeoutMs,
+              options,
+              boundToDialRelease: true,
+            });
+          }
+          if (settled.kind === "failed") {
+            throw readdressDiscoveryFailure(settled.error, requestId, method);
+          }
+          if (settled.kind === "legacy") {
+            return await this.requestOnFreshSocket(
+              method,
+              params,
+              responseTimeoutMs,
+              options,
+              requestId,
+              null,
+              sessionKey,
+            );
+          }
+          // This handoff names the slot that still holds the release.
+          // The next claim converts that object and no other.
+          handoff = settled.handoff;
+        } catch (cause) {
+          admission.relinquish();
+          throw cause;
+        } finally {
+          admission.leave();
+          hold.release();
         }
         continue;
       }
@@ -651,8 +666,11 @@ export class WsRpcClient<
         authority.abortSignal.removeEventListener("abort", onAbort);
         // Publish is the boundary. A release during the dial is session
         // state before this call and before any waiter continuation. Both
-        // are bound to it. A later claim sees the published session and
-        // clears it.
+        // are bound to it. A later claim of the published session returns
+        // it. A discovery retry keeps this slot while a caller holds its
+        // handoff, and only that caller reads the release. A dial hold does
+        // not keep the slot. Waiters already admitted hold this dial, so a
+        // settlement here cannot close the socket before they enter.
         if (this.sessions.consumeReleaseBeforeReady(sessionKey, local)) {
           local.retainDialRelease();
         }

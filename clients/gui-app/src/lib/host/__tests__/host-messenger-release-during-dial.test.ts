@@ -102,10 +102,7 @@ class FakeWebSocket {
     this.listeners.set(type, set);
   }
 
-  removeEventListener(
-    type: string,
-    handler: (event: EventLike) => void,
-  ): void {
+  removeEventListener(type: string, handler: (event: EventLike) => void): void {
     this.listeners.get(type)?.delete(handler);
   }
 
@@ -168,10 +165,7 @@ function openAckFor(open: Record<string, unknown>): string {
   });
 }
 
-function responseFor(
-  request: Record<string, unknown>,
-  echoed: string,
-): string {
+function responseFor(request: Record<string, unknown>, echoed: string): string {
   return JSON.stringify({
     kind: "response",
     requestId: request.requestId,
@@ -283,12 +277,16 @@ describe("runtime host messenger release during dial", () => {
   it("closes the socket after dispose during the dial once the call settles", async () => {
     const { binding } = await drive("dispose");
     await expect(
-      binding.messenger.request("host.echo", { message: "later" }, {
-        replayMustBeKeyed: false,
-        requiredHostMethodVersion: null,
-        idempotencyKey: null,
-        authority: authority(),
-      }),
+      binding.messenger.request(
+        "host.echo",
+        { message: "later" },
+        {
+          replayMustBeKeyed: false,
+          requiredHostMethodVersion: null,
+          idempotencyKey: null,
+          authority: authority(),
+        },
+      ),
     ).rejects.toThrow("Host messenger has been disposed");
     expect(FakeWebSocket.instances).toHaveLength(1);
   });
@@ -310,5 +308,81 @@ describe("runtime host messenger release during dial", () => {
     await answer(socket, "later");
     await expect(pending).resolves.toEqual({ echoed: "later" });
     expect(socket.closed).toBeNull();
+  });
+
+  it("reset during a discovery retry closes the replacement and keeps the next socket", async () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    let issued = 0;
+    const binding = buildRuntimeHostMessenger<typeof registry>({
+      registry,
+      resolveTarget: (hostId) =>
+        hostId === localEntry.hostId ? localEntry : null,
+      auth: null,
+      authnBaseUrl: "https://authn.invalid",
+      requestId: () => {
+        issued += 1;
+        return `req-${issued}`;
+      },
+      onRemoteAvailabilityRecovered: () => undefined,
+      onRemoteSessionTerminal: () => undefined,
+    });
+    const arrived = FakeWebSocket.nextInstance();
+    const owner = binding.messenger.request(
+      "host.echo",
+      { message: "owner" },
+      {
+        replayMustBeKeyed: false,
+        requiredHostMethodVersion: null,
+        idempotencyKey: null,
+        authority: authority(),
+      },
+    );
+    const ownerError = owner.then(
+      () => null,
+      (cause: unknown) => cause,
+    );
+    const waiter = binding.messenger.request(
+      "host.echo",
+      { message: "waiter" },
+      {
+        replayMustBeKeyed: false,
+        requiredHostMethodVersion: null,
+        idempotencyKey: null,
+        authority: authority(),
+      },
+    );
+    const socket = await arrived;
+    const openSent = socket.nextSend();
+    socket.emit("open", { type: "open" });
+    const open = await openSent;
+    if (open.kind !== "open") {
+      throw new Error("expected the open frame");
+    }
+    const replacementArrived = FakeWebSocket.nextInstance();
+    socket.close(1006, "peer-dropped");
+    binding.reset();
+    const replacement = await replacementArrived;
+    await answer(replacement, "waiter");
+    await expect(waiter).resolves.toEqual({ echoed: "waiter" });
+    expect(replacement.closed).toEqual({
+      code: 1000,
+      reason: "session-closed",
+    });
+    await expect(ownerError).resolves.toBeInstanceOf(Error);
+    const laterArrived = FakeWebSocket.nextInstance();
+    const later = binding.messenger.request(
+      "host.echo",
+      { message: "later" },
+      {
+        replayMustBeKeyed: false,
+        requiredHostMethodVersion: null,
+        idempotencyKey: null,
+        authority: authority(),
+      },
+    );
+    const laterSocket = await laterArrived;
+    await answer(laterSocket, "later");
+    await expect(later).resolves.toEqual({ echoed: "later" });
+    expect(laterSocket.closed).toBeNull();
   });
 });

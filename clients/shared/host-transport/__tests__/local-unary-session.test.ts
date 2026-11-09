@@ -1,11 +1,18 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import {
-  defineVersionedRpcRegistry,
+  defineFallbackMethodDegrade,
   defineRpcContract,
+  defineUpgradePath,
+  defineVersionedRpcRegistry,
   RPC_REQUEST_TIMEOUT_FATAL_CODE,
   UNARY_CAPABILITY_IDEMPOTENCY_KEY,
   UNARY_CAPABILITY_PERSISTENT_SESSION,
+  type ConnectionManifest,
+  type VersionedRpcRegistry,
 } from "@traycer/protocol/framework/index";
 import {
   clientFrameSchema,
@@ -22,6 +29,7 @@ import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/tr
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 import type { DialPriority } from "../dial-priority";
 import {
+  HostMethodVersionUnsatisfiedError,
   HostRequestAbortedError,
   HostRpcError,
   HostTransportFailureError,
@@ -31,7 +39,12 @@ import {
   type HostTransportEndpoint,
 } from "../host-messenger";
 import { createAuthAwareMessenger } from "../auth-aware-messenger";
-import { localUnarySessionKey } from "../local-unary-session";
+import {
+  LocalUnarySession,
+  LocalUnarySessionDirectory,
+  localUnarySessionKey,
+  type MultiplexSocket,
+} from "../local-unary-session";
 import { resetNegotiatedManifests } from "../negotiated-manifest-registry";
 import type {
   IWebSocketFactory,
@@ -72,6 +85,258 @@ const testRegistry = defineVersionedRpcRegistry({
       latestMinor: 0,
       versions: {
         0: { contract: statusV10, upgradeFromPreviousVersion: null },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+});
+
+const echoMinor0 = defineRpcContract({
+  method: "host.echo",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: z.object({ legacy: z.string() }),
+  responseSchema: z.object({ echoed: z.string() }),
+});
+
+const echoMinor1 = defineRpcContract({
+  method: "host.echo",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: z.object({ message: z.string() }),
+  responseSchema: z.object({ echoed: z.string() }),
+});
+
+const upgradeEchoMinor = defineUpgradePath<
+  typeof echoMinor0,
+  typeof echoMinor1
+>({
+  from: echoMinor0.schemaVersion,
+  to: echoMinor1.schemaVersion,
+  upgradeRequest: (request) => ({ message: request.legacy }),
+  upgradeResponse: (response) => response,
+});
+
+const downgradeRegistry = defineVersionedRpcRegistry({
+  "host.echo": {
+    1: {
+      latestMinor: 1,
+      versions: {
+        0: { contract: echoMinor0, upgradeFromPreviousVersion: null },
+        1: {
+          contract: echoMinor1,
+          upgradeFromPreviousVersion: upgradeEchoMinor,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+});
+
+/** Optional echo installed only at minor 1. A host optional minor 0 has no contract here. */
+const hostMinorAbsentRegistry = defineVersionedRpcRegistry({
+  "host.echo": {
+    1: {
+      latestMinor: 1,
+      versions: {
+        1: {
+          contract: echoMinor1,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+});
+
+const extraV10 = defineRpcContract({
+  method: "host.extra",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: z.object({ message: z.string() }),
+  responseSchema: z.object({ echoed: z.string() }),
+});
+
+const brokenV10 = defineRpcContract({
+  method: "host.broken",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: z.object({ message: z.string() }),
+  responseSchema: z.object({ echoed: z.string() }),
+});
+
+const unsupportedV10 = defineRpcContract({
+  method: "host.unsupported",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: z.object({ message: z.string() }),
+  responseSchema: z.object({ echoed: z.string() }),
+});
+
+const spareV10 = defineRpcContract({
+  method: "host.spare",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: z.object({}),
+  responseSchema: z.object({ ready: z.boolean() }),
+});
+
+const gapV10 = defineRpcContract({
+  method: "host.gap",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: z.object({ message: z.string() }),
+  responseSchema: z.object({ echoed: z.string() }),
+});
+
+const adaptV10 = defineRpcContract({
+  method: "host.adapt",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: z.object({ message: z.string() }),
+  responseSchema: z.object({ echoed: z.string() }),
+});
+
+const line = <Contract extends { method: string }>(contract: Contract) => ({
+  1: {
+    latestMinor: 0 as const,
+    versions: {
+      0: { contract, upgradeFromPreviousVersion: null },
+    },
+    downgradePathsFromLatest: {},
+  },
+});
+
+const degradeRegistry = defineVersionedRpcRegistry({
+  "host.status": line(statusV10),
+  "host.extra": {
+    degrade: defineFallbackMethodDegrade<
+      typeof extraV10,
+      typeof statusV10,
+      "host.status"
+    >({
+      kind: "fallback",
+      to: { method: "host.status", major: 1, minor: 0 },
+      adaptRequest: () => ({}),
+      adaptResponse: () => ({ echoed: "adapted" }),
+    }),
+    ...line(extraV10),
+  },
+  "host.broken": {
+    degrade: defineFallbackMethodDegrade<
+      typeof brokenV10,
+      typeof statusV10,
+      "host.status"
+    >({
+      kind: "fallback",
+      to: { method: "host.status", major: 1, minor: 0 },
+      adaptRequest: () => {
+        throw new Error("adapt rejected");
+      },
+      adaptResponse: () => ({ echoed: "adapted" }),
+    }),
+    ...line(brokenV10),
+  },
+  "host.unsupported": {
+    degrade: { kind: "unsupported" },
+    ...line(unsupportedV10),
+  },
+  "host.spare": line(spareV10),
+  "host.gap": {
+    degrade: defineFallbackMethodDegrade<
+      typeof gapV10,
+      typeof spareV10,
+      "host.spare"
+    >({
+      kind: "fallback",
+      to: { method: "host.spare", major: 1, minor: 0 },
+      adaptRequest: () => ({}),
+      adaptResponse: () => ({ echoed: "adapted" }),
+    }),
+    ...line(gapV10),
+  },
+  "host.adapt": {
+    degrade: defineFallbackMethodDegrade<
+      typeof adaptV10,
+      typeof statusV10,
+      "host.status"
+    >({
+      kind: "fallback",
+      to: { method: "host.status", major: 1, minor: 0 },
+      adaptRequest: () => ({}),
+      adaptResponse: () => {
+        throw new Error("adapt response rejected");
+      },
+    }),
+    ...line(adaptV10),
+  },
+});
+
+/** Same degrade shape as `degradeRegistry`, without the fallback target installed. */
+const unknownTargetRegistry = defineVersionedRpcRegistry({
+  "host.status": line(statusV10),
+  "host.gap": {
+    degrade: defineFallbackMethodDegrade<
+      typeof gapV10,
+      typeof spareV10,
+      "host.spare"
+    >({
+      kind: "fallback",
+      to: { method: "host.spare", major: 1, minor: 0 },
+      adaptRequest: () => ({}),
+      adaptResponse: () => ({ echoed: "adapted" }),
+    }),
+    ...line(gapV10),
+  },
+});
+
+const decodeMinor0 = defineRpcContract({
+  method: "host.echo",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: z.object({ message: z.string() }),
+  responseSchema: z.object({ echoed: z.string() }),
+});
+
+const decodeMinor1 = defineRpcContract({
+  method: "host.echo",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: z.object({ message: z.string() }),
+  responseSchema: z.object({ echoed: z.string() }),
+});
+
+const throwingResponseUpgrade = defineUpgradePath<
+  typeof decodeMinor0,
+  typeof decodeMinor1
+>({
+  from: decodeMinor0.schemaVersion,
+  to: decodeMinor1.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: () => {
+    throw new Error("response upgrade rejected");
+  },
+});
+
+const decodeThrowRegistry = defineVersionedRpcRegistry({
+  "host.echo": {
+    1: {
+      latestMinor: 1,
+      versions: {
+        0: { contract: decodeMinor0, upgradeFromPreviousVersion: null },
+        1: {
+          contract: decodeMinor1,
+          upgradeFromPreviousVersion: throwingResponseUpgrade,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+});
+
+const statusV20 = defineRpcContract({
+  method: "host.status",
+  schemaVersion: { major: 2, minor: 0 } as const,
+  requestSchema: z.object({}),
+  responseSchema: z.object({ ready: z.boolean() }),
+});
+
+const statusNoBridgeRegistry = defineVersionedRpcRegistry({
+  "host.status": {
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: { contract: statusV20, upgradeFromPreviousVersion: null },
       },
       downgradePathsFromLatest: {},
     },
@@ -251,6 +516,14 @@ function sessionAck(idempotency: boolean): HostOpenAckFrame {
   };
 }
 
+function statusAck(major: number): HostOpenAckFrame {
+  return {
+    kind: "openAck",
+    manifest: { "host.status": { major, minor: 0 } },
+    capabilities: [UNARY_CAPABILITY_PERSISTENT_SESSION],
+  };
+}
+
 function legacyAck(): HostOpenAckFrame {
   return {
     kind: "openAck",
@@ -350,6 +623,268 @@ function makeClient(
     hostAttestationWindowMs,
     evidence: NO_TRANSPORT_EVIDENCE,
   });
+}
+
+function makeClientFor<Registry extends VersionedRpcRegistry>(
+  registry: Registry,
+  factory: IWebSocketFactory,
+): WsRpcClient<Registry> {
+  let issued = 0;
+  return new WsRpcClient<Registry>({
+    clientIdentity: TEST_CLIENT_IDENTITY,
+    registry,
+    requestId: () => {
+      issued += 1;
+      return `req-${issued}`;
+    },
+    webSocketFactory: factory,
+    dialTimeoutMs: 5_000,
+    frameTimeoutMs: 5_000,
+    hostAttestationWindowMs: 0,
+    evidence: NO_TRANSPORT_EVIDENCE,
+  });
+}
+
+function versionFloorOptions(bearer: MutableBearerLease): HostRequestOptions {
+  return {
+    ...optionsFor(bearer, new AbortController().signal, null, false, null),
+    requiredHostMethodVersion: {
+      method: "host.echo",
+      version: { major: 2, minor: 0 },
+    },
+  };
+}
+
+class RecordingSocket implements MultiplexSocket {
+  readonly sent: ClientFrame[] = [];
+  closed: { readonly code: number; readonly reason: string } | null = null;
+  failSend: "request" | "cancel" | null = null;
+
+  send(frame: ClientFrame): void {
+    if (this.failSend === frame.kind) {
+      throw new Error(`send ${frame.kind} failed`);
+    }
+    this.sent.push(frame);
+  }
+
+  close(code: number, reason: string): void {
+    this.closed = { code, reason };
+  }
+}
+
+const BOTH_MANIFESTS: ConnectionManifest = {
+  "host.echo": { major: 1, minor: 0 },
+  "host.status": { major: 1, minor: 0 },
+};
+
+function directEchoSession(manifests: {
+  readonly clientManifest: ConnectionManifest;
+  readonly hostManifest: ConnectionManifest;
+}): {
+  readonly session: LocalUnarySession<typeof testRegistry>;
+  readonly socket: RecordingSocket;
+} {
+  const directory = new LocalUnarySessionDirectory<typeof testRegistry>();
+  const session = new LocalUnarySession<typeof testRegistry>({
+    key: localUnarySessionKey(HOST_ID, USER_A, SOCKET_URL),
+    registry: testRegistry,
+    hostId: HOST_ID,
+    directory,
+  });
+  const socket = new RecordingSocket();
+  session.attach({
+    socket,
+    clientManifest: manifests.clientManifest,
+    hostManifest: manifests.hostManifest,
+    idempotency: true,
+  });
+  return { session, socket };
+}
+
+function directSession<Registry extends VersionedRpcRegistry>(
+  registry: Registry,
+  manifests: {
+    readonly clientManifest: ConnectionManifest;
+    readonly hostManifest: ConnectionManifest;
+  },
+): {
+  readonly session: LocalUnarySession<Registry>;
+  readonly socket: RecordingSocket;
+} {
+  const directory = new LocalUnarySessionDirectory<Registry>();
+  const session = new LocalUnarySession<Registry>({
+    key: localUnarySessionKey(HOST_ID, USER_A, SOCKET_URL),
+    registry,
+    hostId: HOST_ID,
+    directory,
+  });
+  const socket = new RecordingSocket();
+  session.attach({
+    socket,
+    clientManifest: manifests.clientManifest,
+    hostManifest: manifests.hostManifest,
+    idempotency: true,
+  });
+  return { session, socket };
+}
+
+function expectDirectoryEmpty(
+  directory: LocalUnarySessionDirectory<typeof testRegistry>,
+  key: string,
+): void {
+  expect(directory.dialHoldCount(key)).toBe(0);
+  const probe = directory.acquireDialHold(key);
+  expect(directory.dialHoldCount(key)).toBe(0);
+  probe.release();
+}
+
+function incompatibleHandshake(): HostRpcError {
+  return new HostRpcError({
+    code: "INCOMPATIBLE",
+    message: "host build is incompatible",
+    requestId: "req-owner",
+    method: "host.echo",
+    fatalDetails: {
+      code: "INCOMPATIBLE",
+      reason: "host build is incompatible",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    },
+  });
+}
+
+function echoCall(
+  session: LocalUnarySession<typeof testRegistry>,
+  requestId: string,
+  signal: AbortSignal,
+) {
+  const bearer = new MutableBearerLease("token-a", USER_A);
+  return session.call({
+    requestId,
+    method: "host.echo",
+    params: { message: requestId },
+    responseTimeoutMs: 5_000,
+    options: optionsFor(bearer, signal, null, false, null),
+    boundToDialRelease: true,
+  });
+}
+
+async function openDiscoveringSocket(
+  sockets: RecordedSocket[],
+): Promise<RecordedSocket> {
+  const discovering = sockets[0];
+  if (discovering === undefined) {
+    throw new Error("expected the discovering socket");
+  }
+  const opened = discovering.socket.nextSend();
+  discovering.socket.fireOpen();
+  await opened;
+  return discovering;
+}
+
+async function releaseOutstandingHandshake(
+  client: WsRpcClient<typeof testRegistry>,
+  sockets: RecordedSocket[],
+): Promise<RecordedSocket> {
+  const discovering = await openDiscoveringSocket(sockets);
+  client.releaseIdleLocalSessions();
+  return discovering;
+}
+
+function makeTimedClient(
+  factory: IWebSocketFactory,
+  dialTimeoutMs: number,
+  frameTimeoutMs: number,
+): WsRpcClient<typeof testRegistry> {
+  let issued = 0;
+  return new WsRpcClient<typeof testRegistry>({
+    clientIdentity: TEST_CLIENT_IDENTITY,
+    registry: testRegistry,
+    requestId: () => {
+      issued += 1;
+      return `req-${issued}`;
+    },
+    webSocketFactory: factory,
+    dialTimeoutMs,
+    frameTimeoutMs,
+    hostAttestationWindowMs: 0,
+    evidence: NO_TRANSPORT_EVIDENCE,
+  });
+}
+
+async function completeReplacementOnFakeClock(
+  sockets: RecordedSocket[],
+  waiter: Promise<{ readonly echoed: string }>,
+): Promise<void> {
+  await vi.advanceTimersByTimeAsync(0);
+  expect(sockets).toHaveLength(2);
+  const retried = sockets[1];
+  if (retried === undefined) {
+    throw new Error("expected the replacement dial");
+  }
+  const opened = retried.socket.nextSend();
+  retried.socket.fireOpen();
+  await vi.advanceTimersByTimeAsync(0);
+  await opened;
+  const requested = retried.socket.nextSend();
+  retried.socket.fireMessage(sessionAck(true));
+  await vi.advanceTimersByTimeAsync(0);
+  await requested;
+  const frame = requestFrames(retried)[0];
+  if (frame === undefined) {
+    throw new Error("expected the waiter request on the replacement");
+  }
+  respondEcho(retried.socket, frame, "waiter");
+  await vi.advanceTimersByTimeAsync(0);
+  await expect(waiter).resolves.toEqual({ echoed: "waiter" });
+  expect(retried.socket.closed).toEqual({
+    code: 1000,
+    reason: "session-closed",
+  });
+}
+
+function admittedPair(client: WsRpcClient<typeof testRegistry>): {
+  readonly owner: Promise<unknown>;
+  readonly waiter: Promise<{ readonly echoed: string }>;
+} {
+  const bearer = new MutableBearerLease("token-a", USER_A);
+  return {
+    owner: captureRejection(
+      client.request(
+        "host.echo",
+        { message: "owner" },
+        optionsFor(bearer, new AbortController().signal, null, false, null),
+      ),
+    ),
+    waiter: client.request(
+      "host.echo",
+      { message: "waiter" },
+      optionsFor(bearer, new AbortController().signal, null, false, null),
+    ),
+  };
+}
+
+async function expectReplacementClosed(
+  sockets: RecordedSocket[],
+  waiter: Promise<{ readonly echoed: string }>,
+): Promise<void> {
+  expect(sockets).toHaveLength(2);
+  const retried = sockets[1];
+  if (retried === undefined) {
+    throw new Error("expected the replacement dial");
+  }
+  await classify(retried, sessionAck(true));
+  const frame = requestFrames(retried)[0];
+  if (frame === undefined) {
+    throw new Error("expected the waiter request on the replacement");
+  }
+  respondEcho(retried.socket, frame, "waiter");
+  await expect(waiter).resolves.toEqual({ echoed: "waiter" });
+  expect(retried.socket.closed).toEqual({
+    code: 1000,
+    reason: "session-closed",
+  });
+  expect(sockets).toHaveLength(2);
 }
 
 describe("local unary session", () => {
@@ -797,7 +1332,7 @@ describe("local unary session", () => {
     expect(sockets).toHaveLength(1);
   });
 
-  it("aborts a queued call before send with no cancel frame", async () => {
+  it("aborts a call waiting for admission before send with no cancel frame", async () => {
     const { factory, sockets } = makeFactory();
     const client = makeClient(factory, 0);
     const bearer = new MutableBearerLease("token-a", USER_A);
@@ -1869,19 +2404,19 @@ describe("local unary session", () => {
       wrapped.request(
         "host.echo",
         { message: "owner" },
-        optionsFor(ownerBearer, new AbortController().signal, null, false, null),
+        optionsFor(
+          ownerBearer,
+          new AbortController().signal,
+          null,
+          false,
+          null,
+        ),
       ),
     );
     const waiter = wrapped.request(
       "host.echo",
       { message: "waiter" },
-      optionsFor(
-        waiterBearer,
-        new AbortController().signal,
-        null,
-        false,
-        null,
-      ),
+      optionsFor(waiterBearer, new AbortController().signal, null, false, null),
     );
     expect(sockets).toHaveLength(1);
     const discovering = sockets[0];
@@ -1892,6 +2427,7 @@ describe("local unary session", () => {
     discovering.socket.fireOpen();
     await opened;
     expect(openFrames(discovering)[0]?.token).toBe("stale-token");
+    client.releaseIdleLocalSessions();
     discovering.socket.fireMessage({
       kind: "fatalError",
       details: {
@@ -1930,6 +2466,11 @@ describe("local unary session", () => {
     respondEcho(retried.socket, frame, "waiter");
     await expect(waiter).resolves.toEqual({ echoed: "waiter" });
     expect(revalidated).toEqual([ownerBearer]);
+    expect(retried.socket.closed).toEqual({
+      code: 1000,
+      reason: "session-closed",
+    });
+    expect(sockets).toHaveLength(2);
   });
 
   it("gives each waiter its own error when discovery fails for every caller", async () => {
@@ -2119,5 +2660,1700 @@ describe("local unary session", () => {
     respondEcho(discovering.socket, laterRequest, "later");
     await expect(later).resolves.toEqual({ echoed: "later" });
     expect(sockets).toHaveLength(1);
+  });
+
+  it("completes a call only through settle", () => {
+    const source = readFileSync(
+      join(
+        dirname(fileURLToPath(import.meta.url)),
+        "../local-unary-session.ts",
+      ),
+      "utf8",
+    );
+    expect(source.includes("call.fail")).toBe(false);
+    expect(source.includes("call.succeed")).toBe(false);
+    expect(source.split("call.resolve(").length - 1).toBe(1);
+    expect(source.split("call.reject(").length - 1).toBe(1);
+  });
+
+  it("aborts a queued session call before send and retires the released session", async () => {
+    const { session, socket } = directEchoSession({
+      clientManifest: BOTH_MANIFESTS,
+      hostManifest: BOTH_MANIFESTS,
+    });
+    session.retainDialRelease();
+    const controller = new AbortController();
+    controller.abort();
+    const error = await captureRejection(
+      echoCall(session, "req-queued", controller.signal),
+    );
+    expect(error).toBeInstanceOf(HostRequestAbortedError);
+    if (!(error instanceof HostRequestAbortedError)) {
+      throw new Error("expected the queued abort");
+    }
+    expect(error.mayHaveDispatched).toBe(false);
+    expect(socket.sent).toHaveLength(0);
+    expect(socket.closed).toEqual({ code: 1000, reason: "session-closed" });
+    expect(session.isRetired).toBe(true);
+  });
+
+  it("aborts a call in pump when the signal flips after it is queued", async () => {
+    const { session, socket } = directEchoSession({
+      clientManifest: BOTH_MANIFESTS,
+      hostManifest: BOTH_MANIFESTS,
+    });
+    session.retainDialRelease();
+    const controller = new AbortController();
+    let reads = 0;
+    Object.defineProperty(controller.signal, "aborted", {
+      configurable: true,
+      get: () => {
+        reads += 1;
+        return reads >= 2;
+      },
+    });
+    const error = await captureRejection(
+      echoCall(session, "req-pump", controller.signal),
+    );
+    expect(reads).toBeGreaterThanOrEqual(2);
+    expect(error).toBeInstanceOf(HostRequestAbortedError);
+    expect(socket.sent).toHaveLength(0);
+    expect(socket.closed).toEqual({ code: 1000, reason: "session-closed" });
+  });
+
+  it("closes a released session when the version floor fails before send", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory, 0);
+    const bearer = new MutableBearerLease("token-a", USER_A);
+    const refused = captureRejection(
+      client.request(
+        "host.echo",
+        { message: "floor" },
+        versionFloorOptions(bearer),
+      ),
+    );
+    const discovering = await releaseOutstandingHandshake(client, sockets);
+    discovering.socket.fireMessage(sessionAck(true));
+    const error = await refused;
+    expect(error).toBeInstanceOf(HostMethodVersionUnsatisfiedError);
+    expect(requestFrames(discovering)).toHaveLength(0);
+    expect(discovering.socket.closed).toEqual({
+      code: 1000,
+      reason: "session-closed",
+    });
+  });
+
+  it("lets a waiter send when the discovering call fails the version floor", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory, 0);
+    const bearer = new MutableBearerLease("token-a", USER_A);
+    const owner = captureRejection(
+      client.request(
+        "host.echo",
+        { message: "owner" },
+        versionFloorOptions(bearer),
+      ),
+    );
+    const waiter = client.request(
+      "host.echo",
+      { message: "waiter" },
+      optionsFor(bearer, new AbortController().signal, null, false, null),
+    );
+    const discovering = await releaseOutstandingHandshake(client, sockets);
+    const waiterSent = discovering.socket.nextSend();
+    discovering.socket.fireMessage(sessionAck(true));
+    await waiterSent;
+    const error = await owner;
+    expect(error).toBeInstanceOf(HostMethodVersionUnsatisfiedError);
+    const frame = requestFrames(discovering)[0];
+    if (frame === undefined) {
+      throw new Error("expected the waiter request");
+    }
+    expect(frame.params).toEqual({ message: "waiter" });
+    expect(discovering.socket.closed).toBeNull();
+    respondEcho(discovering.socket, frame, "waiter");
+    await expect(waiter).resolves.toEqual({ echoed: "waiter" });
+    expect(discovering.socket.closed).toEqual({
+      code: 1000,
+      reason: "session-closed",
+    });
+    expect(sockets).toHaveLength(1);
+  });
+
+  it("closes a released session when the client manifest omits the method", async () => {
+    const { session, socket } = directEchoSession({
+      clientManifest: { "host.status": { major: 1, minor: 0 } },
+      hostManifest: BOTH_MANIFESTS,
+    });
+    session.retainDialRelease();
+    const error = await captureRejection(
+      echoCall(session, "req-client", new AbortController().signal),
+    );
+    expect(error).toBeInstanceOf(HostRpcError);
+    if (!(error instanceof HostRpcError)) {
+      throw new Error("expected the missing client canonical");
+    }
+    expect(error.message).toBe(
+      "Client registry has no canonical manifest entry for method 'host.echo'",
+    );
+    expect(socket.sent).toHaveLength(0);
+    expect(socket.closed).toEqual({ code: 1000, reason: "session-closed" });
+  });
+
+  it("closes a released session when the host omits a method with no degrade", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory, 0);
+    const bearer = new MutableBearerLease("token-a", USER_A);
+    const refused = captureRejection(
+      client.request(
+        "host.echo",
+        { message: "missing" },
+        optionsFor(bearer, new AbortController().signal, null, false, null),
+      ),
+    );
+    const discovering = await releaseOutstandingHandshake(client, sockets);
+    discovering.socket.fireMessage({
+      kind: "openAck",
+      manifest: { "host.status": { major: 1, minor: 0 } },
+      optionalManifest: {},
+      capabilities: [UNARY_CAPABILITY_PERSISTENT_SESSION],
+    });
+    const error = await refused;
+    expect(error).toBeInstanceOf(HostRpcError);
+    if (!(error instanceof HostRpcError)) {
+      throw new Error("expected the missing degrade");
+    }
+    expect(error.message).toBe(
+      "Host does not advertise method 'host.echo', and the client registry declares no degrade strategy",
+    );
+    expect(requestFrames(discovering)).toHaveLength(0);
+    expect(discovering.socket.closed).toEqual({
+      code: 1000,
+      reason: "session-closed",
+    });
+  });
+
+  it("closes a released session when the method degrades as unsupported", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClientFor(degradeRegistry, factory);
+    const bearer = new MutableBearerLease("token-a", USER_A);
+    const refused = captureRejection(
+      client.request(
+        "host.unsupported",
+        { message: "nope" },
+        optionsFor(bearer, new AbortController().signal, null, false, null),
+      ),
+    );
+    const discovering = sockets[0];
+    if (discovering === undefined) {
+      throw new Error("expected the discovering socket");
+    }
+    const opened = discovering.socket.nextSend();
+    discovering.socket.fireOpen();
+    await opened;
+    client.releaseIdleLocalSessions();
+    discovering.socket.fireMessage({
+      kind: "openAck",
+      manifest: { "host.status": { major: 1, minor: 0 } },
+      optionalManifest: {},
+      capabilities: [UNARY_CAPABILITY_PERSISTENT_SESSION],
+    });
+    const error = await refused;
+    expect(error).toBeInstanceOf(HostRpcError);
+    if (!(error instanceof HostRpcError)) {
+      throw new Error("expected the unsupported degrade");
+    }
+    expect(error.code).toBe("E_HOST_UNSUPPORTED");
+    expect(requestFrames(discovering)).toHaveLength(0);
+    expect(discovering.socket.closed).toEqual({
+      code: 1000,
+      reason: "session-closed",
+    });
+  });
+
+  it("closes a released session when the fallback target is absent", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClientFor(degradeRegistry, factory);
+    const bearer = new MutableBearerLease("token-a", USER_A);
+    const refused = captureRejection(
+      client.request(
+        "host.gap",
+        { message: "gap" },
+        optionsFor(bearer, new AbortController().signal, null, false, null),
+      ),
+    );
+    const discovering = sockets[0];
+    if (discovering === undefined) {
+      throw new Error("expected the discovering socket");
+    }
+    const opened = discovering.socket.nextSend();
+    discovering.socket.fireOpen();
+    await opened;
+    client.releaseIdleLocalSessions();
+    discovering.socket.fireMessage({
+      kind: "openAck",
+      manifest: { "host.status": { major: 1, minor: 0 } },
+      optionalManifest: {},
+      capabilities: [UNARY_CAPABILITY_PERSISTENT_SESSION],
+    });
+    const error = await refused;
+    expect(error).toBeInstanceOf(HostRpcError);
+    if (!(error instanceof HostRpcError)) {
+      throw new Error("expected the absent fallback");
+    }
+    expect(error.message).toBe(
+      "Fallback for method 'host.gap' targets unavailable floor method 'host.spare'",
+    );
+    // The target is installed on the client and absent from the host
+    // manifest. `defineVersionedRpcRegistry` does not reject a missing
+    // target; that arm is the unknown-target test below.
+    expect(requestFrames(discovering)).toHaveLength(0);
+    expect(discovering.socket.closed).toEqual({
+      code: 1000,
+      reason: "session-closed",
+    });
+  });
+
+  it("returns the adapted fallback and then closes a released session", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClientFor(degradeRegistry, factory);
+    const bearer = new MutableBearerLease("token-a", USER_A);
+    const pending = client.request(
+      "host.extra",
+      { message: "extra" },
+      optionsFor(bearer, new AbortController().signal, null, false, null),
+    );
+    const discovering = sockets[0];
+    if (discovering === undefined) {
+      throw new Error("expected the discovering socket");
+    }
+    const opened = discovering.socket.nextSend();
+    discovering.socket.fireOpen();
+    await opened;
+    client.releaseIdleLocalSessions();
+    const requested = discovering.socket.nextSend();
+    discovering.socket.fireMessage({
+      kind: "openAck",
+      manifest: { "host.status": { major: 1, minor: 0 } },
+      optionalManifest: {},
+      capabilities: [UNARY_CAPABILITY_PERSISTENT_SESSION],
+    });
+    await requested;
+    const frame = requestFrames(discovering)[0];
+    if (frame === undefined) {
+      throw new Error("expected the fallback request");
+    }
+    expect(frame.method).toBe("host.status");
+    expect(frame.params).toEqual({});
+    expect(discovering.socket.closed).toBeNull();
+    respondStatus(discovering.socket, frame, true);
+    await expect(pending).resolves.toEqual({ echoed: "adapted" });
+    expect(discovering.socket.closed).toEqual({
+      code: 1000,
+      reason: "session-closed",
+    });
+  });
+
+  it("closes a released session when fallback adaptRequest throws", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClientFor(degradeRegistry, factory);
+    const bearer = new MutableBearerLease("token-a", USER_A);
+    const refused = captureRejection(
+      client.request(
+        "host.broken",
+        { message: "broken" },
+        optionsFor(bearer, new AbortController().signal, null, false, null),
+      ),
+    );
+    const discovering = sockets[0];
+    if (discovering === undefined) {
+      throw new Error("expected the discovering socket");
+    }
+    const opened = discovering.socket.nextSend();
+    discovering.socket.fireOpen();
+    await opened;
+    client.releaseIdleLocalSessions();
+    discovering.socket.fireMessage({
+      kind: "openAck",
+      manifest: { "host.status": { major: 1, minor: 0 } },
+      optionalManifest: {},
+      capabilities: [UNARY_CAPABILITY_PERSISTENT_SESSION],
+    });
+    const error = await refused;
+    expect(error).toBeInstanceOf(Error);
+    if (!(error instanceof Error)) {
+      throw new Error("expected the adapt rejection");
+    }
+    expect(error.message).toBe("adapt rejected");
+    expect(requestFrames(discovering)).toHaveLength(0);
+    expect(discovering.socket.closed).toEqual({
+      code: 1000,
+      reason: "session-closed",
+    });
+  });
+
+  it("closes a released session when preparing the payload rejects the downgrade", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClientFor(downgradeRegistry, factory);
+    const bearer = new MutableBearerLease("token-a", USER_A);
+    const refused = captureRejection(
+      client.request(
+        "host.echo",
+        { message: "newer" },
+        optionsFor(bearer, new AbortController().signal, null, false, null),
+      ),
+    );
+    const discovering = sockets[0];
+    if (discovering === undefined) {
+      throw new Error("expected the discovering socket");
+    }
+    const opened = discovering.socket.nextSend();
+    discovering.socket.fireOpen();
+    await opened;
+    client.releaseIdleLocalSessions();
+    discovering.socket.fireMessage({
+      kind: "openAck",
+      manifest: {},
+      optionalManifest: { "host.echo": { major: 1, minor: 0 } },
+      capabilities: [UNARY_CAPABILITY_PERSISTENT_SESSION],
+    });
+    const error = await refused;
+    expect(error).toBeInstanceOf(HostRpcError);
+    if (!(error instanceof HostRpcError)) {
+      throw new Error("expected the downgrade refusal");
+    }
+    expect(error.code).toBe("DOWNGRADE_UNSUPPORTED");
+    expect(requestFrames(discovering)).toHaveLength(0);
+    expect(discovering.socket.closed).toEqual({
+      code: 1000,
+      reason: "session-closed",
+    });
+  });
+
+  it("closes a released session when the host minor is not installed", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClientFor(hostMinorAbsentRegistry, factory);
+    const bearer = new MutableBearerLease("token-a", USER_A);
+    const refused = captureRejection(
+      client.request(
+        "host.echo",
+        { message: "newer" },
+        optionsFor(bearer, new AbortController().signal, null, false, null),
+      ),
+    );
+    const discovering = sockets[0];
+    if (discovering === undefined) {
+      throw new Error("expected the discovering socket");
+    }
+    const opened = discovering.socket.nextSend();
+    discovering.socket.fireOpen();
+    await opened;
+    client.releaseIdleLocalSessions();
+    discovering.socket.fireMessage({
+      kind: "openAck",
+      manifest: {},
+      optionalManifest: { "host.echo": { major: 1, minor: 0 } },
+      capabilities: [UNARY_CAPABILITY_PERSISTENT_SESSION],
+    });
+    const error = await refused;
+    expect(error).toBeInstanceOf(HostRpcError);
+    if (!(error instanceof HostRpcError)) {
+      throw new Error("expected the missing older minor");
+    }
+    expect(error.message).toBe(
+      "No installed contract for method 'host.echo' 1.0",
+    );
+    expect(requestFrames(discovering)).toHaveLength(0);
+    expect(discovering.socket.closed).toEqual({
+      code: 1000,
+      reason: "session-closed",
+    });
+  });
+
+  it("closes a released session when a replay key cannot be honoured", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory, 0);
+    const bearer = new MutableBearerLease("token-a", USER_A);
+    const replay = captureRejection(
+      client.request(
+        "host.echo",
+        { message: "replay" },
+        optionsFor(
+          bearer,
+          new AbortController().signal,
+          "must-key",
+          true,
+          null,
+        ),
+      ),
+    );
+    const discovering = await releaseOutstandingHandshake(client, sockets);
+    discovering.socket.fireMessage(sessionAck(false));
+    const error = await replay;
+    expect(error).toBeInstanceOf(HostTransportFailureError);
+    if (!(error instanceof HostTransportFailureError)) {
+      throw new Error("expected the unkeyed replay refusal");
+    }
+    expect(error.fatalDetails).not.toBeNull();
+    expect(mayHaveReachedHost(error)).toBe(false);
+    expect(requestFrames(discovering)).toHaveLength(0);
+    expect(discovering.socket.closed).toEqual({
+      code: 1000,
+      reason: "session-closed",
+    });
+    const followUp = client.request(
+      "host.echo",
+      { message: "fresh" },
+      optionsFor(bearer, new AbortController().signal, null, false, null),
+    );
+    expect(sockets).toHaveLength(2);
+    const retried = sockets[1];
+    if (retried === undefined) {
+      throw new Error("expected a new dial after the released refusal");
+    }
+    await classify(retried, sessionAck(true));
+    const frame = requestFrames(retried)[0];
+    if (frame === undefined) {
+      throw new Error("expected the follow-up on the new socket");
+    }
+    respondEcho(retried.socket, frame, "fresh");
+    await expect(followUp).resolves.toEqual({ echoed: "fresh" });
+  });
+
+  it("closes a released session when the bearer lease is empty before send", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory, 0);
+    const bearer = new MutableBearerLease("token-a", USER_A);
+    const refused = captureRejection(
+      client.request(
+        "host.echo",
+        { message: "late" },
+        optionsFor(bearer, new AbortController().signal, null, false, null),
+      ),
+    );
+    const discovering = sockets[0];
+    if (discovering === undefined) {
+      throw new Error("expected the discovering socket");
+    }
+    const opened = discovering.socket.nextSend();
+    discovering.socket.fireOpen();
+    await opened;
+    bearer.rotate("");
+    client.releaseIdleLocalSessions();
+    discovering.socket.fireMessage(sessionAck(true));
+    const error = await refused;
+    expect(error).toBeInstanceOf(HostRpcError);
+    if (!(error instanceof HostRpcError)) {
+      throw new Error("expected the released lease");
+    }
+    expect(error.message).toContain("No bearer available");
+    expect(requestFrames(discovering)).toHaveLength(0);
+    expect(discovering.socket.closed).toEqual({
+      code: 1000,
+      reason: "session-closed",
+    });
+  });
+
+  it("keeps a released session up until the original in-flight id settles", async () => {
+    const { session, socket } = directEchoSession({
+      clientManifest: BOTH_MANIFESTS,
+      hostManifest: BOTH_MANIFESTS,
+    });
+    session.retainDialRelease();
+    const first = echoCall(session, "req-dup", new AbortController().signal);
+    const duplicate = await captureRejection(
+      echoCall(session, "req-dup", new AbortController().signal),
+    );
+    expect(duplicate).toBeInstanceOf(HostRpcError);
+    if (!(duplicate instanceof HostRpcError)) {
+      throw new Error("expected the duplicate id");
+    }
+    expect(duplicate.message).toBe(
+      "Duplicate request id 'req-dup' on the persistent session",
+    );
+    expect(socket.sent).toHaveLength(1);
+    expect(socket.closed).toBeNull();
+    session.handlers.onFrame({
+      kind: "response",
+      requestId: "req-dup",
+      method: "host.echo",
+      schemaVersion: { major: 1, minor: 0 },
+      result: { echoed: "req-dup" },
+      error: null,
+    });
+    await expect(first).resolves.toEqual({ echoed: "req-dup" });
+    expect(socket.closed).toEqual({ code: 1000, reason: "session-closed" });
+  });
+
+  it("carries a dial release onto the socket opened after a pre-ack close", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory, 0);
+    const { owner, waiter } = admittedPair(client);
+    const discovering = await releaseOutstandingHandshake(client, sockets);
+    discovering.socket.fireClose(1006, "peer-dropped", false);
+    await owner;
+    await expectReplacementClosed(sockets, waiter);
+  });
+
+  it("carries a dial release onto the socket opened after an authority abort", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory, 0);
+    const bearer = new MutableBearerLease("token-a", USER_A);
+    const controller = new AbortController();
+    const owner = captureRejection(
+      client.request(
+        "host.echo",
+        { message: "owner" },
+        optionsFor(bearer, controller.signal, null, false, null),
+      ),
+    );
+    const waiter = client.request(
+      "host.echo",
+      { message: "waiter" },
+      optionsFor(bearer, new AbortController().signal, null, false, null),
+    );
+    const discovering = await releaseOutstandingHandshake(client, sockets);
+    discovering.socket.abortOnAck = () => {
+      controller.abort();
+    };
+    discovering.socket.fireMessage(sessionAck(true));
+    await owner;
+    await expectReplacementClosed(sockets, waiter);
+  });
+
+  it("carries a dial release onto the socket opened after a transport error", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory, 0);
+    const { owner, waiter } = admittedPair(client);
+    const discovering = await releaseOutstandingHandshake(client, sockets);
+    discovering.socket.trailingError = "socket reset";
+    discovering.socket.fireMessage(sessionAck(true));
+    await owner;
+    await expectReplacementClosed(sockets, waiter);
+  });
+
+  it("carries a dial release onto the socket opened after a malformed frame", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory, 0);
+    const { owner, waiter } = admittedPair(client);
+    const discovering = await releaseOutstandingHandshake(client, sockets);
+    discovering.socket.trailingRaw = "not-json";
+    discovering.socket.fireMessage(sessionAck(true));
+    await owner;
+    await expectReplacementClosed(sockets, waiter);
+  });
+
+  it("carries a dial release onto the socket opened after a schema-invalid frame", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory, 0);
+    const { owner, waiter } = admittedPair(client);
+    const discovering = await releaseOutstandingHandshake(client, sockets);
+    discovering.socket.trailingRaw = JSON.stringify({ kind: "nope" });
+    discovering.socket.fireMessage(sessionAck(true));
+    await owner;
+    await expectReplacementClosed(sockets, waiter);
+  });
+
+  it("carries a dial release onto the socket opened after a non-ack frame", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory, 0);
+    const { owner, waiter } = admittedPair(client);
+    const discovering = await releaseOutstandingHandshake(client, sockets);
+    discovering.socket.fireMessage({
+      kind: "response",
+      requestId: "req-1",
+      method: "host.echo",
+      schemaVersion: { major: 1, minor: 0 },
+      result: { echoed: "early" },
+      error: null,
+    });
+    await owner;
+    await expectReplacementClosed(sockets, waiter);
+  });
+
+  it("does not carry a dial release onto a later call after a connection-wide failure", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory, 0);
+    const { owner, waiter } = admittedPair(client);
+    const waiterError = captureRejection(waiter);
+    const discovering = await releaseOutstandingHandshake(client, sockets);
+    discovering.socket.fireMessage({
+      kind: "fatalError",
+      details: {
+        code: "INCOMPATIBLE",
+        reason: "host build is incompatible",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+    await owner;
+    await waiterError;
+    expect(sockets).toHaveLength(1);
+    const bearer = new MutableBearerLease("token-a", USER_A);
+    const later = client.request(
+      "host.echo",
+      { message: "later" },
+      optionsFor(bearer, new AbortController().signal, null, false, null),
+    );
+    expect(sockets).toHaveLength(2);
+    const retried = sockets[1];
+    if (retried === undefined) {
+      throw new Error("expected the later dial");
+    }
+    await classify(retried, sessionAck(true));
+    const frame = requestFrames(retried)[0];
+    if (frame === undefined) {
+      throw new Error("expected the later request");
+    }
+    respondEcho(retried.socket, frame, "later");
+    await expect(later).resolves.toEqual({ echoed: "later" });
+    expect(retried.socket.closed).toBeNull();
+  });
+
+  it("keeps the published session open when release arrives before an admitted waiter enters", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory, 0);
+    const bearer = new MutableBearerLease("token-a", USER_A);
+    const owner = captureRejection(
+      client.request(
+        "host.echo",
+        { message: "owner" },
+        versionFloorOptions(bearer),
+      ),
+    );
+    const waiter = client.request(
+      "host.echo",
+      { message: "waiter" },
+      optionsFor(bearer, new AbortController().signal, null, false, null),
+    );
+    const discovering = await openDiscoveringSocket(sockets);
+    const waiterSent = discovering.socket.nextSend();
+    discovering.socket.fireMessage(sessionAck(true));
+    queueMicrotask(() => {
+      client.releaseIdleLocalSessions();
+    });
+    await waiterSent;
+    const error = await owner;
+    expect(error).toBeInstanceOf(HostMethodVersionUnsatisfiedError);
+    const frame = requestFrames(discovering)[0];
+    if (frame === undefined) {
+      throw new Error("expected the waiter request");
+    }
+    expect(frame.params).toEqual({ message: "waiter" });
+    expect(discovering.socket.closed).toBeNull();
+    respondEcho(discovering.socket, frame, "waiter");
+    await expect(waiter).resolves.toEqual({ echoed: "waiter" });
+    expect(discovering.socket.closed).toEqual({
+      code: 1000,
+      reason: "session-closed",
+    });
+    expect(sockets).toHaveLength(1);
+  });
+
+  it("carries a dial release that arrives after a pre-ack close and before the waiter resumes", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory, 0);
+    const { owner, waiter } = admittedPair(client);
+    const discovering = await openDiscoveringSocket(sockets);
+    discovering.socket.fireClose(1006, "peer-dropped", false);
+    queueMicrotask(() => {
+      client.releaseIdleLocalSessions();
+    });
+    await owner;
+    await expectReplacementClosed(sockets, waiter);
+  });
+
+  it("drops the retry when the handed waiter aborts before it claims", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory, 0);
+    const bearer = new MutableBearerLease("token-a", USER_A);
+    const waiterController = new AbortController();
+    const owner = captureRejection(
+      client.request(
+        "host.echo",
+        { message: "owner" },
+        optionsFor(bearer, new AbortController().signal, null, false, null),
+      ),
+    );
+    const waiter = captureRejection(
+      client.request(
+        "host.echo",
+        { message: "waiter" },
+        optionsFor(bearer, waiterController.signal, null, false, null),
+      ),
+    );
+    const discovering = await openDiscoveringSocket(sockets);
+    client.releaseIdleLocalSessions();
+    discovering.socket.fireClose(1006, "peer-dropped", false);
+    queueMicrotask(() => {
+      waiterController.abort();
+    });
+    await owner;
+    const waiterError = await waiter;
+    expect(waiterError).toBeInstanceOf(HostRequestAbortedError);
+    const later = client.request(
+      "host.echo",
+      { message: "later" },
+      optionsFor(bearer, new AbortController().signal, null, false, null),
+    );
+    expect(sockets).toHaveLength(2);
+    const retried = sockets[1];
+    if (retried === undefined) {
+      throw new Error("expected the later dial");
+    }
+    await classify(retried, sessionAck(true));
+    const frame = requestFrames(retried)[0];
+    if (frame === undefined) {
+      throw new Error("expected the later request");
+    }
+    respondEcho(retried.socket, frame, "later");
+    await expect(later).resolves.toEqual({ echoed: "later" });
+    expect(retried.socket.closed).toBeNull();
+  });
+
+  it("dials the next caller when the handed waiter aborts before it claims", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory, 0);
+    const bearer = new MutableBearerLease("token-a", USER_A);
+    const waiterController = new AbortController();
+    const owner = captureRejection(
+      client.request(
+        "host.echo",
+        { message: "owner" },
+        optionsFor(bearer, new AbortController().signal, null, false, null),
+      ),
+    );
+    const waiter = captureRejection(
+      client.request(
+        "host.echo",
+        { message: "waiter" },
+        optionsFor(bearer, waiterController.signal, null, false, null),
+      ),
+    );
+    const discovering = await openDiscoveringSocket(sockets);
+    client.releaseIdleLocalSessions();
+    let follower: Promise<{ readonly echoed: string }> | null = null;
+    discovering.socket.fireClose(1006, "peer-dropped", false);
+    queueMicrotask(() => {
+      waiterController.abort();
+      follower = client.request(
+        "host.echo",
+        { message: "waiter" },
+        optionsFor(bearer, new AbortController().signal, null, false, null),
+      );
+    });
+    await owner;
+    const waiterError = await waiter;
+    expect(waiterError).toBeInstanceOf(HostRequestAbortedError);
+    await Promise.resolve();
+    await Promise.resolve();
+    const next = follower;
+    if (next === null) {
+      throw new Error("expected the next caller");
+    }
+    await expectReplacementClosed(sockets, next);
+  });
+
+  it("carries a dial release when the first handed waiter fails before the second claims", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory, 0);
+    const bearerA = new MutableBearerLease("token-a", USER_A);
+    const bearerB = new MutableBearerLease("token-b", USER_A);
+    const bearerC = new MutableBearerLease("token-c", USER_A);
+    const owner = captureRejection(
+      client.request(
+        "host.echo",
+        { message: "owner" },
+        optionsFor(bearerA, new AbortController().signal, null, false, null),
+      ),
+    );
+    const bridge = captureRejection(
+      client.request(
+        "host.echo",
+        { message: "bridge" },
+        optionsFor(bearerB, new AbortController().signal, null, false, null),
+      ),
+    );
+    const survivor = client.request(
+      "host.echo",
+      { message: "waiter" },
+      optionsFor(bearerC, new AbortController().signal, null, false, null),
+    );
+    const discovering = await openDiscoveringSocket(sockets);
+    client.releaseIdleLocalSessions();
+    bearerB.rotate("");
+    discovering.socket.fireClose(1006, "peer-dropped", false);
+    const ownerError = await owner;
+    expect(ownerError).toBeInstanceOf(Error);
+    const bridgeError = await bridge;
+    expect(bridgeError).toBeInstanceOf(HostRpcError);
+    if (!(bridgeError instanceof HostRpcError)) {
+      throw new Error("expected the released lease to fail the first waiter");
+    }
+    expect(bridgeError.message).toContain("No bearer available");
+    await expectReplacementClosed(sockets, survivor);
+  });
+
+  it("carries a dial release onto the socket opened after a dial timeout", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    try {
+      const { factory, sockets } = makeFactory();
+      const client = makeTimedClient(factory, 5_000, 5_000);
+      const { owner, waiter } = admittedPair(client);
+      expect(sockets).toHaveLength(1);
+      client.releaseIdleLocalSessions();
+      await vi.advanceTimersByTimeAsync(5_000);
+      const outcome = await owner;
+      expect(outcome).toBeInstanceOf(RetryableTransportError);
+      if (!(outcome instanceof Error)) {
+        throw new Error("expected the dial timeout");
+      }
+      expect(outcome.message).toContain("WebSocket dial timed out");
+      await completeReplacementOnFakeClock(sockets, waiter);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("carries a dial release onto the socket opened after an ack timeout", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    try {
+      const { factory, sockets } = makeFactory();
+      const client = makeTimedClient(factory, 5_000, 5_000);
+      const { owner, waiter } = admittedPair(client);
+      const discovering = sockets[0];
+      if (discovering === undefined) {
+        throw new Error("expected the discovering socket");
+      }
+      const opened = discovering.socket.nextSend();
+      discovering.socket.fireOpen();
+      await vi.advanceTimersByTimeAsync(0);
+      await opened;
+      client.releaseIdleLocalSessions();
+      await vi.advanceTimersByTimeAsync(5_000);
+      const outcome = await owner;
+      expect(outcome).toBeInstanceOf(RetryableTransportError);
+      if (!(outcome instanceof Error)) {
+        throw new Error("expected the ack timeout");
+      }
+      expect(outcome.message).toContain("WebSocket frame timed out");
+      await completeReplacementOnFakeClock(sockets, waiter);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("carries a dial release onto the socket opened after a downgrade compatibility failure", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClientFor(statusNoBridgeRegistry, factory);
+    const bearer = new MutableBearerLease("token-a", USER_A);
+    const owner = captureRejection(
+      client.request(
+        "host.status",
+        {},
+        optionsFor(bearer, new AbortController().signal, null, false, null),
+      ),
+    );
+    const waiter = client.request(
+      "host.status",
+      {},
+      optionsFor(bearer, new AbortController().signal, null, false, null),
+    );
+    const discovering = await openDiscoveringSocket(sockets);
+    client.releaseIdleLocalSessions();
+    discovering.socket.fireMessage(statusAck(1));
+    const error = await owner;
+    expect(error).toBeInstanceOf(HostRpcError);
+    if (!(error instanceof HostRpcError)) {
+      throw new Error("expected the downgrade failure");
+    }
+    expect(error.code).toBe("DOWNGRADE_UNSUPPORTED");
+    expect(error.fatalDetails).toBeNull();
+    expect(sockets).toHaveLength(2);
+    const retried = sockets[1];
+    if (retried === undefined) {
+      throw new Error("expected the replacement dial");
+    }
+    await classify(retried, statusAck(2));
+    const frame = requestFrames(retried)[0];
+    if (frame === undefined) {
+      throw new Error("expected the waiter request on the replacement");
+    }
+    expect(frame.method).toBe("host.status");
+    respondStatus(retried.socket, frame, true);
+    await expect(waiter).resolves.toEqual({ ready: true });
+    expect(retried.socket.closed).toEqual({
+      code: 1000,
+      reason: "session-closed",
+    });
+  });
+
+  it("does not arm a later call when a released dial retries with nobody waiting", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory, 0);
+    const bearer = new MutableBearerLease("token-a", USER_A);
+    const owner = captureRejection(
+      client.request(
+        "host.echo",
+        { message: "owner" },
+        optionsFor(bearer, new AbortController().signal, null, false, null),
+      ),
+    );
+    const discovering = await releaseOutstandingHandshake(client, sockets);
+    discovering.socket.fireClose(1006, "peer-dropped", false);
+    await owner;
+    expect(sockets).toHaveLength(1);
+    const later = client.request(
+      "host.echo",
+      { message: "later" },
+      optionsFor(bearer, new AbortController().signal, null, false, null),
+    );
+    expect(sockets).toHaveLength(2);
+    const retried = sockets[1];
+    if (retried === undefined) {
+      throw new Error("expected the later dial");
+    }
+    await classify(retried, sessionAck(true));
+    const frame = requestFrames(retried)[0];
+    if (frame === undefined) {
+      throw new Error("expected the later request");
+    }
+    respondEcho(retried.socket, frame, "later");
+    await expect(later).resolves.toEqual({ echoed: "later" });
+    expect(retried.socket.closed).toBeNull();
+  });
+
+  it("closes the published session when the admitted waiter's abort releases the last hold", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory, 0);
+    const bearer = new MutableBearerLease("token-a", USER_A);
+    const waiterController = new AbortController();
+    const owner = captureRejection(
+      client.request(
+        "host.echo",
+        { message: "owner" },
+        versionFloorOptions(bearer),
+      ),
+    );
+    const waiter = captureRejection(
+      client.request(
+        "host.echo",
+        { message: "waiter" },
+        optionsFor(bearer, waiterController.signal, null, false, null),
+      ),
+    );
+    const discovering = await releaseOutstandingHandshake(client, sockets);
+    const waiterSent = discovering.socket.nextSend();
+    discovering.socket.fireMessage(sessionAck(true));
+    await waiterSent;
+    expect(discovering.socket.closed).toBeNull();
+    waiterController.abort();
+    const waiterError = await waiter;
+    expect(waiterError).toBeInstanceOf(HostRequestAbortedError);
+    expect(discovering.socket.closed).toEqual({
+      code: 1000,
+      reason: "session-closed",
+    });
+    const ownerError = await owner;
+    expect(ownerError).toBeInstanceOf(HostMethodVersionUnsatisfiedError);
+    expect(sockets).toHaveLength(1);
+  });
+
+  it("does not retire a published session when a dial hold from before the retry releases", async () => {
+    const directory = new LocalUnarySessionDirectory<typeof testRegistry>();
+    const key = localUnarySessionKey(HOST_ID, USER_A, SOCKET_URL);
+    const first = directory.claim(key, null);
+    if (first.kind !== "owner") {
+      throw new Error("expected the discovering dial");
+    }
+    const waiting = directory.claim(key, null);
+    if (waiting.kind !== "wait") {
+      throw new Error("expected a waiter");
+    }
+    const hold = directory.acquireDialHold(key);
+    const handed = waiting.settled.then((result) => {
+      if (result.kind !== "retry") {
+        throw new Error("expected the handed retry");
+      }
+      return result.handoff;
+    });
+    first.publish.retry();
+    const next = directory.claim(key, await handed);
+    if (next.kind !== "owner") {
+      throw new Error("expected the handed retry");
+    }
+    const session = new LocalUnarySession<typeof testRegistry>({
+      key,
+      registry: testRegistry,
+      hostId: HOST_ID,
+      directory,
+    });
+    const socket = new RecordingSocket();
+    session.attach({
+      socket,
+      clientManifest: BOTH_MANIFESTS,
+      hostManifest: BOTH_MANIFESTS,
+      idempotency: true,
+    });
+    next.publish.ready(session);
+    hold.release();
+    expect(session.isRetired).toBe(false);
+    expect(socket.closed).toBeNull();
+  });
+
+  it("drops a leftover retry without copying its release onto the next dial", () => {
+    const directory = new LocalUnarySessionDirectory<typeof testRegistry>();
+    const key = localUnarySessionKey(HOST_ID, USER_A, SOCKET_URL);
+    const first = directory.claim(key, null);
+    if (first.kind !== "owner") {
+      throw new Error("expected the discovering dial");
+    }
+    const waiting = directory.claim(key, null);
+    if (waiting.kind !== "wait") {
+      throw new Error("expected a waiter");
+    }
+    directory.releaseIdle();
+    first.publish.retry();
+    waiting.relinquish();
+    const fresh = directory.claim(key, null);
+    if (fresh.kind !== "owner") {
+      throw new Error("expected a fresh dial");
+    }
+    const session = new LocalUnarySession<typeof testRegistry>({
+      key,
+      registry: testRegistry,
+      hostId: HOST_ID,
+      directory,
+    });
+    const socket = new RecordingSocket();
+    session.attach({
+      socket,
+      clientManifest: BOTH_MANIFESTS,
+      hostManifest: BOTH_MANIFESTS,
+      idempotency: true,
+    });
+    fresh.publish.ready(session);
+    expect(directory.consumeReleaseBeforeReady(key, session)).toBe(false);
+    expect(session.isRetired).toBe(false);
+    expect(socket.closed).toBeNull();
+  });
+
+  it("does not carry a dial release that arrives after a connection-wide failure", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory, 0);
+    const { owner, waiter } = admittedPair(client);
+    const waiterError = captureRejection(waiter);
+    const discovering = await openDiscoveringSocket(sockets);
+    discovering.socket.fireMessage({
+      kind: "fatalError",
+      details: {
+        code: "INCOMPATIBLE",
+        reason: "host build is incompatible",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+    queueMicrotask(() => {
+      client.releaseIdleLocalSessions();
+    });
+    await owner;
+    await waiterError;
+    expect(sockets).toHaveLength(1);
+    const bearer = new MutableBearerLease("token-a", USER_A);
+    const later = client.request(
+      "host.echo",
+      { message: "later" },
+      optionsFor(bearer, new AbortController().signal, null, false, null),
+    );
+    expect(sockets).toHaveLength(2);
+    const retried = sockets[1];
+    if (retried === undefined) {
+      throw new Error("expected the later dial");
+    }
+    await classify(retried, sessionAck(true));
+    const frame = requestFrames(retried)[0];
+    if (frame === undefined) {
+      throw new Error("expected the later request");
+    }
+    respondEcho(retried.socket, frame, "later");
+    await expect(later).resolves.toEqual({ echoed: "later" });
+    expect(retried.socket.closed).toBeNull();
+  });
+
+  it("closes a released session when sending the request throws", async () => {
+    const { session, socket } = directEchoSession({
+      clientManifest: BOTH_MANIFESTS,
+      hostManifest: BOTH_MANIFESTS,
+    });
+    session.retainDialRelease();
+    socket.failSend = "request";
+    const error = await captureRejection(
+      echoCall(session, "req-send", new AbortController().signal),
+    );
+    expect(error).toBeInstanceOf(RetryableTransportError);
+    if (!(error instanceof Error)) {
+      throw new Error("expected the send failure");
+    }
+    expect(error.message).toContain("send request failed");
+    expect(socket.sent).toHaveLength(0);
+    expect(socket.closed).toEqual({ code: 1000, reason: "session-closed" });
+  });
+
+  it("closes a released session when the response method does not match", async () => {
+    const { session, socket } = directEchoSession({
+      clientManifest: BOTH_MANIFESTS,
+      hostManifest: BOTH_MANIFESTS,
+    });
+    session.retainDialRelease();
+    const pending = captureRejection(
+      echoCall(session, "req-mismatch", new AbortController().signal),
+    );
+    expect(socket.sent).toHaveLength(1);
+    expect(socket.closed).toBeNull();
+    session.handlers.onFrame({
+      kind: "response",
+      requestId: "req-mismatch",
+      method: "host.status",
+      schemaVersion: { major: 1, minor: 0 },
+      result: null,
+      error: null,
+    });
+    const error = await pending;
+    expect(error).toBeInstanceOf(HostRpcError);
+    if (!(error instanceof HostRpcError)) {
+      throw new Error("expected the method mismatch");
+    }
+    expect(error.message).toBe(
+      "Response method 'host.status' does not match request method 'host.echo'",
+    );
+    expect(mayHaveReachedHost(error)).toBe(true);
+    expect(socket.closed).toEqual({ code: 1000, reason: "session-closed" });
+  });
+
+  it("closes a released session when upgrading the response throws", async () => {
+    const { session, socket } = directSession(decodeThrowRegistry, {
+      clientManifest: { "host.echo": { major: 1, minor: 1 } },
+      hostManifest: { "host.echo": { major: 1, minor: 0 } },
+    });
+    session.retainDialRelease();
+    const bearer = new MutableBearerLease("token-a", USER_A);
+    const pending = captureRejection(
+      session.call({
+        requestId: "req-decode",
+        method: "host.echo",
+        params: { message: "hi" },
+        responseTimeoutMs: 5_000,
+        options: optionsFor(
+          bearer,
+          new AbortController().signal,
+          null,
+          false,
+          null,
+        ),
+        boundToDialRelease: true,
+      }),
+    );
+    expect(socket.sent).toHaveLength(1);
+    expect(socket.closed).toBeNull();
+    session.handlers.onFrame({
+      kind: "response",
+      requestId: "req-decode",
+      method: "host.echo",
+      schemaVersion: { major: 1, minor: 0 },
+      result: { echoed: "hi" },
+      error: null,
+    });
+    const error = await pending;
+    expect(error).toBeInstanceOf(HostRpcError);
+    if (!(error instanceof HostRpcError)) {
+      throw new Error("expected the response upgrade failure");
+    }
+    expect(error.message).toContain("response upgrade rejected");
+    expect(mayHaveReachedHost(error)).toBe(true);
+    expect(socket.closed).toEqual({ code: 1000, reason: "session-closed" });
+  });
+
+  it("closes a released session when sending the cancel throws", async () => {
+    const { session, socket } = directEchoSession({
+      clientManifest: BOTH_MANIFESTS,
+      hostManifest: BOTH_MANIFESTS,
+    });
+    session.retainDialRelease();
+    const controller = new AbortController();
+    const pending = captureRejection(
+      echoCall(session, "req-cancel", controller.signal),
+    );
+    expect(socket.sent).toHaveLength(1);
+    socket.failSend = "cancel";
+    controller.abort();
+    const error = await pending;
+    expect(error).toBeInstanceOf(HostRequestAbortedError);
+    expect(socket.closed).toEqual({ code: 1000, reason: "session-closed" });
+  });
+
+  it("closes a released session when a malformed frame arrives after adoption", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory, 0);
+    const bearer = new MutableBearerLease("token-a", USER_A);
+    const pending = captureRejection(
+      client.request(
+        "host.echo",
+        { message: "adopted" },
+        optionsFor(bearer, new AbortController().signal, null, false, null),
+      ),
+    );
+    const discovering = await openDiscoveringSocket(sockets);
+    const requested = discovering.socket.nextSend();
+    discovering.socket.fireMessage(sessionAck(true));
+    await requested;
+    client.releaseIdleLocalSessions();
+    expect(discovering.socket.closed).toBeNull();
+    discovering.socket.onmessage?.({ data: "not-json" });
+    const error = await pending;
+    expect(error).toBeInstanceOf(HostTransportFailureError);
+    if (!(error instanceof Error)) {
+      throw new Error("expected the malformed frame");
+    }
+    expect(error.message).toContain("Malformed host frame");
+    expect(mayHaveReachedHost(error)).toBe(true);
+    expect(discovering.socket.closed).toEqual({
+      code: 1000,
+      reason: "session-closed",
+    });
+  });
+
+  it("closes a released session when an unexpected frame arrives after adoption", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory, 0);
+    const bearer = new MutableBearerLease("token-a", USER_A);
+    const pending = captureRejection(
+      client.request(
+        "host.echo",
+        { message: "adopted" },
+        optionsFor(bearer, new AbortController().signal, null, false, null),
+      ),
+    );
+    const discovering = await openDiscoveringSocket(sockets);
+    const requested = discovering.socket.nextSend();
+    discovering.socket.fireMessage(sessionAck(true));
+    await requested;
+    client.releaseIdleLocalSessions();
+    expect(discovering.socket.closed).toBeNull();
+    discovering.socket.fireMessage(sessionAck(true));
+    const error = await pending;
+    expect(error).toBeInstanceOf(HostTransportFailureError);
+    if (!(error instanceof Error)) {
+      throw new Error("expected the unexpected frame");
+    }
+    expect(error.message).toContain("Unexpected host frame 'openAck'");
+    expect(mayHaveReachedHost(error)).toBe(true);
+    expect(discovering.socket.closed).toEqual({
+      code: 1000,
+      reason: "session-closed",
+    });
+  });
+
+  it("closes a released session when fallback adaptResponse throws", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClientFor(degradeRegistry, factory);
+    const bearer = new MutableBearerLease("token-a", USER_A);
+    const refused = captureRejection(
+      client.request(
+        "host.adapt",
+        { message: "adapt" },
+        optionsFor(bearer, new AbortController().signal, null, false, null),
+      ),
+    );
+    const discovering = sockets[0];
+    if (discovering === undefined) {
+      throw new Error("expected the discovering socket");
+    }
+    const opened = discovering.socket.nextSend();
+    discovering.socket.fireOpen();
+    await opened;
+    client.releaseIdleLocalSessions();
+    const requested = discovering.socket.nextSend();
+    discovering.socket.fireMessage({
+      kind: "openAck",
+      manifest: { "host.status": { major: 1, minor: 0 } },
+      optionalManifest: {},
+      capabilities: [UNARY_CAPABILITY_PERSISTENT_SESSION],
+    });
+    await requested;
+    const frame = requestFrames(discovering)[0];
+    if (frame === undefined) {
+      throw new Error("expected the fallback request");
+    }
+    expect(frame.method).toBe("host.status");
+    expect(discovering.socket.closed).toBeNull();
+    respondStatus(discovering.socket, frame, true);
+    const error = await refused;
+    expect(error).toBeInstanceOf(Error);
+    if (!(error instanceof Error)) {
+      throw new Error("expected the adapt response rejection");
+    }
+    expect(error.message).toBe("adapt response rejected");
+    expect(discovering.socket.closed).toEqual({
+      code: 1000,
+      reason: "session-closed",
+    });
+  });
+
+  it("closes a released session when the fallback target is not in the registry", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClientFor(unknownTargetRegistry, factory);
+    const bearer = new MutableBearerLease("token-a", USER_A);
+    const refused = captureRejection(
+      client.request(
+        "host.gap",
+        { message: "gap" },
+        optionsFor(bearer, new AbortController().signal, null, false, null),
+      ),
+    );
+    const discovering = sockets[0];
+    if (discovering === undefined) {
+      throw new Error("expected the discovering socket");
+    }
+    const opened = discovering.socket.nextSend();
+    discovering.socket.fireOpen();
+    await opened;
+    client.releaseIdleLocalSessions();
+    discovering.socket.fireMessage({
+      kind: "openAck",
+      manifest: { "host.status": { major: 1, minor: 0 } },
+      optionalManifest: {},
+      capabilities: [UNARY_CAPABILITY_PERSISTENT_SESSION],
+    });
+    const error = await refused;
+    expect(error).toBeInstanceOf(HostRpcError);
+    if (!(error instanceof HostRpcError)) {
+      throw new Error("expected the unknown fallback target");
+    }
+    expect(error.message).toBe(
+      "Fallback for method 'host.gap' targets unknown method 'host.spare'",
+    );
+    expect(requestFrames(discovering)).toHaveLength(0);
+    expect(discovering.socket.closed).toEqual({
+      code: 1000,
+      reason: "session-closed",
+    });
+  });
+
+  it("closes a released session when the last response is a retryable error", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory, 0);
+    const bearer = new MutableBearerLease("token-a", USER_A);
+    const pending = captureRejection(
+      client.request(
+        "host.echo",
+        { message: "transient" },
+        optionsFor(bearer, new AbortController().signal, null, false, null),
+      ),
+    );
+    const discovering = sockets[0];
+    if (discovering === undefined) {
+      throw new Error("expected the discovering socket");
+    }
+    await classify(discovering, sessionAck(true));
+    client.releaseIdleLocalSessions();
+    const frame = requestFrames(discovering)[0];
+    if (frame === undefined) {
+      throw new Error("expected the in-flight request");
+    }
+    discovering.socket.fireMessage({
+      kind: "response",
+      requestId: frame.requestId,
+      method: frame.method,
+      schemaVersion: frame.schemaVersion,
+      result: null,
+      error: {
+        code: "UNAUTHORIZED",
+        message: "verifier unreachable",
+        retryable: true,
+      },
+    });
+    const error = await pending;
+    expect(error).toBeInstanceOf(RetryableTransportError);
+    if (!(error instanceof RetryableTransportError)) {
+      throw new Error("expected the retryable response");
+    }
+    expect(error.replaySafetyFromKey).toBe(false);
+    expect(mayHaveReachedHost(error)).toBe(false);
+    expect(discovering.socket.closed).toEqual({
+      code: 1000,
+      reason: "session-closed",
+    });
+  });
+
+  it("closes a released session when the last response is a wire error", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory, 0);
+    const bearer = new MutableBearerLease("token-a", USER_A);
+    const pending = captureRejection(
+      client.request(
+        "host.echo",
+        { message: "permanent" },
+        optionsFor(bearer, new AbortController().signal, null, false, null),
+      ),
+    );
+    const discovering = sockets[0];
+    if (discovering === undefined) {
+      throw new Error("expected the discovering socket");
+    }
+    await classify(discovering, sessionAck(true));
+    client.releaseIdleLocalSessions();
+    const frame = requestFrames(discovering)[0];
+    if (frame === undefined) {
+      throw new Error("expected the in-flight request");
+    }
+    discovering.socket.fireMessage({
+      kind: "response",
+      requestId: frame.requestId,
+      method: frame.method,
+      schemaVersion: frame.schemaVersion,
+      result: null,
+      error: { code: "UNAUTHORIZED", message: "Invalid or expired token" },
+    });
+    const error = await pending;
+    expect(error).toBeInstanceOf(HostRpcError);
+    expect(error).not.toBeInstanceOf(RetryableTransportError);
+    if (!(error instanceof HostRpcError)) {
+      throw new Error("expected the wire error");
+    }
+    expect(error.code).toBe("UNAUTHORIZED");
+    expect(discovering.socket.closed).toEqual({
+      code: 1000,
+      reason: "session-closed",
+    });
+  });
+
+  it("closes a released session when the response times out and the cancel write throws", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    try {
+      const { session, socket } = directEchoSession({
+        clientManifest: BOTH_MANIFESTS,
+        hostManifest: BOTH_MANIFESTS,
+      });
+      session.retainDialRelease();
+      const pending = captureRejection(
+        echoCall(session, "req-timeout", new AbortController().signal),
+      );
+      expect(socket.sent).toHaveLength(1);
+      socket.failSend = "cancel";
+      await vi.advanceTimersByTimeAsync(5_000);
+      const error = await pending;
+      expect(error).toBeInstanceOf(HostTransportFailureError);
+      if (!(error instanceof HostTransportFailureError)) {
+        throw new Error("expected the response timeout");
+      }
+      expect(error.message).toBe("WebSocket frame timed out after 5000ms");
+      expect(mayHaveReachedHost(error)).toBe(true);
+      expect(socket.sent.filter((frame) => frame.kind === "cancel")).toEqual(
+        [],
+      );
+      expect(socket.closed).toEqual({ code: 1000, reason: "session-closed" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("fails a call still queued when the peer drops during the write", async () => {
+    const { session, socket } = directEchoSession({
+      clientManifest: BOTH_MANIFESTS,
+      hostManifest: BOTH_MANIFESTS,
+    });
+    session.retainDialRelease();
+    const signal = new AbortController().signal;
+    let queued: Promise<unknown> | null = null;
+    const send = socket.send.bind(socket);
+    socket.send = (frame) => {
+      send(frame);
+      if (frame.kind !== "request" || queued !== null) {
+        return;
+      }
+      queued = captureRejection(echoCall(session, "req-queued", signal));
+      session.handlers.onTransportClosed("peer dropped", false);
+    };
+    const sent = await captureRejection(echoCall(session, "req-sent", signal));
+    const waiting = queued;
+    if (waiting === null) {
+      throw new Error("expected the queued call");
+    }
+    const queuedError = await waiting;
+    expect(sent).toBeInstanceOf(HostTransportFailureError);
+    if (!(sent instanceof HostTransportFailureError)) {
+      throw new Error("expected the sent call to be uncertain");
+    }
+    expect(sent.message).toBe("peer dropped");
+    expect(mayHaveReachedHost(sent)).toBe(true);
+    expect(queuedError).toBeInstanceOf(RetryableTransportError);
+    if (!(queuedError instanceof RetryableTransportError)) {
+      throw new Error("expected the queued call to fail before send");
+    }
+    expect(queuedError.message).toBe(
+      "Persistent session closed before the request was sent",
+    );
+    expect(queuedError.replaySafetyFromKey).toBe(false);
+    expect(mayHaveReachedHost(queuedError)).toBe(false);
+    expect(
+      socket.sent.filter((frame) => frame.kind === "request"),
+    ).toHaveLength(1);
+    expect(socket.closed).toEqual({ code: 1000, reason: "session-closed" });
+    expect(session.isRetired).toBe(true);
+  });
+
+  it("fails a call still queued as incompatible when the host fatal arrives during the write", async () => {
+    const { session, socket } = directEchoSession({
+      clientManifest: BOTH_MANIFESTS,
+      hostManifest: BOTH_MANIFESTS,
+    });
+    session.retainDialRelease();
+    const signal = new AbortController().signal;
+    let queued: Promise<unknown> | null = null;
+    const send = socket.send.bind(socket);
+    socket.send = (frame) => {
+      send(frame);
+      if (frame.kind !== "request" || queued !== null) {
+        return;
+      }
+      queued = captureRejection(echoCall(session, "req-queued", signal));
+      session.handlers.onFrame({
+        kind: "fatalError",
+        details: {
+          code: "INCOMPATIBLE",
+          reason: "host build is incompatible",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        },
+      });
+    };
+    const sent = await captureRejection(echoCall(session, "req-sent", signal));
+    const waiting = queued;
+    if (waiting === null) {
+      throw new Error("expected the queued call");
+    }
+    const queuedError = await waiting;
+    expect(sent).toBeInstanceOf(HostRpcError);
+    expect(queuedError).toBeInstanceOf(HostRpcError);
+    if (
+      !(sent instanceof HostRpcError) ||
+      !(queuedError instanceof HostRpcError)
+    ) {
+      throw new Error("expected both calls to take the incompatible fatal");
+    }
+    expect(sent.code).toBe("INCOMPATIBLE");
+    expect(queuedError.code).toBe("INCOMPATIBLE");
+    expect(sent.requestId).toBe("req-sent");
+    expect(queuedError.requestId).toBe("req-queued");
+    expect(mayHaveReachedHost(sent)).toBe(true);
+    expect(mayHaveReachedHost(queuedError)).toBe(false);
+    expect(queuedError.fatalDetails).not.toBeNull();
+    expect(
+      socket.sent.filter((frame) => frame.kind === "request"),
+    ).toHaveLength(1);
+    expect(socket.closed).toEqual({ code: 1000, reason: "session-closed" });
+    expect(session.isRetired).toBe(true);
+  });
+
+  it("removes a failed dial when the only caller receives an incompatible handshake", () => {
+    const directory = new LocalUnarySessionDirectory<typeof testRegistry>();
+    const key = localUnarySessionKey(HOST_ID, USER_A, SOCKET_URL);
+    const owner = directory.claim(key, null);
+    if (owner.kind !== "owner") {
+      throw new Error("expected the discovering dial");
+    }
+    owner.publish.failed(incompatibleHandshake());
+    expectDirectoryEmpty(directory, key);
+  });
+
+  it("removes the dial when the waiting caller leaves before discovery fails", () => {
+    const directory = new LocalUnarySessionDirectory<typeof testRegistry>();
+    const key = localUnarySessionKey(HOST_ID, USER_A, SOCKET_URL);
+    const owner = directory.claim(key, null);
+    if (owner.kind !== "owner") {
+      throw new Error("expected the discovering dial");
+    }
+    const waiting = directory.claim(key, null);
+    if (waiting.kind !== "wait") {
+      throw new Error("expected a waiter");
+    }
+    const hold = directory.acquireDialHold(key);
+    waiting.leave();
+    hold.release();
+    owner.publish.retry();
+    expectDirectoryEmpty(directory, key);
+  });
+
+  it("converts only the slot that handed the retry", async () => {
+    const directory = new LocalUnarySessionDirectory<typeof testRegistry>();
+    const key = localUnarySessionKey(HOST_ID, USER_A, SOCKET_URL);
+    const first = directory.claim(key, null);
+    if (first.kind !== "owner") {
+      throw new Error("expected the discovering dial");
+    }
+    const firstWaiting = directory.claim(key, null);
+    if (firstWaiting.kind !== "wait") {
+      throw new Error("expected a waiter");
+    }
+    const firstHanded = firstWaiting.settled.then((result) => {
+      if (result.kind !== "retry") {
+        throw new Error("expected the first retry");
+      }
+      return result.handoff;
+    });
+    first.publish.retry();
+    const firstHandoff = await firstHanded;
+    firstWaiting.relinquish();
+
+    const second = directory.claim(key, null);
+    if (second.kind !== "owner") {
+      throw new Error("expected the replacement dial");
+    }
+    const secondWaiting = directory.claim(key, null);
+    if (secondWaiting.kind !== "wait") {
+      throw new Error("expected the replacement waiter");
+    }
+    directory.releaseIdle();
+    const secondHanded = secondWaiting.settled.then((result) => {
+      if (result.kind !== "retry") {
+        throw new Error("expected the second retry");
+      }
+      return result.handoff;
+    });
+    second.publish.retry();
+    const secondHandoff = await secondHanded;
+
+    const whileHeld = directory.claim(key, firstHandoff);
+    if (whileHeld.kind !== "wait") {
+      throw new Error("expected the occupied retry to wait");
+    }
+    whileHeld.leave();
+    secondWaiting.relinquish();
+    const stale = directory.claim(key, firstHandoff);
+    if (stale.kind !== "owner") {
+      throw new Error("expected the stale handoff to start a fresh dial");
+    }
+    const session = new LocalUnarySession<typeof testRegistry>({
+      key,
+      registry: testRegistry,
+      hostId: HOST_ID,
+      directory,
+    });
+    const socket = new RecordingSocket();
+    session.attach({
+      socket,
+      clientManifest: BOTH_MANIFESTS,
+      hostManifest: BOTH_MANIFESTS,
+      idempotency: true,
+    });
+    stale.publish.ready(session);
+    expect(directory.consumeReleaseBeforeReady(key, session)).toBe(false);
+    expect(session.isRetired).toBe(false);
+    expect(socket.closed).toBeNull();
+    const followed = directory.claim(key, secondHandoff);
+    if (followed.kind !== "ready") {
+      throw new Error("expected the published session");
+    }
+    expect(followed.session).toBe(session);
   });
 });
