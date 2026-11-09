@@ -145,7 +145,9 @@ describe("consequenceClauses", () => {
   it("adds the team and resting-storage clauses on a team", () => {
     const clauses = consequenceClauses(input({ configuration: ACME }));
     expect(kinds(clauses)).toEqual(["price", "team", "resting-storage"]);
-    expect(clauses[1].text).toContain("Everyone in the team can use it");
+    expect(clauses[1].text).toBe(
+      "Everyone in Acme can use it; another member's agent can read what yours can.",
+    );
   });
 
   it("adds the move clause when a computer's settings have not moved, naming it", () => {

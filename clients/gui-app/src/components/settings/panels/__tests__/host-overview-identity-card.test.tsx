@@ -240,7 +240,7 @@ describe("<HostSettingsPanel /> Overview identity card — Busy/Idle status", ()
     const chip = await screen.findByTestId("host-active-sessions");
     expect(chip.getAttribute("data-count")).toBe("1");
     expect(chip.getAttribute("data-live")).toBe("true");
-    expect(chip.textContent).toBe("Busy");
+    expect(chip.textContent).toBe("1 agent");
     expect(chip.textContent).not.toMatch(/session/i);
   });
 
@@ -260,7 +260,7 @@ describe("<HostSettingsPanel /> Overview identity card — Busy/Idle status", ()
 
     const chip = await screen.findByTestId("host-active-sessions");
     expect(chip.getAttribute("data-count")).toBe("2");
-    expect(chip.textContent).toBe("Busy");
+    expect(chip.textContent).toBe("2 sessions");
   });
 
   it("is ABSENT entirely while host.status has not resolved — not the same as a known zero", async () => {
@@ -316,7 +316,7 @@ describe("<HostSettingsPanel /> Overview identity card — Busy/Idle status", ()
 
     expect(
       (await screen.findByTestId("host-active-sessions")).textContent,
-    ).toBe("Busy");
+    ).toBe("1 session");
   });
 
   it("keeps the busy chip on screen while host.status is refetching", async () => {
@@ -371,7 +371,7 @@ describe("<HostSettingsPanel /> Overview identity card — Busy/Idle status", ()
     renderPanel(queryClient);
 
     const chip = await screen.findByTestId("host-active-sessions");
-    expect(chip.textContent).toBe("Busy");
+    expect(chip.textContent).toBe("2 terminals");
 
     act(() => {
       void queryClient.invalidateQueries({
@@ -387,14 +387,37 @@ describe("<HostSettingsPanel /> Overview identity card — Busy/Idle status", ()
       expect(statusCalls).toBe(2);
     });
 
-    expect(screen.getByTestId("host-active-sessions").textContent).toBe("Busy");
+    expect(screen.getByTestId("host-active-sessions").textContent).toBe(
+      "2 terminals",
+    );
 
     await act(async () => {
       releaseRefetch?.();
       await refetchGate;
     });
 
-    expect(screen.getByTestId("host-active-sessions").textContent).toBe("Busy");
+    expect(screen.getByTestId("host-active-sessions").textContent).toBe(
+      "2 terminals",
+    );
+  });
+
+  it("puts Computer on the name row and the running version on the fact line", async () => {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      effectiveName: "Studio Mac",
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel(undefined);
+
+    const row = await screen.findByTestId("host-identity-name-row");
+    expect(within(row).getByText("Computer")).toBeTruthy();
+    const health = await screen.findByTestId("host-identity-health");
+    expect(health.parentElement?.parentElement?.textContent).toContain(
+      "macOS · arm64 · v1.5.0",
+    );
   });
 });
 
@@ -430,6 +453,7 @@ describe("<HostSettingsPanel /> Overview identity card — window binding", () =
     // one boolean, which is what made the badge and the button read as
     // unrelated controls.
     expect(button.textContent).toBe("Activate");
+    expect(screen.queryByTestId("host-active-in-window")).toBeNull();
     fireEvent.click(button);
     expect(makeActive).toHaveBeenCalledWith("host-a");
   });
@@ -546,7 +570,7 @@ describe("<HostSettingsPanel /> Overview identity card — window binding", () =
     expect(within(menu).getByTestId("host-make-active")).not.toBeNull();
   });
 
-  it("host.isActive: true renders no Activate button", async () => {
+  it("host.isActive: true shows Active in the header row and More has no Active item", async () => {
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,
@@ -558,12 +582,20 @@ describe("<HostSettingsPanel /> Overview identity card — window binding", () =
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel(undefined);
 
-    await screen.findByText("Studio Mac");
-    fireEvent.pointerDown(await screen.findByTestId("host-overview-menu"), {
+    const card = await screen.findByTestId("host-identity-card");
+    const active = within(card).getByTestId("host-active-in-window");
+    expect(active.textContent).toBe("Active");
+    expect(active.getAttribute("data-slot")).toBe("badge");
+    expect(screen.queryByRole("button", { name: "Activate" })).toBeNull();
+    expect(screen.queryByTestId("host-make-active")).toBeNull();
+
+    fireEvent.pointerDown(within(card).getByTestId("host-overview-menu"), {
       button: 0,
     });
-    await screen.findByRole("menu");
-    expect(screen.queryByTestId("host-make-active")).toBeNull();
+    const menu = await screen.findByRole("menu");
+    expect(within(menu).queryByText("Active")).toBeNull();
+    expect(within(menu).queryByTestId("host-active-in-window")).toBeNull();
+    expect(within(menu).getByTestId("host-overview-restart")).not.toBeNull();
   });
 });
 

@@ -9,6 +9,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ComposerBodyProps } from "@/components/home/composer/composer-body";
+import { LANDING_COMPOSER_EDITOR_CLASSNAME } from "@/components/home/composer/composer-editor-classnames";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -76,6 +77,7 @@ const STAGED_INTENT: WorktreeIntent = {
 let landingTarget: LandingPlacementTarget = READ_TARGET;
 
 const testState = vi.hoisted(() => ({
+  editorClassName: null as string | null,
   bodySubmit: null as (() => void) | null,
   installEditor: null as (() => void) | null,
   snapshot: null as (() => void) | null,
@@ -168,6 +170,7 @@ vi.mock("@/components/home/composer/composer-body", async () => {
   const React = await import("react");
   return {
     ComposerBody: (props: ComposerBodyProps) => {
+      testState.editorClassName = props.editorClassName;
       testState.bodySubmit = props.onSubmit;
       testState.installEditor = () => {
         props.editorRef.current = editorHandle();
@@ -493,6 +496,7 @@ function render(ui: ReactElement): RenderResult {
 afterEach(() => {
   cleanup();
   testState.actionsTarget = null;
+  testState.editorClassName = null;
   testState.bodySubmit = null;
   testState.installEditor = null;
   testState.snapshot = null;
@@ -556,6 +560,19 @@ describe("landing composer placement wiring", () => {
     // equality check on fields would pass for either one.
     expect(testState.actionsTarget).toBe(SUBMIT_TARGET);
     expect(testState.actionsTarget).not.toBe(READ_TARGET);
+  });
+
+  it("passes only the shared landing editor classname", () => {
+    render(
+      <LandingComposer
+        draftId={null}
+        pendingCreateId="pending-1"
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+
+    expect(testState.editorClassName).toBe(LANDING_COMPOSER_EDITOR_CLASSNAME);
   });
 });
 

@@ -179,20 +179,6 @@ function SandboxDetailsSections(props: {
               <dd className="wrap-anywhere">{row.value}</dd>
             </div>
           ))}
-          {summary.burst && summary.createdByAgentName !== null ? (
-            <>
-              <dt className="text-muted-foreground">Created by</dt>
-              <dd className="wrap-anywhere">{summary.createdByAgentName}</dd>
-              {summary.createdByTaskTitle === null ? null : (
-                <>
-                  <dt className="text-muted-foreground">For task</dt>
-                  <dd className="wrap-anywhere">
-                    {summary.createdByTaskTitle}
-                  </dd>
-                </>
-              )}
-            </>
-          ) : null}
         </dl>
       </section>
       <SandboxSettingsDeliverySection summary={summary} />

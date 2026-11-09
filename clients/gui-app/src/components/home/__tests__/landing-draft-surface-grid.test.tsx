@@ -65,12 +65,30 @@ function setViewportWidth(width: number): void {
   });
 }
 
-function appearanceGrid(): Element {
+function appearanceGrid(): HTMLElement {
   const grid = document.querySelector(".landing-appearance-surface");
-  if (grid === null) {
+  if (!(grid instanceof HTMLElement)) {
     throw new Error("landing appearance surface is missing");
   }
   return grid;
+}
+
+function composerColumn(): HTMLElement {
+  const composer = appearanceGrid().querySelector("[data-composer-placement]");
+  if (!(composer instanceof HTMLElement)) {
+    throw new Error("composer track is missing");
+  }
+  return composer;
+}
+
+function customizeButton(): HTMLElement {
+  const button = screen.getByRole("button", { name: "Customize start page" });
+  const grid = appearanceGrid();
+  let node: HTMLElement | null = button;
+  while (node.parentElement !== null && node.parentElement !== grid) {
+    node = node.parentElement;
+  }
+  return node;
 }
 
 afterEach(() => {
@@ -79,42 +97,36 @@ afterEach(() => {
 });
 
 describe("LandingDraftSurface grid", () => {
-  it("places the task list after the composer, and on a phone offers history from the composer", () => {
+  it("nests current tasks in the composer column when greeting and history are on", () => {
     setViewportWidth(1280);
     useSettingsStore.setState({ showGreeting: true, showRecentHistory: true });
-    const view = render(<LandingDraftSurface />);
-
-    const grid = appearanceGrid();
-    const composer = grid.querySelector("[data-composer-placement]");
-    if (composer === null) {
-      throw new Error("composer track is missing");
-    }
-
-    const tasks = screen.getByTestId("current-tasks-section");
-    const wrapper = tasks.parentElement;
-    if (wrapper === null) {
-      throw new Error("task list wrapper is missing");
-    }
-    expect(wrapper.parentElement).toBe(grid);
-    expect(composer.parentElement).toBe(grid);
-    expect(composer.contains(tasks)).toBe(false);
-    expect(composer.nextElementSibling).toBe(wrapper);
-
-    // Below md the section is not mounted. Recent tasks are the history
-    // control in the composer column.
-    view.unmount();
-    setViewportWidth(390);
     render(<LandingDraftSurface />);
-    const phoneComposer = appearanceGrid().querySelector(
-      "[data-composer-placement]",
-    );
-    expect(screen.queryByTestId("current-tasks-section")).toBeNull();
-    expect(
-      phoneComposer?.contains(screen.getByTestId("home-view-history")),
-    ).toBe(true);
+
+    expectNestedTasks();
+    const grid = appearanceGrid();
+    const customize = customizeButton();
+    expect(customize.parentElement).toBe(grid);
+    expect(composerColumn().nextElementSibling).toBe(customize);
+    expect(grid.children).toHaveLength(4);
   });
 
-  it("omits the task list on the empty start page", () => {
+  it("nests tasks when history is on and the greeting is off", () => {
+    setViewportWidth(1280);
+    useSettingsStore.setState({ showGreeting: false, showRecentHistory: true });
+    render(<LandingDraftSurface />);
+
+    expectNestedTasks();
+  });
+
+  it("mounts no task list for a greeting without history", () => {
+    setViewportWidth(1280);
+    useSettingsStore.setState({ showGreeting: true, showRecentHistory: false });
+    render(<LandingDraftSurface />);
+
+    expect(screen.queryByTestId("current-tasks-section")).toBeNull();
+  });
+
+  it("mounts no task list when greeting and history are off", () => {
     setViewportWidth(1280);
     useSettingsStore.setState({
       showGreeting: false,
@@ -124,4 +136,33 @@ describe("LandingDraftSurface grid", () => {
 
     expect(screen.queryByTestId("current-tasks-section")).toBeNull();
   });
+
+  it("on a phone keeps history in the composer and omits tasks and customize", () => {
+    setViewportWidth(390);
+    useSettingsStore.setState({ showGreeting: true, showRecentHistory: true });
+    render(<LandingDraftSurface />);
+
+    const grid = appearanceGrid();
+    const composer = composerColumn();
+    expect(screen.queryByTestId("current-tasks-section")).toBeNull();
+    expect(composer.contains(screen.getByTestId("home-view-history"))).toBe(
+      true,
+    );
+    expect(
+      screen.queryByRole("button", { name: "Customize start page" }),
+    ).toBeNull();
+    expect(grid.children).toHaveLength(3);
+  });
 });
+
+function expectNestedTasks(): void {
+  const composer = composerColumn();
+  const tasks = screen.getByTestId("current-tasks-section");
+  const wrapper = tasks.parentElement;
+  if (!(wrapper instanceof HTMLElement)) {
+    throw new Error("task list wrapper is missing");
+  }
+  expect(wrapper.parentElement).toBe(composer);
+  expect(composer.contains(tasks)).toBe(true);
+  expect(Array.from(appearanceGrid().children).includes(wrapper)).toBe(false);
+}

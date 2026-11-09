@@ -1,4 +1,5 @@
 import type { FallbackRungKind } from "@traycer/protocol/host/fallback-policy";
+import { FRESH_SESSION_HELPER } from "@/components/chat/fallback/fallback-copy";
 
 /**
  * User-facing copy for the four ladder steps.
@@ -39,7 +40,11 @@ import type { FallbackRungKind } from "@traycer/protocol/host/fallback-policy";
 export interface FallbackRungCopy {
   /** The step's own line in "Try these in order". */
   readonly label: string;
-  /** The explanation under the step; the editor states the shared session cost. */
+  /**
+   * The explanation under the step. Account and model switches also carry
+   * {@link FRESH_SESSION_HELPER}; wait and notify do not, because they do
+   * not start a session. The editor still states the shared cost above the list.
+   */
   readonly description: string;
   /**
    * The short form used as a column chip in the per-failure overrides matrix,
@@ -52,12 +57,12 @@ export interface FallbackRungCopy {
 export const FALLBACK_RUNG_COPY: Record<FallbackRungKind, FallbackRungCopy> = {
   profile: {
     label: "Another account on the same provider",
-    description: "Switches to a different account you're signed in to.",
+    description: `Switches to a different account you're signed in to. ${FRESH_SESSION_HELPER}`,
     chipLabel: "other account",
   },
   tier: {
     label: "An equivalent model on another provider",
-    description: "Tries a backup model from the Equivalent models tab.",
+    description: `Tries a backup model from the Equivalent models tab. ${FRESH_SESSION_HELPER}`,
     chipLabel: "equivalent model",
   },
   wait: {

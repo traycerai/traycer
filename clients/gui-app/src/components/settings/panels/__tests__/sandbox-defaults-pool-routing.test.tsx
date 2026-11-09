@@ -178,9 +178,15 @@ describe("<SandboxDefaultsSection /> on a build with a server pool", () => {
     );
 
     await waitFor(() => {
-      expect(
-        screen.getByTestId("sandboxes-defaults-summary").textContent,
-      ).toContain("Linux · 4 vCPU · 8 GB · suspends after 45 minutes");
+      expect(screen.getByTestId("sandboxes-defaults-shape").textContent).toBe(
+        "Shape · Linux · 4 vCPU · 8 GB · from $0.12/h · Suspend keeps memory",
+      );
+      expect(screen.getByTestId("sandboxes-defaults-idle").textContent).toBe(
+        "Idle · 45 minutes",
+      );
+      expect(screen.getByTestId("sandboxes-defaults-resting").textContent).toBe(
+        "Destruction · kept until you destroy it",
+      );
     });
     everyRequestWentToThePool(harness, "environment.configuration.items");
   });

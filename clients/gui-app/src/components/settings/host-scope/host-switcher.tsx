@@ -1,10 +1,7 @@
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import { useState, type ReactNode } from "react";
-import {
-  HOST_FROZEN_WORD,
-  hostSandboxStateWord,
-} from "@traycer/protocol/host/host-status";
+import { HOST_FROZEN_WORD } from "@traycer/protocol/host/host-status";
 import {
   ChevronDown,
   ChevronRight,
@@ -1162,7 +1159,6 @@ function hostSwitcherTriggerText(
   intent: HostPickIntent,
   selected: HostScopeOption | null,
   composer: HostSwitcherComposerMode | null,
-  surface: HostSwitcherSurface,
 ): {
   readonly label: string;
   readonly ariaLabel: string;
@@ -1176,17 +1172,10 @@ function hostSwitcherTriggerText(
       status: null,
     };
   }
-  const selectedStatus =
+  const status =
     selected === null
       ? null
       : hostOptionStatusWord(selected, AVAILABLE_HOST_ROW_SURFACE_STATE);
-  // The host header owns the healthy lifecycle word in Settings.
-  const status =
-    surface === "rail" &&
-    selected?.sandbox?.frozen !== true &&
-    selectedStatus === hostSandboxStateWord("awake")
-      ? null
-      : selectedStatus;
   const name = selected?.name ?? null;
   const spokenStatus =
     status !== null && selected?.sandbox?.frozen
@@ -1243,12 +1232,7 @@ function HostSwitcherTrigger(props: {
   readonly composer: HostSwitcherComposerMode | null;
 }): ReactNode {
   const { selected } = props;
-  const text = hostSwitcherTriggerText(
-    props.intent,
-    selected,
-    props.composer,
-    props.surfaceKind,
-  );
+  const text = hostSwitcherTriggerText(props.intent, selected, props.composer);
   const triggerStatus = text.status;
   const { ref: nameRef, isTruncated } = useIsTextTruncated<HTMLSpanElement>(
     text.label,

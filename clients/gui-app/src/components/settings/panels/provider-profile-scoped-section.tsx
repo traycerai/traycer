@@ -1,9 +1,5 @@
 import { useState, type ReactNode } from "react";
 
-import { useIsMutatingOf } from "@/hooks/use-mutation-state-of";
-import { SettingsDetailsDialog } from "@/components/settings/details/settings-details-button";
-import { useAppliedProviderItemDetailsSubject } from "@/components/settings/details/use-provider-row-details-subject";
-import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 import {
   AlertTriangle,
   Eye,
@@ -17,6 +13,7 @@ import {
   type ProviderCliState,
   type ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
@@ -30,17 +27,9 @@ import {
   providerSignInUnavailableReason,
 } from "@/components/providers/provider-signin-availability";
 import { cn } from "@/lib/utils";
-import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import { useRefreshProviders } from "@/hooks/providers/use-refresh-providers";
-import { providersMutationKeys } from "@/lib/query-keys";
 import { ProviderOnHostOnlyLine } from "./provider-on-host-only-line";
 import { EmbeddedProviderRateLimitForProvider } from "./provider-rate-limit-section";
 import { ProfileEditDialog } from "./provider-profile-edit-dialog";
-import {
-  isProviderAmbientAuthenticated,
-  isProviderAmbientSignedOut,
-} from "@/lib/providers/provider-ambient-auth";
-import { ambientLoginConfigured } from "./provider-rail-state-word";
 import { usePersonalHostName } from "@/components/settings/personal/personal-page-context";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -52,6 +41,7 @@ import {
   profileCommitId,
   profileDisplayLabel,
 } from "@/components/providers/provider-profile-model";
+import { isProviderAmbientSignedOut } from "@/lib/providers/provider-ambient-auth";
 import {
   isRateLimitProfileFetchEligible,
   resolveRateLimitFetchEligibility,
@@ -255,9 +245,9 @@ function ProfileScopedSectionMessages(props: {
  * is no section; the caller keeps the plain unscoped
  * `ProviderRateLimitForProvider` mounted for that case.
  *
- * The terminal login is a read-only row (design, Profiles & Limits): named as
- * the tool's own login on this host, with one verb that starts a Settings
- * sign-in - a new profile that follows you - and leaves that login untouched.
+ * The selected profile, including the terminal login, is the released summary
+ * row under the picker: identity, a status chip and a plan chip, then Sign in
+ * when it is signed out and Manage profile. Details is not on this row.
  *
  * The card's one verb is `Add a profile`: Personal carries every profile it
  * holds to each computer running it. The page header's Refresh re-probes every
@@ -398,11 +388,7 @@ export function ProviderProfileScopedSection(
         />
         <SelectedProfileRow
           state={state}
-          hostName={hostName}
           profile={selectedProfile}
-          addProfileDisabled={addProfileDisabled}
-          addProfileDisabledReason={addProfileDisabledReason}
-          onAddProfile={onAddProfile}
           canAddProfile={canAddProfile}
           signInUnavailableHint={signInUnavailableHint}
           managementHeldReason={managementHeldReason}
@@ -464,17 +450,13 @@ export function ProviderProfileScopedSection(
 }
 
 /**
- * The selected profile's row under the dropdown. The email, plan and a
- * not-usable standing stay on the row. Sign in, Manage profile and Details
- * are visible controls that wrap with the row.
+ * The selected profile's row under the dropdown. Identity, status and plan
+ * wrap with Sign in and Manage profile. The terminal login uses this same
+ * row. Details is not on this row.
  */
 function SelectedProfileRow(props: {
   readonly state: ProviderCliState;
-  readonly hostName: string | null;
   readonly profile: ProviderProfile;
-  readonly addProfileDisabled: boolean;
-  readonly addProfileDisabledReason: string | null;
-  readonly onAddProfile: () => void;
   readonly canAddProfile: boolean;
   readonly signInUnavailableHint: string | null;
   readonly managementHeldReason: string | null;
@@ -482,274 +464,93 @@ function SelectedProfileRow(props: {
   readonly onManage: () => void;
 }): ReactNode {
   const { profile, managementHeldReason } = props;
-  const [detailsOpen, setDetailsOpen] = useState(false);
-  const detailsSubject = useAppliedProviderItemDetailsSubject(
-    "managed_profile",
-    `${providerIdToGuiHarnessId(props.state.providerId)}:${profile.profileId}`,
-  );
-  if (profile.kind === "ambient") {
-    return (
-      <OwnLoginSummary
+  return (
+    <div
+      data-slot="profile-summary-actions"
+      // Wraps because every item except the email is a fixed-width chip:
+      // in a single-line row a narrow viewport collapses the email to
+      // nothing and then pushes the chips into one another, since none of
+      // them can shrink. Wrapping drops the buttons onto their own line
+      // instead, keeping every chip whole.
+      className="flex min-w-0 flex-wrap items-center justify-end gap-2"
+    >
+      <ProfileSummary
+        key={profile.profileId}
         state={props.state}
-        hostName={props.hostName}
-        addProfileDisabled={props.addProfileDisabled}
-        addProfileDisabledReason={props.addProfileDisabledReason}
-        onAddProfile={props.onAddProfile}
+        profile={profile}
       />
-    );
-  }
-  return (
-    <div
-      data-slot="profile-summary-actions"
-      className="flex min-w-0 flex-wrap items-start justify-between gap-2"
-    >
-      <ProfileSummary key={profile.profileId} profile={profile} />
-      <div className="flex min-w-0 flex-wrap items-center gap-2">
-        {detailsSubject === null ? null : (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={() => setDetailsOpen(true)}
-          >
-            Details
-          </Button>
-        )}
-        {profile.auth.status === "unauthenticated" ? (
-          <TooltipWrapper
-            label={props.canAddProfile ? null : props.signInUnavailableHint}
-            side="top"
-            sideOffset={6}
-            align="start"
-          >
-            <span className="flex">
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                disabled={!props.canAddProfile}
-                onClick={props.onSignIn}
-              >
-                <LogIn data-icon="inline-start" />
-                Sign in
-              </Button>
-            </span>
-          </TooltipWrapper>
-        ) : null}
+      {profileReadsSignedOut(props.state, profile) ? (
         <TooltipWrapper
-          label={
-            managementHeldReason ??
-            "Change the profile name and accent color, sign in again, or remove this profile."
-          }
-          side="bottom"
-          sideOffset={6}
-          align="end"
-        >
-          <span className="flex">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              disabled={managementHeldReason !== null}
-              onClick={props.onManage}
-            >
-              <Settings2 data-icon="inline-start" />
-              Manage profile
-            </Button>
-          </span>
-        </TooltipWrapper>
-      </div>
-      <SettingsDetailsDialog
-        subject={detailsSubject}
-        title={profile.label}
-        controls={null}
-        open={detailsOpen}
-        onOpenChange={setDetailsOpen}
-        initialTab="status"
-      />
-    </div>
-  );
-}
-
-/**
- * The terminal login's reconciled read, the same two sources the rail word
- * reads (`provider-rail-state-word.ts`) rather than the ambient profile
- * row's own status alone: that row can lag a probe-less `unauthenticated`
- * stamped at the top level, and reading only the row showed "couldn't be
- * checked" for a login that was definitively absent.
- *
- * `checking` is the same exception the rail word carries: a still-running
- * probe (`authPending`) is not a failed one, so it reads as a neutral wait
- * rather than `unchecked`'s "couldn't check" failure framing with Retry.
- */
-type AmbientLoginReadState =
-  | "signed-in"
-  | "signed-out"
-  | "checking"
-  | "unchecked";
-
-function ambientLoginReadState(state: ProviderCliState): AmbientLoginReadState {
-  if (isProviderAmbientSignedOut(state)) return "signed-out";
-  if (isProviderAmbientAuthenticated(state) || ambientLoginConfigured(state)) {
-    return "signed-in";
-  }
-  if (state.authPending) return "checking";
-  return "unchecked";
-}
-
-/**
- * The terminal login's row under the dropdown that names it: where it works
- * and whether it is signed in, with one verb. `Sign in to use everywhere`
- * opens the same sign-in `Add a profile` does, so the tool's own login is
- * never touched from here.
- *
- * No login found and a failed check read differently: the first names no
- * login to manage at all (`isn't signed in`, with a plain `Sign in`), the
- * second names the read itself as the problem (`Couldn't check …`, with the
- * refresh probe as its own Retry) - conflating them is what let a
- * definitively signed-out login read as merely unchecked.
- */
-function OwnLoginSummary(props: {
-  readonly state: ProviderCliState;
-  readonly hostName: string | null;
-  readonly addProfileDisabled: boolean;
-  readonly addProfileDisabledReason: string | null;
-  readonly onAddProfile: () => void;
-}): ReactNode {
-  const refreshProviders = useRefreshProviders();
-  const refreshing =
-    useIsMutatingOf({ mutationKey: providersMutationKeys.refresh() }) > 0;
-  const providerLabel = PROVIDER_DISPLAY_NAMES[props.state.providerId];
-  const hostName = props.hostName;
-  const readState = ambientLoginReadState(props.state);
-
-  if (readState === "signed-out") {
-    return (
-      <div
-        data-slot="profile-summary-actions"
-        className="flex min-w-0 flex-wrap items-start justify-between gap-2"
-      >
-        <span className="min-w-0 whitespace-normal break-words text-ui-xs text-muted-foreground">
-          {providerLabel} isn&apos;t signed in
-          {hostName === null ? null : ` on ${hostName}`}
-        </span>
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <TooltipWrapper
-            label={props.addProfileDisabledReason}
-            side="top"
-            sideOffset={6}
-            align="start"
-          >
-            <span className="flex">
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                disabled={props.addProfileDisabled}
-                onClick={props.onAddProfile}
-              >
-                <LogIn data-icon="inline-start" />
-                Sign in
-              </Button>
-            </span>
-          </TooltipWrapper>
-        </div>
-      </div>
-    );
-  }
-
-  if (readState === "checking") {
-    return (
-      <div
-        data-slot="profile-summary-actions"
-        className="flex min-w-0 items-center gap-1 text-ui-xs text-muted-foreground"
-      >
-        <span className="min-w-0 whitespace-normal break-words">
-          Checking {providerLabel}&apos;s login
-          {hostName === null ? null : ` on ${hostName}`}…
-        </span>
-      </div>
-    );
-  }
-
-  if (readState === "unchecked") {
-    return (
-      <div
-        data-slot="profile-summary-actions"
-        className="flex min-w-0 flex-wrap items-start justify-between gap-2 text-ui-xs text-muted-foreground"
-      >
-        <span className="min-w-0 whitespace-normal break-words">
-          Couldn&apos;t check {providerLabel}&apos;s login
-          {hostName === null ? null : ` on ${hostName}`}.
-        </span>
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            disabled={refreshing}
-            onClick={() => void refreshProviders()}
-          >
-            Retry
-            {refreshing ? (
-              <AgentSpinningDots
-                className={undefined}
-                testId={undefined}
-                variant={undefined}
-              />
-            ) : null}
-          </Button>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div
-      data-slot="profile-summary-actions"
-      className="flex min-w-0 flex-wrap items-start justify-between gap-2"
-    >
-      <span className="min-w-0 whitespace-normal break-words text-ui-xs text-muted-foreground">
-        works on this computer only
-      </span>
-      <div className="flex min-w-0 flex-wrap items-center gap-2">
-        <TooltipWrapper
-          label={props.addProfileDisabledReason}
+          label={props.canAddProfile ? null : props.signInUnavailableHint}
           side="top"
           sideOffset={6}
           align="start"
         >
-          <span className="flex">
+          <span className="inline-flex">
             <Button
               type="button"
-              variant="ghost"
-              size="sm"
-              disabled={props.addProfileDisabled}
-              onClick={props.onAddProfile}
+              size="xs"
+              variant="secondary"
+              className="shrink-0"
+              disabled={!props.canAddProfile}
+              onClick={props.onSignIn}
             >
               <LogIn data-icon="inline-start" />
-              Sign in to use everywhere
+              Sign in
             </Button>
           </span>
         </TooltipWrapper>
-      </div>
+      ) : null}
+      <TooltipWrapper
+        label={
+          managementHeldReason ??
+          "Change the profile name and accent color, sign in again, or remove this profile."
+        }
+        side="bottom"
+        sideOffset={6}
+        align="end"
+      >
+        {/* Span for the same reason as Add a profile above: a disabled
+            button emits no pointer events for the tooltip to see. */}
+        <span className="inline-flex">
+          <Button
+            type="button"
+            size="xs"
+            variant="outline"
+            className="shrink-0"
+            disabled={managementHeldReason !== null}
+            onClick={props.onManage}
+          >
+            <Settings2 data-icon="inline-start" />
+            Manage profile
+          </Button>
+        </span>
+      </TooltipWrapper>
     </div>
   );
 }
 
-function profileStandingText(profile: ProviderProfile): string | null {
-  if (
-    profile.auth.status === "authenticated" ||
-    profile.auth.status === "configured"
-  ) {
-    return null;
-  }
-  return profileAuthStatusText(profile);
+/**
+ * An ambient row can lag an `unauthenticated` stamped on the provider itself,
+ * so its badge reads the same reconciled signed-out the rail word reads.
+ * Sign in uses that same reading. A row that is itself unauthenticated is
+ * signed out either way.
+ */
+function profileReadsSignedOut(
+  state: ProviderCliState,
+  profile: ProviderProfile,
+): boolean {
+  return (
+    profile.auth.status === "unauthenticated" ||
+    (profile.kind === "ambient" && isProviderAmbientSignedOut(state))
+  );
 }
 
 function ProfileSummary({
+  state,
   profile,
 }: {
+  readonly state: ProviderCliState;
   readonly profile: ProviderProfile;
 }): ReactNode {
   const [emailRevealed, setEmailRevealed] = useState(false);
@@ -761,14 +562,27 @@ function ProfileSummary({
   const tier = profile.identity?.tier;
   const planText =
     tier === null || tier === undefined || tier.length === 0 ? null : tier;
-  const standing = profileStandingText(profile);
 
   return (
-    <div className="flex min-w-0 flex-col gap-0.5 text-ui-xs text-muted-foreground">
-      <div className="flex min-w-0 items-start gap-1">
-        <span className="min-w-0 whitespace-normal break-words">
-          {emailText}
-        </span>
+    <div className="flex min-w-0 flex-auto flex-wrap items-center gap-x-2 gap-y-1 text-ui-xs text-muted-foreground">
+      {/* The email (and its reveal toggle) is the one shrinkable item; the
+          badges are whole-or-nothing chips. `flex-auto`, not `flex-1`: the
+          wrap threshold is computed from each unit's flex BASIS, and `flex-1`
+          zeroes it - a zero-basis email reserves no width during line
+          collection, so the fixed chips would stay on the line and still
+          paint over the toggle. With its content as its basis the email
+          claims its width first, whole chips move down when the line cannot
+          hold everything, and the email truncates only once it has a line
+          largely to itself. */}
+      <div className="flex min-w-0 flex-auto items-center gap-1">
+        <TooltipWrapper
+          label={emailRevealed ? email : null}
+          side="top"
+          sideOffset={undefined}
+          align="start"
+        >
+          <span className="min-w-0 truncate">{emailText}</span>
+        </TooltipWrapper>
         {email !== null ? (
           <button
             type="button"
@@ -789,12 +603,27 @@ function ProfileSummary({
           </button>
         ) : null}
       </div>
-      {planText === null ? null : (
-        <p className="min-w-0 whitespace-normal break-words">{planText}</p>
-      )}
-      {standing === null ? null : (
-        <p className="min-w-0 whitespace-normal break-words">{standing}</p>
-      )}
+      <Badge variant="outline" size="xs" className="shrink-0">
+        {profileReadsSignedOut(state, profile)
+          ? "Signed out"
+          : profileAuthStatusText(profile)}
+      </Badge>
+      {planText !== null ? (
+        <TooltipWrapper
+          label={planText}
+          side="top"
+          sideOffset={undefined}
+          align="end"
+        >
+          <Badge
+            variant="outline"
+            size="xs"
+            className="max-w-[min(28vw,14rem)] shrink-0"
+          >
+            <span className="truncate">{planText}</span>
+          </Badge>
+        </TooltipWrapper>
+      ) : null}
     </div>
   );
 }

@@ -253,13 +253,6 @@ function SandboxLifecycleRowActions(
         operation={applyingOperation}
         name={summary.displayName}
       />
-      <SandboxRowPrimaryAction
-        primary={primary}
-        pendingVerb={pendingVerb}
-        busy={busy}
-        dialogOpen={dialog !== null}
-        run={run}
-      />
       {giveAnother === null ? null : (
         <Button
           type="button"
@@ -294,6 +287,13 @@ function SandboxLifecycleRowActions(
           {giveAnother}
         </Button>
       )}
+      <SandboxRowPrimaryAction
+        primary={primary}
+        pendingVerb={pendingVerb}
+        busy={busy}
+        dialogOpen={dialog !== null}
+        run={run}
+      />
       {inlineActions.map((action) => (
         <Button
           key={action}

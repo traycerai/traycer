@@ -173,11 +173,13 @@ vi.mock("@/components/settings/environment/open-environment-page", () => ({
 }));
 
 import {
-  SandboxCard,
   SandboxHeaderActions,
   SandboxHeaderCost,
   SandboxHeaderNotices,
+  SandboxInstallationGroup,
 } from "@/components/hosts/sandbox-card";
+import { HostOverviewCostsTab } from "@/components/settings/panels/host-overview-costs-tab";
+import { HostOverviewSecretsTab } from "@/components/settings/panels/host-overview-secrets-tab";
 import type { HostHealthState } from "@/components/settings/host-scope/host-health";
 import {
   buildHostScopeOptions,
@@ -215,7 +217,10 @@ function renderCardOnHost(
       />
       <SandboxHeaderCost sandbox={sandbox} />
       <SandboxHeaderNotices sandbox={sandbox} teamName={null} />
-      <SandboxCard hostState={hostState} sandbox={sandbox} />
+      <SandboxInstallationGroup sandbox={sandbox} />
+      {sandbox.summary === null ? null : (
+        <HostOverviewSecretsTab hostState={hostState} sandbox={sandbox} />
+      )}
     </QueryClientProvider>,
   );
 }
@@ -338,7 +343,7 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
-describe("<SandboxCard /> per state", () => {
+describe("per state", () => {
   const ACTIONS: Record<string, readonly string[]> = {
     creating: [],
     awake: ["suspend", "stop", "destroy"],
@@ -354,12 +359,9 @@ describe("<SandboxCard /> per state", () => {
     released: [],
   };
 
-  it("renders one Sandbox body and exactly the allowed header actions in every lifecycle state", () => {
+  it("renders exactly the allowed header actions in every lifecycle state", () => {
     for (const state of HOST_SANDBOX_STATES) {
       renderCard(sandboxOf(state, false, {}));
-      const card = screen.getByTestId("sandbox-card");
-      expect(card.getAttribute("data-state")).toBe(state);
-      expect(card.getAttribute("data-frozen")).toBe("false");
       expect(screen.queryByTestId("sandbox-card-state")).toBeNull();
       expect(actionTestIds()).toEqual(
         ACTIONS[state].map((action) => `sandbox-card-${action}`),
@@ -384,9 +386,7 @@ describe("<SandboxCard /> per state", () => {
     renderCard(sandboxOf(state, frozen, {}));
 
     expect(
-      within(screen.getByTestId("sandbox-card")).getByTestId(
-        "sandbox-card-operational-line",
-      ).textContent,
+      screen.getByTestId("sandbox-card-operational-line").textContent,
     ).toBe(line);
   });
 
@@ -402,11 +402,7 @@ describe("<SandboxCard /> per state", () => {
     (state, frozen) => {
       renderCard(sandboxOf(state, frozen, {}));
 
-      expect(
-        within(screen.getByTestId("sandbox-card")).queryByTestId(
-          "sandbox-card-operational-line",
-        ),
-      ).toBeNull();
+      expect(screen.queryByTestId("sandbox-card-operational-line")).toBeNull();
     },
   );
 
@@ -447,9 +443,6 @@ describe("<SandboxCard /> per state", () => {
         frozenAt: new Date(2026, 9, 9, 12).getTime(),
       }),
     );
-    expect(screen.getByTestId("sandbox-card").getAttribute("data-frozen")).toBe(
-      "true",
-    );
     expect(screen.getByTestId("sandbox-card-state-line").textContent).toMatch(
       /^Your credits ran out · Will be removed on /,
     );
@@ -458,9 +451,6 @@ describe("<SandboxCard /> per state", () => {
 
   it("does not show a frozen notice for a destroyed row whose summary kept the frozen flag", () => {
     renderCard(sandboxOf("destroyed", false, { frozen: true }));
-    const card = screen.getByTestId("sandbox-card");
-    expect(card.getAttribute("data-state")).toBe("destroyed");
-    expect(card.getAttribute("data-frozen")).toBe("false");
     expect(screen.queryByTestId("sandbox-card-state-line")).toBeNull();
     expect(actionTestIds()).toEqual([]);
   });
@@ -590,9 +580,6 @@ describe("<SandboxCard /> per state", () => {
     expect(screen.getByTestId("sandbox-card-cost-today").textContent).toBe(
       "under $0.01 today",
     );
-    expect(
-      screen.getByTestId("sandbox-card-cost-charged").textContent,
-    ).not.toContain("credits");
   });
 
   it("reads a cent or more of today's cost in dollars", () => {
@@ -710,38 +697,9 @@ describe("<SandboxCard /> per state", () => {
       "disk only",
     );
   });
-
-  it("shows the cost view and the runway warning when the figures and the warning are in", () => {
-    mocks.costs = {
-      sandboxes: [COST],
-      awakeBurnMillicreditsPerHour: 120,
-      todayYoursMillicredits: 0,
-      todayByEnvironment: [],
-    };
-    mocks.warning = { kind: "critical", runwayMinutes: 20 };
-    renderCard(sandboxOf("awake", false, {}));
-    expect(
-      screen
-        .getByTestId("sandbox-card-cost-charged")
-        .closest("details:not([open])"),
-    ).toBeNull();
-    expect(
-      screen.getByTestId("sandbox-card-balance").closest("details:not([open])"),
-    ).toBeNull();
-    expect(screen.queryByText("Cost details", { exact: true })).toBeNull();
-    expect(
-      screen.getByTestId("sandbox-card-cost-charged").textContent,
-    ).toContain("$6.00 since");
-    expect(
-      screen.getByTestId("sandbox-card-cost-charged").textContent,
-    ).toContain("$0.50 pending");
-    const warning = screen.getByTestId("sandbox-balance-warning");
-    expect(warning.getAttribute("data-level")).toBe("critical");
-    expect(warning.textContent).toContain("20 min");
-  });
 });
 
-describe("<SandboxCard /> rates", () => {
+describe("rates", () => {
   it.each([
     ["awake", "$0.12 an hour", "under $0.01 an hour", "Storage rate"],
     ["suspended", "under $0.01 an hour", "$0.12 an hour", "Awake rate"],
@@ -873,7 +831,7 @@ function resolvedSandbox(input: {
   return sandbox;
 }
 
-describe("<SandboxCard /> facts as the scope resolves them", () => {
+describe("facts as the scope resolves them", () => {
   it("shows the host list's thaw, not the stale summary's frozen flag", () => {
     const sandbox = resolvedSandbox({
       listed: { state: "suspended", frozen: false },
@@ -884,9 +842,6 @@ describe("<SandboxCard /> facts as the scope resolves them", () => {
 
     renderCard(sandbox);
 
-    expect(screen.getByTestId("sandbox-card").getAttribute("data-frozen")).toBe(
-      "false",
-    );
     expect(screen.queryByTestId("sandbox-card-state")).toBeNull();
     expect(screen.queryByTestId("sandbox-card-state-line")).toBeNull();
     expect(actionTestIds()).toEqual([
@@ -904,9 +859,6 @@ describe("<SandboxCard /> facts as the scope resolves them", () => {
 
     renderCard(sandbox);
 
-    expect(screen.getByTestId("sandbox-card").getAttribute("data-frozen")).toBe(
-      "true",
-    );
     expect(screen.getByTestId("sandbox-card-state-line").textContent).toMatch(
       /^Your credits ran out/,
     );
@@ -921,9 +873,6 @@ describe("<SandboxCard /> facts as the scope resolves them", () => {
 
     renderCard(sandbox);
 
-    expect(screen.getByTestId("sandbox-card").getAttribute("data-frozen")).toBe(
-      "true",
-    );
     expect(screen.getByTestId("sandbox-card-state-line").textContent).toMatch(
       /^Your credits ran out/,
     );
@@ -1075,7 +1024,7 @@ describe("<SandboxHeaderNotices /> session notice follows the resolved state and
   });
 });
 
-describe("<SandboxCard /> without a summary", () => {
+describe("without a summary", () => {
   // The details come from the sandbox list, which loads for a signed-in user.
   beforeEach(() => {
     useAuthStore.setState({ status: "signed-in" });
@@ -1149,9 +1098,7 @@ describe("<SandboxCard /> without a summary", () => {
     );
     expect(destroyed.textContent).toBe("This sandbox was destroyed.");
     expect(
-      within(screen.getByTestId("sandbox-card")).getByTestId(
-        "sandbox-card-operational-line",
-      ).textContent,
+      screen.getByTestId("sandbox-card-operational-line").textContent,
     ).toBe("Its disk is gone.");
     expect(screen.queryByTestId("sandbox-card-details-reload")).toBeNull();
   });
@@ -1179,7 +1126,7 @@ describe("<SandboxCard /> without a summary", () => {
   });
 });
 
-describe("<SandboxCard /> verbs", () => {
+describe("verbs", () => {
   function suspend(): void {
     fireEvent.click(screen.getByTestId("sandbox-card-suspend"));
   }
@@ -1282,7 +1229,7 @@ describe("<SandboxCard /> verbs", () => {
   });
 });
 
-describe("<SandboxCard /> Automations row", () => {
+describe("Automations row", () => {
   it("offers an awake row no action, and says it is free", () => {
     mocks.costs = {
       sandboxes: [costToday(3)],
@@ -1310,7 +1257,7 @@ describe("<SandboxCard /> Automations row", () => {
   });
 });
 
-describe("<SandboxCard /> destroy", () => {
+describe("destroy", () => {
   function openDestroy(): void {
     fireEvent.click(screen.getByTestId("sandbox-card-destroy"));
   }
@@ -1513,7 +1460,7 @@ describe("<SandboxCard /> destroy", () => {
   });
 });
 
-describe("<SandboxCard /> inline secrets readiness", () => {
+describe("inline secrets readiness", () => {
   it("shows ready routes inline for an awake sandbox", () => {
     mocks.grantsData = oneSecretGrant();
     renderCard(
@@ -1561,7 +1508,7 @@ describe("<SandboxCard /> inline secrets readiness", () => {
   });
 });
 
-describe("<SandboxCard /> secrets section", () => {
+describe("secrets section", () => {
   function untrustedRefusalEvent(): SandboxEgressEvent {
     return {
       kind: "egress.refused",
@@ -1751,7 +1698,7 @@ describe("<SandboxCard /> secrets section", () => {
   });
 });
 
-describe("<SandboxCard /> egress events without refusals", () => {
+describe("egress events without refusals", () => {
   it.each([
     [
       "teardown-only",
@@ -1796,7 +1743,7 @@ describe("<SandboxCard /> egress events without refusals", () => {
   });
 });
 
-describe("<SandboxCard /> inline secrets and network", () => {
+describe("inline secrets and network", () => {
   function grant(
     secretName: string,
     route: string,
@@ -2094,5 +2041,149 @@ describe("<SandboxCard /> inline secrets and network", () => {
       .filter((event) => event.getAttribute("data-tone") === "closed");
     expect(closedEvents).toHaveLength(1);
     expect(closedEvents[0].textContent).toContain("db.internal:5432 ·");
+  });
+});
+
+describe("Overview Costs and Secrets tabs", () => {
+  function renderCosts(sandbox: HostScopeSandbox): void {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <HostOverviewCostsTab sandbox={sandbox} />
+      </QueryClientProvider>,
+    );
+  }
+
+  function renderSecrets(sandbox: HostScopeSandbox): void {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <HostOverviewSecretsTab hostState="online" sandbox={sandbox} />
+      </QueryClientProvider>,
+    );
+  }
+
+  it("splits the personal ledger into rate, today, charged, compute, storage, pending, and balance", () => {
+    mocks.costs = {
+      sandboxes: [{ ...COST, pendingMillicredits: 0 }],
+      awakeBurnMillicreditsPerHour: 120,
+      todayYoursMillicredits: 0,
+      todayByEnvironment: [],
+    };
+    renderCosts(sandboxOf("awake", false, {}));
+
+    expect(screen.getByText("$0.12 an hour while awake")).toBeTruthy();
+    expect(
+      screen.getByText("under $0.01 an hour while suspended or stopped"),
+    ).toBeTruthy();
+    expect(screen.getByTestId("sandbox-card-cost-today").textContent).toBe(
+      "under $0.01",
+    );
+    expect(
+      screen.getByTestId("sandbox-card-cost-charged").textContent,
+    ).toContain("$6.00 since");
+    expect(
+      screen.getByTestId("sandbox-card-cost-charged").textContent,
+    ).not.toContain("pending");
+    expect(screen.getByText("$5.00")).toBeTruthy();
+    expect(screen.getByText("$1.00")).toBeTruthy();
+    expect(screen.getByText("Pending")).toBeTruthy();
+    expect(screen.getAllByText("under $0.01").length).toBeGreaterThan(0);
+    expect(screen.getByTestId("sandbox-card-balance").textContent).toBe(
+      "Loading…",
+    );
+  });
+
+  it("says an automation is free and draws no storage rate", () => {
+    renderCosts(sandboxOf("awake", false, { kind: "automation" }));
+    expect(screen.getByText("Free")).toBeTruthy();
+    expect(screen.queryByText("Storage rate")).toBeNull();
+    expect(screen.queryByText(/while suspended or stopped/)).toBeNull();
+  });
+
+  it("draws no rate rows when the price is unknown", () => {
+    mocks.costs = {
+      sandboxes: [COST],
+      awakeBurnMillicreditsPerHour: 120,
+      todayYoursMillicredits: 0,
+      todayByEnvironment: [],
+    };
+    renderCosts(sandboxOf("awake", false, { priceMcPerHour: null }));
+    expect(screen.queryByText("Rate")).toBeNull();
+    expect(screen.queryByText("Storage rate")).toBeNull();
+    expect(screen.getByTestId("sandbox-card-cost-charged")).toBeTruthy();
+  });
+
+  it("keeps rate lines and drops the personal ledger for a team sandbox", () => {
+    mocks.costs = {
+      sandboxes: [COST],
+      awakeBurnMillicreditsPerHour: 120,
+      todayYoursMillicredits: 0,
+      todayByEnvironment: [],
+    };
+    renderCosts({ ...sandboxOf("awake", false, {}), teamOwned: true });
+    expect(screen.getByText("$0.12 an hour while awake")).toBeTruthy();
+    expect(
+      screen.getByText("under $0.01 an hour while suspended or stopped"),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("sandbox-card-cost-today")).toBeNull();
+    expect(screen.queryByTestId("sandbox-card-cost-charged")).toBeNull();
+    expect(screen.queryByTestId("sandbox-card-balance")).toBeNull();
+  });
+
+  it("shows grants, readiness, the stand-in, and network events without a top border", () => {
+    mocks.grantsData = {
+      version: 3,
+      grants: [
+        {
+          secretName: "PROD_DB",
+          kind: "password",
+          protocol: "postgres",
+          source: "approved",
+          connectorName: "private-connector",
+          rotation: null,
+          routes: [
+            {
+              route: "route-1",
+              destination: "db.internal",
+              port: 5432,
+              unready: null,
+            },
+          ],
+        },
+      ],
+      github: null,
+    };
+    mocks.egressEvents = [
+      {
+        kind: "egress.refused",
+        id: "ev-refused",
+        at: new Date(2026, 9, 1, 12).getTime(),
+        emitter: "reporter",
+        untrusted: true,
+        code: "grant_missing",
+        route: null,
+        host: "db.internal",
+        protocol: "postgres",
+        secret: "PROD_DB",
+        howToRequest: null,
+      },
+    ];
+    const sandbox = sandboxOf("awake", false, {
+      phase: "ready",
+      routes: [{ route: "route-1", state: "ready", code: null }],
+    });
+    renderSecrets(sandbox);
+
+    const secrets = screen.getByTestId("sandbox-card-secrets");
+    expect(secrets.className).not.toContain("border-t");
+    expect(screen.getByTestId("sandbox-card-grants")).toBeTruthy();
+    expect(screen.getByTestId("sandbox-card-secrets-readiness")).toBeTruthy();
+    expect(screen.getByTestId("sandbox-card-stand-in")).toBeTruthy();
+    expect(screen.getByTestId("sandbox-card-egress-events")).toBeTruthy();
   });
 });

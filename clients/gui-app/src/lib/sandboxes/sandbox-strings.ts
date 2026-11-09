@@ -22,7 +22,7 @@ import {
  * as shown against it, so changing a clause's words re-opens the block for
  * everyone once.
  */
-export const CONSEQUENCES_WORDING_VERSION = 3;
+export const CONSEQUENCES_WORDING_VERSION = 4;
 
 export const WINDOWS_SANDBOX_LIMITATION =
   "Windows sandboxes have no desktop or Computer Use.";
@@ -255,9 +255,13 @@ export function reachRemedyLine(teamName: string): string {
   return `To work together, start this agent on a host in ${teamName}.`;
 }
 
-/** Shared use and payment, followed by the distinct access warning. */
-export const TEAM_USE_AND_ACCESS_CLAUSE =
-  "Everyone in the team can use it while you pay from your team credits; another member's agent can read what yours can.";
+/**
+ * Who else can use a team sandbox, and what their agent can read.
+ * Payment stays on the price line, beside the standing cost.
+ */
+export function teamAccessClause(teamName: string): string {
+  return `Everyone in ${teamName} can use it; another member's agent can read what yours can.`;
+}
 
 export const RESTING_STORAGE_CLAUSE =
   "Storage while it's suspended or stopped, on the same credits until another member wakes it.";
@@ -337,13 +341,22 @@ export const CHANGE_LABEL = "Change";
 
 // ── Chip ──────────────────────────────────────────────────────────────────
 
-/** A staged create's identity and resources; its consequences show the price. */
+/**
+ * The chip of a staged create: `New Acme sandbox · 2 vCPU · 4 GB · $0.12/h`.
+ * `priceIsFrom` reads the price as a lower bound (`from $0.12/h`): the price
+ * is the region's smallest shape's, not an exact catalogue price.
+ */
 export function stagedChipLabel(args: {
   readonly configuration: SandboxConfigurationCopy;
   readonly cpus: number;
   readonly memoryMb: number;
+  readonly priceMcPerHour: number | null;
+  readonly priceIsFrom: boolean;
 }): string {
-  return `${newSandboxRowLabel(args.configuration)} · ${sandboxShapeLabel(args.cpus, args.memoryMb)}`;
+  const head = `${newSandboxRowLabel(args.configuration)} · ${sandboxShapeLabel(args.cpus, args.memoryMb)}`;
+  if (args.priceMcPerHour === null) return head;
+  const price = shortPriceLabel(args.priceMcPerHour);
+  return `${head} · ${args.priceIsFrom ? `from ${price}` : price}`;
 }
 
 /** A resting pick: `api-refactor · suspended, resumes on send`. */
@@ -702,8 +715,9 @@ export function hoverTaskConfiguration(teamName: string | null): string {
   return `a sandbox of ${teamName ?? "a team"}`;
 }
 
-export function hoverAlsoInTask(count: number): string {
-  return `${count} other ${count === 1 ? "agent" : "agents"} in this task`;
+/** Other agents on this computer, named in one sentence. */
+export function hoverAlsoInTask(names: string): string {
+  return `Also in this task on it: ${names}`;
 }
 
 export function hoverMoreSessions(count: number): string {
