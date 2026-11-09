@@ -239,9 +239,11 @@ export type BotConversationQuestionAnswerEntry = z.infer<
  * writes nothing: with `QUESTION_ALREADY_SETTLED` when any of them is already
  * settled, and as an invalid argument when an open question is missing, an
  * index is repeated or out of range, or an answer is not one the question
- * takes. `text` keeps its 1.0 floor and is not read: the host writes the
- * message's text from the card's questions and the answers
- * (`botQuestionAnswersText`), which is what a client sends in it. The
+ * takes. Refused with `E_BOT_ANSWER_SETS_UNSUPPORTED`, nothing written or
+ * queued, when the bot's bound host is another one that has not said it takes
+ * sets ({@link BOT_HOST_TAKES_ANSWER_SETS}). `text` keeps its 1.0 floor and is
+ * not read: the host writes the message's text from the card's questions and
+ * the answers (`botQuestionAnswersText`), which is what a client sends in it. The
  * message goes where `answer`'s does; one sender's set has one request id, so
  * the same set sent again lands on the message the first one wrote. Absent
  * otherwise; never set with `answer`, `announcementId`, `redeliver`,

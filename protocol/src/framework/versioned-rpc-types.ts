@@ -299,6 +299,12 @@ export const RPC_ERROR_CODES = [
   // deleted since. Nothing was created; the bot the key made, if live, is in
   // the person's list. Additive, as above.
   "E_BOT_REQUEST_KEY_REUSED",
+  // `bot.conversation.send` carried a card's `answers` for a bot whose bound
+  // host has not said it takes them (`BOT_HOST_TAKES_ANSWER_SETS`): a host
+  // that predates them would take the set as an ordinary post. Nothing was
+  // written or queued; each question is answered on its own instead.
+  // Additive, as above.
+  "E_BOT_ANSWER_SETS_UNSUPPORTED",
   // ─── Evicted chats ──────────────────────────────────────────────────────
   //
   // A host dropped a chat's records once the cloud held them, and could not
