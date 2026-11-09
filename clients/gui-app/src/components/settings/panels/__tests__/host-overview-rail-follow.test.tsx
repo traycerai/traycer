@@ -121,6 +121,12 @@ function mount(status: EnvironmentStatusResponseV11): void {
   );
 }
 
+async function flushEffects(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve();
+  });
+}
+
 beforeEach(() => {
   reads.statuses.clear();
   useSettingsEnvironmentPickStore.setState({
@@ -148,9 +154,7 @@ describe("the Overview row and the Environment dropdown on a stopped move", () =
         setup: { stage: "moving_settings", state: "stalled" },
       }),
     );
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    });
+    await flushEffects();
 
     expect(useSettingsEnvironmentPickStore.getState().pick).toBeNull();
     expect(picks).not.toContain("local");
@@ -180,9 +184,7 @@ describe("the Overview row and the Environment dropdown on a stopped move", () =
         setup: { stage: "moving_settings", state: "stalled" },
       }),
     );
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    });
+    await flushEffects();
 
     expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
       kind: "local",
@@ -200,9 +202,7 @@ describe("the Overview row and the Environment dropdown on a stopped move", () =
 describe("the Overview row when the rail already shows the host source", () => {
   it("keeps a later environment pick", async () => {
     mount(environmentStatusFixture({}));
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    });
+    await flushEffects();
 
     expect(useSettingsEnvironmentPickStore.getState().pick).toBeNull();
     expect(

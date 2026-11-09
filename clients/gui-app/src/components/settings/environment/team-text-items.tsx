@@ -183,7 +183,7 @@ function TeamTextHeader(): ReactNode {
     <div
       className={cn(
         GRID,
-        "hidden border-b border-border/40 bg-muted/30 px-3 py-2 text-ui-xs font-medium text-muted-foreground sm:grid",
+        "hidden border-b border-border/40 bg-foreground/5 px-3 py-2 text-ui-xs font-medium text-muted-foreground sm:grid",
       )}
     >
       <span>Name</span>
@@ -785,7 +785,7 @@ function TeamTextRemoveButton(props: {
       aria-label={`Remove ${props.name}`}
       className={cn(
         ROW_ACTIONS_PLACEMENT,
-        "flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/50 hover:text-destructive disabled:opacity-50",
+        "flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-foreground/8 hover:text-destructive disabled:opacity-50",
       )}
     >
       <Trash2 className="size-4" />
