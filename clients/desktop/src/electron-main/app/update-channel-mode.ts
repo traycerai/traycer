@@ -7,7 +7,7 @@
  * policies answer it the same way:
  *
  *   - an RC build silently FOLLOWING ITS OWN LINE (`2.0.0-rc.1` may take
- *     `2.0.0-rc.2` or `2.0.0`, and nothing else), which is derived from the
+ *     `2.0.0-rc.2`, or any newer stable release), which is derived from the
  *     installed version and is never persisted; and
  *   - a user who explicitly OPTED IN to prereleases, whose opt-in is broad by
  *     design and may cross release lines.
@@ -33,6 +33,7 @@
  */
 import {
   isCanonicalReleaseCandidate,
+  isCanonicalStableRelease,
   isSameReleaseLine,
 } from "@traycer-clients/shared/host-version/release-line";
 
@@ -79,14 +80,16 @@ export function modeAllowsPrerelease(mode: DesktopUpdateChannelMode): boolean {
  * selector uses is the one that must decide it, and a second comparison here
  * would be a second answer to the same question.
  *
- *   - `implicit-rc-line` restricts to the installed build's OWN line. Stable
- *     `X.Y.Z` and later `X.Y.Z-rc.M` both qualify; `X.Y+1.0-rc.1` does not, at
- *     any version distance. An ABANDONED line therefore has no implicit exit -
- *     if `2.0.0` is never published and the work ships as `2.1.0`, a
- *     `2.0.0-rc.1` build stops seeing updates. That is the accepted product
- *     behavior, not an oversight: the alternative (letting the follower take a
- *     newer stable on any line) is a cross-line jump nobody consented to, and
- *     the remedy for an abandoned line is to publish its stable or to reinstall.
+ *   - `implicit-rc-line` takes any strictly newer STABLE release, whatever
+ *     its line, and otherwise a later RC on the installed build's OWN line.
+ *     `X.Y+1.0-rc.1` never qualifies: the build consented to one line's
+ *     prereleases, not to prereleases in general. Stables are open on every
+ *     line so that several published releases are taken in ONE hop - an RC
+ *     whose own stable has since been superseded moves straight to the newest
+ *     stable rather than to its line's stable and then, after a relaunch as a
+ *     stable build, to the newest one. Newest-first ordering then ranks that
+ *     stable above every RC on the line, so the hop also terminates implicit
+ *     following.
  *   - `explicit-prerelease` keeps the existing broad behavior (the newest
  *     usable stable or RC release, whatever its line).
  *   - `stable-only` follows the published stable head and explicitly refuses
@@ -106,7 +109,8 @@ export function isSelectableCandidate(input: {
   }
   return (
     input.isStrictlyNewer &&
-    isSameReleaseLine(input.installedVersion, input.candidateVersion)
+    (isCanonicalStableRelease(input.candidateVersion) ||
+      isSameReleaseLine(input.installedVersion, input.candidateVersion))
   );
 }
 

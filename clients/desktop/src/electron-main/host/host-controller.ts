@@ -4407,17 +4407,13 @@ export class HostController {
     // THE ORDINARY `--automatic` PATH IS CLOSED WHILE FOLLOWING A LINE.
     //
     // `host download --automatic` follows the manifest's stable `latest`
-    // pointer, and for a build following its own release line that pointer is
-    // another line - so falling through to it whenever this line has nothing to
-    // offer is exactly the cross-line jump implicit participation forbids. The
-    // only builds this mode may stage are the ones `resolveHostStageTarget`
-    // returns: a later RC on the line, or the line's own stable.
-    //
-    // The consequence is deliberate and matches the Desktop app: an ABANDONED
-    // line has no automatic exit. If `2.0.0` is never published and the work
-    // ships as `2.1.0`, a `2.0.0-rc.1` host stays where it is rather than being
-    // moved to a line nobody put it on. Publishing the line's stable, or a
-    // reinstall, is the exit.
+    // pointer, which RC releases never move and which can lag a line's stable
+    // (installed `2.0.0-rc.1`, `2.0.0` published, `latest` still `1.9.0`) - so
+    // falling through to it would stage a downgrade. The only builds this mode
+    // may stage are the ones `resolveHostStageTarget` returns, pinned by exact
+    // version: the newest stable on any line, or a later RC on the installed
+    // line. A newer stable is therefore reached in one hop even when `latest`
+    // has not caught up with it, and an RC on another line is never taken.
     const automaticStablePathOpen = mode !== "implicit-rc-line";
     try {
       snapshot = parseAvailableSnapshot(
@@ -4486,9 +4482,9 @@ export class HostController {
       // verified, fingerprinted stage; otherwise this valid update remains
       // permanently deferred because Desktop can neither apply nor purge it.
       //
-      // A FOLLOWER REPAIRS FROM ITS OWN LINE OR NOT AT ALL: `--automatic` here
-      // would repair the stage by fetching another line's stable, so the pinned
-      // same-line candidate is used instead. With no such candidate the legacy
+      // A FOLLOWER REPAIRS FROM ITS OWN CANDIDATE OR NOT AT ALL: `--automatic`
+      // here would repair the stage from the lagging `latest` pointer, so the
+      // pinned candidate is used instead. With no such candidate the legacy
       // bytes are left alone - already unusable, and no worse for waiting -
       // rather than replaced by a build this mode may not select.
       //
@@ -4517,11 +4513,11 @@ export class HostController {
         // fingerprint this stage does not have, and would log "cannot purge an
         // unpinned staged host after registry invalidation" at `warn` on every
         // single reconcile - naming a cause that did not happen. The registry
-        // is fine; the stage is fine; this build's line simply has nothing to
+        // is fine; the stage is fine; this mode simply has nothing newer to
         // replace it with yet. Say that once, at debug, since it is a standing
         // condition rather than an event, and stop.
         log.debug(
-          "[host-controller] leaving an unpinned legacy stage in place: its release line has no candidate to replace it with",
+          "[host-controller] leaving an unpinned legacy stage in place: nothing newer this mode may stage",
           {
             version: staged.version,
             installedVersion,
