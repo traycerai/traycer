@@ -479,7 +479,7 @@ function SelectedProfileRow(props: {
         state={props.state}
         profile={profile}
       />
-      {profile.auth.status === "unauthenticated" ? (
+      {profileReadsSignedOut(props.state, profile) ? (
         <TooltipWrapper
           label={props.canAddProfile ? null : props.signInUnavailableHint}
           side="top"
@@ -533,15 +533,17 @@ function SelectedProfileRow(props: {
 /**
  * An ambient row can lag an `unauthenticated` stamped on the provider itself,
  * so its badge reads the same reconciled signed-out the rail word reads.
+ * Sign in uses that same reading. A row that is itself unauthenticated is
+ * signed out either way.
  */
-function profileBadgeText(
+function profileReadsSignedOut(
   state: ProviderCliState,
   profile: ProviderProfile,
-): string {
-  if (profile.kind === "ambient" && isProviderAmbientSignedOut(state)) {
-    return "Signed out";
-  }
-  return profileAuthStatusText(profile);
+): boolean {
+  return (
+    profile.auth.status === "unauthenticated" ||
+    (profile.kind === "ambient" && isProviderAmbientSignedOut(state))
+  );
 }
 
 function ProfileSummary({
@@ -602,7 +604,9 @@ function ProfileSummary({
         ) : null}
       </div>
       <Badge variant="outline" size="xs" className="shrink-0">
-        {profileBadgeText(state, profile)}
+        {profileReadsSignedOut(state, profile)
+          ? "Signed out"
+          : profileAuthStatusText(profile)}
       </Badge>
       {planText !== null ? (
         <TooltipWrapper

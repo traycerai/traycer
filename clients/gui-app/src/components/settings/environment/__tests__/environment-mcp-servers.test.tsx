@@ -707,6 +707,185 @@ describe("The MCP servers page", () => {
     ).toHaveLength(0);
   });
 
+  it("turns a mixed tool off for the provider that had it on when Disable all saves", async () => {
+    negotiateMethods(ALL_METHODS);
+    const harness = mountTeamPage(
+      poolSource("editor"),
+      handlers({
+        servers: () => [
+          declaredServer({
+            serverId: "srv-1",
+            name: "github",
+            item: {
+              key: "github",
+              revision: 4,
+              toolToggles: {
+                [providerIdToGuiHarnessId("claude-code")]: { search: false },
+              },
+              offFor: [],
+            },
+          }),
+        ],
+        hostServers: [],
+        hostServersByProvider: {
+          codex: [hostMcpServer("github", ["search", "open"])],
+          "claude-code": [hostMcpServer("github", ["search", "open"])],
+        },
+      }),
+    );
+    render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
+
+    await screen.findByText("github");
+    await openServerCard("github");
+    const search = await screen.findByRole("switch", {
+      name: "github search",
+    });
+    expect(search.getAttribute("aria-checked")).toBe("false");
+    expect(
+      screen
+        .getByRole("switch", { name: "github open" })
+        .getAttribute("aria-checked"),
+    ).toBe("true");
+    expect(screen.getByRole("button", { name: "Save changes" })).toHaveProperty(
+      "disabled",
+      true,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Disable all" }));
+    expect(
+      harness.paramsOf("environment.configuration.items.put"),
+    ).toHaveLength(0);
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => {
+      const writes = harness.paramsOf("environment.configuration.items.put");
+      expect(writes).toHaveLength(1);
+      expect(writes[0]).toHaveProperty("value.toolToggles", {
+        [providerIdToGuiHarnessId("claude-code")]: {
+          search: false,
+          open: false,
+        },
+        [providerIdToGuiHarnessId("codex")]: { search: false, open: false },
+      });
+    });
+  });
+
+  it("enables Disable all for a mixed tool that is the only one on anywhere, and saves that provider off", async () => {
+    negotiateMethods(ALL_METHODS);
+    const harness = mountTeamPage(
+      poolSource("editor"),
+      handlers({
+        servers: () => [
+          declaredServer({
+            serverId: "srv-1",
+            name: "github",
+            item: {
+              key: "github",
+              revision: 4,
+              toolToggles: {
+                [providerIdToGuiHarnessId("claude-code")]: { search: false },
+              },
+              offFor: [],
+            },
+          }),
+        ],
+        hostServers: [],
+        hostServersByProvider: {
+          codex: [hostMcpServer("github", ["search"])],
+          "claude-code": [hostMcpServer("github", ["search"])],
+        },
+      }),
+    );
+    render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
+
+    await screen.findByText("github");
+    await openServerCard("github");
+    const search = await screen.findByRole("switch", {
+      name: "github search",
+    });
+    expect(search.getAttribute("aria-checked")).toBe("false");
+    expect(screen.getByRole("button", { name: "Disable all" })).toHaveProperty(
+      "disabled",
+      false,
+    );
+    expect(screen.getByRole("button", { name: "Save changes" })).toHaveProperty(
+      "disabled",
+      true,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Disable all" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => {
+      const writes = harness.paramsOf("environment.configuration.items.put");
+      expect(writes).toHaveLength(1);
+      expect(writes[0]).toHaveProperty("value.toolToggles", {
+        [providerIdToGuiHarnessId("claude-code")]: { search: false },
+        [providerIdToGuiHarnessId("codex")]: { search: false },
+      });
+    });
+  });
+
+  it("leaves a mixed tool's providers as stored when another tool is the one saved", async () => {
+    negotiateMethods(ALL_METHODS);
+    const harness = mountTeamPage(
+      poolSource("editor"),
+      handlers({
+        servers: () => [
+          declaredServer({
+            serverId: "srv-1",
+            name: "github",
+            item: {
+              key: "github",
+              revision: 4,
+              toolToggles: {
+                [providerIdToGuiHarnessId("codex")]: { search: true },
+                [providerIdToGuiHarnessId("claude-code")]: { search: false },
+              },
+              offFor: [],
+            },
+          }),
+        ],
+        hostServers: [],
+        hostServersByProvider: {
+          codex: [hostMcpServer("github", ["search", "open"])],
+          "claude-code": [hostMcpServer("github", ["search", "open"])],
+        },
+      }),
+    );
+    render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
+
+    await screen.findByText("github");
+    await openServerCard("github");
+    expect(
+      (
+        await screen.findByRole("switch", { name: "github search" })
+      ).getAttribute("aria-checked"),
+    ).toBe("false");
+    const open = screen.getByRole("switch", { name: "github open" });
+    expect(open.getAttribute("aria-checked")).toBe("true");
+
+    await userEvent.click(open);
+    expect(
+      screen
+        .getByRole("switch", { name: "github search" })
+        .getAttribute("aria-checked"),
+    ).toBe("false");
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => {
+      const writes = harness.paramsOf("environment.configuration.items.put");
+      expect(writes).toHaveLength(1);
+      expect(writes[0]).toHaveProperty("value.toolToggles", {
+        [providerIdToGuiHarnessId("codex")]: { search: true, open: false },
+        [providerIdToGuiHarnessId("claude-code")]: {
+          search: false,
+          open: false,
+        },
+      });
+    });
+  });
+
   it("saves an endpoint edit and a tool edit on the one server put", async () => {
     negotiateMethods(ALL_METHODS);
     const harness = mountTeamPage(

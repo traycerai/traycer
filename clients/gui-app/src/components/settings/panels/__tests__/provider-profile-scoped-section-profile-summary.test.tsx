@@ -286,7 +286,7 @@ describe("<ProviderProfileScopedSection /> profile summary email reveal", () => 
     expect(screen.queryByRole("button", { name: "Details" })).toBeNull();
   });
 
-  it("badges an ambient row Signed out when the provider is unauthenticated", () => {
+  it("badges an ambient row Signed out when the provider is unauthenticated", async () => {
     const unauthenticated = {
       status: "unauthenticated" as const,
       badgeText: null,
@@ -319,5 +319,31 @@ describe("<ProviderProfileScopedSection /> profile summary email reveal", () => 
     expect(badge.getAttribute("data-slot")).toBe("badge");
     expect(badge.getAttribute("data-variant")).toBe("outline");
     expect(screen.queryByText("Signed in")).toBeNull();
+    const signIn = screen.getByRole("button", { name: "Sign in" });
+    expect(signIn.getAttribute("data-size")).toBe("xs");
+    expect(signIn.getAttribute("data-variant")).toBe("secondary");
+    await userEvent.click(signIn);
+    expect(screen.getByRole("dialog", { name: "Sign in editor" })).toBeTruthy();
+  });
+
+  it("keeps a managed profile's own badge and hides Sign in when only the provider is unauthenticated", () => {
+    const unauthenticated = {
+      status: "unauthenticated" as const,
+      badgeText: null,
+      label: null,
+      detail: null,
+    };
+    renderSection({
+      state: {
+        ...opencodeState(),
+        auth: unauthenticated,
+      },
+    });
+
+    const badge = screen.getByText("Signed in");
+    expect(badge.getAttribute("data-slot")).toBe("badge");
+    expect(badge.getAttribute("data-variant")).toBe("outline");
+    expect(screen.queryByText("Signed out")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
   });
 });

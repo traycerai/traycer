@@ -620,7 +620,13 @@ function McpOpenEditor(props: {
   const groups = groupServerTools(props.server, props.using, props.lists);
   const draft = useToolDraft(groups);
   const endpointDirty = endpoint !== initial;
-  const toolsDirty = toolDraftDirty(groups, draft.value);
+  const toolsDirty = toolDraftDirty(groups, draft.value, draft.edited);
+  const canDisableAll = groups.some(
+    (group) =>
+      draft.value[group.name] ||
+      (!draft.edited.has(group.name) &&
+        group.listed.some((entry) => entry.enabled)),
+  );
   const ready = endpointReady(props.server, endpoint);
   const pending = put.isPending || putItem.isPending;
   const canSave =
@@ -652,6 +658,7 @@ function McpOpenEditor(props: {
                 item.toolToggles,
                 groups,
                 draft.value,
+                draft.edited,
               ),
             };
       if (saved !== null)
@@ -671,7 +678,12 @@ function McpOpenEditor(props: {
           os: null,
           value: mcpItemValue(
             props.server,
-            togglesFromDraft(item.toolToggles, groups, draft.value),
+            togglesFromDraft(
+              item.toolToggles,
+              groups,
+              draft.value,
+              draft.edited,
+            ),
             item.offFor,
           ),
           revision: item.revision,
@@ -703,6 +715,7 @@ function McpOpenEditor(props: {
         groups={groups}
         draft={draft.value}
         canEdit={props.canEdit}
+        canDisableAll={canDisableAll}
         pending={pending}
         onToggle={draft.setTool}
         onEnableAll={() => draft.setAll(true)}
@@ -865,6 +878,7 @@ function McpToolGrid(props: {
   readonly groups: readonly McpToolGroup[];
   readonly draft: ToolDraft;
   readonly canEdit: boolean;
+  readonly canDisableAll: boolean;
   readonly pending: boolean;
   readonly onToggle: (name: string, next: boolean) => void;
   readonly onEnableAll: () => void;
@@ -896,7 +910,7 @@ function McpToolGrid(props: {
             type="button"
             variant="ghost"
             size="sm"
-            disabled={!props.canEdit || props.pending || enabled === 0}
+            disabled={!props.canEdit || props.pending || !props.canDisableAll}
             onClick={props.onDisableAll}
           >
             Disable all
@@ -969,6 +983,7 @@ function groupServerTools(
 
 function useToolDraft(groups: readonly McpToolGroup[]): {
   readonly value: ToolDraft;
+  readonly edited: ReadonlySet<string>;
   readonly setTool: (name: string, next: boolean) => void;
   readonly setAll: (next: boolean) => void;
 } {
@@ -987,6 +1002,7 @@ function useToolDraft(groups: readonly McpToolGroup[]): {
   }
   return {
     value,
+    edited,
     setTool: (name, next) => {
       setEdited((current) => {
         const names = new Set(current);
@@ -1034,14 +1050,27 @@ function draftAll(groups: readonly McpToolGroup[], next: boolean): ToolDraft {
   return draft;
 }
 
+/**
+ * Whether saving writes this group: only an edited group whose providers do
+ * not all match the draft. An untouched group never is, a mixed one included.
+ */
+function draftChangesGroup(
+  group: McpToolGroup,
+  draft: ToolDraft,
+  edited: ReadonlySet<string>,
+): boolean {
+  return (
+    edited.has(group.name) &&
+    group.listed.some((entry) => entry.enabled !== draft[group.name])
+  );
+}
+
 function toolDraftDirty(
   groups: readonly McpToolGroup[],
   draft: ToolDraft,
+  edited: ReadonlySet<string>,
 ): boolean {
-  return groups.some(
-    (group) =>
-      draft[group.name] !== group.listed.every((entry) => entry.enabled),
-  );
+  return groups.some((group) => draftChangesGroup(group, draft, edited));
 }
 
 function enabledInDraft(
@@ -1055,19 +1084,23 @@ function enabledToolsLine(count: number): string {
   return count === 1 ? "1 tool enabled" : `${count} tools enabled`;
 }
 
+/**
+ * A group saving changes gets the draft on every listed harness, so a mixed
+ * group turned off still clears the providers that were on.
+ */
 function togglesFromDraft(
   stored: { [harness: string]: { [tool: string]: boolean } },
   groups: readonly McpToolGroup[],
   draft: ToolDraft,
+  edited: ReadonlySet<string>,
 ): { [harness: string]: { [tool: string]: boolean } } {
   const toggles: { [harness: string]: { [tool: string]: boolean } } = {};
   for (const [harness, tools] of Object.entries(stored)) {
     toggles[harness] = { ...tools };
   }
   for (const group of groups) {
+    if (!draftChangesGroup(group, draft, edited)) continue;
     const next = draft[group.name];
-    const current = group.listed.every((entry) => entry.enabled);
-    if (next === current) continue;
     for (const entry of group.listed) {
       const harness = providerIdToGuiHarnessId(entry.providerId);
       toggles[harness] = { ...toggles[harness], [group.name]: next };
