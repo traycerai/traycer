@@ -35,6 +35,7 @@ function newWindow() {
     openPorts: openFakePorts,
     random: () => 0,
     recordingChannel: () => null,
+    openMediaSession: () => null,
   });
 }
 

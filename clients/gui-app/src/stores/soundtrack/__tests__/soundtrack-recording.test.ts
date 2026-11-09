@@ -318,6 +318,7 @@ function harness(
     openPorts: () => ports,
     random: mulberry32(1),
     recordingChannel: () => channel,
+    openMediaSession: () => null,
   });
   store.getState().enable();
   store.getState().setSignals({

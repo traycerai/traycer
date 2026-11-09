@@ -72,6 +72,7 @@ export type ResumePositions = Readonly<
 /** What is sounding now; null while the view in front has no track. */
 interface SoundingMix {
   readonly view: SoundtrackView;
+  readonly track: SoundtrackTrack;
   readonly plan: MixPlan | null;
 }
 
@@ -457,6 +458,9 @@ export class SoundtrackSession {
     this.players.set(to.view, to);
     this.inFront = to;
     crossfadePlayers(from.player, to.player);
+    // The person asked for this track, so what is reported as sounding follows
+    // at once rather than at the next tick.
+    this.replan();
   }
 
   private playerFor(view: SoundtrackView): ViewPlayer | null {
@@ -618,7 +622,7 @@ export class SoundtrackSession {
     if (track.kind === "composed" || !(player instanceof TrackPlayer)) {
       this.applied = null;
       this.ports.setDimmed(false);
-      this.onSounding({ view, plan: null });
+      this.onSounding({ view, track, plan: null });
       return;
     }
     const plan = this.director.plan(signals, {
@@ -635,7 +639,7 @@ export class SoundtrackSession {
     });
     settleEnabledLayers(player, plan, this.random);
     this.ports.setDimmed(plan.dim);
-    this.onSounding({ view, plan });
+    this.onSounding({ view, track, plan });
   }
 
   private logPause(cause: PauseCause): void {

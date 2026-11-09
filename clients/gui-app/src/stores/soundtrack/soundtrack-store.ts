@@ -11,6 +11,11 @@ import {
   readSoundtrackManifest,
   type SoundtrackManifest,
 } from "@/lib/soundtrack/manifest";
+import {
+  openSoundtrackMediaSession,
+  type MediaSessionHandlers,
+  type SoundtrackMediaSession,
+} from "@/lib/soundtrack/media-session";
 import { MIX_TUNING } from "@/lib/soundtrack/mix-tuning";
 import type {
   RecordingQuality,
@@ -146,6 +151,13 @@ interface SoundtrackStoreDependencies {
   /** Read at each `enable()`; a read over the network answers with a promise. */
   readonly readManifest: () => SoundtrackManifest | Promise<SoundtrackManifest>;
   readonly openPorts: (stems: StemManifest, volume: number) => SoundtrackPorts;
+  /**
+   * Opened with the ports and closed with them; null where the system has no
+   * media controls to join.
+   */
+  readonly openMediaSession: (
+    handlers: MediaSessionHandlers,
+  ) => SoundtrackMediaSession | null;
   readonly random: RandomSource;
   /** Where a recording is saved; null in a build that cannot save one. */
   readonly recordingChannel: () => RecordingSaveChannel | null;
@@ -154,8 +166,16 @@ interface SoundtrackStoreDependencies {
 export function createSoundtrackStore(
   dependencies: SoundtrackStoreDependencies,
 ): UseBoundStore<StoreApi<SoundtrackState>> {
-  const { readManifest, openPorts, random, recordingChannel } = dependencies;
+  const {
+    readManifest,
+    openPorts,
+    openMediaSession,
+    random,
+    recordingChannel,
+  } = dependencies;
   let session: SoundtrackSession | null = null;
+  // The system's media controls, for as long as `session` lasts.
+  let mediaSession: SoundtrackMediaSession | null = null;
   // What the open session plays, which a recording's header names.
   let playing: SoundtrackManifest | null = null;
   let recorder: SessionRecorder | null = null;
@@ -187,6 +207,24 @@ export function createSoundtrackStore(
         return;
       }
       playing = manifest;
+      // The system's buttons are the status row's: each one moves the person's
+      // wish in settings, which this window's session follows like any other.
+      mediaSession = openMediaSession({
+        play: () => {
+          useSettingsStore.getState().setSoundtrackPaused(false);
+        },
+        pause: () => {
+          useSettingsStore.getState().setSoundtrackPaused(true);
+        },
+        next: () => {
+          useSettingsStore.getState().setSoundtrackPaused(false);
+          get().next();
+        },
+        previous: () => {
+          useSettingsStore.getState().setSoundtrackPaused(false);
+          get().previous();
+        },
+      });
       session = new SoundtrackSession({
         manifest,
         ports,
@@ -194,6 +232,7 @@ export function createSoundtrackStore(
         director: MIX_DIRECTORS[get().directorId],
         resumePositions: get().resumePositions,
         onSounding: (sounding) => {
+          mediaSession?.setTrack(sounding?.track.title ?? null);
           set(
             sounding === null
               ? { soundingView: null }
@@ -207,7 +246,10 @@ export function createSoundtrackStore(
           get().disable();
         },
       });
-      if (get().paused) session.pause();
+      if (get().paused) {
+        session.pause();
+        mediaSession?.setPaused(true);
+      }
       set({ enabled: true });
     };
     const start = (): void => {
@@ -269,6 +311,8 @@ export function createSoundtrackStore(
         stopRecorder("music-off");
         const resumePositions = session.end();
         session = null;
+        mediaSession?.close();
+        mediaSession = null;
         playing = null;
         set({
           enabled: false,
@@ -298,6 +342,7 @@ export function createSoundtrackStore(
         set({ paused });
         if (paused) session?.pause();
         else session?.play();
+        mediaSession?.setPaused(paused);
       },
       setSignals: (signals) => {
         session?.setSignals(signals);
@@ -353,6 +398,7 @@ export function createSoundtrackStore(
 export const useSoundtrackStore = createSoundtrackStore({
   readManifest: readSoundtrackManifest,
   openPorts: openWebAudioPorts,
+  openMediaSession: openSoundtrackMediaSession,
   random: Math.random,
   recordingChannel: desktopRecordingChannel,
 });
