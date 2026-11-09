@@ -68,7 +68,6 @@ import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
 import { threadOriginRow, type ThreadOriginRow } from "@/lib/bots/reply-row";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
-import { NO_TRANSCRIPT_BASELINE } from "@/stores/chats/chat-announcements";
 import { useKeptBoxDraft } from "@/hooks/bots/use-kept-box-draft";
 import type {
   BotSessionOpen,
@@ -504,7 +503,7 @@ function ThreadOriginPost(
       memberName: anchorSenderLabel,
       answer: null,
       answerAll: null,
-      baselineEpoch: NO_TRANSCRIPT_BASELINE,
+      baseline: null,
       discuss: null,
     }),
     [anchorSenderLabel, botId, viewerUserId],

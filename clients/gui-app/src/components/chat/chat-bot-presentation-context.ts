@@ -3,6 +3,7 @@ import type { StackedIdentity } from "@/components/bots/bot-avatars";
 import type { QuestionCardAnswer } from "@/components/chat/question-card";
 import type { QuestionCardEntry } from "@/components/chat/question-card-view";
 import type { BotConversationQuestionAnswerEntry } from "@traycer/protocol/host/bot/conversation-schemas";
+import type { BotTranscriptBaseline } from "@/stores/bots/bot-drafts-store";
 
 /**
  * A member's answers to every open question of a card at once (T167), and
@@ -154,11 +155,12 @@ export interface ChatBotQuestions {
       ) => Promise<void>)
     | null;
   /**
-   * The transcript's baseline (`transcriptBaselineEpoch`). A card's answers
-   * whose send ended without saying whether they reached the host wait for a
-   * later one, a resync, which shows them settled or still open.
+   * The transcript's baseline. A card's answers whose send ended without
+   * saying whether they reached the host wait for a later one - a resync, or
+   * a new session's first snapshot - which shows them settled or still open.
+   * `null` where no transcript backs the card and nothing can send it.
    */
-  readonly baselineEpoch: number;
+  readonly baseline: BotTranscriptBaseline | null;
   /**
    * Opens the question's discussion - its thread, or the thread it was asked
    * in - with `draft` in the box, unsent; `null` where there is none.

@@ -8,10 +8,12 @@
  * Only the virtualised list is replaced, as in the other question-card suite.
  *
  * What is asserted is what the person sees on the card and what the host
- * RECEIVES: one Submit sends every open question's answer or Skip as one
- * message; a refusal gives the drafts back; a send that ended without saying
- * whether it landed waits for the next transcript baseline, then gives the
- * drafts back or finds the questions settled.
+ * RECEIVES: on a card of two or more questions one Submit sends every open
+ * question's answer or Skip as one message, while a card of one keeps its own
+ * Submit and Skip; a refusal gives the drafts back; a send that ended without
+ * saying whether it landed waits for the next transcript baseline, from its
+ * session store or one that replaced it, then gives the drafts back or finds
+ * the questions settled.
  */
 import { StrictMode } from "react";
 import { act, cleanup, render, screen, within } from "@testing-library/react";
@@ -762,6 +764,48 @@ describe("<BotChannelView tiles={null} /> where a card's answers go together, an
   });
 });
 
+describe("<BotChannelView tiles={null} /> a card of one question, on a host that takes answers together", () => {
+  it("keeps the question's own Submit and no tally, and sends its answer on its own, never as a set", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    session(CHANNEL_ID, [questionRow([deploy(null)])]);
+    mountOnTabHost();
+
+    const card = channelCard();
+    expect(formOf(card)).toEqual({ submits: 1, tally: null, skips: ["Skip"] });
+    const question = cardQuestion(card, DEPLOY);
+    await user.click(choice(question, "After the train"));
+    await user.click(within(question).getByTestId("question-card-submit"));
+
+    expect(sent.map((request) => [request.text, request.answer])).toEqual([
+      [
+        "After the train",
+        { questionMessageId: QUESTION_ID, questionIndex: 0, skipped: false },
+      ],
+    ]);
+    expect(sent.map((request) => request.answers)).toEqual([undefined]);
+  });
+
+  it("sends the question's own Skip at once, as a skipped answer, never as a set", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    session(CHANNEL_ID, [questionRow([deploy(null)])]);
+    mountOnTabHost();
+
+    await user.click(
+      within(cardQuestion(channelCard(), DEPLOY)).getByTestId(
+        "question-card-skip",
+      ),
+    );
+
+    expect(sent.map((request) => [request.text, request.answer])).toEqual([
+      [
+        "Skipped",
+        { questionMessageId: QUESTION_ID, questionIndex: 0, skipped: true },
+      ],
+    ]);
+    expect(sent.map((request) => request.answers)).toEqual([undefined]);
+  });
+});
+
 describe("<BotChannelView tiles={null} /> a card whose answers go together", () => {
   it("counts only the questions still open, says the bot's settlement of the others, and holds Submit until every open one is answered or skipped", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
@@ -1126,6 +1170,98 @@ describe("<BotChannelView tiles={null} /> a card's answers whose send ended with
     ).toBe(`Answered by Olive Owner · ${formatMessageTime(at, Date.now())}`);
     expect(within(card).queryAllByRole("button")).toEqual([]);
     expect(useBotDraftsStore.getState().answers).toEqual({});
+    expect(sent).toHaveLength(1);
+  });
+});
+
+describe("<BotChannelView tiles={null} /> a card's answers held while the channel's session store is replaced", () => {
+  const OPEN_THREE = (): Message =>
+    questionRow([deploy(null), hold(null), watch(null)]);
+
+  /** A pick, words and a skip, then Submit, on a card of three open questions. */
+  async function answerThreeAndSubmit(): Promise<void> {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const card = channelCard();
+    await user.click(choice(cardQuestion(card, DEPLOY), "After the train"));
+    await user.type(
+      answerField(cardQuestion(card, HOLD)),
+      "Hold the migration",
+    );
+    await user.click(
+      within(cardQuestion(card, WATCH)).getByTestId("question-card-skip"),
+    );
+    await user.click(submitButton(card));
+    await settle();
+  }
+
+  /**
+   * The channel unmounts, as a switch away long enough for the registry to
+   * evict its idle session does, and mounts again on a session built anew: a
+   * new handle over a new store whose baseline is back at the same number.
+   */
+  async function returnToANewSession(): Promise<void> {
+    const evicted = mocks.handles.get(CHANNEL_ID);
+    cleanup();
+    await settle();
+    session(CHANNEL_ID, [OPEN_THREE()]);
+    const replacement = mocks.handles.get(CHANNEL_ID);
+    expect(replacement).not.toBe(evicted);
+    expect(
+      [evicted, replacement].map(
+        (handle) => handle?.store.getState().transcriptBaselineEpoch,
+      ),
+    ).toEqual([0, 0]);
+    mountOnTabHost();
+  }
+
+  it("gives every draft back, intact, once the new session shows the questions still open, though its baseline is the number the old one's was, and sends nothing again", async () => {
+    outcome = failing(droppedAfterSend());
+    session(CHANNEL_ID, [OPEN_THREE()]);
+    mountOnTabHost();
+    await answerThreeAndSubmit();
+    expect(sent).toHaveLength(1);
+    expect(
+      within(channelCard()).getAllByTestId("question-card-sending"),
+    ).toHaveLength(1);
+    expect(enabledControls(channelCard())).toEqual([]);
+
+    await returnToANewSession();
+
+    const card = channelCard();
+    expect(within(card).queryByTestId("question-card-sending")).toBeNull();
+    expect(
+      choice(cardQuestion(card, DEPLOY), "After the train").getAttribute(
+        "aria-pressed",
+      ),
+    ).toBe("true");
+    expect(answerField(cardQuestion(card, HOLD)).value).toBe(
+      "Hold the migration",
+    );
+    expect(answerField(cardQuestion(card, HOLD)).disabled).toBe(false);
+    const skipped = buttonOf(
+      within(cardQuestion(card, WATCH)).getByTestId("question-card-skip"),
+    );
+    expect(skipped.getAttribute("aria-pressed")).toBe("true");
+    expect(skipped.disabled).toBe(false);
+    expect(tally(card)).toBe("3 of 3 answered.");
+    expect(submitButton(card).disabled).toBe(false);
+    expect(sent).toHaveLength(1);
+  });
+
+  it("keeps a send still in flight holding the card, and sends nothing again, when the new session's first snapshot arrives", async () => {
+    outcome = holding;
+    session(CHANNEL_ID, [OPEN_THREE()]);
+    mountOnTabHost();
+    await answerThreeAndSubmit();
+    expect(sent).toHaveLength(1);
+
+    await returnToANewSession();
+
+    const card = channelCard();
+    expect(within(card).getAllByTestId("question-card-sending")).toHaveLength(
+      1,
+    );
+    expect(enabledControls(card)).toEqual([]);
     expect(sent).toHaveLength(1);
   });
 });

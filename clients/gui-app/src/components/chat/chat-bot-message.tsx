@@ -676,11 +676,12 @@ function BotAskingBody(props: {
  * person's left in it, is spent. Discuss takes the draft off the card into
  * the discussion's box.
  *
- * Where the answers go together (`answerAll`, T167), one Submit sends them
- * all. A send the host refused gives them all back. One that ended without
- * saying whether it reached the host waits, nothing sent again, for the
- * transcript's next baseline: settled by then, the answers are spent; still
- * open, they are given back to edit as they were.
+ * On a card of two or more questions whose answers go together (`answerAll`,
+ * T167), one Submit sends them all. A send the host refused gives them all
+ * back. One that ended without saying whether it reached the host waits,
+ * nothing sent again, for the transcript's next baseline, from this session
+ * store or the one that replaced it: settled by then, the answers are spent;
+ * still open, they are given back to edit as they were.
  */
 function BotQuestionCard(props: {
   /** The row, by its message id; `null` before it is written. */
@@ -696,7 +697,7 @@ function BotQuestionCard(props: {
     memberName,
     answer,
     answerAll,
-    baselineEpoch,
+    baseline,
     discuss,
   } = questions;
   const drafts = useBotDraftsStore((state) => state.answers[botId]);
@@ -737,8 +738,12 @@ function BotQuestionCard(props: {
     if (spent.length === 0) return;
     for (const key of spent.split("\n")) setAnswer(botId, key, null);
   }, [botId, setAnswer, spent]);
+  // A baseline from another session store is a later one too: the registry
+  // replaced the store, whose epochs start again, and its snapshot is new.
   const resynced =
-    messageId === null || baselineEpoch === NO_TRANSCRIPT_BASELINE
+    messageId === null ||
+    baseline === null ||
+    baseline.epoch === NO_TRANSCRIPT_BASELINE
       ? ""
       : cardQuestions
           .filter((item) => {
@@ -748,7 +753,7 @@ function BotQuestionCard(props: {
             return (
               item.settlement === null &&
               since !== null &&
-              since !== baselineEpoch
+              (since.store !== baseline.store || since.epoch !== baseline.epoch)
             );
           })
           .map((item) => answerDraftKey(messageId, item.index))
@@ -789,10 +794,14 @@ function BotQuestionCard(props: {
         });
       }}
       onAnswerAll={
-        answerAll === null || messageId === null
+        // A card of one question keeps its own Submit and Skip, and `answer`.
+        answerAll === null ||
+        messageId === null ||
+        baseline === null ||
+        question.questions.length < 2
           ? null
           : (entries) => {
-              const sentUnder = baselineEpoch;
+              const sentUnder = baseline;
               const text = botQuestionAnswersText(
                 entries.map((entry) => {
                   const item = cardQuestions.find(

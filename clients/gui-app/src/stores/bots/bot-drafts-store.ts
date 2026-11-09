@@ -32,11 +32,24 @@ export interface BotAnswerDraft {
   readonly sent: BotSentAnswer | null;
   /**
    * For a sent answer whose send failed after it may have reached the host:
-   * the transcript's baseline (`transcriptBaselineEpoch`) when it was sent.
-   * A later baseline - the subscription resynced - shows whether it landed:
-   * settled, or still open and given back to edit. `null` otherwise.
+   * the transcript's baseline when it was sent. A later baseline - the
+   * subscription resynced, or a new session subscribed - shows whether it
+   * landed: settled, or still open and given back to edit. `null` otherwise.
    */
-  readonly unsureSince: number | null;
+  readonly unsureSince: BotTranscriptBaseline | null;
+}
+
+/**
+ * A transcript's baseline (`transcriptBaselineEpoch`) and the session store
+ * that seated it. A store the registry replaces, evicted while idle, starts
+ * its epochs again, so the epoch alone cannot tell its baseline from the one
+ * before.
+ */
+export interface BotTranscriptBaseline {
+  /** The session store, numbered in the order this window first drew it. */
+  readonly store: number;
+  /** `NO_TRANSCRIPT_BASELINE` until the store seats one. */
+  readonly epoch: number;
 }
 
 export interface BotSentAnswer {
