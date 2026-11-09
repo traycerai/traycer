@@ -114,7 +114,7 @@ jobs:
           test "$(node -p 'process.platform + "-" + process.arch')" = "$EXPECTED_PLATFORM"
           test "$(node --version)" = v24.20.0
           test "$(bun --version)" = 1.3.14
-          bunx --help >/dev/null
+          test "$(bunx --no-install node --version)" = v24.20.0
           buf --version
       - name: Restore GitHub access after the origin proof
         if: always() && matrix.origin == 'mirror'
@@ -314,6 +314,7 @@ jobs:
       - id: ci_acquisition_1
         run: |
           bun install --frozen-lockfile
+          bunx --no-install install-electron
           echo "executed=true" >> "$GITHUB_OUTPUT"
       # The host-v1.1.5 oracle in `provider-native-schemas.test.ts` regenerates
       # the checked-in fixture straight from the tag and deep-equals the two.
@@ -593,6 +594,7 @@ jobs:
         shell: bash
         run: |
           bun install --frozen-lockfile
+          bunx --no-install install-electron
           echo "executed=true" >> "$GITHUB_OUTPUT"
       - name: Build the CLI SEA
         run: bun run --filter @traycer-clients/traycer-cli build:sea
@@ -825,6 +827,7 @@ jobs:
       - id: ci_acquisition_1
         run: |
           bun install --frozen-lockfile
+          bunx --no-install install-electron
           echo "executed=true" >> "$GITHUB_OUTPUT"
       - name: Read the installed Electron version
         id: electron

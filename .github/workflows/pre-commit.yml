@@ -162,6 +162,7 @@ jobs:
         id: ci_acquisition_1
         run: |
           bun install --frozen-lockfile
+          bunx --no-install install-electron
           echo "executed=true" >> "$GITHUB_OUTPUT"
       - name: Check formatting
         run: bun run format:check
@@ -318,6 +319,7 @@ jobs:
         id: ci_acquisition_1
         run: |
           bun install --frozen-lockfile
+          bunx --no-install install-electron
           echo "executed=true" >> "$GITHUB_OUTPUT"
       - name: Run ${{ matrix.lane }} checks
         env:

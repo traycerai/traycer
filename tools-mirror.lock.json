@@ -1193,7 +1193,8 @@
       "arch": "x64",
       "sha256": "28298a2d465f2fd45cdf832781e1af27daf9297778f8887283ac039a6ad7596e",
       "objectKey": "tools/pre-commit-hooks/fe05aee5323ed5bcbb50424b7b088cffb8430ce1b1c4a9e073cfac93f9cb34ad/hooks-fe05aee5323ed5bcbb50424b7b088cffb8430ce1b1c4a9e073cfac93f9cb34ad-linux-x64.tar.gz",
-      "prepareRunId": "42532691220"
+      "prepareRunId": "42532691220",
+      "bytes": 59538688
     },
     {
       "repository": "oss",
@@ -1202,7 +1203,8 @@
       "arch": "x64",
       "sha256": "37015f5c8b1150baf44a08fc5df27d0d401eb7cfd40060f33b2b265bf2fb306c",
       "objectKey": "tools/pre-commit-hooks/ce08f73a9f06f991fc1e962dfc7bacb8f09a83b51c06acb245aea384ec0199d1/hooks-ce08f73a9f06f991fc1e962dfc7bacb8f09a83b51c06acb245aea384ec0199d1-linux-x64.tar.gz",
-      "prepareRunId": "42532691220"
+      "prepareRunId": "42532691220",
+      "bytes": 50647152
     }
   ]
 }

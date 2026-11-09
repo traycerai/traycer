@@ -238,6 +238,41 @@ describe("every pre-commit hook runs in a pre-commit.yml job that can execute it
     expect(install.env.CI_TOOLS_MIRROR).toBe("${{ inputs.mirror-base-url }}");
   });
 
+  it("installs Electron after dependency setup and before each executed marker", () => {
+    let installSteps = 0;
+    for (const fileName of ["pre-commit.yml", "test.yml"]) {
+      const document = parse(
+        readFileSync(join(REPO_ROOT, ".github", "workflows", fileName), "utf8"),
+      );
+      for (const job of Object.values(document.jobs)) {
+        for (const step of job.steps ?? []) {
+          const lines = String(step.run ?? "")
+            .trim()
+            .split("\n")
+            .map(normalize);
+          const installIndex = lines.indexOf("bun install --frozen-lockfile");
+          if (installIndex === -1) continue;
+
+          const electronIndex = lines.indexOf(
+            "bunx --no-install install-electron",
+          );
+          const executedIndex = lines.indexOf(
+            'echo "executed=true" >> "$GITHUB_OUTPUT"',
+          );
+          expect(electronIndex, `${fileName} dependency install`).toBe(
+            installIndex + 1,
+          );
+          expect(
+            executedIndex,
+            `${fileName} acquisition marker`,
+          ).toBeGreaterThan(electronIndex);
+          installSteps += 1;
+        }
+      }
+    }
+    expect(installSteps).toBeGreaterThan(0);
+  });
+
   it("limits the cold bootstrap proof to explicit dispatch across every platform and origin", () => {
     const testWorkflow = parse(
       readFileSync(join(REPO_ROOT, ".github", "workflows", "test.yml"), "utf8"),
@@ -254,7 +289,7 @@ describe("every pre-commit hook runs in a pre-commit.yml job that can execute it
 
     const proof = testWorkflow.jobs["bootstrap-proof"];
     expect(normalize(proof.if)).toBe(
-      "github.event_name == 'workflow_dispatch' && inputs.bootstrap_matrix && ( github.event_name != 'pull_request' || (github.base_ref != 'main' && !startsWith(github.base_ref, 'integration/') && !startsWith(github.base_ref, 'land/')) || github.event.pull_request.head.repo.full_name != github.repository || github.event.pull_request.user.type == 'Bot' )",
+      "(github.event_name != 'pull_request' || (github.base_ref != 'main' && !startsWith(github.base_ref, 'integration/') && !startsWith(github.base_ref, 'land/')) || github.event.pull_request.head.repo.full_name != github.repository || github.event.pull_request.user.type == 'Bot' ) && github.event_name == 'workflow_dispatch' && inputs.bootstrap_matrix",
     );
     expect(proof.strategy.matrix.platform).toEqual([
       "linux-x64",
@@ -311,6 +346,9 @@ describe("every pre-commit hook runs in a pre-commit.yml job that can execute it
     );
     expect(originAssertion.run).toContain(
       'test "$BUN_ORIGIN" = "$EXPECTED_ORIGIN"',
+    );
+    expect(originAssertion.run).toContain(
+      'test "$(bunx --no-install node --version)" = v24.20.0',
     );
 
     const aggregate = testWorkflow.jobs.tests;

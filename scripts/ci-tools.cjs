@@ -39,6 +39,8 @@ function readLock(lockPath) {
     if (
       !/^[a-f0-9]{64}$/.test(hook.configSha256) ||
       !/^[a-f0-9]{64}$/.test(hook.sha256) ||
+      !Number.isSafeInteger(hook.bytes) ||
+      hook.bytes <= 0 ||
       !/^\d+$/.test(String(hook.prepareRunId)) ||
       hook.os !== "linux" ||
       hook.arch !== "x64" ||
@@ -137,6 +139,44 @@ function select(lock, name, platform, arch) {
     );
   }
   return entries[0];
+}
+
+function downloadHookArchive(hook, destination, mirror) {
+  if (!mirror || !secureOrigin(mirror))
+    throw new Error(
+      "A verified hook archive requires an explicit mirror origin",
+    );
+  const origin = new URL(mirror);
+  if (origin.search || origin.hash)
+    throw new Error("Hook mirror origin cannot contain a query or fragment");
+  const stage = `${destination}.partial`;
+  fs.mkdirSync(path.dirname(destination), { recursive: true });
+  try {
+    execFileSync(
+      "curl",
+      [
+        "--fail",
+        "--silent",
+        "--show-error",
+        "--location",
+        "--connect-timeout",
+        "10",
+        "--max-time",
+        "180",
+        "--output",
+        stage,
+        `${mirror.replace(/\/$/, "")}/${hook.objectKey}`,
+      ],
+      { stdio: ["ignore", "ignore", "pipe"], timeout: 185000 },
+    );
+    if (fs.statSync(stage).size !== hook.bytes)
+      throw new Error("Hook archive byte size mismatch");
+    if (sha256(stage) !== hook.sha256)
+      throw new Error("Hook archive SHA-256 mismatch");
+    fs.renameSync(stage, destination);
+  } finally {
+    fs.rmSync(stage, { force: true });
+  }
 }
 
 function downloadLockedUrl(lock, url, destination) {
@@ -336,27 +376,10 @@ function main(args) {
         try {
           fs.mkdirSync(path.dirname(archive), { recursive: true });
           const cached =
-            fs.existsSync(archive) && sha256(archive) === hook.sha256;
-          if (!cached)
-            execFileSync(
-              "curl",
-              [
-                "--fail",
-                "--silent",
-                "--show-error",
-                "--location",
-                "--connect-timeout",
-                "10",
-                "--max-time",
-                "60",
-                "--output",
-                archive,
-                `${mirror}/${hook.objectKey}`,
-              ],
-              { stdio: ["ignore", "ignore", "pipe"], timeout: 65000 },
-            );
-          if (sha256(archive) !== hook.sha256)
-            throw new Error("Hook archive SHA-256 mismatch");
+            fs.existsSync(archive) &&
+            fs.statSync(archive).size === hook.bytes &&
+            sha256(archive) === hook.sha256;
+          if (!cached) downloadHookArchive(hook, archive, mirror);
           execFileSync("tar", ["-xzf", archive, "-C", "/opt/traycer-ci"], {
             stdio: "inherit",
           });
@@ -417,6 +440,10 @@ function main(args) {
         archive,
         path.join(electronCache, cacheKey, path.basename(objectKey(entry))),
       );
+      fs.copyFileSync(
+        metadataPath,
+        path.join(electronCache, cacheKey, path.basename(objectKey(metadata))),
+      );
       append(process.env.GITHUB_ENV, `electron_config_cache=${electronCache}`);
       append(process.env.GITHUB_ENV, `ELECTRON_CACHE=${electronCache}`);
       append(
@@ -442,6 +469,7 @@ module.exports = {
   objectKey,
   download,
   downloadLockedUrl,
+  downloadHookArchive,
   sha256,
   install,
 };
