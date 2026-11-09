@@ -1336,7 +1336,13 @@ describe("WsRpcClient", () => {
     expect(error).toBeInstanceOf(HostTransportFailureError);
     // Deliberately NOT retryable: the first attempt may already have
     // committed, so the honest answer is ambiguity, not a third attempt.
+    // This attempt itself sent nothing, so it does not read as reached.
     expect(error).not.toBeInstanceOf(RetryableTransportError);
+    expect(mayHaveReachedHost(error)).toBe(false);
+    if (!(error instanceof HostTransportFailureError)) {
+      throw new Error("expected the unkeyed replay refusal");
+    }
+    expect(error.fatalDetails).not.toBeNull();
   });
 
   it("aborting the captured authority closes and settles the in-flight socket", async () => {

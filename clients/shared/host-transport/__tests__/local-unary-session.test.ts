@@ -3,9 +3,6 @@ import { z } from "zod";
 import {
   defineVersionedRpcRegistry,
   defineRpcContract,
-  LOCAL_UNARY_SESSION_MAX_BUFFERED_BYTES,
-  LOCAL_UNARY_SESSION_MAX_IN_FLIGHT,
-  LOCAL_UNARY_SESSION_MAX_QUEUED,
   RPC_REQUEST_TIMEOUT_FATAL_CODE,
   UNARY_CAPABILITY_IDEMPOTENCY_KEY,
   UNARY_CAPABILITY_PERSISTENT_SESSION,
@@ -33,7 +30,13 @@ import {
   type HostRequestOptions,
   type HostTransportEndpoint,
 } from "../host-messenger";
-import { localUnarySessionKey } from "../local-unary-session";
+import {
+  LocalUnarySession,
+  LocalUnarySessionDirectory,
+  localUnarySessionKey,
+  type MultiplexSocket,
+  type ReplacementDialResult,
+} from "../local-unary-session";
 import { resetNegotiatedManifests } from "../negotiated-manifest-registry";
 import type {
   IWebSocketFactory,
@@ -84,8 +87,7 @@ const HOST_ID = "local-unary-session-host";
 const SOCKET_URL = "ws://127.0.0.1/rpc";
 const USER_A = "user-a";
 const USER_B = "user-b";
-
-const textEncoder = new TextEncoder();
+const ECHO_MANIFEST = { "host.echo": { major: 1, minor: 0 } };
 
 class StubWebSocket implements WebSocketLike {
   onopen: ((event: WebSocketOpenEvent) => void) | null = null;
@@ -172,18 +174,6 @@ function captureRejection(pending: Promise<unknown>): Promise<unknown> {
     () => null,
     (cause: unknown) => cause,
   );
-}
-
-function payloadBytes(message: string): number {
-  return textEncoder.encode(JSON.stringify({ message })).length;
-}
-
-function messageOfBytes(bytes: number): string {
-  const envelope = payloadBytes("");
-  if (bytes < envelope) {
-    throw new Error(`payload of ${bytes} bytes is below the echo envelope`);
-  }
-  return "x".repeat(bytes - envelope);
 }
 
 function requestFrames(recorded: RecordedSocket): ClientRequestFrame[] {
@@ -294,6 +284,37 @@ function optionsFor(
     requiredHostMethodVersion: null,
     authority: authorityFor(bearer, signal, cloudAuthorized),
   };
+}
+
+function recordingSocket(): {
+  readonly socket: MultiplexSocket;
+  readonly sent: ClientFrame[];
+} {
+  const sent: ClientFrame[] = [];
+  return {
+    sent,
+    socket: {
+      send(frame: ClientFrame): void {
+        sent.push(frame);
+      },
+      close(): void {},
+    },
+  };
+}
+
+function openDirectSession(
+  dialReplacement: (
+    authority: HostRequestAuthority,
+    method: string,
+  ) => Promise<ReplacementDialResult>,
+): LocalUnarySession<typeof testRegistry> {
+  return new LocalUnarySession({
+    key: localUnarySessionKey(HOST_ID, USER_A, SOCKET_URL),
+    registry: testRegistry,
+    hostId: HOST_ID,
+    directory: new LocalUnarySessionDirectory(),
+    dialReplacement,
+  });
 }
 
 function makeClient(
@@ -529,9 +550,9 @@ describe("local unary session", () => {
     const bearer = new MutableBearerLease("token-a", USER_A);
     const verdict = { cloudAuthorized: true };
     const readVerdict = (): boolean => verdict.cloudAuthorized;
-    const held = client.request(
+    const first = client.request(
       "host.echo",
-      { message: messageOfBytes(LOCAL_UNARY_SESSION_MAX_BUFFERED_BYTES - 10) },
+      { message: "one" },
       optionsFor(
         bearer,
         new AbortController().signal,
@@ -544,17 +565,21 @@ describe("local unary session", () => {
     if (discovering === undefined) {
       throw new Error("expected the discovering socket");
     }
+    bearer.rotate("token-at-send");
+    verdict.cloudAuthorized = false;
     await classify(discovering, sessionAck(true));
-    const heldRequest = requestFrames(discovering)[0];
-    if (heldRequest === undefined) {
-      throw new Error("expected the in-flight request");
+    const sent = requestFrames(discovering)[0];
+    if (sent === undefined) {
+      throw new Error("expected the discovering request");
     }
-    expect(heldRequest.token).toBe("token-a");
-    expect(heldRequest.cloudAuthorized).toBe(true);
+    expect(sent.token).toBe("token-at-send");
+    expect(sent.cloudAuthorized).toBe(false);
 
-    const queued = client.request(
+    bearer.rotate("token-later");
+    verdict.cloudAuthorized = true;
+    const later = client.request(
       "host.echo",
-      { message: "next" },
+      { message: "later" },
       optionsFor(
         bearer,
         new AbortController().signal,
@@ -564,24 +589,17 @@ describe("local unary session", () => {
       ),
     );
     await flush();
-    expect(requestFrames(discovering)).toHaveLength(1);
-
-    bearer.rotate("token-at-send");
-    verdict.cloudAuthorized = false;
-    respondEcho(discovering.socket, heldRequest, "held");
-    await flush();
     const sentLater = requestFrames(discovering)[1];
     if (sentLater === undefined) {
-      throw new Error(
-        "expected the queued request to send after the slot freed",
-      );
+      throw new Error("expected the later request to send immediately");
     }
-    expect(sentLater.token).toBe("token-at-send");
-    expect(sentLater.cloudAuthorized).toBe(false);
+    expect(sentLater.token).toBe("token-later");
+    expect(sentLater.cloudAuthorized).toBe(true);
     expect(sockets).toHaveLength(1);
-    respondEcho(discovering.socket, sentLater, "next");
-    await expect(held).resolves.toEqual({ echoed: "held" });
-    await expect(queued).resolves.toEqual({ echoed: "next" });
+    respondEcho(discovering.socket, sent, "one");
+    respondEcho(discovering.socket, sentLater, "later");
+    await expect(first).resolves.toEqual({ echoed: "one" });
+    await expect(later).resolves.toEqual({ echoed: "later" });
   });
 
   it("settles a sent request as uncertain on close and does not write it again", async () => {
@@ -622,112 +640,92 @@ describe("local unary session", () => {
     expect(sockets).toHaveLength(1);
   });
 
-  it("fails an unsent unkeyed request without writing it", async () => {
-    const { factory, sockets } = makeFactory();
-    const client = makeClient(factory, 0);
+  it("fails an unsent unkeyed request without writing it or redialing", async () => {
     const bearer = new MutableBearerLease("token-a", USER_A);
-    const sent = captureRejection(
-      client.request(
-        "host.echo",
-        {
-          message: messageOfBytes(LOCAL_UNARY_SESSION_MAX_BUFFERED_BYTES - 10),
-        },
-        optionsFor(bearer, new AbortController().signal, null, false, null),
-      ),
+    let dials = 0;
+    const session = openDirectSession(async () => {
+      dials += 1;
+      return { kind: "legacy" };
+    });
+    const pending = captureRejection(
+      session.call({
+        requestId: "req-unsent",
+        method: "host.echo",
+        params: { message: "waiting" },
+        responseTimeoutMs: 5_000,
+        options: optionsFor(
+          bearer,
+          new AbortController().signal,
+          null,
+          false,
+          null,
+        ),
+      }),
     );
-    const discovering = sockets[0];
-    if (discovering === undefined) {
-      throw new Error("expected the discovering socket");
-    }
-    await classify(discovering, sessionAck(true));
-    const queued = captureRejection(
-      client.request(
-        "host.echo",
-        { message: "waiting" },
-        optionsFor(bearer, new AbortController().signal, null, false, null),
-      ),
-    );
-    await flush();
-    expect(requestFrames(discovering)).toHaveLength(1);
 
-    discovering.socket.fireClose(1006, "peer-dropped", false);
-    await flush();
-    await flush();
-
-    const sentError = await sent;
-    const queuedError = await queued;
-    expect(sentError).toBeInstanceOf(HostTransportFailureError);
-    expect(sentError).not.toBeInstanceOf(RetryableTransportError);
-    expect(mayHaveReachedHost(sentError)).toBe(true);
-    expect(queuedError).toBeInstanceOf(RetryableTransportError);
-    if (!(queuedError instanceof RetryableTransportError)) {
+    session.handlers.onTransportClosed("peer-dropped", false);
+    const error = await pending;
+    expect(error).toBeInstanceOf(RetryableTransportError);
+    if (!(error instanceof RetryableTransportError)) {
       throw new Error("expected the unsent call to be retryable");
     }
-    expect(queuedError.replaySafetyFromKey).toBe(false);
-    expect(mayHaveReachedHost(queuedError)).toBe(false);
-    expect(requestFrames(discovering).map((frame) => frame.requestId)).toEqual([
-      "req-1",
-    ]);
-    expect(sockets).toHaveLength(1);
+    expect(error.replaySafetyFromKey).toBe(false);
+    expect(error.message).toBe("peer-dropped");
+    expect(mayHaveReachedHost(error)).toBe(false);
+    expect(dials).toBe(0);
   });
 
   it("writes an unsent keyed request once on the replacement socket", async () => {
-    const { factory, sockets } = makeFactory();
-    const client = makeClient(factory, 0);
     const bearer = new MutableBearerLease("token-a", USER_A);
-    const sent = captureRejection(
-      client.request(
-        "host.echo",
-        {
-          message: messageOfBytes(LOCAL_UNARY_SESSION_MAX_BUFFERED_BYTES - 10),
+    const recorded = recordingSocket();
+    let dials = 0;
+    const session = openDirectSession(async () => {
+      dials += 1;
+      const attached: ReplacementDialResult = {
+        kind: "persistent",
+        attached: {
+          socket: recorded.socket,
+          clientManifest: ECHO_MANIFEST,
+          hostManifest: ECHO_MANIFEST,
+          idempotency: true,
         },
-        optionsFor(bearer, new AbortController().signal, null, false, null),
-      ),
-    );
-    const discovering = sockets[0];
-    if (discovering === undefined) {
-      throw new Error("expected the discovering socket");
-    }
-    await classify(discovering, sessionAck(true));
-    const queued = client.request(
-      "host.echo",
-      { message: "replay" },
-      optionsFor(
+      };
+      return attached;
+    });
+    const pending = session.call({
+      requestId: "req-keyed",
+      method: "host.echo",
+      params: { message: "replay" },
+      responseTimeoutMs: 5_000,
+      options: optionsFor(
         bearer,
         new AbortController().signal,
         "replay-key",
         false,
         null,
       ),
-    );
+    });
+
+    session.handlers.onTransportClosed("peer-dropped", false);
     await flush();
-    expect(requestFrames(discovering).map((frame) => frame.requestId)).toEqual([
-      "req-1",
-    ]);
-
-    discovering.socket.fireClose(1006, "peer-dropped", false);
-    const replacement = sockets[1];
-    if (replacement === undefined) {
-      throw new Error("expected the keyed call to dial a replacement");
+    expect(dials).toBe(1);
+    expect(recorded.sent).toHaveLength(1);
+    const written = recorded.sent[0];
+    if (written === undefined || written.kind !== "request") {
+      throw new Error("expected the keyed request to be written once");
     }
-    await classify(replacement, sessionAck(true));
-
-    const replayed = requestFrames(replacement);
-    expect(replayed.map((frame) => frame.requestId)).toEqual(["req-2"]);
-    expect(replayed[0]?.idempotencyKey).toBe("replay-key");
-    expect(requestFrames(discovering).map((frame) => frame.requestId)).toEqual([
-      "req-1",
-    ]);
-    const replayedFrame = replayed[0];
-    if (replayedFrame === undefined) {
-      throw new Error("expected the replayed request");
-    }
-    respondEcho(replacement.socket, replayedFrame, "replay");
-    const sentError = await sent;
-    expect(mayHaveReachedHost(sentError)).toBe(true);
-    expect(sentError).not.toBeInstanceOf(RetryableTransportError);
-    await expect(queued).resolves.toEqual({ echoed: "replay" });
-    expect(sockets).toHaveLength(2);
+    expect(written.requestId).toBe("req-keyed");
+    expect(written.idempotencyKey).toBe("replay-key");
+    session.handlers.onFrame({
+      kind: "response",
+      requestId: "req-keyed",
+      method: "host.echo",
+      schemaVersion: { major: 1, minor: 0 },
+      result: { echoed: "replay" },
+      error: null,
+    });
+    await expect(pending).resolves.toEqual({ echoed: "replay" });
+    expect(recorded.sent).toHaveLength(1);
   });
 
   it("fails replayMustBeKeyed before send when the ack has no idempotency capability", async () => {
@@ -756,6 +754,11 @@ describe("local unary session", () => {
     const error = await replay;
     expect(error).toBeInstanceOf(HostTransportFailureError);
     expect(error).not.toBeInstanceOf(RetryableTransportError);
+    expect(mayHaveReachedHost(error)).toBe(false);
+    if (!(error instanceof HostTransportFailureError)) {
+      throw new Error("expected the unkeyed replay refusal");
+    }
+    expect(error.fatalDetails).not.toBeNull();
     expect(requestFrames(discovering)).toHaveLength(0);
 
     const followUp = client.request(
@@ -865,16 +868,15 @@ describe("local unary session", () => {
     const { factory, sockets } = makeFactory();
     const client = makeClient(factory, 0);
     const bearer = new MutableBearerLease("token-a", USER_A);
-    const held = client.request(
+    const discoveringCall = client.request(
       "host.echo",
-      { message: messageOfBytes(LOCAL_UNARY_SESSION_MAX_BUFFERED_BYTES - 10) },
+      { message: "discover" },
       optionsFor(bearer, new AbortController().signal, null, false, null),
     );
     const discovering = sockets[0];
     if (discovering === undefined) {
       throw new Error("expected the discovering socket");
     }
-    await classify(discovering, sessionAck(true));
     const controller = new AbortController();
     const queued = captureRejection(
       client.request(
@@ -884,23 +886,26 @@ describe("local unary session", () => {
       ),
     );
     await flush();
-    expect(requestFrames(discovering)).toHaveLength(1);
     controller.abort();
+    await classify(discovering, sessionAck(true));
 
+    const sent = requestFrames(discovering);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.params).toEqual({ message: "discover" });
+    expect(cancelFrames(discovering)).toHaveLength(0);
     const error = await queued;
     expect(error).toBeInstanceOf(HostRequestAbortedError);
     if (!(error instanceof HostRequestAbortedError)) {
       throw new Error("expected the queued abort");
     }
     expect(error.mayHaveDispatched).toBe(false);
-    expect(cancelFrames(discovering)).toHaveLength(0);
 
-    const heldRequest = requestFrames(discovering)[0];
-    if (heldRequest === undefined) {
-      throw new Error("expected the in-flight request to stay on the socket");
+    const discoveringRequest = sent[0];
+    if (discoveringRequest === undefined) {
+      throw new Error("expected the discovering request");
     }
-    respondEcho(discovering.socket, heldRequest, "held");
-    await expect(held).resolves.toEqual({ echoed: "held" });
+    respondEcho(discovering.socket, discoveringRequest, "discover");
+    await expect(discoveringCall).resolves.toEqual({ echoed: "discover" });
     expect(sockets).toHaveLength(1);
   });
 
@@ -1023,200 +1028,13 @@ describe("local unary session", () => {
     expect(sockets).toHaveLength(1);
   });
 
-  it("refuses one oversized payload and keeps the session", async () => {
-    const { factory, sockets } = makeFactory();
-    const client = makeClient(factory, 0);
-    const bearer = new MutableBearerLease("token-a", USER_A);
-    const oversized = captureRejection(
-      client.request(
-        "host.echo",
-        { message: messageOfBytes(LOCAL_UNARY_SESSION_MAX_BUFFERED_BYTES + 1) },
-        optionsFor(bearer, new AbortController().signal, null, false, null),
-      ),
-    );
-    const discovering = sockets[0];
-    if (discovering === undefined) {
-      throw new Error("expected the discovering socket");
-    }
-    await classify(discovering, sessionAck(true));
-    const error = await oversized;
-    expect(error).toBeInstanceOf(RetryableTransportError);
-    if (!(error instanceof RetryableTransportError)) {
-      throw new Error("expected the oversized call to be refused before send");
-    }
-    expect(error.message).toBe(
-      "Persistent session refused a call whose params exceed the byte cap",
-    );
-    expect(error.replaySafetyFromKey).toBe(false);
-    expect(requestFrames(discovering)).toHaveLength(0);
-
-    const followUp = client.request(
-      "host.echo",
-      { message: "after" },
-      optionsFor(bearer, new AbortController().signal, null, false, null),
-    );
-    await flush();
-    const sent = requestFrames(discovering)[0];
-    if (sent === undefined) {
-      throw new Error("expected the session to accept the next call");
-    }
-    respondEcho(discovering.socket, sent, "after");
-    await expect(followUp).resolves.toEqual({ echoed: "after" });
-    expect(sockets).toHaveLength(1);
-  });
-
-  it("caps queued bytes separately from in-flight bytes and refuses the call that crosses the queue cap", async () => {
-    const { factory, sockets } = makeFactory();
-    const client = makeClient(factory, 0);
-    const bearer = new MutableBearerLease("token-a", USER_A);
-    const signal = new AbortController().signal;
-    const held = client.request(
-      "host.echo",
-      { message: messageOfBytes(LOCAL_UNARY_SESSION_MAX_BUFFERED_BYTES - 10) },
-      optionsFor(bearer, signal, null, false, null),
-    );
-    const discovering = sockets[0];
-    if (discovering === undefined) {
-      throw new Error("expected the discovering socket");
-    }
-    await classify(discovering, sessionAck(true));
-    const queued = client.request(
-      "host.echo",
-      { message: messageOfBytes(200) },
-      optionsFor(bearer, signal, null, false, null),
-    );
-    await flush();
-    expect(requestFrames(discovering)).toHaveLength(1);
-
-    const refused = captureRejection(
-      client.request(
-        "host.echo",
-        {
-          message: messageOfBytes(LOCAL_UNARY_SESSION_MAX_BUFFERED_BYTES - 100),
-        },
-        optionsFor(bearer, signal, null, false, null),
-      ),
-    );
-    const error = await refused;
-    expect(error).toBeInstanceOf(RetryableTransportError);
-    if (!(error instanceof RetryableTransportError)) {
-      throw new Error("expected the queue byte cap to refuse the call");
-    }
-    expect(error.replaySafetyFromKey).toBe(false);
-    expect(requestFrames(discovering)).toHaveLength(1);
-    expect(discovering.socket.closed).toBeNull();
-
-    const heldRequest = requestFrames(discovering)[0];
-    if (heldRequest === undefined) {
-      throw new Error("expected the in-flight request");
-    }
-    respondEcho(discovering.socket, heldRequest, "held");
-    await flush();
-    const queuedRequest = requestFrames(discovering)[1];
-    if (queuedRequest === undefined) {
-      throw new Error(
-        "expected the queued call to send once in-flight bytes freed",
-      );
-    }
-    respondEcho(discovering.socket, queuedRequest, "queued");
-    await expect(held).resolves.toEqual({ echoed: "held" });
-    await expect(queued).resolves.toEqual({ echoed: "queued" });
-    expect(sockets).toHaveLength(1);
-  });
-
-  it("refuses the call past the queue length cap and keeps the session", async () => {
-    const { factory, sockets } = makeFactory();
-    const client = makeClient(factory, 0);
-    const bearer = new MutableBearerLease("token-a", USER_A);
-    const signal = new AbortController().signal;
-    const held = client.request(
-      "host.echo",
-      { message: messageOfBytes(LOCAL_UNARY_SESSION_MAX_BUFFERED_BYTES - 10) },
-      optionsFor(bearer, signal, null, false, null),
-    );
-    const discovering = sockets[0];
-    if (discovering === undefined) {
-      throw new Error("expected the discovering socket");
-    }
-    await classify(discovering, sessionAck(true));
-
-    const queued: Promise<{ readonly echoed: string }>[] = [];
-    for (let index = 0; index < LOCAL_UNARY_SESSION_MAX_QUEUED; index += 1) {
-      queued.push(
-        client.request(
-          "host.echo",
-          { message: `q-${index}` },
-          optionsFor(bearer, signal, null, false, null),
-        ),
-      );
-    }
-    await flush();
-    expect(requestFrames(discovering)).toHaveLength(1);
-
-    const overflow = captureRejection(
-      client.request(
-        "host.echo",
-        { message: "overflow" },
-        optionsFor(bearer, signal, null, false, null),
-      ),
-    );
-    const error = await overflow;
-    expect(error).toBeInstanceOf(RetryableTransportError);
-    if (!(error instanceof RetryableTransportError)) {
-      throw new Error("expected the queue cap to refuse the call");
-    }
-    expect(error.replaySafetyFromKey).toBe(false);
-    expect(error.message).toBe("Persistent session queue is full");
-    expect(requestFrames(discovering)).toHaveLength(1);
-    expect(discovering.socket.closed).toBeNull();
-
-    const heldRequest = requestFrames(discovering)[0];
-    if (heldRequest === undefined) {
-      throw new Error("expected the byte-saturated request");
-    }
-    respondEcho(discovering.socket, heldRequest, "held");
-    for (const frame of requestFrames(discovering).slice(1)) {
-      respondEcho(discovering.socket, frame, "queued");
-    }
-    await expect(held).resolves.toEqual({ echoed: "held" });
-    await Promise.all(queued);
-
-    const followUp = client.request(
-      "host.echo",
-      { message: "after" },
-      optionsFor(bearer, signal, null, false, null),
-    );
-    await flush();
-    const followUpFrame = requestFrames(discovering).at(-1);
-    const followUpParams = followUpFrame?.params;
-    const followUpMessage =
-      typeof followUpParams === "object" &&
-      followUpParams !== null &&
-      "message" in followUpParams &&
-      typeof followUpParams.message === "string"
-        ? followUpParams.message
-        : null;
-    if (followUpFrame === undefined || followUpMessage !== "after") {
-      throw new Error(
-        "expected the session to accept a call after the queue drained",
-      );
-    }
-    respondEcho(discovering.socket, followUpFrame, "after");
-    await expect(followUp).resolves.toEqual({ echoed: "after" });
-    expect(sockets).toHaveLength(1);
-    expect(discovering.socket.closed).toBeNull();
-  });
-
-  it("keeps the call past the in-flight cap queued until a slot frees", async () => {
+  it("writes every queued call once the socket is up", async () => {
+    const burst = 40;
     const { factory, sockets } = makeFactory();
     const client = makeClient(factory, 0);
     const bearer = new MutableBearerLease("token-a", USER_A);
     const calls: Promise<{ readonly echoed: string }>[] = [];
-    for (
-      let index = 0;
-      index < LOCAL_UNARY_SESSION_MAX_IN_FLIGHT + 1;
-      index += 1
-    ) {
+    for (let index = 0; index < burst; index += 1) {
       calls.push(
         client.request(
           "host.echo",
@@ -1230,43 +1048,18 @@ describe("local unary session", () => {
     if (discovering === undefined) {
       throw new Error("expected the discovering socket");
     }
-    const extra = calls[LOCAL_UNARY_SESSION_MAX_IN_FLIGHT];
-    if (extra === undefined) {
-      throw new Error("expected the call past the in-flight cap");
-    }
-    let extraSettled = false;
-    void extra.then(
-      () => {
-        extraSettled = true;
-      },
-      () => {
-        extraSettled = true;
-      },
-    );
 
     await classify(discovering, sessionAck(true));
-    expect(requestFrames(discovering)).toHaveLength(
-      LOCAL_UNARY_SESSION_MAX_IN_FLIGHT,
-    );
-    expect(extraSettled).toBe(false);
-
-    const first = requestFrames(discovering)[0];
-    if (first === undefined) {
-      throw new Error("expected the first in-flight request");
-    }
-    respondEcho(discovering.socket, first, "flight");
-    await flush();
-    expect(requestFrames(discovering)).toHaveLength(
-      LOCAL_UNARY_SESSION_MAX_IN_FLIGHT + 1,
-    );
-    expect(extraSettled).toBe(false);
+    const sent = requestFrames(discovering);
+    expect(sent).toHaveLength(burst);
     expect(discovering.socket.closed).toBeNull();
-
-    for (const frame of requestFrames(discovering).slice(1)) {
+    for (const frame of sent) {
       respondEcho(discovering.socket, frame, "flight");
     }
-    await Promise.all(calls);
-    expect(extraSettled).toBe(true);
+    const results = await Promise.all(calls);
+    expect(results).toEqual(
+      Array.from({ length: burst }, () => ({ echoed: "flight" })),
+    );
     expect(sockets).toHaveLength(1);
     expect(discovering.socket.closed).toBeNull();
   });

@@ -105,22 +105,6 @@ export const UNARY_CAPABILITY_IDEMPOTENCY_KEY = "unary.idempotencyKey";
 export const UNARY_CAPABILITY_PERSISTENT_SESSION = "unary.persistentSession";
 
 /**
- * How many unary calls one persistent local session may have on the wire,
- * and how many it may hold queued waiting for a free in-flight slot or a
- * socket. A call past the in-flight cap waits in the queue. A call past the
- * queue cap is refused before it is sent.
- */
-export const LOCAL_UNARY_SESSION_MAX_IN_FLIGHT = 32;
-export const LOCAL_UNARY_SESSION_MAX_QUEUED = 32;
-
-/**
- * UTF-8 byte cap on the params held queued by one persistent local session,
- * and the same cap again on the params of its in-flight calls. A single call
- * whose params exceed the cap is refused before it is sent.
- */
-export const LOCAL_UNARY_SESSION_MAX_BUFFERED_BYTES = 1024 * 1024;
-
-/**
  * The invariant fragment of the sentence the host writes when its idempotency
  * cache refuses a reused key (`keyReuseConflict` in the host's
  * `transport/rpc/idempotency-cache.ts`).

@@ -15,7 +15,10 @@ import {
 } from "@traycer/protocol/framework/index";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import { CredentialLeaseReleasedError } from "@traycer/protocol/auth/request-context";
-import { markMayHaveReachedHost } from "@traycer/protocol/host-transport/remote/rpc-types";
+import {
+  markMayHaveReachedHost,
+  transportFailureBeforeSend,
+} from "@traycer/protocol/host-transport/remote/rpc-types";
 import type { OpenFrameBearerSource } from "@traycer-clients/shared/auth/bearer-source";
 import type { TransportEvidenceReporter } from "@traycer-clients/shared/host-selection/transport-evidence";
 import {
@@ -638,19 +641,15 @@ export class WsRpcClient<
       // premise the retry rests on, and the earlier attempt may already have
       // committed.
       //
-      // Ambiguous rather than retryable, and that is the point of failing here
-      // instead of dispatching: the outcome of the first attempt is genuinely
-      // unknown, so the honest answer is the one that makes a caller reconcile
-      // (`classifyEpicWriteCommandFailure` routes `HostTransportFailureError`
-      // to `unknown-outcome`) rather than one that invites a third attempt into
-      // the same hole.
+      // Non-retryable, and this attempt sent nothing, so it reads as not
+      // reached. `classifyEpicWriteCommandFailure` still routes the class to
+      // `unknown-outcome`. An earlier attempt's uncertainty is the retry
+      // messenger's wrapper, which engages because these details are non-null.
       if (options.replayMustBeKeyed && wireIdempotencyKey === null) {
-        throw new HostTransportFailureError({
-          code: "RPC_ERROR",
+        throw transportFailureBeforeSend({
           message: `Host '${selected.hostId}' cannot honour the idempotency key a replay of '${method}' requires`,
           requestId,
           method,
-          fatalDetails: null,
         });
       }
 

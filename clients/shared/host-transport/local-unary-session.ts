@@ -4,15 +4,15 @@ import type {
   SchemaVersion,
   VersionedRpcRegistry,
 } from "@traycer/protocol/framework/index";
-import {
-  LOCAL_UNARY_SESSION_MAX_BUFFERED_BYTES,
-  LOCAL_UNARY_SESSION_MAX_IN_FLIGHT,
-  LOCAL_UNARY_SESSION_MAX_QUEUED,
-  type ClientFrame,
-  type HostFatalErrorFrame,
-  type HostFrame,
+import type {
+  ClientFrame,
+  HostFatalErrorFrame,
+  HostFrame,
 } from "@traycer/protocol/framework/index";
-import { markMayHaveReachedHost } from "@traycer/protocol/host-transport/remote/rpc-types";
+import {
+  markMayHaveReachedHost,
+  transportFailureBeforeSend,
+} from "@traycer/protocol/host-transport/remote/rpc-types";
 import { resolveUnavailableMethodDegrade } from "./unavailable-method-degrade";
 import {
   HostMethodVersionUnsatisfiedError,
@@ -50,16 +50,6 @@ export function localUnarySessionKey(
   websocketUrl: string,
 ): string {
   return `${hostId}\u0000${userId}\u0000${websocketUrl}`;
-}
-
-const paramsEncoder = new TextEncoder();
-
-function paramsByteLength(params: unknown): number {
-  const encoded = JSON.stringify(params);
-  if (encoded === undefined) {
-    return 0;
-  }
-  return paramsEncoder.encode(encoded).length;
 }
 
 export interface PersistentSocketHandlers {
@@ -104,7 +94,6 @@ interface QueuedCall<Registry extends VersionedRpcRegistry> {
   readonly params: unknown;
   readonly responseTimeoutMs: number;
   readonly options: HostRequestOptions;
-  readonly bytes: number;
   readonly succeed: (value: unknown) => void;
   readonly fail: (error: unknown) => void;
   /** Removes the pre-send abort listener. Null once the call has left the queue. */
@@ -119,7 +108,6 @@ interface InFlightCall {
   readonly clientCanonical: SchemaVersion;
   readonly hostCanonical: SchemaVersion;
   readonly onWirePayload: unknown;
-  readonly bytes: number;
   readonly responseTimeoutMs: number;
   readonly timer: TimerHandle;
   readonly abortListener: () => void;
@@ -131,13 +119,16 @@ interface InFlightCall {
 /**
  * Multiplexed local unary calls on one socket.
  *
- * A call sits in the queue until a slot is free, then is sent once. A sent
- * call is never written again: a close or a response timeout settles it as
- * uncertain. A call still in the queue is written on the replacement socket
- * only when it carries an idempotency key; an unkeyed one fails before send
- * so the caller can issue a first send. Aborting a queued call sends nothing.
- * Aborting a sent call writes one `cancel` for that request id and leaves
- * every other call on the socket alone.
+ * The remote unary session does not cap how many calls are outstanding:
+ * `pendingUnary` is unbounded, and the interactive scheduler queue that
+ * carries unary is not credit-gated. This session follows that. A call is
+ * sent once the socket is up. A sent call is never written again: a close or
+ * a response timeout settles it as uncertain. A call still in the queue,
+ * which is a call that arrived while the socket was down, is written on the
+ * replacement socket only when it carries an idempotency key; an unkeyed one
+ * fails before send so the caller can issue a first send. Aborting a queued
+ * call sends nothing. Aborting a sent call writes one `cancel` for that
+ * request id and leaves every other call on the socket alone.
  */
 export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
   readonly handlers: PersistentSocketHandlers;
@@ -156,9 +147,7 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
   private hostManifest: ConnectionManifest | null = null;
   private idempotency = false;
   private readonly queue: QueuedCall<Registry>[] = [];
-  private queuedBytes = 0;
   private readonly inFlight = new Map<string, InFlightCall>();
-  private inFlightBytes = 0;
   private redialing = false;
   private retired = false;
   /** Set around a close this session initiated, so that close is not a peer drop. */
@@ -209,28 +198,6 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
         ),
       );
     }
-    const bytes = paramsByteLength(input.params);
-    if (bytes > LOCAL_UNARY_SESSION_MAX_BUFFERED_BYTES) {
-      return Promise.reject(
-        preSendRetryable(
-          input.requestId,
-          input.method,
-          "Persistent session refused a call whose params exceed the byte cap",
-        ),
-      );
-    }
-    if (
-      this.queue.length >= LOCAL_UNARY_SESSION_MAX_QUEUED ||
-      this.queuedBytes + bytes > LOCAL_UNARY_SESSION_MAX_BUFFERED_BYTES
-    ) {
-      return Promise.reject(
-        preSendRetryable(
-          input.requestId,
-          input.method,
-          "Persistent session queue is full",
-        ),
-      );
-    }
     const methodRegistry = this.registry[input.method];
     return new Promise((resolve, reject) => {
       const queued: QueuedCall<Registry> = {
@@ -240,7 +207,6 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
         params: input.params,
         responseTimeoutMs: input.responseTimeoutMs,
         options: input.options,
-        bytes,
         succeed: (value) => {
           resolve(value as ResponseOfMethod<Registry, Method>);
         },
@@ -258,7 +224,6 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
         once: true,
       });
       this.queue.push(queued);
-      this.queuedBytes += bytes;
       if (input.options.authority.abortSignal.aborted) {
         onAbort();
         return;
@@ -273,22 +238,12 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
     if (manifest === null || connection === null) {
       return;
     }
-    while (
-      this.inFlight.size < LOCAL_UNARY_SESSION_MAX_IN_FLIGHT &&
-      this.queue.length > 0
-    ) {
+    while (this.queue.length > 0) {
       const next = this.queue[0];
       if (next === undefined) {
         return;
       }
-      if (
-        this.inFlightBytes + next.bytes >
-        LOCAL_UNARY_SESSION_MAX_BUFFERED_BYTES
-      ) {
-        return;
-      }
       this.queue.shift();
-      this.queuedBytes -= next.bytes;
       this.clearAbortListener(next);
       if (next.options.authority.abortSignal.aborted) {
         next.fail(abortedCall(next, false));
@@ -451,12 +406,10 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
         : null;
     if (call.options.replayMustBeKeyed && wireKey === null) {
       return Promise.reject(
-        new HostTransportFailureError({
-          code: "RPC_ERROR",
+        transportFailureBeforeSend({
           message: `Host '${this.hostId}' cannot honour the idempotency key a replay of '${call.method}' requires`,
           requestId: call.requestId,
           method: call.method,
-          fatalDetails: null,
         }),
       );
     }
@@ -489,7 +442,6 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
         clientCanonical,
         hostCanonical,
         onWirePayload: prepared.onWirePayload,
-        bytes: call.bytes,
         responseTimeoutMs: call.responseTimeoutMs,
         timer: setTimeout(() => {
           this.timeoutSent(call.requestId);
@@ -500,7 +452,6 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
         reject,
       };
       this.inFlight.set(call.requestId, entry);
-      this.inFlightBytes += call.bytes;
       call.options.authority.abortSignal.addEventListener(
         "abort",
         abortListener,
@@ -614,7 +565,6 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
     const incompatible = frame.details.code === "INCOMPATIBLE";
     if (incompatible) {
       const queued = this.queue.splice(0, this.queue.length);
-      this.queuedBytes = 0;
       for (const queuedCall of queued) {
         this.clearAbortListener(queuedCall);
         queuedCall.fail(
@@ -733,7 +683,6 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
           return;
         }
         this.queue.shift();
-        this.queuedBytes -= opener.bytes;
         this.clearAbortListener(opener);
         opener.fail(
           cause instanceof Error
@@ -813,7 +762,6 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
       return false;
     }
     this.inFlight.delete(entry.requestId);
-    this.inFlightBytes -= entry.bytes;
     clearTimeout(entry.timer);
     entry.abortSignal.removeEventListener("abort", entry.abortListener);
     return true;
@@ -828,14 +776,12 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
     if (removed === undefined) {
       return false;
     }
-    this.queuedBytes -= removed.bytes;
     this.clearAbortListener(removed);
     return true;
   }
 
   private failUnkeyedQueued(message: string): void {
     const kept: QueuedCall<Registry>[] = [];
-    let keptBytes = 0;
     for (const call of this.queue) {
       if (call.options.idempotencyKey === null) {
         this.clearAbortListener(call);
@@ -843,19 +789,16 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
         continue;
       }
       kept.push(call);
-      keptBytes += call.bytes;
     }
     this.queue.length = 0;
     for (const call of kept) {
       this.queue.push(call);
     }
-    this.queuedBytes = keptBytes;
   }
 
   /** `error` null means each call fails as a pre-send retry, because it was never written. */
   private failQueued(error: HostRpcError | null): void {
     const pending = this.queue.splice(0, this.queue.length);
-    this.queuedBytes = 0;
     for (const call of pending) {
       this.clearAbortListener(call);
       call.fail(
@@ -959,6 +902,9 @@ export class LocalUnarySessionDirectory<Registry extends VersionedRpcRegistry> {
       this.slots.delete(key);
       return this.beginDial(key);
     }
+    // openAck carries no host version and no instance id, so a host whose
+    // ack omitted the session stays one socket per call for this process.
+    // A later upgrade under the same URL is not on an ack we already hold.
     if (existing.phase === "legacy") {
       return { kind: "legacy" };
     }
