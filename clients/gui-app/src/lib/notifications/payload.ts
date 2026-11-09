@@ -944,6 +944,7 @@ function botTargetOf(payload: ChatNotificationPayload): BotOpenTarget | null {
       kind: "chat",
       chatId: payload.chatId,
       messageId: payload.messageId ?? null,
+      sendPostId: null,
     },
   };
 }

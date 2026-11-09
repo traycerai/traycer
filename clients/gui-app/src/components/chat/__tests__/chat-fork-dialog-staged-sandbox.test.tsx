@@ -682,11 +682,30 @@ describe("ChatForkDialog on a New sandbox the chip picked", () => {
       dialogMocks.selectHost?.(OLD_HOST_ID);
     });
 
-    const result = screen.getByTestId("chat-fork-result").textContent;
-    expect(result).toContain(
-      "Starts from this chat's latest saved transcript in an empty sandbox, with no files; work still in progress may not be included.",
-    );
-    expect(result).toContain("The original agent continues working.");
+    expect(
+      screen.getByText(/uses the latest usable cloud backup available/),
+    ).not.toBeNull();
+    expect(
+      screen.getByText(/Work still in progress may not be included/),
+    ).not.toBeNull();
+    expect(
+      screen.getByText(/The original agent continues working/),
+    ).not.toBeNull();
+    expect(
+      screen.getByText("This fork starts in an empty sandbox, with no files."),
+    ).toBeDefined();
+    expect(
+      screen.getByText(
+        "The fork copies the transcript; the provider session stays on the source computer.",
+      ),
+    ).toBeDefined();
+    expect(
+      screen.getByText(
+        "Makes a second chat there. This one stays where it is.",
+      ),
+    ).toBeDefined();
+    expect(screen.queryByText(/pick this host's folder/)).toBeNull();
+    expect(screen.queryByText(/latest saved checkpoint/)).toBeNull();
   });
 
   it("stages nothing and skips the publication read for a single-host fork", () => {

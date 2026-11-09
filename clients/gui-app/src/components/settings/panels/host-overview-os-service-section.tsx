@@ -42,7 +42,7 @@ export interface OsServiceSectionProps {
   readonly hostName: string;
   /** The registration, in a sentence. The ADAPTER decides the wording. */
   readonly description: string;
-  /** Identifier and path for Installation Details; null when unknown. */
+  /** Identifier and path for this registration; null when unknown. */
   readonly manifestLine: string | null;
   /** Retires the whole section: no description to trust, nothing safe to press. */
   readonly degrade: OverviewDegradeReason | null;
@@ -111,8 +111,8 @@ export function OsServiceSection(props: OsServiceSectionProps): ReactNode {
 }
 
 /**
- * The registration in a sentence and the two repair verbs at the row's
- * trailing edge - a settings row's geometry, so the
+ * The registration and its manifest line, with repair verbs at the trailing
+ * edge - a settings row's geometry, so the
  * verbs drop under the sentence on a narrow pane rather than squeeze it.
  */
 function OsServiceRow(props: OsServiceSectionProps): ReactNode {
@@ -163,6 +163,14 @@ function OsServiceRow(props: OsServiceSectionProps): ReactNode {
         >
           {props.description}
         </p>
+        {props.manifestLine === null ? null : (
+          <p
+            className="font-mono text-code-xs break-all text-muted-foreground"
+            data-testid="host-overview-service-manifest"
+          >
+            {props.manifestLine}
+          </p>
+        )}
       </div>
       <OsServiceActions
         section={props}

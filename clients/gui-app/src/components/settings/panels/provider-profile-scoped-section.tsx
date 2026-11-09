@@ -9,7 +9,6 @@ import {
   Eye,
   EyeOff,
   LogIn,
-  MoreHorizontal,
   Plus,
   Settings2,
 } from "lucide-react";
@@ -19,12 +18,6 @@ import {
   type ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { redactEmail } from "@/lib/providers/redact-email";
@@ -473,7 +466,7 @@ export function ProviderProfileScopedSection(
 /**
  * The selected profile's row under the dropdown. The email, plan and a
  * not-usable standing stay on the row. Sign in, Manage profile and Details
- * sit in More.
+ * are visible controls that wrap with the row.
  */
 function SelectedProfileRow(props: {
   readonly state: ProviderCliState;
@@ -508,14 +501,19 @@ function SelectedProfileRow(props: {
   return (
     <div
       data-slot="profile-summary-actions"
-      className="flex min-w-0 items-start justify-between gap-2"
+      className="flex min-w-0 flex-wrap items-start justify-between gap-2"
     >
       <ProfileSummary key={profile.profileId} profile={profile} />
-      <ProfileRowMore label={profileDisplayLabel(profile)}>
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
         {detailsSubject === null ? null : (
-          <DropdownMenuItem onSelect={() => setDetailsOpen(true)}>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => setDetailsOpen(true)}
+          >
             Details
-          </DropdownMenuItem>
+          </Button>
         )}
         {profile.auth.status === "unauthenticated" ? (
           <TooltipWrapper
@@ -525,13 +523,16 @@ function SelectedProfileRow(props: {
             align="start"
           >
             <span className="flex">
-              <DropdownMenuItem
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
                 disabled={!props.canAddProfile}
-                onSelect={props.onSignIn}
+                onClick={props.onSignIn}
               >
                 <LogIn data-icon="inline-start" />
                 Sign in
-              </DropdownMenuItem>
+              </Button>
             </span>
           </TooltipWrapper>
         ) : null}
@@ -545,16 +546,19 @@ function SelectedProfileRow(props: {
           align="end"
         >
           <span className="flex">
-            <DropdownMenuItem
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
               disabled={managementHeldReason !== null}
-              onSelect={props.onManage}
+              onClick={props.onManage}
             >
               <Settings2 data-icon="inline-start" />
               Manage profile
-            </DropdownMenuItem>
+            </Button>
           </span>
         </TooltipWrapper>
-      </ProfileRowMore>
+      </div>
       <SettingsDetailsDialog
         subject={detailsSubject}
         title={profile.label}
@@ -564,31 +568,6 @@ function SelectedProfileRow(props: {
         initialTab="status"
       />
     </div>
-  );
-}
-
-/** Row actions. Dialogs opened by an item live outside this menu. */
-function ProfileRowMore(props: {
-  readonly label: string;
-  readonly children: ReactNode;
-}): ReactNode {
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          aria-label={`More for ${props.label}`}
-          className="shrink-0"
-        >
-          <MoreHorizontal />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-max">
-        {props.children}
-      </DropdownMenuContent>
-    </DropdownMenu>
   );
 }
 
@@ -644,19 +623,17 @@ function OwnLoginSummary(props: {
   const hostName = props.hostName;
   const readState = ambientLoginReadState(props.state);
 
-  const moreLabel = ownLoginLabel(providerLabel, hostName);
-
   if (readState === "signed-out") {
     return (
       <div
         data-slot="profile-summary-actions"
-        className="flex min-w-0 items-start justify-between gap-2"
+        className="flex min-w-0 flex-wrap items-start justify-between gap-2"
       >
         <span className="min-w-0 whitespace-normal break-words text-ui-xs text-muted-foreground">
           {providerLabel} isn&apos;t signed in
           {hostName === null ? null : ` on ${hostName}`}
         </span>
-        <ProfileRowMore label={moreLabel}>
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
           <TooltipWrapper
             label={props.addProfileDisabledReason}
             side="top"
@@ -664,16 +641,19 @@ function OwnLoginSummary(props: {
             align="start"
           >
             <span className="flex">
-              <DropdownMenuItem
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
                 disabled={props.addProfileDisabled}
-                onSelect={props.onAddProfile}
+                onClick={props.onAddProfile}
               >
                 <LogIn data-icon="inline-start" />
                 Sign in
-              </DropdownMenuItem>
+              </Button>
             </span>
           </TooltipWrapper>
-        </ProfileRowMore>
+        </div>
       </div>
     );
   }
@@ -696,16 +676,19 @@ function OwnLoginSummary(props: {
     return (
       <div
         data-slot="profile-summary-actions"
-        className="flex min-w-0 items-start justify-between gap-2 text-ui-xs text-muted-foreground"
+        className="flex min-w-0 flex-wrap items-start justify-between gap-2 text-ui-xs text-muted-foreground"
       >
         <span className="min-w-0 whitespace-normal break-words">
           Couldn&apos;t check {providerLabel}&apos;s login
           {hostName === null ? null : ` on ${hostName}`}.
         </span>
-        <ProfileRowMore label={moreLabel}>
-          <DropdownMenuItem
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
             disabled={refreshing}
-            onSelect={() => void refreshProviders()}
+            onClick={() => void refreshProviders()}
           >
             Retry
             {refreshing ? (
@@ -715,8 +698,8 @@ function OwnLoginSummary(props: {
                 variant={undefined}
               />
             ) : null}
-          </DropdownMenuItem>
-        </ProfileRowMore>
+          </Button>
+        </div>
       </div>
     );
   }
@@ -724,12 +707,12 @@ function OwnLoginSummary(props: {
   return (
     <div
       data-slot="profile-summary-actions"
-      className="flex min-w-0 items-start justify-between gap-2"
+      className="flex min-w-0 flex-wrap items-start justify-between gap-2"
     >
       <span className="min-w-0 whitespace-normal break-words text-ui-xs text-muted-foreground">
         works on this computer only
       </span>
-      <ProfileRowMore label={moreLabel}>
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
         <TooltipWrapper
           label={props.addProfileDisabledReason}
           side="top"
@@ -737,16 +720,19 @@ function OwnLoginSummary(props: {
           align="start"
         >
           <span className="flex">
-            <DropdownMenuItem
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
               disabled={props.addProfileDisabled}
-              onSelect={props.onAddProfile}
+              onClick={props.onAddProfile}
             >
               <LogIn data-icon="inline-start" />
               Sign in to use everywhere
-            </DropdownMenuItem>
+            </Button>
           </span>
         </TooltipWrapper>
-      </ProfileRowMore>
+      </div>
     </div>
   );
 }

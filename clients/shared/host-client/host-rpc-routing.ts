@@ -589,6 +589,7 @@ export const HOST_UNARY_RPC_ROUTES = {
   "epic.prepareArtifactImage": "target-host",
   "epic.readArtifactObject": "target-host",
   "epic.readChatAttachment": "target-host",
+  "epic.readChatFile": "target-host",
   // The whole-download pair: a host the device holds reads them as a byte
   // pipe, and the pool serves them for a chat its index cannot open
   // (`CHAT_INDEX_UNAVAILABLE` on `chat.subscribe`).

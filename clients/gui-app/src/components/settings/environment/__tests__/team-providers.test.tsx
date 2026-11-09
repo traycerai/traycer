@@ -1,5 +1,6 @@
 import "../../../../../__tests__/test-browser-apis";
 import {
+  act,
   cleanup,
   render,
   screen,
@@ -184,37 +185,8 @@ function publishSettingsApi(
   });
 }
 
-async function openProfileMore(name: string): Promise<void> {
-  const trigger = await screen.findByRole("button", {
-    name: `More for ${name}`,
-  });
-  trigger.focus();
-  await userEvent.keyboard("{Enter}");
-  await screen.findByRole("menu");
-}
-
-async function activateProfileMenuRow(name: string): Promise<void> {
-  const menu = screen.getByRole("menu");
-  const rows = Array.from(
-    menu.querySelectorAll<HTMLElement>(
-      '[role="menuitem"], [role="menuitemcheckbox"]',
-    ),
-  );
-  const target = rows.find(
-    (row) =>
-      row.getAttribute("aria-label") === name ||
-      row.textContent.trim() === name,
-  );
-  if (target === undefined) throw new Error(`missing menu row: ${name}`);
-  const targetIndex = rows.indexOf(target);
-  for (let index = 0; index < targetIndex; index += 1) {
-    await userEvent.keyboard("{ArrowDown}");
-  }
-  await userEvent.keyboard("{Enter}");
-}
-
 function railButton(name: string): HTMLElement {
-  const rail = screen.getByRole("navigation", { name: "Configured providers" });
+  const rail = screen.getByRole("navigation", { name: "Providers" });
   return within(rail).getByRole("button", { name: new RegExp(`^${name}`) });
 }
 
@@ -246,7 +218,7 @@ function handlers(items: () => EnvironmentConfigurationItem[]) {
 }
 
 describe("TeamProviders items", () => {
-  it("puts configured providers first, folds the rest, and follows the first configured row until a click", async () => {
+  it("shows every provider and follows the first configured row until a click", async () => {
     const setSection = vi.fn<(section: SettingsSectionId) => void>();
     publishSettingsApi(setSection);
     const harness = mountTeamPage(poolSource("editor"), {
@@ -275,28 +247,22 @@ describe("TeamProviders items", () => {
     ).toBeTruthy();
     expect(screen.queryByRole("combobox")).toBeNull();
     const rail = await screen.findByRole("navigation", {
-      name: "Configured providers",
+      name: "Providers",
     });
     await waitFor(() => {
       expect(railButton("Codex").getAttribute("aria-current")).toBe("true");
     });
     expect(railPieces("Codex")).toEqual({ title: "Codex", subtitle: null });
-    expect(railButton("Codex").className).toContain("whitespace-normal");
-    expect(railButton("Codex").className).toContain("break-words");
-    expect(railButton("Codex").className).not.toContain("truncate");
     expect(railPieces("Cursor")).toEqual({ title: "Cursor", subtitle: null });
     expect(
       within(rail).queryByRole("button", { name: /^Claude Code/ }),
-    ).toBeNull();
+    ).toBeTruthy();
     expect(rail.textContent).not.toContain("plan");
     expect(rail.textContent).not.toContain("key");
     expect(rail.textContent).not.toContain("No profiles");
-    const callsBeforeToggle = harness.messenger.calls.length;
-    const add = within(rail).getByRole("button", { name: "Add provider" });
-    expect(add.getAttribute("aria-expanded")).toBe("false");
-    await userEvent.click(add);
-    expect(harness.messenger.calls.length).toBe(callsBeforeToggle);
-    expect(add.getAttribute("aria-expanded")).toBe("true");
+    expect(
+      within(rail).queryByRole("button", { name: "Add provider" }),
+    ).toBeNull();
     expect(railPieces("Claude Code")).toEqual({
       title: "Claude Code",
       subtitle: null,
@@ -321,7 +287,7 @@ describe("TeamProviders items", () => {
     render(<TeamProviders />, { wrapper: harness.Wrapper });
 
     const rail = await screen.findByRole("navigation", {
-      name: "Configured providers",
+      name: "Providers",
     });
     expect(
       within(rail).queryByRole("button", { name: "Add provider" }),
@@ -331,15 +297,16 @@ describe("TeamProviders items", () => {
     ).toBeTruthy();
     expect(railButton("Claude Code").getAttribute("aria-current")).toBe("true");
 
-    plans.resolve({ plans: [] });
-
-    const add = await within(rail).findByRole("button", {
-      name: "Add provider",
+    await act(async () => {
+      plans.resolve({ plans: [] });
+      await plans.promise;
     });
-    expect(add.getAttribute("aria-expanded")).toBe("false");
     expect(
-      within(rail).queryByRole("button", { name: "Command Code" }),
+      within(rail).queryByRole("button", { name: "Add provider" }),
     ).toBeNull();
+    expect(
+      within(rail).getByRole("button", { name: "Command Code" }),
+    ).toBeTruthy();
     expect(railButton("Claude Code").getAttribute("aria-current")).toBe("true");
     expect(harness.paramsOf("environment.plans.list").length).toBeGreaterThan(
       0,
@@ -356,7 +323,7 @@ describe("TeamProviders items", () => {
     render(<TeamProviders />, { wrapper: harness.Wrapper });
 
     const rail = await screen.findByRole("navigation", {
-      name: "Configured providers",
+      name: "Providers",
     });
     await waitFor(() => {
       expect(railButton("Cursor").getAttribute("aria-current")).toBe("true");
@@ -367,13 +334,10 @@ describe("TeamProviders items", () => {
     });
     expect(
       within(rail).queryByRole("button", { name: /^Claude Code/ }),
-    ).toBeNull();
+    ).toBeTruthy();
     expect(rail.textContent).not.toContain("plan");
     expect(rail.textContent).not.toContain("key");
     expect(rail.textContent).not.toContain("No profiles");
-    await userEvent.click(
-      within(rail).getByRole("button", { name: "Add provider" }),
-    );
     await userEvent.click(railButton("Claude Code"));
     expect(railButton("Claude Code").getAttribute("aria-current")).toBe("true");
     expect(railButton("Cursor").getAttribute("aria-current")).toBeNull();
@@ -393,7 +357,7 @@ describe("TeamProviders items", () => {
     render(<TeamProviders />, { wrapper: harness.Wrapper });
 
     const rail = await screen.findByRole("navigation", {
-      name: "Configured providers",
+      name: "Providers",
     });
     await waitFor(() => {
       expect(railButton("Cursor").getAttribute("aria-current")).toBe("true");
@@ -401,10 +365,7 @@ describe("TeamProviders items", () => {
     expect(railPieces("Cursor")).toEqual({ title: "Cursor", subtitle: null });
     expect(
       within(rail).queryByRole("button", { name: /^Claude Code/ }),
-    ).toBeNull();
-    await userEvent.click(
-      within(rail).getByRole("button", { name: "Add provider" }),
-    );
+    ).toBeTruthy();
     expect(railButton("Claude Code").getAttribute("aria-current")).toBeNull();
   });
 
@@ -425,19 +386,21 @@ describe("TeamProviders items", () => {
     render(<TeamProviders />, { wrapper: harness.Wrapper });
 
     const rail = await screen.findByRole("navigation", {
-      name: "Configured providers",
+      name: "Providers",
     });
     await waitFor(() => {
       expect(railButton("Codex").getAttribute("aria-current")).toBe("true");
     });
     expect(railPieces("Codex")).toEqual({ title: "Codex", subtitle: null });
-    expect(within(rail).queryByRole("button", { name: /^Cursor/ })).toBeNull();
+    expect(
+      within(rail).queryByRole("button", { name: /^Cursor/ }),
+    ).toBeTruthy();
     expect(
       within(rail).queryByRole("button", { name: /^Claude Code/ }),
-    ).toBeNull();
+    ).toBeTruthy();
   });
 
-  it("keeps every Personal provider on the rail while its secrets read is out, then folds the empty ones", async () => {
+  it("keeps every Personal provider visible before and after its secrets read settles", async () => {
     const secrets = Promise.withResolvers<{ secrets: []; removed: [] }>();
     const harness = mountTeamPage(personalPoolSource(), {
       ...handlers(() => []),
@@ -446,7 +409,7 @@ describe("TeamProviders items", () => {
     render(<TeamProviders />, { wrapper: harness.Wrapper });
 
     const rail = await screen.findByRole("navigation", {
-      name: "Configured providers",
+      name: "Providers",
     });
     expect(
       within(rail).queryByRole("button", { name: "Add provider" }),
@@ -455,12 +418,13 @@ describe("TeamProviders items", () => {
       within(rail).getByRole("button", { name: "Command Code" }),
     ).toBeTruthy();
 
-    secrets.resolve({ secrets: [], removed: [] });
-
-    await within(rail).findByRole("button", { name: "Add provider" });
+    await act(async () => {
+      secrets.resolve({ secrets: [], removed: [] });
+      await secrets.promise;
+    });
     expect(
-      within(rail).queryByRole("button", { name: "Command Code" }),
-    ).toBeNull();
+      within(rail).getByRole("button", { name: "Command Code" }),
+    ).toBeTruthy();
     expect(railButton("Claude Code").getAttribute("aria-current")).toBe("true");
   });
 
@@ -516,12 +480,11 @@ describe("TeamProviders items", () => {
     render(<TeamProviders />, { wrapper: harness.Wrapper });
 
     expect(await screen.findByText("Work")).toBeTruthy();
-    await openProfileMore("Work");
-    const checkboxItem = screen.getByRole("menuitemcheckbox", {
+    const checkboxItem = screen.getByRole("switch", {
       name: "Use Work",
     });
     expect(checkboxItem.getAttribute("aria-checked")).toBe("true");
-    await activateProfileMenuRow("Use Work");
+    await userEvent.click(checkboxItem);
 
     expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
       {
@@ -547,9 +510,8 @@ describe("TeamProviders items", () => {
     if (screen.queryByRole("menu") !== null) {
       await userEvent.keyboard("{Escape}");
     }
-    await openProfileMore("Work");
     await waitFor(() => {
-      const updatedCheckboxItem = screen.getByRole("menuitemcheckbox", {
+      const updatedCheckboxItem = screen.getByRole("switch", {
         name: "Use Work",
       });
       expect(updatedCheckboxItem.getAttribute("aria-checked")).toBe("false");
@@ -557,10 +519,16 @@ describe("TeamProviders items", () => {
   });
 
   it("gives a viewer On/Off for a profile with no switch, plus the member-only verbs withheld", async () => {
-    const harness = mountTeamPage(
-      poolSource("viewer"),
-      handlers(() => [profile(true, 4)]),
-    );
+    const harness = mountTeamPage(poolSource("viewer"), {
+      ...handlers(() => [profile(true, 4)]),
+      "environment.secrets.list": () => ({
+        secrets: [
+          cursorKey,
+          { ...cursorKey, secretId: "second-key", name: "OPENAI_API_KEY" },
+        ],
+        removed: [],
+      }),
+    });
     render(<TeamProviders />, { wrapper: harness.Wrapper });
 
     const name = await screen.findByText("Work");
@@ -571,9 +539,11 @@ describe("TeamProviders items", () => {
       "whitespace-normal",
     );
     expect(screen.queryByText("Off")).toBeNull();
-    expect(screen.queryByRole("heading", { name: "Key" })).toBeNull();
-    await openProfileMore("Work");
+    expect(screen.getByRole("heading", { name: "Key" })).toBeTruthy();
     expect(screen.getByText("On")).toBeTruthy();
+    const keys = screen.getByRole("region", { name: "Key" });
+    expect(await within(keys).findByText("CURSOR_API_KEY")).toBeTruthy();
+    expect(within(keys).getByText("OPENAI_API_KEY")).toBeTruthy();
     expect(screen.queryByRole("switch")).toBeNull();
     expect(screen.queryByRole("button", { name: "Add a key" })).toBeNull();
   });
@@ -590,8 +560,8 @@ describe("TeamProviders items", () => {
 
     await userEvent.click(await screen.findByRole("tab", { name: "Env" }));
     await userEvent.click(
-      await screen.findByRole("button", {
-        name: "Edit claude:ANTHROPIC_BASE_URL value",
+      await screen.findByRole("textbox", {
+        name: "claude:ANTHROPIC_BASE_URL value",
       }),
     );
     const field = await screen.findByLabelText(
@@ -634,8 +604,8 @@ describe("TeamProviders items", () => {
     await userEvent.click(railButton("Claude Code"));
     await userEvent.click(await screen.findByRole("tab", { name: "Env" }));
     await userEvent.click(
-      await screen.findByRole("button", {
-        name: "Edit claude:ANTHROPIC_BASE_URL value",
+      await screen.findByRole("textbox", {
+        name: "claude:ANTHROPIC_BASE_URL value",
       }),
     );
     const field = await screen.findByLabelText(
@@ -707,9 +677,6 @@ describe("TeamProviders items", () => {
     });
     render(<TeamProviders />, { wrapper: harness.Wrapper });
 
-    await userEvent.click(
-      await screen.findByRole("button", { name: "Add provider" }),
-    );
     await userEvent.click(
       await screen.findByRole("button", { name: /^Cursor/ }),
     );
@@ -793,9 +760,6 @@ describe("TeamProviders items", () => {
     ).toBe("true");
 
     await userEvent.click(
-      await screen.findByRole("button", { name: "Add provider" }),
-    );
-    await userEvent.click(
       await screen.findByRole("button", { name: /^Codex/ }),
     );
 
@@ -827,8 +791,7 @@ describe("TeamProviders items", () => {
       render(<TeamProviders />, { wrapper: harness.Wrapper });
 
       expect(await screen.findByText("Work")).toBeTruthy();
-      await openProfileMore("Work");
-      await activateProfileMenuRow("Details");
+      await userEvent.click(screen.getByRole("button", { name: "Details" }));
 
       const drawer = await screen.findByRole("dialog");
       expect(

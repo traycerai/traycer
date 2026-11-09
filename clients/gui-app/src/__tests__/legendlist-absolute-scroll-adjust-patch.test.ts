@@ -217,6 +217,129 @@ function loadEndPad(
   };
 }
 
+interface AdjustFixture {
+  readonly ctx: {
+    state: {
+      scroll: number;
+      scrollingTo: undefined;
+      touchScroll: { touching: boolean; momentum: boolean } | undefined;
+      adjustingFromInitialMount: number;
+      refScroller: { current: { getCurrentScrollOffset: () => number } };
+      scrollLength: number;
+      scrollForNextCalculateItemsInView: undefined;
+    };
+    values: Map<string, unknown>;
+  };
+  readonly scroller: { scrollTop: number };
+  readonly recalculations: { count: number };
+}
+
+/**
+ * `ScrollAdjustHandler` and the gate beside it (`shouldAbsorbAdjustInLayout`),
+ * evaluated from the installed build. The handler is the one object every
+ * adjust of the list's reaches, and the patch decides there whether an adjust
+ * is written to the scroller or waits in the pending term; this runs the
+ * build's own decision and commit. The list helpers it calls are supplied:
+ * the signal store is a map, and `clampScrollOffset` clamps to a content of
+ * `contentSize` as the build's does from its own size state.
+ */
+function loadScrollAdjustHandler(
+  source: string,
+  contentSize: number,
+): {
+  make: (fixture: AdjustFixture) => {
+    requestAdjust: (add: number) => void;
+    commitPendingAdjust: () => void;
+  };
+} {
+  const start = source.indexOf("function shouldAbsorbAdjustInLayout(");
+  const end = source.indexOf(
+    "\n};\n\n// src/core/updateContentInsetEndAdjustment.ts",
+    start,
+  );
+  if (start === -1 || end === -1) {
+    throw new Error("the adjust handler is not in the installed build");
+  }
+  const body = source.slice(start, end + 3);
+  const factory: unknown = runInNewContext(
+    `(function (set$, peek$, clampScrollOffset, checkFinishedScroll, calculateItemsInView, calculateOffsetForIndex, calculateOffsetWithOffsetPosition) { ${body}\n return ScrollAdjustHandler; })`,
+    {},
+  );
+  if (typeof factory !== "function") throw new Error("no factory");
+  return {
+    make(fixture) {
+      const Handler: unknown = Reflect.apply(factory, undefined, [
+        (ctx: AdjustFixture["ctx"], name: string, value: unknown) => {
+          ctx.values.set(name, value);
+        },
+        (ctx: AdjustFixture["ctx"], name: string) => ctx.values.get(name),
+        (ctx: AdjustFixture["ctx"], offset: number) =>
+          Math.max(0, Math.min(offset, contentSize - ctx.state.scrollLength)),
+        () => undefined,
+        () => {
+          fixture.recalculations.count += 1;
+        },
+        () => {
+          throw new Error("no index target in these cases");
+        },
+        () => {
+          throw new Error("no index target in these cases");
+        },
+      ]);
+      if (typeof Handler !== "function") throw new Error("no handler class");
+      const handler: unknown = Reflect.construct(Handler, [fixture.ctx]);
+      const requestAdjust: unknown = Reflect.get(
+        handler as object,
+        "requestAdjust",
+      );
+      const commitPendingAdjust: unknown = Reflect.get(
+        handler as object,
+        "commitPendingAdjust",
+      );
+      if (
+        typeof requestAdjust !== "function" ||
+        typeof commitPendingAdjust !== "function"
+      ) {
+        throw new Error("handler methods missing");
+      }
+      return {
+        requestAdjust: (add) => {
+          Reflect.apply(requestAdjust, handler, [add]);
+        },
+        commitPendingAdjust: () => {
+          Reflect.apply(commitPendingAdjust, handler, [undefined]);
+        },
+      };
+    },
+  };
+}
+
+/** A rendered list whose scroller holds `scrollTop`, with the view 700 tall. */
+function adjustFixture(scrollTop: number): AdjustFixture {
+  const scroller = { scrollTop };
+  return {
+    ctx: {
+      state: {
+        scroll: scrollTop,
+        scrollingTo: undefined,
+        touchScroll: undefined,
+        adjustingFromInitialMount: 0,
+        refScroller: {
+          current: { getCurrentScrollOffset: () => scroller.scrollTop },
+        },
+        scrollLength: 700,
+        scrollForNextCalculateItemsInView: undefined,
+      },
+      values: new Map<string, unknown>([
+        ["readyToRender", true],
+        ["scrollAdjustPending", 0],
+      ]),
+    },
+    scroller,
+    recalculations: { count: 0 },
+  };
+}
+
 /** A list of two rows, `a` and `k`, whose `k` changes item type as the chat's
  *  transcript does when a placeholder hydrates. */
 function twoRowList() {
@@ -561,6 +684,93 @@ describe("@legendapp/list web patch", () => {
         expect(averageSizes.assistant).toMatchObject({ avg: 100, num: 2 });
         expect(averageSizes["placeholder:assistant"]?.num ?? 0).toBe(0);
       }
+    });
+
+    // A row measured above the view during a touch fling asks for an adjust.
+    // Written to the scroller, it ended the fling (iOS WebKit through 26 stops
+    // momentum on any offset write) and painted a step: on the phone every
+    // flick through older messages died within a second. While a touch scroll
+    // owns the scroller the adjust waits in the pending term instead, which
+    // the build already lays out without moving anything on screen; the end
+    // of the touch scroll commits it as one write. The caller
+    // (`requestAdjust`) has already stepped `state.scroll` by the adjust when
+    // the handler runs, and the handler gives that step back, since the
+    // pending term now carries it.
+    it(`${file} holds a touch fling's adjust in the pending term and commits it at rest`, () => {
+      const source = readFileSync(join(packageDir, file), "utf8");
+      const handlers = loadScrollAdjustHandler(source, 5000);
+      const fixture = adjustFixture(500);
+      fixture.ctx.state.touchScroll = { touching: false, momentum: true };
+      const handler = handlers.make(fixture);
+
+      fixture.ctx.state.scroll = 800;
+      handler.requestAdjust(300);
+      expect(fixture.ctx.values.get("scrollAdjustPending")).toBe(300);
+      expect(fixture.ctx.values.has("scrollAdjust")).toBe(false);
+      expect(fixture.ctx.state.scroll).toBe(500);
+
+      // Under the finger the next measurement joins it; nothing is written.
+      fixture.ctx.state.touchScroll = { touching: true, momentum: false };
+      fixture.ctx.state.scroll = 450;
+      handler.requestAdjust(-50);
+      expect(fixture.ctx.values.get("scrollAdjustPending")).toBe(250);
+      expect(fixture.ctx.values.has("scrollAdjust")).toBe(false);
+      expect(fixture.ctx.state.scroll).toBe(500);
+
+      // At rest: one write of the whole, the pending term cleared, and the
+      // containers re-laid in the same step.
+      fixture.ctx.state.touchScroll = { touching: false, momentum: false };
+      handler.commitPendingAdjust();
+      expect(fixture.ctx.values.get("scrollAdjust")).toBe(250);
+      expect(fixture.ctx.state.scroll).toBe(750);
+      expect(fixture.ctx.values.get("scrollAdjustPending")).toBe(0);
+      expect(fixture.recalculations.count).toBe(1);
+    });
+
+    // Without a touch scroll (a wheel, a trackpad, a keyboard) the adjust is
+    // written as before: the pending term is for a scroller that cannot be
+    // written, and a desktop fling takes a write without stopping.
+    it(`${file} writes an adjust at once when no touch scroll owns the scroller`, () => {
+      const source = readFileSync(join(packageDir, file), "utf8");
+      const fixture = adjustFixture(500);
+      const handler = loadScrollAdjustHandler(source, 5000).make(fixture);
+
+      fixture.ctx.state.scroll = 800;
+      handler.requestAdjust(300);
+      expect(fixture.ctx.values.get("scrollAdjust")).toBe(300);
+      expect(fixture.ctx.values.get("scrollAdjustPending")).toBe(0);
+      expect(fixture.ctx.state.scroll).toBe(800);
+    });
+
+    // Near an edge the commit would be clamped: the pending term would hold a
+    // gap on screen that the clamped commit then closes with a visible step,
+    // where a write now moves the view by the adjust alone. The content is
+    // 5000 tall and the view 700, so the far end is 4300: an adjust that
+    // would carry the offset past it is written now, during the fling.
+    it(`${file} writes a touch fling's adjust at once when its commit would be clamped`, () => {
+      const source = readFileSync(join(packageDir, file), "utf8");
+      const fixture = adjustFixture(4200);
+      fixture.ctx.state.touchScroll = { touching: false, momentum: true };
+      const handler = loadScrollAdjustHandler(source, 5000).make(fixture);
+
+      fixture.ctx.state.scroll = 4500;
+      handler.requestAdjust(300);
+      expect(fixture.ctx.values.get("scrollAdjust")).toBe(300);
+      expect(fixture.ctx.values.get("scrollAdjustPending")).toBe(0);
+      expect(fixture.ctx.state.scroll).toBe(4500);
+    });
+
+    // The scroller shim is where the touch scroll is known, and its behaviour
+    // (touch input, scroll reports, the quiet timer, the commit at rest and
+    // the early commit before an edge) runs through the real list in
+    // `browser-tests/legend-list-touch-fling-adjust.spec.ts`. What is pinned
+    // here is the one piece the browser spec cannot tell apart: that the
+    // shim's settle is the handler's commit, not a write of its own.
+    it(`${file} settles a touch scroll through the handler's commit`, () => {
+      const source = readFileSync(join(packageDir, file), "utf8");
+      expect(source).toContain(
+        "touchScroll.momentum = false;\n    const scrollingTo = state.scrollingTo;\n    if (!(scrollingTo && scrollingTo.animated && !scrollingTo.isInitialScroll)) {\n      state.scrollAdjustHandler.commitPendingAdjust(void 0);\n    }",
+      );
     });
   }
 });

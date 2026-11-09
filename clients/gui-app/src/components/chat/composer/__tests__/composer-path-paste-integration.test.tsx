@@ -520,7 +520,7 @@ function Harness({
   // (`useComposerPasteEvents` + `filePaths`) and is identical under either
   // ingest. It is wired through this hook rather than the deleted base64
   // adapter so the coverage sits on the code that ships.
-  const paste = useComposerHashPaste(editorRef, fileDrops, mentionRoots);
+  const paste = useComposerHashPaste(editorRef, fileDrops, mentionRoots, null);
   const setHandle = (instance: ComposerPromptEditorHandle | null): void => {
     handleRef.current = instance;
     editorRef.current = instance;

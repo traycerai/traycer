@@ -51,13 +51,6 @@ vi.mock("@/hooks/sandboxes/use-sandbox-operation", () => ({
 vi.mock("@/hooks/sandboxes/use-sandbox-settings-status", () => ({
   useSandboxSettingsStatus: () => ({ data: undefined }),
 }));
-vi.mock("@/hooks/sandboxes/use-sandbox-session-report", () => ({
-  useSandboxRowSessionReport: () => ({
-    report: { kind: "unknown" },
-    failed: false,
-  }),
-}));
-
 afterEach(() => {
   act(() => {
     closeSandboxDetails();
@@ -80,7 +73,7 @@ describe("<SandboxDetailsDrawerHost />", () => {
     expect(list.refetch).toHaveBeenCalledTimes(1);
   });
 
-  it("shows the agent, task purpose, sessions and setup evidence kept out of the list", () => {
+  it("keeps lifecycle details and setup diagnostics available in the drawer", () => {
     const summary: SandboxSummary = sandboxSummaryFixture({
       id: "sbx-details",
       displayName: "Sandbox details fixture",
@@ -109,9 +102,6 @@ describe("<SandboxDetailsDrawerHost />", () => {
     expect(screen.getByText("Planner")).toBeTruthy();
     expect(screen.getByText("For task")).toBeTruthy();
     expect(screen.getByText("Sandbox setup")).toBeTruthy();
-    expect(screen.getByRole("region", { name: "Sessions" })).toBeTruthy();
-    // The list row no longer shows the setup failure's reference, so Details
-    // names it even when the failure carries no code of its own.
     expect(
       screen.getByRole("region", { name: "Settings delivery" }).textContent,
     ).toBe(

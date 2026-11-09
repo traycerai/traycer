@@ -4,7 +4,7 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 import {
   approvalBlockSchema,
   artifactOperationBlockSchemaPreHtml,
-  autonomousResumeBlockSchema,
+  autonomousResumeBlockSchemaPreConversationMessage,
   commandBlockSchema,
   compactionBlockSchemaPreNotApplied,
   errorBlockSchema,
@@ -37,7 +37,7 @@ const openContentBlockSchemaPreMcpApp = lazySchema(() =>
     openPlanBlockSchema,
     errorBlockSchema,
     compactionBlockSchemaPreNotApplied,
-    autonomousResumeBlockSchema,
+    autonomousResumeBlockSchemaPreConversationMessage,
     openSteerBlockSchema,
     interviewBlockSchema,
     artifactOperationBlockSchemaPreHtml,

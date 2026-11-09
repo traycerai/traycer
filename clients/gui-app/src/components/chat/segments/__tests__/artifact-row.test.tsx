@@ -5,6 +5,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -857,6 +858,41 @@ describe("<ArtifactRow />", () => {
       fireEvent.click(screen.getByRole("button", { name: "Open in panel" }));
 
       expectLatestExpand();
+    });
+
+    it("keeps Open in panel working once the card is expanded, on the same frame and with the same pin", () => {
+      storeMocks.current = {
+        artifacts: {
+          byId: { [ARTIFACT_ID]: PROJECTION_WITH_HEAD },
+          allIds: [ARTIFACT_ID],
+        },
+        deletedArtifacts: EMPTY_DELETED,
+      };
+      renderRow(scopeWithClient(makeArtifactReadClient(neverRespond)), STAMP);
+      expect(sandboxFrameMocks.mounts).toBe(1);
+
+      fireEvent.click(screen.getByRole("button", { name: "Expand" }));
+      const dialog = screen.getByRole("dialog", { name: "My Artifact" });
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: "Open in panel" }),
+      );
+
+      expect(within(dialog).getByTestId("download-stub")).toBeTruthy();
+      expect(lastOpenedIntent()).toMatchObject({
+        node: {
+          id: ARTIFACT_ID,
+          type: "html",
+          hostId: "host-1",
+          htmlVersion: {
+            manifest: { files: STAMP.manifest.files, capturedAt: 1_000 },
+            entryPath: "index.html",
+          },
+        },
+        target: { epicId: "epic-1" },
+        adoptHtmlVersion: true,
+      });
+      // Raising the card must not reload the page it shows.
+      expect(sandboxFrameMocks.mounts).toBe(1);
     });
 
     it("hands the download the same host and artifact, and grows its touch target on a coarse pointer", () => {

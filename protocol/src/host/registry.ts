@@ -764,8 +764,10 @@ import {
   draftsListUpgradeV10ToV20,
   draftsListDowngradeV20ToV10,
   draftsPutBlobUpgradeV10ToV11,
+  draftsPutBlobUpgradeV11ToV12,
   draftsPutBlobV10,
   draftsPutBlobV11,
+  draftsPutBlobV12,
   draftsReadBlobUpgradeV10ToV11,
   draftsReadBlobV10,
   draftsReadBlobV11,
@@ -957,6 +959,7 @@ import {
   epicReadChatAttachmentUpgradeV10ToV11,
   epicReadChatAttachmentV10,
   epicReadChatAttachmentV11,
+  epicReadChatFileV10,
   epicReadCloudChatPartV10,
   epicReadCloudChatPayloadV10,
   epicResolveCloudChatHeadV10,
@@ -10833,6 +10836,24 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
     },
     degrade: { kind: "unsupported" },
   },
+  // One chat FILE attachment's bytes, the non-image sibling of the read above:
+  // same request, same chat gate, same `missing` arm, but it returns the bytes
+  // alone and sniffs nothing; the node carries the name and media type.
+  // Optional and off the floor because a new method name is handshake-fatal against a released
+  // peer; a host without it has no file attachments to serve.
+  "epic.readChatFile": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicReadChatFileV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
   "epic.editArtboard": {
     1: {
       latestMinor: 0,
@@ -13641,10 +13662,15 @@ const HOST_RPC_DRAFTS_REGISTRY_DEFINITION = {
   // declaration, not the enforcement - the upgrade path does not re-parse, so
   // an over-cap `@1.0` body still reaches the resolver and is refused by the
   // host store's own version-independent decoded cap.
+  // `@1.2` adds `kind: "file"` (absent `kind` is still an image): a file may
+  // carry 16 MiB with its declared name and media type, and a stored file is
+  // answered with its path on the host. Request growth plus one optional
+  // response key, which an older peer's frozen response strips; both upgrades
+  // are identity.
   "drafts.putBlob": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: draftsPutBlobV10,
@@ -13653,6 +13679,10 @@ const HOST_RPC_DRAFTS_REGISTRY_DEFINITION = {
         1: {
           contract: draftsPutBlobV11,
           upgradeFromPreviousVersion: draftsPutBlobUpgradeV10ToV11,
+        },
+        2: {
+          contract: draftsPutBlobV12,
+          upgradeFromPreviousVersion: draftsPutBlobUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},

@@ -7,7 +7,7 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
-import type { ComponentType, ReactNode } from "react";
+import { useEffect, type ComponentType, type ReactNode } from "react";
 import {
   afterEach,
   beforeEach,
@@ -18,6 +18,12 @@ import {
   type Mock,
 } from "vitest";
 import type { NodeChange, NodeProps } from "@xyflow/react";
+import {
+  Awareness,
+  applyAwarenessUpdate,
+  encodeAwarenessUpdate,
+} from "y-protocols/awareness";
+import * as Y from "yjs";
 import type { SandboxSource } from "@/components/sandbox/sandbox-frame";
 import {
   readCanvasLayout,
@@ -138,6 +144,17 @@ const flow: FlowCapture = vi.hoisted(() => ({
   onMoveStart: null,
   onMoveEnd: null,
 }));
+
+// The inspector is parked behind a constant. This lets the one describe that
+// exercises it switch the constant on; every other test sees it off.
+const inspector = vi.hoisted(() => ({ enabled: false }));
+vi.mock("../canvas-model", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../canvas-model")>();
+  return Object.defineProperty({ ...actual }, "CANVAS_INSPECTOR_ENABLED", {
+    enumerable: true,
+    get: () => inspector.enabled,
+  });
+});
 
 vi.mock("@xyflow/react", async () => {
   const { createContext, useContext, useEffect } = await import("react");
@@ -1934,5 +1951,290 @@ describe("CanvasArtifactEditor hidden-pane geometry", () => {
       resizeCallback?.();
     });
     expect(sourceForBoard).not.toHaveBeenCalled();
+  });
+});
+
+describe("an expanded canvas is the same editor the tile rendered", () => {
+  interface Expandable {
+    readonly store: CanvasLayoutStore;
+    readonly awareness: Awareness | null;
+    readonly frameEvents: CanvasFrameEvents | null;
+    readonly viewOnly: boolean;
+  }
+
+  function mountExpandable(overrides: Partial<Expandable>): CanvasLayoutStore {
+    const options: Expandable = {
+      store: storeFromFixture(file),
+      awareness: null,
+      frameEvents: null,
+      viewOnly: false,
+      ...overrides,
+    };
+    render(
+      <TooltipProvider>
+        <CanvasArtifactEditor
+          artifactId={ARTIFACT_ID}
+          store={options.store}
+          awareness={options.awareness}
+          user={{ name: "Ada", color: "#112233" }}
+          sourceForBoard={() => null}
+          boardFiles={null}
+          frameEvents={options.frameEvents}
+          liveSlotBudget={0}
+          boardByteLengths={null}
+          viewOnly={options.viewOnly}
+        />
+      </TooltipProvider>,
+    );
+    return options.store;
+  }
+
+  function expandCanvas(): HTMLElement {
+    fireEvent.click(screen.getByRole("button", { name: "Expand" }));
+    return screen.getByRole("dialog", { name: "Canvas" });
+  }
+
+  /** Every control the toolbar offers, bar the pair that raise and lower it. */
+  function controlNames(scope: HTMLElement): string[] {
+    return within(scope)
+      .getAllByRole("button")
+      .map((control) => control.getAttribute("aria-label") ?? "")
+      .filter((name) => name !== "" && name !== "Expand" && name !== "Close");
+  }
+
+  function pageMenuNames(scope: HTMLElement): string {
+    return String(
+      within(scope).getByRole("button", { name: "Pages" }).textContent,
+    );
+  }
+
+  afterEach(() => {
+    inspector.enabled = false;
+    act(() => useCanvasSelectionStore.getState().clear());
+  });
+
+  describe("presence", () => {
+    function remoteCursorOn(awareness: Awareness, page: string): void {
+      const remote = new Awareness(new Y.Doc());
+      remote.setLocalState({
+        canvasCursor: {
+          x: 10,
+          y: 20,
+          artifactId: ARTIFACT_ID,
+          page,
+          user: { name: "Grace", color: "#aabbcc" },
+        },
+      });
+      applyAwarenessUpdate(
+        awareness,
+        encodeAwarenessUpdate(remote, [remote.clientID]),
+        "remote",
+      );
+    }
+
+    it("shows a collaborator's cursor on the expanded canvas", () => {
+      const awareness = new Awareness(new Y.Doc());
+      mountExpandable({ awareness });
+      const dialog = expandCanvas();
+
+      act(() => remoteCursorOn(awareness, "page-1"));
+
+      expect(within(dialog).getByText("Grace")).toBeTruthy();
+    });
+
+    it("publishes the reader's own pointer from the expanded canvas", () => {
+      const awareness = new Awareness(new Y.Doc());
+      mountExpandable({ awareness });
+      const dialog = expandCanvas();
+
+      fireEvent.pointerMove(
+        within(dialog).getByRole("group", { name: "Canvas pane" }),
+        {
+          clientX: 40,
+          clientY: 50,
+        },
+      );
+
+      expect(awareness.getLocalState()).toMatchObject({
+        canvasCursor: {
+          artifactId: ARTIFACT_ID,
+          page: "page-1",
+          user: { name: "Ada" },
+        },
+      });
+    });
+  });
+
+  describe("the frame events the tile passed in", () => {
+    it("renders the tile's toolbar controls in the expanded toolbar and runs them", () => {
+      const toggled = vi.fn();
+      mountExpandable({
+        frameEvents: canvasFrameEvents({
+          commentsEnabled: true,
+          renderToolbarControls: () => (
+            <button type="button" onClick={toggled}>
+              Comments
+            </button>
+          ),
+        }),
+      });
+      const dialog = expandCanvas();
+
+      fireEvent.click(within(dialog).getByRole("button", { name: "Comments" }));
+
+      expect(toggled).toHaveBeenCalledTimes(1);
+    });
+
+    it("arms comment mode from the expanded canvas on the one registered view", () => {
+      const onCanvasView = vi.fn<(view: CanvasCommentView | null) => void>();
+      mountExpandable({
+        frameEvents: canvasFrameEvents({ commentsEnabled: true, onCanvasView }),
+      });
+      const dialog = expandCanvas();
+      const lastView = (): CanvasCommentView | null =>
+        onCanvasView.mock.calls.at(-1)?.[0] ?? null;
+      expect(lastView()?.commenting).toBe(false);
+
+      fireEvent.keyDown(within(dialog).getByLabelText("Canvas"), {
+        code: "KeyC",
+      });
+
+      expect(lastView()?.commenting).toBe(true);
+    });
+
+    it("shows the inspector for the selected board inside the expanded canvas, and closes it", () => {
+      inspector.enabled = true;
+      mountExpandable({
+        frameEvents: canvasFrameEvents({
+          renderPanel: (_store, { onClose }) => (
+            <aside aria-label="Annotations">
+              <button type="button" onClick={onClose}>
+                Close annotations
+              </button>
+            </aside>
+          ),
+        }),
+      });
+      const dialog = expandCanvas();
+
+      streamChanges([{ type: "select", id: `board:${HOME}`, selected: true }]);
+      const panel = within(dialog).getByLabelText("Annotations");
+      fireEvent.click(
+        within(panel).getByRole("button", { name: "Close annotations" }),
+      );
+
+      expect(within(dialog).queryByLabelText("Annotations")).toBeNull();
+    });
+  });
+
+  describe("the Pages popover", () => {
+    it("opens inside the raised surface and takes the first Escape, leaving the second to lower the surface", async () => {
+      const user = userEvent.setup();
+      mountExpandable({});
+      const dialog = expandCanvas();
+
+      await user.click(within(dialog).getByRole("button", { name: "Pages" }));
+      const pages = screen.getByRole("list", { name: "Canvas pages" });
+      expect(dialog.contains(pages)).toBe(true);
+
+      await user.keyboard("{Escape}");
+      expect(screen.queryByRole("list", { name: "Canvas pages" })).toBeNull();
+      expect(screen.getByRole("dialog", { name: "Canvas" })).toBeTruthy();
+
+      await user.keyboard("{Escape}");
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+  });
+
+  describe("continuity", () => {
+    it("is never unmounted by expanding or collapsing, and carries the reader's state both ways", () => {
+      const mounted = vi.fn();
+      function MountProbe(): ReactNode {
+        useEffect(() => {
+          mounted();
+        }, []);
+        return null;
+      }
+      mountExpandable({
+        frameEvents: canvasFrameEvents({
+          renderToolbarControls: () => <MountProbe />,
+        }),
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Hand (H)" }));
+
+      const dialog = expandCanvas();
+      expect(
+        within(dialog)
+          .getByRole("button", { name: "Hand (H)" })
+          .getAttribute("aria-pressed"),
+      ).toBe("true");
+      fireEvent.click(within(dialog).getByRole("button", { name: "Pages" }));
+      const details = screen.getByRole("button", { name: "Details" });
+      expect(dialog.parentElement?.contains(details)).toBe(true);
+      fireEvent.click(details);
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: "Rectangle (R)" }),
+      );
+      fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(pageMenuNames(document.body)).toBe("Details");
+      expect(
+        screen
+          .getByRole("button", { name: "Rectangle (R)" })
+          .getAttribute("aria-pressed"),
+      ).toBe("true");
+      // The toolbar is part of the editor, so a rebuilt editor would mount it again.
+      expect(mounted).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("the gates", () => {
+    it("offers a view-only canvas exactly the controls inline and expanded, and no way to edit a note", () => {
+      mountExpandable({ viewOnly: true });
+      const inline = controlNames(document.body);
+
+      const dialog = expandCanvas();
+
+      expect(controlNames(dialog)).toEqual(inline);
+      expect(
+        within(dialog).queryByRole("button", { name: "Rectangle (R)" }),
+      ).toBeNull();
+      const note = within(dialog).queryByRole("button", {
+        name: "Edit sticky note",
+      });
+      if (note !== null) fireEvent.doubleClick(note);
+      expect(
+        within(dialog).queryByRole("textbox", { name: "Sticky note text" }),
+      ).toBeNull();
+    });
+
+    it("refuses comment mode on a canvas that cannot take comments, expanded or not", () => {
+      const onCanvasView = vi.fn<(view: CanvasCommentView | null) => void>();
+      mountExpandable({
+        frameEvents: canvasFrameEvents({
+          commentsEnabled: false,
+          onCanvasView,
+        }),
+      });
+      const dialog = expandCanvas();
+
+      fireEvent.keyDown(within(dialog).getByLabelText("Canvas"), {
+        code: "KeyC",
+      });
+
+      expect(onCanvasView.mock.calls.at(-1)?.[0]?.commenting).toBe(false);
+    });
+
+    it("keeps a view-only canvas from selecting a note", () => {
+      mountExpandable({ viewOnly: true });
+      expandCanvas();
+
+      streamChanges([{ type: "select", id: "note:note-1", selected: true }]);
+
+      expect(
+        screen.queryByRole("complementary", { name: "Note inspector" }),
+      ).toBeNull();
+    });
   });
 });

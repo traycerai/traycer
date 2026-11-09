@@ -83,15 +83,18 @@ export function BotThreadFollowControl(props: {
 }
 
 /**
- * A Threads row's menu: Follow or Unfollow the thread, whichever it is
- * not now.
+ * A Threads card's menu: Open thread, which shows its channel with the
+ * thread beside it, and Follow or Unfollow the thread, whichever it is not
+ * now.
  */
 export function BotThreadRowMenu(props: {
   readonly botId: string;
   readonly threadId: string;
   readonly following: boolean;
+  /** Opens the thread beside its channel; `null` for one whose post is gone. */
+  readonly onOpenThread: (() => void) | null;
 }): ReactNode {
-  const { botId, threadId, following } = props;
+  const { botId, threadId, following, onOpenThread } = props;
   const update = useBotThreadFollowSetMutation(useTabHostClient());
   return (
     <DropdownMenu>
@@ -107,6 +110,14 @@ export function BotThreadRowMenu(props: {
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
+        {onOpenThread === null ? null : (
+          <DropdownMenuItem
+            data-testid="bot-thread-row-open"
+            onSelect={onOpenThread}
+          >
+            Open thread
+          </DropdownMenuItem>
+        )}
         <DropdownMenuItem
           data-testid={
             following ? "bot-thread-row-unfollow" : "bot-thread-row-follow"

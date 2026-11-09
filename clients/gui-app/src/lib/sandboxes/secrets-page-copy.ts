@@ -45,8 +45,9 @@ export function secretValueOrigin(
 }
 
 /**
- * What a secret's row says after its name: "Set · 1 destination ·
- * added by you 24 Oct", each clause only when it is known.
+ * What a secret's row says after its name: "Set · sent to api.stripe.com ·
+ * added by you 24 Oct", each clause only when it is known. Several addresses
+ * are joined with commas and the row wraps them.
  */
 export function secretRowDetail(input: {
   readonly destinations: readonly string[];
@@ -54,9 +55,7 @@ export function secretRowDetail(input: {
 }): string {
   const parts = ["Set"];
   if (input.destinations.length > 0) {
-    parts.push(
-      `${input.destinations.length} ${input.destinations.length === 1 ? "destination" : "destinations"}`,
-    );
+    parts.push(`sent to ${input.destinations.join(", ")}`);
   }
   if (input.origin !== null) parts.push(input.origin);
   return parts.join(" · ");
@@ -93,7 +92,7 @@ export const SECRET_SAVED_OFFLINE =
   "Saved. It reaches your account when this computer is connected.";
 
 /** If a secret leaked: the order that closes it fastest. */
-export const SECRET_RECOVERY_TITLE = "Secret leaked?";
+export const SECRET_RECOVERY_TITLE = "If this secret leaked";
 
 export const SECRET_RECOVERY_STEPS: readonly string[] = [
   "Remove it first: every sandbox stops using the old value, and each computer that holds it as a value keeps it until its tools restart.",

@@ -497,6 +497,8 @@ function ProviderSkillsTabBody({
 
         {openSkill === null ? null : (
           <ProviderSkillDetailDialog
+            policyControl={null}
+            policyFeedback={null}
             skill={openSkill}
             sourceLabel={skillSourceLabel(openSkill.source, providerLabel)}
             removal={

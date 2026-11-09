@@ -50,6 +50,7 @@ vi.mock("@/components/sandbox/sandbox-frame", () => ({
   },
 }));
 
+import { ArtifactExpansion } from "@/components/artifacts/artifact-expansion";
 import { ArtifactPagesFrame } from "@/components/html-artifact/artifact-pages-frame";
 
 function manifestOf(pages: readonly string[]): ArtifactManifest {
@@ -86,31 +87,36 @@ const FILLING_ONE_PAGE: PagesOptions = {
 function renderPages(overrides: Partial<PagesOptions>) {
   const options = { ...FILLING_ONE_PAGE, ...overrides };
   render(
-    <ArtifactPagesFrame
-      source={{
-        kind: "artifact",
-        artifactId: "artifact-a1",
-        treePath: "site",
-        entryPath: options.pages[0],
-        manifest: manifestOf(options.pages),
-        // Never called: the frame that would mount a server is the stand-in
-        // above. What a refused read SERVES is the artifact server's own test.
-        readSpan: () => Promise.resolve({ unavailable: "failed" }),
-        resolveOutsideReference: () => null,
-      }}
-      title="Report"
-      className=""
-      height={options.height}
-      commenting={options.commenting}
-      onSize={() => undefined}
-      onStatus={() => undefined}
-      onBridge={null}
-      onTextSelection={null}
-      onFrame={null}
-      renderOverlay={null}
-      sourceEquivalent={undefined}
-      menuItems={options.menuItems}
-    />,
+    // The frame is not a surface on its own: every call site renders it inside
+    // the expansion that raises it, and that is what its Expand toggle asks.
+    <ArtifactExpansion title="Report">
+      <ArtifactPagesFrame
+        source={{
+          kind: "artifact",
+          artifactId: "artifact-a1",
+          treePath: "site",
+          entryPath: options.pages[0],
+          manifest: manifestOf(options.pages),
+          // Never called: the frame that would mount a server is the stand-in
+          // above. What a refused read SERVES is the artifact server's own
+          // test.
+          readSpan: () => Promise.resolve({ unavailable: "failed" }),
+          resolveOutsideReference: () => null,
+        }}
+        title="Report"
+        className=""
+        height={options.height}
+        commenting={options.commenting}
+        onSize={() => undefined}
+        onStatus={() => undefined}
+        onBridge={null}
+        onTextSelection={null}
+        onFrame={null}
+        renderOverlay={null}
+        sourceEquivalent={undefined}
+        menuItems={options.menuItems}
+      />
+    </ArtifactExpansion>,
   );
   const navigation = (): NonNullable<SandboxFrameProps["pageNavigation"]> => {
     const value = frames.latest?.pageNavigation ?? null;
@@ -230,12 +236,11 @@ function frameProps(): SandboxFrameProps {
   return frames.latest;
 }
 
-it("opens the current page in a fullscreen dialog and restores the inline view on Escape", async () => {
+it("opens the current page over the task and keeps the reader's place on Escape", async () => {
   const user = userEvent.setup();
   const { report } = renderPages({ pages: TWO_PAGES });
   report((page) => page.onNavigate("report.html"));
-  const trigger = button("Expand");
-  await user.click(trigger);
+  await user.click(button("Expand"));
   const dialog = screen.getByRole("dialog", { name: "Report" });
   const expandedFrame = within(dialog).getByTestId("page-frame");
   expect(expandedFrame.getAttribute("data-path")).toBe("report.html");
@@ -250,21 +255,26 @@ it("opens the current page in a fullscreen dialog and restores the inline view o
   ).toBe("index.html");
   fireEvent.keyDown(dialog, { key: "Escape" });
   expect(screen.queryByRole("dialog")).toBeNull();
-  await waitFor(() => expect(document.activeElement).toBe(trigger));
+  // One surface, raised and lowered again: the page the reader moved to while
+  // it was up is the page waiting for them afterwards. The expanded view used
+  // to be a second frame with its own history, which is exactly why it also
+  // had its own, emptier set of controls.
+  await waitFor(() => expect(document.activeElement).toBe(button("Expand")));
   const inlineFrame = screen.getByTestId("page-frame");
-  expect(inlineFrame.getAttribute("data-path")).toBe("report.html");
+  expect(inlineFrame.getAttribute("data-path")).toBe("index.html");
   expect(inlineFrame.getAttribute("data-mode")).toBe("inline");
 });
 
 it("closes on the first Escape immediately after opening and restores focus", async () => {
   const user = userEvent.setup();
   renderPages({});
-  const trigger = button("Expand");
-  await user.click(trigger);
+  await user.click(button("Expand"));
   expect(screen.getByRole("dialog", { name: "Report" })).toBeTruthy();
   await user.keyboard("{Escape}");
   expect(screen.queryByRole("dialog")).toBeNull();
-  await waitFor(() => expect(document.activeElement).toBe(trigger));
+  // Expand stands down while the surface is up and returns with it, so this is
+  // the restored control rather than the node that was clicked.
+  await waitFor(() => expect(document.activeElement).toBe(button("Expand")));
 });
 
 describe("the floating controls chip", () => {
@@ -530,5 +540,55 @@ describe("commenting on the entry page", () => {
     });
 
     expect(setMode.mock.calls).toEqual([["edit"]]);
+  });
+});
+
+describe("a page that is already showing when the surface is raised or lowered", () => {
+  // A chat row has a fixed height, so its page is not told to take the zoom
+  // view. Raising it makes the page fill, and the page must hear that without
+  // anything else happening - it is already loaded and ready.
+  it("is told its view again when the frame starts and stops filling, keeping the reader's place", async () => {
+    const user = userEvent.setup();
+    const bridge = realBridge();
+    frames.bridge = bridge;
+    const setHtmlView = vi.spyOn(bridge, "setHtmlView");
+    const { report } = renderPages({ pages: TWO_PAGES, height: 240 });
+    report((page) => {
+      page.onNavigate("report.html");
+      frameProps().onStatus("ready");
+    });
+    expect(setHtmlView).toHaveBeenLastCalledWith({
+      enabled: false,
+      scale: 1,
+      commenting: false,
+    });
+
+    await user.click(button("Expand"));
+
+    expect(setHtmlView).toHaveBeenLastCalledWith({
+      enabled: true,
+      scale: 1,
+      commenting: false,
+    });
+    expect(screen.getByTestId("page-frame").getAttribute("data-path")).toBe(
+      "report.html",
+    );
+    expect(screen.getByTestId("page-frame").getAttribute("data-mode")).toBe(
+      "fullscreen",
+    );
+
+    await user.click(button("Close"));
+
+    expect(setHtmlView).toHaveBeenLastCalledWith({
+      enabled: false,
+      scale: 1,
+      commenting: false,
+    });
+    expect(screen.getByTestId("page-frame").getAttribute("data-path")).toBe(
+      "report.html",
+    );
+    expect(screen.getByTestId("page-frame").getAttribute("data-mode")).toBe(
+      "inline",
+    );
   });
 });

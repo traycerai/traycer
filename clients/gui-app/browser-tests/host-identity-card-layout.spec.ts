@@ -54,3 +54,34 @@ test("on desktop host actions remain beside the name", async ({ page }) => {
     expect(actions.y + actions.height).toBeGreaterThan(nameRow.y);
   }
 });
+
+test("at 390px inline installation facts and copy controls wrap within the pane", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openCards(page);
+
+  const facts = page.getByRole("region", { name: "Installation facts" });
+  for (const label of [
+    "Platform",
+    "Architecture",
+    "Build version",
+    "Build",
+    "SHA-256",
+  ]) {
+    await expect(facts.getByText(label, { exact: true })).toBeVisible();
+  }
+  await expect(
+    facts.getByRole("button", { name: "Copy SHA-256" }),
+  ).toBeVisible();
+  for (const value of await facts.locator("dd").all()) {
+    const rect = await box(value);
+    expect(rect.x).toBeGreaterThanOrEqual(0);
+    expect(rect.x + rect.width).toBeLessThanOrEqual(390);
+    expect(
+      await value.evaluate(
+        (element) => element.scrollWidth <= element.clientWidth,
+      ),
+    ).toBe(true);
+  }
+});
