@@ -2690,6 +2690,10 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       followLatchRef.current?.setFollowIntent(next === "following-end");
       timelineScrollModeRef.current = next;
       isAtEndRef.current = next === "following-end";
+      // At the end the rail marks the last turn. A flip with no scroll of its
+      // own (the pill's go-live, a settle's verdict, a turn coming to rest)
+      // moves that tick too.
+      minimapInViewRefreshRef.current();
       if (next === "following-end") {
         if (releasePersistenceGate) {
           restorePersistencePendingRef.current = false;
@@ -5154,6 +5158,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
                       senderFirst={botChannel}
                       inViewRefreshRef={minimapInViewRefreshRef}
                       listRef={chatTimelineRef}
+                      atEndRef={isAtEndRef}
                       topOffsetAdjustmentRef={listTopOffsetAdjustmentRef}
                       viewportRef={transcriptContainerRef}
                       bottomInset={endInset}

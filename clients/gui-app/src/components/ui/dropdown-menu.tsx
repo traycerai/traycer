@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { CheckIcon, ChevronRightIcon } from "lucide-react";
 import { usePaneAwareContentGuard } from "@/components/epic-tabs/pane-visibility-context";
 import { useDialogOverlayBoundaryEl } from "@/providers/dialog-overlay-boundary-context";
+import { useSurfaceOverlayContainerEl } from "@/providers/surface-overlay-container-context";
 import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
 import { useSafeAreaCollisionPadding } from "@/components/ui/safe-area-collision-padding";
 import { MenuOpenMarker } from "@/components/ui/open-menus";
@@ -61,11 +62,17 @@ function DropdownMenuContent({
   // Concealed region (see `portal-concealment-context`): un-present the
   // portal; it re-presents intact when the region returns.
   const concealed = usePortalConcealed();
+  // A menu opened inside a top-layer surface must portal into it or it paints
+  // beneath it (see `surface-overlay-container-context`). `null` everywhere
+  // else, which is `document.body` as before.
+  const surfaceContainer = useSurfaceOverlayContainerEl();
   // Read above the early returns so hook order does not depend on presentation.
   const safeAreaInsets = useSafeAreaCollisionPadding();
   if (!paneFocused || concealed) return null;
   return (
-    <DropdownMenuPrimitive.Portal container={container}>
+    <DropdownMenuPrimitive.Portal
+      container={container ?? surfaceContainer ?? undefined}
+    >
       <DropdownMenuPrimitive.Content
         ref={ref}
         data-slot="dropdown-menu-content"
@@ -337,12 +344,13 @@ function DropdownMenuSubContent({
   ...props
 }: DropdownMenuSubContentProps) {
   const dialogBoundary = useDialogOverlayBoundaryEl();
+  const surfaceContainer = useSurfaceOverlayContainerEl();
   // A submenu opens sideways from a row that is itself already near an edge, so
   // it is the surface most likely to need the clamp its parent content has.
   const safeAreaInsets = useSafeAreaCollisionPadding();
   return (
     <DropdownMenuPrimitive.Portal
-      container={container ?? dialogBoundary ?? undefined}
+      container={container ?? dialogBoundary ?? surfaceContainer ?? undefined}
     >
       <DropdownMenuPrimitive.SubContent
         ref={ref}

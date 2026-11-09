@@ -721,6 +721,15 @@ describe("<SandboxCard /> per state", () => {
     mocks.warning = { kind: "critical", runwayMinutes: 20 };
     renderCard(sandboxOf("awake", false, {}));
     expect(
+      screen
+        .getByTestId("sandbox-card-cost-charged")
+        .closest("details:not([open])"),
+    ).toBeNull();
+    expect(
+      screen.getByTestId("sandbox-card-balance").closest("details:not([open])"),
+    ).toBeNull();
+    expect(screen.queryByText("Cost details", { exact: true })).toBeNull();
+    expect(
       screen.getByTestId("sandbox-card-cost-charged").textContent,
     ).toContain("$6.00 since");
     expect(
@@ -1504,8 +1513,8 @@ describe("<SandboxCard /> destroy", () => {
   });
 });
 
-describe("<SandboxCard /> secrets summary readiness", () => {
-  it("says all working for an awake sandbox with a ready route", () => {
+describe("<SandboxCard /> inline secrets readiness", () => {
+  it("shows ready routes inline for an awake sandbox", () => {
     mocks.grantsData = oneSecretGrant();
     renderCard(
       sandboxOf("awake", false, {
@@ -1514,18 +1523,25 @@ describe("<SandboxCard /> secrets summary readiness", () => {
       }),
     );
 
-    expect(screen.getByTestId("sandbox-card-secrets").textContent).toContain(
-      "1 secret · all working",
-    );
+    expect(
+      screen.getByTestId("sandbox-card-grant-route").textContent,
+    ).toContain("ready");
+    expect(
+      screen
+        .getByText("PROD_DB", { exact: true })
+        .closest("details:not([open])"),
+    ).toBeNull();
   });
 
   it("says connecting while the sandbox is attaching", () => {
     mocks.grantsData = oneSecretGrant();
     renderCard(sandboxOf("awake", false, { phase: "attaching" }));
 
-    expect(screen.getByTestId("sandbox-card-secrets").textContent).toContain(
-      "1 secret · connecting",
-    );
+    expect(
+      screen
+        .getByTestId("sandbox-card-secrets-readiness")
+        .getAttribute("data-tone"),
+    ).toBe("pending");
   });
 
   it("does not claim a route is ready when its host is offline", () => {
@@ -1539,12 +1555,9 @@ describe("<SandboxCard /> secrets summary readiness", () => {
       "offline",
     );
 
-    expect(screen.getByTestId("sandbox-card-secrets").textContent).toContain(
-      "1 secret",
-    );
     expect(
-      screen.getByTestId("sandbox-card-secrets").textContent,
-    ).not.toContain("all working");
+      screen.getByTestId("sandbox-card-grant-route").textContent,
+    ).not.toContain("ready");
   });
 });
 
@@ -1602,21 +1615,18 @@ describe("<SandboxCard /> secrets section", () => {
     expect(screen.queryByTestId("sandbox-card-egress-event")).toBeNull();
   });
 
-  it("shows a blocked request count and reveals its event details on See events", async () => {
+  it("shows a refused network event inline", () => {
     mocks.grantsData = { version: 3, grants: [], github: null };
     mocks.egressEvents = [untrustedRefusalEvent()];
 
     renderCard(sandboxOf("awake", false, { phase: "ready" }));
 
     const events = screen.getByTestId("sandbox-card-egress-events");
-    expect(events.querySelector("summary")?.textContent).toContain(
-      "1 recent blocked request · See events",
-    );
-    expect(events.hasAttribute("open")).toBe(false);
-    const summary = events.querySelector("summary");
-    if (summary === null) throw new Error("Expected the events disclosure");
-    fireEvent.click(summary);
-    await waitFor(() => expect(events.hasAttribute("open")).toBe(true));
+    expect(
+      within(events)
+        .getByTestId("sandbox-card-egress-event")
+        .closest("details:not([open])"),
+    ).toBeNull();
     const item = screen.getByTestId("sandbox-card-egress-event");
     expect(item.getAttribute("data-tone")).toBe("refused");
     expect(item.textContent).toContain("reported by the sandbox");
@@ -1769,27 +1779,24 @@ describe("<SandboxCard /> egress events without refusals", () => {
       },
       "Connection held while waking",
     ],
-  ] as const)(
-    "shows the events disclosure for a %s list",
-    async (_name, event, headline) => {
-      mocks.egressEvents = [event];
+  ] as const)("shows inline events for a %s list", (_name, event, headline) => {
+    mocks.egressEvents = [event];
 
-      renderCard(sandboxOf("awake", false, { phase: "ready" }));
+    renderCard(sandboxOf("awake", false, { phase: "ready" }));
 
-      const events = screen.getByTestId("sandbox-card-egress-events");
-      const summary = within(events).getByText(
-        "Recent network events · See events",
-      );
-      fireEvent.click(summary);
-      await waitFor(() => expect(events.hasAttribute("open")).toBe(true));
-      expect(
-        screen.getByTestId("sandbox-card-egress-event").textContent,
-      ).toContain(headline);
-    },
-  );
+    const events = screen.getByTestId("sandbox-card-egress-events");
+    expect(
+      within(events)
+        .getByTestId("sandbox-card-egress-event")
+        .closest("details:not([open])"),
+    ).toBeNull();
+    expect(
+      screen.getByTestId("sandbox-card-egress-event").textContent,
+    ).toContain(headline);
+  });
 });
 
-describe("<SandboxCard /> condensed secrets and network", () => {
+describe("<SandboxCard /> inline secrets and network", () => {
   function grant(
     secretName: string,
     route: string,
@@ -1810,14 +1817,7 @@ describe("<SandboxCard /> condensed secrets and network", () => {
     return { version: 3, grants, github: null };
   }
 
-  async function openDetails(): Promise<HTMLElement> {
-    const details = screen.getByTestId("sandbox-card-secret-details");
-    fireEvent.click(within(details).getByText("Details"));
-    await waitFor(() => expect(details.hasAttribute("open")).toBe(true));
-    return details;
-  }
-
-  it("keeps grant and GitHub facts closed until Details opens", async () => {
+  it("shows grant and GitHub facts immediately", () => {
     mocks.grantsData = grantsOf([
       {
         ...grant("PROD_DB", "route-1", "db.internal"),
@@ -1855,14 +1855,14 @@ describe("<SandboxCard /> condensed secrets and network", () => {
     );
 
     const row = screen.getByTestId("sandbox-card-secrets");
-    expect(row.textContent).toContain("2 secrets · all working");
     expect(row.textContent).toContain("Manage");
-    const details = screen.getByTestId("sandbox-card-secret-details");
-    expect(details.hasAttribute("open")).toBe(false);
-    expect(within(row).queryByText(/stand-in|real value/)).toBeNull();
-
-    fireEvent.click(within(details).getByText("Details"));
-    await waitFor(() => expect(details.hasAttribute("open")).toBe(true));
+    const details = screen.getByTestId("sandbox-card-grants");
+    expect(
+      within(details)
+        .getByTestId("sandbox-card-stand-in")
+        .closest("details:not([open])"),
+    ).toBeNull();
+    expect(screen.queryByText("Details")).toBeNull();
     expect(
       within(details).getByTestId("sandbox-card-stand-in").textContent,
     ).toMatch(/stand-in|real value/);
@@ -1887,7 +1887,7 @@ describe("<SandboxCard /> condensed secrets and network", () => {
     });
   });
 
-  it("opens failed grant details with See why and keeps Manage available", async () => {
+  it("shows failed routes inline and keeps Manage available", () => {
     mocks.grantsData = grantsOf([grant("PROD_DB", "route-1", "db.internal")]);
 
     renderCard(
@@ -1900,12 +1900,8 @@ describe("<SandboxCard /> condensed secrets and network", () => {
     );
 
     const row = screen.getByTestId("sandbox-card-secrets");
-    expect(row.textContent).toContain("1 of 1 secret not working");
-    expect(row.textContent).toContain("See why");
     expect(row.textContent).toContain("Manage");
-    fireEvent.click(within(row).getByRole("button", { name: "See why" }));
-    const details = screen.getByTestId("sandbox-card-secret-details");
-    await waitFor(() => expect(details.hasAttribute("open")).toBe(true));
+
     expect(
       screen.getByTestId("sandbox-card-grant-route").textContent,
     ).toContain("Connector is offline");
@@ -1935,47 +1931,40 @@ describe("<SandboxCard /> condensed secrets and network", () => {
     ).toBe(true);
   });
 
-  it("keeps cached grant facts without Retry when a refetch fails", async () => {
+  it("keeps cached grant facts without Retry when a refetch fails", () => {
     mocks.grantsData = grantsOf([grant("PROD_DB", "route-1", "db.internal")]);
     mocks.grantsError = true;
     renderCard(sandboxOf("awake", false, { phase: "ready" }));
 
     const row = screen.getByTestId("sandbox-card-secrets");
-    expect(row.textContent).toContain("1 secret");
     expect(row.textContent).not.toContain("Couldn't load");
     expect(within(row).queryByRole("button", { name: "Retry" })).toBeNull();
 
-    const details = await openDetails();
+    const details = screen.getByTestId("sandbox-card-grants");
     expect(
       within(details).getByTestId("sandbox-card-grant").textContent,
     ).toContain("PROD_DB");
     expect(mocks.grantsRefetch).not.toHaveBeenCalled();
   });
 
-  it("shows saved grants while suspended and while the sandbox has no phase", async () => {
+  it("shows saved grants while suspended and while the sandbox has no phase", () => {
     mocks.grantsData = grantsOf([grant("PROD_DB", "route-1", "db.internal")]);
     renderCard(sandboxOf("suspended", false, { phase: "ready" }));
-    expect(screen.getByTestId("sandbox-card-secrets").textContent).toContain(
-      "1 secret",
-    );
-    let details = await openDetails();
+    let details = screen.getByTestId("sandbox-card-grants");
     expect(
       within(details).getByTestId("sandbox-card-grant").textContent,
     ).toContain("PROD_DB");
     cleanup();
 
     renderCard(sandboxOf("awake", false, { phase: null }));
-    expect(screen.getByTestId("sandbox-card-secrets").textContent).toContain(
-      "1 secret",
-    );
-    details = await openDetails();
+    details = screen.getByTestId("sandbox-card-grants");
     expect(
       within(details).getByTestId("sandbox-card-grant").textContent,
     ).toContain("PROD_DB");
     expect(mocks.useEgressEvents).not.toHaveBeenCalledWith("host-sbx-1");
   });
 
-  it("shows broker unavailability even when the sandbox reports the route ready", async () => {
+  it("shows broker unavailability even when the sandbox reports the route ready", () => {
     mocks.grantsData = grantsOf([
       {
         ...grant("PROD_DB", "route-1", "db.internal"),
@@ -1996,22 +1985,18 @@ describe("<SandboxCard /> condensed secrets and network", () => {
       }),
     );
 
-    const row = screen.getByTestId("sandbox-card-secrets");
-    expect(row.textContent).toContain("1 of 1 secret not working");
-    fireEvent.click(within(row).getByRole("button", { name: "See why" }));
-    const details = screen.getByTestId("sandbox-card-secret-details");
-    await waitFor(() => expect(details.hasAttribute("open")).toBe(true));
     expect(
       screen.getByTestId("sandbox-card-grant-route").textContent,
     ).toContain("connector private-connector offline");
   });
 
-  it("keeps degraded phase details available before grants load and opens them from See why", async () => {
+  it("shows degraded readiness inline before and after grants load", () => {
     renderCard(sandboxOf("awake", false, { phase: "degraded(gateway)" }));
-    let details = screen.getByTestId("sandbox-card-secret-details");
-    expect(details.hasAttribute("open")).toBe(false);
-    fireEvent.click(within(details).getByText("Details"));
-    await waitFor(() => expect(details.hasAttribute("open")).toBe(true));
+    expect(
+      screen
+        .getByTestId("sandbox-card-secrets-readiness")
+        .closest("details:not([open])"),
+    ).toBeNull();
     expect(
       screen.getByTestId("sandbox-card-secrets-readiness").textContent,
     ).toBe(
@@ -2021,11 +2006,7 @@ describe("<SandboxCard /> condensed secrets and network", () => {
 
     mocks.grantsData = grantsOf([grant("PROD_DB", "route-1", "db.internal")]);
     renderCard(sandboxOf("awake", false, { phase: "degraded(gateway)" }));
-    const row = screen.getByTestId("sandbox-card-secrets");
-    expect(row.textContent).toContain("1 secret · not working");
-    fireEvent.click(within(row).getByRole("button", { name: "See why" }));
-    details = screen.getByTestId("sandbox-card-secret-details");
-    await waitFor(() => expect(details.hasAttribute("open")).toBe(true));
+    const details = screen.getByTestId("sandbox-card-grants");
     expect(
       screen.getByTestId("sandbox-card-secrets-readiness").textContent,
     ).toContain("Degraded at gateway");
@@ -2045,142 +2026,37 @@ describe("<SandboxCard /> condensed secrets and network", () => {
       { linked: true, installations: [] },
       "GitHub: linked, with the Traycer App installed nowhere yet.",
     ],
-  ] as const)(
-    "marks GitHub %s as not working",
-    async (_state, github, exactLine) => {
-      mocks.grantsData = { ...grantsOf([]), github };
-      renderCard(sandboxOf("awake", false, { phase: "ready" }));
-
-      const row = screen.getByTestId("sandbox-card-secrets");
-      expect(row.textContent).toContain("GitHub not working");
-      fireEvent.click(within(row).getByRole("button", { name: "See why" }));
-      const details = screen.getByTestId("sandbox-card-secret-details");
-      await waitFor(() => expect(details.hasAttribute("open")).toBe(true));
-      expect(screen.getByTestId("sandbox-card-github").textContent).toBe(
-        exactLine,
-      );
-    },
-  );
-
-  interface SeeWhyCase {
-    readonly name: string;
-    readonly grants: SandboxGrantsSummary;
-    readonly runtime: Parameters<typeof sandboxSummaryFixture>[0];
-    readonly line: string;
-    readonly seeWhy: boolean;
-  }
-  const seeWhyCases: readonly SeeWhyCase[] = [
-    {
-      name: "an unavailable route",
-      grants: grantsOf([grant("PROD_DB", "route-1", "db.internal")]),
-      runtime: {
-        phase: "ready",
-        routes: [
-          {
-            route: "route-1",
-            state: "unavailable",
-            code: "connector_offline",
-          },
-        ],
-      },
-      line: "1 of 1 secret not working",
-      seeWhy: true,
-    },
-    {
-      name: "a failed rotation",
-      grants: grantsOf([
-        {
-          ...grant("PROD_DB", "route-1", "db.internal"),
-          rotation: { state: "failed", classes: [] },
-        },
-      ]),
-      runtime: {
-        phase: "ready",
-        routes: [{ route: "route-1", state: "ready", code: null }],
-      },
-      line: "1 of 1 secret not working",
-      seeWhy: true,
-    },
-    {
-      name: "GitHub not linked",
-      grants: {
-        ...grantsOf([]),
-        github: { linked: false, installations: [] },
-      },
-      runtime: { phase: "ready", routes: [] },
-      line: "0 secrets · GitHub not working",
-      seeWhy: true,
-    },
-    {
-      name: "a degraded sandbox",
-      grants: grantsOf([grant("PROD_DB", "route-1", "db.internal")]),
-      runtime: { phase: "degraded(gateway)", routes: [] },
-      line: "1 secret · not working",
-      seeWhy: true,
-    },
-    {
-      name: "every secret working",
-      grants: grantsOf([grant("PROD_DB", "route-1", "db.internal")]),
-      runtime: {
-        phase: "ready",
-        routes: [{ route: "route-1", state: "ready", code: null }],
-      },
-      line: "1 secret · all working",
-      seeWhy: false,
-    },
-    {
-      name: "a sandbox still connecting",
-      grants: grantsOf([grant("PROD_DB", "route-1", "db.internal")]),
-      runtime: { phase: "attaching", routes: [] },
-      line: "1 secret · connecting",
-      seeWhy: false,
-    },
-  ];
-
-  it.each(seeWhyCases)(
-    "offers See why exactly when the summary reports failure: $name",
-    ({ grants, runtime, line, seeWhy }) => {
-      mocks.grantsData = grants;
-      renderCard(sandboxOf("awake", false, runtime));
-
-      const row = screen.getByTestId("sandbox-card-secrets");
-      expect(row.textContent).toContain(line);
-      expect(
-        within(row).queryByRole("button", { name: "See why" }) !== null,
-      ).toBe(seeWhy);
-    },
-  );
-
-  it("shows a blocked request count and See events only when there is a refusal", () => {
-    mocks.grantsData = grantsOf([]);
-    renderCard(sandboxOf("awake", false, { phase: "ready" }));
-    expect(screen.queryByTestId("sandbox-card-egress-events")).toBeNull();
-    cleanup();
-
-    mocks.egressEvents = [
-      {
-        kind: "egress.refused",
-        id: "ev-refused",
-        at: new Date(2026, 9, 1, 12).getTime(),
-        emitter: "reporter",
-        untrusted: true,
-        code: "grant_missing",
-        route: null,
-        host: "db.internal",
-        protocol: "postgres",
-        secret: "PROD_DB",
-        howToRequest: null,
-      },
-    ];
+  ] as const)("marks GitHub %s as not working", (_state, github, exactLine) => {
+    mocks.grantsData = { ...grantsOf([]), github };
     renderCard(sandboxOf("awake", false, { phase: "ready" }));
 
-    const events = screen.getByTestId("sandbox-card-egress-events");
-    expect(events.querySelector("summary")?.textContent).toContain(
-      "1 recent blocked request · See events",
+    expect(
+      screen.getByTestId("sandbox-card-github").closest("details:not([open])"),
+    ).toBeNull();
+    expect(screen.getByTestId("sandbox-card-github").textContent).toBe(
+      exactLine,
     );
   });
 
-  it("joins a known route address for another event when a refusal opens the section", async () => {
+  it("shows a failed rotation inline beside its granted secret", () => {
+    mocks.grantsData = grantsOf([
+      {
+        ...grant("PROD_DB", "route-1", "db.internal"),
+        rotation: { state: "failed", classes: [] },
+      },
+    ]);
+    renderCard(sandboxOf("awake", false, { phase: "ready" }));
+    expect(
+      screen
+        .getByTestId("sandbox-card-grant-rotation")
+        .closest("details:not([open])"),
+    ).toBeNull();
+    expect(
+      screen.getByTestId("sandbox-card-grant-rotation").textContent,
+    ).toContain("failed");
+  });
+
+  it("joins a known route address for an inline event beside a refusal", () => {
     mocks.grantsData = grantsOf([grant("PROD_DB", "route-1", "db.internal")]);
     mocks.egressEvents = [
       {
@@ -2208,11 +2084,11 @@ describe("<SandboxCard /> condensed secrets and network", () => {
     ];
     renderCard(sandboxOf("awake", false, { phase: "ready" }));
 
-    const events = screen.getByTestId("sandbox-card-egress-events");
-    const summary = events.querySelector("summary");
-    if (summary === null) throw new Error("Expected the events disclosure");
-    fireEvent.click(summary);
-    await waitFor(() => expect(events.hasAttribute("open")).toBe(true));
+    expect(
+      screen
+        .getByTestId("sandbox-card-egress-events")
+        .closest("details:not([open])"),
+    ).toBeNull();
     const closedEvents = screen
       .getAllByTestId("sandbox-card-egress-event")
       .filter((event) => event.getAttribute("data-tone") === "closed");

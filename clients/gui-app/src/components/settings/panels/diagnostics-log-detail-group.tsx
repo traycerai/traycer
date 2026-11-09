@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Info } from "lucide-react";
 import { toast } from "sonner";
 import { SettingsGroup } from "@/components/settings/settings-group";
-import { HostSettingsDisclosure } from "@/components/settings/panels/host-settings-disclosure";
 import { LogLevelRow } from "@/components/settings/panels/log-level-row";
 import type { LogLevelControl } from "@/components/settings/panels/log-level-controls";
 import { HOST_DIAGNOSTICS } from "@/components/settings/panels/diagnostics-settings.definitions";
@@ -55,9 +54,8 @@ export function LogDetailGroup(props: {
 }): ReactNode {
   const { controls } = props;
   const compact = useSettingsDensity() === "compact";
-  // The host page and the app page share this card. Only the host page's group
-  // object carries the support sentence, the guidance beside the heading, and
-  // the capture disclosure — the app page keeps the heading the group draws.
+  // The host thresholds apply to every host on that computer; the app's
+  // control has its own scope description.
   const hostLogDetail = props.group === HOST_DIAGNOSTICS.definitions.logDetail;
   const [resetPending, setResetPending] = useState(false);
   // Focus-restoration target for when the reminder row (and the "Reset all to
@@ -159,7 +157,6 @@ export function LogDetailGroup(props: {
           }}
         />
       ) : null}
-      {hostLogDetail ? <HostProblemCaptureDisclosure /> : null}
     </div>
   );
 
@@ -188,12 +185,6 @@ export function LogDetailGroup(props: {
         <h2 className="font-semibold text-ui-xs text-muted-foreground">
           Log detail
         </h2>
-        <p
-          className="text-ui-xs text-muted-foreground"
-          data-testid="diagnostics-verbosity-guidance"
-        >
-          Use Debug while capturing a problem
-        </p>
       </div>
       <p className="mb-2 px-1 text-ui-xs text-muted-foreground">
         Applies to every Traycer host on this computer.
@@ -208,24 +199,6 @@ export function LogDetailGroup(props: {
         {body}
       </SettingsGroup>
     </div>
-  );
-}
-
-function HostProblemCaptureDisclosure(): ReactNode {
-  return (
-    <HostSettingsDisclosure
-      label="How to capture a problem"
-      defaultOpen={false}
-    >
-      <p
-        className="wrap-anywhere text-ui-sm text-muted-foreground"
-        data-testid="diagnostics-capture-steps"
-      >
-        Raise the relevant level to Debug, reproduce the problem, then set it
-        back to Info. This app&apos;s own log and memory capture live under
-        Application › Diagnostics.
-      </p>
-    </HostSettingsDisclosure>
   );
 }
 

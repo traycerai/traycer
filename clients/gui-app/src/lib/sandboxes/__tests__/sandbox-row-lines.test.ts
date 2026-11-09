@@ -457,7 +457,7 @@ describe("sandboxClockLine", () => {
     },
   );
 
-  it("names only whose settings did not apply on an awake row, without its name, state or reference", () => {
+  it("names whose settings did not apply and the support reference on an awake row", () => {
     expect(
       sandboxClockLine({
         summary: sandboxSummaryFixture({
@@ -473,10 +473,10 @@ describe("sandboxClockLine", () => {
         reachability: { unreachable: false, lastContactAt: null },
         now: NOW,
       }),
-    ).toBe("Personal's settings didn't apply");
+    ).toBe("Personal's settings didn't apply · SBX-0520");
   });
 
-  it("reads a failed row by its time alone, leaving a mapped support reference to Details", () => {
+  it("reads a failed row by its time and mapped support reference", () => {
     expect(
       sandboxClockLine({
         summary: sandboxSummaryFixture({
@@ -491,7 +491,7 @@ describe("sandboxClockLine", () => {
         reachability: { unreachable: false, lastContactAt: null },
         now: NOW,
       }),
-    ).toBe("Couldn't start at 11:01");
+    ).toBe("Couldn't start at 11:01 · SBX-0412");
   });
 
   it("copies the support reference with the sandbox id, or the id alone with none", () => {
@@ -754,7 +754,7 @@ describe("sandboxListHeader", () => {
         todayMc: 3,
         todayYoursMc: null,
       }),
-    ).toBe("1 sandbox · under $0.01 today");
+    ).toBe("1 sandbox · under $0.01 today (UTC day)");
   });
 
   it("reads a cent or more in dollars", () => {
@@ -765,7 +765,7 @@ describe("sandboxListHeader", () => {
         todayMc: 20,
         todayYoursMc: null,
       }),
-    ).toBe("1 sandbox · $0.02 today");
+    ).toBe("1 sandbox · $0.02 today (UTC day)");
   });
 
   it("keeps the sandbox count beside Automations when there is one", () => {

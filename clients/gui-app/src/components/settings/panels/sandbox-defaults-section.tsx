@@ -13,6 +13,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useEnvironmentMembersList } from "@/hooks/environment/use-environment-members-list";
+import { useHostClient } from "@/lib/host";
 import { useConfigurationItemMutations } from "@/hooks/environment/team/use-configuration-item-mutations";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
 import {
@@ -66,17 +68,18 @@ function configurationEnvironmentKey(
 }
 
 /**
- * A shape as the catalogue offers it, with its class's wake string and its
- * price (`from` unless it is the region's smallest, the one shape the
- * catalogue prices).
+ * A shape's wake time and price (`from` unless it is the region's smallest,
+ * the one shape the catalogue prices).
  */
-function shapeLine(catalogue: SandboxCatalogue, shape: StageSize): string {
+function shapeConsequenceLine(
+  catalogue: SandboxCatalogue,
+  shape: StageSize,
+): string {
   const provider = stageProviderFor(catalogue, shape.os);
   const price = stagePrice(catalogue, shape);
   const priceLabel =
     price === null ? null : shortPriceLabel(price.awakeMcPerHour);
   return [
-    `${shape.os === "linux" ? "Linux" : "Windows"} · ${sandboxShapeLabel(shape.cpus, shape.memoryMb)}`,
     price === null || price.exact ? priceLabel : `from ${priceLabel}`,
     provider === null ? null : wakeString(provider.suspendFidelity),
   ]
@@ -142,7 +145,7 @@ function defaultsCardBody(
 /**
  * The configuration's defaults for new sandboxes: its shared
  * `sandbox_defaults` item, the built-in defaults while none is set. Editors and
- * admins reveal the form here; readers without edit access can open Members. The
+ * admins change them here; readers see the people who can change them. The
  * gear on a New row changes one sandbox only and never shows here.
  */
 export function SandboxDefaultsSection(props: {
@@ -153,9 +156,8 @@ export function SandboxDefaultsSection(props: {
     configurationEnvironmentKey(props.configuration),
   );
   const body = defaultsCardBody(catalogue, environment, read);
-  const [editing, setEditing] = useState(false);
   // Held here, not in the form: a conflict rereads the item, and the form
-  // reopened on its new revision still shows why the save did not land.
+  // mounted on its new revision still shows why the save did not land.
   const { put } = useConfigurationItemMutations();
   const issue =
     put.data === undefined ? null : configurationWriteIssue(put.data);
@@ -166,37 +168,11 @@ export function SandboxDefaultsSection(props: {
       data-testid="sandboxes-defaults"
     >
       <h2 className="text-ui font-medium">Defaults</h2>
-      {body.kind === "unread" ? null : (
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <SandboxDefaultsList catalogue={body.catalogue} shape={body.shape} />
-          {body.kind === "form" ? (
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              aria-expanded={editing}
-              onClick={() => setEditing(!editing)}
-            >
-              Edit defaults
-            </Button>
-          ) : null}
-        </div>
-      )}
+      {body.kind === "list" ? (
+        <SandboxDefaultsList catalogue={body.catalogue} shape={body.shape} />
+      ) : null}
       {environment !== null && environment.role === null ? (
-        <p
-          className="text-ui-xs text-muted-foreground wrap-anywhere"
-          data-testid="sandboxes-defaults-editors"
-        >
-          Editors and admins can change defaults ·{" "}
-          <Button
-            type="button"
-            variant="link"
-            size="sm"
-            onClick={() => navigateToSettingsSection("members")}
-          >
-            Members
-          </Button>
-        </p>
+        <DefaultsEditors environmentId={environment.environmentId} />
       ) : null}
       {read !== null && read.kind === "failed" ? (
         <div className="flex flex-wrap items-center gap-2">
@@ -213,9 +189,9 @@ export function SandboxDefaultsSection(props: {
           </Button>
         </div>
       ) : null}
-      {body.kind === "form" && editing ? (
+      {body.kind === "form" ? (
         <SandboxDefaultsForm
-          // A save, or a change made elsewhere, reopens the form on the value read.
+          // A save, or a change made elsewhere, resets the form to the value read.
           key={`${body.revision ?? "none"}`}
           catalogue={body.catalogue}
           initialShape={body.shape}
@@ -234,6 +210,62 @@ export function SandboxDefaultsSection(props: {
       ) : null}
       <ConfigurationWriteFeedback issue={issue} />
     </section>
+  );
+}
+
+/** Names are shown only after the complete membership read succeeds. */
+function DefaultsEditors(props: { readonly environmentId: string }): ReactNode {
+  const members = useEnvironmentMembersList(
+    useHostClient(),
+    props.environmentId,
+    true,
+  );
+  const names =
+    members.isPending || members.isError
+      ? []
+      : members.members.flatMap((member) =>
+          member.effectiveRole !== null &&
+          member.inviteState !== "pending" &&
+          member.displayName !== null
+            ? [member.displayName]
+            : [],
+        );
+  let description: string;
+  if (members.isPending) description = "Loading editors and admins…";
+  else if (members.isError)
+    description = "Couldn't read who can change defaults.";
+  else
+    description =
+      names.length === 0
+        ? "Editors and admins can change defaults."
+        : `${names.join(", ")} can change defaults.`;
+  return (
+    <div className="flex min-w-0 flex-wrap items-center gap-2">
+      <p
+        className="text-ui-xs text-muted-foreground wrap-anywhere"
+        data-testid="sandboxes-defaults-editors"
+      >
+        {description}
+      </p>
+      {members.isError ? (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={members.retry}
+        >
+          Retry members
+        </Button>
+      ) : null}
+      <Button
+        type="button"
+        variant="link"
+        size="sm"
+        onClick={() => navigateToSettingsSection("members")}
+      >
+        Members
+      </Button>
+    </div>
   );
 }
 
@@ -374,9 +406,14 @@ function SandboxDefaultsForm(props: {
             <SelectTrigger
               id={`${ids}-shape`}
               className="w-full"
+              aria-describedby={`${ids}-shape-consequence`}
               data-testid="sandboxes-defaults-shape-select"
             >
-              <SelectValue />
+              <SelectValue>
+                {picked === null
+                  ? null
+                  : `${picked.os === "linux" ? "Linux" : "Windows"} · ${sandboxShapeLabel(picked.cpus, picked.memoryMb)}`}
+              </SelectValue>
             </SelectTrigger>
             <SelectContent>
               {options.map((option) => (
@@ -384,11 +421,21 @@ function SandboxDefaultsForm(props: {
                   key={sizeKey(catalogue, option)}
                   value={sizeKey(catalogue, option)}
                 >
-                  {shapeLine(catalogue, option)}
+                  <span className="min-w-0 wrap-anywhere">
+                    {`${option.os === "linux" ? "Linux" : "Windows"} · ${sandboxShapeLabel(option.cpus, option.memoryMb)} · ${shapeConsequenceLine(catalogue, option)}`}
+                  </span>
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
+          {picked === null ? null : (
+            <p
+              id={`${ids}-shape-consequence`}
+              className="text-ui-xs text-muted-foreground wrap-anywhere"
+            >
+              {shapeConsequenceLine(catalogue, picked)}
+            </p>
+          )}
         </div>
         <PeriodInput
           id={`${ids}-idle`}

@@ -29,14 +29,7 @@ import {
   QueryClientProvider,
   useQueryClient,
 } from "@tanstack/react-query";
-import {
-  act,
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react";
+import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import type { GuiHarnessOption } from "@traycer/protocol/host/index";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
@@ -1166,22 +1159,6 @@ export function composerStages(): Readonly<
       ([key]) => !key.startsWith(pending),
     ),
   );
-}
-
-export function getSetupAction(testId: string): HTMLElement {
-  const direct = screen.queryByTestId(testId);
-  if (direct !== null) return direct;
-  const more = screen.queryByRole("button", { name: "More" });
-  if (more !== null) fireEvent.pointerDown(more, { button: 0 });
-  return screen.getByTestId(testId);
-}
-
-export async function findSetupAction(testId: string): Promise<HTMLElement> {
-  const direct = screen.queryByTestId(testId);
-  if (direct !== null) return direct;
-  const more = screen.queryByRole("button", { name: "More" });
-  if (more !== null) fireEvent.pointerDown(more, { button: 0 });
-  return screen.findByTestId(testId);
 }
 
 /**
