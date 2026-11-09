@@ -7,7 +7,7 @@ import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import type { EnvironmentStatusResponseV20 } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentStatusResponseV12 } from "@traycer/protocol/host/environment-schemas";
 import { useEnvironmentStatusRead } from "@/hooks/environment/use-environment-reads";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import {
@@ -59,7 +59,7 @@ function PersonalReaders(props: {
 
 describe("a Personal revision change", () => {
   it("rereads the Personal MCP servers and Skills a change elsewhere moved", async () => {
-    let status: EnvironmentStatusResponseV20 = environmentStatusFixture({
+    let status: EnvironmentStatusResponseV12 = environmentStatusFixture({
       principal: { kind: "personal" },
       receivedRevision: 1,
       appliedRevision: 1,

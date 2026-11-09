@@ -26,7 +26,7 @@ import {
   recordNegotiatedHostMethods,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import type { EnvironmentStatusResponseV20 } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentStatusResponseV12 } from "@traycer/protocol/host/environment-schemas";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
 import { useScopedHostBinding } from "@/components/settings/host-scope/use-scoped-host-binding";
@@ -124,12 +124,12 @@ function ScopedBinding(props: { readonly children: ReactNode }): ReactNode {
 interface MountedPage {
   /** Change what the host answers, then make the page read it again. */
   readonly hostNowAnswers: (
-    status: EnvironmentStatusResponseV20,
+    status: EnvironmentStatusResponseV12,
   ) => Promise<void>;
 }
 
-function mountPageOver(first: EnvironmentStatusResponseV20): MountedPage {
-  const answer: { current: EnvironmentStatusResponseV20 } = { current: first };
+function mountPageOver(first: EnvironmentStatusResponseV12): MountedPage {
+  const answer: { current: EnvironmentStatusResponseV12 } = { current: first };
   const handlers: MockHandlerMap<HostRpcRegistry> = {
     "environment.status": () => answer.current,
     "environment.localOverrides": () => ({ overrides: [] }),
@@ -184,7 +184,7 @@ function statusLine(): string | null {
 }
 
 function waitingEdit(
-  reachability: EnvironmentStatusResponseV20["reachability"],
+  reachability: EnvironmentStatusResponseV12["reachability"],
 ) {
   return environmentStatusFixture({
     reachability,

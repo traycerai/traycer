@@ -34,12 +34,13 @@ import type {
   ConfigAgentMemoriesSetResponse,
 } from "@traycer/protocol/host/config/schemas";
 import type {
-  EnvironmentStatusResponseV20,
+  EnvironmentStatusResponseV12,
   EnvironmentUploadReceipt,
 } from "@traycer/protocol/host/environment-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
   mountTeamPage,
+  mountTeamPageNegotiating,
   requireTeamHostClient,
   resetTeamPageHarness,
   type TeamPageHarness,
@@ -121,8 +122,8 @@ function receipt(
 const script: {
   reads: ConfigAgentMemoriesResponse[];
   get: (() => Promise<ConfigAgentMemoriesResponse>) | null;
-  statuses: EnvironmentStatusResponseV20[];
-  status: (() => Promise<EnvironmentStatusResponseV20>) | null;
+  statuses: EnvironmentStatusResponseV12[];
+  status: (() => Promise<EnvironmentStatusResponseV12>) | null;
   set: (request: {
     readonly enabled: boolean;
   }) =>
@@ -882,7 +883,7 @@ describe("Agent memories ▸ the host row's write", () => {
   );
 
   it("retires an active observation when a new client serves the same host", async () => {
-    let resolveStatus: (value: EnvironmentStatusResponseV20) => void = () => {
+    let resolveStatus: (value: EnvironmentStatusResponseV12) => void = () => {
       throw new Error("status was not started");
     };
     script.set = () => queuedAnswer(UPLOAD);
@@ -1072,7 +1073,10 @@ describe("Agent memories ▸ the host row's write", () => {
       read(false, 5),
       read(true, 7),
     ];
-    mount();
+    const harness = mountTeamPageNegotiating({ kind: "host" }, handlers(), {
+      "environment.status": { major: 1, minor: 2 },
+    });
+    render(<AgentMemoriesSettingsPanel />, { wrapper: harness.Wrapper });
     await flipOn();
 
     await waitFor(async () =>
@@ -1082,6 +1086,30 @@ describe("Agent memories ▸ the host row's write", () => {
     await waitFor(async () =>
       expect(await line()).toContain("Running agents pick this up"),
     );
+  });
+
+  it("leaves a queued edit unconfirmed when a 1.1 host cannot supply acceptance evidence", async () => {
+    script.set = () => queuedAnswer(UPLOAD);
+    script.reads = [read(false, 5), read(true, 7)];
+    const status = vi.fn(() =>
+      Promise.resolve(
+        environmentStatusFixture({
+          acceptedUploads: [receipt({ revision: 7 })],
+        }),
+      ),
+    );
+    script.status = status;
+    const harness = mountTeamPageNegotiating({ kind: "host" }, handlers(), {
+      "environment.status": { major: 1, minor: 1 },
+    });
+    render(<AgentMemoriesSettingsPanel />, { wrapper: harness.Wrapper });
+    await flipOn();
+
+    await vi.advanceTimersByTimeAsync(AGENT_MEMORY_CONFIRM_BOUND_MS + 1_000);
+    await waitFor(async () =>
+      expect(await line()).toContain("can't be shown here"),
+    );
+    expect(status).not.toHaveBeenCalled();
   });
 
   it("keeps an acknowledgement whose revision the host's projection already passed, instead of losing the write to the fast path", async () => {
@@ -1355,7 +1383,7 @@ describe("Agent memories ▸ the host row's write", () => {
   });
 
   it("stands down when the configuration switches while status is in flight", async () => {
-    let resolveStatus: (value: EnvironmentStatusResponseV20) => void = () => {
+    let resolveStatus: (value: EnvironmentStatusResponseV12) => void = () => {
       throw new Error("status was not started");
     };
     script.set = () => queuedAnswer(UPLOAD);
@@ -1387,7 +1415,7 @@ describe("Agent memories ▸ the host row's write", () => {
   });
 
   it("ignores an older held status after a newer write supersedes it", async () => {
-    let resolveStatus: (value: EnvironmentStatusResponseV20) => void = () => {
+    let resolveStatus: (value: EnvironmentStatusResponseV12) => void = () => {
       throw new Error("status was not started");
     };
     script.set = () => queuedAnswer(UPLOAD);
@@ -1429,7 +1457,7 @@ describe("Agent memories ▸ the host row's write", () => {
   });
 
   it("ignores a status response after the row unmounts", async () => {
-    let resolveStatus: (value: EnvironmentStatusResponseV20) => void = () => {
+    let resolveStatus: (value: EnvironmentStatusResponseV12) => void = () => {
       throw new Error("status was not started");
     };
     script.set = () => queuedAnswer(UPLOAD);

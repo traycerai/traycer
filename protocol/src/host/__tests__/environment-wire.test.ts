@@ -88,6 +88,7 @@ const ENVIRONMENT_METHOD_NAMES = Object.keys(ENVIRONMENT_RPC_METHODS).filter(
 /** The family's methods that carry a `@1.2` MINOR over their `@1.1`. */
 const ENVIRONMENT_METHODS_WITH_MINOR_1_2: ReadonlySet<string> = new Set([
   "environment.review",
+  "environment.status",
   "environment.secrets.list",
 ]);
 
@@ -236,19 +237,17 @@ describe("new methods are off every released floor", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("registers the frozen environment lines and the bridged status major as unsupported-degrade", () => {
+  it("registers the frozen environment lines and status minor as unsupported-degrade", () => {
     const shapes = ENVIRONMENT_METHOD_NAMES.map(
       (name) => `${name}: ${registryShapeOf(hostRpcRegistry[name])}`,
     );
     expect(shapes).toEqual(
       ENVIRONMENT_METHOD_NAMES.map((name) =>
-        name === "environment.status"
-          ? `${name}: degrade=unsupported majors=1,2 latestMinor=1 minors=0,1`
-          : ENVIRONMENT_METHODS_WITH_MINOR_1_2.has(name)
-            ? `${name}: degrade=unsupported majors=1 latestMinor=2 minors=0,1,2`
-            : ENVIRONMENT_METHODS_WITH_MINOR_1_1.has(name)
-              ? `${name}: degrade=unsupported majors=1 latestMinor=1 minors=0,1`
-              : `${name}: degrade=unsupported majors=1 latestMinor=0 minors=0`,
+        ENVIRONMENT_METHODS_WITH_MINOR_1_2.has(name)
+          ? `${name}: degrade=unsupported majors=1 latestMinor=2 minors=0,1,2`
+          : ENVIRONMENT_METHODS_WITH_MINOR_1_1.has(name)
+            ? `${name}: degrade=unsupported majors=1 latestMinor=1 minors=0,1`
+            : `${name}: degrade=unsupported majors=1 latestMinor=0 minors=0`,
       ),
     );
     expect(hostRpcRegistry["environment.status"].degrade).toEqual({
@@ -1788,8 +1787,8 @@ describe("environment.status@1.1 and environment.review@1.1 upgrade from @1.0 to
     ).toEqual({});
   });
 
-  it("bridges receipt status to frozen hosts while preserving the move state", () => {
-    const answer: env.EnvironmentStatusResponseV20 = {
+  it("upgrades frozen status without inventing receipts and preserves the move state", () => {
+    const answer: env.EnvironmentStatusResponseV12 = {
       ...STATUS_V10,
       setup: { stage: "moving_settings", state: "awaiting_consent" },
       consent: { acceptedAt: 1_700_000_000_000, planHash: "h1" },
@@ -1817,30 +1816,19 @@ describe("environment.status@1.1 and environment.review@1.1 upgrade from @1.0 to
     expect(
       hostRpcRegistry[
         "environment.status"
-      ][2].versions[0].contract.responseSchema.parse(answer),
+      ][1].versions[2].contract.responseSchema.parse(answer),
     ).toEqual(answer);
     const { acceptedUploads: _receipts, ...frozenAnswer } = answer;
     expect(
-      downgradeResponseAcrossMajors(
-        hostRpcRegistry["environment.status"],
-        2,
-        1,
-        answer,
-      ),
-    ).toEqual({ ok: true, value: frozenAnswer });
-    expect(
-      downgradeRequestAcrossMajors(
-        hostRpcRegistry["environment.status"],
-        2,
-        1,
-        {},
-      ),
-    ).toEqual({ ok: true, value: {} });
+      hostRpcRegistry[
+        "environment.status"
+      ][1].versions[1].contract.responseSchema.parse(answer),
+    ).toEqual(frozenAnswer);
     expect(
       upgradeResponseToVersion(
         hostRpcRegistry["environment.status"],
         ONE_ONE,
-        { major: 2, minor: 0 },
+        { major: 1, minor: 2 },
         frozenAnswer,
       ),
     ).toEqual({ ...frozenAnswer, acceptedUploads: [] });
@@ -1848,7 +1836,7 @@ describe("environment.status@1.1 and environment.review@1.1 upgrade from @1.0 to
       upgradeRequestToVersion(
         hostRpcRegistry["environment.status"],
         ONE_ONE,
-        { major: 2, minor: 0 },
+        { major: 1, minor: 2 },
         {},
       ),
     ).toEqual({});

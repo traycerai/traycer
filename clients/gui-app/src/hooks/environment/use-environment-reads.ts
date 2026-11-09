@@ -9,7 +9,7 @@ import type {
   EnvironmentLocalOverridesResponse,
   EnvironmentNoticesResponse,
   EnvironmentReviewResponse,
-  EnvironmentStatusResponseV20,
+  EnvironmentStatusResponseV12,
 } from "@traycer/protocol/host/environment-schemas";
 import {
   CONFIGURATION_READS,
@@ -47,7 +47,7 @@ export function useEnvironmentStatusRead(
   client: HostClient<HostRpcRegistry> | null,
   hostId: string | null,
   enabled: boolean,
-): EnvironmentRead<EnvironmentStatusResponseV20> {
+): EnvironmentRead<EnvironmentStatusResponseV12> {
   const supported = useHostMethodSupport(hostId, "environment.status");
   const query = useHostQuery<HostRpcRegistry, "environment.status">({
     cacheKeyIdentity: undefined,
@@ -74,7 +74,7 @@ export function useEnvironmentStatusRead(
  */
 function useRereadOnRevision(
   hostId: string | null,
-  status: EnvironmentStatusResponseV20 | null,
+  status: EnvironmentStatusResponseV12 | null,
   personalEnvironmentId: string | null,
 ): void {
   const queryClient = useQueryClient();

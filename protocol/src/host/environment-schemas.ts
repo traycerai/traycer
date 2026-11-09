@@ -336,15 +336,15 @@ export type EnvironmentStatusResponseV11 = z.infer<
   typeof environmentStatusResponseSchemaV11
 >;
 
-/** Upload receipts require @2.0; the published @1.1 response stays frozen. */
-export const environmentStatusResponseSchemaV20 = lazySchema(() =>
+/** Upload receipts require @1.2; the published @1.1 response stays frozen. */
+export const environmentStatusResponseSchemaV12 = lazySchema(() =>
   environmentStatusResponseSchemaV11.extend({
     /** One receipt is evidence of acceptance; its absence is not evidence of rejection. */
     acceptedUploads: z.array(environmentUploadReceiptSchema).default([]),
   }),
 );
-export type EnvironmentStatusResponseV20 = z.infer<
-  typeof environmentStatusResponseSchemaV20
+export type EnvironmentStatusResponseV12 = z.infer<
+  typeof environmentStatusResponseSchemaV12
 >;
 
 // ── environment.notices / .undo / .review ───────────────────────────────────

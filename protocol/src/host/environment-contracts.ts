@@ -1,8 +1,4 @@
-import {
-  defineRpcContract,
-  defineUpgradePath,
-  defineDowngradePath,
-} from "../framework/index";
+import { defineRpcContract, defineUpgradePath } from "../framework/index";
 import * as schemas from "./environment-schemas";
 import { RETIRED_PROVIDER_VARIABLES } from "./released-wire-rows";
 
@@ -224,34 +220,21 @@ export const environmentStatusUpgradeV10ToV11 = defineUpgradePath<
   }),
 });
 
-export const environmentStatusV20 = defineRpcContract({
+export const environmentStatusV12 = defineRpcContract({
   method: "environment.status",
-  schemaVersion: { major: 2, minor: 0 } as const,
+  schemaVersion: { major: 1, minor: 2 } as const,
   requestSchema: schemas.environmentStatusRequestSchema,
-  responseSchema: schemas.environmentStatusResponseSchemaV20,
+  responseSchema: schemas.environmentStatusResponseSchemaV12,
 });
 
-export const environmentStatusUpgradeV11ToV20 = defineUpgradePath<
+export const environmentStatusUpgradeV11ToV12 = defineUpgradePath<
   typeof environmentStatusV11,
-  typeof environmentStatusV20
+  typeof environmentStatusV12
 >({
   from: environmentStatusV11.schemaVersion,
-  to: environmentStatusV20.schemaVersion,
+  to: environmentStatusV12.schemaVersion,
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({ ...response, acceptedUploads: [] }),
-});
-
-export const environmentStatusDowngradeV20ToV11 = defineDowngradePath<
-  typeof environmentStatusV20,
-  typeof environmentStatusV11
->({
-  from: environmentStatusV20.schemaVersion,
-  to: environmentStatusV11.schemaVersion,
-  downgradeRequest: (request) => ({ ok: true, value: request }),
-  downgradeResponse: (response) => ({
-    ok: true,
-    value: schemas.environmentStatusResponseSchemaV11.parse(response),
-  }),
 });
 
 export const environmentReviewV10 = defineRpcContract({
@@ -853,7 +836,7 @@ export const ENVIRONMENT_RPC_METHODS = {
   "environment.status": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: environmentStatusV10,
@@ -863,18 +846,12 @@ export const ENVIRONMENT_RPC_METHODS = {
           contract: environmentStatusV11,
           upgradeFromPreviousVersion: environmentStatusUpgradeV10ToV11,
         },
-      },
-      downgradePathsFromLatest: {},
-    },
-    2: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: environmentStatusV20,
-          upgradeFromPreviousVersion: environmentStatusUpgradeV11ToV20,
+        2: {
+          contract: environmentStatusV12,
+          upgradeFromPreviousVersion: environmentStatusUpgradeV11ToV12,
         },
       },
-      downgradePathsFromLatest: { 1: environmentStatusDowngradeV20ToV11 },
+      downgradePathsFromLatest: {},
     },
   },
   "environment.notices": {

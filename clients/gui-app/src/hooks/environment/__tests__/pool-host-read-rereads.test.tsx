@@ -13,7 +13,7 @@ import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import type { EnvironmentStatusResponseV20 } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentStatusResponseV12 } from "@traycer/protocol/host/environment-schemas";
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
 import { useEnvironmentStatusRead } from "@/hooks/environment/use-environment-reads";
 import { useRereadHostReadsOnFocus } from "@/hooks/environment/use-reread-host-reads-on-focus";
@@ -141,7 +141,7 @@ function FocusReaders(): ReactNode {
   return null;
 }
 
-function handlersFor(status: () => EnvironmentStatusResponseV20) {
+function handlersFor(status: () => EnvironmentStatusResponseV12) {
   return {
     "environment.status": status,
     "environment.list": () => ({
@@ -183,7 +183,7 @@ function readCounts(
   );
 }
 
-function seedPersonalHostReads(): EnvironmentStatusResponseV20 {
+function seedPersonalHostReads(): EnvironmentStatusResponseV12 {
   return environmentStatusFixture({
     principal: { kind: "personal" },
     receivedRevision: 1,
