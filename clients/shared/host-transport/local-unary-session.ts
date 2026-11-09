@@ -821,6 +821,10 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
     }
   }
 
+  releaseIfIdle(): void {
+    this.retireIfIdle();
+  }
+
   private retireIfIdle(): void {
     if (this.retired) {
       return;
@@ -907,6 +911,18 @@ export class LocalUnarySessionDirectory<Registry extends VersionedRpcRegistry> {
         existing.waiters.push(resolve);
       }),
     };
+  }
+
+  releaseIdle(): void {
+    const sessions = Array.from(
+      this.slots.values(),
+      (slot) => slot.session,
+    );
+    for (const session of sessions) {
+      if (session !== null) {
+        session.releaseIfIdle();
+      }
+    }
   }
 
   release(key: string, session: LocalUnarySession<Registry>): void {

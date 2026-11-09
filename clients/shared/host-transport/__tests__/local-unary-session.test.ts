@@ -96,11 +96,22 @@ class StubWebSocket implements WebSocketLike {
   onclose: ((event: WebSocketCloseEvent) => void) | null = null;
   readonly sentFrames: ClientFrame[] = [];
   closed: { readonly code: number; readonly reason: string } | null = null;
+  private readonly sendWaiters: Array<() => void> = [];
 
   send(data: string): void {
     this.sentFrames.push(
       clientFrameSchema.parse(JSON.parse(data)) as ClientFrame,
     );
+    const waiters = this.sendWaiters.splice(0, this.sendWaiters.length);
+    for (const resolve of waiters) {
+      resolve();
+    }
+  }
+
+  nextSend(): Promise<void> {
+    return new Promise((resolve) => {
+      this.sendWaiters.push(resolve);
+    });
   }
 
   close(code: number, reason: string): void {
@@ -161,12 +172,6 @@ function makeFactory(): {
     },
   };
   return { factory, sockets };
-}
-
-function flush(): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, 0);
-  });
 }
 
 function captureRejection(pending: Promise<unknown>): Promise<unknown> {
@@ -250,10 +255,12 @@ async function classify(
   recorded: RecordedSocket,
   ack: HostOpenAckFrame,
 ): Promise<void> {
+  const opened = recorded.socket.nextSend();
   recorded.socket.fireOpen();
-  await flush();
+  await opened;
+  const requested = recorded.socket.nextSend();
   recorded.socket.fireMessage(ack);
-  await flush();
+  await requested;
 }
 
 function authorityFor(
@@ -289,13 +296,24 @@ function optionsFor(
 function recordingSocket(): {
   readonly socket: MultiplexSocket;
   readonly sent: ClientFrame[];
+  nextSend(): Promise<void>;
 } {
   const sent: ClientFrame[] = [];
+  const waiters: Array<() => void> = [];
   return {
     sent,
+    nextSend(): Promise<void> {
+      return new Promise((resolve) => {
+        waiters.push(resolve);
+      });
+    },
     socket: {
       send(frame: ClientFrame): void {
         sent.push(frame);
+        const pending = waiters.splice(0, waiters.length);
+        for (const resolve of pending) {
+          resolve();
+        }
       },
       close(): void {},
     },
@@ -407,12 +425,13 @@ describe("local unary session", () => {
     await expect(first).resolves.toEqual({ echoed: "first" });
 
     bearer.rotate("token-a-rotated");
+    const rotatedWrite = discovering.socket.nextSend();
     const rotated = client.request(
       "host.echo",
       { message: "rotated" },
       optionsFor(bearer, new AbortController().signal, null, false, null),
     );
-    await flush();
+    await rotatedWrite;
     const rotatedRequest = requestFrames(discovering)[1];
     if (rotatedRequest === undefined) {
       throw new Error("expected the rotated request on the same socket");
@@ -428,7 +447,6 @@ describe("local unary session", () => {
       { message: "other" },
       optionsFor(other, new AbortController().signal, null, false, null),
     );
-    await flush();
     expect(sockets).toHaveLength(2);
     const separate = sockets[1];
     if (separate === undefined) {
@@ -479,12 +497,13 @@ describe("local unary session", () => {
     respondStatus(discovering.socket, firstStatus, true);
     await expect(ready).resolves.toEqual({ ready: true });
 
+    const statusWrite = discovering.socket.nextSend();
     const notReady = client.request(
       "host.status",
       {},
       optionsFor(bearer, new AbortController().signal, null, false, null),
     );
-    await flush();
+    await statusWrite;
     const secondStatus = requestFrames(discovering)[1];
     if (secondStatus === undefined) {
       throw new Error("expected the second status request on the same socket");
@@ -583,6 +602,7 @@ describe("local unary session", () => {
 
     bearer.rotate("token-later");
     verdict.cloudAuthorized = true;
+    const laterWrite = discovering.socket.nextSend();
     const later = client.request(
       "host.echo",
       { message: "later" },
@@ -594,7 +614,7 @@ describe("local unary session", () => {
         readVerdict,
       ),
     );
-    await flush();
+    await laterWrite;
     const sentLater = requestFrames(discovering)[1];
     if (sentLater === undefined) {
       throw new Error("expected the later request to send immediately");
@@ -635,8 +655,6 @@ describe("local unary session", () => {
     expect(sent[0]?.idempotencyKey).toBe("sent-key");
 
     discovering.socket.fireClose(1006, "peer-dropped", false);
-    await flush();
-    await flush();
 
     const error = await pending;
     expect(error).toBeInstanceOf(HostTransportFailureError);
@@ -712,8 +730,9 @@ describe("local unary session", () => {
       ),
     });
 
+    const replayed = recorded.nextSend();
     session.handlers.onTransportClosed("peer-dropped", false);
-    await flush();
+    await replayed;
     expect(dials).toBe(1);
     expect(recorded.sent).toHaveLength(1);
     const written = recorded.sent[0];
@@ -755,7 +774,10 @@ describe("local unary session", () => {
     if (discovering === undefined) {
       throw new Error("expected the discovering socket");
     }
-    await classify(discovering, sessionAck(false));
+    const opened = discovering.socket.nextSend();
+    discovering.socket.fireOpen();
+    await opened;
+    discovering.socket.fireMessage(sessionAck(false));
 
     const error = await replay;
     expect(error).toBeInstanceOf(HostTransportFailureError);
@@ -767,12 +789,13 @@ describe("local unary session", () => {
     expect(error.fatalDetails).not.toBeNull();
     expect(requestFrames(discovering)).toHaveLength(0);
 
+    const followUpWrite = discovering.socket.nextSend();
     const followUp = client.request(
       "host.echo",
       { message: "fresh" },
       optionsFor(bearer, new AbortController().signal, null, false, null),
     );
-    await flush();
+    await followUpWrite;
     const sent = requestFrames(discovering);
     expect(sent).toHaveLength(1);
     const sentFrame = sent[0];
@@ -812,8 +835,6 @@ describe("local unary session", () => {
       },
     };
     discovering.socket.fireMessage(fatal);
-    await flush();
-    await flush();
 
     const error = await pending;
     expect(error).toBeInstanceOf(RetryableTransportError);
@@ -858,8 +879,6 @@ describe("local unary session", () => {
       },
     };
     discovering.socket.fireMessage(fatal);
-    await flush();
-    await flush();
 
     const error = await pending;
     expect(error).toBeInstanceOf(HostRpcError);
@@ -891,7 +910,6 @@ describe("local unary session", () => {
         optionsFor(bearer, controller.signal, null, false, null),
       ),
     );
-    await flush();
     controller.abort();
     await classify(discovering, sessionAck(true));
 
@@ -938,8 +956,9 @@ describe("local unary session", () => {
     }
     await classify(discovering, sessionAck(true));
     expect(requestFrames(discovering)).toHaveLength(2);
+    const cancelWrite = discovering.socket.nextSend();
     controller.abort();
-    await flush();
+    await cancelWrite;
 
     expect(cancelFrames(discovering)).toEqual([
       { kind: "cancel", requestId: "req-1" },
@@ -958,12 +977,13 @@ describe("local unary session", () => {
     respondEcho(discovering.socket, keptRequest, "keep");
     await expect(kept).resolves.toEqual({ echoed: "keep" });
 
+    const laterWrite = discovering.socket.nextSend();
     const later = client.request(
       "host.echo",
       { message: "later" },
       optionsFor(bearer, new AbortController().signal, null, false, null),
     );
-    await flush();
+    await laterWrite;
     const laterRequest = requestFrames(discovering)[2];
     if (laterRequest === undefined) {
       throw new Error("expected a later call on the same session");
@@ -1019,12 +1039,13 @@ describe("local unary session", () => {
     expect(cancelFrames(discovering)).toHaveLength(0);
     expect(discovering.socket.closed).toBeNull();
 
+    const laterWrite = discovering.socket.nextSend();
     const later = client.request(
       "host.echo",
       { message: "later" },
       optionsFor(bearer, new AbortController().signal, null, false, null),
     );
-    await flush();
+    await laterWrite;
     const laterRequest = requestFrames(discovering)[1];
     if (laterRequest === undefined) {
       throw new Error("expected a later call on the same session");
@@ -1087,7 +1108,6 @@ describe("local unary session", () => {
         optionsFor(bearer, controller.signal, null, false, null),
       ),
     );
-    await flush();
     controller.abort();
     const error = await waiting;
     expect(error).toBeInstanceOf(HostRequestAbortedError);
@@ -1141,7 +1161,6 @@ describe("local unary session", () => {
     );
     const ownerError = await owner;
     expect(ownerError).toBeInstanceOf(HostRpcError);
-    await flush();
     expect(sockets).toHaveLength(1);
     const socket = sockets[0];
     if (socket === undefined) {
@@ -1173,8 +1192,9 @@ describe("local unary session", () => {
     if (discovering === undefined) {
       throw new Error("expected the discovering socket");
     }
+    const opened = discovering.socket.nextSend();
     discovering.socket.fireOpen();
-    await flush();
+    await opened;
     discovering.socket.fireMessage({
       kind: "fatalError",
       details: {
@@ -1196,7 +1216,6 @@ describe("local unary session", () => {
       { message: "second" },
       optionsFor(bearer, new AbortController().signal, null, false, null),
     );
-    await flush();
     expect(sockets).toHaveLength(2);
     const retried = sockets[1];
     if (retried === undefined) {
@@ -1347,14 +1366,14 @@ describe("local unary session", () => {
       ),
     });
     session.handlers.onTransportClosed("peer-dropped", false);
-    await flush();
     expect(dials).toBe(1);
     openerController.abort();
     if (releaseDial === null) {
       throw new Error("expected the replacement dial to be waiting");
     }
+    const keptWrite = recorded.nextSend();
     releaseDial();
-    await flush();
+    await keptWrite;
     const openerError = await opener;
     expect(openerError).toBeInstanceOf(HostRequestAbortedError);
     expect(dials).toBe(2);
@@ -1370,5 +1389,105 @@ describe("local unary session", () => {
       error: null,
     });
     await expect(kept).resolves.toEqual({ echoed: "kept" });
+  });
+
+  it("lets the next call dial when socket construction throws", async () => {
+    const sockets: RecordedSocket[] = [];
+    let creations = 0;
+    const factory: IWebSocketFactory = {
+      create(url: string, priority: DialPriority): WebSocketLike {
+        void url;
+        void priority;
+        creations += 1;
+        if (creations === 1) {
+          throw new Error(
+            "No global `WebSocket` available for the host transport on this runtime.",
+          );
+        }
+        const socket = new StubWebSocket();
+        sockets.push({ socket, sent: socket.sentFrames });
+        return socket;
+      },
+    };
+    const client = makeClient(factory, 0);
+    const bearer = new MutableBearerLease("token-a", USER_A);
+    const first = captureRejection(
+      client.request(
+        "host.echo",
+        { message: "first" },
+        optionsFor(bearer, new AbortController().signal, null, false, null),
+      ),
+    );
+    const error = await first;
+    expect(error).toBeInstanceOf(Error);
+    if (!(error instanceof Error)) {
+      throw new Error("expected socket construction to reject the call");
+    }
+    expect(error.message).toContain("No global");
+
+    const second = client.request(
+      "host.echo",
+      { message: "second" },
+      optionsFor(bearer, new AbortController().signal, null, false, null),
+    );
+    expect(sockets).toHaveLength(1);
+    const retried = sockets[0];
+    if (retried === undefined) {
+      throw new Error("expected the next call to dial");
+    }
+    await classify(retried, sessionAck(true));
+    const frame = requestFrames(retried)[0];
+    if (frame === undefined) {
+      throw new Error("expected the retried request");
+    }
+    respondEcho(retried.socket, frame, "second");
+    await expect(second).resolves.toEqual({ echoed: "second" });
+  });
+
+  it("closes an idle session when the client releases it and dials again", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory, 0);
+    const bearer = new MutableBearerLease("token-a", USER_A);
+    const first = client.request(
+      "host.echo",
+      { message: "first" },
+      optionsFor(bearer, new AbortController().signal, null, false, null),
+    );
+    const discovering = sockets[0];
+    if (discovering === undefined) {
+      throw new Error("expected the discovering socket");
+    }
+    await classify(discovering, sessionAck(true));
+    const firstRequest = requestFrames(discovering)[0];
+    if (firstRequest === undefined) {
+      throw new Error("expected the first request");
+    }
+    respondEcho(discovering.socket, firstRequest, "first");
+    await expect(first).resolves.toEqual({ echoed: "first" });
+    expect(discovering.socket.closed).toBeNull();
+
+    client.releaseIdleLocalSessions();
+    expect(discovering.socket.closed).toEqual({
+      code: 1000,
+      reason: "session-closed",
+    });
+
+    const second = client.request(
+      "host.echo",
+      { message: "second" },
+      optionsFor(bearer, new AbortController().signal, null, false, null),
+    );
+    expect(sockets).toHaveLength(2);
+    const retried = sockets[1];
+    if (retried === undefined) {
+      throw new Error("expected a new dial after the release");
+    }
+    await classify(retried, sessionAck(true));
+    const frame = requestFrames(retried)[0];
+    if (frame === undefined) {
+      throw new Error("expected the request on the new socket");
+    }
+    respondEcho(retried.socket, frame, "second");
+    await expect(second).resolves.toEqual({ echoed: "second" });
   });
 });

@@ -340,6 +340,17 @@ export class WsRpcClient<
     this.clientIdentity = toClientHandshakeIdentity(options.clientIdentity);
   }
 
+  /**
+   * Closes sessions with nothing queued, nothing in flight, and no redial.
+   * A process that builds a client for one call uses this when that call
+   * settles, so the adopted socket does not keep the process alive. A client
+   * that outlives its calls does not: the idle socket is what the next call
+   * reuses.
+   */
+  releaseIdleLocalSessions(): void {
+    this.sessions.releaseIdle();
+  }
+
   async request<Method extends keyof Registry & string>(
     method: Method,
     params: RequestOfMethod<Registry, Method>,
@@ -477,36 +488,43 @@ export class WsRpcClient<
       settleUnpublished,
     );
 
-    const clientManifest = this.buildManifest();
-    const token = discovery.token;
+    let session: Session | null = null;
+    let socket: WebSocketLike | null = null;
+    const onAbort = (): void => {
+      session?.abort();
+    };
+    let adopted = false;
 
-    const session = openSession({
-      socket: this.webSocketFactory.create(
+    try {
+      const clientManifest = this.buildManifest();
+      const token = discovery.token;
+      // Construction is inside this try: `create()` throws synchronously when
+      // the runtime has no WebSocket global, and that throw has to release the
+      // unpublished dial. A slot left in `dialing` would make the next call
+      // wait forever.
+      socket = this.webSocketFactory.create(
         discovery.websocketUrl,
         // Classified here because here is where the method is known: the
         // factory sees a URL. A one-shot host is dialed once per call, and
         // the discovering dial of a persistent session uses this call's
         // method. See `dial-priority.ts`.
         dialPriorityForMethod(method),
-      ),
-      dialTimeoutMs: this.dialTimeoutMs,
-      hostAttestationWindowMs: this.hostAttestationWindowMs,
-      requestId,
-      method,
-      hostId: selected.hostId,
-      evidence: this.evidence,
-      liveness: this.liveness,
-    });
-    const onAbort = (): void => {
-      session.abort();
-    };
-    authority.abortSignal.addEventListener("abort", onAbort, { once: true });
-    if (authority.abortSignal.aborted) {
-      onAbort();
-    }
-    let adopted = false;
+      );
+      session = openSession({
+        socket,
+        dialTimeoutMs: this.dialTimeoutMs,
+        hostAttestationWindowMs: this.hostAttestationWindowMs,
+        requestId,
+        method,
+        hostId: selected.hostId,
+        evidence: this.evidence,
+        liveness: this.liveness,
+      });
+      authority.abortSignal.addEventListener("abort", onAbort, { once: true });
+      if (authority.abortSignal.aborted) {
+        onAbort();
+      }
 
-    try {
       await session.dial();
 
       session.send({
@@ -746,8 +764,10 @@ export class WsRpcClient<
       throw cause;
     } finally {
       authority.abortSignal.removeEventListener("abort", onAbort);
-      if (!adopted) {
+      if (session !== null && !adopted) {
         session.close(1000, "ok");
+      } else if (socket !== null && session === null) {
+        socket.close(1000, "ok");
       }
     }
   }

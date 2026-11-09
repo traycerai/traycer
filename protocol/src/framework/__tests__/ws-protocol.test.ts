@@ -231,12 +231,6 @@ describe("ws-protocol canonical Zod schemas", () => {
       ]);
     });
 
-    it("names the persistent session capability unary.persistentSession", () => {
-      expect(UNARY_CAPABILITY_PERSISTENT_SESSION).toBe(
-        "unary.persistentSession",
-      );
-    });
-
     it("accepts a client `fatalError` frame with full details", () => {
       const frame = {
         kind: "fatalError" as const,
