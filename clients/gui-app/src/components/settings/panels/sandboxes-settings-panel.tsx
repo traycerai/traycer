@@ -53,7 +53,11 @@ import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-
 import { useRefreshSandboxCosts } from "@/hooks/sandboxes/use-refresh-sandbox-costs";
 import { useSandboxRowSessionReport } from "@/hooks/sandboxes/use-sandbox-session-report";
 import { useSandboxSettingsStatus } from "@/hooks/sandboxes/use-sandbox-settings-status";
-import { sandboxSettingsFailed } from "@traycer/protocol/host/sandbox-settings";
+import {
+  sandboxSettingsFailed,
+  sandboxSettingsEvidence,
+  sandboxSettingsStepsLine,
+} from "@traycer/protocol/host/sandbox-settings";
 import { useSandboxRowUnreachable } from "@/hooks/sandboxes/use-sandbox-row-unreachable";
 import { useOpenLink } from "@/lib/links/open-link";
 import { useSampledNow } from "@/lib/relative-time";
@@ -71,6 +75,11 @@ import {
   sandboxFilterSummary,
   sandboxFrozenNeedsOwnCredits,
   sandboxFrozenClock,
+  sandboxKeptByLabel,
+  sandboxStartedByLabel,
+  sandboxSessionPills,
+  sandboxSessionsLine,
+  type SandboxSessionReport,
   sandboxWakePayerConsequence,
   sandboxListHeader,
   sandboxPublicState,
@@ -958,7 +967,7 @@ function SandboxListRow(props: {
       data-testid="sandboxes-row"
       className="flex flex-col gap-4 px-5 py-4 sm:flex-row sm:items-center sm:justify-between"
     >
-      <div className="flex min-w-0 flex-1 gap-3">
+      <div className="flex min-w-0 flex-1 gap-3 sm:shrink-0 sm:basis-80">
         <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-foreground/8 text-muted-foreground">
           <KindTile summary={summary} />
         </div>
@@ -969,21 +978,16 @@ function SandboxListRow(props: {
           >
             {summary.displayName}
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge
-              variant={setupFailed ? "warning" : STATE_BADGE[publicState]}
-              data-testid="sandboxes-row-state"
-            >
-              {hostSandboxStateWord(state)}
-              {setupFailed ? " · Setup failed" : ""}
-            </Badge>
-            {summary.frozen ? (
-              <Badge variant="warning">{HOST_FROZEN_WORD}</Badge>
-            ) : null}
-          </div>
+          <SandboxRowIdentityBadges
+            summary={summary}
+            setupFailed={setupFailed}
+            publicState={publicState}
+            viewerUserId={viewerUserId}
+          />
           <p className="text-ui-sm text-muted-foreground wrap-anywhere">
             {sandboxShapeAndCostLine(summary, configuration, viewerUserId)}
           </p>
+          <SandboxRowCreator summary={summary} />
           {clock === null ? null : (
             <p
               className="flex items-start gap-1.5 text-ui-xs text-muted-foreground wrap-anywhere"
@@ -993,10 +997,14 @@ function SandboxListRow(props: {
               <span className="min-w-0">{clock}</span>
             </p>
           )}
-          {setupFailed ? (
-            <p className="text-ui-xs text-muted-foreground wrap-anywhere">
-              Compute is charged while it is awake.
-            </p>
+          <SandboxRowSetupEvidence
+            visible={setupFailed}
+            steps={sandboxSettingsStepsLine(
+              sandboxSettingsEvidence(settingsItems, summary.guestConfigured),
+            )}
+          />
+          {awake && !unreachable && !resumePending ? (
+            <SandboxRowSessions report={sessions.report} now={now} />
           ) : null}
           <SandboxSessionNotice
             summary={summary}
@@ -1030,6 +1038,71 @@ function SandboxListRow(props: {
   );
 }
 
+function SandboxRowIdentityBadges(props: {
+  readonly summary: SandboxSummary;
+  readonly setupFailed: boolean;
+  readonly publicState: SandboxPublicState;
+  readonly viewerUserId: string | null;
+}): ReactNode {
+  const startedBy = sandboxStartedByLabel(props.summary, props.viewerUserId);
+  const keptBy = sandboxKeptByLabel(props.summary, props.viewerUserId);
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <Badge
+        variant={props.setupFailed ? "warning" : STATE_BADGE[props.publicState]}
+        data-testid="sandboxes-row-state"
+      >
+        {hostSandboxStateWord(props.summary.state)}
+        {props.setupFailed ? " · Setup failed" : ""}
+      </Badge>
+      {props.summary.frozen ? (
+        <Badge variant="warning">{HOST_FROZEN_WORD}</Badge>
+      ) : null}
+      {startedBy === null ? null : (
+        <Badge variant="muted" wrap>
+          <span className="wrap-anywhere">{startedBy}</span>
+        </Badge>
+      )}
+      {keptBy === null ? null : (
+        <Badge variant="muted" wrap>
+          <span className="wrap-anywhere">{keptBy}</span>
+        </Badge>
+      )}
+    </div>
+  );
+}
+
+function SandboxRowCreator(props: {
+  readonly summary: SandboxSummary;
+}): ReactNode {
+  const { summary } = props;
+  let creator: string | null = null;
+  if (summary.burst && summary.createdByAgentName !== null) {
+    creator = `Created by ${summary.createdByAgentName}`;
+    if (summary.createdByTaskTitle !== null)
+      creator += ` for ${summary.createdByTaskTitle}`;
+  } else if (!summary.burst && summary.createdByTaskTitle !== null) {
+    creator = `For task ${summary.createdByTaskTitle}`;
+  }
+  if (creator === null) return null;
+  return (
+    <p className="text-ui-xs text-muted-foreground wrap-anywhere">{creator}</p>
+  );
+}
+
+function SandboxRowSetupEvidence(props: {
+  readonly visible: boolean;
+  readonly steps: string;
+}): ReactNode {
+  if (!props.visible) return null;
+  return (
+    <div className="text-ui-xs text-muted-foreground wrap-anywhere">
+      <p>Compute is charged while it is awake.</p>
+      <p>{props.steps}</p>
+    </div>
+  );
+}
+
 /**
  * When this sandbox stops running, on a row whose kind the control plane is
  * withdrawing. It sits under the clock line because it replaces what that
@@ -1053,5 +1126,44 @@ function SandboxRowWithdrawal(props: {
     >
       {line}
     </p>
+  );
+}
+
+function SandboxRowSessions(props: {
+  readonly report: SandboxSessionReport;
+  readonly now: number;
+}): ReactNode {
+  return (
+    <div
+      className="flex min-w-0 flex-wrap items-center gap-1.5 text-ui-xs text-muted-foreground"
+      data-testid="sandboxes-row-sessions"
+    >
+      {props.report.kind === "live" && props.report.busy ? (
+        <span
+          aria-hidden
+          className="size-1.5 shrink-0 rounded-full bg-success"
+        />
+      ) : null}
+      <span className="min-w-0 wrap-anywhere">
+        {sandboxSessionsLine(props.report, props.now)}
+      </span>
+      {sandboxSessionPills(props.report).map((pill) => (
+        <Badge
+          key={pill.key}
+          size="xs"
+          variant="muted"
+          wrap
+          data-testid="sandboxes-row-session-pill"
+        >
+          {pill.working ? (
+            <span
+              aria-hidden
+              className="size-1.5 shrink-0 rounded-full bg-success"
+            />
+          ) : null}
+          <span className="min-w-0 wrap-anywhere">{pill.label}</span>
+        </Badge>
+      ))}
+    </div>
   );
 }

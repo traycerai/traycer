@@ -255,37 +255,6 @@ function heldLogLevels(initial: ConfigLogLevelsSetResponse): HeldLogLevels {
   };
 }
 
-const HOST_CAPTURE_STEPS =
-  "Raise the relevant level to Debug, reproduce the problem, then set it back to Info. This app's own log and memory capture live under Application › Diagnostics.";
-
-function expectHostVerbosityGuidance(): void {
-  const heading = screen.getByRole("heading", { name: "Log detail" });
-  expect(heading.textContent).toBe("Log detail");
-  const guidance = screen.getByTestId("diagnostics-verbosity-guidance");
-  expect(guidance.textContent).toBe("Use Debug while capturing a problem");
-  expect(heading.contains(guidance)).toBe(false);
-}
-
-async function expectHostCaptureDisclosure(): Promise<void> {
-  const disclosure = screen.getByRole("button", {
-    name: "How to capture a problem",
-  });
-  expect(disclosure.getAttribute("aria-expanded")).toBe("false");
-  fireEvent.click(disclosure);
-  const steps = await screen.findByTestId("diagnostics-capture-steps");
-  expect(steps.textContent.replace(/\s+/g, " ").trim()).toBe(
-    HOST_CAPTURE_STEPS,
-  );
-}
-
-function expectHostCaptureGuidanceAbsent(): void {
-  expect(screen.queryByTestId("diagnostics-verbosity-guidance")).toBeNull();
-  expect(screen.queryByTestId("diagnostics-capture-steps")).toBeNull();
-  expect(
-    screen.queryByRole("button", { name: "How to capture a problem" }),
-  ).toBeNull();
-}
-
 describe("<DiagnosticsSettingsPanel />", () => {
   const writeTextMock = vi.fn(() => Promise.resolve());
 
@@ -326,12 +295,11 @@ describe("<DiagnosticsSettingsPanel />", () => {
     expect(await screen.findByTestId("settings-log-level-host")).toBeTruthy();
     expect(await screen.findByText("Host")).toBeTruthy();
     expect(await screen.findByText("CLI")).toBeTruthy();
-    expect(screen.getByText("Logs from this host, for support.")).toBeTruthy();
     expect(
-      screen.queryByText(
-        "Log verbosity and recent log output for the host selected above.",
+      screen.getByText(
+        /Log verbosity and recent log output for the host selected above/,
       ),
-    ).toBeNull();
+    ).toBeTruthy();
 
     // The old local-only gate is gone entirely - not just hidden for this
     // scope.
@@ -396,8 +364,23 @@ describe("<DiagnosticsSettingsPanel />", () => {
     expect(
       await screen.findByRole("heading", { name: "Log detail" }),
     ).toBeTruthy();
-    expectHostVerbosityGuidance();
-    await expectHostCaptureDisclosure();
+    expect(
+      screen.getByText(
+        /Both levels default to Info — raise one to Debug when capturing a problem for support, reproduce the problem, then set it back to Info/,
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        /This app's own log and memory capture live under Application › Diagnostics/,
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "How to capture a problem" }),
+    ).toBeNull();
+    expect(
+      screen.getByText("Verbosity of the Traycer CLI’s logs."),
+    ).toBeTruthy();
+    expect(screen.getByText("Verbosity of the host’s logs.")).toBeTruthy();
     expect(await screen.findByTestId("settings-log-level-cli")).toBeTruthy();
     expect(await screen.findByTestId("settings-log-level-host")).toBeTruthy();
     expect(screen.getByText("CLI log level")).toBeTruthy();
@@ -792,7 +775,6 @@ describe("<DiagnosticsSettingsPanel />", () => {
     // nothing left to say - and a titled card with an empty body is worse than
     // no card. This is the branch that made `LogDetailGroup` return null.
     expect(screen.queryByRole("heading", { name: "Log detail" })).toBeNull();
-    expectHostCaptureGuidanceAbsent();
     // A remote host has no local truth to fall back to.
     expect(screen.queryByTestId("local-config-fallback-notice")).toBeNull();
   });

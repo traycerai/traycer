@@ -1,6 +1,5 @@
 import { useState, type ReactNode } from "react";
 import { z } from "zod";
-import { MoreHorizontal, Plus } from "lucide-react";
 import type {
   ProviderCliState,
   ProviderId,
@@ -15,14 +14,7 @@ import type {
 } from "@traycer/protocol/host/environment/configuration-contracts";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuCheckboxItem,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+import { Switch } from "@/components/ui/switch";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-host";
 import type { ConfigurationItem } from "@/hooks/environment/team/use-configuration-items-query";
@@ -110,7 +102,6 @@ export function TeamProviders(): ReactNode {
   const secretsQuery = useEnvironmentSecretsQuery(useHostClient());
   const items = query.data ?? [];
   const [providerId, setProviderId] = useState<ProviderId>("claude-code");
-  const [addProviderOpen, setAddProviderOpen] = useState(false);
   const [os, setOs] = useState<EnvironmentOs>("any");
   const [issue, setIssue] = useState<ConfigurationWriteIssue>(null);
   const writes = useConfigurationItemWrites(query, (result) =>
@@ -123,11 +114,6 @@ export function TeamProviders(): ReactNode {
     plans: plansQuery.data?.plans ?? null,
     secrets: secretsQuery.data?.secrets ?? null,
   });
-  const primary = rows.filter((row) => row.railClass !== "unconfigured");
-  const unconfigured = rows.filter((row) => row.railClass === "unconfigured");
-  const selectedFolded =
-    unconfigured.find((row) => row.providerId === providerId) ?? null;
-  const behindAdd = unconfigured.filter((row) => row.providerId !== providerId);
   const railKey = rows
     .map((row) => `${row.providerId}:${row.railClass}`)
     .join("|");
@@ -181,8 +167,6 @@ export function TeamProviders(): ReactNode {
       personal={personal}
       teamName={teamName}
       providerId={providerId}
-      addProviderOpen={addProviderOpen}
-      onToggleAdd={() => setAddProviderOpen((open) => !open)}
       os={os}
       onOsChange={setOs}
       issue={issue}
@@ -190,9 +174,7 @@ export function TeamProviders(): ReactNode {
       readFailed={read.failed}
       onRetry={read.retry}
       ready={query.data !== undefined}
-      primary={primary}
-      selectedFolded={selectedFolded}
-      behindAdd={behindAdd}
+      rows={rows}
       onSelect={selectProvider}
       profiles={profiles}
       adminNames={members.adminNames}
@@ -211,8 +193,6 @@ function TeamProvidersView(props: {
   readonly personal: boolean;
   readonly teamName: string;
   readonly providerId: ProviderId;
-  readonly addProviderOpen: boolean;
-  readonly onToggleAdd: () => void;
   readonly os: EnvironmentOs;
   readonly onOsChange: (os: EnvironmentOs) => void;
   readonly issue: ConfigurationWriteIssue;
@@ -220,9 +200,7 @@ function TeamProvidersView(props: {
   readonly readFailed: boolean;
   readonly onRetry: () => void;
   readonly ready: boolean;
-  readonly primary: readonly ProviderRailRow[];
-  readonly selectedFolded: ProviderRailRow | null;
-  readonly behindAdd: readonly ProviderRailRow[];
+  readonly rows: readonly ProviderRailRow[];
   readonly onSelect: (providerId: ProviderId) => void;
   readonly profiles: readonly ConfigurationItem[];
   readonly adminNames: readonly string[];
@@ -240,8 +218,6 @@ function TeamProvidersView(props: {
     personal,
     teamName,
     providerId,
-    addProviderOpen,
-    onToggleAdd,
     os,
     onOsChange,
     issue,
@@ -249,9 +225,7 @@ function TeamProvidersView(props: {
     readFailed,
     onRetry,
     ready,
-    primary,
-    selectedFolded,
-    behindAdd,
+    rows,
     onSelect,
     profiles,
     adminNames,
@@ -277,11 +251,8 @@ function TeamProvidersView(props: {
       ) : null}
       {ready ? (
         <div className="grid min-w-0 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,3fr)]">
-          <nav
-            aria-label="Configured providers"
-            className="flex min-w-0 flex-col gap-1"
-          >
-            {primary.map((row) => (
+          <nav aria-label="Providers" className="flex min-w-0 flex-col gap-1">
+            {rows.map((row) => (
               <ProviderRailButton
                 key={row.providerId}
                 row={row}
@@ -289,38 +260,6 @@ function TeamProvidersView(props: {
                 onSelect={onSelect}
               />
             ))}
-            {selectedFolded === null ? null : (
-              <ProviderRailButton
-                row={selectedFolded}
-                selected
-                onSelect={onSelect}
-              />
-            )}
-            {behindAdd.length === 0 ? null : (
-              <button
-                type="button"
-                aria-expanded={addProviderOpen}
-                className={railButtonClass(false)}
-                onClick={onToggleAdd}
-              >
-                <span className="flex min-w-0 items-start gap-1.5">
-                  <Plus className="mt-0.5 size-3.5 shrink-0" />
-                  <span className="min-w-0 whitespace-normal break-words">
-                    Add provider
-                  </span>
-                </span>
-              </button>
-            )}
-            {addProviderOpen
-              ? behindAdd.map((row) => (
-                  <ProviderRailButton
-                    key={row.providerId}
-                    row={row}
-                    selected={false}
-                    onSelect={onSelect}
-                  />
-                ))
-              : null}
           </nav>
           <Tabs key={providerId} defaultValue="plans" className="min-w-0 gap-3">
             <TabsList
@@ -453,7 +392,7 @@ function railButtonClass(selected: boolean): string {
 
 /**
  * A saved profile: its name, the account it names, and Off when it is not
- * in use. Details and the use switch sit in More. There is no standing or
+ * in use, with inline Details and Use controls. There is no standing or
  * presence to show yet; those arrive with the profile stream.
  */
 function ConfigurationProfileRow(props: {
@@ -489,7 +428,7 @@ function ConfigurationProfileRow(props: {
     );
   };
   return (
-    <li className="flex min-w-0 items-start justify-between gap-3 p-3">
+    <li className="flex min-w-0 flex-wrap items-start justify-between gap-3 p-3">
       <div className="min-w-0">
         <p className="min-w-0 whitespace-normal break-words text-ui-sm font-medium">
           {profile.name}
@@ -503,40 +442,29 @@ function ConfigurationProfileRow(props: {
           <p className="text-ui-xs text-muted-foreground">Off</p>
         )}
       </div>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
+        {detailsSubject === null ? null : (
           <Button
             type="button"
             variant="ghost"
-            size="icon-sm"
-            aria-label={`More for ${profile.name}`}
-            className="shrink-0"
+            size="sm"
+            onClick={() => setDetailsOpen(true)}
           >
-            <MoreHorizontal />
+            Details
           </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
-          {detailsSubject === null ? null : (
-            <DropdownMenuItem onSelect={() => setDetailsOpen(true)}>
-              Details
-            </DropdownMenuItem>
-          )}
-          {canEdit ? (
-            <DropdownMenuCheckboxItem
-              aria-label={`Use ${profile.name}`}
-              checked={profile.enabled}
-              disabled={put.isPending}
-              onCheckedChange={setEnabled}
-            >
-              Use
-            </DropdownMenuCheckboxItem>
-          ) : (
-            <DropdownMenuLabel>
-              {profile.enabled ? "On" : "Off"}
-            </DropdownMenuLabel>
-          )}
-        </DropdownMenuContent>
-      </DropdownMenu>
+        )}
+        {canEdit ? (
+          <Switch
+            aria-label={`Use ${profile.name}`}
+            checked={profile.enabled}
+            disabled={put.isPending}
+            onCheckedChange={setEnabled}
+          />
+        ) : null}
+        {!canEdit && profile.enabled ? (
+          <span className="text-ui-xs text-muted-foreground">On</span>
+        ) : null}
+      </div>
       <SettingsDetailsDialog
         subject={detailsSubject}
         title={profile.name}

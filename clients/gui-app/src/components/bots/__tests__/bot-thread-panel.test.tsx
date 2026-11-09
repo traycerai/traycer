@@ -83,6 +83,12 @@ import type { BotComposerEdit } from "@/components/bots/bot-message-composer";
 import type { BotSentPost } from "@/stores/bots/bot-open-thread-store";
 import type { BotTranscriptLanding } from "@/components/bots/bot-chat-transcript";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
+import {
+  BOT_BOX_DRAFTS_PERSIST_KEY,
+  storedBoxDraftsOf,
+  type StoredBoxDraft,
+} from "@/lib/bots/bot-box-draft-storage";
+import { isRecord } from "@/lib/editor/prosemirror-json";
 import { setPhoneLayoutOnly } from "@/lib/mobile-app";
 import {
   useVoiceSessionStore,
@@ -770,6 +776,40 @@ describe("<BotThreadPanel /> a direct reply nobody has replied under", () => {
     expect(
       sent.map((request) => [request.text, request.announcementId]),
     ).toEqual([["Which job?", "answer-1"]]);
+  });
+});
+
+describe("<BotThreadPanel /> what its box holds unsent", () => {
+  /** The draft this device holds for the bot's box under `key`. */
+  function storedBox(key: string): StoredBoxDraft | undefined {
+    const parsed: unknown = JSON.parse(
+      localStorage.getItem(BOT_BOX_DRAFTS_PERSIST_KEY) ?? "null",
+    );
+    const stored =
+      isRecord(parsed) && isRecord(parsed.state)
+        ? parsed.state.threadBoxes
+        : null;
+    return storedBoxDraftsOf(stored)[BOT_ID]?.[key];
+  }
+
+  it("keeps the thread's draft under the thread, apart from the channel's, on the device and in its box when the thread opens again", () => {
+    useBotDraftsStore
+      .getState()
+      .typeThreadBox(BOT_ID, CONVERSATION_ID, "For the channel", null);
+    const thread = listed("user-teammate");
+    const box = (): HTMLElement =>
+      editableIn(screen.getByTestId("bot-thread-composer-input"));
+    const panel = mountPanel(thread, []);
+    expect(textOf(box())).toBe("");
+
+    typeInto(box(), "For the thread");
+    panel.unmount();
+    window.dispatchEvent(new Event("pagehide"));
+
+    expect(storedBox(originOf(thread))?.text).toBe("For the thread");
+    expect(storedBox(CONVERSATION_ID)?.text).toBe("For the channel");
+    mountPanel(thread, []);
+    expect(textOf(box())).toBe("For the thread");
   });
 });
 

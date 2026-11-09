@@ -1001,3 +1001,62 @@ describe("<HostSwitcher /> environment labels (Tracy Bots)", () => {
     expect(screen.queryByTestId("host-option-environment-host-b")).toBeNull();
   });
 });
+
+describe("<HostSwitcher /> rail introduction", () => {
+  function openRail(
+    consequence: {
+      readonly heading: string;
+      readonly hint: string;
+    } | null,
+  ): void {
+    const host = hostScopeOptionFixture({
+      hostId: "host-a",
+      name: "Host A",
+    });
+    render(
+      <HostSwitcher
+        hosts={[host]}
+        selected={host}
+        activeHostId={host.hostId}
+        onSelect={() => undefined}
+        action={null}
+        surface="rail"
+        intent="view"
+        consequence={consequence}
+        refusalByHostId={NO_HOST_OPTION_REFUSALS}
+        inertExceptHostId={null}
+        disabled={false}
+        isLoading={false}
+        listsFailed={false}
+        onRetryLists={() => undefined}
+        updateViewForHost={null}
+        composer={null}
+        environmentLabelForHost={null}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("settings-host-switcher"));
+  }
+
+  it("shows the caller's introduction and does not invent a View host heading", () => {
+    openRail({
+      heading: "Look at another host",
+      hint: "Changes what this window shows. Nothing is created.",
+    });
+
+    expect(screen.getByText("Look at another host")).not.toBeNull();
+    expect(
+      screen.getByText("Changes what this window shows. Nothing is created."),
+    ).not.toBeNull();
+    expect(screen.queryByText("View host")).toBeNull();
+  });
+
+  it("leaves the list untitled when the caller passes no introduction", () => {
+    openRail(null);
+
+    expect(screen.queryByText("View host")).toBeNull();
+    expect(screen.queryByText("Look at another host")).toBeNull();
+    expect(
+      screen.getByTestId("settings-host-switcher-option-host-a"),
+    ).not.toBeNull();
+  });
+});

@@ -1,5 +1,4 @@
 import {
-  act,
   cleanup,
   render,
   screen,
@@ -71,8 +70,14 @@ async function selectOs(user: UserEvent, name: string): Promise<void> {
   await user.click(await screen.findByRole("option", { name }));
 }
 
+function shellEditor(): HTMLElement {
+  const section = screen.getByLabelText("Shell path").closest("section");
+  if (section === null) throw new Error("Shell path has no editor section");
+  return section;
+}
+
 describe("TeamVariablesAndShells", () => {
-  it("keeps values compact until edited and opens a draft row from Add variable", async () => {
+  it("keeps saved and new variable fields and shell controls visible", async () => {
     const harness = mountTeamPage(poolSource("editor"), {
       "environment.configuration.items": () => ({
         items: [variable("NODE_ENV", "production", 3)],
@@ -81,222 +86,97 @@ describe("TeamVariablesAndShells", () => {
     });
     render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
 
-    expect(
-      await screen.findByRole("button", { name: "Edit NODE_ENV value" }),
-    ).toBeTruthy();
-    expect(screen.queryByLabelText("NODE_ENV value")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
-    await userEvent.click(
-      screen.getByRole("button", { name: "More for NODE_ENV" }),
+    const row = await screen.findByRole("region", { name: "NODE_ENV" });
+    expect(within(row).getByLabelText("NODE_ENV value")).toHaveProperty(
+      "value",
+      "production",
     );
-    expect(
-      await screen.findByRole("menuitem", { name: "Delete" }),
-    ).toBeTruthy();
-    await userEvent.keyboard("{Escape}");
-
-    await userEvent.click(screen.getByRole("button", { name: "Add variable" }));
-    expect(await screen.findByLabelText("Variable name")).toBeTruthy();
+    expect(within(row).getByRole("button", { name: "Save" })).toBeTruthy();
+    expect(within(row).getByRole("button", { name: "Delete" })).toBeTruthy();
+    expect(screen.getByLabelText("Variable name")).toBeTruthy();
     expect(screen.getByLabelText("New variable value")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Add a variable" })).toBeTruthy();
+    expect(screen.getByLabelText("Shell path")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Reset" })).toBeTruthy();
   });
 
-  it("shows applied differences inline and full host values only after Details", async () => {
-    const harness = mountTeamPage(poolSource("editor"), {
-      "environment.configuration.items": () => ({
-        items: [variable("NODE_ENV", "production", 3)],
-      }),
-      "environment.host.list": () => ({ hosts: [reachableHost] }),
-      "config.env.list": () => ({
-        entries: [{ key: "NODE_ENV", value: "staging" }],
-      }),
-      "config.shell.get": () => ({
-        path: "/bin/zsh",
-        args: ["-l"],
-        synthesised: false,
-      }),
-    });
-    render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
-
-    expect(await screen.findByText("Applied on Mac mini")).toBeTruthy();
-    expect(screen.queryByText("Live values")).toBeNull();
-    expect(await screen.findByText("This host uses staging")).toBeTruthy();
-    expect(screen.queryByText(/Shell:/)).toBeNull();
-    await userEvent.click(screen.getByRole("button", { name: "Details" }));
-    expect(await screen.findByText(/Shell:/)).toBeTruthy();
-    expect(screen.getByText("/bin/zsh -l")).toBeTruthy();
-    const appliedVariableKey = screen.getByText("NODE_ENV", {
-      selector: "code",
-    });
-    expect(appliedVariableKey.parentElement?.textContent).toBe(
-      "NODE_ENV: staging",
-    );
-  });
-
-  describe("a live value beside a setting", () => {
-    const hostOn = (hostPlatform: string | null) => ({
-      ...reachableHost,
-      hostPlatform,
-    });
-    const hostShell = { path: "/bin/zsh", args: [], synthesised: false };
-    const shellRow = (os: "any" | "linux" | "macos", path: string) =>
-      configurationItem({
-        kind: "shell",
-        key: "shell",
-        os,
-        value: { path, args: [] },
-        revision: 2,
-      });
-    const osVariable = (
-      key: string,
-      os: "any" | "linux" | "macos",
-      value: string,
-    ) => configurationItem({ kind: "variable", key, os, value: { value } });
-
-    const mountVariables = (
-      hostPlatform: string | null,
-      items: EnvironmentConfigurationItem[],
-      live: { key: string; value: string }[],
-    ) =>
-      mountTeamPage(poolSource("editor"), {
-        "environment.configuration.items": () => ({ items }),
-        "environment.host.list": () => ({ hosts: [hostOn(hostPlatform)] }),
-        "config.env.list": () => ({ entries: live }),
-        "config.shell.get": () => hostShell,
-      });
-
-    it("compares only rows that apply to the viewed host under All operating systems", async () => {
-      const harness = mountVariables(
-        "darwin-arm64",
-        [
-          osVariable("LINUX_URL", "linux", "from-linux"),
-          osVariable("MAC_URL", "macos", "from-mac"),
-          osVariable("ANY_URL", "any", "from-any"),
-        ],
-        [
-          { key: "LINUX_URL", value: "live-linux" },
-          { key: "MAC_URL", value: "live-mac" },
-          { key: "ANY_URL", value: "live-any" },
-        ],
-      );
-      render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
-
-      const anyRow = await screen.findByRole("region", { name: "ANY_URL" });
-      const macRow = screen.getByRole("region", { name: "MAC_URL · macOS" });
-      const linuxRow = screen.getByRole("region", {
-        name: "LINUX_URL · Linux",
-      });
-      expect(
-        await within(anyRow).findByText("This host uses live-any"),
-      ).toBeTruthy();
-      expect(
-        await within(macRow).findByText("This host uses live-mac"),
-      ).toBeTruthy();
-      expect(within(linuxRow).queryByText(/This host uses/)).toBeNull();
-    });
-
-    it("leaves a universal row alone when a row for the host's own OS overrides it", async () => {
-      const harness = mountVariables(
-        "darwin-arm64",
-        [
-          osVariable("API_URL", "any", "from-any"),
-          osVariable("API_URL", "macos", "from-mac"),
-        ],
-        [{ key: "API_URL", value: "from-mac" }],
-      );
-      render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
-
-      await screen.findByRole("region", { name: "API_URL · macOS" });
-      await userEvent.click(
-        await screen.findByRole("button", { name: "Details" }),
-      );
-      await screen.findByText(": from-mac");
-      expect(screen.queryByText(/This host uses/)).toBeNull();
-    });
-
-    it("claims a difference for a universal row but not an OS row when the host's OS is unknown", async () => {
-      const harness = mountVariables(
-        null,
-        [
-          osVariable("MAC_URL", "macos", "from-mac"),
-          osVariable("ANY_URL", "any", "from-any"),
-        ],
-        [
-          { key: "MAC_URL", value: "live-mac" },
-          { key: "ANY_URL", value: "live-any" },
-        ],
-      );
-      render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
-
-      const anyRow = await screen.findByRole("region", { name: "ANY_URL" });
-      expect(
-        await within(anyRow).findByText("This host uses live-any"),
-      ).toBeTruthy();
-      expect(screen.queryByText("This host uses live-mac")).toBeNull();
-    });
-
-    it("compares the shell only when the selected OS applies to the viewed host", async () => {
-      const harness = mountVariables(
-        "darwin-arm64",
-        [shellRow("linux", "/bin/dash"), shellRow("macos", "/bin/fish")],
-        [],
-      );
-      const user = userEvent.setup();
-      render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
-
-      await selectOs(user, "macOS");
-      await screen.findByText("/bin/fish");
-      expect(await screen.findByText("This host uses /bin/zsh")).toBeTruthy();
-
-      await selectOs(user, "Linux");
-      await screen.findByText("/bin/dash");
-      expect(screen.queryByText(/This host uses/)).toBeNull();
-    });
-
-    it("compares the universal shell, and drops that when the host's OS has its own", async () => {
-      let items = [shellRow("any", "/bin/bash")];
+  it.each(["darwin-arm64", null])(
+    "keeps every live value in its own card when the host platform is %s",
+    async (hostPlatform) => {
       const harness = mountTeamPage(poolSource("editor"), {
-        "environment.configuration.items": () => ({ items }),
-        "environment.host.list": () => ({ hosts: [hostOn("darwin-arm64")] }),
-        "config.env.list": () => ({ entries: [] }),
-        "config.shell.get": () => hostShell,
+        "environment.configuration.items": () => ({
+          items: [
+            variable("NODE_ENV", "production", 3),
+            configurationItem({
+              kind: "variable",
+              key: "NODE_ENV",
+              os: "macos",
+              value: { value: "mac-production" },
+              revision: 3,
+            }),
+            configurationItem({
+              kind: "variable",
+              key: "LINUX_URL",
+              os: "linux",
+              value: { value: "saved-linux" },
+              revision: 2,
+            }),
+            configurationItem({
+              kind: "shell",
+              key: "shell",
+              os: "macos",
+              value: { path: "/bin/fish", args: [] },
+              revision: 2,
+            }),
+          ],
+        }),
+        "environment.host.list": () => ({
+          hosts: [{ ...reachableHost, hostPlatform }],
+        }),
+        "config.env.list": () => ({
+          entries: [
+            { key: "NODE_ENV", value: "staging" },
+            { key: "LINUX_URL", value: "live-linux" },
+            { key: "HOST_ONLY", value: "host-value" },
+          ],
+        }),
+        "config.shell.get": () => ({
+          path: "/bin/zsh",
+          args: ["-l"],
+          synthesised: false,
+        }),
       });
-      const { rerender } = render(<TeamVariablesAndShells />, {
-        wrapper: harness.Wrapper,
-      });
-      expect(await screen.findByText("This host uses /bin/zsh")).toBeTruthy();
-
-      items = [shellRow("any", "/bin/bash"), shellRow("macos", "/bin/zsh")];
-      await act(async () => {
-        await harness.queryClient.invalidateQueries();
-      });
-      rerender(<TeamVariablesAndShells />);
-      await waitFor(() => {
-        expect(screen.queryByText(/This host uses/)).toBeNull();
-      });
-    });
-
-    it("compares a universal shell but not an OS shell when the host's OS is unknown", async () => {
-      const harness = mountVariables(null, [shellRow("any", "/bin/bash")], []);
-      render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
-      expect(await screen.findByText("This host uses /bin/zsh")).toBeTruthy();
-    });
-
-    it("never compares an OS shell when the host's OS is unknown", async () => {
-      const harness = mountVariables(
-        null,
-        [shellRow("macos", "/bin/fish")],
-        [],
-      );
       const user = userEvent.setup();
       render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
 
-      await selectOs(user, "macOS");
-      await screen.findByText("/bin/fish");
-      await user.click(await screen.findByRole("button", { name: "Details" }));
-      await screen.findByText("/bin/zsh");
+      const live = await screen.findByRole("region", { name: "Live values" });
+      expect(await within(live).findByText("Applied on Mac mini")).toBeTruthy();
+      expect(await within(live).findByText("/bin/zsh -l")).toBeTruthy();
+      for (const value of ["staging", "live-linux", "host-value"]) {
+        expect(await within(live).findByText(`: ${value}`)).toBeTruthy();
+      }
+      const variableRow = screen.getByRole("region", { name: "NODE_ENV" });
+      expect(
+        within(variableRow).getByLabelText("NODE_ENV value"),
+      ).toHaveProperty("value", "production");
       expect(screen.queryByText(/This host uses/)).toBeNull();
-    });
-  });
+      expect(screen.queryByRole("button", { name: "Details" })).toBeNull();
+
+      await selectOs(user, "macOS");
+      expect(screen.getByLabelText("Shell path")).toHaveProperty(
+        "value",
+        "/bin/fish",
+      );
+      expect(within(live).getByText("/bin/zsh -l")).toBeTruthy();
+      await selectOs(user, "Linux");
+      expect(screen.getByLabelText("LINUX_URL value")).toHaveProperty(
+        "value",
+        "saved-linux",
+      );
+      expect(within(live).getByText(": staging")).toBeTruthy();
+      expect(screen.queryByText(/This host uses/)).toBeNull();
+    },
+  );
 
   it("reads the team's items by environment id, never the host's own config", async () => {
     const harness = mountTeamPage(poolSource("editor"), {
@@ -307,9 +187,6 @@ describe("TeamVariablesAndShells", () => {
     });
     render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
 
-    await userEvent.click(
-      await screen.findByRole("button", { name: "Edit NODE_ENV value" }),
-    );
     expect(await screen.findByLabelText("NODE_ENV value")).toHaveProperty(
       "value",
       "production",
@@ -364,9 +241,7 @@ describe("TeamVariablesAndShells", () => {
       }),
     );
 
-    expect(
-      await screen.findByRole("button", { name: "Edit NODE_ENV value" }),
-    ).toBeTruthy();
+    expect(await screen.findByLabelText("NODE_ENV value")).toBeTruthy();
     expect(
       harness.paramsOf("environment.configuration.items").length,
     ).toBeGreaterThan(reads);
@@ -388,95 +263,81 @@ describe("TeamVariablesAndShells", () => {
     }
   });
 
-  it.each(["Save", "Cancel"] as const)(
-    "keeps a variable draft through an immediate current conflict until deliberate %s",
-    async (action) => {
-      let current = variable("NODE_ENV", "production", 3);
-      let puts = 0;
-      const harness = mountTeamPage(poolSource("editor"), {
-        "environment.configuration.items": () => ({ items: [current] }),
-        "environment.configuration.items.put": () => {
-          puts += 1;
-          if (puts === 1) {
-            current = variable("NODE_ENV", "staging", 4);
-            return {
-              outcome: "conflict",
-              current: { revision: 4, changedBy: "Grace", changedAt: 2 },
-            };
-          }
-          current = variable("NODE_ENV", "development!", 5);
-          return { outcome: "saved", revision: 5 };
-        },
-        "environment.host.list": () => ({ hosts: [] }),
-      });
-      render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
-      await userEvent.click(
-        await screen.findByRole("button", { name: "Edit NODE_ENV value" }),
+  it("keeps a variable draft through an immediate current conflict until a deliberate save", async () => {
+    let current = variable("NODE_ENV", "production", 3);
+    let puts = 0;
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.configuration.items": () => ({ items: [current] }),
+      "environment.configuration.items.put": () => {
+        puts += 1;
+        if (puts === 1) {
+          current = variable("NODE_ENV", "staging", 4);
+          return {
+            outcome: "conflict",
+            current: { revision: 4, changedBy: "Grace", changedAt: 2 },
+          };
+        }
+        current = variable("NODE_ENV", "development!", 5);
+        return { outcome: "saved", revision: 5 };
+      },
+      "environment.host.list": () => ({ hosts: [] }),
+    });
+    render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
+    const field = await screen.findByLabelText("NODE_ENV value");
+    await userEvent.clear(field);
+    await userEvent.type(field, "development");
+    await userEvent.click(
+      within(screen.getByRole("region", { name: "NODE_ENV" })).getByRole(
+        "button",
+        { name: "Save" },
+      ),
+    );
+    expect(
+      await screen.findByText("Changed by Grace a moment ago"),
+    ).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByLabelText("NODE_ENV value")).toHaveProperty(
+        "value",
+        "development",
       );
-      const field = screen.getByLabelText("NODE_ENV value");
-      await userEvent.clear(field);
-      await userEvent.type(field, "development");
-      await userEvent.click(screen.getByRole("button", { name: "Save" }));
       expect(
-        await screen.findByText("Changed by Grace a moment ago"),
-      ).toBeTruthy();
-      await waitFor(() => {
-        expect(screen.getByLabelText("NODE_ENV value")).toHaveProperty(
-          "value",
-          "development",
-        );
-        expect(screen.getByRole("button", { name: "Save" })).toHaveProperty(
-          "disabled",
-          false,
-        );
-      });
-      expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
-        {
-          environmentId: "env-a",
-          kind: "variable",
-          key: "NODE_ENV",
-          os: "any",
-          value: { value: "development" },
-          revision: 3,
-        },
-      ]);
-      if (action === "Cancel") {
-        await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
-        await waitFor(() => {
-          expect(
-            screen.getByRole("button", { name: "Edit NODE_ENV value" }),
-          ).toHaveProperty("textContent", "staging");
-        });
-        current = variable("NODE_ENV", "after-cancel", 5);
-        await act(async () => {
-          await harness.queryClient.refetchQueries();
-        });
-        await waitFor(() => {
-          expect(
-            screen.getByRole("button", { name: "Edit NODE_ENV value" }),
-          ).toHaveProperty("textContent", "after-cancel");
-        });
-        expect(screen.queryByLabelText("NODE_ENV value")).toBeNull();
-        expect(
-          harness.paramsOf("environment.configuration.items.put"),
-        ).toHaveLength(1);
-        return;
-      }
-      await userEvent.type(screen.getByLabelText("NODE_ENV value"), "!");
-      await userEvent.click(screen.getByRole("button", { name: "Save" }));
-      await waitFor(() => {
-        expect(
-          screen.getByRole("button", { name: "Edit NODE_ENV value" }),
-        ).toHaveProperty("disabled", false);
-      });
-      expect(
-        harness.paramsOf("environment.configuration.items.put")[1],
-      ).toMatchObject({ revision: 4, value: { value: "development!" } });
-      expect(
-        screen.getByRole("button", { name: "Edit NODE_ENV value" }),
-      ).toHaveProperty("textContent", "development!");
-    },
-  );
+        within(screen.getByRole("region", { name: "NODE_ENV" })).getByRole(
+          "button",
+          { name: "Save" },
+        ),
+      ).toHaveProperty("disabled", false);
+    });
+    expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
+      {
+        environmentId: "env-a",
+        kind: "variable",
+        key: "NODE_ENV",
+        os: "any",
+        value: { value: "development" },
+        revision: 3,
+      },
+    ]);
+    await userEvent.type(screen.getByLabelText("NODE_ENV value"), "!");
+    await userEvent.click(
+      within(screen.getByRole("region", { name: "NODE_ENV" })).getByRole(
+        "button",
+        { name: "Save" },
+      ),
+    );
+    await waitFor(() => {
+      expect(screen.getByLabelText("NODE_ENV value")).toHaveProperty(
+        "disabled",
+        false,
+      );
+    });
+    expect(
+      harness.paramsOf("environment.configuration.items.put")[1],
+    ).toMatchObject({ revision: 4, value: { value: "development!" } });
+    expect(screen.getByLabelText("NODE_ENV value")).toHaveProperty(
+      "value",
+      "development!",
+    );
+  });
 
   it("shows and saves each operating system's own value when two share a key and revision", async () => {
     const harness = mountTeamPage(poolSource("editor"), {
@@ -501,9 +362,6 @@ describe("TeamVariablesAndShells", () => {
     const user = userEvent.setup();
     render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
 
-    await user.click(
-      await screen.findByRole("button", { name: "Edit NODE_ENV value" }),
-    );
     expect(await screen.findByLabelText("NODE_ENV value")).toHaveProperty(
       "value",
       "production",
@@ -512,9 +370,6 @@ describe("TeamVariablesAndShells", () => {
       screen.getByRole("combobox", { name: "Operating system" }),
     );
     await user.click(await screen.findByRole("option", { name: "Linux" }));
-    await user.click(
-      screen.getByRole("button", { name: "Edit NODE_ENV value" }),
-    );
     const field = screen.getByLabelText("NODE_ENV value");
     expect(field).toHaveProperty("value", "linux-value");
 
@@ -565,10 +420,7 @@ describe("TeamVariablesAndShells", () => {
     const row = await screen.findByRole("region", { name: "API_URL · macOS" });
     expect(within(row).getByText("macOS")).toBeTruthy();
     expect(screen.queryByText("No variables.")).toBeNull();
-    expect(within(row).queryByRole("button", { name: "Save" })).toBeNull();
-    await user.click(
-      within(row).getByRole("button", { name: "Edit API_URL · macOS value" }),
-    );
+    expect(within(row).getByRole("button", { name: "Save" })).toBeTruthy();
     const field = within(row).getByLabelText("API_URL · macOS value");
     expect(field).toHaveProperty("value", "mac-value");
 
@@ -586,9 +438,10 @@ describe("TeamVariablesAndShells", () => {
     ]);
 
     await waitFor(() => {
-      expect(
-        screen.getByRole("button", { name: "Edit API_URL · macOS value" }),
-      ).toHaveProperty("disabled", false);
+      expect(screen.getByLabelText("API_URL · macOS value")).toHaveProperty(
+        "disabled",
+        false,
+      );
     });
     await user.click(
       screen.getByRole("combobox", { name: "Operating system" }),
@@ -610,9 +463,6 @@ describe("TeamVariablesAndShells", () => {
     const user = userEvent.setup();
     render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
     await selectOs(user, "Linux");
-    await user.click(
-      await screen.findByRole("button", { name: "Add variable" }),
-    );
     await user.type(screen.getByLabelText("Variable name"), "API_URL");
     await user.click(screen.getByRole("button", { name: "Add a variable" }));
     const refreshed = "Saved, but latest settings haven't refreshed.";
@@ -639,13 +489,12 @@ describe("TeamVariablesAndShells", () => {
     });
 
     const typeNewPath = async (user: UserEvent): Promise<void> => {
-      await user.click(
-        await screen.findByRole("button", { name: "Edit Shell path" }),
-      );
       const field = await screen.findByLabelText("Shell path");
       await user.clear(field);
       await user.type(field, "/bin/zsh");
-      await user.click(screen.getByRole("button", { name: "Save" }));
+      await user.click(
+        within(shellEditor()).getByRole("button", { name: "Save" }),
+      );
     };
 
     it("keeps an accepted shell through stale read retries, then uses the confirmed revision on its next save", async () => {
@@ -673,10 +522,10 @@ describe("TeamVariablesAndShells", () => {
           "Saved, but latest settings haven't refreshed.",
         ),
       ).toBeTruthy();
-      expect(
-        screen.getByRole("button", { name: "Edit Shell path" }),
-      ).toHaveProperty("textContent", "/bin/zsh");
-      expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+      expect(screen.getByLabelText("Shell path")).toHaveProperty(
+        "value",
+        "/bin/zsh",
+      );
       const reads = harness.paramsOf("environment.configuration.items").length;
       await user.click(screen.getByRole("button", { name: "Retry" }));
       expect(
@@ -690,9 +539,10 @@ describe("TeamVariablesAndShells", () => {
       expect(
         harness.paramsOf("environment.configuration.items.put"),
       ).toHaveLength(1);
-      expect(
-        screen.getByRole("button", { name: "Edit Shell path" }),
-      ).toHaveProperty("disabled", true);
+      expect(screen.getByLabelText("Shell path")).toHaveProperty(
+        "disabled",
+        true,
+      );
       current = {
         ...shellItem,
         revision: 4,
@@ -700,18 +550,22 @@ describe("TeamVariablesAndShells", () => {
       };
       await user.click(screen.getByRole("button", { name: "Retry" }));
       await waitFor(() => {
-        expect(
-          screen.getByRole("button", { name: "Edit Shell path" }),
-        ).toHaveProperty("disabled", false);
+        expect(screen.getByLabelText("Shell path")).toHaveProperty(
+          "disabled",
+          false,
+        );
       });
-      await user.click(screen.getByRole("button", { name: "Edit Shell path" }));
+      await user.click(screen.getByLabelText("Shell path"));
       await user.clear(screen.getByLabelText("Shell path"));
       await user.type(screen.getByLabelText("Shell path"), "/bin/fish");
-      await user.click(screen.getByRole("button", { name: "Save" }));
+      await user.click(
+        within(shellEditor()).getByRole("button", { name: "Save" }),
+      );
       await waitFor(() => {
-        expect(
-          screen.getByRole("button", { name: "Edit Shell path" }),
-        ).toHaveProperty("disabled", false);
+        expect(screen.getByLabelText("Shell path")).toHaveProperty(
+          "disabled",
+          false,
+        );
       });
       expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
         {
@@ -800,21 +654,17 @@ describe("TeamVariablesAndShells", () => {
       });
       const user = userEvent.setup();
       render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
-      await user.click(
-        await screen.findByRole("button", { name: "More for shell" }),
-      );
-      await user.click(screen.getByRole("menuitem", { name: "Remove" }));
+      await user.click(await screen.findByRole("button", { name: "Remove" }));
       expect(
         await screen.findByText(
           "Removed, but latest settings haven't refreshed.",
         ),
       ).toBeTruthy();
-      expect(
-        screen.getByRole("button", { name: "Edit Shell path" }),
-      ).toHaveProperty("textContent", "No shell set.");
-      expect(
-        screen.getByRole("button", { name: "Edit Shell path" }),
-      ).toHaveProperty("disabled", true);
+      expect(screen.getByLabelText("Shell path")).toHaveProperty("value", "");
+      expect(screen.getByLabelText("Shell path")).toHaveProperty(
+        "disabled",
+        true,
+      );
       const reads = harness.paramsOf("environment.configuration.items").length;
       items = [{ ...shellItem, revision: 4 }];
       await user.click(screen.getByRole("button", { name: "Retry" }));
@@ -823,15 +673,17 @@ describe("TeamVariablesAndShells", () => {
           "Removed, but latest settings haven't refreshed.",
         ),
       ).toBeTruthy();
-      expect(
-        screen.getByRole("button", { name: "Edit Shell path" }),
-      ).toHaveProperty("disabled", true);
+      expect(screen.getByLabelText("Shell path")).toHaveProperty(
+        "disabled",
+        true,
+      );
       items = [];
       await user.click(screen.getByRole("button", { name: "Retry" }));
       await waitFor(() => {
-        expect(
-          screen.getByRole("button", { name: "Edit Shell path" }),
-        ).toHaveProperty("disabled", false);
+        expect(screen.getByLabelText("Shell path")).toHaveProperty(
+          "disabled",
+          false,
+        );
       });
       expect(harness.paramsOf("environment.configuration.items")).toHaveLength(
         reads + 2,
@@ -849,9 +701,10 @@ describe("TeamVariablesAndShells", () => {
       ]);
       await typeNewPath(user);
       await waitFor(() => {
-        expect(
-          screen.getByRole("button", { name: "Edit Shell path" }),
-        ).toHaveProperty("disabled", false);
+        expect(screen.getByLabelText("Shell path")).toHaveProperty(
+          "disabled",
+          false,
+        );
       });
       expect(
         harness.paramsOf("environment.configuration.items.put")[0],
@@ -896,18 +749,20 @@ describe("TeamVariablesAndShells", () => {
         "value",
         "/bin/zsh",
       );
-      expect(screen.getByRole("button", { name: "Save" })).toHaveProperty(
-        "disabled",
-        false,
-      );
+      expect(
+        within(shellEditor()).getByRole("button", { name: "Save" }),
+      ).toHaveProperty("disabled", false);
       expect(
         harness.paramsOf("environment.configuration.items.put"),
       ).toHaveLength(1);
-      await user.click(screen.getByRole("button", { name: "Save" }));
+      await user.click(
+        within(shellEditor()).getByRole("button", { name: "Save" }),
+      );
       await waitFor(() => {
-        expect(
-          screen.getByRole("button", { name: "Edit Shell path" }),
-        ).toHaveProperty("disabled", false);
+        expect(screen.getByLabelText("Shell path")).toHaveProperty(
+          "disabled",
+          false,
+        );
       });
       expect(
         harness.paramsOf("environment.configuration.items.put")[1],
@@ -939,11 +794,12 @@ describe("TeamVariablesAndShells", () => {
     render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
 
     await screen.findByRole("heading", { name: "Variables & shells" });
-    // An unread inventory is not an empty one, so the card says nothing at
-    // all rather than sending the reader to start a sandbox.
+    // An unread inventory cannot justify recommending a sandbox.
     expect(screen.queryByRole("status")).toBeNull();
     expect(screen.queryByText("Applied on Mac mini")).toBeNull();
-    expect(screen.queryByText("Live values")).toBeNull();
+    expect(
+      await screen.findByRole("region", { name: "Live values" }),
+    ).toBeTruthy();
     expect(screen.queryByText(/sandbox to see/)).toBeNull();
   });
 

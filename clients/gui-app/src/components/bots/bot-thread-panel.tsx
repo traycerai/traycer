@@ -52,7 +52,9 @@ import { useBotBoxEdit } from "@/hooks/bots/use-bot-box-edit";
 import { useBotFailedRequest } from "@/hooks/bots/use-bot-failed-request";
 import type { BotImageReach } from "@/hooks/bots/use-bot-send-version";
 import type {
+  BotTranscriptFold,
   BotTranscriptLanding,
+  BotTranscriptMark,
   QuestionAnswerSend,
 } from "@/components/bots/bot-chat-transcript";
 import type {
@@ -112,6 +114,28 @@ export type BotThreadPanelThread =
       readonly sendable: boolean;
     }
   | { readonly kind: "failed"; readonly retry: () => void };
+
+/**
+ * Where a thread's post, replies and box are drawn: in the panel beside the
+ * channel, which scrolls them in the pane, or as a card on the Threads page
+ * (Tracy Bots T137), which grows to the thread while the page scrolls. A
+ * card's reply count opens the thread in its channel's panel
+ * (`onOpenThread`), its post's time shows the post in the channel
+ * (`onShowPost`), a long thread folds its middle (`fold`, `null` once shown
+ * in full), and the reply its reading would acknowledge is marked
+ * (`readMark`, `null` for none).
+ */
+export type BotThreadLayout =
+  | { readonly kind: "panel" }
+  | {
+      readonly kind: "card";
+      readonly fold: BotTranscriptFold | null;
+      readonly onOpenThread: () => void;
+      readonly onShowPost: () => void;
+      readonly readMark: BotTranscriptMark | null;
+    };
+
+const PANEL_LAYOUT: BotThreadLayout = { kind: "panel" };
 
 /**
  * A thread of a bot's channel, in Slack's thread panel (Tracy Bots): the
@@ -269,9 +293,26 @@ export function BotThreadPanel(props: {
           />
         </div>
       )}
-      <ThreadPanelBody {...props} sendFailure={sendFailure} />
+      <ThreadPanelBody
+        {...props}
+        sendFailure={sendFailure}
+        layout={PANEL_LAYOUT}
+      />
     </section>
   );
+}
+
+/**
+ * A thread's post, its replies and its box, drawn as a card on the Threads
+ * page (Tracy Bots T137): the panel's own body, laid out by `layout`, so a
+ * row, a receipt, a question card and the box behave as they do in the
+ * panel. A send from the card that fails says so in the card's box.
+ */
+export function BotThreadCardBody(
+  props: Omit<ThreadPanelBodyProps, "sendFailure">,
+): ReactNode {
+  const sendFailure = useBotSendFailure();
+  return <ThreadPanelBody {...props} sendFailure={sendFailure} />;
 }
 
 type ThreadPanelBodyProps = {
@@ -291,6 +332,7 @@ type ThreadPanelBodyProps = {
   readonly landOn: BotTranscriptLanding | null;
   readonly quote: BotComposerQuote | null;
   readonly sendFailure: BotSendFailure;
+  readonly layout: BotThreadLayout;
 };
 
 /**
@@ -504,6 +546,9 @@ function ThreadOriginPost(
               origin.loaded ? loadedPresentation : unloadedPresentation
             }
             hoverActions={false}
+            timeLink={
+              props.layout.kind === "card" ? props.layout.onShowPost : null
+            }
           />
         </TracyTranscriptOriginScope>
       </BotTranscriptImageScope>
@@ -520,9 +565,15 @@ function ThreadOriginPost(
  * The post where no list of replies holds it: a scroll region of its own, as
  * tall as the post and no taller than the pane leaves it. On the focus layout
  * it is the context region and takes all the pane leaves, so the box rests on
- * the keyboard under a short post too.
+ * the keyboard under a short post too. A card draws it as tall as it is.
  */
-function ThreadPostScroll(props: { readonly children: ReactNode }): ReactNode {
+function ThreadPostScroll(props: {
+  readonly layout: BotThreadLayout;
+  readonly children: ReactNode;
+}): ReactNode {
+  if (props.layout.kind === "card") {
+    return <div className="pt-2">{props.children}</div>;
+  }
   return (
     <div
       className="min-h-0 overflow-y-auto pt-2 group-data-[focus-layout]/thread-panel:flex-1"
@@ -692,6 +743,7 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
         origin={origin}
         thread={thread}
         sendFailure={props.sendFailure}
+        layout={props.layout}
       />
     );
   }
@@ -700,7 +752,7 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
     <>
       {box.threadId === null ? (
         <>
-          <ThreadPostScroll>{origin}</ThreadPostScroll>
+          <ThreadPostScroll layout={props.layout}>{origin}</ThreadPostScroll>
           <ThreadListReadFailure retry={thread.retry} />
         </>
       ) : (
@@ -845,6 +897,7 @@ function KnownThread(
     onDiscuss,
     onOpenTurn,
     landOn,
+    layout,
   } = props;
   const client = useTabHostClient();
   const {
@@ -971,6 +1024,9 @@ function KnownThread(
   );
   const replyCount = listed?.replyCount ?? 0;
   const hasReplies = replyCount > 0;
+  const replies = replyCount === 1 ? "1 reply" : `${replyCount} replies`;
+  // A card's count opens the thread in its channel's panel.
+  const openThread = layout.kind === "card" ? layout.onOpenThread : null;
   const listHeader = useMemo(
     () =>
       hasReplies ? (
@@ -980,24 +1036,46 @@ function KnownThread(
             className="flex items-center gap-3 px-4 pt-2 text-ui-xs text-muted-foreground"
             data-testid="bot-thread-reply-count"
           >
-            <span className="shrink-0">
-              {replyCount === 1 ? "1 reply" : `${replyCount} replies`}
-            </span>
+            {openThread === null ? (
+              <span className="shrink-0">{replies}</span>
+            ) : (
+              <Button
+                type="button"
+                variant="link"
+                size="inline-xs"
+                data-testid="bot-thread-reply-count-open"
+                onClick={openThread}
+              >
+                {replies}
+              </Button>
+            )}
             <span className="h-px flex-1 bg-border/60" aria-hidden="true" />
           </div>
         </>
       ) : null,
-    [hasReplies, origin, replyCount],
+    [hasReplies, openThread, origin, replies],
+  );
+  const flow = useMemo(
+    () =>
+      layout.kind === "card"
+        ? { fold: layout.fold, mark: layout.readMark }
+        : null,
+    [layout],
   );
   return (
     <>
-      {hasReplies ? null : <ThreadPostScroll>{origin}</ThreadPostScroll>}
+      {hasReplies ? null : (
+        <ThreadPostScroll layout={layout}>{origin}</ThreadPostScroll>
+      )}
       <ThreadListReadFailure retry={retry} />
       {listed === null ? null : (
         <div
           className={cn(
-            "flex min-h-0 flex-col",
-            hasReplies && "grow basis-[min(10rem,25dvh)]",
+            "flex flex-col",
+            layout.kind === "panel" && "min-h-0",
+            layout.kind === "panel" &&
+              hasReplies &&
+              "grow basis-[min(10rem,25dvh)]",
           )}
           data-testid="bot-thread-replies"
           data-has-replies={hasReplies ? "true" : "false"}
@@ -1013,6 +1091,7 @@ function KnownThread(
             showConnecting={hasReplies}
             header={listHeader}
             landOn={landOn}
+            flow={flow}
           />
         </div>
       )}
@@ -1053,6 +1132,7 @@ function UnlistedThread(props: {
     { readonly kind: "pending" | "failed" }
   >;
   readonly sendFailure: BotSendFailure;
+  readonly layout: BotThreadLayout;
 }): ReactNode {
   const sendFailed = props.sendFailure.failed ? (
     <div className="shrink-0 px-4 pt-2">
@@ -1062,7 +1142,9 @@ function UnlistedThread(props: {
   if (props.thread.kind === "failed") {
     return (
       <>
-        <ThreadPostScroll>{props.origin}</ThreadPostScroll>
+        <ThreadPostScroll layout={props.layout}>
+          {props.origin}
+        </ThreadPostScroll>
         {sendFailed}
         <div className="p-4">
           <BotReadFailure
@@ -1076,7 +1158,7 @@ function UnlistedThread(props: {
   }
   return (
     <>
-      <ThreadPostScroll>{props.origin}</ThreadPostScroll>
+      <ThreadPostScroll layout={props.layout}>{props.origin}</ThreadPostScroll>
       {sendFailed}
       <div
         className="flex flex-1 items-center justify-center py-10 text-muted-foreground"

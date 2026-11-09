@@ -48,3 +48,68 @@ export function chatSessionWithPosts(
   }));
   return { store } as ChatSessionStoreHandle;
 }
+
+/**
+ * A thread's session holding `rows` as the thread's replies, for the real
+ * transcript: the channel's session fields plus what the transcript reads of
+ * a thread chat.
+ */
+export function chatSessionWithThreadRows(
+  rows: ReadonlyArray<Message>,
+): ChatSessionStoreHandle {
+  const store = createStore<
+    Pick<
+      ChatSessionState,
+      | "snapshotLoaded"
+      | "messages"
+      | "events"
+      | "transcriptRowContext"
+      | "transcriptDerived"
+      | "pendingUserMessages"
+      | "queue"
+      | "turnInProgress"
+      | "messageDelivery"
+      | "liveAssistantMessage"
+      | "activeTurn"
+      | "pendingApprovals"
+      | "pendingFileEditApprovals"
+      | "pendingInterviews"
+      | "runStatus"
+      | "transcriptWindow"
+      | "transcriptBaselineEpoch"
+      | "transcriptHydrationSequence"
+      | "coldRewrittenMessageIds"
+      | "backgroundItems"
+      | "reportVisibleTranscriptRange"
+      | "requestFindReadOrdinal"
+      | "requestTranscriptOrdinal"
+      | "holdTranscriptOrdinal"
+    >
+  >(() => ({
+    snapshotLoaded: true,
+    messages: [...rows],
+    events: [],
+    transcriptRowContext: {},
+    transcriptDerived: null,
+    pendingUserMessages: [],
+    queue: { status: "idle", items: [] },
+    turnInProgress: undefined,
+    messageDelivery: null,
+    liveAssistantMessage: null,
+    activeTurn: null,
+    pendingApprovals: [],
+    pendingFileEditApprovals: [],
+    pendingInterviews: [],
+    runStatus: "idle",
+    transcriptWindow: emptyTranscriptWindow(),
+    transcriptBaselineEpoch: 0,
+    transcriptHydrationSequence: 0,
+    coldRewrittenMessageIds: new Set<string>(),
+    backgroundItems: undefined,
+    reportVisibleTranscriptRange: () => undefined,
+    requestFindReadOrdinal: () => undefined,
+    requestTranscriptOrdinal: () => undefined,
+    holdTranscriptOrdinal: () => () => undefined,
+  }));
+  return { store } as ChatSessionStoreHandle;
+}

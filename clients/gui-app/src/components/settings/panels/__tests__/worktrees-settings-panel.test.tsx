@@ -10,7 +10,6 @@ import {
   within,
   type RenderResult,
 } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -1184,10 +1183,13 @@ describe("WorktreesList delete flow", () => {
       "Collapse all",
       "Refresh worktrees",
     ]);
-    // Desktop is two rows: select-all, expand/collapse, and refresh stay in
-    // the action group. Search, filter, and sort are the row under it.
-    expect(screen.queryByTestId("worktrees-filter-sort-trigger")).toBeNull();
-    expect(screen.queryByTestId("worktrees-list-actions")).toBeNull();
+    // Select-all, expand/collapse, and refresh stay in the action group.
+    // Search, filter, and sort are the band under it. The combined filter
+    // menu and the list-actions menu stay absent at every width.
+    expect(
+      screen.queryByRole("button", { name: /Filter and sort/ }),
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "List actions" })).toBeNull();
     const desktopActions = screen.getByTestId("worktrees-toolbar-actions");
     expect(
       desktopActions.contains(screen.getByTestId("worktrees-select-all")),
@@ -1222,62 +1224,105 @@ describe("WorktreesList delete flow", () => {
     ).toContain("whitespace-nowrap");
   });
 
-  it("keeps search and one Filter and sort control above the list on a phone, and moves the rest into List actions", async () => {
+  it("shows policy, selection, refresh, filter, and sort inline on a phone, with one Task rollup", () => {
     window.innerWidth = 390;
-    renderListWithToolbar({
-      ...testToolbarProps(),
-      policies: <div data-testid="worktree-policy-slot">Cleanup policy</div>,
+    const worktree = entry({
+      worktreePath: "/wt/alpha",
+      branch: "feat-alpha",
+      owners: [
+        {
+          epicId: "epic-1",
+          ownerKind: "chat",
+          ownerId: "chat-1",
+          updatedAt: 1,
+        },
+      ],
+      prState: "merged",
+      prNumber: 20,
+      prUrl: "https://github.com/acme/app/pull/20",
+      mergedHeadShaMatches: true,
+      submodules: [
+        {
+          repoIdentifier: { owner: "acme", repo: "sub" },
+          branch: "feat-alpha",
+          prState: "merged",
+          prNumber: 21,
+          prUrl: "https://github.com/acme/sub/pull/21",
+          mergedHeadShaMatches: true,
+          mergedIntoDefault: true,
+          atPinnedCommit: false,
+        },
+      ],
     });
+    const queryClient = new QueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <WorktreesList
+            openStreamTransport={() => stubOpenStreamTransport()}
+            hostId="host-a"
+            worktrees={[worktree]}
+            enrichedByPath={fullyEnriched([worktree])}
+            erroredPaths={new Set()}
+            seededPaths={new Set()}
+            onVisiblePathsChange={vi.fn()}
+            taskTitlesByEpicId={new Map([["epic-1", "Payments revamp"]])}
+            toolbarProps={{
+              ...testToolbarProps(),
+              policies: (
+                <div data-testid="worktree-policy-slot">Cleanup policy</div>
+              ),
+            }}
+          />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
 
-    expect(screen.queryByTestId("worktrees-filter-trigger")).toBeNull();
-    expect(screen.queryByTestId("worktrees-sort-trigger")).toBeNull();
-    expect(screen.queryByTestId("worktrees-toolbar-actions")).toBeNull();
+    expect(screen.queryByRole("button", { name: "List actions" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /Filter and sort/ }),
+    ).toBeNull();
     expect(screen.queryByRole("button", { name: "Copy paths" })).toBeNull();
     expect(screen.queryByText("Copy paths")).toBeNull();
 
-    const trigger = screen.getByTestId("worktrees-filter-sort-trigger");
-    expect(trigger.textContent).toBe("Filter and sort");
-    expect(trigger.getAttribute("aria-label")).toBe(
-      "Filter and sort: All, Newest",
-    );
+    const policy = screen.getByTestId("worktree-policy-slot");
+    const selectAll = screen.getByRole("checkbox", {
+      name: "Select all visible worktrees",
+    });
+    const collapse = screen.getByRole("button", { name: "Collapse all" });
+    const refresh = screen.getByRole("button", { name: "Refresh worktrees" });
     const search = screen.getByRole("searchbox", { name: "Search worktrees" });
-    const toolbar = worktreesToolbar(trigger);
-    expect(toolbar.childElementCount).toBe(1);
-    const phoneRow = toolbar.firstElementChild;
-    if (!(phoneRow instanceof HTMLElement)) {
-      throw new Error("expected the phone toolbar row");
+    const filter = screen.getByRole("button", { name: "Filter: All" });
+    const sort = screen.getByRole("button", { name: "Sort: Newest" });
+    const toolbar = worktreesToolbar(filter);
+    for (const control of [
+      policy,
+      selectAll,
+      collapse,
+      refresh,
+      search,
+      filter,
+      sort,
+    ]) {
+      expect(toolbar.contains(control)).toBe(true);
+      expect(control.closest("[data-slot='popover-content']")).toBeNull();
     }
-    expect(phoneRow.contains(search)).toBe(true);
-    expect(phoneRow.contains(trigger)).toBe(true);
-    const listActions = screen.getByRole("button", { name: "List actions" });
-    expect(listActions.getAttribute("data-testid")).toBe(
-      "worktrees-list-actions",
+    expect(filter.textContent).toContain("All");
+    expect(sort.textContent).toContain("Newest");
+
+    const header = taskGroupHeader("epic-1");
+    within(header).getByRole("button", { name: "Open Task Payments revamp" });
+    expect(within(header).getByTestId("task-merge-rollup").textContent).toBe(
+      "Merged",
     );
-    expect(phoneRow.contains(listActions)).toBe(true);
-    expect(screen.queryByTestId("worktrees-select-all")).toBeNull();
-    expect(screen.queryByTestId("worktree-policy-slot")).toBeNull();
-    expect(
-      screen.queryByRole("button", { name: "Refresh worktrees" }),
-    ).toBeNull();
-
-    await userEvent.setup().click(listActions);
-
-    const menu = screen
-      .getByTestId("worktree-policy-slot")
-      .closest("[data-slot='popover-content']");
-    if (!(menu instanceof HTMLElement)) {
-      throw new Error("expected the list actions menu");
-    }
-    expect(phoneRow.contains(menu)).toBe(false);
-    within(menu).getByTestId("worktrees-select-all");
-    within(menu).getByText("Select all");
-    within(menu).getByRole("button", { name: "Collapse all" });
-    within(menu).getByRole("button", { name: "Refresh worktrees" });
-    within(menu).getByTestId("worktree-policy-slot");
-    expect(screen.queryByRole("button", { name: "Copy paths" })).toBeNull();
-    expect(
-      screen.getAllByTestId("worktree-row-copy-path").length,
-    ).toBeGreaterThan(0);
+    expect(screen.getAllByTestId("task-merge-rollup")).toHaveLength(1);
+    const row = worktreeRow("feat-alpha");
+    expect(within(row).queryByTestId("task-merge-rollup")).toBeNull();
+    expect(within(row).queryByText("Payments revamp")).toBeNull();
+    expect(within(row).queryByRole("button", { name: "Details" })).toBeNull();
+    within(row).getByRole("button", {
+      name: "Worktree actions for feat-alpha",
+    });
   });
 
   it("shows the freshness label for a real timestamp and suppresses it while refreshing", () => {

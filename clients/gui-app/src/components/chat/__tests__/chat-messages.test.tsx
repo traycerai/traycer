@@ -3227,6 +3227,58 @@ describe("ChatMessages scroll policy", () => {
   // isolation); this one is the wiring pin that a deleted link anywhere in
   // that chain would fail.
   describe("minimap current tick via the real scroll chain (O2, ticket 16)", () => {
+    function activeTickMessageId(): string | null {
+      return (
+        document
+          .querySelector(
+            '[data-testid="chat-turn-minimap-tick"][data-active="true"]',
+          )
+          ?.getAttribute("data-message-id") ?? null
+      );
+    }
+
+    // A real content height parks the end with three of the tail's queries in
+    // full view; the follow mode, not their tie, decides the tick.
+    async function renderTwelveRowsAtEnd(scrollStateKey: string) {
+      const messages = makeCompletedTranscript(12);
+      setLegendListScrollContainerScrollHeightOverride(
+        LEGEND_LIST_HEADER_PX + messages.length * 90 + 40,
+      );
+      renderChatMessages({ messages, scrollStateKey });
+      await settleLegendList();
+      assertTrueBottomGeometry();
+    }
+
+    it("marks the last turn's tick while the timeline follows its end", async () => {
+      await renderTwelveRowsAtEnd("minimap-at-end");
+
+      await waitFor(() => {
+        expect(activeTickMessageId()).toBe("message-10");
+      });
+    });
+
+    it("moves the tick with the follow mode itself, with no scroll event", async () => {
+      await renderTwelveRowsAtEnd("minimap-go-live");
+      const scrollNode = getScrollNode();
+      fireEvent.wheel(scrollNode, { deltaY: -80 });
+      await fireScrollTopAndFlush(0);
+      await waitForPillVisible();
+      await waitFor(() => {
+        expect(activeTickMessageId()).toBe("message-0");
+      });
+      const pill = queryScrollToEndPill();
+      if (pill === null) throw new Error("scroll-to-end pill is not mounted");
+      let scrollEvents = 0;
+      scrollNode.addEventListener("scroll", () => {
+        scrollEvents += 1;
+      });
+
+      fireEvent.click(pill);
+
+      expect(scrollEvents).toBe(0);
+      expect(activeTickMessageId()).toBe("message-10");
+    });
+
     it("updates the current rail tick through a real fireEvent.scroll, not a direct inViewRefreshRef call", async () => {
       const messages = makeCompletedTranscript(12);
       renderChatMessages({

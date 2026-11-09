@@ -120,7 +120,7 @@ export const useTracySurfaceStore = create<TracySurfaceState>()(
         for (const [botId, landing] of [...stagedLandings]) {
           releaseTracyLanding(botId, landing);
         }
-        for (const botId of state.visitedBotIds) forgetBotState(botId);
+        for (const botId of state.visitedBotIds) closeBotState(botId);
         useMobileTabOriginStore.getState().clearAll();
         if (!state.open && state.visitedBotIds.length === 0) return;
         actedOnSinceBind = true;
@@ -192,14 +192,21 @@ export function releaseTracyLanding(
 }
 
 /**
- * A bot's rail, unsent drafts, surface actions and unspent landing: the state
- * kept per channel while the surface shows it.
+ * A bot's rail, card answers, surface actions and unspent landing: the state
+ * kept per channel while the surface shows it. What its message boxes hold
+ * unsent outlives the surface (Tracy Bots T158).
  */
-function forgetBotState(botId: string): void {
+function closeBotState(botId: string): void {
   useBotOpenThreadStore.getState().setRail(botId, null);
-  useBotDraftsStore.getState().forgetBot(botId);
+  useBotDraftsStore.getState().closeBot(botId);
   useBotSurfaceActionsStore.getState().forgetBot(botId);
   useBotTabLandingStore.getState().clear(botId);
+}
+
+/** All the bot's state, its message boxes' drafts included: it is gone. */
+function forgetBotState(botId: string): void {
+  closeBotState(botId);
+  useBotDraftsStore.getState().forgetBot(botId);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
