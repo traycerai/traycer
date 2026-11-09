@@ -112,16 +112,18 @@ export function openSoundtrackMediaSession(
     anchor.load();
     URL.revokeObjectURL(url);
   };
-  // Only the actions the system took: one it refused has nothing to clear.
+  // Only what the system took is undone: an action it refused, or a position
+  // it has no call for, has nothing to clear.
   const registered: MediaSessionAction[] = [];
   const register = (action: MediaSessionAction, handler: () => void): void => {
     mediaSession.setActionHandler(action, handler);
     registered.push(action);
   };
+  let positioned = false;
   const leaveControls = (): void => {
     for (const action of registered)
       mediaSession.setActionHandler(action, null);
-    mediaSession.setPositionState();
+    if (positioned) mediaSession.setPositionState();
     mediaSession.metadata = null;
     mediaSession.playbackState = "none";
   };
@@ -136,6 +138,7 @@ export function openSoundtrackMediaSession(
       position: 0,
       playbackRate: 1,
     });
+    positioned = true;
     mediaSession.playbackState = "playing";
     // Ahead of the first track: without metadata the system shows the window's title.
     setTrack(null);
@@ -144,8 +147,8 @@ export function openSoundtrackMediaSession(
     appLogger.warn("[soundtrack] could not join the system's media controls", {
       error: describeLogError(error),
     });
-    leaveControls();
     releaseAnchor();
+    leaveControls();
     return null;
   }
   return {

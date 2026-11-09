@@ -123,6 +123,21 @@ describe("openSoundtrackMediaSession", () => {
     expect(osSession.metadata).toBeNull();
   });
 
+  it("stays out of the controls, the buttons it took given back, where the system has no position call", () => {
+    Object.defineProperty(osSession, "setPositionState", {
+      configurable: true,
+      value: undefined,
+    });
+
+    const session = openSoundtrackMediaSession(newHandlers());
+
+    expect(session).toBeNull();
+    expect(pause).toHaveBeenCalledTimes(1);
+    expect(revokeObjectURL).toHaveBeenCalledWith(OBJECT_URL);
+    expect(osSession.handlers.size).toBe(0);
+    expect(osSession.playbackState).toBe("none");
+  });
+
   it("plays a looping anchor, offers the four buttons with no timeline, and routes each press to its handler", () => {
     const handlers = newHandlers();
 
