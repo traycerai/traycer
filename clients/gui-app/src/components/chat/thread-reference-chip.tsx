@@ -50,7 +50,22 @@ function HeldThreadReference(props: {
   if (held === null) {
     return <TaskReferenceChip referenceId={referenceId} display={display} />;
   }
+  return <ThreadReferenceButton held={held} />;
+}
+
+function ThreadReferenceButton(props: {
+  readonly held: HeldBotThread;
+}): ReactNode {
+  const { held } = props;
   const title = held.thread.anchor?.excerpt ?? null;
+  const openChannel = useOpenBotChannel();
+  // A thread whose post is gone from the channel cannot be opened, as in the
+  // Threads list: its panel is found through that post. The chip stays
+  // focusable, so its tooltip, the only place it names the thread, still
+  // opens by hover and by keyboard.
+  const gone = held.thread.anchor === null;
+  // The tooltip wraps the button itself: its trigger hands its props and ref
+  // to its direct child, which has to be the element that takes them.
   return (
     <TooltipWrapper
       label={`${title ?? "Thread"}\n${held.thread.threadId}`}
@@ -58,43 +73,31 @@ function HeldThreadReference(props: {
       sideOffset={undefined}
       align={undefined}
     >
-      <ThreadReferenceButton held={held} title={title} />
+      <button
+        type="button"
+        aria-disabled={gone}
+        onClick={() => {
+          if (gone) return;
+          openChannel(held.botId, {
+            kind: "thread",
+            threadId: held.thread.threadId,
+            messageId: null,
+          });
+        }}
+        className={cn(
+          "mx-0.25 inline-flex max-w-[min(26rem,80vw)] items-center gap-1 rounded-md border border-primary/25 bg-primary/10 px-1.5 py-0.5 align-baseline",
+          "text-ui-sm font-medium text-primary transition-colors hover:bg-primary/15 hover:text-primary focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none aria-disabled:hover:bg-primary/10",
+        )}
+        data-thread-reference={held.thread.threadId}
+        data-bot-id={held.botId}
+        // Excluded from quote selection, as the agent and task chips are: a drag
+        // across it must not append its title as quoted text.
+        data-quote-exclude=""
+      >
+        <NamedBotAvatar botId={held.botId} size="xs" />
+        <span className="shrink-0 font-normal">thread</span>
+        {title === null ? null : <span className="truncate">{title}</span>}
+      </button>
     </TooltipWrapper>
-  );
-}
-
-function ThreadReferenceButton(props: {
-  readonly held: HeldBotThread;
-  readonly title: string | null;
-}): ReactNode {
-  const { held, title } = props;
-  const openChannel = useOpenBotChannel();
-  return (
-    <button
-      type="button"
-      // A thread whose post is gone from the channel cannot be opened, as in
-      // the Threads list: its panel is found through that post.
-      disabled={held.thread.anchor === null}
-      onClick={() =>
-        openChannel(held.botId, {
-          kind: "thread",
-          threadId: held.thread.threadId,
-          messageId: null,
-        })
-      }
-      className={cn(
-        "mx-0.25 inline-flex max-w-[min(26rem,80vw)] items-center gap-1 rounded-md border border-primary/25 bg-primary/10 px-1.5 py-0.5 align-baseline",
-        "text-ui-sm font-medium text-primary transition-colors hover:bg-primary/15 hover:text-primary focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none disabled:hover:bg-primary/10",
-      )}
-      data-thread-reference={held.thread.threadId}
-      data-bot-id={held.botId}
-      // Excluded from quote selection, as the agent and task chips are: a drag
-      // across it must not append its title as quoted text.
-      data-quote-exclude=""
-    >
-      <NamedBotAvatar botId={held.botId} size="xs" />
-      <span className="shrink-0 font-normal">thread</span>
-      {title === null ? null : <span className="truncate">{title}</span>}
-    </button>
   );
 }

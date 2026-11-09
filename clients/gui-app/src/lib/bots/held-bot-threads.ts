@@ -16,7 +16,8 @@ const THREAD_LIST_METHOD = "bot.thread.list";
 /**
  * The threads every bot's thread list read so far holds, whichever host
  * answered it: their ids lower-cased and sorted, each beside its thread and
- * bot. Built once per query client and shared by every chip, and rebuilt on
+ * bot, and a thread two hosts' lists hold with the copy answered last first.
+ * Built once per query client and shared by every chip, and rebuilt on
  * the first read after a thread list is read, re-read or dropped: a message
  * holding many id-shaped tokens resolves each against this instead of walking
  * the query cache once per token, as the task chips do.
@@ -55,16 +56,15 @@ export function findHeldBotThread(
     else high = middle;
   }
   // An id sorts before every id it begins, so the thread it names in full
-  // comes first. One thread listed twice (two hosts answered) is one thread.
+  // comes first. One thread listed twice (two hosts answered) is one thread,
+  // read from its copy answered last, which comes first.
   let found: HeldBotThread | null = null;
   for (let index = low; index < entries.length; index += 1) {
     const [lowerCased, entry] = entries[index];
     if (!lowerCased.startsWith(normalized)) break;
     if (lowerCased === normalized) return entry;
-    if (found !== null && found.thread.threadId !== entry.thread.threadId) {
-      return null;
-    }
-    found = entry;
+    if (found === null) found = entry;
+    else if (found.thread.threadId !== entry.thread.threadId) return null;
   }
   return found;
 }
@@ -122,7 +122,11 @@ function heldBotThreadsFor(queryClient: QueryClient): HeldBotThreads {
 function scanHeldBotThreads(
   queryClient: QueryClient,
 ): ReadonlyArray<readonly [string, HeldBotThread]> {
-  const entries: Array<readonly [string, HeldBotThread]> = [];
+  const entries: Array<{
+    readonly lowerCased: string;
+    readonly held: HeldBotThread;
+    readonly answeredAt: number;
+  }> = [];
   for (const query of queryClient.getQueryCache().findAll({
     predicate: (query) =>
       hostQueryKeys.matchesMethodOnAnyHost(query.queryKey, THREAD_LIST_METHOD),
@@ -133,10 +137,22 @@ function scanHeldBotThreads(
     );
     if (botId === null || response === undefined) continue;
     for (const thread of response.threads) {
-      entries.push([thread.threadId.toLowerCase(), heldEntry(botId, thread)]);
+      entries.push({
+        lowerCased: thread.threadId.toLowerCase(),
+        held: heldEntry(botId, thread),
+        answeredAt: query.state.dataUpdatedAt,
+      });
     }
   }
-  return entries.sort(([a], [b]) => compareCodeUnits(a, b));
+  return entries
+    .sort((a, b) => {
+      const byId = compareCodeUnits(a.lowerCased, b.lowerCased);
+      return byId !== 0 ? byId : b.answeredAt - a.answeredAt;
+    })
+    .map(({ lowerCased, held }): readonly [string, HeldBotThread] => [
+      lowerCased,
+      held,
+    ]);
 }
 
 /** The order `<` reads strings in, which the prefix search relies on. */

@@ -17,6 +17,8 @@ import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
  */
 
 export const HOST_ID = "host-test";
+/** A host the bot was reached through before `HOST_ID`. */
+export const OTHER_HOST_ID = "host-earlier";
 export { BOT_ID };
 export const OTHER_BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAW";
 
@@ -43,6 +45,19 @@ export function holdThreads(
   threads: ReadonlyArray<BotThreadSummary>,
   options: { readonly botId: string; readonly hostId: string },
 ): void {
+  holdThreadsAt(queryClient, threads, { ...options, answeredAt: Date.now() });
+}
+
+/** The same, as `hostId` answered it at `answeredAt` (epoch ms). */
+export function holdThreadsAt(
+  queryClient: QueryClient,
+  threads: ReadonlyArray<BotThreadSummary>,
+  options: {
+    readonly botId: string;
+    readonly hostId: string;
+    readonly answeredAt: number;
+  },
+): void {
   const answer: BotThreadListResponse = {
     threads: [...threads],
     trunkCostUsd: null,
@@ -57,5 +72,6 @@ export function holdThreads(
       botThreadListParams(options.botId),
     ),
     answer,
+    { updatedAt: options.answeredAt },
   );
 }

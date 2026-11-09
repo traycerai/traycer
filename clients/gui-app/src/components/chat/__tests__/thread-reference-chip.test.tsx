@@ -16,8 +16,10 @@ import {
   EXCERPT,
   HOST_ID,
   OTHER_BOT_ID,
+  OTHER_HOST_ID,
   THREAD_ID,
   holdThreads,
+  holdThreadsAt,
   threadSummary,
 } from "@/components/chat/__tests__/thread-reference-chip-support";
 import { ThreadReferenceChip } from "@/components/chat/thread-reference-chip";
@@ -120,20 +122,52 @@ describe("<ThreadReferenceChip /> pressed", () => {
     });
   });
 
-  it("opens nothing for a thread whose post is gone from the channel", async () => {
+  it("opens nothing for a thread whose post is gone from the channel, and still names the thread in its tooltip to the keyboard", async () => {
     holdThreads(
       queryClient,
       [{ ...threadSummary(THREAD_ID, EXCERPT), anchor: null }],
       { botId: BOT_ID, hostId: HOST_ID },
     );
     mount(THREAD_ID);
+    const user = userEvent.setup();
 
     const chip = screen.getByRole("button");
-    expect(chip.hasAttribute("disabled")).toBe(true);
-    await userEvent.setup().click(chip);
+    expect(chip.getAttribute("aria-disabled")).toBe("true");
+    await user.tab();
+    expect(document.activeElement).toBe(chip);
+    expect((await screen.findByRole("tooltip")).textContent).toContain(
+      THREAD_ID,
+    );
+    await user.click(chip);
 
     expect(useBotTabLandingStore.getState().byBotId).toEqual({});
     expect(useTracySurfaceStore.getState().open).toBe(false);
     expect(mocks.activateTabIntent).not.toHaveBeenCalled();
   });
+
+  it.each<[string, ReadonlyArray<"earlier" | "later">, string]>([
+    ["its id", ["earlier", "later"], THREAD_ID],
+    ["a prefix", ["later", "earlier"], THREAD_ID.slice(0, 8)],
+  ])(
+    "opens nothing for a thread written as %s whose post is gone in the list one host answered last, though another host's earlier list still has it (cached %j)",
+    async (_written, cached, referenceId) => {
+      for (const answered of cached) {
+        const thread = threadSummary(THREAD_ID, EXCERPT);
+        holdThreadsAt(
+          queryClient,
+          [answered === "earlier" ? thread : { ...thread, anchor: null }],
+          answered === "earlier"
+            ? { botId: BOT_ID, hostId: OTHER_HOST_ID, answeredAt: 1_000 }
+            : { botId: BOT_ID, hostId: HOST_ID, answeredAt: 2_000 },
+        );
+      }
+      mount(referenceId);
+
+      const chip = screen.getByRole("button");
+      expect(chip.getAttribute("aria-disabled")).toBe("true");
+      await userEvent.setup().click(chip);
+
+      expect(mocks.activateTabIntent).not.toHaveBeenCalled();
+    },
+  );
 });
