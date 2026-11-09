@@ -17,7 +17,11 @@ import {
 import type { SandboxFrameProps } from "@/components/sandbox/sandbox-frame";
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import type { ArtifactManifest } from "@/lib/sandbox/artifact-serving";
-import type { SandboxBridgeHost } from "@/lib/sandbox/bridge-host";
+import type {
+  SandboxArtifactLink,
+  SandboxBridgeHost,
+} from "@/lib/sandbox/bridge-host";
+import { HtmlArtifactLinkContext } from "@/components/html-artifact/html-artifact-link-context";
 
 /**
  * The page is a sandboxed iframe on a custom scheme, which jsdom will not
@@ -30,6 +34,7 @@ import type { SandboxBridgeHost } from "@/lib/sandbox/bridge-host";
 const frames = vi.hoisted(() => ({
   latest: null as SandboxFrameProps | null,
   bridge: null as SandboxBridgeHost | null,
+  toast: vi.fn(),
 }));
 
 vi.mock("@/components/sandbox/sandbox-frame", () => ({
@@ -49,6 +54,8 @@ vi.mock("@/components/sandbox/sandbox-frame", () => ({
     );
   },
 }));
+
+vi.mock("sonner", () => ({ toast: frames.toast }));
 
 import { ArtifactExpansion } from "@/components/artifacts/artifact-expansion";
 import { ArtifactPagesFrame } from "@/components/html-artifact/artifact-pages-frame";
@@ -77,6 +84,8 @@ interface PagesOptions {
   readonly commenting: boolean;
   /** The visible comment layer the caller places over the entry page. */
   readonly renderOverlay: ((onEntryPage: boolean) => ReactNode) | null;
+  /** What the surface around the frame provides to open a page's link; `null` provides none. */
+  readonly openArtifactLink: ((link: SandboxArtifactLink) => void) | null;
 }
 
 const FILLING_ONE_PAGE: PagesOptions = {
@@ -85,11 +94,12 @@ const FILLING_ONE_PAGE: PagesOptions = {
   menuItems: undefined,
   commenting: false,
   renderOverlay: null,
+  openArtifactLink: null,
 };
 
 function renderPages(overrides: Partial<PagesOptions>) {
   const options = { ...FILLING_ONE_PAGE, ...overrides };
-  render(
+  const frame = (
     // The frame is not a surface on its own: every call site renders it inside
     // the expansion that raises it, and that is what its Expand toggle asks.
     <ArtifactExpansion title="Report">
@@ -119,7 +129,16 @@ function renderPages(overrides: Partial<PagesOptions>) {
         sourceEquivalent={undefined}
         menuItems={options.menuItems}
       />
-    </ArtifactExpansion>,
+    </ArtifactExpansion>
+  );
+  render(
+    options.openArtifactLink === null ? (
+      frame
+    ) : (
+      <HtmlArtifactLinkContext value={options.openArtifactLink}>
+        {frame}
+      </HtmlArtifactLinkContext>
+    ),
   );
   const navigation = (): NonNullable<SandboxFrameProps["pageNavigation"]> => {
     const value = frames.latest?.pageNavigation ?? null;
@@ -144,6 +163,7 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  frames.toast.mockClear();
   frames.latest = null;
   frames.bridge = null;
   disposeBridges();
@@ -651,5 +671,35 @@ describe("a page that is already showing when the surface is raised or lowered",
     expect(screen.getByTestId("page-frame").getAttribute("data-mode")).toBe(
       "inline",
     );
+  });
+});
+
+describe("a link on a page that leads out of the artifact", () => {
+  const LINK: SandboxArtifactLink = {
+    href: "../sibling/index.html",
+    pagePath: "site/index.html",
+  };
+  function clickLink(): void {
+    const onArtifactLink = frames.latest?.onArtifactLink;
+    if (onArtifactLink === undefined) throw new Error("expected a link hook");
+    act(() => onArtifactLink(LINK));
+  }
+
+  it("reaches the opener the surface around the frame provides", () => {
+    const open = vi.fn<(link: SandboxArtifactLink) => void>();
+    renderPages({ openArtifactLink: open });
+
+    clickLink();
+
+    expect(open).toHaveBeenCalledExactlyOnceWith(LINK);
+    expect(frames.toast).not.toHaveBeenCalled();
+  });
+
+  it("is answered with a toast where the surface provides no opener", () => {
+    renderPages({});
+
+    clickLink();
+
+    expect(frames.toast).toHaveBeenCalledExactlyOnceWith("Couldn't open link");
   });
 });

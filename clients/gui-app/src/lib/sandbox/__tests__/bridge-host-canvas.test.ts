@@ -1545,6 +1545,28 @@ describe("artifact links from a served html artifact page", () => {
     expect(harness.onArtifactLink).not.toHaveBeenCalled();
   });
 
+  it("drops a report from a page that proved itself but is marked crashed", () => {
+    const harness = createHarness({
+      canvas: false,
+      ready: false,
+      pages: COMMENTABLE_PAGES,
+    });
+    harness.host.receive(
+      notification("traycer/notifications/early-error", { message: "early" }),
+    );
+    harness.host.receive(
+      notification("traycer/notifications/document-ready", {
+        nonce: NONCE,
+        height: 10,
+      }),
+    );
+    expect(harness.host.status).toBe("crashed");
+
+    harness.host.receive(link({}));
+
+    expect(harness.onArtifactLink).not.toHaveBeenCalled();
+  });
+
   it("drops a report from a canvas board, which reports its own links", () => {
     const harness = createHarness({ canvas: true, ready: true });
 

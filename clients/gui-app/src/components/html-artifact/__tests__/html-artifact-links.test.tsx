@@ -65,8 +65,6 @@ vi.mock("@/lib/links/open-link", () => ({
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
 vi.mock("sonner", () => ({ toast: mocks.toast }));
 
-const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
-
 const epicSession = {} as React.ContextType<typeof EpicSessionContext>;
 
 /** Renders the provider around a frame stand-in and returns what the frame calls on a click. */
@@ -139,7 +137,7 @@ describe("HtmlArtifactLinks", () => {
       const open = mountFrame({ viewTabId: "tab-1", tileHost: "tab-host" });
 
       open({ href, pagePath: "a/b/index.html" });
-      await flush();
+      await vi.waitFor(() => expect(mocks.openTile).toHaveBeenCalled());
 
       expect(mocks.resolveArtifactByPath).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -160,9 +158,10 @@ describe("HtmlArtifactLinks", () => {
     const open = mountFrame({ viewTabId: "tab-1", tileHost: "tab-host" });
 
     open({ href: "../missing/index.html", pagePath: "a/b/index.html" });
-    await flush();
+    await vi.waitFor(() =>
+      expect(mocks.toast).toHaveBeenCalledWith("Couldn't open link"),
+    );
 
-    expect(mocks.toast).toHaveBeenCalledWith("Couldn't open link");
     expect(mocks.openTile).not.toHaveBeenCalled();
   });
 
@@ -170,10 +169,11 @@ describe("HtmlArtifactLinks", () => {
     const open = mountFrame({ viewTabId: "tab-1", tileHost: "tab-host" });
 
     open({ href: "../../../x/", pagePath: "a/b/index.html" });
-    await flush();
+    await vi.waitFor(() =>
+      expect(mocks.toast).toHaveBeenCalledWith("Couldn't open link"),
+    );
 
     expect(mocks.resolveArtifactByPath).not.toHaveBeenCalled();
-    expect(mocks.toast).toHaveBeenCalledWith("Couldn't open link");
     expect(mocks.openTile).not.toHaveBeenCalled();
   });
 
@@ -191,11 +191,10 @@ describe("HtmlArtifactLinks", () => {
     ["no tile host", "tab-1", null],
   ])(
     "answers a click with the toast when there is %s",
-    async (_l, viewTabId, tileHost) => {
+    (_l, viewTabId, tileHost) => {
       const open = mountFrame({ viewTabId, tileHost });
 
       open({ href: "../sibling/index.html", pagePath: "a/b/index.html" });
-      await flush();
 
       expect(mocks.toast).toHaveBeenCalledWith("Couldn't open link");
       expect(mocks.resolveArtifactByPath).not.toHaveBeenCalled();
