@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   artifactSubscribeServerFrameSchemaV10,
   artifactSubscribeServerFrameSchemaV11,
+  artifactSubscribeServerFrameSchemaV12,
+  type ArtifactSubscribeUnavailableCodeV12,
 } from "@traycer/protocol/host/epic/artifact-subscribe";
 import type {
   AdapterHost,
@@ -109,10 +111,10 @@ function awarenessFrame() {
 }
 
 function unavailableFrame(overrides: {
-  code: "staleAuthorityEpoch" | "artifactNotFound" | "bodyUnavailable";
+  code: ArtifactSubscribeUnavailableCodeV12;
   terminal: boolean;
 }) {
-  const parsed = artifactSubscribeServerFrameSchemaV10.parse({
+  const parsed = artifactSubscribeServerFrameSchemaV12.parse({
     kind: "unavailable",
     authorityEpoch: AUTHORITY_EPOCH,
     artifactId: ARTIFACT_ID,
@@ -483,6 +485,31 @@ describe("createArtifactLaneAdapter - unavailable mapping", () => {
     expect(replacementReasons(log)).toEqual(["authority-epoch-changed"]);
   });
 
+  it("bodyMoved emits a terminal body-moved doc-unavailable and no requestReplacement", () => {
+    const { factory, latest } = createFakeStreamClientFactory();
+    const adapter = createArtifactLaneAdapter(
+      createSources(factory, undefined, undefined),
+    );
+    const { host, log } = createRecordingHost();
+    adapter.attach(host);
+
+    latest().callbacks.onUnavailable(
+      unavailableFrame({ code: "bodyMoved", terminal: true }),
+    );
+
+    expect(emittedEvents(log)).toEqual([
+      {
+        kind: "doc-unavailable",
+        authorityEpoch: AUTHORITY_EPOCH,
+        docId: ARTIFACT_ID,
+        code: "body-moved",
+        terminal: true,
+        reason: "host said so",
+      },
+    ]);
+    expect(replacementReasons(log)).toEqual([]);
+  });
+
   it("artifactNotFound and bodyUnavailable emit NO requestReplacement", () => {
     for (const code of ["artifactNotFound", "bodyUnavailable"] as const) {
       const { factory, latest } = createFakeStreamClientFactory();
@@ -710,7 +737,7 @@ describe("createArtifactLaneAdapter - generation guard", () => {
 
 // ─── Binary-payload-missing drop, through the REAL ArtifactStreamClient ────
 
-describe("ArtifactStreamClient (real, over a stub IStreamSession) - binary-payload-missing drop", () => {
+describe("ArtifactStreamClient (real, over a stub IStreamSession)", () => {
   class StubStreamSession implements IStreamSession {
     private frameHandler: ServerFrameHandler | null = null;
     private statusHandler: StatusChangeHandler | null = null;
@@ -865,6 +892,30 @@ describe("ArtifactStreamClient (real, over a stub IStreamSession) - binary-paylo
     );
 
     expect(recorder.awarenessCalls).toBe(0);
+  });
+
+  it("an unavailable frame with the bodyMoved code reaches onUnavailable", () => {
+    const session = new StubStreamSession();
+    const codes: string[] = [];
+    createClient(session, {
+      ...createCallbackRecorder().callbacks,
+      onUnavailable: (frame) => codes.push(frame.code),
+    });
+
+    session.fireServerFrame(
+      {
+        kind: "unavailable",
+        authorityEpoch: AUTHORITY_EPOCH,
+        artifactId: ARTIFACT_ID,
+        code: "bodyMoved",
+        reason: "host said so",
+        terminal: true,
+        hasBinaryPayload: false,
+      },
+      null,
+    );
+
+    expect(codes).toEqual(["bodyMoved"]);
   });
 });
 
