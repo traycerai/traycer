@@ -117,10 +117,5 @@ export function useEpicDeleteAgentSubtree() {
         running.current = false;
       });
   };
-  return {
-    deleteSubtree,
-    isPending: mutation.isPending,
-    error: mutation.error?.message ?? null,
-    resetError: mutation.reset,
-  };
+  return { mutation, deleteSubtree };
 }

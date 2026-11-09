@@ -59,7 +59,7 @@ function AgentDeleteConfirmDialogBody(props: AgentDeleteConfirmDialogProps) {
       };
     }),
   );
-  const pending = props.isPending || deletion.isPending;
+  const pending = props.isPending || deletion.mutation.isPending;
   if (props.open !== wasOpen) {
     setWasOpen(props.open);
     setIncludeNestedAgents(false);
@@ -76,7 +76,7 @@ function AgentDeleteConfirmDialogBody(props: AgentDeleteConfirmDialogProps) {
     <ConfirmDestructiveDialog
       {...props}
       onOpenChange={(open) => {
-        if (!open) deletion.resetError();
+        if (!open) deletion.mutation.reset();
         props.onOpenChange(open);
       }}
       description={description}
@@ -111,10 +111,10 @@ function AgentDeleteConfirmDialogBody(props: AgentDeleteConfirmDialogProps) {
         nestedCount={nestedCount}
         pending={pending}
         blockedReason={blockedReason}
-        error={deletion.error}
+        error={deletion.mutation.error?.message ?? null}
         onCheckedChange={(checked) => {
           setIncludeNestedAgents(checked);
-          deletion.resetError();
+          deletion.mutation.reset();
         }}
       />
       {props.children}

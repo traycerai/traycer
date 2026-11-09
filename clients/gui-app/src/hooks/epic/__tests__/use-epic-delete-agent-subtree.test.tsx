@@ -262,7 +262,9 @@ describe("useEpicDeleteAgentSubtree", () => {
       deleted = await result.current.deleteSubtree("root", CONFIRMED_IDS);
     });
     await waitFor(() =>
-      expect(result.current.error).toContain("Deleted 1 of 4 agents"),
+      expect(result.current.mutation.error?.message).toContain(
+        "Deleted 1 of 4 agents",
+      ),
     );
 
     expect(deleted).toBe(false);
@@ -271,7 +273,7 @@ describe("useEpicDeleteAgentSubtree", () => {
       { kind: "chat", id: "chat-child", hostId: "host-child" },
     ]);
     expect(deletionRuntime.rolledBackIds).toEqual(["chat-child"]);
-    expect(result.current.isPending).toBe(false);
+    expect(result.current.mutation.isPending).toBe(false);
   });
 
   it("stops when a terminal-agent delete reports false after an earlier delete succeeds", async () => {
@@ -285,7 +287,9 @@ describe("useEpicDeleteAgentSubtree", () => {
       deleted = await result.current.deleteSubtree("root", CONFIRMED_IDS);
     });
     await waitFor(() =>
-      expect(result.current.error).toContain("Deleted 2 of 4 agents"),
+      expect(result.current.mutation.error?.message).toContain(
+        "Deleted 2 of 4 agents",
+      ),
     );
 
     expect(deleted).toBe(false);
@@ -307,7 +311,9 @@ describe("useEpicDeleteAgentSubtree", () => {
       deleted = await result.current.deleteSubtree("root", ["root"]);
     });
     await waitFor(() =>
-      expect(result.current.error).toContain("nested agents changed"),
+      expect(result.current.mutation.error?.message).toContain(
+        "nested agents changed",
+      ),
     );
 
     expect(deleted).toBe(false);
@@ -324,7 +330,9 @@ describe("useEpicDeleteAgentSubtree", () => {
     await act(async () => {
       deleted = await result.current.deleteSubtree("root", CONFIRMED_IDS);
     });
-    await waitFor(() => expect(result.current.error).toContain("chat-child"));
+    await waitFor(() =>
+      expect(result.current.mutation.error?.message).toContain("chat-child"),
+    );
 
     expect(deleted).toBe(false);
     expect(deletionRuntime.calls).toEqual([]);
@@ -343,7 +351,9 @@ describe("useEpicDeleteAgentSubtree", () => {
       deleted = await result.current.deleteSubtree("root", CONFIRMED_IDS);
     });
     await waitFor(() =>
-      expect(result.current.error).toContain("Deleted 1 of 4 agents"),
+      expect(result.current.mutation.error?.message).toContain(
+        "Deleted 1 of 4 agents",
+      ),
     );
 
     expect(deleted).toBe(false);
@@ -363,7 +373,9 @@ describe("useEpicDeleteAgentSubtree", () => {
       deleted = await result.current.deleteSubtree("root", CONFIRMED_IDS);
     });
     await waitFor(() =>
-      expect(result.current.error).toContain("Nested agents are still loading"),
+      expect(result.current.mutation.error?.message).toContain(
+        "Nested agents are still loading",
+      ),
     );
 
     expect(deleted).toBe(false);
@@ -381,7 +393,9 @@ describe("useEpicDeleteAgentSubtree", () => {
       deleted = await result.current.deleteSubtree("root", CONFIRMED_IDS);
     });
     await waitFor(() =>
-      expect(result.current.error).toContain("Nested agents are still loading"),
+      expect(result.current.mutation.error?.message).toContain(
+        "Nested agents are still loading",
+      ),
     );
 
     expect(deleted).toBe(false);

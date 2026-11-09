@@ -70,19 +70,21 @@ vi.mock("@/hooks/use-epic-store", () => ({
 
 vi.mock("@/hooks/epic/use-epic-delete-agent-subtree", () => ({
   useEpicDeleteAgentSubtree: () => {
-    const [error, setError] = useState<string | null>(null);
+    const [error, setError] = useState<Error | null>(null);
     return {
       deleteSubtree: async (
         nodeId: string,
         confirmedIds: readonly string[],
       ) => {
         const deleted = await dialogRuntime.deleteSubtree(nodeId, confirmedIds);
-        if (!deleted) setError(dialogRuntime.errorAfterFailure);
+        if (!deleted) setError(new Error(dialogRuntime.errorAfterFailure));
         return deleted;
       },
-      isPending: false,
-      error,
-      resetError: () => setError(null),
+      mutation: {
+        isPending: false,
+        error,
+        reset: () => setError(null),
+      },
     };
   },
 }));

@@ -1203,7 +1203,9 @@ describe("useEpicDeleteAgentSubtree preflight and progress", () => {
       });
 
       expect(fixture.deleteChatCalls).toEqual([]);
-      await waitFor(() => expect(result.current.error).toContain("working"));
+      await waitFor(() =>
+        expect(result.current.mutation.error?.message).toContain("working"),
+      );
     },
   );
 
@@ -1218,7 +1220,9 @@ describe("useEpicDeleteAgentSubtree preflight and progress", () => {
 
     expect(fixture.deleteChatCalls).toEqual([]);
     await waitFor(() =>
-      expect(result.current.error).toContain("nested agents changed"),
+      expect(result.current.mutation.error?.message).toContain(
+        "nested agents changed",
+      ),
     );
   });
 
@@ -1244,7 +1248,9 @@ describe("useEpicDeleteAgentSubtree preflight and progress", () => {
     });
 
     expect(fixture.deleteChatCalls).toEqual([]);
-    await waitFor(() => expect(result.current.error).toContain("Parent chat"));
+    await waitFor(() =>
+      expect(result.current.mutation.error?.message).toContain("Parent chat"),
+    );
   });
 
   it("refuses an offline owner that would be deleted through a stand-in host", async () => {
@@ -1286,7 +1292,9 @@ describe("useEpicDeleteAgentSubtree preflight and progress", () => {
     });
 
     expect(fixture.deleteChatCalls).toEqual([]);
-    await waitFor(() => expect(result.current.error).toContain("offline"));
+    await waitFor(() =>
+      expect(result.current.mutation.error?.message).toContain("offline"),
+    );
   });
 
   it("stops and reports progress when a later member's real delete fails", async () => {
@@ -1310,8 +1318,10 @@ describe("useEpicDeleteAgentSubtree preflight and progress", () => {
       SUBTREE_PARENT_ID,
     ]);
     await waitFor(() => {
-      expect(result.current.error).toContain("Deleted 1 of 2 agents");
-      expect(result.current.error).toContain("Parent chat");
+      expect(result.current.mutation.error?.message).toContain(
+        "Deleted 1 of 2 agents",
+      );
+      expect(result.current.mutation.error?.message).toContain("Parent chat");
     });
   });
 
@@ -1359,6 +1369,8 @@ describe("useEpicDeleteAgentSubtree preflight and progress", () => {
       SUBTREE_PARENT_ID,
       SUBTREE_CHILD_ID,
     ]);
-    await waitFor(() => expect(result.current.error).toContain("Child chat"));
+    await waitFor(() =>
+      expect(result.current.mutation.error?.message).toContain("Child chat"),
+    );
   });
 });
