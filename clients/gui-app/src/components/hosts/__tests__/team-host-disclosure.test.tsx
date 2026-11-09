@@ -131,7 +131,11 @@ vi.mock("@/providers/use-runner-host", () => ({
 vi.mock("@/lib/host/fleet-refresh", () => ({ requestFleetRefresh: vi.fn() }));
 vi.mock("@/lib/auth-error-toast", () => ({ toastFromAuthError: vi.fn() }));
 
-import { taskHasReadersOutsideTeam } from "@/components/hosts/team-host-disclosure-model";
+import {
+  taskHasReadersOutsideTeam,
+  teamHostDisclosureSentences,
+  teamHostOutsideReadersLine,
+} from "@/components/hosts/team-host-disclosure-model";
 import { TeamHostDisclosure } from "@/components/hosts/team-host-disclosure";
 import { SandboxTileStateFrame } from "@/components/hosts/sandbox-tile-state-frame";
 import {
@@ -419,6 +423,19 @@ function renderDisclosure(hostId: string): void {
   );
 }
 
+function expectSentencesAtRest(card: HTMLElement): void {
+  expect(card.className).toContain("absolute");
+  expect(card.querySelector("svg")).not.toBeNull();
+  expect(card.querySelector("details")).toBeNull();
+  expect(screen.queryByText("How access works")).toBeNull();
+  for (const sentence of teamHostDisclosureSentences(TEAM_NAME)) {
+    expect(within(card).getByText(sentence).tagName).toBe("P");
+  }
+  expect(card.textContent).not.toContain(
+    "other members' agents can read your data",
+  );
+}
+
 describe("<TeamHostDisclosure />", () => {
   beforeEach(() => {
     resetSeenStore();
@@ -433,35 +450,15 @@ describe("<TeamHostDisclosure />", () => {
     resetSeenStore();
   });
 
-  it("shows the access consequence once and keeps technical facts behind details", () => {
+  it("shows the three access paragraphs at rest, with no disclosure", () => {
     renderDisclosure("host-1");
 
     const card = screen.getByTestId("team-host-disclosure");
     expect(card.getAttribute("role")).toBe("status");
-    expect(card.textContent).toContain(
-      "Alpha: other members' agents can read your data and act and be charged as you while you are attached.",
+    expectSentencesAtRest(card);
+    expect(screen.getByTestId("team-host-disclosure-dismiss").textContent).toBe(
+      "Got it",
     );
-    expect(card.textContent.match(/Alpha/g)).toHaveLength(1);
-    const details = screen.getByText("How access works").closest("details");
-    if (details === null) throw new Error("Expected access details");
-    expect(details.open).toBe(false);
-    fireEvent.click(screen.getByText("How access works"));
-    expect(details.open).toBe(true);
-    expect(
-      within(details).getByText(
-        "Agents here run as the host and can read what yours can, browser sign-ins included. They work with this team's hosts only.",
-      ),
-    ).toBeTruthy();
-    expect(
-      within(details).getByText(
-        "A browser-using agent here runs its browser in the sandbox, never on your computer.",
-      ),
-    ).toBeTruthy();
-    expect(
-      within(details).getByText(
-        "A copy of your sign-in to this host, taken by anyone who was root here, keeps working against this team's hosts until this host sleeps.",
-      ),
-    ).toBeTruthy();
   });
 
   it("omits the outside-readers line when no one outside the team reads the task", () => {
@@ -484,11 +481,11 @@ describe("<TeamHostDisclosure />", () => {
     renderDisclosure("host-1");
 
     expect(screen.getByTestId("team-host-disclosure-outside").textContent).toBe(
-      "People outside the team can read chats in this task.",
+      teamHostOutsideReadersLine(TEAM_NAME),
     );
   });
 
-  it("scrolls the access facts and keeps Got it and outside readers outside that scroller", () => {
+  it("keeps the three paragraphs, Got it, and outside readers visible at rest", () => {
     mocks.collaborators.current = view({
       ownerTeam: null,
       direct: [VIEWER, "user-stranger"],
@@ -496,20 +493,16 @@ describe("<TeamHostDisclosure />", () => {
     });
     renderDisclosure("host-1");
 
-    const details = screen.getByText("How access works").closest("details");
-    if (details === null) throw new Error("Expected access details");
-    const body = details.querySelector("div");
-    if (body === null) throw new Error("Expected the details body");
-    expect(body.parentElement).toBe(details);
-    expect(body.className).toContain("max-h-40");
-    expect(body.className).toContain("overflow-y-auto");
-    expect(body.className).toContain("overscroll-contain");
-    expect(
-      body.contains(screen.getByTestId("team-host-disclosure-dismiss")),
-    ).toBe(false);
-    expect(
-      body.contains(screen.getByTestId("team-host-disclosure-outside")),
-    ).toBe(false);
+    const card = screen.getByTestId("team-host-disclosure");
+    expectSentencesAtRest(card);
+    const dismiss = screen.getByTestId("team-host-disclosure-dismiss");
+    const outside = screen.getByTestId("team-host-disclosure-outside");
+    expect(dismiss.textContent).toBe("Got it");
+    expect(dismiss.closest("details")).toBeNull();
+    expect(outside.closest("details")).toBeNull();
+    expect(outside.textContent).toBe(teamHostOutsideReadersLine(TEAM_NAME));
+    expect(card.contains(dismiss)).toBe(true);
+    expect(card.contains(outside)).toBe(true);
   });
 
   it("treats collaborators as null without an open task", () => {
@@ -539,7 +532,7 @@ describe("<TeamHostDisclosure />", () => {
 
     expect(screen.getByTestId("team-host-disclosure")).toBeTruthy();
     expect(screen.getByTestId("team-host-disclosure-outside").textContent).toBe(
-      "People outside the team can read chats in this task.",
+      teamHostOutsideReadersLine(TEAM_NAME),
     );
   });
 
@@ -628,7 +621,7 @@ describe("<TeamHostDisclosure /> unknown readers", () => {
 
     expect(screen.getByTestId("team-host-disclosure")).toBeTruthy();
     expect(screen.getByTestId("team-host-disclosure-outside").textContent).toBe(
-      "People outside the team can read chats in this task.",
+      teamHostOutsideReadersLine(TEAM_NAME),
     );
   });
 
@@ -639,7 +632,7 @@ describe("<TeamHostDisclosure /> unknown readers", () => {
 
     expect(screen.getByTestId("team-host-disclosure")).toBeTruthy();
     expect(screen.getByTestId("team-host-disclosure-outside").textContent).toBe(
-      "People outside the team can read chats in this task.",
+      teamHostOutsideReadersLine(TEAM_NAME),
     );
   });
 
@@ -796,9 +789,7 @@ describe("<SandboxTileStateFrame /> team host disclosure", () => {
     renderFrame();
 
     const card = screen.getByTestId("team-host-disclosure");
-    expect(card.textContent).toContain(
-      "Alpha: other members' agents can read your data and act and be charged as you while you are attached.",
-    );
+    expectSentencesAtRest(card);
     expect(screen.getByTestId("tile-body")).toBeTruthy();
   });
 
@@ -848,9 +839,7 @@ describe("<SandboxTileStateFrame /> team host disclosure", () => {
 
     const cards = screen.getAllByTestId("team-host-disclosure");
     expect(cards).toHaveLength(1);
-    expect(cards[0]?.textContent).toContain(
-      "Alpha: other members' agents can read your data and act and be charged as you while you are attached.",
-    );
+    expectSentencesAtRest(cards[0]);
     expectChatTileLive();
   });
 

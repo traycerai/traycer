@@ -4,12 +4,9 @@ import { toast } from "sonner";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { LogLevelRow } from "@/components/settings/panels/log-level-row";
 import type { LogLevelControl } from "@/components/settings/panels/log-level-controls";
-import { HOST_DIAGNOSTICS } from "@/components/settings/panels/diagnostics-settings.definitions";
 import type { SettingsGroupDefinition } from "@/lib/settings-search/settings-definitions";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
-import { useSettingsDensity } from "@/providers/settings-density-context";
 
 /**
  * Verbosity controls plus the "you left a level raised" reminder, over whatever
@@ -53,10 +50,6 @@ export function LogDetailGroup(props: {
   readonly emptyState: ReactNode;
 }): ReactNode {
   const { controls } = props;
-  const compact = useSettingsDensity() === "compact";
-  // The host thresholds apply to every host on that computer; the app's
-  // control has its own scope description.
-  const hostLogDetail = props.group === HOST_DIAGNOSTICS.definitions.logDetail;
   const [resetPending, setResetPending] = useState(false);
   // Focus-restoration target for when the reminder row (and the "Reset all to
   // Info" button a keyboard/screen-reader user just activated) unmounts -
@@ -160,45 +153,16 @@ export function LogDetailGroup(props: {
     </div>
   );
 
-  if (!hostLogDetail) {
-    return (
-      <SettingsGroup
-        group={props.group}
-        showTitle
-        tone="default"
-        dataTestId={undefined}
-        fill={false}
-      >
-        {body}
-      </SettingsGroup>
-    );
-  }
-
   return (
-    <div>
-      <div
-        className={cn(
-          "flex flex-wrap items-baseline gap-x-3 gap-y-1 px-1",
-          compact ? "mb-1" : "mb-1.5",
-        )}
-      >
-        <h2 className="font-semibold text-ui-xs text-muted-foreground">
-          Log detail
-        </h2>
-      </div>
-      <p className="mb-2 px-1 text-ui-xs text-muted-foreground">
-        Applies to every Traycer host on this computer.
-      </p>
-      <SettingsGroup
-        group={props.group}
-        showTitle={false}
-        tone="default"
-        dataTestId={undefined}
-        fill={false}
-      >
-        {body}
-      </SettingsGroup>
-    </div>
+    <SettingsGroup
+      group={props.group}
+      showTitle
+      tone="default"
+      dataTestId={undefined}
+      fill={false}
+    >
+      {body}
+    </SettingsGroup>
   );
 }
 

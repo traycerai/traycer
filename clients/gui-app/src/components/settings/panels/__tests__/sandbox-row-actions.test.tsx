@@ -1334,9 +1334,15 @@ describe("<SandboxRowActions /> a sandbox whose settings did not apply", () => {
         false,
       );
 
+      const giveAnother = screen.getByRole("button", {
+        name: "Give it another 1 hour",
+      });
+      const start = screen.getByRole("button", { name: "Start" });
+      expect(giveAnother.textContent).toContain("Give it another 1 hour");
       expect(
-        screen.getByRole("button", { name: "Give it another 1 hour" }),
-      ).toBeTruthy();
+        giveAnother.compareDocumentPosition(start) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).not.toBe(0);
       expect(await menuItems()).not.toContain("Give it another 1 hour");
     });
   });

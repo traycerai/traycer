@@ -650,7 +650,7 @@ describe("<HostSwitcher /> trigger status", () => {
     ).not.toBeNull();
   });
 
-  it("leaves a healthy awake sandbox's status to the host header on the rail", () => {
+  it("shows Awake for a healthy awake sandbox on the rail and in the picker", () => {
     const sandbox = hostScopeOptionFixture({
       hostId: "sandbox-a",
       name: "Build box",
@@ -664,10 +664,19 @@ describe("<HostSwitcher /> trigger status", () => {
     });
     renderSelectedHost(sandbox, "rail");
 
-    expect(screen.queryByTestId("settings-host-switcher-status")).toBeNull();
     expect(
-      screen.getByRole("button", { name: "Settings host: Build box" }),
+      screen.getByTestId("settings-host-switcher-status").textContent,
+    ).toBe("Awake");
+    expect(
+      screen.getByRole("button", { name: "Settings host: Build box, Awake" }),
     ).not.toBeNull();
+
+    fireEvent.click(screen.getByTestId("settings-host-switcher"));
+    const option = screen.getByTestId(
+      "settings-host-switcher-option-sandbox-a",
+    );
+    expect(option.textContent).toContain("Awake");
+    expect(option.textContent).not.toContain("offline");
   });
 
   it("keeps the offline health word for an awake sandbox on the rail", () => {
@@ -736,6 +745,9 @@ describe("<HostSwitcher /> trigger status", () => {
       expect(
         screen.getByTestId("settings-host-switcher-status").textContent,
       ).toBe(expected);
+      if (_name === "frozen") {
+        expect(screen.getByText("Out of credits")).not.toBeNull();
+      }
     },
   );
 });

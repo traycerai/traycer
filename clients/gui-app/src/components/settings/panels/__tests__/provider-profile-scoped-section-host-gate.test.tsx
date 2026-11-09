@@ -1,7 +1,6 @@
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -379,11 +378,9 @@ describe("<ProviderProfileScopedSection /> host gate", () => {
     expect(screen.getByText(REFUSAL)).toBeDefined();
   });
 
-  it("names the terminal login after its host, with no Terminal badge and no manage or re-auth button, and its one verb starts a new sign-in", async () => {
-    const onAddProfile = vi.fn();
+  it("names the terminal login after its host, badges Signed in, and offers Manage profile with no sign-in verb", () => {
     renderSection(
       {
-        onAddProfile,
         state: opencodeState({ profiles: [ambientProfile()] }),
       },
       "Studio",
@@ -394,23 +391,26 @@ describe("<ProviderProfileScopedSection /> host gate", () => {
         name: "OpenCode profile: OpenCode's own login on Studio",
       }),
     ).toBeDefined();
-    expect(screen.getByText("works on this computer only")).toBeDefined();
+    expect(screen.queryByText("works on this computer only")).toBeNull();
     expect(screen.queryByText("Terminal")).toBeNull();
-    expect(screen.queryByText("Signed in")).toBeNull();
-    expect(screen.queryByText("Email unavailable")).toBeNull();
+    expect(screen.getByText("Email unavailable")).toBeDefined();
     expect(screen.queryByRole("button", { name: /^Refresh/ })).toBeNull();
-
-    expect(screen.queryByRole("button", { name: "Manage profile" })).toBeNull();
+    const signedIn = screen.getByText("Signed in");
+    expect(signedIn.getAttribute("data-slot")).toBe("badge");
+    expect(signedIn.getAttribute("data-variant")).toBe("outline");
+    expect(signedIn.getAttribute("data-size")).toBe("xs");
+    const manage = screen.getByRole("button", { name: "Manage profile" });
+    expect(manage.getAttribute("data-size")).toBe("xs");
+    expect(manage.getAttribute("data-variant")).toBe("outline");
     expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
     expect(
-      screen.getByRole("button", { name: "Sign in to use everywhere" }),
-    ).toBeTruthy();
-    screen.getByRole("button", { name: "Sign in to use everywhere" }).focus();
-    await userEvent.keyboard("{Enter}");
-    expect(onAddProfile).toHaveBeenCalledTimes(1);
+      screen.queryByRole("button", { name: "Sign in to use everywhere" }),
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Details" })).toBeNull();
+    expect(screen.queryByText(/Couldn't check/)).toBeNull();
   });
 
-  it("reaches inline Retry for an unchecked terminal login with the keyboard", async () => {
+  it("badges an unchecked terminal login as Unknown, with no Retry on the row", () => {
     const profile = {
       ...ambientProfile(),
       auth: {
@@ -435,17 +435,30 @@ describe("<ProviderProfileScopedSection /> host gate", () => {
       null,
     );
 
-    screen.getByRole("button", { name: "Retry" }).focus();
-    await userEvent.keyboard("{Enter}");
+    const unknown = screen.getByText("Unknown");
+    expect(unknown.getAttribute("data-slot")).toBe("badge");
+    expect(unknown.getAttribute("data-variant")).toBe("outline");
+    expect(unknown.getAttribute("data-size")).toBe("xs");
+    expect(screen.queryByText(/Couldn't check/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
     expect(screen.queryByRole("menu")).toBeNull();
   });
 
-  it("omits the host name when unknown, and holds the sign-in verb with the credential refusal", () => {
+  it("omits the host name when unknown, and holds Sign in with the credential refusal", () => {
+    const unauthenticated = {
+      status: "unauthenticated" as const,
+      badgeText: null,
+      label: null,
+      detail: null,
+    };
     renderSection(
       {
         canAddProfile: false,
         credentialRefusal: "Sandboxes don't take sign-ins",
-        state: opencodeState({ profiles: [ambientProfile()] }),
+        state: opencodeState({
+          auth: unauthenticated,
+          profiles: [{ ...ambientProfile(), auth: unauthenticated }],
+        }),
       },
       null,
     );
@@ -455,10 +468,21 @@ describe("<ProviderProfileScopedSection /> host gate", () => {
         name: "OpenCode profile: OpenCode's own login",
       }),
     ).toBeDefined();
-    const verb = screen.getByRole("button", {
-      name: "Sign in to use everywhere",
-    });
+    const signedOut = screen.getByText("Signed out");
+    expect(signedOut.getAttribute("data-slot")).toBe("badge");
+    expect(signedOut.getAttribute("data-variant")).toBe("outline");
+    expect(signedOut.getAttribute("data-size")).toBe("xs");
+    const verb = screen.getByRole("button", { name: "Sign in" });
+    expect(verb.getAttribute("data-size")).toBe("xs");
+    expect(verb.getAttribute("data-variant")).toBe("secondary");
     expect(verb).toHaveProperty("disabled", true);
     expect(tooltipTextNear(verb)).toBe("Sandboxes don't take sign-ins");
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", { name: "Add a profile" })
+        .disabled,
+    ).toBe(true);
+    expect(
+      screen.queryByRole("button", { name: "Sign in to use everywhere" }),
+    ).toBeNull();
   });
 });

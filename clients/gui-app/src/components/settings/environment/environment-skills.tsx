@@ -84,12 +84,12 @@ import {
   skillUpstreamLine,
   skillWriteRefusal,
   skillsCardHeading,
-  SKILLS_PAGE_DESCRIPTION,
   skillsReadFailed,
   skillsReading,
   updateDescription,
   updateTitle,
 } from "./mcp-skills-copy";
+import { SkillsIntroduction } from "./configuration-introduction";
 import { OnHostOnlySkills } from "./on-host-only-entries";
 import { TeamContentNeedsHost } from "./team-content-needs-host";
 import { TeamReadFailed } from "./team-read-failed";
@@ -211,15 +211,11 @@ export function EnvironmentSkillsPage(): ReactNode {
   return <EnvironmentSkills key={configurationKey} providerId={null} />;
 }
 
-function SkillsPage(props: {
-  readonly children: ReactNode;
-  readonly action: ReactNode;
-}): ReactNode {
+function SkillsPage(props: { readonly children: ReactNode }): ReactNode {
   return (
     <SettingsPanelShell
       title="Skills"
-      description={SKILLS_PAGE_DESCRIPTION}
-      headerAction={props.action}
+      description={<SkillsIntroduction />}
       bodyClassName="flex flex-col gap-3 overflow-visible rounded-none border-none bg-transparent"
     >
       {props.children}
@@ -260,11 +256,7 @@ function EnvironmentSkills(props: {
   // for a list that came from the room, so the picker is drawn only where a
   // host is what the page is missing.
   const wrap = (content: ReactNode): ReactNode =>
-    props.providerId === null ? (
-      <SkillsPage action={null}>{content}</SkillsPage>
-    ) : (
-      content
-    );
+    props.providerId === null ? <SkillsPage>{content}</SkillsPage> : content;
   const hosted =
     served.scope.client !== null && served.scope.viewingHost !== null;
   if (served.listVersion === null) return wrap(<SkillsReading name={name} />);
@@ -725,13 +717,8 @@ function SkillsPageList(props: {
       </Button>
     ) : null;
   return (
-    <SkillsPage
-      action={
-        <div className="flex max-w-full flex-wrap items-center gap-2">
-          {checkAction}
-        </div>
-      }
-    >
+    <SkillsPage>
+      <SkillsListHeading skillCount={skills.length} check={checkAction} />
       {skills.length === 0 ? (
         <p className="text-ui-sm text-muted-foreground">{noSkillsLine(name)}</p>
       ) : (
@@ -958,6 +945,19 @@ function SkillsPageList(props: {
         />
       )}
     </SkillsPage>
+  );
+}
+
+function SkillsListHeading(props: {
+  readonly skillCount: number;
+  readonly check: ReactNode;
+}): ReactNode {
+  if (props.skillCount === 0 && props.check === null) return null;
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2">
+      <h2 className="text-ui-sm font-medium">Skills</h2>
+      {props.check}
+    </div>
   );
 }
 

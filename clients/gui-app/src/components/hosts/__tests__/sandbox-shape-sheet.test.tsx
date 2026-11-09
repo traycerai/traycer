@@ -343,8 +343,48 @@ describe("<SandboxShapeSheet />", () => {
     expect(screen.queryByTestId("sandbox-shape-sheet-memory")).toBeNull();
     expect(screen.queryByTestId("sandbox-shape-sheet-disk")).toBeNull();
     const size = screen.getByRole("combobox", { name: "Size" });
+    expect(size.textContent).toContain("2 vCPU · 4 GB · 20 GB · from $0.08/h");
+    expect(size.textContent).not.toContain("Suspend keeps memory");
+    expect(screen.getByText("Suspend keeps memory")).toBeTruthy();
+    fireEvent.click(size);
+    expect(
+      screen.getByRole("option", { name: /1 vCPU · 1 GB · 10 GB/ }).textContent,
+    ).toContain("$0.08/h");
+    expect(
+      screen.getByRole("option", { name: /1 vCPU · 1 GB · 10 GB/ }).textContent,
+    ).not.toContain("from ");
+    expect(
+      screen.getByRole("option", { name: /4 vCPU · 8 GB · 40 GB/ }).textContent,
+    ).toContain("from $0.08/h");
+  });
+
+  it("leaves a size string alone when that rung is smaller than the catalogue's source shape", () => {
+    const [provider] = CATALOGUE.providers;
+    catalogueInUse = {
+      providers: [
+        {
+          ...provider,
+          shapes: [
+            { cpus: 4, memoryMb: 8 * GIB, diskMb: 40 * GIB, default: false },
+            { cpus: 2, memoryMb: 4 * GIB, diskMb: 20 * GIB, default: true },
+          ],
+        },
+      ],
+    };
+    renderSheet(vi.fn());
+
+    const size = screen.getByRole("combobox", { name: "Size" });
     expect(size.textContent).toContain("2 vCPU · 4 GB · 20 GB");
     expect(size.textContent).not.toContain("$");
+    expect(size.textContent).not.toContain("Suspend keeps memory");
+    expect(screen.getByText("Suspend keeps memory")).toBeTruthy();
+    fireEvent.click(size);
+    expect(
+      screen.getByRole("option", { name: /4 vCPU · 8 GB · 40 GB/ }).textContent,
+    ).toContain("$0.08/h");
+    expect(
+      screen.getByRole("option", { name: /2 vCPU · 4 GB · 20 GB/ }).textContent,
+    ).not.toContain("$");
   });
 
   it("opens on the configuration's defaults, shape and periods, when the person has no pick", () => {
@@ -375,7 +415,7 @@ describe("<SandboxShapeSheet />", () => {
 
     expect(
       screen.getByRole("combobox", { name: "Size" }).textContent,
-    ).toContain("4 vCPU · 8 GB · 40 GB");
+    ).toContain("4 vCPU · 8 GB · 40 GB · from $0.08/h");
     expect(screen.getByText(idleAndRestingLine(2, 120))).toBeDefined();
   });
 
@@ -442,7 +482,7 @@ describe("<SandboxShapeSheet />", () => {
     );
     expect(
       screen.getByRole("combobox", { name: "Size" }).textContent,
-    ).toContain("4 vCPU · 8 GB · 40 GB");
+    ).toContain("4 vCPU · 8 GB · 40 GB · $0.48/h");
     expect(
       screen.getByTestId("sandbox-shape-sheet-readiness").textContent,
     ).toBe(READY_SENTENCE);
@@ -542,20 +582,19 @@ describe("<SandboxShapeSheet />", () => {
         screen.getByRole("combobox", { name: "Sandbox region" }).textContent,
       ).toContain("United States");
       const size = screen.getByRole("combobox", { name: "Size" });
-      expect(size.textContent).toContain("2 vCPU · 8 GB · 20 GB");
+      expect(size.textContent).toContain("2 vCPU · 8 GB · 20 GB · $0.50/h");
       expect(
         screen.getByTestId("sandbox-shape-sheet-price").textContent,
       ).toContain("$0.50 an hour while awake · uses your credits");
-      expect(document.body.textContent.match(/\$0\.50/gu)).toHaveLength(1);
       fireEvent.click(size);
       expect(
         screen.getByRole("option", { name: /1 vCPU · 4 GB · 10 GB/ })
           .textContent,
-      ).not.toContain("$");
+      ).toContain("$0.25/h");
       expect(
         screen.getByRole("option", { name: /2 vCPU · 8 GB · 20 GB/ })
           .textContent,
-      ).not.toContain("$");
+      ).toContain("$0.50/h");
     });
 
     it("says Windows has no desktop or Computer Use as soon as Windows is picked, before anything is staged", () => {

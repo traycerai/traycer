@@ -1,17 +1,14 @@
 import type { ReactElement } from "react";
 import { createRoot } from "react-dom/client";
+import type { HostListItem } from "@traycer/protocol/host/host-status";
 import { MoreHorizontal, Pencil } from "lucide-react";
 import { HostIdentityCard } from "@/components/settings/host-scope/host-identity-card";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
+import { HostOverviewAboutThisHost } from "@/components/settings/panels/host-overview-about-this-host";
 import {
-  HostOverviewFact,
-  HostOverviewFacts,
-} from "@/components/settings/panels/host-overview-facts";
-import {
-  deriveInstallationDetails,
-  deriveInstallRecordRows,
-} from "@/components/settings/panels/host-overview-installation-model";
-import type { InstallationDetailsRecord } from "@/components/settings/panels/host-settings-installation-details";
+  InstallRecordGroup,
+  type InstallationDetailsRecord,
+} from "@/components/settings/panels/host-settings-installation-details";
 import { Button } from "@/components/ui/button";
 import "@/lib/theme-applier";
 import "@/index.css";
@@ -33,6 +30,7 @@ export function HostCard(props: { readonly failed: boolean }): ReactElement {
       <HostIdentityCard
         host={host}
         displayName={name}
+        version={host.version}
         nameAction={
           <Button
             type="button"
@@ -79,6 +77,26 @@ export function HostCard(props: { readonly failed: boolean }): ReactElement {
   );
 }
 
+function accountItem(): HostListItem {
+  return {
+    hostId: "8f14e45fceea167a5a36dedd4bea2543c9a2",
+    displayName: null,
+    platform: "darwin-arm64",
+    kind: "personal",
+    publicKey: "pk",
+    createdAt: "2026-03-03T12:00:00Z",
+    status: {
+      connectivity: "connectable",
+      viewerReachability: "unknown",
+      clientCloud: "ok",
+      updateState: "current",
+      appVersion: "1.5.0",
+      lastSeenAt: "2026-11-08T00:00:00Z",
+    },
+    updatePolicy: "manual",
+  };
+}
+
 function InstallationFacts(): ReactElement {
   const record: InstallationDetailsRecord = {
     version:
@@ -92,23 +110,20 @@ function InstallationFacts(): ReactElement {
     platform: "darwin",
     arch: "arm64",
   };
-  const rows = [
-    ...deriveInstallationDetails({
-      about: null,
-      live: true,
-      runningVersion: "1.5.0",
-      record,
-    }),
-    ...deriveInstallRecordRows(record, "1.5.0"),
-  ];
   return (
-    <section aria-label="Installation facts" data-testid="fixture-installation">
-      <HostOverviewFacts testId="fixture-installation-facts">
-        {rows.map((row) => (
-          <HostOverviewFact key={row.testId} {...row} />
-        ))}
-      </HostOverviewFacts>
-    </section>
+    <>
+      <HostOverviewAboutThisHost
+        item={accountItem()}
+        nowMs={Date.parse("2026-11-09T12:00:00Z")}
+      />
+      <InstallRecordGroup
+        hostName="Windows runner for long release integration and deployment checks"
+        degrade={null}
+        record={record}
+        loading={false}
+        readFailed={false}
+      />
+    </>
   );
 }
 

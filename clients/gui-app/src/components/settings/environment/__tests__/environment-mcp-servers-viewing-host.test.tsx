@@ -1,12 +1,19 @@
 import "../../../../../__tests__/test-browser-apis";
 import { useContext } from "react";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mockRemoteHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { EnvironmentMcpServersPage } from "@/components/settings/environment/environment-mcp-servers";
+import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 import {
   declaredServer,
   hostMcpServer,
@@ -77,8 +84,16 @@ const METHODS = {
   "environment.configuration.items": { major: 1, minor: 0 },
 } as const;
 
+async function openServerCard(name: string): Promise<void> {
+  const row = (await screen.findAllByRole("listitem")).find(
+    (item) => within(item).queryByText(name) !== null,
+  );
+  if (row === undefined) throw new Error(`No row for ${name}.`);
+  await userEvent.click(within(row).getByRole("button", { expanded: false }));
+}
+
 describe("The MCP servers page, viewing another host", () => {
-  it("sends the revision the first tool switch saved with the next one", async () => {
+  it("sends the revision the first save stored when the next staged tool change is saved", async () => {
     negotiateMethods(METHODS);
     const host = { revision: 4 };
     const sentRevisions: Array<number | null> = [];
@@ -138,16 +153,35 @@ describe("The MCP servers page, viewing another host", () => {
     });
     render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
 
-    await userEvent.click(await screen.findByRole("button", { name: "Tools" }));
-    await userEvent.click(
-      await screen.findByRole("switch", { name: "github search" }),
-    );
+    await openServerCard("github");
+    const search = await screen.findByRole("switch", { name: "github search" });
+    expect(screen.getByRole("switch", { name: "github open" })).toBeTruthy();
+    const listsBeforeSave = harness.paramsOf(
+      "environment.configuration.mcpServers.list",
+    ).length;
+    await userEvent.click(search);
+    expect(
+      harness.paramsOf("environment.configuration.items.put"),
+    ).toHaveLength(0);
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
     await waitFor(() => {
-      expect(
-        harness.paramsOf("environment.configuration.items.put"),
-      ).toHaveLength(1);
+      expect(sentRevisions).toEqual([4]);
+    });
+    expect(
+      harness.paramsOf("environment.configuration.items.put")[0],
+    ).toMatchObject({
+      revision: 4,
+      value: {
+        toolToggles: {
+          [providerIdToGuiHarnessId("codex")]: { search: false },
+        },
+      },
     });
     await waitFor(() => {
+      expect(
+        harness.paramsOf("environment.configuration.mcpServers.list").length,
+      ).toBeGreaterThan(listsBeforeSave);
       expect(
         screen
           .getByRole("switch", { name: "github open" })
@@ -155,10 +189,21 @@ describe("The MCP servers page, viewing another host", () => {
       ).toBe(false);
     });
     await userEvent.click(screen.getByRole("switch", { name: "github open" }));
+    expect(sentRevisions).toEqual([4]);
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
 
     await waitFor(() => {
-      expect(sentRevisions).toHaveLength(2);
+      expect(sentRevisions).toEqual([4, 5]);
     });
-    expect(sentRevisions).toEqual([4, 5]);
+    expect(
+      harness.paramsOf("environment.configuration.items.put")[1],
+    ).toMatchObject({
+      revision: 5,
+      value: {
+        toolToggles: {
+          [providerIdToGuiHarnessId("codex")]: { open: false },
+        },
+      },
+    });
   });
 });

@@ -24,11 +24,10 @@ import {
   teamAllowanceShortLine,
   audienceClause,
   costLine,
-  fundedRowPrice,
   moveClause,
   reachSentence,
   restingStorageClause,
-  TEAM_USE_AND_ACCESS_CLAUSE,
+  teamAccessClause,
   unpricedCostLine,
   type SandboxConfigurationCopy,
 } from "@/lib/sandboxes/sandbox-strings";
@@ -643,43 +642,25 @@ export function priceClause(input: ConsequencesInput): ConsequenceClause {
 
 /**
  * Every clause the block shows in full, in order: the price
- * always; the audience when the task has or may gain readers; the reach when
- * it holds a host of another configuration; shared use, payment, access and
- * resting storage on a team; the move clause on an unmoved computer.
+ * always, with its funding context; the audience when the task has or may
+ * gain readers; the reach when it holds a host of another configuration;
+ * team access and resting storage on a team; the move clause on an unmoved
+ * computer.
  */
 export function consequenceClauses(
   input: ConsequencesInput,
 ): readonly ConsequenceClause[] {
   const copy = stageConfigurationCopy(input.configuration);
-  const price = priceClause(input);
-  // Expanded team copy puts the payer beside shared use. The summary keeps
-  // price and payer together when those consequences are collapsed.
-  let priceText = price.text;
-  if (
-    copy.kind === "team" &&
-    (!input.needsCredits || input.billingStarted) &&
-    !input.wakingName
-  ) {
-    priceText =
-      input.price === null
-        ? "Billed by the hour while awake"
-        : fundedRowPrice(input.price.awakeMcPerHour, input.price.exact);
-  }
-  const clauses: ConsequenceClause[] = [{ kind: "price", text: priceText }];
+  const clauses: ConsequenceClause[] = [priceClause(input)];
   if (input.audience === "shared") {
     clauses.push({ kind: "audience", text: audienceClause(copy) });
   }
   if (input.reachHost !== null) {
     clauses.push({ kind: "reach", text: reachSentence(input.reachHost) });
   }
-  if (input.configuration.kind === "team") {
+  if (copy.kind === "team") {
     clauses.push(
-      {
-        kind: "team",
-        text: input.wakingName
-          ? "Everyone in the team can use it; another member's agent can read what yours can."
-          : TEAM_USE_AND_ACCESS_CLAUSE,
-      },
+      { kind: "team", text: teamAccessClause(copy.teamName) },
       { kind: "resting-storage", text: restingStorageClause() },
     );
   }

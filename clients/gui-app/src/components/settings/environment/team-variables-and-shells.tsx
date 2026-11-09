@@ -10,10 +10,8 @@ import { useBoundedRead } from "@/hooks/environment/team/use-bounded-read";
 import { useConfigurationVariablesQuery } from "@/hooks/environment/team/use-variables-query";
 import { configurationShellValueSchema } from "@/hooks/environment/team/configuration-item-values";
 import type { ConfigurationItem } from "@/hooks/environment/team/use-configuration-items-query";
-import {
-  useCanEditConfiguration,
-  useConfigurationIsPersonal,
-} from "./configuration-source";
+import { useCanEditConfiguration } from "./configuration-source";
+import { VariablesIntroduction } from "./configuration-introduction";
 import { ConfigurationOsPicker } from "./configuration-os-picker";
 import { ConfigurationWriteFeedback } from "./configuration-write-feedback";
 import {
@@ -40,7 +38,6 @@ import {
 } from "./configuration-item-write-status";
 
 export function TeamVariablesAndShells(): ReactNode {
-  const personal = useConfigurationIsPersonal();
   const query = useConfigurationVariablesQuery();
   const read = useBoundedRead(query);
   const items = query.data;
@@ -56,11 +53,7 @@ export function TeamVariablesAndShells(): ReactNode {
   return (
     <SettingsPanelShell
       title="Variables & shells"
-      description={
-        personal
-          ? "Plain values every computer and sandbox running these settings gets, and the shell agents run in."
-          : "Plain values every host running these settings gets, and the shell agents run in."
-      }
+      description={<VariablesIntroduction />}
       bodyClassName="flex flex-col gap-4 overflow-visible rounded-none border-none bg-transparent"
     >
       <ConfigurationOsPicker value={os} onChange={setOs} />

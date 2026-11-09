@@ -67,9 +67,9 @@ describe("FallbackLadderEditor", () => {
     renderLadder(vi.fn(), vi.fn(), ALL_ENABLED);
     const rows = screen.getAllByRole("listitem");
     const descriptions = [
-      "Switches to a different account you're signed in to.",
+      "Switches to a different account you're signed in to. Starts a fresh session from this transcript.",
       "Traycer notifies you and stops trying. Later steps won't run.",
-      "Tries a backup model from the Equivalent models tab.",
+      "Tries a backup model from the Equivalent models tab. Starts a fresh session from this transcript.",
       "If the provider gives a reset time within your longest wait, Traycer waits until then and retries the message.",
     ];
     for (const [index, description] of descriptions.entries()) {

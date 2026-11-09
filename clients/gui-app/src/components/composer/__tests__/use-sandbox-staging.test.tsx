@@ -337,7 +337,15 @@ function Harness(props: {
   useEffect(() => {
     latest = result;
   }, [result]);
-  return result === null ? null : result.sheet;
+  if (result === null) return null;
+  return (
+    <>
+      <span data-testid="staged-sandbox-chip">
+        {result.composer.stagedLabel}
+      </span>
+      {result.sheet}
+    </>
+  );
 }
 
 function mount(hosts: readonly HostScopeOption[]): SandboxStaging {
@@ -605,6 +613,16 @@ describe("useSandboxStaging New rows", () => {
         "Linux · 2 vCPU · 4 GB · $0.21 an hour while awake · uses your acme credits",
       );
     });
+
+    it("includes the exact short price on the staged chip", () => {
+      withBalances(1_000, 1_000);
+      const { composer } = mount([LAPTOP]);
+      act(() => composer.onPickNew("personal"));
+
+      expect(screen.getByTestId("staged-sandbox-chip").textContent).toBe(
+        "New Personal sandbox · 2 vCPU · 4 GB · $0.21/h",
+      );
+    });
   });
 
   it("stages a new sandbox in the default shape and remembers the configuration", () => {
@@ -612,10 +630,9 @@ describe("useSandboxStaging New rows", () => {
 
     act(() => composer.onPickNew("personal"));
 
-    expect(staging().composer.stagedLabel).toBe(
-      "New Personal sandbox · 2 vCPU · 4 GB",
+    expect(screen.getByTestId("staged-sandbox-chip").textContent).toBe(
+      "New Personal sandbox · 2 vCPU · 4 GB · from $0.12/h",
     );
-    expect(staging().composer.stagedLabel).not.toContain("$");
     // The catalogue's from price names all three rates, rest rates included.
     expect(staging().consequences?.price).toEqual({
       awakeMcPerHour: 120,
@@ -640,6 +657,26 @@ describe("useSandboxStaging New rows", () => {
       ],
     ).toBe("personal");
     expect(staging().composer.stagedConfigurationKey).toBe("personal");
+  });
+
+  it("omits the price on a staged chip when the catalogue prices no rate for the shape", () => {
+    mocks.catalogue = {
+      providers: [
+        {
+          ...PROVIDER,
+          shapes: [
+            { cpus: 4, memoryMb: 8192, diskMb: 40960, default: false },
+            { cpus: 2, memoryMb: 4096, diskMb: 20480, default: true },
+          ],
+        },
+      ],
+    };
+    const { composer } = mount([LAPTOP]);
+    act(() => composer.onPickNew("personal"));
+
+    expect(screen.getByTestId("staged-sandbox-chip").textContent).toBe(
+      "New Personal sandbox · 2 vCPU · 4 GB",
+    );
   });
 
   it("states what a setup is charged for under a new stage that is still only staged, before anything launches", () => {
@@ -928,16 +965,14 @@ describe("useSandboxStaging New rows", () => {
     ).toBeNull();
     expect(screen.getByTestId("consequences-add-credits")).toBeTruthy();
     expect(screen.getByTestId("consequences-price").textContent).toBe(
-      "from $0.12 an hour while awake",
+      "from $0.12 an hour while awake · uses your acme credits",
     );
-    expect(
-      screen.getByTestId("consequences-clause-team").textContent,
-    ).toContain("while you pay from your team credits");
+    expect(screen.getByTestId("consequences-clause-team").textContent).toBe(
+      "Everyone in acme can use it; another member's agent can read what yours can.",
+    );
     const blockText = screen.getByTestId("consequences-block").textContent;
     expect(blockText.match(/while awake/g)).toHaveLength(1);
-    expect(
-      blockText.match(/while you pay from your team credits/g),
-    ).toHaveLength(1);
+    expect(blockText).not.toContain("while you pay from your team credits");
     fireEvent.click(
       screen.getByRole("button", { name: chooseAnotherHostLabel }),
     );
@@ -1208,7 +1243,7 @@ describe("useSandboxStaging sandbox rows' lines", () => {
     );
 
     expect(lineOf(awakeTeamBox)).toEqual([
-      "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake",
+      "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake · uses your acme credits",
       "acme · $0.05 today",
     ]);
   });
@@ -1412,7 +1447,7 @@ describe("useSandboxStaging host picks", () => {
     const store = useStagedSandboxStore.getState();
     store.begin(SURFACE, false, Date.now(), false);
     store.report(SURFACE, { step: "booting", stepAt: Date.now() });
-    expect(staging().composer.stagedLabel).toBe(
+    expect(screen.getByTestId("staged-sandbox-chip").textContent).toBe(
       "box-suspended · suspended, resumes on send",
     );
 

@@ -277,9 +277,11 @@ function EnvironmentPickerTrigger(props: {
     pick.kind === "team" ? pick.environmentId : "",
   );
   let label: ReactNode = "Personal";
+  let title = "Personal";
   let local = false;
   if (pick.kind === "local") {
     label = pick.hostName;
+    title = pick.hostName;
     local = true;
   } else if (pick.kind === "team") {
     // A pick the membership list cannot name is either an invitation the
@@ -288,6 +290,7 @@ function EnvironmentPickerTrigger(props: {
     label = teamLabel ?? (
       <InvitedTeamNameLabel environmentId={pick.environmentId} />
     );
+    title = teamLabel ?? "";
   }
   return (
     <DropdownMenuTrigger asChild>
@@ -299,7 +302,14 @@ function EnvironmentPickerTrigger(props: {
         data-testid="environment-picker-trigger"
       >
         <span className="flex min-w-0 items-center gap-1.5">
-          <span className="truncate">{label}</span>
+          <TooltipWrapper
+            label={title.length > 0 ? title : null}
+            side="top"
+            sideOffset={undefined}
+            align={undefined}
+          >
+            <span className="truncate">{label}</span>
+          </TooltipWrapper>
           {local ? (
             <TooltipWrapper
               label={LOCAL_BADGE_TOOLTIP}
