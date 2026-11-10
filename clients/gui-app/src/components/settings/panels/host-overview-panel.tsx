@@ -1684,11 +1684,8 @@ export function HostOverviewPanel(props: {
       activateBusy={scope.isActivating}
       onCopyHostId={() => hostIdCopy.copy(host.hostId)}
       // A sandbox's lifecycle owns the inline slot, so its binding stays in
-      // More. An unbound computer with Update now keeps Activate there too.
-      // The bound computer keeps Active inline, beside Update now.
-      activateInMenu={
-        host.sandbox !== null || (primaryAction !== null && !host.isActive)
-      }
+      // More. A computer keeps Active or Activate inline, beside Update now.
+      activateInMenu={host.sandbox !== null}
     />
   );
   let headerActions: ReactNode = null;
