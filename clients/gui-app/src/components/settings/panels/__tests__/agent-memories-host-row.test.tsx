@@ -413,7 +413,7 @@ describe("Agent memories ▸ the host row's write", () => {
   });
 
   it.each(["applied", "saved", "queued"] as const)(
-    "keeps the confirmed %s read when Settings reopens inside cache freshness",
+    "shows the confirmed %s read at once when Settings reopens inside cache freshness, and reads once more",
     async (state) => {
       script.set = () =>
         state === "queued"
@@ -457,21 +457,79 @@ describe("Agent memories ▸ the host row's write", () => {
       await act(async () => {
         await vi.advanceTimersByTimeAsync(1_000);
       });
+      // The reopen's read is held, so what the row shows meanwhile is the cache.
+      let landReopenRead: (value: ConfigAgentMemoriesResponse) => void = () => {
+        throw new Error("the reopen read has not started");
+      };
+      script.get = () =>
+        new Promise((resolve) => {
+          landReopenRead = resolve;
+        });
       view.rerender(<AgentMemoriesSettingsPanel />);
+      const toggle = (): HTMLElement =>
+        screen.getByRole("switch", { name: "Use Traycer memories for agents" });
       await waitFor(() =>
-        expect(
-          screen
-            .getByRole("switch", {
-              name: "Use Traycer memories for agents",
-            })
-            .getAttribute("aria-checked"),
-        ).toBe("true"),
+        expect(harness.paramsOf("config.agentMemories.get").length).toBe(
+          confirmedReads + 1,
+        ),
       );
+      expect(toggle().getAttribute("aria-checked")).toBe("true");
+      expect(toggle().hasAttribute("disabled")).toBe(false);
+
+      act(() => landReopenRead(read(true, 6)));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(toggle().getAttribute("aria-checked")).toBe("true");
+      expect(toggle().hasAttribute("disabled")).toBe(false);
       expect(harness.paramsOf("config.agentMemories.get").length).toBe(
-        confirmedReads,
+        confirmedReads + 1,
       );
     },
   );
+
+  it("reads the host on every open, however fresh the cache, and swaps the cached answer for the host's once it lands", async () => {
+    script.reads = [read(true, 5)];
+    const harness = mountTeamPage({ kind: "host" }, handlers());
+    harness.queryClient.setDefaultOptions({
+      queries: { retry: false, staleTime: 60_000, gcTime: 300_000 },
+      mutations: { retry: false },
+    });
+    const view = render(<AgentMemoriesSettingsPanel />, {
+      wrapper: harness.Wrapper,
+    });
+    const toggle = (): HTMLElement =>
+      screen.getByRole("switch", { name: "Use Traycer memories for agents" });
+    await waitFor(() =>
+      expect(toggle().getAttribute("aria-checked")).toBe("true"),
+    );
+    const firstReads = harness.paramsOf("config.agentMemories.get").length;
+    view.rerender(null);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+
+    // The host has moved on since: off, at a newer revision.
+    let landReopenRead: (value: ConfigAgentMemoriesResponse) => void = () => {
+      throw new Error("the reopen read has not started");
+    };
+    script.get = () =>
+      new Promise((resolve) => {
+        landReopenRead = resolve;
+      });
+    view.rerender(<AgentMemoriesSettingsPanel />);
+    await waitFor(() =>
+      expect(harness.paramsOf("config.agentMemories.get").length).toBe(
+        firstReads + 1,
+      ),
+    );
+    expect(toggle().getAttribute("aria-checked")).toBe("true");
+
+    act(() => landReopenRead(read(false, 6)));
+    await waitFor(() =>
+      expect(toggle().getAttribute("aria-checked")).toBe("false"),
+    );
+  });
 
   it("refetches on reopening after focus rereads an unconfirmed write", async () => {
     function FocusReader(): null {
