@@ -7,7 +7,6 @@ import { ContextUsageChip } from "@/components/chat/context-usage-chip";
 import {
   ChatStatusExtraRowsContext,
   ChatStatusFreshContext,
-  ChatStatusReadOnlyContext,
   type ChatStatusExtraRow,
 } from "@/components/chat/chat-status-capabilities";
 import { selectContextUsage } from "@/components/epic-canvas/renderers/chat-tile-session-state";
@@ -128,41 +127,39 @@ export function BotSessionStatus(props: {
   }, [data, navigate, props.threadId]);
   if (data === null) return null;
   return (
-    <ChatStatusReadOnlyContext value>
-      <ChatStatusFreshContext value={fresh}>
-        <ChatStatusExtraRowsContext value={rows}>
-          <div className="shrink-0 px-4 pt-4">
-            <div
-              className={cn("mx-auto w-full", readingWidth.className)}
-              style={{ maxWidth: readingWidth.maxWidth }}
-            >
-              <div className="@container mx-3 overflow-hidden rounded-t-lg border border-border bg-foreground/3">
-                <BackgroundItemsPanel
-                  items={fresh ? (items ?? []) : []}
-                  epicId={props.botId}
-                  chatId={props.chatId}
-                  viewTabId={`bot:${props.botId}`}
-                  canAct={false}
-                  readOnly
-                  pendingStopTaskIds={NO_STOPS}
-                  stopAllPending={false}
-                  sessionStopPending={false}
-                  turnActive={false}
-                  scrollRegionMaxHeightClass="max-h-60"
-                  separated={false}
-                  onItemClick={noItem}
-                  onStopItem={noStop}
-                  onStopAll={noStop}
-                  onStopSession={noStop}
-                />
-              </div>
-              <div className="flex justify-end px-4 py-1">
-                <ContextUsageChip usage={usage} onCompact={null} />
-              </div>
+    <ChatStatusFreshContext value={fresh}>
+      <ChatStatusExtraRowsContext value={rows}>
+        <div className="shrink-0 px-4 pt-4">
+          <div
+            className={cn("mx-auto w-full", readingWidth.className)}
+            style={{ maxWidth: readingWidth.maxWidth }}
+          >
+            <div className="@container mx-3 overflow-hidden rounded-t-lg border border-border bg-foreground/3">
+              <BackgroundItemsPanel
+                items={fresh ? (items ?? []) : []}
+                epicId={props.botId}
+                chatId={props.chatId}
+                viewTabId={`bot:${props.botId}`}
+                canAct={false}
+                readOnly
+                pendingStopTaskIds={NO_STOPS}
+                stopAllPending={false}
+                sessionStopPending={false}
+                turnActive={false}
+                scrollRegionMaxHeightClass="max-h-60"
+                separated={false}
+                onItemClick={noItem}
+                onStopItem={noStop}
+                onStopAll={noStop}
+                onStopSession={noStop}
+              />
+            </div>
+            <div className="flex justify-end px-4 py-1">
+              <ContextUsageChip usage={usage} onCompact={null} />
             </div>
           </div>
-        </ChatStatusExtraRowsContext>
-      </ChatStatusFreshContext>
-    </ChatStatusReadOnlyContext>
+        </div>
+      </ChatStatusExtraRowsContext>
+    </ChatStatusFreshContext>
   );
 }

@@ -1,6 +1,6 @@
 import { createContext, type ReactNode } from "react";
 
-/** Whether the status surfaces may offer actions that change the session. */
+/** Whether the session surface is read-only, including layout editing. */
 export const ChatStatusReadOnlyContext = createContext(false);
 
 export interface ChatStatusExtraRow {

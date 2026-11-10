@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useRef, type RefObject } from "react";
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  type RefObject,
+} from "react";
+import { ChatStatusReadOnlyContext } from "@/components/chat/chat-status-capabilities";
 import { useEpicViewTabId } from "@/components/epic-canvas/view-tab-context";
 import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
 import { useRegionValues } from "@/lib/layout-overrides";
@@ -56,6 +63,7 @@ export function useLayoutRegion(input: {
   const { regionId, instanceId } = input;
   const viewTabId = useEpicViewTabId();
   const visible = usePaneVisible();
+  const readOnly = useContext(ChatStatusReadOnlyContext);
   const editing = useLayoutEditorStore((state) => state.session !== null);
   const ghost = useRegionGhost(regionId);
   const nodeRef = useRef<HTMLElement | null>(null);
@@ -71,7 +79,7 @@ export function useLayoutRegion(input: {
   const sync = useCallback(() => {
     const previous = registered.current;
     const state = useLayoutEditorStore.getState();
-    const node = nodeRef.current;
+    const node = readOnly ? null : nodeRef.current;
     const sceneId = viewTabId ?? "shell";
     const key = `${regionId}@${sceneId}:${instanceId ?? "-"}`;
     // A hidden pane's copy is named no more than it is registered (L-109): it
@@ -121,7 +129,7 @@ export function useLayoutRegion(input: {
     state.registerInstance(instance);
     flag(node, "data-ghost", ghostRef.current);
     decorate(instance);
-  }, [regionId, instanceId, viewTabId, visible]);
+  }, [regionId, instanceId, viewTabId, visible, readOnly]);
 
   const ref = useCallback(
     (node: HTMLElement | null) => {
@@ -178,7 +186,7 @@ export function useLayoutRegion(input: {
     flag(node, "data-ghost", ghost);
   }, [ghost]);
 
-  return { ref, editing, ghost };
+  return { ref, editing: editing && !readOnly, ghost };
 }
 
 /**
@@ -195,11 +203,12 @@ export function useLayoutRegion(input: {
  * state word instead (4.9): a preview may not start work.
  */
 export function useRegionGhost(regionId: RegionId): boolean {
+  const readOnly = useContext(ChatStatusReadOnlyContext);
   const hidden = regionValuesHidden(useRegionValues(regionId));
   const requested = useLayoutEditorStore((state) =>
     regionGhostRequested(state, regionId),
   );
-  return hidden && requested;
+  return !readOnly && hidden && requested;
 }
 
 /**
