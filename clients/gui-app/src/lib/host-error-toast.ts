@@ -316,6 +316,19 @@ export function toastFromHostError(
     transportNoticeToast(error);
     return;
   }
+  // Like simulatorActionErrorText, remove the host's machine prefix. This
+  // open was refused by the simulator pack's state, not by a reportable bug.
+  const simulatorUnavailablePrefix = /^simulator unavailable \([^)]*\):\s*/;
+  if (
+    error.method === "simulator.open" &&
+    error.code === "RPC_ERROR" &&
+    simulatorUnavailablePrefix.test(error.message)
+  ) {
+    toast.error(
+      error.message.replace(simulatorUnavailablePrefix, "") || fallback,
+    );
+    return;
+  }
   const message = hostErrorToastMessage(error, fallback);
   emitHostFatalErrorNotification(error, message);
   const dedupeKey = hostErrorDedupeKey(error);
