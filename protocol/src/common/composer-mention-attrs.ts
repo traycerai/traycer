@@ -225,7 +225,21 @@ export type BrowserTabMentionAttachment = {
   url: string;
 };
 
+export type HostMentionAttachment = {
+  kind: "mention";
+  contextType: "host";
+  hostId: string;
+  path: string;
+  pathKind: null;
+  relPath: null;
+  absolutePath: null;
+  workspacePath: null;
+  label: string;
+  description: string;
+};
+
 export type MentionAttachment =
+  | HostMentionAttachment
   | FileMentionAttachment
   | WorktreeMentionAttachment
   | GitMentionAttachment
@@ -305,6 +319,23 @@ export function mentionAttachmentFromAttrs(
   }
   if (contextType === "git") {
     return gitMentionAttachmentFromAttrs(attrs);
+  }
+  if (contextType === "host") {
+    const hostId = stringValue(attrs.hostId) ?? stringValue(attrs.id);
+    if (hostId === null) return null;
+    const label = stringValue(attrs.label) ?? hostId;
+    return {
+      kind: "mention",
+      contextType,
+      hostId,
+      path: label,
+      pathKind: null,
+      relPath: null,
+      absolutePath: null,
+      workspacePath: null,
+      label,
+      description: stringValue(attrs.description) ?? hostId,
+    };
   }
   if (contextType === "browser-tab") {
     return browserTabMentionAttachmentFromAttrs(attrs);
