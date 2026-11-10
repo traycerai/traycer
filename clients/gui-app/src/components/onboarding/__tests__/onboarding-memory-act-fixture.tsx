@@ -44,6 +44,7 @@ import {
   type ProviderId,
 } from "@traycer/protocol/host/provider-schemas";
 import { environmentStatusResponseSchemaV12 } from "@traycer/protocol/host/environment-schemas";
+import { DirectoryProbe } from "@/components/onboarding/__tests__/onboarding-memory-act-directory-probe";
 import { RequestContext } from "@/components/onboarding/__tests__/onboarding-memory-act-request-context";
 import { OnboardingPage } from "@/components/onboarding/onboarding-page";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -53,6 +54,7 @@ import {
   type HostRpcRegistry,
   type MessengerFactory,
 } from "@/lib/host";
+import type { HostDirectoryService } from "@/lib/host/host-directory-service";
 import { StreamRuntimeContext } from "@/lib/host/stream-runtime-context";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { WindowsBridgeContext } from "@/providers/windows-bridge-context";
@@ -346,6 +348,15 @@ function streamBinding() {
 }
 
 let queryClient = new QueryClient();
+let hostDirectory: HostDirectoryService | null = null;
+const captureDirectory = (directory: HostDirectoryService | null): void => {
+  hostDirectory = directory;
+};
+
+/** The window's host directory reads the host list again, from `world.otherHosts`. */
+export async function refreshHostDirectory(): Promise<void> {
+  await hostDirectory?.refresh();
+}
 
 /** What the page's own invalidation does when a provider is toggled on the Providers act. */
 export function invalidateAllQueries(): Promise<void> {
@@ -387,11 +398,13 @@ function renderTour(): void {
             >
               <StreamRuntimeContext.Provider value={streams}>
                 <TooltipProvider>
-                  <RequestContext>
-                    <LazyMotion features={domMax}>
-                      <OnboardingPage />
-                    </LazyMotion>
-                  </RequestContext>
+                  <DirectoryProbe onDirectory={captureDirectory}>
+                    <RequestContext>
+                      <LazyMotion features={domMax}>
+                        <OnboardingPage />
+                      </LazyMotion>
+                    </RequestContext>
+                  </DirectoryProbe>
                 </TooltipProvider>
               </StreamRuntimeContext.Provider>
             </WindowsBridgeContext.Provider>

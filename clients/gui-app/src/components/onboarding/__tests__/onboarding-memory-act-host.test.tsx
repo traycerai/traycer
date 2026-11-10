@@ -20,6 +20,8 @@ import {
   continueFromMemory,
   currentStepId,
   deferred,
+  invalidateAllQueries,
+  refreshHostDirectory,
   openMemoryAct,
   paramsOf,
   providerSwitch,
@@ -137,6 +139,39 @@ describe("the Memory act: the host is picked while a save is running", () => {
         (call) => call.method === "providers.setNativeMemory",
       ),
     ).toHaveLength(2);
+    expect(methodsSentTo(OTHER_HOST.hostId)).not.toContain(
+      "providers.setNativeMemory",
+    );
+    expect(useOnboardingStore.getState().step).toBe(2);
+    expect(currentStepId()).toBe("agent-memories");
+  });
+
+  it("sends nothing once the picked host drops out and the tour falls back to the first host", async () => {
+    world.otherHosts = [OTHER_HOST];
+    world.setGate = deferred();
+    await openMemoryAct();
+    await chooseTraycer();
+    await providerSwitch("codex");
+    await continueFromMemory();
+    await waitFor(() =>
+      expect(paramsOf("config.agentMemories.set")).toHaveLength(1),
+    );
+
+    await pickOtherHost();
+    // The picked machine leaves the host list: the page has no client for it
+    // and goes back to the window's own, while the save is still held.
+    world.otherHosts = [];
+    await act(() => refreshHostDirectory());
+    await act(() => invalidateAllQueries());
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("onboarding-host-picker-bar").textContent,
+      ).not.toContain(OTHER_HOST.label),
+    );
+    act(() => world.setGate?.resolve());
+    await writesAnswered();
+
+    expect(methodsSentTo(HOST_ID)).not.toContain("providers.setNativeMemory");
     expect(methodsSentTo(OTHER_HOST.hostId)).not.toContain(
       "providers.setNativeMemory",
     );
