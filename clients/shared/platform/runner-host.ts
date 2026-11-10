@@ -1,3 +1,4 @@
+import type { HostOwnershipResult } from "../host-client/host-ownership";
 import type {
   TeamComputersResult,
   SetEnvironmentBotHostResult,
@@ -448,6 +449,10 @@ export interface IRunnerHost {
     input: UpdateHostVersionPolicyInput,
   ): Promise<UpdateHostVersionPolicyFetchResult>;
 
+  readHostOwnership(
+    bearer: string,
+    hostId: string,
+  ): Promise<HostOwnershipResult>;
   listTeamComputers(
     bearer: string,
     environmentId: string,

@@ -128,52 +128,74 @@ function TeamComputers(props: { readonly environmentId: string }): ReactNode {
           {setBotHost.error.message}
         </p>
       ) : null}
-      <Dialog
-        open={returning !== null}
-        onOpenChange={(open) => {
-          if (!open && !release.isPending) setReturning(null);
-        }}
-      >
-        <DialogContent className="w-full sm:max-w-prose">
-          <DialogHeader>
-            <DialogTitle>
-              Return {returning?.hostName ?? "this computer"} to its owner?
-            </DialogTitle>
-            <DialogDescription>
-              The team will lose access to this computer. Its owner will be
-              notified.
-            </DialogDescription>
-          </DialogHeader>
-          {release.error !== null ? (
-            <p role="alert" className="text-ui-sm text-destructive">
-              {release.error.message}
-            </p>
-          ) : null}
-          <div className="flex flex-wrap justify-end gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              disabled={release.isPending}
-              onClick={() => setReturning(null)}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              disabled={release.isPending || !canEdit}
-              onClick={() => {
-                if (returning !== null && canEdit)
-                  release.mutate(returning.hostId, {
-                    onSuccess: () => setReturning(null),
-                  });
-              }}
-            >
-              {release.isPending ? "Returning…" : "Return computer"}
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+      <TeamComputerReturnDialog
+        computer={returning}
+        pending={release.isPending}
+        failure={release.error?.message ?? null}
+        canEdit={canEdit}
+        onClose={() => setReturning(null)}
+        onReturn={(hostId) =>
+          release.mutate(hostId, {
+            onSuccess: () => setReturning(null),
+          })
+        }
+      />
     </section>
+  );
+}
+
+function TeamComputerReturnDialog(props: {
+  readonly computer: TeamComputer | null;
+  readonly pending: boolean;
+  readonly failure: string | null;
+  readonly canEdit: boolean;
+  readonly onClose: () => void;
+  readonly onReturn: (hostId: string) => void;
+}): ReactNode {
+  return (
+    <Dialog
+      open={props.computer !== null}
+      onOpenChange={(open) => {
+        if (!open && !props.pending) props.onClose();
+      }}
+    >
+      <DialogContent className="w-full sm:max-w-prose">
+        <DialogHeader>
+          <DialogTitle>
+            Return {props.computer?.hostName ?? "this computer"} to its owner?
+          </DialogTitle>
+          <DialogDescription>
+            The team will lose access to this computer. Its owner will be
+            notified.
+          </DialogDescription>
+        </DialogHeader>
+        {props.failure !== null ? (
+          <p role="alert" className="text-ui-sm text-destructive">
+            {props.failure}
+          </p>
+        ) : null}
+        <div className="flex flex-wrap justify-end gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            disabled={props.pending}
+            onClick={props.onClose}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            disabled={props.pending || !props.canEdit}
+            onClick={() => {
+              if (props.computer !== null && props.canEdit)
+                props.onReturn(props.computer.hostId);
+            }}
+          >
+            {props.pending ? "Returning…" : "Return computer"}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 

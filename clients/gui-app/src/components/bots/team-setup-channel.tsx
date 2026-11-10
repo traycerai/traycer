@@ -38,7 +38,6 @@ import {
   type SandboxDefaultsRead,
 } from "@/hooks/sandboxes/use-sandbox-defaults";
 import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
-import { useTeamHostInstallTokenLatest } from "@/hooks/bots/use-team-host-install-token-mutation";
 import { AddComputerDialog } from "@/components/settings/team/add-computer-dialog";
 import { useSandboxTraycerModels } from "@/hooks/sandboxes/use-sandbox-traycer-models-query";
 import {
@@ -386,14 +385,10 @@ function EnableTeamCloudAction(props: {
   // between must still know the team's sandbox is coming.
   const pressed = useTeamCloudCreate(environmentId, sandboxes.data);
   const pending = pressed?.pending === true;
-  // A machine's token being minted from this app, this card's or an earlier
-  // mount's, holds the team's host as a listed one does.
-  const machineMint = useTeamHostInstallTokenLatest(environmentId);
-
   const shape = teamStageShape(catalogue.data, defaults);
   const blocked = enableTeamCloudBlocked({
     environmentId,
-    machineJoining: props.machineJoining || machineMint.pending,
+    machineJoining: props.machineJoining,
     models,
     sandboxes,
     unlisted: pressed?.acceptedSandboxId ?? null,

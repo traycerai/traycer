@@ -1,3 +1,4 @@
+import type { HostOwnershipResult } from "@traycer-clients/shared/host-client/host-ownership";
 import type {
   TeamComputersResult,
   SetEnvironmentBotHostResult,
@@ -142,6 +143,10 @@ export interface AuthBridgeSurface {
     hostId: string,
     input: UpdateHostVersionPolicyInput,
   ): Promise<UpdateHostVersionPolicyFetchResult>;
+  readHostOwnership(
+    bearer: string,
+    hostId: string,
+  ): Promise<HostOwnershipResult>;
   listTeamComputers(
     bearer: string,
     environmentId: string,
@@ -339,6 +344,12 @@ export function buildAuthBridge(): AuthBridgeSurface {
         input,
       ) as Promise<UpdateHostVersionPolicyFetchResult>,
 
+    readHostOwnership: (bearer, hostId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.readHostOwnership,
+        bearer,
+        hostId,
+      ) as Promise<HostOwnershipResult>,
     listTeamComputers: (bearer, environmentId) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.listTeamComputers,

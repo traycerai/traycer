@@ -228,6 +228,7 @@ function createBaseRunnerHost(): IRunnerHost {
       Promise.resolve({ kind: "network-error" as const }),
     updateHostVersionPolicy: () =>
       Promise.resolve({ kind: "network-error" as const }),
+    readHostOwnership: () => Promise.resolve({ kind: "unauthorized" as const }),
     listTeamComputers: () => Promise.resolve({ kind: "unauthorized" as const }),
     setEnvironmentBotHost: () =>
       Promise.resolve({ kind: "unauthorized" as const }),

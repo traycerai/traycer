@@ -1705,7 +1705,8 @@ function registerHostCommands(program: Command): void {
 
   withRunner(
     host
-      .command("use <team>")
+      .command("use")
+      .argument("<team>", "Team name, handle, or environment id")
       .description("Give this computer to a team you belong to."),
     (_opts, [team]) => buildHostUseCommand(team ?? ""),
   );

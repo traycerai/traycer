@@ -1,3 +1,4 @@
+import { hostRegistryKindSchemaV11 } from "@traycer/protocol/host/host-status";
 import { z } from "zod";
 import { composeRequestAbort, untilAborted } from "../auth/request-abort";
 
@@ -6,7 +7,7 @@ const teamComputerSchema = z.object({
   hostId: z.string().min(1),
   environmentId: z.string().min(1),
   hostName: z.string().nullable(),
-  hostKind: z.enum(["personal", "sandbox"]),
+  hostKind: hostRegistryKindSchemaV11,
   sharingGeneration: z.number().int().nonnegative(),
   holdsBotSlot: z.boolean().optional().default(false),
   purgePending: z.boolean(),

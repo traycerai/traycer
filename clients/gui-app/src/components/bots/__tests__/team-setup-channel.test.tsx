@@ -32,9 +32,8 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { StrictMode, type ReactNode } from "react";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
-import userEvent, { type UserEvent } from "@testing-library/user-event";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { TeamHostInstallTokenResult } from "@traycer-clients/shared/host-client/team-host";
 import type {
   SandboxCreateFetchResult,
   SandboxListFetchResult,
@@ -154,7 +153,6 @@ vi.mock("@/components/bots/bot-settings-panel", () => ({
 }));
 
 import { BotTabSurface } from "@/components/bots/bot-tab-surface";
-import { teamHostMutationKeys } from "@/lib/query-keys";
 import { useTeamCloudCreateStore } from "@/stores/bots/team-cloud-create-store";
 import { AddComputerDialog } from "@/components/settings/team/add-computer-dialog";
 
@@ -213,9 +211,6 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
         "traycer host use env-new",
       );
       expect(document.body.textContent).not.toContain("traycer host join");
-      expect(
-        mocks.binding?.auth.mintTeamHostInstallToken,
-      ).not.toHaveBeenCalled();
     });
 
     it("quotes a selected team safely in both machine commands", async () => {
@@ -306,16 +301,13 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
       expect(screen.queryByTestId("team-host-option-cloud-note")).toBeNull();
     });
 
-    it("does not mint or create anything when the available instructions are opened", async () => {
+    it("does not create a sandbox when the available instructions are opened", async () => {
       const user = userEvent.setup();
       mocks.reads["env-new"] = { setup: JOINING_SETUP };
       render(surfaceFor(SETUP_BOT_ID));
 
       for (const button of hostButtons()) await user.click(button);
 
-      expect(
-        mocks.binding?.auth.mintTeamHostInstallToken,
-      ).not.toHaveBeenCalled();
       expect(mocks.binding?.auth.createSandbox).not.toHaveBeenCalled();
     });
   });
@@ -337,74 +329,6 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
         name: "Enable cloud",
       });
     }
-
-    describe("while an install-token mutation is pending", () => {
-      const MACHINE_JOINING_NOTE = "A machine is joining the team.";
-
-      async function pressEnableCloudHeld(user: UserEvent): Promise<void> {
-        expect(enableButton()).toHaveProperty("disabled", true);
-        expect(
-          document.getElementById(
-            enableButton().getAttribute("aria-describedby") ?? "",
-          )?.textContent,
-        ).toBe(MACHINE_JOINING_NOTE);
-        await user.click(enableButton());
-        expect(auth().createSandbox).not.toHaveBeenCalled();
-      }
-
-      it("holds cloud creation across a remount until the pending mint settles", async () => {
-        const user = userEvent.setup();
-        const first = render(surfaceFor(SETUP_BOT_ID));
-        await waitFor(() =>
-          expect(enableButton()).toHaveProperty("disabled", false),
-        );
-        let answer: (result: TeamHostInstallTokenResult) => void = () =>
-          undefined;
-        const pendingMint = queryClient
-          .getMutationCache()
-          .build<TeamHostInstallTokenResult, Error, void, undefined>(
-            queryClient,
-            {
-              mutationKey: teamHostMutationKeys.installToken(
-                "user-viewer",
-                "env-new",
-              ),
-              mutationFn: () =>
-                new Promise((resolve) => {
-                  answer = resolve;
-                }),
-            },
-          );
-        // Another install-token flow can still conflict with cloud creation;
-        // represent its pending state without making Add a computer mint one.
-        const mintResult = pendingMint.execute();
-
-        await waitFor(() =>
-          expect(enableButton()).toHaveProperty("disabled", true),
-        );
-        await pressEnableCloudHeld(user);
-
-        first.unmount();
-        render(surfaceFor(SETUP_BOT_ID));
-        await pressEnableCloudHeld(user);
-
-        await act(async () => {
-          answer({
-            kind: "ok",
-            hostId: "0b6f6a3e-6f4c-4a0e-9d6e-0d7a4c1f2a11",
-            installToken: "team-host-install-token-fixture",
-            expiresAt: Date.now() + 10 * 60_000,
-          });
-          await mintResult;
-        });
-
-        await waitFor(() =>
-          expect(enableButton()).toHaveProperty("disabled", false),
-        );
-        expect(auth().mintTeamHostInstallToken).not.toHaveBeenCalled();
-        expect(auth().createSandbox).not.toHaveBeenCalled();
-      });
-    });
 
     it("creates the team's kept sandbox in the team's environment, in the configuration's default shape and region, holding the button while it is created", async () => {
       const user = userEvent.setup();

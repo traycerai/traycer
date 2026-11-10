@@ -1,3 +1,4 @@
+import { readHostOwnershipViaHttp } from "@traycer-clients/shared/host-client/host-ownership";
 import {
   listTeamComputersViaHttp,
   setEnvironmentBotHostViaHttp,
@@ -767,6 +768,19 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
         environmentId,
         hostId,
         sharingGeneration,
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.readHostOwnership,
+    async (_event, bearer: unknown, hostId: unknown) => {
+      assertString(bearer, "readHostOwnership.bearer");
+      assertString(hostId, "readHostOwnership.hostId");
+      return readHostOwnershipViaHttp(
+        bridge.options.authnBaseUrl,
+        bearer,
+        hostId,
       );
     },
   );

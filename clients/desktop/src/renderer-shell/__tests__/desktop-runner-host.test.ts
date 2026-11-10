@@ -133,6 +133,7 @@ function buildFakeBridge(
     validateAuthTokenIdentity: async () => ({ kind: "rejected" as const }),
     listRegisteredHosts: async () => ({ kind: "network-error" as const }),
     updateHostVersionPolicy: async () => ({ kind: "network-error" as const }),
+    readHostOwnership: () => Promise.resolve({ kind: "unauthorized" as const }),
     listTeamComputers: () => Promise.resolve({ kind: "unauthorized" as const }),
     setEnvironmentBotHost: () =>
       Promise.resolve({ kind: "unauthorized" as const }),

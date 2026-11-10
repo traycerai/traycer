@@ -1,4 +1,4 @@
-import { fetchRegisteredHostsViaHttp } from "@traycer-clients/shared/host-client/remote-fetcher";
+import { readHostOwnershipViaHttp } from "@traycer-clients/shared/host-client/host-ownership";
 import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
 import { callHostRpc, toAgentCliError } from "../internal/host-rpc";
 import { runWithCliStore, withCommitRetry } from "../store/credentials-store";
@@ -468,15 +468,13 @@ export async function useInstalledHostTeam(
       exitCode: 1,
     });
   }
-  const directory = await fetchRegisteredHostsViaHttp(
+  const directory = await readHostOwnershipViaHttp(
     auth.authnBaseUrl,
     auth.token,
+    current.hostId,
   );
-  const host =
-    directory.kind === "ok"
-      ? directory.response.hosts.find((row) => row.hostId === current.hostId)
-      : undefined;
-  if (host === undefined || host.owner === undefined) {
+  const host = directory.kind === "ok" ? directory.host : undefined;
+  if (host === undefined) {
     throw cliError({
       code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
       message: "This computer's ownership could not be confirmed. Try again.",
@@ -514,15 +512,12 @@ export async function useInstalledHostTeam(
       environmentId: target.environmentId,
     }),
   );
-  const confirmed = await fetchRegisteredHostsViaHttp(
+  const confirmed = await readHostOwnershipViaHttp(
     auth.authnBaseUrl,
     auth.token,
+    current.hostId,
   );
-  const owner =
-    confirmed.kind === "ok"
-      ? confirmed.response.hosts.find((row) => row.hostId === current.hostId)
-          ?.owner
-      : undefined;
+  const owner = confirmed.kind === "ok" ? confirmed.host.owner : undefined;
   if (
     owner?.kind !== "team" ||
     owner.id !== target.ownerId ||

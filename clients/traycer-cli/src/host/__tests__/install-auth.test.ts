@@ -14,11 +14,8 @@ import {
   readCredentialsFile,
   writeCredentialsFile,
 } from "@traycer/protocol/config/credentials";
-import type {
-  HostOwnerPrincipal,
-  HostRegistryKind,
-} from "@traycer/protocol/host/host-status";
-import type { HostListFetchResult } from "@traycer-clients/shared/host-client/remote-fetcher";
+import type { HostOwnerPrincipal } from "@traycer/protocol/host/host-status";
+import type { HostOwnershipResult } from "@traycer-clients/shared/host-client/host-ownership";
 
 // `maybeProvisionCredential`'s own decision logic, which had no direct
 // coverage: every command suite that exercises it (`host-install`,
@@ -44,7 +41,7 @@ const mocks = vi.hoisted(() => ({
   resolveHostAuthMock: vi.fn(),
   provisionInstalledHostCredentialMock: vi.fn(),
   callHostRpcMock: vi.fn(),
-  fetchRegisteredHostsMock: vi.fn(),
+  readHostOwnershipMock: vi.fn(),
   credentialsPath: "",
 }));
 
@@ -78,18 +75,19 @@ vi.mock("../../store/paths", async (importOriginal) => {
 });
 
 vi.mock(
-  "@traycer-clients/shared/host-client/remote-fetcher",
+  "@traycer-clients/shared/host-client/host-ownership",
   async (importOriginal) => {
     const actual =
       await importOriginal<
-        typeof import("@traycer-clients/shared/host-client/remote-fetcher")
+        typeof import("@traycer-clients/shared/host-client/host-ownership")
       >();
     return {
       ...actual,
-      fetchRegisteredHostsViaHttp: (
+      readHostOwnershipViaHttp: (
         authnBaseUrl: string,
         bearerToken: string,
-      ) => mocks.fetchRegisteredHostsMock(authnBaseUrl, bearerToken),
+        hostId: string,
+      ) => mocks.readHostOwnershipMock(authnBaseUrl, bearerToken, hostId),
     };
   },
 );
@@ -135,33 +133,17 @@ const personalBinding = {
   canUnbind: false,
 };
 
-function registeredHost(
+function hostOwnership(
   owner: HostOwnerPrincipal,
-  kind: HostRegistryKind,
-): HostListFetchResult {
+  kind: "personal" | "sandbox",
+): HostOwnershipResult {
   return {
     kind: "ok",
-    response: {
-      hosts: [
-        {
-          hostId: "host-local",
-          displayName: "Computer",
-          platform: "darwin",
-          kind,
-          publicKey: "test-public-key",
-          createdAt: "2026-11-10T00:00:00.000Z",
-          status: {
-            connectivity: "offline",
-            viewerReachability: "unknown",
-            clientCloud: "ok",
-            updateState: "current",
-            appVersion: null,
-            lastSeenAt: null,
-          },
-          owner,
-          updatePolicy: "manual",
-        },
-      ],
+    host: {
+      hostId: "host-local",
+      owner,
+      kind,
+      remoteAccess: false,
     },
   };
 }
@@ -256,8 +238,8 @@ describe("install auth helpers", () => {
       authnBaseUrl: "https://authn.test",
       userId: "member-1",
     });
-    mocks.fetchRegisteredHostsMock.mockResolvedValue(
-      registeredHost({ kind: "user", id: "member-1" }, "personal"),
+    mocks.readHostOwnershipMock.mockResolvedValue(
+      hostOwnership({ kind: "user", id: "member-1" }, "personal"),
     );
     mocks.provisionInstalledHostCredentialMock.mockResolvedValue({
       kind: "active",
@@ -269,18 +251,18 @@ describe("install auth helpers", () => {
     const token = "inline-team-token";
     await writeStoredCredentials(token);
     const credentialsAtOwnerChecks: (string | null)[] = [];
-    mocks.fetchRegisteredHostsMock
+    mocks.readHostOwnershipMock
       .mockImplementationOnce(async () => {
         credentialsAtOwnerChecks.push(
           (await readCredentialsFile(mocks.credentialsPath))?.token ?? null,
         );
-        return registeredHost({ kind: "user", id: "member-1" }, "personal");
+        return hostOwnership({ kind: "user", id: "member-1" }, "personal");
       })
       .mockImplementationOnce(async () => {
         credentialsAtOwnerChecks.push(
           (await readCredentialsFile(mocks.credentialsPath))?.token ?? null,
         );
-        return registeredHost(
+        return hostOwnership(
           { kind: "team", id: "organization-acme", name: "Acme" },
           "personal",
         );
@@ -299,7 +281,23 @@ describe("install auth helpers", () => {
     expect(mocks.callHostRpcMock.mock.calls[2]?.[1]).toEqual({
       environmentId: "environment-acme",
     });
-    expect(mocks.fetchRegisteredHostsMock).toHaveBeenCalledTimes(2);
+    expect(mocks.readHostOwnershipMock).toHaveBeenCalledTimes(2);
+    expect(mocks.readHostOwnershipMock).toHaveBeenNthCalledWith(
+      1,
+      "https://authn.test",
+      "stored-bearer",
+      "host-local",
+    );
+    expect(mocks.readHostOwnershipMock).toHaveBeenNthCalledWith(
+      2,
+      "https://authn.test",
+      "stored-bearer",
+      "host-local",
+    );
+    const ownershipReads = mocks.readHostOwnershipMock.mock.invocationCallOrder;
+    const bindCalls = mocks.callHostRpcMock.mock.invocationCallOrder;
+    expect(ownershipReads[0]).toBeLessThan(bindCalls[2] ?? Infinity);
+    expect(ownershipReads[1]).toBeGreaterThan(bindCalls[2] ?? -Infinity);
     expect(credentialsAtOwnerChecks).toEqual([token, token]);
     expect(await readCredentialsFile(mocks.credentialsPath)).toBeNull();
   });
@@ -328,13 +326,13 @@ describe("install auth helpers", () => {
     const token = "inline-team-token";
     const replacement = "concurrent-login-token";
     await writeStoredCredentials(token);
-    mocks.fetchRegisteredHostsMock
+    mocks.readHostOwnershipMock
       .mockResolvedValueOnce(
-        registeredHost({ kind: "user", id: "member-1" }, "personal"),
+        hostOwnership({ kind: "user", id: "member-1" }, "personal"),
       )
       .mockImplementationOnce(async () => {
         await writeStoredCredentials(replacement);
-        return registeredHost(
+        return hostOwnership(
           { kind: "team", id: "organization-acme", name: "Acme" },
           "personal",
         );
@@ -375,8 +373,8 @@ describe("install auth helpers", () => {
       }
       return Promise.resolve(teamBinding);
     });
-    mocks.fetchRegisteredHostsMock.mockResolvedValue(
-      registeredHost(
+    mocks.readHostOwnershipMock.mockResolvedValue(
+      hostOwnership(
         { kind: "team", id: "organization-acme", name: "Acme" },
         "personal",
       ),
@@ -392,14 +390,15 @@ describe("install auth helpers", () => {
       "environment.host.bind",
       expect.anything(),
     );
+    expect(mocks.readHostOwnershipMock).toHaveBeenCalledTimes(1);
     expect((await readCredentialsFile(mocks.credentialsPath))?.token).toBe(
       token,
     );
   });
 
   it("refuses a sandbox host before attempting a team bind", async () => {
-    mocks.fetchRegisteredHostsMock.mockResolvedValue(
-      registeredHost({ kind: "user", id: "member-1" }, "sandbox"),
+    mocks.readHostOwnershipMock.mockResolvedValue(
+      hostOwnership({ kind: "user", id: "member-1" }, "sandbox"),
     );
 
     await expect(
@@ -411,8 +410,8 @@ describe("install auth helpers", () => {
   });
 
   it("refuses a computer already owned by another team", async () => {
-    mocks.fetchRegisteredHostsMock.mockResolvedValue(
-      registeredHost(
+    mocks.readHostOwnershipMock.mockResolvedValue(
+      hostOwnership(
         { kind: "team", id: "organization-other", name: "Other" },
         "personal",
       ),
@@ -429,12 +428,12 @@ describe("install auth helpers", () => {
   it("retains a pre-existing sign-in after the team bind", async () => {
     const token = "pre-existing-token";
     await writeStoredCredentials(token);
-    mocks.fetchRegisteredHostsMock
+    mocks.readHostOwnershipMock
       .mockResolvedValueOnce(
-        registeredHost({ kind: "user", id: "member-1" }, "personal"),
+        hostOwnership({ kind: "user", id: "member-1" }, "personal"),
       )
       .mockResolvedValueOnce(
-        registeredHost(
+        hostOwnership(
           { kind: "team", id: "organization-acme", name: "Acme" },
           "personal",
         ),

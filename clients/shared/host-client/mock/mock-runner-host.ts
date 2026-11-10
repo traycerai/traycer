@@ -1,4 +1,8 @@
 import {
+  readHostOwnershipViaHttp,
+  type HostOwnershipResult,
+} from "../host-ownership";
+import {
   listTeamComputersViaHttp,
   setEnvironmentBotHostViaHttp,
   type TeamComputersResult,
@@ -695,6 +699,13 @@ export class MockRunnerHost implements IRunnerHost {
       hostId,
       input,
     );
+  }
+
+  readHostOwnership(
+    bearer: string,
+    hostId: string,
+  ): Promise<HostOwnershipResult> {
+    return readHostOwnershipViaHttp(this.authnBaseUrl, bearer, hostId);
   }
 
   listTeamComputers(

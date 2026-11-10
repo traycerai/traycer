@@ -1,4 +1,8 @@
 import {
+  readHostOwnershipViaHttp,
+  type HostOwnershipResult,
+} from "@traycer-clients/shared/host-client/host-ownership";
+import {
   listTeamComputersViaHttp,
   setEnvironmentBotHostViaHttp,
   type TeamComputersResult,
@@ -771,6 +775,13 @@ export class MobileRunnerHost implements IRunnerHost {
       hostId,
       input,
     );
+  }
+
+  readHostOwnership(
+    bearer: string,
+    hostId: string,
+  ): Promise<HostOwnershipResult> {
+    return readHostOwnershipViaHttp(this.authnBaseUrl, bearer, hostId);
   }
 
   listTeamComputers(

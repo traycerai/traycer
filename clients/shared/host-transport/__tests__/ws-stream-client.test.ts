@@ -4729,6 +4729,71 @@ describe("WsStreamClient host credential provisioning", () => {
     session.close();
   });
 
+  it("ignores an older socket's missing ack after team-unavailable, then permits a fresh reconnect to mint", async () => {
+    const mint = vi.fn<HostCredentialMintFlow>().mockResolvedValue({
+      kind: "unavailable",
+    });
+    const { factory, sockets } = makeFactory();
+    const client = makeProvisioningClient({
+      factory,
+      mint,
+      endpoint: () => HOST_A,
+      authToken: undefined,
+    });
+
+    // Each subscription owns a StreamSession/socket, while credential mint
+    // bookkeeping is shared by this WsStreamClient.
+    const olderSession = client.subscribe("epic.subscribe", {
+      epicId: "epic-1",
+    });
+    await flush();
+    const olderSocket = sockets[0].socket;
+    olderSocket.fireOpen();
+    await pollUntil(
+      "older socket to send its open frame",
+      () => olderSocket.textSent.length > 0,
+    );
+
+    const teamSession = client.subscribe("epic.subscribe", {
+      epicId: "epic-1",
+    });
+    const teamSocket = await nthSocket(sockets, 1);
+    teamSocket.fireOpen();
+    await pollUntil(
+      "team socket to send its open frame",
+      () => teamSocket.textSent.length > 0,
+    );
+    ackProvisionHandshake(teamSocket, "team-unavailable");
+    await flush();
+
+    // The earlier handshake is still live in its own session. Its late `missing`
+    // must not undo the team state or start a personal credential mint.
+    ackProvisionHandshake(olderSocket, "missing");
+    await flush();
+    expect(mint).not.toHaveBeenCalled();
+    expect(allProvisionFrames(sockets)).toHaveLength(0);
+
+    // This dial starts after the team-state observation. A fresh `missing` ack
+    // after the team becomes available must remain eligible for provisioning.
+    teamSocket.fireClose(1000, "reconnect-after-team-return", false);
+    const freshSocket = await nthSocket(sockets, 2);
+    freshSocket.fireOpen();
+    await pollUntil(
+      "fresh socket to send its open frame",
+      () => freshSocket.textSent.length > 0,
+    );
+    ackProvisionHandshake(freshSocket, "missing");
+    await flush();
+
+    expect(mint).toHaveBeenCalledTimes(1);
+    expect(mint).toHaveBeenCalledWith({
+      hostId: HOST_A.hostId,
+      reason: "missing",
+    });
+    olderSession.close();
+    teamSession.close();
+  });
+
   it("observes team-unavailable without minting a personal credential", async () => {
     const mint = vi.fn(async () =>
       provisioned({ token: "should-not", refreshToken: "should-not" }),

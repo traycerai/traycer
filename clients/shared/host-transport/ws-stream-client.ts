@@ -395,6 +395,8 @@ export class WsStreamClient<
    */
   private readonly provisionRetryTimers = new Map<string, TimerHandle>();
   private readonly provisionGenerations = new Map<string, number>();
+  private openedCredentialSocketSequence = 0;
+  private readonly teamCredentialSocketBarriers = new Map<string, number>();
   /**
    * Hosts THIS client handed a credential to.
    *
@@ -539,16 +541,23 @@ export class WsStreamClient<
         ),
       onTransportReconnect: (reconnectingMethod) =>
         this.resetMethodSupport(reconnectingMethod),
-      onHostCredentialAck: (hostId, state, canProvision) => {
-        this.handleHostCredentialAck(hostId, state, canProvision);
+      nextCredentialSocketSequence: () => ++this.openedCredentialSocketSequence,
+      onHostCredentialAck: (hostId, state, canProvision, socketSequence) => {
+        this.handleHostCredentialAck(
+          hostId,
+          state,
+          canProvision,
+          socketSequence,
+        );
       },
       // The passive tap is delivered by the session itself, ahead of the
       // compatibility abort, so it fires on EVERY state-carrying ack rather
       // than only the ones whose method version also happened to negotiate.
-      onHostCredentialState: (hostId, state) => {
+      onHostCredentialState: (hostId, state, socketSequence) => {
+        if (!this.acceptsCredentialSocket(hostId, socketSequence)) return;
         // Ownership can change even when this method's version cannot open.
         if (state === "team-unavailable") {
-          this.handleHostCredentialAck(hostId, state, false);
+          this.handleHostCredentialAck(hostId, state, false, socketSequence);
         }
         this.options.onHostCredentialState?.(hostId, state);
       },
@@ -848,9 +857,19 @@ export class WsStreamClient<
     }
   }
 
+  private acceptsCredentialSocket(
+    hostId: string,
+    socketSequence: number,
+  ): boolean {
+    return (
+      !this.closed &&
+      socketSequence > (this.teamCredentialSocketBarriers.get(hostId) ?? 0)
+    );
+  }
+
   /**
-   * Runs on every `openAck` from a host that advertised the provisioning
-   * capability. Two jobs, in this order:
+   * Team unavailability fences older handshakes. Otherwise a peer that
+   * accepts provisioning has two jobs, in this order:
    *
    *   1. deliver a credential minted earlier that never found a live socket;
    *   2. otherwise start one mint for a host reporting it has none.
@@ -863,8 +882,9 @@ export class WsStreamClient<
     hostId: string,
     state: HostCredentialState,
     canProvision: boolean,
+    socketSequence: number,
   ): void {
-    if (this.closed) {
+    if (!this.acceptsCredentialSocket(hostId, socketSequence)) {
       return;
     }
     // Recorded before anything else can return early, so no path through this
@@ -874,6 +894,12 @@ export class WsStreamClient<
     const previousState = this.lastHostCredentialState.get(hostId) ?? null;
     this.lastHostCredentialState.set(hostId, state);
     if (state === "team-unavailable") {
+      // A sibling's delayed ack was formed before this observation. Only a
+      // new open can establish that provisioning became appropriate again.
+      this.teamCredentialSocketBarriers.set(
+        hostId,
+        this.openedCredentialSocketSequence,
+      );
       if (previousState !== state) {
         this.provisionGenerations.set(
           hostId,
@@ -1528,15 +1554,16 @@ interface StreamSessionOptions<Registry extends VersionedStreamRpcRegistry> {
     reconnectingMethod: keyof Registry & string,
   ) => void;
   /**
-   * Reports the connected host's own credential state, once per successful
-   * handshake, and ONLY when that host advertised the provisioning capability
-   * and actually reported a state. The owning client decides what to do; the
-   * session just carries the frame.
+   * Reports the connected host's state after the method's handshake, with
+   * the provisioning capability and the order of this socket's open frame.
+   * The owning client fences reports across sibling sessions.
    */
+  readonly nextCredentialSocketSequence: () => number;
   readonly onHostCredentialAck: (
     hostId: string,
     state: HostCredentialState,
     canProvision: boolean,
+    socketSequence: number,
   ) => void;
   /**
    * Passive observation of the same state, delivered EARLIER than
@@ -1546,7 +1573,11 @@ interface StreamSessionOptions<Registry extends VersionedStreamRpcRegistry> {
    * this build cannot subscribe to. `null` when nobody is watching.
    */
   readonly onHostCredentialState:
-    | ((hostId: string, state: HostCredentialState) => void)
+    | ((
+        hostId: string,
+        state: HostCredentialState,
+        socketSequence: number,
+      ) => void)
     | null;
   /**
    * Reports positive host-recovery evidence to the owning client, with the
@@ -1675,6 +1706,7 @@ class StreamSession<
   private disposed = false;
 
   private activeSocket: StreamWebSocketLike | null = null;
+  private credentialSocketSequence = 0;
   private openFrameToken: string | null = null;
   /**
    * The verdict this connection's `open` frame actually carried, or `undefined`
@@ -2286,6 +2318,7 @@ class StreamSession<
     // genuinely needed one because the two reads happened to agree.
     const sentCloudAuthorized = this.config.cloudAuthorized?.();
     this.openFrameCloudAuthorized = sentCloudAuthorized;
+    this.credentialSocketSequence = this.config.nextCredentialSocketSequence();
     const openFrame: ClientStreamOpenFrame = {
       kind: "open",
       capabilities: [STREAM_CAPABILITY_TEAM_CREDENTIAL_STATE],
@@ -2700,6 +2733,7 @@ class StreamSession<
         hostId,
         hostCredentialState,
         this.supportsHostCredentialProvision,
+        this.credentialSocketSequence,
       );
     }
   }
@@ -2717,7 +2751,7 @@ class StreamSession<
       return;
     }
     try {
-      observe(hostId, state);
+      observe(hostId, state, this.credentialSocketSequence);
     } catch (cause) {
       console.warn(
         `[stream] host-credential state observer threw (method=${this.config.method}, host=${hostId})`,

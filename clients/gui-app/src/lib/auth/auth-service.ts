@@ -1,3 +1,4 @@
+import type { HostOwnershipResult } from "@traycer-clients/shared/host-client/host-ownership";
 import type {
   TeamComputersResult,
   SetEnvironmentBotHostResult,
@@ -3125,6 +3126,28 @@ export class AuthService {
       throw new Error("Sign in to update this host.");
     }
     return this.runnerHost.updateHostVersionPolicy(bearer, hostId, input);
+  }
+
+  async readHostOwnership(
+    hostId: string,
+    era: AuthEra,
+  ): Promise<HostOwnershipResult> {
+    const before = this.currentAuthEra();
+    if (
+      before.identity !== era.identity ||
+      before.credentialGeneration !== era.credentialGeneration
+    )
+      throw new SupersededAuthEraError();
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    const result = await this.runnerHost.readHostOwnership(bearer, hostId);
+    const after = this.currentAuthEra();
+    if (
+      after.identity !== era.identity ||
+      after.credentialGeneration !== era.credentialGeneration
+    )
+      throw new SupersededAuthEraError();
+    return result;
   }
 
   async listTeamComputers(environmentId: string): Promise<TeamComputersResult> {

@@ -2,6 +2,12 @@
  * Query-key builders for non-Traycer Host `AuthService` reads.
  */
 export const authQueryKeys = {
+  hostOwnership: (
+    auth: object | null,
+    userId: string | null,
+    hostId: string | null,
+  ): readonly unknown[] => ["auth", "host-ownership", auth, userId, hostId],
+  hostOwnershipAll: (): readonly unknown[] => ["auth", "host-ownership"],
   teamComputers: (
     auth: object | null,
     userId: string | null,

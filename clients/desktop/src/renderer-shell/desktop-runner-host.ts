@@ -1,3 +1,4 @@
+import type { HostOwnershipResult } from "@traycer-clients/shared/host-client/host-ownership";
 import type {
   TeamComputersResult,
   SetEnvironmentBotHostResult,
@@ -256,6 +257,10 @@ export interface DesktopPreloadBridge {
     hostId: string,
     input: UpdateHostVersionPolicyInput,
   ): Promise<UpdateHostVersionPolicyFetchResult>;
+  readHostOwnership(
+    bearer: string,
+    hostId: string,
+  ): Promise<HostOwnershipResult>;
   listTeamComputers(
     bearer: string,
     environmentId: string,
@@ -1309,6 +1314,13 @@ export class DesktopRunnerHost implements IRunnerHost {
     input: UpdateHostVersionPolicyInput,
   ): Promise<UpdateHostVersionPolicyFetchResult> {
     return this.bridge.updateHostVersionPolicy(bearerToken, hostId, input);
+  }
+
+  readHostOwnership(
+    bearer: string,
+    hostId: string,
+  ): Promise<HostOwnershipResult> {
+    return this.bridge.readHostOwnership(bearer, hostId);
   }
 
   listTeamComputers(

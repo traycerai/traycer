@@ -1,4 +1,7 @@
-import { TEAM_TRANSFER_REFUSALS } from "@traycer-clients/shared/host-client/team-computer-refusals";
+import { useTeamComputerTransfer } from "@/hooks/environment/use-team-computer-transfer";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import { useQueryClient } from "@tanstack/react-query";
+import { authQueryKeys } from "@/lib/query-keys";
 import type { HostOwnerPrincipal } from "@traycer/protocol/host/host-status";
 import { TEAM_TRANSFER_DISCLOSURE } from "@traycer/protocol/host/environment/team-transfer-disclosure";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
@@ -69,6 +72,7 @@ export function HostOverviewSettingsCard(props: {
 }): ReactNode {
   const openMoveSheet = useMoveSheetStore((state) => state.openSheet);
   const [stopOpen, setStopOpen] = useState(false);
+  const [transferReceipt, setTransferReceipt] = useState<string | null>(null);
   const hostIds = useMemo(() => [props.hostId], [props.hostId]);
   const statusVersion =
     useHostNegotiatedMethodVersions(hostIds, "environment.status").get(
@@ -114,12 +118,15 @@ export function HostOverviewSettingsCard(props: {
   const teamOwner = props.owner?.kind === "team" ? props.owner : null;
   if (model.kind === "team" || teamOwner !== null) {
     return (
-      <TeamOwnedHostSettingsRow
-        {...lineProps}
-        owner={teamOwner}
-        fallback={model.kind === "team" ? model : null}
-        isLocalMachine={props.isLocalMachine}
-      />
+      <>
+        <TeamOwnedHostSettingsRow
+          {...lineProps}
+          owner={teamOwner}
+          fallback={model.kind === "team" ? model : null}
+          isLocalMachine={props.isLocalMachine}
+        />
+        <TransferReceipt value={transferReceipt} />
+      </>
     );
   }
   if (model.kind === "progress") {
@@ -161,6 +168,7 @@ export function HostOverviewSettingsCard(props: {
               hostId={props.hostId}
               hostName={props.hostName}
               mayTransfer={false}
+              onTransferred={setTransferReceipt}
               value={model.value}
               options={model.options}
               onChoose={(option) => {
@@ -184,6 +192,7 @@ export function HostOverviewSettingsCard(props: {
         open={stopOpen}
         onOpenChange={setStopOpen}
       />
+      <TransferReceipt value={transferReceipt} />
     </>
   );
 }
@@ -241,12 +250,18 @@ function ReturnLocalTeamComputer(props: {
   readonly hostId: string;
   readonly hostName: string;
 }): ReactNode {
+  const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const [returned, setReturned] = useState(false);
   const mutation = useHostScopedMutationForClient(props.client, {
     method: "environment.move.stop",
     mutationKey: environmentMutationKeys.moveStop(),
     errorMessage: null,
+    onSettled: () => {
+      void queryClient.invalidateQueries({
+        queryKey: authQueryKeys.hostOwnershipAll(),
+      });
+    },
     invalidateMethods: [
       "environment.host.read",
       "environment.status",
@@ -369,6 +384,7 @@ function EnvironmentSourceControl(
     readonly hostId: string;
     readonly hostName: string;
     readonly mayTransfer: boolean;
+    readonly onTransferred: (receipt: string) => void;
   },
 ): ReactNode {
   return props.mayTransfer ? (
@@ -387,6 +403,7 @@ function TeamEnvironmentSourceControl(
     readonly client: HostClient<HostRpcRegistry>;
     readonly hostId: string;
     readonly hostName: string;
+    readonly onTransferred: (receipt: string) => void;
   },
 ): ReactNode {
   const environments = useEnvironmentListQuery(props.client, true);
@@ -396,17 +413,7 @@ function TeamEnvironmentSourceControl(
   const [selected, setSelected] = useState<EnvironmentDescriptorV11 | null>(
     null,
   );
-  const [receipt, setReceipt] = useState<string | null>(null);
-  const mutation = useHostScopedMutationForClient(props.client, {
-    method: "environment.host.bind",
-    mutationKey: environmentMutationKeys.hostBind(),
-    errorMessage: null,
-    invalidateMethods: [
-      "environment.host.read",
-      "environment.status",
-      "environment.host.list",
-    ],
-  });
+  const mutation = useTeamComputerTransfer(props.client, props.hostId);
   return (
     <>
       <EnvironmentSourceSelect
@@ -439,10 +446,7 @@ function TeamEnvironmentSourceControl(
           </ul>
           {mutation.isError ? (
             <p role="alert" className="text-ui-sm text-destructive">
-              {TEAM_TRANSFER_REFUSALS.find(
-                (refusal) => refusal.code === mutation.error.code,
-              )?.message ??
-                "Could not add this computer. Check your team membership and try again."}
+              {mutation.error.message}
             </p>
           ) : null}
           <div className="flex flex-wrap justify-end gap-2">
@@ -460,23 +464,14 @@ function TeamEnvironmentSourceControl(
               onClick={() => {
                 if (selected === null) return;
                 const team = selected;
-                mutation.mutate(
-                  { environmentId: team.environmentId },
-                  {
-                    onSuccess: (binding) => {
-                      if (
-                        binding.hostId === props.hostId &&
-                        binding.explicit &&
-                        binding.environment.environmentId === team.environmentId
-                      ) {
-                        setReceipt(
-                          `${props.hostName} now belongs to ${team.label}. Return it from this computer's Overview when you want it back.`,
-                        );
-                        setSelected(null);
-                      }
-                    },
+                mutation.mutate(team, {
+                  onSuccess: () => {
+                    props.onTransferred(
+                      `${props.hostName} now belongs to ${team.label}. Return it from this computer's Overview when you want it back.`,
+                    );
+                    setSelected(null);
                   },
-                );
+                });
               }}
             >
               {mutation.isPending ? "Adding…" : "Confirm at this computer"}
@@ -484,11 +479,6 @@ function TeamEnvironmentSourceControl(
           </div>
         </DialogContent>
       </Dialog>
-      {receipt !== null ? (
-        <p role="status" className="text-ui-sm">
-          {receipt}
-        </p>
-      ) : null}
     </>
   );
 }
@@ -665,6 +655,7 @@ export function HostOverviewSettingsCardSlot(props: {
   readonly owner: HostOwnerPrincipal | null;
   readonly isLocalMachine: boolean;
 }): ReactNode {
+  const userId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
   const status = useEnvironmentStatusRead(
     props.client,
     props.hostId,
@@ -694,7 +685,7 @@ export function HostOverviewSettingsCardSlot(props: {
   }
   return (
     <HostOverviewSettingsCard
-      key={props.hostId}
+      key={JSON.stringify([props.hostId, userId])}
       client={props.client}
       hostId={props.hostId}
       hostName={props.hostName}
@@ -703,5 +694,13 @@ export function HostOverviewSettingsCardSlot(props: {
       owner={props.owner}
       isLocalMachine={props.isLocalMachine}
     />
+  );
+}
+
+function TransferReceipt(props: { readonly value: string | null }): ReactNode {
+  return props.value === null ? null : (
+    <p role="status" className="text-ui-sm">
+      {props.value}
+    </p>
   );
 }
