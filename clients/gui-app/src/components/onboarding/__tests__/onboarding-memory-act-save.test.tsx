@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import {
   ENVIRONMENT_ID,
+  HOST_ID,
   acceptHeldWrite,
   deliverAcceptedWrites,
   deliverSavedWrite,
@@ -518,9 +519,9 @@ describe("the Memory act: a read is only as fresh as when it was taken", () => {
 
       // The next reader of the act's entry asks the host instead of being
       // handed the answer the act took.
-      expect(entryIsStale()).toBe(true);
+      expect(entryIsStale(HOST_ID)).toBe(true);
       const reads = paramsOf("config.agentMemories.get").length;
-      mountEntryReader();
+      mountEntryReader(HOST_ID);
       await waitFor(() =>
         expect(entryReaderAnswer()).toMatchObject({
           enabled: false,
@@ -538,12 +539,12 @@ describe("the Memory act: a read is only as fresh as when it was taken", () => {
     await screen.findByTestId("onboarding-memory-not-now");
     await settled();
     await act(() => refreshMemoryEntry());
-    expect(entryIsStale()).toBe(false);
+    expect(entryIsStale(HOST_ID)).toBe(false);
 
     fireEvent.click(screen.getByTestId("onboarding-memory-not-now"));
     await expectOnStep("session-import");
 
-    expect(entryIsStale()).toBe(true);
+    expect(entryIsStale(HOST_ID)).toBe(true);
   });
 
   it("marks the entry stale when Continue moves on after Traycer was switched off following an overturn", async () => {
@@ -557,12 +558,12 @@ describe("the Memory act: a read is only as fresh as when it was taken", () => {
     await settled();
     fireEvent.click(switchOf("onboarding-memory-traycer"));
     await act(() => refreshMemoryEntry());
-    expect(entryIsStale()).toBe(false);
+    expect(entryIsStale(HOST_ID)).toBe(false);
 
     await continueFromMemory();
     await expectOnStep("session-import");
 
-    expect(entryIsStale()).toBe(true);
+    expect(entryIsStale(HOST_ID)).toBe(true);
   });
 
   it("marks the entry stale when a save that was running as the person went Back ends", async () => {
@@ -580,7 +581,7 @@ describe("the Memory act: a read is only as fresh as when it was taken", () => {
     await writesAnswered();
     await settled();
 
-    expect(entryIsStale()).toBe(true);
+    expect(entryIsStale(HOST_ID)).toBe(true);
   });
 
   it("does not let a read still in flight when the act is left clear the mark", async () => {
@@ -593,6 +594,6 @@ describe("the Memory act: a read is only as fresh as when it was taken", () => {
     act(() => world.getGate?.resolve());
     await settled();
 
-    expect(entryIsStale()).toBe(true);
+    expect(entryIsStale(HOST_ID)).toBe(true);
   });
 });

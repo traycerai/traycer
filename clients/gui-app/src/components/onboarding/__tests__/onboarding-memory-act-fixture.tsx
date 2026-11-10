@@ -444,9 +444,9 @@ const captureDirectory = (directory: HostDirectoryService | null): void => {
   hostDirectory = directory;
 };
 
-let mountReader: (() => void) | null = null;
+let mountReader: ((hostId: string) => void) | null = null;
 let readerAnswer: ConfigAgentMemoriesResponse | null = null;
-const captureReaderMount = (mount: (() => void) | null): void => {
+const captureReaderMount = (mount: ((hostId: string) => void) | null): void => {
   mountReader = mount;
 };
 const captureReaderAnswer = (
@@ -456,8 +456,8 @@ const captureReaderAnswer = (
 };
 
 /** Mounts a second reader of the act's `config.agentMemories.get` entry. */
-export function mountEntryReader(): void {
-  act(() => mountReader?.());
+export function mountEntryReader(hostId: string): void {
+  act(() => mountReader?.(hostId));
 }
 
 /** What that reader was given, once it has an answer. */
@@ -465,18 +465,19 @@ export function entryReaderAnswer(): ConfigAgentMemoriesResponse | null {
   return readerAnswer;
 }
 
-function memoryEntries() {
+function memoryEntries(hostId: string) {
   return queryClient
     .getQueryCache()
     .getAll()
-    .filter((entry) =>
-      JSON.stringify(entry.queryKey).includes("config.agentMemories.get"),
-    );
+    .filter((entry) => {
+      const key = JSON.stringify(entry.queryKey);
+      return key.includes("config.agentMemories.get") && key.includes(hostId);
+    });
 }
 
-/** The act's `config.agentMemories.get` entry is marked stale. */
-export function entryIsStale(): boolean {
-  const entries = memoryEntries();
+/** The act's `config.agentMemories.get` entry for a host is marked stale. */
+export function entryIsStale(hostId: string): boolean {
+  const entries = memoryEntries(hostId);
   return (
     entries.length > 0 && entries.every((entry) => entry.state.isInvalidated)
   );
@@ -643,6 +644,10 @@ export async function expectOnStep(stepId: string): Promise<void> {
 export async function writesAnswered(): Promise<void> {
   await waitFor(() => expect(queryClient.isMutating()).toBe(0));
   await act(() => Promise.resolve());
+}
+/** Every read the page started has been answered; a held write may still be open. */
+export async function readsAnswered(): Promise<void> {
+  await waitFor(() => expect(queryClient.isFetching()).toBe(0));
 }
 /** Every read and write the page started has been answered. */
 export async function settled(): Promise<void> {

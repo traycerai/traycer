@@ -1,7 +1,7 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { ConfigAgentMemoriesResponse } from "@traycer/protocol/host/config/schemas";
 import { useHostQuery } from "@/hooks/host/use-host-query";
-import { useOptionalHostClient, type HostRpcRegistry } from "@/lib/host";
+import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 
 /**
  * A second reader of the cache entry the act reads, as Settings → Agent
@@ -9,22 +9,33 @@ import { useOptionalHostClient, type HostRpcRegistry } from "@/lib/host";
  * it once the tour has moved on and sees what the entry gives a later reader.
  */
 export function EntryReaderSlot(props: {
-  readonly onMount: (mount: (() => void) | null) => void;
+  readonly onMount: (mount: ((hostId: string) => void) | null) => void;
   readonly onAnswer: (answer: ConfigAgentMemoriesResponse | null) => void;
 }): ReactNode {
-  const [mounted, setMounted] = useState(false);
+  const [mounted, setMounted] = useState<string | null>(null);
   const { onMount } = props;
   useEffect(() => {
-    onMount(() => setMounted(true));
+    onMount((hostId) => setMounted(hostId));
     return () => onMount(null);
   }, [onMount]);
-  return mounted ? <EntryReader onAnswer={props.onAnswer} /> : null;
+  return mounted === null ? null : (
+    <EntryReader hostId={mounted} onAnswer={props.onAnswer} />
+  );
 }
 
 function EntryReader(props: {
+  readonly hostId: string;
   readonly onAnswer: (answer: ConfigAgentMemoriesResponse | null) => void;
 }): ReactNode {
-  const client = useOptionalHostClient();
+  const binding = useHostBinding();
+  const { hostId } = props;
+  const client = useMemo(
+    () =>
+      binding === null
+        ? null
+        : binding.hostClient.createRequesterForHostId(hostId),
+    [binding, hostId],
+  );
   const read = useHostQuery<HostRpcRegistry, "config.agentMemories.get">({
     cacheKeyIdentity: undefined,
     client,

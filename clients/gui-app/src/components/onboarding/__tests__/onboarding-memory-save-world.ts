@@ -347,11 +347,9 @@ export async function runSave(
       return flag("I1 write/done straight after a status lookup");
     if (lastRequest.name === "provider")
       return flag("I1 write/done straight after a provider write");
-    if (lastRequest.rebound) {
-      exemptWindows += 1;
-      return;
-    }
+    // The window is only for a read that was on when taken.
     if (!lastRequest.receivedOn) flag("I1 write/done on a read that said off");
+    else if (lastRequest.rebound) exemptWindows += 1;
   };
 
   const io: MemorySaveIo = {
@@ -466,12 +464,18 @@ export async function runSave(
     if (!selection.selected) flag("I3 done after the selection moved");
     // Read through a function: the closures above assign these, which the
     // checker does not follow from here.
-    const final = (): { rebound: boolean; at: number | null } => ({
+    const final = (): {
+      rebound: boolean;
+      readOn: boolean;
+      at: number | null;
+    } => ({
       rebound: lastRequest !== null && lastRequest.rebound,
+      readOn: lastRequest !== null && lastRequest.receivedOn,
       at: injectedAt,
     });
     if (final().rebound) {
-      // The named exemption: done on a read that was true when taken.
+      // The named exemption: done on a read that was ON when taken.
+      if (!final().readOn) flag("I1 write/done on a read that said off");
       staleDone += 1;
       if (final().at !== trace.length)
         flag("X a request followed the stale read that done stood on");
