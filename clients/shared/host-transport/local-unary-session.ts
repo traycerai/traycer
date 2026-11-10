@@ -363,10 +363,7 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
   }
 
   /** Completes a direct send. A degrade settles itself after adapting. */
-  private completeDirectSend(
-    call: QueuedCall,
-    sent: PreparedSend,
-  ): void {
+  private completeDirectSend(call: QueuedCall, sent: PreparedSend): void {
     if (!sent.accepted) {
       this.settle(call, { ok: false, error: sent.error });
       return;
