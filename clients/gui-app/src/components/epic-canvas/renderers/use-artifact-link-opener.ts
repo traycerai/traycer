@@ -7,6 +7,7 @@ import {
   firstEagerlyTrueIndex,
   openResolvedArtifact,
   openResolvedWorkspaceTarget,
+  type ChatLinkHandler,
   type ChatLinkLifecycle,
   type ChatLinkPolicyDeps,
 } from "@/components/chat/build-chat-link-policy";
@@ -179,6 +180,15 @@ export type ArtifactTreeLinkOpener = (
   folderChain: readonly string[] | null,
 ) => void;
 
+/**
+ * Opens what `path`, read from `folderChain`, names in the artifacts tree, and
+ * nothing outside it: no workspace or disk file, no other Epic.
+ */
+export type ArtifactTreeOnlyOpener = (
+  path: string,
+  folderChain: readonly string[],
+) => void;
+
 /** A markdown artifact's links, which are relative to its own folder. */
 export function useArtifactLinkOpener(args: {
   readonly epicId: string;
@@ -189,7 +199,6 @@ export function useArtifactLinkOpener(args: {
   const openTreeLink = useArtifactTreeLinkOpener({
     epicId: args.epicId,
     viewTabId: args.viewTabId,
-    workspaceFiles: true,
   });
   const openLink = useCallback(
     (link: OpenableArtifactLink, event: LinkClickEvent): void =>
@@ -199,12 +208,21 @@ export function useArtifactLinkOpener(args: {
   return { openLink };
 }
 
-export function useArtifactTreeLinkOpener(args: {
+/** What both openers share: the tab's deps and the latest-click-wins lifecycle. */
+interface TreeLinkRuntime {
+  /** `null` until the Epic's worktrees have loaded. */
+  readonly chatDeps: ChatLinkPolicyDeps | null;
+  readonly openFile: ChatLinkHandler | null;
+  /** Why a click finds `chatDeps` missing. */
+  readonly unavailableMessage: string;
+  readonly supersedePending: () => number;
+  readonly newLifecycle: () => ChatLinkLifecycle;
+}
+
+function useTreeLinkRuntime(args: {
   readonly epicId: string;
   readonly viewTabId: string;
-  /** Whether a relative href also races the workspace files it could name. */
-  readonly workspaceFiles: boolean;
-}): ArtifactTreeLinkOpener {
+}): TreeLinkRuntime {
   const tabHostId = useTabHostId();
   const tabHostClient = useTabHostClient();
   const activeHostId = tabHostId;
@@ -226,10 +244,6 @@ export function useArtifactTreeLinkOpener(args: {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const epicHandle = useOpenEpicHandle();
-  // `isPending` guards the egress the way the anchors do: each call
-  // fires a fresh bridge request, so a double click would open two OS tabs.
-  const { isPending: urlOpenPending, openLink: openUrl } =
-    useOpenLinkWithPending();
   const pendingProjectedOpenCancelRef = useRef<(() => void) | null>(null);
   const disposedRef = useRef(false);
   const clickTokenRef = useRef(0);
@@ -249,6 +263,21 @@ export function useArtifactTreeLinkOpener(args: {
     pendingProjectedOpenCancelRef.current = null;
     return clickTokenRef.current;
   }, []);
+
+  const newLifecycle = useCallback(
+    (): ChatLinkLifecycle => ({
+      isDisposed: () => disposedRef.current,
+      getPendingProjectedOpenCancel: () =>
+        pendingProjectedOpenCancelRef.current,
+      setPendingProjectedOpenCancel: (cancel) => {
+        pendingProjectedOpenCancelRef.current = cancel;
+      },
+      beginClick: supersedePending,
+      isCurrent: (token) => token === clickTokenRef.current,
+      onAsyncFailure: () => toast("Couldn't open link"),
+    }),
+    [supersedePending],
+  );
 
   const chatDeps = useMemo<ChatLinkPolicyDeps | null>(() => {
     if (workspaceRoots === null || tabHostClient === null) return null;
@@ -285,6 +314,44 @@ export function useArtifactTreeLinkOpener(args: {
     [chatDeps],
   );
 
+  return {
+    chatDeps,
+    openFile,
+    unavailableMessage: worktrees.isError
+      ? "Couldn't open link"
+      : "Folder links are still loading",
+    supersedePending,
+    newLifecycle,
+  };
+}
+
+function markdownFileLink(
+  link: Extract<OpenableArtifactLink, { readonly kind: "file" }>,
+): MarkdownFileLink {
+  return {
+    path: link.path,
+    line: link.line,
+    col: link.col,
+    isDirectory: false,
+  };
+}
+
+export function useArtifactTreeLinkOpener(args: {
+  readonly epicId: string;
+  readonly viewTabId: string;
+}): ArtifactTreeLinkOpener {
+  const {
+    chatDeps,
+    openFile,
+    unavailableMessage,
+    supersedePending,
+    newLifecycle,
+  } = useTreeLinkRuntime(args);
+  // `isPending` guards the egress the way the anchors do: each call
+  // fires a fresh bridge request, so a double click would open two OS tabs.
+  const { isPending: urlOpenPending, openLink: openUrl } =
+    useOpenLinkWithPending();
+
   return useCallback(
     (
       link: OpenableArtifactLink,
@@ -305,30 +372,11 @@ export function useArtifactTreeLinkOpener(args: {
         // projection wait before returning, otherwise that earlier click can
         // open after this one has already reported that links are unavailable.
         supersedePending();
-        toast(
-          worktrees.isError
-            ? "Couldn't open link"
-            : "Folder links are still loading",
-        );
+        toast(unavailableMessage);
         return;
       }
-      const lifecycle: ChatLinkLifecycle = {
-        isDisposed: () => disposedRef.current,
-        getPendingProjectedOpenCancel: () =>
-          pendingProjectedOpenCancelRef.current,
-        setPendingProjectedOpenCancel: (cancel) => {
-          pendingProjectedOpenCancelRef.current = cancel;
-        },
-        beginClick: supersedePending,
-        isCurrent: (token) => token === clickTokenRef.current,
-        onAsyncFailure: () => toast("Couldn't open link"),
-      };
-      const markdownLink: MarkdownFileLink = {
-        path: link.path,
-        line: link.line,
-        col: link.col,
-        isDirectory: false,
-      };
+      const lifecycle = newLifecycle();
+      const fileLink = markdownFileLink(link);
       if (
         isAbsolutePath(link.path) ||
         artifactEpicIdFromLinkPath(link.path) !== null
@@ -337,29 +385,58 @@ export function useArtifactTreeLinkOpener(args: {
         // UNCHANGED. The shared policy resolves artifact paths before plain
         // file handling, so prefixing a rootless `epics/<id>/artifacts/...`
         // path with this artifact's folder chain would target the wrong item.
-        if (!openFile(markdownLink, lifecycle)) toast("Couldn't open link");
+        if (!openFile(fileLink, lifecycle)) toast("Couldn't open link");
+        return;
+      }
+      void resolveAndOpenArtifactRelativeHref(chatDeps, lifecycle, fileLink, {
+        epicId: args.epicId,
+        selfFolderChain: folderChain,
+        workspaceFiles: true,
+      });
+    },
+    [
+      args.epicId,
+      chatDeps,
+      newLifecycle,
+      openFile,
+      openUrl,
+      supersedePending,
+      unavailableMessage,
+      urlOpenPending,
+    ],
+  );
+}
+
+/**
+ * The artifacts-tree half of the opener alone, for links a page's own script
+ * may have written: the path only ever reaches this Epic's tree resolver,
+ * whatever it spells (a drive, backslashes, another `epics/…/artifacts`), and
+ * never the absolute-path, workspace-file or URL handling markdown links get.
+ */
+export function useArtifactTreeOnlyOpener(args: {
+  readonly epicId: string;
+  readonly viewTabId: string;
+}): ArtifactTreeOnlyOpener {
+  const { chatDeps, unavailableMessage, supersedePending, newLifecycle } =
+    useTreeLinkRuntime(args);
+  return useCallback(
+    (path: string, folderChain: readonly string[]): void => {
+      if (chatDeps === null) {
+        supersedePending();
+        toast(unavailableMessage);
         return;
       }
       void resolveAndOpenArtifactRelativeHref(
         chatDeps,
-        lifecycle,
-        markdownLink,
+        newLifecycle(),
+        { path, line: null, col: null, isDirectory: false },
         {
           epicId: args.epicId,
           selfFolderChain: folderChain,
-          workspaceFiles: args.workspaceFiles,
+          workspaceFiles: false,
         },
       );
     },
-    [
-      args.epicId,
-      args.workspaceFiles,
-      chatDeps,
-      openFile,
-      openUrl,
-      supersedePending,
-      urlOpenPending,
-      worktrees.isError,
-    ],
+    [args.epicId, chatDeps, newLifecycle, supersedePending, unavailableMessage],
   );
 }

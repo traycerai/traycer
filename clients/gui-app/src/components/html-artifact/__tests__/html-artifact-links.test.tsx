@@ -84,6 +84,8 @@ const epicSession = {} as React.ContextType<typeof EpicSessionContext>;
 function mountFrame(options: {
   readonly viewTabId: string | null;
   readonly tileHost: string | null;
+  /** Whether the Epic session the tree is read through is around the frame. */
+  readonly epicSession: boolean;
 }): (link: SandboxArtifactLink) => void {
   const opener: { current: ((link: SandboxArtifactLink) => void) | null } = {
     current: null,
@@ -96,7 +98,7 @@ function mountFrame(options: {
   render(
     <QueryClientProvider client={queryClient}>
       <TabHostContext value={options.tileHost}>
-        <EpicSessionContext value={epicSession}>
+        <EpicSessionContext value={options.epicSession ? epicSession : null}>
           <HtmlArtifactLinks epicId="epic-1" viewTabId={options.viewTabId}>
             <Frame />
           </HtmlArtifactLinks>
@@ -107,6 +109,13 @@ function mountFrame(options: {
   if (opener.current === null) throw new Error("the frame never rendered");
   return opener.current;
 }
+
+/** A frame in an Epic's tab, with a tile host and the Epic session around it. */
+const IN_EPIC_TAB = {
+  viewTabId: "tab-1",
+  tileHost: "tab-host",
+  epicSession: true,
+} as const;
 
 beforeEach(() => {
   mocks.openTile.mockReset();
@@ -147,7 +156,7 @@ describe("HtmlArtifactLinks", () => {
     "opens the artifact %s names from page a/b/index.html in a tile",
     async (href, resolvedPath) => {
       mocks.resolveArtifactByPath.mockResolvedValue(FOUND);
-      const open = mountFrame({ viewTabId: "tab-1", tileHost: "tab-host" });
+      const open = mountFrame(IN_EPIC_TAB);
 
       open(linkOn(href));
       await vi.waitFor(() => expect(mocks.openTile).toHaveBeenCalled());
@@ -169,7 +178,7 @@ describe("HtmlArtifactLinks", () => {
 
   it("reads a rooted href from the tree root, not from the page's folder", async () => {
     mocks.resolveArtifactByPath.mockResolvedValue(FOUND);
-    const open = mountFrame({ viewTabId: "tab-1", tileHost: "tab-host" });
+    const open = mountFrame(IN_EPIC_TAB);
 
     open(linkOn("/top/index.html"));
     await vi.waitFor(() => expect(mocks.openTile).toHaveBeenCalled());
@@ -186,7 +195,7 @@ describe("HtmlArtifactLinks", () => {
 
   it("reads an href that is an artifact's path on disk as the tree path it names", async () => {
     mocks.resolveArtifactByPath.mockResolvedValue(FOUND);
-    const open = mountFrame({ viewTabId: "tab-1", tileHost: "tab-host" });
+    const open = mountFrame(IN_EPIC_TAB);
 
     open(linkOn(DISK_SIBLING));
     await vi.waitFor(() => expect(mocks.openTile).toHaveBeenCalled());
@@ -200,7 +209,7 @@ describe("HtmlArtifactLinks", () => {
 
   it("toasts for an artifact's path on disk that the tree lacks, without a disk-file or workspace fallback", async () => {
     mocks.fetchWorkspaceFileExists.mockResolvedValue(true);
-    const open = mountFrame({ viewTabId: "tab-1", tileHost: "tab-host" });
+    const open = mountFrame(IN_EPIC_TAB);
 
     open(linkOn(DISK_SIBLING));
     await vi.waitFor(() =>
@@ -213,7 +222,7 @@ describe("HtmlArtifactLinks", () => {
 
   it("toasts for another Epic's artifact on disk, without a lookup or probe", async () => {
     mocks.fetchWorkspaceFileExists.mockResolvedValue(true);
-    const open = mountFrame({ viewTabId: "tab-1", tileHost: "tab-host" });
+    const open = mountFrame(IN_EPIC_TAB);
 
     open(linkOn("/Users/u/.traycer/epics/epic-2/artifacts/x/index.html"));
     await vi.waitFor(() =>
@@ -226,7 +235,7 @@ describe("HtmlArtifactLinks", () => {
   });
 
   it("toasts when the link names nothing in the tree", async () => {
-    const open = mountFrame({ viewTabId: "tab-1", tileHost: "tab-host" });
+    const open = mountFrame(IN_EPIC_TAB);
 
     open(linkOn("../missing/index.html"));
     await vi.waitFor(() =>
@@ -238,7 +247,7 @@ describe("HtmlArtifactLinks", () => {
 
   it("opens an href written out in full on the page's own origin, read from the tree root", async () => {
     mocks.resolveArtifactByPath.mockResolvedValue(FOUND);
-    const open = mountFrame({ viewTabId: "tab-1", tileHost: "tab-host" });
+    const open = mountFrame(IN_EPIC_TAB);
 
     open(linkOn("traycer-artifact://artifact-a1--m1/a/sibling/index.html"));
     await vi.waitFor(() => expect(mocks.openTile).toHaveBeenCalled());
@@ -252,7 +261,7 @@ describe("HtmlArtifactLinks", () => {
 
   it("opens the same on the Android origin", async () => {
     mocks.resolveArtifactByPath.mockResolvedValue(FOUND);
-    const open = mountFrame({ viewTabId: "tab-1", tileHost: "tab-host" });
+    const open = mountFrame(IN_EPIC_TAB);
 
     open(
       linkAt(
@@ -271,7 +280,7 @@ describe("HtmlArtifactLinks", () => {
 
   it("opens a protocol-relative href on the page's own origin", async () => {
     mocks.resolveArtifactByPath.mockResolvedValue(FOUND);
-    const open = mountFrame({ viewTabId: "tab-1", tileHost: "tab-host" });
+    const open = mountFrame(IN_EPIC_TAB);
 
     open(linkOn("//artifact-a1--m1/a/sibling/"));
     await vi.waitFor(() => expect(mocks.openTile).toHaveBeenCalled());
@@ -303,7 +312,7 @@ describe("HtmlArtifactLinks", () => {
     "toasts for %s, with no probe, lookup or tile",
     async (_label, href, pageUrl) => {
       mocks.fetchWorkspaceFileExists.mockResolvedValue(true);
-      const open = mountFrame({ viewTabId: "tab-1", tileHost: "tab-host" });
+      const open = mountFrame(IN_EPIC_TAB);
 
       open(linkAt(href, pageUrl));
       await vi.waitFor(() =>
@@ -320,7 +329,7 @@ describe("HtmlArtifactLinks", () => {
     "toasts %s, which walks above the artifacts root, without the resolver or a workspace probe, even where a file of that name exists",
     async (href) => {
       mocks.fetchWorkspaceFileExists.mockResolvedValue(true);
-      const open = mountFrame({ viewTabId: "tab-1", tileHost: "tab-host" });
+      const open = mountFrame(IN_EPIC_TAB);
 
       open(linkOn(href));
       await vi.waitFor(() =>
@@ -335,7 +344,7 @@ describe("HtmlArtifactLinks", () => {
 
   it("toasts for a plain file the tree lacks, without racing a workspace file of that name", async () => {
     mocks.fetchWorkspaceFileExists.mockResolvedValue(true);
-    const open = mountFrame({ viewTabId: "tab-1", tileHost: "tab-host" });
+    const open = mountFrame(IN_EPIC_TAB);
 
     open(linkOn("../sibling/notes.txt"));
     await vi.waitFor(() =>
@@ -349,7 +358,7 @@ describe("HtmlArtifactLinks", () => {
   it("opens a plain file that is an artifact of the tree, without probing the workspace", async () => {
     mocks.resolveArtifactByPath.mockResolvedValue(FOUND);
     mocks.fetchWorkspaceFileExists.mockResolvedValue(true);
-    const open = mountFrame({ viewTabId: "tab-1", tileHost: "tab-host" });
+    const open = mountFrame(IN_EPIC_TAB);
 
     open(linkOn("../sibling/notes.txt"));
     await vi.waitFor(() => expect(mocks.openTile).toHaveBeenCalled());
@@ -362,8 +371,69 @@ describe("HtmlArtifactLinks", () => {
     expect(mocks.fetchWorkspaceFileExists).not.toHaveBeenCalled();
   });
 
+  it.each([
+    [
+      "a path that spells another Epic's artifact inside this tree",
+      "/epics/epic-1/artifacts/epics/epic-2/artifacts/top/index.html",
+      "epics/epic-1/artifacts/epics/epic-2/artifacts/top/index.md",
+    ],
+    [
+      "a rooted drive path",
+      "/C:/repo/secret.txt",
+      "epics/epic-1/artifacts/C:/repo/secret.txt/index.md",
+    ],
+    [
+      "a percent-encoded drive path",
+      "%43%3A%5Crepo%5Csecret.txt",
+      "epics/epic-1/artifacts/a/b/C:/repo/secret.txt/index.md",
+    ],
+  ])(
+    "asks only this Epic's tree about %s, and toasts when it is missing",
+    async (_label, href, filePath) => {
+      mocks.fetchWorkspaceFileExists.mockResolvedValue(true);
+      const open = mountFrame(IN_EPIC_TAB);
+
+      open(linkOn(href));
+      await vi.waitFor(() =>
+        expect(mocks.toast).toHaveBeenCalledWith("Couldn't open link"),
+      );
+
+      expect(mocks.resolveArtifactByPath.mock.calls).toEqual([
+        [expect.objectContaining({ epicId: "epic-1", filePath })],
+      ]);
+      expect(mocks.fetchWorkspaceFileExists).not.toHaveBeenCalled();
+      expect(mocks.openTile).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    [
+      "a backslash after the origin",
+      "https://artifact-a1--m1.traycer-artifact.invalid\\research/top/index.html",
+    ],
+    [
+      "an extra slash after the scheme",
+      "https:///artifact-a1--m1.traycer-artifact.invalid/research/top/index.html",
+    ],
+  ])(
+    "toasts for %s on the page's own origin, with no lookup, probe or tile",
+    async (_label, href) => {
+      mocks.fetchWorkspaceFileExists.mockResolvedValue(true);
+      const open = mountFrame(IN_EPIC_TAB);
+
+      open(linkAt(href, ANDROID_PAGE));
+      await vi.waitFor(() =>
+        expect(mocks.toast).toHaveBeenCalledWith("Couldn't open link"),
+      );
+
+      expect(mocks.resolveArtifactByPath).not.toHaveBeenCalled();
+      expect(mocks.fetchWorkspaceFileExists).not.toHaveBeenCalled();
+      expect(mocks.openTile).not.toHaveBeenCalled();
+    },
+  );
+
   it("toasts for a href that names no file", () => {
-    const open = mountFrame({ viewTabId: "tab-1", tileHost: "tab-host" });
+    const open = mountFrame(IN_EPIC_TAB);
 
     open(linkOn("#"));
 
@@ -372,12 +442,13 @@ describe("HtmlArtifactLinks", () => {
   });
 
   it.each([
-    ["no tab to open a tile in", null, "tab-host"],
-    ["no tile host", "tab-1", null],
+    ["no tab to open a tile in", null, "tab-host", true],
+    ["no tile host", "tab-1", null, true],
+    ["no Epic session", "tab-1", "tab-host", false],
   ])(
     "answers a click with the toast when there is %s",
-    (_l, viewTabId, tileHost) => {
-      const open = mountFrame({ viewTabId, tileHost });
+    (_l, viewTabId, tileHost, epicSession) => {
+      const open = mountFrame({ viewTabId, tileHost, epicSession });
 
       open(linkOn("../sibling/index.html"));
 
