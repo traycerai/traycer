@@ -423,9 +423,9 @@ function OnboardingTour(props: {
     });
   }, []);
 
-  // Set once this tour is left: finished, skipped or unmounted. The memory
-  // act's save runs on after that, and must not then finish a tour that is
-  // gone or move it a step.
+  // Set once this tour is left: finished, skipped, a task opened, or
+  // unmounted. Work still running then - the memory act's save, the import
+  // act's task read - lands on a tour that is gone.
   const left = useRef(false);
   useEffect(() => {
     left.current = false;
@@ -434,8 +434,12 @@ function OnboardingTour(props: {
     };
   }, []);
 
-  const finish = useCallback(
-    (outcome: "completed" | "skipped"): void => {
+  // Every way out of the tour, once. It claims the departure before its
+  // effects, so a second way out finds the tour left and does nothing.
+  // Returns whether this call left it.
+  const leave = useCallback(
+    (outcome: "completed" | "skipped"): boolean => {
+      if (left.current) return false;
       left.current = true;
       Analytics.getInstance().track(
         outcome === "completed"
@@ -447,9 +451,16 @@ function OnboardingTour(props: {
       if (outcome === "completed") guide.activate();
       else guide.dismiss();
       complete();
-      void navigate({ to: "/draft/new", replace: true });
+      return true;
     },
-    [step.id, complete, navigate],
+    [step.id, complete],
+  );
+
+  const finish = useCallback(
+    (outcome: "completed" | "skipped"): void => {
+      if (leave(outcome)) void navigate({ to: "/draft/new", replace: true });
+    },
+    [leave, navigate],
   );
 
   const back = useCallback((): void => {
@@ -463,6 +474,7 @@ function OnboardingTour(props: {
   }, [index, retreat, steps]);
 
   const advance = useCallback((): void => {
+    if (left.current) return;
     if (isLastStep) {
       finish("completed");
       return;
@@ -477,7 +489,8 @@ function OnboardingTour(props: {
 
   // The footer's primary, Enter and the arrow key. On the memory act with
   // Traycer memories chosen it saves first and moves on only once everything
-  // has landed - and only if the tour is still open on the act it saved.
+  // has landed - and only if the person is still on the act it saved.
+  // `advance` refuses once the tour is left.
   const proceed = (): void => {
     if (memoryFooter?.kind !== "save") {
       advance();
@@ -486,12 +499,11 @@ function OnboardingTour(props: {
     if (memory.saving) return;
     const savedOnStep = index;
     void memory.save().then((done) => {
-      if (!done || left.current) return;
       const now = clampOnboardingStep(
         useOnboardingStore.getState().step,
         steps.length,
       );
-      if (now === savedOnStep) advance();
+      if (done && now === savedOnStep) advance();
     });
   };
 
@@ -687,16 +699,10 @@ function OnboardingTour(props: {
                           .getState()
                           .rememberImport(streamHostId);
                     }}
-                    onBeforeTaskOpen={() => {
-                      Analytics.getInstance().track(
-                        AnalyticsEvent.OnboardingCompleted,
-                        { last_step: step.id },
-                      );
-                      // Mount AppShell before the import wizard requests its task tab.
-                      useFirstTaskGuideStore.getState().activate();
-                      complete();
-                      return Promise.resolve(true);
-                    }}
+                    // Completing mounts AppShell before the import wizard
+                    // requests its task tab. A read that lands after the tour
+                    // was left opens nothing.
+                    onBeforeTaskOpen={() => Promise.resolve(leave("completed"))}
                   />
                 </m.div>
               </AnimatePresence>
