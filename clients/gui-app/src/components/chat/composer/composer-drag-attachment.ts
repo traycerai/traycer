@@ -14,6 +14,7 @@ import {
   LEFT_PANEL_RAIL_ITEM_DND_TYPE,
   MANAGED_COMMAND_OUTPUT_DND_TYPE,
   SIDEBAR_NODE_DND_TYPE,
+  SIMULATOR_TILE_DND_TYPE,
   TERMINAL_TILE_DND_TYPE,
   WORKSPACE_FILE_DND_TYPE,
   WORKSPACE_FOLDER_DND_TYPE,
@@ -182,6 +183,24 @@ function activeAgentMention(
   });
 }
 
+function chatArtifactMention(
+  source: Extract<
+    EpicCanvasDragSourceData,
+    { readonly kind: typeof CHAT_ARTIFACT_DND_TYPE }
+  >,
+  targetHostId: string,
+): MentionAttachment | null {
+  if (!isEpicArtifactKind(source.artifact.type)) return null;
+  if (source.artifact.hostId !== targetHostId) return null;
+  return entityMentionAttachment({
+    nodeKind: source.artifact.type,
+    epicId: source.epicId,
+    entityId: source.artifact.id,
+    label: source.artifact.name,
+    description: epicTitle(source.epicId),
+  });
+}
+
 function unreachableDragSource(source: never): null {
   void source;
   return null;
@@ -214,24 +233,17 @@ export function mentionAttachmentFromDragSource(
     case GIT_DIFF_TILE_DND_TYPE:
       return gitDiffMention(source, targetHostId);
     case CHAT_ARTIFACT_DND_TYPE:
-      if (!isEpicArtifactKind(source.artifact.type)) return null;
-      if (source.artifact.hostId !== targetHostId) return null;
-      return entityMentionAttachment({
-        nodeKind: source.artifact.type,
-        epicId: source.epicId,
-        entityId: source.artifact.id,
-        label: source.artifact.name,
-        description: epicTitle(source.epicId),
-      });
+      return chatArtifactMention(source, targetHostId);
     case ACTIVE_AGENT_DND_TYPE:
       return activeAgentMention(source, targetHostId);
     case ARTIFACT_TAB_DND_TYPE:
     case BROWSER_TILE_DND_TYPE:
+    case SIMULATOR_TILE_DND_TYPE:
     case TERMINAL_TILE_DND_TYPE:
     case MANAGED_COMMAND_OUTPUT_DND_TYPE:
     case LEFT_PANEL_RAIL_ITEM_DND_TYPE:
-      // Tabs, raw terminals, shell rows, and panel chrome are not message
-      // context. A shell's output reaches the agent through the host's own
+      // Tabs, raw terminals, simulators, shell rows, and panel chrome are not
+      // message context. A shell's output reaches the agent through the host's own
       // delivery, so mentioning the window would be a second, weaker path to
       // the same bytes.
       return null;
