@@ -376,6 +376,22 @@ function controllerFor(input: {
 
 const OK: PushTokenFetchResult = { kind: "ok" };
 
+function accessTokenExpiringAt(expSeconds: number): string {
+  const segment = (value: unknown): string =>
+    btoa(JSON.stringify(value))
+      .replace(/=+$/, "")
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_");
+  return `${segment({ alg: "none" })}.${segment({ exp: expSeconds })}.signature`;
+}
+
+const EXPIRED_BEARER = accessTokenExpiringAt(
+  Math.floor(Date.now() / 1000) - 3_600,
+);
+const FRESH_BEARER = accessTokenExpiringAt(
+  Math.floor(Date.now() / 1000) + 3_600,
+);
+
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -694,6 +710,118 @@ describe("MobilePushRegistration", () => {
     expect(calls.registered).toHaveLength(2);
     expect(calls.registered[1].bearer).toBe("bearer-2");
     // The fixture keeps returning a network error, so the retry stays failed.
+    expect(push.registrationState()).toBe("failed");
+  });
+
+  /**
+   * Signed in with `stored`, granted, and started: startup has asked the
+   * provider and `register()` has settled, so the only thing left to arrive is
+   * the provider's token event. authn answers every upload with `answer`.
+   */
+  async function startedWith(
+    stored: string,
+    answer: (bearer: string) => PushTokenFetchResult,
+  ): Promise<{
+    push: MobilePushRegistration;
+    plugin: FakePlugin;
+    source: FakeTokenSource;
+    sent: string[];
+    registrations: DependencyCalls<PushTokenFetchResult>;
+    permissionChecks: DependencyCalls<PermissionResult>;
+  }> {
+    const plugin = fakePlugin({
+      permission: "granted",
+      afterRequest: "granted",
+    });
+    const sent: string[] = [];
+    const registrations = new DependencyCalls<PushTokenFetchResult>();
+    const push = new MobilePushRegistration({
+      plugin,
+      authnBaseUrl: AUTHN_URL,
+      platform: "ios",
+      environment: "sandbox",
+      registerToken: (_authnBaseUrl, bearer) => {
+        sent.push(bearer);
+        return registrations.record(Promise.resolve(answer(bearer)));
+      },
+      removeToken: async () => OK,
+    });
+    const source = new FakeTokenSource();
+    const { permissionChecks, pluginRegisters } = observePluginCalls(plugin);
+    source.emitSignedIn(credentials("user-1", stored));
+    const startup = pluginRegisters.count;
+    push.start(source, NO_RESUME);
+    await completed(pluginRegisters, startup);
+    return { push, plugin, source, sent, registrations, permissionChecks };
+  }
+
+  it("holds an expired stored bearer back until the refreshed one arrives", async () => {
+    // authn answers 401 to an access token past its `exp`.
+    const { push, plugin, source, sent, registrations } = await startedWith(
+      EXPIRED_BEARER,
+      (bearer) =>
+        bearer === EXPIRED_BEARER ? { kind: "unauthorized" } : { kind: "ok" },
+    );
+
+    // Startup runs before the auth service refreshes the stored pair. The
+    // token event reaches the hold synchronously, so nothing can be in flight.
+    plugin.emitRegistration("apns-token-1");
+    expect(sent).toEqual([]);
+    expect(push.registrationState()).toBe("pending");
+
+    // The refresh writes the store; that change registers with the new bearer.
+    source.emitSignedIn(credentials("user-1", FRESH_BEARER));
+    await completed(registrations, 0);
+    expect(sent).toEqual([FRESH_BEARER]);
+    expect(push.registrationState()).toBe("registered");
+  });
+
+  it("sends a bearer that only the device clock calls expired once the grace passes", async () => {
+    vi.useFakeTimers();
+    // authn judges the token on its own clock and accepts it; the phone's
+    // clock is hours ahead, so the same token reads as expired here.
+    const { push, plugin, sent, registrations } = await startedWith(
+      EXPIRED_BEARER,
+      () => OK,
+    );
+    plugin.emitRegistration("apns-token-1");
+    expect(sent).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    await completed(registrations, 0);
+
+    expect(sent).toEqual([EXPIRED_BEARER]);
+    expect(push.registrationState()).toBe("registered");
+  });
+
+  it("keeps the grace to its end when a muted-set change re-arms the send", async () => {
+    vi.useFakeTimers();
+    const { push, plugin, sent, registrations, permissionChecks } =
+      await startedWith(EXPIRED_BEARER, () => OK);
+    plugin.emitRegistration("apns-token-1");
+    expect(sent).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(3_000);
+    await push.setMutedSeverities(["info"]);
+    const scheduledCheck = permissionChecks.count;
+    await vi.advanceTimersByTimeAsync(1_000);
+    await completed(permissionChecks, scheduledCheck);
+    expect(sent).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(11_000);
+    await completed(registrations, 0);
+    expect(sent).toEqual([EXPIRED_BEARER]);
+  });
+
+  it("still shows a failure when authn refuses a bearer that has not expired", async () => {
+    const { push, plugin, sent, registrations } = await startedWith(
+      FRESH_BEARER,
+      () => ({ kind: "unauthorized" }),
+    );
+    plugin.emitRegistration("apns-token-1");
+    await completed(registrations, 0);
+
+    expect(sent).toEqual([FRESH_BEARER]);
     expect(push.registrationState()).toBe("failed");
   });
 
