@@ -379,8 +379,7 @@ async function mount(input: {
     voiceAudio: Capacitor.isNativePlatform()
       ? new MobileVoiceAudio(VoiceAudio, openAppSettings)
       : null,
-    // Present where the app project carries the native recognizer, which
-    // Android's does not.
+    // Present where the app project carries the native recognizer.
     deviceDictation: Capacitor.isPluginAvailable("DeviceDictation")
       ? new MobileDeviceDictation(DeviceDictation)
       : null,
