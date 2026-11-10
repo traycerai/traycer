@@ -55,6 +55,7 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   vi.useRealTimers();
   resetTeamPageHarness();
 });
@@ -108,6 +109,7 @@ describe("the team page chip", () => {
 
   it("keeps mounted host metadata fresh after an item settles, and stops on unmount", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
     let state: EnvironmentHostItemApply["state"] = "received";
     const harness = mountTeamPage(poolSource("editor"), {
       "environment.host.list": () => ({ hosts: [hostReporting(state)] }),
