@@ -376,6 +376,22 @@ function controllerFor(input: {
 
 const OK: PushTokenFetchResult = { kind: "ok" };
 
+function accessTokenExpiringAt(expSeconds: number): string {
+  const segment = (value: unknown): string =>
+    btoa(JSON.stringify(value))
+      .replace(/=+$/, "")
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_");
+  return `${segment({ alg: "none" })}.${segment({ exp: expSeconds })}.signature`;
+}
+
+const EXPIRED_BEARER = accessTokenExpiringAt(
+  Math.floor(Date.now() / 1000) - 3_600,
+);
+const FRESH_BEARER = accessTokenExpiringAt(
+  Math.floor(Date.now() / 1000) + 3_600,
+);
+
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -694,6 +710,64 @@ describe("MobilePushRegistration", () => {
     expect(calls.registered).toHaveLength(2);
     expect(calls.registered[1].bearer).toBe("bearer-2");
     // The fixture keeps returning a network error, so the retry stays failed.
+    expect(push.registrationState()).toBe("failed");
+  });
+
+  it("holds an expired stored bearer back until the refreshed one arrives", async () => {
+    const plugin = fakePlugin({
+      permission: "granted",
+      afterRequest: "granted",
+    });
+    const sent: string[] = [];
+    const push = new MobilePushRegistration({
+      plugin,
+      authnBaseUrl: AUTHN_URL,
+      platform: "ios",
+      environment: "sandbox",
+      // authn answers 401 to an access token past its `exp`.
+      registerToken: async (_authnBaseUrl, bearer) => {
+        sent.push(bearer);
+        return bearer === EXPIRED_BEARER
+          ? { kind: "unauthorized" }
+          : { kind: "ok" };
+      },
+      removeToken: async () => OK,
+    });
+    const source = new FakeTokenSource();
+    await source.setSignedIn(credentials("user-1", EXPIRED_BEARER));
+    push.start(source, NO_RESUME);
+    await drain();
+    plugin.emitRegistration("apns-token-1");
+    await drain();
+
+    // Startup runs before the auth service refreshes the stored pair.
+    expect(sent).toEqual([]);
+    expect(push.registrationState()).toBe("pending");
+
+    // The refresh writes the store; that change registers with the new bearer.
+    await source.setSignedIn(credentials("user-1", FRESH_BEARER));
+    expect(sent).toEqual([FRESH_BEARER]);
+    expect(push.registrationState()).toBe("registered");
+  });
+
+  it("still shows a failure when authn refuses a bearer that has not expired", async () => {
+    const plugin = fakePlugin({
+      permission: "granted",
+      afterRequest: "granted",
+    });
+    const { push, calls } = controller({
+      plugin,
+      registerResult: { kind: "unauthorized" },
+      removeResult: OK,
+    });
+    const source = new FakeTokenSource();
+    await source.setSignedIn(credentials("user-1", FRESH_BEARER));
+    push.start(source, NO_RESUME);
+    await drain();
+    plugin.emitRegistration("apns-token-1");
+    await drain();
+
+    expect(calls.registered.map((call) => call.bearer)).toEqual([FRESH_BEARER]);
     expect(push.registrationState()).toBe("failed");
   });
 

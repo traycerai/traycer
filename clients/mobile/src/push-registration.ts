@@ -44,6 +44,7 @@ import type {
   TokenStoreChange,
 } from "@traycer-clients/shared/platform/runner-host";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
+import { readAccessTokenExpiryMs } from "@traycer-clients/shared/auth/jwt-exp";
 import type {
   DevicePushEnvironment,
   DevicePushPlatform,
@@ -548,6 +549,13 @@ export class MobilePushRegistration {
     const bearer = this.bearerToken;
     const userId = this.userId;
     if (token === null || bearer === null || userId === null) return;
+    // A cold start or a resume after a long background reads the stored pair
+    // before the auth service has refreshed it, and authn answers 401 to an
+    // access token past its `exp`. The refresh writes the store, and that
+    // change registers again with the new bearer, so sending now would only
+    // report a failure the app is about to repair.
+    const expiresAtMs = readAccessTokenExpiryMs(bearer);
+    if (expiresAtMs !== null && expiresAtMs <= Date.now()) return;
     const mutedSeverities = readMutedSeverities(userId);
     const key = registrationKey(userId, token, mutedSeverities);
     if (this.lastRegisteredKey === key) return;
