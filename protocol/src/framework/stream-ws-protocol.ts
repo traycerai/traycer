@@ -90,6 +90,9 @@ export const STREAM_CAPABILITY_HOST_CREDENTIAL_PROVISION =
  */
 export const STREAM_CAPABILITY_CLOUD_VERDICT_UPDATE = "cloudVerdictUpdate";
 
+/** Client declaration that `openAck` can carry the team credential state. */
+export const STREAM_CAPABILITY_TEAM_CREDENTIAL_STATE = "teamCredentialState";
+
 /**
  * What the host reports about its own device credential in `openAck`.
  *
@@ -98,13 +101,20 @@ export const STREAM_CAPABILITY_CLOUD_VERDICT_UPDATE = "cloudVerdictUpdate";
  *   - `needs-reauth` - the host held one and its refresh family is dead
  *                      (revoked, superseded, or expired); a fresh handoff is
  *                      the recovery door.
+ *   - `team-unavailable` - the team credential cannot currently be obtained.
+ *                      The host renews it; a user credential handoff is refused.
  */
-export type HostCredentialState = "missing" | "active" | "needs-reauth";
+export type HostCredentialState =
+  | "missing"
+  | "active"
+  | "needs-reauth"
+  | "team-unavailable";
 
 export const hostCredentialStateSchema = z.enum([
   "missing",
   "active",
   "needs-reauth",
+  "team-unavailable",
 ]);
 
 /**
@@ -141,6 +151,8 @@ export type ClientStreamOpenFrame = {
   readonly kind: "open";
   readonly token: string;
   readonly manifest: ConnectionManifest;
+  /** Unknown tags are ignored. Omission declares no additional state support. */
+  readonly capabilities?: readonly string[];
   /**
    * Who is connecting - see {@link ClientHandshakeIdentity}. The `/stream`
    * socket authenticates independently of `/rpc`, so it gates independently
@@ -299,6 +311,7 @@ export const clientStreamOpenFrameSchema = z.object({
   kind: z.literal("open"),
   token: z.string(),
   manifest: connectionManifestSchema,
+  capabilities: z.array(z.string()).optional(),
   // Additive/optional in both directions - same rule as the unary open frame.
   clientIdentity: clientHandshakeIdentitySchema.optional(),
   // `.optional()` and NOT `.default(true)`. The host has to be able to tell
