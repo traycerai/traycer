@@ -304,11 +304,11 @@ describe("TeamProviders items", () => {
     render(<TeamProviders />, { wrapper: harness.Wrapper });
 
     expect(
-      await screen.findByText(
-        "Sign-ins, keys and tools for each coding agent, on every host running Acme.",
-      ),
+      await screen.findByRole("combobox", { name: "Provider" }),
     ).toBeTruthy();
-    expect(screen.getByRole("combobox", { name: "Provider" })).toBeTruthy();
+    expect(
+      screen.getByText("Sign-ins, keys and tools for each coding agent."),
+    ).toBeTruthy();
     const rail = await screen.findByRole("navigation", {
       name: "Providers",
     });

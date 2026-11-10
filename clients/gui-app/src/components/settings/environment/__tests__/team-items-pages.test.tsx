@@ -1038,9 +1038,8 @@ describe("Environment page subtitles", () => {
     {
       pageName: "Providers",
       page: <TeamProviders key="p" />,
-      team: "Sign-ins, keys and tools for each coding agent, on every host running Acme.",
-      personal:
-        "Sign-ins, keys and tools for each coding agent, on every computer and sandbox running Personal.",
+      team: "Sign-ins, keys and tools for each coding agent.",
+      personal: "Sign-ins, keys and tools for each coding agent.",
       teamSplit: false,
       personalSplit: false,
     },

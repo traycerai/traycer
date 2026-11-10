@@ -1010,8 +1010,8 @@ payer exists. **Resuming changes the payer to you.** is its own line before
 the actions when that team row is resting and the payer is not the viewer.
 **Give it another {period}** is offered on a resting row inside its warning
 lead and precedes the primary action. **Details** stays inline. Setup failures
-show **Retry setup**,
-applicable **Open terminal** and **Stop** controls, **Choose another host**, and
+show **Retry applying** (or **Repair setup** on an older host), applicable
+**Open terminal** and **Stop** controls, **Choose another host**, and
 **Details** once; remaining secondary actions stay in **More**. Rows show
 starter and keeper, agent/task purpose, session counts and names, and setup
 evidence with support references. **Details** retains lifecycle status, settings
