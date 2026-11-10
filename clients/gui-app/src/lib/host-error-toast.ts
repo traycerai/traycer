@@ -289,6 +289,9 @@ export function toastHostRefusalWithGuidance(
   );
 }
 
+const SIMULATOR_UNAVAILABLE_GUIDANCE_PREFIX =
+  /^simulator unavailable \(state=(?:off|installing|unsupported)\):\s*/;
+
 /**
  * Maps a HostRpcError to its toast copy.
  * Permission errors get distinct copy from network/RPC
@@ -316,16 +319,16 @@ export function toastFromHostError(
     transportNoticeToast(error);
     return;
   }
-  // Like simulatorActionErrorText, remove the host's machine prefix. This
-  // open was refused by the simulator pack's state, not by a reportable bug.
-  const simulatorUnavailablePrefix = /^simulator unavailable \([^)]*\):\s*/;
+  // Failed installs and hub failures carry diagnostic text and stay
+  // reportable. Only the actionable states carry guidance for the person.
   if (
     error.method === "simulator.open" &&
     error.code === "RPC_ERROR" &&
-    simulatorUnavailablePrefix.test(error.message)
+    SIMULATOR_UNAVAILABLE_GUIDANCE_PREFIX.test(error.message)
   ) {
     toast.error(
-      error.message.replace(simulatorUnavailablePrefix, "") || fallback,
+      error.message.replace(SIMULATOR_UNAVAILABLE_GUIDANCE_PREFIX, "") ||
+        fallback,
     );
     return;
   }

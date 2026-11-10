@@ -34,10 +34,10 @@ afterEach(() => {
 describe("simulator open refusals through toastFromHostError", () => {
   it.each([
     ["off", OFF_GUIDANCE],
-    ["installing", "Mobile simulator tools are still installing."],
+    ["installing", "Simulator tools are being installed."],
     [
-      "failed",
-      "The tools could not be installed. Try again in the Host panel.",
+      "unsupported",
+      "Simulator support is not available for this machine's processor.",
     ],
   ])(
     "shows the host's guidance for state=%s without Report issue",
@@ -51,21 +51,18 @@ describe("simulator open refusals through toastFromHostError", () => {
     },
   );
 
-  it.each(["", " ", "   "])(
-    "keeps the fallback for empty guidance %j without Report issue",
-    (guidance) => {
-      toastFromHostError(
-        openError(`simulator unavailable (state=off):${guidance}`),
-        FALLBACK,
-      );
+  it("keeps the fallback for empty guidance without Report issue", () => {
+    toastFromHostError(
+      openError("simulator unavailable (state=off): "),
+      FALLBACK,
+    );
 
-      expect(toast.error).toHaveBeenCalledExactlyOnceWith(FALLBACK);
-    },
-  );
+    expect(toast.error).toHaveBeenCalledExactlyOnceWith(FALLBACK);
+  });
 
   it.each([
-    "simulator boot failed: timed out after 180000ms",
-    "simulator not found: simulator=missing-device",
+    "simulator unavailable (state=failed): The installed simulator tools are incomplete (missing simulator-hub).",
+    "simulator unavailable (state=hub): the hub exited (code=1 signal=null)",
   ])("keeps Report issue for a genuine open failure: %s", (message) => {
     toastFromHostError(openError(message), FALLBACK);
 
