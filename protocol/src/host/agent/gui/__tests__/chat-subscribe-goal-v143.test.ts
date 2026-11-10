@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  chatGoalStatusSchema,
   chatSubscribeServerFrameSchema,
   chatSubscribeWindowedServerFrameSchema,
   chatSubscribeV142,
@@ -101,7 +100,14 @@ function goalOf(frame: unknown): unknown {
 }
 
 describe.each(carriers)("$name on chat.subscribe@1.43", ({ build }) => {
-  it.each(chatGoalStatusSchema.options)("keeps a %s goal", (status) => {
+  it.each([
+    "active",
+    "paused",
+    "blocked",
+    "usageLimited",
+    "budgetLimited",
+    "complete",
+  ])("keeps a %s goal", (status) => {
     const parsed = chatSubscribeV143.serverFrameSchema.parse(
       build({ goal: { ...goal, status } }),
     );
