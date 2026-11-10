@@ -70,6 +70,7 @@ import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
+import type { BotReplyTarget } from "@/lib/bots/bot-reply-target";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
 import {
@@ -654,6 +655,65 @@ describe("Reply on a row of a bot's channel", () => {
     for (const messageId of EVERY_ROW) {
       expect(replyOn(messageId), messageId).toBeNull();
     }
+  });
+
+  /** A row of the bot with `text` as its one text block, below the rows of the channel. */
+  function addBotRow(messageId: string, text: string): void {
+    mocks.sessions[CHANNEL_ID].store.setState((state) => ({
+      messages: [
+        ...state.messages,
+        botReply({ messageId, text, timestamp: 5_000 }),
+      ],
+    }));
+  }
+
+  function channelReplyTarget(): BotReplyTarget | null {
+    return (
+      useBotDraftsStore.getState().threadBoxes[BOT_ID]?.[CHANNEL_ID]?.replyTo ??
+      null
+    );
+  }
+
+  it("names a bot's row by its first line as the bot wrote it, not by the preview that folds its lines together", async () => {
+    addBotRow("bot-two-lines", "First line\nSecond line");
+    render(<MountedChannel />);
+
+    await userEvent
+      .setup()
+      .click(within(rowOf("bot-two-lines")).getByTestId("bot-message-reply"));
+
+    expect(
+      screen.getByTestId("bot-channel-composer-reply-line").textContent,
+    ).toBe("First line");
+    expect(channelReplyTarget()).toEqual({
+      messageId: "bot-two-lines",
+      author: "Release Bot",
+      line: "First line",
+    });
+  });
+
+  it("keeps a bot's line of two hundred characters whole when the preview's cut falls inside a character", async () => {
+    // One character of eleven UTF-16 units, so the preview's cut at two
+    // hundred units lands inside it.
+    const family = ["\u{1F468}", "\u{1F469}", "\u{1F467}", "\u{1F466}"].join(
+      String.fromCodePoint(0x200d),
+    );
+    const line = `${"a".repeat(195)}${family} end`;
+    addBotRow("bot-long-line", line);
+    render(<MountedChannel />);
+
+    await userEvent
+      .setup()
+      .click(within(rowOf("bot-long-line")).getByTestId("bot-message-reply"));
+
+    expect(
+      screen.getByTestId("bot-channel-composer-reply-line").textContent,
+    ).toBe(line);
+    expect(channelReplyTarget()).toEqual({
+      messageId: "bot-long-line",
+      author: "Release Bot",
+      line,
+    });
   });
 
   it("keeps naming the message by the line it was chosen with when the row's text changes", async () => {

@@ -602,11 +602,12 @@ function BotRow(props: {
     message,
     presentation,
   );
+  const text = botRowText(message);
   const reply = replyTo(
     presentation,
     message.persistentMessageId,
     presentation.botTitle,
-    message.content,
+    text,
   );
   const receipt = replyReceiptFor(message, presentation);
   const sheet = useRowSheet(
@@ -665,7 +666,7 @@ function BotRow(props: {
           open={sheet.open}
           onOpenChange={sheet.setOpen}
           name={presentation.botTitle}
-          text={message.content}
+          text={text}
           reply={reply}
           thread={thread}
           failed={null}
@@ -706,6 +707,18 @@ function useRowSheet(enabled: boolean): {
     longPress: enabled ? longPress : null,
     shown: enabled && shown,
   };
+}
+
+/**
+ * A bot's row's text as the bot wrote it, its text parts a line apart, as
+ * the reply badge reads a post (`postTextOf`). The row's `content` is only a
+ * preview, its whitespace folded and its length cut, so its first line is
+ * not the message's.
+ */
+function botRowText(message: ChatMessageModel): string {
+  return message.segments
+    .flatMap((segment) => (segment.kind === "text" ? [segment.markdown] : []))
+    .join("\n");
 }
 
 /** The receipt under a row of the bot, by the turn that wrote it; `null` where none did. */
