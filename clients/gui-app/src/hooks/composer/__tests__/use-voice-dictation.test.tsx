@@ -13,6 +13,10 @@ import {
 } from "@/hooks/composer/use-voice-dictation";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useVoiceSessionStore } from "@/stores/voice/voice-session-store";
+import type {
+  DeviceDictationCallbacks,
+  IDeviceDictationHost,
+} from "@traycer-clients/shared/platform/runner-host";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
   localEntry,
@@ -78,13 +82,20 @@ vi.mock("@traycer-clients/shared/host-transport/speech-stream-client", () => ({
   SpeechStreamClient: speech.FakeSpeechStreamClient,
 }));
 
-const runnerHostState = vi.hoisted(() => ({
-  requestMicrophoneAccess: (): Promise<string> => Promise.resolve("granted"),
-}));
+const runnerHostState = vi.hoisted(
+  (): {
+    requestMicrophoneAccess: () => Promise<string>;
+    deviceDictation: IDeviceDictationHost | null;
+  } => ({
+    requestMicrophoneAccess: () => Promise.resolve("granted"),
+    deviceDictation: null,
+  }),
+);
 
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({
     requestMicrophoneAccess: () => runnerHostState.requestMicrophoneAccess(),
+    deviceDictation: runnerHostState.deviceDictation,
   }),
 }));
 
@@ -233,6 +244,7 @@ beforeEach(() => {
   streamRuntimeState.wsStreamClient = {};
   selectedHostState.entry = localEntry;
   runnerHostState.requestMicrophoneAccess = () => Promise.resolve("granted");
+  runnerHostState.deviceDictation = null;
   getUserMediaCalls = 0;
   lastGetUserMediaConstraints = null;
   getUserMediaImpl = () => Promise.resolve(fakeMediaStream());
@@ -1504,4 +1516,148 @@ describe("useVoiceDictation transcription analytics", () => {
       },
     ]);
   });
+});
+
+// ---------------------------------------------------------------------------
+// The shell's own recognizer (`IRunnerHost.deviceDictation`, the phone). The
+// hook then needs no host stream client at all.
+// ---------------------------------------------------------------------------
+
+describe("useVoiceDictation with a device recognizer", () => {
+  interface FakeDeviceSession {
+    readonly callbacks: DeviceDictationCallbacks;
+    readonly sent: Uint8Array[];
+    flushCalls: number;
+    closeCalls: number;
+  }
+
+  function installDeviceRecognizer(): FakeDeviceSession[] {
+    const sessions: FakeDeviceSession[] = [];
+    runnerHostState.deviceDictation = {
+      isAvailable: () => Promise.resolve(true),
+      open: ({ callbacks }) => {
+        const session: FakeDeviceSession = {
+          callbacks,
+          sent: [],
+          flushCalls: 0,
+          closeCalls: 0,
+        };
+        sessions.push(session);
+        return {
+          sendAudio: (pcm) => {
+            session.sent.push(pcm);
+          },
+          flush: () => {
+            session.flushCalls += 1;
+          },
+          close: () => {
+            session.closeCalls += 1;
+          },
+        };
+      },
+    };
+    // The phone has no host stream to dictate through.
+    streamRuntimeState.wsStreamClient = null;
+    return sessions;
+  }
+
+  function lastSession(sessions: FakeDeviceSession[]): FakeDeviceSession {
+    const session = sessions.at(-1);
+    if (session === undefined) throw new Error("no device session was opened");
+    return session;
+  }
+
+  it("records through the device session instead of failing for want of a host stream", async () => {
+    const sessions = installDeviceRecognizer();
+    const { result } = renderDictation();
+
+    act(() => {
+      result.current.start();
+    });
+    await flushAsync();
+    expect(result.current.failureClass).toBeNull();
+    expect(result.current.state).toBe("requesting");
+
+    act(() => {
+      lastSession(sessions).callbacks.onReady();
+    });
+    expect(result.current.state).toBe("recording");
+
+    // Captured audio reaches the device session.
+    const processor = lastAudioContext().processor;
+    if (processor === null) throw new Error("capture graph was not wired");
+    act(() => {
+      fireAudio(processor, [0.5, -0.5]);
+    });
+    expect(lastSession(sessions).sent).toHaveLength(1);
+  });
+
+  it("flushes on stop and inserts the transcript before returning to idle", async () => {
+    const sessions = installDeviceRecognizer();
+    const onText = vi.fn<(text: string) => void>();
+    const { result } = renderHook(() =>
+      useVoiceDictation({
+        language: "en",
+        onText,
+        draftIdentity: () => ({
+          incarnation: incarnationBox.current,
+          generation: draftBox.current,
+        }),
+      }),
+    );
+    act(() => {
+      result.current.start();
+    });
+    await flushAsync();
+    const { callbacks } = lastSession(sessions);
+    act(() => {
+      callbacks.onReady();
+    });
+
+    act(() => {
+      result.current.stop();
+    });
+    expect(lastSession(sessions).flushCalls).toBe(1);
+    expect(result.current.state).toBe("transcribing");
+
+    act(() => {
+      callbacks.onTranscript("hello phone");
+      callbacks.onFlushed();
+    });
+    expect(onText).toHaveBeenCalledExactlyOnceWith("hello phone");
+    expect(result.current.state).toBe("idle");
+  });
+
+  it.each([
+    {
+      permissionDenied: true,
+      failureClass: "speech_recognition_denied",
+    },
+    {
+      permissionDenied: false,
+      failureClass: "device_recognizer_failed",
+    },
+  ] as const)(
+    "classifies a recognizer error with permissionDenied=$permissionDenied as $failureClass",
+    async ({ permissionDenied, failureClass }) => {
+      const sessions = installDeviceRecognizer();
+      const { result } = renderDictation();
+      act(() => {
+        result.current.start();
+      });
+      await flushAsync();
+
+      act(() => {
+        lastSession(sessions).callbacks.onError({
+          message: "recognizer said no",
+          permissionDenied,
+        });
+      });
+
+      expect(result.current.failureClass).toBe(failureClass);
+      expect(result.current.permissionDenied).toBe(permissionDenied);
+      expect(result.current.errorMessage).toBe("recognizer said no");
+      expect(result.current.state).toBe("error");
+    },
+  );
 });

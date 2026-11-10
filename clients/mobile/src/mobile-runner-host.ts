@@ -81,6 +81,7 @@ import type {
   ILinkCodeScanner,
   ILinkLoginDeepLinkSource,
   INotificationHost,
+  IDeviceDictationHost,
   IPushPermissionHost,
   IRunnerHost,
   ISecureStorage,
@@ -321,6 +322,11 @@ export interface MobileRunnerHostOptions {
    * `getUserMedia` drives the browser's own prompt.
    */
   readonly voiceAudio: MobileVoiceAudio | null;
+  /**
+   * On-device dictation, or `null` where the app has no native recognizer -
+   * see `IRunnerHost.deviceDictation`. Decided by the entry point.
+   */
+  readonly deviceDictation: IDeviceDictationHost | null;
 }
 
 const STEP_UP_EXPIRY_SKEW_MS = 5_000;
@@ -399,6 +405,7 @@ export class MobileRunnerHost implements IRunnerHost {
    * entry, tests) - so the GUI's one branch on `null` hides the Settings row
    * wherever it would have nothing to report or no working button.
    */
+  readonly deviceDictation: IDeviceDictationHost | null;
   readonly pushPermission: IPushPermissionHost | null;
   readonly systemBack: ISystemBackHost | null;
   readonly statusBarTap: IStatusBarTapHost | null;
@@ -454,6 +461,7 @@ export class MobileRunnerHost implements IRunnerHost {
     this.statusBarTap = options.statusBarTap;
     this.authSheet = options.authSheet;
     this.voiceAudio = options.voiceAudio;
+    this.deviceDictation = options.deviceDictation;
     this.notifications = buildNotifications(options.pushRegistration);
     this.tokenStore = new MobileTokenStore(
       this.secureStorage,

@@ -90,13 +90,16 @@ export function neverOffered(_context: SettingsAvailabilityContext): boolean {
 }
 
 /**
- * Voice input — the mobile app refuses dictation outright
- * (`useDictationAvailability`), so the toggle would control nothing.
+ * Voice input — the mobile app dictates through its own recognizer or not at
+ * all (`useDictationAvailability`), so without one the toggle would control
+ * nothing.
  */
 export function isVoiceInputRowAvailable(
   context: SettingsAvailabilityContext,
 ): boolean {
-  return !context.mobileApp;
+  return (
+    !context.mobileApp || (context.runnerHost?.deviceDictation ?? null) !== null
+  );
 }
 
 /**
