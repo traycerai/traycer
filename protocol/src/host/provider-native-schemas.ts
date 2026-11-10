@@ -1018,7 +1018,7 @@ const providerSkillSchemaBeforeProfileOrigin = lazySchema(() =>
     conflict: z.boolean().optional(),
   }),
 );
-/** Skill metadata added on list@10.8 and nativeMutate@1.5; older rows omit it. */
+/** Skill metadata added on list@10.9 and nativeMutate@1.5; older rows omit it. */
 export const providerSkillSchema = lazySchema(() =>
   providerSkillSchemaBeforeProfileOrigin.extend({
     profileOrigin: z
