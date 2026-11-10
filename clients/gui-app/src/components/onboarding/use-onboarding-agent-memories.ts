@@ -293,11 +293,15 @@ export function useOnboardingAgentMemories(input: {
     savingRef.current = true;
     setSaving(true);
     const target: SaveTarget = { hostId, selection: selectionRef.current };
+    // The view shows no rows while the host's providers are loading, and no
+    // rows is not no providers. A read that failed, or a host that cannot
+    // switch them, has been said on the act, and the save goes on without.
+    const rows = providerControls === "loading" ? null : view.rows;
     // `.finally` rather than try/finally: React Compiler cannot lower a try
     // without a catch, and would leave this whole hook unmemoized.
-    return runMemorySave(saveIo(target), view.rows)
+    return runMemorySave(saveIo(target), rows)
       .then((result) => {
-        if (result !== "moved")
+        if (result !== "moved" && result !== "undiscovered")
           record(target.hostId, (current) => ({
             ...current,
             traycerUnreached: result === "unreached",

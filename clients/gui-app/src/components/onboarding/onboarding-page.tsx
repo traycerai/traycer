@@ -990,6 +990,11 @@ type MemoryFooter =
       readonly saving: boolean;
       /** The last save stopped short; offer a way on that writes nothing more. */
       readonly interrupted: boolean;
+      /**
+       * The host has not said yet which providers it can switch, and the act
+       * says it is checking: Continue waits rather than save without them.
+       */
+      readonly discovering: boolean;
     };
 
 function memoryFooterFor(
@@ -1004,6 +1009,7 @@ function memoryFooterFor(
     kind: "save",
     saving: memory.saving,
     interrupted: memory.interrupted,
+    discovering: memory.providerControls === "loading",
   };
 }
 
@@ -1068,6 +1074,7 @@ function OnboardingActions(props: {
               memory: props.memory,
             })}
             pending={props.memory?.kind === "save" && props.memory.saving}
+            waiting={props.memory?.kind === "save" && props.memory.discovering}
             onAdvance={props.onAdvance}
           />
         </>
@@ -1139,13 +1146,15 @@ function OnboardingAdvanceButton(props: {
   readonly label: string;
   /** A save is in flight: unchanged label, an inline spinner, no second press. */
   readonly pending: boolean;
+  /** Not ready to save yet: no press, and the act says what it is waiting for. */
+  readonly waiting: boolean;
   readonly onAdvance: () => void;
 }) {
   return (
     <button
       type="button"
       data-testid="onboarding-advance"
-      disabled={props.pending}
+      disabled={props.pending || props.waiting}
       aria-busy={props.pending}
       onClick={props.onAdvance}
       className={cn(

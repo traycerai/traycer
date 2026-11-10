@@ -117,8 +117,23 @@ export interface MemorySaveIo {
  * - `short`: the save stopped with something unsaved.
  * - `unreached`: a read failed, or the host serves no configuration.
  * - `moved`: the act's host changed, and the save sent nothing more.
+ * - `undiscovered`: the host had not yet said which providers it can switch,
+ *   and the save sent nothing.
  */
-export type MemorySaveResult = "done" | "short" | "unreached" | "moved";
+export type MemorySaveResult =
+  | "done"
+  | "short"
+  | "unreached"
+  | "moved"
+  | "undiscovered";
+
+/**
+ * The provider switches a save writes: those that differ from what the host
+ * held as the save began. `null` while the host has not said which providers
+ * it can switch, which is not the same as none: a save then would turn
+ * Traycer memories on and leave every provider's own memories on beside them.
+ */
+export type MemorySaveRows = ReadonlyArray<OnboardingMemoryRow> | null;
 
 /** What one save has done so far. */
 export interface MemorySaveProgress {
@@ -158,7 +173,7 @@ export type MemorySaveStep =
   | { readonly kind: "done" }
   | {
       readonly kind: "stop";
-      readonly result: Exclude<MemorySaveResult, "done">;
+      readonly result: Exclude<MemorySaveResult, "done" | "undiscovered">;
     };
 
 const SHORT: MemorySaveStep = { kind: "stop", result: "short" };
@@ -218,8 +233,9 @@ export function nextMemorySaveStep(input: {
  */
 export function runMemorySave(
   io: MemorySaveIo,
-  rows: ReadonlyArray<OnboardingMemoryRow>,
+  rows: MemorySaveRows,
 ): Promise<MemorySaveResult> {
+  if (rows === null) return Promise.resolve("undiscovered");
   return continueSave(io, rows.filter(memoryRowNeedsWrite), MEMORY_SAVE_START);
 }
 
