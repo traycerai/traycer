@@ -117,11 +117,13 @@ async function exploreInsideSaves(states: ReadonlyArray<State>): Promise<{
   runs: number;
   exemptWindows: number;
   oneAfterRebind: number;
+  staleDone: number;
 }> {
   const found = new Map<string, Found>();
   let runs = 0;
   let exemptWindows = 0;
   let oneAfterRebind = 0;
+  let staleDone = 0;
   for (const state of states) {
     const base = await runSave(cloneWorld(state.world), null);
     for (let after = 1; after <= base.requests; after += 1) {
@@ -132,17 +134,20 @@ async function exploreInsideSaves(states: ReadonlyArray<State>): Promise<{
         runs += 1;
         exemptWindows += run.exemptWindows;
         oneAfterRebind += run.oneAfterRebind;
+        staleDone += run.staleDone;
         const path = [
           ...state.path,
           `save, then ${injection.label} after answer ${after}`,
         ];
         record(found, run, path);
-        // The retry after a save that was changed under it.
-        record(found, await runSave(world, null), [...path, "save (retry)"]);
+        // The retry after a save that was changed under it. A save that
+        // returned done is not retried: the act is left.
+        if (run.result !== "done")
+          record(found, await runSave(world, null), [...path, "save (retry)"]);
       }
     }
   }
-  return { found, runs, exemptWindows, oneAfterRebind };
+  return { found, runs, exemptWindows, oneAfterRebind, staleDone };
 }
 
 /**
@@ -213,7 +218,7 @@ describe("the memory act's save, over every order of host events", () => {
     console.warn(
       [
         `E1: ${between.states.length} states, ${between.saves} saves, ${Math.round(betweenMs)} ms`,
-        `E2: ${inside.runs} runs, ${inside.exemptWindows} exempt rebind windows, ${inside.oneAfterRebind} windows with one request after an unseen rebind`,
+        `E2: ${inside.runs} runs, ${inside.exemptWindows} exempt rebind windows, ${inside.oneAfterRebind} windows with one request after an unseen rebind, ${inside.staleDone} saves done on a read that was true when taken`,
         `L: ${stuck.length} stuck of ${reachable.length}`,
         `total ${Math.round(total)} ms`,
       ].join("\n"),
@@ -222,12 +227,29 @@ describe("the memory act's save, over every order of host events", () => {
     expect(between.states.length).toBeGreaterThan(5000);
     expect(inside.exemptWindows).toBeGreaterThan(0);
     expect(inside.oneAfterRebind).toBeGreaterThan(0);
+    expect(inside.staleDone).toBeGreaterThan(0);
     // L: from every reachable state the act can still finish.
     expect(stuck.map((state) => state.path.join(" > "))).toEqual([]);
     expect([
       ...describeFound(between.found),
       ...describeFound(inside.found),
     ]).toEqual([]);
+  });
+});
+
+describe("one Continue on a host that applies the write", () => {
+  it("sends one set, reads before each provider and is done", async () => {
+    const run = await runSave(initialWorld(), null);
+    expect(run.result).toBe("done");
+    expect(run.trace).toEqual([
+      "get",
+      "set",
+      "get",
+      "provider",
+      "get",
+      "provider",
+      "get",
+    ]);
   });
 });
 

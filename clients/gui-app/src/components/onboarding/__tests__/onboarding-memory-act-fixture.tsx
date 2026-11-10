@@ -15,6 +15,7 @@ import {
 } from "@testing-library/react";
 
 import type { ReactNode } from "react";
+import type { ConfigAgentMemoriesResponse } from "@traycer/protocol/host/config/schemas";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   createMemoryHistory,
@@ -46,6 +47,7 @@ import {
 } from "@traycer/protocol/host/provider-schemas";
 import { environmentStatusResponseSchemaV12 } from "@traycer/protocol/host/environment-schemas";
 import { DirectoryProbe } from "@/components/onboarding/__tests__/onboarding-memory-act-directory-probe";
+import { EntryReaderSlot } from "@/components/onboarding/__tests__/onboarding-memory-act-entry-reader";
 import { RequestContext } from "@/components/onboarding/__tests__/onboarding-memory-act-request-context";
 import { OnboardingPage } from "@/components/onboarding/onboarding-page";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -89,6 +91,17 @@ interface World {
   memoriesOn: boolean;
   /** A write the configuration saved that this host has not received: its revision. */
   undelivered: number | null;
+  /**
+   * After this many `providers.setNativeMemory` calls, the next
+   * `config.agentMemories.get` answers as it stands and the host is then
+   * rebound to another configuration where Traycer memories are off.
+   */
+  rebindAfterNativeWrites: number | null;
+  /** What overtakes that read: the host rebinds, or the setting is turned off. */
+  overtakenBy: "rebind" | "overturn";
+  /** Holds `config.agentMemories.get` open until resolved. */
+  getGate: Deferred | null;
+  nativeWrites: number;
   /** The revision this host has read the configuration at; `get` answers it. */
   revision: number;
   /** The configuration the host serves; a rebound host answers with another. */
@@ -125,6 +138,10 @@ function freshWorld(): World {
   return {
     memoriesOn: false,
     undelivered: null,
+    rebindAfterNativeWrites: null,
+    overtakenBy: "rebind",
+    getGate: null,
+    nativeWrites: 0,
     revision: 4,
     environmentId: ENVIRONMENT_ID,
     providers: defaultProviders(),
@@ -251,11 +268,25 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) => {
         providers: world.providers.map(providerState),
         native: null,
       }),
-      "config.agentMemories.get": () => ({
-        enabled: world.memoriesOn,
-        revision: world.revision,
-        environmentId: world.environmentId,
-      }),
+      "config.agentMemories.get": async () => {
+        if (world.getGate !== null) await world.getGate.promise;
+        const answer = {
+          enabled: world.memoriesOn,
+          revision: world.revision,
+          environmentId: world.environmentId,
+        };
+        if (
+          world.rebindAfterNativeWrites !== null &&
+          world.nativeWrites >= world.rebindAfterNativeWrites
+        ) {
+          world.rebindAfterNativeWrites = null;
+          if (world.overtakenBy === "rebind") {
+            world.environmentId = "env-rebound";
+            world.memoriesOn = false;
+          } else overturnWrite();
+        }
+        return answer;
+      },
       "config.agentMemories.set": async (request) => {
         const answer =
           world.setAnswers[Math.min(setCalls, world.setAnswers.length - 1)];
@@ -291,6 +322,7 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) => {
         };
       },
       "providers.setNativeMemory": async (request) => {
+        world.nativeWrites += 1;
         if (world.nativeGate !== null) await world.nativeGate.promise;
         const failures = world.nativeFailures.get(request.harnessId) ?? 0;
         if (failures > 0) {
@@ -412,6 +444,52 @@ const captureDirectory = (directory: HostDirectoryService | null): void => {
   hostDirectory = directory;
 };
 
+let mountReader: (() => void) | null = null;
+let readerAnswer: ConfigAgentMemoriesResponse | null = null;
+const captureReaderMount = (mount: (() => void) | null): void => {
+  mountReader = mount;
+};
+const captureReaderAnswer = (
+  answer: ConfigAgentMemoriesResponse | null,
+): void => {
+  readerAnswer = answer;
+};
+
+/** Mounts a second reader of the act's `config.agentMemories.get` entry. */
+export function mountEntryReader(): void {
+  act(() => mountReader?.());
+}
+
+/** What that reader was given, once it has an answer. */
+export function entryReaderAnswer(): ConfigAgentMemoriesResponse | null {
+  return readerAnswer;
+}
+
+function memoryEntries() {
+  return queryClient
+    .getQueryCache()
+    .getAll()
+    .filter((entry) =>
+      JSON.stringify(entry.queryKey).includes("config.agentMemories.get"),
+    );
+}
+
+/** The act's `config.agentMemories.get` entry is marked stale. */
+export function entryIsStale(): boolean {
+  const entries = memoryEntries();
+  return (
+    entries.length > 0 && entries.every((entry) => entry.state.isInvalidated)
+  );
+}
+
+/** Reads the entry again now, so it stands fresh. */
+export function refreshMemoryEntry(): Promise<void> {
+  return queryClient.refetchQueries({
+    predicate: (entry) =>
+      JSON.stringify(entry.queryKey).includes("config.agentMemories.get"),
+  });
+}
+
 /** The window's host directory reads the host list again, from `world.otherHosts`. */
 export async function refreshHostDirectory(): Promise<void> {
   await hostDirectory?.refresh();
@@ -461,6 +539,10 @@ export function renderInHost(ui: ReactNode): void {
                   <DirectoryProbe onDirectory={captureDirectory}>
                     <RequestContext>
                       <LazyMotion features={domMax}>{ui}</LazyMotion>
+                      <EntryReaderSlot
+                        onMount={captureReaderMount}
+                        onAnswer={captureReaderAnswer}
+                      />
                     </RequestContext>
                   </DirectoryProbe>
                 </TooltipProvider>
@@ -587,6 +669,8 @@ export function negotiateManifest(
 
 /** Every test file's beforeEach: a fresh host, manifest, store and scroll stub. */
 export function resetMemoryActFixture(): void {
+  readerAnswer = null;
+  mountReader = null;
   // Motion keeps its frame loop at module level for the whole worker; a file
   // that ran before this one on a fake clock can leave it stalled, and the
   // tour's step changes then never finish. Without animations they do not

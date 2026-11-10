@@ -182,6 +182,8 @@ function actWriteIn(world: World, env: Env): boolean {
 
 export type ViolationClass =
   | "D done though a provider write did not land"
+  | "X a request followed the stale read that done stood on"
+  | "X a request after the save finished"
   | "S more than one set in one save"
   | "R runaway save: more than 30 requests"
   | "I1 write/done with no read in this save"
@@ -227,6 +229,13 @@ export interface SaveRun {
   readonly trace: ReadonlyArray<string>;
   /** Runs where exactly one request landed after an unseen rebind. */
   readonly oneAfterRebind: number;
+  /**
+   * "Done on a read that was true when taken": a rebind or a later revision
+   * landed after the final read's answer, and the save returned done on it.
+   * The irreducible staleness of a read; closing it takes one atomic host
+   * operation. Bounded here: no request follows that read, and none after done.
+   */
+  readonly staleDone: number;
 }
 
 const ROWS = (world: World): ReadonlyArray<OnboardingMemoryRow> =>
@@ -248,6 +257,10 @@ export async function runSave(
   let lastRequest: RequestRecord | null = null;
   let answers = 0;
   let exemptWindows = 0;
+  let staleDone = 0;
+  /** Requests made when a change landed after a read's answer. */
+  let injectedAt: number | null = null;
+  let finished = false;
   /** A rebind landed and no read has named the new configuration yet. */
   const rebind = {
     unseen: false,
@@ -286,11 +299,14 @@ export async function runSave(
         (world.bound !== boundBefore || injection.label === "overturn") &&
         lastRequest !== null &&
         lastRequest.name === "get"
-      )
+      ) {
         lastRequest.rebound = true;
+        injectedAt = trace.length;
+      }
     }
   };
   const sent = (name: "get" | "status" | "set" | "provider"): void => {
+    if (finished) flag("X a request after the save finished");
     counts.requests += 1;
     trace.push(name);
     if (counts.requests === 31) flag("R runaway save: more than 30 requests");
@@ -443,11 +459,23 @@ export async function runSave(
   };
 
   const result = await runMemorySave(io, ROWS(world));
+  finished = true;
   if (result === "done") {
     if (Object.values(world.providers).some((on) => on))
       flag("D done though a provider write did not land");
     if (!selection.selected) flag("I3 done after the selection moved");
-    standsOnRead();
+    // Read through a function: the closures above assign these, which the
+    // checker does not follow from here.
+    const final = (): { rebound: boolean; at: number | null } => ({
+      rebound: lastRequest !== null && lastRequest.rebound,
+      at: injectedAt,
+    });
+    if (final().rebound) {
+      // The named exemption: done on a read that was true when taken.
+      staleDone += 1;
+      if (final().at !== trace.length)
+        flag("X a request followed the stale read that done stood on");
+    } else standsOnRead();
   }
   // I4: what the act would show from the save's last read and its evidence.
   const lastGet = reads.last;
@@ -467,6 +495,7 @@ export async function runSave(
     violations,
     exemptWindows,
     trace,
+    staleDone,
     oneAfterRebind:
       rebind.ones + (rebind.unseen && rebind.landed === 1 ? 1 : 0),
   };
