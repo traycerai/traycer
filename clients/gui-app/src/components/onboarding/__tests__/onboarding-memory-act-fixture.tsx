@@ -14,6 +14,7 @@ import {
   within,
 } from "@testing-library/react";
 
+import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   createMemoryHistory,
@@ -363,7 +364,8 @@ export function invalidateAllQueries(): Promise<void> {
   return queryClient.invalidateQueries();
 }
 
-function renderTour(): void {
+/** Renders `ui` inside the faked host's real providers. */
+export function renderInHost(ui: ReactNode): void {
   queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
@@ -400,9 +402,7 @@ function renderTour(): void {
                 <TooltipProvider>
                   <DirectoryProbe onDirectory={captureDirectory}>
                     <RequestContext>
-                      <LazyMotion features={domMax}>
-                        <OnboardingPage />
-                      </LazyMotion>
+                      <LazyMotion features={domMax}>{ui}</LazyMotion>
                     </RequestContext>
                   </DirectoryProbe>
                 </TooltipProvider>
@@ -443,7 +443,7 @@ export async function clickAdvance(): Promise<void> {
 
 /** The tour past its welcome, on the first act. */
 export async function enterTour(): Promise<void> {
-  renderTour();
+  renderInHost(<OnboardingPage />);
   const skipWelcome = await screen.findByTestId("onboarding-welcome-skip");
   // The hand-off is a pair of timeouts; only those run on the fake clock.
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });

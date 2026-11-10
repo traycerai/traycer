@@ -3,6 +3,7 @@
  * host picker. The faked host and the helpers are in
  * `onboarding-memory-act-fixture.tsx`.
  */
+import { useEffect, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -22,6 +23,7 @@ import {
   deferred,
   invalidateAllQueries,
   refreshHostDirectory,
+  renderInHost,
   openMemoryAct,
   paramsOf,
   providerSwitch,
@@ -30,6 +32,10 @@ import {
   world,
   writesAnswered,
 } from "@/components/onboarding/__tests__/onboarding-memory-act-fixture";
+import {
+  useOnboardingAgentMemories,
+  type OnboardingAgentMemories,
+} from "@/components/onboarding/use-onboarding-agent-memories";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 
 vi.mock("@/components/auth/cinematic-backdrop", () => ({
@@ -203,5 +209,63 @@ describe("the Memory act: the host is picked while a save is running", () => {
     );
     expect(useOnboardingStore.getState().step).toBe(2);
     expect(currentStepId()).toBe("agent-memories");
+  });
+});
+
+interface MemoryProbe {
+  readonly memory: OnboardingAgentMemories;
+  readonly pickHost: (hostId: string | null) => void;
+}
+
+/** The hook as the tour calls it, with the picked host a test can move. */
+function MemoryHookHost(props: {
+  readonly onRender: (probe: MemoryProbe) => void;
+}) {
+  const [pickedHostId, setPickedHostId] = useState<string | null>(HOST_ID);
+  const memory = useOnboardingAgentMemories({
+    active: true,
+    hostUsable: true,
+    pickedHostId,
+  });
+  const { onRender } = props;
+  useEffect(() => {
+    onRender({ memory, pickHost: setPickedHostId });
+  }, [memory, onRender]);
+  return null;
+}
+
+describe("the Memory act's save: the picker names another host but the client stays", () => {
+  it("stops a save when only the picked host changes", async () => {
+    world.setGate = deferred();
+    let latest: MemoryProbe | null = null;
+    const current = (): MemoryProbe => {
+      if (latest === null) throw new Error("the hook has not rendered yet");
+      return latest;
+    };
+    renderInHost(
+      <MemoryHookHost
+        onRender={(probe) => {
+          latest = probe;
+        }}
+      />,
+    );
+    await waitFor(() => expect(current().memory.rows).toHaveLength(2));
+    act(() => current().memory.choose());
+    await waitFor(() => expect(current().memory.chosen).toBe(true));
+
+    let saved: Promise<boolean> = Promise.resolve(true);
+    act(() => {
+      saved = current().memory.save();
+    });
+    await waitFor(() =>
+      expect(paramsOf("config.agentMemories.set")).toHaveLength(1),
+    );
+
+    // The client still addresses the first host; only the picker's name moves.
+    act(() => current().pickHost(OTHER_HOST.hostId));
+    act(() => world.setGate?.resolve());
+
+    await expect(saved).resolves.toBe(false);
+    expect(methodsSentTo(HOST_ID)).not.toContain("providers.setNativeMemory");
   });
 });
