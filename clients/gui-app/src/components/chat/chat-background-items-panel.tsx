@@ -361,12 +361,47 @@ function HeldManagedCommandRow(props: {
 }) {
   const { held, command, onOpen } = props;
   const readOnly = useContext(ChatStatusReadOnlyContext);
+  const content = (
+    <>
+      {command !== null && command.status.state === "running" ? (
+        <ManagedCommandMonitorIcon
+          monitoring={command.monitoring}
+          decorative
+          className="size-3.5 shrink-0 text-foreground/40"
+        />
+      ) : (
+        <PauseCircle
+          aria-hidden
+          className="size-3.5 shrink-0 text-foreground/40"
+        />
+      )}
+      <span
+        className={cn(
+          "block min-w-0 flex-1 truncate text-foreground/85",
+          CHAT_DOCK_PANEL_ROW_TEXT,
+        )}
+      >
+        {held.description}
+      </span>
+      <span
+        className={cn(
+          "shrink-0 text-muted-foreground",
+          CHAT_DOCK_PANEL_ROW_TEXT,
+        )}
+      >
+        Held
+      </span>
+    </>
+  );
   if (readOnly)
     return (
-      <li className={CHAT_DOCK_PANEL_ROW_CONTENT}>
-        <PauseCircle aria-hidden className="size-3.5" />
-        <span>{held.description}</span>
-        <span>Held</span>
+      <li className="m-0">
+        <div
+          className={CHAT_DOCK_PANEL_ROW}
+          style={{ paddingLeft: chatDockPanelRowTreeInset(0) }}
+        >
+          <div className={CHAT_DOCK_PANEL_ROW_BUTTON}>{content}</div>
+        </div>
       </li>
     );
   return (
@@ -390,34 +425,7 @@ function HeldManagedCommandRow(props: {
             }}
             className={CHAT_DOCK_PANEL_ROW_BUTTON}
           >
-            {command !== null && command.status.state === "running" ? (
-              <ManagedCommandMonitorIcon
-                monitoring={command.monitoring}
-                decorative
-                className="size-3.5 shrink-0 text-foreground/40"
-              />
-            ) : (
-              <PauseCircle
-                aria-hidden
-                className="size-3.5 shrink-0 text-foreground/40"
-              />
-            )}
-            <span
-              className={cn(
-                "block min-w-0 flex-1 truncate text-foreground/85",
-                CHAT_DOCK_PANEL_ROW_TEXT,
-              )}
-            >
-              {held.description}
-            </span>
-            <span
-              className={cn(
-                "shrink-0 text-muted-foreground",
-                CHAT_DOCK_PANEL_ROW_TEXT,
-              )}
-            >
-              Held
-            </span>
+            {content}
           </button>
         </TooltipWrapper>
         <span className="inline-flex opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
@@ -501,6 +509,26 @@ function ManagedCommandRow(props: {
   });
   const grabCursor = isDragging ? "cursor-grabbing" : "cursor-grab";
 
+  const content = (
+    <>
+      <ManagedCommandMonitorIcon
+        monitoring={command.monitoring}
+        decorative
+        className="size-3.5 text-primary/80"
+      />
+      <span
+        className={cn(
+          "block min-w-0 flex-1 truncate text-foreground/85",
+          CHAT_DOCK_PANEL_ROW_TEXT,
+        )}
+      >
+        {title}
+      </span>
+      {command.status.state === "running" ? (
+        <LiveElapsed startedAt={command.status.startedAtMs} />
+      ) : null}
+    </>
+  );
   if (readOnly)
     return (
       <li
@@ -511,30 +539,7 @@ function ManagedCommandRow(props: {
           className={CHAT_DOCK_PANEL_ROW}
           style={{ paddingLeft: chatDockPanelRowTreeInset(0) }}
         >
-          <div className={CHAT_DOCK_PANEL_ROW_BUTTON}>
-            <ManagedCommandMonitorIcon
-              monitoring={command.monitoring}
-              decorative
-              className="size-3.5 text-primary/80"
-            />
-            <span
-              className={cn(
-                "block min-w-0 flex-1 truncate text-foreground/85",
-                CHAT_DOCK_PANEL_ROW_TEXT,
-              )}
-            >
-              {title}
-            </span>
-            {command.status.state === "running" ? (
-              <>
-                <span>Running</span>
-                <LiveElapsed startedAt={command.status.startedAtMs} />
-              </>
-            ) : null}
-            <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 uppercase text-muted-foreground">
-              {command.monitoring ? "Monitor" : "Shell"}
-            </span>
-          </div>
+          <div className={CHAT_DOCK_PANEL_ROW_BUTTON}>{content}</div>
         </div>
       </li>
     );
@@ -571,22 +576,7 @@ function ManagedCommandRow(props: {
               dragDisabled ? null : grabCursor,
             )}
           >
-            <ManagedCommandMonitorIcon
-              monitoring={command.monitoring}
-              decorative
-              className="size-3.5 text-primary/80"
-            />
-            <span
-              className={cn(
-                "block min-w-0 flex-1 truncate text-foreground/85",
-                CHAT_DOCK_PANEL_ROW_TEXT,
-              )}
-            >
-              {title}
-            </span>
-            {command.status.state === "running" ? (
-              <LiveElapsed startedAt={command.status.startedAtMs} />
-            ) : null}
+            {content}
           </button>
         </TooltipWrapper>
         <span className="inline-flex opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">

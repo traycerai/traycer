@@ -1,4 +1,10 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
@@ -7,6 +13,7 @@ import {
 } from "@/stores/managed-commands/test-support/managed-command-chat-session";
 import type { BackgroundItem } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ChatPortForward } from "@traycer/protocol/host/port-forward";
+import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
 
 // The one faked boundary: the host RPCs behind the managed-command rows. This
 // suite is about how background items nest and read; the managed-command
@@ -50,6 +57,7 @@ vi.mock("@/lib/links/open-link", () => ({
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BackgroundItemsPanel } from "@/components/chat/chat-background-items-panel";
+import { ChatStatusReadOnlyContext } from "@/components/chat/chat-status-capabilities";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 
 // A port-forward row's Stop control is wired through a real `useMutation`,
@@ -1047,7 +1055,119 @@ describe("<BackgroundItemsPanel />", () => {
       disposeManagedCommandChatSessions();
     }
   });
+
+  it("T179/Astra: a read-only held row shows the live glyph while its shell is still running, never the stopped glyph", () => {
+    const session = installManagedCommandChatSession({
+      epicId: "epic-1",
+      chatId: "chat-1",
+      hostId: "host-1",
+    });
+    const running = managedCommand({
+      id: "cmd-held-running",
+      monitoring: true,
+      description: "deploy watcher",
+    });
+    session.setCommands([running]);
+    session.setHeldUpdates([
+      {
+        commandId: running.id,
+        description: running.description,
+        heldAtMs: 10,
+      },
+    ]);
+    try {
+      renderPanel({
+        items: [],
+        onItemClick: () => undefined,
+        onStopItem: () => null,
+        onStopAll: () => null,
+        readOnly: true,
+        canAct: false,
+      });
+      fireEvent.click(screen.getByRole("button", { name: /Background/ }));
+      const row = screen.getByText("deploy watcher").closest("li");
+      if (row === null) throw new Error("held row not found");
+      // The live monitor glyph (`data-monitor-icon`), not the pause glyph a
+      // held-but-stopped shell gets - the bug was the readOnly row always
+      // rendering the pause glyph, ignoring that this command is still
+      // running.
+      expect(row.querySelector("[data-monitor-icon]")).toBeTruthy();
+      expect(within(row).getByText("Held")).toBeTruthy();
+    } finally {
+      session.dispose();
+      disposeManagedCommandChatSessions();
+    }
+  });
+
+  it("T179/Astra: a read-only running shell/monitor row matches the live row's grammar - no 'Running' text, no duplicate kind pill", () => {
+    const session = installManagedCommandChatSession({
+      epicId: "epic-1",
+      chatId: "chat-1",
+      hostId: "host-1",
+    });
+    const shell = managedCommand({
+      id: "cmd-shell",
+      monitoring: false,
+      description: "db migration",
+    });
+    const monitor = managedCommand({
+      id: "cmd-monitor",
+      monitoring: true,
+      description: "deploy watcher",
+    });
+    session.setCommands([shell, monitor]);
+    try {
+      renderPanel({
+        items: [],
+        onItemClick: () => undefined,
+        onStopItem: () => null,
+        onStopAll: () => null,
+        readOnly: true,
+        canAct: false,
+      });
+      fireEvent.click(screen.getByRole("button", { name: /Background/ }));
+      const shellRow = screen.getByText("Shell · db migration").closest("li");
+      const monitorRow = screen
+        .getByText("Monitor · deploy watcher")
+        .closest("li");
+      if (shellRow === null || monitorRow === null) {
+        throw new Error("shell/monitor row not found");
+      }
+      // The regular (non-readOnly) row carries neither a "Running" label nor
+      // a kind pill - the noun is already in the title ("Shell ·" / "Monitor
+      // ·"). The readOnly row used to duplicate both; it must not any more.
+      expect(screen.queryByText("Running")).toBeNull();
+      expect(screen.queryByText("Shell")).toBeNull();
+      expect(screen.queryByText("Monitor")).toBeNull();
+      // Parity still carries the live elapsed timer.
+      expect(shellRow.querySelector(".tabular-nums")).toBeTruthy();
+      expect(monitorRow.querySelector(".tabular-nums")).toBeTruthy();
+    } finally {
+      session.dispose();
+      disposeManagedCommandChatSessions();
+    }
+  });
 });
+
+function managedCommand(fields: {
+  readonly id: string;
+  readonly monitoring: boolean;
+  readonly description: string;
+}): ManagedCommand {
+  return {
+    id: fields.id,
+    monitoring: fields.monitoring,
+    description: fields.description,
+    command: null,
+    cwd: null,
+    cadence: null,
+    status: { state: "running", pid: 1, startedAtMs: 0 },
+    relaunchOnHostRestart: true,
+    chatId: "chat-1",
+    createdAtMs: 0,
+    updatedAtMs: 0,
+  };
+}
 
 interface PanelInput {
   readonly items: ReadonlyArray<BackgroundItem>;
@@ -1057,6 +1177,8 @@ interface PanelInput {
   readonly sessionStopPending?: boolean;
   readonly turnActive?: boolean;
   readonly onStopSession?: () => string | null;
+  readonly readOnly?: boolean;
+  readonly canAct?: boolean;
 }
 
 function renderPanel(input: PanelInput) {
@@ -1067,7 +1189,7 @@ function panelElement(input: PanelInput) {
   // The panel only ever mounts inside a chat tile, and its managed-command
   // rows act on that tile's host - so the provider is part of its contract,
   // not test scaffolding.
-  return (
+  const panel = (
     <QueryClientProvider client={queryClient}>
       <TabHostProvider hostId="host-1">
         <BackgroundItemsPanel
@@ -1075,8 +1197,8 @@ function panelElement(input: PanelInput) {
           epicId="epic-1"
           chatId="chat-1"
           viewTabId="tab-1"
-          canAct
-          readOnly={false}
+          canAct={input.canAct ?? true}
+          readOnly={input.readOnly ?? false}
           pendingStopTaskIds={new Set()}
           stopAllPending={false}
           sessionStopPending={input.sessionStopPending ?? false}
@@ -1090,6 +1212,15 @@ function panelElement(input: PanelInput) {
         />
       </TabHostProvider>
     </QueryClientProvider>
+  );
+  // Real consumers (`BotSessionStatus`) set the panel's own `readOnly` prop
+  // and the row-level `ChatStatusReadOnlyContext` together - the row
+  // components (`HeldManagedCommandRow`, `ManagedCommandRow`) read the
+  // CONTEXT, not the prop, for their own readOnly branch.
+  return input.readOnly === true ? (
+    <ChatStatusReadOnlyContext value>{panel}</ChatStatusReadOnlyContext>
+  ) : (
+    panel
   );
 }
 

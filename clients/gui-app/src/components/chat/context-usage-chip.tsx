@@ -109,8 +109,8 @@ export function ContextUsageChip(props: ContextUsageChipProps) {
   const chip = (
     <ContextUsageChipView
       {...props}
-      ref={ref}
-      contextEditing={editing && !readOnly}
+      ref={readOnly ? null : ref}
+      contextEditing={readOnly ? false : editing}
     />
   );
   // L-144: every pointable region offers its verbs on right-click. The one
