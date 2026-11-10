@@ -1051,9 +1051,15 @@ describe("the Import act: an open task that outlives the tour", () => {
 });
 
 describe("the Memory act: a save that lands after Skip with another act after it", () => {
+  let tracked: MockInstance<Analytics["track"]>;
+  beforeEach(() => {
+    tracked = vi.spyOn(Analytics.getInstance(), "track");
+  });
+  afterEach(() => {
+    tracked.mockRestore();
+  });
+
   it("does not move the tour on a step", async () => {
-    const tracked = vi.spyOn(Analytics.getInstance(), "track");
-    navigateMock.mockClear();
     world.setGate = deferred();
     await openMemoryAct();
     await chooseTraycer();
@@ -1075,6 +1081,5 @@ describe("the Memory act: a save that lands after Skip with another act after it
       ),
     ).toEqual([]);
     expect(currentStepId()).toBe("agent-memories");
-    tracked.mockRestore();
   });
 });
