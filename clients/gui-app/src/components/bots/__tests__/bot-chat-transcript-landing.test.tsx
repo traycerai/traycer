@@ -352,6 +352,34 @@ describe("a loaded thread transcript", () => {
     await waitFor(() => expect(flashing("ask-1")).toBe(true));
     expect(screen.queryByTestId("chat-turn-minimap")).toBeNull();
   });
+
+  it("lands on the post a reply's badge names when the badge is chosen", async () => {
+    members = (userId) =>
+      userId === "owner-1"
+        ? { displayName: "Olive Owner", avatarUrl: null }
+        : null;
+    mountTranscript(
+      [
+        resolvedUserMessage(),
+        otherUserMessage(),
+        { ...reply(), repliesTo: "ask-1" },
+      ],
+      THREAD_SURFACE,
+    );
+    await settleLegendList();
+    expect(flashing("ask-1")).toBe(false);
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Replying to Olive Owner: Please review",
+      }),
+    );
+    await settleLegendList();
+
+    expect(flashing("ask-1")).toBe(true);
+    await waitFor(() => expect(mocks.settled).toHaveLength(1));
+    expect(mocks.settled[0]?.outcome).toBe("landed");
+  });
 });
 
 describe("a transcript asked to land on a post", () => {
