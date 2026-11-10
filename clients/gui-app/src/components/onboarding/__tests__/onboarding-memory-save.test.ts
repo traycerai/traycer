@@ -56,10 +56,13 @@ async function saveCounting(
   world: World,
   found: Map<string, Found>,
   path: ReadonlyArray<string>,
-): Promise<number> {
+): Promise<{ undiscovered: number; elsewhereDone: number }> {
   const run = await runSave(world, null);
   record(found, run, path);
-  return run.result === "undiscovered" ? 1 : 0;
+  return {
+    undiscovered: run.result === "undiscovered" ? 1 : 0,
+    elsewhereDone: run.elsewhereDone,
+  };
 }
 
 /** E1: saves are atomic; every sequence of events up to `depth`, deduplicated. */
@@ -71,6 +74,7 @@ async function exploreBetweenSaves(
   states: ReadonlyArray<State & { depth: number }>;
   saves: number;
   undiscovered: number;
+  elsewhereDone: number;
 }> {
   const found = new Map<string, Found>();
   const seen = new Set<string>([worldKey(initialWorld())]);
@@ -80,6 +84,7 @@ async function exploreBetweenSaves(
   let frontier: State[] = [all[0]];
   let saves = 0;
   let undiscovered = 0;
+  let elsewhereDone = 0;
   for (let level = 1; level <= depth; level += 1) {
     const next: State[] = [];
     for (const state of frontier) {
@@ -88,7 +93,9 @@ async function exploreBetweenSaves(
         const path = [...state.path, eventLabel(event)];
         if (event.kind === "save") {
           saves += 1;
-          undiscovered += await saveCounting(world, found, path);
+          const counted = await saveCounting(world, found, path);
+          undiscovered += counted.undiscovered;
+          elsewhereDone += counted.elsewhereDone;
         } else applyWorldEvent(world, event);
         const key = worldKey(world);
         if (seen.has(key)) continue;
@@ -100,7 +107,7 @@ async function exploreBetweenSaves(
     }
     frontier = next;
   }
-  return { found, states: all, saves, undiscovered };
+  return { found, states: all, saves, undiscovered, elsewhereDone };
 }
 
 const INJECTIONS: ReadonlyArray<{
@@ -140,6 +147,7 @@ async function exploreInsideSaves(states: ReadonlyArray<State>): Promise<{
   oneAfterRebind: number;
   staleDone: number;
   failedDiscoveryDone: number;
+  elsewhereDone: number;
 }> {
   const found = new Map<string, Found>();
   let runs = 0;
@@ -147,6 +155,7 @@ async function exploreInsideSaves(states: ReadonlyArray<State>): Promise<{
   let oneAfterRebind = 0;
   let staleDone = 0;
   let failedDiscoveryDone = 0;
+  let elsewhereDone = 0;
   for (const state of states) {
     const base = await runSave(cloneWorld(state.world), null);
     for (let after = 1; after <= base.requests; after += 1) {
@@ -159,6 +168,7 @@ async function exploreInsideSaves(states: ReadonlyArray<State>): Promise<{
         oneAfterRebind += run.oneAfterRebind;
         staleDone += run.staleDone;
         failedDiscoveryDone += run.failedDiscoveryDone;
+        elsewhereDone += run.elsewhereDone;
         const path = [
           ...state.path,
           `save, then ${injection.label} after answer ${after}`,
@@ -178,6 +188,7 @@ async function exploreInsideSaves(states: ReadonlyArray<State>): Promise<{
     oneAfterRebind,
     staleDone,
     failedDiscoveryDone,
+    elsewhereDone,
   };
 }
 
@@ -277,23 +288,23 @@ describe("the memory act's save, over every order of host events", () => {
 });
 
 describe("a provider's own memory turned back on elsewhere after the host was read", () => {
-  // Reported, not fixed: `memoryRowNeedsWrite` skips a row whose `stored`
-  // already equals the choice, so a save done after the change leaves that
-  // provider's memory on. Kept apart so the main walk's counts stay its own.
-  it("is the only way a save can be done with a switchable provider on", async () => {
+  // An accepted limit: a provider's own memory can be left on if it was
+  // turned back on elsewhere after the act read the list, because a switch
+  // that already matches that list is not sent again. Settings → Providers
+  // shows it. Kept in a walk of its own so the main walk's counts stay its
+  // own. The world marks each provider turned back on this way, so a provider
+  // left on for any other reason is still a failure here.
+  it("leaves a provider on only when it was turned back on elsewhere, and does so", async () => {
     const walk = await exploreBetweenSaves(8, true);
     const inside = await exploreInsideSaves(
       walk.states.filter((state) => state.depth <= 4),
     );
-    const classes = [...walk.found.keys(), ...inside.found.keys()];
-    const gap = "D done though a provider write did not land";
-    console.warn(
-      [
-        `E3: ${walk.states.length} states, ${walk.saves} saves`,
-        ...describeFound(walk.found).filter((line) => line.startsWith(gap)),
-      ].join("\n"),
-    );
-    expect(classes.filter((cls) => cls !== gap)).toEqual([]);
+    expect([
+      ...describeFound(walk.found),
+      ...describeFound(inside.found),
+    ]).toEqual([]);
+    expect(walk.elsewhereDone).toBeGreaterThan(0);
+    expect(inside.elsewhereDone).toBeGreaterThan(0);
   });
 });
 

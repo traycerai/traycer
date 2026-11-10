@@ -50,6 +50,12 @@ export type Discovery = "unknown" | "failed" | "none" | "known";
 
 export interface World {
   discovery: Discovery;
+  /**
+   * A provider's own memory was turned back on elsewhere after the act's
+   * list read, and no fresh read or landed write has settled it since. The
+   * accepted limit: a save skips a row whose `stored` already matches.
+   */
+  elsewhere: Record<"claude-code" | "codex", boolean>;
   /** What discovery last read of each provider's own memory (`stored`). */
   snapshot: Record<"claude-code" | "codex", boolean>;
   cfg: Record<Env, ConfigState>;
@@ -69,6 +75,7 @@ export interface World {
 export function initialWorld(): World {
   return {
     discovery: "known",
+    elsewhere: { "claude-code": false, codex: false },
     snapshot: { "claude-code": true, codex: true },
     cfg: { A: { revision: 1, value: false }, B: { revision: 1, value: false } },
     received: {
@@ -194,15 +201,17 @@ export function applyWorldEvent(world: World, event: WorldEvent): void {
     case "discover":
       world.discovery = event.outcome;
       world.snapshot = { ...world.providers };
+      world.elsewhere = { "claude-code": false, codex: false };
       return;
     case "switch-host":
       world.discovery = "unknown";
       return;
-    case "elsewhere":
-      if (!world.providers["claude-code"])
-        world.providers["claude-code"] = true;
-      else world.providers.codex = true;
+    case "elsewhere": {
+      const turned = world.providers["claude-code"] ? "codex" : "claude-code";
+      world.providers[turned] = true;
+      world.elsewhere[turned] = true;
       return;
+    }
     case "overturn": {
       const config = world.cfg[world.bound];
       config.revision += 1;
@@ -286,6 +295,11 @@ export interface SaveRun {
   readonly staleDone: number;
   /** Saves done on a failed provider list: the person was told, and went on. */
   readonly failedDiscoveryDone: number;
+  /**
+   * Saves done with a provider on that was turned back on elsewhere after
+   * the list read: the accepted limit, counted per occurrence.
+   */
+  readonly elsewhereDone: number;
 }
 
 /** The rows a save is given: what the act's host has said about its providers. */
@@ -313,6 +327,7 @@ export async function runSave(
   let exemptWindows = 0;
   let staleDone = 0;
   let failedDiscoveryDone = 0;
+  let elsewhereDone = 0;
   /** Requests made when a change landed after a read's answer. */
   let injectedAt: number | null = null;
   let finished = false;
@@ -505,6 +520,7 @@ export async function runSave(
         world.providers[key] = false;
         // The provider list is read again after the act's own write.
         world.snapshot[key] = false;
+        world.elsewhere[key] = false;
       }
       await answered();
       return landed;
@@ -523,6 +539,7 @@ export async function runSave(
     // checked against the host and not against the rows the save was given.
     const atDone = providersAtDone(world);
     if (atDone === "on") flag("D done though a provider write did not land");
+    if (atDone === "elsewhere") elsewhereDone += 1;
     // A failed list was said on the act; the person went on without it.
     if (atDone === "unread") failedDiscoveryDone += 1;
     if (!selection.selected) flag("I3 done after the selection moved");
@@ -560,6 +577,7 @@ export async function runSave(
     trace,
     staleDone,
     failedDiscoveryDone,
+    elsewhereDone,
     oneAfterRebind:
       rebind.ones + (rebind.unseen && rebind.landed === 1 ? 1 : 0),
   };
@@ -567,13 +585,22 @@ export async function runSave(
 
 /**
  * Where the host's switchable providers stand when a save returns done:
- * `on` if one still has its own memory on, `unread` if the provider list
- * failed (so none are known), `off` otherwise.
+ * `on` if one still has its own memory on, `elsewhere` if every one left on
+ * was turned back on elsewhere after the list read (the accepted limit),
+ * `unread` if the provider list failed (so none are known), `off` otherwise.
  */
-function providersAtDone(world: World): "off" | "on" | "unread" {
+function providersAtDone(world: World): "off" | "on" | "unread" | "elsewhere" {
   if (world.discovery === "failed") return "unread";
-  const anyOn = Object.values(world.providers).some((on) => on);
-  return world.discovery === "known" && anyOn ? "on" : "off";
+  if (world.discovery !== "known") return "off";
+  const left = (["claude-code", "codex"] as const).filter(
+    (provider) => world.providers[provider],
+  );
+  if (left.length === 0) return "off";
+  // The accepted limit covers a provider only if it was turned back on
+  // elsewhere after the list read; any other provider left on is a failure.
+  return left.every((provider) => world.elsewhere[provider])
+    ? "elsewhere"
+    : "on";
 }
 
 /** The act would show "on" from this read though the host had received it off. */
