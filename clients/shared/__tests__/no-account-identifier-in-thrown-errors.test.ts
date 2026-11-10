@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { dirname, join, sep } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
@@ -423,11 +423,34 @@ function visit(node: ts.Node, ctx: ScanContext): void {
   });
 }
 
+function forwardSlashes(filePath: string): string {
+  return filePath.replace(/\\/g, "/");
+}
+
+function scannedPathEndsWith(filePath: string, suffix: string): boolean {
+  return forwardSlashes(filePath).endsWith(suffix);
+}
+
+function isExcludedScannedPath(filePath: string): boolean {
+  const normalized = forwardSlashes(filePath);
+  return (
+    normalized.includes("/__tests__/") ||
+    normalized.endsWith(".test.ts") ||
+    normalized.endsWith(".test.tsx")
+  );
+}
+
+const BEARER_SOURCE_SUFFIX = "clients/shared/auth/bearer-source.ts";
+const REQUEST_CONTEXT_SUFFIX = "protocol/src/auth/request-context.ts";
+
 function scanProductionPopulation(): ProductionPopulation {
+  // `ts.sys.readDirectory` already uses `/`. Stored paths are normalized
+  // here so every later comparison uses that form, including on Windows
+  // where `node:path` would use backslashes.
   const files = [
     ...ts.sys.readDirectory(SHARED_ROOT, SOURCE_EXTENSIONS, SOURCE_EXCLUDES),
     ...ts.sys.readDirectory(PROTOCOL_SRC, SOURCE_EXTENSIONS, SOURCE_EXCLUDES),
-  ];
+  ].map(forwardSlashes);
   const violations: ThrownIdentityInterpolation[] = [];
   let constructionCount = 0;
   for (const file of files) {
@@ -490,22 +513,40 @@ describe("no account identifier in thrown Error messages", () => {
     expect(productionScan.constructionCount).toBeGreaterThan(100);
     expect(
       productionScan.files.some((file) =>
-        file.endsWith(join("clients", "shared", "auth", "bearer-source.ts")),
+        scannedPathEndsWith(file, BEARER_SOURCE_SUFFIX),
+      ),
+    ).toBe(true);
+    expect(
+      scannedPathEndsWith("clients/shared/auth/other.ts", BEARER_SOURCE_SUFFIX),
+    ).toBe(false);
+    expect(
+      scannedPathEndsWith(
+        "clients\\shared\\auth\\bearer-source.ts",
+        BEARER_SOURCE_SUFFIX,
       ),
     ).toBe(true);
     expect(
       productionScan.files.some((file) =>
-        file.endsWith(join("protocol", "src", "auth", "request-context.ts")),
+        scannedPathEndsWith(file, REQUEST_CONTEXT_SUFFIX),
       ),
     ).toBe(true);
     expect(
-      productionScan.files.some(
-        (file) =>
-          file.includes(`${sep}__tests__${sep}`) ||
-          file.endsWith(".test.ts") ||
-          file.endsWith(".test.tsx"),
-      ),
+      scannedPathEndsWith("protocol/src/auth/other.ts", REQUEST_CONTEXT_SUFFIX),
     ).toBe(false);
+    expect(
+      scannedPathEndsWith(
+        "protocol\\src\\auth\\request-context.ts",
+        REQUEST_CONTEXT_SUFFIX,
+      ),
+    ).toBe(true);
+    expect(productionScan.files.some(isExcludedScannedPath)).toBe(false);
+    expect(isExcludedScannedPath("clients\\shared\\__tests__\\leak.ts")).toBe(
+      true,
+    );
+    expect(isExcludedScannedPath("clients/shared/foo.test.ts")).toBe(true);
+    expect(isExcludedScannedPath("clients/shared/auth/bearer-source.ts")).toBe(
+      false,
+    );
     expect(productionScan.violations).toEqual([]);
   });
 
