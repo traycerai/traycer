@@ -672,3 +672,64 @@ describe("the Memory act: Settings reads the host after any way out", () => {
     expect(getsSentTo(HOST_ID)).toBeGreaterThan(before);
   });
 });
+
+describe("the Memory act: Continue and the host's providers", () => {
+  const advance = (): HTMLElement => screen.getByTestId("onboarding-advance");
+
+  it("waits while the providers are being read, and writes them once they are", async () => {
+    world.providersGate = deferred();
+    await openMemoryAct();
+    await chooseTraycer();
+    await screen.findByText("Checking your providers");
+    expect(advance().hasAttribute("disabled")).toBe(true);
+    expect(advance().textContent).toContain("Continue");
+
+    // Enter reaches the same save; with the providers unknown it sends nothing.
+    fireEvent.keyDown(document.body, { key: "Enter" });
+    // The list is still held, so only writes can be waited out.
+    await writesAnswered();
+    expect(paramsOf("config.agentMemories.set")).toEqual([]);
+    expect(paramsOf("providers.setNativeMemory")).toEqual([]);
+    expect(currentStepId()).toBe("agent-memories");
+
+    act(() => world.providersGate?.resolve());
+    await providerSwitch("codex");
+    await waitFor(() => expect(advance().hasAttribute("disabled")).toBe(false));
+    await continueFromMemory();
+    await expectOnStep("session-import");
+    expect(paramsOf("config.agentMemories.set")).toHaveLength(1);
+    expect(paramsOf("providers.setNativeMemory")).toEqual([
+      { harnessId: "claude", nativeMemory: false },
+      { harnessId: "codex", nativeMemory: false },
+    ]);
+  });
+
+  it("goes on with Traycer memories alone when the providers could not be read", async () => {
+    world.providersFail = true;
+    await openMemoryAct();
+    await chooseTraycer();
+    await screen.findByText(/Couldn.t read your providers/);
+    expect(advance().hasAttribute("disabled")).toBe(false);
+
+    await continueFromMemory();
+    await expectOnStep("session-import");
+    expect(paramsOf("config.agentMemories.set")).toHaveLength(1);
+    expect(paramsOf("providers.setNativeMemory")).toEqual([]);
+  });
+
+  it("goes on with Traycer memories alone when no provider can be switched", async () => {
+    world.providers = defaultProviders().map((provider) => ({
+      ...provider,
+      supported: false,
+    }));
+    await openMemoryAct();
+    await chooseTraycer();
+    await screen.findByTestId("onboarding-memory-without-switch");
+    expect(advance().hasAttribute("disabled")).toBe(false);
+
+    await continueFromMemory();
+    await expectOnStep("session-import");
+    expect(paramsOf("config.agentMemories.set")).toHaveLength(1);
+    expect(paramsOf("providers.setNativeMemory")).toEqual([]);
+  });
+});

@@ -9,9 +9,9 @@ import type {
   ConfigAgentMemoriesResponse,
   ConfigAgentMemoriesSetResponse,
 } from "@traycer/protocol/host/config/schemas";
-import type { OnboardingMemoryRow } from "@/components/onboarding/onboarding-agent-memories-model";
 import {
   NO_SAVE_EVIDENCE,
+  type MemorySaveRows,
   runMemorySave,
   traycerStanding,
   type MemorySaveIo,
@@ -39,7 +39,19 @@ interface Receipt {
   readonly revision: number;
 }
 
+/**
+ * What the act's host has said about the providers it can switch.
+ * `unknown`: not yet (the act shows "Checking your providers").
+ * `failed`: the list could not be read (the person is told, and Traycer
+ * memories alone are written). `none`: read, and none can be switched.
+ * `known`: read, and claude-code and codex can.
+ */
+export type Discovery = "unknown" | "failed" | "none" | "known";
+
 export interface World {
+  discovery: Discovery;
+  /** What discovery last read of each provider's own memory (`stored`). */
+  snapshot: Record<"claude-code" | "codex", boolean>;
   cfg: Record<Env, ConfigState>;
   received: Record<Env, ConfigState>;
   bound: Env;
@@ -56,6 +68,8 @@ export interface World {
 
 export function initialWorld(): World {
   return {
+    discovery: "known",
+    snapshot: { "claude-code": true, codex: true },
     cfg: { A: { revision: 1, value: false }, B: { revision: 1, value: false } },
     received: {
       A: { revision: 1, value: false },
@@ -93,12 +107,20 @@ export type WorldEvent =
   | { readonly kind: "deliver" }
   | { readonly kind: "rebind" }
   | { readonly kind: "provider-fail" }
+  /** The act's host answers its provider list: switchable ones, none, or a failure. */
+  | { readonly kind: "discover"; readonly outcome: "known" | "none" | "failed" }
+  /** The act moves to a host whose providers are not known yet. */
+  | { readonly kind: "switch-host" }
+  /** A provider's own memory is turned back on elsewhere after discovery. */
+  | { readonly kind: "elsewhere" }
   /** A later revision turns Traycer memories off and this host reads it. Only injected inside a save: no save can undo it. */
   | { readonly kind: "overturn" }
   | { readonly kind: "mode"; readonly mode: SetMode };
 
 export function eventLabel(event: WorldEvent): string {
-  return event.kind === "mode" ? `mode:${event.mode}` : event.kind;
+  if (event.kind === "mode") return `mode:${event.mode}`;
+  if (event.kind === "discover") return `discover:${event.outcome}`;
+  return event.kind;
 }
 
 function oldestPending(world: World): Upload | undefined {
@@ -108,8 +130,21 @@ function oldestPending(world: World): Upload | undefined {
 }
 
 /** The events that change the world and make sense from here. */
-export function applicableEvents(world: World): ReadonlyArray<WorldEvent> {
+export function applicableEvents(
+  world: World,
+  elsewhere: boolean,
+): ReadonlyArray<WorldEvent> {
   const events: WorldEvent[] = [{ kind: "save" }];
+  if (world.discovery === "unknown")
+    for (const outcome of ["known", "none", "failed"] as const)
+      events.push({ kind: "discover", outcome });
+  else events.push({ kind: "switch-host" });
+  if (
+    elsewhere &&
+    world.discovery === "known" &&
+    (!world.providers["claude-code"] || !world.providers.codex)
+  )
+    events.push({ kind: "elsewhere" });
   if (oldestPending(world) !== undefined)
     events.push({ kind: "accept" }, { kind: "refuse" });
   const config = world.cfg[world.bound];
@@ -156,6 +191,18 @@ export function applyWorldEvent(world: World, event: WorldEvent): void {
     case "provider-fail":
       world.failNext = true;
       return;
+    case "discover":
+      world.discovery = event.outcome;
+      world.snapshot = { ...world.providers };
+      return;
+    case "switch-host":
+      world.discovery = "unknown";
+      return;
+    case "elsewhere":
+      if (!world.providers["claude-code"])
+        world.providers["claude-code"] = true;
+      else world.providers.codex = true;
+      return;
     case "overturn": {
       const config = world.cfg[world.bound];
       config.revision += 1;
@@ -182,6 +229,7 @@ function actWriteIn(world: World, env: Env): boolean {
 
 export type ViolationClass =
   | "D done though a provider write did not land"
+  | "U a save with undiscovered providers sent a request or finished"
   | "X a request followed the stale read that done stood on"
   | "X a request after the save finished"
   | "S more than one set in one save"
@@ -236,16 +284,22 @@ export interface SaveRun {
    * operation. Bounded here: no request follows that read, and none after done.
    */
   readonly staleDone: number;
+  /** Saves done on a failed provider list: the person was told, and went on. */
+  readonly failedDiscoveryDone: number;
 }
 
-const ROWS = (world: World): ReadonlyArray<OnboardingMemoryRow> =>
-  (["claude-code", "codex"] as const).map((providerId) => ({
+/** The rows a save is given: what the act's host has said about its providers. */
+const rowsFor = (world: World): MemorySaveRows => {
+  if (world.discovery === "unknown") return null;
+  if (world.discovery !== "known") return [];
+  return (["claude-code", "codex"] as const).map((providerId) => ({
     providerId,
     name: providerId,
     value: false,
-    stored: world.providers[providerId],
+    stored: world.snapshot[providerId],
     outcome: null,
   }));
+};
 
 /** One save, run to its end against `world`, which it changes. */
 export async function runSave(
@@ -258,6 +312,7 @@ export async function runSave(
   let answers = 0;
   let exemptWindows = 0;
   let staleDone = 0;
+  let failedDiscoveryDone = 0;
   /** Requests made when a change landed after a read's answer. */
   let injectedAt: number | null = null;
   let finished = false;
@@ -446,7 +501,11 @@ export async function runSave(
       if (world.failNext) {
         world.failNext = false;
         landed = false;
-      } else world.providers[key] = false;
+      } else {
+        world.providers[key] = false;
+        // The provider list is read again after the act's own write.
+        world.snapshot[key] = false;
+      }
       await answered();
       return landed;
     },
@@ -456,11 +515,16 @@ export async function runSave(
     },
   };
 
-  const result = await runMemorySave(io, ROWS(world));
+  const startedUnknown = world.discovery === "unknown";
+  const result = await runMemorySave(io, rowsFor(world));
   finished = true;
   if (result === "done") {
-    if (Object.values(world.providers).some((on) => on))
-      flag("D done though a provider write did not land");
+    // Done means every provider the host can switch has its own memory off,
+    // checked against the host and not against the rows the save was given.
+    const atDone = providersAtDone(world);
+    if (atDone === "on") flag("D done though a provider write did not land");
+    // A failed list was said on the act; the person went on without it.
+    if (atDone === "unread") failedDiscoveryDone += 1;
     if (!selection.selected) flag("I3 done after the selection moved");
     // Read through a function: the closures above assign these, which the
     // checker does not follow from here.
@@ -481,17 +545,12 @@ export async function runSave(
         flag("X a request followed the stale read that done stood on");
     } else standsOnRead();
   }
+  // U: a save begun before the host said which providers it can switch
+  // sends nothing and is not done.
+  if (startedUnknown && (result !== "undiscovered" || counts.requests > 0))
+    flag("U a save with undiscovered providers sent a request or finished");
   // I4: what the act would show from the save's last read and its evidence.
-  const lastGet = reads.last;
-  if (
-    lastGet !== null &&
-    lastGet.answer.environmentId !== null &&
-    traycerStanding(
-      lastGet.answer,
-      world.evidence.get(lastGet.answer.environmentId),
-    ) === "on" &&
-    !lastGet.receivedOn
-  )
+  if (standingOnAnOffRead(world, reads.last))
     flag("I4 standing on though the read's configuration was off");
   return {
     result,
@@ -500,7 +559,35 @@ export async function runSave(
     exemptWindows,
     trace,
     staleDone,
+    failedDiscoveryDone,
     oneAfterRebind:
       rebind.ones + (rebind.unseen && rebind.landed === 1 ? 1 : 0),
   };
+}
+
+/**
+ * Where the host's switchable providers stand when a save returns done:
+ * `on` if one still has its own memory on, `unread` if the provider list
+ * failed (so none are known), `off` otherwise.
+ */
+function providersAtDone(world: World): "off" | "on" | "unread" {
+  if (world.discovery === "failed") return "unread";
+  const anyOn = Object.values(world.providers).some((on) => on);
+  return world.discovery === "known" && anyOn ? "on" : "off";
+}
+
+/** The act would show "on" from this read though the host had received it off. */
+function standingOnAnOffRead(
+  world: World,
+  read: {
+    answer: ConfigAgentMemoriesResponse;
+    receivedOn: boolean;
+  } | null,
+): boolean {
+  if (read === null || read.answer.environmentId === null) return false;
+  const standing = traycerStanding(
+    read.answer,
+    world.evidence.get(read.answer.environmentId),
+  );
+  return standing === "on" && !read.receivedOn;
 }

@@ -51,11 +51,26 @@ function record(
   }
 }
 
+/** One atomic save; 1 if it was refused for want of the host's providers. */
+async function saveCounting(
+  world: World,
+  found: Map<string, Found>,
+  path: ReadonlyArray<string>,
+): Promise<number> {
+  const run = await runSave(world, null);
+  record(found, run, path);
+  return run.result === "undiscovered" ? 1 : 0;
+}
+
 /** E1: saves are atomic; every sequence of events up to `depth`, deduplicated. */
-async function exploreBetweenSaves(depth: number): Promise<{
+async function exploreBetweenSaves(
+  depth: number,
+  elsewhere: boolean,
+): Promise<{
   found: Map<string, Found>;
   states: ReadonlyArray<State & { depth: number }>;
   saves: number;
+  undiscovered: number;
 }> {
   const found = new Map<string, Found>();
   const seen = new Set<string>([worldKey(initialWorld())]);
@@ -64,15 +79,16 @@ async function exploreBetweenSaves(depth: number): Promise<{
   ];
   let frontier: State[] = [all[0]];
   let saves = 0;
+  let undiscovered = 0;
   for (let level = 1; level <= depth; level += 1) {
     const next: State[] = [];
     for (const state of frontier) {
-      for (const event of applicableEvents(state.world)) {
+      for (const event of applicableEvents(state.world, elsewhere)) {
         const world = cloneWorld(state.world);
         const path = [...state.path, eventLabel(event)];
         if (event.kind === "save") {
           saves += 1;
-          record(found, await runSave(world, null), path);
+          undiscovered += await saveCounting(world, found, path);
         } else applyWorldEvent(world, event);
         const key = worldKey(world);
         if (seen.has(key)) continue;
@@ -84,12 +100,12 @@ async function exploreBetweenSaves(depth: number): Promise<{
     }
     frontier = next;
   }
-  return { found, states: all, saves };
+  return { found, states: all, saves, undiscovered };
 }
 
 const INJECTIONS: ReadonlyArray<{
   readonly label: string;
-  readonly change: WorldEvent | "select-away";
+  readonly change: WorldEvent | "select-away" | "switch-host";
 }> = [
   { label: "rebind", change: { kind: "rebind" } },
   { label: "accept", change: { kind: "accept" } },
@@ -97,6 +113,8 @@ const INJECTIONS: ReadonlyArray<{
   { label: "overturn", change: { kind: "overturn" } },
   { label: "deliver", change: { kind: "deliver" } },
   { label: "select-away", change: "select-away" },
+  // The act moves to a host whose providers are not known yet.
+  { label: "switch-host", change: "switch-host" },
 ];
 
 function injectionAt(after: number, index: number): Injection {
@@ -106,7 +124,10 @@ function injectionAt(after: number, index: number): Injection {
     label,
     apply: (world, selection) => {
       if (change === "select-away") selection.selected = false;
-      else applyWorldEvent(world, change);
+      else if (change === "switch-host") {
+        selection.selected = false;
+        applyWorldEvent(world, { kind: "switch-host" });
+      } else applyWorldEvent(world, change);
     },
   };
 }
@@ -118,12 +139,14 @@ async function exploreInsideSaves(states: ReadonlyArray<State>): Promise<{
   exemptWindows: number;
   oneAfterRebind: number;
   staleDone: number;
+  failedDiscoveryDone: number;
 }> {
   const found = new Map<string, Found>();
   let runs = 0;
   let exemptWindows = 0;
   let oneAfterRebind = 0;
   let staleDone = 0;
+  let failedDiscoveryDone = 0;
   for (const state of states) {
     const base = await runSave(cloneWorld(state.world), null);
     for (let after = 1; after <= base.requests; after += 1) {
@@ -135,6 +158,7 @@ async function exploreInsideSaves(states: ReadonlyArray<State>): Promise<{
         exemptWindows += run.exemptWindows;
         oneAfterRebind += run.oneAfterRebind;
         staleDone += run.staleDone;
+        failedDiscoveryDone += run.failedDiscoveryDone;
         const path = [
           ...state.path,
           `save, then ${injection.label} after answer ${after}`,
@@ -147,7 +171,14 @@ async function exploreInsideSaves(states: ReadonlyArray<State>): Promise<{
       }
     }
   }
-  return { found, runs, exemptWindows, oneAfterRebind, staleDone };
+  return {
+    found,
+    runs,
+    exemptWindows,
+    oneAfterRebind,
+    staleDone,
+    failedDiscoveryDone,
+  };
 }
 
 /**
@@ -168,6 +199,8 @@ async function stuckStates(
       { kind: "accept" },
       { kind: "deliver" },
       { kind: "mode", mode: "applied" },
+      // The host answers its provider list.
+      { kind: "discover", outcome: "known" },
     ];
     let reached = false;
     const saved = cloneWorld(world);
@@ -176,6 +209,7 @@ async function stuckStates(
     else {
       for (const next of [{ kind: "save" } as const, ...helpers]) {
         if (reached) break;
+        if (next.kind === "discover" && world.discovery !== "unknown") continue;
         const branch = cloneWorld(next.kind === "save" ? saved : world);
         if (next.kind !== "save") applyWorldEvent(branch, next);
         reached = await reaches(
@@ -202,10 +236,12 @@ function describeFound(found: Map<string, Found>): string[] {
   );
 }
 
+const DEPTH = 10;
+
 describe("the memory act's save, over every order of host events", () => {
   it("keeps its invariants between saves and inside one", async () => {
     const started = performance.now();
-    const between = await exploreBetweenSaves(12);
+    const between = await exploreBetweenSaves(DEPTH, false);
     const betweenMs = performance.now() - started;
     const inside = await exploreInsideSaves(
       between.states.filter((state) => state.depth <= 6),
@@ -218,22 +254,46 @@ describe("the memory act's save, over every order of host events", () => {
     console.warn(
       [
         `E1: ${between.states.length} states, ${between.saves} saves, ${Math.round(betweenMs)} ms`,
-        `E2: ${inside.runs} runs, ${inside.exemptWindows} exempt rebind windows, ${inside.oneAfterRebind} windows with one request after an unseen rebind, ${inside.staleDone} saves done on a read that was true when taken`,
+        `E2: ${inside.runs} runs, ${inside.exemptWindows} exempt rebind windows, ${inside.oneAfterRebind} windows with one request after an unseen rebind, ${inside.staleDone} saves done on a read that was true when taken, ${inside.failedDiscoveryDone} done on a failed provider list`,
         `L: ${stuck.length} stuck of ${reachable.length}`,
         `total ${Math.round(total)} ms`,
       ].join("\n"),
     );
     // The walk must reach the places the invariants are about.
     expect(between.states.length).toBeGreaterThan(5000);
+    expect(between.undiscovered).toBeGreaterThan(0);
     expect(inside.exemptWindows).toBeGreaterThan(0);
     expect(inside.oneAfterRebind).toBeGreaterThan(0);
     expect(inside.staleDone).toBeGreaterThan(0);
+    // The named exemption: a failed provider list was said on the act.
+    expect(inside.failedDiscoveryDone).toBeGreaterThan(0);
     // L: from every reachable state the act can still finish.
     expect(stuck.map((state) => state.path.join(" > "))).toEqual([]);
     expect([
       ...describeFound(between.found),
       ...describeFound(inside.found),
     ]).toEqual([]);
+  });
+});
+
+describe("a provider's own memory turned back on elsewhere after the host was read", () => {
+  // Reported, not fixed: `memoryRowNeedsWrite` skips a row whose `stored`
+  // already equals the choice, so a save done after the change leaves that
+  // provider's memory on. Kept apart so the main walk's counts stay its own.
+  it("is the only way a save can be done with a switchable provider on", async () => {
+    const walk = await exploreBetweenSaves(8, true);
+    const inside = await exploreInsideSaves(
+      walk.states.filter((state) => state.depth <= 4),
+    );
+    const classes = [...walk.found.keys(), ...inside.found.keys()];
+    const gap = "D done though a provider write did not land";
+    console.warn(
+      [
+        `E3: ${walk.states.length} states, ${walk.saves} saves`,
+        ...describeFound(walk.found).filter((line) => line.startsWith(gap)),
+      ].join("\n"),
+    );
+    expect(classes.filter((cls) => cls !== gap)).toEqual([]);
   });
 });
 

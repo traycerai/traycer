@@ -98,6 +98,10 @@ interface World {
   rebindAfterNativeWrites: number | null;
   /** What overtakes that read: the host rebinds, or the setting is turned off. */
   overtakenBy: "rebind" | "overturn";
+  /** Holds `providers.list` open until resolved. */
+  providersGate: Deferred | null;
+  /** `providers.list` fails. */
+  providersFail: boolean;
   /** Holds `config.agentMemories.get` open until resolved. */
   getGate: Deferred | null;
   nativeWrites: number;
@@ -140,6 +144,8 @@ function freshWorld(): World {
     rebindAfterNativeWrites: null,
     overtakenBy: "rebind",
     getGate: null,
+    providersGate: null,
+    providersFail: false,
     nativeWrites: 0,
     revision: 4,
     environmentId: ENVIRONMENT_ID,
@@ -263,10 +269,14 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) => {
         updatesExternallyManaged: null,
         previousExit: null,
       }),
-      "providers.list": () => ({
-        providers: world.providers.map(providerState),
-        native: null,
-      }),
+      "providers.list": async () => {
+        if (world.providersGate !== null) await world.providersGate.promise;
+        if (world.providersFail) throw hostFailure("providers.list");
+        return {
+          providers: world.providers.map(providerState),
+          native: null,
+        };
+      },
       "config.agentMemories.get": async () => {
         // The answer is taken when the call arrives; a held gate delays only
         // its delivery, so a late answer can be an old one.
