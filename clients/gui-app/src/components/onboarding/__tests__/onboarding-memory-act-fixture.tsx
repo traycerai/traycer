@@ -39,6 +39,7 @@ import {
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { IStreamSession } from "@traycer/protocol/host-transport/stream-session";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import { epicGetChatRunSettingsV41 } from "@traycer/protocol/host/epic/contracts";
 import { environmentStatusResponseSchemaV12 } from "@traycer/protocol/host/environment-schemas";
 import {
   providerState,
@@ -119,6 +120,8 @@ interface World {
   setGate: Deferred | null;
   /** Holds `providers.setNativeMemory` open until resolved. */
   nativeGate: Deferred | null;
+  /** Holds `epic.getChatRunSettings`, the read behind Open task, until resolved. */
+  chatSettingsGate: Deferred | null;
   sessionImport: boolean;
   /** Hosts besides the tour's own that the host picker offers. */
   otherHosts: RemoteHostDirectoryEntry[];
@@ -152,6 +155,7 @@ function freshWorld(): World {
     setAnswers: ["applied"],
     nativeFailures: new Map(),
     applyNativeWrites: false,
+    chatSettingsGate: null,
     accepted: [],
     refused: [],
     setGate: null,
@@ -320,6 +324,21 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) => {
           );
         }
         return { nativeMemory: request.nativeMemory };
+      },
+      "epic.getChatRunSettings": async () => {
+        if (world.chatSettingsGate !== null)
+          await world.chatSettingsGate.promise;
+        return epicGetChatRunSettingsV41.responseSchema.parse({
+          settings: {
+            harnessId: "claude",
+            model: "claude-sonnet-4-20250514",
+            permissionMode: "supervised",
+            reasoningEffort: "high",
+            serviceTier: null,
+            agentMode: "epic",
+            profileId: null,
+          },
+        });
       },
       "environment.status": () => statusAnswer(),
     },
@@ -582,6 +601,7 @@ const FULL_MANIFEST = {
   "environment.status": { major: 1, minor: 2 },
   "config.agentMemories.get": { major: 1, minor: 0 },
   "config.agentMemories.set": { major: 1, minor: 0 },
+  "epic.getChatRunSettings": { major: 4, minor: 1 },
 } as const;
 
 export function currentStepId(): string | null {

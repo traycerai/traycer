@@ -64,8 +64,45 @@ vi.mock("@/components/onboarding/onboarding-provider-discovery", () => ({
 vi.mock("@/components/onboarding/onboarding-detected-agents", () => ({
   OnboardingDetectedAgents: () => <div data-testid="detected-agents-stub" />,
 }));
-vi.mock("@/components/session-import/session-import-wizard", () => ({
-  SessionImportWizard: () => <div data-testid="session-import-wizard" />,
+// The wizard is its Open task button for one imported chat: the button, its
+// mutation and the page's `onBeforeTaskOpen` are the consumers under test.
+vi.mock("@/components/session-import/session-import-wizard", async () => {
+  const { SessionImportOpenTaskButton } =
+    await import("@/components/session-import/session-import-open-task-button");
+  return {
+    SessionImportWizard: (props: {
+      readonly onBeforeTaskOpen: (() => Promise<boolean>) | null;
+      readonly onTaskOpened: () => void;
+    }) => (
+      <div data-testid="session-import-wizard">
+        <SessionImportOpenTaskButton
+          target={{
+            kind: "already_in_traycer",
+            epicId: "epic-1",
+            chatId: "chat-1",
+          }}
+          title="Imported task"
+          targetHostId={null}
+          presentation="icon"
+          onTaskOpened={props.onTaskOpened}
+          onBeforeTaskOpen={props.onBeforeTaskOpen}
+        />
+      </div>
+    ),
+  };
+});
+const tabIntents = vi.hoisted(() => [] as unknown[]);
+vi.mock("@/lib/tab-navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/tab-navigation")>()),
+  // A task tab is requested by an intent: record it and let the navigation run.
+  activateTabIntent: (
+    navigate: (options: Record<string, unknown>) => Promise<void>,
+    intent: unknown,
+  ) => {
+    tabIntents.push(intent);
+    void navigate({ to: "/imported-task" });
+    return true;
+  },
 }));
 vi.mock("@/components/session-import/use-session-import-scan", () => ({
   useSessionImportScan: () => ({
@@ -880,7 +917,7 @@ describe("the Memory act: its own provider writes outrank the list read", () => 
   });
 });
 
-describe("the Memory act: a save that outlives the tour", () => {
+describe("the Memory act: work that outlives the tour", () => {
   // With no session import, Memory is the last act, so a save that lands is
   // the one that would finish the tour.
   let tracked: MockInstance<Analytics["track"]>;
@@ -943,5 +980,101 @@ describe("the Memory act: a save that outlives the tour", () => {
     await waitFor(() => expect(navigateMock).toHaveBeenCalledTimes(1));
     expect(useFirstTaskGuideStore.getState().status).toBe("active");
     expect(completions()).toBe(1);
+  });
+});
+
+describe("the Import act: an open task that outlives the tour", () => {
+  let tracked: MockInstance<Analytics["track"]>;
+  const completions = (): number =>
+    tracked.mock.calls.filter(
+      ([event]) => event === AnalyticsEvent.OnboardingCompleted,
+    ).length;
+
+  beforeEach(() => {
+    navigateMock.mockClear();
+    tabIntents.length = 0;
+    useFirstTaskGuideStore.setState({ status: "inactive" });
+    tracked = vi.spyOn(Analytics.getInstance(), "track");
+  });
+  afterEach(() => {
+    tracked.mockRestore();
+  });
+
+  async function openTaskWithReadHeld(): Promise<void> {
+    world.chatSettingsGate = deferred();
+    await enterTour();
+    act(() => useOnboardingStore.getState().reseat(3));
+    fireEvent.click(await screen.findByLabelText("Open task: Imported task"));
+    await waitFor(() =>
+      expect(hostCalls().map((call) => call.method)).toContain(
+        "epic.getChatRunSettings",
+      ),
+    );
+  }
+
+  it("opens no task once the tour was skipped while the read ran", async () => {
+    await openTaskWithReadHeld();
+    fireEvent.click(screen.getByTestId("onboarding-skip"));
+    expect(navigateMock).toHaveBeenCalledTimes(1);
+
+    act(() => world.chatSettingsGate?.resolve());
+    await settled();
+
+    expect(navigateMock).toHaveBeenCalledTimes(1);
+    expect(tabIntents).toEqual([]);
+    expect(useFirstTaskGuideStore.getState().status).toBe("finished");
+    expect(completions()).toBe(0);
+  });
+
+  it("opens no task once the page was left while the read ran", async () => {
+    await openTaskWithReadHeld();
+    leaveTour();
+
+    act(() => world.chatSettingsGate?.resolve());
+    await settled();
+
+    expect(navigateMock).not.toHaveBeenCalled();
+    expect(tabIntents).toEqual([]);
+    expect(useFirstTaskGuideStore.getState().status).toBe("inactive");
+    expect(completions()).toBe(0);
+  });
+
+  it("completes the tour and opens the task when nothing was left", async () => {
+    await openTaskWithReadHeld();
+    act(() => world.chatSettingsGate?.resolve());
+
+    await waitFor(() => expect(tabIntents).toHaveLength(1));
+    expect(navigateMock).toHaveBeenCalledWith({ to: "/imported-task" });
+    expect(useFirstTaskGuideStore.getState().status).toBe("active");
+    expect(completions()).toBe(1);
+  });
+});
+
+describe("the Memory act: a save that lands after Skip with another act after it", () => {
+  it("does not move the tour on a step", async () => {
+    const tracked = vi.spyOn(Analytics.getInstance(), "track");
+    navigateMock.mockClear();
+    world.setGate = deferred();
+    await openMemoryAct();
+    await chooseTraycer();
+    await providerSwitch("codex");
+    await continueFromMemory();
+    await waitFor(() =>
+      expect(paramsOf("config.agentMemories.set")).toHaveLength(1),
+    );
+    fireEvent.click(screen.getByTestId("onboarding-skip"));
+    tracked.mockClear();
+
+    act(() => world.setGate?.resolve());
+    await writesAnswered();
+    await settled();
+
+    expect(
+      tracked.mock.calls.filter(
+        ([event]) => event === AnalyticsEvent.OnboardingNavigated,
+      ),
+    ).toEqual([]);
+    expect(currentStepId()).toBe("agent-memories");
+    tracked.mockRestore();
   });
 });
