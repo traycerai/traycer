@@ -1056,11 +1056,13 @@ export const assistantMessageSchemaPreMultiSelect = lazySchema(() =>
      */
     options: z.array(z.string().min(1)).min(1).optional(),
     /**
-     * The member's post a bot's direct reply answers, by its message id
-     * (Tracy Bots, reply mode `direct`). Present only on a bot reply at a
-     * channel's top level; absent everywhere else. Optional and live line
-     * only, as `turnProfile`. Not the agent sender's `inReplyTo`, which
-     * names an agent-to-agent message.
+     * The member's message a bot's reply answers, by its message id: at a
+     * channel's top level the post a direct reply answers (Tracy Bots,
+     * reply mode `direct`); in a thread the latest message the reply
+     * resolves, else the post the thread opens on (T165). Absent on a reply
+     * that answers none, which an older host writes in a thread, and on
+     * every other row. Optional and live line only, as `turnProfile`. Not
+     * the agent sender's `inReplyTo`, which names an agent-to-agent message.
      */
     repliesTo: z.string().min(1).optional(),
     /**

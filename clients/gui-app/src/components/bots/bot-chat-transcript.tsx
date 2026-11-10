@@ -39,10 +39,13 @@ import {
 } from "@/components/chat/chat-messages";
 import {
   ChatBotPresentationContext,
+  ChatBotRepliesContext,
   type ChatBotFailedRequest,
   type ChatBotPresentation,
   type ChatBotQuestionAnswers,
+  type ChatBotReplies,
   type ChatBotThreadLine,
+  type ChatBotThreadOpening,
   type ChatBotTurnReceipt,
 } from "@/components/chat/chat-bot-presentation-context";
 import type { QuestionCardAnswer } from "@/components/chat/question-card";
@@ -141,6 +144,8 @@ export type BotTranscriptSurface =
       readonly openTurn: BotTurnOpen | null;
       /** The thread's session, whose failed turn the agent chat's actions recover; `null` while not known. */
       readonly sessionChatId: string | null;
+      /** The post the thread opens on, which a reply's badge may name (T165). */
+      readonly opening: ChatBotThreadOpening;
     };
 
 /**
@@ -657,6 +662,42 @@ function BotChatTranscriptBody(props: {
   const transcriptWindow = isWindowedTranscript(state)
     ? state.transcriptWindow
     : null;
+  const replies = useMemo<ChatBotReplies | null>(() => {
+    if (surface === null) return null;
+    const opening = surface.kind === "thread" ? surface.opening : null;
+    const above = rowsAbove(
+      transcriptListRows({
+        window: transcriptWindow,
+        rendered: messages,
+        splitLongTurns: false,
+      }),
+      opening?.messageId ?? null,
+    );
+    return {
+      botId,
+      hostId,
+      conversationId: chatId,
+      botTitle: title,
+      memberName: (userId) =>
+        userId === null
+          ? "Member"
+          : botMemberName(userId, profile, resolveMember),
+      above: (messageId) => above.get(messageId) ?? null,
+      open: (messageId) => jumpTo({ kind: "message", messageId }),
+      opening,
+    };
+  }, [
+    botId,
+    chatId,
+    hostId,
+    jumpTo,
+    messages,
+    profile,
+    resolveMember,
+    surface,
+    title,
+    transcriptWindow,
+  ]);
   const listHeader = surface?.kind === "channel" ? surface.history : header;
   const intro = channelIntro(
     surface,
@@ -681,43 +722,45 @@ function BotChatTranscriptBody(props: {
   return (
     <ChatContainerContext.Provider value={botId}>
       <ChatBotPresentationContext.Provider value={presentation}>
-        <BotTranscriptRows
-          ref={transcriptRef}
-          flow={flow}
-          intro={intro}
-          header={listHeader}
-          instanceId={instanceId}
-          hostId={hostId}
-          messages={messages}
-          transcriptWindow={transcriptWindow}
-          reportVisibleRange={state.reportVisibleTranscriptRange}
-          list={
-            <ChatMessages
-              minimapEnabled={props.minimapEnabled}
-              taskTitle={title}
-              taskId={chatId}
-              epicId={botId}
-              hostId={hostId}
-              messages={messages}
-              transcriptWindow={transcriptWindow}
-              onVisibleOrdinalRangeChange={state.reportVisibleTranscriptRange}
-              onFindReadOrdinalChange={state.requestFindReadOrdinal}
-              baselineEpoch={state.transcriptBaselineEpoch}
-              hydrationSequence={state.transcriptHydrationSequence}
-              coldRewrittenMessageIds={state.coldRewrittenMessageIds}
-              backgroundItems={state.backgroundItems}
-              getMessageActions={getMessageActions}
-              nextStepActions={null}
-              instanceId={instanceId}
-              visible
-              systemOverlayActive={false}
-              scrollRequest={scrollRequest}
-              onScrollRequestSettled={onScrollRequestSettled}
-              composerOverlayHeight={0}
-              subagentDrillIn={subagentDrillIn}
-            />
-          }
-        />
+        <ChatBotRepliesContext.Provider value={replies}>
+          <BotTranscriptRows
+            ref={transcriptRef}
+            flow={flow}
+            intro={intro}
+            header={listHeader}
+            instanceId={instanceId}
+            hostId={hostId}
+            messages={messages}
+            transcriptWindow={transcriptWindow}
+            reportVisibleRange={state.reportVisibleTranscriptRange}
+            list={
+              <ChatMessages
+                minimapEnabled={props.minimapEnabled}
+                taskTitle={title}
+                taskId={chatId}
+                epicId={botId}
+                hostId={hostId}
+                messages={messages}
+                transcriptWindow={transcriptWindow}
+                onVisibleOrdinalRangeChange={state.reportVisibleTranscriptRange}
+                onFindReadOrdinalChange={state.requestFindReadOrdinal}
+                baselineEpoch={state.transcriptBaselineEpoch}
+                hydrationSequence={state.transcriptHydrationSequence}
+                coldRewrittenMessageIds={state.coldRewrittenMessageIds}
+                backgroundItems={state.backgroundItems}
+                getMessageActions={getMessageActions}
+                nextStepActions={null}
+                instanceId={instanceId}
+                visible
+                systemOverlayActive={false}
+                scrollRequest={scrollRequest}
+                onScrollRequestSettled={onScrollRequestSettled}
+                composerOverlayHeight={0}
+                subagentDrillIn={subagentDrillIn}
+              />
+            }
+          />
+        </ChatBotRepliesContext.Provider>
       </ChatBotPresentationContext.Provider>
     </ChatContainerContext.Provider>
   );
@@ -930,6 +973,31 @@ function BotTranscriptFlowRows(props: {
       )}
     </div>
   );
+}
+
+/**
+ * By message id, the message of the row drawn directly above each drawn row:
+ * `opening` above the first (the post a thread opens on; `null` in a
+ * channel), and nothing below a row not loaded yet or not stored yet, whose
+ * message is not known.
+ */
+function rowsAbove(
+  rows: ReadonlyArray<TranscriptListRow>,
+  opening: string | null,
+): ReadonlyMap<string, string | null> {
+  const above = new Map<string, string | null>();
+  let previous: string | null = opening;
+  for (const row of rows) {
+    if (row.kind !== "hydrated") {
+      previous = null;
+      continue;
+    }
+    if (rowPaintsNothing(row.model)) continue;
+    const id = row.model.persistentMessageId;
+    if (id !== null) above.set(id, previous);
+    previous = id;
+  }
+  return above;
 }
 
 /** The ordinals `rows` cover, end exclusive; `null` where none has one. */

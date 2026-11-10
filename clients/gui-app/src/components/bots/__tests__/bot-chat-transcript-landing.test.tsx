@@ -273,6 +273,7 @@ const THREAD_SURFACE: BotTranscriptSurface = {
   failedRequest: () => null,
   openTurn: null,
   sessionChatId: null,
+  opening: { messageId: "post-1", conversationId: "channel-1", show: vi.fn() },
 };
 
 /** The member directory a mounted transcript reads; none by default. */
