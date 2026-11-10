@@ -361,6 +361,11 @@ describe("<BotChatTranscript /> on a channel the host has not created yet", () =
       failedRequest: () => null,
       openTurn: null,
       sessionChatId: null,
+      opening: {
+        messageId: "post-1",
+        conversationId: "channel-1",
+        show: vi.fn(),
+      },
     });
 
     expect(screen.queryByRole("status")).toBeNull();
