@@ -10,6 +10,8 @@ import {
  * `chat.subscribe@1.43`: the snapshot and `turnStateChanged` carry the goal
  * the chat's provider thread holds. Absent means the host cannot say; null
  * means there is no goal. `1.42` and below bind both frames without the key.
+ * `turnOrdinal` is host-computed and checked; the provider's own numbers are
+ * passed through unchecked.
  */
 
 const envelope = {
@@ -132,6 +134,34 @@ describe.each(carriers)("$name on chat.subscribe@1.43", ({ build }) => {
         build({ goal: { ...goal, status: "abandoned" } }),
       ).success,
     ).toBe(false);
+  });
+
+  it.each([0, -1, 1.5])("refuses a turnOrdinal of %s", (turnOrdinal) => {
+    expect(
+      chatSubscribeV143.serverFrameSchema.safeParse(
+        build({ goal: { ...goal, turnOrdinal } }),
+      ).success,
+    ).toBe(false);
+  });
+
+  it("keeps a null turnOrdinal", () => {
+    const parsed = chatSubscribeV143.serverFrameSchema.parse(
+      build({ goal: { ...goal, turnOrdinal: null } }),
+    );
+    expect(goalOf(parsed)).toEqual({ ...goal, turnOrdinal: null });
+  });
+
+  it("passes the provider's numbers through unchecked", () => {
+    const providerGoal = {
+      ...goal,
+      tokenBudget: 0,
+      tokensUsed: 12.5,
+      timeUsedSeconds: -3,
+    };
+    const parsed = chatSubscribeV143.serverFrameSchema.parse(
+      build({ goal: providerGoal }),
+    );
+    expect(goalOf(parsed)).toEqual(providerGoal);
   });
 });
 

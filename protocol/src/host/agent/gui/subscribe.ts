@@ -8826,6 +8826,11 @@ export type ChatGoalStatus = z.infer<typeof chatGoalStatusSchema>;
  * which leaves out cached input, so it is not the chat's token usage.
  * `turnOrdinal` is the latest goal turn the host has counted, the turn that
  * set the goal being 1; null when the host has counted none.
+ *
+ * Only `turnOrdinal` is range-checked here, because the host computes it. The
+ * budget and the two usage counts are the provider's numbers passed through,
+ * like the turn usage counts: the host checks them where it reads the
+ * provider, so a bad value costs that one goal rather than the whole frame.
  */
 export const chatGoalSchema = lazySchema(() =>
   z.object({
@@ -8834,7 +8839,7 @@ export const chatGoalSchema = lazySchema(() =>
     tokenBudget: z.number().nullable(),
     tokensUsed: z.number(),
     timeUsedSeconds: z.number(),
-    turnOrdinal: z.number().nullable(),
+    turnOrdinal: z.number().int().positive().nullable(),
     updatedAt: z.number(),
   }),
 );
