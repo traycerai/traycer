@@ -10,6 +10,7 @@ public class MainActivity extends BridgeActivity {
         // `cap sync` auto-registers only the npm plugins; a plugin that lives
         // in this app module is registered here, before the bridge loads.
         registerPlugin(AuthSessionPlugin.class);
+        registerPlugin(DeviceDictationPlugin.class);
         registerPlugin(SandboxArtifactsPlugin.class);
         registerPlugin(VoiceAudioPlugin.class);
         registerPlugin(WindowBackgroundPlugin.class);
