@@ -78,6 +78,13 @@ public class DeviceDictationPlugin extends Plugin {
     private Session session;
 
     /**
+     * The start still waiting on its language check. Only the latest start
+     * may open a session, and a cancel withdraws it, so an answer that
+     * arrives late or out of order never replaces a newer session.
+     */
+    private String startingId;
+
+    /**
      * The recognizer last asked to download a language. It is kept because
      * the request is sent only once the recognizer has connected to the
      * system, and destroying it before then drops the request.
@@ -102,7 +109,13 @@ public class DeviceDictationPlugin extends Plugin {
             call.reject("Dictation could not start.");
             return;
         }
+        getActivity().runOnUiThread(() -> startingId = id);
         resolveLanguage(call.getString("language", "auto"), (tag, installed) -> {
+            if (!id.equals(startingId)) {
+                call.reject("Dictation was cancelled.");
+                return;
+            }
+            startingId = null;
             if (tag == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
                 call.reject("Dictation is not available on this device.");
                 return;
@@ -191,6 +204,7 @@ public class DeviceDictationPlugin extends Plugin {
     public void cancel(PluginCall call) {
         String id = call.getString("sessionId");
         getActivity().runOnUiThread(() -> {
+            if (id != null && id.equals(startingId)) startingId = null;
             if (session != null && session.id.equals(id)) end(session, "Dictation was cancelled.");
             call.resolve();
         });
