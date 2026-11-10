@@ -597,7 +597,7 @@ describe("revertSessionLine", () => {
         {
           ...DEFAULT_ARRANGEMENT,
           sidebarSide: "left",
-          minimapSide: "right",
+          minimapSide: "left",
         },
       );
       const lines = sessionChangeLines(entry, current);
@@ -611,7 +611,7 @@ describe("revertSessionLine", () => {
       expect(result.arrangement.sidebarSide).toBe(
         DEFAULT_ARRANGEMENT.sidebarSide,
       );
-      expect(result.arrangement.minimapSide).toBe("right");
+      expect(result.arrangement.minimapSide).toBe("left");
       expect(arrangementKeys(result, entry)).toEqual(["minimapSide"]);
     });
   });
