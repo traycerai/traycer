@@ -169,6 +169,25 @@ function freshSession(
   return handle;
 }
 
+/** The same session, but reconnected mid-resync: the connection moved to a
+ *  new epoch its transcript baseline has not caught up to yet - the fact
+ *  `fresh` reads to call a session stale, independent of `connectionStatus`
+ *  or `snapshotLoaded`. */
+function staleReconnectingSession(
+  chatId: string,
+  usage: TokenUsage | null,
+): ChatSessionStoreHandle {
+  const { handle } = scriptedSession(chatId, [
+    sessionPrompt(`${chatId}-prompt`, 1_000),
+  ]);
+  handle.store.setState({
+    transcriptBaselineEpoch: 0,
+    connectionEpoch: 1,
+    liveTurnUsage: usage,
+  });
+  return handle;
+}
+
 function task(taskId: string, overrides: Partial<BotTaskEntry>): BotTaskEntry {
   return botTaskEntrySchema.parse({
     taskId,
@@ -293,6 +312,22 @@ describe("the trunk session's status surfaces", () => {
     expect(
       screen.queryByRole("button", { name: "Unpin breakdown" }),
     ).toBeNull();
+  });
+
+  it("hides the context chip entirely while the session is stale (reconnected, transcript not yet resynced), even though usage data is present", async () => {
+    mocks.sessions[TRUNK_ID] = staleReconnectingSession(TRUNK_ID, USAGE);
+    mountSession({
+      chatId: TRUNK_ID,
+      threadId: null,
+      tasks: [],
+      subscriptions: null,
+    });
+    await settleLegendList();
+
+    // Not the ghost placeholder either: a read-only session draws no editor
+    // and so no ghost affordance, only the chip itself or nothing.
+    expect(within(view()).queryByTestId("context-usage-chip")).toBeNull();
+    expect(within(view()).queryByTestId("context-usage-chip-ghost")).toBeNull();
   });
 
   it("lists a periodic task's check-ins and a trunk-targeted subscription, each with no stop or pin control", async () => {

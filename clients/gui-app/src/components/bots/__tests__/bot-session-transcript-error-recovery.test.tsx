@@ -121,6 +121,7 @@ import {
   type BotIdentity,
 } from "@/components/bots/bot-identity-context";
 import {
+  botReply,
   scriptedSession,
   sessionPrompt,
 } from "@/components/bots/__tests__/bot-turn-test-support";
@@ -179,25 +180,13 @@ function transcriptSession(
   const { handle } = scriptedSession(chatId, [
     sessionPrompt(`${chatId}-prompt`, 1_000),
     {
-      role: "assistant",
-      messageId: `${chatId}-turn`,
-      sender: {
-        type: "agent",
-        harnessId: "claude",
-        agentId: "claude-sonnet-4",
-        displayName: "Claude Sonnet 4",
-        reply: { expectsReply: false },
-        inReplyTo: null,
-      },
+      ...botReply({
+        messageId: `${chatId}-turn`,
+        text: "",
+        timestamp: 1_200,
+      }),
       blocks: [errorBlock(code)],
-      startedAt: 1_100,
-      timestamp: 1_200,
       turnId: TURN_ID,
-      usage: null,
-      reasoningEffort: null,
-      serviceTier: null,
-      envCredentialVar: null,
-      imageResolutions: [],
     },
   ]);
   handle.store.setState({

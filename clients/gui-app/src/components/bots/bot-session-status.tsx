@@ -81,7 +81,7 @@ export function BotSessionStatus(props: {
             className="size-3.5 shrink-0 text-primary/80"
           />
           {task.label ?? task.taskId} · Check-ins
-          <span className="ml-auto shrink-0 rounded bg-muted px-1.5 py-0.5 text-ui-xs uppercase text-muted-foreground">
+          <span className="ml-auto shrink-0 rounded bg-foreground/8 px-1.5 py-0.5 text-ui-xs uppercase text-muted-foreground">
             Check-in task
           </span>
         </button>
@@ -108,7 +108,7 @@ export function BotSessionStatus(props: {
               ? ""
               : ` · Since ${formatAbsoluteDateTime(subscription.since)}`}
           </span>
-          <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-ui-xs uppercase text-muted-foreground">
+          <span className="shrink-0 rounded bg-foreground/8 px-1.5 py-0.5 text-ui-xs uppercase text-muted-foreground">
             Subscription
           </span>
         </>
@@ -158,7 +158,7 @@ export function BotSessionStatus(props: {
               />
             </div>
             <div className="flex justify-end px-4 py-1">
-              <ContextUsageChip usage={usage} onCompact={null} />
+              <ContextUsageChip usage={fresh ? usage : null} onCompact={null} />
             </div>
           </div>
         </div>
