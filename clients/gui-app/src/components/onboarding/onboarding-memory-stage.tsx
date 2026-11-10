@@ -110,7 +110,11 @@ function MemoryChoiceCards(props: {
           className="mt-auto self-start"
           onClick={memory.choose}
         >
-          Use Traycer memories
+          {/* Already on, there is nothing to turn on: what this card still
+              offers is the provider switches, which start off. */}
+          {memory.alreadyOn
+            ? "Set up provider memories"
+            : "Use Traycer memories"}
         </Button>
       </section>
       <section
