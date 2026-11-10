@@ -6,7 +6,12 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { SPEECH_INPUT_SAMPLE_RATE } from "@traycer/protocol/host/speech/schemas";
 import { SpeechStreamClient } from "@traycer-clients/shared/host-transport/speech-stream-client";
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
-import type { MicrophoneAccessStatus } from "@traycer-clients/shared/platform/runner-host";
+import type { IStreamClient } from "@traycer-clients/shared/host-transport/i-stream-client";
+import type {
+  IDeviceDictationHost,
+  MicrophoneAccessStatus,
+} from "@traycer-clients/shared/platform/runner-host";
+import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { dictationCaptureConstraints } from "@/hooks/composer/dictation-capture-constraints";
 import { servesInputDevices } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
@@ -55,7 +60,11 @@ export type DictationFailureClass =
   // The host answered with an `error` frame.
   | "host_error_frame"
   // The stream dropped mid-session without us closing it.
-  | "connection_lost";
+  | "connection_lost"
+  // The OS refuses the app speech recognition (the device recognizer).
+  | "speech_recognition_denied"
+  // The device recognizer failed.
+  | "device_recognizer_failed";
 
 export interface UseVoiceDictationArgs {
   readonly language: string;
@@ -108,6 +117,30 @@ export interface UseVoiceDictation {
    * triggering React re-renders.
    */
   readonly getStream: () => MediaStream | null;
+}
+
+/** What the hook drives, whichever recognizer is behind it. */
+type DictationSession = Pick<
+  SpeechStreamClient,
+  "sendAudio" | "flush" | "close"
+>;
+
+type DictationTransport =
+  | { readonly kind: "device"; readonly host: IDeviceDictationHost }
+  | {
+      readonly kind: "host";
+      readonly wsStreamClient: IStreamClient<HostStreamRpcRegistry>;
+    };
+
+/** The shell's own recognizer where it has one; the host's otherwise. */
+function resolveDictationTransport(
+  deviceDictation: IDeviceDictationHost | null,
+  wsStreamClient: IStreamClient<HostStreamRpcRegistry> | null,
+): DictationTransport | null {
+  if (deviceDictation !== null)
+    return { kind: "device", host: deviceDictation };
+  if (wsStreamClient !== null) return { kind: "host", wsStreamClient };
+  return null;
 }
 
 // ScriptProcessor frame size → ~128 ms chunks at 16 kHz. Power-of-two as the
@@ -174,10 +207,12 @@ function dictationDurationBucket(
 }
 
 /**
- * Drives on-device dictation: captures the mic as PCM16 mono, streams it to the
- * host recognizer over `speech.dictate` (reporting the real capture rate so
- * the host resamples to the model rate), and forwards final transcripts to the
- * caller (which writes them into the composer).
+ * Drives on-device dictation: captures the mic as PCM16 mono and forwards
+ * final transcripts to the caller (which writes them into the composer). The
+ * audio goes to the shell's own recognizer where it has one
+ * (`IRunnerHost.deviceDictation`, the phone), and otherwise to the host
+ * recognizer over `speech.dictate` (reporting the real capture rate so the
+ * host resamples to the model rate).
  */
 export function useVoiceDictation(
   args: UseVoiceDictationArgs,
@@ -196,6 +231,7 @@ export function useVoiceDictation(
       ? (selectedStream?.wsStreamClient ?? null)
       : null;
   const runnerHost = useRunnerHost();
+  const deviceDictation = runnerHost.deviceDictation;
   const [state, setState] = useState<VoiceDictationState>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [failureClass, setFailureClass] =
@@ -217,7 +253,7 @@ export function useVoiceDictation(
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const sourceNodeRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
-  const speechClientRef = useRef<SpeechStreamClient | null>(null);
+  const speechClientRef = useRef<DictationSession | null>(null);
   const readyRef = useRef(false);
   // True once the capture graph is wired and pulling (mic stream + running
   // context + connected processor). "recording" requires this AND the speech
@@ -407,7 +443,7 @@ export function useVoiceDictation(
   // the wired capture graph (audioGraphReadyRef). Whichever signal lands
   // second takes the transition; queued pre-ready audio is flushed here so
   // nothing is sent before the session can accept it.
-  const tryBeginRecording = useCallback((client: SpeechStreamClient) => {
+  const tryBeginRecording = useCallback((client: DictationSession) => {
     if (closingRef.current || speechClientRef.current !== client) return;
     if (!readyRef.current || !audioGraphReadyRef.current) return;
     // Same-tick latch (stateRef only updates post-render): a non-null start
@@ -618,7 +654,11 @@ export function useVoiceDictation(
     setErrorMessage(null);
     setFailureClass(null);
     setPermissionDenied(false);
-    if (wsStreamClient === null) {
+    const transport = resolveDictationTransport(
+      deviceDictation,
+      wsStreamClient,
+    );
+    if (transport === null) {
       fail(
         "not_connected",
         {},
@@ -673,115 +713,145 @@ export function useVoiceDictation(
     }
     audioContextRef.current = ctx;
 
-    const client = new SpeechStreamClient({
-      wsStreamClient,
-      language: handlersRef.current.language,
-      sampleRate: ctx.sampleRate,
-      callbacks: {
-        onReady: () => {
-          // Ignore a `ready` that arrives after this session was stopped/
-          // cancelled or superseded by a newer one - otherwise it would flip the
-          // UI back to "recording" with no live capture.
-          if (closingRef.current || speechClientRef.current !== client) return;
-          readyRef.current = true;
-          // "recording" additionally needs the wired capture graph - a `ready`
-          // that beats the permission prompt must not show a recording UI
-          // that captures nothing (the prompt may still fail).
-          tryBeginRecording(client);
-        },
-        onTranscript: (frame) => {
-          // Insert only while THIS client is still the active session - guards
-          // against a late final from a stopped/cancelled session landing in a
-          // newer recording's composer. (Finals after stop, during
-          // "transcribing", are still wanted, so this isn't gated on closing.)
-          if (frame.isFinal && speechClientRef.current === client) {
-            // After stop, a final belongs to the draft the mic stopped over.
-            // Sent or replaced since, it would land in the next message, so
-            // it is not inserted. The session stays open for the host's
-            // `flushed`, which still records the outcome (the text WAS
-            // produced) and closes it; `start`, the cap or the host closing
-            // the stream do otherwise.
-            // The same criterion the editor inserts by: a whitespace-only
-            // final inserts nothing and is "no text" for the funnel.
-            if (frame.text.trim().length > 0) receivedTextRef.current = true;
-            const draftAtStop = draftAtStopRef.current;
-            if (
-              draftAtStop !== null &&
-              !sameDraft(handlersRef.current.draftIdentity(), draftAtStop)
-            ) {
-              return;
-            }
-            handlersRef.current.onText(frame.text);
-          }
-        },
-        onFlushed: () => {
-          // A later attempt (auto-restart, or a stop/start racing this flush)
-          // already superseded this session - ignore its stale resolution,
-          // matching onTranscript's guard. Otherwise this would finalize()
-          // the ACTIVE session out from under it.
-          if (speechClientRef.current !== client) return;
-          // Same gate as the stopped event: a flush of a session that never
-          // reached "recording" transcribed nothing worth counting.
-          if (recordingStartedAtRef.current !== null) {
-            Analytics.getInstance().track(
-              AnalyticsEvent.VoiceTranscriptionSucceeded,
-              {
-                duration_bucket: dictationDurationBucket(
-                  recordingStartedAtRef.current,
-                ),
-                had_text: receivedTextRef.current,
-                decode_bucket: decodeDurationBucket(
-                  flushRequestedAtRef.current,
-                ),
+    const onReady = (): void => {
+      // Ignore a `ready` that arrives after this session was stopped/
+      // cancelled or superseded by a newer one - otherwise it would flip the
+      // UI back to "recording" with no live capture.
+      if (closingRef.current || speechClientRef.current !== client) return;
+      readyRef.current = true;
+      // "recording" additionally needs the wired capture graph - a `ready`
+      // that beats the permission prompt must not show a recording UI
+      // that captures nothing (the prompt may still fail).
+      tryBeginRecording(client);
+    };
+    const onFinalText = (text: string): void => {
+      // Insert only while THIS client is still the active session - guards
+      // against a late final from a stopped/cancelled session landing in a
+      // newer recording's composer. (Finals after stop, during
+      // "transcribing", are still wanted, so this isn't gated on closing.)
+      if (speechClientRef.current !== client) return;
+      // After stop, a final belongs to the draft the mic stopped over.
+      // Sent or replaced since, it would land in the next message, so
+      // it is not inserted. The session stays open for the recognizer's
+      // `flushed`, which still records the outcome (the text WAS
+      // produced) and closes it; `start`, the cap or the host closing
+      // the stream do otherwise.
+      // The same criterion the editor inserts by: a whitespace-only
+      // final inserts nothing and is "no text" for the funnel.
+      if (text.trim().length > 0) receivedTextRef.current = true;
+      const draftAtStop = draftAtStopRef.current;
+      if (
+        draftAtStop !== null &&
+        !sameDraft(handlersRef.current.draftIdentity(), draftAtStop)
+      ) {
+        return;
+      }
+      handlersRef.current.onText(text);
+    };
+    const onFlushed = (): void => {
+      // A later attempt (auto-restart, or a stop/start racing this flush)
+      // already superseded this session - ignore its stale resolution,
+      // matching the final-text guard. Otherwise this would finalize()
+      // the ACTIVE session out from under it.
+      if (speechClientRef.current !== client) return;
+      // Same gate as the stopped event: a flush of a session that never
+      // reached "recording" transcribed nothing worth counting.
+      if (recordingStartedAtRef.current !== null) {
+        Analytics.getInstance().track(
+          AnalyticsEvent.VoiceTranscriptionSucceeded,
+          {
+            duration_bucket: dictationDurationBucket(
+              recordingStartedAtRef.current,
+            ),
+            had_text: receivedTextRef.current,
+            decode_bucket: decodeDurationBucket(flushRequestedAtRef.current),
+          },
+        );
+      }
+      finalize();
+    };
+    const client: DictationSession =
+      transport.kind === "device"
+        ? transport.host.open({
+            language: handlersRef.current.language,
+            sampleRate: ctx.sampleRate,
+            callbacks: {
+              onReady,
+              onTranscript: onFinalText,
+              onFlushed,
+              onError: (error) => {
+                if (speechClientRef.current !== client) return;
+                if (error.permissionDenied) setPermissionDenied(true);
+                fail(
+                  error.permissionDenied
+                    ? "speech_recognition_denied"
+                    : "device_recognizer_failed",
+                  {},
+                  error.message,
+                  error.message,
+                );
               },
-            );
-          }
-          finalize();
-        },
-        onError: (frame) => {
-          if (speechClientRef.current !== client) return;
-          // `frame` still goes in as the analytics error (unchanged
-          // classification); the host's own code rides the log fields, where
-          // it names ENGINE_UNAVAILABLE / MODEL_NOT_READY / DICTATION_FAILED.
-          fail(
-            "host_error_frame",
-            { hostErrorCode: frame.code },
-            frame.message,
-            frame,
-          );
-        },
-        onConnectionStatus: (status, reason) => {
-          if (speechClientRef.current !== client) return;
-          lastConnectionStatusRef.current = status;
-          if (status !== "closed") return;
-          if (closingRef.current) {
-            // Expected close (we flushed / tore down). Settle whatever is
-            // still waiting on a `flushed` the dropped socket can't deliver:
-            // the "transcribing" UI, or a session the fallback left open.
-            finalize();
-            return;
-          }
-          // Unexpected drop mid-recording: surface it and stop capturing,
-          // otherwise the audio graph keeps buffering with nowhere to send.
-          markClosing();
-          fail(
-            "connection_lost",
-            // Optional chaining, not a null check: the declared type says
-            // `| null`, but this is a callback the transport invokes - a
-            // caller that omits the argument entirely must not turn a
-            // diagnostic into a crash inside the failure path itself.
-            { closeReason: reason?.kind ?? "none" },
-            "Lost connection to the local host.",
-            "Lost connection to the local host.",
-          );
-        },
-      },
-    });
+            },
+          })
+        : new SpeechStreamClient({
+            wsStreamClient: transport.wsStreamClient,
+            language: handlersRef.current.language,
+            sampleRate: ctx.sampleRate,
+            callbacks: {
+              onReady,
+              onTranscript: (frame) => {
+                if (frame.isFinal) onFinalText(frame.text);
+              },
+              onFlushed,
+              onError: (frame) => {
+                if (speechClientRef.current !== client) return;
+                // `frame` still goes in as the analytics error (unchanged
+                // classification); the host's own code rides the log fields,
+                // where it names ENGINE_UNAVAILABLE / MODEL_NOT_READY /
+                // DICTATION_FAILED.
+                fail(
+                  "host_error_frame",
+                  { hostErrorCode: frame.code },
+                  frame.message,
+                  frame,
+                );
+              },
+              onConnectionStatus: (status, reason) => {
+                if (speechClientRef.current !== client) return;
+                lastConnectionStatusRef.current = status;
+                if (status !== "closed") return;
+                if (closingRef.current) {
+                  // Expected close (we flushed / tore down). Settle whatever
+                  // is still waiting on a `flushed` the dropped socket can't
+                  // deliver: the "transcribing" UI, or a session the
+                  // fallback left open.
+                  finalize();
+                  return;
+                }
+                // Unexpected drop mid-recording: surface it and stop
+                // capturing, otherwise the audio graph keeps buffering with
+                // nowhere to send.
+                markClosing();
+                fail(
+                  "connection_lost",
+                  // Optional chaining, not a null check: the declared type
+                  // says `| null`, but this is a callback the transport
+                  // invokes - a caller that omits the argument entirely must
+                  // not turn a diagnostic into a crash inside the failure
+                  // path itself.
+                  { closeReason: reason?.kind ?? "none" },
+                  "Lost connection to the local host.",
+                  "Lost connection to the local host.",
+                );
+              },
+            },
+          });
     speechClientRef.current = client;
     void startAudioGraph(generation);
   }, [
     state,
     wsStreamClient,
+    deviceDictation,
     fail,
     finalize,
     clearFinalizeTimers,

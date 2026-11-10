@@ -78,7 +78,7 @@ export interface LocalUnarySessionOptions<
   readonly directory: LocalUnarySessionDirectory<Registry>;
 }
 
-interface QueuedCall<Registry extends VersionedRpcRegistry> {
+interface QueuedCall {
   readonly requestId: string;
   readonly method: string;
   readonly methodRegistry: MethodVersionRegistry;
@@ -165,7 +165,7 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
   private clientManifest: ConnectionManifest | null = null;
   private hostManifest: ConnectionManifest | null = null;
   private idempotency = false;
-  private readonly queue: QueuedCall<Registry>[] = [];
+  private readonly queue: QueuedCall[] = [];
   private readonly inFlight = new Map<string, InFlightCall>();
   private retired = false;
   /**
@@ -248,7 +248,7 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
     }
     const methodRegistry = this.registry[input.method];
     return new Promise((resolve, reject) => {
-      const queued: QueuedCall<Registry> = {
+      const queued: QueuedCall = {
         requestId: input.requestId,
         method: input.method,
         methodRegistry,
@@ -308,7 +308,7 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
   }
 
   private dispatch(
-    call: QueuedCall<Registry>,
+    call: QueuedCall,
     connection: MultiplexSocket,
     hostManifest: ConnectionManifest,
   ): void {
@@ -363,10 +363,7 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
   }
 
   /** Completes a direct send. A degrade settles itself after adapting. */
-  private completeDirectSend(
-    call: QueuedCall<Registry>,
-    sent: PreparedSend,
-  ): void {
+  private completeDirectSend(call: QueuedCall, sent: PreparedSend): void {
     if (!sent.accepted) {
       this.settle(call, { ok: false, error: sent.error });
       return;
@@ -382,7 +379,7 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
   }
 
   private async degrade(
-    call: QueuedCall<Registry>,
+    call: QueuedCall,
     clientManifest: ConnectionManifest,
     hostManifest: ConnectionManifest,
     clientCanonical: SchemaVersion | undefined,
@@ -418,7 +415,7 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
    * caller observes the adapted value. The wire promise is not settled here.
    */
   private sendForDegrade(
-    call: QueuedCall<Registry>,
+    call: QueuedCall,
     wireMethod: string,
     methodRegistry: MethodVersionRegistry,
     clientCanonical: SchemaVersion,
@@ -456,7 +453,7 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
    * still settles it as uncertain rather than as a second send.
    */
   private sendPrepared(
-    call: QueuedCall<Registry>,
+    call: QueuedCall,
     connection: MultiplexSocket,
     wireMethod: string,
     methodRegistry: MethodVersionRegistry,
@@ -832,7 +829,7 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
    * a released session when nothing remains, and only then resumes the caller
    * so an awaited result observes the closed socket.
    */
-  private settle(call: QueuedCall<Registry>, outcome: CallOutcome): void {
+  private settle(call: QueuedCall, outcome: CallOutcome): void {
     if (call.settled) {
       return;
     }
@@ -925,7 +922,7 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
     this.directory.release(this.key, this);
   }
 
-  private clearAbortListener(call: QueuedCall<Registry>): void {
+  private clearAbortListener(call: QueuedCall): void {
     const listener = call.abortListener;
     if (listener === null) {
       return;

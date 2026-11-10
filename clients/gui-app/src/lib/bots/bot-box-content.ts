@@ -5,6 +5,7 @@
  * image is not text at all: it rides `attachments` beside it.
  */
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import { stringValue } from "@traycer/protocol/common/composer-mention-attrs";
 import { jsonContentToMarkdown } from "@traycer/protocol/common/json-content-serializer";
 import {
   BOT_CONVERSATION_ATTACHMENT_MEDIA_TYPES,
@@ -41,6 +42,21 @@ function withoutImages(
       child.attrs?.contextType === BOT_TOKEN_CONTEXT_TYPE
     ) {
       return [{ type: "text", text: chip(child.attrs), marks: child.marks }];
+    }
+    if (child.type === "mention" && child.attrs?.contextType === "host") {
+      const hostId =
+        stringValue(child.attrs.hostId) ?? stringValue(child.attrs.id) ?? "";
+      const label = stringValue(child.attrs.label) ?? hostId;
+      return [
+        {
+          type: "text",
+          text:
+            hostId.length === 0
+              ? `@host:${label} [hostId is unavailable]`
+              : `@host:${label} [hostId=${hostId}]`,
+          marks: child.marks,
+        },
+      ];
     }
     const kept = withoutImages(child, chip);
     return [child.type === "blockquote" ? quotedLines(kept) : kept];

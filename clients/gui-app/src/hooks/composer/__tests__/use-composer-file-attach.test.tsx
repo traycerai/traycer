@@ -17,7 +17,6 @@ import {
   type Mock,
 } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
-import { FILE_ATTACHMENT_MAX_BYTES } from "@traycer/protocol/host/drafts/schemas";
 
 import {
   composerAttachmentsHoldSend,
@@ -47,6 +46,7 @@ import {
   fileNodeAttrs,
   freshHostId,
   okPut,
+  oversizedFile,
   targetFor,
   uniqueFile,
 } from "@/lib/composer/__tests__/file-attachment-fixtures";
@@ -71,12 +71,6 @@ function filePaths(): ComposerFilePathIngestArgs {
     mentionRoots: [],
     beginPathInsertion: () => () => true,
   };
-}
-
-function oversizedFile(): File {
-  const file = uniqueFile("huge.mov");
-  Object.defineProperty(file, "size", { value: FILE_ATTACHMENT_MAX_BYTES + 1 });
-  return file;
 }
 
 function fileTransfer(files: ReadonlyArray<File>) {

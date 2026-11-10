@@ -715,6 +715,8 @@ import {
   botConversationSendUpgradeV12ToV13,
   botConversationSendV14,
   botConversationSendUpgradeV13ToV14,
+  botConversationSendV15,
+  botConversationSendUpgradeV14ToV15,
   botThreadListV10,
   botThreadListV11,
   botThreadListV12,
@@ -9792,7 +9794,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   "bot.conversation.send": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 4,
+      latestMinor: 5,
       versions: {
         0: {
           contract: botConversationSendV10,
@@ -9820,6 +9822,12 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         4: {
           contract: botConversationSendV14,
           upgradeFromPreviousVersion: botConversationSendUpgradeV13ToV14,
+        },
+        // @1.5 answers every open question of a card at once (`answers`,
+        // T167).
+        5: {
+          contract: botConversationSendV15,
+          upgradeFromPreviousVersion: botConversationSendUpgradeV14ToV15,
         },
       },
       downgradePathsFromLatest: {},

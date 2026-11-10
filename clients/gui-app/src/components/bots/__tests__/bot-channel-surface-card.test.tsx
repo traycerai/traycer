@@ -12,6 +12,10 @@
  * answer kept where it can be sent again; a resolved surface offering
  * nothing; an artifact path in the bot's text opening its artifact.
  */
+import {
+  botMentionHostClientMock,
+  emptyBotMentionHostListsMock,
+} from "@/components/bots/__tests__/bot-mention-host-test-support";
 import { StrictMode } from "react";
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -101,6 +105,15 @@ const mocks = vi.hoisted(() => ({
   resolveArtifact:
     vi.fn<(args: unknown) => Promise<ResolveArtifactByPathResult | null>>(),
 }));
+
+vi.mock(
+  "@/hooks/host/use-host-client-for-host-id",
+  () => botMentionHostClientMock,
+);
+vi.mock(
+  "@/hooks/bots/use-environment-host-lists-query",
+  () => emptyBotMentionHostListsMock,
+);
 
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: () => null,

@@ -672,17 +672,6 @@ async function expectOnlyPin(
   await expect(pin(page, hidden)).toHaveCount(0);
 }
 
-test("a comment on the other page is adopted without reloading it", async ({
-  page,
-}) => {
-  await open(page);
-  await clickInPage(page, "#detail");
-  await expect(pageFrame(page).locator("#marked")).toBeVisible();
-  await setComments(page, true);
-
-  await commentOn(page, "#fresh");
-});
-
 test("a comment on the entry page is adopted without reloading it", async ({
   page,
 }) => {

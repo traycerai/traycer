@@ -1,3 +1,4 @@
+import { readDesktopHorizontalWheelOwnership } from "@/components/layout/shell/desktop-history-gesture-ownership";
 const useHostNotificationIndicatorsMock = vi.hoisted(() =>
   vi.fn(() => ({
     data: { epics: {}, chats: {} },
@@ -1029,9 +1030,10 @@ describe("CommGraphTile", () => {
 
     const canvas = await screen.findByTestId("comm-graph-canvas");
 
-    expect(
-      canvas.parentElement?.hasAttribute("data-history-gesture-owner"),
-    ).toBe(true);
+    expect(readDesktopHorizontalWheelOwnership(canvas)).toEqual({
+      back: true,
+      forward: true,
+    });
   });
 
   it("opens one relay subscription covering every host the epic's agents reference", async () => {

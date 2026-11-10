@@ -15,7 +15,6 @@ import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import { FILE_ATTACHMENT_MAX_BYTES } from "@traycer/protocol/host/drafts/schemas";
 
 import {
   attachFileAttachment,
@@ -31,6 +30,7 @@ import { type ComposerFileAttachmentAttrs } from "@/lib/composer/file-attachment
 import {
   freshHostId,
   okPut,
+  oversizedFile,
   recordingSettle,
   targetFor,
   uniqueFile,
@@ -42,12 +42,6 @@ const toasts = vi.hoisted(() => ({ error: vi.fn() }));
 vi.mock("@/lib/reportable-error-toast", () => ({
   reportableErrorToast: toasts.error,
 }));
-
-function oversizedFile(): File {
-  const file = uniqueFile("huge.mov");
-  Object.defineProperty(file, "size", { value: FILE_ATTACHMENT_MAX_BYTES + 1 });
-  return file;
-}
 
 function settled(id: string): Promise<void> {
   return waitForSettled(id, readFileAttachmentUploadStatus);
@@ -126,7 +120,6 @@ describe("refuseFileAttachment", () => {
 
 describe("showTooManyFilesToast", () => {
   it("names a refused file that has no name by the placeholder", () => {
-    toasts.error.mockClear();
     showTooManyFilesToast([""]);
     expect(toasts.error).toHaveBeenCalledTimes(1);
     expect(toasts.error.mock.calls[0][0]).toBe("Couldn't attach file.");

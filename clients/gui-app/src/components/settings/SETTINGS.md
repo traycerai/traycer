@@ -590,7 +590,9 @@ keyboard, and is still the end of a pairing that shows the code.
 Ask which question a row's absence answers, not which list it would be shorter
 to join.
 
-- **Voice input** (`voice-settings-section.tsx`) - the build refuses dictation.
+- **Voice input** (`voice-settings-section.tsx`) - hidden only where the app
+  has no recognizer of its own (`IRunnerHost.deviceDictation`), where the
+  build refuses dictation.
 - **Prevent sleep while running** (`prevent-sleep-settings-section.tsx`) - the
   setting's only consumer, `PreventSleepController`, holds an OS power-save
   blocker through the desktop power bridge, and `resolveDesktopPowerBridge`

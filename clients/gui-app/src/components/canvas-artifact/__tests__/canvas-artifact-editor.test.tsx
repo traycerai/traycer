@@ -2170,7 +2170,7 @@ describe("an expanded canvas is the same editor the tile rendered", () => {
       ).toBe("true");
       fireEvent.click(within(dialog).getByRole("button", { name: "Pages" }));
       const details = screen.getByRole("button", { name: "Details" });
-      expect(dialog.parentElement?.contains(details)).toBe(true);
+      expect(dialog.contains(details)).toBe(true);
       fireEvent.click(details);
       fireEvent.click(
         within(dialog).getByRole("button", { name: "Rectangle (R)" }),
@@ -2200,10 +2200,7 @@ describe("an expanded canvas is the same editor the tile rendered", () => {
       expect(
         within(dialog).queryByRole("button", { name: "Rectangle (R)" }),
       ).toBeNull();
-      const note = within(dialog).queryByRole("button", {
-        name: "Edit sticky note",
-      });
-      if (note !== null) fireEvent.doubleClick(note);
+      fireEvent.doubleClick(within(dialog).getByText("start here"));
       expect(
         within(dialog).queryByRole("textbox", { name: "Sticky note text" }),
       ).toBeNull();

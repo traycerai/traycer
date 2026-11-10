@@ -942,6 +942,8 @@ export class DesktopRunnerHost implements IRunnerHost {
   readonly hostTray: IHostTray | null;
   // Present in every launch mode: in `none` it is the only way back.
   readonly hostLifecycle: IHostLifecycleHost;
+  // Dictation on the desktop is the local host's.
+  readonly deviceDictation: null = null;
   // No OS push on the desktop: notifications here are native `show` calls, not
   // an APNs/FCM permission the user can revoke from a settings app.
   readonly pushPermission: null = null;

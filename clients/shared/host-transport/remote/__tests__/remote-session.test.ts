@@ -7434,7 +7434,7 @@ describe("RemoteSession pending-unary FATAL rejection (S3)", () => {
   it(
     "keeps a request with a 210s budget pending past the 30s default, and fails it at the budget",
     async () => {
-      vi.useFakeTimers({ shouldAdvanceTime: true });
+      vi.useFakeTimers();
       const relay = new FakeRelayHost();
       relay.floorRpcManifest = { "host.status": { major: 1, minor: 0 } };
       relay.skipUnaryAutoRespond = true;
@@ -7447,6 +7447,7 @@ describe("RemoteSession pending-unary FATAL rejection (S3)", () => {
         session.start();
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
 
+        const startedAt = Date.now();
         const catalogBudgetMs = 210_000;
         const budgeted = session.sendUnary(
           "host.status",
@@ -7484,7 +7485,15 @@ describe("RemoteSession pending-unary FATAL rejection (S3)", () => {
           },
         );
 
-        await vi.advanceTimersByTimeAsync(UNARY_RESPONSE_TIMEOUT_MS + 1_000);
+        // WebCrypto and the serial scheduler must finish sending BOTH calls
+        // before the response clock jumps. Polling retains its 10s setup budget.
+        await vi.waitFor(
+          () => expect(relay.unaryRequests).toHaveLength(2),
+          WAIT,
+        );
+        await vi.advanceTimersByTimeAsync(
+          startedAt + UNARY_RESPONSE_TIMEOUT_MS + 1_000 - Date.now(),
+        );
         const defaultError = await defaultOutcome;
         expect(String(defaultError)).toContain("timed out awaiting a response");
         // 31s in: the unbudgeted request has failed, the budgeted one has not.
@@ -7493,7 +7502,7 @@ describe("RemoteSession pending-unary FATAL rejection (S3)", () => {
         // Still pending one second before its own budget: the transport
         // honours the 210s allowance, not some shorter fixed bound.
         await vi.advanceTimersByTimeAsync(
-          catalogBudgetMs - (UNARY_RESPONSE_TIMEOUT_MS + 1_000) - 1_000,
+          startedAt + catalogBudgetMs - 1_000 - Date.now(),
         );
         expect(budgetedSettled).toBe(false);
 

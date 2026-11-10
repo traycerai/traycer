@@ -181,7 +181,7 @@ export function stopBotBoxDraftWrites(): void {
  * still lands after it, with all its images, where the page is still there;
  * written from what was waiting, the older write being stored never lands.
  */
-export function flushPendingBotBoxDraftWrite(): void {
+function flushPendingBotBoxDraftWrite(): void {
   if (writer.stopped) return;
   const { hashByInline, inFlightHashByInline } = writer;
   const pending = takePending();

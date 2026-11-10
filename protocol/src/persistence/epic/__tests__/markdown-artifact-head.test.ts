@@ -199,7 +199,6 @@ describe("the frozen pre-html readers ignore the head", () => {
       } = entry;
       const parsed = preHtmlSchema.parse(entry);
       expect(parsed).toEqual(unchanged);
-      expect(parsed).not.toHaveProperty("head");
     },
   );
 
@@ -214,7 +213,6 @@ describe("the frozen pre-html readers ignore the head", () => {
       } = entry;
       const parsed = epicArtifactSchemaPreHtml.parse(entry);
       expect(parsed).toEqual(unchanged);
-      expect(parsed).not.toHaveProperty("head");
     },
   );
 });

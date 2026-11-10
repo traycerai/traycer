@@ -2464,6 +2464,14 @@ export interface ChatSessionStoreHandle {
   readonly epicId: string;
   readonly chatId: string;
   readonly userId: string | null;
+  /**
+   * This live session's place in the order the window built them, fixed when
+   * its store is created. The registry replaces a session it evicted with a
+   * new store for the same chat whose connection epochs start again, so a
+   * transcript baseline names this as well as its epoch. `0` on a published
+   * copy, which is no live session and backs no bot's question card.
+   */
+  readonly sessionGeneration: number;
   readonly store: UseBoundStore<StoreApi<ChatSessionState>>;
   readonly deliveredNotices: DeliveredNoticeTracker;
   /**
@@ -3535,6 +3543,9 @@ const handoffCaptureRoots = new Map<string, HandoffCaptureRoot>();
 registerExtraImageRootSource({
   hashes: collectPendingRestoreContentImageHashes,
 });
+
+/** Live sessions this window has built; see `sessionGeneration`. */
+let chatSessionsBuilt = 0;
 
 export function createChatSessionStore(
   options: ChatSessionStoreOptions,
@@ -12640,10 +12651,12 @@ export function createChatSessionStoreWithNotificationDependencies(
 
   liveChatSessionStores.add(store);
 
+  chatSessionsBuilt += 1;
   return {
     epicId: options.epicId,
     chatId: options.chatId,
     userId: options.userId,
+    sessionGeneration: chatSessionsBuilt,
     store,
     deliveredNotices: {
       notices: new WeakSet<ChatErrorNotice>(),

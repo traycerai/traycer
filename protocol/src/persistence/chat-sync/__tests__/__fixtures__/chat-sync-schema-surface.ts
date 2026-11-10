@@ -2522,6 +2522,59 @@ export const chatSyncSchemaSurfaceBaseline = {
                           "spoken": {
                             "type": "boolean",
                             "const": true
+                          },
+                          "questionAnswers": {
+                            "type": "object",
+                            "properties": {
+                              "questionMessageId": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "answers": {
+                                "minItems": 1,
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "questionIndex": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "question": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "answer": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "skipped": {
+                                      "type": "boolean"
+                                    }
+                                  },
+                                  "required": [
+                                    "questionIndex",
+                                    "question",
+                                    "answer",
+                                    "skipped"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              }
+                            },
+                            "required": [
+                              "questionMessageId",
+                              "answers"
+                            ],
+                            "additionalProperties": false
                           }
                         },
                         "required": [
@@ -6805,6 +6858,10 @@ export const chatSyncSchemaSurfaceBaseline = {
                                             },
                                             "at": {
                                               "type": "number"
+                                            },
+                                            "requestId": {
+                                              "type": "string",
+                                              "minLength": 1
                                             }
                                           },
                                           "required": [

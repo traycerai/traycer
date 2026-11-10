@@ -72,10 +72,8 @@ function sameCreature(a: CreatureChoice, b: CreatureChoice): boolean {
 }
 
 /**
- * A bot's look, in its channel settings: its icon (a creature grown from its
- * id), the colour its icon sits on, and the background of its channel. Each starts on the look the bot's id gives it,
- * and "Use the default" brings that back. Drawn where the tab's host can
- * change it; the rename authority decides who may.
+ * A bot's icon, icon colour and channel background, in its channel settings.
+ * Drawn where the tab's host can change it; the rename authority decides who may.
  */
 export function BotAppearanceSettings(props: {
   readonly botId: string;

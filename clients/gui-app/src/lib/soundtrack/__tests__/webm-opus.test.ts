@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { opusHead } from "./opus-head-fixture";
 import {
   readOpusPreSkip,
   webmOpusCluster,
@@ -178,16 +179,6 @@ function float64(bytes: Uint8Array): number {
   ).getFloat64(0, false);
 }
 
-/** A synthetic but structurally valid `OpusHead`, as the encoder would hand over. */
-function opusHead(preSkip: number): Uint8Array {
-  const bytes = new Uint8Array(19);
-  bytes.set(new TextEncoder().encode("OpusHead"), 0);
-  bytes[8] = 1; // version
-  bytes[9] = 2; // channel count
-  new DataView(bytes.buffer).setUint16(10, preSkip, true);
-  return bytes;
-}
-
 describe("readOpusPreSkip", () => {
   it("reads the little-endian pre-skip at its fixed offset", () => {
     expect(readOpusPreSkip(opusHead(3840))).toBe(3840);
@@ -209,7 +200,6 @@ describe("readOpusPreSkip", () => {
 function parsedHeader(preSkipSamples: number): {
   readonly head: Uint8Array;
   readonly ebml: Elem;
-  readonly segment: Elem;
   readonly trackEntry: Elem;
   readonly audio: Elem;
   readonly info: Elem;
@@ -227,7 +217,7 @@ function parsedHeader(preSkipSamples: number): {
   );
   const audio = requiredChild(trackEntry.children, ID.audio, "Audio");
   const info = requiredChild(segment.children, ID.info, "Info");
-  return { head, ebml, segment, trackEntry, audio, info };
+  return { head, ebml, trackEntry, audio, info };
 }
 
 describe("webmOpusHeader", () => {
