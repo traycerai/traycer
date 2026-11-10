@@ -140,7 +140,7 @@ describe("TeamComputerUnattended", () => {
       />,
     );
 
-    const button = screen.getByRole("button", { name: "Creating token…" });
+    const button = screen.getByRole("button", { name: "Create install token" });
     expect(button).toHaveProperty("disabled", true);
     fireEvent.click(button);
     expect(onMint).toHaveBeenCalledTimes(1);
