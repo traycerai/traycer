@@ -549,7 +549,9 @@ describe("<BotChatTranscript /> a bot that answers posts in the channel", () => 
 
     const badge = screen.getByTestId("bot-reply-badge-unavailable");
     expect(badge.textContent).toBe("Message unavailable");
-    expect(within(badge).queryByRole("button")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /Message unavailable/ }),
+    ).toBeNull();
   });
 });
 
