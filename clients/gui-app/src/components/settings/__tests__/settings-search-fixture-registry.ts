@@ -108,6 +108,7 @@ function notificationsHost(options: {
     phoneLayout: false,
     soundtrackOffered: false,
     soundtrackRecordingOffered: false,
+    soundtrackSetPiecesOffered: false,
     soundtrackOn: false,
   };
 }
@@ -119,6 +120,7 @@ const NO_BRIDGES: SettingsAvailabilityContext = {
   phoneLayout: false,
   soundtrackOffered: false,
   soundtrackRecordingOffered: false,
+  soundtrackSetPiecesOffered: false,
   soundtrackOn: false,
 };
 
@@ -282,6 +284,14 @@ export const SETTINGS_SEARCH_FIXTURES = [
           ...NO_BRIDGES,
           soundtrackOffered: true,
           soundtrackRecordingOffered: true,
+        },
+      },
+      {
+        name: "a staging desktop with the set pieces bridge",
+        context: {
+          ...NO_BRIDGES,
+          soundtrackOffered: true,
+          soundtrackSetPiecesOffered: true,
         },
       },
       {

@@ -9,6 +9,7 @@ const SOUNDTRACK_DESKTOP: SettingsAvailabilityContext = {
   phoneLayout: false,
   soundtrackOffered: true,
   soundtrackRecordingOffered: true,
+  soundtrackSetPiecesOffered: false,
   soundtrackOn: true,
 };
 
@@ -40,6 +41,7 @@ describe("settings search for Record session", () => {
         recordingHits(query, {
           ...SOUNDTRACK_DESKTOP,
           soundtrackRecordingOffered: false,
+          soundtrackSetPiecesOffered: false,
         }),
       ).toEqual([]);
     },
