@@ -27,6 +27,8 @@ import {
   MockRunnerHost,
   MockTraycerCli,
 } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import { remoteEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
+import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
@@ -57,6 +59,8 @@ import { WindowsBridgeContext } from "@/providers/windows-bridge-context";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 
 export const HOST_ID = "memory-act-host";
+/** A second machine, which the host picker offers as a remote host. */
+export const OTHER_HOST = remoteEntry("memory-act-other-host", null);
 export const ENVIRONMENT_ID = "env-personal";
 
 interface ProviderSpec {
@@ -87,7 +91,11 @@ interface World {
   refused: string[];
   /** Holds `config.agentMemories.set` open until resolved. */
   setGate: Deferred | null;
+  /** Holds `providers.setNativeMemory` open until resolved. */
+  nativeGate: Deferred | null;
   sessionImport: boolean;
+  /** Hosts besides the tour's own that the host picker offers. */
+  otherHosts: RemoteHostDirectoryEntry[];
 }
 
 export function defaultProviders(): ProviderSpec[] {
@@ -111,7 +119,9 @@ function freshWorld(): World {
     accepted: [],
     refused: [],
     setGate: null,
+    nativeGate: null,
     sessionImport: true,
+    otherHosts: [],
   };
 }
 
@@ -255,7 +265,8 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) => {
           uploadId: null,
         };
       },
-      "providers.setNativeMemory": (request) => {
+      "providers.setNativeMemory": async (request) => {
+        if (world.nativeGate !== null) await world.nativeGate.promise;
         const failures = world.nativeFailures.get(request.harnessId) ?? 0;
         if (failures > 0) {
           world.nativeFailures.set(request.harnessId, failures - 1);
@@ -281,6 +292,14 @@ export function hostCalls(): { method: string; params: unknown }[] {
     .flatMap((messenger) => messenger.calls)
     .filter((call) => call.method !== "host.status");
 }
+/** The recorded calls one host's address received, in order. */
+export function callsTo(hostId: string): { method: string; params: unknown }[] {
+  return messengers
+    .flatMap((messenger) => messenger.calls)
+    .filter((call) => call.authority.endpoint.hostId === hostId)
+    .filter((call) => call.method !== "host.status");
+}
+
 export function methodsInOrder(): string[] {
   return hostCalls().map((call) => call.method);
 }
@@ -346,6 +365,8 @@ function renderTour(): void {
     hasLocalHost: undefined,
     traycerCli: new MockTraycerCli(),
   });
+  for (const other of world.otherHosts)
+    recordNegotiatedHostManifest(other.hostId, FULL_MANIFEST);
   const streams = streamBinding();
   const rootRoute = createRootRoute({
     component: () => (
@@ -357,7 +378,7 @@ function renderTour(): void {
             invalidator={null}
             requestId={null}
             remoteFetcher={() =>
-              Promise.resolve({ kind: "hosts", entries: [] })
+              Promise.resolve({ kind: "hosts", entries: world.otherHosts })
             }
             fallback={<div data-testid="memory-act-fallback" />}
           >

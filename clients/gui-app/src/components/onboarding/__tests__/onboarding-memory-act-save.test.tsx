@@ -250,3 +250,42 @@ describe("the Memory act: a queued Traycer write", () => {
     expect(paramsOf("config.agentMemories.set")).toHaveLength(2);
   });
 });
+
+describe("the Memory act: the report and the switch after a save", () => {
+  it("locks the Traycer switch while its write is held", async () => {
+    world.setAnswers = ["queued"];
+    await openMemoryAct();
+    await chooseTraycer();
+    await continueFromMemory();
+    await screen.findByTestId("onboarding-memory-save-report");
+
+    const row = screen.getByTestId("onboarding-memory-traycer");
+    const traycer = switchOf("onboarding-memory-traycer");
+    expect(isOn(traycer)).toBe(true);
+    expect(traycer.hasAttribute("disabled")).toBe(true);
+    expect(row.textContent).toContain(
+      "Waiting for your configuration. Change this later in Settings → Agent memories.",
+    );
+  });
+
+  it("says a provider switched back on is no longer turned off by Traycer", async () => {
+    world.providers = [
+      { ...defaultProviders()[0], nativeMemory: false },
+      defaultProviders()[1],
+    ];
+    world.nativeFailures.set("codex", 1);
+    await openMemoryAct();
+    await chooseTraycer();
+    fireEvent.click(await providerSwitch("claude-code"));
+    await providerSwitch("codex");
+
+    await continueFromMemory();
+    const report = await screen.findByTestId("onboarding-memory-save-report");
+
+    expect(report.textContent).toContain(
+      "Traycer no longer turns off Claude Code memories.",
+    );
+    expect(report.textContent).toContain("Couldn't change Codex memories.");
+    expect(report.textContent).not.toContain("now on");
+  });
+});
