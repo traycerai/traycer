@@ -67,6 +67,8 @@ export interface SettingsAvailabilityContext {
    * whether this shell can save a recording of the music.
    */
   readonly soundtrackRecordingOffered: boolean;
+  /** Whether this staging desktop can read the private track catalog. */
+  readonly soundtrackSetPiecesOffered: boolean;
   /** `soundtrackEnabled`, subscribed: a row that needs Music on follows it. */
   readonly soundtrackOn: boolean;
 }
@@ -242,5 +244,14 @@ export function isPushPermissionRowAvailable(
 ): boolean {
   return (
     context.runnerHost !== null && context.runnerHost.pushPermission !== null
+  );
+}
+
+/** Complete-track listening controls exist only on the staging source bridge. */
+export function isSetPiecesRowAvailable(
+  context: SettingsAvailabilityContext,
+): boolean {
+  return (
+    isSoundtrackRowAvailable(context) && context.soundtrackSetPiecesOffered
   );
 }

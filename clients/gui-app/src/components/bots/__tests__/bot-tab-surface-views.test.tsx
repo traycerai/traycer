@@ -15,6 +15,7 @@
  * `useBotActiveTasks` over the real agent-activity store and the real
  * notification-indicator hooks (the host answers `indicatorState`).
  */
+import { emptyBotMentionHostListsMock } from "@/components/bots/__tests__/bot-mention-host-test-support";
 import {
   botListChangedMock,
   botListQueryMock,
@@ -75,6 +76,11 @@ import {
   TAB_HOST,
   trackingTask,
 } from "./bot-tab-surface-harness";
+
+vi.mock(
+  "@/hooks/bots/use-environment-host-lists-query",
+  () => emptyBotMentionHostListsMock,
+);
 
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => mocks.navigate,

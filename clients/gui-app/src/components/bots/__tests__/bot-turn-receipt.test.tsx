@@ -10,6 +10,10 @@
  * channel's neighbouring reads are replaced.
  */
 import {
+  botMentionHostClientMock,
+  emptyBotMentionHostListsMock,
+} from "@/components/bots/__tests__/bot-mention-host-test-support";
+import {
   act,
   cleanup,
   fireEvent,
@@ -73,6 +77,15 @@ const mocks = vi.hoisted(() => ({
   /** Whether the tab's host negotiated `bot.turn.locate`. */
   locateSupported: true,
 }));
+
+vi.mock(
+  "@/hooks/host/use-host-client-for-host-id",
+  () => botMentionHostClientMock,
+);
+vi.mock(
+  "@/hooks/bots/use-environment-host-lists-query",
+  () => emptyBotMentionHostListsMock,
+);
 
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: () => null,

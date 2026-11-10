@@ -186,6 +186,66 @@ describe("downloadToFile resume and integrity policy", () => {
     SETTLE_RETRY_TEST_TIMEOUT_MS,
   );
 
+  it(
+    "resumes a partial archive on a mirror without carrying the first origin validator",
+    async () => {
+      vi.useRealTimers();
+      const expected = "abcdef";
+      const destPath = join(workDir, "mirrored-archive.tar.gz");
+      const firstOriginRequests: Array<{
+        range: string | undefined;
+        ifRange: string | undefined;
+      }> = [];
+      const mirrorRequests: Array<{
+        range: string | undefined;
+        ifRange: string | undefined;
+      }> = [];
+      let firstOriginCalls = 0;
+      const firstOrigin = await startFaultServer((request, response) => {
+        firstOriginRequests.push({
+          range: firstRequestHeaderValue(request.headers.range),
+          ifRange: firstRequestHeaderValue(request.headers["if-range"]),
+        });
+        firstOriginCalls += 1;
+        if (firstOriginCalls === 1) {
+          response.writeHead(200, {
+            etag: '"cdn-version"',
+            "content-length": "6",
+          });
+          response.end("abc");
+          return;
+        }
+        response.writeHead(503);
+        response.end("temporarily unavailable");
+      }, faultServers);
+      const mirrorOrigin = await startFaultServer((request, response) => {
+        mirrorRequests.push({
+          range: firstRequestHeaderValue(request.headers.range),
+          ifRange: firstRequestHeaderValue(request.headers["if-range"]),
+        });
+        response.writeHead(206, { "content-range": "bytes 3-5/6" });
+        response.end("def");
+      }, faultServers);
+
+      const pending = downloadToFile({
+        ...downloadOptions(destPath, expected),
+        url: `${firstOrigin}/host.tar.gz`,
+        mirrorUrls: [`${mirrorOrigin}/host.tar.gz`],
+      });
+      const result = await pending;
+
+      expect(result).toEqual({ downloadedBytes: 6, sha256: sha256(expected) });
+      expect(readFileSync(destPath, "utf8")).toBe(expected);
+      expect(firstOriginCalls).toBe(3);
+      expect(firstOriginRequests[1]?.range).toBe("bytes=3-");
+      expect(firstOriginRequests[1]?.ifRange).toBe('"cdn-version"');
+      expect(mirrorRequests).toEqual([
+        { range: "bytes=3-", ifRange: undefined },
+      ]);
+    },
+    SETTLE_RETRY_TEST_TIMEOUT_MS,
+  );
+
   it.each([
     ["strong ETag", { etag: '"etag-1"' }, '"etag-1"'],
     [
@@ -930,6 +990,32 @@ describe("fetch watchdogs and heartbeat semantics", () => {
     }
     expect(heartbeats.filter((phase) => phase === "watchdog")).toHaveLength(4);
     expect(globalThis.fetch).toHaveBeenCalledTimes(4);
+  });
+
+  it("waits before the second attempt on the same origin", async () => {
+    vi.useFakeTimers();
+    const heartbeats: string[] = [];
+    let calls = 0;
+    globalThis.fetch = vi.fn(async () => {
+      calls += 1;
+      return calls === 1
+        ? response("slow down", 429, {})
+        : response("ok", 200, {});
+    }) as typeof globalThis.fetch;
+
+    const pending = fetchText(RESOURCE_URL, {
+      signal: null,
+      onHeartbeat: (heartbeat) => heartbeats.push(heartbeat.phase),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toBe(1);
+    await vi.advanceTimersByTimeAsync(749);
+    expect(calls).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(pending).resolves.toBe("ok");
+    expect(calls).toBe(2);
+    expect(heartbeats).toEqual(["attempt", "backoff", "attempt"]);
   });
 
   it("resets the gap watchdog after each received chunk", async () => {

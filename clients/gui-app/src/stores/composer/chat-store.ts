@@ -4,6 +4,7 @@ import type { AutoJudgeNoticeMarker } from "@traycer/protocol/persistence/chat-t
 import type {
   BotAnnouncement,
   BotQuestion,
+  BotQuestionAnswerSet,
   BotSurfaceReference,
   ConversationRequest,
 } from "@traycer/protocol/persistence/epic/messages";
@@ -807,6 +808,12 @@ export interface ChatMessage {
    * reads it.
    */
   conversationRequest?: ConversationRequest;
+  /**
+   * A member's answers to a bot's question card sent together (T167): each
+   * question with its answer, or Skipped, drawn in place of the row's text.
+   * Absent on every other row.
+   */
+  questionAnswers?: BotQuestionAnswerSet;
   /**
    * The Slack message this user row is, in a bot session that runs a Slack
    * thread or DM: who wrote it in Slack, and the files it did not carry.

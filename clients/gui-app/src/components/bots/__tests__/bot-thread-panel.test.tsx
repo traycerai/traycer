@@ -10,6 +10,10 @@
  * drawn as the bot's, with no request to show. Every state opens on the
  * channel row the thread answers, drawn by the channel's own row component.
  */
+import {
+  botMentionHostClientMock,
+  emptyBotMentionHostListsMock,
+} from "@/components/bots/__tests__/bot-mention-host-test-support";
 import { StrictMode, useSyncExternalStore, type ReactNode } from "react";
 import {
   act,
@@ -150,6 +154,15 @@ const mocks = vi.hoisted(() => ({
     listeners: new Set<() => void>(),
   },
 }));
+
+vi.mock(
+  "@/hooks/host/use-host-client-for-host-id",
+  () => botMentionHostClientMock,
+);
+vi.mock(
+  "@/hooks/bots/use-environment-host-lists-query",
+  () => emptyBotMentionHostListsMock,
+);
 
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: () => null,
@@ -508,6 +521,7 @@ function panelTree(thread: BotThreadPanelThread): ReactNode {
                 hostId={HOST_ID}
                 boundHostId={HOST_ID}
                 imageReach="none"
+                answerReach="each"
                 botTitle="Release Bot"
                 conversationId={CONVERSATION_ID}
                 originMessageId={originOf(thread)}

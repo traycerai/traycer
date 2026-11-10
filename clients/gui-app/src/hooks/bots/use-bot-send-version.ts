@@ -2,8 +2,12 @@ import type { SchemaVersion } from "@traycer/protocol/framework/index";
 import {
   botConversationSendV13,
   botConversationSendV14,
+  botConversationSendV15,
 } from "@traycer/protocol/host/bot/contracts";
-import { BOT_HOST_TAKES_IMAGES } from "@traycer/protocol/host/bot/conversation-schemas";
+import {
+  BOT_HOST_TAKES_ANSWER_SETS,
+  BOT_HOST_TAKES_IMAGES,
+} from "@traycer/protocol/host/bot/conversation-schemas";
 import { useHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
 
 /**
@@ -38,6 +42,14 @@ export const BOT_CONVERSATION_CALL_VERSION =
 export const BOT_CONVERSATION_IMAGES_VERSION =
   botConversationSendV14.schemaVersion;
 
+/**
+ * The `bot.conversation.send` line that takes a card's answers as one set
+ * (`answers`, T167): an older host would drop them and take the text as a
+ * plain post, leaving the questions open.
+ */
+export const BOT_CONVERSATION_ANSWER_SET_VERSION =
+  botConversationSendV15.schemaVersion;
+
 /** Whether a host that negotiated `negotiated` for `bot.conversation.send` takes a send that needs `required`. */
 export function botSendTakes(
   negotiated: SchemaVersion | null,
@@ -51,15 +63,40 @@ export function botSendTakes(
 }
 
 /**
- * Whether the host serving the tab takes a question card's answer. A card on
- * one that does not is drawn without actions, the person's draft kept, and
- * its question is answered in its thread.
+ * How a question card's answers reach the bot:
+ * - `none`: the host serving the tab takes no answer from a card, which is
+ *   drawn without actions, the person's draft kept, and its question is
+ *   answered in its thread;
+ * - `each`: each question is answered on its own;
+ * - `together`: one Submit sends them all as one message. The tab's host takes
+ *   that, and so does the bot's: it is the same host, or the bot's bound host
+ *   said it does, as its thread list reports it.
  */
-export function useBotSendTakesAnswers(hostId: string): boolean {
-  return botSendTakes(
-    useHostMethodSchemaVersion(hostId, "bot.conversation.send"),
-    BOT_CONVERSATION_ANSWER_VERSION,
+export type BotAnswerReach = "none" | "each" | "together";
+
+export function useBotAnswerReach(input: {
+  /** The host serving the tab. */
+  readonly hostId: string;
+  /** The host that runs the bot; `null` when none does. */
+  readonly boundHostId: string | null;
+  /** What that host said it takes, as its thread list reports it. */
+  readonly boundHostTakes: readonly string[];
+}): BotAnswerReach {
+  const { hostId, boundHostId, boundHostTakes } = input;
+  const negotiated = useHostMethodSchemaVersion(
+    hostId,
+    "bot.conversation.send",
   );
+  if (!botSendTakes(negotiated, BOT_CONVERSATION_ANSWER_VERSION)) {
+    return "none";
+  }
+  if (!botSendTakes(negotiated, BOT_CONVERSATION_ANSWER_SET_VERSION)) {
+    return "each";
+  }
+  return boundHostId === hostId ||
+    boundHostTakes.includes(BOT_HOST_TAKES_ANSWER_SETS)
+    ? "together"
+    : "each";
 }
 
 /**

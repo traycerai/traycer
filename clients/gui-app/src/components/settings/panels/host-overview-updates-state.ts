@@ -28,7 +28,7 @@ import {
   isHostClientFloorRefusedAsset,
 } from "@traycer-clients/shared/host-version/client-floor-reason";
 import {
-  isMatchingStableRelease,
+  isCanonicalStableRelease,
   isSameReleaseLine,
 } from "@traycer-clients/shared/host-version/release-line";
 import type {
@@ -500,11 +500,12 @@ export function useHostOverviewUpdates(input: {
   const upToDate =
     manifest !== null && installedVersion !== null && targetVersion === null;
   // The one state "up to date" would misdescribe: an `installed-rc` follower
-  // whose own line has run out, while the catalog still lists something newer
-  // on ANOTHER line. Not moving is deliberate — a follower must not be pushed
-  // to a line nobody put it on — but rendering that as "running the latest
-  // version" is a false claim about the catalog the user is looking at, with
-  // an enabled row for a newer version directly beneath it.
+  // with no newer stable anywhere and nothing later on its own line, while the
+  // catalog still lists a newer RC on ANOTHER line. Not moving is deliberate —
+  // a follower consented to one line's prereleases, not to prereleases in
+  // general — but rendering that as "running the latest version" is a false
+  // claim about the catalog the user is looking at, with an enabled row for a
+  // newer version directly beneath it.
   const strandedOnLine = strandedLineTarget({
     upToDate,
     manifest,
@@ -1297,11 +1298,13 @@ function newerTargetVersion(input: {
 /**
  * The target versions to try, best first.
  *
- * For an `installed-rc` default this is the plan's same-line priority, and the
- * ORDER is the termination guarantee: matching stable `X.Y.Z` outranks every
- * later `X.Y.Z-rc.M`, so an RC that can reach its stable takes it and the next
- * launch derives `stable-only` with nothing to undo. Later RCs on the same line
- * follow, newest first, for the window before that stable exists.
+ * For an `installed-rc` default the ORDER is the termination guarantee: every
+ * newer stable `X.Y.Z`, on any line and newest first, outranks every later
+ * `X.Y.Z-rc.M` on the installed line, so an RC that can reach a stable takes
+ * the newest one in a single hop and the next launch derives `stable-only`
+ * with nothing to undo. Later RCs on the same line follow, newest first, for
+ * the window before any such stable exists. An RC on another line is never a
+ * candidate.
  *
  * A LIST rather than one pick, because each candidate still has to clear the
  * yanked/asset gates above — "prefer stable IF USABLE, otherwise the highest
@@ -1322,37 +1325,39 @@ function targetCandidates(input: {
   if (input.source !== "installed-rc" || installed === null) {
     return [input.manifest.latest];
   }
-  const versions = input.manifest.versions.map((entry) => entry.version);
-  const matchingStable = versions.filter((version) =>
-    isMatchingStableRelease(version, installed),
-  );
-  // EXCLUDING the matching stable, which also satisfies both predicates below
-  // — it is on the line and strictly newer. Without this the stable is
-  // returned twice, and `selectSummaryCandidate` pays for a second yanked and
-  // platform-asset probe on a candidate it already accepted or rejected.
-  const laterOnLine = versions
+  const newer = input.manifest.versions
+    .map((entry) => entry.version)
+    .filter((version) => isStrictlyNewerHostVersion(version, installed));
+  // The two arms are disjoint - a stable is never an RC - so no candidate is
+  // returned twice, and `selectSummaryCandidate` probes each once.
+  const newerStables = newer
+    .filter((version) => isCanonicalStableRelease(version))
+    .sort(compareNewestFirst);
+  const laterOnLine = newer
     .filter(
       (version) =>
-        !matchingStable.includes(version) &&
-        isSameReleaseLine(installed, version) &&
-        isStrictlyNewerHostVersion(version, installed),
+        !isCanonicalStableRelease(version) &&
+        isSameReleaseLine(installed, version),
     )
     .sort(compareNewestFirst);
-  return [...matchingStable, ...laterOnLine];
+  return [...newerStables, ...laterOnLine];
 }
 
 /**
  * The newer version this host will not take on its own, or `null`.
  *
+ * With `upToDate` true under `installed-rc`, no stable is newer and the
+ * installed line has nothing later, so whatever is newer is a release
+ * candidate on another line — which is exactly what the copy it feeds says.
+ *
  * Gated on `installed-rc` PROVENANCE, not merely on there being something
- * newer. The copy it feeds says the host "follows its own release line", and
- * that is only true of a host whose catalog was derived from an installed
- * release candidate. A STABLE host with explicit inclusion is the case this
- * gate exists for: it is on the newest stable, `latest` names that stable, and
- * a newer RC row appears only because the user asked to see RCs — it follows
- * no line, and telling it otherwise would explain its state with a mechanism
- * that does not apply to it. Those RC rows stay manually installable either
- * way; only the sentence changes.
+ * newer. That sentence is only true of a host whose catalog was derived from
+ * an installed release candidate. A STABLE host with explicit inclusion is the
+ * case this gate exists for: it is on the newest stable, `latest` names that
+ * stable, and a newer RC row appears only because the user asked to see RCs —
+ * it follows no line, and telling it otherwise would explain its state with a
+ * mechanism that does not apply to it. Those RC rows stay manually
+ * installable either way; only the sentence changes.
  *
  * Also gated on `upToDate`, which lives here rather than at the call site
  * where it was one more branch in an already dense hook.
@@ -1385,9 +1390,9 @@ function resolveCheckboxState(
  *
  * Deliberately unrestricted, unlike `targetCandidates`. This does not decide
  * what to OFFER; it answers whether the summary may claim "running the latest
- * version". A follower with an exhausted line is not on the newest build the
- * catalog knows about, and saying so is what keeps the sentence honest while
- * the automatic policy stays unchanged.
+ * version". A follower whose only newer build is another line's RC is not on
+ * the newest build the catalog knows about, and saying so is what keeps the
+ * sentence honest while the automatic policy stays unchanged.
  */
 function newestNewerVersion(
   manifest: HostAvailableManifest | null,
@@ -2268,8 +2273,9 @@ function describeCheckState(input: {
   /** The strictly-newer version this sentence is about, if there is one. */
   readonly targetVersion: string | null;
   /**
-   * Set only when this host's own release line has no newer candidate but the
-   * catalog does — the state "running the latest version" would misdescribe.
+   * Set only when this host will take nothing on its own but the catalog lists
+   * a newer release candidate on another line — the state "running the latest
+   * version" would misdescribe.
    */
   readonly strandedOnLine: string | null;
   readonly installedVersion: string | null;
@@ -2328,14 +2334,14 @@ function describeCheckState(input: {
     return { text: "Checking for updates…", kind: "checking" };
   }
   if (input.upToDate) {
-    // Honest about BOTH halves: the newer version exists, and this host will
-    // not take it on its own. Naming the installed version names the line, and
-    // pointing at the version list is not decoration — those rows are enabled,
-    // and they are the only way across. The answer card leads the Updates
-    // tab, so the list is directly below the sentence.
+    // Honest about BOTH halves: the newer release candidate exists, and this
+    // host will not take it on its own. Naming the installed version names the
+    // line, and pointing at the version list is not decoration — those rows
+    // are enabled, and they are the only way across. The answer card leads the
+    // Updates tab, so the list is directly below the sentence.
     if (input.strandedOnLine !== null && input.installedVersion !== null) {
       return {
-        text: `v${input.strandedOnLine} is available, but ${input.installedVersion} follows its own release line and won't update to it automatically. Pick it from the versions below to move.`,
+        text: `v${input.strandedOnLine} is a release candidate on another release line, so ${input.installedVersion} won't update to it automatically. Pick it from the versions below to move.`,
         kind: "stranded",
       };
     }

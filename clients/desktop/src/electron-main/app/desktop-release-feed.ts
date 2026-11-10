@@ -1,3 +1,5 @@
+import type { AppUpdater } from "electron-updater/out/AppUpdater";
+import { GenericProvider } from "electron-updater/out/providers/GenericProvider";
 import type { OutgoingHttpHeaders, RequestOptions } from "node:http";
 import { posix } from "node:path";
 // Value imports intentionally target electron-updater's concrete provider
@@ -34,13 +36,12 @@ type RedirectRequestOptions = RequestOptions & {
   redirect?: "manual" | "follow" | "error";
 };
 
-// A single GitHub release asset, reduced to the two fields the desktop feed
-// needs: the file name (to match channel manifests / installers) and the
-// authenticated `api.github.com/.../releases/assets/<id>` URL used to fetch it
-// on private repositories.
+// A release asset: CDN entries include the size; GitHub entries retain the
+// authenticated asset URL used by private feeds.
 export interface DesktopReleaseAsset {
   readonly name: string;
   readonly url: string;
+  readonly size?: number;
 }
 
 // A `desktop-v*` GitHub release that passed RC-only consent and metadata
@@ -50,6 +51,20 @@ export interface DesktopReleaseCandidate {
   readonly tag: string;
   readonly version: string;
   readonly assets: readonly DesktopReleaseAsset[];
+  readonly origins?: readonly DesktopReleaseOrigin[];
+  readonly manifestIdentity?: string;
+}
+
+export interface DesktopVersionAssets {
+  readonly version: string;
+  readonly assets: readonly DesktopReleaseAsset[];
+}
+
+export interface DesktopReleaseOrigin {
+  readonly url: string;
+  // null denotes GitHub's exact-tag layout; [] denotes a missing CDN index.
+  readonly blockMapAssets: readonly DesktopVersionAssets[] | null;
+  readonly assets?: readonly DesktopReleaseAsset[];
 }
 
 // electron-updater derives the platform channel manifest name the same way in
@@ -278,12 +293,27 @@ export function validateDesktopReleaseManifest(
         reason: `channel manifest ${channelFile} references a file with no name`,
       };
     }
+    if (candidate.origins !== undefined && file.url !== fileName) {
+      return {
+        ok: false,
+        reason: `public installer ${fileName} must be relative to its release origin`,
+      };
+    }
     // Mirror electron-updater's `resolveFiles`, which throws
     // ERR_UPDATER_NO_CHECKSUM for any referenced file lacking sha512/sha2.
     if (!hasManifestChecksum(file)) {
       return {
         ok: false,
         reason: `referenced file ${fileName} is missing a checksum`,
+      };
+    }
+    const indexedAsset = candidate.assets.find(
+      (asset) => asset.name === fileName,
+    );
+    if (indexedAsset?.size !== undefined && indexedAsset.size !== file.size) {
+      return {
+        ok: false,
+        reason: `installer ${fileName} disagrees with its indexed size`,
       };
     }
     // Every referenced file must actually be a published release asset, or the
@@ -418,7 +448,7 @@ export function readReleaseAssets(value: unknown): DesktopReleaseAsset[] {
   });
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
@@ -578,6 +608,7 @@ export function desktopReleasesUrl(): string {
 // or the custom authenticated provider for private/staging repos.
 export type DesktopUpdateFeed =
   | { readonly provider: "generic"; readonly url: string }
+  | PublicReleaseFeedConfig
   | ExactReleaseFeedConfig;
 
 // Builds the feed for a pinned desktop release. Public repos use the generic
@@ -594,7 +625,18 @@ export function buildDesktopReleaseFeed(
   linuxPackageType: LinuxPackageType | null,
   isArm64Mac: boolean,
 ): DesktopUpdateFeed {
-  if (token.length === 0) {
+  const origin = release.origins?.[0];
+  if (
+    token.length === 0 ||
+    (origin !== undefined && origin.blockMapAssets !== null)
+  ) {
+    if (origin !== undefined) {
+      return {
+        provider: "custom",
+        updateProvider: PublicDesktopReleaseProvider,
+        origin,
+      };
+    }
     return {
       provider: "generic",
       url: `https://github.com/${owner}/${repo}/releases/download/${encodeURIComponent(release.tag)}/`,
@@ -624,9 +666,17 @@ export function resolveDesktopManifestRequest(
   token: string,
 ): { readonly url: string; readonly headers: Record<string, string> } | null {
   const channelFile = platformChannelFile();
-  if (token.length === 0) {
+  const origin = release.origins?.[0];
+  if (
+    token.length === 0 ||
+    (origin !== undefined && origin.blockMapAssets !== null)
+  ) {
     return {
-      url: `https://github.com/${owner}/${repo}/releases/download/${encodeURIComponent(release.tag)}/${channelFile}`,
+      url: new URL(
+        channelFile,
+        release.origins?.[0]?.url ??
+          `https://github.com/${owner}/${repo}/releases/download/${encodeURIComponent(release.tag)}/`,
+      ).href,
       headers: { accept: "application/octet-stream" },
     };
   }
@@ -641,6 +691,87 @@ export function resolveDesktopManifestRequest(
       authorization: `token ${token}`,
     },
   };
+}
+
+interface PublicReleaseFeedConfig {
+  readonly provider: "custom";
+  readonly updateProvider: typeof PublicDesktopReleaseProvider;
+  readonly origin: DesktopReleaseOrigin;
+}
+
+// GenericProvider owns channel parsing and file resolution. Only the
+// versionless blockmap layout differs.
+export class PublicDesktopReleaseProvider extends GenericProvider {
+  private readonly options: PublicReleaseFeedConfig;
+
+  constructor(
+    options: PublicReleaseFeedConfig,
+    updater: AppUpdater,
+    runtimeOptions: ProviderRuntimeOptions,
+  ) {
+    super(
+      { provider: "generic", url: options.origin.url, channel: "latest" },
+      updater,
+      runtimeOptions,
+    );
+    this.options = options;
+  }
+
+  async getBlockMapFiles(
+    baseUrl: URL,
+    oldVersion: string,
+    newVersion: string,
+  ): Promise<URL[]> {
+    const name = `${decodeURIComponent(posix.basename(baseUrl.pathname))}.blockmap`;
+    const oldName = name.split(newVersion).join(oldVersion);
+    const versions = this.options.origin.blockMapAssets;
+    if (versions === null) {
+      const oldBase = new URL(this.options.origin.url);
+      oldBase.pathname = oldBase.pathname.replace(
+        /\/[^/]+\/$/,
+        `/${encodeURIComponent(desktopReleaseTag(oldVersion))}/`,
+      );
+      return [
+        new URL(encodeURIComponent(oldName), oldBase),
+        new URL(encodeURIComponent(name), this.options.origin.url),
+      ];
+    }
+    return [
+      [oldVersion, oldName],
+      [newVersion, name],
+    ].map(([version, blockMapName]) => {
+      const asset = versions
+        .find((it) => it.version === version)
+        ?.assets.find((it) => it.name === blockMapName);
+      if (asset === undefined) {
+        // electron-updater catches this and downloads the full installer.
+        throw new Error(
+          `Blockmap "${blockMapName}" is not indexed for desktop ${version}`,
+        );
+      }
+      return new URL(asset.url);
+    });
+  }
+}
+
+export function desktopManifestIdentity(info: UpdateInfo): string {
+  return JSON.stringify({
+    version: info.version,
+    files: getFileList(info)
+      .map((file) => ({
+        name: file.url,
+        size: file.size ?? null,
+        sha512: file.sha512 ?? null,
+        sha2: readManifestString(file, "sha2"),
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name)),
+  });
+}
+
+export function readDesktopManifestIdentity(raw: string, url: string): string {
+  return desktopManifestIdentity(
+    parseUpdateInfo(raw, platformChannelFile(), new URL(url)),
+  );
 }
 
 function privateExactReleaseFeed(

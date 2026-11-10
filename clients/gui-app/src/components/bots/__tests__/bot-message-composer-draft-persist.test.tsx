@@ -3,10 +3,14 @@
  * app (Tracy Bots T158): the REAL `BotMessageComposer` over the real
  * `useKeptBoxDraft`, drafts store and `localStorage`. Each case starts the
  * app afresh, so the box, the store and the testing library share one set of
- * modules, and a restart loads them again over what was stored. Only the send
- * mutation is scripted, and each case settles the send through the callbacks
+ * modules, and a restart loads them again over what was stored. Each case
+ * scripts the send mutation and settles the send through the callbacks
  * the box handed it.
  */
+import {
+  botMentionHostClientMock,
+  emptyBotMentionHostListsMock,
+} from "@/components/bots/__tests__/bot-mention-host-test-support";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   BotConversationSendRequest,
@@ -21,7 +25,6 @@ import {
   restart,
   startFresh,
   storeDraftsAsLeft,
-  storedDrafts,
   waitForStore,
   type App,
 } from "@/stores/bots/__tests__/bot-box-draft-persist-support";
@@ -39,6 +42,15 @@ const mocks = vi.hoisted(() => ({
   >(),
   settled: new WeakMap<SendCallbacks, Promise<void>>(),
 }));
+
+vi.mock(
+  "@/hooks/host/use-host-client-for-host-id",
+  () => botMentionHostClientMock,
+);
+vi.mock(
+  "@/hooks/bots/use-environment-host-lists-query",
+  () => emptyBotMentionHostListsMock,
+);
 
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => ({ stub: "tab-host-client" }),
@@ -213,6 +225,5 @@ describe("<BotMessageComposer /> and its draft on the device", () => {
       app,
       (stored) => stored?.[BOT_ID]?.[CHANNEL]?.text === "Is CI green?",
     );
-    expect(storedDrafts(app)?.[BOT_ID]?.[CHANNEL]?.text).toBe("Is CI green?");
   });
 });

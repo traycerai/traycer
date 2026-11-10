@@ -135,7 +135,8 @@ export function ArtifactExpansionFixture(): ReactElement {
             onBridge={null}
             onTextSelection={null}
             onFrame={null}
-            renderOverlay={null}
+            onCommentPage={null}
+            overlay={null}
             sourceEquivalent={undefined}
             toolbarControls={<ToolbarProbe picked={picked} />}
             menuItems={

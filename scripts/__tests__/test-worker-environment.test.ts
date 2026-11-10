@@ -26,6 +26,28 @@ const inheritedConfig = path.resolve(
 );
 const inheritedTestSpread = "    ...baseConfig.test,\n";
 const requiredGlobalSetups: string[] = [];
+const publicWorkerEnvironment = {
+  CI_TOOLS_MIRROR_BASE_URL: "https://mirror.fixture.invalid/tools",
+  ELECTRON_MIRROR: "https://electron.fixture.invalid/",
+  ELECTRON_CUSTOM_DIR: "42.11.12-fixture",
+  ELECTRON_CACHE: "/synthetic/electron-cache",
+  electron_config_cache: "fixture-electron-config-cache",
+  ELECTRON_CONFIG_CACHE: "fixture-electron-config-cache",
+};
+const adjacentFakeSecrets = Object.fromEntries(
+  Object.keys(publicWorkerEnvironment).flatMap((name) =>
+    ["TOKEN", "SECRET", "KEY"].map((suffix) => [
+      `${name}_${suffix}`,
+      "synthetic-secret-value",
+    ]),
+  ),
+);
+
+type EnvironmentProbeResult = {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+};
 
 function listVitestConfigs(directory: string): string[] {
   const found: string[] = [];
@@ -917,7 +939,72 @@ function runVitest(
   };
 }
 
+function runGuardedEnvironmentProbe(home: string): EnvironmentProbeResult {
+  const script = [
+    `const expected = ${JSON.stringify(publicWorkerEnvironment)};`,
+    `const secretNames = ${JSON.stringify(Object.keys(adjacentFakeSecrets))};`,
+    `const publicFields = Object.fromEntries(Object.entries(expected).map(([name, value]) => [name, process.env[name] === value]));`,
+    `const strippedSecrets = Object.fromEntries(secretNames.map((name) => [name, process.env[name] === undefined]));`,
+    `process.stdout.write(JSON.stringify({ publicFields, strippedSecrets }));`,
+  ].join("\n");
+  const result = spawnSync(
+    process.execPath,
+    ["--import", guardPath, "-e", script],
+    {
+      cwd: repoRoot,
+      env: {
+        PATH: process.env.PATH ?? "",
+        HOME: home,
+        USERPROFILE: home,
+        TMPDIR: home,
+        TMP: home,
+        TEMP: home,
+        SYSTEMROOT: process.env.SYSTEMROOT,
+        WINDIR: process.env.WINDIR,
+        COMSPEC: process.env.COMSPEC,
+        PATHEXT: process.env.PATHEXT,
+        ...publicWorkerEnvironment,
+        ...adjacentFakeSecrets,
+      },
+      encoding: "utf8",
+      timeout: 15_000,
+      windowsHide: true,
+    },
+  );
+  return {
+    status: result.status,
+    stdout: result.stdout,
+    stderr: result.stderr,
+  };
+}
+
 describe("test worker environment guard", () => {
+  it("preserves exact public mirror and Electron cache inputs while stripping adjacent secrets", () => {
+    const syntheticHome = mkdtempSync(
+      path.join(tmpdir(), "traycer-worker-env-allowlist-"),
+    );
+    try {
+      const result = runGuardedEnvironmentProbe(syntheticHome);
+      expect(result.status, result.stderr).toBe(0);
+      const report = JSON.parse(result.stdout) as {
+        publicFields: Record<string, boolean>;
+        strippedSecrets: Record<string, boolean>;
+      };
+      expect(report.publicFields).toEqual(
+        Object.fromEntries(
+          Object.keys(publicWorkerEnvironment).map((name) => [name, true]),
+        ),
+      );
+      expect(report.strippedSecrets).toEqual(
+        Object.fromEntries(
+          Object.keys(adjacentFakeSecrets).map((name) => [name, true]),
+        ),
+      );
+    } finally {
+      rmSync(syntheticHome, { recursive: true, force: true });
+    }
+  });
+
   it("scrubs a synthetic probe before isolated and reused shared worker files", () => {
     const syntheticHome = mkdtempSync(
       path.join(tmpdir(), "traycer-worker-env-proof-"),

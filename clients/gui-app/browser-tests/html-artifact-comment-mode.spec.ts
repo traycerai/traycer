@@ -22,6 +22,8 @@ interface CommentModeProbe {
     readonly mediaType: string;
     readonly base64: string;
   }>;
+  readonly revealThread: (threadId: string) => void;
+  readonly lastThreadId: () => string | null;
 }
 interface ProbeWindow extends Window {
   __commentModeProbe?: CommentModeProbe;
@@ -433,9 +435,9 @@ test("zoom and wheel scroll keep working while Comments is on", async ({
 });
 
 async function pinOffset(page: Page, selector: string): Promise<number> {
-  const pinBox = await page
-    .getByRole("button", { name: "Open comment 1" })
-    .boundingBox();
+  // The deep section's own pin. Its number follows document order, so it is
+  // not the comment labelled 1 once another thread sits above it.
+  const pinBox = await pin(page, "thread-deep").boundingBox();
   if (pinBox === null) return Number.POSITIVE_INFINITY;
   const target = await elementBoxInPage(page, selector);
   // The pin hangs off the element's top-right: its right edge on the
@@ -624,4 +626,197 @@ test("comment mode picks instead of activating the page, while a pinch still zoo
   await expect
     .poll(async () => (await memory(page)).scrollY, { timeout: 3_000 })
     .toBeGreaterThan(scrolled + 20);
+});
+
+const MISSING = "This page is not in the artifact.";
+const UNREACHABLE = "Couldn't load this page from its host.";
+
+function pin(page: Page, threadId: string): Locator {
+  return page.locator(`[data-comment-pin="${threadId}"]`);
+}
+
+async function postedThreadId(page: Page): Promise<string> {
+  const threadId = await page.evaluate(() => {
+    const probe = (window as ProbeWindow).__commentModeProbe;
+    if (probe === undefined) throw new Error("no comment-mode probe");
+    return probe.lastThreadId();
+  });
+  if (threadId === null) throw new Error("no comment was created");
+  return threadId;
+}
+
+/** Hover, pick, and post. The pin is the comment's, and the document is the one already loaded. */
+async function commentOn(page: Page, selector: string): Promise<string> {
+  const loaded = (await memory(page)).loadId;
+  await hoverElement(page, selector);
+  await clickInPage(page, selector);
+  const dialog = page.getByRole("dialog", { name: "New comment" });
+  await expect(dialog).toBeVisible();
+  await dialog
+    .locator('[contenteditable="true"]')
+    .fill("A note on this element");
+  await dialog.getByRole("button", { name: "Comment", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  const threadId = await postedThreadId(page);
+  await expect(pin(page, threadId)).toBeVisible();
+  expect((await memory(page)).loadId).toBe(loaded);
+  return threadId;
+}
+
+async function expectOnlyPin(
+  page: Page,
+  shown: string,
+  hidden: string,
+): Promise<void> {
+  await expect(pin(page, shown)).toBeVisible();
+  await expect(pin(page, hidden)).toHaveCount(0);
+}
+
+test("a comment on the entry page is adopted without reloading it", async ({
+  page,
+}) => {
+  await open(page);
+  await setComments(page, true);
+
+  await commentOn(page, "#fresh");
+  // The seeded entry pin sits at the top of the page, so it is on screen
+  // without scrolling down to the deep section.
+  await expect(pin(page, "thread-top")).toBeVisible();
+});
+
+test("each page shows only its own pins, and Back and Home keep that", async ({
+  page,
+}) => {
+  await open(page);
+  await setComments(page, true);
+  await expectOnlyPin(page, "thread-top", "thread-marked");
+
+  // Comment mode takes the click, so the link is followed with the tool off.
+  await setComments(page, false);
+  await clickInPage(page, "#detail");
+  await expect(pageFrame(page).locator("#marked")).toBeVisible();
+  await setComments(page, true);
+  await expectOnlyPin(page, "thread-marked", "thread-top");
+
+  await page.getByRole("button", { name: "Back" }).click();
+  await expect(pageFrame(page).locator("#counter")).toBeVisible();
+  await expect(pageFrame(page).locator("#marked")).toHaveCount(0);
+  await expectOnlyPin(page, "thread-top", "thread-marked");
+
+  await setComments(page, false);
+  await clickInPage(page, "#detail");
+  await expect(pageFrame(page).locator("#marked")).toBeVisible();
+  await setComments(page, true);
+  await page.getByRole("button", { name: "Home" }).click();
+  await expect(pageFrame(page).locator("#counter")).toBeVisible();
+  await expect(pageFrame(page).locator("#marked")).toHaveCount(0);
+  await expectOnlyPin(page, "thread-top", "thread-marked");
+});
+
+test("a comment stamped on the other page is still there after Home and the link back", async ({
+  page,
+}) => {
+  await open(page);
+  await clickInPage(page, "#detail");
+  await expect(pageFrame(page).locator("#marked")).toBeVisible();
+  await setComments(page, true);
+  const threadId = await commentOn(page, "#fresh");
+  const stamped = (await memory(page)).loadId;
+
+  await page.getByRole("button", { name: "Home" }).click();
+  await expect(pageFrame(page).locator("#marked")).toHaveCount(0);
+  await expect(pageFrame(page).locator("#counter")).toBeVisible();
+  await expect(pin(page, threadId)).toHaveCount(0);
+
+  await setComments(page, false);
+  await clickInPage(page, "#detail");
+  await expect(pageFrame(page).locator("#marked")).toBeVisible();
+  await setComments(page, true);
+
+  expect((await memory(page)).loadId).not.toBe(stamped);
+  await expect(pageFrame(page).locator("#fresh")).toHaveAttribute(
+    "data-tid",
+    /.+/,
+  );
+  await expect(pin(page, threadId)).toBeVisible();
+  await expect(pin(page, "thread-deep")).toHaveCount(0);
+});
+
+test("revealing a thread on the other page opens it and Back returns", async ({
+  page,
+}) => {
+  await open(page);
+  await page.evaluate(() => {
+    const probe = (window as ProbeWindow).__commentModeProbe;
+    if (probe === undefined) throw new Error("no comment-mode probe");
+    probe.revealThread("thread-marked");
+  });
+
+  await expect(commentsButton(page)).toHaveAttribute("aria-pressed", "true");
+  await expect(pageFrame(page).locator("#marked")).toBeVisible();
+  await expect
+    .poll(() => markerDelta(page, selectionOutline(page), "#marked"))
+    .toBeLessThanOrEqual(2);
+
+  await page.getByRole("button", { name: "Back" }).click();
+  await expect(pageFrame(page).locator("#counter")).toBeVisible();
+  await expect(pageFrame(page).locator("#marked")).toHaveCount(0);
+  await expect(commentsButton(page)).toHaveAttribute("aria-pressed", "true");
+});
+
+test("a missing page stays on its stand-in when Comments turns on", async ({
+  page,
+}) => {
+  await open(page);
+  await clickInPage(page, "#away");
+  await expect(page.getByText(MISSING)).toBeVisible();
+
+  await setComments(page, true);
+
+  await expect(page.getByText(MISSING)).toBeVisible();
+  await expect(
+    page.getByText("Comments can't be added on this page."),
+  ).toHaveCount(0);
+  await expect(page.locator("[data-canvas-selection-overlay]")).toHaveCount(0);
+  await expect(page.getByRole("dialog", { name: "New comment" })).toHaveCount(
+    0,
+  );
+
+  await page.getByRole("button", { name: "Go home" }).click();
+  await expect(pageFrame(page).locator("#counter")).toBeVisible();
+  await expect(page.getByText(MISSING)).toHaveCount(0);
+});
+
+test("an unreachable page stays on its stand-in when Comments turns on", async ({
+  page,
+}) => {
+  await open(page);
+  await clickInPage(page, "#broken");
+  await expect(page.getByText(UNREACHABLE)).toBeVisible();
+
+  await setComments(page, true);
+
+  await expect(page.getByText(UNREACHABLE)).toBeVisible();
+  await expect(
+    page.getByText("Comments can't be added on this page."),
+  ).toHaveCount(0);
+  await expect(page.locator("[data-canvas-selection-overlay]")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Retry" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Back" }).click();
+  await expect(pageFrame(page).locator("#counter")).toBeVisible();
+  await expect(page.getByText(UNREACHABLE)).toHaveCount(0);
+});
+
+test("a link still opens the other page while Comments is off, and that page still runs", async ({
+  page,
+}) => {
+  await open(page);
+  await clickInPage(page, "#detail");
+  await expect(pageFrame(page).locator("#marked")).toBeVisible();
+  await expect(page.locator("[data-canvas-selection-overlay]")).toHaveCount(0);
+
+  await clickInPage(page, "#counter");
+
+  await expect(pageFrame(page).locator("#counter")).toHaveText("count 1");
 });

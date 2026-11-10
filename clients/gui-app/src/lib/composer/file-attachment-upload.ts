@@ -27,7 +27,7 @@ import {
 } from "./file-attachments";
 
 /** The `drafts.putBlob` minor that accepts `kind: "file"`. */
-export const DRAFTS_PUT_BLOB_FILE_MINOR = 2;
+const DRAFTS_PUT_BLOB_FILE_MINOR = 2;
 
 /**
  * A host below `@1.2` strips `kind`, `fileName` and `mediaType` and would
@@ -58,7 +58,7 @@ export interface PutFileBlobVariables {
 
 /**
  * One `drafts.putBlob` of a file, dispatched through the surface's host
- * mutation (`useDraftsPutFileBlob`), which carries the digest key, the `@1.2`
+ * mutation (`useDraftsPutFileBlob`), which carries the file identity key, the `@1.2`
  * floor and the two-minute budget.
  */
 export type PutFileBlob = (
@@ -70,7 +70,7 @@ export type PutFileBlob = (
  * settled: the dispatch floor is what decides then, so a picked file is not
  * refused on a guess.
  */
-export function hostFileAttachmentSupport(
+function hostFileAttachmentSupport(
   hostId: string,
 ): "supported" | "outdated" | "unknown" {
   const version = readNegotiatedMethodVersion(hostId, "drafts.putBlob");

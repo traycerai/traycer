@@ -5477,7 +5477,13 @@ describe("RemoteSession unary idempotency negotiation", () => {
         expect(error).toBeInstanceOf(HostTransportFailureError);
         // Ambiguous, never retryable: the attempt this one replays may already
         // have committed, so licensing a third would compound it.
+        // This attempt itself sent nothing, so it does not read as reached.
         expect(error).not.toBeInstanceOf(RetryableTransportError);
+        expect(mayHaveReachedHost(error)).toBe(false);
+        if (!(error instanceof HostTransportFailureError)) {
+          throw new Error("expected the unkeyed replay refusal");
+        }
+        expect(error.fatalDetails).not.toBeNull();
         // The refusal is the assertion. The relay auto-responds here (no
         // `skipUnaryAutoRespond`), so a dispatched frame would have RESOLVED
         // the call rather than reaching either check above - and this pins

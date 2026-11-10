@@ -76,7 +76,7 @@ import type {
 } from "@traycer-clients/shared/host-transport/artifact-stream-client";
 import type {
   ArtifactSubscribeSeedOffer,
-  ArtifactSubscribeUnavailableCode,
+  ArtifactSubscribeUnavailableCodeV12,
 } from "@traycer/protocol/host/epic/artifact-subscribe";
 import { artifactLaneId, type ArtifactLaneRequest } from "./lane-events";
 
@@ -163,7 +163,7 @@ export interface ArtifactLaneAdapter
  * the wrong affordance - which is the reason neither side is free text.
  */
 function unavailableCodeOf(
-  code: ArtifactSubscribeUnavailableCode,
+  code: ArtifactSubscribeUnavailableCodeV12,
 ): DocUnavailableCode {
   switch (code) {
     case "staleAuthorityEpoch":
@@ -172,6 +172,8 @@ function unavailableCodeOf(
       return "artifact-not-found";
     case "bodyUnavailable":
       return "body-unavailable";
+    case "bodyMoved":
+      return "body-moved";
   }
 }
 

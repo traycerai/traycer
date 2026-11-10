@@ -329,7 +329,7 @@ class RuntimeHostMessenger<
     hostId: string,
     fatal: FatalErrorDetails,
   ) => void;
-  private readonly localMessenger: IHostMessenger<Registry>;
+  private readonly localMessenger: WsRpcClient<Registry>;
   /**
    * The remote bindings, keyed by the host they serve. Two slots: the server
    * pool's, and ONE host's. A request for a different remote host replaces
@@ -545,6 +545,7 @@ class RuntimeHostMessenger<
     this.currentBearer = null;
     this.detachOrphanAvailability();
     this.teardownRemoteTransport();
+    this.localMessenger.releaseIdleLocalSessions();
   }
 
   reset(): void {
@@ -556,6 +557,7 @@ class RuntimeHostMessenger<
     this.currentBearer = null;
     this.detachOrphanAvailability();
     this.teardownRemoteTransport();
+    this.localMessenger.releaseIdleLocalSessions();
     this.terminalVerdictByHost.clear();
   }
 

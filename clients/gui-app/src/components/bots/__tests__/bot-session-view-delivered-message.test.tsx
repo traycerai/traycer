@@ -12,6 +12,10 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import {
+  botQuestionAnswersText,
+  type BotQuestionAnswerSet,
+} from "@traycer/protocol/persistence/epic/messages";
 import type {
   AutonomousResumeConversationMessage,
   AutonomousResumeTrigger,
@@ -77,6 +81,7 @@ import {
   postThread,
   scriptedSession,
   sessionTurn,
+  textDoc,
 } from "@/components/bots/__tests__/bot-turn-test-support";
 import {
   installLegendListTestClock,
@@ -193,6 +198,28 @@ function personMessage(messageId: string): Extract<Message, { role: "user" }> {
     ...base,
     sender: { type: "user", userId: SENDER_ID },
     message: { kind: "user", content, browserAnnotations: [] },
+  };
+}
+
+/**
+ * The member's message that answers a card's questions together: its text the
+ * form an older client draws, and `answers` beside it.
+ */
+function answeredTogether(
+  answers: BotQuestionAnswerSet["answers"],
+): Extract<Message, { role: "user" }> {
+  return {
+    ...personMessage(THREAD_MESSAGE_ID),
+    message: {
+      kind: "user",
+      content: textDoc(
+        botQuestionAnswersText(answers)
+          .split("\n")
+          .filter((line) => line.length > 0),
+      ),
+      browserAnnotations: [],
+    },
+    questionAnswers: { questionMessageId: "bot-question:req-card", answers },
   };
 }
 
@@ -329,6 +356,61 @@ describe("a bot's session holding a delivered member message", () => {
       THREAD_MESSAGE_ID,
     );
     expect(opened.channel).not.toHaveBeenCalled();
+  });
+
+  it("draws the answers a member sent together as each question with its answer, or Skipped, in place of the row's text", async () => {
+    const answers: BotQuestionAnswerSet["answers"] = [
+      {
+        questionIndex: 0,
+        question: "Which train should carry the fix?",
+        answer: "The Thursday train",
+        skipped: false,
+      },
+      {
+        questionIndex: 1,
+        question: "Who signs off on the rollout?",
+        answer: null,
+        skipped: true,
+      },
+      {
+        questionIndex: 2,
+        question: "Anything to hold back?",
+        answer: "The billing migration",
+        skipped: false,
+      },
+    ];
+    mocks.sessions[THREAD_ID] = scriptedSession(THREAD_ID, [
+      answeredTogether(answers),
+    ]).handle;
+    mountThreadSession(resumeTrigger(delivered({})));
+    await settleLegendList();
+
+    const post = within(
+      within(view()).getByTestId("bot-delivered-message"),
+    ).getByTestId("bot-delivered-post");
+    const list = within(post).getByTestId("bot-question-answers");
+    expect(
+      Array.from(list.querySelectorAll("dt, dd")).map(
+        (node) => node.textContent,
+      ),
+    ).toEqual([
+      "Which train should carry the fix?",
+      "The Thursday train",
+      "Who signs off on the rollout?",
+      "Skipped",
+      "Anything to hold back?",
+      "The billing migration",
+    ]);
+    // The row's own text repeats every question and answer, so one more
+    // drawing of it would show a second copy of each.
+    const drawn = post.textContent;
+    for (const text of [
+      "Which train should carry the fix?",
+      "The Thursday train",
+      "Skipped",
+    ]) {
+      expect(drawn.split(text)).toHaveLength(2);
+    }
   });
 
   it("draws the channel post a thread answers and opens the channel landed on it", async () => {

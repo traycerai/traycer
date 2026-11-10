@@ -641,7 +641,9 @@ describe("what a window leaves stored", () => {
     app.drafts.getState().setAnswer(BOT_ID, "question-1", {
       chosen: ["a"],
       typed: "",
+      skip: false,
       sent: null,
+      unsureSince: null,
     });
     app.drafts.getState().closeBot(BOT_ID);
     app.drafts.getState().forgetBot("a-bot-holding-nothing");
@@ -881,7 +883,9 @@ describe("closing Tracy and forgetting a bot", () => {
     app.drafts.getState().setAnswer(BOT_ID, "question-1", {
       chosen: ["a"],
       typed: "",
+      skip: false,
       sent: null,
+      unsureSince: null,
     });
     return useTracySurfaceStore;
   }

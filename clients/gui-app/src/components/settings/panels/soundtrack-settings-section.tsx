@@ -26,6 +26,7 @@ import {
   isMixDirectorId,
   type MixDirectorId,
 } from "@/lib/soundtrack/directors";
+import { useSoundtrackStore } from "@/stores/soundtrack/soundtrack-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
 const VOLUME_STEP = 0.05;
@@ -44,6 +45,12 @@ const DIRECTOR_IDS: readonly MixDirectorId[] = ["static", "rules"];
  * show only while it is on, and keep their value.
  */
 export function SoundtrackSettingsSection(): ReactNode {
+  const setPiecesEnabled = useSoundtrackStore(
+    (state) => state.setPiecesEnabled,
+  );
+  const setSetPiecesEnabled = useSoundtrackStore(
+    (state) => state.setSetPiecesEnabled,
+  );
   const availability = useSettingsAvailabilityContext();
   const on = useSettingsStore((state) => state.soundtrackEnabled);
   const playbackControls = useSettingsStore(
@@ -84,6 +91,20 @@ export function SoundtrackSettingsSection(): ReactNode {
               checked={playbackControls}
               onCheckedChange={setPlaybackControlsOn}
               aria-label="Playback controls"
+            />
+          }
+        />
+      ) : null}
+      {APP_NOTIFICATIONS.definitions.soundtrackSetPieces.availableWhen(
+        availability,
+      ) ? (
+        <SettingsRow
+          row={APP_NOTIFICATIONS.definitions.soundtrackSetPieces}
+          control={
+            <Switch
+              checked={setPiecesEnabled}
+              onCheckedChange={setSetPiecesEnabled}
+              aria-label="Set pieces"
             />
           }
         />

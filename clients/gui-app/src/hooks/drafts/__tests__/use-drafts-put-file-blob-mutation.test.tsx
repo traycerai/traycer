@@ -38,7 +38,7 @@ afterEach(() => {
 });
 
 describe("useDraftsPutFileBlob", () => {
-  it("dispatches on the target's own client with the digest key, the 1.2 floor and the two-minute budget", async () => {
+  it("dispatches on the target's own client with the file identity key, the 1.2 floor and the two-minute budget", async () => {
     const requestWithOptions = vi
       .fn<RequestWithOptions>()
       .mockResolvedValue({ ok: true });

@@ -62,6 +62,7 @@ import {
   botConversationSendRequestSchemaV11,
   botConversationSendRequestSchemaV12,
   botConversationSendRequestSchemaV13,
+  botConversationSendRequestSchemaV14,
   botConversationSendResponseSchema,
   botConversationSearchRequestSchema,
   botConversationSearchResponseSchema,
@@ -417,7 +418,7 @@ export const botConversationSendUpgradeV12ToV13 = defineUpgradePath<
 export const botConversationSendV14 = defineRpcContract({
   method: "bot.conversation.send",
   schemaVersion: { major: 1, minor: 4 } as const,
-  requestSchema: botConversationSendRequestSchema,
+  requestSchema: botConversationSendRequestSchemaV14,
   responseSchema: botConversationSendResponseSchema,
 });
 export const botConversationSendUpgradeV13ToV14 = defineUpgradePath<
@@ -426,6 +427,27 @@ export const botConversationSendUpgradeV13ToV14 = defineUpgradePath<
 >({
   from: botConversationSendV13.schemaVersion,
   to: botConversationSendV14.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+/**
+ * `bot.conversation.send@1.5` (T167): a member's answers to every open
+ * question of a bot's card in one send (`answers`). A 1.4 request answers at
+ * most one question (`answer`).
+ */
+export const botConversationSendV15 = defineRpcContract({
+  method: "bot.conversation.send",
+  schemaVersion: { major: 1, minor: 5 } as const,
+  requestSchema: botConversationSendRequestSchema,
+  responseSchema: botConversationSendResponseSchema,
+});
+export const botConversationSendUpgradeV14ToV15 = defineUpgradePath<
+  typeof botConversationSendV14,
+  typeof botConversationSendV15
+>({
+  from: botConversationSendV14.schemaVersion,
+  to: botConversationSendV15.schemaVersion,
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });

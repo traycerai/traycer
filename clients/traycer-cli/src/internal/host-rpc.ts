@@ -362,20 +362,21 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
     signal: null,
   });
 
+  const client = new WsRpcClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    requestId: () => randomUUID(),
+    webSocketFactory: createWhatwgWebSocketFactory(),
+    dialTimeoutMs: DEFAULT_DIAL_TIMEOUT_MS,
+    frameTimeoutMs: FRAME_TIMEOUT_MS,
+    hostAttestationWindowMs: attestationWindowForPolicy(retryPolicy),
+    // The CLI has no selection authority to feed: there is no window, no
+    // kernel, and nothing that could act on a failover verdict.
+    evidence: NO_TRANSPORT_EVIDENCE,
+    clientIdentity: CLI_CLIENT_IDENTITY,
+  });
   const messenger = createRetryingMessenger<HostRpcRegistry>(
     createAuthAwareMessenger<HostRpcRegistry>(
-      new WsRpcClient<HostRpcRegistry>({
-        registry: hostRpcRegistry,
-        requestId: () => randomUUID(),
-        webSocketFactory: createWhatwgWebSocketFactory(),
-        dialTimeoutMs: DEFAULT_DIAL_TIMEOUT_MS,
-        frameTimeoutMs: FRAME_TIMEOUT_MS,
-        hostAttestationWindowMs: attestationWindowForPolicy(retryPolicy),
-        // The CLI has no selection authority to feed: there is no window, no
-        // kernel, and nothing that could act on a failover verdict.
-        evidence: NO_TRANSPORT_EVIDENCE,
-        clientIdentity: CLI_CLIENT_IDENTITY,
-      }),
+      client,
       revalidator,
       dispatch.reauthenticate,
     ),
@@ -433,6 +434,7 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
   } finally {
     dispatch.signal?.removeEventListener("abort", abortWithCaller);
     callLifetime.abort("cli-call-settled");
+    client.releaseIdleLocalSessions();
     store.dispose();
   }
 }

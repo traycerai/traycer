@@ -1,3 +1,4 @@
+import { readDesktopHorizontalWheelOwnership } from "@/components/layout/shell/desktop-history-gesture-ownership";
 import "../../../../__tests__/test-browser-apis";
 import { cleanup, fireEvent, screen } from "@testing-library/react";
 import { renderPeekTile } from "@/components/browser-tile/__tests__/browser-peek-tile-render";
@@ -143,9 +144,10 @@ describe("BrowserPeekTile viewer role", () => {
   it("leaves horizontal swipes to the read-only screencast", () => {
     renderTile();
 
-    expect(readOnlySurface().hasAttribute("data-history-gesture-owner")).toBe(
-      true,
-    );
+    expect(readDesktopHorizontalWheelOwnership(readOnlySurface())).toEqual({
+      back: true,
+      forward: true,
+    });
   });
 
   it("sends nothing and shows nothing when a gesture lands on the surface", () => {

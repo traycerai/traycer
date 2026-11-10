@@ -243,12 +243,13 @@ function ShownArtifact(props: {
           className="w-full"
           height={height}
           commenting={false}
+          onCommentPage={null}
           onSize={handleSize}
           onStatus={handleStatus}
           onBridge={null}
           onTextSelection={null}
           onFrame={null}
-          renderOverlay={null}
+          overlay={null}
           sourceEquivalent={undefined}
           toolbarControls={
             <InlineArtifactActions

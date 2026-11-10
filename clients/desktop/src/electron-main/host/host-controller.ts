@@ -957,35 +957,41 @@ function parseAvailableSnapshot(raw: unknown): AvailableSnapshotShape {
 }
 
 // Resolve the host-runtime archive bundled beside the desktop's CLI binary
-// (`resources/cli/<platform>-<arch>/host-runtime-<platform>-<arch>.tar.gz`,
-// staged by scripts/desktop-install-cloud.js). Windows-only (fixup A2): on
-// POSIX the per-user slot CLI is a symlink into the app bundle, so
-// `process.execPath` resolves beside the bundled host archive and the CLI's
-// own `resolveBundledHostArchive` finds it unaided - passing nothing is
-// correct there. On Windows symlinks need elevated privilege, so the slot
-// CLI is a COPY living outside the bundle; the CLI can no longer see the
-// sibling archive and would fall back to the registry, which publishes no
-// win32 asset for dogfood/unsigned builds. `--from` points it at the
-// archive explicitly. Returns null when there is no packaged archive (dev
-// builds, CLI-only installs) - `host ensure` then falls through to its
-// normal registry resolution.
+// (`resources/cli/win32-<arch>/host-runtime-win32-<arch>.tar.gz`, or `.zip`
+// when that is the signed asset). Windows-only. Host ensure spawns the
+// in-bundle CLI (`resolveBundledCliPath`), so on POSIX `process.execPath`
+// already sits in that directory and the CLI's `resolveBundledHostArchive`
+// finds the archive. The per-user slot (`~/.traycer/cli/.../bin/traycer`)
+// is a copy on every platform, including POSIX, and is not the process
+// ensure runs. On Windows that copy is also what a terminal would run, and
+// the in-bundle path is still passed here as `--bundled` because a Windows
+// slot copy does not sit beside the archive. A pinned CLI then verifies the
+// sibling descriptor and records registry provenance. An unpinned CLI treats
+// the same path as a local file. `--from` would record every install as
+// unsigned. Returns null when there is no packaged archive (dev builds,
+// CLI-only installs). `host ensure` then uses its normal resolution.
 async function resolveWindowsBundledHostArchive(): Promise<string | null> {
   if (process.platform !== "win32") return null;
   const bundledCli = await resolveBundledCliPath();
   if (bundledCli === null) return null;
   // No native Windows arm64 host - arm64 runs the x64 runtime (mirrors
-  // resolveBundledHostArchive in the CLI).
+  // resolveBundledHostArchive in the CLI). tar.gz first, then zip, same
+  // order as the CLI's candidate names.
   const arch = process.arch === "arm64" ? "x64" : process.arch;
-  const archive = join(
-    dirname(bundledCli),
+  const dir = dirname(bundledCli);
+  for (const name of [
     `host-runtime-win32-${arch}.tar.gz`,
-  );
-  try {
-    await access(archive, constants.R_OK);
-    return archive;
-  } catch {
-    return null;
+    `host-runtime-win32-${arch}.zip`,
+  ]) {
+    const archive = join(dir, name);
+    try {
+      await access(archive, constants.R_OK);
+      return archive;
+    } catch {
+      // Try the next candidate.
+    }
   }
+  return null;
 }
 
 function latestVersionFromSnapshot(
@@ -4115,16 +4121,16 @@ export class HostController {
     keepInstalled: boolean,
   ): Promise<MutationOutcome<ConvergeReadyOk>> {
     const prePid = (await readRunningHostIdentity(this.layout))?.pid ?? null;
-    const bundledHostFrom = await resolveWindowsBundledHostArchive();
-    // `--keep-installed` and `--from` coexist deliberately: on this (Windows)
-    // route `--from` is only the FIRST-INSTALL source, so a viable install is
-    // kept and the bundled archive is used only when nothing is installed.
+    const bundledHostArchive = await resolveWindowsBundledHostArchive();
+    // `--keep-installed` and `--bundled` coexist: `--bundled` is only the
+    // first-install source, so a viable install is kept and the archive is
+    // used only when nothing is installed.
     const args = [
       "host",
       "ensure",
       ...(force ? ["--force"] : []),
       ...(keepInstalled ? ["--keep-installed"] : []),
-      ...(bundledHostFrom !== null ? ["--from", bundledHostFrom] : []),
+      ...(bundledHostArchive !== null ? ["--bundled", bundledHostArchive] : []),
     ];
     let raw: unknown;
     try {
@@ -4401,17 +4407,13 @@ export class HostController {
     // THE ORDINARY `--automatic` PATH IS CLOSED WHILE FOLLOWING A LINE.
     //
     // `host download --automatic` follows the manifest's stable `latest`
-    // pointer, and for a build following its own release line that pointer is
-    // another line - so falling through to it whenever this line has nothing to
-    // offer is exactly the cross-line jump implicit participation forbids. The
-    // only builds this mode may stage are the ones `resolveHostStageTarget`
-    // returns: a later RC on the line, or the line's own stable.
-    //
-    // The consequence is deliberate and matches the Desktop app: an ABANDONED
-    // line has no automatic exit. If `2.0.0` is never published and the work
-    // ships as `2.1.0`, a `2.0.0-rc.1` host stays where it is rather than being
-    // moved to a line nobody put it on. Publishing the line's stable, or a
-    // reinstall, is the exit.
+    // pointer, which RC releases never move and which can lag a line's stable
+    // (installed `2.0.0-rc.1`, `2.0.0` published, `latest` still `1.9.0`) - so
+    // falling through to it would stage a downgrade. The only builds this mode
+    // may stage are the ones `resolveHostStageTarget` returns, pinned by exact
+    // version: the newest stable on any line, or a later RC on the installed
+    // line. A newer stable is therefore reached in one hop even when `latest`
+    // has not caught up with it, and an RC on another line is never taken.
     const automaticStablePathOpen = mode !== "implicit-rc-line";
     try {
       snapshot = parseAvailableSnapshot(
@@ -4480,9 +4482,9 @@ export class HostController {
       // verified, fingerprinted stage; otherwise this valid update remains
       // permanently deferred because Desktop can neither apply nor purge it.
       //
-      // A FOLLOWER REPAIRS FROM ITS OWN LINE OR NOT AT ALL: `--automatic` here
-      // would repair the stage by fetching another line's stable, so the pinned
-      // same-line candidate is used instead. With no such candidate the legacy
+      // A FOLLOWER REPAIRS FROM ITS OWN CANDIDATE OR NOT AT ALL: `--automatic`
+      // here would repair the stage from the lagging `latest` pointer, so the
+      // pinned candidate is used instead. With no such candidate the legacy
       // bytes are left alone - already unusable, and no worse for waiting -
       // rather than replaced by a build this mode may not select.
       //
@@ -4511,11 +4513,11 @@ export class HostController {
         // fingerprint this stage does not have, and would log "cannot purge an
         // unpinned staged host after registry invalidation" at `warn` on every
         // single reconcile - naming a cause that did not happen. The registry
-        // is fine; the stage is fine; this build's line simply has nothing to
+        // is fine; the stage is fine; this mode simply has nothing newer to
         // replace it with yet. Say that once, at debug, since it is a standing
         // condition rather than an event, and stop.
         log.debug(
-          "[host-controller] leaving an unpinned legacy stage in place: its release line has no candidate to replace it with",
+          "[host-controller] leaving an unpinned legacy stage in place: nothing newer this mode may stage",
           {
             version: staged.version,
             installedVersion,

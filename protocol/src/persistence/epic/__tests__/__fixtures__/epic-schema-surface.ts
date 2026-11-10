@@ -8029,6 +8029,137 @@ export const epicSchemaSurfaceBaseline = {
                 },
                 "artifactRoomId": {
                   "type": "string"
+                },
+                "head": {
+                  "type": "object",
+                  "properties": {
+                    "files": {
+                      "type": "object",
+                      "properties": {
+                        "revision.json": {
+                          "type": "object",
+                          "properties": {
+                            "sha256": {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]{64}$"
+                            },
+                            "byteLength": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "mediaType": {
+                              "type": "string",
+                              "maxLength": 127,
+                              "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]*\\/[a-z0-9][a-z0-9!#$&^_.+-]*$"
+                            },
+                            "status": {
+                              "type": "string",
+                              "enum": [
+                                "queued",
+                                "uploading",
+                                "published",
+                                "local-only",
+                                "failed"
+                              ]
+                            },
+                            "seq": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "scalars": {
+                              "oneOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string",
+                                      "enum": [
+                                        "spec",
+                                        "review"
+                                      ]
+                                    },
+                                    "title": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "kind",
+                                    "title"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string",
+                                      "enum": [
+                                        "ticket",
+                                        "story"
+                                      ]
+                                    },
+                                    "title": {
+                                      "type": "string"
+                                    },
+                                    "assignee": {
+                                      "type": "string"
+                                    },
+                                    "status": {
+                                      "anyOf": [
+                                        {
+                                          "type": "number",
+                                          "const": 0
+                                        },
+                                        {
+                                          "type": "number",
+                                          "const": 1
+                                        },
+                                        {
+                                          "type": "number",
+                                          "const": 2
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "kind",
+                                    "title",
+                                    "assignee",
+                                    "status"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "sha256",
+                            "byteLength",
+                            "mediaType",
+                            "status",
+                            "seq",
+                            "scalars"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "revision.json"
+                      ]
+                    },
+                    "capturedAt": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "files",
+                    "capturedAt"
+                  ]
+                },
+                "markdownBody": {
+                  "type": "string",
+                  "const": "object"
                 }
               },
               "required": [
@@ -8092,6 +8223,137 @@ export const epicSchemaSurfaceBaseline = {
                 },
                 "artifactRoomId": {
                   "type": "string"
+                },
+                "head": {
+                  "type": "object",
+                  "properties": {
+                    "files": {
+                      "type": "object",
+                      "properties": {
+                        "revision.json": {
+                          "type": "object",
+                          "properties": {
+                            "sha256": {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]{64}$"
+                            },
+                            "byteLength": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "mediaType": {
+                              "type": "string",
+                              "maxLength": 127,
+                              "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]*\\/[a-z0-9][a-z0-9!#$&^_.+-]*$"
+                            },
+                            "status": {
+                              "type": "string",
+                              "enum": [
+                                "queued",
+                                "uploading",
+                                "published",
+                                "local-only",
+                                "failed"
+                              ]
+                            },
+                            "seq": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "scalars": {
+                              "oneOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string",
+                                      "enum": [
+                                        "spec",
+                                        "review"
+                                      ]
+                                    },
+                                    "title": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "kind",
+                                    "title"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string",
+                                      "enum": [
+                                        "ticket",
+                                        "story"
+                                      ]
+                                    },
+                                    "title": {
+                                      "type": "string"
+                                    },
+                                    "assignee": {
+                                      "type": "string"
+                                    },
+                                    "status": {
+                                      "anyOf": [
+                                        {
+                                          "type": "number",
+                                          "const": 0
+                                        },
+                                        {
+                                          "type": "number",
+                                          "const": 1
+                                        },
+                                        {
+                                          "type": "number",
+                                          "const": 2
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "kind",
+                                    "title",
+                                    "assignee",
+                                    "status"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "sha256",
+                            "byteLength",
+                            "mediaType",
+                            "status",
+                            "seq",
+                            "scalars"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "revision.json"
+                      ]
+                    },
+                    "capturedAt": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "files",
+                    "capturedAt"
+                  ]
+                },
+                "markdownBody": {
+                  "type": "string",
+                  "const": "object"
                 },
                 "assignee": {
                   "type": "string"
@@ -8177,6 +8439,137 @@ export const epicSchemaSurfaceBaseline = {
                 "artifactRoomId": {
                   "type": "string"
                 },
+                "head": {
+                  "type": "object",
+                  "properties": {
+                    "files": {
+                      "type": "object",
+                      "properties": {
+                        "revision.json": {
+                          "type": "object",
+                          "properties": {
+                            "sha256": {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]{64}$"
+                            },
+                            "byteLength": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "mediaType": {
+                              "type": "string",
+                              "maxLength": 127,
+                              "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]*\\/[a-z0-9][a-z0-9!#$&^_.+-]*$"
+                            },
+                            "status": {
+                              "type": "string",
+                              "enum": [
+                                "queued",
+                                "uploading",
+                                "published",
+                                "local-only",
+                                "failed"
+                              ]
+                            },
+                            "seq": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "scalars": {
+                              "oneOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string",
+                                      "enum": [
+                                        "spec",
+                                        "review"
+                                      ]
+                                    },
+                                    "title": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "kind",
+                                    "title"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string",
+                                      "enum": [
+                                        "ticket",
+                                        "story"
+                                      ]
+                                    },
+                                    "title": {
+                                      "type": "string"
+                                    },
+                                    "assignee": {
+                                      "type": "string"
+                                    },
+                                    "status": {
+                                      "anyOf": [
+                                        {
+                                          "type": "number",
+                                          "const": 0
+                                        },
+                                        {
+                                          "type": "number",
+                                          "const": 1
+                                        },
+                                        {
+                                          "type": "number",
+                                          "const": 2
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "kind",
+                                    "title",
+                                    "assignee",
+                                    "status"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "sha256",
+                            "byteLength",
+                            "mediaType",
+                            "status",
+                            "seq",
+                            "scalars"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "revision.json"
+                      ]
+                    },
+                    "capturedAt": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "files",
+                    "capturedAt"
+                  ]
+                },
+                "markdownBody": {
+                  "type": "string",
+                  "const": "object"
+                },
                 "assignee": {
                   "type": "string"
                 },
@@ -8260,6 +8653,137 @@ export const epicSchemaSurfaceBaseline = {
                 },
                 "artifactRoomId": {
                   "type": "string"
+                },
+                "head": {
+                  "type": "object",
+                  "properties": {
+                    "files": {
+                      "type": "object",
+                      "properties": {
+                        "revision.json": {
+                          "type": "object",
+                          "properties": {
+                            "sha256": {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]{64}$"
+                            },
+                            "byteLength": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "mediaType": {
+                              "type": "string",
+                              "maxLength": 127,
+                              "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]*\\/[a-z0-9][a-z0-9!#$&^_.+-]*$"
+                            },
+                            "status": {
+                              "type": "string",
+                              "enum": [
+                                "queued",
+                                "uploading",
+                                "published",
+                                "local-only",
+                                "failed"
+                              ]
+                            },
+                            "seq": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "scalars": {
+                              "oneOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string",
+                                      "enum": [
+                                        "spec",
+                                        "review"
+                                      ]
+                                    },
+                                    "title": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "kind",
+                                    "title"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string",
+                                      "enum": [
+                                        "ticket",
+                                        "story"
+                                      ]
+                                    },
+                                    "title": {
+                                      "type": "string"
+                                    },
+                                    "assignee": {
+                                      "type": "string"
+                                    },
+                                    "status": {
+                                      "anyOf": [
+                                        {
+                                          "type": "number",
+                                          "const": 0
+                                        },
+                                        {
+                                          "type": "number",
+                                          "const": 1
+                                        },
+                                        {
+                                          "type": "number",
+                                          "const": 2
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "kind",
+                                    "title",
+                                    "assignee",
+                                    "status"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "sha256",
+                            "byteLength",
+                            "mediaType",
+                            "status",
+                            "seq",
+                            "scalars"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "revision.json"
+                      ]
+                    },
+                    "capturedAt": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "files",
+                    "capturedAt"
+                  ]
+                },
+                "markdownBody": {
+                  "type": "string",
+                  "const": "object"
                 }
               },
               "required": [
@@ -8710,6 +9234,10 @@ export const epicSchemaSurfaceBaseline = {
                       "type": "null"
                     }
                   ]
+                },
+                "markdownBody": {
+                  "type": "string",
+                  "const": "object"
                 }
               },
               "required": [
@@ -8818,6 +9346,10 @@ export const epicSchemaSurfaceBaseline = {
                       "type": "null"
                     }
                   ]
+                },
+                "markdownBody": {
+                  "type": "string",
+                  "const": "object"
                 }
               },
               "required": [
@@ -8926,6 +9458,10 @@ export const epicSchemaSurfaceBaseline = {
                       "type": "null"
                     }
                   ]
+                },
+                "markdownBody": {
+                  "type": "string",
+                  "const": "object"
                 }
               },
               "required": [
@@ -9034,6 +9570,10 @@ export const epicSchemaSurfaceBaseline = {
                       "type": "null"
                     }
                   ]
+                },
+                "markdownBody": {
+                  "type": "string",
+                  "const": "object"
                 }
               },
               "required": [
@@ -18660,6 +19200,140 @@ export const epicSchemaSurfaceBaseline = {
                 },
                 "artifactRoomId": {
                   "type": "string"
+                },
+                "head": {
+                  "type": "object",
+                  "properties": {
+                    "files": {
+                      "type": "object",
+                      "properties": {
+                        "revision.json": {
+                          "type": "object",
+                          "properties": {
+                            "sha256": {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]{64}$"
+                            },
+                            "byteLength": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "mediaType": {
+                              "type": "string",
+                              "maxLength": 127,
+                              "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]*\\/[a-z0-9][a-z0-9!#$&^_.+-]*$"
+                            },
+                            "status": {
+                              "type": "string",
+                              "enum": [
+                                "queued",
+                                "uploading",
+                                "published",
+                                "local-only",
+                                "failed"
+                              ]
+                            },
+                            "seq": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "scalars": {
+                              "oneOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string",
+                                      "enum": [
+                                        "spec",
+                                        "review"
+                                      ]
+                                    },
+                                    "title": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "kind",
+                                    "title"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string",
+                                      "enum": [
+                                        "ticket",
+                                        "story"
+                                      ]
+                                    },
+                                    "title": {
+                                      "type": "string"
+                                    },
+                                    "assignee": {
+                                      "type": "string"
+                                    },
+                                    "status": {
+                                      "anyOf": [
+                                        {
+                                          "type": "number",
+                                          "const": 0
+                                        },
+                                        {
+                                          "type": "number",
+                                          "const": 1
+                                        },
+                                        {
+                                          "type": "number",
+                                          "const": 2
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "kind",
+                                    "title",
+                                    "assignee",
+                                    "status"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "sha256",
+                            "byteLength",
+                            "mediaType",
+                            "status",
+                            "seq",
+                            "scalars"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": [
+                        "revision.json"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "capturedAt": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "files",
+                    "capturedAt"
+                  ],
+                  "additionalProperties": false
+                },
+                "markdownBody": {
+                  "type": "string",
+                  "const": "object"
                 }
               },
               "required": [
@@ -18725,6 +19399,140 @@ export const epicSchemaSurfaceBaseline = {
                 },
                 "artifactRoomId": {
                   "type": "string"
+                },
+                "head": {
+                  "type": "object",
+                  "properties": {
+                    "files": {
+                      "type": "object",
+                      "properties": {
+                        "revision.json": {
+                          "type": "object",
+                          "properties": {
+                            "sha256": {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]{64}$"
+                            },
+                            "byteLength": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "mediaType": {
+                              "type": "string",
+                              "maxLength": 127,
+                              "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]*\\/[a-z0-9][a-z0-9!#$&^_.+-]*$"
+                            },
+                            "status": {
+                              "type": "string",
+                              "enum": [
+                                "queued",
+                                "uploading",
+                                "published",
+                                "local-only",
+                                "failed"
+                              ]
+                            },
+                            "seq": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "scalars": {
+                              "oneOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string",
+                                      "enum": [
+                                        "spec",
+                                        "review"
+                                      ]
+                                    },
+                                    "title": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "kind",
+                                    "title"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string",
+                                      "enum": [
+                                        "ticket",
+                                        "story"
+                                      ]
+                                    },
+                                    "title": {
+                                      "type": "string"
+                                    },
+                                    "assignee": {
+                                      "type": "string"
+                                    },
+                                    "status": {
+                                      "anyOf": [
+                                        {
+                                          "type": "number",
+                                          "const": 0
+                                        },
+                                        {
+                                          "type": "number",
+                                          "const": 1
+                                        },
+                                        {
+                                          "type": "number",
+                                          "const": 2
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "kind",
+                                    "title",
+                                    "assignee",
+                                    "status"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "sha256",
+                            "byteLength",
+                            "mediaType",
+                            "status",
+                            "seq",
+                            "scalars"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": [
+                        "revision.json"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "capturedAt": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "files",
+                    "capturedAt"
+                  ],
+                  "additionalProperties": false
+                },
+                "markdownBody": {
+                  "type": "string",
+                  "const": "object"
                 },
                 "assignee": {
                   "type": "string"
@@ -18812,6 +19620,140 @@ export const epicSchemaSurfaceBaseline = {
                 "artifactRoomId": {
                   "type": "string"
                 },
+                "head": {
+                  "type": "object",
+                  "properties": {
+                    "files": {
+                      "type": "object",
+                      "properties": {
+                        "revision.json": {
+                          "type": "object",
+                          "properties": {
+                            "sha256": {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]{64}$"
+                            },
+                            "byteLength": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "mediaType": {
+                              "type": "string",
+                              "maxLength": 127,
+                              "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]*\\/[a-z0-9][a-z0-9!#$&^_.+-]*$"
+                            },
+                            "status": {
+                              "type": "string",
+                              "enum": [
+                                "queued",
+                                "uploading",
+                                "published",
+                                "local-only",
+                                "failed"
+                              ]
+                            },
+                            "seq": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "scalars": {
+                              "oneOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string",
+                                      "enum": [
+                                        "spec",
+                                        "review"
+                                      ]
+                                    },
+                                    "title": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "kind",
+                                    "title"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string",
+                                      "enum": [
+                                        "ticket",
+                                        "story"
+                                      ]
+                                    },
+                                    "title": {
+                                      "type": "string"
+                                    },
+                                    "assignee": {
+                                      "type": "string"
+                                    },
+                                    "status": {
+                                      "anyOf": [
+                                        {
+                                          "type": "number",
+                                          "const": 0
+                                        },
+                                        {
+                                          "type": "number",
+                                          "const": 1
+                                        },
+                                        {
+                                          "type": "number",
+                                          "const": 2
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "kind",
+                                    "title",
+                                    "assignee",
+                                    "status"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "sha256",
+                            "byteLength",
+                            "mediaType",
+                            "status",
+                            "seq",
+                            "scalars"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": [
+                        "revision.json"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "capturedAt": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "files",
+                    "capturedAt"
+                  ],
+                  "additionalProperties": false
+                },
+                "markdownBody": {
+                  "type": "string",
+                  "const": "object"
+                },
                 "assignee": {
                   "type": "string"
                 },
@@ -18897,6 +19839,140 @@ export const epicSchemaSurfaceBaseline = {
                 },
                 "artifactRoomId": {
                   "type": "string"
+                },
+                "head": {
+                  "type": "object",
+                  "properties": {
+                    "files": {
+                      "type": "object",
+                      "properties": {
+                        "revision.json": {
+                          "type": "object",
+                          "properties": {
+                            "sha256": {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]{64}$"
+                            },
+                            "byteLength": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "mediaType": {
+                              "type": "string",
+                              "maxLength": 127,
+                              "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]*\\/[a-z0-9][a-z0-9!#$&^_.+-]*$"
+                            },
+                            "status": {
+                              "type": "string",
+                              "enum": [
+                                "queued",
+                                "uploading",
+                                "published",
+                                "local-only",
+                                "failed"
+                              ]
+                            },
+                            "seq": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "scalars": {
+                              "oneOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string",
+                                      "enum": [
+                                        "spec",
+                                        "review"
+                                      ]
+                                    },
+                                    "title": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "kind",
+                                    "title"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string",
+                                      "enum": [
+                                        "ticket",
+                                        "story"
+                                      ]
+                                    },
+                                    "title": {
+                                      "type": "string"
+                                    },
+                                    "assignee": {
+                                      "type": "string"
+                                    },
+                                    "status": {
+                                      "anyOf": [
+                                        {
+                                          "type": "number",
+                                          "const": 0
+                                        },
+                                        {
+                                          "type": "number",
+                                          "const": 1
+                                        },
+                                        {
+                                          "type": "number",
+                                          "const": 2
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "kind",
+                                    "title",
+                                    "assignee",
+                                    "status"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "sha256",
+                            "byteLength",
+                            "mediaType",
+                            "status",
+                            "seq",
+                            "scalars"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": [
+                        "revision.json"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "capturedAt": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "files",
+                    "capturedAt"
+                  ],
+                  "additionalProperties": false
+                },
+                "markdownBody": {
+                  "type": "string",
+                  "const": "object"
                 }
               },
               "required": [
@@ -19361,6 +20437,10 @@ export const epicSchemaSurfaceBaseline = {
                       "type": "null"
                     }
                   ]
+                },
+                "markdownBody": {
+                  "type": "string",
+                  "const": "object"
                 }
               },
               "required": [
@@ -19470,6 +20550,10 @@ export const epicSchemaSurfaceBaseline = {
                       "type": "null"
                     }
                   ]
+                },
+                "markdownBody": {
+                  "type": "string",
+                  "const": "object"
                 }
               },
               "required": [
@@ -19579,6 +20663,10 @@ export const epicSchemaSurfaceBaseline = {
                       "type": "null"
                     }
                   ]
+                },
+                "markdownBody": {
+                  "type": "string",
+                  "const": "object"
                 }
               },
               "required": [
@@ -19688,6 +20776,10 @@ export const epicSchemaSurfaceBaseline = {
                       "type": "null"
                     }
                   ]
+                },
+                "markdownBody": {
+                  "type": "string",
+                  "const": "object"
                 }
               },
               "required": [
