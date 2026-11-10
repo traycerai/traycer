@@ -3,25 +3,11 @@ import {
   type ProviderCliState,
   type ProviderId,
 } from "@traycer/protocol/host/provider-schemas";
+import type { TraycerStanding } from "@/components/onboarding/onboarding-memory-save";
 
 // The memory act's MODEL, apart from its components: fast refresh only keeps
 // state for a module that exports components alone, and both the page and the
 // stage read these.
-
-/** How far the Traycer memories write got. */
-export type TraycerMemoryOutcome =
-  | { readonly kind: "saved" }
-  /**
-   * The host is holding the edit with no connection to the configuration, so
-   * it is in force nowhere yet. `uploadId` is how `environment.status` names
-   * it later; a retry looks for it there instead of sending it again.
-   */
-  | {
-      readonly kind: "queued";
-      readonly uploadId: string | null;
-      readonly environmentId: string;
-    }
-  | { readonly kind: "failed"; readonly refused: boolean };
 
 /** How the last write of one provider's memories went. */
 export interface ProviderMemoryOutcome {
@@ -48,7 +34,12 @@ export interface OnboardingMemoryDraft {
    * and an explicit choice survive any number of visits.
    */
   readonly providers: ReadonlyMap<ProviderId, boolean>;
-  readonly traycerOutcome: TraycerMemoryOutcome | null;
+  /**
+   * The last save stopped on a read that failed, or found no configuration.
+   * What it knows of its Traycer write is kept per configuration, outside
+   * the draft, because it outlives the choices.
+   */
+  readonly traycerUnreached: boolean;
   readonly providerOutcomes: ReadonlyMap<ProviderId, ProviderMemoryOutcome>;
 }
 
@@ -57,7 +48,7 @@ export function emptyMemoryDraft(hostId: string | null): OnboardingMemoryDraft {
     hostId,
     traycer: null,
     providers: new Map(),
-    traycerOutcome: null,
+    traycerUnreached: false,
     providerOutcomes: new Map(),
   };
 }
@@ -76,7 +67,7 @@ export function withTraycerChoice(
     ...draft,
     traycer: false,
     providers: new Map(),
-    traycerOutcome: null,
+    traycerUnreached: false,
     providerOutcomes: new Map(),
   };
 }
@@ -178,21 +169,27 @@ export interface OnboardingMemoryView {
    */
   readonly chosen: boolean | null;
   /**
+   * Traycer memories in the configuration the host serves, as last read,
+   * with what the act knows of its own write there. `null` before a read
+   * names a configuration.
+   */
+  readonly traycerStanding: TraycerStanding | null;
+  /**
    * The setting is on - from before, or by this act's own save - or this
-   * act's change to it is held for the configuration. The act cannot take
-   * either back, so its switch cannot offer to.
+   * act's change to it is held for the configuration or has not reached this
+   * host yet. The act cannot take any of these back, so its switch cannot
+   * offer to.
    */
   readonly traycerLocked: boolean;
   readonly rows: ReadonlyArray<OnboardingMemoryRow>;
   readonly withoutSwitch: ReadonlyArray<string>;
-  /** The last save stopped short: a write failed, or Traycer's is held. */
+  /** The last save stopped short: a write failed, or Traycer's is not on yet. */
   readonly interrupted: boolean;
 }
 
 export function memoryViewFor(input: {
   readonly draft: OnboardingMemoryDraft;
-  /** The host reads Traycer memories as on for its configuration. */
-  readonly alreadyOn: boolean;
+  readonly traycerStanding: TraycerStanding | null;
   /** `undefined` until `providers.list` has answered. */
   readonly providers: ReadonlyArray<ProviderCliState> | undefined;
   readonly providerControls: ProviderMemoryControls;
@@ -210,19 +207,22 @@ export function memoryViewFor(input: {
     providerControls === "unsupported"
       ? [...listed.rows.map((row) => row.name), ...listed.withoutSwitch]
       : listed.withoutSwitch;
-  // A held change is in the configuration's queue, not in this draft: turning
-  // the switch off would neither withdraw it nor stop it landing, and the
-  // receipt a retry looks it up by would be dropped with the choice.
+  const standing = input.traycerStanding;
+  // A held or unread change is on its way, not in this draft: turning the
+  // switch off would neither withdraw it nor stop it landing.
   const traycerLocked =
-    input.alreadyOn ||
-    draft.traycerOutcome?.kind === "saved" ||
-    draft.traycerOutcome?.kind === "queued";
+    standing === "on" || standing === "held" || standing === "unconfirmed";
   const chosen = draft.traycer === null ? null : draft.traycer || traycerLocked;
   const traycerShort =
-    draft.traycerOutcome !== null && draft.traycerOutcome.kind !== "saved";
-  const failedRow = rows.some((row) => row.outcome?.kind === "failed");
+    draft.traycerUnreached ||
+    (standing !== null && standing !== "on" && standing !== "off");
+  // A provider's failure stops the act only where Traycer memories are on:
+  // anywhere else the next save starts with Traycer's own write.
+  const failedRow =
+    standing === "on" && rows.some((row) => row.outcome?.kind === "failed");
   return {
     chosen,
+    traycerStanding: standing,
     traycerLocked,
     rows,
     withoutSwitch,

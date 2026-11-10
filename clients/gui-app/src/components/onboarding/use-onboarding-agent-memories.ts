@@ -11,8 +11,11 @@ import {
   type ProviderMemoryControls,
 } from "@/components/onboarding/onboarding-agent-memories-model";
 import {
+  NO_SAVE_EVIDENCE,
   runMemorySave,
+  traycerStanding,
   type MemorySaveIo,
+  type SaveEvidence,
 } from "@/components/onboarding/onboarding-memory-save";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
@@ -61,8 +64,9 @@ export interface OnboardingAgentMemories extends OnboardingMemoryView {
   readonly setProvider: (providerId: ProviderId, value: boolean) => void;
   /**
    * Writes what is still unsaved and answers whether everything has landed.
-   * Traycer first, and the providers only once it is saved: a failure can
-   * leave a provider's memories on beside Traycer's, never both off.
+   * Traycer first, and each provider only after a read finds Traycer
+   * memories on in the configuration the host serves: a failure can leave a
+   * provider's memories on beside Traycer's, never both off.
    */
   readonly save: () => Promise<boolean>;
   readonly reloadProviders: () => void;
@@ -197,10 +201,26 @@ export function useOnboardingAgentMemories(input: {
     loaded: providersQuery.data !== undefined,
     failed: providersQuery.isError,
   });
-  const alreadyOn = memoryRead.data?.enabled === true;
+  // What the act knows of its Traycer write, by host and then configuration.
+  // Apart from the draft, which a choice on another host replaces: coming
+  // back must find a held change still held, never send it again.
+  const [evidence, setEvidence] = useState<
+    ReadonlyMap<string | null, SaveEvidence>
+  >(() => new Map());
+  // A save reads and files evidence between its requests, sooner than React
+  // renders again.
+  const evidenceRef = useRef(evidence);
+  const read = memoryRead.data;
+  const alreadyOn = read?.enabled === true;
   const view = memoryViewFor({
     draft,
-    alreadyOn,
+    traycerStanding:
+      read === undefined || read.environmentId === null
+        ? null
+        : traycerStanding(
+            read,
+            (evidence.get(hostId) ?? NO_SAVE_EVIDENCE).get(read.environmentId),
+          ),
     providers: providersQuery.data?.providers,
     providerControls,
   });
@@ -227,12 +247,13 @@ export function useOnboardingAgentMemories(input: {
         }
       },
       writeProvider: (row) => writeProvider(target, row),
-      evidence: () => draft.traycerOutcome,
-      record: (next) =>
-        record(target.hostId, (current) => ({
-          ...current,
-          traycerOutcome: next,
-        })),
+      evidence: () =>
+        evidenceRef.current.get(target.hostId) ?? NO_SAVE_EVIDENCE,
+      record: (next) => {
+        const all = new Map(evidenceRef.current).set(target.hostId, next);
+        evidenceRef.current = all;
+        setEvidence(all);
+      },
     };
   }
 
@@ -267,7 +288,14 @@ export function useOnboardingAgentMemories(input: {
     // `.finally` rather than try/finally: React Compiler cannot lower a try
     // without a catch, and would leave this whole hook unmemoized.
     return runMemorySave(saveIo(target), view.rows)
-      .then((result) => result === "done")
+      .then((result) => {
+        if (result !== "moved")
+          record(target.hostId, (current) => ({
+            ...current,
+            traycerUnreached: result === "unreached",
+          }));
+        return result === "done";
+      })
       .finally(() => {
         savingRef.current = false;
         setSaving(false);

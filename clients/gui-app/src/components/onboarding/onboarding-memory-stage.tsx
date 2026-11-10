@@ -11,6 +11,7 @@ import {
   joinProviderNames,
   type OnboardingMemoryRow,
 } from "@/components/onboarding/onboarding-agent-memories-model";
+import type { TraycerStanding } from "@/components/onboarding/onboarding-memory-save";
 import type { OnboardingAgentMemories } from "@/components/onboarding/use-onboarding-agent-memories";
 import { cn } from "@/lib/utils";
 import "./onboarding-memory.css";
@@ -185,9 +186,9 @@ function MemoryChoices(props: {
 function traycerDescription(memory: OnboardingAgentMemories): string {
   if (!memory.traycerLocked)
     return "Agents can read, add, update and remove shared memories.";
-  return memory.draft.traycerOutcome?.kind === "queued"
-    ? "Waiting for your configuration. Change this later in Settings → Agent memories."
-    : "On. Turn it off later in Settings → Agent memories.";
+  return memory.traycerStanding === "on"
+    ? "On. Turn it off later in Settings → Agent memories."
+    : "Waiting for your configuration. Change this later in Settings → Agent memories.";
 }
 
 function ProviderMemories(props: {
@@ -336,20 +337,22 @@ function saveReportLines(
   memory: OnboardingAgentMemories,
 ): ReadonlyArray<string> | null {
   if (!memory.interrupted || memory.saving) return null;
-  const traycer = memory.draft.traycerOutcome;
-  if (traycer?.kind === "queued")
-    return [
-      "Traycer memories are waiting to reach your configuration and aren't on yet. This computer sends the change when it's online.",
-      PROVIDERS_UNCHANGED,
-    ];
-  if (traycer?.kind === "failed")
-    return [
-      traycer.refused
-        ? "Your configuration turned this change away, so Traycer memories aren't on."
-        : "Couldn't turn on Traycer memories.",
-      PROVIDERS_UNCHANGED,
-    ];
-  return ["Traycer memories are on.", ...providerReportLines(memory.rows)];
+  return [
+    traycerReportLine(memory.traycerStanding),
+    ...providerReportLines(memory.rows),
+  ];
+}
+
+/** Traycer memories in the configuration the host serves now. */
+function traycerReportLine(standing: TraycerStanding | null): string {
+  if (standing === "on") return "Traycer memories are on.";
+  if (standing === "held")
+    return "Traycer memories are waiting to reach your configuration and aren't on yet. This computer sends the change when it's online.";
+  if (standing === "unconfirmed")
+    return "Traycer memories are saved to your configuration but haven't reached this computer yet.";
+  if (standing === "refused")
+    return "Your configuration turned this change away, so Traycer memories aren't on.";
+  return "Couldn't turn on Traycer memories.";
 }
 
 function providerReportLines(
@@ -358,7 +361,7 @@ function providerReportLines(
   const failed = rows.filter((row) => row.outcome?.kind === "failed");
   const off = rows.filter((row) => row.outcome?.kind === "saved" && !row.value);
   const on = rows.filter((row) => row.outcome?.kind === "saved" && row.value);
-  return [
+  const lines = [
     off.length === 0
       ? null
       : `${joinProviderNames(off.map((row) => row.name))} memories are now off.`,
@@ -367,6 +370,9 @@ function providerReportLines(
     on.length === 0
       ? null
       : `Traycer no longer turns off ${joinProviderNames(on.map((row) => row.name))} memories.`,
-    `Couldn't change ${joinProviderNames(failed.map((row) => row.name))} memories.`,
+    failed.length === 0
+      ? null
+      : `Couldn't change ${joinProviderNames(failed.map((row) => row.name))} memories.`,
   ].filter((line) => line !== null);
+  return lines.length === 0 ? [PROVIDERS_UNCHANGED] : lines;
 }
