@@ -1174,13 +1174,14 @@ function useOpenSkillActions({
 function skillOpenLabel(skill: ProviderSkill, providerLabel: string): string {
   const badge = skillSourceLabel(skill.source, providerLabel);
   const origin = skillProfileOriginLabel(skill.profileOrigin);
+  const source = origin === null ? badge : `${badge}, ${origin}`;
   if (skill.shadowed === true) {
-    return `Open ${skill.name} (${badge}, ${SKILL_SHADOWED_TOOLTIP})`;
+    return `Open ${skill.name} (${source}, ${SKILL_SHADOWED_TOOLTIP})`;
   }
   if (skill.conflict === true) {
-    return `Open ${skill.name} (${badge}, ${SKILL_CONFLICT_LABEL}: ${SKILL_CONFLICT_TOOLTIP})`;
+    return `Open ${skill.name} (${source}, ${SKILL_CONFLICT_LABEL}: ${SKILL_CONFLICT_TOOLTIP})`;
   }
-  return `Open ${skill.name} (${origin === null ? badge : `${badge}, ${origin}`})`;
+  return `Open ${skill.name} (${source})`;
 }
 
 function SkillRow({
