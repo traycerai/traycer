@@ -3,12 +3,14 @@ import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import {
   emptyMemoryDraft,
   memoryViewFor,
+  NO_PROVIDER_WRITES,
   withProviderChoice,
   withTraycerChoice,
   type OnboardingMemoryDraft,
   type OnboardingMemoryRow,
   type OnboardingMemoryView,
   type ProviderMemoryControls,
+  type ProviderWrites,
 } from "@/components/onboarding/onboarding-agent-memories-model";
 import {
   NO_SAVE_EVIDENCE,
@@ -218,6 +220,12 @@ export function useOnboardingAgentMemories(input: {
   // A save reads and files evidence between its requests, sooner than React
   // renders again.
   const evidenceRef = useRef(evidence);
+  // The act's provider writes, by the host each was sent to. The save takes
+  // its rows from these as it starts and writes a provider at most once, so
+  // it never reads them between requests.
+  const [providerWrites, setProviderWrites] = useState<
+    ReadonlyMap<string | null, ProviderWrites>
+  >(() => new Map());
   const read = memoryRead.data;
   const alreadyOn = read?.enabled === true;
   const view = memoryViewFor({
@@ -230,6 +238,7 @@ export function useOnboardingAgentMemories(input: {
             (evidence.get(hostId) ?? NO_SAVE_EVIDENCE).get(read.environmentId),
           ),
     providers: providersQuery.data?.providers,
+    providerWrites: providerWrites.get(hostId) ?? NO_PROVIDER_WRITES,
     providerControls,
   });
 
@@ -279,11 +288,16 @@ export function useOnboardingAgentMemories(input: {
     } catch {
       kind = "failed";
     }
-    record(target.hostId, (current) => {
-      const providerOutcomes = new Map(current.providerOutcomes);
-      providerOutcomes.set(row.providerId, { kind, value: row.value });
-      return { ...current, providerOutcomes };
-    });
+    const outcome = { kind, value: row.value };
+    setProviderWrites((all) =>
+      new Map(all).set(
+        target.hostId,
+        new Map(all.get(target.hostId) ?? NO_PROVIDER_WRITES).set(
+          row.providerId,
+          outcome,
+        ),
+      ),
+    );
     return kind === "saved";
   }
 

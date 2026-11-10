@@ -9,12 +9,21 @@ import type { TraycerStanding } from "@/components/onboarding/onboarding-memory-
 // state for a module that exports components alone, and both the page and the
 // stage read these.
 
-/** How the last write of one provider's memories went. */
+/** How this act's last write of one provider's memories went. */
 export interface ProviderMemoryOutcome {
   readonly kind: "saved" | "failed";
   /** The value it wrote, so a choice that has moved since is not answered by it. */
   readonly value: boolean;
 }
+
+/**
+ * This act's last write of each provider's memories on one host. Kept apart
+ * from the draft, like what the act knows of its Traycer write: turning
+ * Traycer off or choosing on another host replaces the choices, and the host
+ * still holds what was written.
+ */
+export type ProviderWrites = ReadonlyMap<ProviderId, ProviderMemoryOutcome>;
+export const NO_PROVIDER_WRITES: ProviderWrites = new Map();
 
 /**
  * Everything the memory act remembers across Back and Next. Held by the tour,
@@ -40,7 +49,6 @@ export interface OnboardingMemoryDraft {
    * the draft, because it outlives the choices.
    */
   readonly traycerUnreached: boolean;
-  readonly providerOutcomes: ReadonlyMap<ProviderId, ProviderMemoryOutcome>;
 }
 
 export function emptyMemoryDraft(hostId: string | null): OnboardingMemoryDraft {
@@ -49,7 +57,6 @@ export function emptyMemoryDraft(hostId: string | null): OnboardingMemoryDraft {
     traycer: null,
     providers: new Map(),
     traycerUnreached: false,
-    providerOutcomes: new Map(),
   };
 }
 
@@ -68,7 +75,6 @@ export function withTraycerChoice(
     traycer: false,
     providers: new Map(),
     traycerUnreached: false,
-    providerOutcomes: new Map(),
   };
 }
 
@@ -88,9 +94,14 @@ export interface OnboardingMemoryRow {
   readonly name: string;
   /** The switch: `false` is "turn this provider's memories off". */
   readonly value: boolean;
-  /** What the host holds now. `true` means Traycer applies no override. */
-  readonly stored: boolean;
-  /** The last write's outcome, while it is still about this value. */
+  /**
+   * What the host holds, as far as the act can tell: its own last write of
+   * this provider once that landed, otherwise the host's provider list, where
+   * `true` means Traycer applies no override. `null` when that write failed,
+   * since the host may or may not have taken it.
+   */
+  readonly stored: boolean | null;
+  /** The act's last write of this provider, while it is still about this value. */
   readonly outcome: ProviderMemoryOutcome | null;
 }
 
@@ -121,6 +132,7 @@ export interface OnboardingMemoryRows {
 export function memoryRowsFor(
   providers: ReadonlyArray<ProviderCliState>,
   draft: OnboardingMemoryDraft,
+  writes: ProviderWrites,
 ): OnboardingMemoryRows {
   const rows: OnboardingMemoryRow[] = [];
   const withoutSwitch: string[] = [];
@@ -132,25 +144,38 @@ export function memoryRowsFor(
       continue;
     }
     const value = draft.providers.get(provider.providerId) ?? false;
-    const outcome = draft.providerOutcomes.get(provider.providerId) ?? null;
+    const written = writes.get(provider.providerId) ?? null;
     rows.push({
       providerId: provider.providerId,
       name,
       value,
-      stored: provider.nativeMemory ?? true,
-      outcome: outcome?.value === value ? outcome : null,
+      stored: heldValue(provider, written),
+      outcome: written?.value === value ? written : null,
     });
   }
   return { rows, withoutSwitch };
 }
 
 /**
+ * A write of the act's own outranks the list: the list may be a read from
+ * before that write, and the read its write asks for may not have landed yet
+ * or may have failed.
+ */
+function heldValue(
+  provider: ProviderCliState,
+  written: ProviderMemoryOutcome | null,
+): boolean | null {
+  if (written === null) return provider.nativeMemory ?? true;
+  return written.kind === "saved" ? written.value : null;
+}
+
+/**
  * Whether Continue still has to write this row: the choice differs from what
- * the host holds and no write of this value has landed. A choice that matches
- * the host already is never resent.
+ * the host holds, or the act's last write of it failed and what the host
+ * holds is unknown. A choice the host holds already is never resent.
  */
 export function memoryRowNeedsWrite(row: OnboardingMemoryRow): boolean {
-  return row.value !== row.stored && row.outcome?.kind !== "saved";
+  return row.stored === null || row.value !== row.stored;
 }
 
 /** "A", "A and B", "A, B and C". */
@@ -192,13 +217,15 @@ export function memoryViewFor(input: {
   readonly traycerStanding: TraycerStanding | null;
   /** `undefined` until `providers.list` has answered. */
   readonly providers: ReadonlyArray<ProviderCliState> | undefined;
+  /** The act's provider writes on the host the draft is for. */
+  readonly providerWrites: ProviderWrites;
   readonly providerControls: ProviderMemoryControls;
 }): OnboardingMemoryView {
   const { draft, providerControls } = input;
   const listed =
     input.providers === undefined
       ? { rows: [], withoutSwitch: [] }
-      : memoryRowsFor(input.providers, draft);
+      : memoryRowsFor(input.providers, draft, input.providerWrites);
   // A host that cannot write the switch shows none: every selected provider
   // is then one whose settings stay as they are.
   const switchable = providerControls === "ready";
