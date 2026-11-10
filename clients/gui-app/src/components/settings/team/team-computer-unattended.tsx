@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { useDeadlineReached } from "@/hooks/use-deadline-reached";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { formatClockTime } from "@/lib/relative-time";
@@ -47,7 +48,14 @@ export function TeamComputerUnattended(
             disabled={props.pending}
             onClick={props.onMint}
           >
-            {props.pending ? "Creating token…" : mintLabel}
+            {props.pending ? (
+              <AgentSpinningDots
+                className={undefined}
+                testId={undefined}
+                variant={undefined}
+              />
+            ) : null}
+            {mintLabel}
           </Button>
         </>
       ) : (
