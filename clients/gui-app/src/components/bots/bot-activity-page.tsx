@@ -133,6 +133,20 @@ export function BotActivityPage(props: {
       className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto p-4"
       data-testid="bot-activity-page"
     >
+      <button
+        type="button"
+        className="self-start text-ui-xs underline"
+        onClick={() =>
+          props.onOpenSession({
+            chatId: props.trunkChatId,
+            threadId: null,
+            messageId: null,
+            sendPostId: null,
+          })
+        }
+      >
+        Open trunk session
+      </button>
       <h3 className="text-ui-xs tracking-[0.08em] text-muted-foreground uppercase">
         {heading}
       </h3>

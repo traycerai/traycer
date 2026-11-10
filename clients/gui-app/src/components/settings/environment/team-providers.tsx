@@ -1,5 +1,4 @@
 import { useState, type ReactNode } from "react";
-import { z } from "zod";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import type {
   EnvironmentOs,
@@ -12,7 +11,6 @@ import type {
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { SettingsMasterSelect } from "@/components/settings/settings-master-detail";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
-import { Switch } from "@/components/ui/switch";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-host";
 import type { ConfigurationItem } from "@/hooks/environment/team/use-configuration-items-query";
@@ -29,7 +27,6 @@ import { useConfigurationPlansQuery } from "@/hooks/environment/team/use-plans-q
 import { useEnvironmentSecretsQuery } from "@/hooks/environment/team/use-secrets-query";
 import { useHostClient } from "@/lib/host";
 import { configurationProfileValueSchema } from "@/hooks/environment/team/configuration-item-values";
-import { useConfigurationItemMutations } from "@/hooks/environment/team/use-configuration-item-mutations";
 import { cn } from "@/lib/utils";
 import { ConfigurationOsPicker } from "./configuration-os-picker";
 import { ConfigurationWriteFeedback } from "./configuration-write-feedback";
@@ -45,6 +42,7 @@ import {
 import { TeamPackItem } from "./team-provider-items";
 import { EnvironmentProviderMcpTab } from "./environment-provider-mcp-tab";
 import { TeamProviderLiveFacts } from "./team-provider-live-facts";
+import { ConfigurationProfiles } from "./team-configuration-profiles";
 import { TeamPlans } from "./team-plans";
 import { ProviderRowDetails } from "@/components/settings/details/provider-row-details";
 import { useConfigurationAdminNames } from "@/hooks/environment/team/use-admin-names";
@@ -58,7 +56,6 @@ import { ConfigurationReadFailed } from "./team-read-failed";
 import { usePickedTeamLabel } from "./team-pick-label";
 import { PROVIDER_ENV_TAB_SUBTITLE } from "@/components/settings/panels/provider-env-subtitle";
 import {
-  useCanEditConfiguration,
   useConfigurationIsPersonal,
   useConfigurationSource,
 } from "./configuration-source";
@@ -284,6 +281,7 @@ function TeamProvidersView(props: {
               <TabsContent value="plans" className="flex flex-col gap-4">
                 <TeamPlans providerId={providerId} adminNames={adminNames} />
                 <ConfigurationProfiles
+                  providerLabel={providerDisplayName(providerId)}
                   profiles={profiles}
                   onOutcome={onOutcome}
                 />
@@ -365,97 +363,6 @@ function railButtonClass(selected: boolean): string {
     selected
       ? "bg-accent text-accent-foreground"
       : "text-foreground/70 hover:bg-accent/60 hover:text-accent-foreground",
-  );
-}
-
-/**
- * Profiles as one picker. The selected profile's account name stays under
- * it. Use is the switch when this person can edit; a reader sees On or Off
- * and no switch. There is no auth standing and no manage action on a
- * configuration profile.
- */
-function ConfigurationProfiles(props: {
-  readonly profiles: readonly ConfigurationItem[];
-  readonly onOutcome: (
-    result: EnvironmentConfigurationItemWriteResponse,
-  ) => void;
-}): ReactNode {
-  const [pickedKey, setPickedKey] = useState<string | null>(null);
-  if (props.profiles.length === 0) return null;
-  const selected =
-    props.profiles.find((item) => item.key === pickedKey) ?? props.profiles[0];
-  return (
-    <section className="flex min-w-0 flex-col gap-2">
-      <h2 className="text-ui-sm font-medium">Profiles</h2>
-      <SettingsMasterSelect
-        label="Profile"
-        value={selected.key}
-        options={props.profiles.map((item) => ({
-          value: item.key,
-          label: configurationProfileValueSchema.parse(item.value).name,
-          icon: null,
-          trailing: null,
-        }))}
-        onSelect={setPickedKey}
-      />
-      <ConfigurationProfileActions
-        item={selected}
-        onOutcome={props.onOutcome}
-      />
-    </section>
-  );
-}
-
-function ConfigurationProfileActions(props: {
-  readonly item: ConfigurationItem;
-  readonly onOutcome: (
-    result: EnvironmentConfigurationItemWriteResponse,
-  ) => void;
-}): ReactNode {
-  const source = useConfigurationSource();
-  const canEdit = useCanEditConfiguration();
-  const { put } = useConfigurationItemMutations();
-  const profile = configurationProfileValueSchema.parse(props.item.value);
-  const setEnabled = (enabled: boolean): void => {
-    if (source.kind !== "pool") return;
-    put.mutate(
-      {
-        environmentId: source.environmentId,
-        kind: "managed_profile",
-        key: props.item.key,
-        os: null,
-        value: {
-          ...z.record(z.string(), z.json()).parse(props.item.value),
-          enabled,
-        },
-        revision: props.item.revision,
-      },
-      { onSuccess: props.onOutcome },
-    );
-  };
-  return (
-    <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
-      {profile.accountIdentity === null ? null : (
-        <p className="min-w-0 whitespace-normal break-words text-ui-xs text-muted-foreground">
-          {profile.accountIdentity}
-        </p>
-      )}
-      {canEdit ? (
-        <div className="flex items-center gap-2 text-ui-xs text-muted-foreground">
-          <span aria-hidden="true">Use</span>
-          <Switch
-            aria-label={`Use ${profile.name}`}
-            checked={profile.enabled}
-            disabled={put.isPending}
-            onCheckedChange={setEnabled}
-          />
-        </div>
-      ) : (
-        <span className="text-ui-xs text-muted-foreground">
-          {profile.enabled ? "On" : "Off"}
-        </span>
-      )}
-    </div>
   );
 }
 

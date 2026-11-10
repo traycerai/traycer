@@ -1032,7 +1032,7 @@ describe("useHostQuery fixed cadence wiring", () => {
       hostRpcMethod: "host.getRateLimitUsage",
     });
     expect(refetchIntervalFor(query)).toBe(false);
-    expect(refetchIntervalInBackgroundFor(query)).toBe(false);
+    expect(refetchIntervalInBackgroundFor(query)).toBeUndefined();
   });
 
   it("opts host.getRateLimitUsage into the table's 15-minute fixed cadence when poll:true", async () => {

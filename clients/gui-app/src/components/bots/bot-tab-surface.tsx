@@ -116,6 +116,7 @@ import {
   BotUnselectedLevel2Pane,
 } from "@/components/bots/bot-channel-level2";
 import { BotActivityPage } from "@/components/bots/bot-activity-page";
+import { BotSessionStatusDataContext } from "@/components/bots/bot-session-status-context";
 import { BotThreadsView } from "@/components/bots/bot-threads-view";
 import { useBotThreadListQuery } from "@/hooks/bots/use-bot-thread-list-query";
 import { useBotActiveTasks } from "@/hooks/bots/use-bot-active-tasks";
@@ -1550,18 +1551,25 @@ function BotTabContent(props: {
                 channel's views and of a session. */}
             {!threadsShown &&
               (session !== null ? (
-                <BotSessionView
-                  key={session.chatId}
-                  botId={botId}
-                  hostId={hostId}
-                  botTitle={snapshot.bot.title}
-                  session={session}
-                  threads={threads}
-                  resolveMember={resolveMember}
-                  onClose={closeSession}
-                  onOpenChannel={showChannel}
-                  onOpenThread={showThread}
-                />
+                <BotSessionStatusDataContext
+                  value={{
+                    tasks: snapshot.tasks,
+                    subscriptions: snapshot.notificationSubscriptions,
+                  }}
+                >
+                  <BotSessionView
+                    key={session.chatId}
+                    botId={botId}
+                    hostId={hostId}
+                    botTitle={snapshot.bot.title}
+                    session={session}
+                    threads={threads}
+                    resolveMember={resolveMember}
+                    onClose={closeSession}
+                    onOpenChannel={showChannel}
+                    onOpenThread={showThread}
+                  />
+                </BotSessionStatusDataContext>
               ) : (
                 <Tabs
                   value={view}

@@ -123,7 +123,8 @@ describe("<SandboxDetailsDrawerHost />", () => {
     });
     const kept = screen.getByTestId("sandbox-details-status");
     expect(within(kept).getByText("Started by")).toBeTruthy();
-    expect(within(kept).getByText("Planner")).toBeTruthy();
+    expect(within(kept).getByText("you")).toBeTruthy();
+    expect(within(kept).queryByText("Planner")).toBeNull();
     expect(within(kept).queryByText("For task")).toBeNull();
     expect(within(kept).queryByText("Created by")).toBeNull();
   });

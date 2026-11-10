@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useContext } from "react";
 
 import { Info } from "lucide-react";
 import { create, useStore } from "zustand";
@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import type { HostRpcRegistry } from "@/lib/host";
 import { cn } from "@/lib/utils";
 import { useMaybeChatTranscript } from "@/components/chat/chat-transcript-context";
+import { ChatStatusReadOnlyContext } from "@/components/chat/chat-status-capabilities";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useExistingChatSessionHandle } from "@/lib/registries/chat-session-registry";
@@ -108,7 +109,8 @@ export function FallbackManualRungActions({
 }) {
   const transcript = useMaybeChatTranscript();
   const epicId = useMaybeOpenEpicHandle()?.epicId ?? null;
-  if (transcript === null || epicId === null) return null;
+  const readOnly = useContext(ChatStatusReadOnlyContext);
+  if (readOnly || transcript === null || epicId === null) return null;
   return (
     <ManualRungActions
       turnId={turnId}

@@ -5022,7 +5022,7 @@ describe("ResourceMonitorPopover · host picker", () => {
     ).not.toBeNull();
     expect(
       screen.getByRole("button", { name: "Settings host: host-b" }).textContent,
-    ).toBe("host-b");
+    ).toBe("host-b Computer");
     fireEvent.click(
       screen.getByRole("button", { name: "Settings host: host-b" }),
     );

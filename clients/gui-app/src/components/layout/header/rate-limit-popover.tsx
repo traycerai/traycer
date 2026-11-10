@@ -1050,32 +1050,6 @@ function RateLimitPopoverScopedBody({
   );
 }
 
-function RateLimitHostChooser(props: {
-  readonly scope: HostScope;
-  readonly displayedHost: HostScopeOption | null;
-  readonly onClose: () => void;
-  readonly opensList: boolean;
-}): ReactNode {
-  if (props.opensList && props.scope.hosts.length === 0) {
-    return (
-      <RateLimitHostPickerRow
-        scope={props.scope}
-        displayedHost={props.displayedHost}
-        onClose={props.onClose}
-      />
-    );
-  }
-  if (props.opensList) {
-    return (
-      <RateLimitHostNameKindList
-        scope={props.scope}
-        displayedHost={props.displayedHost}
-      />
-    );
-  }
-  return <RateLimitHostIdentity host={props.displayedHost} />;
-}
-
 function RateLimitPopoverHostHeader(props: {
   readonly scope: HostScope;
   readonly displayedHost: HostScopeOption | null;
@@ -1099,15 +1073,19 @@ function RateLimitPopoverHostHeader(props: {
     settingsOverlayOpen || settingsRouteOpen || settingsTabVisible;
   // Choice and identity are separate: a stale pin keeps its recovery picker
   // even when the fleet has shrunk to one host or none.
-  const opensList = scope.hosts.length > 1 || scope.vanishedHostId !== null;
+  const showHostPicker =
+    scope.hosts.length > 1 || scope.vanishedHostId !== null;
   return (
     <>
-      <RateLimitHostChooser
-        scope={scope}
-        displayedHost={displayedHost}
-        onClose={props.onClose}
-        opensList={opensList}
-      />
+      {showHostPicker ? (
+        <RateLimitHostPickerRow
+          scope={scope}
+          displayedHost={displayedHost}
+          onClose={props.onClose}
+        />
+      ) : (
+        <RateLimitHostIdentity host={displayedHost} />
+      )}
       {scope.vanishedSelection === null ? null : (
         <div
           className="m-3 flex shrink-0 flex-col gap-2 rounded-md border p-2 text-ui-xs"
@@ -1184,89 +1162,6 @@ function RateLimitHostIdentity(props: {
           {HOST_KIND_WORDS[host.kind]}
         </span>
       )}
-    </div>
-  );
-}
-
-/**
- * Several hosts: each name and kind on one line. Choosing one scopes this
- * popover. A long fleet scrolls. Status and the credit badge stay off this
- * header.
- */
-function RateLimitHostNameKindList(props: {
-  readonly scope: HostScope;
-  readonly displayedHost: HostScopeOption | null;
-}): ReactNode {
-  return (
-    <div className="shrink-0 border-b" data-testid="rate-limit-host-list">
-      <div
-        className="max-h-40 overflow-y-auto overscroll-contain"
-        role="group"
-        aria-label="Host"
-      >
-        {props.scope.hosts.map((host) => {
-          const selected = host.hostId === props.displayedHost?.hostId;
-          return (
-            <div
-              key={host.hostId}
-              className={selected ? "bg-foreground/5" : ""}
-            >
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                aria-current={selected ? "true" : "false"}
-                data-testid={`rate-limit-host-option-${host.hostId}`}
-                className="h-auto w-full min-w-0 justify-start text-start whitespace-normal break-words"
-                onClick={() => props.scope.setHostId(host.hostId)}
-              >
-                {host.name}
-                {host.kind === null ? null : (
-                  <span className="font-normal text-muted-foreground">
-                    {" · "}
-                    {HOST_KIND_WORDS[host.kind]}
-                  </span>
-                )}
-              </Button>
-            </div>
-          );
-        })}
-      </div>
-      {props.scope.isLoading ? (
-        <div
-          className="flex items-center gap-2 border-t border-border/60 px-3 py-2"
-          data-testid="rate-limit-host-loading-more"
-        >
-          <AgentSpinningDots
-            className={undefined}
-            testId={undefined}
-            variant={undefined}
-            tone="muted"
-          />
-          <span className="text-ui-xs text-muted-foreground">
-            Loading more hosts…
-          </span>
-        </div>
-      ) : null}
-      {props.scope.listsFailed && !props.scope.isLoading ? (
-        <div
-          className="flex items-center justify-between gap-2 border-t border-border/60 px-3 py-2"
-          data-testid="rate-limit-host-lists-failed"
-        >
-          <span className="text-ui-xs text-muted-foreground">
-            Some hosts may be missing
-          </span>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="shrink-0"
-            onClick={props.scope.retryLists}
-          >
-            Try again
-          </Button>
-        </div>
-      ) : null}
     </div>
   );
 }

@@ -2,6 +2,12 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Check, Plus, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  VariableEditSheet,
+  VariablePhoneRow,
+} from "@/components/settings/variable-edit-sheet";
+import { useIsSmallViewport } from "@/hooks/ui/use-small-viewport";
 import {
   Select,
   SelectContent,
@@ -32,9 +38,8 @@ const ENV_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 // Single grid shared by the header, every row, and the add row so the column
 // edges line up exactly (the previous header/rows used different padding). The
 // last track is fixed so the row delete button and the add button never shift
-// the Name/Value boundaries. Below `sm` the three columns can't fit, so rows
-// restack onto two lines - name + actions, then the value field full-width
-// (see VALUE_FIELD_PLACEMENT / ROW_ACTIONS_PLACEMENT) - and the header hides.
+// the Name/Value boundaries. Below `sm`, preview rows open an edit sheet and
+// the table header hides.
 const GRID =
   "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.7fr)_4.75rem]";
 const VALUE_FIELD_PLACEMENT =
@@ -343,6 +348,7 @@ export function EnvOverrideEditor(props: {
   readonly renderDetails?: (key: string) => ReactNode;
 }) {
   const { credentialRefusal, namePlaceholder, emptyLabel } = props;
+  const phone = useIsSmallViewport();
   const [adding, setAdding] = useState(false);
   const [pending, setPending] = useState<PendingEnvWrite | null>(null);
   const [savedRow, setSavedRow] = useState<SavedEnvRow | null>(null);
@@ -415,6 +421,13 @@ export function EnvOverrideEditor(props: {
     }
   }
 
+  const feedback = (
+    <EnvWriteFeedback pendingLabel={pendingLabel} writeError={writeError} />
+  );
+  // Every phone sheet shows the editor's one write error, so opening or
+  // closing a sheet clears it: an error never shows in a sheet it is not from.
+  const clearSheetError = (): void => setWriteError(null);
+
   return (
     <div className="overflow-hidden rounded-lg border border-border/60">
       <div
@@ -455,6 +468,9 @@ export function EnvOverrideEditor(props: {
             if (savedKeyShaped(entry)) {
               return (
                 <EnvMaskedRow
+                  phone={phone}
+                  feedback={feedback}
+                  onSheetToggle={clearSheetError}
                   key={entry.key}
                   entry={entry}
                   disabled={disabled}
@@ -467,6 +483,9 @@ export function EnvOverrideEditor(props: {
             }
             return (
               <EnvOverrideRow
+                phone={phone}
+                feedback={feedback}
+                onSheetToggle={clearSheetError}
                 key={entry.key}
                 entry={entry}
                 otherKeys={keys.filter((k) => k !== entry.key)}
@@ -486,6 +505,8 @@ export function EnvOverrideEditor(props: {
       ) : null}
       {adding ? (
         <EnvOverrideAddRow
+          phone={phone}
+          feedback={feedback}
           existingKeys={keys}
           claimedBy={props.claimedBy}
           disabled={disabled}
@@ -495,7 +516,10 @@ export function EnvOverrideEditor(props: {
           onAdd={(key, value) => {
             onCommit("", key, value);
           }}
-          onCancel={() => setAdding(false)}
+          onCancel={() => {
+            setAdding(false);
+            if (phone) clearSheetError();
+          }}
         />
       ) : (
         <div className="border-t border-border/40 px-3 py-2">
@@ -504,28 +528,45 @@ export function EnvOverrideEditor(props: {
             size="sm"
             variant="outline"
             disabled={disabled}
-            onClick={() => setAdding(true)}
+            onClick={() => {
+              setAdding(true);
+              if (phone) clearSheetError();
+            }}
           >
             <Plus className="size-3.5" />
             Add a variable
           </Button>
         </div>
       )}
-      {pendingLabel === null ? null : (
-        <p role="status" className="px-3 py-2 text-ui-xs text-muted-foreground">
-          {pendingLabel}
-        </p>
-      )}
-      {writeError === null ? null : (
-        <p role="alert" className="px-3 py-2 text-ui-xs text-destructive">
-          {writeError}
-        </p>
-      )}
+      {phone ? null : feedback}
     </div>
   );
 }
 
+function EnvWriteFeedback(props: {
+  readonly pendingLabel: string | null;
+  readonly writeError: string | null;
+}): ReactNode {
+  return (
+    <>
+      {props.pendingLabel === null ? null : (
+        <p role="status" className="px-3 py-2 text-ui-xs text-muted-foreground">
+          {props.pendingLabel}
+        </p>
+      )}
+      {props.writeError === null ? null : (
+        <p role="alert" className="px-3 py-2 text-ui-xs text-destructive">
+          {props.writeError}
+        </p>
+      )}
+    </>
+  );
+}
+
 function EnvOverrideRow(props: {
+  readonly phone: boolean;
+  readonly feedback: ReactNode;
+  readonly onSheetToggle: () => void;
   readonly entry: EnvOverrideValue;
   readonly otherKeys: readonly string[];
   readonly disabled: boolean;
@@ -544,6 +585,7 @@ function EnvOverrideRow(props: {
 }) {
   const { entry, otherKeys, disabled, credentialRefusal, onCommit, onDelete } =
     props;
+  const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<Draft>(() => draftOf(entry));
   // After a completed save or stale refusal, follow the authoritative value
   // until the next edit, so a normalized or superseded draft is not resubmitted.
@@ -553,9 +595,10 @@ function EnvOverrideRow(props: {
   if (props.savedRow !== seenSavedRow) setSeenSavedRow(props.savedRow);
   const [following, setFollowing] = useState(false);
   const [seenRefusal, setSeenRefusal] = useState(
-    props.staleRefusal === null ? 0 : props.staleRefusal.seq,
+    () => props.staleRefusal?.seq ?? 0,
   );
   if (saved) {
+    setOpen(false);
     setFollowing(true);
     setDraft(draftOf(entry));
   } else if (
@@ -635,11 +678,16 @@ function EnvOverrideRow(props: {
   const trimValue = (): void => {
     const nextValue = draft.value.trim();
     editDraft((current) => ({ ...current, value: nextValue }));
-    commitValue(nextValue);
+    if (!props.phone) commitValue(nextValue);
   };
 
+  const phoneRef = useRef(props.phone);
+  useEffect(() => {
+    phoneRef.current = props.phone;
+  }, [props.phone]);
   useEffect(() => {
     return () => {
+      if (phoneRef.current) return;
       const current = draftRef.current;
       if (current.keyShaped) return;
       const currentEntry = entryRef.current;
@@ -660,53 +708,29 @@ function EnvOverrideRow(props: {
     };
   }, []);
 
-  return (
-    <li className="flex flex-col gap-1 px-3 py-2">
-      <div className={GRID}>
-        <Input
-          value={draft.key}
+  const editor = (
+    <>
+      <div className={props.phone ? "flex flex-col gap-4" : GRID}>
+        <EnvDraftFields
+          draft={draft}
           disabled={disabled}
-          spellCheck={false}
-          aria-label={`Name for ${entry.key}`}
-          className="h-8"
-          onChange={(event) =>
-            editDraft((current) => ({ ...current, key: event.target.value }))
-          }
-          onKeyDown={(event) => {
-            if (event.key === "Enter") event.currentTarget.blur();
-          }}
-          onBlur={commit}
-          font="mono"
-          size="xs"
+          phone={props.phone}
+          nameLabel={`Name for ${entry.key}`}
+          valueLabel={`Value for ${entry.key}`}
+          onName={(key) => editDraft((current) => ({ ...current, key }))}
+          onValue={(value) => editDraft((current) => ({ ...current, value }))}
+          onMode={(mode) => editDraft((current) => ({ ...current, mode }))}
+          onCommit={commit}
         />
-        <EnvValueField
-          value={draft.value}
-          mode={draft.mode}
-          disabled={disabled}
-          ariaLabel={`Value for ${entry.key}`}
-          className={VALUE_FIELD_PLACEMENT}
-          onModeChange={(mode) =>
-            editDraft((current) => ({ ...current, mode }))
-          }
-          onValueChange={(value) =>
-            editDraft((current) => ({ ...current, value }))
-          }
-          onBlur={commit}
-        />
-        <RemoveVariableButton
-          name={entry.key}
-          disabled={disabled}
-          onDelete={onDelete}
-        />
+        {props.phone ? null : (
+          <RemoveVariableButton
+            name={entry.key}
+            disabled={disabled}
+            onDelete={onDelete}
+          />
+        )}
       </div>
-      {props.note === null ? null : (
-        <p
-          data-testid="env-row-note"
-          className="text-ui-xs text-muted-foreground"
-        >
-          {props.note}
-        </p>
-      )}
+      <EnvRowNote note={props.note} />
       <EnvRowFooter
         draft={draft}
         disabled={disabled}
@@ -718,9 +742,57 @@ function EnvOverrideRow(props: {
           setDraft(draftOf(entry));
         }}
       />
-      {props.details === null ? null : (
-        <div className="flex justify-end">{props.details}</div>
+      <EnvRowDetails details={props.details} />
+    </>
+  );
+  if (!props.phone)
+    return <li className="flex flex-col gap-1 px-3 py-2">{editor}</li>;
+  const dismiss = (): void => {
+    if (disabled) return;
+    setOpen(false);
+    setFollowing(false);
+    setDraft(draftOf(entry));
+    props.onSheetToggle();
+  };
+  return (
+    <li className="flex min-w-0 flex-col gap-1">
+      <VariablePhoneRow
+        name={entry.key}
+        value={entry.value === null ? "Unset" : entry.value}
+        badge={null}
+        disabled={disabled}
+        onEdit={() => {
+          // Open on the stored value and follow it until the first edit, so
+          // Save never writes back a value changed while the sheet was shut.
+          setFollowing(true);
+          setDraft(draftOf(entry));
+          setOpen(true);
+          props.onSheetToggle();
+        }}
+      />
+      {open ? null : (
+        <EnvPhoneRowStatus
+          note={props.note}
+          refusal={null}
+          details={props.details}
+        />
       )}
+      <VariableEditSheet
+        open={open}
+        title={entry.key}
+        busy={disabled}
+        saveDisabled={false}
+        removeLabel={`Remove ${entry.key}`}
+        onSave={() => {
+          if (draftShowsEntry(draft, entry)) dismiss();
+          else commit();
+        }}
+        onRemove={() => onDelete(entry.key)}
+        onDismiss={dismiss}
+      >
+        {editor}
+        {props.feedback}
+      </VariableEditSheet>
     </li>
   );
 }
@@ -731,6 +803,9 @@ function EnvOverrideRow(props: {
  * value stays saved until the person acts; its link carries it on.
  */
 function EnvMaskedRow(props: {
+  readonly phone: boolean;
+  readonly feedback: ReactNode;
+  readonly onSheetToggle: () => void;
   readonly entry: EnvOverrideValue;
   readonly disabled: boolean;
   readonly keyRefusal: KeyRefusalFor;
@@ -739,8 +814,17 @@ function EnvMaskedRow(props: {
   readonly onDelete: (key: string) => void;
 }) {
   const { entry, disabled } = props;
-  return (
-    <li className="flex flex-col gap-1 px-3 py-2" data-testid="env-masked-row">
+  const [open, setOpen] = useState(false);
+  const refusal =
+    props.keyRefusal === null ? null : (
+      <KeyRefusalLine
+        refusal={props.keyRefusal(entry.key)}
+        disabled={disabled}
+        onLink={(refusal) => refusal.onLink(entry.key, entry.value ?? "")}
+      />
+    );
+  const editor = (
+    <>
       <div className={GRID}>
         <span className="truncate font-mono text-ui-xs text-foreground">
           {entry.key}
@@ -755,31 +839,105 @@ function EnvMaskedRow(props: {
         >
           ••••••••
         </span>
-        <RemoveVariableButton
-          name={entry.key}
-          disabled={disabled}
-          onDelete={props.onDelete}
-        />
+        {props.phone ? null : (
+          <RemoveVariableButton
+            name={entry.key}
+            disabled={disabled}
+            onDelete={props.onDelete}
+          />
+        )}
       </div>
-      {props.note === null ? null : (
-        <p
-          data-testid="env-row-note"
-          className="text-ui-xs text-muted-foreground"
-        >
-          {props.note}
-        </p>
-      )}
-      {props.keyRefusal === null ? null : (
-        <KeyRefusalLine
-          refusal={props.keyRefusal(entry.key)}
-          disabled={disabled}
-          onLink={(refusal) => refusal.onLink(entry.key, entry.value ?? "")}
+      <EnvRowNote note={props.note} />
+      {refusal}
+      <EnvRowDetails details={props.details} />
+    </>
+  );
+  if (!props.phone)
+    return (
+      <li
+        className="flex flex-col gap-1 px-3 py-2"
+        data-testid="env-masked-row"
+      >
+        {editor}
+      </li>
+    );
+  return (
+    <li className="flex min-w-0 flex-col gap-1" data-testid="env-masked-row">
+      <VariablePhoneRow
+        name={entry.key}
+        value={
+          <span
+            aria-label={`${entry.key} is hidden`}
+            data-testid="env-masked-value"
+          >
+            ••••••••
+          </span>
+        }
+        badge={null}
+        disabled={disabled}
+        onEdit={() => {
+          setOpen(true);
+          props.onSheetToggle();
+        }}
+      />
+      {open ? null : (
+        <EnvPhoneRowStatus
+          note={props.note}
+          refusal={refusal}
+          details={props.details}
         />
       )}
-      {props.details === null ? null : (
-        <div className="flex justify-end">{props.details}</div>
-      )}
+      <VariableEditSheet
+        open={open}
+        title={entry.key}
+        busy={disabled}
+        saveDisabled
+        removeLabel={`Remove ${entry.key}`}
+        onSave={null}
+        onRemove={() => props.onDelete(entry.key)}
+        onDismiss={() => {
+          setOpen(false);
+          props.onSheetToggle();
+        }}
+      >
+        {editor}
+        {props.feedback}
+      </VariableEditSheet>
     </li>
+  );
+}
+
+function EnvRowNote(props: { readonly note: ReactNode }): ReactNode {
+  if (props.note === null) return null;
+  return (
+    <p data-testid="env-row-note" className="text-ui-xs text-muted-foreground">
+      {props.note}
+    </p>
+  );
+}
+
+function EnvRowDetails(props: { readonly details: ReactNode }): ReactNode {
+  if (props.details === null) return null;
+  return <div className="flex justify-end">{props.details}</div>;
+}
+
+/**
+ * Under a closed phone row: its note, refusal and details, as the desktop row
+ * shows them. An open sheet shows them in the sheet instead.
+ */
+function EnvPhoneRowStatus(props: {
+  readonly note: ReactNode;
+  readonly refusal: ReactNode;
+  readonly details: ReactNode;
+}): ReactNode {
+  if (props.note === null && props.refusal === null && props.details === null)
+    return null;
+  return (
+    <div className="flex min-w-0 flex-col gap-1 px-3 pb-2">
+      <EnvRowNote note={props.note} />
+      {props.refusal}
+      <EnvRowDetails details={props.details} />
+    </div>
   );
 }
 
@@ -845,6 +1003,8 @@ function EnvSecretClaim(props: {
 }
 
 function EnvOverrideAddRow(props: {
+  readonly phone: boolean;
+  readonly feedback: ReactNode;
   readonly existingKeys: readonly string[];
   readonly claimedBy: ReadonlyMap<string, string>;
   readonly disabled: boolean;
@@ -907,24 +1067,32 @@ function EnvOverrideAddRow(props: {
     onAdd(nextKey, nextValue);
   };
 
-  return (
-    <div className="flex flex-col gap-1 border-t border-border/40 px-3 py-2">
-      <div className={GRID}>
-        <Input
-          value={draft.key}
-          disabled={disabled}
-          spellCheck={false}
-          placeholder={namePlaceholder}
-          aria-label="New variable name"
-          className="h-8"
-          onChange={(event) =>
-            edit((current) => ({ ...current, key: event.target.value }))
+  const editor = (
+    <>
+      <div className={props.phone ? "flex flex-col gap-4" : GRID}>
+        <label
+          className={
+            props.phone ? "flex w-full flex-col gap-2 text-ui-sm" : "contents"
           }
-          font="mono"
-          size="xs"
-        />
+        >
+          {props.phone ? "Name" : null}
+          <Input
+            value={draft.key}
+            disabled={disabled}
+            spellCheck={false}
+            placeholder={namePlaceholder}
+            aria-label="New variable name"
+            className="h-8"
+            onChange={(event) =>
+              edit((current) => ({ ...current, key: event.target.value }))
+            }
+            font="mono"
+            size="xs"
+          />
+        </label>
         {secretName === null ? (
           <EnvValueField
+            multiline={props.phone}
             value={draft.value}
             mode={draft.mode}
             disabled={disabled}
@@ -947,30 +1115,32 @@ function EnvOverrideAddRow(props: {
             <EnvSecretClaim name={draft.key.trim()} secretName={secretName} />
           </div>
         )}
-        <div className={cn(ROW_ACTIONS_PLACEMENT, "flex")}>
-          <Button
-            type="button"
-            size="icon-sm"
-            variant="ghost"
-            disabled={
-              disabled || draft.key.trim().length === 0 || secretName !== null
-            }
-            aria-label="Apply variable"
-            onClick={add}
-          >
-            <Check className="size-4 text-[var(--term-ansi-green)]" />
-          </Button>
-          <Button
-            type="button"
-            size="icon-sm"
-            variant="ghost"
-            disabled={disabled}
-            aria-label="Discard variable"
-            onClick={onCancel}
-          >
-            <X className="size-4" />
-          </Button>
-        </div>
+        {props.phone ? null : (
+          <div className={cn(ROW_ACTIONS_PLACEMENT, "flex")}>
+            <Button
+              type="button"
+              size="icon-sm"
+              variant="ghost"
+              disabled={
+                disabled || draft.key.trim().length === 0 || secretName !== null
+              }
+              aria-label="Apply variable"
+              onClick={add}
+            >
+              <Check className="size-4 text-[var(--term-ansi-green)]" />
+            </Button>
+            <Button
+              type="button"
+              size="icon-sm"
+              variant="ghost"
+              disabled={disabled}
+              aria-label="Discard variable"
+              onClick={onCancel}
+            >
+              <X className="size-4" />
+            </Button>
+          </div>
+        )}
       </div>
       {secretName === null ? (
         <EnvRowFooter
@@ -984,11 +1154,84 @@ function EnvOverrideAddRow(props: {
           onRefusalFollowed={onCancel}
         />
       ) : null}
-    </div>
+    </>
+  );
+  if (!props.phone)
+    return (
+      <div className="flex flex-col gap-1 border-t border-border/40 px-3 py-2">
+        {editor}
+      </div>
+    );
+  return (
+    <VariableEditSheet
+      open
+      title="Add a variable"
+      busy={disabled}
+      saveDisabled={draft.key.trim().length === 0 || secretName !== null}
+      removeLabel="Remove"
+      onRemove={null}
+      onSave={add}
+      onDismiss={onCancel}
+    >
+      {editor}
+      {props.feedback}
+    </VariableEditSheet>
+  );
+}
+
+function EnvDraftFields(props: {
+  readonly draft: Draft;
+  readonly disabled: boolean;
+  readonly phone: boolean;
+  readonly nameLabel: string;
+  readonly valueLabel: string;
+  readonly onName: (name: string) => void;
+  readonly onValue: (value: string) => void;
+  readonly onMode: (mode: EnvMode) => void;
+  readonly onCommit: () => void;
+}): ReactNode {
+  // A phone writes only from the sheet's Save, never on blur.
+  const onBlur = props.phone ? () => undefined : props.onCommit;
+  return (
+    <>
+      <label
+        className={
+          props.phone ? "flex w-full flex-col gap-2 text-ui-sm" : "contents"
+        }
+      >
+        {props.phone ? "Name" : null}
+        <Input
+          value={props.draft.key}
+          disabled={props.disabled}
+          spellCheck={false}
+          aria-label={props.nameLabel}
+          className="h-8"
+          font="mono"
+          size="xs"
+          onChange={(event) => props.onName(event.target.value)}
+          onBlur={onBlur}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") event.currentTarget.blur();
+          }}
+        />
+      </label>
+      <EnvValueField
+        multiline={props.phone}
+        value={props.draft.value}
+        mode={props.draft.mode}
+        disabled={props.disabled}
+        ariaLabel={props.valueLabel}
+        className={VALUE_FIELD_PLACEMENT}
+        onModeChange={props.onMode}
+        onValueChange={props.onValue}
+        onBlur={onBlur}
+      />
+    </>
   );
 }
 
 function EnvValueField(props: {
+  readonly multiline: boolean;
   readonly value: string;
   readonly mode: EnvMode;
   readonly disabled: boolean;
@@ -1009,7 +1252,15 @@ function EnvValueField(props: {
     onBlur,
   } = props;
   return (
-    <div className={cn("flex min-w-0 items-center gap-2", className)}>
+    <div
+      className={cn(
+        props.multiline
+          ? "flex w-full flex-col gap-2 text-ui-sm"
+          : "flex min-w-0 items-center gap-2",
+        className,
+      )}
+    >
+      {props.multiline ? "Value" : null}
       <Select
         value={mode}
         disabled={disabled}
@@ -1030,21 +1281,34 @@ function EnvValueField(props: {
           <SelectItem value="unset">Unset</SelectItem>
         </SelectContent>
       </Select>
-      <Input
-        value={mode === "unset" ? "" : value}
-        disabled={disabled || mode === "unset"}
-        spellCheck={false}
-        aria-label={ariaLabel}
-        placeholder={mode === "unset" ? "not set" : "value"}
-        className="h-8 min-w-0 flex-1"
-        onChange={(event) => onValueChange(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter") event.currentTarget.blur();
-        }}
-        onBlur={onBlur}
-        font="mono"
-        size="xs"
-      />
+      {props.multiline ? (
+        <Textarea
+          value={mode === "unset" ? "" : value}
+          disabled={disabled || mode === "unset"}
+          spellCheck={false}
+          aria-label={ariaLabel}
+          placeholder={mode === "unset" ? "not set" : "value"}
+          font="mono"
+          rows={4}
+          onChange={(event) => onValueChange(event.target.value)}
+        />
+      ) : (
+        <Input
+          value={mode === "unset" ? "" : value}
+          disabled={disabled || mode === "unset"}
+          spellCheck={false}
+          aria-label={ariaLabel}
+          placeholder={mode === "unset" ? "not set" : "value"}
+          className="h-8 min-w-0 flex-1"
+          onChange={(event) => onValueChange(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") event.currentTarget.blur();
+          }}
+          onBlur={onBlur}
+          font="mono"
+          size="xs"
+        />
+      )}
     </div>
   );
 }

@@ -3375,8 +3375,10 @@ describe("A provider's skill switch while its own write is in flight", () => {
 
   beforeEach(() => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
   });
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.useRealTimers();
   });
 

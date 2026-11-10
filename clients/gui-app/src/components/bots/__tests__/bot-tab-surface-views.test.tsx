@@ -385,12 +385,27 @@ vi.mock("@/components/bots/bot-activity-page", () => ({
   BotActivityPage: (props: {
     boundHere: boolean;
     active: { rows: ReadonlyArray<{ task: { taskId: string } }> };
+    trunkChatId: string;
+    onOpenSession: BotSessionOpen;
   }) => (
     <div
       data-testid="stub-activity"
       data-is-this-host={String(props.boundHere)}
       data-row-ids={props.active.rows.map((row) => row.task.taskId).join(",")}
-    />
+    >
+      <button
+        type="button"
+        data-testid="stub-activity-open-trunk"
+        onClick={() =>
+          props.onOpenSession({
+            chatId: props.trunkChatId,
+            threadId: null,
+            messageId: null,
+            sendPostId: null,
+          })
+        }
+      />
+    </div>
   ),
 }));
 vi.mock("@/components/bots/bot-threads-view", () => ({
@@ -914,6 +929,23 @@ describe("<BotTabSurface /> views", () => {
 
     expect(screen.queryByTestId("bot-tab-activity-count")).toBeNull();
     expect(visibleTabText()).toBe("Activity");
+  });
+
+  it("the Activity tab's trunk door swaps the whole Tabs view for the trunk's own session, not a thread", async () => {
+    const user = userEvent.setup();
+    render(surface());
+    await user.click(activityTab());
+    expect(screen.getByTestId("stub-activity")).toBeTruthy();
+
+    await user.click(screen.getByTestId("stub-activity-open-trunk"));
+
+    const session = screen.getByTestId("stub-session");
+    expect(session.getAttribute("data-chat-id")).toBe(
+      snapshot().bot.trunkChatId,
+    );
+    expect(session.getAttribute("data-thread-id")).toBe("none");
+    expect(screen.queryByTestId("stub-activity")).toBeNull();
+    expect(screen.queryAllByRole("tab")).toEqual([]);
   });
 
   it("shows Threads from the column in place of the channel and its views, through the tab's host, and its own channel row lands back where it was", async () => {
