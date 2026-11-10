@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
+import { validateVersionedRpcRegistry } from "@traycer/protocol/framework/index";
 
 import {
   providersListResponseSchema,
   providersListResponseSchemaV100Preimage,
   providersListResponseSchemaV101Preimage,
+  providersListResponseSchemaV108Preimage,
   providersListResponseSchemaV92,
+  providersNativeMutateResponseSchemaV14,
+  providersNativeMutateResponseSchemaV15,
 } from "@traycer/protocol/host/provider-schemas";
 import { hostRpcRegistry } from "@traycer/protocol/host/registry";
 
@@ -73,6 +77,32 @@ describe("registry lines", () => {
       minor: 1,
     });
     expect(mutateMajor1.versions[1].upgradeFromPreviousVersion).not.toBeNull();
+  });
+
+  it("freezes the released skill-metadata preimages and binds the new listing heads", () => {
+    expect(listMajor10.latestMinor).toBe(9);
+    expect(listMajor10.versions[8].contract.responseSchema).toBe(
+      providersListResponseSchemaV108Preimage,
+    );
+    expect(listMajor10.versions[9].contract.responseSchema).toBe(
+      providersListResponseSchema,
+    );
+    expect(mutateMajor1.latestMinor).toBe(5);
+    expect(mutateMajor1.versions[4].contract.responseSchema).toBe(
+      providersNativeMutateResponseSchemaV14,
+    );
+    expect(mutateMajor1.versions[5].contract.responseSchema).toBe(
+      providersNativeMutateResponseSchemaV15,
+    );
+  });
+
+  it("validates only the list and native-mutation registries with their additive bridges", () => {
+    expect(() =>
+      validateVersionedRpcRegistry({
+        "providers.list": hostRpcRegistry["providers.list"],
+        "providers.nativeMutate": hostRpcRegistry["providers.nativeMutate"],
+      }),
+    ).not.toThrow();
   });
 
   it("freezes list@10.0 and mutate@1.0 at the pre-remedy shape", () => {

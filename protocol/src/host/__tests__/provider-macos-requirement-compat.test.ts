@@ -70,8 +70,8 @@ describe("providers.list@10.2 carries macosRequirement", () => {
     const entry = hostRpcRegistry["providers.list"][10];
     // 10.3 (MCP origin), 10.4 (open-chat plugins), 10.5 (the envelope keys),
     // 10.6 (OpenCode's managed lines), 10.7 (`chatsFollow`) and
-    // 10.8 (native memory) opened above it.
-    expect(entry.latestMinor).toBe(8);
+    // 10.8 (native memory) and 10.9 (skill origin) opened above it.
+    expect(entry.latestMinor).toBe(9);
     expect(entry.versions[2].contract.schemaVersion).toEqual({
       major: 10,
       minor: 2,
@@ -198,7 +198,7 @@ describe("providers.list@10.2 carries macosRequirement", () => {
       responseSchema: providersListResponseSchemaV107Preimage,
     });
     expect(
-      hostRpcRegistry["providers.list"][10].versions[8].contract,
+      hostRpcRegistry["providers.list"][10].versions[9].contract,
     ).toMatchObject({ responseSchema: providersListResponseSchema });
   });
 

@@ -27,6 +27,7 @@ import { ChevronRight, ListFilter, Plus, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import {
   DropdownMenu,
@@ -67,6 +68,8 @@ import {
   SKILL_CONFLICT_LABEL,
   SKILL_CONFLICT_TONE,
   SKILL_CONFLICT_TOOLTIP,
+  SKILL_SHADOWED_TOOLTIP,
+  skillProfileOriginLabel,
   skillSourceLabel,
   SKILL_SOURCE_ORDER,
   SKILL_SOURCE_TONE,
@@ -1170,10 +1173,15 @@ function useOpenSkillActions({
 
 function skillOpenLabel(skill: ProviderSkill, providerLabel: string): string {
   const badge = skillSourceLabel(skill.source, providerLabel);
-  if (skill.conflict === true) {
-    return `Open ${skill.name} (${badge}, ${SKILL_CONFLICT_LABEL}: ${SKILL_CONFLICT_TOOLTIP})`;
+  const origin = skillProfileOriginLabel(skill.profileOrigin);
+  const source = origin === null ? badge : `${badge}, ${origin}`;
+  if (skill.shadowed === true) {
+    return `Open ${skill.name} (${source}, ${SKILL_SHADOWED_TOOLTIP})`;
   }
-  return `Open ${skill.name} (${badge})`;
+  if (skill.conflict === true) {
+    return `Open ${skill.name} (${source}, ${SKILL_CONFLICT_LABEL}: ${SKILL_CONFLICT_TOOLTIP})`;
+  }
+  return `Open ${skill.name} (${source})`;
 }
 
 function SkillRow({
@@ -1223,7 +1231,22 @@ function SkillRow({
         {/* Badges hold one trailing edge across every row - names vary in
             length, so anchoring status here is what keeps it scannable as a
             column instead of drifting with each name. */}
-        <span className="flex shrink-0 items-center gap-1.5">
+        <span className="flex min-w-0 flex-wrap items-center justify-end gap-1.5">
+          {skillProfileOriginLabel(skill.profileOrigin) !== null ? (
+            <Badge variant="muted" wrap>
+              {skillProfileOriginLabel(skill.profileOrigin)}
+            </Badge>
+          ) : null}
+          {skill.shadowed === true ? (
+            <TooltipWrapper
+              label={SKILL_SHADOWED_TOOLTIP}
+              side="top"
+              sideOffset={4}
+              align="center"
+            >
+              <Badge variant="warning">Shadowed</Badge>
+            </TooltipWrapper>
+          ) : null}
           {skill.conflict === true ? (
             <TooltipWrapper
               label={SKILL_CONFLICT_TOOLTIP}

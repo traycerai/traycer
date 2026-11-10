@@ -1582,6 +1582,7 @@ import {
   providersNativeMutateResponseSchemaV10Preimage,
   providersNativeMutateResponseSchemaV11Preimage,
   providersNativeMutateResponseSchemaV14,
+  providersNativeMutateResponseSchemaV15,
   providersCancelLoginResponseSchemaV10,
   providersClearApiKeyRequestSchema,
   providersClearApiKeyRequestSchemaV10,
@@ -1623,6 +1624,7 @@ import {
   providersListResponseSchemaV105Preimage,
   providersListResponseSchemaV106Preimage,
   providersListResponseSchemaV107Preimage,
+  providersListResponseSchemaV108Preimage,
   providersListResponseSchemaV80,
   providersListResponseSchemaV90,
   providersListResponseSchemaV91,
@@ -3191,7 +3193,25 @@ export const providersListV108 = defineRpcContract({
   method: "providers.list",
   schemaVersion: { major: 10, minor: 8 } as const,
   requestSchema: providersListRequestSchema,
+  responseSchema: providersListResponseSchemaV108Preimage,
+});
+
+/** Optional skill origin and shadowing metadata; old peers strip the keys. */
+export const providersListV109 = defineRpcContract({
+  method: "providers.list",
+  schemaVersion: { major: 10, minor: 9 } as const,
+  requestSchema: providersListRequestSchema,
   responseSchema: providersListResponseSchema,
+});
+
+export const providersListUpgradeV108ToV109 = defineUpgradePath<
+  typeof providersListV108,
+  typeof providersListV109
+>({
+  from: { major: 10, minor: 8 },
+  to: { major: 10, minor: 9 },
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
 });
 
 export const providersListUpgradeV102ToV103 = defineUpgradePath<
@@ -3901,10 +3921,10 @@ export function downgradeNativeListErrorForPublishedLines(
 }
 
 export const providersListDowngradeV10ToV9 = defineDowngradePath<
-  typeof providersListV108,
+  typeof providersListV109,
   typeof providersListV92
 >({
-  from: { major: 10, minor: 8 },
+  from: { major: 10, minor: 9 },
   // Lands on 9.2, major 9's latest installed minor; a 9.0 or 9.1 caller's own
   // contract parse then strips the keys its minor predates.
   to: { major: 9, minor: 2 },
@@ -3927,10 +3947,10 @@ export const providersListDowngradeV10ToV9 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV8 = defineDowngradePath<
-  typeof providersListV108,
+  typeof providersListV109,
   typeof providersListV80
 >({
-  from: { major: 10, minor: 8 },
+  from: { major: 10, minor: 9 },
   to: { major: 8, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -3950,10 +3970,10 @@ export const providersListDowngradeV10ToV8 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV7 = defineDowngradePath<
-  typeof providersListV108,
+  typeof providersListV109,
   typeof providersListV70
 >({
-  from: { major: 10, minor: 8 },
+  from: { major: 10, minor: 9 },
   to: { major: 7, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -3973,10 +3993,10 @@ export const providersListDowngradeV10ToV7 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV6 = defineDowngradePath<
-  typeof providersListV108,
+  typeof providersListV109,
   typeof providersListV60
 >({
-  from: { major: 10, minor: 8 },
+  from: { major: 10, minor: 9 },
   to: { major: 6, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -3993,10 +4013,10 @@ export const providersListDowngradeV10ToV6 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV5 = defineDowngradePath<
-  typeof providersListV108,
+  typeof providersListV109,
   typeof providersListV50
 >({
-  from: { major: 10, minor: 8 },
+  from: { major: 10, minor: 9 },
   to: { major: 5, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -4013,10 +4033,10 @@ export const providersListDowngradeV10ToV5 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV4 = defineDowngradePath<
-  typeof providersListV108,
+  typeof providersListV109,
   typeof providersListV40
 >({
-  from: { major: 10, minor: 8 },
+  from: { major: 10, minor: 9 },
   to: { major: 4, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -4033,10 +4053,10 @@ export const providersListDowngradeV10ToV4 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV3 = defineDowngradePath<
-  typeof providersListV108,
+  typeof providersListV109,
   typeof providersListV30
 >({
-  from: { major: 10, minor: 8 },
+  from: { major: 10, minor: 9 },
   to: { major: 3, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -4053,10 +4073,10 @@ export const providersListDowngradeV10ToV3 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV2 = defineDowngradePath<
-  typeof providersListV108,
+  typeof providersListV109,
   typeof providersListV20
 >({
-  from: { major: 10, minor: 8 },
+  from: { major: 10, minor: 9 },
   to: { major: 2, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -4073,10 +4093,10 @@ export const providersListDowngradeV10ToV2 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV1 = defineDowngradePath<
-  typeof providersListV108,
+  typeof providersListV109,
   typeof providersListV10
 >({
-  from: { major: 10, minor: 8 },
+  from: { major: 10, minor: 9 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -5075,6 +5095,24 @@ export const providersNativeMutateV14 = defineRpcContract({
   schemaVersion: { major: 1, minor: 4 } as const,
   requestSchema: providersNativeMutateRequestSchemaV14,
   responseSchema: providersNativeMutateResponseSchemaV14,
+});
+
+/** Optional skill origin and shadowing metadata in the resulting skills list. */
+export const providersNativeMutateV15 = defineRpcContract({
+  method: "providers.nativeMutate",
+  schemaVersion: { major: 1, minor: 5 } as const,
+  requestSchema: providersNativeMutateRequestSchemaV14,
+  responseSchema: providersNativeMutateResponseSchemaV15,
+});
+
+export const providersNativeMutateUpgradeV14ToV15 = defineUpgradePath<
+  typeof providersNativeMutateV14,
+  typeof providersNativeMutateV15
+>({
+  from: { major: 1, minor: 4 },
+  to: { major: 1, minor: 5 },
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
 });
 
 export const providersNativeMutateUpgradeV10ToV11 = defineUpgradePath<
@@ -13126,7 +13164,7 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
   "providers.nativeMutate": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 4,
+      latestMinor: 5,
       versions: {
         0: {
           contract: providersNativeMutateV10,
@@ -13151,6 +13189,10 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
           contract: providersNativeMutateV14,
           upgradeFromPreviousVersion: providersNativeMutateUpgradeV13ToV14,
           responseGrowthProjectionGated: true,
+        },
+        5: {
+          contract: providersNativeMutateV15,
+          upgradeFromPreviousVersion: providersNativeMutateUpgradeV14ToV15,
         },
       },
       downgradePathsFromLatest: {},
@@ -14375,14 +14417,14 @@ const HOST_RPC_ID_CARRYING_REGISTRY_DEFINITION = {
 } as const;
 
 /**
- * `providers.list` major 10, named. Its nine minors and nine bridges inline
+ * `providers.list` major 10, named. Its ten minors and nine bridges inline
  * push `HOST_RPC_PROVIDERS_LIST_REGISTRY_DEFINITION` over TS7056's
  * declaration-serialization ceiling; a named slot type is emitted by name,
  * as `HostRpcNotificationMethodMap` is. The literal below is checked against
  * it, so the slot keeps every exact contract and bridge.
  */
 type ProvidersListMajor10 = {
-  readonly latestMinor: 8;
+  readonly latestMinor: 9;
   readonly versions: {
     readonly 0: {
       readonly contract: typeof providersListV100;
@@ -14422,6 +14464,10 @@ type ProvidersListMajor10 = {
       readonly contract: typeof providersListV108;
       readonly upgradeFromPreviousVersion: typeof providersListUpgradeV107ToV108;
     };
+    readonly 9: {
+      readonly contract: typeof providersListV109;
+      readonly upgradeFromPreviousVersion: typeof providersListUpgradeV108ToV109;
+    };
   };
   readonly downgradePathsFromLatest: {
     readonly 1: typeof providersListDowngradeV10ToV1;
@@ -14437,7 +14483,7 @@ type ProvidersListMajor10 = {
 };
 
 const PROVIDERS_LIST_MAJOR_10: ProvidersListMajor10 = {
-  latestMinor: 8,
+  latestMinor: 9,
   versions: {
     0: {
       contract: providersListV100,
@@ -14483,6 +14529,10 @@ const PROVIDERS_LIST_MAJOR_10: ProvidersListMajor10 = {
     8: {
       contract: providersListV108,
       upgradeFromPreviousVersion: providersListUpgradeV107ToV108,
+    },
+    9: {
+      contract: providersListV109,
+      upgradeFromPreviousVersion: providersListUpgradeV108ToV109,
     },
   },
   downgradePathsFromLatest: {

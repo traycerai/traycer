@@ -66,6 +66,7 @@ import {
   providersListResponseSchemaV105Preimage,
   providersListResponseSchemaV106Preimage,
   providersListResponseSchemaV107Preimage,
+  providersListResponseSchemaV108Preimage,
   providersUsePackVersionResponseSchemaV10,
   providersUsePackVersionResponseSchema,
   providersListResponseSchemaV70,
@@ -252,7 +253,8 @@ const FIXTURES = {
   // live shape goes red on this row rather than on the release that ships the
   // growth. Same response then applies - freeze the line that stopped being
   // head, open the next one.
-  "providers.list@10.8": dump(providersListResponseSchema),
+  "providers.list@10.8": dump(providersListResponseSchemaV108Preimage),
+  "providers.list@10.9": dump(providersListResponseSchema),
   "providers.usePackVersion@1.0": dump(providersUsePackVersionResponseSchemaV10),
   "providers.usePackVersion@1.1": dump(providersUsePackVersionResponseSchema),
   // The REQUEST lines carry their own freeze history (`native` grew the

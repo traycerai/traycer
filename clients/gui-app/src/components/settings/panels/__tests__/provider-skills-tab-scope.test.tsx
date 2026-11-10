@@ -336,6 +336,88 @@ describe("<ProviderSkillsTab /> scope (F5)", () => {
     ).toBeDefined();
   });
 
+  it("shows each profile origin and names a shadowed user skill in its row", () => {
+    skillMocks.skills = [
+      {
+        ...FIND_SKILLS,
+        name: "shadowed-user-skill",
+        profileOrigin: "user",
+        shadowed: true,
+      },
+      {
+        ...FIND_SKILLS,
+        name: "environment-skill",
+        source: "managed",
+        profileOrigin: "host-view",
+      },
+      {
+        ...FIND_SKILLS,
+        name: "computer-skill",
+        source: "provider",
+        profileOrigin: "this-host",
+      },
+    ];
+
+    render(<ProviderSkillsTab state={skillsState()} />);
+
+    expect(screen.getByText("Your skill")).toBeDefined();
+    expect(screen.getByText("Traycer")).toBeDefined();
+    expect(screen.getByText("Made on this computer")).toBeDefined();
+    expect(screen.getByText("Shadowed")).toBeDefined();
+    expect(
+      screen.getByRole("button", {
+        name: "Open shadowed-user-skill (Shared, Your skill, Shadowed by a Traycer skill of the same name)",
+      }),
+    ).toBeDefined();
+  });
+
+  it.each([
+    {
+      status: "shadowed",
+      shadowed: true,
+      conflict: false,
+      statusLabel: "Shadowed by a Traycer skill of the same name",
+    },
+    {
+      status: "conflict",
+      shadowed: false,
+      conflict: true,
+      statusLabel:
+        "Conflict: A folder already occupies this provider's link for this skill. Traycer did not adopt or overwrite it.",
+    },
+  ])("keeps origin and legacy accessible names on $status rows", (status) => {
+    skillMocks.skills = [
+      {
+        ...FIND_SKILLS,
+        name: "computer-skill",
+        path: `${FIND_SKILLS.path}-computer`,
+        profileOrigin: "this-host",
+        shadowed: status.shadowed,
+        conflict: status.conflict,
+      },
+      {
+        ...FIND_SKILLS,
+        name: "legacy-skill",
+        path: `${FIND_SKILLS.path}-legacy`,
+        shadowed: status.shadowed,
+        conflict: status.conflict,
+      },
+    ];
+
+    render(<ProviderSkillsTab state={skillsState()} />);
+
+    expect(
+      screen.getByRole("button", {
+        name: `Open computer-skill (Shared, Made on this computer, ${status.statusLabel})`,
+      }),
+    ).toBeDefined();
+    expect(
+      screen.getByRole("button", {
+        name: `Open legacy-skill (Shared, ${status.statusLabel})`,
+      }),
+    ).toBeDefined();
+  });
+
   it("labels the scope picker Skills location (not MCP or Plugins)", () => {
     render(<ProviderSkillsTab state={skillsState()} />);
 

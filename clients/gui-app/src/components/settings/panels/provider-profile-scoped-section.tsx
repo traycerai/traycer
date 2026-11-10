@@ -23,7 +23,10 @@ import { cn } from "@/lib/utils";
 import { ProviderOnHostOnlyLine } from "./provider-on-host-only-line";
 import { EmbeddedProviderRateLimitForProvider } from "./provider-rate-limit-section";
 import { ProfileSummaryActions } from "./profile-summary-actions";
-import { ProfileEditDialog } from "./provider-profile-edit-dialog";
+import {
+  ProfileEditDialog,
+  ProfileLaunchCommandBlock,
+} from "./provider-profile-edit-dialog";
 import { usePersonalHostName } from "@/components/settings/personal/personal-page-context";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -389,6 +392,12 @@ export function ProviderProfileScopedSection(
           onSignIn={openProfileSignIn}
           onManage={openProfileEditor}
         />
+        {selectedProfile.kind === "ambient" ? (
+          <ProfileLaunchCommandBlock
+            providerId={state.providerId}
+            launchCommand={selectedProfile.launchCommand}
+          />
+        ) : null}
 
         <ProfileScopedSectionMessages
           addProfileDisabled={addProfileDisabled}
