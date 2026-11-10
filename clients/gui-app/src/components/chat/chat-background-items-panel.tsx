@@ -957,7 +957,8 @@ export function BackgroundItemsPanel(props: {
   // A harness background item is stopped over the chat's own stream, so it
   // needs that stream open. A managed command is stopped by an RPC to its
   // host, which a reconnecting chat has no bearing on - gating it on `canAct`
-  // too left a reconnecting chat with no way to stop a runaway shell.
+  // too left a reconnecting chat with no way to stop a runaway shell. Read-only
+  // views must still suppress both actions.
   const { stoppable, managed: managedStoppable } = sessionStatusControls(
     props.canAct,
     props.readOnly,
