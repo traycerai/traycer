@@ -20,6 +20,12 @@ import { describe, expect, it } from "vitest";
 // `accountId`, `orgId`, `organizationId`, `email`, `teamId`). A bare
 // name there is a value being interpolated.
 //
+// The payload rule separately flags JSON.stringify calls and `.data` accesses
+// on typed message-event parameters, including `(event).data` and literal
+// `event["data"]`. A `.length` access remains allowed. For a template
+// substitution that is a local identifier, it checks one initializer hop;
+// this is not general taint tracking.
+//
 // One hop: when the message argument itself is a bare identifier that
 // is not an identity name, the same check is applied to that
 // identifier's initializer in the same function body. Nothing deeper.
@@ -30,7 +36,7 @@ import { describe, expect, it } from "vitest";
 // that deliberate violation as a genuine breach. Same constraint as
 // `host-lifecycle-eslint-boundary.test.ts`.
 //
-// Limits, on purpose. There is no scope analysis. The hop is one
+// Identity-rule limits, on purpose. There is no scope analysis. The hop is one
 // initializer, and only when the argument itself is the identifier.
 // Unseen: forwarding (`${cause.message}`, `error.message`, `${cause}` —
 // the field is already in the originating throw, and that origin is the
@@ -337,7 +343,26 @@ function isMessageEventBinding(name: ts.Identifier): boolean {
   );
 }
 
-function isLengthOfDataAccess(node: ts.PropertyAccessExpression): boolean {
+function dataPropertyReceiver(node: ts.Node): ts.Expression | null {
+  if (ts.isPropertyAccessExpression(node) && node.name.text === "data") {
+    return node.expression;
+  }
+  if (ts.isElementAccessExpression(node)) {
+    const argument = node.argumentExpression;
+    if (argument === undefined) return null;
+    const property = unwrap(argument);
+    if (
+      (ts.isStringLiteral(property) ||
+        ts.isNoSubstitutionTemplateLiteral(property)) &&
+      property.text === "data"
+    ) {
+      return node.expression;
+    }
+  }
+  return null;
+}
+
+function isLengthOfDataAccess(node: ts.Node): boolean {
   let access: ts.Node = node;
   let parent = access.parent;
   while (
@@ -398,25 +423,43 @@ function inspectPayloadMessage(
     });
   };
 
-  // This recognizes a wire access in the message's call arguments, enough for
-  // `truncate(event.data)`. It is a one-hop syntactic check, not general taint
-  // tracking: callees, parameters, and alias chains are not followed.
-  const visitPayload = (node: ts.Node): void => {
+  // This recognizes wire accesses in call arguments and follows one template
+  // interpolation local to its initializer. It does not follow more aliases,
+  // callees, or non-literal computed keys as general taint tracking.
+  const visitPayload = (node: ts.Node, followTemplateLocal: boolean): void => {
     if (ts.isCallExpression(node) && isJsonStringifyCall(node)) {
       note("JSON.stringify", node);
     }
+    const receiver = dataPropertyReceiver(node);
+    const event = receiver === null ? null : unwrap(receiver);
     if (
-      ts.isPropertyAccessExpression(node) &&
-      node.name.text === "data" &&
-      ts.isIdentifier(node.expression) &&
-      isMessageEventBinding(node.expression) &&
+      receiver !== null &&
+      event !== null &&
+      ts.isIdentifier(event) &&
+      isMessageEventBinding(event) &&
       !isLengthOfDataAccess(node)
     ) {
       note("message-event data", node);
     }
-    ts.forEachChild(node, visitPayload);
+    if (ts.isTemplateExpression(node)) {
+      for (const span of node.templateSpans) {
+        const substitution = unwrap(span.expression);
+        if (followTemplateLocal && ts.isIdentifier(substitution)) {
+          const initializer = initializerInFunction(
+            substitution,
+            ctx.sourceFile,
+          );
+          if (initializer !== null) visitPayload(initializer, false);
+        }
+        visitPayload(span.expression, followTemplateLocal);
+      }
+      return;
+    }
+    ts.forEachChild(node, (child) => {
+      visitPayload(child, followTemplateLocal);
+    });
   };
-  visitPayload(expression);
+  visitPayload(expression, true);
 }
 
 function initializerInFunction(
@@ -886,6 +929,57 @@ describe("no account identifier in thrown Error messages", () => {
       ],
       "message-event data",
       "event.data",
+    );
+  });
+
+  it("flags data access through a parenthesized message-event binding", () => {
+    expectPayloadFlagged(
+      join("clients", "shared", "host-transport", "ws-rpc-client.ts"),
+      [
+        "function onMessage(event: WebSocketMessageEvent): void {",
+        "  throw new Error(`Malformed host frame: ${(event).data}`);",
+        "}",
+      ],
+      "message-event data",
+      "(event).data",
+    );
+  });
+
+  it("flags literal computed access to message-event data", () => {
+    expectPayloadFlagged(
+      join("clients", "shared", "host-transport", "ws-rpc-client.ts"),
+      [
+        "function onMessage(event: WebSocketMessageEvent): void {",
+        '  throw new Error(`Malformed host frame: ${event["data"]}`);',
+        "}",
+      ],
+      "message-event data",
+      'event["data"]',
+    );
+  });
+
+  it("does not trace a non-literal computed message-event key", () => {
+    expectPayloadClean(
+      join("clients", "shared", "host-transport", "ws-rpc-client.ts"),
+      [
+        "function onMessage(event: WebSocketMessageEvent, key: string): void {",
+        "  throw new Error(`Malformed host frame: ${event[key]}`);",
+        "}",
+      ],
+    );
+  });
+
+  it("flags JSON.stringify hoisted into a template local", () => {
+    expectPayloadFlagged(
+      join("clients", "shared", "host-transport", "ws-rpc-client.ts"),
+      [
+        "function malformed(value: unknown): never {",
+        "  const dump = JSON.stringify(value);",
+        "  throw new Error(`Malformed host frame: ${dump}`);",
+        "}",
+      ],
+      "JSON.stringify",
+      "JSON.stringify(value)",
     );
   });
 

@@ -538,11 +538,15 @@ function convertJsonSchemaShape(
 
   // `node` is unvalidated structure - every branch above reaches it through a
   // `typeof` probe - so a slice of it is the echoed-payload shape, capped
-  // length and all. `context` is the path to the offending node and is the
-  // part that locates it; `typeof` is a closed set of JS type tags and carries
-  // nothing from the schema.
+  // length and all. `context` is the path to the offending node and is what
+  // locates it: it carries the registry method or record, the version, the
+  // request/response side and the recursive anyOf/oneOf/items index.
+  //
+  // It does not report `typeof node` either. The guard above has already
+  // rejected primitives and null, so that expression can only ever print
+  // "object" - a clause that cannot vary is not information.
   throw new Error(
-    `Unsupported schema for ${context}; expected an object, enum, union, or array (received ${typeof node}).`,
+    `Unsupported schema for ${context}; expected an object, enum, union, or array.`,
   );
 }
 
