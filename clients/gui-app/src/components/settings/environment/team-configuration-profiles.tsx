@@ -155,15 +155,22 @@ function ConfigurationProfileEditor(props: {
 }): ReactNode {
   const source = useConfigurationSource();
   const { put, remove } = useConfigurationItemMutations();
-  const [label, setLabel] = useState(props.profile.label);
-  const [accentColor, setAccentColor] =
-    useState<ProviderProfileAccentColor | null>(props.profile.accentColor);
+  // Only this person's edits are held. A field they did not touch follows the
+  // stored profile, so a save after a conflict re-read never writes back a
+  // value a teammate has since changed. A picked color is never null, so null
+  // means untouched.
+  const [labelOverride, setLabel] = useState<string | null>(null);
+  const [accentColorOverride, setAccentColor] =
+    useState<ProviderProfileAccentColor | null>(null);
   const [confirmRemoveOpen, setConfirmRemoveOpen] = useState(false);
+  const label = labelOverride ?? props.profile.label;
+  const accentColor = accentColorOverride ?? props.profile.accentColor;
   const trimmedLabel = label.trim();
   const invalid = trimmedLabel.length === 0 || trimmedLabel.length > 64;
   const changed =
-    trimmedLabel !== props.profile.label ||
-    accentColor !== props.profile.accentColor;
+    (labelOverride !== null && trimmedLabel !== props.profile.label) ||
+    (accentColorOverride !== null &&
+      accentColorOverride !== props.profile.accentColor);
   const busy = put.isPending || remove.isPending;
   const onSuccess = (
     result: EnvironmentConfigurationItemWriteResponse,
@@ -183,11 +190,10 @@ function ConfigurationProfileEditor(props: {
         os: null,
         value: {
           ...z.record(z.string(), z.json()).parse(props.item.value),
-          name: trimmedLabel,
-          color:
-            accentColor === props.profile.accentColor
-              ? configurationProfileValueSchema.parse(props.item.value).color
-              : accentColor,
+          ...(labelOverride === null ? {} : { name: trimmedLabel }),
+          ...(accentColorOverride === null
+            ? {}
+            : { color: accentColorOverride }),
         },
         revision: props.item.revision,
       },
