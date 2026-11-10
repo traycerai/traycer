@@ -1,5 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { useLayoutEffect, useRef, useState } from "react";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import {
   emptyMemoryDraft,
@@ -18,10 +17,7 @@ import {
   type MemorySaveIo,
   type SaveEvidence,
 } from "@/components/onboarding/onboarding-memory-save";
-import {
-  useHostQuery,
-  useHostQueryEntryHash,
-} from "@/hooks/host/use-host-query";
+import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import {
@@ -37,7 +33,8 @@ import { configMutationKeys, providersMutationKeys } from "@/lib/query-keys";
 
 const AGENT_MEMORIES_GET = "config.agentMemories.get";
 const AGENT_MEMORIES_SET = "config.agentMemories.set";
-const STATUS_IDENTITY = ["onboarding-agent-memories"];
+/** The act's own cache entries, apart from every other reader of the same methods. */
+const ACT_IDENTITY = ["onboarding-agent-memories"];
 
 /** One save: the host its answers are filed against, and when it started. */
 interface SaveTarget {
@@ -146,15 +143,18 @@ export function useOnboardingAgentMemories(input: {
       current.hostId === forHost ? change(current) : current,
     );
 
+  // The act's own cache entry, never the one Settings → Agent memories reads:
+  // a read the act took can be overtaken (a rebind, a later change), and
+  // Settings must not start from it.
   const memoryRead = useHostQuery<HostRpcRegistry, "config.agentMemories.get">({
-    cacheKeyIdentity: undefined,
+    cacheKeyIdentity: ACT_IDENTITY,
     client,
     method: AGENT_MEMORIES_GET,
     params: {},
     options: { enabled: input.active && ready },
   });
   const statusRead = useHostQuery<HostRpcRegistry, "environment.status">({
-    cacheKeyIdentity: STATUS_IDENTITY,
+    cacheKeyIdentity: ACT_IDENTITY,
     client,
     method: "environment.status",
     params: {},
@@ -169,6 +169,8 @@ export function useOnboardingAgentMemories(input: {
     mutationKey: configMutationKeys.agentMemoriesSet(),
     // Reported on the act, beside the change it is about.
     errorMessage: null,
+    // Every entry of the method on that host, the act's and Settings' alike,
+    // once the write settles: Settings may hold an answer from before it.
     invalidateMethods: [AGENT_MEMORIES_GET],
   });
   // One observer for every provider. Each provider's write is its own request
@@ -183,8 +185,7 @@ export function useOnboardingAgentMemories(input: {
   });
 
   const [saving, setSaving] = useState(false);
-  /** The cache entry the running save reads; `null` while none runs. */
-  const savingEntryRef = useRef<string | null>(null);
+  const savingRef = useRef(false);
   const { pickedHostId } = input;
   // Counts every change of the act's host, whether the host its requests
   // reach or the host the picker names. The observers above follow the
@@ -201,37 +202,6 @@ export function useOnboardingAgentMemories(input: {
   /** The save may still send: the act's host has not changed since it began. */
   const sendsTo = (target: SaveTarget): boolean =>
     selectionRef.current === target.selection;
-
-  // Settings → Agent memories reads this same cache entry. A read the act took
-  // can be overtaken without anything reading again (a rebind, a later change
-  // turning the setting off), so it is marked stale, without a request, when
-  // the person leaves the act by any way out and when a save ends: the next
-  // reader asks the host.
-  const queryClient = useQueryClient();
-  const readEntry = useHostQueryEntryHash<
-    HostRpcRegistry,
-    "config.agentMemories.get"
-  >({
-    cacheKeyIdentity: undefined,
-    client,
-    method: AGENT_MEMORIES_GET,
-    params: {},
-  });
-  const { active } = input;
-  useEffect(() => {
-    if (!active) return undefined;
-    return () => {
-      // A read still in flight would land after the mark and clear it. Only
-      // the entry a running save reads keeps its read: the save marks that
-      // entry as it ends. Any other entry, such as another host's, is
-      // cancelled.
-      if (savingEntryRef.current !== readEntry)
-        void queryClient.cancelQueries({
-          predicate: (entry) => entry.queryHash === readEntry,
-        });
-      markEntryStale(queryClient, readEntry);
-    };
-  }, [active, readEntry, queryClient]);
 
   const providerControls = providerMemoryControls({
     nativeSetSupported,
@@ -319,9 +289,8 @@ export function useOnboardingAgentMemories(input: {
 
   function save(): Promise<boolean> {
     if (view.chosen !== true || !ready) return Promise.resolve(true);
-    if (savingEntryRef.current !== null) return Promise.resolve(false);
-    const savedEntry = readEntry;
-    savingEntryRef.current = savedEntry;
+    if (savingRef.current) return Promise.resolve(false);
+    savingRef.current = true;
     setSaving(true);
     const target: SaveTarget = { hostId, selection: selectionRef.current };
     // `.finally` rather than try/finally: React Compiler cannot lower a try
@@ -336,9 +305,8 @@ export function useOnboardingAgentMemories(input: {
         return result === "done";
       })
       .finally(() => {
-        savingEntryRef.current = null;
+        savingRef.current = false;
         setSaving(false);
-        markEntryStale(queryClient, savedEntry);
       });
   }
 
@@ -358,14 +326,6 @@ export function useOnboardingAgentMemories(input: {
     save,
     reloadProviders: () => void providersQuery.refetch(),
   };
-}
-
-/** Stale, so its next reader asks the host; nothing is fetched now. */
-function markEntryStale(queryClient: QueryClient, entryHash: string): void {
-  void queryClient.invalidateQueries({
-    predicate: (entry) => entry.queryHash === entryHash,
-    refetchType: "none",
-  });
 }
 
 function memoryAvailability(input: {

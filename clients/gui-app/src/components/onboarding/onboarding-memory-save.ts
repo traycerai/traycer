@@ -199,7 +199,8 @@ export function nextMemorySaveStep(input: {
     // the act finishes with the providers off and Traycer memories off where
     // the host now is, and onboarding does not correct it: closing that
     // needs the host to check and write in one step. Settings → Agent
-    // memories reads again when opened (the hook marks its entry stale).
+    // memories reads for itself when opened: the act keeps its reads in its
+    // own cache entry.
     return progress.providerFailed ? SHORT : { kind: "done" };
   }
   if (standing === "off" || standing === "refused" || standing === "failed")
