@@ -385,6 +385,7 @@ function OnboardingTour(props: {
   const memory = useOnboardingAgentMemories({
     active: step.id === "agent-memories",
     hostUsable: onboardingHostIsUsable(hostPicker),
+    pickedHostId: scope.hostId,
   });
   const memoryFooter = memoryFooterFor(step, memory);
 
