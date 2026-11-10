@@ -30,7 +30,9 @@ function EntryReader(props: {
     client,
     method: "config.agentMemories.get",
     params: {},
-    options: { enabled: true },
+    // The app's client keeps a read fresh for a minute (`createAppQueryClient`);
+    // the test client's default of none would refetch whatever the act left.
+    options: { enabled: true, staleTime: 60_000 },
   });
   const { onAnswer } = props;
   const answer = read.data ?? null;
