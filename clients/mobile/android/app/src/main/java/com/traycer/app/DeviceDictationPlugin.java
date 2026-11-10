@@ -53,6 +53,8 @@ public class DeviceDictationPlugin extends Plugin {
         final String id;
         final Intent intent;
         final SpeechRecognizer recognizer;
+        /** The pipe's read end, held only until the recognizer has its own copy. */
+        final ParcelFileDescriptor source;
         final OutputStream pipe;
         final ExecutorService writer = Executors.newSingleThreadExecutor();
         boolean listening;
@@ -64,10 +66,11 @@ public class DeviceDictationPlugin extends Plugin {
         boolean ended;
         PluginCall finishCall;
 
-        Session(String id, Intent intent, SpeechRecognizer recognizer, OutputStream pipe) {
+        Session(String id, Intent intent, SpeechRecognizer recognizer, ParcelFileDescriptor source, OutputStream pipe) {
             this.id = id;
             this.intent = intent;
             this.recognizer = recognizer;
+            this.source = source;
             this.pipe = pipe;
         }
     }
@@ -265,7 +268,7 @@ public class DeviceDictationPlugin extends Plugin {
         // The session lasts as long as the audio does, through any pause.
         intent.putExtra(RecognizerIntent.EXTRA_SEGMENTED_SESSION, RecognizerIntent.EXTRA_AUDIO_SOURCE);
         SpeechRecognizer recognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(getContext());
-        Session opened = new Session(id, intent, recognizer, new ParcelFileDescriptor.AutoCloseOutputStream(pipe[1]));
+        Session opened = new Session(id, intent, recognizer, pipe[0], new ParcelFileDescriptor.AutoCloseOutputStream(pipe[1]));
         recognizer.setRecognitionListener(
             new RecognitionListener() {
                 @Override
@@ -314,7 +317,12 @@ public class DeviceDictationPlugin extends Plugin {
                 }
 
                 @Override
-                public void onReadyForSpeech(Bundle params) {}
+                public void onReadyForSpeech(Bundle params) {
+                    // The recognizer reads its own copy from here on. With
+                    // this one closed it is the only reader, so a write
+                    // fails, and never blocks, once the recognizer is gone.
+                    closeQuietly(opened.source);
+                }
 
                 @Override
                 public void onRmsChanged(float rmsdB) {}
@@ -371,11 +379,28 @@ public class DeviceDictationPlugin extends Plugin {
         release(current);
     }
 
+    /**
+     * Frees the session at once: audio still queued for the pipe is dropped,
+     * and a write blocked on a full pipe fails because both read ends close.
+     */
     private void release(Session current) {
-        closePipe(current);
-        current.writer.shutdown();
+        current.writer.shutdownNow();
         current.recognizer.destroy();
+        closeQuietly(current.source);
+        try {
+            current.pipe.close();
+        } catch (IOException error) {
+            // Already closed.
+        }
         if (session == current) session = null;
+    }
+
+    private static void closeQuietly(ParcelFileDescriptor descriptor) {
+        try {
+            descriptor.close();
+        } catch (IOException error) {
+            // Already closed.
+        }
     }
 
     /** Closes after the audio already queued for the pipe has been written. */
