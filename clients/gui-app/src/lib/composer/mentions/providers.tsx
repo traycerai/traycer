@@ -108,10 +108,14 @@ export type MentionMenuAction =
   | { readonly kind: "back" }
   | { readonly kind: "complete"; readonly mention: MentionAttachment }
   /**
-   * A row whose picker resolves it by its id: what it inserts is no prompt
-   * attachment. A bot channel's box lists its names this way.
+   * A name of a bot's message box: what it inserts is no prompt attachment
+   * but a chip of the wire token it stands for.
    */
-  | { readonly kind: "select" }
+  | {
+      readonly kind: "complete-token";
+      readonly token: string;
+      readonly label: string;
+    }
   /**
    * A tab on another host: attach snapshot context (text line + screenshot)
    * rather than a mention the agent could try to drive.
@@ -479,7 +483,7 @@ class FileMentionProvider extends ComposerMentionProvider {
   readonly id = "files" as const;
   readonly rootOrder = 10;
   protected readonly label = "Files";
-  protected readonly description = "Workspace files";
+  protected readonly description = "Files in a folder";
 
   rootEntry(context: ComposerMentionProviderContext): MentionMenuEntry | null {
     if (context.roots.length === 0) return null;
@@ -538,7 +542,7 @@ class FolderMentionProvider extends ComposerMentionProvider {
   readonly id = "folders" as const;
   readonly rootOrder = 20;
   protected readonly label = "Folders";
-  protected readonly description = "Workspace folders";
+  protected readonly description = "Linked folders";
 
   rootEntry(context: ComposerMentionProviderContext): MentionMenuEntry | null {
     if (context.roots.length === 0) return null;

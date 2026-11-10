@@ -21,6 +21,7 @@ import { ZoomControls } from "@/components/epic-canvas/zoom-controls/zoom-contro
 import { cn } from "@/lib/utils";
 import { appLogger } from "@/lib/logger";
 import type { FileAssetMeta } from "@/hooks/assets/use-file-asset";
+import { historyGestureOwnerAttribute } from "@/components/layout/shell/desktop-history-gesture-ownership";
 import { formatImagePreviewCaption } from "./image-preview-caption";
 import { copyImageToClipboard } from "./image-preview-clipboard";
 import {
@@ -661,7 +662,14 @@ export function ImagePreview(props: ImagePreviewProps) {
   }
 
   return (
-    <div className="flex h-full min-h-0 w-full flex-col">
+    <div
+      className="flex h-full min-h-0 w-full flex-col"
+      // A pannable image keeps horizontal swipes at every zoom level, so the
+      // gesture does not change meaning as the reader zooms.
+      data-history-gesture-owner={historyGestureOwnerAttribute(
+        props.gesturesEnabled,
+      )}
+    >
       {props.compact ? null : (
         <div
           role="toolbar"

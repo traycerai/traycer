@@ -1,4 +1,10 @@
-import { cleanup, render, screen, within } from "@testing-library/react";
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   EnvironmentSecretV12,
@@ -15,6 +21,10 @@ import { SecretsSettingsPanel } from "@/components/settings/panels/secrets-setti
 import { HeldValueHostRuntime } from "@/components/settings/personal/__tests__/held-value-host-runtime";
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import {
+  RETIRED_PROVIDER_VARIABLES,
+  RETIRED_SECRET_ROW_FIELDS,
+} from "@traycer/protocol/host/released-wire-rows";
 
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
@@ -42,20 +52,25 @@ afterEach(() => {
 const TEAM_SUBTITLE =
   "Values and logins Acme's agents use, on its sandboxes without being seen.";
 
+async function expectTeamSubtitle(): Promise<void> {
+  await waitFor(() => {
+    expect(screen.getAllByText(TEAM_SUBTITLE)).toHaveLength(1);
+  });
+}
+
 function secret(name: string): EnvironmentSecretV12 {
   return {
+    ...RETIRED_SECRET_ROW_FIELDS,
+    providerVariables: [...RETIRED_PROVIDER_VARIABLES],
     secretId: `sec-${name}`,
     name,
     kind: "api_key",
     protocol: null,
     destinations: ["api.example.com"],
-    mode: "brokered",
-    state: "live",
     currentVersionId: "ver-1",
     revoked: false,
     updatedAt: 1,
     variables: [],
-    providerVariables: [],
   };
 }
 
@@ -116,10 +131,16 @@ describe("the Secrets page header", () => {
       removed: [],
     });
 
-    const empty = await screen.findByTestId("secrets-empty");
-    expect(empty.textContent).toBe(TEAM_SUBTITLE);
-    expect(empty.textContent).not.toContain("On your computers");
-    expect(screen.getAllByText(TEAM_SUBTITLE)).toHaveLength(1);
+    await screen.findByTestId("secrets-empty");
+    await waitFor(() => {
+      expect(screen.getByTestId("secrets-empty").textContent).toBe(
+        TEAM_SUBTITLE,
+      );
+    });
+    expect(screen.getByTestId("secrets-empty").textContent).not.toContain(
+      "On your computers",
+    );
+    await expectTeamSubtitle();
   });
 
   it("shows the subtitle once there are secrets", async () => {
@@ -131,7 +152,7 @@ describe("the Secrets page header", () => {
     });
 
     await screen.findByText("OPENAI_API_KEY");
-    expect(screen.getAllByText(TEAM_SUBTITLE)).toHaveLength(1);
+    await expectTeamSubtitle();
     expect(screen.queryByTestId("secrets-empty")).toBeNull();
   });
 
@@ -147,7 +168,7 @@ describe("the Secrets page header", () => {
     // No authoritative answer yet: not "no secrets", and the failure line
     // does not say the subtitle, so the header does.
     expect(screen.queryByTestId("secrets-empty")).toBeNull();
-    expect(screen.getAllByText(TEAM_SUBTITLE)).toHaveLength(1);
+    await expectTeamSubtitle();
   });
 
   it("keeps an empty answer it already had, and the subtitle once, when a later read of the list fails", async () => {
@@ -164,8 +185,12 @@ describe("the Secrets page header", () => {
     await harness.queryClient.invalidateQueries();
 
     await screen.findByTestId("secrets-page-error");
-    expect(screen.getByTestId("secrets-empty").textContent).toBe(TEAM_SUBTITLE);
-    expect(screen.getAllByText(TEAM_SUBTITLE)).toHaveLength(1);
+    await waitFor(() => {
+      expect(screen.getByTestId("secrets-empty").textContent).toBe(
+        TEAM_SUBTITLE,
+      );
+    });
+    await expectTeamSubtitle();
   });
 
   // NEW-154-24: a viewer read "Read-only" top right with the subtitle twice,
@@ -185,7 +210,7 @@ describe("the Secrets page header", () => {
     expect(
       screen.getAllByText("You can see Acme's settings but not change them."),
     ).toHaveLength(1);
-    expect(screen.getAllByText(TEAM_SUBTITLE)).toHaveLength(1);
+    await expectTeamSubtitle();
   });
 
   it("lists a viewer's secrets and their states, and says None rather than the subtitle", async () => {
@@ -198,7 +223,7 @@ describe("the Secrets page header", () => {
 
     expect(await screen.findByText("No secrets.")).toBeTruthy();
     expect(screen.queryByTestId("secrets-empty")).toBeNull();
-    expect(screen.getAllByText(TEAM_SUBTITLE)).toHaveLength(1);
+    await expectTeamSubtitle();
   });
 
   it("shows a viewer a removal that is still waiting", async () => {

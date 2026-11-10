@@ -146,6 +146,25 @@ export function providerTabInputs(
 }
 
 /**
+ * The tab that holds this provider's key on the Providers page, named as the
+ * pane names it.
+ *
+ * Account holds the key. A provider with no key has no such tab.
+ * A link that names the label opens `tab`.
+ */
+export type ProviderKeyTab = {
+  readonly tab: "account";
+  readonly label: "Account";
+};
+
+export function providerKeyTab(input: {
+  readonly apiKeySupported: boolean;
+}): ProviderKeyTab | null {
+  if (!input.apiKeySupported) return null;
+  return { tab: "account", label: "Account" };
+}
+
+/**
  * Whether this provider has MANAGED PROFILES at all.
  *
  * A deliberate mirror of the host's `providerSupportsManagedProfiles`

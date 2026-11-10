@@ -956,7 +956,7 @@ describe("cancelling a queued row whose setup failed returns it to the composer"
     // type says it cannot be missing: that type is the lie here, and this is
     // the assertion that actually fails when no entry was recorded.
     expect(lastCopy).toBeDefined();
-    expect(lastCopy.reason).toContain("Workspace setup failed");
+    expect(lastCopy.reason).toContain("Folder setup failed");
     expect(JSON.stringify(lastCopy.content)).toContain("look at this");
     // And it is stated, through upstream's dead-send surface rather than the
     // displaced-restoration one: the prompt is not waiting anywhere to be put

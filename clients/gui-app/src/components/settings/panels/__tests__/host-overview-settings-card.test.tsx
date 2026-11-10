@@ -5,6 +5,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { useState, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -31,8 +32,10 @@ import {
   pendingUploadFixture,
 } from "@/lib/environment/__tests__/environment-test-support";
 import type { HostRpcRegistry } from "@/lib/host";
+import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
 import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
 import { useRetrospectiveSheetStore } from "@/stores/settings/retrospective-sheet-store";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 
 // The drawer itself has a separate suite; keep its controls real so dated
 // lines remain covered through the Details action.
@@ -154,6 +157,10 @@ function renderCardWithBinding(
 beforeEach(() => {
   useMoveSheetStore.setState({ target: null });
   useRetrospectiveSheetStore.setState({ target: null, open: false });
+  useSettingsEnvironmentPickStore.setState({
+    pick: null,
+    defaultPick: PERSONAL_PICK,
+  });
 });
 
 afterEach(() => {
@@ -162,7 +169,7 @@ afterEach(() => {
 });
 
 describe("<HostOverviewSettingsCard />", () => {
-  it("shows This computer only while awaiting, and selecting Personal opens the move sheet", async () => {
+  it("shows the host name and its detail while awaiting, and selecting Personal opens the move sheet", async () => {
     renderCard(
       environmentStatusFixture({
         principal: null,
@@ -172,18 +179,22 @@ describe("<HostOverviewSettingsCard />", () => {
       {},
     );
 
-    expect(screen.getByRole("combobox", { name: "Settings" }).textContent).toBe(
-      "This computer only",
-    );
-    fireEvent.click(screen.getByRole("combobox", { name: "Settings" }));
-    fireEvent.click(await screen.findByRole("option", { name: /Personal/ }));
+    const trigger = screen.getByRole("combobox", { name: "Environment" });
+    expect(within(trigger).getByText("Old laptop")).toBeTruthy();
+    expect(within(trigger).queryByText("Local")).toBeNull();
+    expect(
+      within(trigger).getByText("its own settings, not in Personal yet")
+        .className,
+    ).toContain("in-data-[slot=select-trigger]:hidden");
+    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+    fireEvent.click(await screen.findByRole("option", { name: /^Personal/ }));
     expect(useMoveSheetStore.getState().target).toEqual({
       hostId: "old",
       hostName: "Old laptop",
     });
   });
 
-  it("shows the Settings row label and keeps Details beside its value", () => {
+  it("shows the Environment row label and keeps Details beside its value", () => {
     renderCard(
       environmentStatusFixture({
         principal: null,
@@ -193,10 +204,13 @@ describe("<HostOverviewSettingsCard />", () => {
       {},
     );
 
-    expect(screen.getByText("Settings")).toBeTruthy();
+    expect(screen.getByText("Environment")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Details" })).toBeTruthy();
-    expect(screen.getByRole("combobox", { name: "Settings" }).textContent).toBe(
-      "This computer only",
+    expect(screen.getByTestId("host-settings-source").textContent).toContain(
+      "Runs its own settings, not in Personal yet",
+    );
+    expect(screen.getByTestId("host-settings-source").textContent).toContain(
+      "Old laptop",
     );
   });
 
@@ -225,6 +239,9 @@ describe("<HostOverviewSettingsCard />", () => {
     ).toBe(
       "Moving this computer's settings to Personal · 2 of 4 items applied",
     );
+    const source = screen.getByRole("combobox", { name: "Environment" });
+    expect(source.textContent).toBe("Personal");
+    expect(source.hasAttribute("disabled")).toBe(true);
     const row = screen.getByTestId("host-settings-card-progress").parentElement;
     expect(row?.contains(screen.getByRole("button", { name: "Details" }))).toBe(
       true,
@@ -266,6 +283,10 @@ describe("<HostOverviewSettingsCard />", () => {
       expect(
         screen.getByTestId("host-settings-card-move-stopped").textContent,
       ).toBe("Moving stopped: it timed out. 3 items left.");
+      const stopped = screen.getByRole("combobox", { name: "Environment" });
+      expect(within(stopped).getByText("Old laptop")).toBeTruthy();
+      expect(within(stopped).queryByText("Local")).toBeNull();
+      expect(stopped.hasAttribute("disabled")).toBe(true);
       expect(screen.queryByTestId("host-settings-card-progress")).toBeNull();
       fireEvent.click(screen.getByRole("button", { name: "Details" }));
       expect(screen.getByTestId("overview-stop-sharing")).toBeTruthy();
@@ -348,7 +369,7 @@ describe("<HostOverviewSettingsCard />", () => {
       {},
     );
 
-    expect(screen.getByRole("combobox", { name: "Settings" }).textContent).toBe(
+    expect(screen.getByTestId("host-settings-source").textContent).toContain(
       "Personal",
     );
     expect(screen.queryByText("Moved to Personal on 20 Oct")).toBeNull();
@@ -368,9 +389,12 @@ describe("<HostOverviewSettingsCard />", () => {
       {},
     );
 
-    expect(screen.getByRole("combobox", { name: "Settings" }).textContent).toBe(
-      "This computer only",
-    );
+    const trigger = screen.getByRole("combobox", { name: "Environment" });
+    expect(within(trigger).getByText("Old laptop")).toBeTruthy();
+    expect(within(trigger).queryByText("Local")).toBeNull();
+    expect(
+      within(trigger).getByText("its own settings, not in Personal yet"),
+    ).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Details" }));
     expect(screen.getByTestId("overview-stop-sharing")).toBeTruthy();
   });
@@ -387,7 +411,7 @@ describe("<HostOverviewSettingsCard />", () => {
       {},
     );
 
-    expect(screen.getByRole("combobox", { name: "Settings" }).textContent).toBe(
+    expect(screen.getByTestId("host-settings-source").textContent).toContain(
       "Personal",
     );
     fireEvent.click(screen.getByRole("button", { name: "Details" }));
@@ -406,15 +430,24 @@ describe("<HostOverviewSettingsCard />", () => {
     });
   });
 
-  it("shows the team's fixed settings value without a selector", () => {
+  it("shows the team's fixed Settings source in the disabled selector", () => {
     renderCardWithBinding(environmentStatusFixture({}), {}, TEAM_BINDING, true);
 
-    expect(screen.getByText("Designers")).toBeTruthy();
-    expect(screen.queryByRole("combobox", { name: "Settings" })).toBeNull();
-    expect(screen.getByText("Runs Designers' settings.")).toBeTruthy();
+    const selector = screen.getByRole("combobox", { name: "Environment" });
+    expect(selector.textContent).toBe("Designers");
+    expect(selector.hasAttribute("disabled")).toBe(true);
+    expect(screen.getByText("Runs Designers")).toBeTruthy();
   });
 
-  it("opens the Stop sharing review when This computer only is selected", async () => {
+  it("says Runs and the team name on a team-owned computer, and the selector value is that name", () => {
+    renderCardWithBinding(environmentStatusFixture({}), {}, TEAM_BINDING, true);
+
+    const selector = screen.getByRole("combobox", { name: "Environment" });
+    expect(screen.getByText("Runs Designers")).toBeTruthy();
+    expect(selector.textContent).toBe("Designers");
+  });
+
+  it("opens the Stop sharing review when the host's own settings are selected", async () => {
     renderCard(
       environmentStatusFixture({
         planes: {
@@ -431,10 +464,10 @@ describe("<HostOverviewSettingsCard />", () => {
       },
     );
 
-    fireEvent.click(screen.getByRole("combobox", { name: "Settings" }));
-    fireEvent.click(
-      await screen.findByRole("option", { name: /This computer only/ }),
-    );
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Environment" }), {
+      key: "ArrowDown",
+    });
+    fireEvent.click(await screen.findByRole("option", { name: /^Old laptop/ }));
 
     expect(
       await screen.findByTestId("stop-sharing-managed-empty"),
@@ -444,7 +477,7 @@ describe("<HostOverviewSettingsCard />", () => {
     ).toBe(false);
   });
 
-  it("shows This computer only after every plane stopped using Personal", () => {
+  it("shows the host name and its detail after every plane stopped using Personal", () => {
     renderCard(
       environmentStatusFixture({
         principal: null,
@@ -454,9 +487,12 @@ describe("<HostOverviewSettingsCard />", () => {
       {},
     );
 
-    expect(screen.getByRole("combobox", { name: "Settings" }).textContent).toBe(
-      "This computer only",
-    );
+    const trigger = screen.getByRole("combobox", { name: "Environment" });
+    expect(within(trigger).getByText("Old laptop")).toBeTruthy();
+    expect(within(trigger).queryByText("Local")).toBeNull();
+    expect(
+      within(trigger).getByText("its own settings, not in Personal yet"),
+    ).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Details" }));
     expect(
       screen.getByText("This computer stopped using Personal on 21 Oct"),
@@ -466,7 +502,7 @@ describe("<HostOverviewSettingsCard />", () => {
 
   it("shows Personal for an unrecorded shared computer", () => {
     renderCard(environmentStatusFixture({ setup: null }), {});
-    expect(screen.getByRole("combobox", { name: "Settings" }).textContent).toBe(
+    expect(screen.getByTestId("host-settings-source").textContent).toContain(
       "Personal",
     );
   });
@@ -660,6 +696,7 @@ describe("hostSettingsRowModel", () => {
     const model = hostSettingsRowModel(
       environmentStatusFixture(overrides),
       PERSONAL_BINDING,
+      "Old laptop",
     );
     if (expected === "progress") {
       expect(model.kind).toBe("progress");
@@ -672,18 +709,48 @@ describe("hostSettingsRowModel", () => {
       "Designers",
     );
     expect(model.options.map((option) => option.label)).toContain("Personal");
-    expect(model.options.map((option) => option.label)).toContain(
-      "This computer only",
+    expect(model.options.map((option) => option.label)).toContain("Old laptop");
+  });
+
+  it("names Personal and this host, and hides the detail sentences in the closed trigger", () => {
+    const model = hostSettingsRowModel(
+      environmentStatusFixture({
+        principal: null,
+        planes: { records: "local", broker: "local", room: "local" },
+      }),
+      PERSONAL_BINDING,
+      "Old laptop",
     );
+    expect(model).toMatchObject({
+      kind: "select",
+      value: "local",
+      description: "Runs its own settings, not in Personal yet",
+      options: [
+        {
+          value: "personal",
+          label: "Personal",
+          detail: "Runs Personal",
+        },
+        {
+          value: "local",
+          label: "Old laptop",
+          detail: "its own settings, not in Personal yet",
+        },
+      ],
+    });
   });
 
   it("uses the team's name as a fixed value", () => {
     expect(
-      hostSettingsRowModel(environmentStatusFixture({}), TEAM_BINDING),
+      hostSettingsRowModel(
+        environmentStatusFixture({}),
+        TEAM_BINDING,
+        "Old laptop",
+      ),
     ).toEqual({
       kind: "team",
       label: "Designers",
-      description: "Runs Designers' settings.",
+      description: "Runs Designers",
     });
   });
 
@@ -696,16 +763,108 @@ describe("hostSettingsRowModel", () => {
         room: "shared_unrecorded",
       },
     });
-    expect(hostSettingsRowModel(status, PERSONAL_BINDING)).toMatchObject({
+    expect(
+      hostSettingsRowModel(status, PERSONAL_BINDING, "Old laptop"),
+    ).toMatchObject({
       kind: "select",
       value: "personal",
     });
   });
 
   it("reserves the row while status or binding is unread", () => {
-    expect(hostSettingsRowModel(null, PERSONAL_BINDING).kind).toBe("loading");
-    expect(hostSettingsRowModel(environmentStatusFixture({}), null).kind).toBe(
-      "loading",
+    expect(
+      hostSettingsRowModel(null, PERSONAL_BINDING, "Old laptop").kind,
+    ).toBe("loading");
+    expect(
+      hostSettingsRowModel(environmentStatusFixture({}), null, "Old laptop")
+        .kind,
+    ).toBe("loading");
+  });
+});
+
+describe("<HostOverviewSettingsCard /> follows the rail", () => {
+  const localPick = {
+    kind: "local" as const,
+    hostId: "old",
+    hostName: "Old laptop",
+  };
+
+  it("writes Personal, the host, the team, and a move, and leaves a stopped move that has no Local row", async () => {
+    useSettingsEnvironmentPickStore.setState({ pick: localPick });
+    renderCard(
+      environmentStatusFixture({
+        planes: {
+          records: "shared_unrecorded",
+          broker: "shared_unrecorded",
+          room: "shared_unrecorded",
+        },
+      }),
+      {},
     );
+    await waitFor(() => {
+      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(
+        PERSONAL_PICK,
+      );
+    });
+    cleanup();
+
+    useSettingsEnvironmentPickStore.setState({
+      pick: null,
+      defaultPick: PERSONAL_PICK,
+    });
+    renderCard(
+      environmentStatusFixture({
+        principal: null,
+        planes: { records: "local", broker: "local", room: "local" },
+      }),
+      {},
+    );
+    await waitFor(() => {
+      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(
+        localPick,
+      );
+    });
+    cleanup();
+
+    useSettingsEnvironmentPickStore.setState({
+      pick: null,
+      defaultPick: PERSONAL_PICK,
+    });
+    renderCardWithBinding(environmentStatusFixture({}), {}, TEAM_BINDING, true);
+    await waitFor(() => {
+      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
+        kind: "team",
+        environmentId: TEAM_BINDING.environment.environmentId,
+      });
+    });
+    cleanup();
+
+    useSettingsEnvironmentPickStore.setState({ pick: localPick });
+    renderCard(
+      environmentStatusFixture({
+        setup: { stage: "moving_settings", state: "running" },
+      }),
+      {},
+    );
+    await waitFor(() => {
+      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(
+        PERSONAL_PICK,
+      );
+    });
+    cleanup();
+
+    useSettingsEnvironmentPickStore.setState({
+      pick: null,
+      defaultPick: PERSONAL_PICK,
+    });
+    renderCard(
+      environmentStatusFixture({
+        setup: { stage: "moving_settings", state: "failed" },
+      }),
+      {},
+    );
+    await waitFor(() => {
+      expect(useSettingsEnvironmentPickStore.getState().pick).toBeNull();
+    });
   });
 });

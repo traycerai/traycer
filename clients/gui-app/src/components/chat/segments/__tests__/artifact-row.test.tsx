@@ -5,6 +5,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -82,6 +83,22 @@ const PROJECTION_WITH_HEAD: ArtifactProjection = {
       },
     },
     capturedAt: 2_000,
+  },
+};
+
+/** Live head is the same bundle the card stamped, so Expand must open Latest. */
+const PROJECTION_STAMP_IS_HEAD: ArtifactProjection = {
+  ...PROJECTION,
+  head: {
+    files: {
+      "index.html": {
+        sha256: STAMP_SHA,
+        byteLength: 100,
+        mediaType: "text/html",
+        status: "published",
+      },
+    },
+    capturedAt: 1_000,
   },
 };
 
@@ -746,15 +763,32 @@ describe("<ArtifactRow />", () => {
     // the mock function having been called again.
     expect(sandboxFrameMocks.mounts).toBe(2);
   });
-  describe("inline Expand", () => {
+  describe("inline Open in panel", () => {
     function lastOpenedIntent(): TileOpenIntent {
       const intent = expandMocks.openTile.mock.calls.at(-1)?.[0];
       if (intent === undefined)
-        throw new Error("Expected Expand to open a tile.");
+        throw new Error("Expected Open in panel to open a tile.");
       return intent;
     }
 
-    it("opens the stamped snapshot, bound to the chat's host, deduped onto the artifact's tile", () => {
+    function expectLatestExpand(): void {
+      const intent = lastOpenedIntent();
+      expect(intent).toMatchObject({
+        node: {
+          id: ARTIFACT_ID,
+          type: "html",
+          name: "My Artifact",
+          hostId: "host-1",
+        },
+        target: { epicId: "epic-1" },
+        dedupe: true,
+        source: "direct_ui",
+        adoptHtmlVersion: true,
+      });
+      expect(intent.node).not.toHaveProperty("htmlVersion");
+    }
+
+    it("opens a stamp older than the live head pinned to that capture", () => {
       storeMocks.current = {
         artifacts: {
           byId: { [ARTIFACT_ID]: PROJECTION_WITH_HEAD },
@@ -764,10 +798,10 @@ describe("<ArtifactRow />", () => {
       };
       renderRow(scopeWithClient(makeArtifactReadClient(neverRespond)), STAMP);
 
-      fireEvent.click(screen.getByRole("button", { name: "Expand" }));
+      fireEvent.click(screen.getByRole("button", { name: "Open in panel" }));
 
-      // `dedupe: true` is what keeps a second click from opening a second
-      // tile; the executor moves the existing tile onto this `htmlVersion`.
+      // `dedupe: true` keeps a second click on the artifact's one tile; the
+      // executor adopts this pin so the tile shows the card's older capture.
       expect(lastOpenedIntent()).toMatchObject({
         node: {
           id: ARTIFACT_ID,
@@ -782,10 +816,11 @@ describe("<ArtifactRow />", () => {
         target: { epicId: "epic-1" },
         dedupe: true,
         source: "direct_ui",
+        adoptHtmlVersion: true,
       });
     });
 
-    it("opens the live head with its own capture time after the stamped object is evicted", async () => {
+    it("opens Latest from a Showing latest card, with no pin", async () => {
       storeMocks.current = {
         artifacts: {
           byId: { [ARTIFACT_ID]: PROJECTION_WITH_HEAD },
@@ -804,26 +839,60 @@ describe("<ArtifactRow />", () => {
       });
       expect(screen.getByText("Showing latest")).toBeTruthy();
 
-      fireEvent.click(screen.getByRole("button", { name: "Expand" }));
+      fireEvent.click(screen.getByRole("button", { name: "Open in panel" }));
 
+      expectLatestExpand();
+    });
+
+    it("opens Latest from a stamped card whose capture is the live head", () => {
+      storeMocks.current = {
+        artifacts: {
+          byId: { [ARTIFACT_ID]: PROJECTION_STAMP_IS_HEAD },
+          allIds: [ARTIFACT_ID],
+        },
+        deletedArtifacts: EMPTY_DELETED,
+      };
+      renderRow(scopeWithClient(makeArtifactReadClient(neverRespond)), STAMP);
+      expect(screen.queryByText("Showing latest")).toBeNull();
+
+      fireEvent.click(screen.getByRole("button", { name: "Open in panel" }));
+
+      expectLatestExpand();
+    });
+
+    it("keeps Open in panel working once the card is expanded, on the same frame and with the same pin", () => {
+      storeMocks.current = {
+        artifacts: {
+          byId: { [ARTIFACT_ID]: PROJECTION_WITH_HEAD },
+          allIds: [ARTIFACT_ID],
+        },
+        deletedArtifacts: EMPTY_DELETED,
+      };
+      renderRow(scopeWithClient(makeArtifactReadClient(neverRespond)), STAMP);
+      expect(sandboxFrameMocks.mounts).toBe(1);
+
+      fireEvent.click(screen.getByRole("button", { name: "Expand" }));
+      const dialog = screen.getByRole("dialog", { name: "My Artifact" });
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: "Open in panel" }),
+      );
+
+      expect(within(dialog).getByTestId("download-stub")).toBeTruthy();
       expect(lastOpenedIntent()).toMatchObject({
         node: {
+          id: ARTIFACT_ID,
+          type: "html",
           hostId: "host-1",
           htmlVersion: {
-            manifest: {
-              files: {
-                "index.html": {
-                  sha256: HEAD_SHA,
-                  byteLength: HEAD_BYTES_LENGTH,
-                  mediaType: "text/html",
-                },
-              },
-              capturedAt: 2_000,
-            },
+            manifest: { files: STAMP.manifest.files, capturedAt: 1_000 },
             entryPath: "index.html",
           },
         },
+        target: { epicId: "epic-1" },
+        adoptHtmlVersion: true,
       });
+      // Raising the card must not reload the page it shows.
+      expect(sandboxFrameMocks.mounts).toBe(1);
     });
 
     it("hands the download the same host and artifact, and grows its touch target on a coarse pointer", () => {
@@ -840,9 +909,9 @@ describe("<ArtifactRow />", () => {
       const download = screen.getByTestId("download-stub");
       expect(download.dataset.hostId).toBe("host-1");
       expect(download.dataset.artifactId).toBe(ARTIFACT_ID);
-      expect(screen.getByRole("button", { name: "Expand" }).dataset.size).toBe(
-        "icon-touch",
-      );
+      expect(
+        screen.getByRole("button", { name: "Open in panel" }).dataset.size,
+      ).toBe("icon-touch");
     });
   });
 });

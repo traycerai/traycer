@@ -12,6 +12,7 @@ import {
   upgradeRequestToVersion,
   upgradeResponseToVersion,
 } from "@traycer/protocol/framework/versioned-rpc";
+import { decodeResponsePayload } from "@traycer/protocol/host-transport/remote/rpc-codec";
 import {
   configEnvSetUpgradeV10ToV11,
   configEnvSetV10,
@@ -60,6 +61,7 @@ import {
 } from "@traycer/protocol/host-transport/remote/rpc-types";
 import { releasedMethodNames } from "./__fixtures__/released-method-names";
 import { supportMatrix } from "./__fixtures__/support-matrix";
+import { RETIRED_SECRET_CREATE_FIELDS } from "@traycer/protocol/host/released-wire-rows";
 
 /**
  * The wire of the environment family: the 26 environment methods, the
@@ -85,6 +87,7 @@ const ENVIRONMENT_METHOD_NAMES = Object.keys(ENVIRONMENT_RPC_METHODS).filter(
 /** The family's methods that carry a `@1.2` MINOR over their `@1.1`. */
 const ENVIRONMENT_METHODS_WITH_MINOR_1_2: ReadonlySet<string> = new Set([
   "environment.review",
+  "environment.status",
   "environment.secrets.list",
 ]);
 
@@ -176,11 +179,12 @@ const sshBinding = {
 
 const createOptions = {
   name: "PROD_DB",
-  mode: "brokered",
+  // Retired, and still on the request because `cli-v1.5.2` and `cli-v1.5.3`
+  // send both. The host refuses any other value for either.
+  ...RETIRED_SECRET_CREATE_FIELDS,
   portOverride: false,
   swapSites: ["header"],
   variables: [{ name: "DATABASE_URL", dialect: "postgres_url" }],
-  exportPolicy: null,
   sandboxesByDefault: false,
   plaintextConsent: null,
 };
@@ -232,7 +236,7 @@ describe("new methods are off every released floor", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("registers each in hostRpcRegistry as unsupported-degrade, major 1 only, with @1.0 alone, @1.0 and @1.1, or @1.0 to @1.2", () => {
+  it("registers the frozen environment lines and status minor as unsupported-degrade", () => {
     const shapes = ENVIRONMENT_METHOD_NAMES.map(
       (name) => `${name}: ${registryShapeOf(hostRpcRegistry[name])}`,
     );
@@ -1675,7 +1679,6 @@ describe("secret versions, Undo, Destroy, rotation and consent shapes, field for
       }),
     ).toBe(false);
     expect(accepts(schema, { ...database, variables: [] })).toBe(true);
-    expect(accepts(schema, { ...database, exportPolicy: "none" })).toBe(true);
     expect(accepts(schema, { ...database, portOverride: "yes" })).toBe(false);
     expect(
       accepts(schema, { ...database, sandboxesByDefault: undefined }),
@@ -1721,7 +1724,7 @@ describe("secret versions, Undo, Destroy, rotation and consent shapes, field for
 const ONE_ZERO = { major: 1, minor: 0 } as const;
 const ONE_ONE = { major: 1, minor: 1 } as const;
 
-const STATUS_V10 = {
+const STATUS_V10: env.EnvironmentStatusResponse = {
   principal: { kind: "team", teamName: "acme" },
   reachability: "connected",
   bindingGeneration: 2,
@@ -1783,8 +1786,8 @@ describe("environment.status@1.1 and environment.review@1.1 upgrade from @1.0 to
     ).toEqual({});
   });
 
-  it("parses a status answer that names the move's consent, a stopped plane and a stop time", () => {
-    const answer = {
+  it("upgrades frozen status without inventing receipts and preserves the move state", () => {
+    const answer: env.EnvironmentStatusResponseV12 = {
       ...STATUS_V10,
       setup: { stage: "moving_settings", state: "awaiting_consent" },
       consent: { acceptedAt: 1_700_000_000_000, planHash: "h1" },
@@ -1795,12 +1798,58 @@ describe("environment.status@1.1 and environment.review@1.1 upgrade from @1.0 to
       },
       returnedFromTeam: { at: 1_700_000_000_001 },
       stoppedAt: 1_700_000_000_002,
+      // One acknowledgement for a queued edit the configuration took, which
+      // is how the caller that forwarded it learns the revision to wait for.
+      acceptedUploads: [
+        {
+          uploadId: "u1",
+          kind: "agent_memory",
+          key: "memory",
+          os: "any",
+          environmentId: "env-a",
+          revision: 7,
+          acceptedAt: 1_700_000_000_003,
+        },
+      ],
     };
     expect(
       hostRpcRegistry[
         "environment.status"
-      ][1].versions[1].contract.responseSchema.parse(answer),
+      ][1].versions[2].contract.responseSchema.parse(answer),
     ).toEqual(answer);
+    // A newer minor's response passes through to an older client unchanged.
+    expect(
+      decodeResponsePayload(
+        hostRpcRegistry["environment.status"],
+        ONE_ONE,
+        { major: 1, minor: 2 },
+        answer,
+        "status-minor",
+        "environment.status",
+      ),
+    ).toEqual(answer);
+    const { acceptedUploads: _receipts, ...frozenAnswer } = answer;
+    expect(
+      hostRpcRegistry[
+        "environment.status"
+      ][1].versions[1].contract.responseSchema.parse(answer),
+    ).toEqual(frozenAnswer);
+    expect(
+      upgradeResponseToVersion(
+        hostRpcRegistry["environment.status"],
+        ONE_ONE,
+        { major: 1, minor: 2 },
+        frozenAnswer,
+      ),
+    ).toEqual({ ...frozenAnswer, acceptedUploads: [] });
+    expect(
+      upgradeRequestToVersion(
+        hostRpcRegistry["environment.status"],
+        ONE_ONE,
+        { major: 1, minor: 2 },
+        {},
+      ),
+    ).toEqual({});
     expect(
       hostRpcRegistry[
         "environment.status"
@@ -1910,18 +1959,6 @@ describe("environment.review.heldApply and environment.review.record", () => {
     hostRpcRegistry["environment.review.heldApply"][1].versions[0].contract;
   const record =
     hostRpcRegistry["environment.review.record"][1].versions[0].contract;
-  const secretArm = {
-    heldId: "held-1",
-    choice: "secret",
-    kind: "api_key",
-    protocol: "https",
-    hosts: ["api.example.com"],
-    port: null,
-    portOverride: false,
-    swapSites: ["header"],
-    plaintextConsent: { disclosureVersion: 1 },
-  };
-
   it("registers both off the released floor with unsupported degrade, major 1", () => {
     for (const method of [
       "environment.review.heldApply",
@@ -1935,40 +1972,35 @@ describe("environment.review.heldApply and environment.review.record", () => {
     }
   });
 
-  it("takes the secret arm's binding when the choice is secret, and refuses the choice without it", () => {
-    expect(heldApply.requestSchema.parse(secretArm)).toEqual(secretArm);
-    expect(
-      accepts(heldApply.requestSchema, { heldId: "held-1", choice: "secret" }),
-    ).toBe(false);
-    for (const bad of [
-      { ...secretArm, hosts: [] },
-      { ...secretArm, swapSites: [] },
-      { ...secretArm, swapSites: ["cookie"] },
-      { ...secretArm, port: 0 },
-      { ...secretArm, protocol: "gopher" },
-      { ...secretArm, kind: "pgp" },
-    ]) {
-      expect(accepts(heldApply.requestSchema, bad)).toBe(false);
-    }
-  });
-
-  it("takes only the held id for the plain choices, dropping a binding sent with them", () => {
-    for (const choice of ["variable", "stays", "discard", "approve"] as const) {
+  it("takes the held id and one of its two choices, dropping anything sent beside them", () => {
+    for (const choice of ["discard", "approve"] as const) {
       expect(
         heldApply.requestSchema.parse({ heldId: "held-1", choice }),
       ).toEqual({ heldId: "held-1", choice });
     }
     expect(
       heldApply.requestSchema.parse({
-        ...secretArm,
-        choice: "variable",
+        heldId: "held-1",
+        choice: "approve",
+        kind: "api_key",
+        hosts: ["api.example.com"],
       }),
-    ).toEqual({ heldId: "held-1", choice: "variable" });
+    ).toEqual({ heldId: "held-1", choice: "approve" });
     expect(
-      accepts(heldApply.requestSchema, { heldId: "", choice: "variable" }),
+      accepts(heldApply.requestSchema, { heldId: "", choice: "discard" }),
     ).toBe(false);
+    // A choice no version of this method ever had is refused at the frame.
+    // The retired ones a released desktop can still send - `variable`,
+    // `stays` and a whole `secret` arm - PARSE here, which is all this
+    // repository can show: `released-secret-wire-rows.test.ts` holds the
+    // parsing. Their refusal happens in the host, which is not in this
+    // repository, and is held by the review resolver's own tests there.
     expect(
       accepts(heldApply.requestSchema, { heldId: "held-1", choice: "keep" }),
+    ).toBe(false);
+    // `secret` carries its whole binding or it is not that arm at all.
+    expect(
+      accepts(heldApply.requestSchema, { heldId: "held-1", choice: "secret" }),
     ).toBe(false);
   });
 

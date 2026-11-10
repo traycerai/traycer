@@ -179,6 +179,8 @@ vi.mock(
         instance.setContent(content, selection),
       syncContent: (content, selection) =>
         instance.syncContent(content, selection),
+      insertFileAttachment: () => false,
+      settleFileAttachment: () => false,
       insertImageAttachments: (attrs) => instance.insertImageAttachments(attrs),
       insertMentionAttachment: (mention) =>
         instance.insertMentionAttachment(mention),
@@ -279,7 +281,8 @@ vi.mock("@/components/home/hooks/use-landing-composer-actions", () => ({
   }),
 }));
 
-vi.mock("@/providers/use-runner-host", () => ({
+vi.mock("@/providers/use-runner-host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/providers/use-runner-host")>()),
   useRunnerHost: () => ({
     fileDrops: {
       resolveDroppedFilePaths: () => Promise.resolve([]),
@@ -295,9 +298,15 @@ vi.mock("@/providers/use-runner-host", () => ({
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   useAuthUser: () => ({ data: null }),
 }));
-vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
-  useSandboxCatalogue: () => ({ data: null }),
-}));
+vi.mock(
+  "@/hooks/sandboxes/use-sandbox-catalogue-query",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/sandboxes/use-sandbox-catalogue-query")
+    >()),
+    useSandboxCatalogue: () => ({ data: null }),
+  }),
+);
 // The setup line prices a resting sandbox from the account's list.
 vi.mock("@/hooks/sandboxes/use-sandbox-list-query", () => ({
   useSandboxList: () => ({ data: undefined }),
@@ -351,6 +360,7 @@ vi.mock("@/components/chat/composer/picker/use-composer-picker-items", () => ({
 
 vi.mock("@/hooks/composer/use-workspace-mention-roots", () => ({
   useLandingComposerMentionRoots: () => [],
+  useLandingRunWorkingDirectory: () => null,
 }));
 
 vi.mock("@/hooks/composer/use-composer-dictation", () => ({

@@ -55,6 +55,7 @@ import {
   SettingsGroup,
 } from "@/components/bots/bot-settings-group";
 import { BotSlackSettings } from "@/components/bots/bot-slack-settings";
+import { BotAppearanceSettings } from "@/components/bots/bot-appearance-settings";
 import {
   BotMemoryContext,
   type BotMemoryAccess,
@@ -67,7 +68,8 @@ const BOT_TITLE_MAX = 500;
  * A bot channel's settings, behind the channel header's ⋮,
  * in a side panel beside the channel (over it on a narrow pane), which Escape
  * closes. Grouped as Slack's channel details are:
- * - Details: the bot's name, who manages it and who may message it, how a
+ * - Details: the bot's name, its icon, the colour behind it and the
+ *   channel's background, who manages it and who may message it, how a
  *   personal bot answers posts, and a team's members;
  * - Model: the harness, model, effort and profile the bot runs on;
  * - Notifications: what the bell raises for this channel;
@@ -147,6 +149,7 @@ export function BotChannelSettingsPanel(props: {
               the form on the new name instead of leaving the field on the
               old one. */}
           <BotTitleForm key={bot.title} bot={bot} />
+          <BotAppearanceSettings botId={bot.botId} />
           <BotOwnerDetails />
           {personal ? <BotReplyModeSection bot={bot} /> : null}
           {personal ? null : <BotTeamMembers />}

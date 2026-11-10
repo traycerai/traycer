@@ -23,7 +23,7 @@ import {
 } from "@/stores/chats/chat-run-activity";
 import { isTransientLiveAssistantMessageId } from "@/lib/chat/transient-live-assistant-message-id";
 import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-json-content";
-import { containsImageAtoms } from "@/lib/composer/image-atoms";
+import { contentIsSubmittable } from "@/lib/composer/composer-content";
 import { reportableWarningToast } from "@/lib/reportable-error-toast";
 import type {
   PendingInterviewView,
@@ -610,11 +610,9 @@ export function inlineEditIsPending(
   return inlineEdit !== null && inlineEdit.pendingClientActionId !== null;
 }
 
+/** The same rule every composer sends by: text, an image, or a file. */
 function inlineEditHasDraftContent(inlineEdit: InlineEditState): boolean {
-  return (
-    extractPlainTextFromComposerJSONContent(inlineEdit.currentContent).trim()
-      .length > 0 || containsImageAtoms(inlineEdit.currentContent)
-  );
+  return contentIsSubmittable(inlineEdit.currentContent);
 }
 
 export function chatMessageEditingForInlineEdit(input: {

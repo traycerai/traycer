@@ -18,8 +18,8 @@ import {
   providersSkillsInspectResultSchema,
 } from "@traycer/protocol/host/provider-native-schemas";
 import {
-  providersListV107,
   providersListV108,
+  providersListV109,
   providersNativeMutateV14,
   providersNativeMutateV15,
 } from "@traycer/protocol/host/registry";
@@ -777,7 +777,7 @@ describe("profile-origin metadata compatibility", () => {
       origin: "Imported from github.com/org/skills",
     };
     expect(
-      providersListV107.responseSchema.parse({ providers: [], native }),
+      providersListV108.responseSchema.parse({ providers: [], native }),
     ).toEqual({
       providers: [],
       native: { ok: true, kind: "skills", skills: [legacyRow] },
@@ -804,13 +804,13 @@ describe("profile-origin metadata compatibility", () => {
       ],
     } as const;
     expect(
-      providersListV108.responseSchema.parse({
+      providersListV109.responseSchema.parse({
         providers: [],
         native: enriched,
       }),
     ).toEqual({ providers: [], native: enriched });
     expect(
-      providersListV108.responseSchema.parse({ providers: [], native: legacy }),
+      providersListV109.responseSchema.parse({ providers: [], native: legacy }),
     ).toEqual({ providers: [], native: legacy });
     expect(
       providersNativeMutateV15.responseSchema.parse({ result: enriched }),

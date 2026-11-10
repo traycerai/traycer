@@ -1,5 +1,12 @@
 import { pruneRecoveryTiles } from "@/lib/tab-recovery/history";
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import {
   useNavigate,
   useRouter,
@@ -52,7 +59,14 @@ import {
   type NestedFocusTarget,
 } from "@/lib/epic-nested-focus-route";
 import { consumeNestedRoutePrimaryEditorFocus } from "@/lib/nested-route-dom-focus";
-import { getNestedRouteApplicationDeferralMs } from "@/lib/nested-focus-navigation-intent";
+import {
+  beginNestedFocusNavigation,
+  forgetExplicitNestedFocusIntents,
+  getNestedRouteApplicationDeferralMs,
+  lastExplicitNestedFocusIntentSeq,
+  lastReturnedToNestedFocusRequestSeq,
+  subscribeExplicitNestedFocusIntents,
+} from "@/lib/nested-focus-navigation-intent";
 import { shouldYieldPaneActivationRouteFocus } from "@/components/epic-canvas/pane-activation";
 import { findHostedTileElement } from "@/components/epic-canvas/surface-host/hosted-tile-resolver";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
@@ -161,6 +175,19 @@ export function useEpicRouteSynchronization(
   const activeArtifactId = useActiveEpicArtifactId(tabId);
   const canvas = useEpicCanvas(tabId);
   const hasRestoredCanvas = canvas.root !== null;
+  // Whether the canvas shows anything. A canvas whose only pane is the empty
+  // opener is NOT a layout to preserve: `EmptyEpicRoot` seeds that pane the
+  // moment the snapshot lands with no records, and on a task opened for the
+  // first time on this machine the chat records arrive later, from the
+  // polled record list. Gating auto-open on `root !== null` latched on that
+  // seeded pane and left the task on the opener with its chats one click
+  // away in the sidebar; a canvas with no tiles opens the auto-open target
+  // exactly as a canvas with no root does.
+  const canvasHoldsTiles = useMemo(
+    () =>
+      collectPanes(canvas.root).some((pane) => pane.tabInstanceIds.length > 0),
+    [canvas.root],
+  );
   const nestedRouteTarget = useMemo(
     () =>
       parseNestedFocusTargetFromSearch({
@@ -192,6 +219,73 @@ export function useEpicRouteSynchronization(
       nestedRouteTargetApplied &&
       activeArtifactId === focusArtifactId);
 
+  // A pending artifact-focus request and whether the person has since retired
+  // it. See `markExplicitNestedFocusIntent` for why the signal is a stamp taken
+  // at the navigation boundary rather than anything read off the canvas.
+  const focusRequestKey =
+    focusArtifactId === undefined
+      ? null
+      : `${epicId}|${focusArtifactId}|${focusedAt ?? ""}`;
+  // Subscribed rather than read imperatively, because one gesture this has to
+  // catch moves nothing else: re-selecting the already-focused tile leaves the
+  // canvas byte-identical, so a consumer watching canvas state would never
+  // re-render to notice it.
+  const lastIntentSeq = useSyncExternalStore(
+    subscribeExplicitNestedFocusIntents,
+    useCallback(
+      () => lastExplicitNestedFocusIntentSeq(epicId, tabId),
+      [epicId, tabId],
+    ),
+  );
+  // The other half of the same question, read the same way. Two numbers rather
+  // than one object because a snapshot has to be referentially stable between
+  // renders; stamped from one sequence so the higher of the two is simply what
+  // happened last.
+  const lastReturnSeq = useSyncExternalStore(
+    subscribeExplicitNestedFocusIntents,
+    useCallback(
+      () => lastReturnedToNestedFocusRequestSeq(epicId, tabId),
+      [epicId, tabId],
+    ),
+  );
+  // Sampled the first time this key is RENDERED - before any effect, so before
+  // the `snapshotLoaded` gate below: the task can still be loading when the
+  // person acts, and a baseline taken once the snapshot had landed would read
+  // their action as having happened before the request and never retire it.
+  // React's documented "adjust state when a prop changes" shape, not an effect.
+  const [focusRequestBaseline, setFocusRequestBaseline] =
+    useState<FocusRequestBaseline | null>(null);
+  if ((focusRequestBaseline?.key ?? null) !== focusRequestKey) {
+    // A later click on the same artifact carries a fresh `focusedAt`, so it is
+    // a different key and therefore a new request, owed its own wait.
+    setFocusRequestBaseline(
+      focusRequestKey === null
+        ? null
+        : {
+            key: focusRequestKey,
+            lastIntentSeq,
+            lastReturnSeq,
+            nestedTargetPresent: nestedRouteTarget !== null,
+          },
+    );
+  }
+  const {
+    retired: focusRequestRetired,
+    restored: focusRequestRestored,
+    outranksNestedRoute: focusRequestOutrunsNestedRoute,
+  } = readFocusRequestState(focusRequestBaseline, focusRequestKey, {
+    lastIntentSeq,
+    lastReturnSeq,
+  });
+
+  // Dropped when this surface goes, so the per-tab stamps stay bounded by the
+  // tabs actually mounted. Unconditional, and safe to run while this surface
+  // still holds a baseline taken from the dropped stamp - see
+  // `forgetExplicitNestedFocusIntents`.
+  useEffect(() => {
+    return () => forgetExplicitNestedFocusIntents(epicId, tabId);
+  }, [epicId, tabId]);
+
   useEffect(() => {
     if (!snapshotLoaded) {
       return;
@@ -220,6 +314,7 @@ export function useEpicRouteSynchronization(
           focusArtifactId,
           focusThreadId,
           activeArtifactId,
+          requestRetired: focusRequestRetired,
         })
       ) {
         return;
@@ -251,6 +346,7 @@ export function useEpicRouteSynchronization(
     focusArtifactId,
     focusThreadId,
     activeArtifactId,
+    focusRequestRetired,
     canvas,
     navigate,
     epicId,
@@ -395,6 +491,8 @@ export function useEpicRouteSynchronization(
   ]);
 
   const lastAutoOpenKey = useRef<string | null>(null);
+  /** The most recent return this effect has already released a key for. */
+  const honouredReturnSeq = useRef(0);
   useEffect(() => {
     if (!snapshotLoaded) return;
     if (
@@ -403,6 +501,7 @@ export function useEpicRouteSynchronization(
         nestedRouteTarget,
         focusArtifactId,
         recordCount: records.length,
+        requestOutrunsNestedRoute: focusRequestOutrunsNestedRoute,
       })
     ) {
       return;
@@ -410,18 +509,28 @@ export function useEpicRouteSynchronization(
 
     const key = `${epicId}|${focusArtifactId ?? ""}|${focusedAt ?? ""}`;
     const hasExplicitFocus = focusArtifactId !== undefined;
-    if (!hasExplicitFocus && hasRestoredCanvas) {
+    // A retirement SPENT this key (below), which is what stops a late record
+    // reviving a request the person left. Coming back to the request's own
+    // entry is them asking for it again, so the spend is released - once per
+    // return, tracked by the stamp itself, because `restored` stays true for as
+    // long as that return is the latest signal and clearing on every run would
+    // reopen the artifact endlessly.
+    if (focusRequestRestored && lastReturnSeq > honouredReturnSeq.current) {
+      honouredReturnSeq.current = lastReturnSeq;
+      if (lastAutoOpenKey.current === key) lastAutoOpenKey.current = null;
+    }
+    const gate = gateLegacyAutoOpen({
+      hasExplicitFocus,
+      canvasHoldsTiles,
+      keyAlreadySpent: lastAutoOpenKey.current === key,
+      anyKeySpent: lastAutoOpenKey.current !== null,
+    });
+    if (gate === "skip") return;
+    if (gate === "spend-key") {
       lastAutoOpenKey.current = key;
       return;
     }
-    if (!hasExplicitFocus && lastAutoOpenKey.current !== null) {
-      return;
-    }
-    if (hasExplicitFocus && lastAutoOpenKey.current === key) {
-      return;
-    }
 
-    lastAutoOpenKey.current = key;
     // Auto-open's recency input, read HERE rather than subscribed to. Every
     // value in it moves on each streamed token, and this decision fires once
     // per key - a subscription would re-render this hook at the token rate to
@@ -437,9 +546,36 @@ export function useEpicRouteSynchronization(
       persistedFocus,
       epicNodeRecency(handle.store.getState()),
     );
-    if (target === null) {
+    // The person acted while this request was waiting, so it is theirs to lose
+    // rather than ours to honour over whatever they moved to. Spend the key so
+    // a later arrival of the same record cannot revive it.
+    if (hasExplicitFocus && focusRequestRetired) {
+      lastAutoOpenKey.current = key;
       return;
     }
+    if (target === null) {
+      // An explicit REQUEST that cannot resolve yet stays PENDING rather than
+      // spending its key: the artifact's record simply has not projected into
+      // this device's session yet - a cold cross-task landing, or a record
+      // created on another device moments before the click - and it arrives on
+      // this effect's own `records` dependency, so the next run resolves it.
+      // Spending the key here would drop the request for good: every later run
+      // returns at `lastAutoOpenKey.current === key`.
+      //
+      // Nothing is retried on a schedule: there is no timer and no poll, only
+      // the re-evaluation this effect already did. A request naming a record
+      // that never arrives therefore opens nothing, quietly. It also names a real artifact: the cross-epic branch
+      // of `openResolvedArtifact` only navigates once
+      // `epic.resolveArtifactByPath` has confirmed one.
+      //
+      // A LANDING still spends its key on a null resolve: it runs once per
+      // epic.
+      if (!hasExplicitFocus) {
+        lastAutoOpenKey.current = key;
+      }
+      return;
+    }
+    lastAutoOpenKey.current = key;
     if (activeArtifactId === target.id) {
       return;
     }
@@ -472,6 +608,18 @@ export function useEpicRouteSynchronization(
         ) {
           return focusTarget;
         }
+        // Armed for the same reason the navigation boundary arms it: the
+        // replace below is async, so until it commits the route still names
+        // the PREVIOUS target, and the nested-route sync effect would reapply
+        // it and bounce focus straight off the artifact just opened. A waiting
+        // request can outrank a target committed during its wait, which is what
+        // makes a stale target reachable here.
+        //
+        // It matters most where the commit does not land at all:
+        // `replaceNestedFocusRoute` tolerates a rejected or superseded
+        // navigation by design, and without this the artifact would open and
+        // then sit unfocused behind the tile the route still named.
+        beginNestedFocusNavigation(targetEpicId, targetTabId, focusTarget);
         replaceNestedFocusRoute(
           navigate,
           { epicId: targetEpicId, tabId: targetTabId },
@@ -479,7 +627,12 @@ export function useEpicRouteSynchronization(
         );
         return focusTarget;
       },
-      MANUAL_TILE_OPEN,
+      // NOT the person: this is the route serving its own focus request, and
+      // the request is the thing a human claim would retire. The navigator
+      // above takes no provenance at all - it writes the route directly
+      // rather than through the boundary that marks - so this is the value
+      // that stays correct if it is ever routed through the boundary.
+      { ...MANUAL_TILE_OPEN, provenance: "automatic" },
     );
   }, [
     snapshotLoaded,
@@ -488,7 +641,7 @@ export function useEpicRouteSynchronization(
     focusArtifactId,
     focusedAt,
     persistedFocus,
-    hasRestoredCanvas,
+    canvasHoldsTiles,
     navigate,
     router,
     activeArtifactId,
@@ -496,6 +649,10 @@ export function useEpicRouteSynchronization(
     tabId,
     nestedFocusEnabled,
     nestedRouteTarget,
+    focusRequestRetired,
+    focusRequestRestored,
+    lastReturnSeq,
+    focusRequestOutrunsNestedRoute,
   ]);
 
   const lastSyncedFocus = useRef<string | null>(persistedFocus);
@@ -691,6 +848,130 @@ function replaceNestedFocusRoute(
 }
 
 /**
+ * What this run of the legacy auto-open effect may do, before anything is
+ * resolved: give up, spend the key without resolving, or go on and resolve.
+ *
+ * Extracted from the effect because it is the one part of that decision which
+ * is pure bookkeeping over the key - a LANDING fires once per epic and an
+ * explicit REQUEST once per key - and reading it as four flags here keeps the
+ * effect itself about what to open.
+ */
+type LegacyAutoOpenGate = "skip" | "spend-key" | "resolve";
+
+function gateLegacyAutoOpen(args: {
+  readonly hasExplicitFocus: boolean;
+  readonly canvasHoldsTiles: boolean;
+  readonly keyAlreadySpent: boolean;
+  readonly anyKeySpent: boolean;
+}): LegacyAutoOpenGate {
+  const { hasExplicitFocus, canvasHoldsTiles, keyAlreadySpent, anyKeySpent } =
+    args;
+  if (hasExplicitFocus) {
+    return keyAlreadySpent ? "skip" : "resolve";
+  }
+  // A canvas with tiles already shows what the person left open, so a landing
+  // records its key and chooses nothing. Empty seeded panes are still openers.
+  if (canvasHoldsTiles) return "spend-key";
+  return anyKeySpent ? "skip" : "resolve";
+}
+
+interface FocusRequestBaseline {
+  readonly key: string;
+  readonly lastIntentSeq: number;
+  /** The return stamp when this request arrived. See {@link FocusRequestState.restored}. */
+  readonly lastReturnSeq: number;
+  /**
+   * Whether the route ALREADY named a nested target when this request arrived.
+   * See {@link readFocusRequestState}.
+   */
+  readonly nestedTargetPresent: boolean;
+}
+
+interface FocusRequestState {
+  /**
+   * The person acted after this request arrived, so it is theirs to lose rather
+   * than ours to honour over whatever they moved to.
+   *
+   * Strictly NEWER, never merely different: the baseline outlives the stamp it
+   * was taken from, because the sampling surface drops that stamp on every root
+   * `StrictMode` replay while React retains the baseline. `>` reads a dropped
+   * stamp as what it is - no intent newer than the baseline - where `!==` read
+   * it as the person acting and retired a request nobody had touched.
+   */
+  readonly retired: boolean;
+  /**
+   * The person navigated BACK to this request's own entry after something had
+   * retired it, so it is owed its wait again.
+   *
+   * Needed because retirement is otherwise permanent for the life of the key,
+   * in two reinforcing ways: the baseline it is measured against is never
+   * recut, and {@link lastAutoOpenKey} is SPENT on retirement so a late record
+   * cannot revive it. Together those mean a person who asks for an artifact,
+   * has tiles open automatically over it, and presses Back twice to get back to
+   * it would find their own first Back had cancelled it for good.
+   *
+   * Ordered against {@link retired} rather than replacing it: both stamps come
+   * from one sequence, so leaving and returning any number of times resolves to
+   * whichever happened last.
+   */
+  readonly restored: boolean;
+  /**
+   * Whether this still-waiting request outranks the nested target in the route.
+   *
+   * A committed nested target normally governs focus outright, and it has to:
+   * the route can carry a `focusArtifactId` long after that request was
+   * answered, so honouring the artifact again would re-open it on every Back to
+   * such a URL.
+   *
+   * But a target committed WHILE a request was waiting is a different thing
+   * from one the request arrived to find. The waiting case is reachable without
+   * the person doing anything - a host push surfacing an agent's or a page's
+   * browser tab commits a target, and that commit preserves the pending
+   * `focusArtifactId` in the URL exactly as it should - and precedence alone
+   * then defeated the request: the artifact the person clicked never opened,
+   * with nothing in the URL to show why.
+   *
+   * So only a request that arrived to a route naming NO target outranks one
+   * committed later. Back and a cold load are untouched, because in both the
+   * target is already there when the key is first seen.
+   *
+   * {@link retired} still wins over this, which is what keeps a PERSON's nested
+   * navigation authoritative: their gesture stamps the tab, the request is
+   * retired, and the target they chose governs. Only a commit nobody asked for
+   * leaves a request alive to outrank it.
+   */
+  readonly outranksNestedRoute: boolean;
+}
+
+/**
+ * Read a pending request's standing from its baseline. A baseline for a
+ * different key is a baseline for a different request, and answers neither
+ * question.
+ */
+function readFocusRequestState(
+  baseline: FocusRequestBaseline | null,
+  key: string | null,
+  signals: { readonly lastIntentSeq: number; readonly lastReturnSeq: number },
+): FocusRequestState {
+  if (baseline === null || baseline.key !== key) {
+    return { retired: false, restored: false, outranksNestedRoute: false };
+  }
+  const { lastIntentSeq, lastReturnSeq } = signals;
+  // Newer than the baseline AND newer than the other signal: the first asks
+  // whether it happened during this request's wait, the second which of the two
+  // happened last.
+  const retired =
+    lastIntentSeq > baseline.lastIntentSeq && lastIntentSeq > lastReturnSeq;
+  const restored =
+    lastReturnSeq > baseline.lastReturnSeq && lastReturnSeq > lastIntentSeq;
+  return {
+    retired,
+    restored,
+    outranksNestedRoute: !baseline.nestedTargetPresent && !retired,
+  };
+}
+
+/**
  * Whether the legacy auto-open effect should no-op: a committed nested route
  * target already governs focus, or there is nothing to auto-open yet.
  */
@@ -699,14 +980,27 @@ function shouldSuppressLegacyAutoOpen(args: {
   readonly nestedRouteTarget: NestedFocusTarget | null;
   readonly focusArtifactId: string | undefined;
   readonly recordCount: number;
+  /**
+   * Whether a request that is still waiting outranks the committed nested
+   * target, because the route named no target when the request arrived. See
+   * `focusRequestOutrunsNestedRoute` - without this, a nested target committed
+   * during the wait by something nobody asked for defeated the request on
+   * precedence alone.
+   */
+  readonly requestOutrunsNestedRoute: boolean;
 }): boolean {
   const {
     nestedFocusEnabled,
     nestedRouteTarget,
     focusArtifactId,
     recordCount,
+    requestOutrunsNestedRoute,
   } = args;
-  if (nestedFocusEnabled && nestedRouteTarget !== null) {
+  if (
+    nestedFocusEnabled &&
+    nestedRouteTarget !== null &&
+    !requestOutrunsNestedRoute
+  ) {
     return true;
   }
   if (recordCount === 0 && focusArtifactId === undefined) {
@@ -724,13 +1018,25 @@ function shouldDeferToLegacyArtifactFocus(args: {
   readonly focusArtifactId: string | undefined;
   readonly focusThreadId: string | undefined;
   readonly activeArtifactId: string | null;
+  /**
+   * Whether the person retired the artifact request by acting themselves. A
+   * retired request will never activate its artifact, so deferring to it would
+   * never end: the URL keeps naming an id that `activeArtifactId` is now
+   * deliberately not, and the route would never record where focus actually
+   * went.
+   */
+  readonly requestRetired: boolean;
 }): boolean {
-  const { focusArtifactId, focusThreadId, activeArtifactId } = args;
+  const { focusArtifactId, focusThreadId, activeArtifactId, requestRetired } =
+    args;
   if (focusArtifactId === undefined && focusThreadId === undefined) {
     return false;
   }
   if (focusArtifactId === undefined) {
     return true;
+  }
+  if (requestRetired) {
+    return false;
   }
   if (activeArtifactId !== focusArtifactId) {
     return true;

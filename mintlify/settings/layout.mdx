@@ -15,14 +15,14 @@ description: "Apply a Default, Compact or Detailed preset, and set up the status
 | Resource monitor metrics | CPU, Processes | CPU | CPU, Memory, Processes, RAM share |
 | **Files changed**, **Active agents**, **Background**, **Access** | Visible | Compact | Visible |
 | **Microphone**, **Compact conversation** | Visible | Hidden | Visible |
-| **Attach image** | Visible | Visible | Visible |
+| **Attach** | Visible | Visible | Visible |
 | **Reasoning level** | Text | Bars | Bars + text |
 | **Pin context breakdown** | Off | Off | On, every field |
 | **Context indicator** | Text | Ring only | Text |
 | **Resource chips on sidebar rows** | None | None | CPU, Memory, Processes |
 
-- The selected preset shows **Modified** when a display value differs from that preset. Changing placement or order alone does not mark the preset as modified.
-- **View changes** lists both display changes and arrangement changes, with controls to revert individual changes. Applying a preset resets its display values while keeping your arrangement.
+- The selected preset shows **Modified** when a display value differs from that preset. Changing placement, order or which panels show does not mark the preset as modified.
+- **View changes** lists both display changes and arrangement changes, with controls to revert individual changes. Applying a preset resets its display values while keeping your arrangement and panels.
 - A preset leaves the status bar's **Placement**, **Reasoning control**, and the sidebar's panel order and visibility as they are.
 - **Reset to defaults** puts the whole page back, including those. It doesn't ask first.
 
@@ -88,7 +88,7 @@ These rows change the controls around the chat composer. Rows set to **Compact**
 
 | Setting | Options | What **Compact** or **Hidden** does |
 | --- | --- | --- |
-| **Attach image** | Visible, Hidden | Removes the button. Pasting or dropping an image still attaches it. |
+| **Attach** | Visible, Hidden | Removes the button. Pasting or dropping an image still attaches it. |
 | **Access** | Visible, Compact | Shows the permission mode as its icon alone, with the name on hover. |
 | **Microphone** | Visible, Hidden | Removes the button. The dictation shortcut still starts voice input; this doesn't turn **Voice input** off in [General](/settings/general). |
 | **Compact conversation** | Visible, Hidden | Removes the button beside the context reading. The command palette and `/compact` still compact a conversation. |
@@ -110,7 +110,7 @@ A preview at the top of the group shows the context reading.
 | --- | --- | --- |
 | **Pin context breakdown** | Off | Keeps the context window breakdown visible near the composer when usage data is available. **Fields** chooses what it shows: **Used**, **Fresh**, **Cache read**, **Cache write** and **Output**. The remaining percentage always comes first, and at least one field stays selected. |
 | **Context indicator** | Text | How the chip beside the composer shows the context left while the breakdown isn't pinned: **Text**, **Ring**, or **Ring only**. |
-| **Minimap position** | Right | Where minimaps appear: **Right**, **Left**, or **Hidden**. Minimaps are compact overviews for moving around chats and artifacts. |
+| **Minimap position** | Left | Where minimaps appear: **Right**, **Left**, or **Hidden**. Minimaps are compact overviews for moving around chats and artifacts. |
 
 ## Sidebar
 

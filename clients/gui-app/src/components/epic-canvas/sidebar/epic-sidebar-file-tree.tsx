@@ -297,7 +297,7 @@ function unaryFileTreeSource(args: {
     hasError: unary.error !== null && paths.length === 0,
     truncationNotice:
       unary.data?.truncated === true
-        ? `Showing the first ${paths.length.toLocaleString()} files - this workspace exceeds the preview limit.`
+        ? `Showing the first ${paths.length.toLocaleString()} files - this folder exceeds the preview limit.`
         : null,
     isLive: false,
   };
@@ -572,7 +572,10 @@ function FileTreeBodyForResolvedHost(
       const ref = workspaceFileRefForTreePath(treePath);
       if (ref === null) return;
       onLatchHost();
-      openTile(tileIntent(ref, { tabId: props.tabId }, gesture, "direct_ui"));
+      openTile(
+        tileIntent(ref, { tabId: props.tabId }, gesture, "direct_ui"),
+        "user",
+      );
     };
     // Preview is right on a touch viewport too, even though the double-click
     // that promotes it there has no touch equivalent: that viewport shows ONE
@@ -839,7 +842,7 @@ function FileTreeBodyForResolvedHost(
               <ReportIssueAction
                 context={createReportIssueContext({
                   title: "Unable to load files",
-                  message: "The workspace file tree could not be loaded.",
+                  message: "The folder file tree could not be loaded.",
                   code: null,
                   source: "File tree",
                 })}

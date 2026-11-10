@@ -468,6 +468,7 @@ describe("configure formatting", () => {
     profileSelection: { kind: "profile", profileId: "prof_work" },
     reasoningEffort: "high",
     fastMode: false,
+    serviceTier: "priority",
     permissionMode: "supervised",
     agentMode: "regular",
   };
@@ -484,6 +485,7 @@ describe("configure formatting", () => {
     expect(human).toContain("profile: --profile prof_work");
     expect(human).toContain("reasoningEffort: high");
     expect(human).toContain("fastMode: off");
+    expect(human).toContain("serviceTier: priority");
     expect(human).not.toContain("Warnings:");
   });
 

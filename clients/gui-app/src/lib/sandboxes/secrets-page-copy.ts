@@ -14,8 +14,8 @@ export const SECRETS_EMPTY_TEXT =
   "Values and logins your agents use. On your computers they are set as values; on sandboxes agents use them without seeing them.";
 
 /** A team's Secrets text, as its subtitle and as its empty state. */
-export function teamSecretsText(teamName: string): string {
-  return `Values and logins ${teamName}'s agents use, on its sandboxes without being seen.`;
+export function teamSecretsDescription(name: string): string {
+  return `Values and logins ${name}'s agents use, on its sandboxes without being seen.`;
 }
 
 export const SECRETS_ADD_LABEL = "Add a secret";
@@ -27,7 +27,7 @@ export const PERSONAL_SECRETS_READ_FAILED = "Couldn't read Personal's secrets.";
 
 /** In place of the kinds Add a secret does not offer: a provider's key. */
 export const PROVIDER_KEYS_LINE = {
-  before: "Provider keys are set on each provider's Account tab, under ",
+  before: "Provider keys are set on each provider's page, under ",
   link: "Providers",
   after: ".",
 } as const;
@@ -47,7 +47,8 @@ export function secretValueOrigin(
 
 /**
  * What a secret's row says after its name: "Set · sent to api.stripe.com ·
- * added by you 24 Oct", each clause only when it is known.
+ * added by you 24 Oct", each clause only when it is known. Several addresses
+ * are joined with commas and the row wraps them.
  */
 export function secretRowDetail(input: {
   readonly destinations: readonly string[];
@@ -66,7 +67,6 @@ export const TEAM_SECRETS_LINE =
   "Team secrets are brokered only; a tool that needs a plain value needs a personal sandbox.";
 
 export const SECRET_REVOKED_LABEL = "Revoked";
-export const SECRET_PENDING_REVIEW_LABEL = "Waiting for you";
 
 /**
  * Beside Replace value, Undo and Destroy, and under the recovery order: what

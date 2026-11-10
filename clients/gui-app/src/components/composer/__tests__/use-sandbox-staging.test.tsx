@@ -1,7 +1,7 @@
 import { useSandboxesPageStore } from "@/stores/sandboxes/sandboxes-page-store";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useEffect } from "react";
-import { QueryClient } from "@tanstack/react-query";
+import { useEffect, useState, type ReactElement, type ReactNode } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AuthService } from "@/lib/auth/auth-service";
 import { HostDirectoryService } from "@/lib/host";
 import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
@@ -28,8 +28,10 @@ import {
   act,
   cleanup,
   fireEvent,
-  render,
+  render as renderBare,
+  type RenderResult,
   screen,
+  within,
 } from "@testing-library/react";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
@@ -46,6 +48,11 @@ import {
   type SandboxStaging,
 } from "@/components/composer/use-sandbox-staging";
 import { ConsequencesBlock } from "@/components/composer/consequences-block";
+import {
+  SandboxSetupLine,
+  type SandboxSetupLineActions,
+  type SandboxSetupLineFacts,
+} from "@/components/composer/sandbox-setup-line";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import type {
   HostScopeOption,
@@ -64,6 +71,7 @@ import type {
 import {
   idleAndRestingLine,
   SANDBOXES_CANT_BE_CREATED,
+  USE_THIS_SHAPE,
   WAKE_STRING_MEMORY,
 } from "@/lib/sandboxes/sandbox-strings";
 import { useSandboxShapeMemoryStore } from "@/stores/composer/sandbox-shape-memory-store";
@@ -79,6 +87,9 @@ import {
 import { useLandingReturnedSandbox } from "@/hooks/sandboxes/use-returned-sandbox-stage";
 import type { ReturnedSandbox } from "@/lib/sandboxes/returned-sandbox";
 
+const WINDOWS_SANDBOX_LIMITATION =
+  "Windows sandboxes have no desktop or Computer Use.";
+
 const mocks = vi.hoisted(() => ({
   user: null as AuthenticatedUser | null,
   catalogue: null as SandboxCatalogue | null,
@@ -92,9 +103,21 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   useAuthUser: () => ({ data: mocks.user }),
 }));
-vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
-  useSandboxCatalogue: () => ({ data: mocks.catalogue }),
-}));
+// The real query options stay: the shape sheet's readiness and the run's
+// preflight read the catalogue through them. Only the hook that serves the
+// fixture catalogue is replaced, as the query it stands for would answer.
+vi.mock(
+  "@/hooks/sandboxes/use-sandbox-catalogue-query",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/sandboxes/use-sandbox-catalogue-query")
+    >()),
+    useSandboxCatalogue: () =>
+      mocks.catalogue === null
+        ? { isPending: true, isError: false, data: undefined }
+        : { isPending: false, isError: false, data: mocks.catalogue },
+  }),
+);
 vi.mock("@/hooks/sandboxes/use-sandbox-costs-query", () => ({
   useSandboxCosts: () => ({ data: mocks.costs }),
 }));
@@ -145,6 +168,18 @@ vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
   useSystemTabModalActions: () => ({ openSettings: mocks.openSettings }),
 }));
 
+/** The query client the shape sheet's readiness read needs, one per mounted tree. */
+function QueryProviders(props: { readonly children: ReactNode }): ReactNode {
+  const [client] = useState(() => new QueryClient());
+  return (
+    <QueryClientProvider client={client}>{props.children}</QueryClientProvider>
+  );
+}
+
+function render(ui: ReactElement): RenderResult {
+  return renderBare(ui, { wrapper: QueryProviders });
+}
+
 const SURFACE = "landing:window-test";
 const MEMORY_HOST = "laptop";
 
@@ -182,6 +217,26 @@ const PROVIDER: SandboxCatalogueProvider = {
 };
 
 const CATALOGUE: SandboxCatalogue = { providers: [PROVIDER] };
+
+/** A provider that creates Windows in the same region, on the same bounds. */
+const WINDOWS_PROVIDER: SandboxCatalogueProvider = {
+  ...PROVIDER,
+  provider: "gce-windows",
+  os: ["windows"],
+};
+
+function renderStagedConsequences(): void {
+  const { consequences, chooseAnotherHostLabel } = staging();
+  if (consequences === null) throw new Error("nothing was staged");
+  render(
+    <ConsequencesBlock
+      input={consequences}
+      onMoveFirst={null}
+      onOpenTerminalInstead={null}
+      chooseAnotherHostLabel={chooseAnotherHostLabel}
+    />,
+  );
+}
 
 const DEFAULT_SHAPE: StageShape = {
   os: "linux",
@@ -282,12 +337,48 @@ function Harness(props: {
   useEffect(() => {
     latest = result;
   }, [result]);
-  return result === null ? null : result.sheet;
+  if (result === null) return null;
+  return (
+    <>
+      <span data-testid="staged-sandbox-chip">
+        {result.composer.stagedLabel}
+      </span>
+      {result.sheet}
+    </>
+  );
 }
 
 function mount(hosts: readonly HostScopeOption[]): SandboxStaging {
   render(<Harness surfaceKey={SURFACE} hosts={hosts} />);
   return staging();
+}
+
+function ConsequencesHarness(props: {
+  readonly hosts: readonly HostScopeOption[];
+}) {
+  const result = useSandboxStaging({
+    surface: {
+      surfaceKey: SURFACE,
+      task: null,
+      openTerminalInstead: null,
+    },
+    memoryHostId: MEMORY_HOST,
+    hosts: props.hosts,
+    forkOnNew: null,
+  });
+  useEffect(() => {
+    latest = result;
+  }, [result]);
+  if (result === null || result.consequences === null) return null;
+  return (
+    <ConsequencesBlock
+      input={result.consequences}
+      onMoveFirst={null}
+      onOpenTerminalInstead={null}
+      onChooseAnotherHost={() => undefined}
+      chooseAnotherHostLabel={result.chooseAnotherHostLabel}
+    />
+  );
 }
 
 function staging(): SandboxStaging {
@@ -343,6 +434,11 @@ describe("a staged name at create", () => {
       authContextId: null,
       credentialGeneration: null,
       localHostIdSeeder: () => Promise.resolve(null),
+    });
+    // The run's preflight reads the catalogue for this shape before it creates.
+    vi.spyOn(auth, "getSandboxCatalogue").mockResolvedValue({
+      kind: "ok",
+      catalogue: CATALOGUE,
     });
     const create = vi
       .spyOn(auth, "createSandbox")
@@ -517,6 +613,16 @@ describe("useSandboxStaging New rows", () => {
         "Linux · 2 vCPU · 4 GB · $0.21 an hour while awake · uses your acme credits",
       );
     });
+
+    it("includes the exact short price on the staged chip", () => {
+      withBalances(1_000, 1_000);
+      const { composer } = mount([LAPTOP]);
+      act(() => composer.onPickNew("personal"));
+
+      expect(screen.getByTestId("staged-sandbox-chip").textContent).toBe(
+        "New Personal sandbox · 2 vCPU · 4 GB · $0.21/h",
+      );
+    });
   });
 
   it("stages a new sandbox in the default shape and remembers the configuration", () => {
@@ -524,6 +630,16 @@ describe("useSandboxStaging New rows", () => {
 
     act(() => composer.onPickNew("personal"));
 
+    expect(screen.getByTestId("staged-sandbox-chip").textContent).toBe(
+      "New Personal sandbox · 2 vCPU · 4 GB · from $0.12/h",
+    );
+    // The catalogue's from price names all three rates, rest rates included.
+    expect(staging().consequences?.price).toEqual({
+      awakeMcPerHour: 120,
+      suspendedMcPerHour: 4,
+      stoppedMcPerHour: 2,
+      exact: false,
+    });
     const stage = readStagedSandbox(SURFACE);
     expect(stage).toMatchObject({
       phase: "staged",
@@ -541,6 +657,90 @@ describe("useSandboxStaging New rows", () => {
       ],
     ).toBe("personal");
     expect(staging().composer.stagedConfigurationKey).toBe("personal");
+  });
+
+  it("omits the price on a staged chip when the catalogue prices no rate for the shape", () => {
+    mocks.catalogue = {
+      providers: [
+        {
+          ...PROVIDER,
+          shapes: [
+            { cpus: 4, memoryMb: 8192, diskMb: 40960, default: false },
+            { cpus: 2, memoryMb: 4096, diskMb: 20480, default: true },
+          ],
+        },
+      ],
+    };
+    const { composer } = mount([LAPTOP]);
+    act(() => composer.onPickNew("personal"));
+
+    expect(screen.getByTestId("staged-sandbox-chip").textContent).toBe(
+      "New Personal sandbox · 2 vCPU · 4 GB",
+    );
+  });
+
+  it("states what a setup is charged for under a new stage that is still only staged, before anything launches", () => {
+    const { composer } = mount([LAPTOP]);
+
+    act(() => composer.onPickNew("personal"));
+    renderStagedConsequences();
+
+    expect(readStagedSandbox(SURFACE)).toMatchObject({
+      phase: "staged",
+      clientRequestId: null,
+    });
+    expect(screen.getByTestId("consequences-setup-charges").textContent).toBe(
+      "Running the sandbox is charged separately from build work. Build work is charged once, even if the build fails. Keeping the result is charged as storage for as long as you keep it.",
+    );
+    expect(screen.getByTestId("consequences-price").textContent).toContain(
+      "an hour while awake",
+    );
+  });
+
+  it("hands the block a Linux OS, and no Windows limitation, for a new Linux stage", () => {
+    mocks.catalogue = { providers: [PROVIDER, WINDOWS_PROVIDER] };
+    const { composer } = mount([LAPTOP]);
+
+    act(() => composer.onPickNew("personal"));
+
+    expect(staging().consequences?.os).toBe("linux");
+    renderStagedConsequences();
+    expect(screen.queryByText(WINDOWS_SANDBOX_LIMITATION)).toBeNull();
+  });
+
+  it("hands the block the Windows OS of a new stage the catalogue can only create on Windows", () => {
+    mocks.catalogue = { providers: [WINDOWS_PROVIDER] };
+    const { composer } = mount([LAPTOP]);
+
+    act(() => composer.onPickNew("personal"));
+
+    expect(readStagedSandbox(SURFACE)?.target).toMatchObject({
+      kind: "new",
+      shape: { os: "windows" },
+    });
+    expect(staging().consequences?.os).toBe("windows");
+    renderStagedConsequences();
+    expect(screen.getByText(WINDOWS_SANDBOX_LIMITATION)).toBeDefined();
+  });
+
+  it("hands the block the Windows OS of the person's remembered pick once they use it from the gear", () => {
+    mocks.catalogue = { providers: [PROVIDER, WINDOWS_PROVIDER] };
+    useSandboxShapeMemoryStore.getState().remember(MEMORY_HOST, "personal", {
+      ...DEFAULT_SHAPE,
+      os: "windows",
+    });
+    const { composer } = mount([LAPTOP]);
+
+    act(() => composer.onOpenShape("personal"));
+    fireEvent.click(screen.getByRole("button", { name: USE_THIS_SHAPE }));
+
+    expect(readStagedSandbox(SURFACE)?.target).toMatchObject({
+      kind: "new",
+      shape: { os: "windows" },
+    });
+    expect(staging().consequences?.os).toBe("windows");
+    renderStagedConsequences();
+    expect(screen.getByText(WINDOWS_SANDBOX_LIMITATION)).toBeDefined();
   });
 
   it("stages the configuration's defaults, shape and periods, for everyone who picks a New row", () => {
@@ -668,6 +868,121 @@ describe("useSandboxStaging New rows", () => {
     });
   });
 
+  it("keeps the hourly price and payer under a created settings failure at a short balance", () => {
+    mocks.user = userWith(
+      userSubscription({
+        totalPlanCredits: 0,
+        consumedFromPlan: 0,
+        bonusCredits: 0,
+        consumedFromBonus: 0,
+        bundleRemaining: 0,
+      }),
+      [teamSubscription(0)],
+    );
+    const { composer } = mount([LAPTOP]);
+    act(() => composer.onPickNew("team-1"));
+
+    expect(staging().consequences).toMatchObject({
+      needsCredits: true,
+      billingStarted: false,
+    });
+
+    const store = useStagedSandboxStore.getState();
+    store.begin(SURFACE, false, Date.now(), false);
+    act(() =>
+      store.report(SURFACE, {
+        createdSandboxId: "sbx-created-settings-failure",
+        createdHostId: "host-created-settings-failure",
+        step: "applying",
+        failure: {
+          kind: "settings",
+          code: "SBX-0520",
+          steps: { applied: ["Secrets"], notApplied: ["Providers"] },
+        },
+      }),
+    );
+
+    const stage = staging().stage;
+    const consequences = staging().consequences;
+    if (stage === null || consequences === null) {
+      throw new Error(
+        "the settings-failed stage or its consequences are missing",
+      );
+    }
+    expect(consequences).toMatchObject({
+      needsCredits: true,
+      billingStarted: true,
+    });
+
+    const onRetryApplying = vi.fn();
+    const actions: SandboxSetupLineActions = {
+      onKeepWaiting: () => undefined,
+      onCancel: null,
+      onChooseAnotherHost: null,
+      chooseAnotherHostLabel: "Use This computer",
+      onRetryCreation: () => undefined,
+      onRetry: () => undefined,
+      onSendAgain: () => undefined,
+      onChangeShape: null,
+      onRetryApplying,
+      onRepairSetup: null,
+      onStop: null,
+      onOpenTerminal: null,
+    };
+    const facts: SandboxSetupLineFacts = {
+      costLine: "",
+      regionLabel: "US East",
+      shapeLabel: "2 vCPU · 4 GB",
+      smallerShapeAffordable: false,
+      offeredAgents: null,
+      sandboxAwake: true,
+      sandboxStoppable: false,
+      sandboxResting: false,
+    };
+    const onChooseAnotherHost = vi.fn();
+    const chooseAnotherHostLabel = staging().chooseAnotherHostLabel;
+    render(
+      <>
+        <SandboxSetupLine
+          stage={stage}
+          name="api-refactor"
+          facts={facts}
+          actions={actions}
+        />
+        <ConsequencesBlock
+          input={consequences}
+          onMoveFirst={null}
+          onOpenTerminalInstead={null}
+          onChooseAnotherHost={onChooseAnotherHost}
+          chooseAnotherHostLabel={chooseAnotherHostLabel}
+        />
+      </>,
+    );
+
+    const setupLine = screen.getByTestId("sandbox-setup-line-detail");
+    expect(
+      within(setupLine).queryByText("Compute is charged while it is awake."),
+    ).toBeNull();
+    expect(screen.getByTestId("consequences-add-credits")).toBeTruthy();
+    expect(screen.getByTestId("consequences-price").textContent).toBe(
+      "from $0.12 an hour while awake · uses your acme credits",
+    );
+    expect(screen.getByTestId("consequences-clause-team").textContent).toBe(
+      "Everyone in acme can use it; another member's agent can read what yours can.",
+    );
+    const blockText = screen.getByTestId("consequences-block").textContent;
+    expect(blockText.match(/while awake/g)).toHaveLength(1);
+    expect(blockText).not.toContain("while you pay from your team credits");
+    fireEvent.click(
+      screen.getByRole("button", { name: chooseAnotherHostLabel }),
+    );
+    expect(onChooseAnotherHost).toHaveBeenCalledOnce();
+    fireEvent.click(
+      within(setupLine).getByTestId("sandbox-setup-retry-applying"),
+    );
+    expect(onRetryApplying).toHaveBeenCalledOnce();
+  });
+
   it("tells a team sandbox on the landing composer as shared", () => {
     const { composer } = mount([LAPTOP]);
 
@@ -679,6 +994,130 @@ describe("useSandboxStaging New rows", () => {
       price: { awakeMcPerHour: 120, exact: false },
     });
   });
+
+  it("keeps the hourly price after a no-provider handoff failure while awake", () => {
+    mocks.user = userWith(
+      userSubscription({
+        totalPlanCredits: 0,
+        consumedFromPlan: 0,
+        bonusCredits: 0,
+        consumedFromBonus: 0,
+        bundleRemaining: 0,
+      }),
+      [],
+    );
+    const view = render(<ConsequencesHarness hosts={[LAPTOP]} />);
+    act(() => staging().composer.onPickNew("personal"));
+    expect(screen.getByTestId("consequences-price").textContent).toContain(
+      "Not enough credits.",
+    );
+    expect(screen.getByTestId("consequences-add-credits")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Use Laptop" })).toBeTruthy();
+    const store = useStagedSandboxStore.getState();
+    store.begin(SURFACE, false, Date.now(), false);
+    act(() =>
+      store.report(SURFACE, {
+        createdSandboxId: "sbx-no-provider-handoff",
+        createdHostId: "host-no-provider-handoff",
+        phase: "handoff",
+        step: "delivering",
+        failure: { kind: "no-provider" },
+      }),
+    );
+    view.rerender(
+      <ConsequencesHarness
+        hosts={[
+          LAPTOP,
+          sandboxHost("host-no-provider-handoff", { state: "awake" }, null),
+        ]}
+      />,
+    );
+
+    expect(screen.getByTestId("consequences-price").textContent).toBe(
+      "from $0.12 an hour while awake · uses your credits",
+    );
+    expect(screen.getByTestId("consequences-add-credits")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Use Laptop" })).toBeTruthy();
+  });
+
+  it.each([
+    { label: "starting", state: "starting" as const },
+    { label: "suspended", state: "suspended" as const },
+  ])(
+    "does not treat an existing sandbox's id as billing before its $label wake completes",
+    ({ state }) => {
+      const host = sandboxHost("box-prewake", { state: "suspended" }, null);
+      const view = render(<ConsequencesHarness hosts={[LAPTOP, host]} />);
+      act(() => staging().composer.onPickHost(host));
+      const store = useStagedSandboxStore.getState();
+      store.begin(SURFACE, false, Date.now(), false);
+      act(() =>
+        store.report(SURFACE, {
+          createdSandboxId: "sbx-box-prewake",
+          createdHostId: host.hostId,
+          step: "booting",
+        }),
+      );
+      view.rerender(
+        <ConsequencesHarness
+          hosts={[LAPTOP, sandboxHost(host.hostId, { state }, null)]}
+        />,
+      );
+
+      expect(staging().consequences).toMatchObject({ billingStarted: false });
+      expect(screen.getByTestId("consequences-price").textContent).toBe(
+        "$0.12 an hour while awake · uses your credits",
+      );
+    },
+  );
+
+  it.each([
+    { label: "starting", state: "starting" as const, frozen: false },
+    { label: "suspended", state: "suspended" as const, frozen: false },
+    { label: "frozen", state: "awake" as const, frozen: true },
+  ])(
+    "keeps the short-balance choice when a prior handoff host is $label",
+    ({ state, frozen }) => {
+      mocks.user = userWith(
+        userSubscription({
+          totalPlanCredits: 0,
+          consumedFromPlan: 0,
+          bonusCredits: 0,
+          consumedFromBonus: 0,
+          bundleRemaining: 0,
+        }),
+        [],
+      );
+      const view = render(<ConsequencesHarness hosts={[LAPTOP]} />);
+      act(() => staging().composer.onPickNew("personal"));
+      const store = useStagedSandboxStore.getState();
+      store.begin(SURFACE, false, Date.now(), false);
+      act(() =>
+        store.report(SURFACE, {
+          createdSandboxId: "sbx-prewake-handoff",
+          createdHostId: "host-prewake-handoff",
+          phase: "handoff",
+          step: "delivering",
+          failure: { kind: "no-provider" },
+        }),
+      );
+      view.rerender(
+        <ConsequencesHarness
+          hosts={[
+            LAPTOP,
+            sandboxHost("host-prewake-handoff", { state, frozen }, null),
+          ]}
+        />,
+      );
+
+      expect(screen.getByTestId("consequences-price").textContent).toContain(
+        "Not enough credits.",
+      );
+      expect(screen.queryByText(/an hour while awake/)).toBeNull();
+      expect(screen.getByTestId("consequences-add-credits")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Use Laptop" })).toBeTruthy();
+    },
+  );
 });
 
 describe("useSandboxStaging In this task", () => {
@@ -804,7 +1243,7 @@ describe("useSandboxStaging sandbox rows' lines", () => {
     );
 
     expect(lineOf(awakeTeamBox)).toEqual([
-      "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake",
+      "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake · uses your acme credits",
       "acme · $0.05 today",
     ]);
   });
@@ -1008,7 +1447,7 @@ describe("useSandboxStaging host picks", () => {
     const store = useStagedSandboxStore.getState();
     store.begin(SURFACE, false, Date.now(), false);
     store.report(SURFACE, { step: "booting", stepAt: Date.now() });
-    expect(staging().composer.stagedLabel).toBe(
+    expect(screen.getByTestId("staged-sandbox-chip").textContent).toBe(
       "box-suspended · suspended, resumes on send",
     );
 
@@ -1261,6 +1700,48 @@ describe("useSandboxStaging a staged resting sandbox's block", () => {
       stagedPrice(pricedHost("team-box", "suspended", teamOwnedItem())),
     ).toBe("Waking team-box uses your acme allowance and makes you the payer.");
   });
+
+  it.each([
+    { state: "suspended", os: "windows", limited: true },
+    { state: "stopped", os: "windows", limited: true },
+    { state: "suspended", os: "linux", limited: false },
+    { state: "stopped", os: "linux", limited: false },
+  ] as const)(
+    "hands the block the $os OS of a staged $state sandbox's own row, so the limitation reads as $limited before anything is sent",
+    ({ state, os, limited }) => {
+      const hostId = `box-${os}-${state}`;
+      const host = sandboxHost(
+        hostId,
+        {
+          state,
+          summary: sandboxSummaryFixture({
+            id: `sbx-${hostId}`,
+            hostId,
+            state,
+            os,
+            priceMcPerHour: PRICED,
+          }),
+        },
+        null,
+      );
+      const { composer } = mount([LAPTOP, host]);
+
+      act(() => composer.onPickHost(host));
+
+      expect(readStagedSandbox(SURFACE)).toMatchObject({
+        phase: "staged",
+        clientRequestId: null,
+        target: { kind: "existing", hostId },
+      });
+      renderStagedConsequences();
+      if (limited) {
+        expect(screen.getByText(WINDOWS_SANDBOX_LIMITATION)).toBeDefined();
+      } else {
+        expect(screen.queryByText(WINDOWS_SANDBOX_LIMITATION)).toBeNull();
+      }
+      expect(staging().consequences?.os).toBe(os);
+    },
+  );
 });
 
 describe("the allowance block under a stage", () => {

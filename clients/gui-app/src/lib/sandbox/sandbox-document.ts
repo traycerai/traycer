@@ -180,12 +180,19 @@ function bootstrapMain(config: BootstrapConfig): void {
     });
   });
 
+  // The app is pulling its own navigation preview over this page, so nothing
+  // in the page may scroll until it says otherwise.
+  let heldStill = false;
   window.addEventListener("message", (event: MessageEvent<unknown>) => {
     if (event.source !== host) return;
     const data = event.data;
     if (!isObject(data)) return;
     if (data.method === "ui/notifications/host-context-changed") {
       if (isObject(data.params)) applyHostContext(data.params);
+      return;
+    }
+    if (data.method === "traycer/history-gesture/hold") {
+      heldStill = isObject(data.params) && data.params.held === true;
       return;
     }
     if (data.method !== "ping") return;
@@ -235,7 +242,9 @@ function bootstrapMain(config: BootstrapConfig): void {
   // A wheel nothing in the page can scroll by is cancelled and handed to the
   // app, which notes the reader's gesture before it scrolls: a relayed note
   // alone can lose the race to the chained scroll. A page that handled the
-  // wheel itself (`preventDefault`) keeps it.
+  // wheel itself (`preventDefault`) keeps it. The hand-over also says whether
+  // the cancel took and which way the page could still scroll, which is what
+  // lets the app's back/forward swipe treat this page like its own content.
   const canScrollInside = (
     target: EventTarget | null,
     vertical: boolean,
@@ -262,6 +271,10 @@ function bootstrapMain(config: BootstrapConfig): void {
   window.addEventListener(
     "wheel",
     (event) => {
+      if (heldStill) {
+        event.preventDefault();
+        return;
+      }
       if (event.defaultPrevented || event.ctrlKey) return;
       const vertical = Math.abs(event.deltaY) >= Math.abs(event.deltaX);
       const delta = vertical ? event.deltaY : event.deltaX;
@@ -273,6 +286,9 @@ function bootstrapMain(config: BootstrapConfig): void {
         deltaX: event.deltaX,
         deltaY: event.deltaY,
         deltaMode: event.deltaMode,
+        cancelable: event.cancelable,
+        ownsBack: canScrollInside(event.target, false, -1),
+        ownsForward: canScrollInside(event.target, false, 1),
       });
     },
     { passive: false },

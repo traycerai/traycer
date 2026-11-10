@@ -100,24 +100,26 @@ export function HostBusyForceDeferDialog(props: HostBusyForceDeferDialogProps) {
       <DialogContent
         layout="banded"
         showCloseButton={false}
-        className="w-[min(92vw,28rem)] overflow-hidden sm:max-w-md"
+        className="flex w-[min(92vw,28rem)] flex-col overflow-hidden sm:max-w-md"
         data-testid="host-busy-force-defer-dialog"
         data-purpose={props.purpose}
       >
-        <div className="flex flex-col gap-1.5 p-5">
+        <div className="flex shrink-0 flex-col gap-1.5 p-5">
           <DialogTitle>{props.title}</DialogTitle>
           <DialogDescription>{props.message}</DialogDescription>
+        </div>
+        <div className="min-h-0 overflow-y-auto">
           {props.detail === null ? null : (
             <p
-              className="text-ui-sm leading-relaxed text-foreground"
+              className="px-5 pb-4 text-ui-sm leading-relaxed text-foreground"
               data-testid="host-busy-force-defer-detail"
             >
               {props.detail}
             </p>
           )}
+          {props.children}
         </div>
-        {props.children}
-        <div className="flex justify-end gap-2 border-t border-border/60 bg-foreground/3 px-5 py-3">
+        <div className="flex shrink-0 justify-end gap-2 border-t border-border/60 bg-foreground/3 px-5 py-3">
           <Button
             type="button"
             variant="ghost"

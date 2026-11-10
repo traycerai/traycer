@@ -28,6 +28,7 @@ import {
 } from "@/components/ui/select";
 import { useAuthUser } from "@/hooks/auth/use-auth-user-query";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
+import { useSandboxGetReadiness } from "@/hooks/sandboxes/use-sandbox-get-readiness-query";
 import {
   formatMemory,
   roundSandboxShape,
@@ -42,6 +43,7 @@ import {
   stageNeedsCredits,
   stagePrice,
   stageProviderFor,
+  stageQuotedSize,
   stageSizeIsRung,
   type ConsequencesInput,
   type SandboxConfigurationDefaults,
@@ -54,6 +56,7 @@ import {
   SANDBOX_REGION_LABEL,
   SHAPE_SHEET_DESCRIPTION,
   USE_THIS_SHAPE,
+  WINDOWS_SANDBOX_LIMITATION,
   idleAndRestingLine,
   newSandboxRowLabel,
   sandboxShapeLabel,
@@ -115,7 +118,7 @@ export function SandboxShapeSheet(props: {
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogContent
-        className="w-[min(92vw,30rem)] sm:max-w-[min(92vw,30rem)]"
+        className="flex w-[min(92vw,30rem)] flex-col sm:max-w-[min(92vw,30rem)]"
         data-testid="sandbox-shape-sheet"
       >
         <DialogHeader>
@@ -236,12 +239,13 @@ function formOf(
   name: string,
   provider: SandboxCatalogueProvider,
 ): ShapeForm {
+  const size = stageQuotedSize(provider, shape)?.shape;
   return {
     name,
     os: shape.os,
-    cpus: String(shape.cpus),
-    memoryGb: String(shape.memoryMb / MB_PER_GIB),
-    diskGb: String((shape.diskMb ?? provider.shape.diskDefaultMb) / MB_PER_GIB),
+    cpus: String(size?.cpus ?? shape.cpus),
+    memoryGb: String((size?.memoryMb ?? shape.memoryMb) / MB_PER_GIB),
+    diskGb: size === undefined ? "" : String(size.diskMb / MB_PER_GIB),
     region: shape.region,
     idleMinutes: String(shape.idleMinutes),
     ...restingFields(shape.destroyAfterRestingMinutes),
@@ -267,28 +271,28 @@ function rungKey(rung: SandboxShapeRung): string {
 function rungOfForm(
   form: ShapeForm,
   shapes: readonly SandboxShapeRung[],
-  provider: SandboxCatalogueProvider,
 ): SandboxShapeRung | null {
   const size = {
     cpus: Number(form.cpus),
     memoryMb: Math.round(Number(form.memoryGb) * MB_PER_GIB),
     diskMb: Math.round(Number(form.diskGb) * MB_PER_GIB),
   };
-  return shapes.find((rung) => stageSizeIsRung(provider, rung, size)) ?? null;
+  return shapes.find((rung) => stageSizeIsRung(rung, size)) ?? null;
 }
 
 type FormSize = Pick<StageShape, "cpus" | "memoryMb" | "diskMb">;
 
 /**
- * The form's size: the listed shape it names, or inside the bounds of a
- * provider that lists none, rounded as the server rounds it.
+ * The form's size: an exact rung, or a free-form request within bounds.
+ * CPU and memory are rounded here; disk remains a request whose allocated
+ * geometry is read through `stageQuotedSize` by pricing and readiness.
  */
 function sizeOfForm(
   form: ShapeForm,
   provider: SandboxCatalogueProvider,
 ): { readonly size: FormSize } | { readonly problem: string } {
   if (provider.shapes !== null) {
-    const rung = rungOfForm(form, provider.shapes, provider);
+    const rung = rungOfForm(form, provider.shapes);
     if (rung === null) return { problem: "Pick a size." };
     return {
       size: { cpus: rung.cpus, memoryMb: rung.memoryMb, diskMb: rung.diskMb },
@@ -377,6 +381,7 @@ function ShapeSheetForm(props: {
       : formOf(props.initialShape, name, provider);
   });
   const [periodsOpen, setPeriodsOpen] = useState(false);
+  const [sizeCommitted, setSizeCommitted] = useState(true);
   const provider = stageProviderFor(props.catalogue, form.os);
   if (provider === null) {
     return (
@@ -395,6 +400,7 @@ function ShapeSheetForm(props: {
     configuration: props.configuration,
     price,
     needsCredits,
+    billingStarted: false,
     shortfallMc:
       balance === null || price === null
         ? null
@@ -405,218 +411,252 @@ function ShapeSheetForm(props: {
   return (
     <form
       noValidate
-      className="flex flex-col gap-4"
+      className="flex min-h-0 min-w-0 flex-col gap-4"
       onSubmit={(event) => {
         event.preventDefault();
         if (shape === null) return;
         props.onUseShape(shape, stagedSandboxName(form.name), wake);
       }}
     >
-      <div className="flex flex-col gap-1.5">
-        <Label htmlFor={`${ids}-name`}>Name</Label>
-        <Input
-          id={`${ids}-name`}
-          value={form.name}
-          maxLength={NAME_MAX_LENGTH}
-          data-testid="sandbox-shape-sheet-name"
-          onChange={(event) => setForm({ ...form, name: event.target.value })}
-        />
-      </div>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <ShapeSelect
-          id={`${ids}-os`}
-          label="Operating system"
-          value={form.os}
-          options={offered.map((os) => ({ value: os, label: OS_LABEL[os] }))}
-          onChange={(value) => {
-            const os = offered.find((candidate) => candidate === value);
-            if (os === undefined) return;
-            const next = stageProviderFor(props.catalogue, os);
-            if (next === null) return;
-            const rung = defaultShapeRung(next);
-            setForm({
-              ...form,
-              os,
-              region: next.regions[0].id,
-              ...(rung === null
-                ? { diskGb: String(next.shape.diskDefaultMb / MB_PER_GIB) }
-                : rungFields(rung)),
-            });
-          }}
-        />
-        <ShapeSelect
-          id={`${ids}-region`}
-          label={SANDBOX_REGION_LABEL}
-          value={form.region}
-          options={provider.regions.map((region) => ({
-            value: region.id,
-            label: region.label,
-          }))}
-          onChange={(value) => setForm({ ...form, region: value })}
-        />
-        {provider.shapes === null ? (
-          <>
-            <ShapeNumber
-              id={`${ids}-cpus`}
-              label="vCPU"
-              value={form.cpus}
-              min={provider.shape.cpuMin}
-              max={provider.shape.cpuMax}
-              step={provider.shape.cpuStep}
-              testId="sandbox-shape-sheet-cpus"
-              onChange={(value) => setForm({ ...form, cpus: value })}
-            />
-            <ShapeNumber
-              id={`${ids}-memory`}
-              label="Memory (GB)"
-              value={form.memoryGb}
-              min={provider.shape.memoryMinMb / MB_PER_GIB}
-              max={provider.shape.memoryMaxMb / MB_PER_GIB}
-              step={provider.shape.memoryStepMb / MB_PER_GIB}
-              testId="sandbox-shape-sheet-memory"
-              onChange={(value) => setForm({ ...form, memoryGb: value })}
-            />
-            <ShapeNumber
-              id={`${ids}-disk`}
-              label="Disk (GB)"
-              value={form.diskGb}
-              min={provider.shape.diskMinMb / MB_PER_GIB}
-              max={provider.shape.diskMaxMb / MB_PER_GIB}
-              step={1}
-              testId="sandbox-shape-sheet-disk"
-              onChange={(value) => setForm({ ...form, diskGb: value })}
-            />
-          </>
-        ) : (
-          <div className="sm:col-span-2">
-            <ShapeSelect
-              id={`${ids}-size`}
-              label="Size"
-              value={sizeValue(form, provider.shapes, provider)}
-              options={provider.shapes.map((rung) => ({
-                value: rungKey(rung),
-                label: rungLabel(props.catalogue, form, rung),
-              }))}
-              onChange={(value) => {
-                const rung = provider.shapes?.find(
-                  (candidate) => rungKey(candidate) === value,
-                );
-                if (rung === undefined) return;
-                setForm({ ...form, ...rungFields(rung) });
-              }}
-            />
-          </div>
-        )}
-      </div>
-      {wake === null ? null : (
-        <p className="m-0 text-ui-xs text-muted-foreground">{wake}</p>
-      )}
-      <div className="flex flex-wrap items-baseline gap-x-1.5 text-ui-xs text-muted-foreground">
-        <span>
-          {idleAndRestingLine(
-            Number(form.idleMinutes),
-            // A cleared period is never, the form's own `null`; only a form
-            // that does not parse shows the shape it opened with.
-            shape === null
-              ? props.initialShape.destroyAfterRestingMinutes
-              : shape.destroyAfterRestingMinutes,
-          )}
-        </span>
-        <Button
-          type="button"
-          variant="link"
-          size="inline-xs"
-          aria-expanded={periodsOpen}
-          onClick={() => setPeriodsOpen(!periodsOpen)}
-        >
-          {CHANGE_LABEL}
-        </Button>
-      </div>
-      {periodsOpen ? (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <ShapeNumber
-            id={`${ids}-idle`}
-            label="Suspends after (idle minutes)"
-            value={form.idleMinutes}
-            min={IDLE_FLOOR_MINUTES}
-            max={null}
-            step={1}
-            testId="sandbox-shape-sheet-idle"
-            onChange={(value) => setForm({ ...form, idleMinutes: value })}
+      <div className="-m-1 flex min-h-0 flex-col gap-4 overflow-y-auto p-1">
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor={`${ids}-name`}>Name</Label>
+          <Input
+            id={`${ids}-name`}
+            value={form.name}
+            maxLength={NAME_MAX_LENGTH}
+            data-testid="sandbox-shape-sheet-name"
+            onChange={(event) => setForm({ ...form, name: event.target.value })}
           />
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor={`${ids}-resting`}>Destroyed after idle for</Label>
-            <div className="flex gap-2">
-              <Input
-                id={`${ids}-resting`}
-                type="number"
-                inputMode="numeric"
-                min={1}
-                value={form.restingAmount}
-                placeholder="Never"
-                data-testid="sandbox-shape-sheet-resting"
-                onChange={(event) =>
-                  setForm({ ...form, restingAmount: event.target.value })
-                }
-              />
-              <Select
-                value={form.restingUnit}
-                onValueChange={(value) => {
-                  if (
-                    value === "minutes" ||
-                    value === "hours" ||
-                    value === "days"
-                  ) {
-                    setForm({ ...form, restingUnit: value });
-                  }
+        </div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <ShapeSelect
+            id={`${ids}-os`}
+            label="Operating system"
+            value={form.os}
+            options={offered.map((os) => ({ value: os, label: OS_LABEL[os] }))}
+            onChange={(value) => {
+              const os = offered.find((candidate) => candidate === value);
+              if (os === undefined) return;
+              const next = stageProviderFor(props.catalogue, os);
+              if (next === null) return;
+              const rung = defaultShapeRung(next);
+              setSizeCommitted(true);
+              setForm({
+                ...form,
+                os,
+                region: next.regions[0].id,
+                ...(rung === null
+                  ? { diskGb: String(next.shape.diskDefaultMb / MB_PER_GIB) }
+                  : rungFields(rung)),
+              });
+            }}
+          />
+          <ShapeSelect
+            id={`${ids}-region`}
+            label={SANDBOX_REGION_LABEL}
+            value={form.region}
+            options={provider.regions.map((region) => ({
+              value: region.id,
+              label: region.label,
+            }))}
+            onChange={(value) => {
+              setSizeCommitted(true);
+              setForm({ ...form, region: value });
+            }}
+          />
+          {provider.shapes === null ? (
+            <>
+              <ShapeNumber
+                id={`${ids}-cpus`}
+                label="vCPU"
+                value={form.cpus}
+                min={provider.shape.cpuMin}
+                max={provider.shape.cpuMax}
+                step={provider.shape.cpuStep}
+                testId="sandbox-shape-sheet-cpus"
+                onChange={(value) => {
+                  setSizeCommitted(false);
+                  setForm({ ...form, cpus: value });
                 }}
-              >
-                <SelectTrigger aria-label="Idle period unit">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="minutes">minutes</SelectItem>
-                  <SelectItem value="hours">hours</SelectItem>
-                  <SelectItem value="days">days</SelectItem>
-                </SelectContent>
-              </Select>
+                onCommit={() => setSizeCommitted(true)}
+              />
+              <ShapeNumber
+                id={`${ids}-memory`}
+                label="Memory (GB)"
+                value={form.memoryGb}
+                min={provider.shape.memoryMinMb / MB_PER_GIB}
+                max={provider.shape.memoryMaxMb / MB_PER_GIB}
+                step={provider.shape.memoryStepMb / MB_PER_GIB}
+                testId="sandbox-shape-sheet-memory"
+                onChange={(value) => {
+                  setSizeCommitted(false);
+                  setForm({ ...form, memoryGb: value });
+                }}
+                onCommit={() => setSizeCommitted(true)}
+              />
+              <ShapeNumber
+                id={`${ids}-disk`}
+                label="Disk (GB)"
+                value={form.diskGb}
+                min={provider.shape.diskMinMb / MB_PER_GIB}
+                max={provider.shape.diskMaxMb / MB_PER_GIB}
+                step={1}
+                testId="sandbox-shape-sheet-disk"
+                onChange={(value) => {
+                  setSizeCommitted(false);
+                  setForm({ ...form, diskGb: value });
+                }}
+                onCommit={() => setSizeCommitted(true)}
+              />
+            </>
+          ) : (
+            <div className="sm:col-span-2">
+              <ShapeSelect
+                id={`${ids}-size`}
+                label="Size"
+                value={sizeValue(form, provider.shapes)}
+                options={provider.shapes.map((rung) => ({
+                  value: rungKey(rung),
+                  label: rungLabel(props.catalogue, form, rung),
+                }))}
+                onChange={(value) => {
+                  const rung = provider.shapes?.find(
+                    (candidate) => rungKey(candidate) === value,
+                  );
+                  if (rung === undefined) return;
+                  setSizeCommitted(true);
+                  setForm({ ...form, ...rungFields(rung) });
+                }}
+              />
+            </div>
+          )}
+        </div>
+        {form.os === "windows" ? (
+          <p className="m-0 text-ui-xs text-muted-foreground">
+            {WINDOWS_SANDBOX_LIMITATION}
+          </p>
+        ) : null}
+        <ShapeStartupPreview
+          configuration={props.configuration}
+          shape={sizeCommitted ? shape : null}
+          wake={wake}
+        />
+        <div className="flex flex-wrap items-baseline gap-x-1.5 text-ui-xs text-muted-foreground">
+          <span>
+            {idleAndRestingLine(
+              Number(form.idleMinutes),
+              // A cleared period is never, the form's own `null`; only a form
+              // that does not parse shows the shape it opened with.
+              shape === null
+                ? props.initialShape.destroyAfterRestingMinutes
+                : shape.destroyAfterRestingMinutes,
+            )}
+          </span>
+          <Button
+            type="button"
+            variant="link"
+            size="inline-xs"
+            aria-expanded={periodsOpen}
+            onClick={() => setPeriodsOpen(!periodsOpen)}
+          >
+            {CHANGE_LABEL}
+          </Button>
+        </div>
+        {periodsOpen ? (
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <ShapeNumber
+              id={`${ids}-idle`}
+              label="Suspends after (idle minutes)"
+              value={form.idleMinutes}
+              min={IDLE_FLOOR_MINUTES}
+              max={null}
+              step={1}
+              testId="sandbox-shape-sheet-idle"
+              onChange={(value) => setForm({ ...form, idleMinutes: value })}
+              onCommit={null}
+            />
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor={`${ids}-resting`}>Destroyed after idle for</Label>
+              <div className="flex gap-2">
+                <Input
+                  id={`${ids}-resting`}
+                  type="number"
+                  inputMode="numeric"
+                  min={1}
+                  value={form.restingAmount}
+                  placeholder="Never"
+                  data-testid="sandbox-shape-sheet-resting"
+                  onChange={(event) =>
+                    setForm({ ...form, restingAmount: event.target.value })
+                  }
+                />
+                <Select
+                  value={form.restingUnit}
+                  onValueChange={(value) => {
+                    if (
+                      value === "minutes" ||
+                      value === "hours" ||
+                      value === "days"
+                    ) {
+                      setForm({ ...form, restingUnit: value });
+                    }
+                  }}
+                >
+                  <SelectTrigger aria-label="Idle period unit">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="minutes">minutes</SelectItem>
+                    <SelectItem value="hours">hours</SelectItem>
+                    <SelectItem value="days">days</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
           </div>
-        </div>
-      ) : null}
-      {"problem" in result ? (
-        <p
-          className="m-0 text-ui-sm text-destructive"
-          role="alert"
-          data-testid="sandbox-shape-sheet-problem"
+        ) : null}
+        {"problem" in result ? (
+          <p
+            className="m-0 text-ui-sm text-destructive"
+            role="alert"
+            data-testid="sandbox-shape-sheet-problem"
+          >
+            {result.problem}
+          </p>
+        ) : null}
+        <div
+          className="flex flex-col gap-1 rounded-md border border-border/60 p-3 text-ui-xs text-muted-foreground"
+          data-testid="sandbox-shape-sheet-price"
         >
-          {result.problem}
-        </p>
-      ) : null}
-      <div
-        className="flex flex-col gap-1 rounded-md border border-border/60 p-3 text-ui-xs text-muted-foreground"
-        data-testid="sandbox-shape-sheet-price"
-      >
-        {clauses.map((clause) =>
-          clause.kind === "price" ? (
-            <p
-              key={clause.kind}
-              className="m-0 flex flex-wrap items-baseline gap-x-1.5"
-            >
-              <span className="text-foreground/85">{clause.text}</span>
-              {needsCredits ? (
-                <AddCreditsLink
-                  configuration={props.configuration}
-                  testId="sandbox-shape-sheet-add-credits"
-                />
-              ) : null}
+          {clauses.map((clause) =>
+            clause.kind === "price" ? (
+              <p
+                key={clause.kind}
+                className="m-0 flex flex-wrap items-baseline gap-x-1.5"
+              >
+                <span className="text-foreground/85">{clause.text}</span>
+                {needsCredits ? (
+                  <AddCreditsLink
+                    configuration={props.configuration}
+                    testId="sandbox-shape-sheet-add-credits"
+                  />
+                ) : null}
+              </p>
+            ) : (
+              <p key={clause.kind} className="m-0">
+                {clause.text}
+              </p>
+            ),
+          )}
+          {price === null ? null : (
+            <p className="m-0" data-testid="sandbox-shape-sheet-resting-price">
+              {price.exact ? "" : "From "}Suspended:{" "}
+              {shortPriceLabel(price.suspendedMcPerHour)}
+              {" · "}Stopped: {shortPriceLabel(price.stoppedMcPerHour)}
             </p>
-          ) : (
-            <p key={clause.kind} className="m-0">
-              {clause.text}
-            </p>
-          ),
-        )}
+          )}
+        </div>
       </div>
       <DialogFooter>
         <Button type="button" variant="ghost" onClick={props.onCancel}>
@@ -634,12 +674,37 @@ function ShapeSheetForm(props: {
   );
 }
 
+/** The selected shape's startup time and what a later wake keeps. */
+function ShapeStartupPreview(props: {
+  readonly configuration: StageConfiguration;
+  readonly shape: StageShape | null;
+  readonly wake: string | null;
+}): ReactNode {
+  const readiness = useSandboxGetReadiness(props.configuration, props.shape);
+  const readinessLine =
+    readiness.isSuccess && !readiness.isFetching ? readiness.data : null;
+  return (
+    <>
+      {readinessLine === null ? null : (
+        <p
+          className="m-0 text-ui-xs text-muted-foreground"
+          data-testid="sandbox-shape-sheet-readiness"
+        >
+          {readinessLine}
+        </p>
+      )}
+      {props.wake === null ? null : (
+        <p className="m-0 text-ui-xs text-muted-foreground">{props.wake}</p>
+      )}
+    </>
+  );
+}
+
 function sizeValue(
   form: ShapeForm,
   shapes: readonly SandboxShapeRung[],
-  provider: SandboxCatalogueProvider,
 ): string {
-  const rung = rungOfForm(form, shapes, provider);
+  const rung = rungOfForm(form, shapes);
   return rung === null ? "" : rungKey(rung);
 }
 
@@ -671,6 +736,7 @@ function ShapeNumber(props: {
   readonly step: number;
   readonly testId: string;
   readonly onChange: (value: string) => void;
+  readonly onCommit: (() => void) | null;
 }): ReactNode {
   return (
     <div className="flex flex-col gap-1.5">
@@ -685,6 +751,10 @@ function ShapeNumber(props: {
         value={props.value}
         data-testid={props.testId}
         onChange={(event) => props.onChange(event.target.value)}
+        onBlur={props.onCommit ?? undefined}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") props.onCommit?.();
+        }}
       />
     </div>
   );

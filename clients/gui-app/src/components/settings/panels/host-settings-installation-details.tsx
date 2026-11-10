@@ -75,16 +75,14 @@ interface InstallRecordGroupProps {
   readonly degrade: OverviewDegradeReason | null;
   readonly record: InstallationDetailsRecord | null;
   readonly loading: boolean;
-  /** The read itself failed - which is NOT the same as "no record". */
+  /** The read itself failed. That is not the same as no record. */
   readonly readFailed: boolean;
 }
 
 /**
- * Installation ▸ Install record, shown open: how this host was installed.
- *
- * It used to be a collapsed "Installation details" disclosure, which made the
- * one group on the page about the install a click away on the tab named for
- * it. Its states keep their words.
+ * Installation ▸ Install record. A failed read, a missing method, and a host
+ * with no record each say so. The version is the install runtime, which stays
+ * even when it matches the account's last report.
  */
 export function InstallRecordGroup(props: InstallRecordGroupProps): ReactNode {
   return (
@@ -100,16 +98,6 @@ export function InstallRecordGroup(props: InstallRecordGroupProps): ReactNode {
   );
 }
 
-/**
- * Three outcomes, and the middle one is the finding: a FAILED read is not an
- * unmanaged host. Collapsing both to `record: null` made the card assert that
- * this host runs from a checkout or an unpacked tree - a fact the RPC never
- * established, stated to the user as if it had.
- *
- * `unmanaged` IS a real state rather than an error: a host run from a checkout
- * has no install record, and reporting that as "nothing is installed" put a
- * false alarm on every developer's machine.
- */
 function InstallRecordBody(props: InstallRecordGroupProps): ReactNode {
   const { record } = props;
   if (props.degrade !== null) {
@@ -138,7 +126,16 @@ function InstallRecordBody(props: InstallRecordGroupProps): ReactNode {
       </p>
     );
   }
+  return <InstallRecordFacts record={record} />;
+}
+
+function InstallRecordFacts(props: {
+  readonly record: InstallationDetailsRecord;
+}): ReactNode {
+  const { record } = props;
   const verified = isSignatureVerified(record);
+  const showBuild =
+    record.runtimeVersion !== null && record.runtimeVersion !== record.version;
   return (
     <HostOverviewFacts testId="host-overview-install-record-facts">
       <HostOverviewFact
@@ -149,8 +146,7 @@ function InstallRecordBody(props: InstallRecordGroupProps): ReactNode {
         copy={null}
         testId="settings-host-install-version"
       />
-      {record.runtimeVersion === null ||
-      record.runtimeVersion === record.version ? null : (
+      {showBuild ? (
         <HostOverviewFact
           label="Build"
           value={record.version}
@@ -159,7 +155,7 @@ function InstallRecordBody(props: InstallRecordGroupProps): ReactNode {
           copy={null}
           testId="settings-host-install-build"
         />
-      )}
+      ) : null}
       <HostOverviewFact
         label="Source"
         value={formatSource(record.source)}
@@ -215,10 +211,6 @@ function isSignatureVerified(record: InstallationDetailsRecord): boolean {
 
 function describeVerification(record: InstallationDetailsRecord): string {
   if (record.signatureKeyId === UNSIGNED_SIGNATURE_KEY_ID) {
-    // Not "Unverified": nothing failed and nothing is wrong. This build was
-    // installed from a local file or run from a tree, so there was no
-    // signature to check in the first place, and saying so is the difference
-    // between a state and a fault.
     return "Unsigned local build";
   }
   return record.signatureVerifiedAt === null

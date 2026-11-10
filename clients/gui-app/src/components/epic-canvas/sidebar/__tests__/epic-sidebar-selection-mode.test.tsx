@@ -2,19 +2,20 @@ import {
   act,
   cleanup,
   fireEvent,
-  render,
+  render as renderWithoutQueryClient,
   screen,
   waitFor,
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   HostRpcError,
   RetryableTransportError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { domMax, LazyMotion } from "motion/react";
-import { forwardRef, type ReactNode } from "react";
+import { forwardRef, type ReactElement, type ReactNode } from "react";
 import { userEvent } from "@testing-library/user-event";
 import type { Mock } from "vitest";
 import type { ChatSearchMessageHitsStatus } from "@/hooks/chats/use-chat-search-message-hits";
@@ -187,7 +188,7 @@ interface TestState {
     readonly kind: "ambient" | "managed";
     readonly label: string;
   }>;
-  permissionRole: "owner" | "editor" | "viewer" | null;
+  permissionRole: "owner" | "editor" | null;
   /**
    * The host's `epic.setChatArchived` support, as the registry reports it:
    * `true` advertised, `false` known absent, `null` no handshake yet. One knob
@@ -330,7 +331,9 @@ vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => {
 });
 
 // The artifact panel now hosts a search box; keep its host query inert so these
-// tree-focused tests need no QueryClient. An empty query renders no results.
+// tree-focused tests do not depend on cloud-search results. The render wrapper
+// supplies QueryClient for local mutations; this fixture has no real host
+// client to serve cloud reads.
 vi.mock("@/hooks/epic/use-epic-search-artifacts-query", () => ({
   useEpicSearchArtifacts: () => ({
     isSuccess: false,
@@ -704,11 +707,10 @@ vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
  * "nothing to add".
  *
  * The chat panel reads both directly now that the "other devices" section is
- * gone, and both are ordinary host queries - so leaving them real would need
- * this suite to supply a `QueryClientProvider` and a host-client stub complete
- * enough for `useReactiveHostReadiness`, for rows that do not render here
- * either way. The fold and the interleave they feed are asserted without a
- * renderer in `unified-chat-list.test.ts`.
+ * gone, and both are ordinary host queries. This harness has no real host
+ * client to serve them, and the rows they produce are not rendered here either
+ * way. The fold and interleave they feed are asserted without a renderer in
+ * `unified-chat-list.test.ts`.
  */
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => {
   const actual =
@@ -759,25 +761,23 @@ vi.mock("@/hooks/chats/use-chat-publication-targets", () => ({
 }));
 
 // The Agents panel's message-hit section, which the chats panel body asks for
-// on every render. Left `absent` - the section is not this suite's subject, and
-// the real hook issues a host query, which a mount with no `QueryClientProvider`
-// cannot serve.
+// on every render. Leave it absent because this fixture has no host client to
+// serve its real query, and message hits are not under test here.
 vi.mock("@/hooks/chats/use-chat-search-message-hits", () => ({
   useChatSearchMessageHits: (): ChatSearchMessageHitsStatus => ({
     kind: "absent",
   }),
 }));
 
-// The task's hosts view, asked for on every render for the same reason and left
-// out for the same one: its real hook issues a host query.
+// The task's hosts view is asked for on every render. Leave it out because this
+// fixture has no host client to serve its real query.
 vi.mock("@/hooks/epic/use-task-hosts-view", () => ({
   useTaskHostsView: () => ({ kind: "none" }),
 }));
 
-// The Mobile simulators panel's presence rule, asked for on every render of the
-// panel host; left out for the same reason again - it reads the host binding
-// and issues a `simulator.status` host query. Neither input present, so the
-// panel is absent from the rail this suite reads.
+// The Mobile simulators panel's presence rule is asked for on every render of
+// the panel host. This fixture has no host binding to serve `simulator.status`,
+// so neither input is present and the panel is absent from the rail.
 vi.mock(
   "@/components/epic-canvas/sidebar/use-simulator-panel-availability",
   () => ({
@@ -789,8 +789,8 @@ vi.mock(
 );
 
 // The agent hover card's host projection reads the sandbox list, and this
-// suite's eager hover-card mock mounts that card on every agent row; left out
-// for the same reason: its real hook reads the host binding.
+// suite's eager hover-card mock mounts that card on every agent row. Keep the
+// list empty because this fixture has no host binding for the real query.
 vi.mock("@/hooks/sandboxes/use-sandbox-list-query", () => ({
   useSandboxList: () => ({ data: undefined }),
 }));
@@ -892,9 +892,8 @@ vi.mock("@/hooks/epic/use-epic-tui-agent-mutations", () => ({
 }));
 
 vi.mock("@/providers/use-open-epic-handle", () => ({
-  // The chat write-routing gate reads the session through the
-  // NON-throwing accessor. `null` here is the honest double: this suite
-  // mounts no epic store, and no session means no epic write path to gate.
+  // The row-level optional-session gate reads no mounted EpicSessionContext.
+  // The deletion controller below gets its own store fixture for preflight.
   useMaybeOpenEpicHandle: () => null,
   useOpenEpicHandle: () => {
     if (!testState.sessionReady) {
@@ -905,23 +904,46 @@ vi.mock("@/providers/use-open-epic-handle", () => ({
     return {
       epicId: "epic-1",
       store: {
-        getState: () => ({
-          deleteArtifact: testState.localDeleteArtifact,
-          // The unread marker computes its variant from BOTH stores, reading
-          // the tree non-reactively through this handle so a body-write stamp
-          // cannot re-render the row. That makes `tree` part of the state this
-          // double has to carry.
-          tree: testState.tree,
-          renameArtifact: vi.fn(),
-          // The rename path stamps an optimistic overlay patch before firing
-          // the RPC, and reads the stamp tombstone back on settle. An empty
-          // `tuiAgents` map is the doc-resident reading for an agent row,
-          // which is what an absent union entry means.
-          beginRenameMutation: testState.beginRenameMutation,
-          retirePendingMutation: testState.retirePendingMutation,
-          isLatestRenameStamp: () => true,
-          tuiAgents: { byId: {} },
-        }),
+        getState: () => {
+          const state = fakeEpicStoreState();
+          // The controller's real preflight routes through this handle union,
+          // so keep owner hosts and list authority aligned with the panel's
+          // store fixture.
+          const tuiAgentRecords = testState.records.filter(
+            (record) => record.type === "terminal-agent",
+          );
+          const tuiAgentsById = Object.fromEntries(
+            tuiAgentRecords.map((record) => [
+              record.id,
+              state.tuiAgents.byId[record.id] ?? {
+                id: record.id,
+                hostId: record.hostId,
+                profileId: null,
+                sessionState: null,
+                lastExit: null,
+              },
+            ]),
+          );
+          return {
+            ...state,
+            deleteArtifact: testState.localDeleteArtifact,
+            tree: testState.tree,
+            renameArtifact: vi.fn(),
+            beginRenameMutation: testState.beginRenameMutation,
+            retirePendingMutation: testState.retirePendingMutation,
+            isLatestRenameStamp: () => true,
+            tuiAgents: {
+              ...state.tuiAgents,
+              allIds: [
+                ...new Set([
+                  ...state.tuiAgents.allIds,
+                  ...tuiAgentRecords.map((record) => record.id),
+                ]),
+              ],
+              byId: { ...state.tuiAgents.byId, ...tuiAgentsById },
+            },
+          };
+        },
         subscribe: () => () => undefined,
       },
     };
@@ -1409,6 +1431,20 @@ import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-st
 
 const TAB_ID = "tab-1";
 const EPIC_ID = "epic-1";
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: { retry: false },
+    mutations: { retry: false },
+  },
+});
+
+function render(ui: ReactElement) {
+  return renderWithoutQueryClient(ui, {
+    wrapper: ({ children }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    ),
+  });
+}
 
 function seedLocalChatFailure(chatId: string): void {
   const notifications = useAppLocalNotificationsStore.getState();
@@ -1445,10 +1481,13 @@ function clearLocalChatFailure(chatId: string): void {
 // file would fail closed vacuously - stage `signed-in` for the whole file,
 // module-scope, so every describe block below gets it without its own copy.
 beforeEach(() => {
+  queryClient.clear();
   useAuthStore.setState({ status: "signed-in" });
 });
 
 afterEach(() => {
+  cleanup();
+  queryClient.clear();
   useAppLocalNotificationsStore.getState().resetForTests();
   // Zustand stores are module scope, so a status staged here outlives this
   // file inside the same worker.
@@ -2526,9 +2565,9 @@ describe("epic sidebar selection mode", () => {
     expect(screen.queryByText("No artifacts yet.")).toBeNull();
   });
 
-  it("hides sidebar bulk selection for viewer roles", () => {
+  it("hides sidebar bulk selection while the role is not known", () => {
     seedChatTree();
-    testState.permissionRole = "viewer";
+    testState.permissionRole = null;
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
 
@@ -2969,10 +3008,10 @@ describe("epic sidebar selection mode", () => {
     expect(markRead).toHaveBeenCalledWith(EPIC_ID, "ticket-child", 2);
   });
 
-  it("exports one artifact from its row actions for viewers", () => {
+  it("exports one artifact from its row actions without a role", () => {
     seedArtifactTree();
     testState.activePanelId = "artifacts";
-    testState.permissionRole = "viewer";
+    testState.permissionRole = null;
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
     openRowMore("spec-root");
@@ -2993,7 +3032,7 @@ describe("epic sidebar selection mode", () => {
   it("exports one artifact with everything nested under it from its row actions", () => {
     seedArtifactTree();
     testState.activePanelId = "artifacts";
-    testState.permissionRole = "viewer";
+    testState.permissionRole = null;
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
     openRowMore("spec-root");
@@ -3024,7 +3063,7 @@ describe("epic sidebar selection mode", () => {
   it("bulk-exports every selected visible artifact, including descendants", () => {
     seedArtifactTree();
     testState.activePanelId = "artifacts";
-    testState.permissionRole = "viewer";
+    testState.permissionRole = null;
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
 
@@ -4330,74 +4369,18 @@ describe("chat row read-only arm", () => {
     testState.permissionRole = "owner";
   });
 
-  function indicator(
-    overrides: Partial<TestIndicatorState>,
-  ): TestIndicatorState {
-    return {
-      unreadFailure: false,
-      pendingFork: false,
-      pendingApproval: false,
-      pendingInterview: false,
-      unreadDone: false,
-      ...overrides,
-    };
-  }
-
-  it("shows the read-only lock in place of the chat glyph for a viewer's otherwise-idle chat row", () => {
+  // The task's role no longer locks a row: every task role may write, so the
+  // lock is the chat's own (its session's access snapshot) and nothing else.
+  it("shows the idle glyph, not a read-only lock, for a chat row when the task grants no role", () => {
     seedChatTree();
-    testState.permissionRole = "viewer";
+    testState.permissionRole = null;
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
 
-    const lock = readOnlyLock("chat-child");
-    expect(lock).toBeTruthy();
-    expect(lock === null ? null : tooltipTextIn(lock)).toBe("Read-only agent");
-    // It replaces the IDLE GLYPH, not the trailing time: a viewer still sees
-    // when the row last moved.
+    expect(readOnlyLock("chat-child")).toBeNull();
     const row = screen.getByTestId("epic-sidebar-item-chat-child");
-    expect(row.querySelector(".lucide-message-square")).toBeNull();
+    expect(row.querySelector(".lucide-message-square")).not.toBeNull();
     expect(idleTime("chat-child")).toBeTruthy();
-  });
-
-  it("keeps Working / Needs attention / Done ahead of the read-only lock for a viewer row", () => {
-    seedChatTree();
-    testState.permissionRole = "viewer";
-
-    // A running turn outranks read-only.
-    testState.activeAgentIds = new Set(["chat-child"]);
-    const view = render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
-    expect(leadingStatusKinds("chat-child")).toEqual(["activity"]);
-    expect(readOnlyLock("chat-child")).toBeNull();
-
-    // Needs attention outranks read-only.
-    testState.activeAgentIds = new Set<string>();
-    act(() => {
-      seedLocalChatFailure("chat-child");
-    });
-    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
-    expect(leadingStatusKinds("chat-child")).toEqual(["failure"]);
-    expect(readOnlyLock("chat-child")).toBeNull();
-
-    // Done outranks read-only.
-    act(() => {
-      clearLocalChatFailure("chat-child");
-    });
-    testState.indicatorChats = {
-      "chat-child": indicator({ unreadDone: true }),
-    };
-    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
-    expect(leadingStatusKinds("chat-child")).toEqual(["done"]);
-    expect(readOnlyLock("chat-child")).toBeNull();
-  });
-
-  it("never locks a TUI terminal-agent row for a viewer - terminal agents carry no chat session lock", () => {
-    seedChatTree();
-    testState.permissionRole = "viewer";
-
-    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
-
-    expect(idleTime("agent-root")).toBeTruthy();
-    expect(readOnlyLock("agent-root")).toBeNull();
   });
 });
 
@@ -5633,15 +5616,15 @@ describe("chat row archive", () => {
 
   // --- B7: viewer role ----------------------------------------------------
 
-  it("gives a viewer no archive shortcut, a disabled Archive/Rename menu, working Copy ID, and the read-only lock (B7)", () => {
+  it("gives a row without a role no archive shortcut, a disabled Archive/Rename menu and a working Copy ID (B7)", () => {
     seedChatTree();
-    testState.permissionRole = "viewer";
+    testState.permissionRole = null;
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
 
-    // Hover button absent for viewers (requires canMutate).
+    // Hover button absent without a role (requires canMutate).
     expect(screen.queryByTestId("epic-sidebar-archive-chat-child")).toBeNull();
-    // Chat row ⋯ menu is open to a viewer - only its mutating entries
+    // Chat row ⋯ menu stays open - only its mutating entries
     // (Archive, Rename) are hard-disabled; the read-only Copy ID entry works.
     expect(screen.getByTestId("epic-sidebar-more-chat-child")).toBeTruthy();
     expect(isMenuItemUnavailable(dropdownItem("archive-item-chat-child"))).toBe(
@@ -5657,12 +5640,6 @@ describe("chat row archive", () => {
     });
     fireEvent.click(copyItem);
     expect(writeText).toHaveBeenCalledWith("chat-child");
-
-    // The read-only lock must still render - do not let the menu change become
-    // "no status". Scoped to the row, since several rows carry the same label.
-    const lock = readOnlyLock("chat-child");
-    expect(lock).toBeTruthy();
-    expect(lock === null ? null : tooltipTextIn(lock)).toBe("Read-only agent");
   });
 
   // --- B8: status survives selection mode and rename (archive must not blank it)

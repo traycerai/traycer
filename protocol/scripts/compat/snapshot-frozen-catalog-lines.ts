@@ -26,6 +26,7 @@ import {
   listAgentsResponseSchemaV92,
   listAgentsResponseSchemaV100,
   listAgentsResponseSchemaV101,
+  listAgentsResponseSchemaV102,
   listAgentsResponseSchema,
 } from "../../src/host/agent/shared";
 import {
@@ -65,6 +66,7 @@ import {
   providersListResponseSchemaV105Preimage,
   providersListResponseSchemaV106Preimage,
   providersListResponseSchemaV107Preimage,
+  providersListResponseSchemaV108Preimage,
   providersUsePackVersionResponseSchemaV10,
   providersUsePackVersionResponseSchema,
   providersListResponseSchemaV70,
@@ -162,9 +164,12 @@ const FIXTURES = {
   // 10.1 froze when 10.2 opened to put `reach` and `hostConnectivity` on the
   // row. Its dump did not change by the freeze.
   "agent.list@10.1": dump(listAgentsResponseSchemaV101),
+  // 10.2 froze when 10.3 opened for serviceTier; its dump did not change by
+  // the freeze.
+  "agent.list@10.2": dump(listAgentsResponseSchemaV102),
   // The head line. It dumps LIVE, so the next attempt to grow the row goes red
   // on this line.
-  "agent.list@10.2": dump(listAgentsResponseSchema),
+  "agent.list@10.3": dump(listAgentsResponseSchema),
   "providers.list@1.0": dump(providersListResponseSchemaV10),
   "providers.list@2.0": dump(providersListResponseSchemaV20),
   // Frozen with Amp, before `profiles` (the v4.0 cut) - pinned now that this
@@ -241,11 +246,15 @@ const FIXTURES = {
   // 10.6 froze when `chatsFollow` opened 10.7. Its dump did not change by the
   // freeze.
   "providers.list@10.6": dump(providersListResponseSchemaV106Preimage),
-  // 10.7 shipped before 10.8 opened. Preserve its pre-skill-origin dump.
+  // 10.7 froze when `nativeMemory` and `nativeMemorySupported` opened 10.8.
+  // Its dump did not change by the freeze.
   "providers.list@10.7": dump(providersListResponseSchemaV107Preimage),
   // The head line. It dumps the LIVE schema, so the FIRST attempt to grow the
-  // live shape goes red on this row rather than on the release that ships it.
-  "providers.list@10.8": dump(providersListResponseSchema),
+  // live shape goes red on this row rather than on the release that ships the
+  // growth. Same response then applies - freeze the line that stopped being
+  // head, open the next one.
+  "providers.list@10.8": dump(providersListResponseSchemaV108Preimage),
+  "providers.list@10.9": dump(providersListResponseSchema),
   "providers.usePackVersion@1.0": dump(providersUsePackVersionResponseSchemaV10),
   "providers.usePackVersion@1.1": dump(providersUsePackVersionResponseSchema),
   // The REQUEST lines carry their own freeze history (`native` grew the

@@ -18,7 +18,7 @@ import { signGcsReadUrl } from "./gcs-signed-url";
  */
 
 const BUCKET = "traycerai-dev-soundtrack";
-const MANIFEST_OBJECT = "v1.json";
+
 const READ_ONLY_SCOPE = "https://www.googleapis.com/auth/devstorage.read_only";
 const MANIFEST_TIMEOUT_MS = 15_000;
 
@@ -43,10 +43,13 @@ const stemLayer = z.union([
 
 const stemManifest = z.object({
   tracks: z.array(z.object({ name: z.string(), layers: z.array(stemLayer) })),
+  recordings: z
+    .array(z.object({ name: z.string(), file: stemPath }))
+    .optional(),
 });
 
 const setManifest = z.object({
-  version: z.literal(1),
+  version: z.union([z.literal(1), z.literal(2)]),
   tracks: z.unknown(),
   views: z.unknown(),
   stems: stemManifest,
@@ -59,6 +62,10 @@ function withSignedFiles(
   sign: (path: string) => string,
 ): StemManifest {
   return {
+    recordings: stems.recordings?.map((recording) => ({
+      ...recording,
+      file: sign(recording.file),
+    })),
     tracks: stems.tracks.map((track) => ({
       ...track,
       layers: track.layers.map((layer) =>
@@ -88,6 +95,8 @@ export interface SoundtrackSourceOptions {
   readonly audience: string;
   /** The folder under `sets/` in the bucket. */
   readonly set: string;
+  /** Which published catalog to read: `v1.json` or `v2.json`. */
+  readonly manifestVersion: 1 | 2;
   readonly fetch: typeof fetch;
   readonly now: () => number;
   /** Told why a read failed, never with the key, a token or a link. */
@@ -99,6 +108,7 @@ export function createSoundtrackSource(
   options: SoundtrackSourceOptions,
 ): SoundtrackSource | null {
   const { keyFilePath, audience, set, fetch, now, warn } = options;
+  const manifestObject = options.manifestVersion === 2 ? "v2.json" : "v1.json";
   if (keyFilePath === null || audience.length === 0) return null;
   const accessToken = createCachedGoogleToken({
     keyFilePath,
@@ -118,7 +128,7 @@ export function createSoundtrackSource(
     const token = await accessToken();
     if (token === null) return UNAVAILABLE;
     const response = await fetch(
-      `https://storage.googleapis.com/${BUCKET}/sets/${set}/${MANIFEST_OBJECT}`,
+      `https://storage.googleapis.com/${BUCKET}/sets/${set}/${manifestObject}`,
       {
         headers: { Authorization: `Bearer ${token}` },
         cache: "no-store",

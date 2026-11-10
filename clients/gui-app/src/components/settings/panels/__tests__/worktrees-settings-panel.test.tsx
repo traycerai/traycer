@@ -31,6 +31,7 @@ import {
   type HostStreamRpcRegistry,
 } from "@traycer/protocol/host/registry";
 import { WorktreesList } from "@/components/settings/panels/worktrees-settings-panel";
+import { expectScrollableDialogLayout } from "@/components/ui/__tests__/dialog-scroll-layout-assertions";
 import { useWorktreeListing } from "@/components/settings/panels/worktrees-listing-query";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import {
@@ -441,8 +442,13 @@ const WORKTREES: WorktreeHostEntryV16[] = [
 
 let virtualViewportHeight = 100_000;
 let restoreOffsetHeight: (() => void) | null = null;
+// jsdom's default width is the desktop toolbar. A phone test assigns a
+// narrower width and this file puts the desktop width back before the next
+// render, because the media-query shim does not notify subscribers.
+const DESKTOP_INNER_WIDTH = window.innerWidth;
 
 beforeEach(() => {
+  window.innerWidth = DESKTOP_INNER_WIDTH;
   useWorktreesSettingsViewStore.setState({
     searchText: "",
     sortMode: DEFAULT_WORKTREE_SORT_MODE,
@@ -458,11 +464,44 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  window.innerWidth = DESKTOP_INNER_WIDTH;
   if (restoreOffsetHeight !== null) {
     restoreOffsetHeight();
   }
   restoreOffsetHeight = null;
 });
+
+/** The toolbar shell. The filter grid's container-query classes also contain
+ * `worktrees-toolbar`, so a substring match stops on the grid. */
+function worktreesToolbar(start: Element): HTMLElement {
+  let current: Element | null = start;
+  while (current !== null) {
+    if (
+      current instanceof HTMLElement &&
+      current.classList.contains("@container/worktrees-toolbar")
+    ) {
+      return current;
+    }
+    current = current.parentElement;
+  }
+  throw new Error("expected the worktrees toolbar");
+}
+
+function worktreeRow(branch: string): HTMLElement {
+  const row = screen.getByText(branch).closest('[data-testid="worktree-row"]');
+  if (!(row instanceof HTMLElement)) {
+    throw new Error(`expected a worktree row for ${branch}`);
+  }
+  return row;
+}
+
+function repoHeader(label: string): HTMLElement {
+  const header = screen.getByRole("button", { name: `Collapse ${label}` });
+  if (header.getAttribute("data-testid") !== "worktree-repo-header") {
+    throw new Error(`expected a repository header for ${label}`);
+  }
+  return header;
+}
 
 // Treat every passed worktree as already-enriched (its base entry IS its enriched
 // entry) - the default the behavioural tests want, so tiers classify immediately.
@@ -1140,6 +1179,36 @@ describe("WorktreesList delete flow", () => {
       "Collapse all",
       "Refresh worktrees",
     ]);
+    // Select-all, expand/collapse, and refresh stay in the action group.
+    // Search, filter, and sort are the band under it. The combined filter
+    // menu and the list-actions menu stay absent at every width.
+    expect(
+      screen.queryByRole("button", { name: /Filter and sort/ }),
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "List actions" })).toBeNull();
+    const desktopActions = screen.getByTestId("worktrees-toolbar-actions");
+    expect(
+      desktopActions.contains(screen.getByTestId("worktrees-select-all")),
+    ).toBe(true);
+    expect(
+      desktopActions.contains(screen.getByTestId("worktrees-toggle-all-repos")),
+    ).toBe(true);
+    expect(
+      desktopActions.contains(screen.getByTestId("worktrees-filter-trigger")),
+    ).toBe(false);
+    expect(
+      desktopActions.contains(screen.getByTestId("worktrees-sort-trigger")),
+    ).toBe(false);
+    const desktopToolbar = worktreesToolbar(
+      screen.getByTestId("worktrees-filter-trigger"),
+    );
+    expect(desktopToolbar.childElementCount).toBe(2);
+    expect(desktopToolbar.children[0]?.contains(desktopActions)).toBe(true);
+    expect(
+      desktopToolbar.children[1]?.contains(
+        screen.getByRole("searchbox", { name: "Search worktrees" }),
+      ),
+    ).toBe(true);
     const actionBar = screen.getByTestId("worktrees-selection-action-bar");
     expect(actionBar.className).toContain("border-border");
     expect(actionBar.className).toContain("ring-foreground");
@@ -1149,6 +1218,111 @@ describe("WorktreesList delete flow", () => {
     expect(
       within(actionBar).getByTestId("worktrees-list-delete-selected").className,
     ).toContain("whitespace-nowrap");
+  });
+
+  it("shows policy, selection, refresh, filter, and sort inline on a phone, with one Task rollup", () => {
+    window.innerWidth = 390;
+    const worktree = entry({
+      worktreePath: "/wt/alpha",
+      branch: "feat-alpha",
+      owners: [
+        {
+          epicId: "epic-1",
+          ownerKind: "chat",
+          ownerId: "chat-1",
+          updatedAt: 1,
+        },
+      ],
+      prState: "merged",
+      prNumber: 20,
+      prUrl: "https://github.com/acme/app/pull/20",
+      mergedHeadShaMatches: true,
+      submodules: [
+        {
+          repoIdentifier: { owner: "acme", repo: "sub" },
+          branch: "feat-alpha",
+          prState: "merged",
+          prNumber: 21,
+          prUrl: "https://github.com/acme/sub/pull/21",
+          mergedHeadShaMatches: true,
+          mergedIntoDefault: true,
+          atPinnedCommit: false,
+        },
+      ],
+    });
+    const queryClient = new QueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <WorktreesList
+            openStreamTransport={() => stubOpenStreamTransport()}
+            hostId="host-a"
+            worktrees={[worktree]}
+            enrichedByPath={fullyEnriched([worktree])}
+            erroredPaths={new Set()}
+            seededPaths={new Set()}
+            onVisiblePathsChange={vi.fn()}
+            taskTitlesByEpicId={new Map([["epic-1", "Payments revamp"]])}
+            toolbarProps={{
+              ...testToolbarProps(),
+              policies: (
+                <div data-testid="worktree-policy-slot">Cleanup policy</div>
+              ),
+            }}
+          />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+
+    expect(screen.queryByRole("button", { name: "List actions" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /Filter and sort/ }),
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Copy paths" })).toBeNull();
+    expect(screen.queryByText("Copy paths")).toBeNull();
+
+    const policy = screen.getByTestId("worktree-policy-slot");
+    const selectAll = screen.getByRole("checkbox", {
+      name: "Select all visible worktrees",
+    });
+    const collapse = screen.getByRole("button", { name: "Collapse all" });
+    const refresh = screen.getByRole("button", { name: "Refresh worktrees" });
+    const search = screen.getByRole("searchbox", { name: "Search worktrees" });
+    const filter = screen.getByRole("button", { name: "Filter: All" });
+    const sort = screen.getByRole("button", { name: "Sort: Newest" });
+    const toolbar = worktreesToolbar(filter);
+    for (const control of [
+      policy,
+      selectAll,
+      collapse,
+      refresh,
+      search,
+      filter,
+      sort,
+    ]) {
+      expect(toolbar.contains(control)).toBe(true);
+      expect(control.closest("[data-slot='popover-content']")).toBeNull();
+    }
+    expect(filter.textContent).toContain("All");
+    expect(sort.textContent).toContain("Newest");
+
+    const header = repoHeader("acme/app");
+    expect(header.getAttribute("data-task-epic-id")).toBeNull();
+    expect(header.className).toContain("bg-background");
+    expect(within(header).queryByTestId("task-merge-rollup")).toBeNull();
+    expect(
+      within(header).queryByRole("button", { name: /Open Task/ }),
+    ).toBeNull();
+    const row = worktreeRow("feat-alpha");
+    within(row).getByRole("button", { name: "Open Task Payments revamp" });
+    expect(within(row).getByTestId("task-merge-rollup").textContent).toBe(
+      "Task Merged",
+    );
+    expect(screen.getAllByTestId("task-merge-rollup")).toHaveLength(1);
+    expect(within(row).queryByRole("button", { name: "Details" })).toBeNull();
+    within(row).getByRole("button", {
+      name: "Worktree actions for feat-alpha",
+    });
   });
 
   it("shows the freshness label for a real timestamp and suppresses it while refreshing", () => {
@@ -1161,22 +1335,66 @@ describe("WorktreesList delete flow", () => {
     });
     const label = screen.getByTestId("worktrees-updated-ago");
     expect(label.textContent).toMatch(/^Updated /);
+    expect(label.parentElement?.className).not.toContain("invisible");
+    expect(label.parentElement?.getAttribute("aria-hidden")).not.toBe("true");
 
     cleanup();
 
-    // While a manual refresh is in flight the timestamp is suppressed (the
-    // spinning Refresh button stands in for it).
+    // While a manual refresh is in flight the timestamp stays mounted and
+    // only turns invisible (the spinning Refresh button stands in for it).
     renderListWithToolbar({
       ...testToolbarProps(),
       lastUpdatedAt: Date.now() - 60_000,
       refreshing: true,
     });
-    // Keep its layout space while hiding the stale timestamp during refresh.
-    expect(
-      screen
-        .getByTestId("worktrees-updated-ago")
-        .parentElement?.getAttribute("aria-hidden"),
-    ).toBe("true");
+    const hidden = screen.getByTestId("worktrees-updated-ago");
+    expect(hidden.parentElement?.className).toContain("invisible");
+    expect(hidden.parentElement?.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("keeps Updated ago, a full-width search, and separate filter and sort at every width", () => {
+    for (const width of [DESKTOP_INNER_WIDTH, 390]) {
+      cleanup();
+      window.innerWidth = width;
+      renderListWithToolbar({
+        ...testToolbarProps(),
+        lastUpdatedAt: Date.now() - 60_000,
+        refreshing: false,
+      });
+
+      const stamp = screen.getByTestId("worktrees-updated-ago");
+      expect(stamp.textContent).toMatch(/^Updated /);
+      expect(stamp.parentElement?.className).not.toContain("invisible");
+
+      const search = screen.getByRole("searchbox", {
+        name: "Search worktrees",
+      });
+      expect(search.parentElement?.className).toContain(
+        "@xs/worktrees-toolbar:col-span-2",
+      );
+      expect(search.parentElement?.className).toContain(
+        "@lg/worktrees-toolbar:col-span-3",
+      );
+
+      const filter = screen.getByTestId("worktrees-filter-trigger");
+      const sort = screen.getByTestId("worktrees-sort-trigger");
+      expect(filter.className).toContain("min-w-0");
+      expect(sort.className).toContain("min-w-0");
+      for (const trigger of [filter, sort]) {
+        const reserved = [...trigger.querySelectorAll("[data-label]")];
+        expect(reserved.length).toBeGreaterThan(0);
+        for (const node of reserved) {
+          expect(node.getAttribute("aria-hidden")).toBe("true");
+          expect(node.className).toContain("invisible");
+          expect(node.className).toContain("col-start-1");
+          expect(node.className).toContain("row-start-1");
+        }
+      }
+      expect(screen.queryByRole("button", { name: "List actions" })).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: /Filter and sort/ }),
+      ).toBeNull();
+    }
   });
 
   it("selecting the first row does not insert a new top bar that shifts the list", () => {
@@ -1440,6 +1658,12 @@ describe("WorktreesList delete flow", () => {
     const headerWrappers = screen
       .getAllByTestId("worktree-repo-header")
       .map((header) => header.closest("[data-index]"));
+    const stickyRepoHeader = headerWrappers.find((wrapper) =>
+      wrapper?.className.includes("sticky"),
+    );
+    expect(stickyRepoHeader).toBeTruthy();
+    expect(stickyRepoHeader?.className).toContain("bg-background");
+    expect(stickyRepoHeader?.className).not.toContain("bg-[color-mix(");
     expect(
       headerWrappers.filter((wrapper) => wrapper?.className.includes("sticky")),
     ).toHaveLength(1);
@@ -1706,6 +1930,9 @@ describe("WorktreesList delete flow", () => {
     // Aggregate-by-class confirmation names the dirty loss and the neutral
     // unverified caveat instead of a single stacked warning.
     screen.getByText("Delete 2 worktrees?");
+    expectScrollableDialogLayout(
+      screen.getByTestId("worktree-bulk-delete-dialog"),
+    );
     screen.getByTestId("worktree-bulk-delete-dirty-loss");
     screen.getByText("1 not selected: 1 in use");
     fireEvent.click(screen.getByTestId("confirm-action"));
@@ -3494,6 +3721,10 @@ describe("WorktreesList v1.2 signals", () => {
               updatedAt: 30,
             },
           ],
+          prState: "merged",
+          prNumber: 10,
+          prUrl: "https://github.com/acme/app/pull/10",
+          mergedHeadShaMatches: true,
         }),
       ],
       taskTitlesByEpicId: new Map([["epic-1", "Ship the audit"]]),
@@ -3503,11 +3734,25 @@ describe("WorktreesList v1.2 signals", () => {
       onVisiblePathsChange: undefined,
     });
 
-    // The resolved epic-1 renders a button chip (the duplicate epic-1 owner collapses).
-    screen.getByRole("button", { name: "Open Task Ship the audit" });
+    // Two epics stay in the repo group. The resolved epic renders on the row,
+    // and the rollup beside that title still leads with "Task" because this
+    // epic has no Task-group header. The duplicate epic-1 owner collapses.
+    const header = screen.getByRole("button", { name: "Collapse acme/app" });
+    expect(header.getAttribute("data-task-epic-id")).toBeNull();
+    expect(within(header).queryByTestId("task-merge-rollup")).toBeNull();
+    const row = worktreeRow("feat-owned");
+    const openTask = within(row).getByRole("button", {
+      name: "Open Task Ship the audit",
+    });
+    expect(within(openTask).getByText("Ship the audit").className).toContain(
+      "wrap-anywhere",
+    );
     // epic-2 has no cached title -> demoted muted "Owner unresolved" text, not a
     // prominent chip.
-    screen.getByText("Owner unresolved");
+    within(row).getByText("Owner unresolved");
+    expect(within(row).getByTestId("task-merge-rollup").textContent).toBe(
+      "Task Merged",
+    );
   });
 
   it("opens the owning Task epic when a resolved Task chip is clicked", () => {
@@ -3535,9 +3780,23 @@ describe("WorktreesList v1.2 signals", () => {
       onVisiblePathsChange: undefined,
     });
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Open Task Ship the audit" }),
+    const header = repoHeader("acme/app");
+    expect(header.getAttribute("data-task-epic-id")).toBeNull();
+    expect(
+      within(header).queryByRole("button", {
+        name: "Open Task Ship the audit",
+      }),
+    ).toBeNull();
+    const row = worktreeRow("feat-owned");
+    const openTask = within(row).getByRole("button", {
+      name: "Open Task Ship the audit",
+    });
+    expect(openTask.className).toContain("whitespace-normal");
+    expect(openTask.className).not.toContain("truncate");
+    expect(within(openTask).getByText("Ship the audit").className).toContain(
+      "wrap-anywhere",
     );
+    fireEvent.click(openTask);
 
     expect(tabNavigationMock.openOrFocusEpicIntent).toHaveBeenCalledTimes(1);
     expect(tabNavigationMock.openOrFocusEpicIntent).toHaveBeenCalledWith({
@@ -3582,11 +3841,26 @@ describe("WorktreesList v1.2 signals", () => {
       onVisiblePathsChange: undefined,
     });
 
-    screen.getByText("Owner unresolved");
+    const header = repoHeader("acme/app");
+    expect(header.getAttribute("data-task-epic-id")).toBeNull();
+    expect(
+      within(header).queryByRole("button", { name: /Open Task/i }),
+    ).toBeNull();
+    expect(within(header).queryByText("Owner unresolved")).toBeNull();
+    const row = worktreeRow("feat-owned");
+    within(row).getByText("Owner unresolved");
+    expect(
+      within(row).queryByRole("button", { name: /Open Task/i }),
+    ).toBeNull();
     expect(screen.queryByRole("button", { name: /Open Task/i })).toBeNull();
+    expect(
+      screen.queryByRole("button", {
+        name: "Collapse acme/app, owner unresolved",
+      }),
+    ).toBeNull();
   });
 
-  it("renders linked PR chips for the superproject and every displayable submodule PR", () => {
+  it("renders every displayable PR on the settings row and keeps the unmerged chip inline", () => {
     renderList({
       hostId: "host-a",
       queryClient: new QueryClient(),
@@ -3659,45 +3933,179 @@ describe("WorktreesList v1.2 signals", () => {
       onVisiblePathsChange: undefined,
     });
 
-    const prChips = screen.getAllByTestId("worktree-pr-chip");
-    expect(prChips.map((chip) => chip.getAttribute("data-pr-state"))).toEqual([
-      "merged",
-      "open",
-      "closed",
-      "merged",
-      "unmerged",
-    ]);
-    expect(prChips[0]?.className).toContain("text-purple-700");
-    expect(prChips[1]?.className).toContain("text-green-700");
-    expect(prChips[2]?.className).toContain("text-red-700");
-    expect(prChips[4]?.className).toContain("text-muted-foreground");
+    const row = worktreeRow("feat-prs");
+    const pills = within(row).getAllByTestId("worktree-context-pr-pill");
+    expect(pills).toHaveLength(4);
+    for (const pill of pills) {
+      expect(pill.className).toContain("max-w-[min(60vw,16rem)]");
+    }
     expect(
-      screen
-        .getByRole("link", { name: "Open PR #10 Merged" })
-        .getAttribute("href"),
-    ).toBe("https://github.com/acme/app/pull/10");
+      within(row).queryByTestId("worktree-pr-overflow-trigger"),
+    ).toBeNull();
     expect(
-      screen
-        .getByRole("link", { name: "Open open-sub PR #11 Open" })
-        .getAttribute("href"),
-    ).toBe("https://github.com/acme/open-sub/pull/11");
-    expect(
-      screen
-        .getByRole("link", { name: "Open closed-sub PR #12 Closed" })
-        .getAttribute("href"),
-    ).toBe("https://github.com/acme/closed-sub/pull/12");
-    expect(
-      screen
-        .getByRole("link", { name: "Open merged-sub PR #13 Merged" })
-        .getAttribute("href"),
-    ).toBe("https://github.com/acme/merged-sub/pull/13");
+      screen.queryByRole("button", { name: /Show \d+ more pull request/ }),
+    ).toBeNull();
+    const expectedLinks = [
+      ["Open PR #10 Merged", "https://github.com/acme/app/pull/10"],
+      ["Open open-sub PR #11 Open", "https://github.com/acme/open-sub/pull/11"],
+      [
+        "Open closed-sub PR #12 Closed",
+        "https://github.com/acme/closed-sub/pull/12",
+      ],
+      [
+        "Open merged-sub PR #13 Merged",
+        "https://github.com/acme/merged-sub/pull/13",
+      ],
+    ] as const;
+    for (const [name, destination] of expectedLinks) {
+      expect(within(row).getByRole("link", { name }).getAttribute("href")).toBe(
+        destination,
+      );
+    }
     expect(
       screen.queryByRole("link", { name: "Open none-sub PR #14" }),
     ).toBeNull();
     expect(
       screen.queryByRole("link", { name: "Open cold-sub PR #15" }),
     ).toBeNull();
-    screen.getByText("none-sub · unmerged commits");
+    const unmerged = within(row).getByText("none-sub · unmerged commits");
+    expect(unmerged.closest("[data-slot='popover-content']")).toBeNull();
+    expect(within(row).getByTestId("worktree-pr-chip").textContent).toContain(
+      "none-sub · unmerged commits",
+    );
+  });
+
+  it("shows all seven valid PRs on the settings row with no overflow", () => {
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [
+        entry({
+          worktreePath: "/wt/dense-prs",
+          branch: "feat-dense-prs",
+          prState: "open",
+          prNumber: 100,
+          prUrl: "https://github.com/acme/app/pull/100",
+          mergedHeadShaMatches: false,
+          submodules: [
+            {
+              repoIdentifier: { owner: "acme", repo: "sub-one" },
+              branch: "feat-dense-prs",
+              prState: "open",
+              prNumber: 101,
+              prUrl: "https://github.com/acme/sub-one/pull/101",
+              mergedHeadShaMatches: false,
+              mergedIntoDefault: false,
+              atPinnedCommit: false,
+            },
+            {
+              repoIdentifier: { owner: "acme", repo: "sub-two" },
+              branch: "feat-dense-prs",
+              prState: "closed",
+              prNumber: 102,
+              prUrl: "https://github.com/acme/sub-two/pull/102",
+              mergedHeadShaMatches: false,
+              mergedIntoDefault: false,
+              atPinnedCommit: false,
+            },
+            {
+              repoIdentifier: { owner: "acme", repo: "sub-three" },
+              branch: "feat-dense-prs",
+              prState: "merged",
+              prNumber: 103,
+              prUrl: "https://github.com/acme/sub-three/pull/103",
+              mergedHeadShaMatches: true,
+              mergedIntoDefault: true,
+              atPinnedCommit: false,
+            },
+            {
+              repoIdentifier: { owner: "acme", repo: "sub-four" },
+              branch: "feat-dense-prs",
+              prState: "open",
+              prNumber: 104,
+              prUrl: "https://github.com/acme/sub-four/pull/104",
+              mergedHeadShaMatches: false,
+              mergedIntoDefault: false,
+              atPinnedCommit: false,
+            },
+            {
+              repoIdentifier: { owner: "acme", repo: "sub-five" },
+              branch: "feat-dense-prs",
+              prState: "closed",
+              prNumber: 105,
+              prUrl: "https://github.com/acme/sub-five/pull/105",
+              mergedHeadShaMatches: false,
+              mergedIntoDefault: false,
+              atPinnedCommit: false,
+            },
+            {
+              repoIdentifier: { owner: "acme", repo: "sub-six" },
+              branch: "feat-dense-prs",
+              prState: "merged",
+              prNumber: 106,
+              prUrl: "https://github.com/acme/sub-six/pull/106",
+              mergedHeadShaMatches: true,
+              mergedIntoDefault: true,
+              atPinnedCommit: false,
+            },
+          ],
+        }),
+      ],
+      taskTitlesByEpicId: undefined,
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      seededPaths: undefined,
+      onVisiblePathsChange: undefined,
+    });
+
+    const row = worktreeRow("feat-dense-prs");
+    const pills = within(row).getAllByTestId("worktree-context-pr-pill");
+    expect(pills).toHaveLength(7);
+    for (const pill of pills) {
+      expect(pill.className).toContain("max-w-[min(60vw,16rem)]");
+    }
+    expect(
+      within(row).queryByTestId("worktree-pr-overflow-trigger"),
+    ).toBeNull();
+    expect(screen.queryByTestId("worktree-pr-overflow-content")).toBeNull();
+
+    const expectedLinks = [
+      {
+        name: "Open PR #100 Open",
+        destination: "https://github.com/acme/app/pull/100",
+      },
+      {
+        name: "Open sub-one PR #101 Open",
+        destination: "https://github.com/acme/sub-one/pull/101",
+      },
+      {
+        name: "Open sub-two PR #102 Closed",
+        destination: "https://github.com/acme/sub-two/pull/102",
+      },
+      {
+        name: "Open sub-three PR #103 Merged",
+        destination: "https://github.com/acme/sub-three/pull/103",
+      },
+      {
+        name: "Open sub-four PR #104 Open",
+        destination: "https://github.com/acme/sub-four/pull/104",
+      },
+      {
+        name: "Open sub-five PR #105 Closed",
+        destination: "https://github.com/acme/sub-five/pull/105",
+      },
+      {
+        name: "Open sub-six PR #106 Merged",
+        destination: "https://github.com/acme/sub-six/pull/106",
+      },
+    ];
+    for (const expectedLink of expectedLinks) {
+      expect(
+        within(row)
+          .getByRole("link", { name: expectedLink.name })
+          .getAttribute("href"),
+      ).toBe(expectedLink.destination);
+    }
   });
 
   it("explains unmerged submodule commits with a count and newest subjects", async () => {
@@ -3903,7 +4311,15 @@ describe("WorktreesList v1.2 signals", () => {
       onVisiblePathsChange: undefined,
       taskTitlesByEpicId: undefined,
     });
-    screen.getByText("Not used by any Task");
+    const row = worktreeRow("feat-free");
+    within(row).getByText("Not used by any Task");
+    const header = screen.getByRole("button", { name: "Collapse acme/app" });
+    expect(header.getAttribute("data-testid")).toBe("worktree-repo-header");
+    expect(header.getAttribute("data-task-epic-id")).toBeNull();
+    const label = within(header).getByText("acme/app");
+    expect(label.className).toContain("wrap-anywhere");
+    expect(label.className).toContain("whitespace-normal");
+    expect(label.className).not.toContain("truncate");
   });
 
   it("leads landed rows with a green Landed pill and shows ahead/behind facts", () => {
@@ -3920,6 +4336,7 @@ describe("WorktreesList v1.2 signals", () => {
           worktreePath: "/wt/diverged",
           branch: "feat-diverged",
           branchStatus: { ahead: 2, behind: 3, mergedIntoDefault: false },
+          lastActivityAt: Date.now() - 5 * 60 * 1000,
         }),
       ],
       enrichedByPath: undefined,
@@ -3940,7 +4357,23 @@ describe("WorktreesList v1.2 signals", () => {
         .getAllByTestId("worktree-tier-pill")
         .some((pill) => pill.textContent === "Landed"),
     ).toBe(true);
-    screen.getByText("2 ahead · 3 behind");
+    const facts = screen.getByText("2 ahead · 3 behind");
+    expect(facts.className).toContain("wrap-anywhere");
+    expect(facts.className).toContain("whitespace-normal");
+    const lastActive = screen.getByText(/^Last active /);
+    expect(lastActive.textContent).toMatch(/^Last active \d+m ago$/);
+    expect(facts.contains(lastActive)).toBe(false);
+    expect(facts.parentElement?.contains(lastActive)).toBe(false);
+    expect(facts.parentElement?.nextElementSibling).toBe(lastActive);
+    const divergedText = worktreeRow("feat-diverged").textContent;
+    expect(divergedText.includes("· Last active")).toBe(false);
+    expect(divergedText.includes("·Last active")).toBe(false);
+    for (const branch of ["feat-merged", "feat-diverged"]) {
+      const name = screen.getByText(branch);
+      expect(name.className).toContain("wrap-anywhere");
+      expect(name.className).toContain("whitespace-normal");
+      expect(name.className).not.toContain("truncate");
+    }
   });
 
   it("shows a pending tier pill for a row not yet enriched (empty overlay)", () => {
@@ -4064,9 +4497,14 @@ describe("WorktreesList v1.2 signals", () => {
       seededPaths: undefined,
       onVisiblePathsChange: undefined,
     });
-    const rollup = screen.getByTestId("task-merge-rollup");
+    const header = repoHeader("acme/app");
+    expect(within(header).queryByTestId("task-merge-rollup")).toBeNull();
+    const row = worktreeRow("feat-alpha");
+    within(row).getByRole("button", { name: "Open Task Payments revamp" });
+    const rollup = within(row).getByTestId("task-merge-rollup");
     expect(rollup.getAttribute("data-rollup-status")).toBe("partial");
-    expect(rollup.textContent).toContain("Merged 1/2");
+    expect(rollup.textContent).toBe("Task Merged 1/2");
+    within(row).getByTestId("worktree-tier-pill");
   });
 
   it("Task chip shows 'Merged' when the superproject and every owned submodule have merged PRs", () => {
@@ -4087,6 +4525,7 @@ describe("WorktreesList v1.2 signals", () => {
           ],
           prState: "merged",
           prNumber: 20,
+          prUrl: "https://github.com/acme/app/pull/20",
           mergedHeadShaMatches: true,
           submodules: [
             {
@@ -4094,7 +4533,7 @@ describe("WorktreesList v1.2 signals", () => {
               branch: "feat-alpha",
               prState: "merged",
               prNumber: 21,
-              prUrl: null,
+              prUrl: "https://github.com/acme/sub/pull/21",
               mergedHeadShaMatches: true,
               mergedIntoDefault: true,
               atPinnedCommit: false,
@@ -4108,10 +4547,32 @@ describe("WorktreesList v1.2 signals", () => {
       seededPaths: undefined,
       onVisiblePathsChange: undefined,
     });
-    const rollup = screen.getByTestId("task-merge-rollup");
+    const header = repoHeader("acme/app");
+    expect(within(header).queryByTestId("task-merge-rollup")).toBeNull();
+    const row = worktreeRow("feat-alpha");
+    within(row).getByRole("button", { name: "Open Task Payments revamp" });
+    const rollup = within(row).getByTestId("task-merge-rollup");
     expect(rollup.getAttribute("data-rollup-status")).toBe("merged");
-    expect(rollup.textContent).toContain("Merged");
-    expect(rollup.textContent).not.toContain("/");
+    expect(rollup.textContent).toBe("Task Merged");
+    expect(within(row).getByTestId("worktree-tier-pill").textContent).toBe(
+      "Landed",
+    );
+    expect(within(row).getAllByTestId("worktree-context-pr-pill")).toHaveLength(
+      2,
+    );
+    expect(
+      within(row).queryByTestId("worktree-pr-overflow-trigger"),
+    ).toBeNull();
+    expect(
+      within(row)
+        .getByRole("link", { name: "Open PR #20 Merged" })
+        .getAttribute("href"),
+    ).toBe("https://github.com/acme/app/pull/20");
+    expect(
+      within(row)
+        .getByRole("link", { name: "Open sub PR #21 Merged" })
+        .getAttribute("href"),
+    ).toBe("https://github.com/acme/sub/pull/21");
   });
 
   it("Task chip shows no merge rollup when there is no PR anywhere (pre-M4 / gh absent degrade)", () => {
@@ -4139,8 +4600,16 @@ describe("WorktreesList v1.2 signals", () => {
       seededPaths: undefined,
       onVisiblePathsChange: undefined,
     });
-    // The Task title still renders; the merge-rollup badge does not.
-    screen.getByText("Payments revamp");
+    const header = repoHeader("acme/app");
+    expect(
+      within(header).queryByRole("button", {
+        name: "Open Task Payments revamp",
+      }),
+    ).toBeNull();
+    expect(within(header).queryByTestId("task-merge-rollup")).toBeNull();
+    const row = worktreeRow("feat-alpha");
+    within(row).getByRole("button", { name: "Open Task Payments revamp" });
+    expect(within(row).queryByTestId("task-merge-rollup")).toBeNull();
     expect(screen.queryByTestId("task-merge-rollup")).toBeNull();
   });
 
@@ -4429,23 +4898,184 @@ describe("WorktreesList v1.2 signals", () => {
       onVisiblePathsChange: undefined,
     });
 
-    const tierPill = screen.getByTestId("worktree-tier-pill");
-    const rollup = screen.getByTestId("task-merge-rollup");
+    const header = repoHeader("acme/app");
+    expect(within(header).queryByTestId("task-merge-rollup")).toBeNull();
+    const row = worktreeRow("feat-alpha");
+    const tierPill = within(row).getByTestId("worktree-tier-pill");
+    const rollup = within(row).getByTestId("task-merge-rollup");
 
     // The rollup carries no icon and no Badge chrome (border/background) - it
     // cannot be mistaken for the row's own loud worktree-tier signal, which
-    // keeps its icon and colored border.
+    // keeps its icon and colored border. A single owner still gets the caption.
     expect(rollup.querySelector("svg")).toBeNull();
     expect(rollup.className).not.toContain("border");
     expect(rollup.className).not.toContain("bg-emerald");
     expect(rollup.className).not.toContain("bg-amber");
     expect(tierPill.querySelector("svg")).not.toBeNull();
 
-    // Wording scopes it to the Task, distinct from the row's own tier label -
-    // both happen to say "Merged" for different subjects, so the prefix is
-    // what keeps them from reading as the same claim.
     expect(rollup.textContent).toBe("Task Merged");
-    expect(tierPill.textContent).not.toBe(rollup.textContent);
+    expect(tierPill.textContent).toBe("Landed");
+    within(row).getByRole("button", { name: "Open Task Payments revamp" });
+  });
+
+  it("groups every worktree of one repository together and leaves each row its Task, tier, and PR", () => {
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [
+        entry({
+          worktreePath: "/wt/landed",
+          branch: "feat-landed",
+          owners: [
+            {
+              epicId: "epic-1",
+              ownerKind: "chat",
+              ownerId: "chat-1",
+              updatedAt: 1,
+            },
+          ],
+          prState: "merged",
+          prNumber: 30,
+          prUrl: "https://github.com/acme/app/pull/30",
+          mergedHeadShaMatches: true,
+        }),
+        entry({
+          worktreePath: "/wt/open",
+          branch: "feat-open",
+          owners: [
+            {
+              epicId: "epic-1",
+              ownerKind: "chat",
+              ownerId: "chat-2",
+              updatedAt: 2,
+            },
+          ],
+          prState: "open",
+          prNumber: 31,
+          prUrl: "https://github.com/acme/app/pull/31",
+          mergedHeadShaMatches: false,
+        }),
+      ],
+      taskTitlesByEpicId: new Map([["epic-1", "Payments revamp"]]),
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      seededPaths: undefined,
+      onVisiblePathsChange: undefined,
+    });
+
+    const header = repoHeader("acme/app");
+    expect(screen.getAllByTestId("worktree-repo-header")).toHaveLength(1);
+    expect(header.className).toContain("bg-background");
+    expect(header.getAttribute("data-task-epic-id")).toBeNull();
+    expect(
+      within(header).queryByRole("button", { name: /Open Task/ }),
+    ).toBeNull();
+    expect(within(header).queryByTestId("task-merge-rollup")).toBeNull();
+    expect(
+      screen.queryByRole("button", {
+        name: "Collapse acme/app, Payments revamp",
+      }),
+    ).toBeNull();
+
+    const landed = worktreeRow("feat-landed");
+    expect(within(landed).getByTestId("worktree-tier-pill").textContent).toBe(
+      "Landed",
+    );
+    expect(
+      within(landed)
+        .getByRole("link", { name: "Open PR #30 Merged" })
+        .getAttribute("href"),
+    ).toBe("https://github.com/acme/app/pull/30");
+    within(landed).getByRole("button", { name: "Open Task Payments revamp" });
+    expect(within(landed).getByTestId("task-merge-rollup").textContent).toBe(
+      "Task Merged 1/2",
+    );
+
+    const open = worktreeRow("feat-open");
+    within(open).getByTestId("worktree-tier-pill");
+    expect(
+      within(open)
+        .getByRole("link", { name: "Open PR #31 Open" })
+        .getAttribute("href"),
+    ).toBe("https://github.com/acme/app/pull/31");
+    within(open).getByRole("button", { name: "Open Task Payments revamp" });
+    expect(within(open).getByTestId("task-merge-rollup").textContent).toBe(
+      "Task Merged 1/2",
+    );
+  });
+
+  it("groups a Task that spans repositories under each repository and repeats the caption on each row", () => {
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [
+        entry({
+          worktreePath: "/wt/zeta",
+          branch: "feat-zeta",
+          repoLabel: "acme/zeta",
+          repoIdentifier: { owner: "acme", repo: "zeta" },
+          owners: [
+            {
+              epicId: "epic-1",
+              ownerKind: "chat",
+              ownerId: "chat-zeta",
+              updatedAt: 1,
+            },
+          ],
+          prState: "merged",
+          prNumber: 40,
+          mergedHeadShaMatches: true,
+        }),
+        entry({
+          worktreePath: "/wt/alpha",
+          branch: "feat-alpha",
+          repoLabel: "acme/alpha",
+          repoIdentifier: { owner: "acme", repo: "alpha" },
+          owners: [
+            {
+              epicId: "epic-1",
+              ownerKind: "chat",
+              ownerId: "chat-alpha",
+              updatedAt: 2,
+            },
+          ],
+          prState: "open",
+          prNumber: 41,
+          mergedHeadShaMatches: false,
+        }),
+      ],
+      taskTitlesByEpicId: new Map([["epic-1", "Payments revamp"]]),
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      seededPaths: undefined,
+      onVisiblePathsChange: undefined,
+    });
+
+    const headers = screen.getAllByTestId("worktree-repo-header");
+    expect(headers).toHaveLength(2);
+    const firstHeader = headers[0];
+    const secondHeader = headers[1];
+    for (const header of headers) {
+      expect(header.getAttribute("data-task-epic-id")).toBeNull();
+      expect(header.className).toContain("bg-background");
+      expect(header.parentElement?.className).toContain("bg-background");
+      expect(
+        within(header).queryByRole("button", { name: /Open Task/ }),
+      ).toBeNull();
+      expect(within(header).queryByTestId("task-merge-rollup")).toBeNull();
+    }
+    expect(within(firstHeader).getByText("acme/zeta")).toBeTruthy();
+    expect(within(secondHeader).getByText("acme/alpha")).toBeTruthy();
+
+    const zeta = worktreeRow("feat-zeta");
+    const alpha = worktreeRow("feat-alpha");
+    for (const row of [zeta, alpha]) {
+      within(row).getByRole("button", { name: "Open Task Payments revamp" });
+      expect(within(row).getByTestId("task-merge-rollup").textContent).toBe(
+        "Task Merged 1/2",
+      );
+    }
+    expect(screen.getAllByTestId("task-merge-rollup")).toHaveLength(2);
   });
 });
 

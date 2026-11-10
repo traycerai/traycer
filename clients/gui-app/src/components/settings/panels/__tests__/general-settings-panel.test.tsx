@@ -298,7 +298,7 @@ describe("GeneralSettingsPanel", () => {
     delete (globalThis as { runnerHost?: unknown }).runnerHost;
   });
 
-  it("hydrates and updates Agent roles with an Experimental badge beside the label", async () => {
+  it("hydrates and updates Agent roles", async () => {
     let agentRoles = false;
     const bridge: TestFeatureSettingsBridge = {
       get: vi.fn(() => Promise.resolve({ agentRoles, agentFeedback: true })),
@@ -316,13 +316,6 @@ describe("GeneralSettingsPanel", () => {
 
     renderPanel();
 
-    const agentRolesRow = document.querySelector(
-      `[data-settings-anchor="${GENERAL.definitions.agentRoles.anchor}"]`,
-    );
-    expect(agentRolesRow instanceof HTMLElement).toBe(true);
-    if (!(agentRolesRow instanceof HTMLElement)) return;
-    expect(within(agentRolesRow).getByText("Experimental")).toBeTruthy();
-    expect(screen.queryByRole("heading", { name: "Experimental" })).toBeNull();
     const toggle = screen.getByRole("switch", { name: "Agent roles" });
     await waitFor(() => expect(toggle.hasAttribute("disabled")).toBe(false));
     expect(toggle.getAttribute("aria-checked")).toBe("false");
@@ -740,7 +733,7 @@ describe("GeneralSettingsPanel", () => {
     screen.getByText("Worktree branch prefix");
   });
 
-  it("puts the four Agents rows in order, badges Agent roles as Experimental, and draws no old group headings or radios", () => {
+  it("puts the four Agents rows in order and draws no old group headings or radios", () => {
     const featureSettings: TestFeatureSettingsBridge = {
       get: vi.fn(() =>
         Promise.resolve({ agentRoles: false, agentFeedback: true }),
@@ -800,7 +793,7 @@ describe("GeneralSettingsPanel", () => {
     expect(
       within(agentRolesRow).getByRole("switch", { name: "Agent roles" }),
     ).not.toBeNull();
-    expect(within(agentRolesRow).getByText("Experimental")).toBeTruthy();
+    expect(within(agentRolesRow).queryByText("Experimental")).toBeNull();
 
     expect(documentPosition(preventSleep, lifecycle)).toBe("before");
     expect(documentPosition(lifecycle, prefix)).toBe("before");
@@ -835,6 +828,8 @@ describe("GeneralSettingsPanel", () => {
         mobileApp: false,
         phoneLayout: false,
         soundtrackOffered: false,
+        soundtrackRecordingOffered: false,
+        soundtrackOn: false,
       };
       expect(isAgentRolesRowAvailable(context)).toBe(false);
       const { container } = render(panelTree());
@@ -863,6 +858,8 @@ describe("GeneralSettingsPanel", () => {
         mobileApp: false,
         phoneLayout: false,
         soundtrackOffered: false,
+        soundtrackRecordingOffered: false,
+        soundtrackOn: false,
       };
       expect(isAgentRolesRowAvailable(context)).toBe(true);
       const { container } = render(panelTree());
@@ -878,6 +875,8 @@ describe("GeneralSettingsPanel", () => {
         mobileApp: true,
         phoneLayout: true,
         soundtrackOffered: false,
+        soundtrackRecordingOffered: false,
+        soundtrackOn: false,
       };
       expect(isVoiceInputRowAvailable(context)).toBe(false);
       expect(isPreventSleepRowAvailable(context)).toBe(false);

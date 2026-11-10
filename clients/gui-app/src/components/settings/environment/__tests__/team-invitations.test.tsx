@@ -65,7 +65,7 @@ const V11 = { major: 1, minor: 1 } as const;
 const INVITATION: EnvironmentInvitation = {
   environmentId: "env-beta",
   teamName: "Beta",
-  role: "viewer",
+  role: "editor",
   paidPlan: true,
 };
 
@@ -664,5 +664,32 @@ describe("InviteAcceptDialog", () => {
     );
     expect(onAccepted).not.toHaveBeenCalled();
     expect(screen.queryByTestId("invite-accept")).toBeNull();
+  });
+
+  it("reads an invitation to the retired viewer role as no longer open, with nothing to accept", async () => {
+    negotiateMethods({
+      "environment.invitations.list": V10,
+      "environment.invitations.accept": V10,
+    });
+    const onAccepted = vi.fn();
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.invitations.accept": () => ({ outcome: "accepted" }),
+    });
+    render(
+      <InviteAcceptDialog
+        invitation={{ ...INVITATION, role: "viewer" }}
+        onClose={() => undefined}
+        onAccepted={onAccepted}
+      />,
+      { wrapper: harness.Wrapper },
+    );
+
+    expect((await screen.findByTestId("invite-accept-gone")).textContent).toBe(
+      "This invitation is no longer open.",
+    );
+    expect(screen.queryByTestId("invite-accept-grant")).toBeNull();
+    expect(screen.queryByTestId("invite-accept")).toBeNull();
+    expect(harness.paramsOf("environment.invitations.accept")).toHaveLength(0);
+    expect(onAccepted).not.toHaveBeenCalled();
   });
 });

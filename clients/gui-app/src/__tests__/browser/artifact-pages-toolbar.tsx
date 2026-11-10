@@ -38,13 +38,14 @@ export function ArtifactPagesToolbarFixture(): ReactElement {
         title="Report"
         className="h-full w-full"
         height={null}
-        pageZoom={false}
+        commenting={false}
         onSize={() => undefined}
         onStatus={() => undefined}
         onBridge={null}
         onTextSelection={null}
         onFrame={null}
-        renderOverlay={null}
+        onCommentPage={null}
+        overlay={null}
         sourceEquivalent={undefined}
         toolbarControls={<button type="button">Probe control</button>}
       />

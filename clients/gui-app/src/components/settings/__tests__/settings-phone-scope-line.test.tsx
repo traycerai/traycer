@@ -92,6 +92,32 @@ vi.mock("@/components/settings/panels/appearance-settings-panel", async () => {
   };
 });
 
+vi.mock("@/components/settings/panels/host-settings-panel", async () => {
+  const React = await import("react");
+  const { SettingsPanelShell } =
+    await import("@/components/settings/settings-panel-shell");
+  return {
+    HostSettingsPanel: () =>
+      React.createElement(SettingsPanelShell, {
+        title: "Overview",
+        children: null,
+      }),
+  };
+});
+
+vi.mock("@/components/settings/panels/worktrees-settings-panel", async () => {
+  const React = await import("react");
+  const { SettingsPanelShell } =
+    await import("@/components/settings/settings-panel-shell");
+  return {
+    WorktreesSettingsPanel: () =>
+      React.createElement(SettingsPanelShell, {
+        title: "Worktrees",
+        children: null,
+      }),
+  };
+});
+
 vi.mock("@/components/settings/panels/providers-settings-panel", async () => {
   const React = await import("react");
   const { SettingsPanelShell } =
@@ -113,7 +139,9 @@ import { SettingsPanelForSection } from "@/components/settings/settings-modal-co
 const originalMatchMedia = window.matchMedia.bind(window);
 const originalInnerWidth = window.innerWidth;
 
-function renderSection(section: "diagnostics" | "providers" | "appearance") {
+function renderSection(
+  section: "diagnostics" | "providers" | "appearance" | "host" | "worktrees",
+) {
   return render(<SettingsPanelForSection section={section} />);
 }
 
@@ -181,6 +209,47 @@ describe("SettingsPanelForSection phone scope line", () => {
     expect(window.matchMedia("(width < 768px)").matches).toBe(false);
   });
 
+  it("shows the environment and host on Overview and Worktrees in phone layout", () => {
+    const localPick: EnvironmentPick = {
+      kind: "local",
+      hostId: "host-local",
+      hostName: "tgill-popos",
+    };
+    const teamPick: EnvironmentPick = { kind: "team", environmentId: "team-1" };
+    const cases = [
+      [teamPick, 1024, "Acme › tgill-mbp · Computer"],
+      [teamPick, 390, "Acme › tgill-mbp · Computer"],
+      [localPick, 1024, "tgill-popos › tgill-popos · Computer"],
+      [localPick, 390, "tgill-popos › tgill-popos · Computer"],
+    ] as const;
+    for (const [environment, width, expected] of cases) {
+      cleanup();
+      reads.environment = environment;
+      reads.hostName =
+        environment.kind === "local" ? environment.hostName : "tgill-mbp";
+      Object.defineProperty(window, "innerWidth", {
+        configurable: true,
+        writable: true,
+        value: width,
+      });
+      renderSection("host");
+      expect(screen.getByRole("heading", { name: "Overview" })).not.toBeNull();
+      expect(scopeLine().textContent).toBe(expected);
+    }
+
+    cleanup();
+    reads.environment = teamPick;
+    reads.hostName = "tgill-mbp";
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      writable: true,
+      value: 390,
+    });
+    renderSection("worktrees");
+    expect(screen.getByRole("heading", { name: "Worktrees" })).not.toBeNull();
+    expect(scopeLine().textContent).toBe("Acme › tgill-mbp · Computer");
+  });
+
   it("shows a picked team name alone on an environment section", () => {
     reads.environment = { kind: "team", environmentId: "team-1" };
     renderSection("providers");
@@ -219,6 +288,11 @@ describe("SettingsPanelForSection phone scope line", () => {
     cleanup();
     setPhoneLayoutOnly(false);
     renderSection("diagnostics");
+    expect(screen.queryByTestId("settings-phone-scope-line")).toBeNull();
+
+    cleanup();
+    renderSection("host");
+    expect(screen.getByRole("heading", { name: "Overview" })).not.toBeNull();
     expect(screen.queryByTestId("settings-phone-scope-line")).toBeNull();
   });
 });

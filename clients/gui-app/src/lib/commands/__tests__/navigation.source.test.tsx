@@ -114,16 +114,18 @@ describe("navigationSource", () => {
   it("offers no route into a section this build does not have", () => {
     // Desktop: Delete account exists in the table (its id has to resolve) but
     // is offered only by the installed mobile app.
-    expect(captureSettingsSubpage("/").map((i) => i.id)).not.toContain(
-      "nav:settings/delete-account",
-    );
+    const desktopIds = captureSettingsSubpage("/").map((i) => i.id);
+    expect(desktopIds).not.toContain("nav:settings/delete-account");
+    expect(desktopIds).toContain("nav:settings/app-diagnostics");
 
     setMobileApp(true);
     const mobileIds = captureSettingsSubpage("/").map((i) => i.id);
     expect(mobileIds).toContain("nav:settings/delete-account");
-    // ...and the two the mobile app drops stay dropped.
+    // ...and the sections the mobile app drops stay dropped. Application
+    // Diagnostics joins Keybindings and Link mobile app.
     expect(mobileIds).not.toContain("nav:settings/keybindings");
     expect(mobileIds).not.toContain("nav:settings/link-phone");
+    expect(mobileIds).not.toContain("nav:settings/app-diagnostics");
   });
 
   it("settings sub-page filters out the current section", () => {

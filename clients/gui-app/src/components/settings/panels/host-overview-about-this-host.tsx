@@ -12,15 +12,9 @@ import {
 import { SettingsGroup } from "@/components/settings/settings-group";
 
 /**
- * Installation ▸ About this host: what the ACCOUNT knows about this machine -
- * its id, when it joined, when it was last seen, the version it last reported
- * and its platform.
- *
- * Read from the account's host record, never from the host, so it reads the
- * same whether or not the host can be reached - which is exactly when someone
- * comes here for the host id or to see when it was last alive. A host the
- * account has no record of gets no group (the caller passes none), the way it
- * gets no Danger zone.
+ * Installation ▸ About this host: what the account knows about this machine.
+ * It reads with or without a route. Last seen is the account's stamp, never
+ * "Online now".
  */
 export function HostOverviewAboutThisHost(
   props: HostOverviewAboutSource,
@@ -55,9 +49,6 @@ export function HostOverviewAboutThisHost(
           label="Last seen"
           value={about.lastSeen}
           kind="text"
-          // A timestamp has no tone. The row used to paint itself `success`
-          // for the same flag that worded it "Online now", so the colour
-          // carried the liveness claim the wording no longer makes.
           tone="default"
           copy={null}
           testId="host-overview-about-last-seen"

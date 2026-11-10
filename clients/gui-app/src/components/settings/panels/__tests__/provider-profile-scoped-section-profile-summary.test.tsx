@@ -1,9 +1,11 @@
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { tooltipTextFor } from "@/components/ui/__tests__/tooltip-probe";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 
 // Same rationale as the sibling report-issue test: `ProfileEditDialog` and the
 // refresh button pull in mutation/host hooks unconditionally, so those are
@@ -44,6 +46,35 @@ vi.mock("@/hooks/providers/use-recolor-provider-profile-mutation", () => ({
 }));
 vi.mock("@/hooks/providers/use-refresh-providers", () => ({
   useRefreshProviders: () => () => Promise.resolve(),
+}));
+vi.mock("@/hooks/bots/use-environment-list-query", () => ({
+  useEnvironmentListQuery: () => ({
+    data: {
+      environments: [{ environmentId: "personal-env", ownerKind: "user" }],
+    },
+    isError: false,
+    refetch: () => Promise.resolve({}),
+  }),
+}));
+vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
+  useCloudChatViewerId: () => "test-user",
+}));
+vi.mock("@/components/settings/panels/provider-profile-edit-dialog", () => ({
+  ProfileEditDialog: (props: {
+    readonly open: boolean;
+    readonly startInReauth: boolean;
+    readonly onOpenChange: (open: boolean) => void;
+  }) =>
+    props.open ? (
+      <div
+        role="dialog"
+        aria-label={props.startInReauth ? "Sign in editor" : "Profile editor"}
+      >
+        <button type="button" onClick={() => props.onOpenChange(false)}>
+          Close editor
+        </button>
+      </div>
+    ) : null,
 }));
 
 import { ProviderProfileScopedSection } from "@/components/settings/panels/provider-profile-scoped-section";
@@ -167,6 +198,7 @@ function renderSection(
 describe("<ProviderProfileScopedSection /> profile summary email reveal", () => {
   afterEach(() => {
     cleanup();
+    useSettingsEnvironmentPickStore.setState({ pick: null });
   });
 
   it("does not leak the raw email through the tooltip while redacted", () => {
@@ -209,12 +241,161 @@ describe("<ProviderProfileScopedSection /> profile summary email reveal", () => 
     expect(screen.queryByText("Open from terminal")).toBeNull();
   });
 
-  it("reveals the raw email in both the text and the tooltip once toggled", () => {
+  it("reveals the raw email in the truncated address and its tooltip", () => {
     renderSection({});
 
     fireEvent.click(screen.getByRole("button", { name: /Reveal email/ }));
 
     const emailSpan = screen.getByText(RAW_EMAIL);
+    expect(emailSpan.className).toContain("truncate");
     expect(tooltipTextFor(emailSpan)).toBe(RAW_EMAIL);
+  });
+
+  it("truncates the address and the plan chip, and badges a usable row Signed in", () => {
+    const profile = managedProfile();
+    renderSection({
+      state: {
+        ...opencodeState(),
+        profiles: [
+          {
+            ...profile,
+            identity: { email: RAW_EMAIL, tier: "Team", accountUuid: null },
+          },
+        ],
+      },
+    });
+
+    const actions = document.querySelector(
+      '[data-slot="profile-summary-actions"]',
+    );
+    expect(actions).not.toBeNull();
+    expect(actions?.className).toContain("flex-wrap");
+    const email = screen.getByText(REDACTED_EMAIL);
+    expect(email.className).toContain("truncate");
+    const plan = screen.getByText("Team");
+    expect(plan.className).toContain("truncate");
+    const planChip = plan.parentElement;
+    expect(planChip?.getAttribute("data-variant")).toBe("outline");
+    expect(planChip?.getAttribute("data-size")).toBe("xs");
+    expect(planChip?.textContent).toBe("Team");
+    const signedIn = screen.getByText("Signed in");
+    expect(signedIn.getAttribute("data-slot")).toBe("badge");
+    expect(signedIn.getAttribute("data-variant")).toBe("outline");
+    expect(signedIn.getAttribute("data-size")).toBe("xs");
+    const manage = screen.getByRole("button", { name: "Manage profile" });
+    expect(manage.getAttribute("data-size")).toBe("xs");
+    expect(manage.getAttribute("data-variant")).toBe("outline");
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Details" })).toBeNull();
+    expect(screen.queryByText("Signed out")).toBeNull();
+  });
+
+  it("badges Signed out and offers Sign in only when the profile is unauthenticated", async () => {
+    const profile = managedProfile();
+    const onAddProfile = vi.fn();
+    renderSection({
+      onAddProfile,
+      state: {
+        ...opencodeState(),
+        profiles: [
+          {
+            ...profile,
+            auth: {
+              status: "unauthenticated",
+              badgeText: null,
+              label: null,
+              detail: null,
+            },
+          },
+        ],
+      },
+    });
+
+    const standing = screen.getByText("Signed out");
+    expect(standing.getAttribute("data-slot")).toBe("badge");
+    expect(standing.getAttribute("data-variant")).toBe("outline");
+    expect(standing.getAttribute("data-size")).toBe("xs");
+    expect(screen.queryByText("Signed in")).toBeNull();
+
+    const signIn = screen.getByRole("button", { name: "Sign in" });
+    expect(signIn.getAttribute("data-size")).toBe("xs");
+    expect(signIn.getAttribute("data-variant")).toBe("secondary");
+    const manage = screen.getByRole("button", { name: "Manage profile" });
+    expect(manage.getAttribute("data-size")).toBe("xs");
+    expect(manage.getAttribute("data-variant")).toBe("outline");
+    expect(screen.queryByRole("button", { name: /^More for / })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Details" })).toBeNull();
+    await userEvent.click(manage);
+    expect(screen.getByRole("dialog", { name: "Profile editor" })).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Close editor" }));
+    await userEvent.click(signIn);
+    expect(screen.getByRole("dialog", { name: "Sign in editor" })).toBeTruthy();
+    expect(onAddProfile).not.toHaveBeenCalled();
+  });
+
+  it("does not put Details on the selected profile row", () => {
+    renderSection({});
+    expect(screen.queryByRole("button", { name: "Details" })).toBeNull();
+  });
+
+  it("badges an ambient row Signed out when the provider is unauthenticated", async () => {
+    const unauthenticated = {
+      status: "unauthenticated" as const,
+      badgeText: null,
+      label: null,
+      detail: null,
+    };
+    renderSection({
+      selectedProfileId: null,
+      state: {
+        ...opencodeState(),
+        auth: unauthenticated,
+        profiles: [
+          {
+            ...managedProfile(),
+            profileId: "ambient",
+            kind: "ambient",
+            label: "Terminal account",
+            auth: {
+              status: "authenticated",
+              badgeText: null,
+              label: null,
+              detail: null,
+            },
+          },
+        ],
+      },
+    });
+
+    const badge = screen.getByText("Signed out");
+    expect(badge.getAttribute("data-slot")).toBe("badge");
+    expect(badge.getAttribute("data-variant")).toBe("outline");
+    expect(screen.queryByText("Signed in")).toBeNull();
+    const signIn = screen.getByRole("button", { name: "Sign in" });
+    expect(signIn.getAttribute("data-size")).toBe("xs");
+    expect(signIn.getAttribute("data-variant")).toBe("secondary");
+    await userEvent.click(signIn);
+    expect(screen.getByRole("dialog", { name: "Sign in editor" })).toBeTruthy();
+  });
+
+  it("keeps a managed profile's own badge and hides Sign in when only the provider is unauthenticated", () => {
+    const unauthenticated = {
+      status: "unauthenticated" as const,
+      badgeText: null,
+      label: null,
+      detail: null,
+    };
+    renderSection({
+      state: {
+        ...opencodeState(),
+        auth: unauthenticated,
+      },
+    });
+
+    const badge = screen.getByText("Signed in");
+    expect(badge.getAttribute("data-slot")).toBe("badge");
+    expect(badge.getAttribute("data-variant")).toBe("outline");
+    expect(screen.queryByText("Signed out")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
   });
 });

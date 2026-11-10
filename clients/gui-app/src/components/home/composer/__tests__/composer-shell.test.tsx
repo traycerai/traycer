@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { use, useState, type ReactNode } from "react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import { use, useCallback, useState, type ReactNode } from "react";
 
 import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
 import type { ComposerExpansion } from "@/components/home/composer/composer-shell";
@@ -183,6 +189,27 @@ const FITTING_EDITOR = (
   <div data-testid="composer-editor" data-composer-editor="" />
 );
 
+/**
+ * An editor whose content is taller than its box, the way a capped
+ * ProseMirror editor reads once a draft outgrows it. jsdom lays nothing out,
+ * so the two heights are pinned on the element itself, before the frame's
+ * own ref runs (a child's ref callback fires first).
+ */
+function OverflowingEditor(): ReactNode {
+  const ref = useCallback((element: HTMLDivElement | null) => {
+    if (element === null) return;
+    Object.defineProperty(element, "scrollHeight", { value: 200 });
+    Object.defineProperty(element, "clientHeight", { value: 100 });
+  }, []);
+  return (
+    <div ref={ref} data-testid="composer-editor" data-composer-editor="" />
+  );
+}
+
+function bar(): Element | null {
+  return document.querySelector("[data-composer-grabber-bar]");
+}
+
 const PICKER_STORE = createComposerPickerStore();
 
 function shellWith(
@@ -233,7 +260,7 @@ describe("ComposerShell phone expansion", () => {
     expect(screen.queryByRole("button", { name: /composer/i })).toBeNull();
   });
 
-  it("offers the pull zone on a phone whatever the draft's size, with nothing drawn in it", () => {
+  it("offers the pull zone on a phone whatever the draft's size, drawing nothing while the draft fits", () => {
     viewportMock.phone = true;
     renderShellWithEditor(makeExpansion(false), FITTING_EDITOR);
 
@@ -241,9 +268,41 @@ describe("ComposerShell phone expansion", () => {
     expect(zone).not.toBeNull();
     expect(zone?.getAttribute("aria-hidden")).toBe("true");
     expect(zone?.childElementCount).toBe(0);
+    // Inside the card's top padding only: nothing above the card, where a
+    // scroll of the chat starts.
+    expect(classTokens(zone)).toContain("top-0");
     const button = screen.getByRole("button", { name: "Expand composer" });
     expect(classTokens(button)).toContain("sr-only");
     expect(button.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("draws the bar on the zone once the draft outgrows its box", () => {
+    viewportMock.phone = true;
+    renderShellWithEditor(makeExpansion(false), <OverflowingEditor />);
+
+    expect(bar()).not.toBeNull();
+    expect(grabberOrThrow().contains(bar())).toBe(true);
+  });
+
+  it("notices an editor that mounts after the frame", async () => {
+    viewportMock.phone = true;
+    const expansion = makeExpansion(false);
+    // The prompt editor renders nothing until its deferred instance exists.
+    const view = render(shellWith(expansion, null));
+    expect(bar()).toBeNull();
+
+    view.rerender(shellWith(expansion, <OverflowingEditor />));
+
+    await waitFor(() => {
+      expect(bar()).not.toBeNull();
+    });
+  });
+
+  it("draws the bar on the open sheet whatever the draft's size, as the way back", () => {
+    viewportMock.phone = true;
+    renderShellWithEditor(makeExpansion(true), FITTING_EDITOR);
+
+    expect(bar()).not.toBeNull();
   });
 
   it("toggles the sheet from the hidden button, which stays mounted across the collapse", () => {
@@ -277,6 +336,25 @@ describe("ComposerShell phone expansion", () => {
 
     expect(expansion.onExpandedChange).toHaveBeenCalledTimes(1);
     expect(expansion.onExpandedChange).toHaveBeenCalledWith(true);
+  });
+
+  it("lifts the card on a short pull up, then settles it shut again", () => {
+    viewportMock.phone = true;
+    vi.useFakeTimers();
+    const expansion = makeExpansion(false);
+    renderShellWithEditor(expansion, FITTING_EDITOR);
+    const zone = grabberOrThrow();
+
+    // 30px was enough to open before; a scroll of the chat starting on the
+    // card's edge travels that far.
+    pull(zone, 100, 70);
+    expect(expansion.onExpandedChange).toHaveBeenCalledTimes(1);
+    expect(expansion.onExpandedChange).toHaveBeenCalledWith(true);
+
+    vi.advanceTimersByTime(200);
+    expect(expansion.onExpandedChange).toHaveBeenCalledTimes(2);
+    expect(expansion.onExpandedChange).toHaveBeenLastCalledWith(false);
+    vi.useRealTimers();
   });
 
   it("closes the sheet on a pull down past the threshold while expanded", () => {
@@ -339,7 +417,7 @@ describe("ComposerShell phone expansion", () => {
     const zone = grabberOrThrow();
 
     pull(zone, 100, 100);
-    pull(zone, 100, 90);
+    pull(zone, 100, 95);
     fireEvent.click(zone);
 
     expect(expansion.onExpandedChange).not.toHaveBeenCalled();

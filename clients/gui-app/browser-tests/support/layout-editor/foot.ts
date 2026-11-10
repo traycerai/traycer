@@ -316,7 +316,7 @@ export async function readingPopoverProblems(
 /** The hosts the fixture's registry holds (`hosts=1`), and what each one's name does in the menu. */
 export const HOST_ROWS: ReadonlyArray<{
   readonly hostId: string;
-  readonly fullName: string | null;
+  readonly fullName: string;
 }> = [
   {
     hostId: "fixture-host-builder",
@@ -327,7 +327,7 @@ export const HOST_ROWS: ReadonlyArray<{
     fullName:
       "gpu-runner-02.us-central1-a.c.example-project.internal (nightly)",
   },
-  { hostId: "fixture-host-studio", fullName: null },
+  { hostId: "fixture-host-studio", fullName: "Mac Studio" },
 ];
 
 /** The menu's own cap (`max-w-64`): a host name never widens it. */
@@ -335,23 +335,46 @@ const USER_MENU_MAX_WIDTH_PX = 256;
 
 interface HostMenuRow {
   readonly hostId: string;
+  readonly name: string | null;
+  readonly nameVisible: boolean;
+  readonly oneLine: boolean;
   readonly truncated: boolean;
-  readonly box: Box;
+  readonly overflows: boolean;
 }
 
 const HOST_MENU_PROBE = `(() => {
   const section = document.querySelector('[data-testid="user-menu-host-section"]');
   if (section === null) return null;
-  return [...section.querySelectorAll('[data-testid^="user-menu-host-option-"]')].map((row) => ({
-    hostId: row.getAttribute("data-testid").slice("user-menu-host-option-".length),
-    truncated: (() => { const name = row.querySelector(".truncate"); return name !== null && name.scrollWidth > name.clientWidth + 0.5; })(),
-    box: (() => { const r = row.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height, cx: r.x + r.width / 2, cy: r.y + r.height / 2 }; })(),
-  }));
+  return [...section.querySelectorAll('[data-testid^="user-menu-host-option-"]')].map((row) => {
+    const hostId = row.getAttribute("data-testid").slice("user-menu-host-option-".length);
+    const fullName = ${JSON.stringify(HOST_ROWS)}.find((host) => host.hostId === hostId)?.fullName;
+    const name = [...row.querySelectorAll("span")].find((span) => span.childElementCount === 0 && span.textContent === fullName);
+    const box = row.getBoundingClientRect();
+    const inside = (rect, parent) =>
+      rect.left >= parent.left - 0.5 && rect.right <= parent.right + 0.5 &&
+      rect.top >= parent.top - 0.5 && rect.bottom <= parent.bottom + 0.5;
+    const nameBox = name?.getBoundingClientRect();
+    const nameStyle = name === undefined ? null : getComputedStyle(name);
+    const lineHeight = nameStyle === null
+      ? 0
+      : parseFloat(nameStyle.lineHeight) || parseFloat(nameStyle.fontSize) * 1.5;
+    return {
+      hostId,
+      name: name?.textContent ?? null,
+      nameVisible: name !== undefined &&
+        name.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) &&
+        nameBox.width > 0 && inside(nameBox, box),
+      oneLine: name !== undefined && nameBox.height > 0 && nameBox.height <= lineHeight * 1.5,
+      truncated: name !== undefined && name.scrollWidth > name.clientWidth + 0.5,
+      overflows: row.scrollWidth > row.clientWidth + 1 ||
+        row.scrollHeight > row.clientHeight + 1 ||
+        [...row.querySelectorAll("*")].some((child) =>
+          child.checkVisibility() && !inside(child.getBoundingClientRect(), box)),
+    };
+  });
 })()`;
 
-export function readHostRows(
-  page: Page,
-): Promise<readonly HostMenuRow[] | null> {
+function readHostRows(page: Page): Promise<readonly HostMenuRow[] | null> {
   return page.evaluate<readonly HostMenuRow[] | null>(HOST_MENU_PROBE);
 }
 
@@ -395,10 +418,32 @@ function opensTowardTrigger(toward: MenuToward, geo: MenuGeometry): boolean {
   return geo.menu.top >= geo.trigger.bottom - 0.5;
 }
 
+function hostRowProblems(
+  hostId: string,
+  fullName: string,
+  row: HostMenuRow | undefined,
+): string[] {
+  if (row === undefined) return [`no ${hostId} row`];
+  const problems: string[] = [];
+  if (row.name !== fullName || !row.nameVisible) {
+    problems.push(`${hostId}'s name is not visible`);
+  }
+  if (!row.oneLine) {
+    problems.push(`${hostId}'s name does not occupy one line`);
+  }
+  if (hostId !== "fixture-host-studio" && !row.truncated) {
+    problems.push(`${hostId}'s long name is not truncated`);
+  }
+  if (row.overflows) {
+    problems.push(`${hostId}'s contents overflow its row`);
+  }
+  return problems;
+}
+
 /**
  * A menu's width whatever a host is called - no wider than 256px, inside
- * the window, opening toward the content - and the long names truncate while
- * one that fits does not. Call with the menu open.
+ * the window, opening toward the content. Host names occupy one line and
+ * truncate when needed; no row's contents overflow it. Call with the menu open.
  */
 export async function hostMenuProblems(
   page: Page,
@@ -435,13 +480,7 @@ export async function hostMenuProblems(
   }
   for (const { hostId, fullName } of HOST_ROWS) {
     const row = rows.find((entry) => entry.hostId === hostId);
-    if (row === undefined) {
-      problems.push(`no ${hostId} row`);
-    } else if (row.truncated !== (fullName !== null)) {
-      problems.push(
-        `${hostId}'s name is ${row.truncated ? "" : "not "}truncated`,
-      );
-    }
+    problems.push(...hostRowProblems(hostId, fullName, row));
   }
   return problems;
 }

@@ -199,7 +199,7 @@ function moduleHeaderPreviewRows(args: {
       ? null
       : {
           key: "parent-path",
-          label: "Location in workspace",
+          label: "Location in folder",
           value: module.parentPath,
         },
     {
@@ -338,7 +338,7 @@ function ModuleHeaderPreviewContent(props: {
       data-testid="git-module-header-preview-content"
     >
       <p className="min-w-0 truncate text-ui-sm font-semibold text-popover-foreground">
-        {props.module.kind === "submodule" ? "Submodule" : "Workspace module"}:{" "}
+        {props.module.kind === "submodule" ? "Submodule" : "Folder module"}:{" "}
         {props.module.label}
       </p>
       <dl className="mt-2 grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-ui-xs">

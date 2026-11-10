@@ -64,7 +64,7 @@ function RevertOnEditDialogContent(props: RevertOnEditDialogProps) {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         layout="banded"
-        className="w-full min-w-0 overflow-hidden"
+        className="flex w-full min-w-0 flex-col overflow-hidden"
         style={{ maxWidth: "min(92vw, 34rem)" }}
         showCloseButton={false}
         data-testid="revert-on-edit-dialog"
@@ -80,6 +80,8 @@ function RevertOnEditDialogContent(props: RevertOnEditDialogProps) {
       >
         <DialogHeader className="space-y-1">
           <DialogTitle>Submit from a previous message?</DialogTitle>
+        </DialogHeader>
+        <div className="-m-1 min-h-0 space-y-3 overflow-y-auto px-6 py-5">
           <DialogDescription>
             Submitting from a previous message will revert file changes to
             before this message and clear the messages after this one.
@@ -87,18 +89,16 @@ function RevertOnEditDialogContent(props: RevertOnEditDialogProps) {
               ? ` ${queuedCount} queued ${queuedCount === 1 ? "message stays" : "messages stay"} queued and will send after the edited message when the queue next runs.`
               : null}
           </DialogDescription>
-        </DialogHeader>
 
-        {artifactCount === null || artifactCount > 0 ? (
-          <div className="px-6 pt-1 pb-2">
+          {artifactCount === null || artifactCount > 0 ? (
             <RevertArtifactsCheckbox
               count={artifactCount}
               checked={revertArtifacts}
               onCheckedChange={setRevertArtifacts}
               disabled={false}
             />
-          </div>
-        ) : null}
+          ) : null}
+        </div>
 
         <DialogFooter className="mt-2">
           <Button

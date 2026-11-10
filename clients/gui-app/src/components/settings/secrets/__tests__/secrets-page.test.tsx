@@ -54,7 +54,6 @@ import { dashboardRunnerHost } from "@/components/settings/host-scope/__tests__/
 import { SecretsPage } from "@/components/settings/secrets/secrets-page";
 import { buildEnvironmentClient } from "@/lib/environment/__tests__/environment-test-support";
 import type { HostRpcRegistry } from "@/lib/host";
-import { secretChangeRefusalLine } from "@/lib/sandboxes/secret-change-refusal-copy";
 import {
   SECRET_REVOKED_LABEL,
   SECRETS_EMPTY_TEXT,
@@ -63,6 +62,11 @@ import { dataHandlingNoticeText } from "@/components/settings/members/data-handl
 import { RunnerHostContext } from "@/providers/runner-host-context";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import {
+  RETIRED_PROVIDER_VARIABLES,
+  RETIRED_SECRET_CREATE_FIELDS,
+  RETIRED_SECRET_ROW_FIELDS,
+} from "@traycer/protocol/host/released-wire-rows";
 
 const HOST_ID = "host-secrets";
 const TYPED_VALUE = "sk_live_TYPED_VALUE_9f3a7c";
@@ -107,18 +111,17 @@ function secretFixture(
   overrides: Partial<EnvironmentSecretV12>,
 ): EnvironmentSecretV12 {
   return {
+    ...RETIRED_SECRET_ROW_FIELDS,
+    providerVariables: [...RETIRED_PROVIDER_VARIABLES],
     secretId: "sec-1",
     name: "STRIPE_KEY",
     kind: "api_key",
     protocol: "https",
     destinations: ["api.stripe.com"],
-    mode: "brokered",
-    state: "live",
     currentVersionId: "ver-1",
     revoked: false,
     updatedAt: 1,
     variables: [],
-    providerVariables: [],
     ...overrides,
   };
 }
@@ -330,6 +333,23 @@ describe("the secrets list", () => {
         .map((button) => button.textContent),
     ).toEqual(["Replace", "Remove", "Details"]);
     expect(screen.queryByTestId("secrets-empty")).toBeNull();
+    const details = await openRowDetails(rows[1]);
+    const recovery = within(details).getByTestId("secret-recovery");
+    expect(within(recovery).queryByText("Secret leaked?")).toBeNull();
+    expect(
+      within(recovery)
+        .getAllByRole("listitem")
+        .map((step) => step.textContent),
+    ).toEqual([
+      "Remove it first: every sandbox stops using the old value, and each computer that holds it as a value keeps it until its tools restart.",
+      "Rotate the credential at the service it belongs to.",
+      "Replace the value here.",
+      "Grant it again.",
+    ]);
+    expect(recovery.textContent).toContain("If this secret leaked");
+    expect(recovery.textContent).toContain(
+      "If Traycer can't be reached, stopping the sandbox ends its sessions.",
+    );
   });
 
   it("says replaced, not added, once the current version is a replacement", async () => {
@@ -566,7 +586,7 @@ describe("the add dialog's kind picker", () => {
       ).toBeNull();
     }
     expect(screen.getByTestId("secret-provider-keys-line").textContent).toBe(
-      "Provider keys are set on each provider's Account tab, under Providers.",
+      "Provider keys are set on each provider's page, under Providers.",
     );
   });
 
@@ -711,11 +731,12 @@ describe("saving a secret", () => {
         connectorId: null,
         confirmedAddresses: null,
         value: TYPED_VALUE,
-        mode: "brokered",
+        // The two fields a released host still reads off this request, with
+        // the only values this tree sends.
+        ...RETIRED_SECRET_CREATE_FIELDS,
         portOverride: false,
         swapSites: ["header"],
         variables: [],
-        exportPolicy: null,
         sandboxesByDefault: true,
         plaintextConsent: null,
         environmentId: PERSONAL_ENV,
@@ -788,24 +809,6 @@ describe("saving a secret", () => {
     expect(screen.getByTestId("add-secret-dialog")).toBeTruthy();
     expect(screen.getByTestId("secret-save")).toBeTruthy();
     expect(screen.queryByTestId("secret-save-done")).toBeNull();
-    expect(host.reads.list).toBe(1);
-  });
-
-  it("says why a team's secret is refused, with the refusal line", async () => {
-    const host = buildSecretsHost({
-      secrets: [],
-      createAnswer: { outcome: "refused", code: "team_secrets_are_brokered" },
-    });
-    renderPage(host);
-
-    await saveApiKey();
-
-    const line = secretChangeRefusalLine("create", "team_secrets_are_brokered");
-    expect(line).not.toBeNull();
-    const note = await screen.findByTestId("secret-save-note");
-    expect(note.textContent).toBe(line);
-    expect(screen.getByTestId("add-secret-dialog")).toBeTruthy();
-    // A refusal saved nothing, so there is nothing to re-read.
     expect(host.reads.list).toBe(1);
   });
 
@@ -894,20 +897,19 @@ describe("the add form's words", () => {
     expect(screen.queryByText(/Where this key is sent/)).toBeNull();
   });
 
-  it("says in plain words what each mode does, and warns only on the one that exposes the value", async () => {
+  it("says in plain words what a sandbox holds, and offers no way to hand over the value", async () => {
     renderPage(buildSecretsHost({ secrets: [] }));
     await openApiKeyForm();
 
     const dialog = screen.getByTestId("add-secret-dialog");
-    expect(
-      within(dialog).getByLabelText(
-        "Agents use it without seeing it (recommended)",
-      ),
-    ).toBeTruthy();
-    expect(within(dialog).getByLabelText("Agents can read it")).toBeTruthy();
     expect(dialog.textContent).toContain(
-      "On a sandbox, any process can read it, and revoking it does not stop a copy already made.",
+      "Agents use it without seeing it: the sandbox holds a stand-in and the real value is attached as a request leaves it.",
     );
+    // No mode to choose: the radio is gone with the mode that fed it.
+    expect(
+      within(dialog).queryByTestId("secret-form-mode-brokered"),
+    ).toBeNull();
+    expect(dialog.textContent).not.toContain("Agents can read it");
     expect(dialog.textContent).not.toContain(
       "agents can use it and never read it",
     );

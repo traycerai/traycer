@@ -27,7 +27,7 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type {
-  EnvironmentStatusResponseV11,
+  EnvironmentStatusResponseV12,
   LocalOverride,
 } from "@traycer/protocol/host/environment-schemas";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
@@ -120,7 +120,7 @@ function renderFrame(options: {
   readonly section: SettingsSectionId;
   /** `null` records nothing: no handshake has completed yet. */
   readonly methods: readonly string[] | null;
-  readonly status: EnvironmentStatusResponseV11;
+  readonly status: EnvironmentStatusResponseV12;
   readonly overrides: readonly LocalOverride[];
   readonly target: PersonalRowNotesTarget;
 }): HostCalls {
@@ -470,7 +470,7 @@ describe("<PersonalPageFrame /> around a page that reads the variables", () => {
   it("requests config.env.list again when the host's received revision moves", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
-      const facts: { status: EnvironmentStatusResponseV11 } = {
+      const facts: { status: EnvironmentStatusResponseV12 } = {
         status: environmentStatusFixture({
           receivedRevision: 1,
           appliedRevision: 1,

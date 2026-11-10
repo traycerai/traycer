@@ -1,3 +1,4 @@
+import type { SandboxCatalogueReadinessRequest } from "@traycer/protocol/host/sandbox-control";
 import { ipcRenderer } from "electron";
 import {
   RunnerHostEvent,
@@ -19,8 +20,10 @@ import type {
   SlackAppInstallUrlResult,
   SlackAppManifestResult,
   SlackAppReadResult,
+  SlackAppDmsRequest,
   SlackAppRegisterRequest,
   SlackAppWriteResult,
+  TeamHostInstallTokenResult,
   SandboxAutomationOpenFetchResult,
   SandboxCatalogueFetchResult,
   SandboxCostsFetchResult,
@@ -142,6 +145,7 @@ export interface AuthBridgeSurface {
   getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult>;
   getSandboxCatalogue(
     bearerToken: string,
+    context: SandboxCatalogueReadinessRequest | null,
   ): Promise<SandboxCatalogueFetchResult>;
   getTraycerModels(bearerToken: string): Promise<TraycerModelsFetchResult>;
   getVoiceAvailability(
@@ -207,6 +211,14 @@ export interface AuthBridgeSurface {
     bearerToken: string,
     botId: string,
   ): Promise<SlackAppWriteResult>;
+  setSlackAppDms(
+    bearerToken: string,
+    request: SlackAppDmsRequest,
+  ): Promise<SlackAppWriteResult>;
+  mintTeamHostInstallToken(
+    bearerToken: string,
+    environmentId: string,
+  ): Promise<TeamHostInstallTokenResult>;
   getSandboxGrants(
     bearerToken: string,
     environmentId: string | null,
@@ -324,10 +336,11 @@ export function buildAuthBridge(): AuthBridgeSurface {
         bearerToken,
       ) as Promise<SandboxCostsFetchResult>,
 
-    getSandboxCatalogue: (bearerToken) =>
+    getSandboxCatalogue: (bearerToken, context) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.getSandboxCatalogue,
         bearerToken,
+        context,
       ) as Promise<SandboxCatalogueFetchResult>,
 
     getVoiceAvailability: (bearerToken) =>
@@ -456,6 +469,20 @@ export function buildAuthBridge(): AuthBridgeSurface {
         bearerToken,
         botId,
       ) as Promise<SlackAppWriteResult>,
+
+    setSlackAppDms: (bearerToken, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.setSlackAppDms,
+        bearerToken,
+        request,
+      ) as Promise<SlackAppWriteResult>,
+
+    mintTeamHostInstallToken: (bearerToken, environmentId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.mintTeamHostInstallToken,
+        bearerToken,
+        environmentId,
+      ) as Promise<TeamHostInstallTokenResult>,
 
     getSandboxGrants: (bearerToken, environmentId, hostId) =>
       ipcRenderer.invoke(

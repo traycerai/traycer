@@ -1,11 +1,21 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { HostSwitcher } from "@/components/settings/host-scope/host-switcher";
 import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
 import { hostListItemToDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
-import { buildHostScopeOptions } from "@/components/settings/host-scope/host-scope-model";
+import {
+  buildHostScopeOptions,
+  type HostScopeOption,
+} from "@/components/settings/host-scope/host-scope-model";
 
 /**
  * The switcher's empty state is the second consumer of the rule the gate
@@ -22,6 +32,88 @@ vi.mock("@/lib/host", async (importOriginal) => ({
 }));
 
 afterEach(cleanup);
+
+function renderSelectedHost(
+  host: HostScopeOption,
+  surface: "rail" | "inline" | "panel-header" | "field",
+): void {
+  render(
+    <TooltipProvider delayDuration={0}>
+      <HostSwitcher
+        hosts={[host]}
+        selected={host}
+        activeHostId={host.hostId}
+        onSelect={() => undefined}
+        action={null}
+        surface={surface}
+        intent="view"
+        consequence={null}
+        refusalByHostId={NO_HOST_OPTION_REFUSALS}
+        inertExceptHostId={null}
+        disabled={false}
+        isLoading={false}
+        listsFailed={false}
+        onRetryLists={() => undefined}
+        updateViewForHost={null}
+        composer={null}
+        environmentLabelForHost={null}
+      />
+    </TooltipProvider>,
+  );
+}
+
+function stubTextOverflow(name: string): () => void {
+  return stubMeasuredOverflow(name, () => true);
+}
+
+/** `overflows` is read on each measurement, so a test can flip truncation. */
+function stubMeasuredOverflow(
+  name: string,
+  overflows: () => boolean,
+): () => void {
+  const originalScrollWidth = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "scrollWidth",
+  );
+  const originalClientWidth = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "clientWidth",
+  );
+  Object.defineProperty(HTMLElement.prototype, "scrollWidth", {
+    configurable: true,
+    get(this: HTMLElement) {
+      if (this.textContent !== name) return 0;
+      return overflows() ? 240 : 80;
+    },
+  });
+  Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+    configurable: true,
+    get(this: HTMLElement) {
+      if (this.textContent !== name) return 0;
+      return overflows() ? 100 : 80;
+    },
+  });
+  return () => {
+    if (originalScrollWidth !== undefined) {
+      Object.defineProperty(
+        HTMLElement.prototype,
+        "scrollWidth",
+        originalScrollWidth,
+      );
+    } else {
+      Reflect.deleteProperty(HTMLElement.prototype, "scrollWidth");
+    }
+    if (originalClientWidth !== undefined) {
+      Object.defineProperty(
+        HTMLElement.prototype,
+        "clientWidth",
+        originalClientWidth,
+      );
+    } else {
+      Reflect.deleteProperty(HTMLElement.prototype, "clientWidth");
+    }
+  };
+}
 
 function renderEmpty(props: {
   readonly isLoading: boolean;
@@ -386,6 +478,125 @@ describe("<HostSwitcher /> trigger kind", () => {
   );
 });
 
+describe("<HostSwitcher /> trigger layout", () => {
+  it("keeps the rail glyph, long name, status, and chevron in one centered row", () => {
+    const name = "AHostNameThatNeedsRoomToWrapWhenTheRailIsNarrow";
+    const host = hostScopeOptionFixture({
+      hostId: "local-host",
+      name,
+      isLocalMachine: true,
+      health: {
+        state: "offline",
+        label: "Offline",
+        detail: null,
+        tone: "idle",
+        live: false,
+      },
+    });
+    renderSelectedHost(host, "rail");
+
+    const trigger = screen.getByTestId("settings-host-switcher");
+    const nameElement = screen.getByText(name);
+    const status = screen.getByTestId("settings-host-switcher-status");
+    expect(trigger.classList.contains("items-center")).toBe(true);
+    expect(trigger.classList.contains("flex-wrap")).toBe(false);
+    expect(trigger.querySelector("svg.lucide-laptop")).not.toBeNull();
+    expect(trigger.querySelector("svg.lucide-chevron-down")).not.toBeNull();
+    expect(nameElement.parentElement?.classList.contains("items-center")).toBe(
+      true,
+    );
+    expect(status.textContent).toBe("offline");
+    expect(status.parentElement?.classList.contains("whitespace-nowrap")).toBe(
+      true,
+    );
+  });
+
+  it.each(["inline", "field", "rail"] as const)(
+    "truncates the %s trigger label and exposes its full text in a tooltip",
+    async (surface) => {
+      const name = "A long host name that does not fit in this trigger";
+      const restore = stubTextOverflow(name);
+      try {
+        const host = hostScopeOptionFixture({ hostId: "host-long", name });
+        renderSelectedHost(host, surface);
+
+        const trigger = screen.getByTestId("settings-host-switcher");
+        const nameElement = screen.getByText(name);
+        expect(nameElement.className).toContain("truncate");
+        expect(nameElement.className).not.toContain("whitespace-normal");
+        expect(nameElement.className).not.toContain("wrap-anywhere");
+        expect(trigger.getAttribute("aria-label")).toBe(
+          `Settings host: ${name}`,
+        );
+
+        fireEvent.focus(trigger);
+        expect((await screen.findByRole("tooltip")).textContent).toBe(name);
+      } finally {
+        restore();
+      }
+    },
+  );
+
+  it("keeps the same trigger button when truncation toggles", () => {
+    const name = "A long host name that does not fit in this trigger";
+    let overflows = true;
+    const observers: RecordingResizeObserver[] = [];
+
+    class RecordingResizeObserver implements ResizeObserver {
+      private readonly callback: ResizeObserverCallback;
+
+      constructor(callback: ResizeObserverCallback) {
+        this.callback = callback;
+        observers.push(this);
+      }
+
+      observe(): void {}
+
+      unobserve(): void {}
+
+      disconnect(): void {
+        const index = observers.indexOf(this);
+        if (index >= 0) observers.splice(index, 1);
+      }
+
+      notify(): void {
+        this.callback([], this);
+      }
+    }
+
+    const previousObserver = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = RecordingResizeObserver;
+    const restore = stubMeasuredOverflow(name, () => overflows);
+    try {
+      const host = hostScopeOptionFixture({ hostId: "host-long", name });
+      renderSelectedHost(host, "rail");
+      const button = screen.getByTestId("settings-host-switcher");
+      act(() => {
+        button.focus();
+      });
+      expect(document.activeElement).toBe(button);
+
+      overflows = false;
+      act(() => {
+        for (const observer of observers) observer.notify();
+      });
+      expect(screen.getByTestId("settings-host-switcher")).toBe(button);
+      expect(document.activeElement).toBe(button);
+      expect(screen.queryByRole("tooltip")).toBeNull();
+
+      overflows = true;
+      act(() => {
+        for (const observer of observers) observer.notify();
+      });
+      expect(screen.getByTestId("settings-host-switcher")).toBe(button);
+      expect(document.activeElement).toBe(button);
+    } finally {
+      restore();
+      globalThis.ResizeObserver = previousObserver;
+    }
+  });
+});
+
 describe("<HostSwitcher /> trigger status", () => {
   it("keeps healthy hosts quiet and names an offline selection", () => {
     const healthy = hostScopeOptionFixture({
@@ -438,6 +649,107 @@ describe("<HostSwitcher /> trigger status", () => {
       screen.getByRole("button", { name: "Host: Host A, offline" }),
     ).not.toBeNull();
   });
+
+  it("shows Awake for a healthy awake sandbox on the rail and in the picker", () => {
+    const sandbox = hostScopeOptionFixture({
+      hostId: "sandbox-a",
+      name: "Build box",
+      kind: "sandbox",
+      sandbox: {
+        state: "awake",
+        frozen: false,
+        summary: null,
+        teamOwned: false,
+      },
+    });
+    renderSelectedHost(sandbox, "rail");
+
+    expect(
+      screen.getByTestId("settings-host-switcher-status").textContent,
+    ).toBe("Awake");
+    expect(
+      screen.getByRole("button", { name: "Settings host: Build box, Awake" }),
+    ).not.toBeNull();
+
+    fireEvent.click(screen.getByTestId("settings-host-switcher"));
+    const option = screen.getByTestId(
+      "settings-host-switcher-option-sandbox-a",
+    );
+    expect(option.textContent).toContain("Awake");
+    expect(option.textContent).not.toContain("offline");
+  });
+
+  it("keeps the offline health word for an awake sandbox on the rail", () => {
+    const sandbox = hostScopeOptionFixture({
+      hostId: "sandbox-a",
+      name: "Build box",
+      kind: "sandbox",
+      health: {
+        state: "offline",
+        label: "Offline",
+        detail: null,
+        tone: "idle",
+        live: false,
+      },
+      sandbox: {
+        state: "awake",
+        frozen: false,
+        summary: null,
+        teamOwned: false,
+      },
+    });
+    renderSelectedHost(sandbox, "rail");
+
+    expect(
+      screen.getByTestId("settings-host-switcher-status").textContent,
+    ).toBe("offline");
+  });
+
+  it.each(["inline", "panel-header"] as const)(
+    "keeps Awake on the %s surface",
+    (surface) => {
+      const sandbox = hostScopeOptionFixture({
+        hostId: "sandbox-a",
+        name: "Build box",
+        kind: "sandbox",
+        sandbox: {
+          state: "awake",
+          frozen: false,
+          summary: null,
+          teamOwned: false,
+        },
+      });
+      renderSelectedHost(sandbox, surface);
+
+      expect(
+        screen.getByTestId("settings-host-switcher-status").textContent,
+      ).toBe("Awake");
+    },
+  );
+
+  it.each([
+    ["frozen", { state: "awake", frozen: true }, "Awake"],
+    ["failed", { state: "failed", frozen: false }, "Failed"],
+    ["resting", { state: "released", frozen: false }, "Not running"],
+  ] as const)(
+    "retains the %s status on the rail",
+    (_name, sandboxState, expected) => {
+      const sandbox = hostScopeOptionFixture({
+        hostId: "sandbox-a",
+        name: "Build box",
+        kind: "sandbox",
+        sandbox: { ...sandboxState, summary: null, teamOwned: false },
+      });
+      renderSelectedHost(sandbox, "rail");
+
+      expect(
+        screen.getByTestId("settings-host-switcher-status").textContent,
+      ).toBe(expected);
+      if (_name === "frozen") {
+        expect(screen.getByText("Out of credits")).not.toBeNull();
+      }
+    },
+  );
 });
 
 describe("<HostSwitcher /> a host nobody named", () => {
@@ -699,5 +1011,64 @@ describe("<HostSwitcher /> environment labels (Tracy Bots)", () => {
 
     expect(screen.queryByTestId("host-option-environment-host-a")).toBeNull();
     expect(screen.queryByTestId("host-option-environment-host-b")).toBeNull();
+  });
+});
+
+describe("<HostSwitcher /> rail introduction", () => {
+  function openRail(
+    consequence: {
+      readonly heading: string;
+      readonly hint: string;
+    } | null,
+  ): void {
+    const host = hostScopeOptionFixture({
+      hostId: "host-a",
+      name: "Host A",
+    });
+    render(
+      <HostSwitcher
+        hosts={[host]}
+        selected={host}
+        activeHostId={host.hostId}
+        onSelect={() => undefined}
+        action={null}
+        surface="rail"
+        intent="view"
+        consequence={consequence}
+        refusalByHostId={NO_HOST_OPTION_REFUSALS}
+        inertExceptHostId={null}
+        disabled={false}
+        isLoading={false}
+        listsFailed={false}
+        onRetryLists={() => undefined}
+        updateViewForHost={null}
+        composer={null}
+        environmentLabelForHost={null}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("settings-host-switcher"));
+  }
+
+  it("shows the caller's introduction and does not invent a View host heading", () => {
+    openRail({
+      heading: "Look at another host",
+      hint: "Changes what this window shows. Nothing is created.",
+    });
+
+    expect(screen.getByText("Look at another host")).not.toBeNull();
+    expect(
+      screen.getByText("Changes what this window shows. Nothing is created."),
+    ).not.toBeNull();
+    expect(screen.queryByText("View host")).toBeNull();
+  });
+
+  it("leaves the list untitled when the caller passes no introduction", () => {
+    openRail(null);
+
+    expect(screen.queryByText("View host")).toBeNull();
+    expect(screen.queryByText("Look at another host")).toBeNull();
+    expect(
+      screen.getByTestId("settings-host-switcher-option-host-a"),
+    ).not.toBeNull();
   });
 });

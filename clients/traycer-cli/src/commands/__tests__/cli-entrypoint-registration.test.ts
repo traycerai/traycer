@@ -497,6 +497,7 @@ describe("traycer CLI entrypoint registration", () => {
       ["host", "restart"],
       ["host", "install"],
       ["host", "ensure"],
+      ["host", "join"],
       ["host", "apply"],
       ["host", "update"],
       ["host", "download"],
@@ -525,6 +526,7 @@ describe("traycer CLI entrypoint registration", () => {
       ["host", "stop"],
       ["host", "install"],
       ["host", "ensure"],
+      ["host", "join"],
       ["host", "apply"],
       ["host", "update"],
       ["host", "download"],
@@ -718,6 +720,12 @@ describe("traycer CLI entrypoint registration", () => {
     // Desktop installs bytes only and registers the macOS login item via
     // SMAppService itself.
     expect(flags).toContain("--no-service-register");
+  });
+
+  it("host join takes no token argument", () => {
+    const program = buildProgram();
+    const cmd = expectCommand(program, ["host", "join"]);
+    expect(cmd.registeredArguments).toEqual([]);
   });
 
   it("service lifecycle commands live under host service", () => {

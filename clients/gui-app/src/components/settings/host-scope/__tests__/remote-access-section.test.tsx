@@ -18,6 +18,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -62,8 +63,16 @@ function hostWithRemoteAccess(
   });
 }
 
-function renderTab(host: AccessHost, methods: readonly string[]): QueryClient {
+function renderTab(
+  host: AccessHost,
+  methods: readonly string[],
+  promptAnswered: boolean,
+): QueryClient {
   recordNegotiatedHostMethods(ACCESS_HOST_ID, methods);
+  useHostAccessPromptsStore.setState({
+    remoteAccessAnswered: promptAnswered ? { [ACCESS_HOST_ID]: true } : {},
+    movedNoticeDismissed: {},
+  });
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
@@ -107,9 +116,31 @@ function noSwitch(): void {
 }
 
 describe("<RemoteAccessSection /> in Access and setup", () => {
+  it("shows the unanswered prompt inside the Remote access group without a second row label", async () => {
+    const host = hostWithRemoteAccess("off", "off");
+    renderTab(host, ACCESS_METHODS, false);
+
+    const section = await screen.findByTestId("remote-access-section");
+    expect(
+      within(section).getByRole("heading", { name: "Remote access" }),
+    ).toBeTruthy();
+    expect(
+      within(section).getByTestId("remote-access-question").textContent,
+    ).toBe(
+      "Allow other devices and agents on your account to reach this computer?",
+    );
+    expect(within(section).queryByTestId("remote-access-state")).toBeNull();
+    expect(within(section).getAllByRole("button", { name: "On" })).toHaveLength(
+      1,
+    );
+    expect(
+      within(section).getByRole("button", { name: "Not now" }),
+    ).toBeTruthy();
+  });
+
   it("Off shows 'turning off' until the host confirms", async () => {
     const host = hostWithRemoteAccess("on", "turning_off");
-    const queryClient = renderTab(host, ACCESS_METHODS);
+    const queryClient = renderTab(host, ACCESS_METHODS, true);
     expect(await shownState()).toBe(REMOTE_ACCESS_TEXT.on);
 
     fireEvent.click(await screen.findByRole("button", { name: "Turn off" }));
@@ -165,7 +196,7 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
   });
 
   it("says what On means and offers Turn off", async () => {
-    renderTab(hostWithRemoteAccess("on", "turning_off"), ACCESS_METHODS);
+    renderTab(hostWithRemoteAccess("on", "turning_off"), ACCESS_METHODS, true);
 
     expect(await shownState()).toBe(
       "On. Other devices and agents signed in to your account can reach this computer.",
@@ -177,7 +208,7 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
 
   it("Turn on sends enabled: true and shows what the host reads next", async () => {
     const host = hostWithRemoteAccess("off", "on");
-    const queryClient = renderTab(host, ACCESS_METHODS);
+    const queryClient = renderTab(host, ACCESS_METHODS, true);
     expect(await shownState()).toBe(REMOTE_ACCESS_TEXT.off);
 
     fireEvent.click(await screen.findByRole("button", { name: "Turn on" }));
@@ -198,7 +229,7 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
   });
 
   it("shows a host that is turning remote access off by itself the same way", async () => {
-    renderTab(hostWithRemoteAccess("turning_off", "off"), ACCESS_METHODS);
+    renderTab(hostWithRemoteAccess("turning_off", "off"), ACCESS_METHODS, true);
 
     expect(await shownState()).toBe(REMOTE_ACCESS_TEXT.turning_off);
     expect(screen.getByTestId("remote-access-turning-off")).toBeTruthy();
@@ -207,7 +238,7 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
 
   it("offers no switch on a host that does not have host.remoteAccess.set, and still says the state", async () => {
     const host = hostWithRemoteAccess("on", "turning_off");
-    renderTab(host, WITHOUT_REMOTE_ACCESS_SET);
+    renderTab(host, WITHOUT_REMOTE_ACCESS_SET, true);
 
     expect(await shownState()).toBe(REMOTE_ACCESS_TEXT.on);
     noSwitch();
@@ -216,7 +247,7 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
 
   it("marks the host answered when the person switches remote access, and no other host", async () => {
     const host = hostWithRemoteAccess("on", "turning_off");
-    renderTab(host, ACCESS_METHODS);
+    renderTab(host, ACCESS_METHODS, false);
     await shownState();
     expect(useHostAccessPromptsStore.getState().remoteAccessAnswered).toEqual(
       {},

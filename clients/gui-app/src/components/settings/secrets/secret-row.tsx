@@ -29,7 +29,6 @@ import {
   type SecretVerifyLine,
 } from "@/lib/sandboxes/secret-verify-copy";
 import {
-  SECRET_PENDING_REVIEW_LABEL,
   SECRET_RECOVERY_FALLBACK,
   SECRET_RECOVERY_STEPS,
   SECRET_RECOVERY_TITLE,
@@ -65,7 +64,7 @@ function Spinner(props: { readonly busy: boolean }): ReactNode {
   ) : null;
 }
 
-/** If the secret leaked: the order that closes it fastest. */
+/** If the secret leaked: the order that closes it fastest, open beside the versions. */
 function RecoveryOrder(): ReactNode {
   return (
     <div className="flex flex-col gap-1" data-testid="secret-recovery">
@@ -132,7 +131,7 @@ function SecretRowIdentity(props: {
     <div className="flex min-w-0 flex-col gap-0.5">
       <span className="flex flex-wrap items-center gap-2">
         <span
-          className="min-w-0 text-ui-sm text-muted-foreground"
+          className="min-w-0 wrap-anywhere text-ui-sm text-muted-foreground"
           data-testid="secret-row-line"
         >
           <span className="font-mono text-foreground">{props.secret.name}</span>
@@ -143,9 +142,6 @@ function SecretRowIdentity(props: {
         </span>
         {props.revoked ? (
           <Badge variant="outline">{SECRET_REVOKED_LABEL}</Badge>
-        ) : null}
-        {!props.revoked && props.secret.state === "pending_review" ? (
-          <Badge variant="outline">{SECRET_PENDING_REVIEW_LABEL}</Badge>
         ) : null}
       </span>
     </div>
@@ -282,7 +278,8 @@ function SecretDetailsControls(props: {
 /**
  * One secret on Settings ▸ Personal ▸ Secrets: "STRIPE_KEY · Set · sent to
  * api.stripe.com · added by you 24 Oct" with Replace, Remove and Details.
- * Details holds Verify, the versions and the recovery order; a replacement's
+ * The addresses stay on that line and wrap. Details holds Verify, the
+ * versions and the recovery order, open with the versions; a replacement's
  * progress stays on the row. No value is ever here. Verify and the versions
  * act on the secret by id, so they work for every kind, those already stored
  * included. A held secret's pending-review badge stays.

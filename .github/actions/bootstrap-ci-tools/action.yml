@@ -1,0 +1,62 @@
+name: Bootstrap CI tools
+description: Install locked, verified tools from the release mirror with bounded upstream fallback
+inputs:
+  tools:
+    description: Space-separated tool names in tools-mirror.lock.json
+    default: bun
+  bun-version:
+    description: Bun version asserted against the checked-in lock
+    default: "1.3.14"
+  cold:
+    description: Skip the archive cache for the cold acceptance run
+    default: "false"
+  no-cache:
+    description: Skip restoring tool archives for provenance checks
+    default: "false"
+  mirror-base-url:
+    description: Target release CDN base URL (staging or production)
+    default: ""
+outputs:
+  executed:
+    description: True only after every requested tool was verified and installed
+    value: ${{ steps.install.outputs.executed }}
+  hooks:
+    description: Hook environment source (mirror or fallback)
+    value: ${{ steps.install.outputs.hooks }}
+  bun-origin:
+    description: Source of verified Bun archive bytes (mirror, upstream or cache)
+    value: ${{ steps.install.outputs.bun-origin }}
+runs:
+  using: composite
+  steps:
+    - name: Resolve archive cache paths from the requested tools
+      id: cache_paths
+      shell: bash
+      env:
+        CI_TOOLS_CACHE: ${{ runner.temp }}/traycer-ci-tools
+        CI_TOOLS_REQUESTED: ${{ inputs.tools }}
+        CI_TOOLS_ROOT: ${{ github.action_path }}/../../..
+        CI_TOOLS_BUN_VERSION: ${{ inputs.bun-version }}
+        CI_TOOLS_BYPASS_CACHE: ${{ inputs.no-cache == 'true' }}
+      run: |
+        read -ra tools <<< "$CI_TOOLS_REQUESTED"
+        node "$CI_TOOLS_ROOT/scripts/ci-tools.cjs" cache-paths "$CI_TOOLS_ROOT/tools-mirror.lock.json" "${tools[@]}"
+    - name: Restore verified tool archives
+      if: inputs.cold != 'true' && inputs.no-cache != 'true'
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: ${{ steps.cache_paths.outputs.paths }}
+        key: ci-tools-${{ runner.os }}-${{ runner.arch }}-${{ inputs.tools }}-${{ steps.cache_paths.outputs.lock-digest }}
+    - name: Verify and install locked tools
+      id: install
+      shell: bash
+      env:
+        CI_TOOLS_CACHE: ${{ runner.temp }}/traycer-ci-tools
+        CI_TOOLS_REQUESTED: ${{ inputs.tools }}
+        CI_TOOLS_ROOT: ${{ github.action_path }}/../../..
+        CI_TOOLS_BUN_VERSION: ${{ inputs.bun-version }}
+        CI_TOOLS_MIRROR: ${{ inputs.mirror-base-url }}
+      run: |
+        set -euo pipefail
+        read -ra tools <<< "$CI_TOOLS_REQUESTED"
+        node "$CI_TOOLS_ROOT/scripts/ci-tools.cjs" install "$CI_TOOLS_ROOT/tools-mirror.lock.json" "${tools[@]}"

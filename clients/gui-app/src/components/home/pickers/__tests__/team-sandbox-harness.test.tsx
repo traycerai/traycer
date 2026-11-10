@@ -81,11 +81,9 @@ describe("teamSandboxHarnessBlocked", () => {
 
   it.each([
     ["placeholder", true, false],
-    ["process-scoped", true, true],
     ["unsupported", true, true],
     [null, true, true],
     ["placeholder", false, false],
-    ["process-scoped", false, false],
     ["unsupported", false, false],
     [null, false, false],
   ] as const)(
@@ -200,7 +198,7 @@ function rowOf(harnessId: GuiHarnessId): HarnessModelRow {
 
 const CATALOG: ReadonlyArray<GuiHarnessCatalogEntry> = [
   catalogEntry("codex", "placeholder"),
-  catalogEntry("claude", "process-scoped"),
+  catalogEntry("claude", null),
   catalogEntry("cursor", "unsupported"),
 ];
 
@@ -245,6 +243,7 @@ function renderPanel(input: {
     onRefreshCatalog: () => Promise.resolve(),
     hostUnavailableLabel: null,
     onOpenProviderSettings: noop,
+    onOpenHostUpdates: noop,
     onClosePicker: noop,
     listRef,
     listKey: "list",
@@ -333,7 +332,7 @@ describe("harness picker off a team sandbox", () => {
     ["a personal host", hostEntry({ kind: "personal", owner: undefined })],
     ["a host with no directory entry", null],
   ] as const)(
-    "changes nothing on %s: a process-scoped harness stays selectable",
+    "changes nothing on %s: a harness with no mode stays selectable",
     (_label, entry) => {
       mocks.entry.current = entry;
       const onSelectRow = vi.fn();

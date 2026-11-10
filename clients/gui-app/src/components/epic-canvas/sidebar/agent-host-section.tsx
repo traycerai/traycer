@@ -29,6 +29,7 @@ import {
 } from "@/hooks/sandboxes/use-sandbox-configurations";
 import { useSandboxCosts } from "@/hooks/sandboxes/use-sandbox-costs-query";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
+import { useRegionValue } from "@/lib/layout-overrides";
 import { useSampledNow } from "@/lib/relative-time";
 import {
   AGENT_SANDBOX,
@@ -136,7 +137,9 @@ function TaskHostSection(props: {
         </p>
       ) : null}
       {others.length === 0 ? null : (
-        <p className="text-muted-foreground">{hoverAlsoInTask(others)}</p>
+        <div className="max-h-40 min-w-0 max-w-full overflow-y-auto overscroll-contain break-words text-muted-foreground">
+          <p>{hoverAlsoInTask(others)}</p>
+        </div>
       )}
       {props.host.sandboxEnd === null ? (
         <HostFilesAction hostId={null} />
@@ -338,6 +341,7 @@ function HostActions(props: {
               "explicit",
               "direct_ui",
             ),
+            "user",
           );
         }}
       >
@@ -448,6 +452,10 @@ function HostFilesAction(props: {
     (state) => state.setActivePanelIdAndExpand,
   );
   const setHost = useSurfaceHostSelectionStore((state) => state.setSelection);
+  const fileTreeShown = useRegionValue("railFileTree", "shown") === "shown";
+  // A host's files open in File Tree, so with that panel off the action would
+  // land on another panel and show none of them.
+  if (props.hostId !== null && !fileTreeShown) return null;
   return (
     <Button
       type="button"
@@ -532,16 +540,37 @@ function HostActivity(props: {
     ),
   ];
   const more = Math.max(0, count - here.length - runningTerminals.length);
-  const hostWide = sandboxHostActivityLine(
-    sandboxSessionKinds(status.data?.sessions ?? null),
-  );
   return (
-    <div className="text-muted-foreground">
-      {hostWide === null ? null : (
-        <p data-testid="agent-host-activity">{hostWide}</p>
+    <HostActivityLines
+      hostWide={sandboxHostActivityLine(
+        sandboxSessionKinds(status.data?.sessions ?? null),
       )}
-      {names.length === 0 ? null : <p>{names.join(", ")}</p>}
-      {more > 0 ? <p>{hoverMoreSessions(more)}</p> : null}
+      names={names.join(", ")}
+      more={more}
+    />
+  );
+}
+
+/**
+ * What a held sandbox report says is running, in the card: kinds, this task's
+ * titles, and sessions the busy count places in other tasks. A long list
+ * wraps and scrolls. An empty report draws nothing.
+ */
+function HostActivityLines(props: {
+  readonly hostWide: string | null;
+  readonly names: string;
+  readonly more: number;
+}): ReactNode {
+  if (props.hostWide === null && props.names.length === 0 && props.more === 0) {
+    return null;
+  }
+  return (
+    <div className="max-h-40 min-w-0 max-w-full space-y-1 overflow-y-auto overscroll-contain break-words text-muted-foreground">
+      {props.hostWide === null ? null : (
+        <p data-testid="agent-host-activity">{props.hostWide}</p>
+      )}
+      {props.names.length === 0 ? null : <p>{props.names}</p>}
+      {props.more > 0 ? <p>{hoverMoreSessions(props.more)}</p> : null}
     </div>
   );
 }

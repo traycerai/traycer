@@ -343,6 +343,7 @@ interface LayoutCanvasProbe {
   readonly foldDockPills: () => void;
   readonly unfoldDockPills: () => void;
   readonly setMicShown: (shown: boolean) => void;
+  readonly setVoiceInputEnabled: (enabled: boolean) => void;
   /** A Settings search result for `anchor` on the Layout page (H2). */
   readonly revealSetting: (anchor: string) => void;
   /** The editor door's deep link to a region's row, as the width gate sends it (H2). */
@@ -533,6 +534,10 @@ function readReadings(value: string | null): CanvasVariant["readings"] {
 
 const VARIANT = readVariant();
 
+/** Captured so `restoreLoadState` puts Voice input back to the page-loaded setting. */
+const INITIAL_VOICE_INPUT_ENABLED =
+  useSettingsStore.getState().voiceInputEnabled;
+
 /**
  * The `hosts=1` fleet: this computer's host ("Mac
  * Studio", which the authority derives as the window's host), a remote this
@@ -553,8 +558,7 @@ const FIXTURE_LOCAL_HOST: LocalHostSnapshot = {
 const FIXTURE_REMOTE_HOSTS: readonly HostDirectoryEntry[] = [
   {
     hostId: "fixture-host-builder",
-    // Long enough to overrun the account menu's width: it truncates in
-    // its row and reads in full from the row's tooltip.
+    // Long enough to wrap across lines inside the account menu's width cap.
     label: "build-vm-01.asia-south2-b.c.example-project.internal (staging)",
     kind: "remote",
     websocketUrl: "ws://127.0.0.1:9/builder",
@@ -563,7 +567,7 @@ const FIXTURE_REMOTE_HOSTS: readonly HostDirectoryEntry[] = [
   },
   {
     hostId: "fixture-host-mini",
-    // Offline and long: an inert row still reveals a truncated name.
+    // Offline and long: an inert row still shows its full name.
     label: "gpu-runner-02.us-central1-a.c.example-project.internal (nightly)",
     kind: "remote",
     websocketUrl: null,
@@ -894,6 +898,7 @@ if (VARIANT.readings !== "none") {
             app: {
               sampledAt,
               hostTotalMemoryBytes: 32 * 1024 ** 3,
+              hostCpuCount: 16,
               process: {
                 pid: 10,
                 parentPid: null,
@@ -1044,6 +1049,9 @@ function buildProbe(): LayoutCanvasProbe {
         .getState()
         .setRegionValues("mic", { shown: shown ? "shown" : "hidden" });
     },
+    setVoiceInputEnabled: (enabled) => {
+      useSettingsStore.getState().setVoiceInputEnabled(enabled);
+    },
     revealSetting: (anchor) => {
       useSettingsSearchStore.getState().requestReveal("layout", anchor);
     },
@@ -1181,6 +1189,9 @@ function buildProbe(): LayoutCanvasProbe {
       strip.resetWidth();
       strip.setCollapsed(VARIANT.collapsed);
       useSettingsStore.getState().setTheme("system");
+      useSettingsStore
+        .getState()
+        .setVoiceInputEnabled(INITIAL_VOICE_INPUT_ENABLED);
       useLeftPanelStore.getState().setMainCollapsed(EPIC_SURFACE_ID, false);
       fixtureIndicators = { epics: {}, chats: {}, complete: true };
       applyFixtureIndicators();

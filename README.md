@@ -33,14 +33,14 @@ Switch models instantly within the same agent, orchestrate agent-to-agent commun
 
 ## Installation
 
-| Platform              | Install                                                                                                                   |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| macOS (Apple Silicon) | [Download .dmg (arm64)](https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-macos-arm64.dmg)    |
-| macOS (Intel)         | [Download .dmg (x64)](https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-macos-x64.dmg)        |
-| Linux (AppImage)      | [Download .AppImage](https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-linux-x86_64.AppImage) |
-| Linux (Debian/Ubuntu) | [Download .deb](https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-linux-amd64.deb)            |
-| Linux (Fedora/RHEL)   | [Download .rpm](https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-linux-x86_64.rpm)           |
-| Windows (x64)         | [Download .exe](https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-windows-x64.exe)            |
+| Platform              | Install                                                                                                |
+| --------------------- | ------------------------------------------------------------------------------------------------------ |
+| macOS (Apple Silicon) | [Download .dmg (arm64)](https://releases.traycer.ai/desktop/stable/traycer-desktop-macos-arm64.dmg)    |
+| macOS (Intel)         | [Download .dmg (x64)](https://releases.traycer.ai/desktop/stable/traycer-desktop-macos-x64.dmg)        |
+| Linux (AppImage)      | [Download .AppImage](https://releases.traycer.ai/desktop/stable/traycer-desktop-linux-x86_64.AppImage) |
+| Linux (Debian/Ubuntu) | [Download .deb](https://releases.traycer.ai/desktop/stable/traycer-desktop-linux-amd64.deb)            |
+| Linux (Fedora/RHEL)   | [Download .rpm](https://releases.traycer.ai/desktop/stable/traycer-desktop-linux-x86_64.rpm)           |
+| Windows (x64)         | [Download .exe](https://releases.traycer.ai/desktop/stable/traycer-desktop-windows-x64.exe)            |
 
 See the [latest release](https://github.com/traycerai/traycer/releases/latest) for all available builds.
 

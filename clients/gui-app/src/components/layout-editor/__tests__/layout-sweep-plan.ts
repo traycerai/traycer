@@ -443,8 +443,9 @@ const NO_GIVEN: ReadonlyArray<SweepStep> = [];
 
 /**
  * The context every row's rule reads, for the layout the plan starts from.
- * General > Voice input stays at its shipped value, on: the sweep never writes
- * it, and the Microphone's rule reads nothing else of it.
+ * The sweep explicitly enables Voice input and restores it afterward, so
+ * General > Voice input is on here though it ships off; the Microphone's rule
+ * reads nothing else of it.
  */
 function formContext(input: SweepPlanInput): LayoutFormContext {
   const { shipped, availability } = input;
@@ -467,6 +468,13 @@ const TAB_PLACEMENT_LEFT: SweepStep = arrangementFieldStep(
   "Tab placement: Left",
   "tabStripPlacement",
   "left",
+);
+
+/** The tabs across the top, which is where overflow has anything to fit. */
+const TAB_PLACEMENT_TOP: SweepStep = arrangementFieldStep(
+  "Tab placement: Top",
+  "tabStripPlacement",
+  "top",
 );
 
 const UNLOCKS: ReadonlyArray<Unlock> = [
@@ -536,6 +544,13 @@ const UNLOCKS: ReadonlyArray<Unlock> = [
     applied: (context) => ({
       ...context,
       arrangement: { ...context.arrangement, tabStripPlacement: "left" },
+    }),
+  },
+  {
+    step: TAB_PLACEMENT_TOP,
+    applied: (context) => ({
+      ...context,
+      arrangement: { ...context.arrangement, tabStripPlacement: "top" },
     }),
   },
   {

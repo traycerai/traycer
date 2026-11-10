@@ -451,6 +451,7 @@ describe("TextSegment next steps rendering", () => {
         // The chip is a button, so it pins the tile.
         gesture: "explicit",
       }),
+      "user",
     );
     expect(screen.queryByText(KNOWN_ROLE_CLAIM_ID)).toBeNull();
     expect(screen.queryByText(KNOWN_ROLE_CLAIM_ID.slice(0, 8))).toBeNull();
@@ -485,6 +486,7 @@ describe("TextSegment next steps rendering", () => {
         // The chip is a button, so it pins the tile.
         gesture: "explicit",
       }),
+      "user",
     );
   });
 

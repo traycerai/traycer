@@ -1,14 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  fetchTextMock: vi.fn(),
+  readSignedFeedMock: vi.fn(),
 }));
 
-vi.mock("../fetch-resource", () => ({
-  fetchText: mocks.fetchTextMock,
+vi.mock("../signed-feed", () => ({
+  readSignedFeed: mocks.readSignedFeedMock,
 }));
 
-const { fetchTextMock } = mocks;
+const { readSignedFeedMock } = mocks;
 
 import {
   fetchCliVersions,
@@ -16,62 +16,78 @@ import {
 } from "../cli-versions";
 import { CliError } from "../../runner/errors";
 
-function body(overrides: Record<string, unknown>): string {
-  return JSON.stringify({
-    schemaVersion: 1,
-    generatedAt: "2026-05-15T12:00:00Z",
+function acceptedPayload(
+  compatibilityEpoch: unknown,
+  overrides: Record<string, unknown>,
+): Record<string, unknown> {
+  const now = Date.now();
+  return {
+    schemaVersion: 2,
+    feed: "cli",
+    target: "production",
+    policyRevision: 1,
+    policyDigest: "a".repeat(64),
+    generatedAt: new Date(now).toISOString(),
     latest: "1.2.0",
-    version: "1.2.0",
-    releaseNotesUrl: "https://example.com/notes/1.2.0",
-    platforms: {},
+    expiresAt: new Date(now + 90 * 24 * 60 * 60 * 1000).toISOString(),
+    versions: [
+      {
+        version: "1.2.0",
+        compatibilityEpoch,
+        releaseNotesUrl: "https://example.com/notes/1.2.0",
+        platforms: {},
+      },
+    ],
     ...overrides,
-  });
+  };
 }
 
 describe("fetchCliVersions compatibilityEpoch", () => {
   beforeEach(() => {
-    fetchTextMock.mockReset();
+    readSignedFeedMock.mockReset();
   });
 
   it("returns a stamped positive integer epoch", async () => {
-    fetchTextMock.mockResolvedValue(body({ compatibilityEpoch: 2 }));
+    readSignedFeedMock.mockResolvedValue(acceptedPayload(2, {}));
     expect((await fetchCliVersions()).compatibilityEpoch).toBe(2);
   });
 
   it("returns null for a malformed stamp rather than throwing", async () => {
     for (const stamp of ["3", 2.5, 0, -1, true, null]) {
-      fetchTextMock.mockResolvedValueOnce(body({ compatibilityEpoch: stamp }));
+      readSignedFeedMock.mockResolvedValueOnce(acceptedPayload(stamp, {}));
       expect((await fetchCliVersions()).compatibilityEpoch).toBeNull();
     }
   });
 
   it("returns null when the stamp is absent", async () => {
-    fetchTextMock.mockResolvedValue(body({}));
+    readSignedFeedMock.mockResolvedValue(acceptedPayload(undefined, {}));
     expect((await fetchCliVersions()).compatibilityEpoch).toBeNull();
   });
 
   it("still throws on the existing shape violations", async () => {
-    fetchTextMock.mockResolvedValue(body({ schemaVersion: 2 }));
+    readSignedFeedMock.mockResolvedValue(
+      acceptedPayload(undefined, { schemaVersion: 3 }),
+    );
     await expect(fetchCliVersions()).rejects.toBeInstanceOf(CliError);
-    fetchTextMock.mockResolvedValue("{ not json");
+    readSignedFeedMock.mockResolvedValue({ schemaVersion: 2 });
     await expect(fetchCliVersions()).rejects.toBeInstanceOf(CliError);
   });
 });
 
 describe("readCliFeedCompatibilityEpoch", () => {
   beforeEach(() => {
-    fetchTextMock.mockReset();
+    readSignedFeedMock.mockReset();
   });
 
   it("returns the stamp when the feed is readable", async () => {
-    fetchTextMock.mockResolvedValue(body({ compatibilityEpoch: 2 }));
+    readSignedFeedMock.mockResolvedValue(acceptedPayload(2, {}));
     expect(
       await readCliFeedCompatibilityEpoch(new AbortController().signal),
     ).toBe(2);
   });
 
   it("returns null when the feed is unreachable, never throwing", async () => {
-    fetchTextMock.mockRejectedValue(new Error("offline"));
+    readSignedFeedMock.mockRejectedValue(new Error("offline"));
     expect(
       await readCliFeedCompatibilityEpoch(new AbortController().signal),
     ).toBeNull();

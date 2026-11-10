@@ -105,6 +105,7 @@ import { environmentStatusFixture } from "@/lib/environment/__tests__/environmen
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { useChatTileHostUpdate } from "@/components/epic-canvas/renderers/use-chat-tile-host-update";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
+import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import type { HostRpcRegistry } from "@/lib/host";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
@@ -357,17 +358,19 @@ describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
-    const control = await screen.findByRole("combobox", { name: "Settings" });
-    const description = screen.getByText(
-      "Uses the settings stored on this computer. Changes stay here.",
+    const row = await screen.findByTestId("host-settings-source");
+    expect(row.textContent).toContain("Environment");
+    expect(row.textContent).toContain(
+      "Runs its own settings, not in Personal yet",
     );
-    const row = description.parentElement?.parentElement;
-    if (row === null || row === undefined) {
-      throw new Error("the settings description sits in no row");
-    }
-    expect(row.contains(control)).toBe(true);
+    const trigger = screen.getByRole("combobox", { name: "Environment" });
+    expect(within(trigger).getByText("host-a")).toBeTruthy();
+    expect(within(trigger).queryByText("Local")).toBeNull();
+    expect(
+      within(trigger).getByText("its own settings, not in Personal yet"),
+    ).toBeTruthy();
+    expect(within(row).getByText("Details")).toBeTruthy();
     expect(activeTabTestId()).toBe("host-overview-tab-installation");
-    expect(control.textContent).toBe("This computer only");
     const tabList = screen.getAllByRole("tab")[0].closest("[role='tablist']");
     expect(
       row.compareDocumentPosition(tabList ?? row) &
@@ -389,8 +392,120 @@ describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
       "access",
       "data",
       "ports",
+      "secrets",
+      "costs",
       "simulators",
     ]);
+  });
+
+  it("says whose host the page is for, and a generic line when none is selected", () => {
+    const fixture = buildFixture("host-a");
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = bindingWith(fixture.client);
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    const view = renderPanel();
+
+    expect(
+      screen.getByText("Status, updates and maintenance for host-a."),
+    ).toBeTruthy();
+
+    scopeOverrides.current = { host: null };
+    view.rerender(
+      <QueryClientProvider
+        client={
+          new QueryClient({
+            defaultOptions: { queries: { retry: false, gcTime: 0 } },
+          })
+        }
+      >
+        <RunnerHostProvider runnerHost={makeRunnerHost()}>
+          <HostSettingsPanel />
+        </RunnerHostProvider>
+      </QueryClientProvider>,
+    );
+    expect(
+      screen.getByText(
+        "Status, updates and maintenance for the selected host.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("opens a sandbox host on Installation, with Secrets and Costs and no Sandbox tab", async () => {
+    const fixture = buildFixture("host-a");
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = bindingWith(fixture.client);
+    scopeOverrides.current = {
+      ...scopeFrom("host-a", fixture),
+      host: hostScopeOptionFixture({
+        hostId: "host-a",
+        name: "Sandbox host",
+        kind: "sandbox",
+        sandbox: {
+          state: "awake",
+          frozen: false,
+          summary: sandboxSummaryFixture({ hostId: "host-a" }),
+          teamOwned: false,
+        },
+      }),
+    };
+    renderPanel();
+
+    expect(
+      await screen.findByTestId("host-overview-tab-installation"),
+    ).toBeTruthy();
+    expect(activeTabTestId()).toBe("host-overview-tab-installation");
+    expect(screen.queryByTestId("host-overview-tab-sandbox")).toBeNull();
+    expect(
+      screen.getAllByRole("tab").map((tab) => tab.getAttribute("data-testid")),
+    ).toEqual([
+      "host-overview-tab-installation",
+      "host-overview-tab-updates",
+      "host-overview-tab-access",
+      "host-overview-tab-data",
+      "host-overview-tab-ports",
+      "host-overview-tab-secrets",
+      "host-overview-tab-costs",
+      "host-overview-tab-simulators",
+    ]);
+    expect(
+      screen
+        .getByTestId("host-overview-tab-secrets")
+        .getAttribute("data-settings-anchor"),
+    ).toBeNull();
+    expect(
+      screen
+        .getByTestId("host-overview-tab-costs")
+        .getAttribute("data-settings-anchor"),
+    ).toBeNull();
+  });
+
+  it("keeps Secrets and Costs off a computer", () => {
+    const fixture = buildFixture("host-a");
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = bindingWith(fixture.client);
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    expect(screen.queryByTestId("host-overview-tab-secrets")).toBeNull();
+    expect(screen.queryByTestId("host-overview-tab-costs")).toBeNull();
+  });
+
+  it("an open intent naming the retired 'sandbox' tab opens Installation", () => {
+    const fixture = buildFixture("host-a");
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = bindingWith(fixture.client);
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    armSettingsOpenIntent({
+      section: "host",
+      resetToGeneral: false,
+      tab: "sandbox",
+      draft: null,
+      hostId: null,
+    });
+    renderPanel();
+
+    expect(activeTabTestId()).toBe("host-overview-tab-installation");
+    expect(useSettingsOpenIntentStore.getState().intent).toBeNull();
   });
 
   it("a tab named in the open intent opens that tab, and spends the intent", () => {
@@ -486,7 +601,9 @@ describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
   });
 
   describe("a settings-search landing", () => {
-    for (const tab of HOST_OVERVIEW_TABS) {
+    for (const tab of HOST_OVERVIEW_TABS.filter(
+      (value) => value !== "secrets" && value !== "costs",
+    )) {
       it(`selects ${tab} for its trigger's anchor`, () => {
         const fixture = buildFixture("host-a");
         recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
@@ -504,6 +621,58 @@ describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
         expect(activeTabTestId()).toBe(`host-overview-tab-${tab}`);
       });
     }
+
+    it("stays on Installation when a computer is asked for Secrets or Costs", () => {
+      const fixture = buildFixture("host-a");
+      recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+      hostBindingMock.current = bindingWith(fixture.client);
+      scopeOverrides.current = scopeFrom("host-a", fixture);
+      for (const anchor of [
+        "host-overview-tab-secrets",
+        "host-overview-tab-costs",
+      ]) {
+        useSettingsSearchStore.setState({
+          pendingReveal: { section: "host", anchor, requestedAt: 1 },
+        });
+        const view = renderPanel();
+        expect(activeTabTestId()).toBe("host-overview-tab-installation");
+        view.unmount();
+      }
+    });
+
+    it("a search naming the old Secrets or Costs anchors stays on Overview, and a sandbox still draws those tabs", () => {
+      const fixture = buildFixture("host-a");
+      recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+      hostBindingMock.current = bindingWith(fixture.client);
+      scopeOverrides.current = {
+        ...scopeFrom("host-a", fixture),
+        host: hostScopeOptionFixture({
+          hostId: "host-a",
+          name: "Sandbox host",
+          kind: "sandbox",
+          sandbox: {
+            state: "awake",
+            frozen: false,
+            summary: sandboxSummaryFixture({ hostId: "host-a" }),
+            teamOwned: false,
+          },
+        }),
+      };
+      for (const tab of ["secrets", "costs"] as const) {
+        useSettingsSearchStore.setState({
+          pendingReveal: {
+            section: "host",
+            anchor: `host-overview-tab-${tab}`,
+            requestedAt: 2,
+          },
+        });
+        const view = renderPanel();
+        expect(activeTabTestId()).toBe("host-overview-tab-installation");
+        expect(screen.getByTestId("host-overview-tab-secrets")).toBeTruthy();
+        expect(screen.getByTestId("host-overview-tab-costs")).toBeTruthy();
+        view.unmount();
+      }
+    });
   });
 
   it("keeps a typed value on a visited tab across a switch away and back", async () => {
@@ -563,8 +732,59 @@ describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
     expect(screen.queryByRole("button", { name: "Restart host" })).toBeNull();
   });
 
+  it("keeps Secrets selected only while the host is a sandbox", async () => {
+    const fixtureA = buildFixture("host-a");
+    const fixtureB = buildFixture("host-b");
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    recordNegotiatedHostMethods("host-b", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = bindingWith(fixtureA.client);
+    scopeOverrides.current = {
+      ...scopeFrom("host-a", fixtureA),
+      host: hostScopeOptionFixture({
+        hostId: "host-a",
+        name: "Sandbox host",
+        kind: "sandbox",
+        sandbox: {
+          state: "awake",
+          frozen: false,
+          summary: sandboxSummaryFixture({ hostId: "host-a" }),
+          teamOwned: false,
+        },
+      }),
+    };
+    const view = renderPanelPersistent(null);
+    await selectHostOverviewTab("secrets");
+    expect(activeTabTestId()).toBe("host-overview-tab-secrets");
+
+    hostBindingMock.current = bindingWith(fixtureB.client);
+    scopeOverrides.current = scopeFrom("host-b", fixtureB);
+    view.rerender();
+
+    expect(activeTabTestId()).toBe("host-overview-tab-installation");
+    expect(screen.queryByTestId("host-overview-tab-secrets")).toBeNull();
+
+    hostBindingMock.current = bindingWith(fixtureA.client);
+    scopeOverrides.current = {
+      ...scopeFrom("host-a", fixtureA),
+      host: hostScopeOptionFixture({
+        hostId: "host-a",
+        name: "Sandbox host",
+        kind: "sandbox",
+        sandbox: {
+          state: "awake",
+          frozen: false,
+          summary: sandboxSummaryFixture({ hostId: "host-a" }),
+          teamOwned: false,
+        },
+      }),
+    };
+    view.rerender();
+
+    expect(activeTabTestId()).toBe("host-overview-tab-secrets");
+  });
+
   describe("on a phone", () => {
-    it("carries the active tab's anchor on the Select, and puts Activate in the ⋯ menu", async () => {
+    it("carries the active tab's anchor on the Select and keeps Activate in the header", async () => {
       window.innerWidth = 500;
       const fixture = buildFixture("host-a");
       recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
@@ -593,32 +813,29 @@ describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
         "host-overview-tab-data",
       );
 
-      // No inline Activate button - it only exists inside the ⋯ menu on a
-      // phone, so the name row never wraps.
-      expect(screen.queryByRole("button", { name: "Activate" })).toBeNull();
+      expect(screen.getByRole("button", { name: "Activate" })).not.toBeNull();
 
       await openHostOverviewMenu();
-      expect(await screen.findByTestId("host-make-active")).not.toBeNull();
+      expect(screen.getAllByTestId("host-make-active")).toHaveLength(1);
     });
 
-    it("keeps a long name on one line with its pencil, its tag and the ⋯ menu", async () => {
+    it("gives the full long name its own row on a phone, with its pencil, and the ⋯ menu below it", async () => {
       window.innerWidth = 500;
       await renderLongNamedHost();
 
       const row = screen.getByTestId("host-identity-name-row");
-      // jsdom lays nothing out, so the line is asserted as the classes that
-      // make it one: a row that cannot wrap, and a name that can shrink below
-      // its text and truncates.
-      expect(row.classList.contains("flex-wrap")).toBe(false);
+      expect(row.classList.contains("w-full")).toBe(true);
       const name = within(row).getByRole("heading", { name: LONG_NAME });
       expect(name.classList.contains("min-w-0")).toBe(true);
-      expect(name.classList.contains("truncate")).toBe(true);
+      expect(name.classList.contains("wrap-anywhere")).toBe(true);
+      expect(name.classList.contains("truncate")).toBe(false);
       expect(within(row).getByTestId("host-overview-edit-name")).not.toBeNull();
-      expect(within(row).getByText("Computer")).not.toBeNull();
-      // The ⋯ menu shares the row's line: the header's one flex line holds the
-      // name row and the actions side by side.
+      // Below sm the header stacks: the ⋯ menu sits under the name row, in the
+      // same header block, never beside the name.
       const line = row.parentElement;
       if (line === null) throw new Error("the name row sits in no line");
+      expect(line.classList.contains("flex-col")).toBe(true);
+      expect(within(row).queryByTestId("host-overview-menu")).toBeNull();
       expect(within(line).getByTestId("host-overview-menu")).not.toBeNull();
     });
   });
@@ -629,16 +846,19 @@ describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
     expect(
       screen
         .getByTestId("host-identity-name-row")
-        .classList.contains("flex-wrap"),
+        .classList.contains("sm:flex-wrap"),
     ).toBe(true);
   });
 
-  it("renders all six tab triggers under a connecting host", async () => {
+  it("renders the six personal-host tab triggers under a connecting host", async () => {
     scopeOverrides.current = coldConnectingScope();
     renderPanel();
 
-    expect(HOST_OVERVIEW_TABS).toHaveLength(6);
-    for (const tab of HOST_OVERVIEW_TABS) {
+    const tabs = HOST_OVERVIEW_TABS.filter(
+      (tab) => tab !== "secrets" && tab !== "costs",
+    );
+    expect(tabs).toHaveLength(6);
+    for (const tab of tabs) {
       expect(
         await screen.findByTestId(`host-overview-tab-${tab}`),
       ).not.toBeNull();

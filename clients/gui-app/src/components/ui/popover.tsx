@@ -7,6 +7,7 @@ import { usePaneAwareContentGuard } from "@/components/epic-tabs/pane-visibility
 import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
 import { useSafeAreaCollisionPadding } from "@/components/ui/safe-area-collision-padding";
 import { declineListSearchAutoFocus } from "@/hooks/ui/decline-list-search-autofocus";
+import { useSurfaceOverlayContainerEl } from "@/providers/surface-overlay-container-context";
 import { cn } from "@/lib/utils";
 
 function Popover({
@@ -35,8 +36,9 @@ function PopoverTrigger({
  * - `bare` — the content draws its own edges (a command list, a picker whose
  *   rows run to the plate's inner edge, a scroll region).
  * - `panel` — `bare` on a bigger plate: a wide surface with its own header and
- *   footer bands, which needs the larger radius to stay concentric with them
- *   and clips them to it.
+ *   footer bands, which needs the larger radius to stay concentric with them.
+ *   `overflow-hidden` clips those bands to the radius and wins over the
+ *   content's own scroll, so a panel's list scrolls in a descendant.
  */
 const POPOVER_CONTENT_LAYOUTS = {
   padded: "gap-2.5 rounded-lg p-2.5",
@@ -82,9 +84,14 @@ function PopoverContent({
   // default width cap; both are displaceable by a caller (see
   // `safe-area-collision-padding.ts` and `dropdown-menu.tsx`).
   const safeAreaInsets = useSafeAreaCollisionPadding();
+  // A popover opened inside a top-layer surface must portal into it or it
+  // paints beneath it (see `surface-overlay-container-context`).
+  const surfaceContainer = useSurfaceOverlayContainerEl();
   if (!paneFocused || concealed) return null;
   return (
-    <PopoverPrimitive.Portal container={container}>
+    <PopoverPrimitive.Portal
+      container={container ?? surfaceContainer ?? undefined}
+    >
       <PopoverPrimitive.Content
         ref={ref}
         data-slot="popover-content"
@@ -94,7 +101,14 @@ function PopoverContent({
         sideOffset={sideOffset}
         collisionPadding={collisionPadding ?? safeAreaInsets}
         className={cn(
-          "z-50 flex w-72 max-w-safe-dvw origin-(--radix-popover-content-transform-origin) flex-col bg-popover text-ui-sm text-popover-foreground shadow-md max-md:short-landscape:max-h-(--radix-popover-content-available-height) max-md:short-landscape:overflow-y-auto ring-1 ring-foreground/10 outline-hidden duration-100 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          // The cap is Radix's available height at every width, including phone
+          // landscape. `overflow-y-auto` is the fallback scroll. A caller that
+          // pins a footer puts `min-h-0 overflow-y-auto` on the list so this
+          // box stays within the cap and the footer does not scroll away.
+          // `data-[state=closed]:overflow-hidden` keeps the exit animation
+          // from flashing a scrollbar. A caller's own `max-h-*` is the same
+          // unprefixed utility, so it displaces this cap.
+          "z-50 flex w-72 max-h-(--radix-popover-content-available-height) max-w-safe-dvw min-h-0 origin-(--radix-popover-content-transform-origin) flex-col overflow-x-hidden overflow-y-auto bg-popover text-ui-sm text-popover-foreground shadow-md ring-1 ring-foreground/10 outline-hidden duration-100 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:overflow-hidden data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           POPOVER_CONTENT_LAYOUTS[layout],
           appearance === "tooltip" &&
             "rounded-md bg-foreground text-background shadow-sm ring-0",

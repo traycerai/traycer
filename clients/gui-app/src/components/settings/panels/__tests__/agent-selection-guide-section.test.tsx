@@ -400,17 +400,19 @@ describe("AgentSelectionGuideSection", () => {
 
   // Regression: the scope refactor wrapped the loaded state in a frame that
   // printed the title, while `AgentSelectionGuideEditorSurface` was already
-  // printing its own - so the panel showed the heading and description twice.
-  // Every other assertion in this file passed throughout.
+  // printing its own - so the panel showed the heading twice.
   it("prints the guide heading exactly once in each state", () => {
     const { rerender, unmount } = renderPanel();
-    expect(screen.getAllByText("Agent selection guide")).toHaveLength(1);
+    expect(
+      screen.getAllByRole("heading", { name: "Agent selection guide" }),
+    ).toHaveLength(1);
 
-    // ...and the message states, which own the heading themselves.
     guideMocks.queryData = undefined;
     guideMocks.queryIsError = true;
     rerender(strictPanel());
-    expect(screen.getAllByText("Agent selection guide")).toHaveLength(1);
+    expect(
+      screen.getAllByRole("heading", { name: "Agent selection guide" }),
+    ).toHaveLength(1);
     unmount();
   });
 
@@ -545,12 +547,25 @@ describe("AgentSelectionGuideSection", () => {
     ).toBeNull();
   });
 
-  it("names the page by the guide agents read, and carries no description line of its own", () => {
+  it("shows the page purpose, guide caption and editor heading with no extra click", () => {
     render(<AgentsSettingsPanel />);
 
-    expect(screen.getByTestId("agents-guide-caption").textContent).toContain(
+    expect(
+      screen.getByText(
+        "How agents are picked, and the agents each coding agent can start.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByTestId("agents-guide-caption").textContent).toBe(
       "The guide agents read when they pick a coding agent, model and effort for work they hand off.",
     );
+    expect(
+      screen.getAllByText(
+        "The guide agents read when they pick a coding agent, model and effort for work they hand off.",
+      ),
+    ).toHaveLength(1);
+    expect(
+      screen.getAllByRole("heading", { name: "Agent selection guide" }),
+    ).toHaveLength(1);
     expect(screen.queryByText(/Instructions for choosing Traycer/)).toBeNull();
     expect(screen.queryByText(/Provider-native subagents/)).toBeNull();
     expect(

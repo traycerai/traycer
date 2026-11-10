@@ -4,16 +4,45 @@ import { join, resolve as resolvePath } from "node:path";
 import type { DesktopTrayEpic } from "../../../ipc-contracts/host-types";
 import type { TrayManagedWindow } from "../tray";
 
-const { mockAppState, mockMenuState, trayInstances } = vi.hoisted(() => ({
+const {
+  mockAppState,
+  mockMenuState,
+  trayInstances,
+  nativeThemeState,
+  processState,
+  execFileState,
+  accessState,
+  nativeImageState,
+  electronLogState,
+} = vi.hoisted(() => ({
   mockAppState: { appPath: "/unused-in-pure-helper-tests" },
   mockMenuState: {
     lastBuiltMenu: null as { template: CapturedMenuItemLike[] } | null,
   },
   trayInstances: [] as MockTrayInstanceLike[],
+  nativeThemeState: {
+    shouldUseDarkColorsForSystemIntegratedUI: true,
+    listeners: new Map<string, Array<() => void>>(),
+  },
+  processState: { platform: "linux" },
+  execFileState: {
+    calls: [] as Array<{ file: string; args: string[]; options: unknown }>,
+    callbacks: [] as Array<
+      (error: Error | null, stdout: string, stderr: string) => void
+    >,
+  },
+  accessState: {
+    blockedPaths: new Set<string>(),
+    releases: new Map<string, () => void>(),
+    calls: [] as string[],
+  },
+  nativeImageState: { paths: [] as string[] },
+  electronLogState: { debugCalls: 0 },
 }));
 
 interface MockTrayInstanceLike {
   readonly toolTips: string[];
+  readonly images: unknown[];
   // Every menu handed to `setContextMenu`, in call order - lets a test count
   // rebuilds (`.length`) rather than only inspect the latest one.
   readonly contextMenus: unknown[];
@@ -22,6 +51,7 @@ interface MockTrayInstanceLike {
   destroyed: boolean;
   destroyCallCount: number;
   setToolTip(text: string): void;
+  setImage(image: unknown): void;
   on(event: string, handler: () => void): void;
   setContextMenu(menu: unknown): void;
   isDestroyed(): boolean;
@@ -54,6 +84,7 @@ interface CapturedMenuItemLike {
 vi.mock("electron", () => {
   class MockTrayClass implements MockTrayInstanceLike {
     readonly toolTips: string[] = [];
+    readonly images: unknown[] = [];
     readonly contextMenus: unknown[] = [];
     readonly eventHandlers: Record<string, Array<() => void>> = {};
     contextMenu: unknown = null;
@@ -65,6 +96,9 @@ vi.mock("electron", () => {
     }
     setToolTip(text: string): void {
       this.toolTips.push(text);
+    }
+    setImage(image: unknown): void {
+      this.images.push(image);
     }
     on(event: string, handler: () => void): void {
       const bucket = this.eventHandlers[event] ?? [];
@@ -108,14 +142,93 @@ vi.mock("electron", () => {
     },
     Tray: MockTrayClass,
     nativeImage: {
-      createFromPath: (): unknown => ({
-        isEmpty: (): boolean => false,
-        setTemplateImage: (): void => {},
-      }),
+      createFromPath: (path: string): unknown => {
+        nativeImageState.paths.push(path);
+        return {
+          path,
+          isEmpty: (): boolean => false,
+          setTemplateImage: (): void => {},
+        };
+      },
       createFromNamedImage: (): unknown => ({
         isEmpty: (): boolean => true,
       }),
       createEmpty: (): unknown => ({ isEmpty: (): boolean => true }),
+    },
+    nativeTheme: {
+      get shouldUseDarkColorsForSystemIntegratedUI() {
+        return nativeThemeState.shouldUseDarkColorsForSystemIntegratedUI;
+      },
+      on: (event: string, listener: () => void): void => {
+        const bucket = nativeThemeState.listeners.get(event) ?? [];
+        bucket.push(listener);
+        nativeThemeState.listeners.set(event, bucket);
+      },
+      removeListener: (event: string, listener: () => void): void => {
+        nativeThemeState.listeners.set(
+          event,
+          (nativeThemeState.listeners.get(event) ?? []).filter(
+            (candidate) => candidate !== listener,
+          ),
+        );
+      },
+    },
+  };
+});
+
+vi.mock("node:child_process", () => {
+  const execFile = (
+    file: string,
+    args: string[],
+    options: unknown,
+    callback: (error: Error | null, stdout: string, stderr: string) => void,
+  ): void => {
+    execFileState.calls.push({ file, args, options });
+    execFileState.callbacks.push(callback);
+  };
+  Object.defineProperty(execFile, Symbol.for("nodejs.util.promisify.custom"), {
+    value: (
+      file: string,
+      args: string[],
+      options: unknown,
+    ): Promise<{ stdout: string; stderr: string }> =>
+      new Promise((resolve, reject) => {
+        execFileState.calls.push({ file, args, options });
+        execFileState.callbacks.push((error, stdout, stderr) => {
+          if (error !== null) reject(error);
+          else resolve({ stdout, stderr });
+        });
+      }),
+  });
+  return { execFile };
+});
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    access: (
+      path: Parameters<typeof actual.access>[0],
+      mode: number | undefined,
+    ): Promise<void> => {
+      const normalizedPath = String(path);
+      accessState.calls.push(normalizedPath);
+      if (accessState.blockedPaths.has(normalizedPath)) {
+        return new Promise<void>((resolve) => {
+          accessState.releases.set(normalizedPath, resolve);
+        });
+      }
+      return actual.access(path, mode);
+    },
+  };
+});
+
+vi.mock("node:process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:process")>();
+  return {
+    ...actual,
+    get platform() {
+      return processState.platform;
     },
   };
 });
@@ -129,7 +242,9 @@ vi.mock("electron-log", () => ({
     info: vi.fn(),
     warn: vi.fn(),
     error: vi.fn(),
-    debug: vi.fn(),
+    debug: vi.fn(() => {
+      electronLogState.debugCalls += 1;
+    }),
   },
 }));
 
@@ -143,7 +258,11 @@ vi.mock("../../../config", async (importActual) => {
 });
 
 import { nativeImage } from "electron";
-import { DesktopTrayController, resolveTrayIconPath } from "../tray";
+import {
+  buildTrayAssetContext,
+  DesktopTrayController,
+  resolveTrayIconPath,
+} from "../tray";
 
 // The controller now receives a pre-loaded image (icon loading moved to the
 // async `loadTrayIconImage`), so menu-structure tests pass a stub from the
@@ -162,6 +281,7 @@ describe("resolveTrayIconPath", () => {
     const asset = resolveTrayIconPath({
       platform: "darwin",
       trayDir: "/packaged/Resources/tray",
+      systemUsesDarkColors: true,
     });
     expect(asset.path).toBe(
       join("/packaged/Resources/tray", "trayTemplate.png"),
@@ -169,21 +289,35 @@ describe("resolveTrayIconPath", () => {
     expect(asset.isTemplate).toBe(true);
   });
 
-  it("returns <trayDir>/tray.png on Windows / Linux", () => {
-    for (const platform of ["win32", "linux"] as const) {
-      const asset = resolveTrayIconPath({
-        platform,
-        trayDir: "/packaged/Resources/tray",
-      });
-      expect(asset.path).toBe(join("/packaged/Resources/tray", "tray.png"));
-      expect(asset.isTemplate).toBe(false);
-    }
+  it("chooses the Windows glyph from system colors and leaves Linux unchanged", () => {
+    const windowsDark = resolveTrayIconPath({
+      platform: "win32",
+      trayDir: "/packaged/Resources/tray",
+      systemUsesDarkColors: true,
+    });
+    const windowsLight = resolveTrayIconPath({
+      platform: "win32",
+      trayDir: "/packaged/Resources/tray",
+      systemUsesDarkColors: false,
+    });
+    expect(windowsDark.path).toBe(join("/packaged/Resources/tray", "tray.png"));
+    expect(windowsLight.path).toBe(
+      join("/packaged/Resources/tray", "tray-dark.png"),
+    );
+    const linux = resolveTrayIconPath({
+      platform: "linux",
+      trayDir: "/packaged/Resources/tray",
+      systemUsesDarkColors: false,
+    });
+    expect(linux.path).toBe(join("/packaged/Resources/tray", "tray.png"));
+    expect(windowsLight.isTemplate).toBe(false);
   });
 
   it("uses the supplied tray directory verbatim regardless of platform", () => {
     const macAsset = resolveTrayIconPath({
       platform: "darwin",
       trayDir: "/fake/app/path/resources/tray",
+      systemUsesDarkColors: false,
     });
     expect(macAsset.path).toBe(
       join("/fake/app/path/resources/tray", "trayTemplate.png"),
@@ -193,6 +327,7 @@ describe("resolveTrayIconPath", () => {
     const linuxAsset = resolveTrayIconPath({
       platform: "linux",
       trayDir: "/fake/app/path/resources/tray",
+      systemUsesDarkColors: false,
     });
     expect(linuxAsset.path).toBe(
       join("/fake/app/path/resources/tray", "tray.png"),
@@ -206,9 +341,14 @@ describe("resolveTrayIconPath", () => {
     // alongside this source tree - exactly what the helper resolves at
     // runtime when the override is set.
     const trayDir = join(REPO_DESKTOP_ROOT, "resources", "tray");
-    const platforms: NodeJS.Platform[] = ["darwin", "win32", "linux"];
-    for (const platform of platforms) {
-      const asset = resolveTrayIconPath({ platform, trayDir });
+    const assets = [
+      { platform: "darwin", systemUsesDarkColors: true },
+      { platform: "win32", systemUsesDarkColors: true },
+      { platform: "win32", systemUsesDarkColors: false },
+      { platform: "linux", systemUsesDarkColors: true },
+    ] as const;
+    for (const context of assets) {
+      const asset = resolveTrayIconPath({ ...context, trayDir });
       expect(existsSync(asset.path), `expected ${asset.path} to exist`).toBe(
         true,
       );
@@ -230,7 +370,7 @@ describe("resolveTrayIconPath", () => {
 
   it("ships a retina @2x companion next to every base asset", () => {
     const trayDir = join(REPO_DESKTOP_ROOT, "resources", "tray");
-    for (const base of ["trayTemplate.png", "tray.png"]) {
+    for (const base of ["trayTemplate.png", "tray.png", "tray-dark.png"]) {
       const retina = base.replace(".png", "@2x.png");
       expect(existsSync(join(trayDir, retina))).toBe(true);
     }
@@ -290,6 +430,16 @@ function makeMruWindowProxy(
 
 describe("DesktopTrayController menu structure", () => {
   beforeEach(() => {
+    processState.platform = "linux";
+    nativeThemeState.shouldUseDarkColorsForSystemIntegratedUI = true;
+    nativeThemeState.listeners.clear();
+    execFileState.calls.length = 0;
+    execFileState.callbacks.length = 0;
+    accessState.blockedPaths.clear();
+    accessState.releases.clear();
+    accessState.calls.length = 0;
+    nativeImageState.paths.length = 0;
+    electronLogState.debugCalls = 0;
     mockAppState.appPath = REPO_DESKTOP_ROOT;
     mockMenuState.lastBuiltMenu = null;
     trayInstances.length = 0;
@@ -301,6 +451,198 @@ describe("DesktopTrayController menu structure", () => {
       configurable: true,
       value: join(REPO_DESKTOP_ROOT, "resources"),
     });
+  });
+
+  it("starts with the white glyph while the Windows registry theme is pending", () => {
+    processState.platform = "win32";
+    const context = buildTrayAssetContext();
+    expect(context.systemUsesDarkColors).toBe(true);
+    expect(resolveTrayIconPath(context).path).toBe(
+      join(context.trayDir, "tray.png"),
+    );
+  });
+
+  it.each([
+    {
+      registryValue: "0x1",
+      appUsesDarkColors: true,
+      expected: "tray-dark.png",
+    },
+    { registryValue: "0x0", appUsesDarkColors: false, expected: "tray.png" },
+  ])(
+    "uses SystemUsesLightTheme $registryValue even when app dark is $appUsesDarkColors",
+    async ({ registryValue, appUsesDarkColors, expected }) => {
+      processState.platform = "win32";
+      nativeThemeState.shouldUseDarkColorsForSystemIntegratedUI =
+        appUsesDarkColors;
+      const controller = new DesktopTrayController(makeWindow(), trayImage(), {
+        onEpicSelected: null,
+        onCommand: null,
+      });
+      const tray = mostRecentTray();
+      expect(execFileState.calls).toHaveLength(1);
+      expect(execFileState.calls[0]).toMatchObject({
+        args: [
+          "query",
+          "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+          "/v",
+          "SystemUsesLightTheme",
+        ],
+        options: {
+          timeout: 1_000,
+          windowsHide: true,
+          encoding: "utf8",
+          maxBuffer: 4_096,
+        },
+      });
+      expect(execFileState.calls[0]?.file.endsWith("\\System32\\reg.exe")).toBe(
+        true,
+      );
+      const completeProbe = execFileState.callbacks[0];
+      if (completeProbe === undefined) {
+        throw new Error("registry probe was not recorded");
+      }
+      completeProbe(
+        null,
+        `    SystemUsesLightTheme    REG_DWORD    ${registryValue}\r\n`,
+        "",
+      );
+      await vi.waitFor(() => expect(tray.images).toHaveLength(1));
+      expect((tray.images[0] as { path: string }).path).toBe(
+        join(REPO_DESKTOP_ROOT, "resources", "tray", expected),
+      );
+      controller.dispose();
+    },
+  );
+
+  it("falls back to the live native theme when the Windows registry probe fails", async () => {
+    processState.platform = "win32";
+    nativeThemeState.shouldUseDarkColorsForSystemIntegratedUI = false;
+    const controller = new DesktopTrayController(makeWindow(), trayImage(), {
+      onEpicSelected: null,
+      onCommand: null,
+    });
+    const tray = mostRecentTray();
+    const completeProbe = execFileState.callbacks[0];
+    if (completeProbe === undefined) {
+      throw new Error("registry probe was not recorded");
+    }
+    completeProbe(new Error("registry unavailable"), "", "");
+    await vi.waitFor(() => expect(tray.images).toHaveLength(1));
+    expect((tray.images[0] as { path: string }).path).toBe(
+      join(REPO_DESKTOP_ROOT, "resources", "tray", "tray-dark.png"),
+    );
+    controller.dispose();
+  });
+
+  it("uses live native theme updates and removes its listener on disposal", async () => {
+    processState.platform = "win32";
+    const controller = new DesktopTrayController(makeWindow(), trayImage(), {
+      onEpicSelected: null,
+      onCommand: null,
+    });
+    const tray = mostRecentTray();
+    expect(nativeThemeState.listeners.get("updated")).toHaveLength(1);
+    nativeThemeState.shouldUseDarkColorsForSystemIntegratedUI = false;
+    for (const listener of nativeThemeState.listeners.get("updated") ?? [])
+      listener();
+    await vi.waitFor(() => expect(tray.images).toHaveLength(1));
+    expect((tray.images[0] as { path: string }).path).toBe(
+      join(REPO_DESKTOP_ROOT, "resources", "tray", "tray-dark.png"),
+    );
+    controller.dispose();
+    expect(nativeThemeState.listeners.get("updated")).toHaveLength(0);
+  });
+
+  it("lets a live theme update supersede a pending registry result", async () => {
+    processState.platform = "win32";
+    nativeThemeState.shouldUseDarkColorsForSystemIntegratedUI = false;
+    const controller = new DesktopTrayController(makeWindow(), trayImage(), {
+      onEpicSelected: null,
+      onCommand: null,
+    });
+    const tray = mostRecentTray();
+    nativeThemeState.shouldUseDarkColorsForSystemIntegratedUI = false;
+    for (const listener of nativeThemeState.listeners.get("updated") ?? []) {
+      listener();
+    }
+    await vi.waitFor(() => expect(tray.images).toHaveLength(1));
+
+    const completeProbe = execFileState.callbacks[0];
+    if (completeProbe === undefined) {
+      throw new Error("registry probe was not recorded");
+    }
+    completeProbe(null, "unparseable registry result", "");
+    await vi.waitFor(() => expect(electronLogState.debugCalls).toBe(1));
+    expect(accessState.calls).toHaveLength(1);
+    expect(tray.images).toHaveLength(1);
+    expect((tray.images[0] as { path: string }).path).toMatch(
+      /tray-dark\.png$/,
+    );
+    controller.dispose();
+  });
+
+  it("ignores a registry result that arrives after controller disposal", async () => {
+    processState.platform = "win32";
+    const controller = new DesktopTrayController(makeWindow(), trayImage(), {
+      onEpicSelected: null,
+      onCommand: null,
+    });
+    const tray = mostRecentTray();
+    controller.dispose();
+    const completeProbe = execFileState.callbacks[0];
+    if (completeProbe === undefined) {
+      throw new Error("registry probe was not recorded");
+    }
+    completeProbe(null, "unparseable registry result", "");
+    await vi.waitFor(() => expect(electronLogState.debugCalls).toBe(1));
+    expect(accessState.calls).toHaveLength(0);
+    expect(tray.images).toHaveLength(0);
+    expect(nativeThemeState.listeners.get("updated")).toHaveLength(0);
+  });
+
+  it("does not set an image whose load finishes after the controller is disposed", async () => {
+    processState.platform = "win32";
+    nativeThemeState.shouldUseDarkColorsForSystemIntegratedUI = false;
+    const controller = new DesktopTrayController(makeWindow(), trayImage(), {
+      onEpicSelected: null,
+      onCommand: null,
+    });
+    const tray = mostRecentTray();
+    const darkPath = join(
+      REPO_DESKTOP_ROOT,
+      "resources",
+      "tray",
+      "tray-dark.png",
+    );
+    accessState.blockedPaths.add(darkPath);
+    for (const listener of nativeThemeState.listeners.get("updated") ?? []) {
+      listener();
+    }
+    await vi.waitFor(() =>
+      expect(accessState.releases.has(darkPath)).toBe(true),
+    );
+
+    controller.dispose();
+    const releaseLoad = accessState.releases.get(darkPath);
+    if (releaseLoad === undefined) throw new Error("icon load was not pending");
+    releaseLoad();
+    await vi.waitFor(() => expect(nativeImageState.paths).toContain(darkPath));
+    expect(tray.images).toHaveLength(0);
+    expect(nativeThemeState.listeners.get("updated")).toHaveLength(0);
+  });
+
+  it("does not query the Windows registry or subscribe to theme updates on Linux or macOS", () => {
+    for (const platform of ["linux", "darwin"] as const) {
+      processState.platform = platform;
+      const controller = new DesktopTrayController(makeWindow(), trayImage(), {
+        onEpicSelected: null,
+        onCommand: null,
+      });
+      expect(execFileState.calls).toHaveLength(0);
+      expect(nativeThemeState.listeners.get("updated") ?? []).toHaveLength(0);
+      controller.dispose();
+    }
   });
 
   it("renders a disabled 'No recent epics' item when the epic list is empty", () => {

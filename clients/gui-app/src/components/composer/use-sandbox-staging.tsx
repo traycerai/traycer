@@ -299,8 +299,6 @@ export function useSandboxStaging(input: {
     [task],
   );
 
-  const stagedConfiguration =
-    stage === null ? null : stage.target.configuration;
   const stagedFacts = useMemo(
     () =>
       stage === null || stage.target.kind !== "new" || catalogue === null
@@ -309,7 +307,8 @@ export function useSandboxStaging(input: {
     [catalogue, stage, user],
   );
   const consequences = useMemo<ConsequencesInput | null>(() => {
-    if (stage === null || stagedConfiguration === null) return null;
+    if (stage === null) return null;
+    const stagedConfiguration = stage.target.configuration;
     const principal = configurationPrincipal(stagedConfiguration, viewerUserId);
     const price = stagedTargetPrice(stage.target, input.hosts, stagedFacts);
     const balance = stageBalanceMc(user, stagedConfiguration);
@@ -318,11 +317,23 @@ export function useSandboxStaging(input: {
     const existingHost = input.hosts.find(
       (host) => host.hostId === existingHostId,
     );
-    const payer = existingHost?.sandbox?.summary?.wakePayer;
+    const stagedHost = input.hosts.find(
+      (host) => host.hostId === (stage.createdHostId ?? existingHostId),
+    );
+    const existingSummary = existingHost?.sandbox?.summary;
+    const payer = existingSummary?.wakePayer;
     return {
       configuration: stagedConfiguration,
+      os:
+        stage.target.kind === "new"
+          ? stage.target.shape.os
+          : existingSummary?.os,
       price,
       needsCredits: stagedFacts !== null && stagedFacts.needsCredits,
+      billingStarted: stagedSandboxBillingStarted(
+        stage,
+        stagedHost === undefined ? null : stagedHost.sandbox,
+      ),
       shortfallMc:
         balance === null || price === null
           ? null
@@ -344,7 +355,6 @@ export function useSandboxStaging(input: {
     input.hosts,
     reachFor,
     stage,
-    stagedConfiguration,
     stagedFacts,
     user,
     viewerUserId,
@@ -548,8 +558,8 @@ export function useSandboxStaging(input: {
     rows,
     setSheetKey,
     stage,
-    stageNew,
     stagedFacts,
+    stageNew,
     surfaceKey,
     task,
     viewerUserId,
@@ -971,6 +981,35 @@ function stagedTargetPrice(
   return stagedFacts === null ? null : stagedFacts.price;
 }
 
+/** Current lifecycle facts override a stage's last proof that it was awake. */
+function stagedSandboxBillingStarted(
+  stage: StagedSandbox,
+  sandbox: HostScopeSandbox | null,
+): boolean {
+  if (sandbox !== null) {
+    if (sandbox.frozen) return false;
+    if (sandbox.state !== null) return sandbox.state === "awake";
+  }
+  switch (stage.failure?.kind) {
+    case "settings":
+    case "no-provider":
+    case "traycer-off":
+    case "agent-not-offered":
+    case "agent-setup-failed":
+    case "not-sent":
+      return true;
+    case undefined:
+    case "timed-out":
+      return (
+        stage.phase === "handoff" ||
+        stage.step === "applying" ||
+        stage.step === "delivering"
+      );
+    default:
+      return false;
+  }
+}
+
 /** The New row of `configurationKey`; `null` for none, or no key. */
 function newRowOf(
   rows: readonly NewRowFacts[],
@@ -1003,5 +1042,10 @@ function existingTargetPrice(
   const summary =
     host === undefined || host.sandbox === null ? null : host.sandbox.summary;
   if (summary === null || summary.priceMcPerHour === null) return null;
-  return { awakeMcPerHour: summary.priceMcPerHour.awakeMc, exact: true };
+  return {
+    awakeMcPerHour: summary.priceMcPerHour.awakeMc,
+    suspendedMcPerHour: summary.priceMcPerHour.suspendedMc,
+    stoppedMcPerHour: summary.priceMcPerHour.stoppedMc,
+    exact: true,
+  };
 }

@@ -48,6 +48,11 @@ import {
 } from "@/components/settings/panels/provider-rate-limit-views";
 import { OpenModelProvidersButton } from "@/components/settings/panels/opencode-go-actions";
 import { resolveCodexResetCreditAction } from "@/components/settings/panels/codex-reset-credit-availability";
+import {
+  useProvidersList,
+  useProvidersListForClient,
+} from "@/hooks/providers/use-providers-list-query";
+import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostProviderRateLimitsQuery } from "@/hooks/host/use-host-provider-rate-limits-query";
 import { useRefreshProviderRateLimitsOnMount } from "@/hooks/host/use-refresh-provider-rate-limits-on-mount";
 import {
@@ -354,7 +359,19 @@ function railTabProviderId(tab: RailTabDescriptor): ProviderId {
   return tab.kind === "traycer" ? "traycer" : tab.providerId;
 }
 
+/** Gates scoped account usage on the bound host’s Traycer provider setting. */
 function useTraycerSubscription() {
+  const account = useTraycerAccountSubscription();
+  const providersQuery = useProvidersList({ enabled: true, subscribed: true });
+  const enabled =
+    providersQuery.data?.providers.some(
+      (provider) => provider.providerId === "traycer" && provider.enabled,
+    ) === true;
+  return { ...account, eligible: account.eligible && enabled };
+}
+
+/** Resolves subscription eligibility independently of host availability. */
+function useTraycerAccountSubscription() {
   const query = useAuthUser();
   const storedAccountContext = useAccountContextStore((s) => s.accountContext);
   const user = query.data ?? null;
@@ -801,12 +818,9 @@ function RateLimitPopoverBody({
           {noFallbackHost ? null : (
             <RateLimitHostUnavailableNotice scope={scope} />
           )}
-          {/* The ACCOUNT-scoped half survives the host being down: Traycer
-              Inference usage comes through the AuthService with no host
-              binding involved, so only the host-RPC provider panes go with
-              the route. Hiding this too both took working data away and had
-              the notice claim more than is true. */}
-          <UnscopedTraycerUsage />
+          {/* Account usage survives an unavailable host unless that host’s
+              retained provider setting explicitly disables Traycer. */}
+          <UnscopedTraycerUsage hostId={scope.hostId} />
         </div>
       </RateLimitPopoverResizeSurface>
     );
@@ -876,7 +890,7 @@ function RateLimitPopoverScopedBody({
   );
 
   // Traycer is a GUI-only rail entry (AuthService subscription, not a host RPC),
-  // gated on the *selected* account being paid or credit-bundled. Recomputed
+  // gated on the provider being enabled and an account being paid or credit-bundled. Recomputed
   // reactively from the auth query + account-context store, so the tab appears /
   // disappears live as either changes - not snapshotted at popover-open time.
   const traycerSubscription = useTraycerSubscription();
@@ -1036,6 +1050,32 @@ function RateLimitPopoverScopedBody({
   );
 }
 
+function RateLimitHostChooser(props: {
+  readonly scope: HostScope;
+  readonly displayedHost: HostScopeOption | null;
+  readonly onClose: () => void;
+  readonly opensList: boolean;
+}): ReactNode {
+  if (props.opensList && props.scope.hosts.length === 0) {
+    return (
+      <RateLimitHostPickerRow
+        scope={props.scope}
+        displayedHost={props.displayedHost}
+        onClose={props.onClose}
+      />
+    );
+  }
+  if (props.opensList) {
+    return (
+      <RateLimitHostNameKindList
+        scope={props.scope}
+        displayedHost={props.displayedHost}
+      />
+    );
+  }
+  return <RateLimitHostIdentity host={props.displayedHost} />;
+}
+
 function RateLimitPopoverHostHeader(props: {
   readonly scope: HostScope;
   readonly displayedHost: HostScopeOption | null;
@@ -1059,30 +1099,15 @@ function RateLimitPopoverHostHeader(props: {
     settingsOverlayOpen || settingsRouteOpen || settingsTabVisible;
   // Choice and identity are separate: a stale pin keeps its recovery picker
   // even when the fleet has shrunk to one host or none.
-  const showHostPicker =
-    scope.hosts.length > 1 || scope.vanishedHostId !== null;
+  const opensList = scope.hosts.length > 1 || scope.vanishedHostId !== null;
   return (
     <>
-      {showHostPicker ? (
-        <RateLimitHostPickerRow
-          scope={scope}
-          displayedHost={displayedHost}
-          onClose={props.onClose}
-        />
-      ) : (
-        <div
-          className="shrink-0 border-b px-3 py-2 text-ui-sm font-medium"
-          data-testid="rate-limit-host-identity"
-        >
-          {displayedHost === null ? "No host" : displayedHost.name}
-          {displayedHost === null || displayedHost.kind === null ? null : (
-            <span className="font-normal text-muted-foreground">
-              {" · "}
-              {HOST_KIND_WORDS[displayedHost.kind]}
-            </span>
-          )}
-        </div>
-      )}
+      <RateLimitHostChooser
+        scope={scope}
+        displayedHost={displayedHost}
+        onClose={props.onClose}
+        opensList={opensList}
+      />
       {scope.vanishedSelection === null ? null : (
         <div
           className="m-3 flex shrink-0 flex-col gap-2 rounded-md border p-2 text-ui-xs"
@@ -1124,21 +1149,124 @@ function RateLimitSettingsMismatch(props: {
     return null;
   return (
     <div
-      className="m-3 flex shrink-0 flex-col gap-2 rounded-md border p-2 text-ui-xs"
-      role="status"
+      className="mx-3 mt-3 flex min-w-0 flex-col gap-2"
       data-testid="rate-limit-host-mismatch"
     >
-      <p>
+      <p className="m-0 rounded-md border p-2 text-ui-xs break-words">
         Showing {props.usageHost.name}. Settings is showing {settingsHost.name}.
       </p>
       <Button
         variant="outline"
         size="sm"
-        className="self-start"
+        className="h-auto w-full max-w-full min-w-0 shrink justify-start text-start whitespace-normal break-words"
         onClick={() => props.onSelect(settingsHost.hostId)}
       >
-        Show {settingsHost.name} here
+        Show usage for {settingsHost.name}
       </Button>
+    </div>
+  );
+}
+
+/** One host: the name and its kind on one line. No status, no credit badge. */
+function RateLimitHostIdentity(props: {
+  readonly host: HostScopeOption | null;
+}): ReactNode {
+  const { host } = props;
+  return (
+    <div
+      className="shrink-0 border-b px-3 py-2 text-ui-sm font-medium break-words"
+      data-testid="rate-limit-host-identity"
+    >
+      {host === null ? "No host" : host.name}
+      {host === null || host.kind === null ? null : (
+        <span className="font-normal text-muted-foreground">
+          {" · "}
+          {HOST_KIND_WORDS[host.kind]}
+        </span>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Several hosts: each name and kind on one line. Choosing one scopes this
+ * popover. A long fleet scrolls. Status and the credit badge stay off this
+ * header.
+ */
+function RateLimitHostNameKindList(props: {
+  readonly scope: HostScope;
+  readonly displayedHost: HostScopeOption | null;
+}): ReactNode {
+  return (
+    <div className="shrink-0 border-b" data-testid="rate-limit-host-list">
+      <div
+        className="max-h-40 overflow-y-auto overscroll-contain"
+        role="group"
+        aria-label="Host"
+      >
+        {props.scope.hosts.map((host) => {
+          const selected = host.hostId === props.displayedHost?.hostId;
+          return (
+            <div
+              key={host.hostId}
+              className={selected ? "bg-foreground/5" : ""}
+            >
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                aria-current={selected ? "true" : "false"}
+                data-testid={`rate-limit-host-option-${host.hostId}`}
+                className="h-auto w-full min-w-0 justify-start text-start whitespace-normal break-words"
+                onClick={() => props.scope.setHostId(host.hostId)}
+              >
+                {host.name}
+                {host.kind === null ? null : (
+                  <span className="font-normal text-muted-foreground">
+                    {" · "}
+                    {HOST_KIND_WORDS[host.kind]}
+                  </span>
+                )}
+              </Button>
+            </div>
+          );
+        })}
+      </div>
+      {props.scope.isLoading ? (
+        <div
+          className="flex items-center gap-2 border-t border-border/60 px-3 py-2"
+          data-testid="rate-limit-host-loading-more"
+        >
+          <AgentSpinningDots
+            className={undefined}
+            testId={undefined}
+            variant={undefined}
+            tone="muted"
+          />
+          <span className="text-ui-xs text-muted-foreground">
+            Loading more hosts…
+          </span>
+        </div>
+      ) : null}
+      {props.scope.listsFailed && !props.scope.isLoading ? (
+        <div
+          className="flex items-center justify-between gap-2 border-t border-border/60 px-3 py-2"
+          data-testid="rate-limit-host-lists-failed"
+        >
+          <span className="text-ui-xs text-muted-foreground">
+            Some hosts may be missing
+          </span>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="shrink-0"
+            onClick={props.scope.retryLists}
+          >
+            Try again
+          </Button>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1957,7 +2085,7 @@ function SingleProfileRateLimitProviderBlock({
       className="flex flex-col gap-2 rounded-lg border border-border/60 bg-background/40 p-2"
     >
       <div className="flex items-center justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-1.5">
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
           {/* Overview stacks every provider's block in one scrollable list with
               no rail-tab context alongside it, so the name alone doesn't say
               which provider this is; the single-provider detail tab already has
@@ -1969,7 +2097,9 @@ function SingleProfileRateLimitProviderBlock({
             {providerDisplayName(providerId)}
           </span>
           {planLabel !== null ? (
-            <Badge variant="secondary">{planLabel}</Badge>
+            <Badge variant="secondary" wrap>
+              {planLabel}
+            </Badge>
           ) : null}
           <ManageProviderLink
             providerId={providerId}
@@ -2717,11 +2847,13 @@ function RateLimitProviderProfileStatusBadges({
         size="default"
         className={undefined}
       />
-      <span className="min-w-0 truncate text-ui-sm font-medium text-foreground">
+      <span className="min-w-0 text-ui-sm font-medium whitespace-normal text-foreground wrap-anywhere">
         {profileDisplayLabel(profile)}
       </span>
       {planLabel !== null ? (
-        <Badge variant="secondary">{planLabel}</Badge>
+        <Badge variant="secondary" wrap>
+          {planLabel}
+        </Badge>
       ) : null}
       {!profile.enabled ? <Badge variant="outline">Disabled</Badge> : null}
     </div>
@@ -2942,11 +3074,24 @@ function SignedOutRateLimitMessage(): ReactNode {
 /**
  * The account-scoped Usage half for a popover whose host-scoped half cannot
  * render: eligible Traycer Inference usage, framed like a pane. Returns null
- * for ineligible accounts, so the caller mounts it unconditionally.
+ * for ineligible accounts or a retained disabled provider setting. Unknown
+ * settings preserve account usage without consulting the ambient host.
  */
-function UnscopedTraycerUsage(): ReactNode {
-  const traycerSubscription = useTraycerSubscription();
-  if (!traycerSubscription.eligible) return null;
+function UnscopedTraycerUsage({
+  hostId,
+}: {
+  readonly hostId: string | null;
+}): ReactNode {
+  const traycerSubscription = useTraycerAccountSubscription();
+  const client = useHostClientForHostId(hostId);
+  const providers = useProvidersListForClient(hostId === null ? null : client, {
+    enabled: false,
+    subscribed: true,
+  });
+  const traycer = providers.data?.providers.find(
+    (provider) => provider.providerId === "traycer",
+  );
+  if (!traycerSubscription.eligible || traycer?.enabled === false) return null;
   return (
     <div className="w-full max-w-full rounded-md border border-border/60 bg-foreground/3 p-3">
       <TraycerRateLimitBlock variant="popover-overview" onReady={null} />
@@ -2975,7 +3120,7 @@ function TraycerRateLimitBlock({
   readonly variant: PopoverBlockVariant;
   readonly onReady: (() => void) | null;
 }): ReactNode {
-  const traycerSubscription = useTraycerSubscription();
+  const traycerSubscription = useTraycerAccountSubscription();
   const setAccountContext = useAccountContextStore((s) => s.setAccountContext);
   const queryClient = useQueryClient();
   const hostId = useAddressableHostId();
@@ -3121,7 +3266,7 @@ function TraycerAccountCards({
                   size="default"
                   className={undefined}
                 />
-                <span className="min-w-0 truncate text-ui-sm font-medium text-foreground">
+                <span className="min-w-0 text-ui-sm font-medium whitespace-normal text-foreground wrap-anywhere">
                   {account.label}
                 </span>
                 {/* The plan tier is the one chip here that names something
@@ -3132,7 +3277,7 @@ function TraycerAccountCards({
                     keeps its account name, its Active state and the whole
                     usage body underneath; only the tier goes. */}
                 {isMobileApp() ? null : (
-                  <Badge variant="secondary">
+                  <Badge variant="secondary" wrap>
                     {subscriptionPlanLabel(
                       account.subscription.subscriptionStatus,
                     )}

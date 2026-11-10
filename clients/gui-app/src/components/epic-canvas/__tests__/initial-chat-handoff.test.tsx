@@ -5,7 +5,7 @@ import * as Y from "yjs";
 import type { ReactNode } from "react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
-import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
+import type { WirePermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import { TestEpicSessionTab } from "@/lib/registries/test-support/test-epic-session-tab";
@@ -153,7 +153,7 @@ function renderWithProviders(children: ReactNode): QueryClient {
   return queryClient;
 }
 
-function makeMeta(permissionRole: PermissionRole | null): SnapshotMetaEpic {
+function makeMeta(permissionRole: WirePermissionRole | null): SnapshotMetaEpic {
   return {
     schemaVersion: "1.0",
     epicLight:
@@ -415,7 +415,7 @@ describe("initial chat handoff route coordinator", () => {
     queryClient.clear();
   });
 
-  it("does not advance while the epic is still loading / viewer-only", async () => {
+  it("does not advance while the epic is still loading or the snapshot names the retired viewer role", async () => {
     registerPendingHandoff();
     const queryClient = renderWithProviders(
       <TestEpicSessionTab epicId={EPIC_ID} tabId={EPIC_ID}>
@@ -431,7 +431,8 @@ describe("initial chat handoff route coordinator", () => {
     seedDocWithChat(donor);
     act(() => {
       epicCallbacks.onConnectionStatus("open", null, true, null);
-      // Viewer is not `epicReady`, so adoption must not advance the handoff.
+      // The retired viewer role decodes to no role, which is not `epicReady`,
+      // so adoption must not advance the handoff.
       epicCallbacks.onSnapshot(
         makeMeta("viewer"),
         Y.encodeStateAsUpdate(donor),
@@ -466,6 +467,10 @@ describe("initial chat handoff route coordinator", () => {
       EPIC_ID,
       EPIC_ID,
       expect.any(Function),
+      // `"automatic"`, not the person: this effect re-runs on a reload, so a
+      // handoff that opens its tile again on the next page load must not
+      // retire an artifact request the route is waiting on in THAT load.
+      "automatic",
     );
     expect(canvasChatTabs().filter((tab) => tab.id === CHAT_ID)).toHaveLength(
       1,

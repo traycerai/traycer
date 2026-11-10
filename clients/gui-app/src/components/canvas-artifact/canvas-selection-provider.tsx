@@ -380,6 +380,11 @@ export function CanvasSelectionProvider(
         parent?.onDoubleClick?.(path, element);
       },
       onBridge: (path, bridge) => {
+        // An adopted revision belongs to the live document that stamped it,
+        // and a board losing its bridge has lost that document - even when
+        // the same bridge comes back, as it does for an html artifact's next
+        // page load.
+        if (bridge === null) adoptedRevisions.current.delete(path);
         registry.update(path, { bridge });
         parent?.onBridge(path, bridge);
         const current = useCanvasSelectionStore.getState().selection;
@@ -505,6 +510,7 @@ export function CanvasSelectionProvider(
               tileId={draftOwner}
               boardPath={path}
               registry={registry}
+              pointerInPage={artifactType === "html"}
               onPick={pick}
               onRetire={retire}
               onEscape={escapeSelection}
@@ -529,6 +535,7 @@ export function CanvasSelectionProvider(
     }),
     [
       artifactId,
+      artifactType,
       parent,
       pick,
       registry,

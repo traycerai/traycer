@@ -126,13 +126,11 @@ export function UserMenu(props: UserMenuProps) {
         side={placement?.side}
         align={placement?.align ?? "end"}
         sideOffset={6}
-        // A menu's width, whatever a host is called: long names truncate
-        // in their rows and read in full from a tooltip.
-        className="w-max max-w-64 whitespace-nowrap"
+        className="flex w-max max-w-64 flex-col overflow-y-hidden"
         data-testid="user-menu-content"
       >
         <div
-          className="flex flex-col gap-0.5 px-1.5 py-1"
+          className="flex shrink-0 flex-col gap-0.5 px-1.5 py-1"
           data-testid="user-menu-identity"
         >
           <span className="truncate text-ui-sm font-medium text-foreground">
@@ -142,88 +140,92 @@ export function UserMenu(props: UserMenuProps) {
             {props.email}
           </span>
         </div>
-        <DropdownMenuSeparator />
+        <div className="shrink-0">
+          <DropdownMenuSeparator />
+        </div>
         <UserMenuHostSection
           tooltipSide={placement?.side ?? "left"}
           onActivated={() => setOpen(false)}
         />
-        <DropdownMenuItem
-          onSelect={() => {
-            setOpen(false);
-            useDesktopDialogStore.getState().openDrafts("menu");
-          }}
-        >
-          <LayersPlus className="size-3.5" />
-          Drafts
-        </DropdownMenuItem>
-        {props.showAppSettings ? (
+        <div className="shrink-0" data-testid="user-menu-account-actions">
           <DropdownMenuItem
-            data-testid="user-menu-app-settings"
             onSelect={() => {
               setOpen(false);
-              Analytics.getInstance().track(AnalyticsEvent.SettingsOpened, {
-                source: "direct_ui",
-                section: "general",
-              });
-              getSystemTabModalApi()?.openSettings({
-                section: null,
-                resetToGeneral: true,
-                tab: null,
-                draft: null,
-                hostId: null,
-              });
+              useDesktopDialogStore.getState().openDrafts("menu");
             }}
           >
-            <Settings className="size-3.5" />
-            App settings
-            {settingsChord === null ? null : (
-              <DropdownMenuShortcut>
-                {formatChordForDisplay(settingsChord)}
-              </DropdownMenuShortcut>
-            )}
+            <LayersPlus className="size-3.5" />
+            Drafts
           </DropdownMenuItem>
-        ) : null}
-        {/* Withheld in the installed mobile app: App Store guideline 3.1.1
+          {props.showAppSettings ? (
+            <DropdownMenuItem
+              data-testid="user-menu-app-settings"
+              onSelect={() => {
+                setOpen(false);
+                Analytics.getInstance().track(AnalyticsEvent.SettingsOpened, {
+                  source: "direct_ui",
+                  section: "general",
+                });
+                getSystemTabModalApi()?.openSettings({
+                  section: null,
+                  resetToGeneral: true,
+                  tab: null,
+                  draft: null,
+                  hostId: null,
+                });
+              }}
+            >
+              <Settings className="size-3.5" />
+              App settings
+              {settingsChord === null ? null : (
+                <DropdownMenuShortcut>
+                  {formatChordForDisplay(settingsChord)}
+                </DropdownMenuShortcut>
+              )}
+            </DropdownMenuItem>
+          ) : null}
+          {/* Withheld in the installed mobile app: App Store guideline 3.1.1
               forbids linking out to a subscription that cannot be bought
               through Apple, and this item opens exactly that page. This menu
               does reach the phone - the mobile header only replaces the
               desktop one for the `app` variant, so `host-loading` renders
               `DesktopAppHeader`, identity menu included. Sign out and App
               settings are unaffected. */}
-        {isMobileApp() ? null : (
+          {isMobileApp() ? null : (
+            <DropdownMenuItem
+              data-testid="user-menu-manage-subscription"
+              onSelect={() => {
+                setOpen(false);
+                // Tracked on the RESOLVED open only: a failed OS handoff is not
+                // a subscription-management visit. The failure toast is
+                // the link seam's, so the rejection is ignored here.
+                void openLink(manageSubscriptionUrl, "account", null).then(
+                  () =>
+                    Analytics.getInstance().track(
+                      AnalyticsEvent.SubscriptionManagementOpened,
+                      { source: "direct_ui" },
+                    ),
+                  ignoreError,
+                );
+              }}
+            >
+              <ExternalLink className="size-3.5" />
+              Manage subscription
+            </DropdownMenuItem>
+          )}
+          <DropdownMenuSeparator />
           <DropdownMenuItem
-            data-testid="user-menu-manage-subscription"
+            data-testid="user-menu-sign-out"
+            variant="destructive"
             onSelect={() => {
               setOpen(false);
-              // Tracked on the RESOLVED open only: a failed OS handoff is not
-              // a subscription-management visit. The failure toast is
-              // the link seam's, so the rejection is ignored here.
-              void openLink(manageSubscriptionUrl, "account", null).then(
-                () =>
-                  Analytics.getInstance().track(
-                    AnalyticsEvent.SubscriptionManagementOpened,
-                    { source: "direct_ui" },
-                  ),
-                ignoreError,
-              );
+              useSignOutConfirmStore.getState().setOpen(true);
             }}
           >
-            <ExternalLink className="size-3.5" />
-            Manage subscription
+            <LogOut className="size-3.5" />
+            Sign out
           </DropdownMenuItem>
-        )}
-        <DropdownMenuSeparator />
-        <DropdownMenuItem
-          data-testid="user-menu-sign-out"
-          variant="destructive"
-          onSelect={() => {
-            setOpen(false);
-            useSignOutConfirmStore.getState().setOpen(true);
-          }}
-        >
-          <LogOut className="size-3.5" />
-          Sign out
-        </DropdownMenuItem>
+        </div>
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -242,9 +244,8 @@ function isUserMenuHostPickable(
 }
 
 /**
- * One host in the account menu. Its tooltip says what a click does (the
- * activate hint, on a row that can take one) and, only when the menu's width
- * has truncated it, the host's full name.
+ * One host in the account menu. A cut-off name's tooltip is that name.
+ * The every-window effect is stated once under the Host heading.
  */
 function UserMenuHostRow(props: {
   readonly host: HostScopeOption;
@@ -258,19 +259,10 @@ function UserMenuHostRow(props: {
     host.name,
   );
   const selectable = isUserMenuHostPickable(host, activatingHostId);
-  const hint = active || !selectable ? null : ACTIVATE_HOST_HINT;
+  const tooltipLabel = isTruncated ? host.name : null;
   return (
     <TooltipWrapper
-      label={
-        isTruncated ? (
-          <span className="flex flex-col gap-0.5">
-            <span className="break-all">{host.name}</span>
-            {hint}
-          </span>
-        ) : (
-          hint
-        )
-      }
+      label={tooltipLabel}
       side={props.tooltipSide}
       sideOffset={6}
       align={undefined}
@@ -296,7 +288,6 @@ function UserMenuHostRow(props: {
           surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
           updateView={null}
           nameRef={nameRef}
-          nameWraps={false}
           environmentLabel={null}
         />
         {host.hostId === activatingHostId ? (
@@ -349,15 +340,17 @@ function UserMenuHostSection(props: {
   const showsLoadingMore = isLoading && hosts.length > 0;
   if (hosts.length === 0 && !showsRetry) return null;
   return (
-    <>
-      <DropdownMenuLabel>
-        Set the app&apos;s machine
-        <span className="block whitespace-normal text-ui-xs font-normal normal-case tracking-normal text-muted-foreground">
-          {ACTIVATE_HOST_HINT}
-        </span>
-      </DropdownMenuLabel>
+    <div className="flex min-h-0 flex-1 flex-col">
+      <DropdownMenuLabel className="shrink-0">Host</DropdownMenuLabel>
+      <p
+        className="shrink-0 px-1.5 pb-1 text-ui-xs text-pretty text-muted-foreground"
+        data-testid="user-menu-host-hint"
+      >
+        {ACTIVATE_HOST_HINT}
+      </p>
       <DropdownMenuRadioGroup
         value={activeHostId ?? ""}
+        className="min-h-0 max-h-(--radix-dropdown-menu-content-available-height) overflow-y-auto overscroll-contain"
         data-testid="user-menu-host-section"
       >
         {hosts.map((host) => (
@@ -410,7 +403,9 @@ function UserMenuHostSection(props: {
           </span>
         </DropdownMenuItem>
       ) : null}
-      <DropdownMenuSeparator />
-    </>
+      <div className="shrink-0">
+        <DropdownMenuSeparator />
+      </div>
+    </div>
   );
 }

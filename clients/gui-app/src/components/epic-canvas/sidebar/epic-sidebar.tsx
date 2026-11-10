@@ -1452,7 +1452,7 @@ function FileTreePanelBodyLive(props: LeftPanelBodyProps) {
  *
  * A FAILED bindings read is checked first, because it also leaves
  * `selectedWorkspacePath` null and would otherwise fall through to "No
- * workspace linked." That sentence is a claim about the agent ("you have not
+ * folder linked." That sentence is a claim about the agent ("you have not
  * linked one"), and here the truth is a fact about the connection ("we could
  * not ask") - the same wrong-remedy conflation the git-diff panel's empty
  * state had. It is also the only branch that offers a way out: host-scoped
@@ -1481,7 +1481,7 @@ function fileTreePanelBody(input: {
     return (
       <SidebarPanelEmptyState
         icon={FolderOpen}
-        title="No workspace linked."
+        title="No folder linked."
         description={null}
         action={null}
         testId="epic-file-tree-empty"
@@ -1731,15 +1731,20 @@ function SidebarBulkDeleteController(props: {
           return found === null ? [] : [found];
         });
         if (openTargets.length > 0) {
-          navigateNested(props.epicId, props.tabId, () => {
-            openTargets.forEach((found) => {
-              closeCanvasTab(props.tabId, found.paneId, found.instanceId);
-            });
-            const canvas =
-              useEpicCanvasStore.getState().canvasByTabId[props.tabId] ??
-              EMPTY_CANVAS;
-            return getCurrentNestedFocusTarget(canvas);
-          });
+          navigateNested(
+            props.epicId,
+            props.tabId,
+            () => {
+              openTargets.forEach((found) => {
+                closeCanvasTab(props.tabId, found.paneId, found.instanceId);
+              });
+              const canvas =
+                useEpicCanvasStore.getState().canvasByTabId[props.tabId] ??
+                EMPTY_CANVAS;
+              return getCurrentNestedFocusTarget(canvas);
+            },
+            "user",
+          );
         }
         targets.forEach((target, index) => {
           if (
@@ -1796,6 +1801,7 @@ function SidebarBulkDeleteController(props: {
       ? describeTreeDeleteDisclosure({
           tree,
           kind: "agent",
+          includeNestedAgents: false,
           nodeIds,
           nestedAgentsKnown,
         })
@@ -2189,6 +2195,7 @@ function TreePanelActions(props: TreePanelActionsProps) {
               "explicit",
               "direct_ui",
             ),
+            "user",
           );
         },
         onBeforeOpen,
@@ -2286,7 +2293,6 @@ function TreePanelActions(props: TreePanelActionsProps) {
   const artifactsDisabledTooltip = mutationDisabledHint(
     permissionRole,
     isDisconnected,
-    "create artifacts",
   );
   const artifactsAddDisabled = !canMutate || addIsPending;
   const artifactsPresentation = resolveDisabledPresentation(
@@ -2309,11 +2315,7 @@ function TreePanelActions(props: TreePanelActionsProps) {
         parentId={null}
         size="icon-sm"
         disabled={!canMutate || addIsPending}
-        disabledTooltip={mutationDisabledHint(
-          permissionRole,
-          isDisconnected,
-          "create agents",
-        )}
+        disabledTooltip={mutationDisabledHint(permissionRole, isDisconnected)}
         triggerLabel={props.addLabel}
         triggerTestId={props.triggerTestId}
         actionRevealClassName=""

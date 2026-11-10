@@ -280,15 +280,18 @@ export function useCreateTuiAgentForClient(
           hostId: placeholderHostId,
           pendingTuiHarnessId: input.harnessId,
         };
-        openTile({
-          node: placeholderRef,
-          target: { tabId: input.tabId },
-          gesture: "explicit",
-          modifiers: null,
-          placement: input.placement,
-          dedupe: true,
-          source: "direct_ui",
-        });
+        openTile(
+          {
+            node: placeholderRef,
+            target: { tabId: input.tabId },
+            gesture: "explicit",
+            modifiers: null,
+            placement: input.placement,
+            dedupe: true,
+            source: "direct_ui",
+          },
+          "user",
+        );
       };
 
       let clearStashedPreparedLaunch = false;
@@ -554,7 +557,7 @@ async function dispatchWorktreeIntent(
         (entryResult) =>
           entryResult.workspacePath === failedPaths[0] && !entryResult.ok,
       )?.errorMessage ?? null;
-    const message = `Couldn't prepare the workspace for ${scope}. The terminal agent was not launched.`;
+    const message = `Couldn't prepare the folder for ${scope}. The terminal agent was not launched.`;
     reportableErrorToast(
       message,
       reason === null ? undefined : { description: reason },

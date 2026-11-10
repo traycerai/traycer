@@ -91,6 +91,7 @@ function register(
     keyFilePath,
     audience: "audience-fixture",
     set: "team",
+    manifestVersion: 1,
     fetch: fetchMock,
     now: () => 1_800_000_000_000,
     warn: () => {},

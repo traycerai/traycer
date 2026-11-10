@@ -1,8 +1,12 @@
 import type { ReactNode } from "react";
 import { toast } from "sonner";
-import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import {
-  sandboxSettingsSteps,
+  sandboxSupportReference,
+  type SandboxSummary,
+} from "@traycer/protocol/host/sandbox-control";
+import {
+  sandboxSettingsEvidence,
+  sandboxSettingsFailed,
   sandboxSettingsStepsLine,
 } from "@traycer/protocol/host/sandbox-settings";
 import { unusedSettingLabel } from "@/components/settings/details/details-unused-setting";
@@ -263,9 +267,19 @@ function SandboxSettingsDeliverySection(props: {
   readonly summary: SandboxSummary;
 }): ReactNode {
   const status = useSandboxSettingsStatus(props.summary).data;
-  if (status === undefined || props.summary.state !== "awake") return null;
-  const steps = sandboxSettingsStepsLine(sandboxSettingsSteps(status.items));
-  const unused = status.items.filter((item) => item.status === "not_used");
+  if (props.summary.state !== "awake") return null;
+  const items = status?.items ?? [];
+  const steps = sandboxSettingsStepsLine(
+    sandboxSettingsEvidence(items, props.summary.guestConfigured),
+  );
+  const unused = items.filter((item) => item.status === "not_used");
+  // The Support reference row above names a reference only for a mapped
+  // failure code; a settings failure without one is SBX-0520.
+  const reference =
+    (props.summary.guestConfigured === false || sandboxSettingsFailed(items)) &&
+    sandboxSupportReference(props.summary.failureCode) === null
+      ? "SBX-0520"
+      : null;
   if (steps.length === 0 && unused.length === 0) return null;
   return (
     <section
@@ -275,6 +289,11 @@ function SandboxSettingsDeliverySection(props: {
     >
       <h3 className="text-ui-sm font-medium">Settings delivery</h3>
       {steps.length === 0 ? null : <p className="text-ui-xs">{steps}</p>}
+      {reference === null ? null : (
+        <p className="text-ui-xs text-muted-foreground">
+          {`Support reference: ${reference}`}
+        </p>
+      )}
       {unused.length === 0 ? null : (
         <ul className="flex list-none flex-col gap-1 p-0 text-ui-xs text-muted-foreground">
           {unused.map((item) => (

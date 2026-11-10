@@ -120,6 +120,10 @@ import {
 import { installWorktreeVirtualizerOffsetHeight } from "./worktrees-virtualizer-test-utils";
 
 let restoreOffsetHeight: (() => void) | null = null;
+// jsdom's default width is the desktop toolbar. A phone test assigns a
+// narrower width, and the media-query shim does not notify subscribers, so
+// the desktop width has to be put back before the next render.
+const DESKTOP_INNER_WIDTH = window.innerWidth;
 
 function host(
   over: Partial<HostDirectoryEntry> & { hostId: string },
@@ -186,6 +190,7 @@ function renderPanel(): { readonly rerender: () => void } {
 }
 
 beforeEach(() => {
+  window.innerWidth = DESKTOP_INNER_WIDTH;
   restoreOffsetHeight = installWorktreeVirtualizerOffsetHeight(() => 100_000);
   state.activeHostId = null;
   state.hosts = [];
@@ -206,6 +211,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  window.innerWidth = DESKTOP_INNER_WIDTH;
   cleanup();
   if (restoreOffsetHeight !== null) {
     restoreOffsetHeight();
@@ -221,6 +227,54 @@ afterEach(() => {
     worktreeBranchPrefix: DEFAULT_WORKTREE_BRANCH_PREFIX,
   });
 });
+
+const CLEAN_WORKTREE = {
+  repoLabel: "acme/app",
+  repoIdentifier: { owner: "acme", repo: "app" },
+  worktreePath: "/wt/clean",
+  branch: "feat-clean",
+  inUse: false,
+  uncommittedCount: 0,
+  gitRemovable: true,
+  scripts: null,
+  owners: [],
+  lastActivityAt: null,
+  branchStatus: null,
+  createdAt: null,
+  prState: null,
+  prNumber: null,
+  prUrl: null,
+  mergedHeadShaMatches: false,
+  submodules: [],
+  atBaseCommit: false,
+  resolvedAt: 1,
+  presence: "present",
+  gitUnreadable: false,
+} satisfies WorktreeHostEntryV16;
+
+/** A signed-in host whose list has one present worktree, so the toolbar mounts. */
+async function renderPopulatedWorktreeList(): Promise<void> {
+  state.hosts = [
+    host({ hostId: "host-a", label: "Host A" }),
+    host({ hostId: "host-b", label: "Host B" }),
+  ];
+  state.activeHostId = "host-a";
+  state.client = clientWithHandler(() => ({
+    worktrees: [CLEAN_WORKTREE],
+    nextCursor: null,
+  }));
+  state.enrichment = {
+    enrichedByPath: new Map([["/wt/clean", CLEAN_WORKTREE]]),
+    erroredPaths: new Set(),
+    seededPaths: new Set(),
+    reportVisiblePaths: vi.fn(),
+    enriching: false,
+  };
+  renderPanel();
+  await waitFor(() => {
+    screen.getByText("feat-clean");
+  });
+}
 
 /**
  * The panel is inventory-only: no branch-prefix strip, in any host state.
@@ -494,51 +548,7 @@ describe("WorktreesSettingsPanel host-scoped states", () => {
   });
 
   it("renders the full toolbar without any host selector or host readout once the list is populated", async () => {
-    state.hosts = [
-      host({ hostId: "host-a", label: "Host A" }),
-      host({ hostId: "host-b", label: "Host B" }),
-    ];
-    state.activeHostId = "host-a";
-    const cleanWorktree = {
-      repoLabel: "acme/app",
-      repoIdentifier: { owner: "acme", repo: "app" },
-      worktreePath: "/wt/clean",
-      branch: "feat-clean",
-      inUse: false,
-      uncommittedCount: 0,
-      gitRemovable: true,
-      scripts: null,
-      owners: [],
-      lastActivityAt: null,
-      branchStatus: null,
-      createdAt: null,
-      prState: null,
-      prNumber: null,
-      prUrl: null,
-      mergedHeadShaMatches: false,
-      submodules: [],
-      atBaseCommit: false,
-      resolvedAt: 1,
-      presence: "present",
-      gitUnreadable: false,
-    } satisfies WorktreeHostEntryV16;
-    state.client = clientWithHandler(() => ({
-      worktrees: [cleanWorktree],
-      nextCursor: null,
-    }));
-    state.enrichment = {
-      enrichedByPath: new Map([["/wt/clean", cleanWorktree]]),
-      erroredPaths: new Set(),
-      seededPaths: new Set(),
-      reportVisiblePaths: vi.fn(),
-      enriching: false,
-    };
-
-    renderPanel();
-
-    await waitFor(() => {
-      screen.getByText("feat-clean");
-    });
+    await renderPopulatedWorktreeList();
     // The toolbar neither picks the host nor names it: both belong to the
     // sidebar. Asserted on the host LABEL rather than on a testid - checking
     // that a testid which exists nowhere is absent proves nothing, while the
@@ -573,5 +583,61 @@ describe("WorktreesSettingsPanel host-scoped states", () => {
     // Same as the no-host empty state - host-scoped UI carries no
     // branch-prefix strip; that control lives in General settings now.
     assertBranchPrefixStripAbsent();
+  });
+
+  it("shows policy, selection, and refresh inline above a populated list on a phone", async () => {
+    window.innerWidth = 390;
+    await renderPopulatedWorktreeList();
+
+    expect(screen.queryByRole("button", { name: "List actions" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /Filter and sort/ }),
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Copy paths" })).toBeNull();
+    expect(screen.queryByText("Copy paths")).toBeNull();
+
+    const search = screen.getByRole("searchbox", { name: "Search worktrees" });
+    const filter = screen.getByRole("button", { name: "Filter: All" });
+    const sort = screen.getByRole("button", { name: "Sort: Newest" });
+    const refresh = screen.getByRole("button", { name: "Refresh worktrees" });
+    const selectAll = screen.getByRole("checkbox", {
+      name: "Select all visible worktrees",
+    });
+    const collapse = screen.getByRole("button", { name: "Collapse all" });
+    const cleanupChip = screen.getByTestId("worktree-auto-cleanup-chip");
+    const agentChip = screen.getByTestId("worktree-agent-create-chip");
+    let toolbar: HTMLElement | null = filter;
+    while (
+      toolbar !== null &&
+      !toolbar.classList.contains("@container/worktrees-toolbar")
+    ) {
+      toolbar = toolbar.parentElement;
+    }
+    if (!(toolbar instanceof HTMLElement)) {
+      throw new Error("expected the worktrees toolbar");
+    }
+    for (const control of [
+      search,
+      filter,
+      sort,
+      refresh,
+      selectAll,
+      collapse,
+      cleanupChip,
+      agentChip,
+    ]) {
+      expect(toolbar.contains(control)).toBe(true);
+      expect(control.closest("[data-slot='popover-content']")).toBeNull();
+    }
+    expect(
+      cleanupChip.compareDocumentPosition(agentChip) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeGreaterThan(0);
+    expect(agentChip.parentElement).toBe(cleanupChip.parentElement);
+    expect(screen.queryByTestId("worktree-auto-cleanup-section")).toBeNull();
+    // The row keeps its own actions trigger. Its "Copy path" item is asserted
+    // in the list suite, whose menu is mounted open; this file leaves the real
+    // menu closed.
+    screen.getByRole("button", { name: "Worktree actions for feat-clean" });
   });
 });

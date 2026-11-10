@@ -132,6 +132,11 @@ vi.mock("@/hooks/bots/use-bot-mutations", () => {
     useBotUpdateTitleMutation: () => idle,
     useBotDeleteMutation: () => idle,
     useBotUpdateReplyModeMutation: () => idle,
+    useBotUpdateAppearanceMutation: () => ({
+      ...idle,
+      isError: false,
+      variables: undefined,
+    }),
     useBotUpdateRunSettingsMutation: (
       client: HostClient<HostRpcRegistry> | null,
     ) => {

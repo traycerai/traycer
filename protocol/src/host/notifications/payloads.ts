@@ -684,14 +684,6 @@ export type HostNotificationSecretGrantRequestPayload = z.infer<
   typeof hostNotificationSecretGrantRequestPayloadSchema
 >;
 
-/** What `traycer_secret_export` can mint. */
-export const HOST_NOTIFICATION_SECRET_EXPORT_KINDS = [
-  "presigned_url",
-  "short_lived_credentials",
-] as const;
-export type HostNotificationSecretExportKind =
-  (typeof HOST_NOTIFICATION_SECRET_EXPORT_KINDS)[number];
-
 /**
  * `secret.export.minted`: The server no longer writes this kind; readers drop
  * it.
@@ -1135,6 +1127,32 @@ export type HostNotificationHooksRemovedPayload = z.infer<
   typeof hostNotificationHooksRemovedPayloadSchema
 >;
 
+export const hostNotificationReadonlyAccessRetiredPayloadSchema = lazySchema(
+  () =>
+    z.discriminatedUnion("scope", [
+      z
+        .object({
+          kind: z.literal("readonly_access_retired"),
+          scope: z.literal("task"),
+          taskId: idSchema,
+          taskTitle: z.string().max(200),
+        })
+        .strict(),
+      z
+        .object({
+          kind: z.literal("readonly_access_retired"),
+          scope: z.literal("team"),
+          environmentId: idSchema,
+          teamName: z.string().min(1).max(200),
+          invitation: z.boolean(),
+        })
+        .strict(),
+    ]),
+);
+export type HostNotificationReadonlyAccessRetiredPayload = z.infer<
+  typeof hostNotificationReadonlyAccessRetiredPayloadSchema
+>;
+
 export const hostNotificationKnownPayloadSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
     hostNotificationChatStoppedPayloadSchema,
@@ -1162,6 +1180,7 @@ export const hostNotificationKnownPayloadSchema = lazySchema(() =>
     hostNotificationEnvironmentMoveStalledPayloadSchema,
     hostNotificationEnvironmentApplyFailedPayloadSchema,
     hostNotificationTeamRoleChangedPayloadSchema,
+    hostNotificationReadonlyAccessRetiredPayloadSchema,
     hostNotificationTeamHostReturnedPayloadSchema,
     hostNotificationSecretRemovedPayloadSchema,
     hostNotificationSandboxNoticePayloadSchema,
@@ -1261,6 +1280,8 @@ function payloadKindMatchesNotificationKind(
       return payloadKind === "environment_move_stalled";
     case "environment.apply.failed":
       return payloadKind === "environment_apply_failed";
+    case "access.readonly.retired":
+      return payloadKind === "readonly_access_retired";
     case "team.role.changed":
       return payloadKind === "team_role_changed";
     case "team.host.returned":

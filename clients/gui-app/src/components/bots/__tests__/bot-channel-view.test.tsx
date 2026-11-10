@@ -11,6 +11,8 @@ import { act, cleanup, render, screen, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import { setPhoneLayoutOnly } from "@/lib/mobile-app";
+import { BotLooksContext } from "@/hooks/bots/use-bot-appearance";
+import { botSwatchAt } from "@/lib/providers/profile-accent-color";
 import {
   useVoiceSessionStore,
   type VoiceSessionDriver,
@@ -263,7 +265,13 @@ vi.mock("@/hooks/bots/use-bot-activity", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/hooks/bots/use-bot-activity")>()),
   useBotActivity: () => null,
 }));
-vi.mock("@/components/bots/bot-chat-transcript", () => ({
+vi.mock("@/components/bots/bot-transcript-image-scope", () => ({
+  BotTranscriptImageScope: (props: { children: ReactNode }) => props.children,
+}));
+vi.mock("@/components/bots/bot-chat-transcript", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/components/bots/bot-chat-transcript")
+  >()),
   BotChatTranscript: (props: {
     chatId: string;
     surface: BotTranscriptSurface | null;
@@ -343,7 +351,17 @@ vi.mock("@/components/bots/bot-message-composer", async (importOriginal) => {
           <button
             type="button"
             data-testid={`stub-${props.testId}-sent`}
-            onClick={() => props.onSent(mocks.sendResponse, POSTED_TEXT)}
+            onClick={() =>
+              props.onSent(mocks.sendResponse, POSTED_TEXT, {
+                type: "doc",
+                content: [
+                  {
+                    type: "paragraph",
+                    content: [{ type: "text", text: POSTED_TEXT }],
+                  },
+                ],
+              })
+            }
           />
         </div>
       ),
@@ -440,8 +458,14 @@ import {
 import type { BotOpenThread } from "@/stores/bots/bot-open-thread-store";
 import { threadOpenOf } from "@/lib/bots/bot-trunk-model";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
+import { RunnerHostContext } from "@/providers/runner-host-context";
+import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
 import { useBotPaneWidthsStore } from "@/stores/bots/bot-pane-widths-store";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
+import {
+  textOf,
+  typeInto,
+} from "@/components/bots/__tests__/bot-box-test-support";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 /** What the stub box reports it sent. */
@@ -527,6 +551,9 @@ let mountLanding: BotChannelLanding | null = null;
 /** How many tiles the next mount is told the installed app shows; `null` off it. */
 let mountTiles: MobileTileCount | null = null;
 
+/** The background the surface's list names for the bot on the next mount. */
+let mountBackground: number | null = null;
+
 function mount(options: MountOptions): {
   readonly onOpenThread: Mock<(open: BotOpenThread | null) => void>;
   /** Renders the same view again, reading the mocks' current state. */
@@ -536,40 +563,48 @@ function mount(options: MountOptions): {
 } {
   const onOpenThread = vi.fn<(open: BotOpenThread | null) => void>();
   const queryClient = new QueryClient();
+  const looks = new Map([
+    [BOT_ID, { mark: null, swatch: null, background: mountBackground }],
+  ]);
+  const runnerHost = createFakeRunnerHost({});
   const tree = (openThread: BotOpenThread | null): ReactNode => (
-    <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <ChatExpansionTestProviders tileInstanceId="tile-1">
-          <BotChannelView
-            tiles={mountTiles}
-            botId={BOT_ID}
-            hostId={HOST_ID}
-            boundHostId={mocks.state.binding.hostId}
-            boundHostEpoch={mocks.state.binding.epoch}
-            botTitle="Release Bot"
-            directive={null}
-            appConversationChatId={mocks.state.appConversationChatId}
-            trunkChatId="trunk-chat"
-            onOpenTurn={vi.fn()}
-            onOpenSession={vi.fn()}
-            landOn={mountLanding}
-            openMemory={null}
-            onOpenMemory={vi.fn()}
-            environmentId="env-1"
-            botNameOf={() => null}
-            environmentBots={null}
-            openExchange={null}
-            exchangeRail={{ open: () => undefined, close: () => undefined }}
-            resolveMember={resolveMember}
-            tasks={[]}
-            surfaceActions={null}
-            openThread={openThread}
-            onOpenThread={onOpenThread}
-            setupHistory={null}
-          />
-        </ChatExpansionTestProviders>
-      </TooltipProvider>
-    </QueryClientProvider>
+    <BotLooksContext value={looks}>
+      <QueryClientProvider client={queryClient}>
+        <RunnerHostContext value={runnerHost}>
+          <TooltipProvider>
+            <ChatExpansionTestProviders tileInstanceId="tile-1">
+              <BotChannelView
+                tiles={mountTiles}
+                botId={BOT_ID}
+                hostId={HOST_ID}
+                boundHostId={mocks.state.binding.hostId}
+                boundHostEpoch={mocks.state.binding.epoch}
+                botTitle="Release Bot"
+                directive={null}
+                appConversationChatId={mocks.state.appConversationChatId}
+                trunkChatId="trunk-chat"
+                onOpenTurn={vi.fn()}
+                onOpenSession={vi.fn()}
+                landOn={mountLanding}
+                openMemory={null}
+                onOpenMemory={vi.fn()}
+                environmentId="env-1"
+                botNameOf={() => null}
+                environmentBots={null}
+                openExchange={null}
+                exchangeRail={{ open: () => undefined, close: () => undefined }}
+                resolveMember={resolveMember}
+                tasks={[]}
+                surfaceActions={null}
+                openThread={openThread}
+                onOpenThread={onOpenThread}
+                setupHistory={null}
+              />
+            </ChatExpansionTestProviders>
+          </TooltipProvider>
+        </RunnerHostContext>
+      </QueryClientProvider>
+    </BotLooksContext>
   );
   let current: BotOpenThread | null =
     options.openThreadPostId === null
@@ -641,6 +676,50 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  mountBackground = null;
+  document.documentElement.classList.remove("dark");
+});
+
+describe("<BotChannelView tiles={null} /> channel background", () => {
+  const TINT_CLASS = "bg-(--channel-tint)/10";
+
+  it.each([false, true])(
+    "tints the message area, and only it, with the chosen swatch (dark: %s)",
+    (dark) => {
+      document.documentElement.classList.toggle("dark", dark);
+      mountBackground = 11;
+      mount({ openThreadPostId: "post-1" });
+
+      const area = screen.getByTestId("bot-channel-messages");
+      expect(area.classList.contains(TINT_CLASS)).toBe(true);
+      expect(area.getAttribute("data-channel-background")).toBe("11");
+      expect(area.style.getPropertyValue("--channel-tint")).toBe(
+        botSwatchAt(11).color,
+      );
+      expect(within(area).getByTestId("stub-transcript-channel")).toBeTruthy();
+      // The composer and the thread panel sit outside it.
+      expect(
+        within(area).queryByTestId("stub-bot-channel-composer"),
+      ).toBeNull();
+      const panel = screen.getByTestId("bot-thread-panel");
+      expect(area.contains(panel)).toBe(false);
+      expect(panel.closest(`[data-channel-background]`)).toBeNull();
+      expect(
+        screen
+          .getByTestId("stub-bot-channel-composer")
+          .closest(`[data-channel-background]`),
+      ).toBeNull();
+    },
+  );
+
+  it("keeps the page's own message area when no background is chosen", () => {
+    mount({ openThreadPostId: null });
+
+    const area = screen.getByTestId("bot-channel-messages");
+    expect(area.classList.contains(TINT_CLASS)).toBe(false);
+    expect(area.hasAttribute("data-channel-background")).toBe(false);
+    expect(area.style.getPropertyValue("--channel-tint")).toBe("");
+  });
 });
 
 describe("<BotChannelView tiles={null} /> channel", () => {
@@ -713,15 +792,10 @@ describe("<BotChannelView tiles={null} /> channel", () => {
     mocks.sendAsync.mockImplementationOnce(() => held.promise);
     const user = userEvent.setup();
     mount({ openThreadPostId: null });
-    const channelBox = (): HTMLTextAreaElement => {
-      const box = within(screen.getByTestId("bot-channel-composer")).getByRole(
-        "textbox",
-      );
-      if (!(box instanceof HTMLTextAreaElement)) throw new Error("no box");
-      return box;
-    };
+    const channelBox = (): HTMLElement =>
+      within(screen.getByTestId("bot-channel-composer")).getByRole("textbox");
 
-    await user.type(channelBox(), POSTED_TEXT);
+    typeInto(channelBox(), POSTED_TEXT);
     await user.click(
       within(screen.getByTestId("bot-channel-composer")).getByRole("button", {
         name: "Send",
@@ -731,7 +805,7 @@ describe("<BotChannelView tiles={null} /> channel", () => {
     expect(mocks.sendAsync.mock.calls[0]?.[0].conversationId).toBe(
       "conversation-channel",
     );
-    expect(channelBox().value).toBe("");
+    expect(textOf(channelBox())).toBe("");
     cleanup();
 
     // The box's own handler was chained first, so it has run once this
@@ -742,7 +816,7 @@ describe("<BotChannelView tiles={null} /> channel", () => {
     });
     mount({ openThreadPostId: null });
 
-    expect(channelBox().value).toBe(POSTED_TEXT);
+    expect(textOf(channelBox())).toBe(POSTED_TEXT);
   });
 
   it("reads the thread list, and not at all while unsupported", () => {
@@ -829,7 +903,7 @@ describe("<BotChannelView tiles={null} /> channel", () => {
     expect(marked("post-e")).toBe("false");
   });
 
-  it("stacks a thread's line with the post's writer, and the bot once the thread has a reply", () => {
+  it("does not infer participants from legacy thread counts or the root writer", () => {
     mocks.state.threads = [
       thread("thread-a", "post-a", { replyCount: 0 }),
       thread("thread-b", "post-b", { replyCount: 2, lastReplyAt: 8_000 }),
@@ -841,8 +915,54 @@ describe("<BotChannelView tiles={null} /> channel", () => {
       screen
         .getByTestId(`stub-line-${postId}`)
         .getAttribute("data-participants");
-    expect(participants("post-a")).toBe("Tess Teammate");
-    expect(participants("post-b")).toBe("Tess Teammate,bot");
+    expect(participants("post-a")).toBe("");
+    expect(participants("post-b")).toBe("");
+  });
+
+  it("shows only the actors supplied for each thread's replies", () => {
+    mocks.state.threads = [
+      thread("thread-a", "post-a", {
+        replyCount: 1,
+        replyParticipants: [{ kind: "person", userId: "user-teammate" }],
+      }),
+      thread("thread-b", "post-b", {
+        replyCount: 2,
+        replyParticipants: [
+          { kind: "bot" },
+          { kind: "person", userId: "user-teammate" },
+        ],
+      }),
+    ];
+    mocks.postIds = ["post-a", "post-b"];
+    mount({ openThreadPostId: null });
+    expect(
+      screen.getByTestId("stub-line-post-a").getAttribute("data-participants"),
+    ).toBe("Tess Teammate");
+    expect(
+      screen.getByTestId("stub-line-post-b").getAttribute("data-participants"),
+    ).toBe("bot,Tess Teammate");
+  });
+
+  it("does not invent a bot reply from a legacy thread count under an assistant root", () => {
+    mocks.state.threads = [
+      thread("thread-a", "post-a", {
+        anchor: {
+          messageId: "post-a",
+          requestId: "request-a",
+          senderUserId: null,
+          sentAt: 1_000,
+          resolvedAt: null,
+          excerpt: null,
+        },
+        replyCount: 1,
+      }),
+    ];
+    mocks.postIds = ["post-a"];
+    mount({ openThreadPostId: null });
+
+    const line = screen.getByTestId("stub-line-post-a");
+    expect(line.getAttribute("data-reply-count")).toBe("1");
+    expect(line.getAttribute("data-participants")).toBe("");
   });
 
   it("asks the host to open a post's thread when its line is clicked", async () => {
@@ -1570,23 +1690,18 @@ describe("<BotChannelView tiles={null} /> focused notification presence", () => 
     // draft's seed (`seedId` 0) shares with the one typed below.
     useBotDraftsStore
       .getState()
-      .typeThreadBox(BOT_ID, "conversation-later", "Draft for B");
+      .typeThreadBox(BOT_ID, "conversation-later", "Draft for B", null);
     const held = Promise.withResolvers<BotConversationSendResponse>();
     mocks.sendAsync.mockImplementationOnce(() => held.promise);
     const user = userEvent.setup();
     const { rerender } = mount({ openThreadPostId: null });
-    const channelBox = (): HTMLTextAreaElement => {
-      const box = within(screen.getByTestId("bot-channel-composer")).getByRole(
-        "textbox",
-      );
-      if (!(box instanceof HTMLTextAreaElement)) throw new Error("no box");
-      return box;
-    };
+    const channelBox = (): HTMLElement =>
+      within(screen.getByTestId("bot-channel-composer")).getByRole("textbox");
 
-    await user.type(channelBox(), "Draft for A");
+    typeInto(channelBox(), "Draft for A");
     mocks.state.appConversationChatId = "conversation-later";
     rerender();
-    expect(channelBox().value).toBe("Draft for B");
+    expect(textOf(channelBox())).toBe("Draft for B");
 
     await user.click(
       within(screen.getByTestId("bot-channel-composer")).getByRole("button", {
@@ -1605,7 +1720,7 @@ describe("<BotChannelView tiles={null} /> focused notification presence", () => 
 
     mocks.state.appConversationChatId = "conversation-channel";
     rerender();
-    expect(channelBox().value).toBe("Draft for A");
+    expect(textOf(channelBox())).toBe("Draft for A");
   });
 
   it("says nothing in another conversation's box of a send that fails after the channel switched", async () => {
@@ -1615,15 +1730,10 @@ describe("<BotChannelView tiles={null} /> focused notification presence", () => 
     mocks.sendAsync.mockImplementationOnce(() => held.promise);
     const user = userEvent.setup();
     const { rerender } = mount({ openThreadPostId: null });
-    const channelBox = (): HTMLTextAreaElement => {
-      const box = within(screen.getByTestId("bot-channel-composer")).getByRole(
-        "textbox",
-      );
-      if (!(box instanceof HTMLTextAreaElement)) throw new Error("no box");
-      return box;
-    };
+    const channelBox = (): HTMLElement =>
+      within(screen.getByTestId("bot-channel-composer")).getByRole("textbox");
 
-    await user.type(channelBox(), "From A");
+    typeInto(channelBox(), "From A");
     await user.click(
       within(screen.getByTestId("bot-channel-composer")).getByRole("button", {
         name: "Send",
@@ -1636,7 +1746,7 @@ describe("<BotChannelView tiles={null} /> focused notification presence", () => 
 
     mocks.state.appConversationChatId = "conversation-later";
     rerender();
-    await user.type(channelBox(), "Draft for B");
+    typeInto(channelBox(), "Draft for B");
 
     // The box's own handler was chained first, so it has run once this
     // settles.
@@ -1646,11 +1756,11 @@ describe("<BotChannelView tiles={null} /> focused notification presence", () => 
     });
 
     expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
-    expect(channelBox().value).toBe("Draft for B");
+    expect(textOf(channelBox())).toBe("Draft for B");
 
     mocks.state.appConversationChatId = "conversation-channel";
     rerender();
-    expect(channelBox().value).toBe("From A");
+    expect(textOf(channelBox())).toBe("From A");
   });
 
   it("says nothing in another conversation's box of a send that fails after the channel switched, and offers it back in its own", async () => {
@@ -1660,26 +1770,21 @@ describe("<BotChannelView tiles={null} /> focused notification presence", () => 
     mocks.sendAsync.mockImplementationOnce(() => held.promise);
     const user = userEvent.setup();
     const { rerender } = mount({ openThreadPostId: null });
-    const channelBox = (): HTMLTextAreaElement => {
-      const box = within(screen.getByTestId("bot-channel-composer")).getByRole(
-        "textbox",
-      );
-      if (!(box instanceof HTMLTextAreaElement)) throw new Error("no box");
-      return box;
-    };
+    const channelBox = (): HTMLElement =>
+      within(screen.getByTestId("bot-channel-composer")).getByRole("textbox");
 
-    await user.type(channelBox(), "From A");
+    typeInto(channelBox(), "From A");
     await user.click(
       within(screen.getByTestId("bot-channel-composer")).getByRole("button", {
         name: "Send",
       }),
     );
     expect(mocks.sendAsync).toHaveBeenCalledTimes(1);
-    await user.type(channelBox(), "Newer A");
+    typeInto(channelBox(), "Newer A");
 
     mocks.state.appConversationChatId = "conversation-later";
     rerender();
-    await user.type(channelBox(), "Draft for B");
+    typeInto(channelBox(), "Draft for B");
 
     // The box's own handler was chained first, so it has run once this
     // settles.
@@ -1689,11 +1794,11 @@ describe("<BotChannelView tiles={null} /> focused notification presence", () => 
     });
 
     expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
-    expect(channelBox().value).toBe("Draft for B");
+    expect(textOf(channelBox())).toBe("Draft for B");
 
     mocks.state.appConversationChatId = "conversation-channel";
     rerender();
-    expect(channelBox().value).toBe("Newer A");
+    expect(textOf(channelBox())).toBe("Newer A");
     expect(
       screen.getByTestId("bot-channel-composer-send-failed").textContent,
     ).toContain("From A");
@@ -1701,7 +1806,7 @@ describe("<BotChannelView tiles={null} /> focused notification presence", () => 
     await user.click(
       screen.getByTestId("bot-channel-composer-send-failed-restore"),
     );
-    expect(channelBox().value).toBe("From A");
+    expect(textOf(channelBox())).toBe("From A");
   });
 
   it("leaves presence to the focused partner while its pane is the unfocused side of a split", () => {
@@ -2045,6 +2150,15 @@ describe("<BotChannelView /> boxes on a short viewport under the keyboard", () =
   it("collapses only the box that has the focus, and restores both with the keyboard down", async () => {
     const user = userEvent.setup();
     mount({ openThreadPostId: "post-a" });
+    // jsdom does not compute `isContentEditable` from the attribute, which is
+    // how the focus layout tells a text entry from a button.
+    for (const testId of ["bot-channel-composer", "bot-thread-composer"]) {
+      Object.defineProperty(
+        within(screen.getByTestId(testId)).getByRole("textbox"),
+        "isContentEditable",
+        { configurable: true, value: true },
+      );
+    }
     expect(formOf("bot-channel-composer")).toBe("full");
     expect(formOf("bot-thread-composer")).toBe("full");
 
@@ -2382,6 +2496,15 @@ describe("<BotChannelView tiles={null} /> a post whose answer lands in a thread"
       threadId: "thread-new",
       requestId: "request-new",
       text: POSTED_TEXT,
+      content: {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [{ type: "text", text: POSTED_TEXT }],
+          },
+        ],
+      },
       senderUserId: null,
       sentAt: 5_000,
       delivery: "written",

@@ -4,7 +4,8 @@ import type { SoundtrackManifest } from "../manifest";
 import { SoundtrackSession, type SoundtrackPorts } from "../session";
 import type { MixSignals } from "../signals";
 import type { Layer, LayerProperties, VariableTrack } from "../variable-sound";
-import { FakeOutput, FakeStems } from "./fakes";
+import { SoundtrackLogRelay } from "../session-log";
+import { captureNothing, FakeOutput, FakeStems } from "./fakes";
 
 const SIGNALS: MixSignals = {
   view: "home",
@@ -80,6 +81,14 @@ function openSession(
     setVolume: vi.fn<(volume: number) => void>(),
     duck: vi.fn<(chimeSeconds: number) => void>(),
     close: vi.fn<(afterSeconds: number) => void>(),
+    log: new SoundtrackLogRelay(),
+    captureMix: captureNothing,
+    pause: () => {
+      output.stopClock();
+    },
+    resume: () => {
+      output.startClock();
+    },
   };
   const manifest: SoundtrackManifest = {
     tracks: [track],
@@ -103,6 +112,7 @@ function openSession(
     director,
     resumePositions: {},
     onSounding: vi.fn<() => void>(),
+    onResumeRefused: () => undefined,
   });
   return { session, output };
 }

@@ -42,6 +42,7 @@ import {
   TaskHostsViewContext,
   useChatSandboxRowLine,
 } from "@/hooks/sandboxes/use-chat-sandbox-row-line";
+import { prepareAgentDelete } from "@/lib/epics/prepare-agent-delete";
 import { settleDetachedEpicMutation } from "@/lib/artifacts/detached-epic-mutation";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { chatOpensPublishedCopy } from "@/lib/chats/chat-open-tile-ref";
@@ -121,7 +122,7 @@ import type { ProviderId } from "@/components/home/data/landing-options";
 import { ProfileBadgedHarnessIcon } from "@/components/providers/profile-badged-harness-icon";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
-import { LazySidebarConfirmDialog } from "@/components/epic-canvas/sidebar/lazy-sidebar-confirm-dialog";
+import { AgentDeleteConfirmDialog } from "@/components/epic-canvas/sidebar/agent-delete-confirm-dialog";
 import { ContextMenuContent } from "@/components/ui/context-menu";
 import {
   SidebarContent,
@@ -367,20 +368,6 @@ interface ChatTreePanelBodyProps {
 }
 
 type TreeFilterFn = (type: string | null | undefined) => boolean;
-
-/**
- * Epic-level viewer (read-only) role for the chat panel. Resolved once in
- * `ChatTreePanelBody` and read directly by the leaf status chip, rather than
- * drilled through four row layers or re-subscribed per row via
- * `useEpicPermissionRole()`. A row's OWN chat session access overrides it when
- * that chat is open.
- *
- * This saves the per-row subscription for the TRAILING chip only. The leading
- * `ChatProgressIcon` is deliberately status-aware, and it re-subscribes per row
- * through its own `useEpicPermissionRole()` call - a known, accepted cost of
- * keeping that icon, not an oversight this context still eliminates.
- */
-const SidebarViewerContext = createContext<boolean>(false);
 
 interface SidebarChatSharingValue {
   readonly visibilitySupported: boolean;
@@ -997,12 +984,6 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     () => otherPrincipalHostIds(taskHosts ?? []),
     [taskHosts],
   );
-  // Read-only (viewer) indication is epic-level, so it is resolved ONCE here
-  // and threaded down as a boolean rather than re-subscribing every row to
-  // `useEpicPermissionRole()`. `viewer` specifically - a null (not-yet-known)
-  // role must not flash the lock. The status-aware leading `ChatProgressIcon`
-  // still makes that per-row subscription itself; see `SidebarViewerContext`.
-  const isViewer = permissionRole === "viewer";
   const localRootPending = useLocalRootCreatePending(epicId, panelId);
   const acknowledgedRootPending = useAcknowledgedRootCreatePending(
     epicId,
@@ -1467,40 +1448,36 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
           <TaskHostsViewContext value={taskHostsView}>
             <HostDirectoryReadingContext value={directoryReading}>
               <AgentRolesEnabledContext value={agentRolesEnabled}>
-                <SidebarViewerContext.Provider value={isViewer}>
-                  <SidebarSortContext.Provider value={comparator}>
-                    <SidebarSortClockContext.Provider value={sortClock}>
-                      <SidebarFilterVisibilityContext.Provider
-                        value={visibleIds}
-                      >
-                        {searchOpen &&
-                        !selectionMode &&
-                        surfaceSearchQuery === null ? (
-                          <ChatSearchHeaderInput
-                            tabId={tabId}
-                            resultCount={searchResultCount}
-                          />
-                        ) : null}
-                        {/* One clock for the tree's rows, owner cards and name labels
+                <SidebarSortContext.Provider value={comparator}>
+                  <SidebarSortClockContext.Provider value={sortClock}>
+                    <SidebarFilterVisibilityContext.Provider value={visibleIds}>
+                      {searchOpen &&
+                      !selectionMode &&
+                      surfaceSearchQuery === null ? (
+                        <ChatSearchHeaderInput
+                          tabId={tabId}
+                          resultCount={searchResultCount}
+                        />
+                      ) : null}
+                      {/* One clock for the tree's rows, owner cards and name labels
                     alike: the first waits, the next row's opens at once. */}
-                        <HoverCardGroup>
-                          <SidebarContent>
-                            <SidebarGroup className="min-h-0 flex-1">
-                              <SidebarGroupContent
-                                ref={treeRegionRef}
-                                className="flex min-h-0 flex-1 flex-col"
-                                data-testid="epic-chat-tree-region"
-                              >
-                                {panelContent}
-                                {messageHits.node}
-                              </SidebarGroupContent>
-                            </SidebarGroup>
-                          </SidebarContent>
-                        </HoverCardGroup>
-                      </SidebarFilterVisibilityContext.Provider>
-                    </SidebarSortClockContext.Provider>
-                  </SidebarSortContext.Provider>
-                </SidebarViewerContext.Provider>
+                      <HoverCardGroup>
+                        <SidebarContent>
+                          <SidebarGroup className="min-h-0 flex-1">
+                            <SidebarGroupContent
+                              ref={treeRegionRef}
+                              className="flex min-h-0 flex-1 flex-col"
+                              data-testid="epic-chat-tree-region"
+                            >
+                              {panelContent}
+                              {messageHits.node}
+                            </SidebarGroupContent>
+                          </SidebarGroup>
+                        </SidebarContent>
+                      </HoverCardGroup>
+                    </SidebarFilterVisibilityContext.Provider>
+                  </SidebarSortClockContext.Provider>
+                </SidebarSortContext.Provider>
               </AgentRolesEnabledContext>
             </HostDirectoryReadingContext>
           </TaskHostsViewContext>
@@ -1639,12 +1616,6 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   // Non-null only where this tree is mounted on a surface that cannot express
   // the desktop open gestures - see `ChatTreeSurface`.
   const surface = useChatTreeSurface();
-  const markArtifactSelfDeleted = useEpicCanvasStore(
-    (s) => s.markArtifactSelfDeleted,
-  );
-  const unmarkArtifactSelfDeleted = useEpicCanvasStore(
-    (s) => s.unmarkArtifactSelfDeleted,
-  );
   const epicHandle = useOpenEpicHandle();
 
   const deleteChat = useEpicDeleteChat();
@@ -1653,7 +1624,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   const renameTerminalAgent = useEpicRenameTuiAgent();
   const renameArtifactInTab = useEpicCanvasStore((s) => s.renameArtifactInTab);
 
-  // What this row's delete dialog says about the agents nested under it (they
+  // What this row's default delete dialog says about agents nested under it (they
   // are kept and move to the top level), subscribed to its ANSWER rather than
   // to the record list it is computed from.
   //
@@ -1676,6 +1647,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       describeTreeDeleteDisclosure({
         tree: state.tree,
         kind: "agent",
+        includeNestedAgents: false,
         nodeIds: [nodeId],
         nestedAgentsKnown: selectNestedAgentsKnown(state),
       }),
@@ -1793,15 +1765,18 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     (event: React.MouseEvent<HTMLButtonElement>) => {
       if (isRenaming) return;
       if (openableType === null) return;
-      openTile({
-        node: openRef(),
-        target: { tabId },
-        gesture: "single",
-        modifiers: modifiersFromMouseEvent(event),
-        placement: null,
-        dedupe: true,
-        source: "direct_ui",
-      });
+      openTile(
+        {
+          node: openRef(),
+          target: { tabId },
+          gesture: "single",
+          modifiers: modifiersFromMouseEvent(event),
+          placement: null,
+          dedupe: true,
+          source: "direct_ui",
+        },
+        "user",
+      );
       // The opening itself is the tree's, on every surface. A mounting surface
       // only gets to append - the switcher sheet closes here.
       if (surface !== null) surface.onRowActivated();
@@ -1817,15 +1792,18 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       if (openableType === null) return;
       // Host-aware dedupe: a cross-host clone holds one tab per host for the
       // same copied chat id, and `openRef` means this row's own.
-      openTile({
-        node: { ...openRef(), instanceId: uuidv4() },
-        target: { tabId },
-        gesture: "double",
-        modifiers: modifiersFromMouseEvent(event),
-        placement: null,
-        dedupe: true,
-        source: "direct_ui",
-      });
+      openTile(
+        {
+          node: { ...openRef(), instanceId: uuidv4() },
+          target: { tabId },
+          gesture: "double",
+          modifiers: modifiersFromMouseEvent(event),
+          placement: null,
+          dedupe: true,
+          source: "direct_ui",
+        },
+        "user",
+      );
     },
     [openRef, isRenaming, openableType, openTile, tabId],
   );
@@ -2006,30 +1984,23 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   };
 
   const confirmDelete = () => {
-    // Detached: the delete is a round trip now. The surface below reacts to
-    // the PROJECTION, not to this promise, so nothing here waits on it - and
-    // nothing here would otherwise hear it fail.
-    settleDetachedEpicMutation(
-      epicHandle.store.getState().deleteArtifact(nodeId),
-      "sidebar tree",
-      "local delete projection",
+    const rollback = prepareAgentDelete(
+      epicHandle,
+      nodeId,
+      artifactType === "chat" ? "chat" : "terminal-agent",
     );
-    if (artifactType !== "terminal-agent") markArtifactSelfDeleted(nodeId);
     const handleDeleteSuccess = () => {
       setConfirmDeleteOpen(false);
-    };
-    const handleDeleteError = () => {
-      if (artifactType !== "terminal-agent") unmarkArtifactSelfDeleted(nodeId);
     };
     if (artifactType === "chat") {
       deleteChat.mutate(
         { epicId, chatId: nodeId, hostId: mutationHostId },
-        { onSuccess: handleDeleteSuccess, onError: handleDeleteError },
+        { onSuccess: handleDeleteSuccess, onError: rollback },
       );
     } else if (artifactType === "terminal-agent") {
       deleteTerminalAgent.mutate(
         { epicId, tuiAgentId: nodeId, hostId: mutationHostId },
-        { onSuccess: handleDeleteSuccess, onError: handleDeleteError },
+        { onSuccess: handleDeleteSuccess, onError: rollback },
       );
     }
   };
@@ -2412,7 +2383,8 @@ function ChatNodeShellBody(
         selectedIds={selectedIds}
         onToggleSelection={onToggleSelection}
       />
-      <LazySidebarConfirmDialog
+      <AgentDeleteConfirmDialog
+        nodeId={nodeId}
         blockedReason={null}
         open={confirmDeleteOpen}
         onOpenChange={onConfirmDeleteOpenChange}
@@ -3681,7 +3653,7 @@ type ChatOwnStatusKind =
  * `read-only` sits in the DEFAULT slot, not above it - the pre-refactor icon
  * rendered the lock as `NotificationIndicatorIcon`'s `defaultIcon`, i.e. only
  * once no tone, no running state and no unread completion claimed the slot. So
- * a viewer still sees "Needs attention" / "Working" on a row that has them, and
+ * a reader still sees "Needs attention" / "Working" on a row that has them, and
  * the lock only replaces the idle relative time.
  */
 function chatOwnStatusKind(
@@ -4140,9 +4112,6 @@ function useChatRowOwnStatusKind(args: {
     ownerHostId,
   );
   const awarenessTier = useEpicAgentActivityTiers().get(nodeId);
-  const isViewer = useContext(SidebarViewerContext);
-  // Terminal-agent rows have no chat session and never carried a read-only
-  // lock (their PTY runs host-side), so the viewer arm is chat-only.
   const isChat = artifactType === "chat";
   const sessionHandle = useExistingChatSessionHandle(
     epicId,
@@ -4169,7 +4138,9 @@ function useChatRowOwnStatusKind(args: {
   if (sessionHandle === null || !isChat) {
     const running = awarenessTier ?? false;
     return {
-      kind: chatOwnStatusKind(indicatorState, running, isChat && isViewer),
+      // No session, so no access snapshot: the row claims no lock rather
+      // than guessing one from the task's role, which every member may write.
+      kind: chatOwnStatusKind(indicatorState, running, false),
       running,
     };
   }

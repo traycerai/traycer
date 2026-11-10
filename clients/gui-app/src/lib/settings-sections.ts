@@ -3,11 +3,13 @@ import {
   Activity,
   Bell,
   Bot,
+  BrainCircuit,
   Boxes,
   Cloud,
   Coins,
   FileText,
   GitBranch,
+  HardDrive,
   ListChecks,
   Globe,
   Keyboard,
@@ -49,6 +51,7 @@ export type SettingsSectionId =
   | "providers"
   | "secrets"
   | "sandboxes"
+  | "storage"
   | "members"
   | "mcp-servers"
   | "skills"
@@ -56,6 +59,7 @@ export type SettingsSectionId =
   | "machine-setup"
   | "notifications"
   | "permissions"
+  | "agent-memories"
   | "agents"
   | "fallback"
   | "keybindings"
@@ -359,6 +363,16 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     icon: KeyRound,
     group: "personal",
   },
+  // What agents carry from one task to the next. Its own page rather than a
+  // tab of Permissions: Permissions is what an agent may do in a task, and
+  // this is what it keeps across them. Under Environment because the memories
+  // are the configuration's, whichever computer the agent runs on.
+  {
+    id: "agent-memories",
+    label: "Agent memories",
+    icon: BrainCircuit,
+    group: "personal",
+  },
   // Two tabs over room files: the selection guide agents read to pick a
   // harness, model and effort, and the agent definitions a harness can start.
   // The section `id` (and its `/settings/agents` route) is an internal
@@ -410,6 +424,14 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     id: "sandboxes",
     label: "Sandboxes",
     icon: Cloud,
+    group: "personal",
+  },
+  // What the picked configuration's hosts keep on disk. Not on a Local row:
+  // the switch is an environment item.
+  {
+    id: "storage",
+    label: "Storage",
+    icon: HardDrive,
     group: "personal",
   },
   // A team's members. Offered only while a team is picked
@@ -491,10 +513,19 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
  *   says "On your desktop, open Settings → Link mobile app"). A phone could
  *   physically show the code to a second phone, so this is a product decision
  *   about which end of the pairing each build is, not an inability.
+ * - **Application Diagnostics — every control needs a desktop bridge.** Log
+ *   level, heap capture and this window's log file all read bridges the
+ *   installed app does not have, so the rail, search and the palette would
+ *   open a page with nothing to do. Unlike the two above, its route does NOT
+ *   redirect: `/settings/app-diagnostics` still renders the panel, which says
+ *   so in one sentence. A bridge that later exists still draws its own group
+ *   there; this set stays a shell decision, resolved once with the rest of
+ *   the offered list, rather than a live bridge check.
  */
 const MOBILE_APP_OMITTED_SECTION_IDS: ReadonlySet<SettingsSectionId> = new Set([
   "keybindings",
   "link-phone",
+  "app-diagnostics",
 ]);
 
 /**

@@ -22,7 +22,6 @@ import {
   buildAccessHostOn,
   type AccessHost,
 } from "@/components/settings/host-scope/__tests__/host-access-test-support";
-import { REMOTE_ACCESS_QUESTION } from "@/components/settings/host-scope/host-access-model";
 import { RemoteAccessQuestion } from "@/components/settings/host-scope/remote-access-question";
 import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
 import { useHostAccessPromptsStore } from "@/stores/hosts/host-access-prompts-store";
@@ -72,6 +71,7 @@ function renderQuestion(options: {
         client={options.host.client}
         hostId={options.hostId}
         enabled={options.enabled}
+        children={null}
       />
     </QueryClientProvider>,
   );
@@ -100,7 +100,9 @@ describe("<RemoteAccessQuestion />", () => {
     });
 
     const question = await screen.findByTestId("remote-access-question");
-    expect(question.textContent).toContain(REMOTE_ACCESS_QUESTION);
+    expect(question.textContent).toContain(
+      "Allow other devices and agents on your account to reach this computer?",
+    );
     expect(screen.getByRole("button", { name: "Not now" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "On" })).toBeTruthy();
   });

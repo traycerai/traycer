@@ -743,6 +743,20 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
         ),
       ).toBeTruthy();
     });
+    expect(screen.getByText("Install a different version")).toBeTruthy();
+    // Both sentences stay in the open Updates tab, beside the checkbox.
+    // A disclosure, or dropping either sentence, is the shape this refuses.
+    const specificVersion = screen.getByText(
+      "Install a specific host version — upgrade to a release candidate or hotfix, or downgrade to an earlier release.",
+    );
+    expect(specificVersion.closest("details")).toBeNull();
+    const releaseCandidates = screen.getByText(
+      "Show RC host versions when choosing a version.",
+    );
+    expect(releaseCandidates.closest("details")).toBeNull();
+    expect(
+      screen.getByRole("checkbox", { name: "Include release candidates" }),
+    ).toBeTruthy();
   });
 
   it("Check now renders one row per manifest version, Install on a non-latest row sends host.update.install with THAT row's version, and freezes every other row's Install button while it is in flight", async () => {

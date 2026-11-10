@@ -294,6 +294,16 @@ describe("<MobileNewTerminalDialog />", () => {
     renderDialog();
 
     const dialog = screen.getByTestId("mobile-epic-new-terminal-dialog");
+    expect(
+      screen.getAllByRole("heading", { name: "New terminal" }),
+    ).toHaveLength(1);
+    expect(screen.getByText("Open a terminal")).toBeDefined();
+    expect(
+      screen.getByText(
+        "The terminal lives on the machine you pick, for its lifetime.",
+      ),
+    ).toBeDefined();
+    expect(screen.getByText("Folders")).toBeDefined();
     expect(dialog.className).toContain("max-h-[min(86dvh,calc(100dvh-2rem))]");
     expect(dialog.className).toContain("grid-rows-[auto_minmax(0,1fr)_auto]");
 

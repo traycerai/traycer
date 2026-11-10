@@ -61,7 +61,7 @@ export interface NewTerminalPickerBodyProps {
   readonly epicId: string;
   readonly surfaceKey: string;
   /**
-   * Focus the workspace search input once the list mounts. The caller owns
+   * Focus the folder search input once the list mounts. The caller owns
    * this because focusing a text field is a request for a keyboard, and
    * whether that keyboard costs anything depends on the shell the surface is
    * rendered in, which this body cannot see.
@@ -189,12 +189,7 @@ export function NewTerminalPickerBody(props: NewTerminalPickerBodyProps) {
         className="flex min-h-0 flex-col overflow-y-auto"
         data-testid="new-terminal-picker-scroller"
       >
-        <div className="border-b p-2.5">
-          <p className="text-ui-sm font-semibold">Open a terminal</p>
-          <p className="text-ui-xs text-muted-foreground">
-            The terminal lives on the machine you pick, for its lifetime.
-          </p>
-        </div>
+        <TerminalPickerIntroduction />
         {/*
           The host section renders the RESOLVED host, which is what keeps this
           create surface honest without a banner: a pin whose host died resolves
@@ -215,7 +210,7 @@ export function NewTerminalPickerBody(props: NewTerminalPickerBodyProps) {
             secondaryLabel={(row) => row.runningDir}
             onSelect={setExplicitRow}
             autoFocusSearch={autoFocusSearch}
-            emptyMessage="No directories available. Open a workspace in the epic first."
+            emptyMessage="No folders available. Add a folder to this task first."
           />
         ) : (
           <div className="flex flex-col gap-2 p-2.5">
@@ -265,6 +260,17 @@ export function NewTerminalPickerBody(props: NewTerminalPickerBodyProps) {
         />
       </div>
     </>
+  );
+}
+
+function TerminalPickerIntroduction(): ReactNode {
+  return (
+    <div className="border-b p-2.5">
+      <p className="text-ui-sm font-semibold">Open a terminal</p>
+      <p className="text-ui-xs text-muted-foreground">
+        The terminal lives on the machine you pick, for its lifetime.
+      </p>
+    </div>
   );
 }
 

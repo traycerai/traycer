@@ -47,6 +47,7 @@ export function NewTerminalStagedHandoff(props: {
         "explicit",
         "direct_ui",
       ),
+      "user",
     );
     usePanelHeaderMenuStore
       .getState()

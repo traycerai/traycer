@@ -67,6 +67,9 @@ const mocks = vi.hoisted(() => ({
   handle: null as ChatSessionStoreHandle | null,
 }));
 
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => null,
+}));
 vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/lib/registries/chat-session-registry")
@@ -188,6 +191,7 @@ function mountTranscript(surface: BotTranscriptSurface): {
         showConnecting
         header={null}
         landOn={null}
+        flow={null}
       />
     </QueryClientProvider>
   );

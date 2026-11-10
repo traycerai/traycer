@@ -36,7 +36,7 @@ import {
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type {
   EnvironmentSecretV12,
-  EnvironmentStatusResponseV11,
+  EnvironmentStatusResponseV12,
 } from "@traycer/protocol/host/environment-schemas";
 import type {
   ProviderCliState,
@@ -53,6 +53,10 @@ import {
   itemStatusFixture,
 } from "@/lib/environment/__tests__/environment-test-support";
 import type { HostRpcRegistry } from "@/lib/host";
+import {
+  RETIRED_PROVIDER_VARIABLES,
+  RETIRED_SECRET_ROW_FIELDS,
+} from "@traycer/protocol/host/released-wire-rows";
 
 const HOST_ID = "host-a";
 const ALL_METHODS = [
@@ -72,7 +76,7 @@ afterEach(() => {
 interface HostFacts {
   readonly providers: ProviderCliState[];
   readonly secrets: EnvironmentSecretV12[];
-  readonly status: EnvironmentStatusResponseV11;
+  readonly status: EnvironmentStatusResponseV12;
   /** The methods the host advertises. */
   readonly methods: readonly string[];
 }
@@ -94,18 +98,17 @@ function secret(
   overrides: Partial<EnvironmentSecretV12>,
 ): EnvironmentSecretV12 {
   return {
+    ...RETIRED_SECRET_ROW_FIELDS,
+    providerVariables: [...RETIRED_PROVIDER_VARIABLES],
     secretId: "secret-1",
     name: "DEPLOY_KEY",
     kind: "api_key",
     protocol: null,
     destinations: [],
-    mode: "brokered",
-    state: "live",
     currentVersionId: "v1",
     revoked: false,
     updatedAt: 1,
     variables: [],
-    providerVariables: [],
     ...overrides,
   };
 }
@@ -122,7 +125,7 @@ function storedKey(): ProviderCliState {
   };
 }
 
-function guideStatus(): EnvironmentStatusResponseV11 {
+function guideStatus(): EnvironmentStatusResponseV12 {
   return environmentStatusFixture({
     items: [itemStatusFixture({ kind: "agent_selection_guide", key: "guide" })],
   });
@@ -353,7 +356,7 @@ describe("<SetUpPersonalGroup />", () => {
       const facts: {
         providers: ProviderCliState[];
         secrets: EnvironmentSecretV12[];
-        status: EnvironmentStatusResponseV11;
+        status: EnvironmentStatusResponseV12;
         methods: readonly string[];
       } = {
         providers: [],

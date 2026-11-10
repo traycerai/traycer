@@ -22,9 +22,10 @@ import userEvent from "@testing-library/user-event";
 import { toastFromAuthError } from "@/lib/auth-error-toast";
 import type { ReactNode } from "react";
 import type { HostSandboxState } from "@traycer/protocol/host/host-status";
+import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import type { SandboxLifecycleVerbFetchResult } from "@traycer-clients/shared/host-client/sandbox-control";
 import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
-import { SandboxCard } from "@/components/hosts/sandbox-card";
+import { SandboxHeaderActions } from "@/components/hosts/sandbox-card";
 import { SandboxDetailsDrawerHost } from "@/components/hosts/sandbox-details-drawer";
 import { SandboxTileStateFrame } from "@/components/hosts/sandbox-tile-state-frame";
 import { SandboxRowActions } from "@/components/settings/panels/sandbox-row-actions";
@@ -76,6 +77,11 @@ vi.mock("@/hooks/sandboxes/use-sandbox-session-report", () => ({
   useSandboxSessionReport: () => ({
     report: { kind: "unknown" },
     failed: false,
+  }),
+  useSandboxRowSessionReport: () => ({
+    report: { kind: "unknown" },
+    failed: false,
+    resumePending: false,
   }),
 }));
 vi.mock("@/components/host/host-restart-sessions", () => ({
@@ -212,6 +218,14 @@ const CASES: readonly VerbCase[] = [
 ];
 const STOP_CASE = CASES.find((entry) => entry.verb === "stop");
 if (STOP_CASE === undefined) throw new Error("Expected the Stop case");
+const FROZEN_DESTROY_CASE: VerbCase = {
+  verb: "destroy",
+  label: "Destroy",
+  pending: "Destroying · pending",
+  reference: "SBX-0801",
+  initial: "suspended",
+  reached: "destroyed",
+};
 
 function Rows(): ReactNode {
   const list = useSandboxList();
@@ -228,7 +242,7 @@ function Rows(): ReactNode {
   ));
 }
 
-function setup(testCase: VerbCase) {
+function setup(testCase: VerbCase, overrides: Partial<SandboxSummary> | null) {
   const binding = mocks.binding;
   if (binding === null) throw new Error("Expected the signed-in binding");
   const answer = Promise.withResolvers<SandboxLifecycleVerbFetchResult>();
@@ -238,6 +252,7 @@ function setup(testCase: VerbCase) {
     id: "sbx-build",
     displayName: "build-box",
     state: testCase.initial,
+    ...(overrides ?? {}),
   });
   const other = sandboxSummaryFixture({
     id: "sbx-other",
@@ -318,7 +333,7 @@ describe("sandbox row operations", () => {
   it("keeps a stopped receipt and its draft when Start fails, then clears it after a successful Retry", async () => {
     const testCase = CASES.find((entry) => entry.verb === "start");
     if (testCase === undefined) throw new Error("Expected the Start case");
-    const { answer, binding, client, main } = setup(testCase);
+    const { answer, binding, client, main } = setup(testCase, null);
     await screen.findByRole("region", { name: "build-box" });
     useNewConversationModalStore.getState().setContent("receipt-epic", {
       type: "doc",
@@ -411,7 +426,7 @@ describe("sandbox row operations", () => {
             };
       const testCase = CASES.find((entry) => entry.verb === "resume");
       if (testCase === undefined) throw new Error("Expected the Resume case");
-      const { answer } = setup(testCase);
+      const { answer } = setup(testCase, null);
       const row = await press(testCase);
       await act(async () => {
         answer.resolve({
@@ -449,7 +464,7 @@ describe("sandbox row operations", () => {
     };
     const testCase = CASES.find((entry) => entry.verb === "resume");
     if (testCase === undefined) throw new Error("Expected the Resume case");
-    const { answer } = setup(testCase);
+    const { answer } = setup(testCase, null);
     const row = await press(testCase);
     await act(async () => {
       answer.resolve({
@@ -472,34 +487,44 @@ describe("sandbox row operations", () => {
   });
 
   it("shows the Settings dialog's pending operation and its failure on the card too", async () => {
-    const { answer, client, main } = setup(SUSPEND_CASE);
+    const { answer, client, main } = setup(SUSPEND_CASE, null);
+    const sandbox = {
+      state: main.state,
+      frozen: false,
+      summary: main,
+      teamOwned: false,
+    };
     render(
       <QueryClientProvider client={client}>
-        <SandboxCard
-          hostName={main.displayName}
-          hostState="online"
-          sandbox={{
-            state: main.state,
-            frozen: false,
-            summary: main,
-            teamOwned: false,
-          }}
-          onDestroyed={null}
-        />
+        <div data-testid="sandbox-header-actions">
+          <SandboxHeaderActions
+            hostName={main.displayName}
+            sandbox={sandbox}
+            onDestroyed={null}
+            renderActions={null}
+          />
+        </div>
       </QueryClientProvider>,
     );
-    const card = screen.getByTestId("sandbox-card");
+    const headerActions = screen.getByTestId("sandbox-header-actions");
     await press(SUSPEND_CASE);
-    expect((await within(card).findByRole("status")).textContent).toBe(
+    expect((await within(headerActions).findByRole("status")).textContent).toBe(
       SUSPEND_CASE.pending,
     );
+    const pendingButtons = screen.getAllByRole("button", {
+      name: SUSPEND_CASE.pending,
+    });
+    expect(pendingButtons).toHaveLength(2);
     expect(
-      within(card)
-        .getByRole("button", { name: SUSPEND_CASE.pending })
-        .hasAttribute("disabled"),
+      pendingButtons.every((button) => button.hasAttribute("disabled")),
     ).toBe(true);
     await userEvent.click(
-      within(card).getByRole("button", { name: "Destroy" }),
+      within(headerActions).getByRole("button", {
+        name: "More actions for build-box",
+      }),
+    );
+    await userEvent.click(
+      await screen.findByRole("menuitem", { name: "Destroy" }),
     );
     const destroyDialog = screen.getByRole("dialog");
     await userEvent.type(
@@ -520,7 +545,7 @@ describe("sandbox row operations", () => {
       answer.resolve(refusal(409, "sandbox_busy"));
       await answer.promise;
     });
-    const failure = await within(card).findByRole("alert");
+    const failure = await within(headerActions).findByRole("alert");
     expect(failure.textContent).toContain(
       "Couldn't suspend build-box · SBX-0601",
     );
@@ -536,7 +561,7 @@ describe("sandbox row operations", () => {
     await userEvent.click(
       within(failure).getByRole("button", { name: "Retry" }),
     );
-    expect((await within(card).findByRole("status")).textContent).toBe(
+    expect((await within(headerActions).findByRole("status")).textContent).toBe(
       SUSPEND_CASE.pending,
     );
     expect(mocks.binding?.auth.runSandboxVerb).toHaveBeenCalledTimes(2);
@@ -546,10 +571,74 @@ describe("sandbox row operations", () => {
     });
   });
 
+  it.each([
+    {
+      label: "Stop from awake",
+      testCase: STOP_CASE,
+      frozen: false,
+      pending: "Stopping · pending",
+    },
+    {
+      label: "Destroy while frozen",
+      testCase: FROZEN_DESTROY_CASE,
+      frozen: true,
+      pending: "Destroying · pending",
+    },
+  ])(
+    "keeps the $label pending notice outside More while the row is stale",
+    async ({ testCase, frozen, pending }) => {
+      const { answer, client, main } = setup(testCase, { frozen });
+      const row = await press(testCase);
+      const sandbox = {
+        state: testCase.initial,
+        frozen,
+        summary: main,
+        teamOwned: false,
+      };
+      render(
+        <QueryClientProvider client={client}>
+          <div data-testid="sandbox-header-actions">
+            <SandboxHeaderActions
+              hostName={main.displayName}
+              sandbox={sandbox}
+              onDestroyed={null}
+              renderActions={null}
+            />
+          </div>
+        </QueryClientProvider>,
+      );
+
+      const headerActions = screen.getByTestId("sandbox-header-actions");
+      const notice = await within(headerActions).findByRole("status");
+      expect(notice.textContent).toBe(pending);
+      await userEvent.click(
+        within(headerActions).getByRole("button", {
+          name: "More actions for build-box",
+        }),
+      );
+      const menu = await screen.findByRole("menu");
+      expect(menu.contains(notice)).toBe(false);
+      expect(
+        within(menu)
+          .getByRole("menuitem", { name: testCase.label })
+          .hasAttribute("aria-disabled"),
+      ).toBe(true);
+
+      await act(async () => {
+        answer.resolve({ kind: "ok", settled: true, state: testCase.reached });
+        await answer.promise;
+      });
+      await waitFor(() =>
+        expect(within(headerActions).queryByRole("status")).toBeNull(),
+      );
+      expect(within(row).queryByRole("alert")).toBeNull();
+    },
+  );
+
   it("disables the tile's wake button while the Settings row wakes that sandbox", async () => {
     const testCase = CASES.find((entry) => entry.verb === "resume");
     if (testCase === undefined) throw new Error("Expected the Resume case");
-    const { answer, client, main } = setup(testCase);
+    const { answer, client, main } = setup(testCase, null);
     mocks.entry = {
       ...sandboxHostEntry(main.hostId, null),
       sandbox: {
@@ -581,7 +670,7 @@ describe("sandbox row operations", () => {
 
   it("shows the same operation in another mounted view of that sandbox", async () => {
     const testCase = SUSPEND_CASE;
-    const { answer, client, main } = setup(testCase);
+    const { answer, client, main } = setup(testCase, null);
     render(
       <QueryClientProvider client={client}>
         <section aria-label="Another view">
@@ -612,7 +701,7 @@ describe("sandbox row operations", () => {
   });
 
   it("closes an open Stop confirmation when the row suspends, sends nothing, and keeps it closed when the row wakes", async () => {
-    const { binding, client, main, other } = setup(STOP_CASE);
+    const { binding, client, main, other } = setup(STOP_CASE, null);
     const row = await screen.findByRole("region", { name: "build-box" });
     await userEvent.click(
       within(row).getByRole("button", { name: "More actions for build-box" }),
@@ -644,7 +733,7 @@ describe("sandbox row operations", () => {
   it("asks for the name again after a Destroy the row closed on its own", async () => {
     const resumeCase = CASES.find((entry) => entry.verb === "resume");
     if (resumeCase === undefined) throw new Error("Expected the Resume case");
-    const { binding, client, main, other } = setup(resumeCase);
+    const { binding, client, main, other } = setup(resumeCase, null);
     const row = await screen.findByRole("region", { name: "build-box" });
     const openDestroy = async (): Promise<HTMLElement> => {
       await userEvent.click(
@@ -691,22 +780,27 @@ describe("sandbox row operations", () => {
   });
 
   it("drops a Stop refused as a conflict, on the row and the card, once neither offers Stop", async () => {
-    const { answer, binding, client, main, other } = setup(STOP_CASE);
-    const card = (state: HostSandboxState) => (
-      <QueryClientProvider client={client}>
-        <SandboxCard
-          hostName={main.displayName}
-          hostState="online"
-          sandbox={{
-            state,
-            frozen: false,
-            summary: { ...main, state },
-            teamOwned: false,
-          }}
-          onDestroyed={null}
-        />
-      </QueryClientProvider>
-    );
+    const { answer, binding, client, main, other } = setup(STOP_CASE, null);
+    const card = (state: HostSandboxState) => {
+      const sandbox = {
+        state,
+        frozen: false,
+        summary: { ...main, state },
+        teamOwned: false,
+      };
+      return (
+        <QueryClientProvider client={client}>
+          <div data-testid="sandbox-header-actions">
+            <SandboxHeaderActions
+              hostName={main.displayName}
+              sandbox={sandbox}
+              onDestroyed={null}
+              renderActions={null}
+            />
+          </div>
+        </QueryClientProvider>
+      );
+    };
     const { rerender } = render(card("awake"));
     const row = await press(STOP_CASE);
     await act(async () => {
@@ -717,10 +811,10 @@ describe("sandbox row operations", () => {
     const failure = await within(row).findByRole("alert");
     expect(failure.textContent).toContain("Couldn't stop build-box · SBX-0701");
     expect(within(failure).getByRole("button", { name: "Retry" })).toBeTruthy();
-    const sandboxCard = screen.getByTestId("sandbox-card");
-    expect(within(sandboxCard).getByRole("alert").textContent).toContain(
-      "Couldn't stop build-box · SBX-0701",
-    );
+    expect(
+      within(screen.getByTestId("sandbox-header-actions")).getByRole("alert")
+        .textContent,
+    ).toContain("Couldn't stop build-box · SBX-0701");
 
     binding.auth.listSandboxes.mockResolvedValue({
       kind: "ok",
@@ -730,14 +824,12 @@ describe("sandbox row operations", () => {
     await within(row).findByRole("button", { name: "Resume" });
     expect(within(row).queryByRole("alert")).toBeNull();
     rerender(card("suspended"));
-    expect(
-      within(screen.getByTestId("sandbox-card")).queryByRole("alert"),
-    ).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("uses the refusal's mapped support reference before the verb's reference", async () => {
     const testCase = SUSPEND_CASE;
-    const { answer } = setup(testCase);
+    const { answer } = setup(testCase, null);
     const row = await press(testCase);
     await act(async () => {
       answer.resolve(refusal(503, "provider-error"));
@@ -750,7 +842,7 @@ describe("sandbox row operations", () => {
 
   it("keeps a pending operation and its later refusal with the account that started it", async () => {
     const testCase = SUSPEND_CASE;
-    const { answer } = setup(testCase);
+    const { answer } = setup(testCase, null);
     const row = await press(testCase);
     await within(row).findByRole("status");
     act(() =>
@@ -775,7 +867,7 @@ describe("sandbox row operations", () => {
   it.each(CASES)(
     "shows $verb pending on its disabled button, leaves another sandbox alone, and settles on success",
     async (testCase) => {
-      const { answer, binding, main, other } = setup(testCase);
+      const { answer, binding, main, other } = setup(testCase, null);
       const row = await press(testCase);
 
       expect((await within(row).findByRole("status")).textContent).toBe(
@@ -786,13 +878,16 @@ describe("sandbox row operations", () => {
           .getByRole("button", { name: testCase.pending })
           .hasAttribute("disabled"),
       ).toBe(true);
-      await userEvent.click(
-        within(row).getByRole("button", { name: "More actions for build-box" }),
-      );
       expect(
-        screen.getAllByRole("menuitem").map((item) => item.textContent),
-      ).toEqual(["Details"]);
-      await userEvent.keyboard("{Escape}");
+        within(row)
+          .getByRole("button", { name: "Details" })
+          .hasAttribute("disabled"),
+      ).toBe(false);
+      expect(
+        within(row).queryByRole("button", {
+          name: "More actions for build-box",
+        }),
+      ).toBeNull();
       const otherRow = screen.getByRole("region", { name: "other-box" });
       expect(within(otherRow).queryByRole("status")).toBeNull();
       expect(
@@ -841,7 +936,7 @@ describe("sandbox row operations", () => {
   it.each(CASES)(
     "keeps $verb's typed refusal on the row and in Details, then Retry runs it again",
     async (testCase) => {
-      const { answer, binding, client } = setup(testCase);
+      const { answer, binding, client } = setup(testCase, null);
       const row = await press(testCase);
       await act(async () => {
         answer.resolve(refusal(409, "sandbox_busy"));

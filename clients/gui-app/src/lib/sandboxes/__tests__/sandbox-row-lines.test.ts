@@ -25,12 +25,13 @@ import {
   sandboxAgentSessionName,
   sandboxRegionLabel,
   sandboxSessionPills,
+  sandboxDestroyedLine,
+  sandboxKeptByLabel,
   sandboxShapeAndCostLine,
-  sandboxPaidByLabel,
+  sandboxStartedByLabel,
   sandboxRowActions,
   sandboxRowMatches,
   sandboxSessionsLine,
-  sandboxStartedByLabel,
   sandboxSupportReferenceLine,
   type SandboxRowAction,
   type SandboxPageConfiguration,
@@ -459,7 +460,7 @@ describe("sandboxClockLine", () => {
     },
   );
 
-  it("reads an awake row whose settings did not apply as the one shared line", () => {
+  it("names whose settings did not apply and the support reference on an awake row", () => {
     expect(
       sandboxClockLine({
         summary: sandboxSummaryFixture({
@@ -475,17 +476,15 @@ describe("sandboxClockLine", () => {
         reachability: { unreachable: false, lastContactAt: null },
         now: NOW,
       }),
-    ).toBe(
-      "Build box is awake, but Personal's settings didn't apply · SBX-0520",
-    );
+    ).toBe("Personal's settings didn't apply · SBX-0520");
   });
 
-  describe("a failed row", () => {
-    const failedLine = (failureCode: string | null) =>
+  it("reads a failed row by its time and mapped support reference", () => {
+    expect(
       sandboxClockLine({
         summary: sandboxSummaryFixture({
           state: "failed",
-          failureCode,
+          failureCode: "create:kube-create-service-account",
           lastTransitionAt: new Date(2026, 9, 25, 11, 1).getTime(),
         }),
         configuration: { kind: "personal" },
@@ -494,19 +493,8 @@ describe("sandboxClockLine", () => {
         viewerUserId: null,
         reachability: { unreachable: false, lastContactAt: null },
         now: NOW,
-      });
-
-    it("reads by its support reference, never its raw code", () => {
-      const line = failedLine("create:kube-create-service-account");
-      expect(line).toBe("Couldn't start build-box at 11:01 · SBX-0412");
-    });
-
-    it.each(["zzz", null])(
-      "omits the support-reference segment cleanly for %s",
-      (code) => {
-        expect(failedLine(code)).toBe("Couldn't start build-box at 11:01");
-      },
-    );
+      }),
+    ).toBe("Couldn't start at 11:01 · SBX-0412");
   });
 
   it("copies the support reference with the sandbox id, or the id alone with none", () => {
@@ -529,7 +517,7 @@ describe("sandboxClockLine", () => {
           reachability: { unreachable: true, lastContactAt: NOW - 60_000 },
           now: NOW,
         }),
-      ).toBe("Destroying · pending");
+      ).toBe("Pending.");
     },
   );
 
@@ -613,7 +601,7 @@ describe("sandboxClockLine, a resting row", () => {
 
   it("promises the next wake and dates the removal in the reader's locale", () => {
     expect(line({ destroyAt: DESTROY_AT }, 50)).toBe(
-      `Suspended since 09:49 · Suspend keeps memory · resumes on your next action · Will be removed on ${formatSandboxDate(DESTROY_AT, false)} · $0.05 today`,
+      `Suspended since 09:49 · Suspend keeps memory · resumes on your next action · Will be removed on ${formatSandboxDate(DESTROY_AT, false)} · storage uses your credits · $0.05 today`,
     );
   });
 
@@ -623,7 +611,7 @@ describe("sandboxClockLine, a resting row", () => {
       50,
     );
     expect(waiting).toBe(
-      "Suspended since 09:49 · Suspend keeps memory · resumes on your next action · $0.05 today",
+      "Suspended since 09:49 · Suspend keeps memory · resumes on your next action · storage uses your credits · $0.05 today",
     );
     expect(waiting).not.toContain("kept until you destroy it");
   });
@@ -632,7 +620,7 @@ describe("sandboxClockLine, a resting row", () => {
     expect(
       line({ destroyAt: null, destroyAfterRestingMinutes: null }, 50),
     ).toBe(
-      "Suspended since 09:49 · Suspend keeps memory · resumes on your next action · kept until you destroy it · $0.05 today",
+      "Suspended since 09:49 · Suspend keeps memory · resumes on your next action · kept until you destroy it · storage uses your credits · $0.05 today",
     );
   });
 
@@ -647,13 +635,13 @@ describe("sandboxClockLine, a resting row", () => {
         50,
       ),
     ).toBe(
-      "Suspended since 09:49 · Suspend keeps memory · resumes on your next action · $0.05 today",
+      "Suspended since 09:49 · Suspend keeps memory · resumes on your next action · storage uses your credits · $0.05 today",
     );
   });
 
   it("dates a stopped row's destroy unless it is started", () => {
     expect(line({ state: "stopped", destroyAt: DESTROY_AT }, 0)).toBe(
-      `Stopped since 09:49 · Will be removed on ${formatSandboxDate(DESTROY_AT, false)}`,
+      `Stopped since 09:49 · Will be removed on ${formatSandboxDate(DESTROY_AT, false)} · storage uses your credits`,
     );
   });
 
@@ -758,43 +746,6 @@ describe("sandboxFrozenClock", () => {
   });
 });
 
-describe("sandboxStartedByLabel", () => {
-  const KEPT_AGENT_ROW = sandboxSummaryFixture({
-    burst: false,
-    createdByAgentId: "agent-1",
-    createdBy: { userId: "u-priya", displayName: "Priya" },
-    keptBy: { userId: "u-me", displayName: "Me" },
-  });
-
-  it("says an agent started a sandbox an agent created and someone kept", () => {
-    expect(sandboxStartedByLabel(KEPT_AGENT_ROW, "u-me")).toBe(
-      "Started by an agent",
-    );
-  });
-
-  it("names the agent where the server names it to this viewer", () => {
-    expect(
-      sandboxStartedByLabel(
-        { ...KEPT_AGENT_ROW, createdByAgentName: "Planner" },
-        "u-me",
-      ),
-    ).toBe("Started by Planner");
-  });
-
-  it("still names the person who started a sandbox no agent created", () => {
-    expect(
-      sandboxStartedByLabel(
-        sandboxSummaryFixture({
-          burst: false,
-          createdByAgentId: null,
-          createdBy: { userId: "u-priya", displayName: "Priya" },
-        }),
-        "u-me",
-      ),
-    ).toBe("Started by Priya");
-  });
-});
-
 describe("sandboxListHeader", () => {
   const rows = [sandboxSummaryFixture({ id: "sbx-1" })];
 
@@ -892,37 +843,112 @@ describe("sandboxTodayCost", () => {
   });
 });
 
-describe("sandboxShapeAndCostLine, an agent sandbox", () => {
-  const AGENT_ROW = {
-    burst: true,
-    createdByAgentId: "agent-1",
-  } satisfies Partial<SandboxSummary>;
-  const line = (overrides: Partial<SandboxSummary>): string =>
-    sandboxShapeAndCostLine(
-      sandboxSummaryFixture({ ...AGENT_ROW, ...overrides }),
-      { kind: "personal" },
-      "viewer",
-    );
-
-  it("names the agent and its task where the server names them to this viewer", () => {
-    expect(
-      line({
+describe("sandboxShapeAndCostLine", () => {
+  it("puts the agent and its task on an agent sandbox's shape line", () => {
+    const line = sandboxShapeAndCostLine(
+      sandboxSummaryFixture({
+        burst: true,
+        createdByAgentId: "agent-1",
         createdByAgentName: "Planner",
         createdByTaskTitle: "Sandbox setup",
       }),
-    ).toBe(
+      { kind: "personal" },
+      "viewer",
+    );
+    expect(line).toBe(
       "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake · created by Planner for Sandbox setup",
+    );
+    expect(line).not.toContain("paid by");
+    expect(
+      sandboxShapeAndCostLine(
+        sandboxSummaryFixture({
+          burst: true,
+          createdByAgentId: "agent-1",
+          createdByAgentName: "Planner",
+          createdByTaskTitle: null,
+        }),
+        { kind: "personal" },
+        "viewer",
+      ),
+    ).toBe(
+      "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake · created by Planner",
     );
   });
 
-  it("names the agent alone when the task is not the viewer's to read", () => {
+  it("keeps the task on a kept row, which is not burst", () => {
+    const kept = sandboxSummaryFixture({
+      burst: false,
+      createdByAgentId: "agent-1",
+      createdByAgentName: "Planner",
+      createdByTaskTitle: "Sandbox setup",
+    });
+    expect(sandboxShapeAndCostLine(kept, { kind: "personal" }, "viewer")).toBe(
+      "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake · uses your credits · created by Planner for Sandbox setup",
+    );
     expect(
-      line({ createdByAgentName: "Planner", createdByTaskTitle: null }),
-    ).toMatch(/ · \$0\.12 an hour while awake · created by Planner$/);
+      sandboxShapeAndCostLine(
+        sandboxSummaryFixture({
+          burst: false,
+          createdByTaskTitle: "Sandbox setup",
+        }),
+        { kind: "personal" },
+        "viewer",
+      ),
+    ).toBe(
+      "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake · uses your credits · for Sandbox setup",
+    );
+  });
+});
+
+describe("who a row names", () => {
+  const hidden = { userId: "other", displayName: null };
+
+  it("omits a starter or keeper the server does not name", () => {
+    expect(
+      sandboxStartedByLabel(
+        sandboxSummaryFixture({ createdBy: hidden }),
+        "viewer",
+      ),
+    ).toBeNull();
+    expect(
+      sandboxStartedByLabel(
+        sandboxSummaryFixture({
+          createdBy: { userId: "viewer", displayName: null },
+        }),
+        "viewer",
+      ),
+    ).toBe("Started by you");
+    expect(
+      sandboxKeptByLabel(sandboxSummaryFixture({ keptBy: hidden }), "viewer"),
+    ).toBeNull();
+    expect(
+      sandboxKeptByLabel(
+        sandboxSummaryFixture({
+          keptBy: { userId: "viewer", displayName: null },
+        }),
+        "viewer",
+      ),
+    ).toBe("Kept by you");
   });
 
-  it("keeps the credits line where the server names no agent", () => {
-    expect(line({ createdByAgentName: null })).not.toContain("created by");
+  it("omits an unnamed destroyer", () => {
+    const at = new Date(2026, 9, 25, 11, 1).getTime();
+    expect(
+      sandboxDestroyedLine(
+        { name: "e2e-sbx-win2", at, actor: hidden },
+        "viewer",
+      ),
+    ).toBe("e2e-sbx-win2 was destroyed at 11:01.");
+    expect(
+      sandboxDestroyedLine(
+        {
+          name: "e2e-sbx-win2",
+          at,
+          actor: { userId: "other", displayName: "Priya" },
+        },
+        "viewer",
+      ),
+    ).toBe("e2e-sbx-win2 was destroyed by Priya at 11:01.");
   });
 });
 
@@ -972,6 +998,12 @@ describe("a stopped row's clock, by who stopped it", () => {
   it("says Stopped for the system's own stop or a row no operation has moved", () => {
     expect(lead(operation({ actor: null, cause: "idle" }))).toBe("Stopped");
     expect(lead(null)).toBe("Stopped");
+  });
+
+  it("says Stopped when the member who stopped it has no name", () => {
+    expect(
+      lead(operation({ actor: { userId: "u-hidden", displayName: null } })),
+    ).toBe("Stopped");
   });
 });
 
@@ -1091,20 +1123,20 @@ describe("sandboxClockLine, an awake row's day from the ledger", () => {
     expect(text).toContain("$0.30 today");
   });
 
-  it("an older server's null duration hides the duration, never the wake's age labelled today, and keeps the label and the cost", () => {
+  it("an older server's null duration hides it without repeating the state pill", () => {
     expect(line(cost(300, null))).toBe(
-      "Awake · $0.30 today · suspends after 30 idle min",
+      "$0.30 today · suspends after 30 idle min",
     );
   });
 
   it.each([
     [
       "resuming",
-      "Resuming · Awake 12 min today · $0.30 today · suspends after 30 idle min",
+      "Awake 12 min today · $0.30 today · suspends after 30 idle min",
     ],
     [
       "starting",
-      "Starting · Awake 12 min today · $0.30 today · suspends after 30 idle min",
+      "Awake 12 min today · $0.30 today · suspends after 30 idle min",
     ],
   ] as const)(
     "reads the ledger's awake time while %s without a pending action",
@@ -1114,23 +1146,21 @@ describe("sandboxClockLine, an awake row's day from the ledger", () => {
   );
 
   it.each([
-    ["resuming", "Resuming · $0.30 today · suspends after 30 idle min"],
-    ["starting", "Starting · $0.30 today · suspends after 30 idle min"],
+    ["resuming", "$0.30 today · suspends after 30 idle min"],
+    ["starting", "$0.30 today · suspends after 30 idle min"],
   ] as const)(
-    "keeps the state word while %s when the ledger has no duration",
+    "omits the already-visible state word while %s when the ledger has no duration",
     (state, expected) => {
       expect(movingLine(state, null, false)).toBe(expected);
     },
   );
 
   it("keeps the pending resume fence ahead of the ledger duration", () => {
-    expect(movingLine("resuming", 12 * 60_000, true)).toBe(
-      "Resuming · pending",
-    );
+    expect(movingLine("resuming", 12 * 60_000, true)).toBe("Pending.");
   });
 });
 
-describe("team payer copy", () => {
+describe("team payer in the resource line", () => {
   const team: SandboxPageConfiguration = {
     kind: "team",
     teamId: "team-a",
@@ -1142,40 +1172,108 @@ describe("team payer copy", () => {
     wakePayer: { userId: "payer", displayName: "Priya" },
     priceMcPerHour: { awakeMc: 210, suspendedMc: 1, stoppedMc: 1 },
   });
-  it("claims the viewer's credits only for the payer", () => {
-    expect(sandboxShapeAndCostLine(summary, team, "payer")).toBe(
-      "Linux · 2 vCPU · 4 GB · $0.21 an hour while awake · uses your Acme credits",
+  const HOURLY = "Linux · 2 vCPU · 4 GB · $0.21 an hour while awake";
+  const CREDITS = `${HOURLY} · uses your Acme credits`;
+  const WAKE = "waking it makes you the payer";
+
+  it("names whose credits pay when the viewer is not a team non-payer", () => {
+    expect(sandboxShapeAndCostLine(summary, team, "payer")).toBe(CREDITS);
+    expect(sandboxShapeAndCostLine(summary, team, "other")).toBe(HOURLY);
+    expect(sandboxShapeAndCostLine(summary, team, "other")).not.toContain(
+      "paid by",
     );
-    expect(sandboxShapeAndCostLine(summary, team, "other")).toBe(
-      "Linux · 2 vCPU · 4 GB · $0.21 an hour while awake",
-    );
-    expect(sandboxPaidByLabel(summary, team, "other")).toBe("Paid by Priya");
-    expect(sandboxPaidByLabel(summary, team, "payer")).toBe("Paid by you");
   });
-  it("warns a non-payer before a resting sandbox is woken", () => {
+  it("warns a resting team non-payer that waking changes the payer", () => {
     expect(
       sandboxShapeAndCostLine(
         { ...summary, state: "suspended" },
         team,
         "other",
       ),
-    ).toBe(
-      "Linux · 2 vCPU · 4 GB · $0.21 an hour while awake · waking it makes you the payer",
-    );
+    ).toBe(`${HOURLY} · ${WAKE}`);
+    expect(
+      sandboxShapeAndCostLine({ ...summary, state: "stopped" }, team, "other"),
+    ).toBe(`${HOURLY} · ${WAKE}`);
   });
-  it("keeps the incumbent payer's cost line when it rests", () => {
+  it("keeps the payer's credit line, with no wake warning, when that row rests", () => {
     expect(
       sandboxShapeAndCostLine(
         { ...summary, state: "suspended" },
         team,
         "payer",
       ),
+    ).toBe(CREDITS);
+  });
+  it("keeps the funding clause when the payer has no name", () => {
+    const unnamed = {
+      ...summary,
+      wakePayer: { userId: "payer", displayName: null },
+    };
+    expect(sandboxShapeAndCostLine(unnamed, team, "other")).toBe(CREDITS);
+    expect(sandboxShapeAndCostLine(unnamed, team, "other")).not.toContain(
+      "a member",
+    );
+    expect(
+      sandboxShapeAndCostLine(
+        { ...unnamed, state: "suspended" },
+        team,
+        "other",
+      ),
+    ).toBe(CREDITS);
+    expect(
+      sandboxShapeAndCostLine({ ...unnamed, state: "stopped" }, team, "other"),
+    ).not.toContain("waking it makes you the payer");
+    expect(
+      sandboxShapeAndCostLine({ ...unnamed, state: "awake" }, team, "payer"),
+    ).toBe(CREDITS);
+    const restingClock = sandboxClockLine({
+      summary: sandboxSummaryFixture({
+        state: "suspended",
+        wakePayer: { userId: "payer", displayName: null },
+      }),
+      configuration: team,
+      cost: null,
+      wakeString: null,
+      viewerUserId: "other",
+      reachability: { unreachable: false, lastContactAt: null },
+      now: 1_791_100_000_000,
+    });
+    expect(restingClock).not.toContain("storage uses");
+    expect(restingClock).not.toContain("a member");
+    expect(
+      sandboxClockLine({
+        summary: sandboxSummaryFixture({
+          state: "suspended",
+          wakePayer: { userId: "payer", displayName: null },
+        }),
+        configuration: team,
+        cost: null,
+        wakeString: null,
+        viewerUserId: "payer",
+        reachability: { unreachable: false, lastContactAt: null },
+        now: 1_791_100_000_000,
+      }),
+    ).toContain("storage uses your Acme credits");
+  });
+  it("leaves the wake warning off a frozen row and off a personal resting row", () => {
+    expect(
+      sandboxShapeAndCostLine(
+        { ...summary, state: "suspended", frozen: true },
+        team,
+        "other",
+      ),
+    ).toBe(HOURLY);
+    expect(
+      sandboxShapeAndCostLine(
+        { ...summary, state: "suspended" },
+        { kind: "personal" },
+        "other",
+      ),
     ).toBe(
-      "Linux · 2 vCPU · 4 GB · $0.21 an hour while awake · uses your Acme credits",
+      "Linux · 2 vCPU · 4 GB · $0.21 an hour while awake · uses your credits",
     );
   });
   describe("an agent-created team row", () => {
-    const WARNING = "waking it makes you the payer";
     const CREATOR = "created by Planner for Sandbox setup";
     const agentRow = (overrides: Partial<SandboxSummary>): SandboxSummary => ({
       ...summary,
@@ -1187,31 +1285,32 @@ describe("team payer copy", () => {
     });
 
     it.each(["suspended", "stopped"] as const)(
-      "warns a non-payer before a %s row is woken and keeps the creator beside it",
+      "puts the creator on a %s row beside the wake warning",
       (state) => {
-        const text = sandboxShapeAndCostLine(
-          agentRow({ state }),
-          team,
-          "other",
-        );
-
-        expect(text).toContain(WARNING);
-        expect(text).toContain(CREATOR);
-        expect(text).toContain("$0.21 an hour while awake");
+        expect(
+          sandboxShapeAndCostLine(agentRow({ state }), team, "other"),
+        ).toBe(`${HOURLY} · ${WAKE} · ${CREATOR}`);
       },
     );
 
-    it("does not warn the current payer, an awake row, or a personal row, and still names the creator", () => {
-      const resting = agentRow({ state: "suspended" });
-
-      for (const text of [
-        sandboxShapeAndCostLine(resting, team, "payer"),
+    it("puts the creator on awake and personal rows without a wake warning", () => {
+      expect(
+        sandboxShapeAndCostLine(
+          agentRow({ state: "suspended" }),
+          team,
+          "payer",
+        ),
+      ).toBe(`${HOURLY} · ${CREATOR}`);
+      expect(
         sandboxShapeAndCostLine(agentRow({ state: "awake" }), team, "other"),
-        sandboxShapeAndCostLine(resting, { kind: "personal" }, "other"),
-      ]) {
-        expect(text).not.toContain(WARNING);
-        expect(text).toContain(CREATOR);
-      }
+      ).toBe(`${HOURLY} · ${CREATOR}`);
+      expect(
+        sandboxShapeAndCostLine(
+          agentRow({ state: "suspended" }),
+          { kind: "personal" },
+          "other",
+        ),
+      ).toBe(`${HOURLY} · ${CREATOR}`);
     });
   });
   describe("a resting team row the server does not price", () => {
@@ -1222,7 +1321,7 @@ describe("team payer copy", () => {
       ...overrides,
     });
 
-    it("warns a non-payer without inventing a rate, and keeps the named creator beside it", () => {
+    it("names the wake change and the creator without inventing a rate", () => {
       expect(
         sandboxShapeAndCostLine(
           unpriced({
@@ -1235,36 +1334,23 @@ describe("team payer copy", () => {
           team,
           "other",
         ),
-      ).toBe(
-        `${SHAPE} · waking it makes you the payer · created by Planner for Sandbox setup`,
-      );
+      ).toBe(`${SHAPE} · ${WAKE} · created by Planner for Sandbox setup`);
     });
 
-    it("warns a non-payer on a row no agent created, with nothing else", () => {
+    it("warns that waking changes the payer on an unpriced stopped row", () => {
       expect(
         sandboxShapeAndCostLine(unpriced({ state: "stopped" }), team, "other"),
-      ).toBe(`${SHAPE} · waking it makes you the payer`);
+      ).toBe(`${SHAPE} · ${WAKE}`);
     });
 
-    it("leaves the current payer, an awake row and a personal row at the bare shape", () => {
-      const resting = unpriced({ state: "suspended" });
-
-      expect(sandboxShapeAndCostLine(resting, team, "payer")).toBe(SHAPE);
+    it("leaves a personal resting row as the shape alone when no rate is available", () => {
       expect(
-        sandboxShapeAndCostLine(unpriced({ state: "awake" }), team, "other"),
-      ).toBe(SHAPE);
-      expect(
-        sandboxShapeAndCostLine(resting, { kind: "personal" }, "other"),
+        sandboxShapeAndCostLine(
+          unpriced({ state: "suspended" }),
+          { kind: "personal" },
+          "other",
+        ),
       ).toBe(SHAPE);
     });
-  });
-  it("never substitutes a member for an unavailable payer name", () => {
-    expect(
-      sandboxPaidByLabel(
-        { ...summary, wakePayer: { userId: "payer", displayName: null } },
-        team,
-        "other",
-      ),
-    ).toBeNull();
   });
 });

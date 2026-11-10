@@ -75,27 +75,31 @@ export const CONFIGURATION_READS = [
  *
  * The cost is an account-wide read, refetched once per active
  * `environment.list` key — one on a pooled build, one per host scope
- * otherwise — each time this runs, and this runs from fifteen places: the
- * revision tick, focus, stale-write recovery, and every configuration write,
- * which is most of them (skills and their uploads, MCP servers, the guide,
- * the policy, plan link and unlink, promotion to Personal and the item
- * mutations). None of it polls: the revision does, and only a revision that
- * moved gets here.
+ * otherwise — on focus, stale-write recovery, and configuration writes.
+ * Revision recovery uses the same matcher in its combined invalidation so
+ * overlapping pool reads are refreshed only once.
  */
 export function invalidateConfigurationReads(
   queryClient: QueryClient,
   environmentId: string,
   reads: ReadonlyArray<keyof HostRpcRegistry & string>,
 ): void {
-  const methods = [HOST_LIST_METHOD, ...reads];
   void queryClient.invalidateQueries({
     predicate: (query) =>
-      hostQueryKeys.matchesMethodOnAnyHost(
-        query.queryKey,
-        ENVIRONMENT_LIST_METHOD,
-      ) ||
-      methods.some(
-        (method) => readEnvironmentId(query.queryKey, method) === environmentId,
-      ),
+      configurationReadMatches(query.queryKey, environmentId, reads),
   });
+}
+
+/** Matches the configuration reads shared by writes and revision recovery. */
+export function configurationReadMatches(
+  queryKey: readonly unknown[],
+  environmentId: string,
+  reads: ReadonlyArray<keyof HostRpcRegistry & string>,
+): boolean {
+  return (
+    hostQueryKeys.matchesMethodOnAnyHost(queryKey, ENVIRONMENT_LIST_METHOD) ||
+    [HOST_LIST_METHOD, ...reads].some(
+      (method) => readEnvironmentId(queryKey, method) === environmentId,
+    )
+  );
 }

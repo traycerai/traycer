@@ -18,8 +18,7 @@ import type {
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 
 /**
- * Overview ▸ Updates: where the desktop app stands, beside the host's own
- * update.
+ * Overview ▸ Updates: the desktop app's available, running or failed update.
  *
  * The host and the app are separate artifacts that update separately, and
  * this page is where a host update happens. Without this row a host that just
@@ -50,7 +49,7 @@ interface DesktopAppRowAction {
 }
 
 interface DesktopAppRowView {
-  /** The one-line state: the four the row exists for, or the bare version. */
+  /** The available, downloading, ready or failed update. */
   readonly state: string;
   readonly detail: string;
   readonly action: DesktopAppRowAction | null;
@@ -62,8 +61,6 @@ interface DesktopAppRowView {
    */
   readonly announcement: string;
 }
-
-const UPDATES_SEPARATELY = "The app updates separately from the host.";
 
 export function HostOverviewDesktopAppRow(
   props: HostOverviewDesktopAppRowProps,
@@ -80,10 +77,8 @@ export function HostOverviewDesktopAppRow(
   const { bridge, snapshot } = props;
   // The updater's first snapshot has not arrived: there is no version to
   // name yet, and a row that only says "Traycer Desktop" says nothing.
-  if (snapshot.currentVersion === "") {
-    return null;
-  }
   const view = desktopAppRowView(bridge, snapshot, openInstallGuidance);
+  if (snapshot.currentVersion === "" || view === null) return null;
 
   return (
     // Focusable from code only: where the focus goes when the control it was
@@ -197,7 +192,7 @@ function desktopAppRowView(
   bridge: DesktopAppUpdatesBridge,
   snapshot: DesktopAppUpdateSnapshot,
   openInstallGuidance: () => void,
-): DesktopAppRowView {
+): DesktopAppRowView | null {
   const current = `v${snapshot.currentVersion}`;
   const runningLine = `This app is on ${current}.`;
   // Same rule as the header button: an install that cannot run from this
@@ -214,8 +209,7 @@ function desktopAppRowView(
         snapshot.latestVersion === null
           ? "Update available"
           : `v${snapshot.latestVersion} available`,
-      detail:
-        blockedReason ?? `${runningLine} It updates separately from the host.`,
+      detail: blockedReason ?? runningLine,
       action: {
         label: "Download",
         disabled: blockedReason !== null,
@@ -232,7 +226,7 @@ function desktopAppRowView(
         snapshot.downloadProgress === null
           ? "Downloading"
           : `Downloading ${snapshot.downloadProgress}%`,
-      detail: `${runningLine} It updates separately from the host.`,
+      detail: runningLine,
       // Download, waiting: the control the download was started from stays.
       action: {
         label: "Download",
@@ -282,14 +276,15 @@ function desktopAppRowView(
     };
   }
 
-  return {
-    state: lastCheckFoundNothing(snapshot)
-      ? `Up to date (${current})`
-      : current,
-    detail: UPDATES_SEPARATELY,
-    action: null,
-    announcement: "",
-  };
+  if (snapshot.status === "error") {
+    return {
+      state: "Update failed",
+      detail: snapshot.errorMessage ?? runningLine,
+      action: null,
+      announcement: "",
+    };
+  }
+  return null;
 }
 
 function readyAnnouncement(
@@ -311,7 +306,7 @@ function readyAnnouncement(
  * manual-install guidance. That second one is how a Linux deb/rpm install
  * whose privilege prompt failed arrives: the updater reports the failure AND
  * the steps that finish the downloaded file by hand. Any other `error` has
- * nothing to act on here; the update toast reports it.
+ * no finish action here; the row retains the failure the toast reports.
  */
 function updateIsFinishable(snapshot: DesktopAppUpdateSnapshot): boolean {
   if (snapshot.status === "ready") return true;
@@ -333,22 +328,4 @@ function finishableState(snapshot: DesktopAppUpdateSnapshot): string {
   return snapshot.latestVersion === null
     ? "Update ready"
     : `v${snapshot.latestVersion} ready`;
-}
-
-/**
- * "Up to date" is a claim about a check, so it needs one that finished and
- * found nothing. The updater publishes that as `up-to-date` only for a check
- * the user asked for; the automatic check that finds nothing goes back to
- * `idle`, with the check's time and the feed's latest version beside it. An
- * `idle` with neither - nothing checked yet, a candidate discarded, the
- * channel just switched - and every other state (checking, error, updates
- * unavailable for this build) claim nothing: the row shows the version alone.
- */
-function lastCheckFoundNothing(snapshot: DesktopAppUpdateSnapshot): boolean {
-  if (snapshot.status === "up-to-date") return true;
-  return (
-    snapshot.status === "idle" &&
-    snapshot.lastCheckedAt !== null &&
-    snapshot.latestVersion !== null
-  );
 }

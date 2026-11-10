@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
-import { AlertCircle, Check, ChevronDown, ChevronRight } from "lucide-react";
+import { toast } from "sonner";
 import { sandboxSupportReference } from "@traycer/protocol/host/sandbox-control";
+import { AlertCircle, Check, ChevronDown, ChevronRight } from "lucide-react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { useConfigurationBillingUrl } from "@/hooks/sandboxes/use-configuration-billing-url";
@@ -19,7 +20,6 @@ import {
   CHANGE_SHAPE_OR_REGION,
   CHOOSE_A_SMALLER_SHAPE,
   DETAILS,
-  COMPUTE_CHARGED_WHILE_AWAKE,
   COPY_SUPPORT_REFERENCE,
   COULDNT_VERIFY_BALANCE,
   KEEP_WAITING,
@@ -52,7 +52,6 @@ import {
   agentNotOfferedOnSandboxesLine,
   agentsCantRunOnSandboxLine,
   traycerOffOnSandboxLine,
-  settingsDidntApplyOnLine,
   stepApplyingSettings,
   takingLongerDetail,
 } from "@/lib/sandboxes/sandbox-strings";
@@ -66,10 +65,7 @@ import {
 import { sandboxAgentDisplayName } from "@/lib/sandboxes/sandbox-agent-refusal";
 import { openActiveModelPickerForHarness } from "@/lib/commands/active-model-picker-registry";
 import { openSandboxDetails } from "@/stores/sandboxes/sandbox-details-store";
-import {
-  sandboxSettingsFailureLine,
-  sandboxSettingsStepsLine,
-} from "@traycer/protocol/host/sandbox-settings";
+import { sandboxSettingsStepsLine } from "@traycer/protocol/host/sandbox-settings";
 
 /** The same ruled setup treatment and counter for a shell waiting on Automations. */
 export function SandboxStartingLine(props: {
@@ -107,11 +103,11 @@ function SandboxSetupLineFrame(props: {
   const ChevronIcon = props.expanded ? ChevronDown : ChevronRight;
   return (
     <div
-      className="flex w-full flex-col gap-1"
+      className="flex w-full min-w-0 flex-col gap-1"
       data-testid="sandbox-setup-line"
     >
-      <div className="flex items-center gap-3">
-        <span aria-hidden className="h-px flex-1 bg-border/60" />
+      <div className="flex min-w-0 items-center gap-3">
+        <span aria-hidden className="h-px min-w-0 flex-1 bg-border/60" />
         {props.onToggle === null ? (
           <div
             role="status"
@@ -125,14 +121,14 @@ function SandboxSetupLineFrame(props: {
             aria-expanded={props.expanded}
             data-testid="sandbox-setup-line-toggle"
             onClick={props.onToggle}
-            className="flex items-center gap-2 rounded-sm text-ui-xs text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+            className="flex min-w-0 flex-wrap items-center gap-2 rounded-sm text-left text-ui-xs text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring wrap-anywhere"
           >
             {props.head}
             <ChevronIcon aria-hidden className="size-3 shrink-0" />
           </button>
         )}
         {props.trailing}
-        <span aria-hidden className="h-px flex-1 bg-border/60" />
+        <span aria-hidden className="h-px min-w-0 flex-1 bg-border/60" />
       </div>
       {props.children}
     </div>
@@ -156,7 +152,7 @@ export interface SandboxSetupLineActions {
   readonly onChangeShape: (() => void) | null;
   /** Repairs the settings on the new host, then waits again. */
   readonly onRetryApplying: (() => void) | null;
-  /** Guest-only repair on an older host; it does not acknowledge settings. */
+  /** Repairs an older sandbox without acknowledging its settings. */
   readonly onRepairSetup: (() => void) | null;
   readonly repairSetupPending?: boolean;
   readonly applyingPending?: boolean;
@@ -173,6 +169,7 @@ export interface SandboxSetupLineActions {
 
 /** The facts the line reads beyond the stage. */
 export interface SandboxSetupLineFacts {
+  readonly readinessLine?: string | null;
   /** The cost line of the staged shape, shown when the line is expanded. */
   readonly costLine: string;
   /** The region and shape, for the shape refusal. */
@@ -240,7 +237,17 @@ export function SandboxSetupLine(props: {
       />
     );
   }
-  if (stage.phase === "staged" || stage.startedAt === null) return null;
+  if (stage.phase === "staged" || stage.startedAt === null) {
+    const readinessLine = props.facts.readinessLine ?? null;
+    return stage.target.kind !== "new" || readinessLine === null ? null : (
+      <p
+        className="m-0 text-ui-xs text-muted-foreground"
+        data-testid="sandbox-staged-readiness"
+      >
+        {readinessLine}
+      </p>
+    );
+  }
   // A sandbox that rested on its own is said by its state footer, never by
   // a create still on its way. A send this window can't give back stays
   // here, with the person's way to wake it.
@@ -561,6 +568,7 @@ function SandboxProgressLine(props: {
         <LineButton
           label={STOP}
           testId="sandbox-setup-stop"
+          // Expanded settings failures carry Stop in their remedy row.
           onClick={
             failure?.kind === "settings" && expanded
               ? null
@@ -626,10 +634,9 @@ function progressTitle(view: ProgressView, name: string): string {
     return resuming ? couldntResumeLine(name) : couldntStartLine(name);
   }
   if (failure?.kind === "settings") {
-    const reference = sandboxSupportReference(failure.code) ?? "SBX-0520";
     return view.sandboxAwake === false
-      ? settingsDidntApplyOnLine(view.configuration, name, reference)
-      : sandboxSettingsFailureLine(name, view.configuration, reference);
+      ? `${view.configuration}'s settings didn't apply on ${name}`
+      : `${name} is awake, but ${view.configuration}'s settings didn't apply`;
   }
   if (view.sandboxStoppable) return SANDBOX_AWAKE;
   if (view.queued) return "Queued";
@@ -647,7 +654,7 @@ function ProgressHead(props: {
 }): ReactNode {
   const { failure } = props.view;
   const waiting = stillWaiting(failure);
-  const code = failureCode(failure);
+  const reference = sandboxSupportReference(supportFailureCode(failure));
   const retryAfterAt = props.view.stage.rateLimit?.retryAfterAt;
   // A failure's title already names the sandbox.
   const namesSandbox =
@@ -670,9 +677,7 @@ function ProgressHead(props: {
         {progressTitle(props.view, props.name)}
       </span>
       {namesSandbox ? <HeadPart text={props.name} /> : null}
-      {code === null || failure?.kind === "settings" ? null : (
-        <HeadPart text={code} />
-      )}
+      {reference === null ? null : <HeadPart text={reference} />}
       {props.view.queued &&
       retryAfterAt !== null &&
       retryAfterAt !== undefined ? (
@@ -704,10 +709,11 @@ function ProgressDetail(props: {
   readonly actions: SandboxSetupLineActions;
 }): ReactNode {
   const { stage, failure, resuming, configuration } = props.view;
+  const supportCode = supportFailureCode(failure);
   return (
     // muted-fill-ok: the line renders on the composer's canvas, not a raised surface
     <div
-      className="mx-auto flex w-full flex-col gap-2 rounded-md border border-border/60 bg-muted/30 p-3 text-ui-xs text-muted-foreground"
+      className="mx-auto flex w-full min-w-0 flex-col gap-2 rounded-md border border-border/60 bg-muted/30 p-3 text-ui-xs text-muted-foreground wrap-anywhere"
       data-testid="sandbox-setup-line-detail"
     >
       {failure?.kind === "settings" ? null : (
@@ -721,11 +727,7 @@ function ProgressDetail(props: {
           configuration={configuration}
         />
       ) : null}
-      <FailureSentence
-        failure={failure}
-        resuming={resuming}
-        sandboxAwake={props.view.sandboxAwake}
-      />
+      <FailureSentence failure={failure} resuming={resuming} />
       {failure?.kind === "settings" ? (
         <>
           <p className="m-0">
@@ -737,7 +739,7 @@ function ProgressDetail(props: {
             <p className="m-0">Your message waits until they apply.</p>
           ) : null}
           {props.actions.applyingError ? (
-            <p role="alert">Settings still didn't apply · SBX-0520</p>
+            <p role="alert">Settings still didn't apply</p>
           ) : null}
         </>
       ) : null}
@@ -750,22 +752,56 @@ function ProgressDetail(props: {
       />
       <div className="flex flex-wrap gap-2">
         <ProgressBranchButtons view={props.view} actions={props.actions} />
+        {supportCode === null ? null : (
+          <CopySupportReference
+            code={supportCode}
+            sandboxId={stage.createdSandboxId}
+          />
+        )}
       </div>
     </div>
+  );
+}
+
+/** Settings failures use the settings reference even on older hosts. */
+function supportFailureCode(
+  failure: StagedSandboxFailure | null,
+): string | null {
+  if (failure?.kind === "settings") {
+    return sandboxSupportReference(failure.code) === null
+      ? "envelope-delivery"
+      : failure.code;
+  }
+  return failure?.kind === "failed" ? failure.code : null;
+}
+
+function CopySupportReference(props: {
+  readonly code: string;
+  readonly sandboxId: string | null;
+}): ReactNode {
+  const clipboard = useClipboardCopy({
+    resetMs: 1500,
+    onSuccess: null,
+    onError: () => toast.error("Couldn't copy the diagnostics."),
+  });
+  return (
+    <LineButton
+      label={COPY_SUPPORT_REFERENCE}
+      testId="sandbox-setup-copy-reference"
+      onClick={() =>
+        clipboard.copy(sandboxSupportReferenceLine(props.code, props.sandboxId))
+      }
+    />
   );
 }
 
 function FailureSentence(props: {
   readonly failure: StagedSandboxFailure | null;
   readonly resuming: boolean;
-  readonly sandboxAwake: boolean | null;
 }): ReactNode {
   if (props.failure?.kind === "failed") {
     if (props.resuming || stepAfterWake(props.failure.step)) return null;
     return <p className="m-0">{MESSAGE_STILL_PENDING}</p>;
-  }
-  if (props.failure?.kind === "settings" && props.sandboxAwake !== false) {
-    return <p className="m-0">{COMPUTE_CHARGED_WHILE_AWAKE}</p>;
   }
   return null;
 }
@@ -780,7 +816,6 @@ function ProgressBranchButtons(props: {
     return (
       <FailedButtons
         stage={props.view.stage}
-        failure={failure}
         resuming={resuming}
         actions={actions}
       />
@@ -788,56 +823,7 @@ function ProgressBranchButtons(props: {
   }
   if (failure?.kind === "settings") {
     return (
-      <>
-        {props.view.stage.createdSandboxId === null ? null : (
-          <>
-            <LineButton
-              label={RETRY_APPLYING}
-              testId="sandbox-setup-retry-applying"
-              onClick={actions.onRetryApplying}
-              pending={actions.applyingPending}
-            />
-            <LineButton
-              label="Repair setup"
-              testId="sandbox-setup-repair-setup"
-              onClick={actions.onRepairSetup}
-              pending={actions.repairSetupPending}
-            />
-          </>
-        )}
-        <LineButton
-          label={OPEN_TERMINAL}
-          testId="sandbox-setup-open-terminal"
-          onClick={actions.onOpenTerminal}
-        />
-        <LineButton
-          label={STOP}
-          testId="sandbox-setup-stop"
-          onClick={actions.onStop}
-        />
-        <LineButton
-          label={actions.chooseAnotherHostLabel}
-          testId="sandbox-setup-choose-another-host"
-          onClick={actions.onChooseAnotherHost}
-        />
-        {props.view.stage.sendTaken ? (
-          <LineButton
-            label={CANCEL_THE_MESSAGE}
-            testId="sandbox-setup-cancel"
-            onClick={actions.onCancel}
-          />
-        ) : null}
-        {props.view.stage.createdSandboxId === null ? null : (
-          <LineButton
-            label={DETAILS}
-            testId="sandbox-setup-details"
-            onClick={() => {
-              const sandboxId = props.view.stage.createdSandboxId;
-              if (sandboxId !== null) openSandboxDetails(sandboxId);
-            }}
-          />
-        )}
-      </>
+      <SettingsFailureButtons stage={props.view.stage} actions={actions} />
     );
   }
   if (failure !== null && waitEnded(failure)) {
@@ -878,23 +864,69 @@ function ProgressBranchButtons(props: {
   );
 }
 
+function SettingsFailureButtons(props: {
+  readonly stage: StagedSandbox;
+  readonly actions: SandboxSetupLineActions;
+}): ReactNode {
+  const { actions } = props;
+  const sandboxId = props.stage.createdSandboxId;
+  return (
+    <>
+      {sandboxId === null ? null : (
+        <>
+          <LineButton
+            label={RETRY_APPLYING}
+            testId="sandbox-setup-retry-applying"
+            onClick={actions.onRetryApplying}
+            pending={actions.applyingPending}
+          />
+          <LineButton
+            label="Repair setup"
+            testId="sandbox-setup-repair-setup"
+            onClick={actions.onRepairSetup}
+            pending={actions.repairSetupPending}
+          />
+        </>
+      )}
+      <LineButton
+        label={OPEN_TERMINAL}
+        testId="sandbox-setup-open-terminal"
+        onClick={actions.onOpenTerminal}
+      />
+      <LineButton
+        label={STOP}
+        testId="sandbox-setup-stop"
+        onClick={actions.onStop}
+      />
+      <LineButton
+        label={actions.chooseAnotherHostLabel}
+        testId="sandbox-setup-choose-another-host"
+        onClick={actions.onChooseAnotherHost}
+      />
+      {props.stage.sendTaken ? (
+        <LineButton
+          label={CANCEL_THE_MESSAGE}
+          testId="sandbox-setup-cancel"
+          onClick={actions.onCancel}
+        />
+      ) : null}
+      {sandboxId === null ? null : (
+        <LineButton
+          label={DETAILS}
+          testId="sandbox-setup-details"
+          onClick={() => openSandboxDetails(sandboxId)}
+        />
+      )}
+    </>
+  );
+}
+
 function FailedButtons(props: {
   readonly stage: StagedSandbox;
-  readonly failure: Extract<StagedSandboxFailure, { readonly kind: "failed" }>;
   readonly resuming: boolean;
   readonly actions: SandboxSetupLineActions;
 }): ReactNode {
   const { actions, resuming } = props;
-  const clipboard = useClipboardCopy({
-    resetMs: 1500,
-    onSuccess: null,
-    onError: null,
-  });
-  // The failed row's id goes in the reference, for support to find it.
-  const supportReference = sandboxSupportReferenceLine(
-    props.failure.code,
-    props.stage.createdSandboxId,
-  );
   return (
     <>
       {resuming ? (
@@ -915,22 +947,8 @@ function FailedButtons(props: {
         actions={actions}
         prefix="sandbox-setup"
       />
-      <LineButton
-        label={COPY_SUPPORT_REFERENCE}
-        testId="sandbox-setup-copy-reference"
-        onClick={() => clipboard.copy(supportReference)}
-      />
     </>
   );
-}
-
-/** The failure's support reference for the line, never its raw code. */
-function failureCode(failure: StagedSandboxFailure | null): string | null {
-  if (failure === null) return null;
-  if (failure.kind === "failed" || failure.kind === "settings") {
-    return sandboxSupportReference(failure.code);
-  }
-  return null;
 }
 
 function stepLabel(
@@ -1056,7 +1074,7 @@ function LineButton(props: {
     <Button
       type="button"
       variant="link"
-      size="inline-xs"
+      size="inline-xs-wrap"
       data-testid={props.testId}
       onClick={props.onClick}
       disabled={props.pending}
@@ -1103,13 +1121,13 @@ export function SandboxReadyLine(props: {
       data-testid="sandbox-ready-line"
     >
       <div className="flex items-center gap-3">
-        <span aria-hidden className="h-px flex-1 bg-border/60" />
+        <span aria-hidden className="h-px min-w-0 flex-1 bg-border/60" />
         <button
           type="button"
           aria-expanded={expanded}
           data-testid="sandbox-ready-line-toggle"
           onClick={() => setExpanded(!expanded)}
-          className="flex items-center gap-2 rounded-sm text-ui-xs text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+          className="flex min-w-0 flex-wrap items-center gap-2 rounded-sm text-left text-ui-xs text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring wrap-anywhere"
         >
           <Check
             aria-hidden
@@ -1120,7 +1138,7 @@ export function SandboxReadyLine(props: {
           <HeadPart text={readySecondsLabel(props.readySeconds)} />
           <ChevronIcon aria-hidden className="size-3 shrink-0" />
         </button>
-        <span aria-hidden className="h-px flex-1 bg-border/60" />
+        <span aria-hidden className="h-px min-w-0 flex-1 bg-border/60" />
       </div>
       {expanded && props.idleMinutes !== null ? (
         <p

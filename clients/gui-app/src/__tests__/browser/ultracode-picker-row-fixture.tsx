@@ -143,8 +143,10 @@ function publishCatalog(
     ultracodeCarried: carried,
     harnesses: HARNESS_OPTIONS,
     modelsHarnessId: harnessId,
+    modelsProfileId: null,
     models: [fixtureModel(harnessId, offered)],
     modelsLoaded: true,
+    modelsFailed: false,
     tuiOnly: false,
     keepsUnavailablePick: false,
   });

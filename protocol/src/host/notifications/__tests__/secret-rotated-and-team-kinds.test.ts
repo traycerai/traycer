@@ -755,7 +755,6 @@ describe("sandbox grant rotation", () => {
     secretName: "DB_PASSWORD",
     kind: "password",
     protocol: "mysql",
-    mode: "brokered",
     source: "default",
   };
 
@@ -800,11 +799,7 @@ describe("sandbox grant rotation", () => {
 });
 
 describe("new RPC error codes", () => {
-  it.each([
-    "team_secrets_are_brokered",
-    "version_destroyed",
-    "version_current",
-  ])("lists %s", (code) => {
+  it.each(["version_destroyed", "version_current"])("lists %s", (code) => {
     expect(RPC_ERROR_CODES).toContain(code);
   });
 });

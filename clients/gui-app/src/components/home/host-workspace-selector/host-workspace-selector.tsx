@@ -467,9 +467,10 @@ type ActiveHostWorkspaceControlsProps = {
    */
   readonly seedIntentOverride: SeedIntentOverride | null;
   // "inline" (landing composer): folder rows with the host chip pushed to the
-  // far right of row 1. "stacked" (fork dialog, terminal-agent launcher): a
-  // file-tree-style Host list above a Workspaces section, no trailing chip.
-  readonly layout: "inline" | "stacked";
+  // far right of row 1. "stacked" (terminal-agent launcher, add-node, chat
+  // fork): a file-tree-style Host list above a Folders section, no trailing
+  // chip.
+  readonly layout: HostWorkspaceControlsLayout;
   readonly hostScope: HostWorkspaceControlsHostScope;
   readonly disabled: boolean;
   /**
@@ -480,6 +481,8 @@ type ActiveHostWorkspaceControlsProps = {
    */
   readonly sandboxStaging: SandboxStagingSurface | null;
 };
+
+type HostWorkspaceControlsLayout = "inline" | "stacked";
 
 export function ActiveHostWorkspaceControls(
   props: ActiveHostWorkspaceControlsProps,
@@ -617,14 +620,15 @@ export function ActiveHostWorkspaceControls(
     }
   };
 
-  if (props.layout === "stacked") {
+  if (props.layout !== "inline") {
     // Host picker as a flat file-tree-style list (own header), with the
-    // folder rows in their own "Workspaces" section below — no trailing chip.
+    // folder rows in their own "Folders" section below — no trailing chip.
     // `--fc-text` brightens location labels to match the panel's other sections;
     // identity, branch values, icons, and actions retain their semantic hierarchy.
     return (
       <div className="flex w-full max-w-full min-w-0 flex-col gap-3 [--fc-opacity:1] [--fc-text:var(--color-foreground)]">
         <HostSection
+          heading="Host"
           hosts={visibleHostOptions}
           activeHostId={activeHostId}
           onSelect={handleSelectHost}
@@ -648,11 +652,11 @@ export function ActiveHostWorkspaceControls(
         />
         <SandboxStagingExtras staging={staging} />
         <section
-          aria-label="Workspaces"
+          aria-label="Folders"
           data-testid="host-workspace-selector-folders-section"
           className="w-full max-w-full min-w-0"
         >
-          <DropdownMenuLabel>Workspaces</DropdownMenuLabel>
+          <DropdownMenuLabel>Folders</DropdownMenuLabel>
           <SandboxWorkspaceSlot staging={staging}>
             <HomeWorkspaceRows
               workspaceSource={workspaceSource}
@@ -1417,7 +1421,10 @@ function HomeWorkspaceSummaryControl(props: {
       data-testid="home-workspace-summary-control"
     >
       {props.hostSlot === null ? null : (
-        <div className="w-fit min-w-0 flex-[0_1_auto] max-w-[min(50%,50vw)] overflow-hidden">
+        <div
+          data-testid="host-workspace-selector-host-slot"
+          className="w-fit min-w-0 flex-[0_1_auto] max-w-[min(50%,50vw)] overflow-hidden"
+        >
           {props.hostSlot}
         </div>
       )}
@@ -2418,7 +2425,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
                 commitPaths: handleBindingCommitted,
                 showPartialFailure: (message) =>
                   reportableErrorToast(message, undefined, {
-                    title: "Workspace update incomplete",
+                    title: "Folder update incomplete",
                     message: null,
                     code: null,
                     source: "Worktree update",
@@ -2501,7 +2508,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
             folderRemovalFailureMessage(failedPath, error),
             undefined,
             {
-              title: "Workspace update incomplete",
+              title: "Folder update incomplete",
               message: null,
               code: null,
               source: "Worktree update",
@@ -3397,7 +3404,10 @@ function InEpicSurface(props: InEpicSurfaceProps) {
         data-layout-passive
         className="flex w-full max-w-full min-w-0 flex-nowrap items-center gap-2 overflow-hidden"
       >
-        <div className="w-fit min-w-0 flex-[0_1_auto] max-w-[min(50%,50vw)] overflow-hidden">
+        <div
+          data-testid="host-workspace-selector-host-slot"
+          className="w-fit min-w-0 flex-[0_1_auto] max-w-[min(50%,50vw)] overflow-hidden"
+        >
           <TooltipWrapper
             label={
               surface.kind === "terminal-agent"
@@ -3540,7 +3550,7 @@ function stagedCommitRefusalReason(input: {
     input.capture.draft !== null &&
     stagedWorktreeIntentIsSuspended(input.stagedKey)
   ) {
-    return "This folder change is waiting on unresolved workspace setup.";
+    return "This folder change is waiting on unresolved folder setup.";
   }
   if (input.pendingDefaultPathCount > 0) {
     return "Wait for folder setup to finish before updating.";

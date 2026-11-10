@@ -38,6 +38,31 @@ export const attachmentMentionNodeSchema = lazySchema(() =>
   }),
 );
 
+/**
+ * Every role value a wire payload or a persisted room may still DECODE,
+ * `viewer` among them.
+ *
+ * `viewer` is retired: no grant names it, no writer stores it, and every
+ * reader resolves it to no access through `grantedRole`
+ * (`protocol/common/permission-role`). It stays in the vocabulary because
+ * removing it would break decoding in three places at once, and a role that
+ * cannot be decoded is not a role that is refused - it is a payload that
+ * fails to parse:
+ *
+ * 1. `collaboratorRolesSchema` is a `z.record` over this schema, so a legacy
+ *    room whose map still holds `viewer` would fail the whole
+ *    `room-metadata` record and take the room down for everyone in it.
+ * 2. Released peers down to the support floor send `viewer` on the grant and
+ *    role-change requests. Parsing it is what lets the host refuse it BY NAME,
+ *    with a message naming the role to choose instead, rather than failing the
+ *    frame.
+ * 3. A current client still opens tasks on hosts that predate the retirement,
+ *    and those hosts legitimately answer `viewer` rows.
+ *
+ * The roles a grant may name are {@link grantedPermissionRoleSchema}. That
+ * narrower type - not this one - is what the rest of the tree means by a
+ * role, so the compiler shows every place a decoded value crosses into one.
+ */
 export const permissionRoleSchema = lazySchema(() =>
   z.enum(["owner", "editor", "viewer"]),
 );

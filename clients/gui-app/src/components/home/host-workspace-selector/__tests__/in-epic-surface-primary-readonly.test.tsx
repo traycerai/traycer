@@ -41,6 +41,7 @@ import {
   userSubscription,
   userWith,
 } from "@/lib/sandboxes/__tests__/auth-user-fixture";
+import { wakeSandboxOnPick } from "@/lib/sandboxes/sandbox-wake";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
 import {
@@ -301,6 +302,16 @@ vi.mock(
     ) => ({ surfaceKey, task: chipMocks.task }),
   }),
 );
+// Whether a pick asks to wake is this helper's assertion. The wake itself
+// still runs, so a real pick elsewhere in the file keeps its effect.
+vi.mock("@/lib/sandboxes/sandbox-wake", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/lib/sandboxes/sandbox-wake")>();
+  return {
+    ...actual,
+    wakeSandboxOnPick: vi.fn(actual.wakeSandboxOnPick),
+  };
+});
 vi.mock("@/hooks/auth/use-auth-user-query", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/hooks/auth/use-auth-user-query")
@@ -644,9 +655,9 @@ it("uses the shared host switcher for a live chat", () => {
   renderBoundSurface("chat", true, null, BINDING);
 
   const switcher = screen.getByRole("button", { name: "Host: Test host" });
-  const switcherSlot = switcher.parentElement?.parentElement;
-  expect(switcherSlot?.className).toContain("flex-[0_1_auto]");
-  expect(switcherSlot?.className).toContain("max-w-[min(50%,50vw)]");
+  const switcherSlot = screen.getByTestId("host-workspace-selector-host-slot");
+  expect(switcherSlot.className).toContain("flex-[0_1_auto]");
+  expect(switcherSlot.className).toContain("max-w-[min(50%,50vw)]");
   expect(switcher.className).toContain("w-fit");
   expect(switcher.className).toContain("max-w-full");
 
@@ -1682,7 +1693,7 @@ it("settles and keeps both staged removals when the first folder rejects", async
   const firstToast = toastMocks.reportableErrorToast.mock.calls[0];
   expect(String(firstToast[0])).toContain("alpha");
   expect(firstToast[2]).toMatchObject({
-    title: "Workspace update incomplete",
+    title: "Folder update incomplete",
   });
   fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
   const discard = await screen.findByTestId("folder-discard-staged");
@@ -1857,6 +1868,18 @@ describe("the chat chip is the composer's picker", () => {
     fireEvent.click(screen.getByTestId("settings-host-switcher"));
   }
 
+  /**
+   * Supplemental facts are already inside the option. There is no disclosure
+   * to open, and reading them does not pick the row or wake the sandbox.
+   */
+  function openHostDetails(row: HTMLElement): HTMLElement {
+    expect(row.querySelector("details")).toBeNull();
+    expect(onForkOnHost).not.toHaveBeenCalled();
+    expect(onForkOnNewSandbox).not.toHaveBeenCalled();
+    expect(wakeSandboxOnPick).not.toHaveBeenCalled();
+    return row;
+  }
+
   beforeEach(() => {
     useAuthStore.setState({
       status: "signed-in",
@@ -1888,6 +1911,7 @@ describe("the chat chip is the composer's picker", () => {
     );
     chipMocks.costs = null;
     useStagedSandboxStore.setState({ bySurface: {} });
+    vi.mocked(wakeSandboxOnPick).mockClear();
   });
 
   afterEach(() => {
@@ -1946,12 +1970,12 @@ describe("the chat chip is the composer's picker", () => {
       true,
     );
     expect(row.textContent).toContain("e2e-sbx-agent-1");
-    expect(row.textContent).toContain(
+    expect(openHostDetails(row).textContent).toContain(
       "Agent sandbox · created by Planner · destroys itself after 2 idle min",
     );
-    expect(within(row).getByTestId("host-switcher-row-tag").textContent).toBe(
-      "Personal",
-    );
+    expect(
+      within(row).getByTestId("host-option-environment-box-agent").textContent,
+    ).toBe("Personal");
     expect(
       screen.queryByTestId("settings-host-switcher-option-box-automations"),
     ).toBeNull();
@@ -1970,7 +1994,7 @@ describe("the chat chip is the composer's picker", () => {
     expect(screen.getByTestId("host-switcher-in-this-task").contains(row)).toBe(
       true,
     );
-    expect(row.textContent).toContain(
+    expect(openHostDetails(row).textContent).toContain(
       "Agent sandbox · created by Planner · destroys itself after 2 idle min",
     );
   });
@@ -1984,13 +2008,8 @@ describe("the chat chip is the composer's picker", () => {
     expect(
       within(computer).getByText("Computer").classList.contains("sr-only"),
     ).toBe(true);
-    const visibleCopy = Array.from(computer.querySelectorAll("span"))
-      .filter(
-        (span) =>
-          span.children.length === 0 && !span.classList.contains("sr-only"),
-      )
-      .map((span) => span.textContent);
-    expect(visibleCopy).toEqual(["windows-test-machine", "Windows · Active"]);
+    expect(within(computer).getByText("windows-test-machine")).toBeDefined();
+    expect(openHostDetails(computer).textContent).toContain("Windows · Active");
     expect(screen.getByText("New Personal sandbox")).toBeDefined();
     expect(
       screen.getByText(
@@ -2029,10 +2048,10 @@ describe("the chat chip is the composer's picker", () => {
       screen.getByTestId("host-switcher-sandboxes-you-started-toggle"),
     );
 
-    expect(
-      screen.getByTestId("settings-host-switcher-option-box-started")
-        .textContent,
-    ).toContain("Personal · $0.03 today");
+    const row = screen.getByTestId("settings-host-switcher-option-box-started");
+    expect(openHostDetails(row).textContent).toContain(
+      "Personal · $0.03 today",
+    );
   });
 
   it("hands a New row's pick to the fork, staging nothing", () => {

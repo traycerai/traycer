@@ -10,15 +10,15 @@ import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import {
   SECRETS_EMPTY_TEXT,
   TEAM_SECRETS_LINE,
-  teamSecretsText,
+  teamSecretsDescription,
 } from "@/lib/sandboxes/secrets-page-copy";
+import { useConfigurationName } from "@/components/settings/environment/team-pick-label";
 
 import {
   useCanEditConfiguration,
   useConfigurationIsPersonal,
   useConfigurationSource,
 } from "@/components/settings/environment/configuration-source";
-import { useConfigurationName } from "@/components/settings/environment/team-pick-label";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useEnvironmentSecretsQuery } from "@/hooks/environment/team/use-secrets-query";
 import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-host";
@@ -46,18 +46,19 @@ function TeamSecretsSettingsPanel(): ReactNode {
   const personal = useConfigurationIsPersonal();
   const name = useConfigurationName();
   const scope = useTeamViewingHost();
+  const teamDescription = teamSecretsDescription(name);
   return (
     // No Read-only tag: what the reader's role can do is said once, as the
     // page's own standing line, not as a tag over the list.
     <SecretsListPanelShell
       client={client}
-      description={personal ? SECRETS.page.description : teamSecretsText(name)}
+      description={personal ? SECRETS.page.description : teamDescription}
       headerAction={undefined}
     >
       <SecretsPage
         client={client}
         hostId={client.getActiveHostId()}
-        emptyText={personal ? SECRETS_EMPTY_TEXT : teamSecretsText(name)}
+        emptyText={personal ? SECRETS_EMPTY_TEXT : teamDescription}
         hostName={(hostId) =>
           scope.hosts.data?.hosts.find((host) => host.hostId === hostId)
             ?.hostLabel ?? "a host"

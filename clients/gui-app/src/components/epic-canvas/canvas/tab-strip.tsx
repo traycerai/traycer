@@ -29,6 +29,7 @@ import { LayoutGroup, useReducedMotion, type Transition } from "motion/react";
 import * as m from "motion/react-m";
 import { runTileStripCommitHandoff } from "@/components/epic-canvas/dnd/tile-strip-commit-handoff";
 import { useTileTabDisplacement } from "@/components/epic-canvas/dnd/use-tile-tab-displacement";
+import { useRegionValue } from "@/lib/layout-overrides";
 import { mergeRefs } from "@/lib/merge-refs";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -89,6 +90,7 @@ import { useRenameInFlight } from "@/stores/epics/open-epic/rename-in-flight";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
+import { WORKSPACE_FILE_TAB_KIND } from "@/stores/epics/canvas/types";
 import { useTerminalRenameFor } from "@/hooks/terminal/use-terminal-rename-for-mutation";
 import { useUsageSummarySupported } from "@/hooks/usage-analytics/use-usage-summary-support";
 import { useChatUsageDialogStore } from "@/stores/chats/chat-usage-dialog-store";
@@ -487,6 +489,7 @@ interface TabItemProps {
   readonly menuProps: Omit<
     TabStripContextMenuProps,
     | "canRename"
+    | "canRevealInSidebar"
     | "onCopyFilePath"
     | "onEditTitle"
     | "onOpenUsage"
@@ -774,6 +777,7 @@ function TabItemBody(
     disabled: isDragging,
   });
   const { onRename } = menuProps;
+  const fileTreeShown = useRegionValue("railFileTree", "shown") === "shown";
   const { displayTitle, browserPresentation, canRename, rename } =
     useTabRenameControl({
       tab,
@@ -958,6 +962,9 @@ function TabItemBody(
       <TabStripContextMenu
         {...menuProps}
         canRename={canRename}
+        canRevealInSidebar={
+          tab.type !== WORKSPACE_FILE_TAB_KIND || fileTreeShown
+        }
         onCopyFilePath={absoluteFilePath === null ? null : handleCopyFilePath}
         onEditTitle={rename.startEditing}
         onOpenUsage={onOpenUsage}
@@ -1145,7 +1152,7 @@ function tabTooltipContent(
       <div className="truncate font-medium">{heading}</div>
       {context === null ? null : (
         <GitDiffTooltipSummaryRow
-          label="Workspace"
+          label="Folder"
           value={context.workspaceLabel}
           testId="git-diff-tooltip-workspace"
           wrap={false}

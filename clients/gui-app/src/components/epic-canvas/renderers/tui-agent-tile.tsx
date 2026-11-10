@@ -306,7 +306,7 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
         }
         hostLabel={reachability.hostLabel}
         ownerKind="agent"
-        onClose={closeCanvasTile}
+        onClose={() => closeCanvasTile("user")}
         testId={`terminal-agent-tile-${props.tileId}`}
       />
     );
@@ -904,7 +904,7 @@ function TuiAgentTileLive(
         destroyedLine={null}
         hostLabel={hostLabel}
         ownerKind="agent"
-        onClose={closeTile}
+        onClose={() => closeTile("user")}
         testId={`terminal-agent-tile-${props.tileId}`}
       />
     );
@@ -946,7 +946,7 @@ function TuiAgentTileLive(
         viewTabId={props.viewTabId}
         hostId={hostId}
         hostLabel={hostLabel}
-        onClose={closeTile}
+        onClose={() => closeTile("user")}
       />
     );
   }
@@ -1255,7 +1255,7 @@ function continueUnderProfileDisabledReasonFor(
     return "Update Traycer host to continue this session under another profile.";
   }
   if (forkDisabled) {
-    return "Fork is available once the terminal agent session and its workspace are ready.";
+    return "Fork is available once the terminal agent session and its folder are ready.";
   }
   return undefined;
 }
@@ -1435,7 +1435,7 @@ function TerminalAgentPreLaunchToolbar(
             <TooltipWrapper
               label={
                 forkDisabled
-                  ? "Fork is available once the terminal agent session and its workspace are ready."
+                  ? "Fork is available once the terminal agent session and its folder are ready."
                   : "Fork terminal agent"
               }
               side="top"
@@ -1840,7 +1840,8 @@ function TerminalAgentLive(props: TerminalAgentLiveProps) {
     // (`pane.tabInstanceIds`), not the content/session id. Passing
     // `handle.sessionId` (the agent record id) silently no-ops, leaving the
     // tab open after the harness TUI exits (e.g. Ctrl+C). Use the instance id.
-    closeCanvasTile();
+    // The harness TUI exited on its own; no person closed this tab.
+    closeCanvasTile("automatic");
   }, [
     status,
     exitCode,

@@ -3,6 +3,7 @@ import { spanOf } from "./variant-groups";
 import type { Layer, VariableTrack } from "./variable-sound";
 
 export interface StemSource {
+  loadRecording?(name: string): Promise<AudioBuffer>;
   /** Rejects when the sample cannot be had; the player skips it and goes on. */
   load(
     track: VariableTrack,
@@ -42,6 +43,10 @@ type StemManifestLayer =
     };
 
 export interface StemManifest {
+  readonly recordings?: readonly {
+    readonly name: string;
+    readonly file: string;
+  }[];
   readonly tracks: readonly {
     readonly name: string;
     readonly layers: readonly StemManifestLayer[];
@@ -180,6 +185,37 @@ export class ManifestStemSource implements StemSource {
       this.inFlight.delete(stem.key);
     });
     this.inFlight.set(stem.key, loading);
+    return loading;
+  }
+
+  loadRecording(name: string): Promise<AudioBuffer> {
+    const locate = (): LocatedStem => {
+      const file = this.manifest.recordings?.find(
+        (item) => item.name === name,
+      )?.file;
+      if (file === undefined)
+        throw new Error(`The manifest has no recording for ${name}`);
+      return {
+        key: JSON.stringify(["recording", name]),
+        path: name,
+        url: file,
+      };
+    };
+    const recording = locate();
+    const cached = this.decoded.get(recording.key);
+    if (cached !== undefined) {
+      this.decoded.delete(recording.key);
+      this.decoded.set(recording.key, cached);
+      return Promise.resolve(cached);
+    }
+    const existing = this.inFlight.get(recording.key);
+    if (existing !== undefined) return existing;
+    const loading = this.fetchAndDecode(recording, () => locate().url).finally(
+      () => {
+        this.inFlight.delete(recording.key);
+      },
+    );
+    this.inFlight.set(recording.key, loading);
     return loading;
   }
 

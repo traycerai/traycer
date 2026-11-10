@@ -126,6 +126,33 @@ export function LogDetailGroup(props: {
     );
   }
 
+  const body = (
+    <div
+      ref={groupContentRef}
+      tabIndex={-1}
+      className="rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+    >
+      {controls.map((control) => (
+        <LogLevelRow
+          key={control.scope}
+          control={control}
+          disabled={resetPending}
+        />
+      ))}
+      {nonDefaultControls.length > 0 ? (
+        <TemporaryDebugReminderRow
+          pending={resetPending}
+          onFocusChange={(focused) => {
+            reminderHadFocusRef.current = focused;
+          }}
+          onReset={() => {
+            void handleResetAll();
+          }}
+        />
+      ) : null}
+    </div>
+  );
+
   return (
     <SettingsGroup
       group={props.group}
@@ -134,30 +161,7 @@ export function LogDetailGroup(props: {
       dataTestId={undefined}
       fill={false}
     >
-      <div
-        ref={groupContentRef}
-        tabIndex={-1}
-        className="rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-      >
-        {controls.map((control) => (
-          <LogLevelRow
-            key={control.scope}
-            control={control}
-            disabled={resetPending}
-          />
-        ))}
-        {nonDefaultControls.length > 0 ? (
-          <TemporaryDebugReminderRow
-            pending={resetPending}
-            onFocusChange={(focused) => {
-              reminderHadFocusRef.current = focused;
-            }}
-            onReset={() => {
-              void handleResetAll();
-            }}
-          />
-        ) : null}
-      </div>
+      {body}
     </SettingsGroup>
   );
 }

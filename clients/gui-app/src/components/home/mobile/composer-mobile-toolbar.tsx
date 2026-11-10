@@ -30,6 +30,7 @@ import type { ProviderTerminalLoginSurface } from "@/lib/providers/provider-term
 interface ComposerMobileToolbarProps {
   readonly store: ComposerToolbarStore;
   readonly onAttachImages: (files: ReadonlyArray<File>) => void;
+  readonly onAttachFiles: (files: ReadonlyArray<File>) => void;
   readonly canSubmit: boolean;
   readonly attachmentPending: boolean;
   readonly onSubmit: () => void;
@@ -67,6 +68,7 @@ function ComposerMobileToolbarImpl(props: ComposerMobileToolbarProps) {
   const {
     store,
     onAttachImages,
+    onAttachFiles,
     canSubmit,
     attachmentPending,
     onSubmit,
@@ -129,10 +131,12 @@ function ComposerMobileToolbarImpl(props: ComposerMobileToolbarProps) {
   // Same two inputs as the desktop toolbar - see `ComposerToolbar`.
   const runHarnessId = useStore(store, (s) => s.selection.harnessId);
   const runModelSlug = useStore(store, (s) => s.selection.modelSlug);
+  const runProfileId = useStore(store, (s) => s.selection.profileId);
   const judgeBilling = useAutoJudgeBilling(
     runTargetHostId,
     runHarnessId,
     runModelSlug,
+    runProfileId,
   );
   const openPermissionSettings = useOpenPermissionSettings(runTargetHostId);
   // Same gate as `ComposerToolbarRight`: an empty slug is the transient
@@ -180,7 +184,10 @@ function ComposerMobileToolbarImpl(props: ComposerMobileToolbarProps) {
 
   return (
     <div className="flex min-w-0 items-center gap-1 px-2.5 pb-2.5 pt-1">
-      <ComposerAttachImageButton onAttachImages={onAttachImages} />
+      <ComposerAttachImageButton
+        onAttachImages={onAttachImages}
+        onAttachFiles={onAttachFiles}
+      />
       {/* Icon-only, exactly as `PermissionsPicker` renders itself under
           `@max-lg` on desktop - the label would truncate to "Full acce..." at
           this width and steal room the model name needs. The mode still reads

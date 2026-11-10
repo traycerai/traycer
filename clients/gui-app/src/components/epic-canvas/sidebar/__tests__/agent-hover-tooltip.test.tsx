@@ -7,7 +7,15 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
 import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
 import {
   sandboxSummarySchema,
@@ -42,6 +50,12 @@ import {
  * RPCs, auth and the tile/panel openers. The projection choice and the host
  * section are the real ones.
  */
+interface HoverEpicChat {
+  readonly id: string;
+  readonly hostId: string;
+  readonly title: string;
+}
+
 const h = vi.hoisted(() => {
   const NO_CONFIGURATIONS: SandboxConfigurations = {
     configurations: [{ kind: "personal" }],
@@ -68,6 +82,7 @@ const h = vi.hoisted(() => {
     setPanel: Mock;
     openDetails: Mock;
     openTile: Mock;
+    chats: Record<string, HoverEpicChat>;
   } = {
     sandboxes: [],
     taskHosts: { kind: "none" },
@@ -88,6 +103,11 @@ const h = vi.hoisted(() => {
     setPanel: vi.fn(),
     openDetails: vi.fn(),
     openTile: vi.fn(),
+    chats: {
+      "agent-1": { id: "agent-1", hostId: "host-t", title: "Reviewer" },
+      "agent-2": { id: "agent-2", hostId: "host-t", title: "Planner" },
+      "agent-3": { id: "agent-3", hostId: "host-sbx", title: "Creator" },
+    },
   };
   return state;
 });
@@ -170,17 +190,13 @@ vi.mock("@/hooks/host/use-host-query", () => ({
 }));
 vi.mock("@/hooks/use-epic-store", () => ({
   useMaybeEpicStore: (
-    selector: (state: unknown) => unknown,
-    _fallback: unknown,
+    selector: (state: {
+      readonly chats: { readonly byId: Record<string, HoverEpicChat> };
+      readonly tuiAgents: { readonly byId: Record<string, HoverEpicChat> };
+    }) => unknown,
   ) =>
     selector({
-      chats: {
-        byId: {
-          "agent-1": { id: "agent-1", hostId: "host-t", title: "Reviewer" },
-          "agent-2": { id: "agent-2", hostId: "host-t", title: "Planner" },
-          "agent-3": { id: "agent-3", hostId: "host-sbx", title: "Creator" },
-        },
-      },
+      chats: { byId: h.chats },
       tuiAgents: { byId: {} },
     }),
 }));
@@ -261,6 +277,10 @@ vi.mock("@/components/worktree/worktree-owner-metadata", () => ({
 
 import { AgentHoverTooltip } from "@/components/epic-canvas/sidebar/agent-hover-tooltip";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import {
+  DEFAULT_LAYOUT_SNAPSHOT,
+  useLayoutStore,
+} from "@/stores/layout/layout-store";
 import { hostSandboxStateWord } from "@traycer/protocol/host/host-status";
 
 const CLAIM: RoleClaim = {
@@ -334,6 +354,12 @@ afterEach(() => {
   h.setPanel.mockClear();
   h.openDetails.mockClear();
   h.openTile.mockClear();
+  h.chats = {
+    "agent-1": { id: "agent-1", hostId: "host-t", title: "Reviewer" },
+    "agent-2": { id: "agent-2", hostId: "host-t", title: "Planner" },
+    "agent-3": { id: "agent-3", hostId: "host-sbx", title: "Creator" },
+  };
+  useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
 });
 
 /**
@@ -649,7 +675,26 @@ function renderAgent(
   });
 }
 
+function sameTaskNamesBox(card: HTMLElement): HTMLElement {
+  const box = card.querySelector("div.max-h-40.overflow-y-auto");
+  if (!(box instanceof HTMLElement)) {
+    throw new Error("same-task names are not in a scrolling box");
+  }
+  expect(box.querySelector("details")).toBeNull();
+  return box;
+}
+
+/** A host's Files open in File Tree, which the shipped layout leaves off. */
+function showFileTree(): void {
+  useLayoutStore.setState({
+    ...DEFAULT_LAYOUT_SNAPSHOT,
+    overrides: { railFileTree: { shown: "shown" } },
+  });
+}
+
 describe("AgentHoverTooltip host section", () => {
+  beforeEach(showFileTree);
+
   it("shows host identity, cost, payer, shape and actions for a row in the viewer's sandbox list", () => {
     h.sandboxes = [sandboxRow({})];
     h.cost = [{ sandboxId: "sbx-1", todayMillicredits: 2000 }];
@@ -684,8 +729,16 @@ describe("AgentHoverTooltip host section", () => {
     expect(text).toContain(hoverTodayCost(2000));
     expect(text).toContain("Suspends after 30 idle min");
     expect(text).toContain("destroyed after 7 idle days");
-    expect(text).toContain("Creator, build");
-    expect(text).toContain("1 more in other tasks");
+    const section = screen.getByTestId("worktree-host-section");
+    expect(section.querySelector("details")).toBeNull();
+    expect(within(section).getByText("Creator, build")).toBeDefined();
+    expect(within(section).getByText("1 more in other tasks")).toBeDefined();
+    expect(within(section).queryByTestId("agent-host-activity")).toBeNull();
+    expect(screen.queryByRole("button", { name: "3 sessions" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Creator, build" })).toBeNull();
+    expect(h.refetchAgents).toHaveBeenCalled();
+    expect(h.refetchTerminals).toHaveBeenCalled();
+    expect(h.openDetails).not.toHaveBeenCalled();
     for (const name of ["Open terminal", "Files", "Details"]) {
       expect(screen.getByRole("button", { name })).toBeDefined();
     }
@@ -693,6 +746,40 @@ describe("AgentHoverTooltip host section", () => {
     expect(
       screen.queryByRole("button", { name: KEEP_THIS_SANDBOX }),
     ).toBeNull();
+  });
+
+  describe("with File Tree off", () => {
+    beforeEach(() => {
+      useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+    });
+
+    it("leaves a sandbox host's Files button out, with the rest of its actions", () => {
+      h.sandboxes = [sandboxRow({})];
+      renderAgent({
+        hostId: "host-sbx",
+        ownerKind: "chat",
+        ownerHostUnreachable: false,
+      });
+
+      expect(screen.queryByRole("button", { name: "Files" })).toBeNull();
+      for (const name of ["Open terminal", "Details"]) {
+        expect(screen.getByRole("button", { name })).toBeDefined();
+      }
+    });
+
+    it("keeps a task-only host's task files button", async () => {
+      h.taskHosts = tasksView(taskHostRow({}));
+      renderAgent({
+        hostId: "host-t",
+        ownerKind: "chat",
+        ownerHostUnreachable: false,
+      });
+
+      await userEvent.hover(screen.getByRole("button", { name: "Reviewer" }));
+      await screen.findByRole("dialog", { name: "Reviewer" });
+
+      expect(screen.getByRole("button", { name: TASK_FILES })).toBeDefined();
+    });
   });
 
   describe("the configuration line under the name", () => {
@@ -886,7 +973,7 @@ describe("AgentHoverTooltip host section", () => {
       });
     }
 
-    it("says how many agents and terminals run on the host, after the idle policy", () => {
+    it("shows agents and terminals on the host, after the idle policy", () => {
       h.sessions = {
         agents: [agentSessionFixture({})],
         terminals: [terminalSessionFixture({})],
@@ -894,8 +981,11 @@ describe("AgentHoverTooltip host section", () => {
       renderAwake();
 
       const section = screen.getByTestId("worktree-host-section");
-      const activity = screen.getByTestId("agent-host-activity");
+      expect(section.querySelector("details")).toBeNull();
+      const activity = within(section).getByTestId("agent-host-activity");
       expect(activity.textContent).toBe("1 agent and 1 terminal on it");
+      expect(section.textContent).toContain("2 more in other tasks");
+      expect(section.textContent).not.toContain("4 sessions");
       const idle = within(section).getByText("Suspends after 30 idle min", {
         exact: false,
       });
@@ -905,30 +995,59 @@ describe("AgentHoverTooltip host section", () => {
       ).toBeTruthy();
     });
 
-    it("counts an idle terminal the busy count leaves out", () => {
+    it("shows the busy remainder when the host lists one terminal", () => {
       h.sessions = {
         agents: [],
         terminals: [terminalSessionFixture({})],
       };
       renderAwake();
 
-      expect(screen.getByTestId("agent-host-activity").textContent).toBe(
-        "1 terminal on it",
-      );
+      const section = screen.getByTestId("worktree-host-section");
+      expect(section.querySelector("details")).toBeNull();
+      expect(
+        within(section).getByTestId("agent-host-activity").textContent,
+      ).toBe("1 terminal on it");
+      expect(section.textContent).toContain("2 more in other tasks");
+      expect(section.textContent).not.toContain("3 sessions");
     });
 
-    it("draws no host-wide line when the host sends no list", () => {
+    it("shows the busy remainder when the host sends no list", () => {
       h.sessions = null;
       renderAwake();
 
-      expect(screen.queryByTestId("agent-host-activity")).toBeNull();
+      const section = screen.getByTestId("worktree-host-section");
+      expect(section.querySelector("details")).toBeNull();
+      expect(section.textContent).toContain("2 more in other tasks");
+      expect(within(section).queryByTestId("agent-host-activity")).toBeNull();
     });
 
-    it("draws no host-wide line when nothing runs", () => {
+    it("shows the busy remainder when the host lists nothing", () => {
       h.sessions = { agents: [], terminals: [] };
       renderAwake();
 
-      expect(screen.queryByTestId("agent-host-activity")).toBeNull();
+      const section = screen.getByTestId("worktree-host-section");
+      expect(section.querySelector("details")).toBeNull();
+      expect(section.textContent).toContain("2 more in other tasks");
+      expect(within(section).queryByTestId("agent-host-activity")).toBeNull();
+    });
+
+    it("draws nothing about sessions when the live report totals zero", () => {
+      h.sessions = { agents: [], terminals: [] };
+      h.sandboxes = [sandboxRow({})];
+      h.busySessionCount = 0;
+      renderAgent({
+        hostId: "host-sbx",
+        ownerKind: "chat",
+        ownerHostUnreachable: false,
+      });
+
+      const section = screen.getByTestId("worktree-host-section");
+      expect(section.querySelector("details")).toBeNull();
+      expect(within(section).queryByTestId("agent-host-sessions")).toBeNull();
+      expect(within(section).queryByTestId("agent-host-activity")).toBeNull();
+      expect(section.textContent).not.toContain(SESSIONS_UNKNOWN);
+      expect(section.textContent).not.toContain("0 sessions");
+      expect(section.textContent).not.toContain("more in other tasks");
     });
   });
 
@@ -967,6 +1086,7 @@ describe("AgentHoverTooltip host section", () => {
     expect(screen.getByTestId("worktree-host-section").textContent).toContain(
       SESSIONS_UNKNOWN,
     );
+    expect(screen.queryByTestId("agent-host-sessions")).toBeNull();
   });
 
   it("opens Details for the row from the viewer's list", async () => {
@@ -1000,9 +1120,13 @@ describe("AgentHoverTooltip host section", () => {
     expect(text).toContain("team-box");
     expect(text).toContain(hoverTaskConfiguration("acme"));
     expect(text).toContain(reachSentence(REACH_UNNAMED_HOSTS));
-    // Other agents the task shows on that host; never the viewing agent.
-    expect(text).toContain(hoverAlsoInTask("Planner"));
-    expect(text).not.toContain("Reviewer,");
+    const names = sameTaskNamesBox(card);
+    expect(card.contains(names)).toBe(true);
+    expect(names.className).toContain("max-h-40");
+    expect(names.className).toContain("overflow-y-auto");
+    expect(names.textContent).toBe(hoverAlsoInTask("Planner"));
+    expect(card.querySelector("details")).toBeNull();
+    expect(screen.queryByTestId("agent-host-sessions")).toBeNull();
 
     expect(screen.getByRole("button", { name: TASK_FILES })).toBeDefined();
     for (const name of ["Open terminal", "Details", KEEP_THIS_SANDBOX]) {
@@ -1012,6 +1136,43 @@ describe("AgentHoverTooltip host section", () => {
 
     await userEvent.click(screen.getByRole("button", { name: TASK_FILES }));
     expect(h.setPanel).toHaveBeenCalledWith("tab-1", "artifacts");
+  });
+
+  it("keeps a long same-task name list scrolling inside the inline box", async () => {
+    const titles = [
+      "Planner alpha with a long name",
+      "Planner beta with a long name",
+      "Planner gamma with a long name",
+      "Planner delta with a long name",
+      "Planner epsilon with a long name",
+      "Planner zeta with a long name",
+      "Planner eta with a long name",
+      "Planner theta with a long name",
+    ];
+    const chats: Record<string, HoverEpicChat> = {
+      "agent-1": { id: "agent-1", hostId: "host-t", title: "Reviewer" },
+    };
+    for (const [index, title] of titles.entries()) {
+      const id = `agent-extra-${index}`;
+      chats[id] = { id, hostId: "host-t", title };
+    }
+    h.chats = chats;
+    h.teams = [{ teamId: "team-1", slug: "acme" }];
+    h.taskHosts = tasksView(taskHostRow({ reach: "other_principal" }));
+    renderAgent({
+      hostId: "host-t",
+      ownerKind: "chat",
+      ownerHostUnreachable: false,
+    });
+
+    await userEvent.hover(screen.getByRole("button", { name: "Reviewer" }));
+    const card = await screen.findByRole("dialog", { name: "Reviewer" });
+    const names = sameTaskNamesBox(card);
+    expect(names.textContent).toBe(hoverAlsoInTask(titles.join(", ")));
+    expect(names.className).toContain("max-h-40");
+    expect(names.className).toContain("overflow-y-auto");
+    expect(card.querySelector("details")).toBeNull();
+    expect(screen.queryByTestId("agent-host-sessions")).toBeNull();
   });
 
   it("reads a destroyed task-only host as destroyed, with Details, and offers no host actions", async () => {
@@ -1137,6 +1298,7 @@ describe("AgentHoverTooltip host section", () => {
 
     expect(text).toContain("build-box");
     expect(text).toContain(SESSIONS_UNKNOWN);
+    expect(screen.queryByTestId("agent-host-sessions")).toBeNull();
     expect(
       screen.getByRole("button", { name: "Files" }).hasAttribute("disabled"),
     ).toBe(true);
@@ -1198,6 +1360,8 @@ describe("AgentHoverTooltip host section", () => {
         ownerHostUnreachable: false,
       });
       expect(sectionText()).toContain(SHOWN);
+      expect(sectionText()).not.toContain(SESSIONS_UNKNOWN);
+      expect(screen.queryByTestId("agent-host-sessions")).toBeNull();
 
       act(() => {
         vi.advanceTimersByTime(29_999);
@@ -1210,6 +1374,8 @@ describe("AgentHoverTooltip host section", () => {
       });
       expect(sectionText()).toContain(SESSIONS_UNKNOWN);
       expect(sectionText()).not.toContain(SHOWN);
+      expect(sectionText()).not.toContain("3 sessions");
+      expect(screen.queryByTestId("agent-host-sessions")).toBeNull();
     });
 
     it("shows unknown while the task lists predate a newer held count, then the refreshed names", () => {
@@ -1235,6 +1401,7 @@ describe("AgentHoverTooltip host section", () => {
       };
       expect(sectionText()).toContain(SHOWN);
       expect(sectionText()).toContain("1 more in other tasks");
+      expect(screen.queryByTestId("agent-host-sessions")).toBeNull();
       // The held status asks the task lists to refresh once.
       expect(h.refetchAgents).toHaveBeenCalledTimes(1);
       expect(h.refetchTerminals).toHaveBeenCalledTimes(1);
@@ -1245,6 +1412,8 @@ describe("AgentHoverTooltip host section", () => {
       h.statusUpdatedAt = base + 1_000;
       rerenderSame(view);
       expect(sectionText()).toContain(SESSIONS_UNKNOWN);
+      expect(screen.queryByTestId("agent-host-sessions")).toBeNull();
+      expect(sectionText()).not.toContain("5 sessions");
       expect(sectionText()).not.toContain(SHOWN);
       expect(sectionText()).not.toContain("more in other tasks");
       expect(h.refetchAgents).toHaveBeenCalledTimes(2);
@@ -1255,11 +1424,17 @@ describe("AgentHoverTooltip host section", () => {
       h.listFetching = true;
       rerenderSame(view);
       expect(sectionText()).toContain(SESSIONS_UNKNOWN);
+      expect(screen.queryByTestId("agent-host-sessions")).toBeNull();
+      expect(sectionText()).not.toContain("5 sessions");
+      expect(sectionText()).not.toContain(SHOWN);
+      expect(sectionText()).not.toContain("more in other tasks");
 
       h.listFetching = false;
       rerenderSame(view);
       expect(sectionText()).toContain(SHOWN);
       expect(sectionText()).toContain("3 more in other tasks");
+      expect(screen.queryByTestId("agent-host-sessions")).toBeNull();
+      expect(sectionText()).not.toContain(SESSIONS_UNKNOWN);
     });
   });
 });

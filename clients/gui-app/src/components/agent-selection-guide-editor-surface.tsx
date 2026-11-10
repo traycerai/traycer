@@ -45,7 +45,10 @@ export function AgentSelectionGuideEditorSurface({
       className={cn("flex min-h-0 flex-col gap-3", className)}
     >
       <div className="min-w-0">
-        <h2 id={titleId} className="text-ui-md font-semibold text-foreground">
+        <h2
+          id={titleId}
+          className="min-w-0 text-ui-md font-semibold text-foreground"
+        >
           {AGENT_SELECTION_GUIDE_TITLE}
         </h2>
       </div>

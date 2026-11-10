@@ -422,9 +422,9 @@ describe("HostDangerZone", () => {
     ).toBeNull();
   });
 
-  it("leaves a sandbox's removal to its sandbox card: a status line, no control, and no deregister bound", () => {
+  it("points sandbox destruction to the header menu without a removal control", () => {
     // The server refuses to deregister a sandbox; its lifecycle belongs to the
-    // sandbox card, so the row names where to go instead of offering a button
+    // header menu, so the instruction names where to go instead of a button
     // that could only fail.
     render(
       <HostDangerZone
@@ -450,7 +450,7 @@ describe("HostDangerZone", () => {
     ).toBeNull();
     expect(
       screen.getByTestId("settings-remove-host-sandbox-managed").textContent,
-    ).toBe("Managed from its sandbox card.");
+    ).toBe("To destroy this sandbox, use More in the header.");
     expect(removeFromAccountHostIds).not.toContain("host-sbx");
     expect(screen.getByTestId("host-danger-zone").textContent).not.toContain(
       "This host is a sandbox",

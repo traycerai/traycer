@@ -32,7 +32,6 @@ import {
   collapsedReadingsProblems,
   hostMenuProblems,
   openHostMenu,
-  readHostRows,
   readReadings,
   readingPopoverProblems,
   readingsRowProblems,
@@ -2379,34 +2378,27 @@ test.describe("the shell with the panel loaded on the left", () => {
     await assertDividerRowDrags(getPage());
   });
 
-  test("the account menu opens on one click toward the content, inside the window and no wider than 256px, and a long offline host name truncates and reads in full from its tooltip", async () => {
+  test("the account menu opens on one click toward the content, inside the window and no wider than 256px, and a long offline host name is readable in full from its tooltip", async () => {
     const page = getPage();
     await openHostMenu(page);
     expect(
       await hostMenuProblems(page, "right"),
       "G4: the account menu on a left strip",
     ).toEqual([]);
-    // The tooltip on the offline row: the longest name, the row a click does
-    // not act on. Waited on as the node the tooltip is, not as a delay.
+    // The disabled offline row still exposes its truncated name on hover.
     const offline = HOST_ROWS[1];
-    const rows = await readHostRows(page);
-    const row = rows?.find((entry) => entry.hostId === offline.hostId);
-    expect(row, `no ${offline.hostId} row`).toBeDefined();
-    if (row === undefined || offline.fullName === null) return;
-    await moveTo(page, row.box.x + 40, row.box.cy);
-    await expect
-      .poll(
-        () =>
-          page.evaluate<string>(
-            `document.querySelector('[role="tooltip"]')?.textContent ?? ""`,
-          ),
-        {
-          message: `hovering ${offline.hostId}'s name shows no tooltip with its full name`,
-        },
-      )
-      .toContain(offline.fullName);
-    // The tooltip is its own dismissable layer and would take the Escape: the
-    // pointer leaves the row first.
+    const row = page.getByTestId(`user-menu-host-option-${offline.hostId}`);
+    await expect(row).toHaveAttribute("aria-disabled", "true");
+    await expect(row.getByText("offline", { exact: true })).toBeVisible();
+    await row.hover();
+    await expect(
+      page.getByRole("tooltip").filter({ hasText: offline.fullName }),
+    ).toHaveText(offline.fullName);
+    const online = HOST_ROWS[0];
+    await page.getByTestId(`user-menu-host-option-${online.hostId}`).hover();
+    await expect(
+      page.getByRole("tooltip").filter({ hasText: online.fullName }),
+    ).toContainText(online.fullName);
     await moveTo(page, 1, 1);
     await waitUntil(
       page,
@@ -2554,6 +2546,10 @@ test.describe("the shell with the panel loaded on the right", () => {
       await hostMenuProblems(page, "left"),
       "G4: the account menu on a right strip",
     ).toEqual([]);
+    await waitUntil(
+      page,
+      `document.querySelector('[role="tooltip"]') === null`,
+    );
     await pressKey(page, "Escape");
     await waitUntil(
       page,

@@ -61,6 +61,7 @@ import {
   NewConversationModalHost,
 } from "../new-conversation-modal";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
+import { expectFocusRingInset } from "@/components/ui/__tests__/dialog-scroll-layout-assertions";
 import { newConversationSurfaceKey } from "@/stores/host/surface-host-selection-store";
 import { NewConversationTransientContext } from "../new-conversation-transient-context";
 
@@ -332,6 +333,8 @@ function editorHandle(): ComposerPromptEditorHandle {
     clear: () => undefined,
     setContent: () => undefined,
     syncContent: () => undefined,
+    insertFileAttachment: () => false,
+    settleFileAttachment: () => false,
     insertImageAttachments: () => undefined,
     insertMentionAttachment: () => false,
     beginPathInsertion: () => null,
@@ -429,11 +432,23 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
     agentMode: "regular",
     get catalog() {
       return testState.catalogHostId === null
-        ? { hostId: null, harnesses: undefined, modelsLoaded: false }
+        ? {
+            hostId: null,
+            harnesses: undefined,
+            modelsHarnessId: "claude",
+            modelsProfileId: null,
+            models: [],
+            modelsLoaded: false,
+            modelsFailed: false,
+          }
         : {
             hostId: testState.catalogHostId,
             harnesses: [],
+            modelsHarnessId: "claude",
+            modelsProfileId: null,
+            models: [],
             modelsLoaded: true,
+            modelsFailed: false,
           };
     },
   }));
@@ -1455,7 +1470,11 @@ describe("new-conversation modal's terminal Start on a staged sandbox", () => {
         catalog: {
           hostId: "host-a",
           harnesses: [{ id: "claude", available: true, modes: ["gui", "tui"] }],
+          modelsHarnessId: "claude",
+          modelsProfileId: null,
+          models: [],
           modelsLoaded: true,
+          modelsFailed: false,
         },
       });
     });
@@ -1632,7 +1651,11 @@ describe("new-conversation modal host while a staged sandbox boots a terminal ag
         catalog: {
           hostId: "host-a",
           harnesses: [{ id: "claude", available: true, modes: ["gui", "tui"] }],
+          modelsHarnessId: "claude",
+          modelsProfileId: null,
+          models: [],
           modelsLoaded: true,
+          modelsFailed: false,
         },
       });
     });
@@ -1715,6 +1738,14 @@ describe("new-conversation modal host while a staged sandbox boots a terminal ag
     expect(
       screen.getByTestId("epic-sidebar-new-conversation-modal"),
     ).toBeDefined();
+    const dialog = screen.getByTestId("epic-sidebar-new-conversation-modal");
+    expect(dialog.classList.contains("overflow-visible")).toBe(true);
+    expect(dialog.classList.contains("overflow-y-auto")).toBe(false);
+    expect(dialog.classList.contains("overflow-x-hidden")).toBe(false);
+    expectFocusRingInset(
+      screen.getByTestId("epic-sidebar-new-conversation-modal-body"),
+      ["-m-1", "p-1"],
+    );
   });
 
   it("drops the automatic launch when its tab closes before the resubmit, keeping the draft", async () => {

@@ -1091,6 +1091,11 @@ describe("<HomePage />", () => {
       expect(
         screen.getByTestId("landing-draft-surface").contains(terminal),
       ).toBe(true);
+      const landingBody = document.querySelector(".landing-appearance-surface");
+      expect(landingBody?.classList.contains("overflow-hidden")).toBe(true);
+      expect(landingBody?.classList.contains("max-md:overflow-y-auto")).toBe(
+        true,
+      );
       terminal.focus();
       expect(document.activeElement).toBe(terminal);
 
@@ -1486,6 +1491,8 @@ function editorHandleForPrompt(prompt: string): ComposerPromptEditorHandle {
     clear: () => undefined,
     setContent: () => undefined,
     syncContent: () => undefined,
+    insertFileAttachment: () => false,
+    settleFileAttachment: () => false,
     insertImageAttachments: () => undefined,
     insertMentionAttachment: () => false,
     beginPathInsertion: () => null,

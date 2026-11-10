@@ -9,7 +9,6 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
-  type MouseEvent,
   type ReactNode,
   type RefCallback,
 } from "react";
@@ -26,7 +25,6 @@ import {
   Copy,
   CopyMinus,
   CopyPlus,
-  ExternalLink,
   FileSliders,
   FolderGit2,
   GitCommitHorizontal,
@@ -45,7 +43,6 @@ import type {
 } from "@traycer/protocol/host/index";
 import type {
   WorktreeEntryScripts,
-  WorktreePrState,
   WorktreeSubmoduleMergeFactV12,
 } from "@traycer/protocol/host/worktree-schemas";
 import {
@@ -96,6 +93,7 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { ScriptsReviewDialog } from "@/components/workspaces/scripts-review-dialog";
 import { TeardownForceDeleteDialog } from "@/components/worktree/teardown-force-delete-dialog";
+import { WorktreePrPills } from "@/components/worktree/worktree-pr-metadata";
 import { type RepoScriptsSeed } from "@/components/workspaces/repo-scripts-form";
 import {
   hostLabelAtSentenceStart,
@@ -137,7 +135,6 @@ import {
   navigateToTabIntent,
   openOrFocusEpicIntent,
 } from "@/lib/tab-navigation";
-import { useOpenLink } from "@/lib/links/open-link";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
@@ -154,7 +151,6 @@ import {
   useWorktreesSettingsSelectionStore,
   type SelectedWorktreePathsUpdate,
 } from "@/stores/settings/worktrees-settings-selection-store";
-import { onMiddleClick } from "@/lib/dom/on-middle-click";
 
 type WorktreeRowDeleteStatus = "deleting";
 // Per-row activity-enrichment state, driving ONLY the tier pill's presentation:
@@ -178,7 +174,9 @@ const EMPTY_REPO_KEY_SET: ReadonlySet<string> = new Set();
 // wrapping Task-chip line, an optional facts line) still position correctly.
 // These are the one legitimately-fixed pixel constant in this surface: they seed
 // the window before the first measure, nothing more.
-const WORKTREE_ROW_ESTIMATE_PX = 88;
+const WORKTREE_ROW_ESTIMATE_PX = 96;
+// A repository divider is one quiet line. The estimate only seeds the window
+// before the first measure.
 const WORKTREE_REPO_HEADER_ESTIMATE_PX = 40;
 const WORKTREE_VIRTUAL_OVERSCAN = 8;
 
@@ -300,6 +298,17 @@ export function WorktreesSettingsPanel(): ReactNode {
   );
 }
 
+interface WorktreesFilterState {
+  readonly searchText: string;
+  readonly onSearchChange: (value: string) => void;
+  readonly tierFilters: WorktreeTierFilterSet;
+  readonly availableTiers: readonly WorktreeTier[];
+  readonly onToggleTier: (tier: WorktreeTier) => void;
+  readonly onClearTierFilters: () => void;
+  readonly sortMode: WorktreeSortMode;
+  readonly onSortModeChange: (mode: WorktreeSortMode) => void;
+}
+
 function WorktreesToolbar(props: {
   readonly onRefresh: () => Promise<unknown>;
   readonly refreshing: boolean;
@@ -309,15 +318,15 @@ function WorktreesToolbar(props: {
    * The leading slot: the host's worktree policy chips (automatic cleanup and
    * agent-created worktrees). A SLOT rather than the scope itself, so the
    * toolbar stays a layout with no opinion on either policy - exactly like
-   * `selectionControls` and `filterControls` beside it.
+   * `selectionControls` and `filters` beside it.
    */
   readonly policies: ReactNode;
   readonly selectionControls: ReactNode | null;
-  readonly filterControls: ReactNode | null;
+  readonly filters: WorktreesFilterState | null;
 }): ReactNode {
   const {
     canRefresh,
-    filterControls,
+    filters,
     lastUpdatedAt,
     onRefresh,
     policies,
@@ -333,25 +342,25 @@ function WorktreesToolbar(props: {
     timeoutMs: WORKTREES_REFRESH_TIMEOUT_MS,
   });
 
+  // One toolbar at every width, including a phone. Policy chips, selection,
+  // and refresh stay on the action row with the age stamp. Search, filter,
+  // and sort are the grid under that row.
   return (
-    <div className="@container/worktrees-toolbar flex flex-col gap-2 border-b border-border/40 px-5 py-2.5">
+    <div className="@container/worktrees-toolbar flex min-w-0 max-w-full flex-col gap-2 border-b border-border/40 px-5 py-2.5">
       {/* The slot on the left held first a host `<Select>`, then a readout of
           the scoped host. Both are gone - the sidebar names that host one row
           away and never scrolls - and it now carries the host's policy chips,
           which wrap onto their own line with the row at narrow widths. */}
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex max-w-full flex-wrap items-center gap-2">
         {policies}
         <div
-          className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2"
+          className="ml-auto flex max-w-full min-w-0 flex-wrap items-center justify-end gap-2"
           data-testid="worktrees-toolbar-actions"
         >
           {selectionControls}
           <span
             aria-hidden={refresh.refreshing}
-            className={cn(
-              "hidden @sm/worktrees-toolbar:inline",
-              refresh.refreshing && "invisible",
-            )}
+            className={cn(refresh.refreshing && "invisible")}
           >
             <WorktreesUpdatedAgoLabel updatedAt={lastUpdatedAt} />
           </span>
@@ -370,7 +379,7 @@ function WorktreesToolbar(props: {
           </Button>
         </div>
       </div>
-      {filterControls}
+      {filters !== null ? <WorktreesFilterControls filters={filters} /> : null}
     </div>
   );
 }
@@ -404,41 +413,53 @@ function WorktreesUpdatedAgoText(props: {
   );
 }
 
-function WorktreesFilterControls(props: {
+function WorktreesSearchField(props: {
   readonly searchText: string;
   readonly onSearchChange: (value: string) => void;
-  readonly tierFilters: WorktreeTierFilterSet;
-  readonly availableTiers: readonly WorktreeTier[];
-  readonly onToggleTier: (tier: WorktreeTier) => void;
-  readonly onClearTierFilters: () => void;
-  readonly sortMode: WorktreeSortMode;
-  readonly onSortModeChange: (mode: WorktreeSortMode) => void;
+  readonly className: string;
 }): ReactNode {
   return (
-    <div className="grid min-w-0 grid-cols-1 items-center gap-2 @xs/worktrees-toolbar:grid-cols-2 @lg/worktrees-toolbar:grid-cols-[minmax(0,1fr)_auto_auto]">
-      <div className="relative min-w-0 @xs/worktrees-toolbar:col-span-2 @lg/worktrees-toolbar:col-span-1">
-        <Search
-          className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground"
-          aria-hidden
-        />
-        <Input
-          type="search"
-          value={props.searchText}
-          onChange={(event) => props.onSearchChange(event.target.value)}
-          placeholder="Search repo, branch, path, PR, or Task"
-          aria-label="Search worktrees"
-          className="pl-8"
-        />
-      </div>
+    <div className={props.className}>
+      <Search
+        className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground"
+        aria-hidden
+      />
+      <Input
+        type="search"
+        value={props.searchText}
+        onChange={(event) => props.onSearchChange(event.target.value)}
+        placeholder="Search repo, branch, path, PR, or Task"
+        aria-label="Search worktrees"
+        className="pl-8"
+      />
+    </div>
+  );
+}
+
+function WorktreesFilterControls(props: {
+  readonly filters: WorktreesFilterState;
+}): ReactNode {
+  const { filters } = props;
+  // Search fills the row at every width. Filter and sort share the next row:
+  // equal columns while the toolbar is narrow, and each control's own label
+  // width once it is wide. The empty third column keeps those two from
+  // stretching across the page.
+  return (
+    <div className="grid min-w-0 grid-cols-1 items-center gap-2 @xs/worktrees-toolbar:grid-cols-2 @lg/worktrees-toolbar:grid-cols-[auto_auto_minmax(0,1fr)]">
+      <WorktreesSearchField
+        searchText={filters.searchText}
+        onSearchChange={filters.onSearchChange}
+        className="relative min-w-0 @xs/worktrees-toolbar:col-span-2 @lg/worktrees-toolbar:col-span-3"
+      />
       <WorktreeFilterMenu
-        tierFilters={props.tierFilters}
-        availableTiers={props.availableTiers}
-        onToggleTier={props.onToggleTier}
-        onClearTierFilters={props.onClearTierFilters}
+        tierFilters={filters.tierFilters}
+        availableTiers={filters.availableTiers}
+        onToggleTier={filters.onToggleTier}
+        onClearTierFilters={filters.onClearTierFilters}
       />
       <WorktreeSortMenu
-        sortMode={props.sortMode}
-        onSortModeChange={props.onSortModeChange}
+        sortMode={filters.sortMode}
+        onSortModeChange={filters.onSortModeChange}
       />
     </div>
   );
@@ -747,7 +768,7 @@ function WorktreesBody(props: {
         <WorktreesToolbar
           {...toolbarProps}
           selectionControls={null}
-          filterControls={null}
+          filters={null}
         />
       ) : null}
       {/* The gate owns every state where the scope has no client: it names
@@ -873,7 +894,12 @@ function buildWorktreeFlatItems(
     });
     if (collapsed) continue;
     group.items.forEach((entry, index) => {
-      items.push({ kind: "row", entry, group, firstInGroup: index === 0 });
+      items.push({
+        kind: "row",
+        entry,
+        group,
+        firstInGroup: index === 0,
+      });
     });
   }
   return items;
@@ -1716,18 +1742,16 @@ export function WorktreesList(props: {
               />
             </>
           }
-          filterControls={
-            <WorktreesFilterControls
-              searchText={searchText}
-              onSearchChange={setSearchText}
-              tierFilters={tierFilters}
-              availableTiers={availableTiers}
-              onToggleTier={toggleTierFilter}
-              onClearTierFilters={clearTierFilters}
-              sortMode={sortMode}
-              onSortModeChange={setSortMode}
-            />
-          }
+          filters={{
+            searchText,
+            onSearchChange: setSearchText,
+            tierFilters,
+            availableTiers,
+            onToggleTier: toggleTierFilter,
+            onClearTierFilters: clearTierFilters,
+            sortMode,
+            onSortModeChange: setSortMode,
+          }}
         />
         <WorktreeDeleteProgressStrip
           summary={progressSummary}
@@ -1805,9 +1829,8 @@ export function WorktreesList(props: {
                       ref={virtualizer.measureElement}
                       className={cn(
                         "left-0 w-full",
-                        isStickyHeader
-                          ? "sticky top-0 z-30 bg-background"
-                          : "absolute top-0",
+                        isStickyHeader ? "sticky top-0 z-30" : "absolute top-0",
+                        isStickyHeader && "bg-background",
                       )}
                       style={
                         isStickyHeader
@@ -2183,12 +2206,12 @@ function WorktreeBulkDeleteDialog(props: {
       <DialogContent
         layout="banded"
         showCloseButton={false}
-        className="w-[min(92vw,32rem)] overflow-hidden sm:max-w-lg"
+        className="flex w-[min(92vw,32rem)] flex-col overflow-hidden sm:max-w-lg"
         data-testid="worktree-bulk-delete-dialog"
       >
         {summary !== null ? (
           <>
-            <div className="flex min-w-0 items-start gap-3 p-5">
+            <div className="flex min-w-0 shrink-0 items-start gap-3 p-5">
               <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-destructive/10 text-destructive">
                 <AlertTriangle className="size-4" aria-hidden />
               </div>
@@ -2200,6 +2223,10 @@ function WorktreeBulkDeleteDialog(props: {
                   Deleting {summary.classSummary}. Traycer runs each repo's
                   teardown script, then removes the worktree.
                 </DialogDescription>
+              </div>
+            </div>
+            <div className="min-h-0 min-w-0 overflow-y-auto">
+              <div className="space-y-2 px-5 pb-4">
                 {summary.dirtyLoss !== null ? (
                   <p
                     className="text-ui-sm leading-relaxed text-warning-foreground"
@@ -2235,23 +2262,23 @@ function WorktreeBulkDeleteDialog(props: {
                   </p>
                 ) : null}
               </div>
+              <ul className="max-h-[min(30vh,12rem)] overflow-y-auto border-t border-border/60 px-5 py-2">
+                {summary.paths.map((path) => (
+                  <TooltipWrapper
+                    key={path}
+                    label={path}
+                    side="top"
+                    sideOffset={undefined}
+                    align={undefined}
+                  >
+                    <li className="truncate py-0.5 text-ui-xs text-muted-foreground">
+                      {path}
+                    </li>
+                  </TooltipWrapper>
+                ))}
+              </ul>
             </div>
-            <ul className="max-h-[min(30vh,12rem)] overflow-y-auto border-t border-border/60 px-5 py-2">
-              {summary.paths.map((path) => (
-                <TooltipWrapper
-                  key={path}
-                  label={path}
-                  side="top"
-                  sideOffset={undefined}
-                  align={undefined}
-                >
-                  <li className="truncate py-0.5 text-ui-xs text-muted-foreground">
-                    {path}
-                  </li>
-                </TooltipWrapper>
-              ))}
-            </ul>
-            <div className="flex justify-end gap-2 border-t border-border/60 bg-foreground/3 px-5 py-3">
+            <div className="flex shrink-0 justify-end gap-2 border-t border-border/60 bg-foreground/3 px-5 py-3">
               <Button
                 type="button"
                 variant="ghost"
@@ -2285,11 +2312,10 @@ type WorktreeScriptReviewDraft = {
 };
 
 /**
- * Repo group header - a quiet sticky divider, not a second status row: no
- * filled high-emphasis background, and muted/regular-weight text so it never
- * competes with a row's bold branch name or colored tier pill. Collapse/expand
- * stays a full-width button for a generous hit target; the chevron carries the
- * only state-change affordance.
+ * Repository group header: one quiet sticky divider in the page background.
+ * The whole header collapses the repository. Muted regular-weight text so it
+ * does not compete with a row's branch or tier pill. The Task pill and its
+ * merge caption live on each row, not in a second header.
  */
 const WorktreeRepoHeader = memo(function WorktreeRepoHeader(props: {
   readonly group: WorktreeRepoGroup;
@@ -2307,18 +2333,18 @@ const WorktreeRepoHeader = memo(function WorktreeRepoHeader(props: {
       aria-expanded={!collapsed}
       aria-label={`${action} ${group.label}`}
       data-testid="worktree-repo-header"
-      className="flex w-full min-w-0 items-center gap-2 border-b border-border/40 bg-background px-5 py-1.5 text-left transition-colors hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50"
+      className="flex w-full min-w-0 items-start gap-2 border-b border-border/40 bg-background px-5 py-1.5 text-left transition-colors hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50"
       onClick={handleToggle}
     >
       <ChevronRight
         className={cn(
-          "size-3.5 shrink-0 text-muted-foreground transition-transform",
+          "mt-0.5 size-3.5 shrink-0 text-muted-foreground transition-transform",
           !collapsed && "rotate-90",
         )}
         aria-hidden
       />
-      <FolderGit2 className="size-3.5 shrink-0 text-muted-foreground" />
-      <span className="min-w-0 flex-1 truncate text-ui-sm font-normal text-muted-foreground">
+      <FolderGit2 className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+      <span className="min-w-0 flex-1 wrap-anywhere text-ui-sm font-normal whitespace-normal text-muted-foreground">
         {group.label}
       </span>
       <span className="shrink-0 text-ui-xs text-muted-foreground">
@@ -2431,14 +2457,6 @@ const WorktreeRow = memo(function WorktreeRow(
     entry,
     deleteEnrichment,
   );
-  // An unresolved row carries schema-safe placeholders only. Do not classify
-  // those placeholders: the isGitRepo/dirty-count cliff makes an unresolved
-  // row look clean enough to delete when it is actually still unknown.
-  const classification =
-    entry.resolvedAt === null ? null : classifyWorktree(entry);
-  const tierClassification =
-    classificationEntry === null ? null : classifyWorktree(classificationEntry);
-  const displayEntry = classificationEntry ?? entry;
   const navigate = useNavigate();
   const openTask = useCallback(
     (epicId: string): void => {
@@ -2493,39 +2511,14 @@ const WorktreeRow = memo(function WorktreeRow(
           onToggleSelection={toggleSelection}
         />
       </div>
-      <div className="min-w-0 flex-1 space-y-1 pr-10">
-        <div className="flex flex-wrap items-center gap-2">
-          <WorktreeTierPill
-            entry={classificationEntry ?? entry}
-            tier={tierClassification?.tier ?? classification?.tier ?? "review"}
-            state={enrichment}
-          />
-          {displayEntry.resolvedAt === null ? null : (
-            <WorktreePrChips entry={displayEntry} />
-          )}
-          <span className="truncate text-ui-sm font-medium text-foreground">
-            {branchLabel(entry)}
-          </span>
-        </div>
-        {classification === null ? (
-          <span className="text-ui-xs text-muted-foreground">
-            {unresolvedWorktreeSecondaryCopy(enrichment)}
-          </span>
-        ) : (
-          <WorktreeSecondaryFacts
-            facts={classification.nonPrFacts}
-            lastActivityAt={entry.lastActivityAt}
-          />
-        )}
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <WorktreeTaskAssociation
-            owners={entry.owners}
-            taskTitlesByEpicId={taskTitlesByEpicId}
-            taskRollupByEpicId={taskRollupByEpicId}
-            onOpenTask={openTask}
-          />
-        </div>
-      </div>
+      <WorktreeRowDetails
+        entry={entry}
+        classificationEntry={classificationEntry}
+        enrichment={enrichment}
+        taskTitlesByEpicId={taskTitlesByEpicId}
+        taskRollupByEpicId={taskRollupByEpicId}
+        onOpenTask={openTask}
+      />
       {deleting ? (
         <span className="inline-flex shrink-0 items-center gap-2 text-ui-xs text-muted-foreground">
           <AgentSpinningDots
@@ -2550,6 +2543,74 @@ const WorktreeRow = memo(function WorktreeRow(
     </div>
   );
 }, worktreeRowPropsEqual);
+
+function WorktreeRowDetails(props: {
+  readonly entry: WorktreeHostEntryV14;
+  readonly classificationEntry: WorktreeHostEntryV14 | null;
+  readonly enrichment: WorktreeEnrichmentState;
+  readonly taskTitlesByEpicId: ReadonlyMap<string, string>;
+  readonly taskRollupByEpicId: ReadonlyMap<string, TaskMergeRollup>;
+  readonly onOpenTask: (epicId: string) => void;
+}): ReactNode {
+  // An unresolved row carries schema-safe placeholders only. Do not classify
+  // those placeholders: the isGitRepo/dirty-count cliff makes an unresolved
+  // row look clean enough to delete when it is actually still unknown.
+  const classification =
+    props.entry.resolvedAt === null ? null : classifyWorktree(props.entry);
+  const tierClassification =
+    props.classificationEntry === null
+      ? null
+      : classifyWorktree(props.classificationEntry);
+  const displayEntry = props.classificationEntry ?? props.entry;
+  const tier = tierClassification?.tier ?? classification?.tier ?? "review";
+  let activity: ReactNode = null;
+  if (classification === null) {
+    activity = (
+      <span className="text-ui-xs text-muted-foreground">
+        {unresolvedWorktreeSecondaryCopy(props.enrichment)}
+      </span>
+    );
+  } else if (props.entry.lastActivityAt !== null) {
+    activity = (
+      <WorktreeLastActiveLabel lastActivityAt={props.entry.lastActivityAt} />
+    );
+  }
+  let facts: ReactNode = null;
+  if (classification !== null && classification.nonPrFacts.length > 0) {
+    facts = (
+      <span className="min-w-0 wrap-anywhere text-ui-xs whitespace-normal text-muted-foreground">
+        {classification.nonPrFacts.join(" · ")}
+      </span>
+    );
+  }
+  return (
+    <div className="min-w-0 flex-1 space-y-1 pr-10">
+      <p className="wrap-anywhere text-ui-sm font-medium whitespace-normal text-foreground">
+        {branchLabel(props.entry)}
+      </p>
+      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+        <WorktreeTierPill
+          entry={displayEntry}
+          tier={tier}
+          state={props.enrichment}
+        />
+        {displayEntry.resolvedAt === null ? null : (
+          <WorktreePrChips entry={displayEntry} />
+        )}
+        {facts}
+      </div>
+      {activity}
+      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+        <WorktreeTaskAssociation
+          owners={props.entry.owners}
+          taskTitlesByEpicId={props.taskTitlesByEpicId}
+          taskRollupByEpicId={props.taskRollupByEpicId}
+          onOpenTask={props.onOpenTask}
+        />
+      </div>
+    </div>
+  );
+}
 
 /**
  * Evidence-tier pill. Leads every row with a TEXT label (never color-only, for
@@ -2700,38 +2761,6 @@ const WORKTREE_TIER_PILL_STYLE: Record<
   },
 };
 
-/**
- * One relevance-gated secondary line: the classifier's evidence facts joined,
- * with the "last active" relative time appended. Renders nothing when there is
- * neither a fact nor a timestamp (silence reads as quiet/clean).
- */
-function WorktreeSecondaryFacts(props: {
-  readonly facts: readonly string[];
-  readonly lastActivityAt: number | null;
-}): ReactNode {
-  const hasFacts = props.facts.length > 0;
-  if (!hasFacts && props.lastActivityAt === null) return null;
-  return (
-    <p className="flex flex-wrap items-center gap-x-1 text-ui-xs text-muted-foreground">
-      {hasFacts ? <span>{props.facts.join(" · ")}</span> : null}
-      {hasFacts && props.lastActivityAt !== null ? (
-        <span aria-hidden>·</span>
-      ) : null}
-      {props.lastActivityAt !== null ? (
-        <WorktreeLastActiveLabel lastActivityAt={props.lastActivityAt} />
-      ) : null}
-    </p>
-  );
-}
-
-interface WorktreePrChipModel {
-  readonly key: string;
-  readonly label: string;
-  readonly ariaLabel: string;
-  readonly prState: WorktreeDisplayedPrState;
-  readonly prUrl: string;
-}
-
 interface WorktreeMutedPrChipModel {
   readonly key: string;
   readonly label: string;
@@ -2741,68 +2770,21 @@ interface WorktreeMutedPrChipModel {
 function WorktreePrChips(props: {
   readonly entry: WorktreeHostEntryV14;
 }): ReactNode {
-  const chips = worktreePrChips(props.entry);
-  if (chips.length === 0) return null;
-  return chips.map((chip) =>
-    "prUrl" in chip ? (
-      <WorktreePrChip key={chip.key} chip={chip} />
-    ) : (
-      <WorktreeMutedPrChip key={chip.key} chip={chip} />
-    ),
+  return (
+    <>
+      <WorktreePrPills
+        worktrees={[props.entry]}
+        detailOnHover
+        maximumVisible={null}
+        className={undefined}
+        testId="worktree-pr-chips"
+        openPrInApp={null}
+      />
+      {props.entry.submodules.flatMap(submoduleUnmergedChip).map((chip) => (
+        <WorktreeMutedPrChip key={chip.key} chip={chip} />
+      ))}
+    </>
   );
-}
-
-function worktreePrChips(
-  entry: WorktreeHostEntryV14,
-): readonly (WorktreePrChipModel | WorktreeMutedPrChipModel)[] {
-  return [
-    ...superprojectPrChip(entry),
-    ...entry.submodules.flatMap((submodule) => [
-      ...submodulePrChip(submodule),
-      ...submoduleUnmergedChip(submodule),
-    ]),
-  ];
-}
-
-function superprojectPrChip(
-  entry: WorktreeHostEntryV14,
-): readonly WorktreePrChipModel[] {
-  const prState = displayedPrState(entry.prState);
-  if (prState === null || entry.prNumber === null || entry.prUrl === null) {
-    return [];
-  }
-  return [
-    {
-      key: `superproject:${entry.prNumber}:${entry.prUrl}`,
-      label: `#${entry.prNumber} ${WORKTREE_PR_STATE_LABEL[prState]}`,
-      ariaLabel: `Open PR #${entry.prNumber} ${WORKTREE_PR_STATE_LABEL[prState]}`,
-      prState,
-      prUrl: entry.prUrl,
-    },
-  ];
-}
-
-function submodulePrChip(
-  submodule: WorktreeSubmoduleMergeFactV12,
-): readonly WorktreePrChipModel[] {
-  const prState = displayedPrState(submodule.prState);
-  if (
-    prState === null ||
-    submodule.prNumber === null ||
-    submodule.prUrl === null
-  ) {
-    return [];
-  }
-  const repoName = submodule.repoIdentifier.repo;
-  return [
-    {
-      key: `submodule:${submodule.repoIdentifier.owner}/${repoName}:${submodule.branch}:${submodule.prNumber}:${submodule.prUrl}`,
-      label: `${repoName} #${submodule.prNumber} ${WORKTREE_PR_STATE_LABEL[prState]}`,
-      ariaLabel: `Open ${repoName} PR #${submodule.prNumber} ${WORKTREE_PR_STATE_LABEL[prState]}`,
-      prState,
-      prUrl: submodule.prUrl,
-    },
-  ];
 }
 
 function submoduleUnmergedChip(
@@ -2859,61 +2841,6 @@ function submoduleUnmergedChip(
   ];
 }
 
-type WorktreeDisplayedPrState = "open" | "closed" | "merged";
-
-const WORKTREE_PR_STATE_LABEL: Record<WorktreeDisplayedPrState, string> = {
-  open: "Open",
-  closed: "Closed",
-  merged: "Merged",
-};
-
-function WorktreePrChip(props: {
-  readonly chip: WorktreePrChipModel;
-}): ReactNode {
-  const style = WORKTREE_PR_PILL_STYLE[props.chip.prState];
-  return (
-    <Badge asChild variant="outline" className={cn(style.className)}>
-      <WorktreePrAnchor
-        href={props.chip.prUrl}
-        ariaLabel={props.chip.ariaLabel}
-        className="max-w-[min(60vw,16rem)]"
-        testId="worktree-pr-chip"
-        prState={props.chip.prState}
-      >
-        <span className="truncate">{props.chip.label}</span>
-        <ExternalLink className="size-3" aria-hidden />
-      </WorktreePrAnchor>
-    </Badge>
-  );
-}
-
-function displayedPrState(
-  prState: WorktreePrState | null,
-): WorktreeDisplayedPrState | null {
-  if (prState === "open" || prState === "closed" || prState === "merged") {
-    return prState;
-  }
-  return null;
-}
-
-const WORKTREE_PR_PILL_STYLE: Record<
-  WorktreeDisplayedPrState,
-  { readonly className: string }
-> = {
-  open: {
-    className:
-      "border-green-600/30 bg-green-500/10 text-green-700 dark:border-green-400/30 dark:text-green-300",
-  },
-  closed: {
-    className:
-      "border-red-600/25 bg-red-500/10 text-red-700 dark:border-red-400/25 dark:text-red-300",
-  },
-  merged: {
-    className:
-      "border-purple-600/30 bg-purple-500/10 text-purple-700 dark:border-purple-400/30 dark:text-purple-300",
-  },
-};
-
 function WorktreeMutedPrChip(props: {
   readonly chip: WorktreeMutedPrChipModel;
 }): ReactNode {
@@ -2926,47 +2853,14 @@ function WorktreeMutedPrChip(props: {
     >
       <Badge
         variant="muted"
-        className="border-border/40 bg-foreground/3"
+        wrap
+        className="max-w-full min-w-0 shrink border-border/40 bg-foreground/3"
         data-testid="worktree-pr-chip"
         data-pr-state="unmerged"
       >
-        <span className="max-w-[min(60vw,16rem)] truncate">
-          {props.chip.label}
-        </span>
+        <span className="wrap-anywhere">{props.chip.label}</span>
       </Badge>
     </TooltipWrapper>
-  );
-}
-
-function WorktreePrAnchor(props: {
-  readonly href: string;
-  readonly ariaLabel: string;
-  readonly className: string | undefined;
-  readonly testId: string | undefined;
-  readonly prState: WorktreeDisplayedPrState | undefined;
-  readonly children: ReactNode;
-}): ReactNode {
-  const openLink = useOpenLink();
-  const openExternal = useCallback(
-    (event: MouseEvent<HTMLAnchorElement>): void => {
-      event.stopPropagation();
-      event.preventDefault();
-      void openLink(props.href, "github", event);
-    },
-    [openLink, props.href],
-  );
-  return (
-    <a
-      href={props.href}
-      aria-label={props.ariaLabel}
-      className={props.className}
-      data-testid={props.testId}
-      data-pr-state={props.prState}
-      onClick={openExternal}
-      onAuxClick={onMiddleClick(openExternal)}
-    >
-      {props.children}
-    </a>
   );
 }
 
@@ -3004,11 +2898,15 @@ function WorktreeTaskAssociation(props: {
   return (
     <span className="flex flex-wrap items-center gap-1">
       {named.map((item) => (
-        <span key={item.epicId} className="flex items-center gap-1">
+        <span
+          key={item.epicId}
+          className="flex min-w-0 flex-wrap items-center gap-1"
+        >
           <Badge
             asChild
             variant="outline"
-            className="max-w-[min(60vw,16rem)] cursor-pointer hover:bg-foreground/5 hover:text-muted-foreground"
+            wrap
+            className="max-w-full min-w-0 shrink cursor-pointer hover:bg-foreground/5 hover:text-muted-foreground"
           >
             <TooltipWrapper
               label={item.title}
@@ -3024,7 +2922,7 @@ function WorktreeTaskAssociation(props: {
                   props.onOpenTask(item.epicId);
                 }}
               >
-                <span className="truncate">{item.title}</span>
+                <span className="wrap-anywhere">{item.title}</span>
               </button>
             </TooltipWrapper>
           </Badge>
@@ -3049,8 +2947,9 @@ function WorktreeTaskAssociation(props: {
  * owns, a different scope that must not compete with or be mistaken for that pill
  * (it previously reused the tier pill's exact green/GitMerge treatment for
  * `merged`, which read as a second worktree-tier signal). Plain muted text, no
- * icon, no border/background, and a "Task" prefix carries the distinction instead.
- * `Merged` means every owned branch - the superproject binding branch and each
+ * icon, no border/background. The caption leads with "Task" so it is not read
+ * as that row's tier. `Merged` means every owned branch - the superproject
+ * binding branch and each
  * owned submodule - has a HEAD-validated merged PR; `Merged N/M` is the honest
  * partial when some but not all have landed (the classic "submodule PR merged,
  * superproject gitlink bump still open" case). Renders nothing when there's no
@@ -3062,6 +2961,8 @@ function TaskMergeRollupBadge(props: {
 }): ReactNode {
   const rollup = props.rollup;
   if (rollup === null || rollup.status === "none") return null;
+  const label = taskMergeRollupLabel(rollup);
+  if (label === null) return null;
   const fullyMerged = rollup.status === "merged";
   return (
     <TooltipWrapper
@@ -3075,11 +2976,11 @@ function TaskMergeRollupBadge(props: {
       align={undefined}
     >
       <span
-        className="text-ui-xs text-muted-foreground"
+        className="text-ui-xs whitespace-normal text-muted-foreground"
         data-testid="task-merge-rollup"
         data-rollup-status={rollup.status}
       >
-        Task {taskMergeRollupLabel(rollup)}
+        {`Task ${label}`}
       </span>
     </TooltipWrapper>
   );
@@ -3404,10 +3305,11 @@ function collapsedRepoKeysReducer(
 }
 
 /**
- * Groups worktrees by repo for display, keyed on the resolved identifier when
- * present (real `owner/repo`) and otherwise on the display label (local repos
- * and orphans). Rows WITHIN each repo group are ordered by creation time -
- * "Newest" (default, most recently created first) or "Oldest". A `null`
+ * Groups worktrees by repository for display, keyed on the resolved identifier
+ * when present (real `owner/repo`) and otherwise on the display label (local
+ * repos and orphans). A Task does not get its own header: its pill and merge
+ * caption stay on the row. Rows WITHIN each group are ordered by creation time
+ * - "Newest" (default, most recently created first) or "Oldest". A `null`
  * `createdAt` sorts last in both directions.
  */
 function groupByRepo(
@@ -3424,7 +3326,11 @@ function groupByRepo(
     if (existing !== undefined) {
       existing.items.push(entry);
     } else {
-      byKey.set(key, { key, label: entry.repoLabel, items: [entry] });
+      byKey.set(key, {
+        key,
+        label: entry.repoLabel,
+        items: [entry],
+      });
     }
   }
   const groups = [...byKey.values()];

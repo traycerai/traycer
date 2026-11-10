@@ -1,5 +1,6 @@
 import { defineRpcContract, defineUpgradePath } from "../framework/index";
 import * as schemas from "./environment-schemas";
+import { RETIRED_PROVIDER_VARIABLES } from "./released-wire-rows";
 
 /**
  * The environment methods: every one a NEW name, introduced at `@1.0`, off
@@ -23,8 +24,11 @@ import * as schemas from "./environment-schemas";
  * `environment.status` answers the move's consent and planes;
  * `environment.review` answers the retrospective sheet's record;
  * `providers.link` and `providers.linkComplete` name the environment whose
- * plan they link. Neither
- * line has shipped, so none is a MAJOR.
+ * plan they link. Each is a MINOR because every addition is additive and an
+ * older peer is served directly: both lines HAVE shipped - `cli-v1.5.2` and
+ * `cli-v1.5.3` carry them - so a removal here would need a MAJOR, which is
+ * why the fields those releases require are filled from
+ * `host/released-wire-rows.ts` rather than dropped.
  */
 export const environmentSecretsListV10 = defineRpcContract({
   method: "environment.secrets.list",
@@ -57,7 +61,12 @@ export const environmentSecretsListV12 = defineRpcContract({
   responseSchema: schemas.environmentSecretsListResponseSchemaV12,
 });
 
-/** A `@1.1` host names no variables: its rows set the secret under none. */
+/**
+ * A `@1.1` host names no variables: its rows set the secret under none. It
+ * names no provider variable either, and no host does any more
+ * (`RETIRED_PROVIDER_VARIABLES`), so the key is the empty list rather than a
+ * guess about what that host held.
+ */
 export const environmentSecretsListUpgradeV11ToV12 = defineUpgradePath<
   typeof environmentSecretsListV11,
   typeof environmentSecretsListV12
@@ -70,7 +79,7 @@ export const environmentSecretsListUpgradeV11ToV12 = defineUpgradePath<
     secrets: response.secrets.map((secret) => ({
       ...secret,
       variables: [],
-      providerVariables: [],
+      providerVariables: [...RETIRED_PROVIDER_VARIABLES],
     })),
     removed: response.removed.map((removed) => ({
       ...removed,
@@ -209,6 +218,23 @@ export const environmentStatusUpgradeV10ToV11 = defineUpgradePath<
     returnedFromTeam: null,
     stoppedAt: null,
   }),
+});
+
+export const environmentStatusV12 = defineRpcContract({
+  method: "environment.status",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: schemas.environmentStatusRequestSchema,
+  responseSchema: schemas.environmentStatusResponseSchemaV12,
+});
+
+export const environmentStatusUpgradeV11ToV12 = defineUpgradePath<
+  typeof environmentStatusV11,
+  typeof environmentStatusV12
+>({
+  from: environmentStatusV11.schemaVersion,
+  to: environmentStatusV12.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({ ...response, acceptedUploads: [] }),
 });
 
 export const environmentReviewV10 = defineRpcContract({
@@ -810,7 +836,7 @@ export const ENVIRONMENT_RPC_METHODS = {
   "environment.status": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: environmentStatusV10,
@@ -819,6 +845,10 @@ export const ENVIRONMENT_RPC_METHODS = {
         1: {
           contract: environmentStatusV11,
           upgradeFromPreviousVersion: environmentStatusUpgradeV10ToV11,
+        },
+        2: {
+          contract: environmentStatusV12,
+          upgradeFromPreviousVersion: environmentStatusUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},

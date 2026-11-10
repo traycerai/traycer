@@ -40,13 +40,14 @@ import type { ReactNode } from "react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EnvironmentHistoryResponse } from "@traycer/protocol/host/environment/configuration-contracts";
-import { environmentStatusResponseSchemaV11 } from "@traycer/protocol/host/environment-schemas";
+import { environmentStatusResponseSchemaV12 } from "@traycer/protocol/host/environment-schemas";
 import type {
   EnvironmentSecretRemovalV12,
   EnvironmentSecretsListResponseV12,
   EnvironmentSecretsVersionsResponseV11,
 } from "@traycer/protocol/host/environment-schemas";
 import { SettingsDetailsDialog } from "@/components/settings/details/settings-details-button";
+import { expectFocusRingInset } from "@/components/ui/__tests__/dialog-scroll-layout-assertions";
 import type { DetailsSubject } from "@/lib/settings-details-entry";
 import {
   mountTeamPage,
@@ -64,6 +65,10 @@ import {
 import { sandboxQueryKeys } from "@/lib/query-keys";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { formatSettingsDate } from "@/lib/settings/settings-date";
+import {
+  RETIRED_PROVIDER_VARIABLES,
+  RETIRED_SECRET_ROW_FIELDS,
+} from "@traycer/protocol/host/released-wire-rows";
 
 const AT = Date.UTC(2026, 9, 20, 9, 30);
 const DAY = 24 * 60 * 60 * 1_000;
@@ -317,7 +322,11 @@ describe("the drawer's reader scopes", () => {
 
     cleanup();
     openDrawer(harness, { kind: "setup_script", key: "macos" }, "Setup");
-    await user.click(await screen.findByRole("button", { name: "Retry" }));
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    const recoveryList = retry.closest("ul");
+    if (recoveryList === null) throw new Error("expected the recovery list");
+    expectFocusRingInset(recoveryList, ["-m-1", "p-1"]);
+    await user.click(retry);
     expect(hoisted.recover.mock.calls).toEqual([
       [{ kind: "retry", hostId: "host-a" }],
     ]);
@@ -584,32 +593,30 @@ describe("the Secrets header's Details", () => {
   const secretsList: EnvironmentSecretsListResponseV12 = {
     secrets: [
       {
+        ...RETIRED_SECRET_ROW_FIELDS,
+        providerVariables: [...RETIRED_PROVIDER_VARIABLES],
         secretId: "sec-live",
         name: "STRIPE_KEY",
         kind: "api_key",
         protocol: null,
         destinations: [],
-        mode: "brokered",
-        state: "live",
         currentVersionId: "ver-1",
         revoked: false,
         updatedAt: AT,
         variables: [],
-        providerVariables: [],
       },
       {
+        ...RETIRED_SECRET_ROW_FIELDS,
+        providerVariables: [...RETIRED_PROVIDER_VARIABLES],
         secretId: "sec-revoked",
         name: "REVOKED_KEY",
         kind: "api_key",
         protocol: null,
         destinations: [],
-        mode: "brokered",
-        state: "live",
         currentVersionId: null,
         revoked: true,
         updatedAt: AT,
         variables: [],
-        providerVariables: [],
       },
     ],
     removed: [
@@ -899,7 +906,7 @@ describe("a sandbox's unused settings", () => {
     at: AT,
     lastReportedAt: AT,
   };
-  const status = environmentStatusResponseSchemaV11.parse({
+  const status = environmentStatusResponseSchemaV12.parse({
     principal: { kind: "personal" },
     reachability: "connected",
     bindingGeneration: 1,
@@ -973,7 +980,7 @@ describe("a sandbox's unused settings", () => {
     }
 
     // The guest is fine; only a settings item failed to apply.
-    const environmentFailed = environmentStatusResponseSchemaV11.parse({
+    const environmentFailed = environmentStatusResponseSchemaV12.parse({
       ...status,
       items: [
         {

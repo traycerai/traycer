@@ -70,7 +70,9 @@ export interface UseHostQueriesOptions<
    * pass it, which vitest cannot see and the compile rejects. Inherited by
    * `UseHostQueriesWithCombineOptions`, so both overloads are covered here.
    */
-  readonly requiredHostMethodVersion?: () => RequiredHostMethodVersion | null;
+  readonly requiredHostMethodVersion?: (
+    request: HostRequestSpec<Registry, Method>,
+  ) => RequiredHostMethodVersion | null;
   /**
    * The method's declared response allowance, as on `useHostQuery`: every
    * request in the batch is dispatched with it. HostClient refuses a value
@@ -149,7 +151,9 @@ export interface UseHostQueriesWithResponseMapOptions<
    * Returning `null` dispatches with no floor, so an unselected request pays
    * nothing.
    */
-  readonly requiredHostMethodVersion?: () => RequiredHostMethodVersion | null;
+  readonly requiredHostMethodVersion?: (
+    request: HostRequestSpec<Registry, Method>,
+  ) => RequiredHostMethodVersion | null;
   /** See `UseHostQueriesOptions.responseTimeoutMs`. */
   readonly responseTimeoutMs?: number;
   /**
@@ -239,7 +243,7 @@ export function useHostQueriesWithResponseMap<
           );
         }
         args.preflight?.();
-        const requirement = args.requiredHostMethodVersion?.() ?? null;
+        const requirement = args.requiredHostMethodVersion?.(request) ?? null;
         const responseTimeoutMs = args.responseTimeoutMs;
         let response: ResponseOfMethod<Registry, Method>;
         if (responseTimeoutMs !== undefined) {

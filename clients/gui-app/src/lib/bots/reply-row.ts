@@ -1,7 +1,11 @@
 import type { BotThreadAnchor } from "@traycer/protocol/host/bot/conversation-schemas";
+import type { AutonomousResumeConversationMessage } from "@traycer/protocol/persistence/epic/content-blocks";
 import type { ConversationRequest } from "@traycer/protocol/persistence/epic/messages";
 import type { OpenMessage } from "@traycer/protocol/persistence/epic/open-harness-records";
-import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-json-content";
+import {
+  buildAttachmentsFromJSONContent,
+  extractPlainTextFromComposerJSONContent,
+} from "@/lib/composer/tiptap-json-content";
 import type { BotSentPost } from "@/stores/bots/bot-open-thread-store";
 import type { ChatMessage } from "@/stores/composer/chat-store";
 
@@ -103,7 +107,13 @@ export function threadOriginRow(input: {
   }
   if (sent !== null) {
     const row = memberOriginRow(
-      originRowBase(input.messageId, "user", sent.sentAt, sent.text),
+      {
+        ...originRowBase(input.messageId, "user", sent.sentAt, sent.text),
+        attachments:
+          sent.content === undefined
+            ? []
+            : buildAttachmentsFromJSONContent(sent.content),
+      },
       sent.senderUserId,
       {
         requestId: sent.requestId,
@@ -157,10 +167,36 @@ function loadedOriginRow(
   }
   const userId = post.sender.type === "user" ? post.sender.userId : null;
   return memberOriginRow(
-    originRowBase(post.messageId, "user", post.timestamp, text),
+    {
+      ...originRowBase(post.messageId, "user", post.timestamp, text),
+      attachments: buildAttachmentsFromJSONContent(post.message.content),
+    },
     userId,
     post.conversationRequest ?? null,
     names,
+  );
+}
+
+/**
+ * The member's message a bot conversation delivery carried into one of the
+ * bot's sessions (Tracy Bots T159), as the channel's row draws it: from the
+ * conversation's own row once it is read, else the writer and the time the
+ * delivery recorded, with no text.
+ */
+export function deliveredMessageRow(input: {
+  readonly delivered: AutonomousResumeConversationMessage;
+  readonly post: OpenMessage | null;
+  /** The writer's name, as the channel shows it; `null` for a sender that is no member. */
+  readonly senderLabel: (senderUserId: string | null) => string;
+  readonly senderAvatarUrl: (senderUserId: string) => string | null;
+}): ChatMessage {
+  const { delivered, post } = input;
+  if (post !== null) return loadedOriginRow(post, input);
+  return memberOriginRow(
+    originRowBase(delivered.messageId, "user", delivered.postedAt, ""),
+    delivered.senderUserId,
+    null,
+    input,
   );
 }
 

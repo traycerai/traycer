@@ -5,6 +5,7 @@ import {
   useEffect,
   type EffectCallback,
 } from "react";
+import { cn } from "@/lib/utils";
 
 export interface PaneSurfaceActivity {
   readonly visible: boolean;
@@ -129,6 +130,57 @@ export function usePaneFocused(): boolean {
   const focused = use(PaneSurfaceActivityContext).focused;
   const visible = usePaneVisible();
   return focused && visible;
+}
+
+/** What {@link usePanePortalHostPresentation} puts on the host element. */
+export interface PanePortalHostProps {
+  readonly "aria-hidden": boolean;
+  readonly inert: boolean;
+  readonly hidden: boolean;
+  readonly className: string;
+}
+
+/**
+ * What a KEPT-MOUNTED portal host takes from its pane's presentation: hidden
+ * with the pane, and while another pane holds focus concealed as well -
+ * `aria-hidden`, `inert`, invisible, no pointer events - so the portals inside
+ * it keep the text someone typed and still cannot be seen, read, tabbed into
+ * or clicked.
+ *
+ * Spread onto the host, whose node comes back in so the blur below can find
+ * focus inside it. TWO hosts take it: the pane's own
+ * (`SurfacePresentationBoundary`), and the expanded artifact's, which needs one
+ * of its own because its surface is promoted to the top layer where the pane's
+ * host cannot reach it. Hence a hook rather than a recipe written twice, which
+ * is how one of them comes to be missing a rule the other has.
+ */
+export function usePanePortalHostPresentation(
+  host: HTMLElement | null,
+  activity: PaneSurfaceActivity,
+): PanePortalHostProps {
+  const { visible, focused } = activity;
+  // An already-focused descendant of the host KEEPS DOM focus once the host is
+  // hidden and made inert - Chrome blurs on neither - so the keyboard would
+  // still reach a backgrounded pane. Blur it explicitly, without unmounting, so
+  // typed state survives. `runPresentationLossBlur` is what lets a
+  // blur-as-commit consumer (the artifact-link editor) tell this synthetic
+  // relinquish from the reader's own blur and NOT commit, close or refocus -
+  // otherwise backgrounding would destroy the draft it is holding.
+  useEffect(() => {
+    if (focused) return;
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && host?.contains(active)) {
+      runPresentationLossBlur(() => active.blur());
+    }
+  }, [focused, host]);
+  return {
+    "aria-hidden": !focused,
+    inert: !focused,
+    hidden: !visible,
+    // `cn`, so a focused host carries `class=""` exactly as it did before this
+    // was a hook rather than dropping the attribute.
+    className: cn(!focused && "invisible pointer-events-none"),
+  };
 }
 
 /**

@@ -65,15 +65,21 @@ function sessionClientLabel(session: UserSessionListItem): string {
   }
 }
 
+function presentText(value: string | null): string | null {
+  if (value === null) return null;
+  const trimmed = value.trim();
+  return trimmed.length === 0 ? null : trimmed;
+}
+
 function sessionDisplayLine(session: UserSessionListItem): string {
+  const version = presentText(session.appVersion);
   const parts = [
-    session.displayLabel,
-    session.platform,
-    session.appVersion === null ? null : `App ${session.appVersion}`,
-    // Coarse (city/region-level) and the strongest "is this me?" signal on the
-    // row - a session in the wrong place is what a user actually scans for.
-    session.location,
-  ].filter((part): part is string => part !== null && part.trim().length > 0);
+    presentText(session.displayLabel),
+    presentText(session.platform),
+    version === null ? null : `App ${version}`,
+    // Coarse place is the strongest "is this me?" signal on the row.
+    presentText(session.location),
+  ].filter((part): part is string => part !== null);
   return parts.length === 0 ? "Session details unavailable" : parts.join(" / ");
 }
 
@@ -110,8 +116,13 @@ function sessionStatusLine(session: UserSessionListItem): string {
   return `Last seen ${formatRelativeTime(session.lastSeenAt)}`;
 }
 
-function sessionTimelineLine(session: UserSessionListItem): string {
-  return `Created ${formatRelativeTime(session.createdAt)} · ${sessionStatusLine(session)}`;
+function sessionTimelineLine(
+  session: UserSessionListItem,
+  pending: boolean,
+): string {
+  const created = `Created ${formatRelativeTime(session.createdAt)}`;
+  const status = pending ? "Signing out" : sessionStatusLine(session);
+  return `${created} · ${status}`;
 }
 
 function sortSessions(
@@ -129,22 +140,22 @@ function sessionIcon(session: UserSessionListItem): ReactNode {
   const className = "size-4";
   switch (session.clientKind) {
     case "web":
-      return <Globe className={className} />;
+      return <Globe className={className} aria-hidden />;
     case "desktop":
-      return <Monitor className={className} />;
+      return <Monitor className={className} aria-hidden />;
     case "cli":
-      return <Terminal className={className} />;
+      return <Terminal className={className} aria-hidden />;
     case "extension":
-      return <Smartphone className={className} />;
+      return <Smartphone className={className} aria-hidden />;
     case "mobile":
       // Deliberately NOT `Smartphone`: the extension already owns that glyph,
       // and two client kinds sharing one icon in the same list is worse than
       // either choice on its own.
-      return <TabletSmartphone className={className} />;
+      return <TabletSmartphone className={className} aria-hidden />;
     case "host":
-      return <Server className={className} />;
+      return <Server className={className} aria-hidden />;
     default:
-      return <HelpCircle className={className} />;
+      return <HelpCircle className={className} aria-hidden />;
   }
 }
 
@@ -270,7 +281,7 @@ export function DevicesSessionsPanel() {
           <div className="flex flex-col gap-3 border-b border-border/60 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0 space-y-1">
               <h2 className="text-ui font-medium">Signed-in sessions</h2>
-              <p className="text-ui-xs text-muted-foreground">
+              <p className="wrap-anywhere text-ui-xs text-muted-foreground">
                 Browser, desktop, CLI, extension, and host access for this
                 account.
               </p>
@@ -405,11 +416,11 @@ function SessionRow(props: {
   return (
     <li
       className={cn(
-        "flex flex-col gap-4 px-5 py-4 sm:flex-row sm:items-center sm:justify-between",
+        "flex min-w-0 flex-col gap-4 px-5 py-4 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between",
         session.revoked && "bg-foreground/3 text-muted-foreground",
       )}
     >
-      <div className="flex min-w-0 gap-3">
+      <div className="flex min-w-0 flex-1 gap-3">
         <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-foreground/8 text-muted-foreground">
           {sessionIcon(session)}
         </div>
@@ -421,12 +432,12 @@ function SessionRow(props: {
             <Badge variant="outline">{sessionClientLabel(session)}</Badge>
             {session.revoked ? <Badge variant="muted">Signed out</Badge> : null}
           </div>
-          <p className="text-ui-sm text-muted-foreground wrap-anywhere">
+          <p className="wrap-anywhere text-ui-sm text-muted-foreground">
             {sessionDisplayLine(session)}
           </p>
-          <p className="flex items-center gap-1.5 text-ui-xs text-muted-foreground">
-            <Clock className="size-3.5" />
-            {pending ? "Signing out" : sessionTimelineLine(session)}
+          <p className="min-w-0 wrap-anywhere text-ui-xs text-muted-foreground">
+            <Clock className="mr-1.5 inline size-3.5 align-text-bottom" />
+            {sessionTimelineLine(session, pending)}
           </p>
         </div>
       </div>
@@ -434,6 +445,7 @@ function SessionRow(props: {
         type="button"
         variant="outline"
         size="sm"
+        className="max-w-full"
         disabled={disabled}
         onClick={() => void props.onRevokeSession(session, mutation)}
       >

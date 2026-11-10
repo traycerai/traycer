@@ -13,6 +13,7 @@ import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mo
 import type { EnvironmentSecretV12 } from "@traycer/protocol/host/environment-schemas";
 import type { EnvironmentMcpServerDeclaration } from "@traycer/protocol/host/environment/configuration-contracts";
 import { EnvironmentMcpServersPage } from "@/components/settings/environment/environment-mcp-servers";
+import { expectFocusRingInset } from "@/components/ui/__tests__/dialog-scroll-layout-assertions";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
   declaredServer,
@@ -28,6 +29,10 @@ import {
   resetTeamPageHarness,
   windowHostScopeMock,
 } from "./team-configuration-test-support";
+import {
+  RETIRED_PROVIDER_VARIABLES,
+  RETIRED_SECRET_ROW_FIELDS,
+} from "@traycer/protocol/host/released-wire-rows";
 
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
@@ -85,18 +90,17 @@ function secret(
   overrides: Partial<EnvironmentSecretV12>,
 ): EnvironmentSecretV12 {
   return {
+    ...RETIRED_SECRET_ROW_FIELDS,
+    providerVariables: [...RETIRED_PROVIDER_VARIABLES],
     secretId,
     name: secretId,
     kind: "api_key",
     protocol: null,
     destinations: ["api.acme.test:443"],
-    mode: "brokered",
-    state: "live",
     currentVersionId: "v1",
     revoked: false,
     updatedAt: 1,
     variables: [],
-    providerVariables: [],
     ...overrides,
   };
 }
@@ -129,6 +133,14 @@ function handlers(options: {
 
 const SAVED = { outcome: "saved" as const, reason: null };
 
+async function openServerCard(name: string): Promise<void> {
+  const row = (await screen.findAllByRole("listitem")).find(
+    (item) => within(item).queryByText(name) !== null,
+  );
+  if (row === undefined) throw new Error(`No row for ${name}.`);
+  await userEvent.click(within(row).getByRole("button", { expanded: false }));
+}
+
 async function openAdd(): Promise<HTMLElement> {
   await userEvent.click(
     await screen.findByRole("button", { name: "Add a server" }),
@@ -151,12 +163,13 @@ describe("The MCP server dialog", () => {
       configuration: "Personal",
       source: personalPoolSource(),
       reach:
-        "It reaches every provider on every computer and sandbox running Personal.",
+        "It reaches every provider on every host running this environment.",
     },
     {
       configuration: "Acme",
       source: poolSource("editor"),
-      reach: "It reaches every provider on every host running Acme.",
+      reach:
+        "It reaches every provider on every host running this environment.",
     },
   ])(
     "adds to $configuration with no scope picker",
@@ -169,6 +182,9 @@ describe("The MCP server dialog", () => {
       render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
 
       const dialog = await openAdd();
+      const scroller = dialog.querySelector("div.overflow-y-auto");
+      if (scroller === null) throw new Error("expected the MCP form scroller");
+      expectFocusRingInset(scroller, ["-m-1", "p-1"]);
 
       expect(
         within(dialog).getByText(`Add an MCP server to ${configuration}`),
@@ -222,7 +238,7 @@ describe("The MCP server dialog", () => {
     });
   });
 
-  it("offers only the live, brokered, unrevoked secrets sent to the address, plus Add a secret, and binds the one picked", async () => {
+  it("offers only the unrevoked secrets sent to the address, plus Add a secret, and binds the one picked", async () => {
     negotiate(PUT_1_1);
     const harness = mountTeamPage(
       poolSource("editor"),
@@ -231,8 +247,6 @@ describe("The MCP server dialog", () => {
         secrets: [
           secret("acme-key", {}),
           secret("revoked-key", { revoked: true }),
-          secret("pending-key", { state: "pending_review" }),
-          secret("exposed-key", { mode: "exposed" }),
           secret("elsewhere-key", { destinations: ["other.test:443"] }),
         ],
         answer: SAVED,
@@ -254,7 +268,7 @@ describe("The MCP server dialog", () => {
     ).toBeTruthy();
     expect(
       within(dialog).getByText(
-        "Stored encrypted in Traycer's cloud. Acme's sandboxes and connected services use it without seeing it; no computer receives the value.",
+        "Stored encrypted in Traycer's cloud. This environment's sandboxes and connected services use it without seeing it; no computer receives the value.",
       ),
     ).toBeTruthy();
     await userEvent.click(
@@ -405,7 +419,7 @@ describe("The MCP server dialog", () => {
     },
   );
 
-  it("keeps the command and arguments a name-only edit did not touch", async () => {
+  it("keeps the arguments a command edit did not touch", async () => {
     negotiate(PUT_1_1);
     const harness = mountTeamPage(
       poolSource("editor"),
@@ -426,10 +440,11 @@ describe("The MCP server dialog", () => {
     );
     render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
 
-    await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
-    const dialog = await screen.findByRole("dialog");
-    await userEvent.type(within(dialog).getByLabelText("Name"), "2");
-    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    await openServerCard("local");
+    const command = screen.getByLabelText("Command for local");
+    expect(command).toHaveProperty("value", " /usr/bin/server ");
+    await userEvent.type(command, "x");
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
 
     await waitFor(() => {
       expect(
@@ -439,13 +454,14 @@ describe("The MCP server dialog", () => {
     expect(
       harness.paramsOf("environment.configuration.mcpServers.put")[0],
     ).toMatchObject({
-      name: "local2",
-      command: " /usr/bin/server ",
+      serverId: "srv-2",
+      name: "local",
+      command: "/usr/bin/server x",
       args: ["--label", " padded ", ""],
     });
   });
 
-  it("saves a disabled server's name-only edit with its id and no toggles or providers, and never switches it on", async () => {
+  it("saves a disabled server's endpoint edit with its id and no toggles or providers, and never switches it on", async () => {
     negotiate(PUT_1_1);
     const harness = mountTeamPage(
       poolSource("editor"),
@@ -459,10 +475,11 @@ describe("The MCP server dialog", () => {
     );
     render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
 
-    await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
-    const dialog = await screen.findByRole("dialog");
-    await userEvent.type(within(dialog).getByLabelText("Name"), "2");
-    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    await openServerCard("github");
+    const endpoint = screen.getByLabelText("Endpoint URL for github");
+    expect(endpoint).toHaveProperty("value", "https://github.invalid/mcp");
+    await userEvent.type(endpoint, "x");
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
 
     await waitFor(() => {
       expect(
@@ -473,7 +490,8 @@ describe("The MCP server dialog", () => {
       harness.paramsOf("environment.configuration.mcpServers.put")[0],
     ).toMatchObject({
       serverId: "srv-1",
-      name: "github2",
+      name: "github",
+      url: "https://github.invalid/mcpx",
       toolToggles: {},
       offFor: [],
     });
@@ -482,7 +500,7 @@ describe("The MCP server dialog", () => {
     ).toHaveLength(0);
   });
 
-  it("saves an edit that leaves the sign-in unchanged, keeping the item's toggles and providers", async () => {
+  it("saves an endpoint edit that leaves the sign-in unchanged, keeping the item's toggles and providers", async () => {
     negotiate(PUT_1_1);
     const harness = mountTeamPage(
       poolSource("editor"),
@@ -512,10 +530,15 @@ describe("The MCP server dialog", () => {
     );
     render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
 
-    await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
-    const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText("Edit github")).toBeTruthy();
-    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    await openServerCard("github");
+    const endpoint = screen.getByLabelText("Endpoint URL for github");
+    expect(endpoint).toHaveProperty("value", "https://github.invalid/mcp");
+    expect(screen.getByRole("button", { name: "Save changes" })).toHaveProperty(
+      "disabled",
+      true,
+    );
+    await userEvent.type(endpoint, "x");
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
 
     await waitFor(() => {
       expect(
@@ -526,7 +549,7 @@ describe("The MCP server dialog", () => {
           serverId: "srv-1",
           name: "github",
           transport: "http",
-          url: "https://github.invalid/mcp",
+          url: "https://github.invalid/mcpx",
           command: null,
           args: [],
           env: ["GITHUB_TOKEN"],

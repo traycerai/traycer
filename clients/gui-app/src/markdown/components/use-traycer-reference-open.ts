@@ -1,5 +1,6 @@
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback, type MouseEvent } from "react";
+import { useTracyTranscriptOrigin } from "@/components/bots/tracy-transcript-origin-context";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { modifiersFromMouseEvent } from "@/lib/canvas/tile-open/intent";
@@ -8,6 +9,7 @@ import {
   navigateToTabIntent,
   openOrFocusEpicIntent,
 } from "@/lib/tab-navigation";
+import { fromTracyTranscript } from "@/lib/tab-navigation/intents";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
@@ -98,6 +100,7 @@ export function useTraycerReferenceOpenHandler(input: {
   const activeHostId = useCanvasHostId();
   const navigate = useNavigate();
   const { openTile } = useEpicTileNavigation();
+  const tracyOrigin = useTracyTranscriptOrigin();
 
   const target = resolveOpenTarget({
     epicId: input.epicId,
@@ -118,15 +121,18 @@ export function useTraycerReferenceOpenHandler(input: {
           // A single click on the reference: the resolver turns that into the
           // epic's current tab, with the preview/permanent call left to the
           // placement settings.
-          openTile({
-            node: target.ref,
-            target: { epicId: target.epicId },
-            gesture: "single",
-            modifiers: modifiersFromMouseEvent(event),
-            placement: null,
-            dedupe: true,
-            source: "direct_ui",
-          });
+          openTile(
+            {
+              node: target.ref,
+              target: { epicId: target.epicId },
+              gesture: "single",
+              modifiers: modifiersFromMouseEvent(event),
+              placement: null,
+              dedupe: true,
+              source: "direct_ui",
+            },
+            "user",
+          );
           return;
         }
         case "navigate":
@@ -135,21 +141,24 @@ export function useTraycerReferenceOpenHandler(input: {
           // re-click.
           navigateToTabIntent(
             navigate,
-            openOrFocusEpicIntent({
-              epicId: target.epicId,
-              focus: {
-                focusedAt: Date.now(),
-                focusArtifactId: target.focusArtifactId,
-                focusThreadId: undefined,
-                migrationSource: undefined,
-              },
-            }),
+            fromTracyTranscript(
+              openOrFocusEpicIntent({
+                epicId: target.epicId,
+                focus: {
+                  focusedAt: Date.now(),
+                  focusArtifactId: target.focusArtifactId,
+                  focusThreadId: undefined,
+                  migrationSource: undefined,
+                },
+              }),
+              tracyOrigin,
+            ),
             undefined,
           );
           return;
       }
     },
-    [target, navigate, openTile],
+    [target, navigate, openTile, tracyOrigin],
   );
 
   // Only a resolved `same-epic-node` surfaces a ref; `navigate` and `none`

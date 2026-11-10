@@ -17,6 +17,8 @@ import {
   OPEN_TERMINAL_INSTEAD,
   SHOW_LESS,
   WHAT_THIS_MEANS,
+  WINDOWS_SANDBOX_LIMITATION,
+  SANDBOX_SETUP_CHARGES,
 } from "@/lib/sandboxes/sandbox-strings";
 import {
   consequencesShown,
@@ -91,6 +93,7 @@ function ConsequencesBlockBody(props: {
   }, [expanded, markSeen, props.subject, props.viewerUserId]);
 
   const clauses = consequenceClauses(props.input);
+  // The standing cost keeps its funding context when the block is open.
   const price = priceClause(props.input);
   const rest = clauses.filter((clause) => clause.kind !== "price");
   return (
@@ -142,6 +145,12 @@ function ConsequencesBlockBody(props: {
           </Button>
         )}
       </p>
+      <p className="m-0" data-testid="consequences-setup-charges">
+        {SANDBOX_SETUP_CHARGES}
+      </p>
+      {props.input.os === "windows" ? (
+        <p className="m-0">{WINDOWS_SANDBOX_LIMITATION}</p>
+      ) : null}
       {expanded
         ? rest.map((clause) => (
             <p

@@ -63,20 +63,31 @@ describe("FallbackLadderEditor", () => {
     expect(labels[1]).toContain(FALLBACK_RUNG_COPY.notify.label);
   });
 
-  it("states that switching starts a new agent session, unconditionally, above the step list", () => {
-    // This paragraph answers the page's central question - what happens to my
-    // chat - and nothing on the page said it before:
-    // the switch-back row's "starts a fresh session too" had no antecedent,
-    // since nothing had ever said the OUTBOUND switch started one either.
-    // Falsification: delete the `<p>` above the DndContext in
-    // `fallback-ladder-editor.tsx`. This is the only place that sentence is
-    // said, so nothing else would catch its silent removal.
+  it("shows each step's description beside its controls and the shared session cost once", () => {
     renderLadder(vi.fn(), vi.fn(), ALL_ENABLED);
+    const rows = screen.getAllByRole("listitem");
+    const descriptions = [
+      "Switches to a different account you're signed in to. Starts a fresh session from this transcript.",
+      "Traycer notifies you and stops trying. Later steps won't run.",
+      "Tries a backup model from the Equivalent models tab. Starts a fresh session from this transcript.",
+      "If the provider gives a reset time within your longest wait, Traycer waits until then and retries the message.",
+    ];
+    for (const [index, description] of descriptions.entries()) {
+      expect(
+        within(rows[index]).getByText(description).closest("details"),
+      ).toBeNull();
+    }
     expect(
-      screen.getByText(
+      screen.getAllByText(
         "Switching accounts or models starts a new agent session using this chat's history, and retries the blocked message there. Messages waiting to run use the new account or model too.",
       ),
-    ).toBeDefined();
+    ).toHaveLength(1);
+    expect(screen.queryByText("Help")).toBeNull();
+    const instructions = screen.getByText(/Reorder with Move up and Move down/);
+    expect(instructions.closest("details")).toBeNull();
+    expect(instructions.textContent).toContain(
+      "Turning a step off leaves it in place. When you reopen this page, steps still off appear just above “Notify me”.",
+    );
   });
 
   it("AX7: the drag handle is hidden from assistive technology and out of the tab order, for EVERY row - not just `notify`", () => {

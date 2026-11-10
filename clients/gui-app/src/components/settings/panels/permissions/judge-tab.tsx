@@ -60,6 +60,7 @@ import {
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { PERMISSIONS } from "@/components/settings/panels/permissions-settings.definitions";
 import {
+  judgeProfileUnavailable,
   judgeWarningCause,
   offeredJudgeProfileIds,
 } from "@/components/settings/panels/auto-judge-selection";
@@ -230,20 +231,34 @@ function presentedPick(
  * whether a last pick can run. Read while the provider is available only:
  * a provider that cannot run is reported before its model is, and a read
  * would start its server for nothing.
+ *
+ * The pick's own account's catalog: a managed profile can offer a model the
+ * ambient account does not, and the ambient list would report that pick as
+ * no longer offered. A pick whose profile the provider no longer offers reads
+ * the ambient list - the removed-account notice is what reports it.
  */
 function useShownPickModels(
   shown: AutoJudgeSelection | null,
   harnesses: ReadonlyArray<GuiHarnessOption> | undefined,
+  providers: ReadonlyArray<ProviderCliState> | undefined,
 ): ReadonlyArray<GuiAgentModelOption> | undefined {
   const row =
     shown === null
       ? undefined
       : harnesses?.find((candidate) => candidate.id === shown.harnessId);
   const available = row?.available === true;
+  const profileId =
+    shown === null ||
+    judgeProfileUnavailable(
+      shown.profileId,
+      offeredJudgeProfileIds(providers, shown.harnessId),
+    )
+      ? null
+      : shown.profileId;
   const models = useGuiHarnessModelsQuery(
     row?.id ?? IDLE_MODELS_HARNESS_ID,
     null,
-    { enabled: available, subscribed: available },
+    { profileId, enabled: available, subscribed: available },
   ).data?.models;
   return row === undefined ? undefined : models;
 }
@@ -314,6 +329,7 @@ function AutoJudgeCard(props: { readonly hostId: string | null }): ReactNode {
   const shownModels = useShownPickModels(
     shownJudgePick(record, pick.draft),
     harnesses,
+    providers,
   );
   const state = judgeTileState({
     record,

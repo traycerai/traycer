@@ -103,15 +103,28 @@ describe("<HostOverviewSettingsCardSlot />", () => {
     configure();
     mount(true, "host-a");
     expect(screen.queryByRole("status", { name: "Reading" })).toBeNull();
-    expect(screen.queryByRole("combobox", { name: "Settings" })).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "Environment" })).toBeNull();
+    expect(screen.queryByText("Personal")).toBeNull();
+    expect(screen.queryByText("Runs the team's settings.")).toBeNull();
   });
 
   it("hides the row when the host is unusable or unnamed", () => {
     mount(false, "host-a");
     expect(screen.queryByRole("status", { name: "Reading" })).toBeNull();
+    expect(screen.queryByText("Personal")).toBeNull();
     cleanup();
     mount(true, null);
     expect(screen.queryByRole("status", { name: "Reading" })).toBeNull();
+    expect(screen.queryByText("Runs the team's settings.")).toBeNull();
+  });
+
+  it("renders nothing for an unusable host instead of guessing Personal or a team", () => {
+    mount(false, "host-a");
+
+    expect(screen.queryByRole("combobox", { name: "Environment" })).toBeNull();
+    expect(screen.queryByText("Personal")).toBeNull();
+    expect(screen.queryByText("Runs Personal")).toBeNull();
+    expect(screen.queryByText("Runs the team's settings.")).toBeNull();
   });
 
   it("keeps a skeleton while either supported read is pending", () => {

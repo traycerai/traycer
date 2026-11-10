@@ -1,12 +1,12 @@
 import { useState, type ReactNode } from "react";
+import { TeamViewingHostSwitch } from "./team-viewing-host-picker";
 import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-host";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { TeamContentNeedsHost } from "./team-content-needs-host";
 import { useConfigurationSource } from "./configuration-source";
 import { usePickedTeamLabel } from "./team-pick-label";
-import { TeamViewingHostPicker } from "./team-viewing-host-picker";
-import { TeamReadFailed } from "./team-read-failed";
 
+import { TeamReadFailed } from "./team-read-failed";
 export function TeamVariableLiveFacts(): ReactNode {
   const source = useConfigurationSource();
   const scope = useTeamViewingHost();
@@ -29,11 +29,19 @@ export function TeamVariableLiveFacts(): ReactNode {
     options: { enabled: scope.client !== null },
   });
   return (
-    <section className="flex flex-col gap-3 rounded-lg border border-border/60 p-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
+    <section
+      className="flex min-w-0 flex-col gap-3 rounded-lg border border-border/60 p-3"
+      aria-label="Live values"
+    >
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
         <h2 className="text-ui-sm font-medium">Live values</h2>
-        <TeamViewingHostPicker open={picking} onOpenChange={setPicking} />
+        <TeamViewingHostSwitch open={picking} onOpenChange={setPicking} />
       </div>
+      {scope.client === null ? null : (
+        <p className="wrap-anywhere text-ui-xs text-muted-foreground">
+          Applied on {scope.viewingHost?.hostLabel ?? "this host"}
+        </p>
+      )}
       {scope.client === null ? (
         <TeamContentNeedsHost
           content="live-values"
@@ -42,6 +50,19 @@ export function TeamVariableLiveFacts(): ReactNode {
         />
       ) : (
         <>
+          <div className="flex min-w-0 flex-col gap-2 text-ui-xs text-muted-foreground">
+            {shell.data === undefined ? null : (
+              <p className="wrap-anywhere">
+                Shell:{" "}
+                <code>{[shell.data.path, ...shell.data.args].join(" ")}</code>
+              </p>
+            )}
+            {variables.data?.entries.map((entry) => (
+              <p key={entry.key} className="wrap-anywhere">
+                <code>{entry.key}</code>: {entry.value ?? "Unset"}
+              </p>
+            ))}
+          </div>
           {shell.isError || variables.isError ? (
             <TeamReadFailed
               message="Couldn't read this host's values."
@@ -51,17 +72,6 @@ export function TeamVariableLiveFacts(): ReactNode {
               }}
             />
           ) : null}
-          {shell.data === undefined ? null : (
-            <p className="text-ui-sm">
-              {scope.viewingHost?.hostLabel ?? "This host"} uses:{" "}
-              <code>{[shell.data.path, ...shell.data.args].join(" ")}</code>
-            </p>
-          )}
-          {variables.data?.entries.map((entry) => (
-            <p key={entry.key} className="text-ui-xs">
-              <code>{entry.key}</code>: {entry.value ?? "Unset"}
-            </p>
-          ))}
         </>
       )}
     </section>

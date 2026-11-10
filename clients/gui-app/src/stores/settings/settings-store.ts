@@ -68,6 +68,14 @@ import {
   type MixDirectorId,
 } from "@/lib/soundtrack/directors";
 import { MIX_TUNING } from "@/lib/soundtrack/mix-tuning";
+import {
+  DEFAULT_RECORDING_LIMIT,
+  DEFAULT_RECORDING_QUALITY,
+  isRecordingLimitId,
+  isRecordingQuality,
+  type RecordingLimitId,
+  type RecordingQuality,
+} from "@/lib/soundtrack/recording";
 import type { DefaultOpenTarget } from "@/lib/editor/editor-menu-catalog";
 import type { TilePlacementCategory } from "@/lib/canvas/tile-open/intent";
 export type ThemeMode = "system" | "light" | "dark";
@@ -368,6 +376,19 @@ export interface SettingsState {
   soundtrackDirector: MixDirectorId;
   /** A gain from 0 to 1. */
   soundtrackVolume: number;
+  /** How long a music recording runs; the recording itself is never kept. */
+  soundtrackRecordingLimit: RecordingLimitId;
+  soundtrackRecordingQuality: RecordingQuality;
+  /** Whether a task's status row carries previous, pause and next. */
+  soundtrackPlaybackControls: boolean;
+  /**
+   * Whether the person has paused the music, across windows and restarts: a
+   * launch with it set opens nothing at the first gesture, and Play does. It
+   * can only be set where those controls can clear it, so turning Music on or
+   * the controls off clears it too, and storage restores it only with them on.
+   * The position in a track is not kept.
+   */
+  soundtrackPaused: boolean;
   setTheme: (theme: ThemeMode) => void;
   setThemePreset: (preset: ThemePreset) => void;
   /**
@@ -425,6 +446,10 @@ export interface SettingsState {
   setSoundtrackEnabled: (value: boolean) => void;
   setSoundtrackDirector: (value: MixDirectorId) => void;
   setSoundtrackVolume: (value: number) => void;
+  setSoundtrackRecordingLimit: (value: RecordingLimitId) => void;
+  setSoundtrackRecordingQuality: (value: RecordingQuality) => void;
+  setSoundtrackPlaybackControls: (value: boolean) => void;
+  setSoundtrackPaused: (value: boolean) => void;
 }
 
 type PersistedSettingsState = Pick<
@@ -472,6 +497,10 @@ type PersistedSettingsState = Pick<
   | "soundtrackEnabled"
   | "soundtrackDirector"
   | "soundtrackVolume"
+  | "soundtrackRecordingLimit"
+  | "soundtrackRecordingQuality"
+  | "soundtrackPlaybackControls"
+  | "soundtrackPaused"
 >;
 
 type SetFn = (
@@ -557,6 +586,10 @@ function partializeSettingsState(state: SettingsState): PersistedSettingsState {
     soundtrackEnabled: state.soundtrackEnabled,
     soundtrackDirector: state.soundtrackDirector,
     soundtrackVolume: state.soundtrackVolume,
+    soundtrackRecordingLimit: state.soundtrackRecordingLimit,
+    soundtrackRecordingQuality: state.soundtrackRecordingQuality,
+    soundtrackPlaybackControls: state.soundtrackPlaybackControls,
+    soundtrackPaused: state.soundtrackPaused,
   };
 }
 
@@ -593,7 +626,7 @@ export const useSettingsStore = create<SettingsState>()(
       artifactIconColorMode: "byType",
       artifactIconColors: DEFAULT_EPIC_NODE_ICON_COLORS,
       defaultEditor: "vscode",
-      voiceInputEnabled: true,
+      voiceInputEnabled: false,
       voiceLanguage: "auto",
       worktreeBranchPrefix: DEFAULT_WORKTREE_BRANCH_PREFIX,
       quoteReplyEnabled: true,
@@ -610,6 +643,10 @@ export const useSettingsStore = create<SettingsState>()(
       soundtrackEnabled: false,
       soundtrackDirector: DEFAULT_MIX_DIRECTOR,
       soundtrackVolume: MIX_TUNING.volume.initial,
+      soundtrackRecordingLimit: DEFAULT_RECORDING_LIMIT,
+      soundtrackRecordingQuality: DEFAULT_RECORDING_QUALITY,
+      soundtrackPlaybackControls: false,
+      soundtrackPaused: false,
       setTheme: makeSetter(set, "theme"),
       setThemePreset: (themePreset) => {
         if (useThemeLibraryStore.getState().clearSelection())
@@ -744,14 +781,31 @@ export const useSettingsStore = create<SettingsState>()(
               },
         );
       },
-      setSoundtrackEnabled: makeSetter(set, "soundtrackEnabled"),
+      setSoundtrackEnabled: (value) => {
+        set((s) => ({
+          soundtrackEnabled: value,
+          soundtrackPaused: !value && s.soundtrackPaused,
+        }));
+      },
       setSoundtrackDirector: makeSetter(set, "soundtrackDirector"),
+      setSoundtrackPlaybackControls: (value) => {
+        set((s) => ({
+          soundtrackPlaybackControls: value,
+          soundtrackPaused: value && s.soundtrackPaused,
+        }));
+      },
+      setSoundtrackPaused: makeSetter(set, "soundtrackPaused"),
       setSoundtrackVolume: (value) => {
         const next = clampSoundtrackVolume(value);
         set((s) =>
           s.soundtrackVolume === next ? s : { soundtrackVolume: next },
         );
       },
+      setSoundtrackRecordingLimit: makeSetter(set, "soundtrackRecordingLimit"),
+      setSoundtrackRecordingQuality: makeSetter(
+        set,
+        "soundtrackRecordingQuality",
+      ),
     }),
     {
       ...basePersistOptions(persistKey(STORE_KEYS.settings)),
@@ -847,6 +901,21 @@ export const useSettingsStore = create<SettingsState>()(
             Number.isFinite(persisted.soundtrackVolume)
               ? clampSoundtrackVolume(persisted.soundtrackVolume)
               : MIX_TUNING.volume.initial,
+          soundtrackRecordingLimit: isRecordingLimitId(
+            persisted.soundtrackRecordingLimit,
+          )
+            ? persisted.soundtrackRecordingLimit
+            : DEFAULT_RECORDING_LIMIT,
+          soundtrackRecordingQuality: isRecordingQuality(
+            persisted.soundtrackRecordingQuality,
+          )
+            ? persisted.soundtrackRecordingQuality
+            : DEFAULT_RECORDING_QUALITY,
+          soundtrackPlaybackControls:
+            persisted.soundtrackPlaybackControls === true,
+          soundtrackPaused:
+            persisted.soundtrackPlaybackControls === true &&
+            persisted.soundtrackPaused === true,
         };
       },
     },

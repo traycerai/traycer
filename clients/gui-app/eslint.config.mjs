@@ -3204,6 +3204,20 @@ export default tseslint.config(
     },
   },
   {
+    // Button touch targets need a CSS-pixel floor independent of the user's
+    // root font size; rem-based min-h-11/min-w-11 fall below 44px at the
+    // default 15px font and at smaller supported font sizes.
+    files: ["src/components/ui/button.tsx"],
+    rules: {
+      "shadcn/no-arbitrary-values": [
+        "error",
+        {
+          allow: [...sanctionedArbitraryValues, "min-h-[44px]", "min-w-[44px]"],
+        },
+      ],
+    },
+  },
+  {
     // The office directory's status glyph is a mark INSIDE a 12px pip - the
     // second channel beside its colour, not a piece of text. The ramp starts
     // at `text-micro` (10px), which does not fit a 12px box with the bold

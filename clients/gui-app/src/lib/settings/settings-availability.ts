@@ -62,6 +62,13 @@ export interface SettingsAvailabilityContext {
    * has anything to play, which is a fact of the build and not a preference.
    */
   readonly soundtrackOffered: boolean;
+  /**
+   * `desktopRecordingChannel() !== null`, read by the caller at call time:
+   * whether this shell can save a recording of the music.
+   */
+  readonly soundtrackRecordingOffered: boolean;
+  /** `soundtrackEnabled`, subscribed: a row that needs Music on follows it. */
+  readonly soundtrackOn: boolean;
 }
 
 /** Rendered in every shell. */
@@ -111,6 +118,29 @@ export function isSoundtrackRowAvailable(
   context: SettingsAvailabilityContext,
 ): boolean {
   return !context.mobileApp && context.soundtrackOffered;
+}
+
+/**
+ * Sounds › Soundtrack › Record session — only a dev or staging desktop build
+ * can save one, and says so through its bridge.
+ */
+export function isSoundtrackRecordingRowAvailable(
+  context: SettingsAvailabilityContext,
+): boolean {
+  return (
+    isSoundtrackRowAvailable(context) && context.soundtrackRecordingOffered
+  );
+}
+
+/**
+ * Sounds › Soundtrack › Playback controls, and the buttons it turns on: they
+ * move music, so with Music off there is nothing for them to do. Their setting
+ * stays as it was.
+ */
+export function isPlaybackControlsRowAvailable(
+  context: SettingsAvailabilityContext,
+): boolean {
+  return isSoundtrackRowAvailable(context) && context.soundtrackOn;
 }
 
 /**

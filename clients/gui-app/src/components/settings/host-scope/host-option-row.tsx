@@ -1,6 +1,7 @@
 import type { ReactNode, Ref } from "react";
 import { HOST_FROZEN_WORD } from "@traycer/protocol/host/host-status";
 import { Badge } from "@/components/ui/badge";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { HostGlyph } from "@/components/settings/host-scope/host-glyph";
 import {
   hostOptionKindLabel,
@@ -14,21 +15,8 @@ import type { FleetUpdateView } from "@/lib/host/fleet-update/fleet-update-view"
 import { cn } from "@/lib/utils";
 
 /**
- * ONE host row: kind glyph · name · [ACTIVE] · update badge · exception status.
- *
- * This is the whole shared vocabulary, and it is deliberately content only —
- * no button, no `CommandItem`, no list semantics. The containers differ in ways
- * that are theirs to own (a cmdk item in a combobox, a radio in a dialog, a row
- * in a section of another popover), and forcing one interaction shell on all of
- * them is what would make the shared picker sit badly in each. What must not
- * differ is this: three pickers each inventing their own icon set and their own
- * word for "offline" is exactly what this replaced.
- *
- * Single-line by design, with two exceptions: a second line saying why this
- * machine's host is left alone (`terminalRunNote`), and a name that wraps
- * where the surface asks (`nameWraps`). Healthy hosts stay quiet;
- * only exception states get a status word. The interaction container owns the trailing selection check so
- * the row does not reserve two competing selection columns.
+ * Shared content for every host picker: a single-line name beside its state
+ * and marks. The full name remains available when space cuts it off. The interaction shell owns selection and the trailing check.
  */
 export function HostOptionRow(props: {
   readonly host: HostScopeOption;
@@ -67,11 +55,6 @@ export function HostOptionRow(props: {
    */
   readonly nameRef: Ref<HTMLSpanElement>;
   /**
-   * The name wraps onto further lines instead of being cut: the composer and
-   * in-task pickers, where a row's title is read in full before a pick.
-   */
-  readonly nameWraps: boolean;
-  /**
    * The environment this host runs (Tracy Bots), or `null` for a picker that
    * does not say - which is every picker but Settings' host list, the one
    * place the person changes it.
@@ -86,7 +69,6 @@ export function HostOptionRow(props: {
     surfaceState,
     updateView,
     nameRef,
-    nameWraps,
     environmentLabel,
   } = props;
   // Includes "setting up" (M5): host-scope narration for a local host being
@@ -115,69 +97,116 @@ export function HostOptionRow(props: {
   // fact by definition, so the tag would restate the check it sits next to.
   const showActiveTag = intent === "view" && active;
   return (
-    <>
+    <span className="flex min-w-0 flex-1 items-center gap-2">
       <HostGlyph
         host={host}
         className="size-4 shrink-0 text-muted-foreground"
       />
       <span className="sr-only">{hostOptionKindLabel(host)}</span>
-      {host.terminalRunNote === null ? (
-        <span
-          ref={nameRef}
-          className={cn(
-            "min-w-0 flex-1 text-start",
-            nameWraps ? "wrap-break-word" : "truncate",
-          )}
+      <span className="flex min-w-0 flex-1 items-center gap-2 text-start">
+        <TooltipWrapper
+          label={nameRef === null ? host.name : null}
+          side="top"
+          sideOffset={6}
+          align={undefined}
         >
-          {host.name}
-        </span>
-      ) : (
-        // The one second line a row carries: why this machine's host is left
-        // alone, where "setting up" read while the app tried to start one.
-        <span className="flex min-w-0 flex-1 flex-col text-start">
-          <span
-            ref={nameRef}
-            className={nameWraps ? "wrap-break-word" : "truncate"}
-          >
+          {/*
+            `flex-1` bases the name at zero, and `min-w-[8ch]` is the floor
+            (about eight characters at the row's font). The name gives space
+            back down to that floor before the marks group shrinks.
+          */}
+          <span ref={nameRef} className="min-w-[8ch] flex-1 truncate">
             {host.name}
           </span>
-          <span
-            className="text-pretty text-ui-xs text-muted-foreground"
-            data-testid={`host-option-terminal-run-${host.hostId}`}
-          >
-            {host.terminalRunNote}
-          </span>
-        </span>
-      )}
-      {picked && intent === "view" ? (
-        <span className="sr-only">Currently viewing</span>
-      ) : null}
-      {showActiveTag ? <ActiveTag /> : null}
-      {environmentLabel === null ? null : (
-        <span
-          className="min-w-0 max-w-[14ch] truncate text-ui-xs text-muted-foreground"
-          data-testid={`host-option-environment-${host.hostId}`}
-        >
-          {environmentLabel}
-        </span>
-      )}
-      {updateBadge === null ? null : (
-        <span
-          className="shrink-0 text-ui-xs text-muted-foreground"
-          data-testid={`host-option-update-badge-${host.hostId}`}
-        >
-          {updateBadge}
-        </span>
+        </TooltipWrapper>
+        {picked && intent === "view" ? (
+          <span className="sr-only">Currently viewing</span>
+        ) : null}
+        <HostOptionMarks
+          host={host}
+          statusWord={statusWord}
+          updateBadge={updateBadge}
+          environmentLabel={environmentLabel}
+          showActiveTag={showActiveTag}
+        />
+      </span>
+    </span>
+  );
+}
+
+/**
+ * A capped mark. `max-w-32` is the ceiling, `min-w-0` lets it go below that
+ * ceiling when the marks group shrinks, and the tooltip carries the full text.
+ */
+function CappedHostMark(props: {
+  readonly text: string;
+  readonly testId: string;
+}): ReactNode {
+  return (
+    <TooltipWrapper
+      label={props.text}
+      side="top"
+      sideOffset={6}
+      align={undefined}
+    >
+      <span className="min-w-0 max-w-32 truncate" data-testid={props.testId}>
+        {props.text}
+      </span>
+    </TooltipWrapper>
+  );
+}
+
+/**
+ * Marks stay on one line beside the name. The status word, frozen badge and
+ * active tag stay whole. The terminal note, environment label and update
+ * badge are capped, and each tooltip carries that mark's full text. The group
+ * shrinks below those caps only after the name has reached its floor.
+ */
+function HostOptionMarks(props: {
+  readonly host: HostScopeOption;
+  readonly statusWord: string | null;
+  readonly updateBadge: string | null;
+  readonly environmentLabel: string | null;
+  readonly showActiveTag: boolean;
+}): ReactNode {
+  const { host, statusWord, updateBadge, environmentLabel, showActiveTag } =
+    props;
+  if (
+    !showActiveTag &&
+    environmentLabel === null &&
+    updateBadge === null &&
+    statusWord === null &&
+    host.terminalRunNote === null
+  )
+    return null;
+  return (
+    <span className="flex min-w-0 items-center gap-2 text-ui-xs whitespace-nowrap text-muted-foreground">
+      {host.terminalRunNote === null ? null : (
+        <CappedHostMark
+          text={host.terminalRunNote}
+          testId={`host-option-terminal-run-${host.hostId}`}
+        />
       )}
       {statusWord === null ? null : (
-        <span className="shrink-0 text-ui-xs text-muted-foreground">
-          {statusWord}
-        </span>
+        <span className="shrink-0">{statusWord}</span>
       )}
       {statusWord !== null && host.sandbox?.frozen ? (
         <Badge variant="warning">{HOST_FROZEN_WORD}</Badge>
       ) : null}
-    </>
+      {showActiveTag ? <ActiveTag /> : null}
+      {environmentLabel === null ? null : (
+        <CappedHostMark
+          text={environmentLabel}
+          testId={`host-option-environment-${host.hostId}`}
+        />
+      )}
+      {updateBadge === null ? null : (
+        <CappedHostMark
+          text={updateBadge}
+          testId={`host-option-update-badge-${host.hostId}`}
+        />
+      )}
+    </span>
   );
 }
 

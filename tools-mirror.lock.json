@@ -1,0 +1,1210 @@
+{
+  "schemaVersion": 1,
+  "artifacts": [
+    {
+      "name": "bun",
+      "version": "1.3.14",
+      "os": "linux",
+      "arch": "x64",
+      "upstreamUrl": "https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/bun-linux-x64.zip",
+      "sha256": "951ee2aee855f08595aeec6225226a298d3fea83a3dcd6465c09cbccdf7e848f",
+      "kind": "zip",
+      "bin": "bun-linux-x64"
+    },
+    {
+      "name": "bun",
+      "version": "1.3.14",
+      "os": "linux",
+      "arch": "arm64",
+      "upstreamUrl": "https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/bun-linux-aarch64.zip",
+      "sha256": "a27ffb63a8310375836e0d6f668ae17fa8d8d18b88c37c821c65331973a19a3b",
+      "kind": "zip",
+      "bin": "bun-linux-aarch64"
+    },
+    {
+      "name": "bun",
+      "version": "1.3.14",
+      "os": "darwin",
+      "arch": "x64",
+      "upstreamUrl": "https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/bun-darwin-x64.zip",
+      "sha256": "4183df3374623e5bab315c547cfa0974533cd457d86b73b639f7a87974cd6633",
+      "kind": "zip",
+      "bin": "bun-darwin-x64"
+    },
+    {
+      "name": "bun",
+      "version": "1.3.14",
+      "os": "darwin",
+      "arch": "arm64",
+      "upstreamUrl": "https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/bun-darwin-aarch64.zip",
+      "sha256": "d8b96221828ad6f97ac7ac0ab7e95872341af763001e8803e8267652c2652620",
+      "kind": "zip",
+      "bin": "bun-darwin-aarch64"
+    },
+    {
+      "name": "bun",
+      "version": "1.3.14",
+      "os": "win32",
+      "arch": "x64",
+      "upstreamUrl": "https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/bun-windows-x64.zip",
+      "sha256": "0a0620930b6675d7ba440e81f4e0e00d3cfbe096c4b140d3fff02205e9e18922",
+      "kind": "zip",
+      "bin": "bun-windows-x64"
+    },
+    {
+      "name": "python-311",
+      "version": "3.11.18+20261026+20261026",
+      "os": "linux",
+      "arch": "x64",
+      "upstreamUrl": "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.11.18%2B20261026-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
+      "sha256": "17c4978a36c496dc53c08899ef8dad1ad2734f6325f08d6033a1e66419e0af26",
+      "kind": "tar.gz",
+      "bin": "python/bin"
+    },
+    {
+      "name": "python-312",
+      "version": "3.12.16+20261026+20261026",
+      "os": "linux",
+      "arch": "x64",
+      "upstreamUrl": "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.12.16%2B20261026-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
+      "sha256": "ce4f6d0a6cfdb3bed6e44c2f9affd85943c76a42e25ad3a259002f31d6fb8a20",
+      "kind": "tar.gz",
+      "bin": "python/bin"
+    },
+    {
+      "name": "buf",
+      "version": "1.72.0",
+      "os": "linux",
+      "arch": "x64",
+      "upstreamUrl": "https://github.com/bufbuild/buf/releases/download/v1.72.0/buf-Linux-x86_64",
+      "sha256": "8720830e26a733da55bb89bcd3cb44849c0965fc0c44fb5d691cccdc64dca5af",
+      "kind": "file",
+      "bin": ".",
+      "executable": "buf"
+    },
+    {
+      "name": "buf",
+      "version": "1.72.0",
+      "os": "linux",
+      "arch": "arm64",
+      "upstreamUrl": "https://github.com/bufbuild/buf/releases/download/v1.72.0/buf-Linux-aarch64",
+      "sha256": "bdbb275fb9624104ef4d8513d269cc410a153138646e67136cb3f8cc185be289",
+      "kind": "file",
+      "bin": ".",
+      "executable": "buf"
+    },
+    {
+      "name": "buf",
+      "version": "1.72.0",
+      "os": "darwin",
+      "arch": "x64",
+      "upstreamUrl": "https://github.com/bufbuild/buf/releases/download/v1.72.0/buf-Darwin-x86_64",
+      "sha256": "eb815a2708d4a43d31799049d5a2987ea81d0a9e98b53976d47bd1e78d154a8f",
+      "kind": "file",
+      "bin": ".",
+      "executable": "buf"
+    },
+    {
+      "name": "buf",
+      "version": "1.72.0",
+      "os": "darwin",
+      "arch": "arm64",
+      "upstreamUrl": "https://github.com/bufbuild/buf/releases/download/v1.72.0/buf-Darwin-arm64",
+      "sha256": "5176f23a6118b9978de1340c3e3301a4ed0d48e16a669510be44b4c355170d57",
+      "kind": "file",
+      "bin": ".",
+      "executable": "buf"
+    },
+    {
+      "name": "buf",
+      "version": "1.72.0",
+      "os": "win32",
+      "arch": "x64",
+      "upstreamUrl": "https://github.com/bufbuild/buf/releases/download/v1.72.0/buf-Windows-x86_64.exe",
+      "sha256": "6e8f6d043e520bc81cae7b85d4cd6d93e57716a8a9842d5d18200191ee259cb5",
+      "kind": "file",
+      "bin": ".",
+      "executable": "buf.exe"
+    },
+    {
+      "name": "ripgrep",
+      "version": "14.1.0",
+      "os": "linux",
+      "arch": "x64",
+      "upstreamUrl": "https://github.com/BurntSushi/ripgrep/releases/download/14.1.0/ripgrep-14.1.0-x86_64-unknown-linux-musl.tar.gz",
+      "sha256": "f84757b07f425fe5cf11d87df6644691c644a5cd2348a2c670894272999d3ba7",
+      "kind": "tar.gz",
+      "bin": "ripgrep-14.1.0-x86_64-unknown-linux-musl"
+    },
+    {
+      "name": "minisign",
+      "version": "0.11",
+      "os": "linux",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/jedisct1/minisign/releases/download/0.11/minisign-0.11-linux.tar.gz",
+      "sha256": "f0a0954413df8531befed169e447a66da6868d79052ed7e892e50a4291af7ae0",
+      "kind": "tar.gz",
+      "bin": "minisign-linux/{arch}"
+    },
+    {
+      "name": "provider-codex",
+      "version": "0.166.0",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/openai/codex/releases/download/rust-v0.166.0/codex-aarch64-apple-darwin.tar.gz",
+      "sha256": "c48824462fc57681eafb0925d97b11b589010475613904f570b42fea53e240d5",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-codex",
+      "version": "0.166.0",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/openai/codex/releases/download/rust-v0.166.0/codex-aarch64-pc-windows-msvc.exe.tar.gz",
+      "sha256": "23cfbde45609292c325029a376340df30191298d7b6c5b26f607f481573ac768",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-codex",
+      "version": "0.166.0",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/openai/codex/releases/download/rust-v0.166.0/codex-aarch64-pc-windows-msvc.exe.zip",
+      "sha256": "2025588829bb65deb4c92e27025a56091fa17bcf2f651262b7331fbffb078117",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-codex",
+      "version": "0.166.0",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/openai/codex/releases/download/rust-v0.166.0/codex-aarch64-unknown-linux-musl.tar.gz",
+      "sha256": "94eb707605ec2646b2e05b7edf7c4e7b3ccf02b16237c34ae9beb8cfb7f810a9",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-codex",
+      "version": "0.166.0",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/openai/codex/releases/download/rust-v0.166.0/codex-command-runner-aarch64-pc-windows-msvc.exe.tar.gz",
+      "sha256": "7e3634876093f54e11ab0d99eeca831ae9edbf1e34a4536d23ae4338582a5ca4",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-codex",
+      "version": "0.166.0",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/openai/codex/releases/download/rust-v0.166.0/codex-command-runner-aarch64-pc-windows-msvc.exe.zip",
+      "sha256": "9db2fe9f0779308852740d4f4f6c05db53d4ff3f8dfa33431c55e2c4e201cfc9",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-codex",
+      "version": "0.166.0",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/openai/codex/releases/download/rust-v0.166.0/codex-command-runner-x86_64-pc-windows-msvc.exe.tar.gz",
+      "sha256": "a5fa7fd9b06bcbaa81505eac5cb170b22823fc40f40fe88f61d747502d950b8f",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-codex",
+      "version": "0.166.0",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/openai/codex/releases/download/rust-v0.166.0/codex-command-runner-x86_64-pc-windows-msvc.exe.zip",
+      "sha256": "23b7684f6d354c38f897c32ad3f0193025e39c32135dd6f241d8ae03e34ac6c9",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-codex",
+      "version": "0.166.0",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/openai/codex/releases/download/rust-v0.166.0/codex-windows-sandbox-service-aarch64-pc-windows-msvc.exe.tar.gz",
+      "sha256": "e7bb083758d5fa805ece90a077aa0e54a37e2f58880ccee462581740cef6bf59",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-codex",
+      "version": "0.166.0",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/openai/codex/releases/download/rust-v0.166.0/codex-windows-sandbox-service-aarch64-pc-windows-msvc.exe.zip",
+      "sha256": "c22b4551c1fe5b6890cd6c33709ee746e8e031cbf17db7e5330df0c0d9f9dde5",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-codex",
+      "version": "0.166.0",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/openai/codex/releases/download/rust-v0.166.0/codex-windows-sandbox-service-x86_64-pc-windows-msvc.exe.tar.gz",
+      "sha256": "9131943a46627cd650216bc5f03f8e017cc0149e1714ab7183c9cc335126e0a3",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-codex",
+      "version": "0.166.0",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/openai/codex/releases/download/rust-v0.166.0/codex-windows-sandbox-service-x86_64-pc-windows-msvc.exe.zip",
+      "sha256": "c5c066693f59869ee4e859b5a2ec9d7f26b2b58db2a5eb41e40dbf2e62d17526",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-codex",
+      "version": "0.166.0",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/openai/codex/releases/download/rust-v0.166.0/codex-windows-sandbox-setup-aarch64-pc-windows-msvc.exe.tar.gz",
+      "sha256": "9b996ddd9bf1ff8eec3baf26ef84194feb111876c864873c5536ff397e283890",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-codex",
+      "version": "0.166.0",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/openai/codex/releases/download/rust-v0.166.0/codex-windows-sandbox-setup-aarch64-pc-windows-msvc.exe.zip",
+      "sha256": "a260ada565c9e61e877952ac708e8f487d143ab36ba0963329ce0d0e0cf06659",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-codex",
+      "version": "0.166.0",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/openai/codex/releases/download/rust-v0.166.0/codex-windows-sandbox-setup-x86_64-pc-windows-msvc.exe.tar.gz",
+      "sha256": "fb106ef832e019ff074ec65d8f251c5da6d46a510034e2f557c9c041dd8b7527",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-codex",
+      "version": "0.166.0",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/openai/codex/releases/download/rust-v0.166.0/codex-windows-sandbox-setup-x86_64-pc-windows-msvc.exe.zip",
+      "sha256": "73856b2c9fdf1c0df4657b4d4414937bf2d5c30f71917d966dcb27f223b0e895",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-codex",
+      "version": "0.166.0",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/openai/codex/releases/download/rust-v0.166.0/codex-x86_64-apple-darwin.tar.gz",
+      "sha256": "db0c38713c36199b12e7c8d1629386c35a4ce8f99e1c9ce72f1725a74df67b57",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-codex",
+      "version": "0.166.0",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/openai/codex/releases/download/rust-v0.166.0/codex-x86_64-pc-windows-msvc.exe.tar.gz",
+      "sha256": "dafeb48b5a853b2898453a6b5bdae0fa0646bd5d5b73c5dfe74c97d0af4a4a0d",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-codex",
+      "version": "0.166.0",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/openai/codex/releases/download/rust-v0.166.0/codex-x86_64-pc-windows-msvc.exe.zip",
+      "sha256": "bf67d9662ed539f305849b74ad6420cc7b23aa2be07753710ca3db9134a0246d",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-codex",
+      "version": "0.166.0",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/openai/codex/releases/download/rust-v0.166.0/codex-x86_64-unknown-linux-musl.tar.gz",
+      "sha256": "a0bf572d2f93f056c6712a6da348e96078dc84f3885fd7be67807ef389cb3978",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-opencode",
+      "version": "1.19.4",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/anomalyco/opencode/releases/download/v1.19.4/opencode-darwin-arm64.zip",
+      "sha256": "c400a2f8c8ab7e99478a7f4dd1a466b57bf33888e520d85c55780a5464c4b689",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-opencode",
+      "version": "1.19.4",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/anomalyco/opencode/releases/download/v1.19.4/opencode-darwin-x64.zip",
+      "sha256": "123ebd72609c4f8dbae0485cdac39b9aedfeb6576b2eef64f2e73152b1de82f4",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-opencode",
+      "version": "1.19.4",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/anomalyco/opencode/releases/download/v1.19.4/opencode-linux-arm64.tar.gz",
+      "sha256": "8568230ccd847dc93e95b9f6894379077d3e014a16b48040743573e77c23e85f",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-opencode",
+      "version": "1.19.4",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/anomalyco/opencode/releases/download/v1.19.4/opencode-linux-x64.tar.gz",
+      "sha256": "849bd6b3d959a1d2ef200ed1634a51c79a45ca236aa26665d75debd694805cce",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-opencode",
+      "version": "1.19.4",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/anomalyco/opencode/releases/download/v1.19.4/opencode-windows-arm64.zip",
+      "sha256": "36e696fd1d275b469ab02a1ccc00d161bfdcc0a4ffa93c2b7a4e57399f3ff347",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-opencode",
+      "version": "1.19.4",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/anomalyco/opencode/releases/download/v1.19.4/opencode-windows-x64.zip",
+      "sha256": "93b899277bd6f68803009e32bf71772ce43c34b18adf1e93b9b4d8780fdf62e5",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-qwen",
+      "version": "0.26.1",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/QwenLM/qwen-code/releases/download/v0.26.1/qwen-code-darwin-arm64.tar.gz",
+      "sha256": "e345176eb1764757d50f44c0b052e405be2fea07e4a681993050779e3bd63ca3",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-qwen",
+      "version": "0.26.1",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/QwenLM/qwen-code/releases/download/v0.26.1/qwen-code-darwin-x64.tar.gz",
+      "sha256": "caa6fa3d1c209bef00676d0988e599b9e9fe8afb3cf982814c8ea4e726acafa3",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-qwen",
+      "version": "0.26.1",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/QwenLM/qwen-code/releases/download/v0.26.1/qwen-code-linux-arm64.tar.gz",
+      "sha256": "1d91ad0f28544f9fdec621a18fb96715776c7a8c311abf3aa4a894bbda2bdc60",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-qwen",
+      "version": "0.26.1",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/QwenLM/qwen-code/releases/download/v0.26.1/qwen-code-linux-x64.tar.gz",
+      "sha256": "7a75d3653077a535210c6a93173ac826f8f8c3c42b5058946ff42078bf4b4ffe",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-qwen",
+      "version": "0.26.1",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/QwenLM/qwen-code/releases/download/v0.26.1/qwen-code-win-x64.zip",
+      "sha256": "b3759760f67ef45f0e1ef0ebae055d8009ca941d19113af8ca199931d6409a7d",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-qwen",
+      "version": "0.26.1",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/QwenLM/qwen-code/releases/download/v0.26.1/SHA256SUMS",
+      "sha256": "90d2c6e528473654314054e8473cf9c1c3d3e78b817ea93a31f71f9cb4a6df8c",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-kimi",
+      "version": "2.3.3",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/MoonshotAI/kimi-code/releases/download/%40moonshot-ai/kimi-code%402.3.3/kimi-code-darwin-arm64.zip",
+      "sha256": "ab0975a61af772173dfbb5464ddbd49b79a9044888432798966ad4b2a0267b25",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-kimi",
+      "version": "2.3.3",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/MoonshotAI/kimi-code/releases/download/%40moonshot-ai/kimi-code%402.3.3/kimi-code-darwin-x64.zip",
+      "sha256": "73c5f1b5e8feeb31cd9428bf2254b1e571bad38cb1beb274c726da64b454cdfe",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-kimi",
+      "version": "2.3.3",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/MoonshotAI/kimi-code/releases/download/%40moonshot-ai/kimi-code%402.3.3/kimi-code-linux-arm64.zip",
+      "sha256": "86877417cdc3743b02521403f56a14b3d0f5e24e24dc6c3799712ca4c31caffc",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-kimi",
+      "version": "2.3.3",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/MoonshotAI/kimi-code/releases/download/%40moonshot-ai/kimi-code%402.3.3/kimi-code-linux-x64.zip",
+      "sha256": "3a08bb743cb735f2871e232be2353e1cf4058952f9ac1bc5e7d00c6ca2a87188",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-kimi",
+      "version": "2.3.3",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/MoonshotAI/kimi-code/releases/download/%40moonshot-ai/kimi-code%402.3.3/kimi-code-win32-arm64.zip",
+      "sha256": "320f734eb95c2b459ed57140c4df017b8e85927af81b9fa1856eb41737b86f39",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-kimi",
+      "version": "2.3.3",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/MoonshotAI/kimi-code/releases/download/%40moonshot-ai/kimi-code%402.3.3/kimi-code-win32-x64.zip",
+      "sha256": "ed05701af76919f7e2d0acd732b05931de185cb32ec928b0a535bfbad553a543",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-pi",
+      "version": "1.4.0",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/earendil-works/pi/releases/download/v1.4.0/pi-darwin-arm64.tar.gz",
+      "sha256": "79d9979d76a2a5adb7c28e27e9b44629928ccd0dc9fbb6ae7217860bd5e8be5d",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-pi",
+      "version": "1.4.0",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/earendil-works/pi/releases/download/v1.4.0/pi-darwin-x64.tar.gz",
+      "sha256": "1bdefc9e1074c1de458ea9f2e43e6013ce49cd05326009b3de144037036585e2",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-pi",
+      "version": "1.4.0",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/earendil-works/pi/releases/download/v1.4.0/pi-linux-arm64.tar.gz",
+      "sha256": "fa5829c7ef83ffeaebba015715c8306220f89b2aa8a00154efbba98dd5440156",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-pi",
+      "version": "1.4.0",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/earendil-works/pi/releases/download/v1.4.0/pi-linux-x64.tar.gz",
+      "sha256": "f2e4e4329603223d03260cdb8bd5033dbdc1f73ba58ab8939db2e56546e115d2",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-pi",
+      "version": "1.4.0",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/earendil-works/pi/releases/download/v1.4.0/pi-windows-arm64.zip",
+      "sha256": "17ab17ee0e9088545c7dfa56d29490c45bd915425610b0db0cd937632f2df714",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-pi",
+      "version": "1.4.0",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/earendil-works/pi/releases/download/v1.4.0/pi-windows-x64.zip",
+      "sha256": "0f7256ea8bdac3af20012b94fdc1252a31cc6dc0d2f9b9eb539555d22e3e321b",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-pi",
+      "version": "1.4.0",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/earendil-works/pi/releases/download/v1.4.0/SHA256SUMS",
+      "sha256": "8b66581fc7439ac791cfc4a7dd9b88809a5ecd30c573327b30c4fab738be2a22",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-omp",
+      "version": "18.13.1",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/can1357/oh-my-pi/releases/download/v18.13.1/omp-darwin-arm64",
+      "sha256": "f9c66e8725cf132a6de31b2321908ae1c43c668de12c91deaf368d25c01947d8",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-omp",
+      "version": "18.13.1",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/can1357/oh-my-pi/releases/download/v18.13.1/omp-darwin-x64",
+      "sha256": "96de0e3b42231f0e5b00333005f413dd97a76160da0d54df299eb0302e0522f7",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-omp",
+      "version": "18.13.1",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/can1357/oh-my-pi/releases/download/v18.13.1/omp-linux-arm64",
+      "sha256": "803db725f9e5bd177ce5274f7718081481f367829f773d984a0a9611f4713244",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-omp",
+      "version": "18.13.1",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/can1357/oh-my-pi/releases/download/v18.13.1/omp-linux-x64",
+      "sha256": "ee2961c7da02e514a2475ee958c2fd85dbabf4d0907949ba5022edb2951f84b5",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-omp",
+      "version": "18.13.1",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/can1357/oh-my-pi/releases/download/v18.13.1/omp-windows-arm64.exe",
+      "sha256": "49f13bc5edd2b27537b43fea6ea1bca216179f1147f98bea91184df9d3ae0a30",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-omp",
+      "version": "18.13.1",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/can1357/oh-my-pi/releases/download/v18.13.1/omp-windows-x64.exe",
+      "sha256": "9fde2d73099ac3cc124d02982bdbeca697de42c7cd3ebf8b63faec1e2f9926f7",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-reasonix",
+      "version": "2.53.1",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/esengine/DeepSeek-Reasonix/releases/download/v2.53.1/reasonix-darwin-amd64.tar.gz",
+      "sha256": "475bd2d29c415303161cc4ebddf3be2744aac6c952236f44793c442857a93f11",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-reasonix",
+      "version": "2.53.1",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/esengine/DeepSeek-Reasonix/releases/download/v2.53.1/reasonix-darwin-arm64.tar.gz",
+      "sha256": "1bd1b1dc889207213d4a7d15593acd60b4c8fe3fc95ee0e3081f8b272d7ad299",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-reasonix",
+      "version": "2.53.1",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/esengine/DeepSeek-Reasonix/releases/download/v2.53.1/reasonix-linux-amd64.tar.gz",
+      "sha256": "1ff6399f4f5d28b07620cb1450df8dc1f4c1076fe2295d547a36a26482c89583",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-reasonix",
+      "version": "2.53.1",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/esengine/DeepSeek-Reasonix/releases/download/v2.53.1/reasonix-linux-arm64.tar.gz",
+      "sha256": "c31d4c062b8038617a9de8cffeb103730b1e8fed86dea615a7650eef3788918a",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-reasonix",
+      "version": "2.53.1",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/esengine/DeepSeek-Reasonix/releases/download/v2.53.1/reasonix-windows-amd64.zip",
+      "sha256": "3baa34e9502eeb5ad7e4cc3fc858e4b349233125b14485225d55cd8fc3df8fbe",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-reasonix",
+      "version": "2.53.1",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/esengine/DeepSeek-Reasonix/releases/download/v2.53.1/reasonix-windows-arm64.zip",
+      "sha256": "cc58f7b79d1643edd12afe21596a97b170fd53015ceda7e16a1c8300bc28237e",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-reasonix",
+      "version": "2.53.1",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/esengine/DeepSeek-Reasonix/releases/download/v2.53.1/SHA256SUMS",
+      "sha256": "92e088ab3105c4d9418587bc233014be8b37825f7de79a4c36d35fbe1d0ff67c",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-ripgrep",
+      "version": "15.2.0",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-aarch64-apple-darwin.tar.gz",
+      "sha256": "3750b2e93f37e0c692657da574d7019a101c0084da05a790c83fd335bad973e4",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-ripgrep",
+      "version": "15.2.0",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-aarch64-apple-darwin.tar.gz.sha256",
+      "sha256": "6548307715b72f409e4a2667fb1fc435822a2561a27445971b0925183313ebad",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-ripgrep",
+      "version": "15.2.0",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-aarch64-pc-windows-msvc.zip",
+      "sha256": "e4abca10c3a64ebea742667dd7009449d49403db5460dd6873e389fa2945360f",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-ripgrep",
+      "version": "15.2.0",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-aarch64-pc-windows-msvc.zip.sha256",
+      "sha256": "49f07d6468add5aff10cf8595155f7c8adbca460a4be85fca23c4d89ff619a62",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-ripgrep",
+      "version": "15.2.0",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-aarch64-unknown-linux-gnu.tar.gz",
+      "sha256": "a740b91c82eaf9914cfedd353572f2791cbe0162c84101ee0951058f4dcbc90d",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-ripgrep",
+      "version": "15.2.0",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-aarch64-unknown-linux-gnu.tar.gz.sha256",
+      "sha256": "7b3f20fe255204e11cdb79fbca5ef7ccff1a10cb4bef53b3a5add996e1792105",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-ripgrep",
+      "version": "15.2.0",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-x86_64-apple-darwin.tar.gz",
+      "sha256": "af7825fcc69a2afc7a7aea55fc9af90e26421d8f20fe59df32e233c0b8a231c1",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-ripgrep",
+      "version": "15.2.0",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-x86_64-apple-darwin.tar.gz.sha256",
+      "sha256": "0c9d82a923b253a32a2cbae3542d8a3bc0fda74d4908d5967f834b38a3fb647f",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-ripgrep",
+      "version": "15.2.0",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-x86_64-pc-windows-msvc.zip",
+      "sha256": "71b2fef860abe467217a538ff31de02f5258807c0129f771846f87bd029aafc5",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-ripgrep",
+      "version": "15.2.0",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-x86_64-pc-windows-msvc.zip.sha256",
+      "sha256": "6e4996a007228048b4bca2bb81b24642d9bc091caa6d19698eab1e8120617b18",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-ripgrep",
+      "version": "15.2.0",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-x86_64-unknown-linux-musl.tar.gz",
+      "sha256": "33e15bcf1624b25cdd2a55813a47a2f95dbe126268203e76aa6a585d1e7b149c",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-ripgrep",
+      "version": "15.2.0",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-x86_64-unknown-linux-musl.tar.gz.sha256",
+      "sha256": "650080eb90718156132c821d150d8b74818f66de47969e38eef5a2dce3e2a5e6",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-reasonix",
+      "version": "2.53.1",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://raw.githubusercontent.com/esengine/DeepSeek-Reasonix/v2.53.1/LICENSE",
+      "sha256": "dc024237821ac82056c37f8d82e3be919bd51e39a4529ec12a8ab3e2a346dc4c",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "electron",
+      "version": "42.11.12",
+      "os": "darwin",
+      "arch": "arm64",
+      "upstreamUrl": "https://github.com/electron/electron/releases/download/v42.11.12/electron-v42.11.12-darwin-arm64.zip",
+      "sha256": "ef1b36456da7e5d0460bf7524ea76424373002d54120449c889d1dde9d7fccbc",
+      "kind": "electron",
+      "bin": null
+    },
+    {
+      "name": "electron",
+      "version": "42.11.12",
+      "os": "darwin",
+      "arch": "x64",
+      "upstreamUrl": "https://github.com/electron/electron/releases/download/v42.11.12/electron-v42.11.12-darwin-x64.zip",
+      "sha256": "e0081f6f9aa106d9e2da5d66d2c8af281c85ee48ca853cb9b8c834ea7bb4c9e8",
+      "kind": "electron",
+      "bin": null
+    },
+    {
+      "name": "electron",
+      "version": "42.11.12",
+      "os": "linux",
+      "arch": "arm64",
+      "upstreamUrl": "https://github.com/electron/electron/releases/download/v42.11.12/electron-v42.11.12-linux-arm64.zip",
+      "sha256": "a44ff616c46e117a8af7c4a179d92d29462d5434f67d8a4345438bc9ced5924b",
+      "kind": "electron",
+      "bin": null
+    },
+    {
+      "name": "electron",
+      "version": "42.11.12",
+      "os": "linux",
+      "arch": "x64",
+      "upstreamUrl": "https://github.com/electron/electron/releases/download/v42.11.12/electron-v42.11.12-linux-x64.zip",
+      "sha256": "1f17c115389c6395ce4b19b29ee2ec4be2208257514d61e269f1c0a7323bd45d",
+      "kind": "electron",
+      "bin": null
+    },
+    {
+      "name": "electron",
+      "version": "42.11.12",
+      "os": "win32",
+      "arch": "arm64",
+      "upstreamUrl": "https://github.com/electron/electron/releases/download/v42.11.12/electron-v42.11.12-win32-arm64.zip",
+      "sha256": "2ddefa1d8f4c5acfa1cf21ec9f3715e8612b34aa7b6a252dc1179ac4f93dfde1",
+      "kind": "electron",
+      "bin": null
+    },
+    {
+      "name": "electron",
+      "version": "42.11.12",
+      "os": "win32",
+      "arch": "x64",
+      "upstreamUrl": "https://github.com/electron/electron/releases/download/v42.11.12/electron-v42.11.12-win32-x64.zip",
+      "sha256": "031a8d77b6e8884779be06a25342bf352ad2548fef3f9140ef6f65bbb640851d",
+      "kind": "electron",
+      "bin": null
+    },
+    {
+      "name": "electron",
+      "version": "42.11.12",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/electron/electron/releases/download/v42.11.12/SHASUMS256.txt",
+      "sha256": "340657d7675fc05ada929818d499585414c2fa53a467b626a8ab78f67f452d30",
+      "kind": "file",
+      "bin": null,
+      "role": "metadata"
+    },
+    {
+      "name": "gitleaks",
+      "version": "8.30.1",
+      "os": "linux",
+      "arch": "x64",
+      "upstreamUrl": "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz",
+      "sha256": "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb",
+      "kind": "tar.gz",
+      "bin": "."
+    },
+    {
+      "name": "tla2tools",
+      "version": "1.7.4",
+      "upstreamUrl": "https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar",
+      "sha256": "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88",
+      "os": "any",
+      "arch": "any",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "minisign",
+      "version": "0.11",
+      "upstreamUrl": "https://github.com/jedisct1/minisign/releases/download/0.11/minisign-0.11-win64.zip",
+      "sha256": "b9c31c2c3034f81f0e5f5d92cbcc20e67a9671b6e5455661588638848dc58031",
+      "os": "win32",
+      "arch": "x64",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "esigner-cka",
+      "version": "1.0.8",
+      "upstreamUrl": "https://github.com/SSLcom/eSignerCKA/releases/download/v1.0.8/SSL.COM-eSigner-CKA_1.0.8.zip",
+      "sha256": "c45bcd520a2a77acda150c12a1c233ca2408b3c10c2016b8d0dc8b9aefc0cadb",
+      "os": "win32",
+      "arch": "x64",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "winget-cli",
+      "version": "1.29.380",
+      "upstreamUrl": "https://github.com/microsoft/winget-cli/releases/download/v1.29.380/Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle",
+      "sha256": "65dea9c01ce08ee7b763366b27c0e651f97db857c11ca9b9c301826c10092f2e",
+      "os": "win32",
+      "arch": "x64",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "wingetcreate",
+      "version": "1.12.13.0",
+      "upstreamUrl": "https://github.com/microsoft/winget-create/releases/download/v1.12.13.0/wingetcreate.exe",
+      "sha256": "24042bd37915805615e6cf969ac57c6439124c3fe85823327f5f3fb24bd9ffea",
+      "os": "win32",
+      "arch": "x64",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "simulator-datachannel",
+      "version": "0.32.3",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/murat-dogan/node-datachannel/releases/download/v0.32.3/node-datachannel-v0.32.3-napi-v8-darwin-arm64.tar.gz",
+      "sha256": "69fbffdacb9abda2a76809693443328b6aad71af25947e0733913340365f4da8",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "simulator-datachannel",
+      "version": "0.32.3",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/murat-dogan/node-datachannel/releases/download/v0.32.3/node-datachannel-v0.32.3-napi-v8-darwin-x64.tar.gz",
+      "sha256": "4f79b7ff0fe035db8d2006842537aca2a2def957569aae6ff578107b56adec38",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "simulator-datachannel",
+      "version": "0.32.3",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/murat-dogan/node-datachannel/releases/download/v0.32.3/node-datachannel-v0.32.3-napi-v8-linux-arm64.tar.gz",
+      "sha256": "4bdbd80aeb11fb0a903318defe663a833a1f0af2615450fe10dab75c81723445",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "simulator-datachannel",
+      "version": "0.32.3",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/murat-dogan/node-datachannel/releases/download/v0.32.3/node-datachannel-v0.32.3-napi-v8-linux-x64.tar.gz",
+      "sha256": "4092afc9cd594a3326eb1bd823da452b227b742ea8222689b2cea6f7344cf67a",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "simulator-datachannel",
+      "version": "0.32.3",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/murat-dogan/node-datachannel/releases/download/v0.32.3/node-datachannel-v0.32.3-napi-v8-win32-arm64.tar.gz",
+      "sha256": "64fe160b953f6dfd44ae3e1f75da0d654e7d23c75c976a2e6a94102fbbc08bb0",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "simulator-datachannel",
+      "version": "0.32.3",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/murat-dogan/node-datachannel/releases/download/v0.32.3/node-datachannel-v0.32.3-napi-v8-win32-x64.tar.gz",
+      "sha256": "3bfacc4125b296197fe9e22ebd9a52f05321c50aca9d80b92897507f898c12c3",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "node",
+      "version": "24.20.0",
+      "os": "linux",
+      "arch": "x64",
+      "upstreamUrl": "https://nodejs.org/dist/v24.20.0/node-v24.20.0-linux-x64.tar.gz",
+      "sha256": "855d581f8a4eb1a8117e3426de25fe02770592febcfb31369aee1ffbfee9e8ec",
+      "kind": "tar.gz",
+      "bin": "node-v24.20.0-linux-x64/bin",
+      "executable": "node"
+    },
+    {
+      "name": "node",
+      "version": "24.20.0",
+      "os": "linux",
+      "arch": "arm64",
+      "upstreamUrl": "https://nodejs.org/dist/v24.20.0/node-v24.20.0-linux-arm64.tar.gz",
+      "sha256": "3515603e2487879a39bc75716f1a2affd027500c64ba50e845cf72cb33219013",
+      "kind": "tar.gz",
+      "bin": "node-v24.20.0-linux-arm64/bin",
+      "executable": "node"
+    },
+    {
+      "name": "node",
+      "version": "24.20.0",
+      "os": "darwin",
+      "arch": "x64",
+      "upstreamUrl": "https://nodejs.org/dist/v24.20.0/node-v24.20.0-darwin-x64.tar.gz",
+      "sha256": "9e5b2644cf107befb6aefca676b96d3296bc10138096f022ed378d6233ed81f4",
+      "kind": "tar.gz",
+      "bin": "node-v24.20.0-darwin-x64/bin",
+      "executable": "node"
+    },
+    {
+      "name": "node",
+      "version": "24.20.0",
+      "os": "darwin",
+      "arch": "arm64",
+      "upstreamUrl": "https://nodejs.org/dist/v24.20.0/node-v24.20.0-darwin-arm64.tar.gz",
+      "sha256": "40e5607e5ecb3db9192723776da2d75d966260fc74a7a9e731c1bd67dda96bc8",
+      "kind": "tar.gz",
+      "bin": "node-v24.20.0-darwin-arm64/bin",
+      "executable": "node"
+    },
+    {
+      "name": "node",
+      "version": "24.20.0",
+      "os": "win32",
+      "arch": "x64",
+      "upstreamUrl": "https://nodejs.org/dist/v24.20.0/node-v24.20.0-win-x64.zip",
+      "sha256": "6cac9ffbca8f6a47091e4b5c772e0606049c3871cb67d900c0cedde630e545ba",
+      "kind": "zip",
+      "bin": "node-v24.20.0-win-x64",
+      "executable": "node.exe"
+    },
+    {
+      "name": "node-checksums",
+      "version": "24.20.0",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://nodejs.org/dist/v24.20.0/SHASUMS256.txt",
+      "sha256": "c614a913a302d35d1c3a1348d07d84c52e28dceb0b97fd91e4ade05906ca2bd7",
+      "kind": "file",
+      "bin": null
+    },
+    {
+      "name": "provider-codex",
+      "version": "0.166.0",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/openai/codex/releases/download/rust-v0.166.0/codex-code-mode-host-aarch64-apple-darwin.tar.gz",
+      "sha256": "7abd50fe5f033495a7b693c45fb82dc57093a18f1c4ba3e8043577de46c5c7c5",
+      "kind": "file"
+    },
+    {
+      "name": "provider-codex",
+      "version": "0.166.0",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/openai/codex/releases/download/rust-v0.166.0/codex-code-mode-host-aarch64-pc-windows-msvc.exe.tar.gz",
+      "sha256": "882215081373e4073d58c74501a8c11f9bc8294a0acccfd0161559ba346c0d57",
+      "kind": "file"
+    },
+    {
+      "name": "provider-codex",
+      "version": "0.166.0",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/openai/codex/releases/download/rust-v0.166.0/codex-code-mode-host-aarch64-pc-windows-msvc.exe.zip",
+      "sha256": "720c7a644822c3a822c1999f63d6d17ffc5a73c46ce39657172759490f97bae6",
+      "kind": "file"
+    },
+    {
+      "name": "provider-codex",
+      "version": "0.166.0",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/openai/codex/releases/download/rust-v0.166.0/codex-code-mode-host-aarch64-unknown-linux-musl.tar.gz",
+      "sha256": "ac98d1f878e353a16cba711fd47bfef2f6c814109bdd819ee2b6b6d6a19701e7",
+      "kind": "file"
+    },
+    {
+      "name": "provider-codex",
+      "version": "0.166.0",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/openai/codex/releases/download/rust-v0.166.0/codex-code-mode-host-x86_64-apple-darwin.tar.gz",
+      "sha256": "b35c775d5e5f8d60d05e0de7154e5bbbf320b6d0e28a3237d42cc8a742ccaf65",
+      "kind": "file"
+    },
+    {
+      "name": "provider-codex",
+      "version": "0.166.0",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/openai/codex/releases/download/rust-v0.166.0/codex-code-mode-host-x86_64-pc-windows-msvc.exe.tar.gz",
+      "sha256": "91ddc4847c18d364e641fbce4a0f50b747935b1d5548d9ebb4b2242a8cd09b96",
+      "kind": "file"
+    },
+    {
+      "name": "provider-codex",
+      "version": "0.166.0",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/openai/codex/releases/download/rust-v0.166.0/codex-code-mode-host-x86_64-pc-windows-msvc.exe.zip",
+      "sha256": "bc98c781efea7410f8f92a8dd2474783c04f1b2563140233cb1dfb599c032a28",
+      "kind": "file"
+    },
+    {
+      "name": "provider-codex",
+      "version": "0.166.0",
+      "os": "any",
+      "arch": "any",
+      "upstreamUrl": "https://github.com/openai/codex/releases/download/rust-v0.166.0/codex-code-mode-host-x86_64-unknown-linux-musl.tar.gz",
+      "sha256": "7588334fd47bc4003d970b70dfd4d1e4578491b1e9baa72976a4c2d7e97590da",
+      "kind": "file"
+    }
+  ],
+  "hookEnvironments": [
+    {
+      "repository": "internal",
+      "configSha256": "92e3dbf4c1faed48c0a8fb559e9290310fd415b9362fd995586aedb7917f471e",
+      "os": "linux",
+      "arch": "x64",
+      "sha256": "739283ef7e09b3e539525a1730873902219e01d5b351cb775c4f20ac842841ad",
+      "bytes": 59538607,
+      "objectKey": "tools/pre-commit-hooks/92e3dbf4c1faed48c0a8fb559e9290310fd415b9362fd995586aedb7917f471e/hooks-92e3dbf4c1faed48c0a8fb559e9290310fd415b9362fd995586aedb7917f471e-linux-x64.tar.gz",
+      "prepareRunId": "42606235414"
+    },
+    {
+      "repository": "oss",
+      "configSha256": "ce08f73a9f06f991fc1e962dfc7bacb8f09a83b51c06acb245aea384ec0199d1",
+      "os": "linux",
+      "arch": "x64",
+      "sha256": "37015f5c8b1150baf44a08fc5df27d0d401eb7cfd40060f33b2b265bf2fb306c",
+      "bytes": 50647152,
+      "objectKey": "tools/pre-commit-hooks/ce08f73a9f06f991fc1e962dfc7bacb8f09a83b51c06acb245aea384ec0199d1/hooks-ce08f73a9f06f991fc1e962dfc7bacb8f09a83b51c06acb245aea384ec0199d1-linux-x64.tar.gz",
+      "prepareRunId": "42606235414"
+    }
+  ]
+}

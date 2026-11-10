@@ -32,13 +32,14 @@ import { WorkingShimmerText } from "@/components/ui/working-shimmer-text";
 import { retrospectiveSheetLinkHostId } from "@/components/settings/move/retrospective-sheet-link-host";
 import { SHARED_BY_EARLIER_VERSION_LINE } from "@/components/settings/move/overview-dated-lines";
 import { useOpenLink } from "@/lib/links/open-link";
-import { useRelativeTimestamp } from "@/lib/relative-time";
+import { useMessageTime, useRelativeTimestamp } from "@/lib/relative-time";
 import { formatClockDuration } from "@/lib/format-duration";
 import {
   botRowThreadAnchorKind,
   firstLineOf,
 } from "@/lib/bots/bot-trunk-model";
 import { turnReceiptLabel } from "@/lib/bots/bot-turn-receipt";
+import { collectAssistantReplyText } from "@/lib/chat/collect-assistant-reply-text";
 import { useElapsedSeconds } from "@/hooks/use-elapsed-seconds";
 import { useLongPress, type LongPress } from "@/hooks/ui/use-long-press";
 import { useResolvedTheme } from "@/providers/use-resolved-theme";
@@ -62,6 +63,7 @@ import type {
 } from "./chat-bot-presentation-context";
 import { chatFindSegmentUnitId } from "./chat-find";
 import { ChatMessageTimestamp } from "./chat-message-timestamp";
+import { useTimestampDrawn } from "./use-timestamp-drawn";
 import {
   answerDraftKey,
   useBotDraftsStore,
@@ -73,6 +75,7 @@ import {
   questionCardView,
 } from "./question-card-view";
 import { TextSegment } from "./segments/text-segment";
+import { UserMessageAttachmentGallery } from "./user-message-attachment-gallery";
 
 /**
  * One row of a bot's channel or thread, in Slack's message layout (Tracy
@@ -113,13 +116,16 @@ import { TextSegment } from "./segments/text-segment";
  *
  * Without `hoverActions` the row is drawn as the post a thread opens on, at
  * the top of the thread panel: the same row, with nothing on hover.
+ * `timeLink` makes its time a link that shows the post in its channel, as a
+ * Threads card's post does (Tracy Bots T137); `null` leaves the time a label.
  */
 export function ChatBotMessage(props: {
   readonly message: ChatMessageModel;
   readonly presentation: ChatBotPresentation;
   readonly hoverActions: boolean;
+  readonly timeLink: (() => void) | null;
 }): ReactElement {
-  const { message, presentation, hoverActions } = props;
+  const { message, presentation, hoverActions, timeLink } = props;
   const sentAt = message.sentAt ?? message.createdAt;
   const body = <BotMessageText message={message} />;
   if (message.role === "assistant") {
@@ -130,6 +136,7 @@ export function ChatBotMessage(props: {
         sentAt={sentAt}
         body={body}
         hoverActions={hoverActions}
+        timeLink={timeLink}
       />
     );
   }
@@ -140,6 +147,7 @@ export function ChatBotMessage(props: {
       sentAt={sentAt}
       body={body}
       hoverActions={hoverActions}
+      timeLink={timeLink}
     />
   );
 }
@@ -154,8 +162,9 @@ function MemberRow(props: {
   readonly sentAt: number;
   readonly body: ReactNode;
   readonly hoverActions: boolean;
+  readonly timeLink: (() => void) | null;
 }): ReactElement {
-  const { message, presentation, sentAt, body, hoverActions } = props;
+  const { message, presentation, sentAt, body, hoverActions, timeLink } = props;
   const name = message.senderLabel ?? "Member";
   const postId = message.persistentMessageId;
   const threadLine =
@@ -190,7 +199,13 @@ function MemberRow(props: {
       replyInThread={replyInThread}
       failed={failed}
       longPress={sheet.longPress}
+      timeLink={timeLink}
     >
+      <UserMessageAttachmentGallery
+        align="start"
+        attachments={message.attachments}
+        browserAnnotations={message.browserAnnotations}
+      />
       {body}
       {failed === null ? null : (
         <UnansweredLine failed={failed} recovery={recovery} />
@@ -218,6 +233,96 @@ function MemberRow(props: {
         />
       )}
     </BotMessageFrame>
+  );
+}
+
+/**
+ * A member's message drawn outside its own channel or thread - the message a
+ * delivery brought into one of the bot's sessions (Tracy Bots T159): the
+ * member's row with nothing on hover and `place` under its text. Until the
+ * message is read its text is a placeholder, and where it cannot be read the
+ * row says so; the row is never empty.
+ */
+export function ChatBotDeliveredPost(props: {
+  readonly message: ChatMessageModel;
+  /** `message`: its text is read; `loading`: it is being read; `unavailable`: it cannot be. */
+  readonly body: "message" | "loading" | "unavailable";
+  /** Where the message was written, and how its turn ended, under it. */
+  readonly place: ReactNode;
+}): ReactElement {
+  const { message, body, place } = props;
+  const name = message.senderLabel ?? "Member";
+  return (
+    <BotMessageFrame
+      avatar={
+        <PersonAvatar
+          userId={message.senderUserId ?? null}
+          name={name}
+          avatarUrl={message.senderAvatarUrl ?? null}
+          size="lg"
+        />
+      }
+      name={name}
+      bot={false}
+      sentAt={message.sentAt ?? message.createdAt}
+      instanceId={message.id}
+      testId="bot-delivered-post"
+      hoverActions={false}
+      replyInThread={null}
+      failed={null}
+      longPress={null}
+      timeLink={null}
+    >
+      <UserMessageAttachmentGallery
+        align="start"
+        attachments={message.attachments}
+        browserAnnotations={message.browserAnnotations}
+      />
+      <DeliveredPostBody message={message} body={body} />
+      {place}
+    </BotMessageFrame>
+  );
+}
+
+/** The delivered row's text, or what stands in for it until or unless it is read. */
+function DeliveredPostBody(props: {
+  readonly message: ChatMessageModel;
+  readonly body: "message" | "loading" | "unavailable";
+}): ReactElement {
+  if (props.body === "loading") {
+    return (
+      <div
+        role="status"
+        aria-label="Loading message"
+        className="h-4 w-full max-w-64 animate-pulse rounded-sm bg-foreground/10"
+        data-testid="bot-delivered-post-loading"
+      />
+    );
+  }
+  if (props.body === "unavailable") {
+    return (
+      <p
+        className="text-ui-sm text-muted-foreground"
+        data-testid="bot-delivered-post-stand-in"
+      >
+        Message unavailable
+      </p>
+    );
+  }
+  return (
+    <div className="flex min-w-0 flex-col gap-1">
+      {props.message.segments.map((segment) =>
+        segment.kind === "text" ? (
+          <TextSegment
+            key={segment.id}
+            findUnitId={null}
+            markdown={segment.markdown}
+            isStreaming={false}
+            nextStepActions={null}
+          />
+        ) : null,
+      )}
+    </div>
   );
 }
 
@@ -253,6 +358,7 @@ export function ChatBotAppPost(props: {
       replyInThread={null}
       failed={null}
       longPress={null}
+      timeLink={null}
     >
       {props.children}
     </BotMessageFrame>
@@ -308,7 +414,11 @@ function failedActionsOf(
           message.senderUserId ?? null,
         );
   if (failed === null) return null;
-  const { retry, edit } = failed;
+  const { retry } = failed;
+  // Edit puts the text back in the box and its send replaces the row. The
+  // box holds an image's bytes, the row only its hash, so a row with images
+  // keeps Retry, which re-sends them, and offers no Edit that would drop them.
+  const edit = message.attachments.length === 0 ? failed.edit : null;
   const parked = failed.state === "parked";
   if (recovery !== null) {
     return {
@@ -347,8 +457,9 @@ function BotRow(props: {
   readonly sentAt: number;
   readonly body: ReactNode;
   readonly hoverActions: boolean;
+  readonly timeLink: (() => void) | null;
 }): ReactElement {
-  const { message, presentation, sentAt, body, hoverActions } = props;
+  const { message, presentation, sentAt, body, hoverActions, timeLink } = props;
   const announcement = message.announcement ?? null;
   const question = message.question ?? null;
   const questions = question === null ? null : presentation.questions;
@@ -369,6 +480,7 @@ function BotRow(props: {
       replyInThread={replyInThread}
       failed={null}
       longPress={sheet.longPress}
+      timeLink={timeLink}
     >
       {question !== null && questions !== null ? (
         <BotAskingBody
@@ -479,7 +591,12 @@ function BotRowBody(props: {
   );
 }
 
-/** A row that asks: the card, under its text when that says more than its questions. */
+/**
+ * A row that asks: the card, under its text when that says more than its
+ * questions. The text is the row's whole text, as its segments carry it:
+ * `content` is the list's short, whitespace-folded preview, which stops
+ * matching the questions once they run long or over more than one line.
+ */
 function BotAskingBody(props: {
   readonly message: ChatMessageModel;
   readonly question: BotQuestion;
@@ -490,7 +607,10 @@ function BotAskingBody(props: {
   const { message, question, questions, botTitle, text } = props;
   return (
     <>
-      {message.content === botQuestionsText(question.questions) ? null : text}
+      {collectAssistantReplyText(message.segments) ===
+      botQuestionsText(question.questions).trim()
+        ? null
+        : text}
       <BotQuestionCard
         messageId={message.persistentMessageId}
         question={question}
@@ -527,9 +647,8 @@ function BotQuestionCard(props: {
       text: item.text,
       options: item.options,
       allowFreeText: item.allowFreeText,
-      // A question that takes the person's own words takes several of its
-      // options too: the host holds such an answer to no one option.
-      several: item.allowFreeText,
+      // Absent from a host below `chat.subscribe@1.43`: one pick.
+      several: item.multiSelect === true,
       settlement: botQuestionCardSettlement(
         item.settlement,
         memberName,
@@ -678,6 +797,8 @@ function BotMessageFrame(props: {
   readonly failed: FailedMessageActions | null;
   /** A long press that opens the row's sheet on a touch screen; `null` for a row with none. */
   readonly longPress: LongPress | null;
+  /** Shows the row in its channel, from its time; `null` leaves the time a label. */
+  readonly timeLink: (() => void) | null;
   readonly children: ReactNode;
 }): ReactElement {
   const nameClassName = "truncate text-ui-sm font-semibold text-foreground";
@@ -734,10 +855,10 @@ function BotMessageFrame(props: {
             <span className={nameClassName}>{props.name}</span>
           )}
           {props.sentAt === null ? null : (
-            <ChatMessageTimestamp
-              timestamp={props.sentAt}
-              separated={false}
+            <RowTime
+              sentAt={props.sentAt}
               instanceId={props.instanceId}
+              link={props.timeLink}
             />
           )}
         </div>
@@ -752,6 +873,55 @@ function BotMessageFrame(props: {
         />
       )}
     </div>
+  );
+}
+
+/**
+ * A row's time; a link where it shows the row in its channel (`link`), and
+ * only while the time is drawn, so a hidden stamp leaves no empty tab stop.
+ */
+function RowTime(props: {
+  readonly sentAt: number;
+  readonly instanceId: string;
+  readonly link: (() => void) | null;
+}): ReactElement {
+  const drawn = useTimestampDrawn(props.sentAt);
+  const time = (
+    <ChatMessageTimestamp
+      timestamp={props.sentAt}
+      separated={false}
+      instanceId={props.instanceId}
+    />
+  );
+  if (props.link === null || !drawn) return time;
+  return (
+    <RowTimeLink sentAt={props.sentAt} onClick={props.link}>
+      {time}
+    </RowTimeLink>
+  );
+}
+
+/**
+ * The time as a link, named for the time it shows and for what it does. Its
+ * own leaf, as the stamp is, so the minute tick the name reads repaints only
+ * this link.
+ */
+function RowTimeLink(props: {
+  readonly sentAt: number;
+  readonly onClick: () => void;
+  readonly children: ReactNode;
+}): ReactElement {
+  const time = useMessageTime(props.sentAt);
+  return (
+    <button
+      type="button"
+      aria-label={`${time}, show in channel`}
+      className="rounded-sm text-muted-foreground hover:text-foreground hover:underline focus-visible:outline-2 focus-visible:outline-ring"
+      data-testid="bot-row-time-link"
+      onClick={props.onClick}
+    >
+      {props.children}
+    </button>
   );
 }
 
@@ -922,7 +1092,9 @@ function TurnReceiptLine(props: {
 }
 
 /** How long a running turn has been running, counting each second. */
-function RunningFor(props: { readonly startedAt: number }): ReactElement {
+export function RunningFor(props: {
+  readonly startedAt: number;
+}): ReactElement {
   const seconds = useElapsedSeconds(props.startedAt, 0, null);
   return <span className="tabular-nums">{formatClockDuration(seconds)}</span>;
 }

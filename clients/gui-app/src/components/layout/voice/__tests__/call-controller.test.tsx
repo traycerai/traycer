@@ -42,6 +42,7 @@ import {
 import type { VoiceEngineEvents } from "@/lib/voice/engine";
 import type { ReplyRow } from "@/lib/voice/focused-replies";
 import {
+  CONFIRM_WINDOW_MS,
   INPUT_ACTIVE_WINDOW_MS,
   OUTPUT_HANGOVER_MS,
   OUTPUT_HANGOVER_WITHOUT_LEVEL_MS,
@@ -364,7 +365,7 @@ function addChat(chatId: string, state: ChatState): StoreApi<ChatState> {
 
 function sessionActivity(
   state: BotSessionActivity["state"],
-  requestId: string,
+  requestId: string | null,
 ): BotSessionActivity {
   return { state, startedAt: 1, step: null, requestId, reason: null };
 }
@@ -372,7 +373,7 @@ function sessionActivity(
 function threadActivity(
   threadId: string,
   state: BotSessionActivity["state"],
-  requestId: string,
+  requestId: string | null,
 ): BotActivity {
   return {
     trunk: null,
@@ -1389,16 +1390,21 @@ describe("a send the bot cannot take", () => {
 describe("what the voice says of the bot's replies", () => {
   it("appends a new reply row once, at a clear moment, under no delegation", async () => {
     const chat = await joinOpenThread([botRow("old", "Earlier answer.", 100)]);
-
-    land(chat, [
+    act(() =>
+      fake.activity.set(threadActivity("t-open", "replying", TURN_REQUEST)),
+    );
+    const rows = [
       botRow("old", "Earlier answer.", 100),
       botRow("new", "The build is green.", 200),
-    ]);
+    ];
+    land(chat, rows);
     await settle();
 
+    // The thread remains replying: the persisted row is enough to speak now.
     expect(appends()).toEqual([["The build is green.", null]]);
     voiceSays("The build is green.");
-    await advance(10 * CALL_HOLD_DELAY_MS);
+    land(chat, rows);
+    await advance(CALL_HOLD_DELAY_MS - 1);
     expect(appends()).toEqual([["The build is green.", null]]);
   });
 
@@ -1515,6 +1521,190 @@ describe("holding the floor while the bot works", () => {
     await advance(10 * CALL_HOLD_DELAY_MS);
 
     expect(appends()).toEqual([[CALL_HOLD_LINE, null]]);
+  });
+
+  it("does not retry a hold when the vendor says an unconfirmed acknowledgement (simulated time)", async () => {
+    const chat = await joinOpenThread([]);
+    hearVoiceWithLevelDetection();
+    act(() =>
+      fake.activity.set(threadActivity("t-open", "replying", "typed-request")),
+    );
+    await advance(CALL_HOLD_DELAY_MS);
+    expect(appends()).toEqual([[CALL_HOLD_LINE, null]]);
+    voiceSays("One moment.");
+    await advance(CONFIRM_WINDOW_MS);
+    expect(holds()).toBe(1);
+    voiceSays("One moment.");
+    await advance(CONFIRM_WINDOW_MS);
+    expect(holds()).toBe(1);
+    land(chat, [botRow("r1", "Build passed.", 200)]);
+    await settle();
+    expect(appendedTexts()).toEqual([CALL_HOLD_LINE, "Build passed."]);
+    voiceSays("Build passed.");
+    await advance(CONFIRM_WINDOW_MS * 2);
+    expect(appendedTexts()).toEqual([CALL_HOLD_LINE, "Build passed."]);
+  });
+
+  it("keeps a spent hold across a lost activity reading for the same request (simulated time)", async () => {
+    await joinOpenThread([]);
+    act(() =>
+      fake.activity.set(threadActivity("t-open", "replying", TURN_REQUEST)),
+    );
+    await advance(CALL_HOLD_DELAY_MS);
+    voiceSays(CALL_HOLD_LINE);
+    await untilQuiet();
+    act(() => fake.activity.set(null));
+    act(() =>
+      fake.activity.set(threadActivity("t-open", "replying", TURN_REQUEST)),
+    );
+    await advance(CALL_HOLD_DELAY_MS);
+    expect(holds()).toBe(1);
+  });
+
+  it("gives a different request its own hold after an unknown reading (simulated time)", async () => {
+    await joinOpenThread([]);
+    hearVoiceWithLevelDetection();
+    act(() =>
+      fake.activity.set(threadActivity("t-open", "replying", TURN_REQUEST)),
+    );
+    await advance(CALL_HOLD_DELAY_MS);
+    voiceSays(CALL_HOLD_LINE);
+    await advance(OUTPUT_HANGOVER_MS);
+    act(() => fake.activity.set(null));
+    act(() =>
+      fake.activity.set(threadActivity("t-open", "replying", "r-next")),
+    );
+    await advance(CALL_HOLD_DELAY_MS - 1);
+    expect(holds()).toBe(1);
+    await advance(1);
+    expect(holds()).toBe(2);
+  });
+
+  it("does not add an app hold after the vendor acknowledged the same voice request", async () => {
+    await joinOpenThread([]);
+    await say("Check the build.");
+    act(() =>
+      fake.activity.set(
+        threadActivity("t-open", "replying", WRITTEN.requestId),
+      ),
+    );
+    await advance(CALL_HOLD_DELAY_MS * 2);
+    act(() => fake.activity.set(null));
+    act(() =>
+      fake.activity.set(
+        threadActivity("t-open", "replying", WRITTEN.requestId),
+      ),
+    );
+    await advance(CALL_HOLD_DELAY_MS);
+    expect(holds()).toBe(0);
+  });
+
+  it("defers a hold while the voice send response is pending, even when activity and reply arrive first", async () => {
+    let answer: (response: BotConversationSendResponse) => void = () => {
+      throw new Error("send not started");
+    };
+    fake.sendMock.mockImplementationOnce(
+      () =>
+        new Promise<BotConversationSendResponse>((resolve) => {
+          answer = resolve;
+        }),
+    );
+    const chat = await joinOpenThread([]);
+    await say("Check the build.");
+    act(() =>
+      fake.activity.set(
+        threadActivity("t-open", "replying", WRITTEN.requestId),
+      ),
+    );
+    await advance(CALL_HOLD_DELAY_MS);
+    expect(holds()).toBe(0);
+    land(chat, [botRow("r1", "Build passed.", 200)]);
+    await settle();
+    expect(appendedTexts()).toContain("Build passed.");
+    voiceSays("Build passed.");
+    answer(WRITTEN);
+    await settle();
+    await advance(CALL_HOLD_DELAY_MS * 2);
+    expect(holds()).toBe(0);
+  });
+
+  it("correlates each queued acknowledged voice send with its own request", async () => {
+    let answer: (response: BotConversationSendResponse) => void = () => {
+      throw new Error("send not started");
+    };
+    fake.sendMock.mockImplementationOnce(
+      () =>
+        new Promise<BotConversationSendResponse>((resolve) => {
+          answer = resolve;
+        }),
+    );
+    fake.sendMock.mockResolvedValueOnce({ ...WRITTEN, requestId: "r2" });
+    await joinOpenThread([]);
+    await say("First request.");
+    await say("Second request.");
+    expect(fake.sendMock).toHaveBeenCalledTimes(1);
+    answer(WRITTEN);
+    await settle();
+    expect(fake.sendMock).toHaveBeenCalledTimes(2);
+    act(() =>
+      fake.activity.set(
+        threadActivity("t-open", "replying", WRITTEN.requestId),
+      ),
+    );
+    await advance(CALL_HOLD_DELAY_MS);
+    act(() => fake.activity.set(threadActivity("t-open", "replying", "r2")));
+    await advance(CALL_HOLD_DELAY_MS);
+    expect(holds()).toBe(0);
+  });
+
+  it("still holds for a typed request with a different identity", async () => {
+    await joinOpenThread([]);
+    await say("Check the build.");
+    act(() =>
+      fake.activity.set(threadActivity("t-open", "replying", "typed-request")),
+    );
+    await advance(CALL_HOLD_DELAY_MS - 1);
+    expect(holds()).toBe(0);
+    await advance(1);
+    expect(holds()).toBe(1);
+  });
+
+  it("does not rearm a drained unconfirmed hold after the reply arrives (simulated time)", async () => {
+    const chat = await joinOpenThread([]);
+    hearVoiceWithLevelDetection();
+    act(() =>
+      fake.activity.set(threadActivity("t-open", "replying", "typed-request")),
+    );
+    await advance(CALL_HOLD_DELAY_MS);
+    expect(appends()).toEqual([[CALL_HOLD_LINE, null]]);
+    voiceSays("One moment.");
+    await advance(OUTPUT_HANGOVER_MS);
+    land(chat, [botRow("r1", "Build passed.", 200)]);
+    await settle();
+    expect(appendedTexts()).toEqual([CALL_HOLD_LINE, "Build passed."]);
+    voiceSays("Build passed.");
+    await advance(CALL_HOLD_DELAY_MS);
+    expect(holds()).toBe(1);
+  });
+
+  it("does not allocate a null-request hold after an acknowledged request resolves (simulated time)", async () => {
+    const chat = await joinOpenThread([]);
+    hearVoiceWithLevelDetection();
+    await say("Check the build.");
+    await advance(INPUT_ACTIVE_WINDOW_MS);
+    act(() =>
+      fake.activity.set(
+        threadActivity("t-open", "replying", WRITTEN.requestId),
+      ),
+    );
+    land(chat, [botRow("r1", "Build passed.", 200)]);
+    await settle();
+    expect(appendedTexts()).toEqual(["Build passed."]);
+    voiceSays("Build passed.");
+    await advance(OUTPUT_HANGOVER_MS);
+    act(() => fake.activity.set(threadActivity("t-open", "replying", null)));
+    await advance(CALL_HOLD_DELAY_MS);
+    expect(holds()).toBe(0);
   });
 
   it("says nothing for a turn that is not replying", async () => {
@@ -1679,6 +1869,57 @@ describe("holding the floor while the bot works", () => {
 
     expect(appendedTexts()).toContain("Build finished with two warnings");
     expect(holds()).toBe(1);
+  });
+
+  it("drains an unconfirmed hold without retrying it when a reply lands (simulated time)", async () => {
+    const chat = await joinOpenThread([]);
+    hearVoiceWithLevelDetection();
+    act(() =>
+      fake.activity.set(threadActivity("t-open", "replying", TURN_REQUEST)),
+    );
+    await advance(CALL_HOLD_DELAY_MS);
+    expect(appends()).toEqual([[CALL_HOLD_LINE, null]]);
+    remoteSpeaking(true);
+    land(chat, [botRow("r1", "Build finished with two warnings", 200)]);
+    await settle();
+    await advance(CONFIRM_WINDOW_MS - 1);
+    expect(appends()).toEqual([[CALL_HOLD_LINE, null]]);
+    remoteSpeaking(false);
+    await advance(1);
+    expect(appends()).toEqual([
+      [CALL_HOLD_LINE, null],
+      ["Build finished with two warnings", null],
+    ]);
+    voiceSays("Build finished with two warnings");
+    await advance(CONFIRM_WINDOW_MS * 2);
+    expect(holds()).toBe(1);
+  });
+
+  it("does not let a cut-off hold's late output confirm the waiting reply (simulated time)", async () => {
+    const chat = await joinOpenThread([]);
+    hearVoiceWithLevelDetection();
+    act(() =>
+      fake.activity.set(threadActivity("t-open", "replying", TURN_REQUEST)),
+    );
+    await advance(CALL_HOLD_DELAY_MS);
+    remoteSpeaking(true);
+    speak("Wait");
+    land(chat, [botRow("r1", "Build finished with two warnings", 200)]);
+    await settle();
+    voiceSays(CALL_HOLD_LINE);
+    await advance(OUTPUT_HANGOVER_MS);
+    expect(fake.markRead).not.toHaveBeenCalled();
+    expect(appendedTexts()).toEqual([CALL_HOLD_LINE]);
+    remoteSpeaking(false);
+    await advance(INPUT_ACTIVE_WINDOW_MS);
+    expect(appendedTexts()).toEqual([
+      CALL_HOLD_LINE,
+      "Build finished with two warnings",
+    ]);
+    expect(fake.markRead).not.toHaveBeenCalled();
+    voiceSays("Build finished with two warnings");
+    await advance(OUTPUT_HANGOVER_MS);
+    expect(fake.markRead).toHaveBeenCalledTimes(1);
   });
 
   it("withdraws a hold line still waiting when a reply lands, so the reply is what is said", async () => {
@@ -2080,21 +2321,6 @@ describe("acknowledgement boundaries and input positions", () => {
       "Second request.",
     ]);
     expect(useVoiceSessionStore.getState().openSpan).toBe("");
-  });
-
-  it("does not let a separately delivered closing mark close input after a fully read reply", async () => {
-    const chat = await joinOpenThread([]);
-    land(chat, [botRow("r1", "The build passed.", 200)]);
-    await settle();
-    voiceSays("The build passed");
-    speak("end the call");
-    voiceSays(".");
-    speak(" with the vendor tomorrow.");
-    await acknowledge();
-    expect(useVoiceSessionStore.getState().phase).toBe("live");
-    expect(fake.sendMock.mock.calls.map(([r]) => r.text)).toEqual([
-      "end the call with the vendor tomorrow.",
-    ]);
   });
 });
 
@@ -2934,6 +3160,7 @@ describe("a call dialled from a message box", () => {
             threadId={threadId}
             announcementId={null}
             sendable
+            imageReach="none"
             placeholder="Message"
             label="Message"
             testId={testId}

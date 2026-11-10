@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EnvironmentPlan } from "@traycer/protocol/host/environment/configuration-contracts";
@@ -25,17 +25,29 @@ const reads = vi.hoisted(
       readonly fetchEligible: boolean;
       readonly usageUpdatedAt: number | null;
     }>;
-  } => ({ providers: [], plans: [], cards: [] }),
+    bound: boolean;
+  } => ({ providers: [], plans: [], cards: [], bound: true }),
 );
 vi.mock("@/hooks/environment/team/use-team-viewing-host", () => ({
   useTeamViewingHost: () => ({
-    viewingHost: { hostId: "host-b", hostLabel: "Studio" },
-    client: {},
+    viewingHost: reads.bound ? { hostId: "host-b", hostLabel: "Studio" } : null,
+    client: reads.bound ? {} : null,
+    hosts: {
+      isError: false,
+      isPending: false,
+      data: { hosts: [] },
+      refetch: () => Promise.resolve(),
+    },
+    selectHost: () => undefined,
+    canSelectHost: () => false,
   }),
+  canSwitchViewingHost: () => false,
 }));
 vi.mock("@/components/settings/environment/team-viewing-host-binding", () => ({
-  TeamViewingHostBinding: (props: { readonly children: ReactNode }) =>
-    props.children,
+  TeamViewingHostBinding: (props: {
+    readonly children: ReactNode;
+    readonly unavailable: ReactNode;
+  }) => (reads.bound ? props.children : props.unavailable),
 }));
 vi.mock("@/components/settings/environment/team-viewing-host-picker", () => ({
   TeamViewingHostPicker: () => null,
@@ -152,7 +164,17 @@ beforeEach(() => {
   reads.providers = [];
   reads.plans = [];
   reads.cards = [];
+  reads.bound = true;
 });
+
+function rateCard(): HTMLElement {
+  const heading = screen.getByRole("heading", { name: "Rate limits" });
+  const section = heading.closest("section");
+  if (!(section instanceof HTMLElement)) {
+    throw new Error("rate limits section missing");
+  }
+  return section;
+}
 
 afterEach(() => {
   cleanup();
@@ -211,5 +233,79 @@ describe("TeamProviderLiveFacts", () => {
 
     expect(reads.cards).toEqual([]);
     expect(screen.queryByRole("status")).toBeNull();
+    expect(rateCard().textContent).not.toContain("uses:");
+    expect(rateCard().textContent).not.toContain("Executable");
+    expect(screen.queryByText("Details")).toBeNull();
+  });
+
+  it("shows the binary the viewing host reported inside Rate limits", () => {
+    reads.providers = [
+      {
+        ...claude(
+          [profile("ambient", "ambient", "authenticated")],
+          "authenticated",
+        ),
+        nextRunBinary: {
+          kind: "path",
+          path: "/usr/local/bin/claude",
+          version: "1.2.3",
+        },
+      },
+    ];
+    renderFacts();
+
+    expect(
+      within(rateCard()).getByText(
+        "Studio uses: /usr/local/bin/claude · 1.2.3.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText("Details")).toBeNull();
+  });
+
+  it("names the included agent and omits a null version", () => {
+    reads.providers = [
+      {
+        ...claude([], "unknown"),
+        nextRunBinary: { kind: "bundled", path: null, version: null },
+      },
+    ];
+    renderFacts();
+
+    expect(
+      within(rateCard()).getByText("Studio uses: Included agent."),
+    ).toBeTruthy();
+    expect(screen.queryByText("Details")).toBeNull();
+  });
+
+  it("omits the binary line when the host reported no binary", () => {
+    reads.providers = [
+      {
+        ...claude([], "unknown"),
+        nextRunBinary: null,
+      },
+    ];
+    renderFacts();
+
+    expect(screen.getByRole("heading", { name: "Rate limits" })).toBeTruthy();
+    expect(screen.queryByText("Details")).toBeNull();
+  });
+
+  it("omits the binary line when no viewing host is bound", () => {
+    reads.bound = false;
+    reads.providers = [
+      {
+        ...claude([], "unknown"),
+        nextRunBinary: {
+          kind: "path",
+          path: "/usr/local/bin/claude",
+          version: "1.2.3",
+        },
+      },
+    ];
+    renderFacts();
+
+    expect(screen.getByRole("heading", { name: "Rate limits" })).toBeTruthy();
+    expect(screen.queryByText("Details")).toBeNull();
+    expect(screen.queryByText(/Studio uses:/)).toBeNull();
   });
 });

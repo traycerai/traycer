@@ -362,6 +362,9 @@ function createBaseRunnerHost(): IRunnerHost {
       Promise.resolve({ kind: "unauthorized" as const }),
     disconnectSlackApp: () =>
       Promise.resolve({ kind: "unauthorized" as const }),
+    setSlackAppDms: () => Promise.resolve({ kind: "unauthorized" as const }),
+    mintTeamHostInstallToken: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
     getSandboxGrants: () => Promise.resolve({ kind: "unauthorized" as const }),
     getTeamEnvironment: () =>
       Promise.resolve({ kind: "unauthorized" as const }),
@@ -524,6 +527,7 @@ function createDirtyEpicHandle(
     ...EMPTY_PROJECTED_SLICES,
     chatRecords: EMPTY_CHATS_SLICE,
     chatRecordHeads: {},
+    evictedChatIds: new Set(),
     chatRecordListAuthoritative: true,
     tuiAgentRecordListAuthoritative: true,
     tuiAgentRecordListFailed: false,
@@ -598,6 +602,7 @@ function createDirtyEpicHandle(
     discardWriteCommand: () => undefined,
     applyChatRecords: () => undefined,
     applyChatRecordTouches: () => undefined,
+    applyChatRecordEvictions: () => undefined,
     peekChatIngestSeq: () => 0,
     markChatRecordListAuthoritative: () => undefined,
     markTuiAgentRecordListAuthoritative: () => undefined,

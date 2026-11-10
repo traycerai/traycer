@@ -1,3 +1,4 @@
+import type { NestedFocusProvenance } from "@/lib/epic-nested-focus-navigation";
 import { StagedStopFailure } from "@/components/composer/staged-sandbox-stop-failure";
 import {
   useCallback,
@@ -33,6 +34,7 @@ import { hostQueryKeys } from "@/lib/query-keys";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { v4 as uuidv4 } from "uuid";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
+import { useSandboxGetReadiness } from "@/hooks/sandboxes/use-sandbox-get-readiness-query";
 import { useSandboxVerb } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
 import { teamCannotCoverAnHour } from "@/components/hosts/sandbox-create-model";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
@@ -437,7 +439,7 @@ export function useStagedSandboxSend(input: {
             applyingPending: newHost.applyingPending,
             applyingError: newHost.applyingError,
             onStop: stop,
-            onOpenTerminal: newHost.onOpenTerminal,
+            onOpenTerminal: terminalOpenButtonAction(newHost.onOpenTerminal),
           }}
         />
         <StagedStopFailure stage={stage} onRetry={stop} />
@@ -477,6 +479,7 @@ export function useSetupLineFacts(
 ): SandboxSetupLineFacts | null {
   const user = useAuthUser().data ?? null;
   const catalogue = useSandboxCatalogue(stage !== null).data ?? null;
+  const readinessLine = useSandboxGetStagedReadinessLine(stage);
   const sandboxList = useSandboxList();
   const sandboxes = sandboxList.data?.sandboxes;
   // Whether the stage's sandbox is awake: `null` until the list has its row.
@@ -505,7 +508,12 @@ export function useSetupLineFacts(
     const row = sandboxes?.find((candidate) => candidate.id === sandboxId);
     return row === undefined || row.priceMcPerHour === null
       ? null
-      : { awakeMcPerHour: row.priceMcPerHour.awakeMc, exact: true };
+      : {
+          awakeMcPerHour: row.priceMcPerHour.awakeMc,
+          suspendedMcPerHour: row.priceMcPerHour.suspendedMc,
+          stoppedMcPerHour: row.priceMcPerHour.stoppedMc,
+          exact: true,
+        };
   }, [sandboxes, stage]);
   return useMemo(() => {
     if (stage === null) return null;
@@ -515,6 +523,7 @@ export function useSetupLineFacts(
           configuration: stage.target.configuration,
           price: existingPrice,
           needsCredits: false,
+          billingStarted: false,
           audience: "private",
           reachHost: null,
           unmovedComputer: null,
@@ -540,10 +549,12 @@ export function useSetupLineFacts(
         configuration,
         price,
         needsCredits: false,
+        billingStarted: false,
         audience: "private",
         reachHost: null,
         unmovedComputer: null,
       }).text,
+      readinessLine,
       // A region the catalogue does not name is left unsaid, never its id.
       regionLabel: region === null ? "" : region.label,
       shapeLabel: sandboxShapeLabel(shape.cpus, shape.memoryMb),
@@ -563,6 +574,7 @@ export function useSetupLineFacts(
     };
   }, [
     catalogue,
+    readinessLine,
     existingPrice,
     sandboxAwake,
     sandboxResting,
@@ -570,6 +582,21 @@ export function useSetupLineFacts(
     stage,
     user,
   ]);
+}
+
+/** Readiness belongs only to a New target before it has a sandbox row. */
+function useSandboxGetStagedReadinessLine(
+  stage: StagedSandbox | null,
+): string | null {
+  const newTarget =
+    stage?.target.kind === "new" && stage.createdSandboxId === null
+      ? stage.target
+      : null;
+  const readiness = useSandboxGetReadiness(
+    newTarget?.configuration ?? null,
+    newTarget?.shape ?? null,
+  );
+  return readiness.isSuccess && !readiness.isFetching ? readiness.data : null;
 }
 
 /**
@@ -735,10 +762,20 @@ export function useStagedSandboxHandoff(input: {
   ]);
 }
 
+/** Keep a terminal button unavailable until its action exists; a click is a user invocation. */
+export function terminalOpenButtonAction(
+  openTerminal: ((provenance: NestedFocusProvenance) => void) | null,
+): (() => void) | null {
+  return openTerminal === null ? null : () => openTerminal("user");
+}
+
 /** Where the surface opens a terminal on the new host, in its epic. */
 export interface StagedSandboxTerminal {
   readonly epicId: string;
-  readonly open: (target: TerminalLaunchTarget) => void;
+  readonly open: (
+    target: TerminalLaunchTarget,
+    provenance: NestedFocusProvenance,
+  ) => void;
 }
 
 /**
@@ -779,7 +816,7 @@ export function useNewHostActions(
   readonly repairSetupPending: boolean;
   readonly applyingPending: boolean;
   readonly applyingError: boolean;
-  readonly onOpenTerminal: (() => void) | null;
+  readonly onOpenTerminal: ((provenance: NestedFocusProvenance) => void) | null;
 } {
   const repair = useSandboxRepairGuestConfigurationOnHost(createdHostId ?? "");
   const operation = useSandboxSettingsOperation(createdHostId ?? "");
@@ -835,6 +872,6 @@ export function useNewHostActions(
     onOpenTerminal:
       terminal === null || terminalTarget === null
         ? null
-        : () => terminal.open(terminalTarget),
+        : (provenance) => terminal.open(terminalTarget, provenance),
   };
 }

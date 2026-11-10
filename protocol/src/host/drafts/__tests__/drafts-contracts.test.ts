@@ -196,9 +196,10 @@ describe("drafts unary contracts", () => {
       RELEASED_FLOOR_METHOD_NAMES,
       SERVES_EVERY_INSTALLED_MAJOR,
     );
-    // `drafts.putBlob` and `drafts.readBlob` are canonical at `@1.1` now (the
-    // wire-cap minor); `versions[0]` above still pins the `@1.0` contract
-    // instance, so this is only the manifest's ADVERTISED minor moving.
+    // `drafts.readBlob` is canonical at `@1.1` (the wire-cap minor) and
+    // `drafts.putBlob` at `@1.2` (file attachments); `versions[0]` above still
+    // pins the `@1.0` contract instance, so this is only the manifest's
+    // ADVERTISED minor moving.
     //
     // `drafts.upsert` and `drafts.list` carry a harness id in their host->client
     // response, so `commandcode` opened major 2 on those two (1.0 frozen, with
@@ -211,7 +212,7 @@ describe("drafts unary contracts", () => {
       "drafts.delete": { major: 1, minor: 0 },
       "drafts.list": { major: 2, minor: 0 },
       "drafts.retract": { major: 1, minor: 0 },
-      "drafts.putBlob": { major: 1, minor: 1 },
+      "drafts.putBlob": { major: 1, minor: 2 },
       "drafts.readBlob": { major: 1, minor: 1 },
     };
     for (const method of UNARY_METHODS) {

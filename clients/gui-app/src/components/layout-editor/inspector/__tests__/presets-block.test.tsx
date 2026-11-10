@@ -68,7 +68,7 @@ describe("applying a preset offers an Undo (L-133 overturned)", () => {
         };
       },
     ];
-    expect(message).toBe("Compact applied. Placement and order kept.");
+    expect(message).toBe("Compact applied. Placement, order and panels kept.");
     expect(options.action.label).toBe("Undo");
     expect(useLayoutStore.getState().basePreset).toBe("compact");
 
@@ -76,7 +76,7 @@ describe("applying a preset offers an Undo (L-133 overturned)", () => {
     act(() => {
       useLayoutStore.getState().setArrangement({
         ...useLayoutStore.getState().arrangement,
-        tabStripPlacement: "left",
+        tabStripPlacement: "right",
       });
     });
 
@@ -89,7 +89,7 @@ describe("applying a preset offers an Undo (L-133 overturned)", () => {
     // The apply never touched the arrangement, so Undo (which only restores
     // basePreset/overrides) leaves the later arrangement change in place.
     expect(useLayoutStore.getState().arrangement.tabStripPlacement).toBe(
-      "left",
+      "right",
     );
   });
 });
@@ -174,7 +174,7 @@ describe("Reset layout's confirm, in both hosts (L-20, P-6)", () => {
       act(() => {
         useLayoutStore.getState().setArrangement({
           ...DEFAULT_ARRANGEMENT,
-          tabStripPlacement: "left",
+          tabStripPlacement: "right",
         });
       });
       render(
@@ -195,7 +195,7 @@ describe("Reset layout's confirm, in both hosts (L-20, P-6)", () => {
 
       fireEvent.click(screen.getByTestId("confirm-cancel"));
       expect(useLayoutStore.getState().arrangement.tabStripPlacement).toBe(
-        "left",
+        "right",
       );
       expect(screen.queryByRole("dialog")).toBeNull();
 
@@ -245,7 +245,7 @@ describe("View changes (L-89 overturned: no separate level)", () => {
     act(() => {
       useLayoutStore.getState().setArrangement({
         ...DEFAULT_ARRANGEMENT,
-        tabStripPlacement: "left",
+        tabStripPlacement: "right",
       });
     });
     render(<PresetsBlock reveal={vi.fn()} />);
@@ -291,6 +291,47 @@ describe("View changes (L-89 overturned: no separate level)", () => {
   });
 });
 
+describe("panels the rail shows are not a preset's to change", () => {
+  function showFileTree(): void {
+    act(() => {
+      useLayoutStore
+        .getState()
+        .setRegionValues("railFileTree", { shown: "shown" });
+    });
+  }
+
+  it("reads Default, not Modified, with File Tree shown", () => {
+    showFileTree();
+    render(<PresetsBlock reveal={vi.fn()} />);
+
+    expect(screen.getByTestId("preset-status-line").textContent).toBe(
+      "Default",
+    );
+    expect(screen.queryAllByTestId("preset-card-modified")).toHaveLength(0);
+  });
+
+  it("lists File Tree under Arrangement against Default, even with Compact applied, and its revert clears it", () => {
+    act(() => {
+      useLayoutStore.getState().applyPreset("compact");
+    });
+    showFileTree();
+    render(<PresetsBlock reveal={vi.fn()} />);
+    const toggle = screen.queryByRole("button", { name: "View changes" });
+    if (toggle !== null) fireEvent.click(toggle);
+
+    const arrangement = within(
+      screen.getByTestId("layout-change-list"),
+    ).getByRole("region", { name: "Arrangement" });
+    expect(arrangement.textContent).toContain("File Tree");
+    expect(arrangement.textContent).toContain("Default: ");
+    expect(arrangement.textContent).not.toContain("Compact: ");
+
+    fireEvent.click(screen.getByRole("button", { name: "Revert File Tree" }));
+
+    expect(useLayoutStore.getState().overrides.railFileTree).toBeUndefined();
+  });
+});
+
 describe("View changes' revert keeps focus in the list, or moves it to the applied card when the list empties", () => {
   function openViewChanges(): void {
     render(<PresetsBlock reveal={vi.fn()} />);
@@ -316,9 +357,9 @@ describe("View changes' revert keeps focus in the list, or moves it to the appli
     act(() => {
       useLayoutStore.getState().setArrangement({
         ...DEFAULT_ARRANGEMENT,
-        tabStripPlacement: "left",
-        sidebarSide: "right",
-        minimapSide: "left",
+        tabStripPlacement: "right",
+        sidebarSide: "left",
+        minimapSide: "right",
       });
     });
     openViewChanges();
@@ -334,7 +375,9 @@ describe("View changes' revert keeps focus in the list, or moves it to the appli
     revertTabPlacement.focus();
     fireEvent.click(revertTabPlacement);
 
-    expect(useLayoutStore.getState().arrangement.tabStripPlacement).toBe("top");
+    expect(useLayoutStore.getState().arrangement.tabStripPlacement).toBe(
+      DEFAULT_ARRANGEMENT.tabStripPlacement,
+    );
     const revertSidebarSide = screen.getByRole("button", {
       name: "Revert Sidebar side",
     });
@@ -347,8 +390,8 @@ describe("View changes' revert keeps focus in the list, or moves it to the appli
     act(() => {
       useLayoutStore.getState().setArrangement({
         ...DEFAULT_ARRANGEMENT,
-        tabStripPlacement: "left",
-        sidebarSide: "right",
+        tabStripPlacement: "right",
+        sidebarSide: "left",
       });
     });
     openViewChanges();
@@ -360,7 +403,7 @@ describe("View changes' revert keeps focus in the list, or moves it to the appli
     revertSidebarSide.focus();
     fireEvent.click(revertSidebarSide);
 
-    expect(useLayoutStore.getState().arrangement.sidebarSide).toBe("left");
+    expect(useLayoutStore.getState().arrangement.sidebarSide).toBe("right");
     const revertTabPlacement = screen.getByRole("button", {
       name: "Revert Tab placement",
     });
@@ -373,7 +416,7 @@ describe("View changes' revert keeps focus in the list, or moves it to the appli
     act(() => {
       useLayoutStore.getState().setArrangement({
         ...DEFAULT_ARRANGEMENT,
-        tabStripPlacement: "left",
+        tabStripPlacement: "right",
       });
     });
     openViewChanges();
@@ -385,7 +428,9 @@ describe("View changes' revert keeps focus in the list, or moves it to the appli
     revertTabPlacement.focus();
     fireEvent.click(revertTabPlacement);
 
-    expect(useLayoutStore.getState().arrangement.tabStripPlacement).toBe("top");
+    expect(useLayoutStore.getState().arrangement.tabStripPlacement).toBe(
+      DEFAULT_ARRANGEMENT.tabStripPlacement,
+    );
     expect(screen.queryByTestId("layout-change-list")).toBeNull();
     expect(screen.queryByRole("button", { name: "View changes" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Hide changes" })).toBeNull();
@@ -399,7 +444,7 @@ describe("View changes' revert keeps focus in the list, or moves it to the appli
       useLayoutStore.getState().setRegionValues("mic", { shown: "hidden" });
       useLayoutStore.getState().setArrangement({
         ...DEFAULT_ARRANGEMENT,
-        tabStripPlacement: "left",
+        tabStripPlacement: "right",
       });
     });
     openViewChanges();
@@ -543,7 +588,9 @@ describe("keyboard applies a preset exactly like a click, as one undo step (R2-B
           readonly cancel: { readonly label: string };
         },
       ];
-      expect(message).toBe("Compact applied. Placement and order kept.");
+      expect(message).toBe(
+        "Compact applied. Placement, order and panels kept.",
+      );
       expect(options.action.label).toBe("Undo");
       expect(options.cancel.label).toBe("View changes");
     },

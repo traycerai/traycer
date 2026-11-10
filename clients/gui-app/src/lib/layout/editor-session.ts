@@ -32,6 +32,7 @@ import {
 } from "@/lib/settings-navigation";
 import type { TabActivationIntent } from "@/lib/tab-navigation/intents";
 import { useCommandPaletteStore } from "@/stores/command-palette/command-palette-store";
+import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
 import {
   useLayoutEditorStore,
   type LayoutEditorEntryMethod,
@@ -186,6 +187,7 @@ export function openLayoutEditor(input: OpenLayoutEditorInput): boolean {
   // do: a call site that forgets is a call site that reopens the bug.
   closeSystemOverlay();
   dismissCommandPalette();
+  dismissNotificationCenter();
   // Before the session begins, so the activation this performs is not the tab
   // switch the session watcher exits on.
   openSampleWorkspace(input.navigateToTabIntent);
@@ -404,6 +406,24 @@ function dismissCommandPalette(): void {
   if (!useCommandPaletteStore.getState().open) return;
   flushSync(() => {
     useCommandPaletteStore.getState().setOpen(false);
+  });
+}
+
+/**
+ * Put the notification center away before the sample workspace opens.
+ *
+ * The header bell and the side-strip drawer are one controlled popover
+ * (`useNotificationsPopoverStore`). It paints above the editor the same way
+ * the system overlay does. `setOpen(false)` is the close the center's own
+ * navigation and its toggle chord already use, so that close lifecycle runs.
+ * The flush keeps the unmount ahead of the navigation, as with the palette.
+ * A width-gate redirect never reaches here: that path opens Settings, and
+ * the center is not a layer this door has to put down first.
+ */
+function dismissNotificationCenter(): void {
+  if (!useNotificationsPopoverStore.getState().open) return;
+  flushSync(() => {
+    useNotificationsPopoverStore.getState().setOpen(false);
   });
 }
 

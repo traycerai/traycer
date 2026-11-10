@@ -233,7 +233,7 @@ const GIB = 1024 * 1024 * 1024;
 /**
  * A projection carrying real numbers, attributed to `hostId` - built the same
  * shape `status-bar-resource-segment.test.tsx` uses, so a foreign-host figure
- * ("12%") is unambiguous if it ever leaks through attribution.
+ * ("0.75%") is unambiguous if it ever leaks through attribution.
  */
 function liveHostTreeProjection(hostId: string): GlobalResourceProjection {
   return {
@@ -242,6 +242,7 @@ function liveHostTreeProjection(hostId: string): GlobalResourceProjection {
     app: {
       sampledAt: 1,
       hostTotalMemoryBytes: 16 * GIB,
+      hostCpuCount: 16,
       process: null,
       processCount: 3,
       cpuPercent: 4,
@@ -389,7 +390,7 @@ describe("<AppStatusBar />", () => {
     render(<AppStatusBar />);
 
     expect(screen.getAllByText("cpu: unavailable")).toHaveLength(1);
-    expect(screen.queryByText("12%")).toBeNull();
+    expect(screen.queryByText("0.75%")).toBeNull();
   });
 
   it("names a vanished pick for what it is", () => {
@@ -657,7 +658,7 @@ describe("<AppStatusBar /> host controls", () => {
 
     // The readings prove the strip IS watching Office Linux - so the absent
     // name below is a deliberate omission rather than an unresolved pick.
-    expect(screen.getByText("12%")).not.toBeNull();
+    expect(screen.getByText("0.75%")).not.toBeNull();
     expect(screen.queryByTestId("settings-host-switcher")).toBeNull();
     expect(screen.queryByText("Office Linux")).toBeNull();
   });

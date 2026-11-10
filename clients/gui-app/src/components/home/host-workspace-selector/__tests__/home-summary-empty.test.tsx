@@ -768,7 +768,7 @@ describe("landing workspace summary empty state", () => {
 
     expect(screen.getByTestId("home-workspace-summary-control")).toBeTruthy();
     const hostTrigger = screen.getByRole("button", { name: /^Host:/ });
-    expect(hostTrigger.className).toContain("h-7");
+    expect(hostTrigger.className).toContain("h-auto");
     expect(hostTrigger.className).toContain("hover:bg-foreground/5");
     expect(screen.queryByTestId("workspace-summary-trigger")).toBeNull();
     expect(screen.getByTestId("folder-add").textContent).toContain(
@@ -1787,6 +1787,8 @@ function editorHandleForPrompt(prompt: string): ComposerPromptEditorHandle {
     clear: () => undefined,
     setContent: () => undefined,
     syncContent: () => undefined,
+    insertFileAttachment: () => false,
+    settleFileAttachment: () => false,
     insertImageAttachments: () => undefined,
     insertMentionAttachment: () => false,
     beginPathInsertion: () => null,

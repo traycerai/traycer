@@ -17,10 +17,17 @@ import { normalizeSliceSoftBreaks } from "@/lib/composer/normalize-soft-breaks";
 import {
   parseLeadingSlashCommand,
   slashCommandParagraph,
+  slashCommandPlainTextFromAttrs,
   stringValue,
   type SlashCommandCatalog,
 } from "@/lib/composer/tiptap-json-content";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import { MAX_FILE_ATTACHMENTS_PER_MESSAGE } from "@traycer/protocol/common/file-attachment";
+import {
+  FILE_ATTACHMENT_NODE_TYPE,
+  fileAttachmentIdentity,
+} from "@/lib/composer/file-attachments";
+import { showTooManyFilesToast } from "@/lib/composer/file-attachment-upload";
 import { hasClaimableFileTransfer } from "@/lib/files/file-transfer-paths";
 
 import {
@@ -54,6 +61,10 @@ export type PastedComposerImageOutcome =
 
 export interface ChatPasteHandlerDeps {
   readonly pickerStore: ComposerPickerStore;
+  /** Keep text/plain as written in a bot message, including Markdown escapes. */
+  readonly preserveMessagePaste: boolean;
+  /** Boxes without a slash provider keep copied slash chips as literal text. */
+  readonly preserveSlashAsText: boolean;
   readonly getHasPastedImageBytes: () => ((hash: string) => boolean) | null;
   /**
    * Landing-only: validate a paste's inline-base64 images synchronously (decode,
@@ -125,10 +136,20 @@ export function createChatPasteHandler(deps: ChatPasteHandlerDeps) {
           const images = collectPastedB64Images(content);
           if (images.length > 0) {
             const outcomes = ingest(images);
-            workingContent = applyPastedB64ImageOutcomes(content, outcomes);
+            workingContent = applyPastedB64ImageOutcomes(
+              workingContent,
+              outcomes,
+            );
           }
         }
-        return validateAndPasteComposerContent(view, workingContent);
+        if (deps.preserveSlashAsText) {
+          const plain = plainSlashContent(workingContent);
+          if (plain === null) return false;
+          workingContent = plain;
+        }
+        const capped = capPastedFileAttachments(view.state, workingContent);
+        showTooManyFilesToast(capped.refusedNames);
+        return validateAndPasteComposerContent(view, capped.content);
       };
       const pasteSliceWithValidatedImages = (
         view: EditorView,
@@ -151,12 +172,32 @@ export function createChatPasteHandler(deps: ChatPasteHandlerDeps) {
           if (images.length > 0) {
             const outcomes = ingest(images);
             workingSlice = new Slice(
-              applyPastedB64ImageOutcomesToFragment(slice.content, outcomes),
+              applyPastedB64ImageOutcomesToFragment(
+                workingSlice.content,
+                outcomes,
+              ),
               slice.openStart,
               slice.openEnd,
             );
           }
         }
+        if (deps.preserveSlashAsText) {
+          workingSlice = new Slice(
+            plainSlashFragment(workingSlice.content, view.state.schema),
+            workingSlice.openStart,
+            workingSlice.openEnd,
+          );
+        }
+        const cappedFragment = capPastedFileAttachmentFragment(
+          view.state,
+          workingSlice.content,
+        );
+        showTooManyFilesToast(cappedFragment.refusedNames);
+        workingSlice = new Slice(
+          cappedFragment.fragment,
+          workingSlice.openStart,
+          workingSlice.openEnd,
+        );
         const hashes = hashOnlyImageFragmentHashes(workingSlice.content);
         const hasPastedImageBytes = deps.getHasPastedImageBytes();
         if (hashes.length === 0 || hasPastedImageBytes === null) {
@@ -244,6 +285,14 @@ export function createChatPasteHandler(deps: ChatPasteHandlerDeps) {
 
               const text = clipboardData.getData("text/plain");
               if (text.length === 0) return false;
+              if (deps.preserveMessagePaste) {
+                view.dispatch(
+                  view.state.tr
+                    .insertText(text.replace(/\r\n?/g, "\n"))
+                    .scrollIntoView(),
+                );
+                return true;
+              }
 
               // A `/command …` pasted at the start of the composer (e.g. a copied
               // next-step prompt) becomes a slashCommand chip, mirroring the
@@ -303,6 +352,134 @@ export function createChatPasteHandler(deps: ChatPasteHandlerDeps) {
       ];
     },
   });
+}
+
+/**
+ * The files the document will still hold around the paste. A paste REPLACES
+ * the selection, so a file inside it is gone once the paste lands and must not
+ * count against the files the paste brings in.
+ */
+function fileIdentitiesAroundPaste(state: EditorState): Set<string> {
+  const doc = state.selection.empty
+    ? state.doc
+    : state.tr.deleteSelection().doc;
+  const identities = new Set<string>();
+  doc.descendants((node) => {
+    if (node.type.name !== FILE_ATTACHMENT_NODE_TYPE) return true;
+    identities.add(fileIdentityOfAttrs(node.attrs));
+    return false;
+  });
+  return identities;
+}
+
+function fileIdentityOfAttrs(
+  attrs: Record<string, unknown> | undefined,
+): string {
+  return fileAttachmentIdentity({
+    hash: stringValue(attrs?.hash) ?? "",
+    fileName: stringValue(attrs?.fileName) ?? "",
+  });
+}
+
+function admitPastedFile(
+  identities: Set<string>,
+  attrs: Record<string, unknown> | undefined,
+): boolean {
+  const identity = fileIdentityOfAttrs(attrs);
+  if (identities.has(identity)) return true;
+  if (identities.size >= MAX_FILE_ATTACHMENTS_PER_MESSAGE) return false;
+  identities.add(identity);
+  return true;
+}
+
+/**
+ * The per-message file cap, applied to a rich paste: every pasted file whose
+ * `(hash, fileName)` is NEW is admitted only while the document holds fewer
+ * than the most a message may carry. A file the document already holds adds
+ * no line to the agent's list and always goes in. The left-out ones are named
+ * so the person hears what the paste dropped.
+ */
+function capPastedFileAttachments(
+  state: EditorState,
+  content: JsonContent,
+): { readonly content: JsonContent; readonly refusedNames: string[] } {
+  const identities = fileIdentitiesAroundPaste(state);
+  const refusedNames: string[] = [];
+  const visit = (node: JsonContent): JsonContent | null => {
+    if (node.type === FILE_ATTACHMENT_NODE_TYPE) {
+      if (admitPastedFile(identities, node.attrs)) return node;
+      refusedNames.push(stringValue(node.attrs?.fileName) ?? "file");
+      return null;
+    }
+    if (node.content === undefined) return node;
+    return {
+      ...node,
+      content: node.content.flatMap((child) => {
+        const next = visit(child);
+        return next === null ? [] : [next];
+      }),
+    };
+  };
+  return { content: visit(content) ?? content, refusedNames };
+}
+
+/** {@link capPastedFileAttachments} over an HTML paste's parsed fragment. */
+function capPastedFileAttachmentFragment(
+  state: EditorState,
+  fragment: Fragment,
+): { readonly fragment: Fragment; readonly refusedNames: string[] } {
+  const identities = fileIdentitiesAroundPaste(state);
+  const refusedNames: string[] = [];
+  const visit = (current: Fragment): Fragment => {
+    const kept: ProseMirrorNode[] = [];
+    current.forEach((node) => {
+      if (node.type.name === FILE_ATTACHMENT_NODE_TYPE) {
+        if (admitPastedFile(identities, node.attrs)) kept.push(node);
+        else refusedNames.push(stringValue(node.attrs.fileName) ?? "file");
+        return;
+      }
+      kept.push(node.isLeaf ? node : node.copy(visit(node.content)));
+    });
+    return Fragment.fromArray(kept);
+  };
+  return { fragment: visit(fragment), refusedNames };
+}
+
+function plainSlashContent(node: JsonContent): JsonContent | null {
+  if (node.type === "slashCommand") {
+    const text = slashCommandPlainTextFromAttrs(node.attrs);
+    if (text.length === 0) return null;
+    return {
+      type: "text",
+      text,
+      ...(node.marks === undefined ? {} : { marks: node.marks }),
+    };
+  }
+  if (node.content === undefined) return node;
+  return {
+    ...node,
+    content: node.content.flatMap((child) => {
+      const plain = plainSlashContent(child);
+      return plain === null ? [] : [plain];
+    }),
+  };
+}
+
+function plainSlashFragment(fragment: Fragment, schema: Schema): Fragment {
+  const nodes: ProseMirrorNode[] = [];
+  fragment.forEach((node) => {
+    if (node.type.name === "slashCommand") {
+      const text = slashCommandPlainTextFromAttrs(node.attrs);
+      if (text.length > 0) nodes.push(schema.text(text, node.marks));
+    } else {
+      nodes.push(
+        node.content.size === 0
+          ? node
+          : node.copy(plainSlashFragment(node.content, schema)),
+      );
+    }
+  });
+  return Fragment.fromArray(nodes);
 }
 
 function pasteComposerContent(view: EditorView, content: JsonContent): boolean {

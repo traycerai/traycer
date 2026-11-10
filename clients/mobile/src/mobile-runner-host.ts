@@ -1,3 +1,4 @@
+import type { SandboxCatalogueReadinessRequest } from "@traycer/protocol/host/sandbox-control";
 import {
   MobileSandboxArtifacts,
   SandboxArtifacts,
@@ -128,13 +129,21 @@ import {
   fetchSlackAppManifestViaHttp,
   mintSlackAppInstallUrlViaHttp,
   readSlackAppViaHttp,
+  setSlackAppDmsViaHttp,
   registerSlackAppViaHttp,
   type SlackAppInstallUrlResult,
   type SlackAppManifestResult,
   type SlackAppReadResult,
   type SlackAppWriteResult,
 } from "@traycer-clients/shared/host-client/slack-app";
-import type { SlackAppRegisterRequest } from "@traycer/protocol/host/slack-app";
+import type {
+  SlackAppDmsRequest,
+  SlackAppRegisterRequest,
+} from "@traycer/protocol/host/slack-app";
+import {
+  mintTeamHostInstallTokenViaHttp,
+  type TeamHostInstallTokenResult,
+} from "@traycer-clients/shared/host-client/team-host";
 import {
   createSandboxViaHttp,
   destroySandboxViaHttp,
@@ -764,8 +773,14 @@ export class MobileRunnerHost implements IRunnerHost {
 
   getSandboxCatalogue(
     bearerToken: string,
+    context: SandboxCatalogueReadinessRequest | null,
   ): Promise<SandboxCatalogueFetchResult> {
-    return fetchSandboxCatalogueViaHttp(this.serverBaseUrl, bearerToken, null);
+    return fetchSandboxCatalogueViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      context,
+    );
   }
 
   getTraycerModels(bearerToken: string): Promise<TraycerModelsFetchResult> {
@@ -955,6 +970,30 @@ export class MobileRunnerHost implements IRunnerHost {
       bearerToken,
       null,
       botId,
+    );
+  }
+
+  setSlackAppDms(
+    bearerToken: string,
+    request: SlackAppDmsRequest,
+  ): Promise<SlackAppWriteResult> {
+    return setSlackAppDmsViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      request,
+    );
+  }
+
+  mintTeamHostInstallToken(
+    bearerToken: string,
+    environmentId: string,
+  ): Promise<TeamHostInstallTokenResult> {
+    return mintTeamHostInstallTokenViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      environmentId,
     );
   }
 

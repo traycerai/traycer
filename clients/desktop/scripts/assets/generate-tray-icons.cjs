@@ -13,12 +13,14 @@
  *   - trayTemplate@2x.png   32x32  black + alpha, macOS retina template
  *   - tray.png              16x16  white + alpha, Windows / Linux fallback
  *   - tray@2x.png           32x32  white + alpha, retina variant
+ *   - tray-dark.png         16x16  black + alpha, Windows light system theme
+ *   - tray-dark@2x.png      32x32  black + alpha, retina variant
  *
  * The macOS variants use only black pixels with alpha so AppKit can invert
  * them automatically against light/dark menu bars when
  * `nativeImage.setTemplateImage(true)` is set (see `src/electron-main/tray/tray.ts`).
- * The non-mac variants use white pixels so the icon stays visible against
- * the dark default tray backgrounds on Windows 10/11 and most Linux DEs.
+ * Windows selects black or white pixels against its system tray theme;
+ * Linux keeps the white glyph for dark tray backgrounds.
  */
 
 const { readFileSync, writeFileSync, mkdirSync } = require("node:fs");
@@ -119,6 +121,14 @@ writeFileSync(
 writeFileSync(
   resolve(outDir, "tray@2x.png"),
   paintGlyph(source, 32, 30, [255, 255, 255]),
+);
+writeFileSync(
+  resolve(outDir, "tray-dark.png"),
+  paintGlyph(source, 16, 15, [0, 0, 0]),
+);
+writeFileSync(
+  resolve(outDir, "tray-dark@2x.png"),
+  paintGlyph(source, 32, 30, [0, 0, 0]),
 );
 
 console.log(`[desktop] generated tray icon assets at ${outDir}`);

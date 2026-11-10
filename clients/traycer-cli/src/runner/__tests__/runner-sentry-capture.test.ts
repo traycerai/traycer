@@ -457,6 +457,25 @@ describe("runner Sentry capture", () => {
     );
   });
 
+  it("tags a host-start acknowledgement timeout with its closed-set evidence", async () => {
+    const { SpawnAcknowledgementTimeoutError } =
+      await import("@traycer-clients/shared/host-start-adoption/spawn-acknowledgement-error");
+    const err = new SpawnAcknowledgementTimeoutError();
+    err.attachProof("pending-ours");
+    err.attachSupervisorEvidence("none", "crashed");
+
+    await runThrowing(err);
+
+    expect(sentryMocks.captureException).toHaveBeenCalledWith(err, {
+      extra: { repeatsSinceLastReport: 0 },
+      tags: {
+        spawn_ack_proof: "pending-ours",
+        spawn_ack_supervisor: "none",
+        spawn_ack_marker: "crashed",
+      },
+    });
+  });
+
   it("captures a non-Error throw", async () => {
     await runThrowing("just a string");
 

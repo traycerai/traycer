@@ -7,6 +7,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import { toast } from "sonner";
 import {
   SandboxSetupLine,
   type SandboxSetupLineActions,
@@ -24,6 +25,7 @@ import type {
   StagedSandbox,
   StagedSandboxFailure,
 } from "@/stores/composer/staged-sandbox-store";
+import { useSandboxDetailsStore } from "@/stores/sandboxes/sandbox-details-store";
 
 vi.mock("@/hooks/sandboxes/use-configuration-billing-url", () => ({
   useConfigurationBillingUrl: () => "https://example.test/billing",
@@ -32,7 +34,24 @@ vi.mock("@/lib/links/open-link", () => ({
   useOpenLink: () => vi.fn(),
 }));
 
-afterEach(cleanup);
+beforeEach(() => {
+  vi.clearAllMocks();
+  useSandboxDetailsStore.setState({ sandboxId: null });
+});
+
+const clipboardDescriptor = Object.getOwnPropertyDescriptor(
+  navigator,
+  "clipboard",
+);
+
+afterEach(() => {
+  cleanup();
+  if (clipboardDescriptor === undefined) {
+    Reflect.deleteProperty(navigator, "clipboard");
+  } else {
+    Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+  }
+});
 
 const onStop = vi.fn();
 
@@ -194,15 +213,10 @@ describe("withdrawing a message from every refusal or failure", () => {
         screen.queryByTestId("sandbox-refusal-line") ??
         screen.getByTestId("sandbox-setup-line-detail");
       const labels = buttonLabels(line);
-      // A settings failure's terminal action reads plain "Open terminal".
+      const terminalLabel =
+        failure.kind === "settings" ? "Open terminal" : "Open terminal instead";
       const exits = [
-        ...(failure.kind === "credits"
-          ? []
-          : [
-              failure.kind === "settings"
-                ? "Open terminal"
-                : "Open terminal instead",
-            ]),
+        ...(failure.kind === "credits" ? [] : [terminalLabel]),
         "Use This computer",
         "Cancel the message",
         "Details",
@@ -476,12 +490,53 @@ describe("SandboxSetupLine's failed start", () => {
     );
   }
 
-  it("titles the failure with its support reference, never the raw code", () => {
+  it("shows the failed-create support code in the heading even when collapsed", () => {
     mountFailed();
 
-    const line = screen.getByTestId("sandbox-setup-line");
-    expect(line.textContent).toContain("SBX-0412");
-    expect(line.textContent).not.toContain(RAW_CODE);
+    const toggle = screen.getByTestId("sandbox-setup-line-toggle");
+    expect(toggle.textContent).toContain("SBX-0412");
+    expect(screen.getByTestId("sandbox-setup-line").textContent).not.toContain(
+      RAW_CODE,
+    );
+    expect(screen.queryByText("Support reference")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Copy support reference" }),
+    ).toBeTruthy();
+
+    fireEvent.click(toggle);
+
+    expect(toggle.textContent).toContain("SBX-0412");
+    expect(screen.queryByTestId("sandbox-setup-line-detail")).toBeNull();
+  });
+
+  it("shows and copies a pre-create failure's reference before a sandbox id exists", async () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    render(
+      <SandboxSetupLine
+        stage={refused(
+          { kind: "personal" },
+          { kind: "failed", code: RAW_CODE, step: "creating" },
+        )}
+        name="api-refactor"
+        facts={facts(false)}
+        actions={ACTIONS}
+      />,
+    );
+
+    expect(
+      screen.getByTestId("sandbox-setup-line-toggle").textContent,
+    ).toContain("SBX-0412");
+    expect(screen.queryByRole("button", { name: "Details" })).toBeNull();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Copy support reference" }),
+    );
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith("SBX-0412");
+    });
   });
 
   it("copies the support reference with the created sandbox's id", async () => {
@@ -497,6 +552,29 @@ describe("SandboxSetupLine's failed start", () => {
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith("SBX-0412 · sbx_made_1");
     });
+  });
+
+  it("shows an error toast when copying the support reference is rejected", async () => {
+    const writeText = vi.fn(() => Promise.reject(new Error("denied")));
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const errorToast = vi.spyOn(toast, "error").mockReturnValue(0);
+    try {
+      mountFailed();
+      fireEvent.click(
+        await screen.findByTestId("sandbox-setup-copy-reference"),
+      );
+      await waitFor(() => {
+        expect(errorToast).toHaveBeenCalledWith(
+          "Couldn't copy the diagnostics.",
+        );
+      });
+      expect(writeText).toHaveBeenCalledWith("SBX-0412 · sbx_made_1");
+    } finally {
+      errorToast.mockRestore();
+    }
   });
 });
 
@@ -830,7 +908,7 @@ describe("SandboxSetupLine when the settings did not apply", () => {
           sendTaken,
           failure: {
             kind: "settings",
-            code: "envelope-delivery:x",
+            code: "SBX-0520",
             steps: STEPS,
           },
         }}
@@ -842,22 +920,43 @@ describe("SandboxSetupLine when the settings did not apply", () => {
     return screen.getByTestId("sandbox-setup-line-detail");
   }
 
-  it("says the one shared sentence, then compute first and one step line, never a raw key or code", () => {
+  it("shows the shared failure sentence and applied-step line", () => {
     const detail = mountSettings(false, ACTIONS);
 
     expect(
       screen.getByText(
-        "api-refactor is awake, but Personal's settings didn't apply · SBX-0520",
+        "api-refactor is awake, but Personal's settings didn't apply",
       ),
     ).toBeTruthy();
     const lines = within(detail)
       .getAllByText(/./, { selector: "p" })
       .map((line) => line.textContent);
-    expect(lines[0]).toBe("Compute is charged while it is awake.");
+    expect(lines).not.toContain("Compute is charged while it is awake.");
     expect(lines).toContain(sandboxSettingsStepsLine(STEPS));
     expect(detail.textContent).not.toMatch(
       /permission_denied|ANTHROPIC_API_KEY|envelope-delivery/,
     );
+  });
+
+  it("shows and copies the fallback settings reference inline", async () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const detail = mountSettings(false, ACTIONS);
+    expect(
+      screen.getByTestId("sandbox-setup-line-toggle").textContent,
+    ).toContain("SBX-0520");
+    expect(within(detail).queryByText("Support reference")).toBeNull();
+
+    fireEvent.click(
+      within(detail).getByRole("button", { name: "Copy support reference" }),
+    );
+
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith("SBX-0520 · sbx_made_1");
+    });
   });
 
   it("says the message waits only when the send was taken", () => {
@@ -871,22 +970,72 @@ describe("SandboxSetupLine when the settings did not apply", () => {
     expect(idle.textContent).not.toContain("waits until they apply");
   });
 
-  it("offers Retry applying, Open terminal, Stop, Use This computer and Details", () => {
+  it("shows all applicable remedies inline and dispatches each once", () => {
+    const onRetryApplying = vi.fn();
+    const onRepairSetup = vi.fn();
+    const onOpenTerminal = vi.fn();
+    const onStop = vi.fn();
+    const onChooseAnotherHost = vi.fn();
+    const onCancel = vi.fn();
     const detail = mountSettings(true, {
       ...ACTIONS,
-      onOpenTerminal: vi.fn(),
+      onRetryApplying,
+      onRepairSetup,
+      onOpenTerminal,
+      onStop,
+      onChooseAnotherHost,
+      onCancel,
     });
 
-    const labels = buttonLabels(detail);
-    for (const label of [
+    expect(buttonLabels(detail)).toEqual([
       "Retry applying",
+      "Repair setup",
       "Open terminal",
       "Stop",
       "Use This computer",
+      "Cancel the message",
+      "Details",
+      "Copy support reference",
+    ]);
+    expect(screen.queryByRole("button", { name: "More" })).toBeNull();
+    for (const label of [
+      "Retry applying",
+      "Repair setup",
+      "Open terminal",
+      "Stop",
+      "Use This computer",
+      "Cancel the message",
       "Details",
     ]) {
-      expect(labels).toContain(label);
+      const button = within(detail).getByRole("button", { name: label });
+      fireEvent.click(button);
     }
+
+    expect(onRetryApplying).toHaveBeenCalledOnce();
+    expect(onRepairSetup).toHaveBeenCalledOnce();
+    expect(onOpenTerminal).toHaveBeenCalledOnce();
+    expect(onStop).toHaveBeenCalledOnce();
+    expect(onChooseAnotherHost).toHaveBeenCalledOnce();
+    expect(onCancel).toHaveBeenCalledOnce();
+    expect(useSandboxDetailsStore.getState().sandboxId).toBe("sbx_made_1");
+  });
+
+  it("keeps Stop reachable once whether the person collapses the failure or leaves it expanded", () => {
+    const onStopHere = vi.fn();
+    const detail = mountSettings(true, { ...ACTIONS, onStop: onStopHere });
+
+    expect(screen.getAllByRole("button", { name: "Stop" })).toHaveLength(1);
+    expect(within(detail).getByRole("button", { name: "Stop" })).toBeTruthy();
+    fireEvent.click(screen.getByTestId("sandbox-setup-stop"));
+    expect(onStopHere).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByTestId("sandbox-setup-line-toggle"));
+
+    expect(screen.queryByTestId("sandbox-setup-line-detail")).toBeNull();
+    const stop = screen.getByTestId("sandbox-setup-stop");
+    expect(stop.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(stop);
+    expect(onStopHere).toHaveBeenCalledTimes(2);
   });
 
   it("hides Retry applying when the host offers no combined retry", () => {
@@ -895,10 +1044,10 @@ describe("SandboxSetupLine when the settings did not apply", () => {
     expect(
       within(detail).queryByTestId("sandbox-setup-retry-applying"),
     ).toBeNull();
-    expect(within(detail).getByTestId("sandbox-setup-stop")).toBeTruthy();
+    expect(screen.getByTestId("sandbox-setup-stop")).toBeTruthy();
   });
 
-  it("offers Repair setup instead of Retry applying when only the guest-only repair is available", () => {
+  it("offers Repair setup instead of Retry applying when only the older repair is available", () => {
     const onRepairSetup = vi.fn();
     const detail = mountSettings(true, {
       ...ACTIONS,
@@ -906,7 +1055,7 @@ describe("SandboxSetupLine when the settings did not apply", () => {
       onRepairSetup,
     });
 
-    fireEvent.click(within(detail).getByTestId("sandbox-setup-repair-setup"));
+    fireEvent.click(screen.getByTestId("sandbox-setup-repair-setup"));
 
     expect(onRepairSetup).toHaveBeenCalledTimes(1);
     expect(
@@ -915,9 +1064,27 @@ describe("SandboxSetupLine when the settings did not apply", () => {
   });
 
   it("disables Retry applying while a retry is pending", () => {
-    const detail = mountSettings(true, { ...ACTIONS, applyingPending: true });
+    const onRetryApplying = vi.fn();
+    const onRepairSetup = vi.fn();
+    const detail = mountSettings(true, {
+      ...ACTIONS,
+      onRetryApplying,
+      onRepairSetup,
+      applyingPending: true,
+      repairSetupPending: true,
+    });
 
     const retry = within(detail).getByTestId("sandbox-setup-retry-applying");
     expect(retry.hasAttribute("disabled")).toBe(true);
+    const repair = screen.getByTestId("sandbox-setup-repair-setup");
+    expect(repair.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(repair);
+    fireEvent.click(retry);
+    expect(onRepairSetup).not.toHaveBeenCalled();
+    expect(onRetryApplying).not.toHaveBeenCalled();
+    const stop = within(detail).getByRole("button", { name: "Stop" });
+    expect(stop.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(stop);
+    expect(onStop).toHaveBeenCalledOnce();
   });
 });

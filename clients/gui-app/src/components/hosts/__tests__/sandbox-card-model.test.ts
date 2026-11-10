@@ -10,12 +10,15 @@ import {
   sandboxFrozenLine,
   sandboxGuestConfigFailure,
   sandboxIdleLine,
+  sandboxBilledPriceField,
+  sandboxOperationalLine,
   sandboxSecretsReadiness,
   sandboxStateLine,
   sandboxSuspendKeepsLine,
   sandboxTileOverlay,
   sandboxWithdrawalLine,
   type SandboxCardAction,
+  type SandboxPriceField,
 } from "@/components/hosts/sandbox-card-model";
 import {
   HOST_HEALTH_TONE,
@@ -182,81 +185,60 @@ describe("sandboxCardActions", () => {
 describe("sandboxStateLine", () => {
   it("speaks a distinct, non-empty sentence for every state", () => {
     const lines = HOST_SANDBOX_STATES.map((state) =>
-      sandboxStateLine(state, false, null),
+      sandboxStateLine(state, null),
     );
     for (const line of lines) expect(line.length).toBeGreaterThan(0);
     expect(new Set(lines).size).toBe(HOST_SANDBOX_STATES.length);
   });
 
   it("the suspending line claims no saved state", () => {
-    expect(sandboxStateLine("suspending", false, null)).not.toContain("Saving");
-    expect(sandboxStateLine("suspending", false, null)).toBe(
+    expect(sandboxStateLine("suspending", null)).not.toContain("Saving");
+    expect(sandboxStateLine("suspending", null)).toBe(
       "Suspending. Billing moves to storage.",
     );
   });
 
   it("states what awake and suspended are billed at", () => {
-    expect(sandboxStateLine("awake", false, null)).toContain("awake rate");
-    expect(sandboxStateLine("suspended", false, null)).toContain(
-      "storage rate",
-    );
+    expect(sandboxStateLine("awake", null)).toContain("awake rate");
+    expect(sandboxStateLine("suspended", null)).toContain("storage rate");
   });
 
   it("says a released row's files are kept and the next shell starts it", () => {
-    expect(sandboxStateLine("released", false, null)).toBe(
+    expect(sandboxStateLine("released", null)).toBe(
       "Not running, files kept. The next shell starts it.",
     );
   });
 
   it("says an awake Automations row is not billed, and only that row", () => {
-    expect(
-      sandboxStateLine("awake", false, summaryOf({ kind: "automation" })),
-    ).toBe("Running. Automations aren't billed.");
-    expect(
-      sandboxStateLine("awake", false, summaryOf({ kind: "agent" })),
-    ).toContain("awake rate");
-  });
-
-  it("leads with the frozen line over every state when frozen", () => {
-    for (const state of HOST_SANDBOX_STATES) {
-      expect(sandboxStateLine(state, true, null)).toBe(sandboxFrozenLine(null));
-    }
-  });
-
-  it("carries the frozen row's destroy date through its summary", () => {
-    const frozenAt = 1_791_000_000_000;
-    expect(
-      sandboxStateLine(
-        "suspended",
-        true,
-        summaryOf({ frozenAt, frozen: true }),
-      ),
-    ).toBe(sandboxFrozenLine(frozenAt));
+    expect(sandboxStateLine("awake", summaryOf({ kind: "automation" }))).toBe(
+      "Running. Automations aren't billed.",
+    );
+    expect(sandboxStateLine("awake", summaryOf({ kind: "agent" }))).toContain(
+      "awake rate",
+    );
   });
 
   it("names the failure's support reference on a failed row, never its raw code, and falls back without one", () => {
     const failed = sandboxStateLine(
       "failed",
-      false,
       summaryOf({ failureCode: "create:kube-create-service-account" }),
     );
     expect(failed).toBe("Failed to start (SBX-0412).");
     expect(failed).not.toContain("create:");
     expect(
-      sandboxStateLine("failed", false, summaryOf({ failureCode: "OOM_BOOT" })),
+      sandboxStateLine("failed", summaryOf({ failureCode: "OOM_BOOT" })),
     ).toBe("Failed to start.");
-    expect(
-      sandboxStateLine("failed", false, summaryOf({ failureCode: null })),
-    ).toBe("Failed to start.");
-    expect(sandboxStateLine("failed", false, null)).toBe("Failed to start.");
-    expect(sandboxStateLine("failed", false, null)).not.toContain("(");
+    expect(sandboxStateLine("failed", summaryOf({ failureCode: null }))).toBe(
+      "Failed to start.",
+    );
+    expect(sandboxStateLine("failed", null)).toBe("Failed to start.");
+    expect(sandboxStateLine("failed", null)).not.toContain("(");
   });
 
   it("says a newer-saved sandbox can't start until the next Traycer update", () => {
     expect(
       sandboxStateLine(
         "stopped",
-        false,
         summaryOf({ failureCode: "chat-store-newer" }),
       ),
     ).toBe(
@@ -266,35 +248,63 @@ describe("sandboxStateLine", () => {
 
   it("names the support reference of a start that did not finish on a stopped row", () => {
     expect(
-      sandboxStateLine("stopped", false, summaryOf({ failureCode: "start:x" })),
+      sandboxStateLine("stopped", summaryOf({ failureCode: "start:x" })),
     ).toBe("The last start didn't finish (SBX-0508). Start tries again.");
-    expect(
-      sandboxStateLine("stopped", false, summaryOf({ failureCode: "zzz" })),
-    ).toBe("The last start didn't finish. Start tries again.");
+    expect(sandboxStateLine("stopped", summaryOf({ failureCode: "zzz" }))).toBe(
+      "The last start didn't finish. Start tries again.",
+    );
   });
 
   it("keeps the plain stopped line for a stopped row with no failure code", () => {
-    const plain = sandboxStateLine("stopped", false, null);
+    const plain = sandboxStateLine("stopped", null);
     expect(plain).toBe(
       "Stopped. Disk kept, processes ended. Start boots it again; shells marked relaunch-on-restart come back.",
     );
-    expect(
-      sandboxStateLine("stopped", false, summaryOf({ failureCode: null })),
-    ).toBe(plain);
+    expect(sandboxStateLine("stopped", summaryOf({ failureCode: null }))).toBe(
+      plain,
+    );
   });
 
   it("keeps the failed-to-start sentence for a failed row with a code", () => {
     expect(
       sandboxStateLine(
         "failed",
-        false,
         summaryOf({ failureCode: "chat-store-newer" }),
       ),
     ).toBe("Failed to start (SBX-0430).");
   });
 
   it("says just Sandbox for a state it does not know", () => {
-    expect(sandboxStateLine(null, false, null)).toBe("Sandbox");
+    expect(sandboxStateLine(null, null)).toBe("Sandbox");
+  });
+});
+
+describe("sandboxOperationalLine", () => {
+  const OPERATIONAL_LINE: Record<HostSandboxState, string | null> = {
+    creating: "This takes about 10 seconds once capacity is found.",
+    awake: null,
+    suspending: null,
+    suspended: "Resumes on your next action.",
+    resuming: null,
+    stopping: "Its disk is kept; running processes end.",
+    stopped:
+      "Disk kept, processes ended. Start boots it again; shells marked relaunch-on-restart come back.",
+    starting: null,
+    destroying: "Its disk is being deleted.",
+    destroyed: "Its disk is gone.",
+    failed: null,
+    released: "Files kept. The next shell starts it.",
+  };
+
+  it.each(HOST_SANDBOX_STATES)("speaks the fixed line for %s", (state) => {
+    expect(sandboxOperationalLine(state, false)).toBe(OPERATIONAL_LINE[state]);
+  });
+
+  it("speaks no line for an unknown state or a frozen sandbox", () => {
+    expect(sandboxOperationalLine(null, false)).toBeNull();
+    for (const state of HOST_SANDBOX_STATES) {
+      expect(sandboxOperationalLine(state, true)).toBeNull();
+    }
   });
 });
 
@@ -309,11 +319,11 @@ describe("sandboxFrozenLine", () => {
     const frozenAt = new Date(2026, 9, 9, 12, 0, 0).getTime();
     const line = sandboxFrozenLine(frozenAt);
     expect(line).toBe(
-      `${BASE} Destroyed on ${formatSandboxDate(frozenDestroyAt(frozenAt), true)}.`,
+      `${BASE} Will be removed on ${formatSandboxDate(frozenDestroyAt(frozenAt), false)}.`,
     );
-    // Thirty days on, to the minute: the date carries its time.
-    expect(formatSandboxDate(frozenDestroyAt(frozenAt), true)).toBe(
-      formatSandboxDate(new Date(2026, 10, 8, 12, 0, 0).getTime(), true),
+    // The line names the removal day without a time.
+    expect(formatSandboxDate(frozenDestroyAt(frozenAt), false)).toBe(
+      formatSandboxDate(new Date(2026, 10, 8, 12, 0, 0).getTime(), false),
     );
   });
 });
@@ -390,41 +400,63 @@ describe("sandboxWithdrawalLine", () => {
 describe("sandboxIdleLine", () => {
   it("states the release rule for an Automations row on its idle period, files kept", () => {
     expect(
-      sandboxIdleLine(summaryOf({ kind: "automation", idleMinutes: 30 })),
+      sandboxIdleLine(
+        summaryOf({ kind: "automation", idleMinutes: 30 }),
+        "awake",
+      ),
     ).toBe("Stops after 30 min idle · files kept · the next shell starts it");
   });
 
+  it("keeps only the period for a released Automations row, whose state line says the rest", () => {
+    expect(
+      sandboxIdleLine(
+        summaryOf({ kind: "automation", idleMinutes: 30 }),
+        "released",
+      ),
+    ).toBe("Stops after 30 min idle");
+  });
+
   it("says Suspends for a normal row and Destroyed for a burst row", () => {
-    expect(sandboxIdleLine(summaryOf({ burst: false, idleMinutes: 30 }))).toBe(
-      "Suspends after 30 min idle",
-    );
-    expect(sandboxIdleLine(summaryOf({ burst: true, idleMinutes: 30 }))).toBe(
-      "Destroyed after 30 min idle",
-    );
+    expect(
+      sandboxIdleLine(summaryOf({ burst: false, idleMinutes: 30 }), "awake"),
+    ).toBe("Suspends after 30 min idle");
+    expect(
+      sandboxIdleLine(summaryOf({ burst: true, idleMinutes: 30 }), "awake"),
+    ).toBe("Destroyed after 30 min idle");
   });
 
   it("takes the 30-minute default when the row sets no idle period", () => {
-    expect(sandboxIdleLine(summaryOf({ idleMinutes: null }))).toBe(
+    expect(sandboxIdleLine(summaryOf({ idleMinutes: null }), "awake")).toBe(
       "Suspends after 30 min idle",
     );
-    expect(sandboxIdleLine(summaryOf({ burst: true, idleMinutes: null }))).toBe(
-      "Destroyed after 30 min idle",
-    );
+    expect(
+      sandboxIdleLine(summaryOf({ burst: true, idleMinutes: null }), "awake"),
+    ).toBe("Destroyed after 30 min idle");
   });
 
   it("words an hour boundary, a whole number of hours and a fractional one", () => {
-    expect(sandboxIdleLine(summaryOf({ idleMinutes: 59 }))).toContain("59 min");
-    expect(sandboxIdleLine(summaryOf({ idleMinutes: 60 }))).toContain("1 h");
-    expect(sandboxIdleLine(summaryOf({ idleMinutes: 120 }))).toContain("2 h");
-    expect(sandboxIdleLine(summaryOf({ idleMinutes: 90 }))).toContain("1.5 h");
+    expect(sandboxIdleLine(summaryOf({ idleMinutes: 59 }), "awake")).toContain(
+      "59 min",
+    );
+    expect(sandboxIdleLine(summaryOf({ idleMinutes: 60 }), "awake")).toContain(
+      "1 h",
+    );
+    expect(sandboxIdleLine(summaryOf({ idleMinutes: 120 }), "awake")).toContain(
+      "2 h",
+    );
+    expect(sandboxIdleLine(summaryOf({ idleMinutes: 90 }), "awake")).toContain(
+      "1.5 h",
+    );
   });
 });
 
 describe("sandboxSuspendKeepsLine", () => {
   it("states what each fidelity keeps and nothing for one this build does not know", () => {
-    expect(sandboxSuspendKeepsLine("memory")).toContain("keeps memory");
-    expect(sandboxSuspendKeepsLine("disk")).toContain("disk only");
-    expect(sandboxSuspendKeepsLine("none")).toContain("keeps nothing");
+    expect(sandboxSuspendKeepsLine("memory")).toBe("keeps memory");
+    expect(sandboxSuspendKeepsLine("disk")).toBe(
+      "keeps disk only · processes restart on resume",
+    );
+    expect(sandboxSuspendKeepsLine("none")).toBe("restarts from its image");
     expect(sandboxSuspendKeepsLine("holographic")).toBeNull();
   });
 });
@@ -446,7 +478,7 @@ describe("sandboxGuestConfigFailure", () => {
 
   it("gives the generic sentence for a failure with a null or blank reason", () => {
     const generic =
-      "Guest setup failed. Agents can't start here until it succeeds.";
+      "Settings did not apply. Agents can't start here until they do.";
     expect(
       sandboxGuestConfigFailure(
         summaryOf({ guestConfigured: false, guestConfigFailureReason: null }),
@@ -467,7 +499,7 @@ describe("sandboxGuestConfigFailure", () => {
           guestConfigFailureReason: "broker unreachable",
         }),
       ),
-    ).toBe("Guest setup failed: broker unreachable");
+    ).toBe("Settings did not apply: broker unreachable");
   });
 });
 
@@ -641,5 +673,26 @@ describe("sandboxSecretsReadiness", () => {
     expect(readiness?.tone).toBe("degraded");
     expect(readiness?.text).not.toContain("at :");
     expect(readiness?.text).not.toContain("  ");
+  });
+});
+
+describe("sandboxBilledPriceField", () => {
+  const BILLED: Record<HostSandboxState, SandboxPriceField | null> = {
+    creating: null,
+    awake: "awakeMc",
+    suspending: "suspendedMc",
+    suspended: "suspendedMc",
+    resuming: "awakeMc",
+    stopping: "stoppedMc",
+    stopped: "stoppedMc",
+    starting: "awakeMc",
+    destroying: null,
+    destroyed: null,
+    failed: null,
+    released: null,
+  };
+
+  it.each(HOST_SANDBOX_STATES)("names the price %s accrues", (state) => {
+    expect(sandboxBilledPriceField(state)).toBe(BILLED[state]);
   });
 });

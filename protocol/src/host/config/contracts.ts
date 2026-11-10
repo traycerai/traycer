@@ -3,6 +3,10 @@ import {
   defineUpgradePath,
 } from "@traycer/protocol/framework/index";
 import {
+  configAgentMemoriesGetRequestSchema,
+  configAgentMemoriesResponseSchema,
+  configAgentMemoriesSetRequestSchema,
+  configAgentMemoriesSetResponseSchema,
   configBrowserGetRequestSchema,
   configBrowserResponseSchema,
   configBrowserSetRequestSchema,
@@ -201,6 +205,22 @@ export const configBrowserSetV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: configBrowserSetRequestSchema,
   responseSchema: configBrowserSetResponseSchema,
+});
+
+/** Reads whether the configuration's agents take part in its shared memories. */
+export const configAgentMemoriesGetV10 = defineRpcContract({
+  method: "config.agentMemories.get",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: configAgentMemoriesGetRequestSchema,
+  responseSchema: configAgentMemoriesResponseSchema,
+});
+
+/** Turns the configuration's shared memories for agents on or off. */
+export const configAgentMemoriesSetV10 = defineRpcContract({
+  method: "config.agentMemories.set",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: configAgentMemoriesSetRequestSchema,
+  responseSchema: configAgentMemoriesSetResponseSchema,
 });
 
 /** Reads the machine-user-global policy for worktrees agents create. */

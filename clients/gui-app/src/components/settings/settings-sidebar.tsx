@@ -272,8 +272,10 @@ function SettingsSidebarHostPicker(props: {
         }}
         surface="rail"
         intent="view"
+        // The list holds computers and sandboxes, so the heading uses the
+        // aggregate. Choosing here only changes which host this window shows.
         consequence={{
-          heading: "Look at another machine",
+          heading: "Look at another host",
           hint: "Changes what this window shows. Nothing is created.",
         }}
         disabled={false}

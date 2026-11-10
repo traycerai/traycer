@@ -124,11 +124,22 @@ export function chatForkHostRefusals(input: {
  * asked for.
  */
 export const CROSS_HOST_CARRY_CHANGES_NOTICE =
-  "Uncommitted changes stay on the source computer, so this fork starts from the workspace you pick here.";
+  "Uncommitted changes stay on the source computer, so this fork starts from the folder you pick here.";
 
-/** The workspace section's own explanation for the empty, unseeded state. */
-export const CROSS_HOST_WORKSPACE_NOTICE =
-  "Folder paths don't travel between computers - pick this host's workspace for the fork.";
+/**
+ * The same degradation when the fork starts in a new sandbox. That sandbox has
+ * no folder to pick, so the sentence stops at the part that is still true.
+ */
+export const CROSS_HOST_UNCOMMITTED_STAY_NOTICE =
+  "Uncommitted changes stay on the source computer.";
+
+/** The folder section's explanation for the empty, unseeded state on another computer. */
+export const CROSS_HOST_FOLDER_NOTICE =
+  "Folder paths don't travel between computers - pick this host's folder for the fork.";
+
+/** A new sandbox has no folder to pick, so the file fact is stated on its own. */
+export const CROSS_HOST_EMPTY_SANDBOX_NOTICE =
+  "This fork starts in an empty sandbox, with no files.";
 
 /**
  * The fork also loses the provider's on-disk session cross-host (the target has
@@ -137,6 +148,68 @@ export const CROSS_HOST_WORKSPACE_NOTICE =
  */
 export const CROSS_HOST_SHALLOW_FORK_NOTICE =
   "The fork copies the transcript; the provider session stays on the source computer.";
+
+export const CHAT_FORK_SECOND_CHAT_NOTICE =
+  "Makes a second chat there. This one stays where it is.";
+
+export type ChatForkExplanation = {
+  readonly id: string;
+  readonly text: string;
+};
+
+/** Visible when the fork is taken from the latest point, not from one turn. */
+export function chatForkLatestDescription(input: {
+  readonly crossHost: boolean;
+}): string {
+  const snapshot = input.crossHost
+    ? "The fork uses the latest usable cloud backup available when you click Fork. Work still in progress may not be included."
+    : "The fork uses the latest saved checkpoint available when you click Fork.";
+  return `${snapshot} The original agent continues working.`;
+}
+
+/**
+ * The cross-host paragraphs, in the order they sit under the chooser.
+ *
+ * A new sandbox and a folder pick state different file facts, so only one of
+ * those sentences is returned. The transcript and provider-session sentence
+ * applies to both.
+ */
+export function chatForkCrossHostExplanations(input: {
+  readonly isCrossHost: boolean;
+  readonly emptySandbox: boolean;
+  readonly carriesChanges: boolean;
+}): readonly ChatForkExplanation[] {
+  if (!input.isCrossHost) return [];
+  const lines: ChatForkExplanation[] = [];
+  if (input.emptySandbox) {
+    lines.push({
+      id: "chat-fork-empty-sandbox",
+      text: CROSS_HOST_EMPTY_SANDBOX_NOTICE,
+    });
+    if (input.carriesChanges) {
+      lines.push({
+        id: "chat-fork-carry-changes-disabled",
+        text: CROSS_HOST_UNCOMMITTED_STAY_NOTICE,
+      });
+    }
+  } else {
+    lines.push({
+      id: "chat-fork-folder-notice",
+      text: CROSS_HOST_FOLDER_NOTICE,
+    });
+    if (input.carriesChanges) {
+      lines.push({
+        id: "chat-fork-carry-changes-disabled",
+        text: CROSS_HOST_CARRY_CHANGES_NOTICE,
+      });
+    }
+  }
+  lines.push({
+    id: "chat-fork-provider-session",
+    text: CROSS_HOST_SHALLOW_FORK_NOTICE,
+  });
+  return lines;
+}
 
 /**
  * What the SOURCE host said about this chat's publication — or that it could

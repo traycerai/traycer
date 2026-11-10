@@ -39,11 +39,14 @@ vi.mock("@/lib/links/open-link", () => ({
 
 import { ChatSandboxFooter } from "@/components/chat/chat-sandbox-footer";
 import {
-  sandboxFrozenLine,
-  sandboxTeamFrozenStateLine,
-} from "@/components/hosts/sandbox-card-model";
-import { sandboxRowActionLabel } from "@/lib/sandboxes/sandbox-row-lines";
+  sandboxFrozenCause,
+  sandboxFrozenClock,
+} from "@/lib/sandboxes/sandbox-row-lines";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  HOST_FROZEN_WORD,
+  hostSandboxStateWord,
+} from "@traycer/protocol/host/host-status";
 
 function render(ui: ReactNode) {
   const queryClient = new QueryClient({
@@ -80,7 +83,6 @@ function resting(
 function lineOf(state: ChatSandboxState): ChatSandboxLine | null {
   return resolveChatSandbox(state, {
     reachable: false,
-    canEdit: true,
     ownedByViewer: true,
     environmentOwned: false,
   }).line;
@@ -197,7 +199,15 @@ describe("<ChatSandboxFooter /> a frozen sandbox", () => {
     render(<ChatSandboxFooter line={lineOf(frozen(false))} />);
 
     const text = document.body.textContent;
-    expect(text).toContain(sandboxFrozenLine(FROZEN_AT));
+    const stateLine = `${hostSandboxStateWord("suspended")} · ${HOST_FROZEN_WORD}`;
+    expect(screen.getByText(stateLine).textContent).toBe(stateLine);
+    const consequence = screen.getByText("Your credits ran out.");
+    expect(consequence.className).toContain("wrap-anywhere");
+    const clock = sandboxFrozenClock(FROZEN_AT);
+    if (clock === null) throw new Error("expected a removal clock");
+    const removal = screen.getByText(clock);
+    expect(removal.textContent).toBe(clock);
+    expect(removal.textContent).not.toContain(" at ");
     expect(text).not.toContain("your next message resumes it");
     expect(
       screen.queryByRole("link", { name: /add credits/i }) ??
@@ -205,29 +215,62 @@ describe("<ChatSandboxFooter /> a frozen sandbox", () => {
     ).not.toBeNull();
   });
 
-  it("names whose bundle is out on a team sandbox and offers Resume using my team credits", () => {
+  it("omits the removal paragraph when the server sent no frozenAt", () => {
+    const base = resting("suspended", { team: false, wakeChangesPayer: false });
+    if (base.kind !== "resting") throw new Error("expected a resting state");
+    render(
+      <ChatSandboxFooter
+        line={lineOf({
+          ...base,
+          sandbox: { ...base.sandbox, frozen: true, frozenAt: null },
+        })}
+      />,
+    );
+
+    const stateLine = `${hostSandboxStateWord("suspended")} · ${HOST_FROZEN_WORD}`;
+    const stateParagraph = screen.getByText(stateLine);
+    expect(stateParagraph.textContent).toBe(stateLine);
+    const footer = stateParagraph.parentElement;
+    if (footer === null) throw new Error("expected the frozen footer");
+    expect(footer.querySelectorAll("p")).toHaveLength(2);
+  });
+
+  it("shows the actual payer consequence on its own wrapping line and offers a short Resume", () => {
     useAuthStore.setState({
       status: "signed-in",
       profile: { userId: "viewer", userName: "V", email: "v@example.com" },
       contextMetadata: { userId: "viewer", username: "V" },
     });
-    const state = frozen(true);
-    if (state.kind !== "resting") throw new Error("expected a resting state");
+    const base = frozen(true);
+    if (base.kind !== "resting") throw new Error("expected a resting state");
+    const state = {
+      ...base,
+      sandbox: {
+        ...base.sandbox,
+        wakePayer: { userId: "priya", displayName: "Priya" },
+      },
+    };
     render(<ChatSandboxFooter line={lineOf(state)} />);
 
-    expect(document.body.textContent).toContain(
-      sandboxTeamFrozenStateLine(state.sandbox, "viewer"),
+    const payerLine = sandboxFrozenCause(
+      state.sandbox,
+      {
+        kind: "team",
+        teamId: "team-a",
+        teamName: "Acme",
+        environmentId: "team-a",
+      },
+      "viewer",
+    );
+    const paragraph = screen.getByText(payerLine);
+    expect(paragraph.className).toContain("wrap-anywhere");
+    expect(paragraph.parentElement?.className).toContain("flex-col");
+    expect(screen.getByRole("button", { name: "Resume" }).textContent).toBe(
+      "Resume",
     );
     expect(
-      screen.getByRole("button", {
-        name: sandboxRowActionLabel("resume-paying", {
-          kind: "team",
-          teamId: "team-a",
-          teamName: "Acme",
-          environmentId: null,
-        }),
-      }),
-    ).toBeTruthy();
+      document.body.textContent.match(/Resuming changes the payer to you\./gu),
+    ).toHaveLength(1);
   });
 });
 

@@ -1,7 +1,8 @@
 /**
- * `environment.list` - every team environment the signed-in user belongs to.
- * `environment.host.read` / `environment.host.bind` - the one environment
- * this host is bound to, and rebinding it.
+ * `environment.list` - the personal environment, then every team environment
+ * the signed-in user belongs to.
+ * `environment.host.read` / `environment.host.bind` - this host's binding
+ * and its compatibility acknowledgement.
  * `environment.host.list` - the hosts of an environment the caller may see.
  * `environment.members` - the people in an environment, by name and avatar,
  * so a client can name the member who wrote a message.
@@ -13,16 +14,15 @@
  * signed-in person's Accept, and accepting one.
  *
  * `@1.1` of `environment.list`, `environment.host.list` and
- * `environment.members` adds the redesign's fields, each with its upgrade
- * from `@1.0`; no line here has shipped, so none is a MAJOR. `@1.2` of
- * `environment.host.list` adds each host's `hasLocalRow`.
+ * `environment.members` adds the fields described below, with upgrades from
+ * `@1.0`. `@1.2` of `environment.host.list` adds each host's `hasLocalRow`.
  *
  * An environment is the cloud container a team shares: skills, the shared
  * notes block, the agent selection guide and the bot list, all held in one
  * collab room. A team is an authn organization. The user belongs to one
  * environment per team they are in, plus their personal environment, and sees
  * them side by side; there is no "current" one. The cloud lists and creates
- * them; the host proxies the list, cached for the signed-in session.
+ * them; the host proxies the list.
  *
  * OPTIONAL capability. Never in `RELEASED_FLOOR_METHOD_NAMES`: the floor is
  * fail-closed on the method-name union, so a name present on only one peer
@@ -88,13 +88,45 @@ export const environmentListV10 = defineRpcContract({
   responseSchema: environmentListResponseSchema,
 });
 
-/** The caller's effective role in an environment; `owner` is a personal one's. */
+/**
+ * The caller's effective role in an environment as it DECODES; `owner` is a
+ * personal one's.
+ *
+ * `viewer` is retired as a role anybody holds. It stays in this released
+ * vocabulary because the `@1.0 → @1.1` upgrade below has to name a value for
+ * an answer that names no role at all, and because a current client still
+ * reads environments from hosts that predate the retirement. Both are
+ * "no authority known", never read-only authority: resolve this value with
+ * {@link grantedEnvironmentRole} before gating anything on it.
+ */
 export const environmentEffectiveRoleSchema = lazySchema(() =>
   z.enum(["owner", "admin", "editor", "viewer"]),
 );
 export type EnvironmentEffectiveRole = z.infer<
   typeof environmentEffectiveRoleSchema
 >;
+
+/** An environment role somebody HOLDS. */
+export type GrantedEnvironmentRole = "owner" | "admin" | "editor";
+
+/**
+ * A decoded environment role as authority: the retired role and an unknown
+ * one are both `null`, which every caller reads as none.
+ */
+export function grantedEnvironmentRole(
+  role: string,
+): GrantedEnvironmentRole | null {
+  switch (role) {
+    case "owner":
+      return "owner";
+    case "admin":
+      return "admin";
+    case "editor":
+      return "editor";
+    default:
+      return null;
+  }
+}
 
 /**
  * `environment.list@1.1`: each environment with the caller's `effectiveRole`,
@@ -133,8 +165,11 @@ export const environmentListV11 = defineRpcContract({
 /**
  * A `@1.0` answer names no role, kind or count. It upgrades from what it does
  * say: the user-owned environment is the caller's personal one, which they
- * own; a team's role is unknown, so it reads as the least, `viewer`, and its
- * host count as none, which a client re-reads rather than acts on.
+ * own; a team's role is unknown, so it reads as the retired `viewer`, which
+ * {@link grantedEnvironmentRole} resolves to no authority, and its host count
+ * as none, which a client re-reads rather than acts on. The unknown role must
+ * stay this value: naming a live role here would hand an old host's answer
+ * authority nobody granted.
  */
 export const environmentListUpgradeV10ToV11 = defineUpgradePath<
   typeof environmentListV10,
@@ -167,9 +202,12 @@ export const environmentListUpgradeV10ToV11 = defineUpgradePath<
  * This read cannot distinguish a computer's own settings from Personal.
  * That settings place is answered by `environment.status` on the host.
  *
- * Only the account that bound a host can unbind it. `enrolledByUserId` is
- * that account, null when the binding is not explicit; `canUnbind` is whether
- * the caller is it.
+ * `enrolledByUserId` is the enrollment attribution recorded by authn for a
+ * bound host, including Personal; null when the host is unbound or
+ * attribution is unknown. Read and bind answer that same fact. `canUnbind`
+ * is true only when this result is explicit, the stored enroller is the
+ * caller, and the host is a computer rather than a sandbox; a sandbox cannot
+ * be unbound.
  */
 export const environmentHostBindingSchema = lazySchema(() =>
   z.object({
@@ -198,8 +236,8 @@ export const environmentHostReadV10 = defineRpcContract({
 
 /**
  * The environment the named host is bound to, as the signed-in user sees it:
- * the same answer `environment.host.read` gives on that host, read from the
- * account's binding records instead of asking the host. Served by the server
+ * the same answer `environment.host.read` gives on that host, read from
+ * authn's host directory instead of asking the host. Served by the server
  * pool, so a list of hosts reads every row's binding without a connection to
  * each host. An absent binding and an explicit Personal binding both answer
  * the Personal descriptor with `explicit` false. This answers which team, if
@@ -223,13 +261,14 @@ export const environmentBindingReadV10 = defineRpcContract({
 });
 
 /**
- * Binds the serving host to one of the signed-in user's environments.
+ * Compatibility request for the serving host's binding. The response reports
+ * the binding recorded by authn, as `environment.host.read` does;
+ * acknowledgement alone establishes no binding and changes no enrollment
+ * attribution.
+ *
  * A Personal binding is reported with `explicit` false, the same answer as
  * an absent environment binding; it does not mean the host runs its own
- * settings. Read `environment.status` for that distinction. Refused for an
- * environment the user does not belong to, and while a live bot of another
- * environment is bound to the host. A rebind applies to new turns; running
- * turns keep the environment they started with.
+ * settings. Read `environment.status` for that distinction.
  */
 export const environmentHostBindRequestSchema = lazySchema(() =>
   z.object({
@@ -257,13 +296,12 @@ export type EnvironmentHostListRequest = z.infer<
 >;
 
 /**
- * One host bound to an environment. `hostLabel` and `hostPlatform` are what
- * the host reported about itself when it was bound, null when it reported
- * nothing; `enrolledByUserId` is the account that bound it, the only one that
- * can unbind it. `kind` is the host's registry kind: a `sandbox` is the
- * environment's machine, listed to every member and open to the environment's
- * bots; a `personal` machine is its enrolling member's, listed to that member
- * alone. `boundAt` is epoch milliseconds.
+ * The frozen @1.0 host row. `hostLabel` and `hostPlatform` are the registry's
+ * reported metadata; `kind` is its machine kind. `enrolledByUserId` is stored
+ * enrollment attribution, independent of the environment's owner.
+ * `boundAt` is epoch milliseconds on a released row, not a canonical binding
+ * time. This version requires attribution and time as values; a row missing
+ * attribution or time is omitted.
  */
 export const environmentHostRecordSchema = lazySchema(() =>
   z.object({
@@ -278,11 +316,11 @@ export const environmentHostRecordSchema = lazySchema(() =>
 export type EnvironmentHostRecord = z.infer<typeof environmentHostRecordSchema>;
 
 /**
- * The hosts of the environment the caller may see: every sandbox bound to it,
- * whoever bound it, plus the caller's own bound hosts of any kind. A member of
- * an object root so the response can grow additively. Personal lists its
- * bound hosts like any other environment; an absent binding is not Personal
- * membership.
+ * The environment's hosts visible to the caller, in an object root. Personal
+ * lists its bound hosts like any other environment; an absent binding is not
+ * Personal membership. The frozen @1.0 representation omits rows without
+ * attribution or a binding time. Authn records no canonical binding time,
+ * so this projection is empty even when authn lists bound hosts.
  */
 export const environmentHostListResponseSchema = lazySchema(() =>
   z.object({
@@ -327,10 +365,9 @@ export type EnvironmentHostItemApply = z.infer<
 /**
  * `environment.host.list@1.1`: each host with whether it is `reachable` now,
  * when it last reported (null before it ever did), and its per-item apply
- * states. `enrolledByUserId` and `boundAt` are null where the hosts route
- * does not know them; `@1.0` has no null for either, so the serving host
- * leaves such a row out of a `@1.0` caller's answer (the minor is
- * projection-gated in the registry).
+ * states. `boundAt` is null: authn records no canonical binding time.
+ * `enrolledByUserId` is null where attribution is unknown. `@1.0` has no
+ * null for either, so a `@1.0` answer omits such a row.
  */
 export const environmentHostRecordSchemaV11 = lazySchema(() =>
   environmentHostRecordSchema.extend({
@@ -481,11 +518,37 @@ export const environmentMembersV10 = defineRpcContract({
   responseSchema: environmentMembersResponseSchema,
 });
 
-/** A team member's role. */
+/**
+ * A team member's role as it DECODES. `viewer` is retired as a role anybody
+ * holds; it stays here for the same two reasons the environment's own role
+ * keeps it - the `@1.0 → @1.1` upgrade has to name a value for a page that
+ * names none, and a current client still reads members from hosts that
+ * predate the retirement. Resolve it with {@link grantedTeamMemberRole}.
+ */
 export const environmentMemberRoleSchema = lazySchema(() =>
   z.enum(["admin", "editor", "viewer"]),
 );
 export type EnvironmentMemberRole = z.infer<typeof environmentMemberRoleSchema>;
+
+/** A team-member role somebody HOLDS. */
+export type GrantedTeamMemberRole = "admin" | "editor";
+
+/**
+ * A decoded team-member role as authority: the retired role and an unknown
+ * one are both `null` - no seat authority, and never read-only authority.
+ */
+export function grantedTeamMemberRole(
+  role: string,
+): GrantedTeamMemberRole | null {
+  switch (role) {
+    case "admin":
+      return "admin";
+    case "editor":
+      return "editor";
+    default:
+      return null;
+  }
+}
 
 /**
  * `environment.members@1.1`'s member: `@1.0`'s plus their `effectiveRole`,
@@ -528,9 +591,10 @@ export const environmentMembersV11 = defineRpcContract({
 });
 
 /**
- * A `@1.0` page names no roles: each member upgrades as the least role,
- * `viewer`, with no plan and no invitation, and the page with no notice to
- * show.
+ * A `@1.0` page names no roles: each member upgrades as the retired `viewer`,
+ * which {@link grantedTeamMemberRole} resolves to no seat authority, with no
+ * plan and no invitation, and the page with no notice to show. The unknown
+ * role must stay this value for the reason the environment list's does.
  */
 export const environmentMembersUpgradeV10ToV11 = defineUpgradePath<
   typeof environmentMembersV10,
@@ -899,7 +963,7 @@ export type EnvironmentSetMainBotResponse = z.infer<
 >;
 
 /**
- * Makes a bot its environment's main bot (decision 30): the bot that curates
+ * Makes a bot its environment's main bot: the bot that curates
  * the environment's shared memory and is told when it passes its ceiling. Any
  * member may set it, and set it back. Refused for an environment the caller
  * does not belong to exactly as for one that does not exist, and for a bot

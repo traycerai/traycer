@@ -49,35 +49,37 @@ export function TeamProviderLiveFacts(props: {
     />
   );
   return (
-    <section className="flex flex-col gap-3 rounded-lg border border-border/60 p-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-ui-sm font-medium">Rate limits</h3>
-        <TeamViewingHostPicker open={picking} onOpenChange={setPicking} />
-      </div>
-      <TeamViewingHostBinding unavailable={noHost}>
-        {query.isError ? (
-          <TeamReadFailed
-            message="Couldn't read this host's providers."
-            onRetry={() => void query.refetch()}
-          />
-        ) : null}
-        {state === undefined ? null : (
-          <>
-            <NextRunBinaryLine state={state} hostName={hostName} />
-            <TeamPlanLimits
-              providerId={props.providerId}
-              state={state}
-              linkedProfileIds={linkedProfileIds}
-              teamName={name}
+    <div className="flex flex-col gap-3">
+      <section className="flex flex-col gap-3 rounded-lg border border-border/60 p-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-ui-sm font-medium">Rate limits</h3>
+          <TeamViewingHostPicker open={picking} onOpenChange={setPicking} />
+        </div>
+        <TeamViewingHostBinding unavailable={noHost}>
+          {query.isError ? (
+            <TeamReadFailed
+              message="Couldn't read this host's providers."
+              onRetry={() => void query.refetch()}
             />
-          </>
-        )}
-      </TeamViewingHostBinding>
-    </section>
+          ) : null}
+          {state === undefined ? null : (
+            <>
+              <NextRunBinaryLine state={state} hostName={hostName} />
+              <TeamPlanLimits
+                providerId={props.providerId}
+                state={state}
+                linkedProfileIds={linkedProfileIds}
+                teamName={name}
+              />
+            </>
+          )}
+        </TeamViewingHostBinding>
+      </section>
+    </div>
   );
 }
 
-/** `Studio uses: <path> · <version>.`, when the host reports its next binary. */
+/** The next executable reported by the viewing host. */
 function NextRunBinaryLine(props: {
   readonly state: ProviderCliState;
   readonly hostName: string;
@@ -85,7 +87,7 @@ function NextRunBinaryLine(props: {
   const binary = props.state.nextRunBinary;
   if (binary === undefined || binary === null) return null;
   return (
-    <p className="text-ui-xs text-muted-foreground">
+    <p className="min-w-0 wrap-anywhere text-ui-xs text-muted-foreground">
       {props.hostName} uses: {binary.path ?? "Included agent"}
       {binary.version === null ? "" : ` · ${binary.version}`}.
     </p>

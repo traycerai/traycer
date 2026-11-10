@@ -5,9 +5,11 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type CSSProperties,
   type ReactNode,
 } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
+import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   BotConversationRecord,
   BotConversationSendResponse,
@@ -26,7 +28,6 @@ import type { OpenMessage } from "@traycer/protocol/persistence/epic/open-harnes
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import type { ChatBotThreadLine } from "@/components/chat/chat-bot-presentation-context";
-import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
 import {
   BotChatTranscript,
   type BotTranscriptLanding,
@@ -35,18 +36,18 @@ import {
 } from "@/components/bots/bot-chat-transcript";
 import { BotRoutingCard } from "@/components/bots/bot-routing-card";
 import { useChatSessionHandleForContainer } from "@/lib/registries/chat-session-registry";
-import { threadOpenOf } from "@/lib/bots/bot-trunk-model";
 import {
   channelMuted,
   followingOf,
 } from "@/lib/bots/bot-notification-settings";
 import { useBotNotificationLevelsQuery } from "@/hooks/bots/use-bot-notification-level";
 import { useBotThreadFollows } from "@/hooks/bots/use-bot-thread-follow";
+import { useBotReadCursors } from "@/hooks/bots/use-bot-read-cursor";
 import {
-  useBotReadCursorAdvanceMutation,
-  useBotReadCursors,
-} from "@/hooks/bots/use-bot-read-cursor";
-import { advanceTarget, threadHasNewReplies } from "@/lib/bots/bot-read-cursor";
+  useAdvanceWhilePresented,
+  usePresented,
+} from "@/hooks/bots/use-bot-read-while-presented";
+import { threadHasNewReplies } from "@/lib/bots/bot-read-cursor";
 import {
   BotMemoryPanel,
   type BotMemoryNavigation,
@@ -64,6 +65,7 @@ import {
 import { useBotSendFailure } from "@/hooks/bots/use-bot-send-failure";
 import { BotReadFailure } from "@/components/bots/bot-read-failure";
 import { BotReplyingStrip } from "@/components/bots/bot-replying-strip";
+import { useBotReplyingTurn } from "@/hooks/bots/use-bot-replying-turn";
 import { BotResizablePane } from "@/components/bots/bot-resizable-pane";
 import { BotExchangeLog } from "@/components/bots/bot-exchange-log";
 import {
@@ -90,13 +92,17 @@ import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useBotConversationListQuery } from "@/hooks/bots/use-bot-conversation-list-query";
 import { useBotThreadListQuery } from "@/hooks/bots/use-bot-thread-list-query";
 import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
-import { useBotSurfaceActMutation } from "@/hooks/bots/use-bot-surface-act";
+import { useBotSurfaceCards } from "@/hooks/bots/use-bot-surface-cards";
+import { BotSurfaceCardsContext } from "@/components/bots/bot-surface-card-context";
+import { threadParticipants } from "@/components/bots/bot-thread-participants";
 import {
-  BotSurfaceCardsContext,
-  type BotSurfaceCards,
-} from "@/components/bots/bot-surface-card-context";
+  anchorSendable,
+  boundThreadAnchorKinds,
+} from "@/components/bots/bot-thread-sendable";
 import { useBotSendTakesAnswers } from "@/hooks/bots/use-bot-send-version";
+import { useBotBoxEdit } from "@/hooks/bots/use-bot-box-edit";
 import { useBotFailedRequest } from "@/hooks/bots/use-bot-failed-request";
+import { useBotImageReach } from "@/hooks/bots/use-bot-send-version";
 import {
   failedOnRequest,
   useBotActivity,
@@ -110,10 +116,6 @@ import {
   botMemberName,
   type BotMemberResolver,
 } from "@/lib/bots/bot-member-names";
-import {
-  isDocumentFocused,
-  subscribeHostNotificationPresence,
-} from "@/lib/notifications/notification-presence";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import { useKeptBoxDraft } from "@/hooks/bots/use-kept-box-draft";
 import {
@@ -132,35 +134,14 @@ import {
   showBotSearchResults,
   useBotSearchStore,
 } from "@/stores/bots/bot-search-store";
-import { useAuthStore, type AuthProfile } from "@/stores/auth/auth-store";
-import type { StackedIdentity } from "@/components/bots/bot-avatars";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import type { MobileTileCount } from "@/lib/layout/mobile-layout-form";
 import { cn } from "@/lib/utils";
+import { useChannelBackground } from "@/hooks/bots/use-bot-appearance";
 
 const EMPTY_THREADS: ReadonlyArray<BotThreadSummary> = [];
 const NO_EXCHANGES: ReadonlyArray<BotExchange> = [];
 const NO_EPIC_IDS: ReadonlyArray<string> = [];
-
-/**
- * The failed message the channel's box is editing, which belongs to the
- * channel's conversation: a channel the view resolves to anew (a host that
- * names it late, or names none and lists an earlier one) starts the box
- * without it.
- */
-function useChannelBoxEdit(channelId: string | null): {
-  readonly edit: BotComposerEdit | null;
-  readonly setEdit: (edit: BotComposerEdit | null) => void;
-  readonly endEdit: () => void;
-} {
-  const [edit, setEdit] = useState<BotComposerEdit | null>(null);
-  const endEdit = useCallback(() => setEdit(null), []);
-  const [editChannelId, setEditChannelId] = useState(channelId);
-  if (channelId !== editChannelId) {
-    setEditChannelId(channelId);
-    setEdit(null);
-  }
-  return { edit, setEdit, endEdit };
-}
 
 /**
  * The bot's channel among its conversations: the one the bot record names.
@@ -364,6 +345,7 @@ export function BotChannelView(props: {
   } = props;
   const openThreadPostId = open?.anchorMessageId ?? null;
   const client = useTabHostClient();
+  const background = useChannelBackground(botId);
   const conversations = useBotConversationListQuery(client, botId, true);
   const channel = useMemo(
     () =>
@@ -398,6 +380,11 @@ export function BotChannelView(props: {
     hostId,
     boundHostId,
     boundHostEpoch,
+  });
+  const imageReach = useBotImageReach({
+    hostId,
+    boundHostId,
+    boundHostTakes: threadAnchorKinds,
   });
   const activity = useBotActivity(botId);
   const viewer = useAuthStore((s) => s.profile);
@@ -465,7 +452,7 @@ export function BotChannelView(props: {
   // A post the bot failed to answer, in a thread or at the top level, is
   // retried as it is or edited in the channel's box, which posts its
   // replacement.
-  const { edit, setEdit, endEdit } = useChannelBoxEdit(channelId);
+  const { edit, setEdit, endEdit } = useBotBoxEdit(activity, channelId);
   const failedOnChannel = useCallback(
     (requestId: string) => failedOnRequest(activity, requestId),
     [activity],
@@ -523,7 +510,11 @@ export function BotChannelView(props: {
   // thread's panel says the send's delivery; one the bot answers in the
   // channel opens nothing, and the channel's box says it.
   const openPostedThread = useCallback(
-    (response: BotConversationSendResponse, text: string): boolean => {
+    (
+      response: BotConversationSendResponse,
+      text: string,
+      content: JsonContent,
+    ): boolean => {
       if (response.threadId === null || !threadListSupported) return false;
       onOpenThread({
         anchorMessageId: response.messageId,
@@ -533,6 +524,7 @@ export function BotChannelView(props: {
           threadId: response.threadId,
           requestId: response.requestId,
           text,
+          content,
           senderUserId: viewer?.userId ?? null,
           sentAt: Date.now(),
           delivery: response.delivery,
@@ -644,7 +636,7 @@ export function BotChannelView(props: {
     ],
   );
 
-  const surfaceCards = useSurfaceCards({
+  const surfaceCards = useBotSurfaceCards({
     client,
     hostId,
     botId,
@@ -655,6 +647,13 @@ export function BotChannelView(props: {
   });
 
   const trunkReply = channelTrunkReply(activity);
+  const trunkReplyTurn = useBotReplyingTurn({
+    client,
+    hostId,
+    botId,
+    activity: trunkReply,
+    onOpenTurn,
+  });
 
   const [channelSection, setChannelSection] = useState<HTMLElement | null>(
     null,
@@ -823,28 +822,43 @@ export function BotChannelView(props: {
                 railOpen ? channelBesideRailClass(tiles) : "flex",
               )}
             >
-              <ChannelSearchBack
-                botId={botId}
-                shown={search.showing}
-                on="channel"
-              />
-              <BotExchangeLinesContext value={exchangeLines.channel}>
-                <BotChatTranscript
+              {/* The message area: where a chosen background tints the
+                  channel. The dock below it (the replying strip, the
+                  routing card and the box) keeps the page's own. */}
+              <div
+                data-testid="bot-channel-messages"
+                data-channel-background={background.swatch}
+                style={{ "--channel-tint": background.color } as CSSProperties}
+                className={cn(
+                  "flex min-h-0 flex-1 flex-col",
+                  background.className,
+                )}
+              >
+                <ChannelSearchBack
                   botId={botId}
-                  chatId={channel.conversationId}
-                  hostId={hostId}
-                  title={botTitle}
-                  instanceId={`bot-channel:${botId}`}
-                  surface={surface}
-                  resolveMember={resolveMember}
-                  showConnecting
-                  header={null}
-                  landOn={landing}
+                  shown={search.showing}
+                  on="channel"
                 />
-              </BotExchangeLinesContext>
+                <BotExchangeLinesContext value={exchangeLines.channel}>
+                  <BotChatTranscript
+                    botId={botId}
+                    chatId={channel.conversationId}
+                    hostId={hostId}
+                    title={botTitle}
+                    instanceId={`bot-channel:${botId}`}
+                    surface={surface}
+                    resolveMember={resolveMember}
+                    showConnecting
+                    header={null}
+                    landOn={landing}
+                    flow={null}
+                  />
+                </BotExchangeLinesContext>
+              </div>
               <BotReplyingStrip
                 botTitle={botTitle}
                 activity={trunkReply}
+                turn={trunkReplyTurn}
                 testId="bot-channel-replying"
               />
               <BotRoutingCard
@@ -861,6 +875,7 @@ export function BotChannelView(props: {
                 threadId={null}
                 announcementId={null}
                 sendable
+                imageReach={imageReach}
                 placeholder={`Message ${botTitle}`}
                 label={`Message ${botTitle}`}
                 testId="bot-channel-composer"
@@ -929,6 +944,7 @@ export function BotChannelView(props: {
                     hostId={hostId}
                     boundHostId={boundHostId}
                     botTitle={botTitle}
+                    imageReach={imageReach}
                     conversationId={channel.conversationId}
                     originMessageId={postId}
                     sent={open?.sent ?? null}
@@ -971,59 +987,6 @@ export function BotChannelView(props: {
         </div>
       </QuoteSinkContext>
     </BotSurfaceCardsContext.Provider>
-  );
-}
-
-/**
- * What a surface post's card reads and sends (T89): each task's open
- * surfaces and the viewer's forwarded actions from the bot's subscription,
- * and the send through the tab's host, which offers it only where that host
- * takes it.
- */
-function useSurfaceCards(args: {
-  readonly client: HostClient<HostRpcRegistry> | null;
-  readonly hostId: string;
-  readonly botId: string;
-  readonly viewer: AuthProfile | null;
-  readonly resolveMember: BotMemberResolver;
-  readonly tasks: ReadonlyArray<BotTaskEntry>;
-  readonly surfaceActions: ReadonlyArray<BotSurfaceActionState> | null;
-}): BotSurfaceCards {
-  const {
-    client,
-    hostId,
-    botId,
-    viewer,
-    resolveMember,
-    tasks,
-    surfaceActions,
-  } = args;
-  const actSupported = useHostMethodSupport(hostId, "bot.surface.act") === true;
-  const { mutateAsync: actAsync } = useBotSurfaceActMutation(client);
-  return useMemo<BotSurfaceCards>(
-    () => ({
-      botId,
-      viewerUserId: viewer?.userId ?? null,
-      memberName: (userId) => botMemberName(userId, viewer, resolveMember),
-      openSurfaces: (taskId) =>
-        tasks.find((task) => task.taskId === taskId)?.inputNeeded ?? null,
-      hostAction: (actionId) =>
-        surfaceActions?.find((action) => action.actionId === actionId) ?? null,
-      postActions: (messageId) =>
-        surfaceActions?.filter((action) => action.messageId === messageId) ??
-        [],
-      act: actSupported && client !== null ? actAsync : null,
-    }),
-    [
-      actAsync,
-      actSupported,
-      botId,
-      client,
-      resolveMember,
-      surfaceActions,
-      tasks,
-      viewer,
-    ],
   );
 }
 
@@ -1347,30 +1310,6 @@ function useChannelSearch(args: {
 }
 
 /**
- * Who is in a thread, as its line under the post stacks them: the post's
- * writer, and the bot once the thread has a reply.
- */
-function threadParticipants(
-  thread: BotThreadSummary,
-  viewer: AuthProfile | null,
-  resolveMember: BotMemberResolver,
-): ReadonlyArray<StackedIdentity> {
-  const writerId = thread.anchor?.senderUserId ?? null;
-  const writer: ReadonlyArray<StackedIdentity> =
-    writerId === null
-      ? []
-      : [
-          {
-            kind: "person",
-            userId: writerId,
-            name: botMemberName(writerId, viewer, resolveMember),
-            avatarUrl: resolveMember(writerId)?.avatarUrl ?? null,
-          },
-        ];
-  return thread.replyCount > 0 ? [...writer, { kind: "bot" }] : writer;
-}
-
-/**
  * The trunk answers a direct post at the channel's top level: its running
  * turn is the channel's typing line only while it answers one, so its other
  * work (a routine, a check-in) and a turn whose post is answered draw none.
@@ -1459,11 +1398,8 @@ function useChannelThreads(args: {
   const anchors = threadList.data?.threadAnchors ?? null;
   const threadAnchorKinds = useMemo(
     () =>
-      supported &&
-      anchors !== null &&
-      anchors.hostId === boundHostId &&
-      anchors.epoch === boundHostEpoch
-        ? anchors.kinds
+      supported
+        ? boundThreadAnchorKinds(anchors, boundHostId, boundHostEpoch)
         : [],
     [anchors, boundHostEpoch, boundHostId, supported],
   );
@@ -1517,33 +1453,6 @@ function followedUnwritten(
 }
 
 /**
- * Whether the open thread's box takes a send. The anchor's row says which
- * row the thread hangs off once the channel has it, whatever opened the
- * thread (a memory's link and a session's "Open thread" name the anchor
- * only): a row of the bot takes a send only while the bot's binding names
- * it among the rows a thread roots on. An open that names its kind, or was
- * made from its row (a box under a question, a proposal or a direct post),
- * and a post being sent go by what they say. A thread opened by its anchor
- * alone takes none until the channel's row or the thread list says a
- * member wrote the anchor.
- */
-function anchorSendable(input: {
-  readonly open: BotOpenThread | null;
-  readonly listed: BotThreadSummary | null;
-  readonly post: OpenMessage | null;
-  readonly threadAnchorKinds: readonly string[];
-}): boolean {
-  const { open, post } = input;
-  const kind =
-    post === null ? (open?.anchorKind ?? null) : threadOpenOf(post).anchorKind;
-  if (kind !== null) return input.threadAnchorKinds.includes(kind);
-  if (post !== null) return true;
-  if (open !== null && (open.sent !== null || open.announcement)) return true;
-  const anchor = input.listed?.anchor ?? null;
-  return anchor !== null && anchor.senderUserId !== null;
-}
-
-/**
  * Channel row `messageId` as the channel's session holds it; `null` while
  * it holds none, or there is no session or row to read.
  */
@@ -1573,19 +1482,6 @@ function useChannelRow(input: {
           .getState()
           .messages.find((message) => message.messageId === messageId) ?? null),
   );
-}
-
-/**
- * Whether the person can see a surface that is `shown`: it is in the pane on
- * screen, in a window they are in.
- */
-function usePresented(shown: boolean): boolean {
-  const paneVisible = usePaneVisible();
-  const windowForeground = useSyncExternalStore(
-    subscribeHostNotificationPresence,
-    isDocumentFocused,
-  );
-  return shown && paneVisible && windowForeground;
 }
 
 /**
@@ -1657,56 +1553,6 @@ function useReadThreadWhilePresented(args: {
     presented,
   });
   return presented ? threadId : null;
-}
-
-/**
- * Moves the person's read cursor on a conversation they can see to its
- * newest row (decision 139), as that row arrives: one advance per newest
- * row, never while it is not presented. The read cursor's own read follows
- * the rows (the bot's subscription reads it again as they land), so a row
- * landing while the conversation is in view advances the cursor past it.
- */
-function useAdvanceWhilePresented(args: {
-  readonly client: HostClient<HostRpcRegistry> | null;
-  readonly botId: string;
-  readonly conversationId: string | null;
-  readonly readCursors: BotReadCursorReadResponse | undefined;
-  readonly presented: boolean;
-}): void {
-  const { client, botId, conversationId, readCursors, presented } = args;
-  const { mutateAsync: advance } = useBotReadCursorAdvanceMutation(client);
-  const target =
-    !presented || conversationId === null || readCursors === undefined
-      ? null
-      : advanceTarget(readCursors, conversationId);
-  // The newest row advanced to, or being advanced to, per conversation: a
-  // read that has not caught up with the advance yet asks for the same row
-  // again. A failed advance is forgotten, so the row is asked for again.
-  const advanced = useRef(new Map<string, number>());
-  const targetMessageId = target?.messageId ?? null;
-  const targetSeq = target?.seq ?? null;
-  useEffect(() => {
-    if (
-      conversationId === null ||
-      targetMessageId === null ||
-      targetSeq === null
-    ) {
-      return;
-    }
-    const done = advanced.current.get(conversationId);
-    if (done !== undefined && done >= targetSeq) return;
-    advanced.current.set(conversationId, targetSeq);
-    advance({
-      botId,
-      conversationId,
-      messageId: targetMessageId,
-      seq: targetSeq,
-    }).catch(() => {
-      if (advanced.current.get(conversationId) === targetSeq) {
-        advanced.current.delete(conversationId);
-      }
-    });
-  }, [advance, botId, conversationId, targetMessageId, targetSeq]);
 }
 
 /** Quotes waiting for their box, by the thread's post; `null` for the channel's. */

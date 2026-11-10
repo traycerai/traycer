@@ -74,6 +74,10 @@ describe.skipIf(nodeBinary === null)(
         stopRequested: false,
         stderrEmpty: false,
         stderrFatal: "other",
+        hostLastLine: "none",
+        errorClass: "none",
+        errorCode: "none",
+        stopIntentState: "none",
         reportMemory: match.memory,
       };
       const event = buildHostCrashEvent(telemetry, null);

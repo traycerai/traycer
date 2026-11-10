@@ -85,6 +85,13 @@ export interface TileOpenIntent {
   /** `false` only for the PaneOpener's "open a second view". */
   readonly dedupe: boolean;
   readonly source: AnalyticsSource;
+  /**
+   * Set by an opener that names the HTML version to show (the chat's inline
+   * Expand): a tile already open on the artifact switches to the node's
+   * `htmlVersion`, or back to Latest when the node has none. Every other
+   * opener leaves an open tile on the version its reader picked.
+   */
+  readonly adoptHtmlVersion?: boolean;
 }
 
 /**

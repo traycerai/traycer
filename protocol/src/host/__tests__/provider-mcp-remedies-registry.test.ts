@@ -5,7 +5,7 @@ import {
   providersListResponseSchema,
   providersListResponseSchemaV100Preimage,
   providersListResponseSchemaV101Preimage,
-  providersListResponseSchemaV107Preimage,
+  providersListResponseSchemaV108Preimage,
   providersListResponseSchemaV92,
   providersNativeMutateResponseSchemaV14,
   providersNativeMutateResponseSchemaV15,
@@ -80,11 +80,11 @@ describe("registry lines", () => {
   });
 
   it("freezes the released skill-metadata preimages and binds the new listing heads", () => {
-    expect(listMajor10.latestMinor).toBe(8);
-    expect(listMajor10.versions[7].contract.responseSchema).toBe(
-      providersListResponseSchemaV107Preimage,
-    );
+    expect(listMajor10.latestMinor).toBe(9);
     expect(listMajor10.versions[8].contract.responseSchema).toBe(
+      providersListResponseSchemaV108Preimage,
+    );
+    expect(listMajor10.versions[9].contract.responseSchema).toBe(
       providersListResponseSchema,
     );
     expect(mutateMajor1.latestMinor).toBe(5);

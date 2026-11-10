@@ -455,7 +455,7 @@ function TerminalAccountRow(props: {
       <Switch
         checked={props.enabled}
         disabled={setEnabled.isPending}
-        aria-label={`${name} Terminal account`}
+        aria-label={`${name} terminal account`}
         onCheckedChange={(enabled) =>
           setEnabled.mutate({
             providerId: props.providerId,

@@ -47,10 +47,10 @@ import type {
 export type HostPickIntent = "view" | "bind" | "pin";
 
 /**
- * What an Activate does, said where it is offered (Settings' Activate button
- * and the account menu's Host rows). Not "tabs stay on the host they started
- * on" - the active-host switch still reloads open tabs today, so
- * that promise would be false. This only says what IS true.
+ * What an Activate does, said once under the account menu's Host heading.
+ * Not on each row, and not "tabs stay on the host they started on" — the
+ * active-host switch still reloads open tabs today, so that promise would
+ * be false. This only says what is true.
  */
 export const ACTIVATE_HOST_HINT =
   "Every window follows, and the choice outlives this one.";

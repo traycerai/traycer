@@ -6,7 +6,7 @@ import {
   probe,
   test,
 } from "./support/canvas-geometry.ts";
-import { centreOf, fixture, nextFrames } from "./support/fixtures.ts";
+import { fixture, nextFrames } from "./support/fixtures.ts";
 
 // Every test here runs in one worker, so the worker-scoped pages boot once
 // per run instead of once per worker that gets a test (the config is
@@ -21,7 +21,7 @@ test.describe.configure({ mode: "default" });
 // (`settingsApp`). What is checked here is what jsdom cannot decide: where
 // things land, what fits in what, which control a width draws, and real
 // pointer, wheel and focus input. One test loads the REAL Settings > Providers
-// panel instead (`panel=providers`), to operate its phone select for real.
+// panel instead (`panel=providers`), to select a provider from its phone rail.
 //
 // WHAT IS NOT CHECKED HERE, AND WHERE IT LIVES INSTEAD (all jsdom):
 //  - every setting does something ("every setting changes the app column"):
@@ -40,6 +40,7 @@ test.describe.configure({ mode: "default" });
 // test needs are set live (`setWindow`, the area's tab, `probe.reset()`), so a
 // test never inherits what the last one left. Any uncaught error or unhandled
 // rejection raised during a test fails it (the fixture enforces that).
+// Below md the Providers page's rail is a Provider select of every provider.
 
 const PANE = "[data-fixture-settings-pane]";
 const ACTIVE_PANEL = `${PANE} [role="tabpanel"]:not([hidden])`;
@@ -394,46 +395,13 @@ test.describe("below md, the area select", () => {
 const PROVIDERS_PAGE_QUERY =
   "settings=1&pane=full&panel=providers&account=1&hosts=1&readings=both";
 
-/** The Providers page's phone select, by the name the page gives it. */
+/** The Providers page's phone select. The desktop rail stays mounted, hidden. */
 function providerSelect(page: Page): Locator {
-  return page
-    .locator(PANE)
-    .getByRole("combobox", { name: "Provider", exact: true });
+  return page.locator(PANE).getByRole("combobox", { name: "Provider" });
 }
 
-interface ProviderPick {
-  readonly label: string | null;
-  readonly title: string | null;
-}
-
-/**
- * The provider the page shows: the closed select's label, and the detail
- * pane's title (the first title drawn, since the desktop rail's column is
- * hidden at this width).
- */
-async function readProviderPick(page: Page): Promise<ProviderPick> {
-  return page.evaluate(() => {
-    const trigger = document.querySelector(
-      '[data-fixture-settings-pane] [role="combobox"][aria-label="Provider"]',
-    );
-    const visible = (node: Element): boolean =>
-      node.getClientRects().length > 0;
-    const titles = [
-      ...document.querySelectorAll(
-        "[data-settings-panel-body] div.font-medium.text-foreground",
-      ),
-    ]
-      .filter(visible)
-      .map((node) => node.textContent.trim());
-    return {
-      label: trigger?.querySelector(".truncate")?.textContent.trim() ?? null,
-      title: titles[0] ?? null,
-    };
-  });
-}
-
-test.describe("below md, the Providers page's provider select", () => {
-  test("opens with the pointer and picks another provider, which then shows", async ({
+test.describe("below md, the Providers page's rail", () => {
+  test("selects a provider and shows its pane", async ({
     browser,
     baseURL,
   }) => {
@@ -452,53 +420,25 @@ test.describe("below md, the Providers page's provider select", () => {
         `${fixture("layout-editor-canvas")}?${PROVIDERS_PAGE_QUERY}`,
       );
       await page.waitForFunction("window.__layoutCanvasProbe?.ready === true");
+      const rail = page.locator(`${PANE} nav[aria-label="Providers"]`);
+      await expect(rail).toHaveCount(1);
+      await expect(rail).toBeHidden();
       const select = providerSelect(page);
-      await expect(select, "the provider select is never drawn").toBeVisible();
-      const current = (await readProviderPick(page)).label;
-      if (current === null) {
-        throw new Error(
-          "narrow select, Providers: the select shows no provider",
-        );
-      }
-
-      const trigger = await centreOf(select);
-      await page.mouse.click(trigger.x, trigger.y);
+      await expect(select, "the Provider select is not drawn").toBeVisible();
+      await expect(select).toContainText("Codex");
+      await select.click();
+      await expect(page.getByRole("listbox")).toBeVisible();
+      await page
+        .getByRole("option", { name: "Claude Code", exact: true })
+        .click();
+      await expect(page.getByRole("listbox")).toHaveCount(0);
+      await expect(select).toContainText("Claude Code");
       await expect(
-        page.getByRole("listbox"),
-        "select Provider does not open",
+        page.locator(PANE).getByText("Anthropic's Claude Code CLI.", {
+          exact: true,
+        }),
+        "selecting Claude Code does not show its detail pane",
       ).toBeVisible();
-      const names = await page
-        .locator('[role="listbox"] [role="option"] .truncate')
-        .allTextContents();
-      const next = names
-        .map((name) => name.trim())
-        .find((name) => name !== current);
-      if (next === undefined) {
-        throw new Error("narrow select, Providers: only one provider to pick");
-      }
-      const option = page.getByRole("option", { name: next, exact: true });
-      await expect(
-        option,
-        `select Provider has no option ${next}`,
-      ).toBeVisible();
-      const target = await centreOf(option);
-      await page.mouse.click(target.x, target.y);
-
-      // Until its exit animation ends the list's layer stays mounted, holding
-      // the page's pointer events and the top of the Escape stack.
-      await expect(
-        page.getByRole("listbox"),
-        `select Provider: picking ${next} leaves it open`,
-      ).toHaveCount(0);
-      await expect(
-        page.locator("[data-radix-popper-content-wrapper]"),
-        `select Provider: picking ${next} leaves it open`,
-      ).toHaveCount(0);
-      await expect
-        .poll(async () => readProviderPick(page), {
-          message: `narrow select, Providers picked ${next}`,
-        })
-        .toEqual({ label: next, title: next });
       expect(
         errors,
         "the Providers page raised an uncaught error or an unhandled rejection during the test",

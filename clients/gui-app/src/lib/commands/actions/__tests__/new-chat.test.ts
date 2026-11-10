@@ -216,6 +216,7 @@ describe("new chat command actions", () => {
       hostId: "test-host",
       parentId: null,
       source: "direct_ui",
+      provenance: "user",
       worktreeIntent: null,
       title: "",
       settings: null,
@@ -245,6 +246,7 @@ describe("new chat command actions", () => {
         hostId: "test-host",
         placement: null,
         source: "direct_ui",
+        provenance: "user",
       },
     ]);
   });
@@ -259,6 +261,7 @@ describe("new chat command actions", () => {
       hostId: "test-host",
       parentId: null,
       source: "direct_ui",
+      provenance: "user",
       worktreeIntent: SEEDED_WORKTREE_INTENT,
       title: "",
       settings: null,
@@ -283,6 +286,7 @@ describe("new chat command actions", () => {
       hostId: "test-host",
       parentId: null,
       source: "direct_ui",
+      provenance: "user",
       worktreeIntent: null,
       title: "Cloned chat title",
       settings: null,
@@ -305,6 +309,7 @@ describe("new chat command actions", () => {
       hostId: "test-host",
       placement: null,
       source: "direct_ui",
+      provenance: "user",
     });
 
     expect(
@@ -343,6 +348,7 @@ describe("new chat command actions", () => {
         hostId: "test-host",
         placement: null,
         source: "direct_ui",
+        provenance: "user",
       },
       navigateNestedFocus: navigation.navigateNestedFocus,
       mobileTarget: null,
@@ -393,6 +399,7 @@ describe("new chat command actions", () => {
         hostId: "test-host",
         placement: null,
         source: "direct_ui",
+        provenance: "user",
       });
 
       expect(registryMock.listenerCount()).toBe(1);
@@ -421,6 +428,7 @@ describe("new chat command actions", () => {
         hostId: "test-host",
         placement: null,
         source: "direct_ui",
+        provenance: "user",
       });
 
       expect(registryMock.listenerCount()).toBe(1);
@@ -442,6 +450,7 @@ describe("new chat command actions", () => {
         hostId: "test-host",
         placement: null,
         source: "direct_ui",
+        provenance: "user",
       });
 
       expect(reportableWarningToast).not.toHaveBeenCalled();
@@ -468,6 +477,7 @@ describe("new chat command actions", () => {
         hostId: "test-host",
         placement: null,
         source: "direct_ui",
+        provenance: "user",
       });
 
       registryMock.projectChat({ id: "host-chat", title: "Host chat" });
@@ -489,6 +499,7 @@ describe("new chat command actions", () => {
         hostId: "test-host",
         placement: null,
         source: "direct_ui",
+        provenance: "user",
       });
 
       cancel();
@@ -507,6 +518,7 @@ describe("new chat command actions", () => {
         hostId: "test-host",
         parentId: null,
         source: "direct_ui",
+        provenance: "user",
         worktreeIntent: null,
         title: "",
         settings: null,
@@ -533,6 +545,7 @@ describe("new chat command actions", () => {
         hostId: "test-host",
         parentId: null,
         source: "direct_ui",
+        provenance: "user",
         worktreeIntent: null,
         title: "",
         settings: null,
@@ -563,6 +576,7 @@ describe("new chat command actions", () => {
       hostId: "test-host",
       placement: { kind: "tab", paneId: targetGroupId, index: null },
       source: "command_palette",
+      provenance: "user",
     });
     registryMock.projectChat({ id: "host-chat", title: "Host chat" });
 
@@ -592,6 +606,7 @@ describe("new chat command actions", () => {
       hostId: "test-host",
       placement: { kind: "tab", paneId: targetGroupId, index: null },
       source: "command_palette",
+      provenance: "user",
     });
 
     useEpicCanvasStore.getState().closeCanvasPane(TAB_ID, targetGroupId);
@@ -622,6 +637,7 @@ describe("new chat command actions", () => {
       hostId: "test-host",
       placement: { kind: "split", paneId: activeGroupId, edge: "bottom" },
       source: "direct_ui",
+      provenance: "user",
     });
     registryMock.projectChat({ id: "host-chat", title: "" });
 

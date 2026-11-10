@@ -528,11 +528,50 @@ describe("page requests", () => {
     harness.host.receive(wheel(2, -3, 1));
     harness.host.receive(wheel(0, 1, 2));
     harness.host.receive(wheel(0, 1e9, 0));
+    // Nothing sent about the swipe: the page claims no cancel and all the room.
+    const unclaimed = { cancelable: false, ownsBack: true, ownsForward: true };
     expect(harness.onWheel.mock.calls).toEqual([
-      [{ deltaX: 0, deltaY: 40 }],
-      [{ deltaX: 32, deltaY: -48 }],
-      [{ deltaX: 0, deltaY: 320 }],
-      [{ deltaX: 0, deltaY: 4000 }],
+      [{ deltaX: 0, deltaY: 40, ...unclaimed }],
+      [{ deltaX: 32, deltaY: -48, ...unclaimed }],
+      [{ deltaX: 0, deltaY: 320, ...unclaimed }],
+      [{ deltaX: 0, deltaY: 4000, ...unclaimed }],
+    ]);
+  });
+
+  it("relays what a page says about the swipe verbatim, and reads anything else as the safe default", () => {
+    const harness = ready(null, OPENS);
+    const swipeFacts = (facts: Record<string, unknown>): Sent =>
+      notification("traycer/notifications/wheel", {
+        deltaX: 10,
+        deltaY: 0,
+        deltaMode: 0,
+        ...facts,
+      });
+    harness.host.receive(
+      swipeFacts({ cancelable: true, ownsBack: false, ownsForward: false }),
+    );
+    harness.host.receive(
+      swipeFacts({ cancelable: "yes", ownsBack: 0, ownsForward: null }),
+    );
+    expect(harness.onWheel.mock.calls).toEqual([
+      [
+        {
+          deltaX: 10,
+          deltaY: 0,
+          cancelable: true,
+          ownsBack: false,
+          ownsForward: false,
+        },
+      ],
+      [
+        {
+          deltaX: 10,
+          deltaY: 0,
+          cancelable: false,
+          ownsBack: true,
+          ownsForward: true,
+        },
+      ],
     ]);
   });
 
@@ -632,7 +671,7 @@ describe("html view state", () => {
     const harness = ready(null, OPENS);
     harness.host.receive(notification("ui/notifications/initialized", {}));
 
-    harness.host.setHtmlView(true, 1.5);
+    harness.host.setHtmlView({ enabled: true, scale: 1.5, commenting: false });
 
     expect(harness.all("traycer/html/view")).toEqual([]);
   });

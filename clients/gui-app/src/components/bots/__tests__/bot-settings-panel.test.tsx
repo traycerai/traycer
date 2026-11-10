@@ -38,11 +38,13 @@ import type {
 import {
   SLACK_APP_REFUSAL_BOT_NOT_FOUND,
   SLACK_APP_REFUSAL_NOT_CONFIGURED,
+  type SlackAppDmsRequest,
   type SlackAppRegisterRequest,
 } from "@traycer/protocol/host/slack-app";
 import type {
   SlackAppManifestResult,
   SlackAppReadResult,
+  SlackAppWriteResult,
 } from "@traycer-clients/shared/host-client/slack-app";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { SLACK_SETTINGS_UNAVAILABLE_IN_STAGING } from "@traycer-clients/shared/host-client/slack-app";
@@ -102,6 +104,8 @@ const mocks = vi.hoisted(() => ({
   replyModeSupport: true as boolean | null,
   // Whether the reply-mode write is in flight.
   replyModePending: false,
+  // What it answers for `bot.updateAppearance` (the appearance section).
+  appearanceSupport: null as boolean | null,
   supportQueries: [] as Array<{ hostId: string | null; method: string }>,
   // Whether the tab's host advertises `host.usage.summary`.
   usageSupported: false,
@@ -142,6 +146,7 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
     if (method.startsWith("bot.notificationLevel.")) {
       return mocks.notificationSupport;
     }
+    if (method === "bot.updateAppearance") return mocks.appearanceSupport;
     return method === "bot.updateReplyMode" ? mocks.replyModeSupport : null;
   },
 }));
@@ -205,6 +210,15 @@ vi.mock("@/hooks/bots/use-bot-mutations", () => ({
     isPending: mocks.replyModePending,
     error: refusalOf(mocks.refusal.replyMode),
     mutate: mocks.updateReplyMode,
+  }),
+  // The appearance section has its own suite over a real host client
+  // (`bot-appearance-settings.test.tsx`); here it only has to mount.
+  useBotUpdateAppearanceMutation: () => ({
+    isPending: false,
+    isError: false,
+    variables: undefined,
+    error: null,
+    mutate: vi.fn(),
   }),
 }));
 vi.mock("@/hooks/bots/use-bot-notification-level", () => ({
@@ -305,7 +319,8 @@ let queryClient: QueryClient;
 const slackOverrides: {
   read: SlackAppReadResult | null;
   manifest: SlackAppManifestResult | null;
-} = { read: null, manifest: null };
+  dms: ((request: SlackAppDmsRequest) => Promise<SlackAppWriteResult>) | null;
+} = { read: null, manifest: null, dms: null };
 const SLACK_BEARER = "test-bearer";
 
 function newSlackHost(): MockRunnerHost {
@@ -332,6 +347,9 @@ function newSlackAuth(host: MockRunnerHost): object {
       host.mintSlackAppInstallUrl(SLACK_BEARER, botId),
     disconnectSlackApp: (botId: string) =>
       host.disconnectSlackApp(SLACK_BEARER, botId),
+    setSlackAppDms: (request: SlackAppDmsRequest) =>
+      slackOverrides.dms?.(request) ??
+      host.setSlackAppDms(SLACK_BEARER, request),
   };
 }
 
@@ -380,6 +398,7 @@ beforeEach(() => {
   slackHost = newSlackHost();
   slackOverrides.read = null;
   slackOverrides.manifest = null;
+  slackOverrides.dms = null;
   mocks.binding = { auth: newSlackAuth(slackHost) };
   queryClient = createAppQueryClient();
   useBotSlackPendingInstallStore.setState({ entries: {} });
@@ -397,6 +416,7 @@ beforeEach(() => {
   mocks.refusal.remove = null;
   mocks.refusal.replyMode = null;
   mocks.replyModeSupport = true;
+  mocks.appearanceSupport = null;
   mocks.replyModePending = false;
   mocks.supportQueries.length = 0;
   mocks.usageSupported = false;
@@ -597,6 +617,34 @@ describe("<BotChannelSettingsPanel /> refusals", () => {
   });
 });
 
+describe("<BotChannelSettingsPanel /> appearance", () => {
+  it("offers Icon, Colour and Background in Details when the host can change them", () => {
+    mocks.appearanceSupport = true;
+    mountPanel(BOT, true);
+
+    for (const [testId, label] of [
+      ["bot-settings-icon", "Icon"],
+      ["bot-settings-colour", "Colour"],
+      ["bot-settings-background", "Background"],
+    ] as const) {
+      expect(within(screen.getByTestId(testId)).getByText(label)).toBeTruthy();
+    }
+    expect(mocks.supportQueries).toContainEqual({
+      hostId: "host-1",
+      method: "bot.updateAppearance",
+    });
+  });
+
+  it("draws none of the three when the host cannot change them", () => {
+    mocks.appearanceSupport = false;
+    mountPanel(BOT, true);
+
+    expect(screen.queryByTestId("bot-settings-icon")).toBeNull();
+    expect(screen.queryByTestId("bot-settings-colour")).toBeNull();
+    expect(screen.queryByTestId("bot-settings-background")).toBeNull();
+  });
+});
+
 describe("<BotChannelSettingsPanel /> reply mode", () => {
   function radio(name: string): HTMLElement {
     return screen.getByRole("radio", { name });
@@ -780,8 +828,10 @@ describe("<BotChannelSettingsPanel /> Max Mode label", () => {
           keepsUnavailablePick: false,
           harnesses: undefined,
           modelsHarnessId: "cursor",
+          modelsProfileId: null,
           models: [],
           modelsLoaded: false,
+          modelsFailed: false,
           tuiOnly: false,
         });
       });
@@ -1388,6 +1438,61 @@ describe("<BotChannelSettingsPanel /> Slack", () => {
     expect(screen.queryByTestId("bot-settings-slack-waiting")).toBeNull();
   });
 
+  it("reads the DM setting, writes a toggle, and re-reads the app", async () => {
+    const user = userEvent.setup();
+    await seedInstalledApp();
+    mountSlackPanel();
+    await screen.findByTestId("bot-settings-slack-connected");
+
+    const setting = screen.getByTestId("bot-settings-slack-dms");
+    expect(within(setting).getByText("Direct messages")).toBeTruthy();
+    expect(
+      within(setting).getByText(
+        "Anyone in the workspace can message this bot directly.",
+      ),
+    ).toBeTruthy();
+    const toggle = within(setting).getByRole("switch", {
+      name: "Direct messages",
+    });
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+
+    await user.click(toggle);
+
+    await waitFor(() =>
+      expect(toggle.getAttribute("aria-checked")).toBe("false"),
+    );
+    const updated = await slackHost.readSlackApp(SLACK_BEARER, BOT.botId);
+    expect(updated.kind).toBe("ok");
+    if (updated.kind === "ok") expect(updated.app?.dmsEnabled).toBe(false);
+  });
+
+  it("shows a DM setting refusal in place and disables its switch while writing", async () => {
+    const user = userEvent.setup();
+    let release: (result: SlackAppWriteResult) => void = () => undefined;
+    slackOverrides.dms = () =>
+      new Promise<SlackAppWriteResult>((resolve) => {
+        release = resolve;
+      });
+    await seedInstalledApp();
+    mountSlackPanel();
+    await screen.findByTestId("bot-settings-slack-connected");
+
+    const toggle = screen.getByRole("switch", { name: "Direct messages" });
+    await user.click(toggle);
+    expect(toggle.getAttribute("disabled")).not.toBeNull();
+
+    release({
+      kind: "refused",
+      status: 404,
+      code: SLACK_APP_REFUSAL_BOT_NOT_FOUND,
+    });
+    const refusal = await within(slackGroup()).findByTestId(
+      "bot-settings-refusal",
+    );
+    expect(refusal.textContent).toBe("You can't change this bot's Slack app.");
+    expect(toggle.getAttribute("disabled")).toBeNull();
+  });
+
   it("shows the workspace the app left after Disconnect, with Install to workspace to come back", async () => {
     const user = userEvent.setup();
     await seedInstalledApp();
@@ -1482,6 +1587,7 @@ describe("<BotChannelSettingsPanel /> Slack", () => {
       registerSlackApp: vi.fn<IRunnerHost["registerSlackApp"]>(),
       mintSlackAppInstallUrl: vi.fn<IRunnerHost["mintSlackAppInstallUrl"]>(),
       disconnectSlackApp: vi.fn<IRunnerHost["disconnectSlackApp"]>(),
+      setSlackAppDms: vi.fn<IRunnerHost["setSlackAppDms"]>(),
     };
     // The real AuthService floor over a runner host that reports the reason.
     const auth = new AuthService({

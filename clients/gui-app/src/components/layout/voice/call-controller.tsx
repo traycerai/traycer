@@ -100,8 +100,6 @@ import {
  * close, the end route) finishes on its own afterwards.
  */
 interface Attempt {
-  /** The store's engine generation this attempt is. */
-  readonly generation: number;
   readonly engine: VoiceEngine;
   /** The server's id, owned the moment the mint answers. */
   sessionId: string | null;
@@ -310,6 +308,7 @@ export function CallController(): ReactNode {
         priority: "focused",
         text,
         delegationId: null,
+        retry: true,
         confirmWords: confirmationWords({
           botTitle: null,
           threadTitle: null,
@@ -378,6 +377,12 @@ export function CallController(): ReactNode {
   const closingRef = useRef(false);
   /** The thread this call's first send opened; its first snapshot is all arrivals. */
   const [openedThreadId, setOpenedThreadId] = useState<string | null>(null);
+  // Only utterances closed by an observed vendor acknowledgement reach pump.
+  // Retain their actual host request ids for the lifetime of this call.
+  const [acknowledgedRequests, setAcknowledgedRequests] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
+  const [awaitingRequest, setAwaitingRequest] = useState(false);
   const pumpRef = useRef<() => void>(() => undefined);
   const unreachableRef = useRef<() => void>(() => undefined);
   const failedSendRef = useRef<() => void>(() => undefined);
@@ -394,6 +399,7 @@ export function CallController(): ReactNode {
     const token = store.sessionToken;
     const threadId = call.threadId;
     sendingRef.current = token;
+    setAwaitingRequest(true);
     const settleSend = (): boolean => {
       if (sendingRef.current === token) {
         sendingRef.current = null;
@@ -413,6 +419,10 @@ export function CallController(): ReactNode {
     sent.then(
       (response: BotConversationSendResponse) => {
         if (!settleSend()) return;
+        setAcknowledgedRequests(
+          (requests) => new Set([...requests, response.requestId]),
+        );
+        setAwaitingRequest(false);
         if (response.delivery === "queued") {
           unreachableRef.current();
           return;
@@ -428,6 +438,7 @@ export function CallController(): ReactNode {
           error: describeLogError(error),
         });
         if (!settleSend()) return;
+        setAwaitingRequest(false);
         failedSendRef.current();
         pumpRef.current();
       },
@@ -800,7 +811,6 @@ export function CallController(): ReactNode {
     const micTrack = stream?.getAudioTracks()[0] ?? null;
     if (micTrack === null) return false;
     const attempt: Attempt = {
-      generation: useVoiceSessionStore.getState().engineGeneration,
       engine: createBrowserGptLiveEngine(),
       sessionId: null,
       expiresAt: 0,
@@ -1183,6 +1193,8 @@ export function CallController(): ReactNode {
       sendingRef.current = null;
       inFlightRef.current = null;
       setOpenedThreadId(null);
+      setAcknowledgedRequests(new Set());
+      setAwaitingRequest(false);
       const { sessionToken: token, engineGeneration: generation } =
         useVoiceSessionStore.getState();
       const stillStarting = (): boolean => {
@@ -1335,6 +1347,8 @@ export function CallController(): ReactNode {
       botTitle={botTitle(focus.botId)}
       client={focusClient}
       scheduler={speech}
+      acknowledgedRequests={acknowledgedRequests}
+      awaitingRequest={awaitingRequest}
     />
   );
 }
@@ -1373,8 +1387,8 @@ interface ReplyWatchState {
  * joined takes its first snapshot as history.
  *
  * The bot's turn on the thread holds the floor: past `CALL_HOLD_DELAY_MS`
- * of replying, one hold line, and one only for the turn. A reply that lands
- * first takes the place of a hold line still waiting and restarts the wait.
+ * of replying, one hold line per request, unless the voice already acknowledged
+ * that request. A reply withdraws obsolete filler while its audio drains.
  * A turn that fails or parks gets one failure line in place of any hold line
  * still waiting, and the call stays open.
  */
@@ -1386,9 +1400,20 @@ function CallThreadWatch(props: {
   readonly botTitle: string;
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly scheduler: SpeechScheduler;
+  readonly acknowledgedRequests: ReadonlySet<string>;
+  readonly awaitingRequest: boolean;
 }): null {
-  const { botId, hostId, threadId, opened, botTitle, client, scheduler } =
-    props;
+  const {
+    botId,
+    hostId,
+    threadId,
+    opened,
+    botTitle,
+    client,
+    scheduler,
+    acknowledgedRequests,
+    awaitingRequest,
+  } = props;
   const handle = useChatSessionHandleForContainer(
     botId,
     threadId,
@@ -1414,13 +1439,19 @@ function CallThreadWatch(props: {
     activity === null ? null : (session?.state ?? ("idle" as const));
   const turnRequest = session?.requestId ?? null;
   const holdTimerRef = useRef<number | null>(null);
-  /** The hold line queued and not appended yet, so a reply can take its place. */
+  /** The hold line, including one in flight whose audio must drain. */
   const holdItemRef = useRef<string | null>(null);
   /**
    * The replying turn has had its one hold line (said, or given to the voice
    * and past taking back): no reply row re-arms it.
    */
   const holdSpentRef = useRef(false);
+  const spentRequestsRef = useRef(new Set<string | null>());
+  const holdRequestRef = useRef<string | null | undefined>(undefined);
+  const awaitingRequestRef = useRef(awaitingRequest);
+  useEffect(() => {
+    awaitingRequestRef.current = awaitingRequest;
+  }, [awaitingRequest]);
   /** Which replying turn is current, so a late delivery spends only its own. */
   const spanRef = useRef(0);
   /** The requests whose failure has been said, so each is said once. */
@@ -1432,7 +1463,7 @@ function CallThreadWatch(props: {
   } | null>(null);
 
   const sayLine = useCallback(
-    (kind: string, text: string, onDelivered: (() => void) | null): string => {
+    (kind: string, text: string, onSettled: (() => void) | null): string => {
       lineSerialRef.current += 1;
       const id = `${kind}:${threadId}:${lineSerialRef.current}`;
       scheduler.enqueue({
@@ -1440,13 +1471,14 @@ function CallThreadWatch(props: {
         priority: "focused",
         text,
         delegationId: null,
+        retry: kind !== "hold",
         confirmWords: confirmationWords({
           botTitle: null,
           threadTitle: null,
           text,
         }),
-        onDelivered,
-        onGivenUp: null,
+        onDelivered: onSettled,
+        onGivenUp: onSettled,
       });
       return id;
     },
@@ -1459,17 +1491,17 @@ function CallThreadWatch(props: {
     }
   }, []);
   /**
-   * Takes back the hold line while it is still queued: it was never said, so
-   * the turn keeps its hold. One already given to the voice cannot be taken
-   * back and is being said: the turn has had it.
+   * Obsolete filler must never retry ahead of a reply. Withdrawing an in-flight
+   * line preserves its audio slot so late words cannot confirm the reply.
    */
   const withdrawHold = useCallback(() => {
     const hold = holdItemRef.current;
     if (hold === null) return;
     holdItemRef.current = null;
-    const pending = scheduler.pendingCount();
-    scheduler.remove(hold);
-    if (scheduler.pendingCount() === pending) holdSpentRef.current = true;
+    if (scheduler.withdraw(hold) !== "unappended") {
+      holdSpentRef.current = true;
+      spentRequestsRef.current.add(holdRequestRef.current ?? null);
+    }
   }, [scheduler]);
   /** Starts the wait for the turn's one hold line, from now. */
   const armHold = useCallback(() => {
@@ -1478,7 +1510,10 @@ function CallThreadWatch(props: {
       holdTimerRef.current = null;
       const span = spanRef.current;
       holdItemRef.current = sayLine("hold", CALL_HOLD_LINE, () => {
-        if (spanRef.current === span) holdSpentRef.current = true;
+        if (spanRef.current === span) {
+          holdSpentRef.current = true;
+          spentRequestsRef.current.add(holdRequestRef.current ?? null);
+        }
       });
     }, CALL_HOLD_DELAY_MS);
   }, [clearHold, sayLine]);
@@ -1491,25 +1526,49 @@ function CallThreadWatch(props: {
   useEffect(() => clearHold, [clearHold]);
 
   useEffect(() => {
-    const previous = turnRef.current;
-    turnRef.current = { state: turnState, requestId: turnRequest };
-    if (turnState === "replying") {
-      if (
-        previous?.state !== "replying" ||
-        previous.requestId !== turnRequest
-      ) {
-        // A new turn: the last one's hold line, if still queued, is not
-        // this one's.
+    if (turnState === "replying" && turnRequest !== null) {
+      if (holdRequestRef.current !== turnRequest) {
+        clearHold();
         withdrawHold();
         spanRef.current += 1;
-        holdSpentRef.current = false;
+        holdRequestRef.current = turnRequest;
+        holdSpentRef.current = spentRequestsRef.current.has(turnRequest);
+      }
+      if (acknowledgedRequests.has(turnRequest)) {
+        clearHold();
+        withdrawHold();
+        holdSpentRef.current = true;
+        spentRequestsRef.current.add(turnRequest);
+      } else if (awaitingRequest) {
+        // Activity can precede the send response naming its request. Wait for
+        // that correlation before deciding whether another acknowledgement is due.
+        clearHold();
+        withdrawHold();
+      } else if (
+        !holdSpentRef.current &&
+        holdTimerRef.current === null &&
+        holdItemRef.current === null
+      ) {
         armHold();
       }
       return;
     }
-    // The turn is over: its hold line, if still queued, is no longer true.
+    // No open post is known: a resolved post may still have a running turn.
     clearHold();
     withdrawHold();
+  }, [
+    acknowledgedRequests,
+    awaitingRequest,
+    armHold,
+    clearHold,
+    turnRequest,
+    turnState,
+    withdrawHold,
+  ]);
+
+  useEffect(() => {
+    const previous = turnRef.current;
+    turnRef.current = { state: turnState, requestId: turnRequest };
     const stopped = turnState === "failed" || turnState === "parked";
     if (!stopped) return;
     // In a thread the call joined, a turn already stopped at the first
@@ -1524,16 +1583,7 @@ function CallThreadWatch(props: {
     if (!news || (!known && announcedRef.current.has(request))) return;
     announcedRef.current.add(request);
     sayLine("failed", callFailureLine(botTitle), null);
-  }, [
-    armHold,
-    botTitle,
-    clearHold,
-    opened,
-    sayLine,
-    turnRequest,
-    turnState,
-    withdrawHold,
-  ]);
+  }, [botTitle, opened, sayLine, turnRequest, turnState]);
 
   // ---- The replies -------------------------------------------------------- //
   useEffect(() => {
@@ -1543,7 +1593,12 @@ function CallThreadWatch(props: {
       // A reply landed: a hold line still waiting is not said. A turn that
       // runs on waits a full delay again, unless it has had its hold line.
       withdrawHoldRef.current();
-      if (turnRef.current?.state === "replying" && !holdSpentRef.current) {
+      if (
+        turnRef.current?.state === "replying" &&
+        turnRef.current.requestId !== null &&
+        !holdSpentRef.current &&
+        !awaitingRequestRef.current
+      ) {
         armHoldRef.current();
       }
       scheduler.enqueue({
@@ -1551,6 +1606,7 @@ function CallThreadWatch(props: {
         priority: "focused",
         text,
         delegationId: null,
+        retry: true,
         confirmWords: confirmationWords({
           botTitle: null,
           threadTitle: null,

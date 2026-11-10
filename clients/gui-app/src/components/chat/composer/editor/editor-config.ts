@@ -18,6 +18,7 @@ import {
 import { AttachmentGroupNode } from "./extensions/attachment-group-extension";
 import { ComposerSourcedQuote } from "./extensions/sourced-quote-extension";
 import { ImageAttachmentNode } from "./extensions/image-attachment-extension";
+import { FileAttachmentNode } from "./extensions/file-attachment-extension";
 import { ChatListKeymap } from "./extensions/chat-list-keymap";
 import {
   createChatPasteHandler,
@@ -38,7 +39,9 @@ export interface BuildComposerExtensionsArgs {
   readonly onSubmit: {
     readonly current: (source: ChatComposerSubmitSource) => void;
   };
-  readonly slashProviderId: GuiHarnessId;
+  /** `null` for a box with no slash commands: `/` is then a character. */
+  readonly slashProviderId: GuiHarnessId | null;
+  readonly preserveMessagePaste?: boolean;
   readonly getHasPastedImageBytes: () => ((hash: string) => boolean) | null;
   readonly getIngestPastedComposerImages: () =>
     | ((
@@ -113,15 +116,20 @@ export function buildComposerExtensions(
     }),
     createMentionExtension({ pickerStore: args.pickerStore }),
     ChatSlashCommandNode,
-    createSlashSuggestionExtension({ pickerStore: args.pickerStore }),
+    ...(args.slashProviderId === null
+      ? []
+      : [createSlashSuggestionExtension({ pickerStore: args.pickerStore })]),
     AttachmentGroupNode,
     ImageAttachmentNode,
+    FileAttachmentNode,
     ChatListKeymap.configure({
       onSubmit: args.onSubmit,
       pickerStore: args.pickerStore,
     }),
     createChatPasteHandler({
       pickerStore: args.pickerStore,
+      preserveMessagePaste: args.preserveMessagePaste === true,
+      preserveSlashAsText: args.slashProviderId === null,
       getHasPastedImageBytes: args.getHasPastedImageBytes,
       getIngestPastedComposerImages: args.getIngestPastedComposerImages,
     }),

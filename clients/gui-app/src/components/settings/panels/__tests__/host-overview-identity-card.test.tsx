@@ -190,7 +190,7 @@ describe("<HostSettingsPanel /> Overview identity card — rename affordance and
   });
 });
 
-describe("<HostSettingsPanel /> Overview identity card — busy chip", () => {
+describe("<HostSettingsPanel /> Overview identity card — Busy/Idle status", () => {
   it("reads 'Idle' with no live tone when the host reports no work", async () => {
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
@@ -217,7 +217,7 @@ describe("<HostSettingsPanel /> Overview identity card — busy chip", () => {
     expect(chip.className).not.toMatch(/emerald/);
   });
 
-  it("reads '1 agent working' for a {1,0,0} breakdown", async () => {
+  it("shows Busy for a working agent without exposing a session breakdown", async () => {
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,
@@ -240,11 +240,11 @@ describe("<HostSettingsPanel /> Overview identity card — busy chip", () => {
     const chip = await screen.findByTestId("host-active-sessions");
     expect(chip.getAttribute("data-count")).toBe("1");
     expect(chip.getAttribute("data-live")).toBe("true");
-    expect(chip.textContent).toBe("1 agent working");
+    expect(chip.textContent).toBe("1 agent");
     expect(chip.textContent).not.toMatch(/session/i);
   });
 
-  it("falls back to '2 sessions' for a @1.1 host with a count and no breakdown", async () => {
+  it("shows Busy when an older host reports only a session count", async () => {
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,
@@ -314,7 +314,9 @@ describe("<HostSettingsPanel /> Overview identity card — busy chip", () => {
       await gate;
     });
 
-    expect(await screen.findByTestId("host-active-sessions")).toBeTruthy();
+    expect(
+      (await screen.findByTestId("host-active-sessions")).textContent,
+    ).toBe("1 session");
   });
 
   it("keeps the busy chip on screen while host.status is refetching", async () => {
@@ -369,7 +371,7 @@ describe("<HostSettingsPanel /> Overview identity card — busy chip", () => {
     renderPanel(queryClient);
 
     const chip = await screen.findByTestId("host-active-sessions");
-    expect(chip.textContent).toBe("2 terminals working");
+    expect(chip.textContent).toBe("2 terminals");
 
     act(() => {
       void queryClient.invalidateQueries({
@@ -386,7 +388,7 @@ describe("<HostSettingsPanel /> Overview identity card — busy chip", () => {
     });
 
     expect(screen.getByTestId("host-active-sessions").textContent).toBe(
-      "2 terminals working",
+      "2 terminals",
     );
 
     await act(async () => {
@@ -395,7 +397,26 @@ describe("<HostSettingsPanel /> Overview identity card — busy chip", () => {
     });
 
     expect(screen.getByTestId("host-active-sessions").textContent).toBe(
-      "2 terminals working",
+      "2 terminals",
+    );
+  });
+
+  it("puts Computer on the name row and the running version on the fact line", async () => {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      effectiveName: "Studio Mac",
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel(undefined);
+
+    const row = await screen.findByTestId("host-identity-name-row");
+    expect(within(row).getByText("Computer")).toBeTruthy();
+    const health = await screen.findByTestId("host-identity-health");
+    expect(health.parentElement?.parentElement?.textContent).toContain(
+      "macOS · arm64 · v1.5.0",
     );
   });
 });
@@ -432,6 +453,7 @@ describe("<HostSettingsPanel /> Overview identity card — window binding", () =
     // one boolean, which is what made the badge and the button read as
     // unrelated controls.
     expect(button.textContent).toBe("Activate");
+    expect(screen.queryByTestId("host-active-in-window")).toBeNull();
     fireEvent.click(button);
     expect(makeActive).toHaveBeenCalledWith("host-a");
   });
@@ -468,7 +490,10 @@ describe("<HostSettingsPanel /> Overview identity card — window binding", () =
       };
       renderPanel(undefined);
 
-      await screen.findByTestId("host-overview-menu");
+      fireEvent.pointerDown(await screen.findByTestId("host-overview-menu"), {
+        button: 0,
+      });
+      await screen.findByRole("menu");
       expect(screen.queryByTestId("host-make-active")).toBeNull();
     },
   );
@@ -500,11 +525,14 @@ describe("<HostSettingsPanel /> Overview identity card — window binding", () =
     };
     renderPanel(undefined);
 
-    await screen.findByTestId("host-overview-menu");
+    fireEvent.pointerDown(await screen.findByTestId("host-overview-menu"), {
+      button: 0,
+    });
+    await screen.findByRole("menu");
     expect(screen.queryByTestId("host-make-active")).toBeNull();
   });
 
-  it("offers Activate on an ordinary confirmed sandbox", async () => {
+  it("offers Activate in More on an ordinary confirmed sandbox", async () => {
     const fixture = buildOverviewHostFixture({
       hostId: "host-sbx",
       isLocalMachine: false,
@@ -535,10 +563,14 @@ describe("<HostSettingsPanel /> Overview identity card — window binding", () =
     };
     renderPanel(undefined);
 
-    expect(await screen.findByTestId("host-make-active")).not.toBeNull();
+    fireEvent.pointerDown(await screen.findByTestId("host-overview-menu"), {
+      button: 0,
+    });
+    const menu = await screen.findByRole("menu");
+    expect(within(menu).getByTestId("host-make-active")).not.toBeNull();
   });
 
-  it("host.isActive: true renders no Activate button", async () => {
+  it("host.isActive: true shows Active in the header row and More has no Active item", async () => {
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,
@@ -550,8 +582,20 @@ describe("<HostSettingsPanel /> Overview identity card — window binding", () =
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel(undefined);
 
-    await screen.findByText("Studio Mac");
+    const card = await screen.findByTestId("host-identity-card");
+    const active = within(card).getByTestId("host-active-in-window");
+    expect(active.textContent).toBe("Active");
+    expect(active.getAttribute("data-slot")).toBe("badge");
+    expect(screen.queryByRole("button", { name: "Activate" })).toBeNull();
     expect(screen.queryByTestId("host-make-active")).toBeNull();
+
+    fireEvent.pointerDown(within(card).getByTestId("host-overview-menu"), {
+      button: 0,
+    });
+    const menu = await screen.findByRole("menu");
+    expect(within(menu).queryByText("Active")).toBeNull();
+    expect(within(menu).queryByTestId("host-active-in-window")).toBeNull();
+    expect(within(menu).getByTestId("host-overview-restart")).not.toBeNull();
   });
 });
 

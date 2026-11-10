@@ -68,8 +68,11 @@ import type {
   IHostManagement,
 } from "@traycer-clients/shared/platform/runner-host";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
+import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
+import { hostQueryKeys } from "@/lib/query-keys";
 import { formatSettingsDate } from "@/lib/settings/settings-date";
 import {
   buildOverviewHostFixture,
@@ -280,6 +283,22 @@ function setRoutelessScope(options: {
   };
 }
 
+function pinSandbox(sandbox: {
+  readonly state: "awake";
+  readonly frozen: boolean;
+  readonly summary: SandboxSummary;
+  readonly teamOwned: boolean;
+}): void {
+  const host = scopeOverrides.current.host;
+  if (typeof host !== "object" || host === null) {
+    throw new Error("expected the selected host fixture");
+  }
+  scopeOverrides.current = {
+    ...scopeOverrides.current,
+    host: { ...host, kind: "sandbox", sandbox },
+  };
+}
+
 function fixtureFor(
   isLocalMachine: boolean,
   overrides: Parameters<typeof buildOverviewHostFixture>[0]["overrideHandlers"],
@@ -313,6 +332,10 @@ function installationPane(): HTMLElement {
   return screen.getByTestId("host-overview-tab-panel-installation");
 }
 
+function inlineAbout(): HTMLElement {
+  return within(installationPane()).getByTestId("host-overview-about-facts");
+}
+
 const initialInnerWidth = window.innerWidth;
 const initialClipboard = Object.getOwnPropertyDescriptor(
   navigator,
@@ -333,8 +356,8 @@ afterEach(() => {
   window.innerWidth = initialInnerWidth;
 });
 
-describe("Overview ▸ Installation — About this host", () => {
-  it("reads every row from the account's record, with a host ID that is shortened and copyable in full", async () => {
+describe("Overview ▸ Installation — account facts", () => {
+  it("shows Added to account and Host ID inline and copies the full id", async () => {
     const item = registryItem({});
     setReadyScope({
       isLocalMachine: false,
@@ -346,30 +369,106 @@ describe("Overview ▸ Installation — About this host", () => {
     mount(null);
     await selectHostOverviewTab("installation");
 
-    const about = within(installationPane()).getByTestId("host-overview-about");
-    const hostId = within(about).getByTestId("host-overview-about-host-id");
+    const details = inlineAbout();
+    expect(screen.queryByText("Details", { exact: true })).toBeNull();
+    expect(
+      within(details)
+        .getByRole("button", { name: "Copy host ID" })
+        .closest("details:not([open])"),
+    ).toBeNull();
+    expect(within(details).getByText("Added to account")).toBeTruthy();
+    const added = formatSettingsDate(Date.parse(item.createdAt), false);
+    expect(
+      within(details).getByTestId("host-overview-about-added").textContent,
+    ).toBe(added);
+    expect(
+      within(details).getByTestId("host-overview-about-last-seen").textContent,
+    ).toBe("Not seen yet");
+
+    const openDetails = inlineAbout();
+    const hostId = within(openDetails).getByTestId(
+      "host-overview-about-host-id",
+    );
     expect(hostId.textContent).toBe("8f14e45f…c9a2");
-    // Shortened on screen, whole on the clipboard.
     const writeText = stubClipboard();
     fireEvent.click(
-      within(about).getByRole("button", { name: "Copy host ID" }),
+      within(openDetails).getByRole("button", { name: "Copy host ID" }),
     );
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith(HOST_ID);
     });
-    const added = formatSettingsDate(Date.parse(item.createdAt), false);
-    expect(
-      within(about).getByTestId("host-overview-about-added").textContent,
-    ).toBe(added);
-    expect(
-      within(about).getByTestId("host-overview-about-version").textContent,
-    ).toBe("v1.5.0");
-    expect(
-      within(about).getByTestId("host-overview-about-platform").textContent,
-    ).toBe("macOS · arm64");
-    expect(
-      within(about).getByTestId("host-overview-about-last-seen"),
-    ).not.toBeNull();
+  });
+
+  it("shows one build version line when the running version and the registry version agree", async () => {
+    setReadyScope({
+      isLocalMachine: false,
+      item: registryItem({}),
+      live: true,
+      fixture: fixtureFor(
+        false,
+        undefined,
+        managed(installRecord("1.5.0", "1.5.0")),
+      ),
+      methods: [...OVERVIEW_METHODS, ...SERVICE_METHODS],
+    });
+    mount(null);
+    await selectHostOverviewTab("installation");
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("host-overview-about-platform").textContent,
+      ).toBe("macOS · arm64");
+      expect(
+        within(screen.getByTestId("host-overview-install-record")).getByTestId(
+          "settings-host-install-version",
+        ).textContent,
+      ).toBe("v1.5.0");
+    });
+    expect(screen.getByTestId("host-overview-about-version").textContent).toBe(
+      "v1.5.0",
+    );
+    expect(screen.queryByTestId("host-overview-about-architecture")).toBeNull();
+    expect(screen.queryByText("from this host now")).toBeNull();
+    expect(screen.queryByTestId("settings-host-install-build")).toBeNull();
+  });
+
+  it("shows the running version and the registry version when they differ", async () => {
+    setReadyScope({
+      isLocalMachine: false,
+      item: registryItem({
+        status: {
+          ...registryItem({}).status,
+          appVersion: "1.4.2",
+          lastSeenAt: new Date(NOW_MS - THREE_HOURS_MS).toISOString(),
+        },
+      }),
+      live: true,
+      fixture: fixtureFor(
+        false,
+        undefined,
+        managed(installRecord("1.5.0", "1.5.0")),
+      ),
+      methods: [...OVERVIEW_METHODS, ...SERVICE_METHODS],
+    });
+    mount(null);
+    await selectHostOverviewTab("installation");
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("host-overview-about-platform").textContent,
+      ).toBe("macOS · arm64");
+      expect(
+        within(screen.getByTestId("host-overview-install-record")).getByTestId(
+          "settings-host-install-version",
+        ).textContent,
+      ).toBe("v1.5.0");
+    });
+    const reported = screen.getByTestId("host-overview-about-version");
+    expect(reported.textContent).toBe("v1.4.2");
+    expect(reported.closest("dd")?.previousElementSibling?.textContent).toBe(
+      "Last reported version",
+    );
+    expect(screen.queryByTestId("settings-host-install-build")).toBeNull();
   });
 
   it("reveals the full host ID to a keyboard: focusing its copy button opens the tooltip", async () => {
@@ -383,19 +482,20 @@ describe("Overview ▸ Installation — About this host", () => {
     mount(null);
     await selectHostOverviewTab("installation");
 
-    const about = within(installationPane()).getByTestId("host-overview-about");
+    const details = inlineAbout();
     expect(screen.queryByRole("tooltip")).toBeNull();
     // The copy button is the row's one focusable stop; focus alone, no
     // pointer, has to be enough to read the value the row shows shortened.
     fireEvent.focus(
-      within(about).getByRole("button", { name: "Copy host ID" }),
+      within(details).getByRole("button", { name: "Copy host ID" }),
     );
 
     expect((await screen.findByRole("tooltip")).textContent).toBe(HOST_ID);
   });
 
-  it("words lastSeenAt on the scope's clock even while the header's live evidence holds", async () => {
-    setReadyScope({
+  it("shows the offline last-seen time in the header and in About", async () => {
+    setRoutelessScope({
+      status: "unreachable",
       isLocalMachine: false,
       item: registryItem({
         status: {
@@ -403,51 +503,95 @@ describe("Overview ▸ Installation — About this host", () => {
           lastSeenAt: new Date(NOW_MS - THREE_HOURS_MS).toISOString(),
         },
       }),
-      // The header's live dot, which a running local process lights whatever
-      // the relay uplink is doing. This row must not follow it: it read
-      // "Online now" here, claiming a check-in the account had not received.
-      live: true,
-      fixture: fixtureFor(false, undefined, undefined),
-      methods: [...OVERVIEW_METHODS, ...SERVICE_METHODS],
     });
+    const host = scopeOverrides.current.host;
+    if (typeof host !== "object" || host === null) {
+      throw new Error("expected the selected host fixture");
+    }
+    scopeOverrides.current = {
+      ...scopeOverrides.current,
+      host: {
+        ...host,
+        health: {
+          state: "offline",
+          label: "Offline",
+          detail: "last seen 3h ago",
+          tone: "idle",
+          live: false,
+        },
+      },
+    };
     mount(null);
     await selectHostOverviewTab("installation");
 
-    const lastSeen = screen.getByTestId("host-overview-about-last-seen");
-    expect(lastSeen.textContent).toBe("3h ago");
-    // The green fill carried the same claim as the wording.
-    expect(lastSeen.className).not.toContain("text-success-foreground");
+    expect(screen.getByTestId("host-identity-health").textContent).toBe(
+      "Offline",
+    );
+    expect(screen.getByText("last seen 3h ago")).toBeTruthy();
+    const details = inlineAbout();
+    expect(
+      within(details).getByTestId("host-overview-about-last-seen").textContent,
+    ).toBe("3h ago");
+    const notices = screen.getByTestId("host-overview-notices");
+    expect(within(notices).queryByText(/last seen/i)).toBeNull();
+    expect(screen.getByTestId("host-overview-about-platform").textContent).toBe(
+      "macOS · arm64",
+    );
+    expect(screen.queryByTestId("host-overview-about-architecture")).toBeNull();
   });
 
-  it("still reads when the host cannot be reached, and says nothing was reported for a host that never checked in", async () => {
+  it("still reads when the host cannot be reached, and collapses a host that never checked in", async () => {
+    const unseen = registryItem({
+      platform: null,
+      status: {
+        ...registryItem({}).status,
+        appVersion: null,
+        lastSeenAt: null,
+      },
+    });
     setRoutelessScope({
       status: "unreachable",
       isLocalMachine: false,
-      item: registryItem({
-        platform: null,
-        status: {
-          ...registryItem({}).status,
-          appVersion: null,
-          lastSeenAt: null,
-        },
-      }),
+      item: unseen,
     });
+    scopeOverrides.current = {
+      ...scopeOverrides.current,
+      host: hostScopeOptionFixture({
+        hostId: HOST_ID,
+        name: HOST_NAME,
+        isLocalMachine: false,
+        registered: true,
+        connectable: false,
+        item: unseen,
+        health: healthLive(false),
+        version: null,
+      }),
+    };
     mount(null);
     await selectHostOverviewTab("installation");
 
-    const about = within(installationPane()).getByTestId("host-overview-about");
+    const details = inlineAbout();
     expect(
-      within(about).getByTestId("host-overview-about-host-id").textContent,
-    ).toBe("8f14e45f…c9a2");
-    expect(
-      within(about).getByTestId("host-overview-about-last-seen").textContent,
+      within(details).getByTestId("host-overview-about-last-seen").textContent,
     ).toBe("Not seen yet");
     expect(
-      within(about).getByTestId("host-overview-about-version").textContent,
+      within(details).getByTestId("host-overview-about-added"),
+    ).toBeTruthy();
+    expect(
+      within(details).getByTestId("host-overview-about-host-id").textContent,
+    ).toBe("8f14e45f…c9a2");
+    expect(
+      within(details).getByTestId("host-overview-about-version").textContent,
     ).toBe("Not reported yet");
     expect(
-      within(about).getByTestId("host-overview-about-platform").textContent,
+      within(details).getByTestId("host-overview-about-platform").textContent,
     ).toBe("Not reported yet");
+    expect(
+      within(details).queryByTestId("host-overview-about-architecture"),
+    ).toBeNull();
+    expect(
+      within(details).queryByTestId("settings-host-install-version"),
+    ).toBeNull();
   });
 
   it("still reads while the host is connecting, beside the loading shape", async () => {
@@ -460,7 +604,9 @@ describe("Overview ▸ Installation — About this host", () => {
     await selectHostOverviewTab("installation");
 
     const pane = installationPane();
-    expect(within(pane).getByTestId("host-overview-about")).not.toBeNull();
+    expect(
+      within(pane).getByTestId("host-overview-about-added"),
+    ).not.toBeNull();
     expect(within(pane).getByTestId("host-scope-connecting")).not.toBeNull();
     expect(
       within(pane).queryByTestId("host-overview-install-record"),
@@ -479,13 +625,89 @@ describe("Overview ▸ Installation — About this host", () => {
     mount(null);
     await selectHostOverviewTab("installation");
 
-    // The reachable groups render, so the absence is not a blank tab.
+    // The reachable line renders, so the absence is not a blank tab.
+    await waitFor(() => {
+      expect(
+        within(installationPane()).getByTestId(
+          "host-overview-installation-empty",
+        ).textContent,
+      ).toBe(
+        `${HOST_NAME} is running from a checkout or an unpacked tree, so it has no installation record.`,
+      );
+    });
+    expect(screen.queryByTestId("host-overview-about-added")).toBeNull();
+    expect(screen.getByTestId("host-overview-install-record")).toBeTruthy();
+  });
+
+  it("keeps sandbox facts ahead of About while the host is connecting or unreachable", async () => {
+    const summary = sandboxSummaryFixture({
+      hostId: HOST_ID,
+      regionLabel: "US East",
+      burst: true,
+      lastActivityAt: null,
+    });
+    const sandbox = {
+      state: "awake" as const,
+      frozen: false,
+      summary,
+      teamOwned: false,
+    };
+    // The header's destroy confirmation reads the runtime binding. A routeless
+    // scope has no client of its own; a binding that still names a client is
+    // what the page has in the app, and it is what keeps that confirmation
+    // from treating "connecting" as "no runtime".
+    const fixture = fixtureFor(false, undefined, undefined);
+    setRoutelessScope({
+      status: "connecting",
+      isLocalMachine: false,
+      item: registryItem({}),
+    });
+    hostBindingMock.current = bindingWith(fixture);
+    pinSandbox(sandbox);
+    mount(null);
+    await selectHostOverviewTab("installation");
+
+    const pane = installationPane();
+    const facts = within(pane).getByTestId("host-overview-sandbox-facts");
+    const about = within(pane).getByTestId("host-overview-about");
     expect(
-      await within(installationPane()).findByTestId(
-        "host-overview-install-record",
-      ),
-    ).not.toBeNull();
-    expect(screen.queryByTestId("host-overview-about")).toBeNull();
+      facts.compareDocumentPosition(about) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
+    expect(within(facts).getByTestId("sandbox-card-shape").textContent).toBe(
+      "2 vCPU · 4 GB memory · 20 GB disk",
+    );
+    expect(within(facts).getByTestId("sandbox-card-region").textContent).toBe(
+      "US East",
+    );
+    expect(
+      within(facts).getByTestId("sandbox-card-other-rate").textContent,
+    ).toBe("under $0.01 an hour");
+    expect(
+      within(facts).getByTestId("sandbox-card-idle").textContent,
+    ).toContain("Destroyed after 30 min idle");
+    expect(
+      within(facts).getByTestId("sandbox-card-last-active").textContent,
+    ).toBe("No activity reported yet");
+    expect(within(facts).getByText("An agent, for one task")).toBeTruthy();
+    expect(within(pane).getByTestId("host-overview-about-added")).toBeTruthy();
+    expect(
+      within(pane).queryByTestId("host-overview-install-record"),
+    ).toBeNull();
+
+    cleanup();
+    setRoutelessScope({
+      status: "unreachable",
+      isLocalMachine: false,
+      item: registryItem({}),
+    });
+    hostBindingMock.current = bindingWith(fixture);
+    pinSandbox(sandbox);
+    mount(null);
+    await selectHostOverviewTab("installation");
+    expect(screen.getByTestId("host-overview-sandbox-facts")).toBeTruthy();
+    expect(screen.getByTestId("host-overview-about")).toBeTruthy();
+    expect(screen.queryByTestId("host-overview-install-record")).toBeNull();
+    expect(screen.queryByText("from this host now")).toBeNull();
   });
 });
 
@@ -514,9 +736,8 @@ describe("Overview ▸ Installation — Install record, open with no click", () 
     await selectHostOverviewTab("installation");
 
     const record = await screen.findByTestId("host-overview-install-record");
-    expect(record.textContent).toContain("Install record");
     expect(
-      (await within(record).findByTestId("host-overview-installation-empty"))
+      within(record).getByTestId("host-overview-installation-empty")
         .textContent,
     ).toBe("Reading install record…");
     expect(
@@ -539,6 +760,7 @@ describe("Overview ▸ Installation — Install record, open with no click", () 
         `${HOST_NAME} is running from a checkout or an unpacked tree, so it has no installation record.`,
       );
     });
+    expect(screen.getByTestId("host-overview-install-record")).toBeTruthy();
   });
 
   it("names a FAILED read as unreadable, never as an unmanaged host", async () => {
@@ -562,6 +784,57 @@ describe("Overview ▸ Installation — Install record, open with no click", () 
     expect(screen.queryByTestId("host-overview-installation-empty")).toBeNull();
   });
 
+  it("keeps a cached install record after a failed refetch, and About keeps the account platform", async () => {
+    let installationReads = 0;
+    readyRemote(
+      {
+        "host.getInstallationInfo": () => {
+          installationReads += 1;
+          return installationReads === 1
+            ? Promise.resolve(managed(installRecord("1.5.0", "1.5.0")))
+            : Promise.reject(new Error("transport down"));
+        },
+      },
+      undefined,
+      [...OVERVIEW_METHODS, ...SERVICE_METHODS],
+    );
+    const mounted = mount(null);
+    await selectHostOverviewTab("installation");
+
+    expect(
+      await screen.findByTestId("host-overview-install-record-facts"),
+    ).not.toBeNull();
+    await act(async () => {
+      await mounted.queryClient.invalidateQueries({
+        predicate: (query) =>
+          hostQueryKeys.matchesMethodOnAnyHost(
+            query.queryKey,
+            "host.getInstallationInfo",
+          ),
+      });
+    });
+
+    await waitFor(() => {
+      expect(installationReads).toBe(2);
+    });
+    // A failed refetch keeps the record already in hand. The unreadable
+    // sentence is for a read that failed with nothing to show.
+    const record = screen.getByTestId("host-overview-install-record");
+    expect(
+      within(record).getByTestId("settings-host-install-version").textContent,
+    ).toBe("v1.5.0");
+    expect(
+      screen.queryByTestId("host-overview-installation-unreadable"),
+    ).toBeNull();
+    const details = inlineAbout();
+    expect(
+      within(details).getByTestId("host-overview-about-platform").textContent,
+    ).toBe("macOS · arm64");
+    expect(
+      within(details).queryByTestId("host-overview-about-architecture"),
+    ).toBeNull();
+  });
+
   it("says a host without host.getInstallationInfo does not support it, and reads nothing", async () => {
     readyRemote(undefined, undefined, [
       ...OVERVIEW_METHODS.filter((m) => m !== "host.getInstallationInfo"),
@@ -576,7 +849,17 @@ describe("Overview ▸ Installation — Install record, open with no click", () 
     expect(notice.textContent).toContain(
       `${HOST_NAME} is running a version that doesn't support this yet. Update it and this comes back on its own.`,
     );
+    const group = screen.getByTestId("host-overview-install-record");
+    expect(
+      within(group).queryByTestId("settings-host-install-version"),
+    ).toBeNull();
+    expect(
+      within(group).queryByTestId("settings-host-install-build"),
+    ).toBeNull();
     expect(screen.queryByTestId("settings-host-install-version")).toBeNull();
+    expect(screen.getByTestId("host-overview-about-version").textContent).toBe(
+      "v1.5.0",
+    );
     expect(
       screen.queryByTestId("host-overview-installation-unsupported"),
     ).toBeNull();
@@ -614,12 +897,16 @@ describe("Overview ▸ Installation — Install record, open with no click", () 
     const record = await screen.findByTestId("host-overview-install-record");
     await waitFor(() => {
       expect(
+        within(record).getByTestId("settings-host-install-build").textContent,
+      ).toBe("20260924-stamp");
+      expect(
         within(record).getByTestId("settings-host-install-version").textContent,
       ).toBe("v1.5.0");
     });
-    expect(
-      within(record).getByTestId("settings-host-install-build").textContent,
-    ).toBe("20260924-stamp");
+    expect(screen.getByTestId("host-overview-about-version").textContent).toBe(
+      "v1.5.0",
+    );
+    expect(within(record).getByText("darwin/arm64")).toBeTruthy();
     expect(
       within(record).getByTestId("settings-host-verification").textContent,
     ).toMatch(/^Verified /);
@@ -633,12 +920,35 @@ describe("Overview ▸ Installation — Install record, open with no click", () 
     mount(null);
     await selectHostOverviewTab("installation");
 
+    const record = await screen.findByTestId("host-overview-install-record");
     await waitFor(() => {
       expect(
-        screen.getByTestId("settings-host-install-version").textContent,
+        within(record).getByTestId("settings-host-install-version").textContent,
       ).toBe("v1.5.0");
     });
-    expect(screen.queryByTestId("settings-host-install-build")).toBeNull();
+    expect(
+      within(record).queryByTestId("settings-host-install-build"),
+    ).toBeNull();
+    expect(screen.getByTestId("host-overview-about-version").textContent).toBe(
+      "v1.5.0",
+    );
+  });
+
+  it("reads an unsigned local build as unsigned", async () => {
+    readyRemote(
+      undefined,
+      managed({
+        ...installRecord("1.5.0", "1.5.0"),
+        signatureKeyId: "local-file:unsigned",
+      }),
+      [...OVERVIEW_METHODS, ...SERVICE_METHODS],
+    );
+    mount(null);
+    await selectHostOverviewTab("installation");
+
+    expect(
+      (await screen.findByTestId("settings-host-verification")).textContent,
+    ).toBe("Unsigned local build");
   });
 
   it("shortens the SHA-256 and keeps the whole digest on the tooltip and the copy button", async () => {
@@ -651,6 +961,10 @@ describe("Overview ▸ Installation — Install record, open with no click", () 
 
     const sha = await screen.findByTestId("settings-host-install-sha256");
     expect(sha.textContent).toBe("aaaaaaaa…aaaa");
+    expect(
+      screen.getByTestId("settings-host-install-version").textContent,
+    ).toBe("v1.5.0");
+    expect(screen.queryByTestId("settings-host-install-build")).toBeNull();
     const writeText = stubClipboard();
     fireEvent.click(screen.getByRole("button", { name: "Copy SHA-256" }));
     await waitFor(() => {
@@ -679,6 +993,11 @@ describe("Overview ▸ Installation — OS service group", () => {
           .textContent,
       ).toBe("ai.traycer.host · /tmp/ai.traycer.host.plist");
     });
+    expect(
+      within(service)
+        .getByTestId("host-overview-service-manifest")
+        .closest("details:not([open])"),
+    ).toBeNull();
     expect(
       within(service).getByTestId("host-overview-service-description")
         .textContent,
@@ -716,6 +1035,9 @@ describe("Overview ▸ Installation — OS service group", () => {
     ).toBeNull();
     expect(
       within(service).queryByTestId("host-overview-service-deregister"),
+    ).toBeNull();
+    expect(
+      within(service).queryByTestId("host-overview-service-manifest"),
     ).toBeNull();
   });
 });
@@ -879,7 +1201,9 @@ describe("Overview ▸ Installation — a host restarting to finish an update", 
   function expectRestartingShape(): void {
     const pane = installationPane();
     expect(within(pane).getByTestId("host-scope-connecting")).not.toBeNull();
-    expect(within(pane).getByTestId("host-overview-about")).not.toBeNull();
+    expect(
+      within(pane).getByTestId("host-overview-about-added"),
+    ).not.toBeNull();
     expect(
       within(pane).queryByTestId("host-overview-installation-needs-connection"),
     ).toBeNull();

@@ -381,12 +381,25 @@ frame.contentWindow` (the origin is always `"null"`), armed by the loader's
 - **Links.** Every `ui/open-link` shows `SandboxLinkConfirm` (D42), on every
   client: the frame cannot prove the reader clicked. Never open a frame's link
   without it.
-- **Fullscreen** (`lib/sandbox/overlay-owner.ts`). One app per window. It is
+- **Fullscreen** (`lib/sandbox/overlay-owner.ts`). One TOP-LAYER SURFACE per
+  window, counting both a fullscreen app and an expanded artifact
+  (`components/artifacts/artifact-expansion.tsx`), so the two are mutually
+  exclusive. It is
   refused, or ends, while anything needs the reader: an approval or download
-  confirm, a link confirm, an agent question, any dialog, composer focus. The
-  row stays mounted while fullscreen. The surface is a manual popover (moving
-  the frame reloads the app), insets the safe area itself, claims the blocking
-  layer, and leaves on Escape, which is how the phone's back button reaches it.
+  confirm, a link confirm, an agent question, any dialog outside the
+  claimant's own surface, composer focus. A claimant that raises its own
+  layers INSIDE its surface names it with `FullscreenClaim.surface` — a popover
+  is a `role="dialog"`, so the canvas Pages list would otherwise end the
+  expansion it belongs to — and that exempts the surface and nothing else; an
+  app passes `null`, its confirms being siblings, so every dialog blocks it.
+  The row stays mounted while fullscreen. Either surface is promoted IN PLACE,
+  never moved (moving the frame reloads the app or the artifact's page), undoes
+  the UA styles of whatever promoted it, insets the safe area itself, claims
+  the blocking layer, and leaves on Escape, which is how the phone's back
+  button reaches it. The app's surface is a manual popover; the artifact's is a
+  native `<dialog>`, always open so the collapsed surface lays out in place and
+  raised with `showModal()`, whose inertness is what keeps Tab, a press and a
+  screen reader out of the task behind it.
   An Escape pressed inside the app reaches it too: while the host context
   says `fullscreen`, the bootstrap forwards bare Escape on the shortcut
   channel, and the bridge accepts it only from the proven page in that mode.

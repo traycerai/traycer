@@ -214,6 +214,33 @@ function listed(
   };
 }
 
+function pageDescription(): HTMLElement {
+  const heading = screen.getByRole("heading", { level: 1 });
+  const header = heading.closest("header");
+  if (header === null) throw new Error("page heading has no header");
+  const paragraph = Array.from(header.querySelectorAll("p")).find(
+    (node) => node.dataset.testid !== "settings-phone-scope-line",
+  );
+  if (paragraph === undefined) {
+    throw new Error("page header has no description");
+  }
+  return paragraph;
+}
+
+async function expectIntroduction(
+  text: string,
+  name: string,
+  split: boolean,
+): Promise<void> {
+  await waitFor(() => {
+    expect(pageDescription().textContent).toBe(text);
+  });
+  if (!split) return;
+  const nameNode = within(pageDescription()).getByText(name);
+  expect(nameNode.tagName).toBe("SPAN");
+  expect(nameNode.className).toContain("truncate");
+}
+
 describe("The Skills page", () => {
   it("shows an uploaded skill without a remount", async () => {
     negotiateMethods({
@@ -236,7 +263,27 @@ describe("The Skills page", () => {
     });
     render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
 
-    await userEvent.type(await screen.findByLabelText("Skill name"), "review");
+    const row = await screen.findByText("find-skills");
+    const skillName = screen.getByLabelText("Skill name");
+    const archive = screen.getByLabelText("Skill folder archive");
+    const body = row.closest("[data-settings-panel-body]");
+    expect(body).not.toBeNull();
+    expect(body?.contains(skillName)).toBe(true);
+    expect(body?.contains(archive)).toBe(true);
+    expect(skillName.closest("header")).toBeNull();
+    expect(skillName.closest("[role='dialog']")).toBeNull();
+    expect(
+      row.compareDocumentPosition(skillName) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(
+      screen.getByText("Choose a .tar.gz skill folder, up to 32 MB."),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Add a skill" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Add skill" })).toBeNull();
+    expect(
+      screen.queryByRole("heading", { level: 3, name: "Skills" }),
+    ).toBeNull();
+    await userEvent.type(skillName, "review");
     await userEvent.upload(
       screen.getByLabelText("Skill folder archive"),
       new File([new Uint8Array([1, 2, 3, 4])], "review.tar.gz", {
@@ -270,7 +317,10 @@ describe("The Skills page", () => {
     render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
 
     // The list comes from the room, so the page names no host for it.
-    await userEvent.type(await screen.findByLabelText("Skill name"), "review");
+    const skillName = await screen.findByLabelText("Skill name");
+    expect(skillName.closest("[role='dialog']")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add skill" })).toBeNull();
+    await userEvent.type(skillName, "review");
     expect(screen.queryByText(/as reported by/)).toBeNull();
     expect(screen.queryAllByRole("combobox")).toHaveLength(0);
 
@@ -416,16 +466,18 @@ describe("The Skills page", () => {
     expect(await screen.findByText("all providers")).toBeTruthy();
     expect(screen.getByText("Built-in · 1.0.0 · all providers")).toBeTruthy();
     expect(screen.queryByText(/written in Settings/)).toBeNull();
-    expect(screen.getByText("review")).toBeTruthy();
-    expect(screen.getByText("Review a change.")).toBeTruthy();
+    expect(screen.getByText("review").className).toContain("wrap-anywhere");
+    expect(screen.getByText("Review a change.").className).toContain(
+      "wrap-anywhere",
+    );
     expect(harness.paramsOf("environment.configuration.skills.list")).toEqual([
       { environmentId: "env-a" },
     ]);
-    expect(
-      await screen.findByText(
-        "Instructions agents follow for a kind of task. Acme's skills reach every provider on every host running Acme.",
-      ),
-    ).toBeTruthy();
+    await expectIntroduction(
+      "Instructions agents follow for a kind of task. Acme's skills reach every provider on its hosts.",
+      "Acme",
+      true,
+    );
   });
 
   it("says all providers while the host cannot switch per provider, whatever offFor holds", async () => {
@@ -699,11 +751,11 @@ describe("The Skills page", () => {
     );
     render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
 
-    expect(
-      await screen.findByText(
-        "Instructions agents follow for a kind of task. Personal's skills reach every provider on every computer and sandbox running Personal.",
-      ),
-    ).toBeTruthy();
+    await expectIntroduction(
+      "Instructions agents follow for a kind of task. Personal's skills reach every provider on every computer and sandbox running Personal.",
+      "Personal",
+      false,
+    );
     await waitFor(() => {
       expect(harness.paramsOf("environment.configuration.skills.list")).toEqual(
         [{ environmentId: "env-personal" }],
@@ -712,6 +764,9 @@ describe("The Skills page", () => {
     expect(
       await screen.findByText("No skills added to Personal."),
     ).toBeTruthy();
+    expect(
+      screen.queryByRole("heading", { name: "Skills", level: 2 }),
+    ).toBeNull();
   });
 
   it("names no host, and offers no host picker, for a list that came from the room", async () => {
@@ -1615,6 +1670,212 @@ describe("The Skills page's update policies", () => {
     });
   });
 
+  describe("the open detail's own Updates control", () => {
+    it("shows the same choices as the row's control, enabled for an editor", async () => {
+      negotiateMethods(POLICIES);
+      const harness = mountTeamPage(
+        poolSource("editor"),
+        handlers({
+          list: listed([REVIEW], "pol-1"),
+          hostSkills: [hostSkill("review", "managed")],
+        }),
+      );
+      render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+      await userEvent.click(
+        await screen.findByRole("button", { name: "Edit" }),
+      );
+      const dialog = await screen.findByRole("dialog");
+      const group = within(dialog).getByRole("group", {
+        name: "Updates for review",
+      });
+      expect(
+        within(group)
+          .getAllByRole("button")
+          .map((b) => b.textContent),
+      ).toEqual(["Evolve", "Frozen"]);
+      expect(group.getAttribute("aria-disabled")).toBeNull();
+    });
+
+    it("changes a skill's policy from the open detail through the same confirm and revision path as the row, and updates the pressed segment once saved", async () => {
+      negotiateMethods(POLICIES);
+      let moved = false;
+      const harness = mountTeamPage(poolSource("editor"), {
+        ...handlers({
+          list: listed([BUILT_IN], "pol-1"),
+          hostSkills: [hostSkill("find-skills", "managed")],
+        }),
+        "environment.configuration.skills.list": () =>
+          listed(
+            [{ ...BUILT_IN, policy: moved ? "evolve" : "auto-update" }],
+            "pol-1",
+          ),
+        "environment.configuration.skills.setPolicy": () => {
+          moved = true;
+          return saved;
+        },
+      });
+      render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+      await userEvent.click(
+        await screen.findByRole("button", { name: "Preview" }),
+      );
+      const dialog = await screen.findByRole("dialog");
+      const group = within(dialog).getByRole("group", {
+        name: "Updates for find-skills",
+      });
+      await userEvent.click(
+        within(group).getByRole("button", { name: "Evolve" }),
+      );
+
+      const confirm = await screen.findByRole("dialog", {
+        name: "Stop updates for find-skills?",
+      });
+      expect(
+        harness.paramsOf("environment.configuration.skills.setPolicy"),
+      ).toEqual([]);
+      await userEvent.click(
+        within(confirm).getByRole("button", { name: "Stop updates" }),
+      );
+
+      await waitFor(() => {
+        expect(
+          harness.paramsOf("environment.configuration.skills.setPolicy"),
+        ).toEqual([
+          {
+            environmentId: "env-a",
+            name: "find-skills",
+            policy: "evolve",
+            revision: "pol-1",
+          },
+        ]);
+      });
+      await waitFor(() => {
+        expect(
+          within(
+            within(dialog).getByRole("group", {
+              name: "Updates for find-skills",
+            }),
+          )
+            .getByRole("button", { name: "Evolve" })
+            .getAttribute("aria-pressed"),
+        ).toBe("true");
+      });
+    });
+
+    it("leaves the detail's control disabled for a viewer, who gets Preview with no way to change it", async () => {
+      negotiateMethods(POLICIES);
+      const harness = mountTeamPage(
+        poolSource("viewer"),
+        handlers({
+          list: listed([REVIEW], "pol-1"),
+          hostSkills: [hostSkill("review", "managed")],
+        }),
+      );
+      render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+      await userEvent.click(
+        await screen.findByRole("button", { name: "Preview" }),
+      );
+      const dialog = await screen.findByRole("dialog");
+      const group = within(dialog).getByRole("group", {
+        name: "Updates for review",
+      });
+      expect(group.getAttribute("aria-disabled")).toBe("true");
+      for (const button of within(group).getAllByRole("button"))
+        expect(button).toHaveProperty("disabled", true);
+    });
+
+    it("holds the detail's control disabled while its own write is in flight, and frees it once the answer lands", async () => {
+      negotiateMethods(POLICIES);
+      let release: () => void = () => undefined;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const harness = mountTeamPage(poolSource("editor"), {
+        ...handlers({
+          list: listed([FROZEN], "pol-1"),
+          hostSkills: [hostSkill("locked", "managed")],
+        }),
+        "environment.configuration.skills.setPolicy": async () => {
+          await held;
+          return saved;
+        },
+      });
+      render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+      await userEvent.click(
+        await screen.findByRole("button", { name: "Preview" }),
+      );
+      const dialog = await screen.findByRole("dialog");
+      const group = within(dialog).getByRole("group", {
+        name: "Updates for locked",
+      });
+      await userEvent.click(
+        within(group).getByRole("button", { name: "Evolve" }),
+      );
+
+      await waitFor(() => {
+        expect(group.getAttribute("aria-disabled")).toBe("true");
+      });
+      // The row's own control takes the same write: both hold disabled
+      // together. The row sits under the dialog's `aria-hidden` background,
+      // so it is found as plain DOM rather than through an accessible query.
+      const groups = document.querySelectorAll<HTMLElement>(
+        '[role="group"][aria-label="Updates for locked"]',
+      );
+      const rowGroup = Array.from(groups).find((element) => element !== group);
+      expect(rowGroup?.getAttribute("aria-disabled")).toBe("true");
+
+      release();
+
+      await waitFor(() => {
+        expect(group.getAttribute("aria-disabled")).toBeNull();
+      });
+    });
+
+    it("resends a policy change from the open detail against the revision a stale answer's reread returns, as the row does", async () => {
+      negotiateMethods(POLICIES);
+      let moved = false;
+      const harness = mountTeamPage(poolSource("editor"), {
+        ...handlers({
+          list: listed([REVIEW], "pol-1"),
+          hostSkills: [hostSkill("review", "managed")],
+        }),
+        "environment.configuration.skills.list": () =>
+          listed([REVIEW], moved ? "pol-2" : "pol-1"),
+        "environment.configuration.skills.setPolicy": () => {
+          const first = !moved;
+          moved = true;
+          return first ? stale : saved;
+        },
+      });
+      render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+      await userEvent.click(
+        await screen.findByRole("button", { name: "Edit" }),
+      );
+      const dialog = await screen.findByRole("dialog");
+      const group = within(dialog).getByRole("group", {
+        name: "Updates for review",
+      });
+      await userEvent.click(
+        within(group).getByRole("button", { name: "Frozen" }),
+      );
+
+      await waitFor(() => {
+        expect(
+          harness.paramsOf("environment.configuration.skills.setPolicy"),
+        ).toMatchObject([{ revision: "pol-1" }, { revision: "pol-2" }]);
+      });
+      // The retry's answer is handled once the control is free again.
+      await waitFor(() => {
+        expect(group.getAttribute("aria-disabled")).toBeNull();
+      });
+      expect(within(dialog).queryByText(/Changed by/)).toBeNull();
+    });
+  });
+
   describe("update and restore", () => {
     // The viewing host advertises the writes only it can make.
     const negotiateHosted = (): void => {
@@ -2283,6 +2544,67 @@ describe("The Skills page's update policies", () => {
     });
   });
 
+  describe("when the viewing host's own native list briefly drops the open skill", () => {
+    // Distinct from "removed under an open editor" above: there, the ROOM's
+    // configuration list drops the skill (`detailSkill`'s own retention).
+    // Here the room's list still names it, but the viewing host's native
+    // `providers.list` answer momentarily does not - the detail's INNER
+    // `row = useLastRow(found, props.draftHeld)` is what has to hold the
+    // last-read row then, independently of the outer one.
+    it("keeps a dirty draft on the last host row it read, not the read-failed view, while the room's own list still names the skill", async () => {
+      negotiateMethods(POLICIES);
+      let onHost = true;
+      const harness = mountTeamPage(poolSource("editor"), {
+        ...handlers({
+          list: listed([REVIEW], "pol-1"),
+          hostSkills: [hostSkill("review", "managed")],
+        }),
+        "providers.list": (request) =>
+          request.native === null
+            ? {
+                providers: CAPABLE.map((id) =>
+                  providerState(id, { mcp: false, skills: true }),
+                ),
+                native: null,
+              }
+            : {
+                providers: [],
+                native: {
+                  ok: true as const,
+                  kind: "skills" as const,
+                  skills: onHost ? [hostSkill("review", "managed")] : [],
+                },
+              },
+      });
+      render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+      await userEvent.click(
+        await screen.findByRole("button", { name: "Edit" }),
+      );
+      const dialog = await screen.findByRole("dialog");
+      await userEvent.click(
+        await within(dialog).findByRole("button", { name: "Edit" }),
+      );
+      fireEvent.change(
+        within(dialog).getByRole("textbox", { name: "When to use" }),
+        { target: { value: "A draft in progress." } },
+      );
+
+      onHost = false;
+      await act(async () => {
+        await harness.queryClient.invalidateQueries();
+      });
+
+      expect(screen.getByRole("dialog")).toBe(dialog);
+      expect(
+        within(dialog).getByRole("textbox", { name: "When to use" }),
+      ).toHaveProperty("value", "A draft in progress.");
+      expect(
+        within(dialog).queryByText("Couldn't find this skill's files."),
+      ).toBeNull();
+    });
+  });
+
   it("offers Auto-update on a built-in and not on a skill with nothing to follow", async () => {
     negotiateMethods(POLICIES);
     const harness = mountTeamPage(
@@ -2405,6 +2727,31 @@ describe("The Skills page's skills from a source", () => {
     expect(screen.getByRole("button", { name: "Update now" })).toBeTruthy();
   });
 
+  it("opens the detail on the version the viewing host's state composed over the room's own list, not the room's alone", async () => {
+    negotiateHosted({ [STATE]: LIST });
+    const harness = mountTeamPage(poolSource("editor"), {
+      ...handlers({
+        list: listed([{ ...FROM_SOURCE, version: "1.0.0" }], "pol-1"),
+        hostSkills: [hostSkill("triage", "managed")],
+      }),
+      [STATE]: () =>
+        listedState(
+          [{ name: "triage", version: "2.0.0", updateAvailable: false }],
+          [],
+        ),
+    });
+    render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(
+      await within(dialog).findByText(
+        "Imported from https://github.com/acme/skills.git · 2.0.0",
+      ),
+    ).toBeTruthy();
+    expect(within(dialog).queryByText(/1\.0\.0/)).toBeNull();
+  });
+
   it("lists the deleted built-ins the state names in place of the list's", async () => {
     negotiateHosted({ [STATE]: LIST });
     const harness = mountTeamPage(poolSource("editor"), {
@@ -2450,6 +2797,9 @@ describe("The Skills page's skills from a source", () => {
     expect(
       screen.queryByRole("button", { name: "Check for updates" }),
     ).toBeNull();
+    expect(
+      screen.getByRole("heading", { name: "Skills", level: 2 }),
+    ).toBeTruthy();
     first.unmount();
     cleanup();
 
@@ -2460,9 +2810,16 @@ describe("The Skills page's skills from a source", () => {
     });
     render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
 
-    await userEvent.click(
-      await screen.findByRole("button", { name: "Check for updates" }),
-    );
+    const checkUpdates = await screen.findByRole("button", {
+      name: "Check for updates",
+    });
+    const skillsHeading = screen.getByRole("heading", {
+      name: "Skills",
+      level: 2,
+    });
+    expect(skillsHeading.parentElement).toBe(checkUpdates.parentElement);
+    expect(checkUpdates.closest("header")).toBeNull();
+    await userEvent.click(checkUpdates);
     await waitFor(() => {
       expect(harness.paramsOf(STATE)).toContainEqual({
         environmentId: "env-a",
@@ -2531,10 +2888,18 @@ describe("The Skills page's skills from a source", () => {
         [IMPORT]: (request) => answers(request),
       });
       render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+      await screen.findByText("review");
+      expect(screen.queryByRole("button", { name: "Add skill" })).toBeNull();
+      expect(screen.queryByLabelText("Skill name")).toBeNull();
+      expect(screen.queryByRole("dialog")).toBeNull();
       await userEvent.click(
-        await screen.findByRole("button", { name: "Import from source" }),
+        screen.getByRole("button", { name: "Import from source" }),
       );
-      const dialog = await screen.findByRole("dialog");
+      const dialog = await screen.findByRole("dialog", {
+        name: "Import skills from a source",
+      });
+      expect(screen.queryByRole("dialog", { name: "Add skill" })).toBeNull();
+      expect(screen.getAllByRole("dialog")).toHaveLength(1);
       await userEvent.type(
         within(dialog).getByLabelText("Skill source"),
         "acme/skills",
@@ -2578,8 +2943,53 @@ describe("The Skills page's skills from a source", () => {
         ]);
       });
       await waitFor(() => {
-        expect(screen.queryByRole("dialog")).toBeNull();
+        expect(
+          screen.queryByRole("dialog", { name: "Import skills from a source" }),
+        ).toBeNull();
       });
+      expect(screen.queryByRole("dialog", { name: "Add skill" })).toBeNull();
+    });
+
+    it("shows the upload form and import together, and import opens its sheet", async () => {
+      negotiateMethods({
+        ...BASE_METHODS,
+        "environment.configuration.skills.upload": LIST,
+      });
+      negotiateMethodsOn(reachableHost.hostId, {
+        [STATE]: LIST,
+        [IMPORT]: LIST,
+      });
+      const harness = mountTeamPage(poolSource("editor"), {
+        ...handlers({ list: listed([REVIEW], "pol-1"), hostSkills: [] }),
+        [STATE]: () => listedState([], []),
+      });
+      render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+      const row = await screen.findByText("review");
+      const skillName = screen.getByLabelText("Skill name");
+      const importSkill = screen.getByRole("button", {
+        name: "Import from source",
+      });
+      expect(screen.getByLabelText("Skill folder archive")).toBeTruthy();
+      expect(
+        screen.getByText("Choose a .tar.gz skill folder, up to 32 MB."),
+      ).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Add a skill" })).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Add skill" })).toBeNull();
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(skillName.closest("[role='dialog']")).toBeNull();
+      expect(importSkill.closest("[role='dialog']")).toBeNull();
+      expect(
+        row.compareDocumentPosition(skillName) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+      await userEvent.click(importSkill);
+      expect(
+        await screen.findByRole("dialog", {
+          name: "Import skills from a source",
+        }),
+      ).toBeTruthy();
+      expect(screen.queryByRole("dialog", { name: "Add skill" })).toBeNull();
     });
 
     it("selects the first 64 of 70 uninstalled skills, stops at the cap, and installs exactly those in order", async () => {
@@ -2743,7 +3153,9 @@ describe("The Skills page's skills from a source", () => {
         await userEvent.click(
           await screen.findByRole("button", { name: "Import from source" }),
         );
-        const dialog = await screen.findByRole("dialog");
+        const dialog = await screen.findByRole("dialog", {
+          name: "Import skills from a source",
+        });
         return { harness, dialog };
       }
 

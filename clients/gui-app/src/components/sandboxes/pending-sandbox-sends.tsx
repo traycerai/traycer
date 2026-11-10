@@ -61,6 +61,7 @@ import {
 } from "@/components/composer/use-sandbox-staging";
 import {
   stagedSandboxFallbackName,
+  terminalOpenButtonAction,
   useNewHostActions,
   useSetupLineFacts,
   useStagedSandboxRunner,
@@ -139,7 +140,10 @@ import { resolveSeededProfileId } from "@/lib/composer/resolve-seeded-profile-id
 import { startVisibleInterval } from "@/lib/dom/visible-interval";
 import { currentDraftBlobOwnerId } from "@/lib/drafts/draft-blob-transport";
 import { draftImageByteTargetForHost } from "@/lib/drafts/draft-image-byte-target";
-import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
+import type {
+  NestedFocusProvenance,
+  NavigateNestedFocus,
+} from "@/lib/epic-nested-focus-navigation";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 import { readLocalHostIdSnapshot } from "@/lib/host/local-host-id-snapshot";
 import { readNegotiatedMethodVersion } from "@/lib/host/read-negotiated-method-version";
@@ -948,6 +952,7 @@ function useDefaultModelOnHost(
 ): PendingDefaultModel {
   const opencodeLine = useChatOpencodeLine();
   const models = useGuiHarnessModelsQueryForClient(client, harnessId, null, {
+    profileId: null,
     // Observe the shared cache; only the kernel's fetch-model effect reads it.
     enabled: false,
     subscribed: client !== null,
@@ -2322,6 +2327,11 @@ function finishDispatchUi(
       hostId: dispatch.input.hostId,
       placement: null,
       source: "direct_ui",
+      // NOT the person, though the source is a direct gesture: this queue is
+      // persisted and rehydrates, so a fork whose sandbox woke after a reload
+      // lands here with nobody at the keyboard. A `"user"` claim would retire
+      // an artifact request the route is waiting on in that load.
+      provenance: "automatic",
     },
     navigateNestedFocus,
     mobileTarget: null,
@@ -3160,7 +3170,10 @@ function PendingStagedSendItem(props: {
   const terminal = useMemo(
     () => ({
       epicId,
-      open: (target: TerminalLaunchTarget) => {
+      open: (
+        target: TerminalLaunchTarget,
+        provenance: NestedFocusProvenance,
+      ) => {
         openTile(
           tileIntent(
             mintPendingSandboxTerminalTile({ ...target, epicId }, send.id),
@@ -3168,6 +3181,7 @@ function PendingStagedSendItem(props: {
             "explicit",
             "direct_ui",
           ),
+          provenance,
         );
       },
     }),
@@ -3288,7 +3302,7 @@ function PendingStagedSendItem(props: {
             applyingPending: newHost.applyingPending,
             applyingError: newHost.applyingError,
             onStop: stop,
-            onOpenTerminal: newHost.onOpenTerminal,
+            onOpenTerminal: terminalOpenButtonAction(newHost.onOpenTerminal),
             onChooseModel: lineRemedies.onChooseModel,
           }}
         />
@@ -3408,7 +3422,7 @@ function usePendingTerminalSandbox(
 function useOpenTerminalWhenUp(
   send: PendingSandboxSend | null,
   stage: StagedSandbox | null,
-  openTerminal: (() => void) | null,
+  openTerminal: ((provenance: NestedFocusProvenance) => void) | null,
 ): void {
   const sendId = send?.request.kind === "terminal" ? send.id : null;
   const userId = send?.userId ?? null;
@@ -3436,7 +3450,8 @@ function useOpenTerminalWhenUp(
       }),
     );
     if (!decision.effects.includes("open-terminal")) return;
-    openTerminal();
+    // Readiness may resume a persisted ask; it is not a new button click.
+    openTerminal("automatic");
     completePendingSandboxTerminal(sendId);
   }, [
     hostId,

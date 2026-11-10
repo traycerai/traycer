@@ -5,6 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Mock } from "vitest";
+import type { UpdateCheckResult } from "electron-updater";
+import { parseUpdateInfo } from "electron-updater/out/providers/Provider";
+import { platformChannelFile } from "../desktop-release-feed";
 import type {
   DesktopAppUpdateSnapshot,
   DesktopCompatRecoveryPlan,
@@ -31,7 +34,9 @@ class FakeAutoUpdater extends EventEmitter {
   allowPrerelease = true;
   requestHeaders: Record<string, string> | null = null;
   readonly setFeedURL = vi.fn((_options: unknown): void => undefined);
-  readonly checkForUpdates = vi.fn((): Promise<null> => Promise.resolve(null));
+  readonly checkForUpdates = vi.fn((): Promise<UpdateCheckResult | null> =>
+    Promise.resolve(fakeUpdateCheckResult()),
+  );
   readonly downloadUpdate = vi.fn((): Promise<string[]> => Promise.resolve([]));
   readonly quitAndInstall = vi.fn(
     (_isSilent: boolean, _isForceRunAfter: boolean): void => undefined,
@@ -93,8 +98,31 @@ const originalPrivateUpdateRepo = process.env.VITE_TRAYCER_DESKTOP_UPDATE_REPO;
 const originalPrivateUpdateToken =
   process.env.VITE_TRAYCER_DESKTOP_UPDATE_TOKEN;
 const originalStagingReleaseToken = process.env.TRAYCER_STAGING_RELEASE_TOKEN;
+let lastChannelManifest: {
+  readonly raw: string;
+  readonly url: string;
+  readonly channelFile: string;
+} | null = null;
+let unstubbedFetchCalls: string[] = [];
 
 beforeEach(() => {
+  lastChannelManifest = null;
+  unstubbedFetchCalls = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const rawUrl =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.href
+            : input.url;
+      const url = new URL(rawUrl);
+      const target = `${url.origin}${url.pathname}`;
+      unstubbedFetchCalls.push(target);
+      throw new Error(`Unstubbed fetch in updater test: ${target}`);
+    }),
+  );
   Reflect.deleteProperty(process.env, "VITE_TRAYCER_DESKTOP_UPDATE_REPO");
   Reflect.deleteProperty(process.env, "VITE_TRAYCER_DESKTOP_UPDATE_TOKEN");
   Object.defineProperty(process, "resourcesPath", {
@@ -141,11 +169,13 @@ afterEach(() => {
   // Only the architecture-selection test sets this; clean up unconditionally
   // so it can never leak into a later test's `platformChannelFile()` call.
   Reflect.deleteProperty(process.env, "TEST_UPDATER_ARCH");
+  expect(unstubbedFetchCalls).toEqual([]);
 });
 
 describe("desktop app updater", () => {
   it("does not override the generated update feed when no private token is baked", async () => {
-    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    const { autoUpdater, updater } =
+      await loadUpdaterWithoutPrivateToken(NOT_LINUX_GUIDANCE);
 
     await updater.installAutoUpdater(true, makeDeps(true));
 
@@ -742,7 +772,7 @@ describe("desktop app updater", () => {
 
   it("persists an explicit prerelease opt-in and selects only desktop-tagged releases", async () => {
     const { autoUpdater, preferences, updater } =
-      await loadUpdater(NOT_LINUX_GUIDANCE);
+      await loadUpdaterWithoutPrivateToken(NOT_LINUX_GUIDANCE);
     vi.stubGlobal(
       "fetch",
       fetchRouter(
@@ -768,27 +798,24 @@ describe("desktop app updater", () => {
 
     expect(preferences.allowPrerelease).toBe(true);
     expect(autoUpdater.allowPrerelease).toBe(true);
-    expect(autoUpdater.setFeedURL).toHaveBeenLastCalledWith({
-      provider: "generic",
-      url: "https://github.com/traycerai/traycer/releases/download/desktop-v1.3.0-rc.2/",
-    });
+    expectPublicFeedUrl(
+      autoUpdater,
+      "https://github.com/traycerai/traycer/releases/download/desktop-v1.3.0-rc.2/",
+    );
   });
 
   it("surfaces a stable-feed 'no production release' 404 as a service error", async () => {
-    // The removed fallback (§"Compatibility recovery and dead paths"): this
-    // 404 used to be swallowed as "up to date" for any build whose version
-    // contained a `-`. A canonical RC build can no longer reach the stable
-    // feed at all - it derives `implicit-rc-line` and resolves through the
-    // namespaced selector - so the only builds that still see this error are
-    // ones for which a 404 from the release feed IS a service problem.
-    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
-    autoUpdater.checkForUpdates.mockImplementation(() => {
-      const err = new Error(
-        "Unable to find latest version on GitHub (https://api.github.com/repos/o/r/releases/latest), please ensure a production release exists: HttpError: 404",
-      );
-      autoUpdater.emit("error", err);
-      return Promise.reject(err);
-    });
+    const { autoUpdater, updater } =
+      await loadUpdaterWithoutPrivateToken(NOT_LINUX_GUIDANCE);
+    const requests: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = new URL(String(input));
+        requests.push(`${url.origin}${url.pathname}`);
+        return new Response("Not Found", { status: 404 });
+      }),
+    );
     await updater.installAutoUpdater(true, makeDeps(true));
 
     await updater.checkForUpdatesNow(false, "manual");
@@ -798,6 +825,11 @@ describe("desktop app updater", () => {
       errorMessage:
         "Traycer couldn't reach the update service right now. Please try again in a little while.",
     });
+    expect(
+      requests.some((url) => url.endsWith("/desktop/stable/index.json")),
+    ).toBe(true);
+    expect(requests.some((url) => url.endsWith("/releases/latest"))).toBe(true);
+    expect(autoUpdater.checkForUpdates).not.toHaveBeenCalled();
   });
 
   it("never queries the stable feed from a canonical RC build", async () => {
@@ -1099,7 +1131,8 @@ describe("updater initialization readiness barrier", () => {
 
 describe("RC release discovery and channel safety", () => {
   it("filters alpha/beta/nightly prereleases and drafts/inconsistent-metadata entries, selecting the eligible rc", async () => {
-    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    const { autoUpdater, updater } =
+      await loadUpdaterWithoutPrivateToken(NOT_LINUX_GUIDANCE);
     vi.stubGlobal(
       "fetch",
       fetchRouter(
@@ -1131,14 +1164,15 @@ describe("RC release discovery and channel safety", () => {
     await updater.setAllowPrereleaseUpdates(true);
     await updater.checkForUpdatesNow(false, "manual");
 
-    expect(autoUpdater.setFeedURL).toHaveBeenLastCalledWith({
-      provider: "generic",
-      url: "https://github.com/traycerai/traycer/releases/download/desktop-v1.5.0-rc.1/",
-    });
+    expectPublicFeedUrl(
+      autoUpdater,
+      "https://github.com/traycerai/traycer/releases/download/desktop-v1.5.0-rc.1/",
+    );
   });
 
   it("selects the global maximum across pagination, not just the first page", async () => {
-    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    const { autoUpdater, updater } =
+      await loadUpdaterWithoutPrivateToken(NOT_LINUX_GUIDANCE);
     const page1 = [
       macReleaseFixture("desktop-v1.2.0", false),
       ...Array.from({ length: 99 }, (_, index) => fillerRelease(index)),
@@ -1182,14 +1216,15 @@ describe("RC release discovery and channel safety", () => {
     // not spin further pages. The manifest fetch for the winning candidate is
     // a separate call, counted independently.
     expect(paginationCalls).toBe(2);
-    expect(autoUpdater.setFeedURL).toHaveBeenLastCalledWith({
-      provider: "generic",
-      url: "https://github.com/traycerai/traycer/releases/download/desktop-v1.5.0-rc.1/",
-    });
+    expectPublicFeedUrl(
+      autoUpdater,
+      "https://releases.traycer.ai/desktop/1.5.0-rc.1/",
+    );
   });
 
   it("surfaces a discovery error (not up-to-date) when pagination exceeds the safety cap", async () => {
-    const { updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    const { updater } =
+      await loadUpdaterWithoutPrivateToken(NOT_LINUX_GUIDANCE);
     const fullPage = Array.from({ length: 100 }, (_, index) =>
       fillerRelease(index),
     );
@@ -1212,7 +1247,8 @@ describe("RC release discovery and channel safety", () => {
   });
 
   it("falls back to an older release that carries the running platform's assets", async () => {
-    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    const { autoUpdater, updater } =
+      await loadUpdaterWithoutPrivateToken(NOT_LINUX_GUIDANCE);
     vi.stubGlobal(
       "fetch",
       fetchRouter(
@@ -1237,16 +1273,17 @@ describe("RC release discovery and channel safety", () => {
     await updater.setAllowPrereleaseUpdates(true);
     await updater.checkForUpdatesNow(false, "manual");
 
-    expect(autoUpdater.setFeedURL).toHaveBeenLastCalledWith({
-      provider: "generic",
-      url: "https://github.com/traycerai/traycer/releases/download/desktop-v1.4.0-rc.1/",
-    });
+    expectPublicFeedUrl(
+      autoUpdater,
+      "https://github.com/traycerai/traycer/releases/download/desktop-v1.4.0-rc.1/",
+    );
   });
 
   it("routes a private RC feed through the authenticated custom provider, never the public generic feed", async () => {
     process.env.VITE_TRAYCER_DESKTOP_UPDATE_REPO = "traycerai/private-traycer";
     process.env.VITE_TRAYCER_DESKTOP_UPDATE_TOKEN = "test-token";
-    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    const { autoUpdater, updater } =
+      await loadUpdaterWithoutPrivateToken(NOT_LINUX_GUIDANCE);
     vi.stubGlobal(
       "fetch",
       fetchRouter([macReleaseFixture("desktop-v1.5.0-rc.1", true)], {
@@ -1269,15 +1306,13 @@ describe("RC release discovery and channel safety", () => {
     expect(typeof feedArg.updateProvider).toBe("function");
     expect(Array.isArray(feedArg.assets)).toBe(true);
     expect(feedArg.token).toBe("test-token");
-    expect(autoUpdater.setFeedURL).not.toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "generic" }),
-    );
   });
 
   it("fails closed and never falls back to the public feed when the private repo coordinate is malformed", async () => {
     process.env.VITE_TRAYCER_DESKTOP_UPDATE_REPO = "not-a-coordinate";
     process.env.VITE_TRAYCER_DESKTOP_UPDATE_TOKEN = "test-token";
-    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    const { autoUpdater, updater } =
+      await loadUpdaterWithoutPrivateToken(NOT_LINUX_GUIDANCE);
     await updater.installAutoUpdater(true, makeDeps(true));
 
     await updater.setAllowPrereleaseUpdates(true);
@@ -1293,6 +1328,7 @@ describe("RC release discovery and channel safety", () => {
       {
         resolve: null,
       };
+    let listingCalls = 0;
     // The releases-list fetch is deferred so the test can control exactly
     // when discovery observes the RC release; a manifest fetch for whichever
     // candidate discovery lands on resolves immediately with a valid
@@ -1303,26 +1339,36 @@ describe("RC release discovery and channel safety", () => {
       vi.fn((input: unknown) => {
         const url = new URL(String(input));
         if (url.searchParams.has("per_page")) {
+          listingCalls += 1;
+          if (listingCalls > 1) {
+            return Promise.resolve(
+              new Response(
+                JSON.stringify([macReleaseFixture("desktop-v1.4.0", false)]),
+                { status: 200 },
+              ),
+            );
+          }
           return new Promise<Response>((resolve) => {
             discoveryControl.resolve = resolve;
           });
         }
-        return Promise.resolve(
-          new Response(
-            manifestYamlForTag(
-              "desktop-v1.9.0-rc.9",
-              macZipAssetName("desktop-v1.9.0-rc.9"),
-            ),
-            { status: 200 },
-          ),
-        );
+        const tag = url.pathname.includes("desktop-v1.9.0-rc.9")
+          ? "desktop-v1.9.0-rc.9"
+          : "desktop-v1.4.0";
+        const raw = manifestYamlForTag(tag, macZipAssetName(tag));
+        lastChannelManifest = {
+          raw,
+          url: url.href,
+          channelFile: platformChannelFile(),
+        };
+        return Promise.resolve(new Response(raw, { status: 200 }));
       }),
     );
     const allowPrereleaseAtCheckTime: boolean[] = [];
     autoUpdater.checkForUpdates.mockImplementation(() => {
       allowPrereleaseAtCheckTime.push(autoUpdater.allowPrerelease);
       autoUpdater.emit("update-not-available", { version: "1.4.0" });
-      return Promise.resolve(null);
+      return Promise.resolve(fakeUpdateNotAvailableResult());
     });
     const snapshots: DesktopAppUpdateSnapshot[] = [];
     await updater.installAutoUpdater(true, makeDeps(true));
@@ -1353,13 +1399,10 @@ describe("RC release discovery and channel safety", () => {
     await flushPromises();
     await flushPromises();
 
-    expect(autoUpdater.setFeedURL).not.toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "generic",
-        url: expect.stringContaining("desktop-v1.9.0-rc.9"),
-      }),
+    expect(JSON.stringify(autoUpdater.setFeedURL.mock.calls)).not.toContain(
+      "desktop-v1.9.0-rc.9",
     );
-    expect(autoUpdater.setFeedURL).toHaveBeenCalledWith({
+    expect(autoUpdater.setFeedURL.mock.calls.at(-1)?.[0]).toMatchObject({
       provider: "github",
       owner: "traycerai",
       repo: "traycer",
@@ -1390,7 +1433,7 @@ describe("RC release discovery and channel safety", () => {
     await updater.setAllowPrereleaseUpdates(true);
     autoUpdater.checkForUpdates.mockImplementation(() => {
       autoUpdater.emit("update-available", { version: "1.6.0-rc.1" });
-      return Promise.resolve(null);
+      return Promise.resolve(fakeUpdateCheckResult());
     });
     await updater.checkForUpdatesNow(false, "manual");
     expect(updater.getAppUpdateSnapshot().status).toBe("available");
@@ -1410,12 +1453,15 @@ describe("RC release discovery and channel safety", () => {
       };
     vi.stubGlobal(
       "fetch",
-      vi.fn(
-        () =>
-          new Promise<Response>((resolve) => {
-            discoveryControl.resolve = resolve;
-          }),
-      ),
+      vi.fn((input: unknown) => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith("/desktop/rc/index.json")) {
+          return Promise.resolve(new Response("Not Found", { status: 404 }));
+        }
+        return new Promise<Response>((resolve) => {
+          discoveryControl.resolve = resolve;
+        });
+      }),
     );
     await updater.installAutoUpdater(true, makeDeps(true));
     await updater.setAllowPrereleaseUpdates(true);
@@ -1452,7 +1498,7 @@ describe("RC release discovery and channel safety", () => {
     await updater.setAllowPrereleaseUpdates(true);
     autoUpdater.checkForUpdates.mockImplementation(() => {
       autoUpdater.emit("update-available", { version: "1.6.0-rc.1" });
-      return Promise.resolve(null);
+      return Promise.resolve(fakeUpdateCheckResult());
     });
     await updater.checkForUpdatesNow(false, "manual");
     updater.startUpdateDownload();
@@ -1479,7 +1525,8 @@ describe("RC release discovery and channel safety", () => {
       Promise.resolve(new Response("[]", { status: 200 })),
     );
     vi.stubGlobal("fetch", fetchMock);
-    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    const { autoUpdater, updater } =
+      await loadUpdaterWithoutPrivateToken(NOT_LINUX_GUIDANCE);
     // Stable channel (allowPrerelease defaults off) - no opt-in.
     await updater.installAutoUpdater(true, makeDeps(true));
 
@@ -1494,7 +1541,8 @@ describe("RC release discovery and channel safety", () => {
   });
 
   it("skips a newer macOS release shipping only the install-only DMG and falls back to an older updatable release", async () => {
-    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    const { autoUpdater, updater } =
+      await loadUpdaterWithoutPrivateToken(NOT_LINUX_GUIDANCE);
     vi.stubGlobal(
       "fetch",
       fetchRouter(
@@ -1518,10 +1566,10 @@ describe("RC release discovery and channel safety", () => {
     await updater.setAllowPrereleaseUpdates(true);
     await updater.checkForUpdatesNow(false, "manual");
 
-    expect(autoUpdater.setFeedURL).toHaveBeenLastCalledWith({
-      provider: "generic",
-      url: "https://github.com/traycerai/traycer/releases/download/desktop-v1.6.0-rc.1/",
-    });
+    expectPublicFeedUrl(
+      autoUpdater,
+      "https://github.com/traycerai/traycer/releases/download/desktop-v1.6.0-rc.1/",
+    );
   });
 
   it("keeps a channel switch refused after an install attempt on a staged artifact errors (finding 2)", async () => {
@@ -1540,7 +1588,7 @@ describe("RC release discovery and channel safety", () => {
     await updater.setAllowPrereleaseUpdates(true);
     autoUpdater.checkForUpdates.mockImplementation(() => {
       autoUpdater.emit("update-available", { version: "1.6.0-rc.1" });
-      return Promise.resolve(null);
+      return Promise.resolve(fakeUpdateCheckResult());
     });
     await updater.checkForUpdatesNow(false, "manual");
     updater.startUpdateDownload();
@@ -1568,7 +1616,8 @@ describe("RC release discovery and channel safety", () => {
   });
 
   it("falls back to an older RC release when the newest RC's channel manifest is broken (finding 4)", async () => {
-    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    const { autoUpdater, updater } =
+      await loadUpdaterWithoutPrivateToken(NOT_LINUX_GUIDANCE);
     vi.stubGlobal(
       "fetch",
       fetchRouter(
@@ -1591,14 +1640,15 @@ describe("RC release discovery and channel safety", () => {
     await updater.setAllowPrereleaseUpdates(true);
     await updater.checkForUpdatesNow(false, "manual");
 
-    expect(autoUpdater.setFeedURL).toHaveBeenLastCalledWith({
-      provider: "generic",
-      url: "https://github.com/traycerai/traycer/releases/download/desktop-v1.6.0-rc.1/",
-    });
+    expectPublicFeedUrl(
+      autoUpdater,
+      "https://github.com/traycerai/traycer/releases/download/desktop-v1.6.0-rc.1/",
+    );
   });
 
   it("falls back to an older release when the newest release's manifest version disagrees with its tag (finding 4)", async () => {
-    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    const { autoUpdater, updater } =
+      await loadUpdaterWithoutPrivateToken(NOT_LINUX_GUIDANCE);
     vi.stubGlobal(
       "fetch",
       fetchRouter(
@@ -1625,13 +1675,14 @@ describe("RC release discovery and channel safety", () => {
     await updater.setAllowPrereleaseUpdates(true);
     await updater.checkForUpdatesNow(false, "manual");
 
-    expect(autoUpdater.setFeedURL).toHaveBeenLastCalledWith({
-      provider: "generic",
-      url: "https://github.com/traycerai/traycer/releases/download/desktop-v1.7.0-rc.1/",
-    });
+    expectPublicFeedUrl(
+      autoUpdater,
+      "https://github.com/traycerai/traycer/releases/download/desktop-v1.7.0-rc.1/",
+    );
   });
   it("never selects a tag with a leading-zero identifier, falling back to a strict-SemVer release", async () => {
-    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    const { autoUpdater, updater } =
+      await loadUpdaterWithoutPrivateToken(NOT_LINUX_GUIDANCE);
     vi.stubGlobal(
       "fetch",
       fetchRouter(
@@ -1654,10 +1705,10 @@ describe("RC release discovery and channel safety", () => {
     await updater.setAllowPrereleaseUpdates(true);
     await updater.checkForUpdatesNow(false, "manual");
 
-    expect(autoUpdater.setFeedURL).toHaveBeenLastCalledWith({
-      provider: "generic",
-      url: "https://github.com/traycerai/traycer/releases/download/desktop-v1.9.0-rc.1/",
-    });
+    expectPublicFeedUrl(
+      autoUpdater,
+      "https://github.com/traycerai/traycer/releases/download/desktop-v1.9.0-rc.1/",
+    );
   });
 
   it("does not let a stale RC check's discovery error overwrite the current (stable) channel's snapshot (finding 8)", async () => {
@@ -1665,18 +1716,37 @@ describe("RC release discovery and channel safety", () => {
     const discoveryControl: { reject: ((err: unknown) => void) | null } = {
       reject: null,
     };
+    let listingCalls = 0;
     vi.stubGlobal(
       "fetch",
-      vi.fn(
-        () =>
-          new Promise<Response>((_resolve, reject) => {
+      vi.fn((input: unknown) => {
+        const url = new URL(String(input));
+        if (url.searchParams.has("per_page")) {
+          listingCalls += 1;
+          if (listingCalls > 1) {
+            return Promise.resolve(
+              new Response(JSON.stringify([]), { status: 200 }),
+            );
+          }
+          return new Promise<Response>((_resolve, reject) => {
             discoveryControl.reject = reject;
-          }),
-      ),
+          });
+        }
+        const tag = url.pathname.includes("desktop-v1.9.0-rc.9")
+          ? "desktop-v1.9.0-rc.9"
+          : "desktop-v1.4.0";
+        const raw = manifestYamlForTag(tag, macZipAssetName(tag));
+        lastChannelManifest = {
+          raw,
+          url: url.href,
+          channelFile: platformChannelFile(),
+        };
+        return Promise.resolve(new Response(raw, { status: 200 }));
+      }),
     );
     autoUpdater.checkForUpdates.mockImplementation(() => {
       autoUpdater.emit("update-not-available", { version: "1.4.0" });
-      return Promise.resolve(null);
+      return Promise.resolve(fakeUpdateNotAvailableResult());
     });
     const snapshots: DesktopAppUpdateSnapshot[] = [];
     await updater.installAutoUpdater(true, makeDeps(true));
@@ -1716,7 +1786,8 @@ describe("architecture-specific channel manifest selection", () => {
   it("selects the arm64 channel manifest over an x64-only release on Linux arm64 (finding 4)", async () => {
     setPlatform("linux");
     process.env.TEST_UPDATER_ARCH = "arm64";
-    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    const { autoUpdater, updater } =
+      await loadUpdaterWithoutPrivateToken(NOT_LINUX_GUIDANCE);
     const x64Only = linuxReleaseFixture(
       "desktop-v1.9.0-rc.2",
       true,
@@ -1752,16 +1823,17 @@ describe("architecture-specific channel manifest selection", () => {
     await updater.setAllowPrereleaseUpdates(true);
     await updater.checkForUpdatesNow(false, "manual");
 
-    expect(autoUpdater.setFeedURL).toHaveBeenLastCalledWith({
-      provider: "generic",
-      url: "https://github.com/traycerai/traycer/releases/download/desktop-v1.9.0-rc.1/",
-    });
+    expectPublicFeedUrl(
+      autoUpdater,
+      "https://github.com/traycerai/traycer/releases/download/desktop-v1.9.0-rc.1/",
+    );
   });
 
   it("skips an arm64-only newest release on an x64 Mac and falls back to an older applicable release (finding 4)", async () => {
     setPlatform("darwin");
     process.env.TEST_UPDATER_ARCH = "x64";
-    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    const { autoUpdater, updater } =
+      await loadUpdaterWithoutPrivateToken(NOT_LINUX_GUIDANCE);
     vi.stubGlobal(
       "fetch",
       fetchRouter(
@@ -1788,16 +1860,17 @@ describe("architecture-specific channel manifest selection", () => {
 
     // MacUpdater would drop the arm64 ZIP on an x64 Mac and throw
     // ZIP_FILE_NOT_FOUND, so discovery rejects the newest and falls back.
-    expect(autoUpdater.setFeedURL).toHaveBeenLastCalledWith({
-      provider: "generic",
-      url: "https://github.com/traycerai/traycer/releases/download/desktop-v1.9.0-rc.1/",
-    });
+    expectPublicFeedUrl(
+      autoUpdater,
+      "https://github.com/traycerai/traycer/releases/download/desktop-v1.9.0-rc.1/",
+    );
   });
 
   it("selects an arm64-only newest release on an arm64 Mac (finding 4)", async () => {
     setPlatform("darwin");
     process.env.TEST_UPDATER_ARCH = "arm64";
-    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    const { autoUpdater, updater } =
+      await loadUpdaterWithoutPrivateToken(NOT_LINUX_GUIDANCE);
     vi.stubGlobal(
       "fetch",
       fetchRouter(
@@ -1818,10 +1891,10 @@ describe("architecture-specific channel manifest selection", () => {
     await updater.setAllowPrereleaseUpdates(true);
     await updater.checkForUpdatesNow(false, "manual");
 
-    expect(autoUpdater.setFeedURL).toHaveBeenLastCalledWith({
-      provider: "generic",
-      url: "https://github.com/traycerai/traycer/releases/download/desktop-v1.9.0-rc.2/",
-    });
+    expectPublicFeedUrl(
+      autoUpdater,
+      "https://github.com/traycerai/traycer/releases/download/desktop-v1.9.0-rc.2/",
+    );
   });
 });
 
@@ -1866,7 +1939,7 @@ describe("channel-change queue ordering", () => {
     expect(rb.outcome).toBe("changed");
     expect(preferences.allowPrerelease).toBe(false);
     expect(autoUpdater.allowPrerelease).toBe(false);
-    expect(autoUpdater.setFeedURL).toHaveBeenCalledWith({
+    expect(autoUpdater.setFeedURL.mock.calls.at(-1)?.[0]).toMatchObject({
       provider: "github",
       owner: "traycerai",
       repo: "traycer",
@@ -2575,9 +2648,14 @@ describe("implicit RC-line following", () => {
     vi.stubGlobal("fetch", fetchRouter(fixtures, manifests));
   }
 
-  function selectedFeedUrl(autoUpdater: FakeAutoUpdater): unknown {
+  function selectedFeedUrl(autoUpdater: FakeAutoUpdater): string | null {
     const calls = autoUpdater.setFeedURL.mock.calls;
-    return calls.length === 0 ? null : calls[calls.length - 1][0];
+    const feed = calls.length === 0 ? null : calls[calls.length - 1][0];
+    if (!isRecord(feed)) return null;
+    if (typeof feed.url === "string") return feed.url;
+    return isRecord(feed.origin) && typeof feed.origin.url === "string"
+      ? feed.origin.url
+      : null;
   }
 
   it("allows prereleases from the installed version alone, persisting nothing", async () => {
@@ -2611,10 +2689,9 @@ describe("implicit RC-line following", () => {
 
     await updater.checkForUpdatesNow(false, "manual");
 
-    expect(selectedFeedUrl(autoUpdater)).toEqual({
-      provider: "generic",
-      url: "https://github.com/traycerai/traycer/releases/download/desktop-v2.0.0-rc.2/",
-    });
+    expect(selectedFeedUrl(autoUpdater)).toBe(
+      "https://github.com/traycerai/traycer/releases/download/desktop-v2.0.0-rc.2/",
+    );
   });
 
   it("prefers the line's stable release over a later RC on the same line", async () => {
@@ -2634,10 +2711,9 @@ describe("implicit RC-line following", () => {
 
     await updater.checkForUpdatesNow(false, "manual");
 
-    expect(selectedFeedUrl(autoUpdater)).toEqual({
-      provider: "generic",
-      url: "https://github.com/traycerai/traycer/releases/download/desktop-v2.0.0/",
-    });
+    expect(selectedFeedUrl(autoUpdater)).toBe(
+      "https://github.com/traycerai/traycer/releases/download/desktop-v2.0.0/",
+    );
   });
 
   it("falls back to the highest usable later RC when the line's stable is unusable", async () => {
@@ -2679,10 +2755,9 @@ describe("implicit RC-line following", () => {
 
     await updater.checkForUpdatesNow(false, "manual");
 
-    expect(selectedFeedUrl(autoUpdater)).toEqual({
-      provider: "generic",
-      url: "https://github.com/traycerai/traycer/releases/download/desktop-v2.0.0-rc.3/",
-    });
+    expect(selectedFeedUrl(autoUpdater)).toBe(
+      "https://github.com/traycerai/traycer/releases/download/desktop-v2.0.0-rc.3/",
+    );
   });
 
   it("reports up-to-date rather than jumping lines when its own line has nothing newer", async () => {
@@ -2732,10 +2807,9 @@ describe("implicit RC-line following", () => {
     // set genuinely widens), so the full transition choreography runs.
     expect(change.outcome).toBe("changed");
     expect(preferences.allowPrerelease).toBe(true);
-    expect(selectedFeedUrl(autoUpdater)).toEqual({
-      provider: "generic",
-      url: "https://github.com/traycerai/traycer/releases/download/desktop-v2.1.0-rc.1/",
-    });
+    expect(selectedFeedUrl(autoUpdater)).toBe(
+      "https://github.com/traycerai/traycer/releases/download/desktop-v2.1.0-rc.1/",
+    );
   });
 
   it("returns an RC build that opted out to its own line rather than to stable-only", async () => {
@@ -2755,10 +2829,9 @@ describe("implicit RC-line following", () => {
     // feed - implicit following is derived from the installed version and
     // survives the opt-out.
     expect(autoUpdater.allowPrerelease).toBe(true);
-    expect(selectedFeedUrl(autoUpdater)).toEqual({
-      provider: "generic",
-      url: "https://github.com/traycerai/traycer/releases/download/desktop-v2.0.0-rc.2/",
-    });
+    expect(selectedFeedUrl(autoUpdater)).toBe(
+      "https://github.com/traycerai/traycer/releases/download/desktop-v2.0.0-rc.2/",
+    );
   });
 
   it("restores stable-only behavior once the line's stable build is what is installed", async () => {
@@ -2768,16 +2841,30 @@ describe("implicit RC-line following", () => {
       NOT_LINUX_GUIDANCE,
       "2.0.0",
     );
-    const fetchMock = vi.fn();
+    const fetchMock = stableIndexFetchMock("2.0.0");
     vi.stubGlobal("fetch", fetchMock);
+    autoUpdater.checkForUpdates.mockImplementation(() =>
+      Promise.resolve(fakeUpdateNotAvailableResult()),
+    );
     await updater.installAutoUpdater(true, makeDeps(true));
 
     await updater.checkForUpdatesNow(false, "manual");
 
     expect(autoUpdater.allowPrerelease).toBe(false);
     expect(preferences.allowPrerelease).toBe(false);
-    // Stable-only never runs the namespaced selector: no discovery walk at all.
-    expect(fetchMock).not.toHaveBeenCalled();
+    // Stable-only reads the stable index and never probes the RC index.
+    expect(
+      fetchMock.mock.calls.some(
+        ([input]) =>
+          new URL(String(input)).pathname === "/desktop/stable/index.json",
+      ),
+    ).toBe(true);
+    expect(
+      fetchMock.mock.calls.some(
+        ([input]) =>
+          new URL(String(input)).pathname === "/desktop/rc/index.json",
+      ),
+    ).toBe(false);
     expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(1);
   });
 
@@ -2786,14 +2873,28 @@ describe("implicit RC-line following", () => {
       NOT_LINUX_GUIDANCE,
       "2.0.0-beta.1",
     );
-    const fetchMock = vi.fn();
+    const fetchMock = stableIndexFetchMock("2.0.0");
     vi.stubGlobal("fetch", fetchMock);
+    autoUpdater.checkForUpdates.mockImplementation(() =>
+      Promise.resolve(fakeUpdateNotAvailableResult()),
+    );
 
     await updater.installAutoUpdater(true, makeDeps(true));
     await updater.checkForUpdatesNow(false, "manual");
 
     expect(autoUpdater.allowPrerelease).toBe(false);
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(
+      fetchMock.mock.calls.some(
+        ([input]) =>
+          new URL(String(input)).pathname === "/desktop/stable/index.json",
+      ),
+    ).toBe(true);
+    expect(
+      fetchMock.mock.calls.some(
+        ([input]) =>
+          new URL(String(input)).pathname === "/desktop/rc/index.json",
+      ),
+    ).toBe(false);
   });
 
   it("never offers or persists enable-rc while following a line implicitly", async () => {
@@ -2850,6 +2951,7 @@ describe("staging updater release authentication and channel", () => {
       null,
       STABLE_APP_VERSION,
       "staging",
+      false,
     );
   }
 
@@ -2872,13 +2974,13 @@ describe("staging updater release authentication and channel", () => {
     const tag = "desktop-v2.0.0-staging.1.gabcdef0";
     vi.stubGlobal(
       "fetch",
-      fetchRouter([macReleaseFixture(tag, true)], {
+      fetchRouter([stagingReleaseFixture(tag, true)], {
         [tag]: manifestYamlForTag(tag, macZipAssetName(tag)),
       }),
     );
     autoUpdater.checkForUpdates.mockImplementation(() => {
       autoUpdater.emit("update-available", { version: "2.0.0-staging.1" });
-      return Promise.resolve(null);
+      return Promise.resolve(fakeUpdateCheckResult());
     });
     await updater.installAutoUpdater(true, makeDeps(true));
     await updater.checkForUpdatesNow(false, "manual");
@@ -2915,13 +3017,13 @@ describe("staging updater release authentication and channel", () => {
     const tag = "desktop-v2.0.0-staging.2.gabcdef1";
     vi.stubGlobal(
       "fetch",
-      fetchRouter([macReleaseFixture(tag, true)], {
+      fetchRouter([stagingReleaseFixture(tag, true)], {
         [tag]: manifestYamlForTag(tag, macZipAssetName(tag)),
       }),
     );
     autoUpdater.checkForUpdates.mockImplementation(() => {
       autoUpdater.emit("update-available", { version: "2.0.0-staging.2" });
-      return Promise.resolve(null);
+      return Promise.resolve(fakeUpdateCheckResult());
     });
     await updater.installAutoUpdater(true, makeDeps(true));
     await updater.checkForUpdatesNow(false, "manual");
@@ -2998,7 +3100,9 @@ describe("staging updater release authentication and channel", () => {
       }),
     );
     await updater.checkForUpdatesNow(false, "manual");
-    expect(authorizations[0]).toBe("token second-token");
+    expect(authorizations.find((value) => value !== null)).toBe(
+      "token second-token",
+    );
   });
 
   it("leaves the original discovery error and the lease alone when a masked listing 404 probes to a visible repository", async () => {
@@ -3049,7 +3153,9 @@ describe("staging updater release authentication and channel", () => {
       }),
     );
     await updater.checkForUpdatesNow(false, "manual");
-    expect(authorizations[0]).toBe("token first-token");
+    expect(authorizations.find((value) => value !== null)).toBe(
+      "token first-token",
+    );
   });
 
   // The DOWNLOAD-path counterparts of the two masked-listing-404 tests above.
@@ -3068,13 +3174,13 @@ describe("staging updater release authentication and channel", () => {
     const tag = "desktop-v2.0.0-staging.1.gabcdef0";
     vi.stubGlobal(
       "fetch",
-      fetchRouter([macReleaseFixture(tag, true)], {
+      fetchRouter([stagingReleaseFixture(tag, true)], {
         [tag]: manifestYamlForTag(tag, macZipAssetName(tag)),
       }),
     );
     autoUpdater.checkForUpdates.mockImplementation(() => {
       autoUpdater.emit("update-available", { version: "2.0.0-staging.1" });
-      return Promise.resolve(null);
+      return Promise.resolve(fakeUpdateCheckResult());
     });
     await updater.installAutoUpdater(true, makeDeps(true));
     await updater.checkForUpdatesNow(false, "manual");
@@ -3088,10 +3194,11 @@ describe("staging updater release authentication and channel", () => {
         return new Response("Not Found", { status: 404 });
       }),
     );
+    autoUpdater.downloadUpdate.mockRejectedValue(
+      new Error("HttpError: 404 Not Found"),
+    );
     updater.startUpdateDownload();
     expect(updater.getAppUpdateSnapshot().status).toBe("downloading");
-
-    autoUpdater.emit("error", new Error("HttpError: 404 Not Found"));
 
     await vi.waitFor(() => {
       expect(updater.getAppUpdateSnapshot().status).toBe("unavailable");
@@ -3121,7 +3228,9 @@ describe("staging updater release authentication and channel", () => {
       }),
     );
     await updater.checkForUpdatesNow(false, "manual");
-    expect(authorizations[0]).toBe("token second-token");
+    expect(authorizations.find((value) => value !== null)).toBe(
+      "token second-token",
+    );
   });
 
   it("leaves the original download error and the lease alone when a masked download-time 404 probes to a visible repository", async () => {
@@ -3130,13 +3239,13 @@ describe("staging updater release authentication and channel", () => {
     const tag = "desktop-v2.0.0-staging.1.gabcdef0";
     vi.stubGlobal(
       "fetch",
-      fetchRouter([macReleaseFixture(tag, true)], {
+      fetchRouter([stagingReleaseFixture(tag, true)], {
         [tag]: manifestYamlForTag(tag, macZipAssetName(tag)),
       }),
     );
     autoUpdater.checkForUpdates.mockImplementation(() => {
       autoUpdater.emit("update-available", { version: "2.0.0-staging.1" });
-      return Promise.resolve(null);
+      return Promise.resolve(fakeUpdateCheckResult());
     });
     await updater.installAutoUpdater(true, makeDeps(true));
     await updater.checkForUpdatesNow(false, "manual");
@@ -3150,10 +3259,11 @@ describe("staging updater release authentication and channel", () => {
         return new Response(JSON.stringify({}), { status: 200 });
       }),
     );
+    autoUpdater.downloadUpdate.mockRejectedValue(
+      new Error("HttpError: 404 Not Found"),
+    );
     updater.startUpdateDownload();
     expect(updater.getAppUpdateSnapshot().status).toBe("downloading");
-
-    autoUpdater.emit("error", new Error("HttpError: 404 Not Found"));
 
     await vi.waitFor(() => {
       expect(updater.getAppUpdateSnapshot().status).toBe("error");
@@ -3185,7 +3295,9 @@ describe("staging updater release authentication and channel", () => {
       }),
     );
     await updater.checkForUpdatesNow(false, "manual");
-    expect(authorizations[0]).toBe("token first-token");
+    expect(authorizations.find((value) => value !== null)).toBe(
+      "token first-token",
+    );
   });
 
   it("does not probe repository visibility during download when no staging token is configured", async () => {
@@ -3241,10 +3353,15 @@ describe("staging updater release authentication and channel", () => {
         // The listing SUCCEEDS - this is the case the listing probe cannot
         // see, because the credential still reads the repository index.
         if (url.searchParams.has("per_page")) {
-          return new Response(JSON.stringify([macReleaseFixture(tag, true)]), {
-            status: 200,
-          });
+          return new Response(
+            JSON.stringify([stagingReleaseFixture(tag, true)]),
+            {
+              status: 200,
+            },
+          );
         }
+        const exactRelease = exactTagReleaseResponse(url, tag);
+        if (exactRelease !== null) return exactRelease;
         return new Response("Not Found", { status: 404 });
       }),
     );
@@ -3271,7 +3388,9 @@ describe("staging updater release authentication and channel", () => {
       }),
     );
     await updater.checkForUpdatesNow(false, "manual");
-    expect(authorizations[0]).toBe("token second-token");
+    expect(authorizations.find((value) => value !== null)).toBe(
+      "token second-token",
+    );
   });
 
   it("leaves a masked manifest 404 as an unusable release when the repository is visible", async () => {
@@ -3282,15 +3401,22 @@ describe("staging updater release authentication and channel", () => {
     process.env.TRAYCER_STAGING_RELEASE_TOKEN = "first-token";
     const { updater } = await loadStagingUpdater();
     const tag = "desktop-v2.0.0-staging.1.gabcdef0";
+    const requests: string[] = [];
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: unknown) => {
         const url = new URL(String(input));
+        requests.push(`${url.origin}${url.pathname}`);
         if (url.searchParams.has("per_page")) {
-          return new Response(JSON.stringify([macReleaseFixture(tag, true)]), {
-            status: 200,
-          });
+          return new Response(
+            JSON.stringify([stagingReleaseFixture(tag, true)]),
+            {
+              status: 200,
+            },
+          );
         }
+        const exactRelease = exactTagReleaseResponse(url, tag);
+        if (exactRelease !== null) return exactRelease;
         if (url.pathname.endsWith("/repos/traycerai/traycer-internal")) {
           return new Response(JSON.stringify({}), { status: 200 });
         }
@@ -3300,7 +3426,16 @@ describe("staging updater release authentication and channel", () => {
     await updater.installAutoUpdater(true, makeDeps(true));
     await updater.checkForUpdatesNow(false, "manual");
 
-    expect(updater.getAppUpdateSnapshot().status).toBe("up-to-date");
+    expect(updater.getAppUpdateSnapshot()).toMatchObject({
+      status: "error",
+      errorMessage:
+        "Traycer couldn't reach the update service right now. Please try again in a little while.",
+    });
+    expect(
+      requests.filter((url) =>
+        url.endsWith("/repos/traycerai/traycer-internal"),
+      ),
+    ).toHaveLength(1);
 
     // And the lease survives: nothing rejected it.
     process.env.TRAYCER_STAGING_RELEASE_TOKEN = "second-token";
@@ -3313,8 +3448,65 @@ describe("staging updater release authentication and channel", () => {
       }),
     );
     await updater.checkForUpdatesNow(false, "manual");
-    expect(authorizations[0]).toBe("token first-token");
+    expect(authorizations.find((value) => value !== null)).toBe(
+      "token first-token",
+    );
   });
+
+  it("reports a CDN and exact-tag manifest 404 as a service error after an unreachable probe, preserving the token lease", async () => {
+    await expectManifest404ProbeFailure(new TypeError("fetch failed"));
+  });
+
+  it("reports a CDN and exact-tag manifest 404 as a service error after a timed-out probe, preserving the token lease", async () => {
+    const timeout = new Error("repository probe timed out");
+    timeout.name = "TimeoutError";
+    await expectManifest404ProbeFailure(timeout);
+  });
+
+  async function expectManifest404ProbeFailure(
+    probeError: Error,
+  ): Promise<void> {
+    process.env.TRAYCER_STAGING_RELEASE_TOKEN = "first-token";
+    const { updater } = await loadStagingUpdater();
+    const trace: StagingFetchTraceEntry[] = [];
+    vi.stubGlobal("fetch", stagingManifest404Fetch(probeError, trace));
+    await updater.installAutoUpdater(true, makeDeps(true));
+
+    await updater.checkForUpdatesNow(false, "manual");
+
+    const failedCheck = updater.getAppUpdateSnapshot();
+    process.env.TRAYCER_STAGING_RELEASE_TOKEN = "second-token";
+    await updater.checkForUpdatesNow(false, "manual");
+
+    const firstCheckTrace: StagingFetchTraceEntry[] = [
+      {
+        url: "https://releases.dev.traycer.ai/desktop/staging/index.json",
+        authorization: null,
+      },
+      {
+        url: "https://releases.dev.traycer.ai/desktop/2.0.0-staging.2.gabcdef1/latest-mac.yml",
+        authorization: null,
+      },
+      {
+        url: "https://api.github.com/repos/traycerai/traycer-internal/releases/tags/desktop-v2.0.0-staging.2.gabcdef1",
+        authorization: "token first-token",
+      },
+      {
+        url: "https://api.github.com/repos/traycerai/traycer-internal/releases/assets/desktop-v2.0.0-staging.2.gabcdef1-manifest",
+        authorization: "token first-token",
+      },
+      {
+        url: "https://api.github.com/repos/traycerai/traycer-internal",
+        authorization: "token first-token",
+      },
+    ];
+    expect(trace).toEqual([...firstCheckTrace, ...firstCheckTrace]);
+    expect(failedCheck).toMatchObject({
+      status: "error",
+      errorMessage:
+        "Traycer couldn't reach the update service right now. Please try again in a little while.",
+    });
+  }
 
   // GitHub answers 403 for BOTH "your token is no good" and "slow down", and
   // reading the second as the first discards a WORKING credential and puts a
@@ -3334,23 +3526,26 @@ describe("staging updater release authentication and channel", () => {
     const tag = "desktop-v2.0.0-staging.3.gabcdef2";
     vi.stubGlobal(
       "fetch",
-      fetchRouter([macReleaseFixture(tag, true)], {
+      fetchRouter([stagingReleaseFixture(tag, true)], {
         [tag]: manifestYamlForTag(tag, macZipAssetName(tag)),
       }),
     );
     autoUpdater.checkForUpdates.mockImplementation(() => {
       autoUpdater.emit("update-available", { version: "2.0.0-staging.3" });
-      return Promise.resolve(null);
+      return Promise.resolve(fakeUpdateCheckResult());
     });
     await updater.installAutoUpdater(true, makeDeps(true));
     await updater.checkForUpdatesNow(false, "manual");
     expect(updater.getAppUpdateSnapshot().status).toBe("available");
 
-    updater.startUpdateDownload();
-    autoUpdater.emit(
-      "error",
+    autoUpdater.downloadUpdate.mockRejectedValue(
       new Error(`403 Forbidden\nHeaders: { ${header} }`),
     );
+    updater.startUpdateDownload();
+
+    await vi.waitFor(() => {
+      expect(updater.getAppUpdateSnapshot().status).toBe("error");
+    });
 
     // A service failure, not a credential verdict.
     expect(updater.getAppUpdateSnapshot().status).toBe("error");
@@ -3370,7 +3565,9 @@ describe("staging updater release authentication and channel", () => {
       }),
     );
     await updater.checkForUpdatesNow(false, "manual");
-    expect(authorizations[0]).toBe(`token ${token}`);
+    expect(authorizations.find((value) => value !== null)).toBe(
+      `token ${token}`,
+    );
   });
 
   it.each([
@@ -3394,10 +3591,12 @@ describe("staging updater release authentication and channel", () => {
           const url = new URL(String(input));
           if (url.searchParams.has("per_page")) {
             return new Response(
-              JSON.stringify([macReleaseFixture(tag, true)]),
+              JSON.stringify([stagingReleaseFixture(tag, true)]),
               { status: 200 },
             );
           }
+          const exactRelease = exactTagReleaseResponse(url, tag);
+          if (exactRelease !== null) return exactRelease;
           return new Response("rate limited", { status, headers });
         }),
       );
@@ -3419,7 +3618,9 @@ describe("staging updater release authentication and channel", () => {
         }),
       );
       await updater.checkForUpdatesNow(false, "manual");
-      expect(authorizations[0]).toBe(`token ${token}`);
+      expect(authorizations.find((value) => value !== null)).toBe(
+        `token ${token}`,
+      );
     },
   );
 
@@ -3432,24 +3633,27 @@ describe("staging updater release authentication and channel", () => {
     const tag = "desktop-v2.0.0-staging.4.gabcdef3";
     vi.stubGlobal(
       "fetch",
-      fetchRouter([macReleaseFixture(tag, true)], {
+      fetchRouter([stagingReleaseFixture(tag, true)], {
         [tag]: manifestYamlForTag(tag, macZipAssetName(tag)),
       }),
     );
     autoUpdater.checkForUpdates.mockImplementation(() => {
       autoUpdater.emit("update-available", { version: "2.0.0-staging.4" });
-      return Promise.resolve(null);
+      return Promise.resolve(fakeUpdateCheckResult());
     });
     await updater.installAutoUpdater(true, makeDeps(true));
     await updater.checkForUpdatesNow(false, "manual");
 
-    updater.startUpdateDownload();
-    autoUpdater.emit(
-      "error",
+    autoUpdater.downloadUpdate.mockRejectedValue(
       new Error(
         '403 Forbidden\nHeaders: { "content-type": "application/json" }',
       ),
     );
+    updater.startUpdateDownload();
+
+    await vi.waitFor(() => {
+      expect(updater.getAppUpdateSnapshot().status).toBe("unavailable");
+    });
 
     expect(updater.getAppUpdateSnapshot()).toMatchObject({
       status: "unavailable",
@@ -3493,81 +3697,64 @@ describe("staging updater release authentication and channel", () => {
     // The listing 404 sent exactly one probe, and it answered "visible".
     expect(probes).toHaveLength(1);
     expect(probes[0].bodyUsed).toBe(true);
-    expect(listings).toHaveLength(1);
-    expect(listings[0].bodyUsed).toBe(true);
+    expect(listings).toHaveLength(2);
+    expect(listings.every((response) => response.bodyUsed)).toBe(true);
   });
 
-  // `settleMasked404` is the only path in this module that emits AFTER the
-  // check that produced its error has finished. `handleUpdaterError` is a
-  // synchronous listener, so it starts the visibility probe without awaiting
-  // it, and the check's `finally` clears `checkIntent` / `checkInFlight` /
-  // `checkErrorEmitted` while the request is still open.
-  //
-  // Both tests here hold the probe open until the check has fully resolved,
-  // which is the ordering the defect needs and which no other test in this
-  // file produces: everywhere else the probe answers immediately, so the
-  // settlement lands while the check is still in flight and the live flags
-  // still happen to be right.
-  describe("a masked-404 settlement that outlives its own check", () => {
+  // Origin checks own their awaited failures and suppress electron-updater's
+  // paired error event. These cases cover the independent out-of-band event
+  // path without making the event a second owner of a failed check.
+  describe("out-of-band masked-404 settlement after a completed check", () => {
     const TAG = "desktop-v2.0.0-staging.1.gabcdef0";
 
-    /**
-     * Discovery succeeds; the repository-visibility probe hangs until released.
-     *
-     * The listing and manifest must BOTH answer 200 - a 404 on either one runs
-     * its own probe, which this gate would block, and the check would never
-     * reach `autoUpdater.checkForUpdates()` at all.
-     */
     function deferredProbeFetch(): {
       readonly fetch: Mock;
+      readonly probeResponse: () => Response | null;
+      readonly probeStarted: Promise<void>;
       readonly releaseProbe: () => void;
     } {
       let release = (): void => {};
+      let announceProbe = (): void => {};
+      let visibilityProbeResponse: Response | null = null;
+      const probeStarted = new Promise<void>((resolve) => {
+        announceProbe = resolve;
+      });
       const gate = new Promise<void>((resolve) => {
         release = resolve;
       });
-      const router = fetchRouter([macReleaseFixture(TAG, true)], {
+      const router = fetchRouter([stagingReleaseFixture(TAG, true)], {
         [TAG]: manifestYamlForTag(TAG, macZipAssetName(TAG)),
       });
       return {
         fetch: vi.fn(async (input: unknown, init: RequestInit | undefined) => {
           const url = new URL(String(input));
           if (url.pathname.endsWith("/repos/traycerai/traycer-internal")) {
+            announceProbe();
             await gate;
-            return new Response("Not Found", { status: 404 });
+            visibilityProbeResponse = new Response("Repository is visible", {
+              status: 200,
+            });
+            return visibilityProbeResponse;
           }
           return router(input, init) as Promise<Response>;
         }),
+        probeResponse: () => visibilityProbeResponse,
+        probeStarted,
         releaseProbe: () => {
           release();
         },
       };
     }
 
-    // Fails the check with a bare 404: `isStagingAuthFailure` matches only
-    // 401/403, so the catch takes the ordinary-error arm while the error event
-    // schedules the masked-404 settlement. That split is the whole setup.
-    function failCheckWithMasked404(autoUpdater: {
-      readonly checkForUpdates: Mock;
-      readonly emit: (event: string, payload: unknown) => void;
-    }): void {
-      autoUpdater.checkForUpdates.mockImplementation(() => {
-        autoUpdater.emit("error", new Error("HttpError: 404 Not Found"));
-        return Promise.reject(new Error("HttpError: 404 Not Found"));
-      });
-    }
-
-    it("publishes exactly one terminal outcome for a MANUAL check", async () => {
-      // The duplicate: the dedup guard asked `checkInFlight && checkErrorEmitted`,
-      // and `checkInFlight` is false BY CONSTRUCTION by the time a settlement
-      // resolves - so the guard could never fire on the one path that needed it,
-      // and the check published its outcome twice.
+    it("keeps a completed MANUAL check's failure when a later visible-repository 404 settles", async () => {
       process.env.TRAYCER_STAGING_RELEASE_TOKEN = "first-token";
       const { autoUpdater, updater } = await loadStagingUpdater();
       const probe = deferredProbeFetch();
       vi.stubGlobal("fetch", probe.fetch);
       await updater.installAutoUpdater(true, makeDeps(true));
-      failCheckWithMasked404(autoUpdater);
+      autoUpdater.checkForUpdates.mockRejectedValue(
+        new Error("HttpError: 503 Service Unavailable"),
+      );
 
       const statuses: string[] = [];
       const unsubscribe = updater.onAppUpdateChange(
@@ -3578,74 +3765,37 @@ describe("staging updater release authentication and channel", () => {
       await updater.checkForUpdatesNow(false, "manual");
       const afterCheck = [...statuses];
       expect(afterCheck.at(-1)).toBe("error");
+      expect(statuses.filter((status) => status === "error")).toHaveLength(1);
 
+      autoUpdater.emit("error", new Error("HttpError: 404 Not Found"));
+      await probe.probeStarted;
+      expect(updater.getAppUpdateSnapshot().status).toBe("error");
       probe.releaseProbe();
-
-      // THE POSITIVE CONTROL, and the reason it is here rather than at the end.
-      // "no second snapshot appeared" is only evidence if the settlement
-      // actually ran, and draining a fixed number of microtasks does not
-      // establish that - an assertion that can pass by arriving early is not an
-      // assertion. The lease discard is the settlement's own footprint:
-      // `emitStagingAuthRejection` discards it and calls the emitter on the
-      // very next line, so a check that re-authenticates with the NEW env token
-      // proves the emitter has already been reached and declined to publish.
-      // Without the settlement this `waitFor` times out on "token first-token".
-      process.env.TRAYCER_STAGING_RELEASE_TOKEN = "second-token";
-      const authorizations: Array<string | null> = [];
-      await vi.waitFor(async () => {
-        authorizations.length = 0;
-        vi.stubGlobal(
-          "fetch",
-          vi.fn(async (input: unknown, init: RequestInit | undefined) => {
-            authorizations.push(
-              new Headers(init?.headers).get("authorization"),
-            );
-            return new Response(JSON.stringify([]), { status: 200 });
-          }),
-        );
-        await updater.checkForUpdatesNow(false, "automatic");
-        expect(authorizations[0]).toBe("token second-token");
-      });
+      await vi.waitFor(() =>
+        expect(probe.probeResponse()?.bodyUsed).toBe(true),
+      );
       unsubscribe();
 
-      // The settlement published nothing: the only statuses after the manual
-      // check are the follow-up checks' own `up-to-date` rows, and
-      // "unavailable" - the terminal outcome the check already published once
-      // as "error" - never appears at all.
       expect(statuses.slice(0, afterCheck.length)).toEqual(afterCheck);
       expect(statuses.filter((status) => status === "unavailable")).toEqual([]);
     });
 
-    it("publishes nothing user-facing for an AUTOMATIC check that follows a manual one", async () => {
-      // A failing automatic check publishes no snapshot, so `lastCheckIntent`
-      // still holds whatever the user last did. The settlement resolved its
-      // intent from that field - `downloadIntent` and `checkIntent` are both
-      // null by then - so a background check inherited "manual" and announced
-      // "Updates are not available for this build." to a user who had asked
-      // for nothing.
+    it("keeps an AUTOMATIC check silent when a later visible-repository 404 settles", async () => {
       process.env.TRAYCER_STAGING_RELEASE_TOKEN = "first-token";
       const { autoUpdater, updater } = await loadStagingUpdater();
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async () => new Response(JSON.stringify([]), { status: 200 })),
-      );
+      const probe = deferredProbeFetch();
+      vi.stubGlobal("fetch", probe.fetch);
       await updater.installAutoUpdater(true, makeDeps(true));
 
-      // The manual check that leaves "manual" behind in the snapshot.
+      autoUpdater.checkForUpdates.mockRejectedValue(
+        new Error("HttpError: 503 Service Unavailable"),
+      );
       await updater.checkForUpdatesNow(false, "manual");
       expect(updater.getAppUpdateSnapshot()).toMatchObject({
-        status: "up-to-date",
+        status: "error",
         lastCheckIntent: "manual",
       });
 
-      const probe = deferredProbeFetch();
-      vi.stubGlobal("fetch", probe.fetch);
-      failCheckWithMasked404(autoUpdater);
-
-      // Read the snapshot STREAM, not the final snapshot. The recovery check
-      // below republishes `up-to-date`, so an "unavailable" row emitted in
-      // between would be overwritten and a final-state assertion would pass
-      // over the exact defect it is here to catch.
       const statuses: string[] = [];
       const unsubscribe = updater.onAppUpdateChange(
         (snapshot: { readonly status: string }) => {
@@ -3653,31 +3803,24 @@ describe("staging updater release authentication and channel", () => {
         },
       );
       await updater.checkForUpdatesNow(false, "automatic");
-      probe.releaseProbe();
-
-      // Same positive control as the manual case: the lease discard is the
-      // settlement's own footprint, so re-authenticating with the new env token
-      // proves the emitter was reached and declined to publish.
-      process.env.TRAYCER_STAGING_RELEASE_TOKEN = "second-token";
-      const authorizations: Array<string | null> = [];
-      await vi.waitFor(async () => {
-        authorizations.length = 0;
-        vi.stubGlobal(
-          "fetch",
-          vi.fn(async (input: unknown, init: RequestInit | undefined) => {
-            authorizations.push(
-              new Headers(init?.headers).get("authorization"),
-            );
-            return new Response(JSON.stringify([]), { status: 200 });
-          }),
-        );
-        await updater.checkForUpdatesNow(false, "automatic");
-        expect(authorizations[0]).toBe("token second-token");
+      const afterAutomaticFailure = [...statuses];
+      expect(updater.getAppUpdateSnapshot()).toMatchObject({
+        status: "error",
+        lastCheckIntent: "manual",
       });
+
+      autoUpdater.emit("error", new Error("HttpError: 404 Not Found"));
+      await probe.probeStarted;
+      expect(updater.getAppUpdateSnapshot().status).toBe("error");
+      probe.releaseProbe();
+      await vi.waitFor(() =>
+        expect(probe.probeResponse()?.bodyUsed).toBe(true),
+      );
       unsubscribe();
 
-      // A failing automatic check is silent by design; the settlement behind it
-      // must be too.
+      expect(statuses.slice(0, afterAutomaticFailure.length)).toEqual(
+        afterAutomaticFailure,
+      );
       expect(statuses.filter((status) => status === "unavailable")).toEqual([]);
     });
   });
@@ -3686,7 +3829,8 @@ describe("staging updater release authentication and channel", () => {
 describe("masked 404 in release discovery: no probe without a token", () => {
   it("does not probe repository visibility when no token is configured", async () => {
     setPlatform("darwin");
-    const { updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    const { updater } =
+      await loadUpdaterWithoutPrivateToken(NOT_LINUX_GUIDANCE);
     const calls: string[] = [];
     vi.stubGlobal(
       "fetch",
@@ -3703,11 +3847,12 @@ describe("masked 404 in release discovery: no probe without a token", () => {
     });
 
     expect(plan.route).toBe("manual");
-    // Only the listing was fetched - no token means the masked-404 discriminator
-    // never runs, since a good-faith absent/public repository 404s the same way
-    // with or without one.
-    expect(calls).toHaveLength(1);
-    expect(calls[0]).toContain("per_page");
+    // The CDN index is tried first, then the GitHub listing. No token means
+    // the masked-404 discriminator never runs, since a good-faith absent/public
+    // repository 404s the same way with or without one.
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toContain("/desktop/rc/index.json");
+    expect(calls[1]).toContain("per_page");
   });
 });
 
@@ -4140,6 +4285,20 @@ async function loadUpdater(
     null,
     STABLE_APP_VERSION,
     "dev",
+    true,
+  );
+}
+
+async function loadUpdaterWithoutPrivateToken(
+  linuxGuidance: LinuxGuidanceTestConfig,
+): Promise<LoadedUpdater> {
+  return loadUpdaterWithControls(
+    linuxGuidance,
+    { kind: "immediate" },
+    null,
+    STABLE_APP_VERSION,
+    "dev",
+    false,
   );
 }
 
@@ -4156,6 +4315,7 @@ async function loadUpdaterForVersion(
     null,
     appVersion,
     "dev",
+    false,
   );
 }
 
@@ -4169,6 +4329,7 @@ async function loadUpdaterWithHydration(
     null,
     STABLE_APP_VERSION,
     "dev",
+    true,
   );
 }
 
@@ -4182,6 +4343,7 @@ async function loadUpdaterWithPersistControl(
     persistControl,
     STABLE_APP_VERSION,
     "dev",
+    true,
   );
 }
 
@@ -4191,8 +4353,19 @@ async function loadUpdaterWithControls(
   persistControl: PersistPrereleaseControl | null,
   appVersion: string,
   releaseChannel: "dev" | "staging",
+  baselinePrivateFeed: boolean,
 ): Promise<LoadedUpdater> {
   vi.resetModules();
+  if (
+    baselinePrivateFeed &&
+    releaseChannel === "dev" &&
+    process.env.VITE_TRAYCER_DESKTOP_UPDATE_TOKEN === undefined
+  ) {
+    process.env.VITE_TRAYCER_DESKTOP_UPDATE_TOKEN = "test-baseline-token";
+    if (process.env.VITE_TRAYCER_DESKTOP_UPDATE_REPO === undefined) {
+      process.env.VITE_TRAYCER_DESKTOP_UPDATE_REPO = "traycerai/traycer";
+    }
+  }
   const nativeAutoUpdater = new FakeNativeAutoUpdater();
   const autoUpdater = new FakeAutoUpdater(nativeAutoUpdater);
   const notify = vi.fn();
@@ -4329,6 +4502,20 @@ function macReleaseFixture(
         url: `https://api.github.com/repos/traycerai/traycer/releases/assets/${tag}-dmg`,
       },
     ],
+  };
+}
+
+function stagingReleaseFixture(tag: string, prerelease: boolean) {
+  const release = macReleaseFixture(tag, prerelease);
+  return {
+    ...release,
+    assets: release.assets.map((asset) => ({
+      ...asset,
+      url: asset.url.replace(
+        "/repos/traycerai/traycer/",
+        "/repos/traycerai/traycer-internal/",
+      ),
+    })),
   };
 }
 
@@ -4497,6 +4684,17 @@ function fetchRouter(
 ): Mock {
   return vi.fn((input: unknown) => {
     const url = new URL(String(input));
+    if (url.pathname.includes("/releases/tags/")) {
+      const tag = decodeURIComponent(url.pathname.split("/").at(-1) ?? "");
+      const release = releasesJson.find(
+        (candidate) => isRecord(candidate) && candidate.tag_name === tag,
+      );
+      return Promise.resolve(
+        release === undefined
+          ? new Response("Not Found", { status: 404 })
+          : new Response(JSON.stringify(release), { status: 200 }),
+      );
+    }
     if (url.searchParams.has("per_page")) {
       return Promise.resolve(
         new Response(JSON.stringify(releasesJson), { status: 200 }),
@@ -4510,8 +4708,150 @@ function fetchRouter(
     if (tag === undefined) {
       return Promise.resolve(new Response("Not Found", { status: 404 }));
     }
-    return Promise.resolve(new Response(manifestByTag[tag], { status: 200 }));
+    const raw = manifestByTag[tag];
+    const channelFile = platformChannelFile();
+    lastChannelManifest = { raw, url: url.href, channelFile };
+    return Promise.resolve(new Response(raw, { status: 200 }));
   });
+}
+
+interface StagingFetchTraceEntry {
+  readonly url: string;
+  readonly authorization: string | null;
+}
+
+function stagingManifest404Fetch(
+  probeError: Error,
+  trace: StagingFetchTraceEntry[],
+): Mock {
+  const version = "2.0.0-staging.2.gabcdef1";
+  const tag = `desktop-v${version}`;
+  const channelFile = platformChannelFile();
+  const installerName = macZipAssetName(tag);
+  const cdnVersionBase = `https://releases.dev.traycer.ai/desktop/${encodeURIComponent(version)}/`;
+  const index = {
+    schemaVersion: 1,
+    channel: "staging",
+    generatedAt: "2026-01-01T00:00:00.000Z",
+    stableHead: null,
+    versions: [
+      {
+        version,
+        tag,
+        channel: "staging",
+        publishedAt: "2026-01-01T00:00:00.000Z",
+        draft: false,
+        assets: [channelFile, installerName].map((name) => ({
+          name,
+          url: new URL(encodeURIComponent(name), cdnVersionBase).href,
+          size: 1024,
+        })),
+      },
+    ],
+  };
+  const exactTagPath = `/repos/traycerai/traycer-internal/releases/tags/${encodeURIComponent(tag)}`;
+  const apiManifestPath = `/repos/traycerai/traycer-internal/releases/assets/${tag}-manifest`;
+  return vi.fn(
+    async (input: RequestInfo | URL, init: RequestInit | undefined) => {
+      const url = new URL(String(input));
+      const authorization = new Headers(init?.headers).get("authorization");
+      trace.push({ url: url.href, authorization });
+      if (url.hostname === "api.github.com") {
+        if (url.pathname === exactTagPath) {
+          return new Response(
+            JSON.stringify(stagingReleaseFixture(tag, true)),
+            {
+              status: 200,
+            },
+          );
+        }
+        if (url.pathname === apiManifestPath) {
+          return new Response("Not Found", { status: 404 });
+        }
+        if (url.pathname === "/repos/traycerai/traycer-internal") {
+          throw probeError;
+        }
+        return new Response("Not Found", { status: 404 });
+      }
+      if (url.pathname === "/desktop/staging/index.json") {
+        return new Response(JSON.stringify(index), { status: 200 });
+      }
+      if (
+        url.pathname ===
+        new URL(encodeURIComponent(channelFile), cdnVersionBase).pathname
+      ) {
+        return new Response("Not Found", { status: 404 });
+      }
+      return new Response("Not Found", { status: 404 });
+    },
+  );
+}
+
+function exactTagReleaseResponse(url: URL, tag: string): Response | null {
+  if (!url.pathname.endsWith(`/releases/tags/${encodeURIComponent(tag)}`)) {
+    return null;
+  }
+  return new Response(JSON.stringify(stagingReleaseFixture(tag, true)), {
+    status: 200,
+  });
+}
+
+function stableIndexFetchMock(version: string): Mock {
+  const tag = `desktop-v${version}`;
+  const channelFile = platformChannelFile();
+  const installerName = macZipAssetName(tag);
+  const baseUrl = `https://releases.traycer.ai/desktop/${encodeURIComponent(version)}/`;
+  const index = {
+    schemaVersion: 1,
+    channel: "stable",
+    generatedAt: "2026-01-01T00:00:00.000Z",
+    stableHead: version,
+    versions: [
+      {
+        version,
+        tag,
+        channel: "stable",
+        publishedAt: "2026-01-01T00:00:00.000Z",
+        draft: false,
+        assets: [channelFile, installerName].map((name) => ({
+          name,
+          url: new URL(encodeURIComponent(name), baseUrl).href,
+          size: 1024,
+        })),
+      },
+    ],
+  };
+  const raw = manifestYamlForTag(tag, installerName);
+  return vi.fn((input: unknown) => {
+    const url = new URL(String(input));
+    if (url.pathname === "/desktop/stable/index.json") {
+      return Promise.resolve(
+        new Response(JSON.stringify(index), { status: 200 }),
+      );
+    }
+    if (
+      url.pathname === `/desktop/${encodeURIComponent(version)}/${channelFile}`
+    ) {
+      lastChannelManifest = { raw, url: url.href, channelFile };
+      return Promise.resolve(new Response(raw, { status: 200 }));
+    }
+    return Promise.resolve(new Response("Not Found", { status: 404 }));
+  });
+}
+
+function fakeUpdateCheckResult(): UpdateCheckResult {
+  const channelFile = lastChannelManifest?.channelFile ?? platformChannelFile();
+  const raw =
+    lastChannelManifest?.raw ??
+    manifestYamlForTag("desktop-v1.0.0", "Traycer-1.0.0-mac.zip");
+  const url = lastChannelManifest?.url ?? `https://example.test/${channelFile}`;
+  const updateInfo = parseUpdateInfo(raw, channelFile, new URL(url));
+  return { isUpdateAvailable: true, updateInfo, versionInfo: updateInfo };
+}
+
+function fakeUpdateNotAvailableResult(): UpdateCheckResult {
+  const result = fakeUpdateCheckResult();
+  return { ...result, isUpdateAvailable: false };
 }
 
 // A GitHub release payload carrying a Linux channel manifest + AppImage under
@@ -4552,6 +4892,15 @@ function linuxReleaseFixture(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object";
+}
+
+function expectPublicFeedUrl(autoUpdater: FakeAutoUpdater, url: string): void {
+  const feed = autoUpdater.setFeedURL.mock.calls.at(-1)?.[0];
+  expect(feed).toMatchObject({
+    provider: "custom",
+    updateProvider: expect.any(Function),
+    origin: { url },
+  });
 }
 
 async function flushPromises(): Promise<void> {

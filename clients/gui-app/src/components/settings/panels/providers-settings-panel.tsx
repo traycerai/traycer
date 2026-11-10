@@ -42,7 +42,6 @@ import {
 } from "@/lib/providers/provider-settings-unreadable-error";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ProviderList } from "@/components/providers/provider-list";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { useProvidersSetEnabled } from "@/hooks/providers/use-providers-set-enabled-mutation";
@@ -72,6 +71,7 @@ import {
 import { LocalRowNote } from "@/components/settings/environment/local-row-note";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import { providerRailStateWord } from "./provider-rail-state-word";
+
 import type { HostRpcRegistry } from "@/lib/host";
 import { HostRuntimeContext } from "@/lib/host/runtime";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
@@ -117,6 +117,7 @@ import {
   type ProviderRailView,
 } from "./provider-rail-filter";
 import { TerminalAgentArgsSection } from "./terminal-agent-args-section";
+import { ProviderNativeMemoryGroup } from "./provider-native-memory-group";
 import { ProviderNativeSubagentsGroup } from "./provider-native-subagents-group";
 import { ClaudeSessionNameGroup } from "./claude-session-name-group";
 import { ProviderAutoJudgeSection } from "./provider-auto-judge-section";
@@ -124,6 +125,7 @@ import { ProviderEnvOverridesSection } from "./provider-env-overrides-section";
 import { ProviderSectionSelect } from "./provider-section-select";
 import { ProviderCliCandidatesSection } from "./provider-cli-candidates-section";
 import {
+  providerKeyTab,
   providerTabInputs,
   supportedTabsFor as resolveSupportedTabs,
   tabsForView,
@@ -188,7 +190,12 @@ function initialActiveProviderId(
   return providers[0].providerId;
 }
 
-/** The tabs `state` shows on the page `view` draws. */
+/**
+ * The tabs `state` shows on the page `view` draws.
+ *
+ * The key has one place: Account, whenever this provider takes a key.
+ * Profiles & Limits stays the profiles and usage tab and does not take the key.
+ */
 function viewTabs(
   state: ProviderCliState,
   permissionsTab: boolean,
@@ -275,12 +282,11 @@ function initialActiveTab(
     providers.find((p) => p.providerId === providerId) ?? providers[0];
   const tabs = viewTabs(state, permissionsTab, view);
   // `focusTab` is a plain `string` in the store, so a deep link CAN name the
-  // client-only `account` tab even though it is absent from the wire enum -
-  // the match below is against the resolved tab list, not the schema. When no
-  // focusTab is set (including the "Add API key" CTA that only sets
-  // `focusHarnessId`), `tabs[0]` is the first supported tab — account when the
-  // provider takes a key, usage when it has profiles/limits, otherwise the
-  // next supported tab in display order.
+  // client-only `account` tab even though it is absent from the wire enum.
+  // The match is against `viewTabs`, which drops `account` when `usage` is
+  // also present — the key then lives at the top of Profiles & Limits, and
+  // a preferred `account` resolves to that tab. Amp keeps `account`. When no
+  // focusTab is set, `tabs[0]` is that first displayed tab.
   const focusTab = useProvidersFocusStore.getState().focusTab;
   if (focusTab !== null) {
     const match = tabs.find((tab) => tab === focusTab);
@@ -585,10 +591,15 @@ function ProvidersSettingsPanelInner({
       // host's. Gating on `ready` alone would hide the control in the ordinary
       // no-explicit-pick case.
       //
-      // Status only: settings live in the body, as rows in the tab they
-      // belong to (the Model list timeout is in each provider's CLI & Args).
+      // The Secrets link does not read a host, so it stays up on every scope.
+      // The status DOES belong here and only on a usable scope: it reports a
+      // max over every provider and refreshes all of them. Settings live in
+      // the body (the Model list timeout is in each provider's CLI & Args).
       headerAction={
-        isHostScopeUsable(scope.status) ? <ProvidersGlobalStatus /> : undefined
+        <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
+          <OpenSecretsLink />
+          {isHostScopeUsable(scope.status) ? <ProvidersGlobalStatus /> : null}
+        </div>
       }
     >
       <HostScopeGate
@@ -618,6 +629,22 @@ function ProvidersSettingsPanelInner({
  * `useHostClient()`, so on `connecting` / `unreachable` / `vanished` they would
  * resolve the ambient host instead of the one the page names.
  */
+function OpenSecretsLink(): ReactNode {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      className="h-auto min-w-0 max-w-full shrink whitespace-normal"
+      onClick={() => {
+        navigateToSettingsSection("secrets");
+      }}
+    >
+      Open Secrets
+    </Button>
+  );
+}
+
 function ProvidersGlobalStatus(): ReactNode {
   // SUBSCRIBED, like the body's instance. `subscribed: false` was avoiding a
   // duplicate that does not exist - two observers of one key share a fetch -
@@ -1101,7 +1128,6 @@ function ProvidersRailLayout({
     () => filterProviderRail(orderedProviders, railView),
     [orderedProviders, railView],
   );
-
   const onSelectProvider = (providerId: ProviderId): void => {
     setInitialFocus({ harnessId: null, profileId: null, startSignIn: false });
     setActiveId(providerId);
@@ -1118,20 +1144,16 @@ function ProvidersRailLayout({
     // viewport: on shorter screens it shrinks to fit the modal instead of
     // overflowing it. Below `md` the card is content-sized and the settings
     // surface scrolls, so there is no height to fill and none is claimed.
-    // Below md the rail column collapses into a full-width provider select
-    // stacked above the detail pane. The select lists `orderedProviders`, not
-    // the rail's filtered `visibleProviders` - the rail's search/filter is a
-    // pointer affordance that goes with it, so it must never narrow what a
-    // phone can reach.
+    // Below md the rail collapses into one full-width select of every
+    // provider. It lists `orderedProviders`, not the rail's filtered
+    // `visibleProviders` — search is a pointer affordance and must never
+    // narrow what a phone can reach. The detail pane stays the desktop one.
     <SettingsMasterDetail
       railLabel="Providers"
       mobileSelect={
         <SettingsMasterSelect
           label="Provider"
           value={active.providerId}
-          // The same `HarnessIcon` the rail draws through `ProviderList`, so
-          // the two presentations of the provider list mark a provider the
-          // same way.
           options={orderedProviders.map((provider) => ({
             value: provider.providerId,
             label: PROVIDER_DISPLAY_NAMES[provider.providerId],
@@ -1162,23 +1184,10 @@ function ProvidersRailLayout({
                 No providers match.
               </p>
             ) : (
-              <ProviderList
-                ariaLabel="Providers"
-                variant="settings"
-                className="gap-1"
-                phone={false}
-                rows={visibleProviders.map((state) => ({
-                  providerId: state.providerId,
-                  active: state.providerId === active.providerId,
-                  dimmed: false,
-                  enabled: state.enabled,
-                  badge: null,
-                  description: null,
-                  trailing: <ProviderRailStateWord state={state} />,
-                  disabledReason: null,
-                  phoneDescription: null,
-                  onSelect: onSelectProvider,
-                }))}
+              <HostProviderRailList
+                providers={visibleProviders}
+                activeId={active.providerId}
+                onSelect={onSelectProvider}
               />
             )}
           </div>
@@ -1204,14 +1213,66 @@ function ProvidersRailLayout({
   );
 }
 
-/** The rail row's one word of state, where the row has one. */
-function ProviderRailStateWord(props: {
-  readonly state: ProviderCliState;
+/** The rail's one word from `providerRailStateWord`. */
+function hostRailSubtitle(state: ProviderCliState): string | null {
+  return providerRailStateWord(state);
+}
+
+function HostProviderRailList(props: {
+  readonly providers: readonly ProviderCliState[];
+  readonly activeId: ProviderId;
+  readonly onSelect: (providerId: ProviderId) => void;
 }): ReactNode {
-  const word = providerRailStateWord(props.state);
-  if (word === null) return null;
   return (
-    <span className="shrink-0 text-ui-xs text-muted-foreground">{word}</span>
+    <div className="flex min-w-0 flex-col gap-1">
+      {props.providers.map((state) => (
+        <HostProviderRailButton
+          key={state.providerId}
+          state={state}
+          selected={state.providerId === props.activeId}
+          onSelect={props.onSelect}
+        />
+      ))}
+    </div>
+  );
+}
+
+function HostProviderRailButton(props: {
+  readonly state: ProviderCliState;
+  readonly selected: boolean;
+  readonly onSelect: (providerId: ProviderId) => void;
+}): ReactNode {
+  const name = PROVIDER_DISPLAY_NAMES[props.state.providerId];
+  const subtitle = hostRailSubtitle(props.state);
+  return (
+    <button
+      type="button"
+      aria-current={props.selected ? "true" : undefined}
+      onClick={() => props.onSelect(props.state.providerId)}
+      className={hostRailButtonClass(props.selected)}
+    >
+      <span className="flex min-w-0 items-start gap-2">
+        <HarnessIcon
+          harnessId={providerIdToGuiHarnessId(props.state.providerId)}
+          className="mt-0.5"
+        />
+        <span className="min-w-0 whitespace-normal break-words">{name}</span>
+      </span>
+      {subtitle === null ? null : (
+        <span className="min-w-0 whitespace-normal break-words pl-6 text-ui-xs text-muted-foreground">
+          {subtitle}
+        </span>
+      )}
+    </button>
+  );
+}
+
+function hostRailButtonClass(selected: boolean): string {
+  return cn(
+    "flex h-auto w-full min-w-0 flex-col items-start gap-0.5 rounded-md px-2.5 py-2 text-left text-ui-sm whitespace-normal break-words transition-colors focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ring",
+    selected
+      ? "bg-accent text-accent-foreground"
+      : "text-foreground/70 hover:bg-accent/60 hover:text-accent-foreground",
   );
 }
 
@@ -1340,6 +1401,17 @@ function ProviderEnablementControl(props: {
       />
     </div>
   );
+}
+
+/**
+ * The move note above a provider's tabs. Providers omits it: the enclosing
+ * environment already determines reach, and these settings move with the
+ * host. MCP and Skills keep the note.
+ */
+function LocalRowNoteForView(): ReactNode {
+  const view = useContext(ProvidersPanelViewContext);
+  if (view === "providers") return null;
+  return <LocalRowNote />;
 }
 
 function ProviderDetail({
@@ -1548,15 +1620,13 @@ function ProviderDetail({
         }
       />
       <div className="flex flex-1 flex-col md:min-h-0">
-        {/* Nothing renders between the provider header and the tab rail but
-            the Local row's note, which says whose settings these are. The
-            API-key card used to sit here, above the bar, so a provider's only
-            real setting appeared outside the tabs that were supposed to hold
-            its settings; it is now the whole body of the `account` tab. That
-            matters more now that the rail is PINNED: anything parked here would
-            occupy fixed height at the top of the pane forever, not just until
-            you scrolled past it. */}
-        <LocalRowNote />
+        {/* Nothing renders between the provider header and the tab rail on
+            Providers. MCP and Skills keep the Local row's move note. The
+            key is the first block of Profiles & Limits when that tab exists,
+            and the whole body of Account when that is the only key home.
+            The rail is PINNED: a block parked here would occupy fixed height
+            at the top of the pane forever, not just until you scrolled. */}
+        <LocalRowNoteForView />
         <Tabs
           value={activeTab}
           onValueChange={(value) => {
@@ -1574,13 +1644,11 @@ function ProviderDetail({
               rather than left for the pointer-events-none pane to explain on
               its own - the inert styling alone gave no reason at all. Usage
               stays off this gate the same way it stays off the inert styling
-              below: it is deliberately still usable while the provider is
-              off, so a reader on it is not told to turn the provider on. */}
+              below: its profile controls are deliberately still usable while
+              the provider is off, so the tab names no reason of its own. Its
+              key is the one inert part, and says why inside its own section. */}
           {detailPaneInert && activeTab !== "usage" ? (
-            <p className="px-0 pb-2 text-ui-xs text-muted-foreground">
-              {PROVIDER_DISPLAY_NAMES[providerId]} is off. Turn it on to add a
-              key or change its settings.
-            </p>
+            <ProviderOffHint providerId={providerId} />
           ) : null}
           {/* Two presentations of ONE selection, off the same `tabs` list and
               the same labels. The pointer-width rail is the line bar; below
@@ -1768,13 +1836,16 @@ function AccountManagedCredentialsLine(): ReactNode {
   );
 }
 
-/** The Env tab: a provider with a key sends its own key variable to Account. */
+/** The Env tab: a provider with a key sends its own key variable to that key's tab. */
 function ProviderEnvTab(props: {
   readonly state: ProviderCliState;
   readonly onActiveTabChange: (tab: ProviderTabKey) => void;
 }): ReactNode {
   const { state, onActiveTabChange } = props;
   const configurationKey = useConfigurationKey();
+  const keyTab = providerKeyTab({
+    apiKeySupported: state.apiKey.supported,
+  });
   return (
     <ProviderEnvOverridesSection
       // Keyed by configuration and provider: a row's draft stays with the
@@ -1783,11 +1854,40 @@ function ProviderEnvTab(props: {
       providerId={state.providerId}
       overrides={state.envOverrides}
       envOverrideScope={state.nativeCapabilities.envOverrideScope}
-      onOpenAccount={
-        state.apiKey.supported ? () => onActiveTabChange("account") : null
+      keyHome={
+        keyTab === null
+          ? null
+          : {
+              label: keyTab.label,
+              open: () => onActiveTabChange(keyTab.tab),
+            }
       }
     />
   );
+}
+
+/** The reason a dimmed, inert pane gives: the provider is off. */
+function ProviderOffHint(props: {
+  readonly providerId: ProviderId;
+}): ReactNode {
+  return (
+    <p className="px-0 pb-2 text-ui-xs text-muted-foreground">
+      {PROVIDER_DISPLAY_NAMES[props.providerId]} is off. Turn it on to add a key
+      or change its settings.
+    </p>
+  );
+}
+
+/**
+ * Where a sandbox says credentials live, on a provider that has no Account
+ * tab to say it. A provider with a key says it on Account. Any other host
+ * renders nothing.
+ */
+function ProviderUsageCredentialsNote(props: {
+  readonly state: ProviderCliState;
+}): ReactNode {
+  if (props.state.apiKey.supported) return null;
+  return <CredentialsManagedInAccountOr>{null}</CredentialsManagedInAccountOr>;
 }
 
 function ProviderTabBody({
@@ -1828,6 +1928,8 @@ function ProviderTabBody({
               flip while the host's read-back is in flight, and that echo
               belongs to one provider. */}
           <ProviderNativeSubagentsGroup key={state.providerId} state={state} />
+          {/* Keyed by provider for the same reason. */}
+          <ProviderNativeMemoryGroup key={state.providerId} state={state} />
           <ClaudeSessionNameGroup
             providerId={state.providerId}
             hostId={hostId}
@@ -1847,15 +1949,8 @@ function ProviderTabBody({
       return (
         <ProviderEnvTab state={state} onActiveTabChange={onActiveTabChange} />
       );
-    // The key IS the account for these providers, so it owns a tab rather than
-    // floating above the tab bar as its own pre-tab region. `supportedTabsFor`
-    // shows this tab exactly when `apiKey.supported`, so the section's own
-    // `if (!supported) return null` guard is unreachable from here - kept
-    // there because the section is not otherwise gated at its call site.
-    //
-    // The draft is threaded in because this body is UNMOUNTED whenever another
-    // tab is active (Radix `TabsContent`), which the section used to survive by
-    // sitting outside the tab bar entirely.
+    // Account is the key's place. The draft is threaded in because this
+    // body unmounts with the tab (Radix `TabsContent`).
     case "account":
       return (
         <CredentialsManagedInAccountOr>
@@ -1869,7 +1964,7 @@ function ProviderTabBody({
     case "usage":
       return (
         <div className="flex flex-col gap-3">
-          <CredentialsManagedInAccountOr>{null}</CredentialsManagedInAccountOr>
+          <ProviderUsageCredentialsNote state={state} />
           <ProviderProfileScopedSection
             state={state}
             {...profileTab}

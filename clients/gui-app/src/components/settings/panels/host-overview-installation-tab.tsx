@@ -1,10 +1,13 @@
 import type { ReactNode } from "react";
+import { SandboxInstallationGroup } from "@/components/hosts/sandbox-card";
 import { HostDangerZone } from "@/components/settings/host-scope/host-danger-zone";
 import { HostScopeConnecting } from "@/components/settings/host-scope/host-scope-gate";
+import type { HostScopeSandbox } from "@/components/settings/host-scope/host-scope-model";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import { HostOverviewAboutThisHost } from "@/components/settings/panels/host-overview-about-this-host";
 import type { HostOverviewAboutSource } from "@/components/settings/panels/host-overview-installation-model";
 import type { OverviewDegradeReason } from "@/components/settings/panels/host-overview-model";
+import { HOST_OVERVIEW } from "@/components/settings/panels/host-overview.definitions";
 import {
   OsServiceSection,
   type OsServiceSectionProps,
@@ -16,12 +19,11 @@ import {
   type InstallationDetailsRecord,
 } from "@/components/settings/panels/host-settings-installation-details";
 import { LocalPackageManagerUpgradeHint } from "@/components/settings/panels/host-settings-package-manager-upgrade-hint";
+import { SettingsGroup } from "@/components/settings/settings-group";
 
 /**
- * Overview ▸ Installation: what the account knows about this host, how it is
- * installed and started, and removing it - About this host, the install
- * record, the OS service, this computer's command-line tools hint, and the
- * Danger zone, last.
+ * Overview ▸ Installation: sandbox facts when this host is one, what the
+ * account knows, how it is installed and started, and removing it.
  */
 export interface HostOverviewInstallationTabProps {
   /** Whether the scope can reach the host; the record and service need it. */
@@ -29,15 +31,14 @@ export interface HostOverviewInstallationTabProps {
   readonly hostName: string;
   /**
    * The account's record of this host, or `null` for a host the account has
-   * no record of (reachable, but not in the account), which gets no About
-   * this host group - as it gets no Danger zone.
+   * no record of, which gets no About group.
    */
   readonly about: HostOverviewAboutSource | null;
   /** `host.getInstallationInfo` support, or why it is missing. */
   readonly installInfoDegrade: OverviewDegradeReason | null;
   readonly record: InstallationDetailsRecord | null;
   readonly recordLoading: boolean;
-  /** The record read itself failed - which is NOT the same as "no record". */
+  /** The record read itself failed. That is not the same as no record. */
   readonly recordReadFailed: boolean;
   /**
    * The host is connecting, or restarting to finish an update: an answer is
@@ -46,18 +47,17 @@ export interface HostOverviewInstallationTabProps {
   readonly connecting: boolean;
   /**
    * The OS service section, already resolved by the page's adapter, or `null`
-   * to withhold it - as it is while the host cannot be reached.
+   * to withhold it while the host cannot be reached.
    */
   readonly service: OsServiceSectionProps | null;
   /**
    * This computer's package-manager hint. Local machine with a CLI bridge
-   * only, by the nature of the fact rather than a scope rule: the hint is
-   * Desktop's launch-time comparison of ITS bundled CLI against THIS machine's
-   * package-manager CLI, recorded in Desktop-local reconcile state the bridge
-   * alone can read. There is no remote equivalent to render. The tab's dot
-   * (`LocalPackageManagerUpgradeDot`) takes the same gate from the panel.
+   * only: the hint is Desktop's launch-time comparison of its bundled CLI
+   * against this machine's package-manager CLI.
    */
   readonly showPackageManagerHint: boolean;
+  /** The scoped sandbox, or null for a computer. Facts only; no grants or ledger. */
+  readonly sandbox: HostScopeSandbox | null;
   readonly scope: HostScope;
 }
 
@@ -66,34 +66,34 @@ export function HostOverviewInstallationTab(
 ): ReactNode {
   return (
     <HostOverviewTabSections>
-      {/* The account's facts first. Not a host read, so it stands whether or
-          not the host answers - the state someone most often comes here in. */}
+      {props.sandbox === null ? null : (
+        <SettingsGroup
+          group={HOST_OVERVIEW.definitions.sandboxFacts}
+          showTitle
+          tone="default"
+          dataTestId="host-overview-sandbox-facts"
+          fill={false}
+        >
+          <div className="flex min-w-0 flex-col gap-3 px-5 py-4">
+            <SandboxInstallationGroup sandbox={props.sandbox} />
+          </div>
+        </SettingsGroup>
+      )}
       {props.about === null ? null : (
         <HostOverviewAboutThisHost {...props.about} />
       )}
       <HostOverviewInstallationHostGroups {...props} />
-      {/* A bridge fact about THIS computer's CLI, not a host read, so it
-          stays while the host is down. */}
       {props.showPackageManagerHint ? <LocalPackageManagerUpgradeHint /> : null}
-      {/* No list of the OTHER hosts, and no "Add host": a page about one host
-          is the wrong place to manage the collection it belongs to. The
-          sidebar switcher owns both.
-
-          Not gated from out here: the zone's rows sit on different capability
-          planes (the local CLI bridge, an account write) and it gates each of
-          them itself. A gate around them took the recovery actions away in the
-          states that need them. */}
       <HostDangerZone scope={props.scope} />
     </HostOverviewTabSections>
   );
 }
 
 /**
- * The two groups read FROM the host - the install record and the OS service.
- * While it connects or restarts they are the loading shape; when it cannot be
- * reached, one line says both need a connection, rather than two empty titled
- * cards or a second "can't reach" notice under the header's. A version that
- * answers neither is one line too, saying what an update brings back.
+ * The two groups read from the host: the install record and the OS service.
+ * While it connects they are the loading shape. When it cannot be reached,
+ * one line says both need a connection. A version that answers neither is
+ * one line saying what an update brings back.
  */
 function HostOverviewInstallationHostGroups(
   props: HostOverviewInstallationTabProps,

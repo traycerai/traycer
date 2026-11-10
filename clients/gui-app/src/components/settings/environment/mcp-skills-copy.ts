@@ -253,17 +253,10 @@ export function serverSwitchFailed(server: string, enabled: boolean): string {
   return `Couldn't turn ${server} ${enabled ? "on" : "off"}. Try again.`;
 }
 
-export function mcpPageSubtitle(personal: boolean, name: string): string {
-  return personal
-    ? "Tools agents can call. Personal's servers reach every provider on every computer and sandbox running Personal."
-    : `Tools agents can call. ${name}'s servers reach every provider on every host running ${name}.`;
-}
+export const MCP_PAGE_DESCRIPTION = "Tools agents can call.";
 
-export function skillsPageSubtitle(personal: boolean, name: string): string {
-  return personal
-    ? "Instructions agents follow for a kind of task. Personal's skills reach every provider on every computer and sandbox running Personal."
-    : `Instructions agents follow for a kind of task. ${name}'s skills reach every provider on every host running ${name}.`;
-}
+export const SKILLS_PAGE_DESCRIPTION =
+  "Instructions agents follow for a kind of task.";
 
 /** Said once above a list that holds a built-in skill, never per row. */
 export const BUILT_IN_SKILL_LINE =
@@ -298,10 +291,8 @@ export function skillsReadFailed(name: string): string {
   return `Couldn't read ${name}'s skills.`;
 }
 
-export function addServerReach(personal: boolean, name: string): string {
-  return personal
-    ? "It reaches every provider on every computer and sandbox running Personal."
-    : `It reaches every provider on every host running ${name}.`;
+export function addServerReach(): string {
+  return "It reaches every provider on every host running this environment.";
 }
 
 /** The Secret option's line: Pick needs `put@1.1`; a 1.0 host takes Add only. */

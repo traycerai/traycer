@@ -161,7 +161,7 @@ export function GithubMentionFilterPopover(
         layout="bare"
         align="end"
         side="bottom"
-        className="w-[min(90vw,14rem)]"
+        className="w-[min(90vw,14rem)] overflow-hidden"
         onOpenAutoFocus={undefined}
         onInteractOutside={(event) => {
           // An outside interaction moves focus where the user POINTED, and
@@ -221,34 +221,40 @@ export function GithubMentionFilterPopover(
           <IssueGroups filter={filter} onApply={applyKeepingHiddenSelection} />
         )}
         {chrome.repositories.length > 1 ? (
-          <FilterGroup
-            label="Repository"
-            value={
-              filter.repository === null
-                ? ALL_REPOSITORIES_VALUE
-                : repositoryKey(filter.repository)
-            }
-            options={[
-              { value: ALL_REPOSITORIES_VALUE, label: "All repositories" },
-              ...chrome.repositories.map((repository) => ({
-                value: repositoryKey(repository),
-                label: repositoryLabel(repository, chrome.repositories),
-              })),
-            ]}
-            onSelect={(value) => {
-              // Resolved back to the repository OBJECT by key rather than
-              // reconstructed from the label: two repos in scope can share a
-              // `repo` name across owners, and only the full key tells them
-              // apart.
-              const repository =
-                chrome.repositories.find(
-                  (candidate) => repositoryKey(candidate) === value,
-                ) ?? null;
-              apply(
-                withGithubMentionRepository(chrome.section, filter, repository),
-              );
-            }}
-          />
+          <div className="min-h-0 overflow-y-auto">
+            <FilterGroup
+              label="Repository"
+              value={
+                filter.repository === null
+                  ? ALL_REPOSITORIES_VALUE
+                  : repositoryKey(filter.repository)
+              }
+              options={[
+                { value: ALL_REPOSITORIES_VALUE, label: "All repositories" },
+                ...chrome.repositories.map((repository) => ({
+                  value: repositoryKey(repository),
+                  label: repositoryLabel(repository, chrome.repositories),
+                })),
+              ]}
+              onSelect={(value) => {
+                // Resolved back to the repository OBJECT by key rather than
+                // reconstructed from the label: two repos in scope can share a
+                // `repo` name across owners, and only the full key tells them
+                // apart.
+                const repository =
+                  chrome.repositories.find(
+                    (candidate) => repositoryKey(candidate) === value,
+                  ) ?? null;
+                apply(
+                  withGithubMentionRepository(
+                    chrome.section,
+                    filter,
+                    repository,
+                  ),
+                );
+              }}
+            />
+          </div>
         ) : null}
       </PopoverContent>
     </Popover>
@@ -418,7 +424,7 @@ function FilterGroup(props: {
   readonly onSelect: (value: string) => void;
 }): ReactNode {
   return (
-    <div className="border-b border-border/60 px-3 py-2 last:border-b-0">
+    <div className="shrink-0 border-b border-border/60 px-3 py-2 last:border-b-0">
       <div className="mb-1 text-overline font-medium uppercase text-muted-foreground/70">
         {props.label}
       </div>

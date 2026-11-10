@@ -1,3 +1,4 @@
+import type { SandboxCatalogueReadinessRequest } from "@traycer/protocol/host/sandbox-control";
 import type { WindowCaptureRect } from "../ipc-contracts/window-capture-types";
 import type { SandboxArtifactBridge } from "@traycer-clients/shared/platform/sandbox-artifacts";
 import type { NotificationFeedOccurrence } from "@traycer-clients/shared/notifications/feed-delivery";
@@ -176,7 +177,11 @@ import type {
   SlackAppReadResult,
   SlackAppWriteResult,
 } from "@traycer-clients/shared/host-client/slack-app";
-import type { SlackAppRegisterRequest } from "@traycer/protocol/host/slack-app";
+import type {
+  SlackAppDmsRequest,
+  SlackAppRegisterRequest,
+} from "@traycer/protocol/host/slack-app";
+import type { TeamHostInstallTokenResult } from "@traycer-clients/shared/host-client/team-host";
 import type { ExecutableWriteGrantFetchResult } from "@traycer-clients/shared/host-client/executable-write-grant";
 import type {
   SandboxAutomationOpenTarget,
@@ -253,6 +258,7 @@ export interface DesktopPreloadBridge {
   getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult>;
   getSandboxCatalogue(
     bearerToken: string,
+    context: SandboxCatalogueReadinessRequest | null,
   ): Promise<SandboxCatalogueFetchResult>;
   getTraycerModels(bearerToken: string): Promise<TraycerModelsFetchResult>;
   getVoiceAvailability(
@@ -318,6 +324,14 @@ export interface DesktopPreloadBridge {
     bearerToken: string,
     botId: string,
   ): Promise<SlackAppWriteResult>;
+  setSlackAppDms(
+    bearerToken: string,
+    request: SlackAppDmsRequest,
+  ): Promise<SlackAppWriteResult>;
+  mintTeamHostInstallToken(
+    bearerToken: string,
+    environmentId: string,
+  ): Promise<TeamHostInstallTokenResult>;
   getSandboxGrants(
     bearerToken: string,
     environmentId: string | null,
@@ -1285,8 +1299,9 @@ export class DesktopRunnerHost implements IRunnerHost {
 
   getSandboxCatalogue(
     bearerToken: string,
+    context: SandboxCatalogueReadinessRequest | null,
   ): Promise<SandboxCatalogueFetchResult> {
-    return this.bridge.getSandboxCatalogue(bearerToken);
+    return this.bridge.getSandboxCatalogue(bearerToken, context);
   }
 
   getVoiceAvailability(
@@ -1414,6 +1429,20 @@ export class DesktopRunnerHost implements IRunnerHost {
     botId: string,
   ): Promise<SlackAppWriteResult> {
     return this.bridge.disconnectSlackApp(bearerToken, botId);
+  }
+
+  setSlackAppDms(
+    bearerToken: string,
+    request: SlackAppDmsRequest,
+  ): Promise<SlackAppWriteResult> {
+    return this.bridge.setSlackAppDms(bearerToken, request);
+  }
+
+  mintTeamHostInstallToken(
+    bearerToken: string,
+    environmentId: string,
+  ): Promise<TeamHostInstallTokenResult> {
+    return this.bridge.mintTeamHostInstallToken(bearerToken, environmentId);
   }
 
   getSandboxGrants(

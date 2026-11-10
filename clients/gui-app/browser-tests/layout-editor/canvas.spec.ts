@@ -370,6 +370,8 @@ test.describe("the canvas at the top placement", () => {
 
   test("a real right-click on the mic at rest opens the quick-verb menu, though its named element has no box", async () => {
     const page = getPage();
+    // The named microphone menu requires Voice input to be enabled.
+    await probe(page, "setVoiceInputEnabled(true)");
     const names = await probeValue<Readonly<Partial<Record<string, string>>>>(
       page,
       "names",
@@ -787,9 +789,10 @@ test.describe("the canvas at the top placement", () => {
 
 /**
  * The regions the sample scene draws, in the order the assertions walk them.
- * The three it does not draw (`homeTab`, `usageLimits`, `resourceMonitor`,
- * plus `railArtifacts` inside Agents' group icon) are shell chrome the app
- * column draws outside the sample tab, which this fixture has no host for.
+ * The three it does not draw (`homeTab`, `usageLimits`, `resourceMonitor`)
+ * are shell chrome the app column draws outside the sample tab, which this
+ * fixture has no host for. `railArtifacts` and `railPullRequests` are inside
+ * their stacks' group icons, and `railFileTree` is off in the shipped layout.
  * `railSimulators` is out for a rule of its own: the panel draws where a
  * machine can run a simulator or the task holds one, and the sample task holds
  * none on a machine that runs none, so the rail draws no icon for it.
@@ -803,8 +806,6 @@ const CANVAS_REGIONS = [
   "railTerminals",
   "railBrowsers",
   "railGitDiff",
-  "railPullRequests",
-  "railFileTree",
   "railSharing",
   "railComments",
   "minimap",
@@ -983,9 +984,10 @@ const DROP_OVERSHOOT = 18;
  * Files joined the rail, and the measured geometry the overshoot is tuned on
  * is unchanged.
  *
- * `stack:railAgents+railArtifacts` is the shipped rail's one stack LINK
- * (L-166), named after the PAIR it joins. It is a member of the order like any
- * other entry, so it is named here; the rail draws the pair as one icon (G3).
+ * `stack:railAgents+railArtifacts` and `stack:railGitDiff+railPullRequests`
+ * are the shipped rail's stack LINKS (L-166), each named after the PAIR it
+ * joins. A link is a member of the order like any other entry, so they are
+ * named here; the rail draws each pair as one icon (G3).
  */
 const TERMINALS_ABOVE_THE_DIVIDER = [
   "railAgents",
@@ -996,6 +998,7 @@ const TERMINALS_ABOVE_THE_DIVIDER = [
   "railBrowsers",
   "railSimulators",
   "railGitDiff",
+  "stack:railGitDiff+railPullRequests",
   "railPullRequests",
   "railFileTree",
   "railSharing",
