@@ -1,7 +1,15 @@
 /**
  * The Memory act's saves: what Continue writes, the order, a failed write and a queued one. The faked host and the helpers are in `onboarding-memory-act-fixture.tsx`.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest";
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import {
   ENVIRONMENT_ID,
@@ -26,6 +34,7 @@ import {
   currentStepId,
   defaultProviders,
   expectOnStep,
+  leaveTour,
   invalidateAllQueries,
   hostCalls,
   isOn,
@@ -37,6 +46,8 @@ import {
   switchOf,
   world,
 } from "@/components/onboarding/__tests__/onboarding-memory-act-fixture";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 
 vi.mock("@/components/auth/cinematic-backdrop", () => ({
@@ -866,5 +877,71 @@ describe("the Memory act: its own provider writes outrank the list read", () => 
     await screen.findByTestId("onboarding-memory-save-report");
     for (const id of ["claude-code", "codex"])
       expect((await providerSwitch(id)).hasAttribute("disabled")).toBe(false);
+  });
+});
+
+describe("the Memory act: a save that outlives the tour", () => {
+  // With no session import, Memory is the last act, so a save that lands is
+  // the one that would finish the tour.
+  let tracked: MockInstance<Analytics["track"]>;
+  const completions = (): number =>
+    tracked.mock.calls.filter(
+      ([event]) => event === AnalyticsEvent.OnboardingCompleted,
+    ).length;
+
+  beforeEach(() => {
+    world.sessionImport = false;
+    navigateMock.mockClear();
+    useFirstTaskGuideStore.setState({ status: "inactive" });
+    tracked = vi.spyOn(Analytics.getInstance(), "track");
+  });
+  afterEach(() => {
+    tracked.mockRestore();
+  });
+
+  async function continueWithSaveHeld(): Promise<void> {
+    world.setGate = deferred();
+    await openMemoryAct();
+    await chooseTraycer();
+    await providerSwitch("codex");
+    await continueFromMemory();
+    await waitFor(() =>
+      expect(paramsOf("config.agentMemories.set")).toHaveLength(1),
+    );
+  }
+
+  it("does not finish the tour a second time when it was skipped while the save ran", async () => {
+    await continueWithSaveHeld();
+    fireEvent.click(screen.getByTestId("onboarding-skip"));
+    expect(navigateMock).toHaveBeenCalledTimes(1);
+    expect(useFirstTaskGuideStore.getState().status).toBe("finished");
+
+    act(() => world.setGate?.resolve());
+    await writesAnswered();
+
+    expect(navigateMock).toHaveBeenCalledTimes(1);
+    expect(useFirstTaskGuideStore.getState().status).toBe("finished");
+    expect(completions()).toBe(0);
+  });
+
+  it("finishes nothing when the page was left while the save ran", async () => {
+    await continueWithSaveHeld();
+    leaveTour();
+
+    act(() => world.setGate?.resolve());
+    await writesAnswered();
+
+    expect(navigateMock).not.toHaveBeenCalled();
+    expect(useFirstTaskGuideStore.getState().status).toBe("inactive");
+    expect(completions()).toBe(0);
+  });
+
+  it("still finishes the tour when nothing was left", async () => {
+    await continueWithSaveHeld();
+    act(() => world.setGate?.resolve());
+
+    await waitFor(() => expect(navigateMock).toHaveBeenCalledTimes(1));
+    expect(useFirstTaskGuideStore.getState().status).toBe("active");
+    expect(completions()).toBe(1);
   });
 });

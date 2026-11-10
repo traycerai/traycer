@@ -45,9 +45,9 @@ import {
   type ProviderSpec,
 } from "@/components/onboarding/__tests__/onboarding-memory-act-provider-state";
 import { DirectoryProbe } from "@/components/onboarding/__tests__/onboarding-memory-act-directory-probe";
+import { TourSlot } from "@/components/onboarding/__tests__/onboarding-memory-act-tour-slot";
 import { SettingsPanelSlot } from "@/components/onboarding/__tests__/onboarding-memory-act-settings-panel";
 import { RequestContext } from "@/components/onboarding/__tests__/onboarding-memory-act-request-context";
-import { OnboardingPage } from "@/components/onboarding/onboarding-page";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   HostRuntimeProvider,
@@ -592,9 +592,24 @@ export async function clickAdvance(): Promise<void> {
   fireEvent.click(await screen.findByTestId("onboarding-advance"));
 }
 
+const tourSlot: { leave: (() => void) | null } = { leave: null };
+
+/** The tour unmounts, as when the route changes; the host provider stays. */
+export function leaveTour(): void {
+  const leave = tourSlot.leave;
+  if (leave === null) throw new Error("no tour is mounted");
+  act(leave);
+}
+
 /** The tour past its welcome, on the first act. */
 export async function enterTour(): Promise<void> {
-  renderInHost(<OnboardingPage />);
+  renderInHost(
+    <TourSlot
+      onMount={(leave) => {
+        tourSlot.leave = leave;
+      }}
+    />,
+  );
   const skipWelcome = await screen.findByTestId("onboarding-welcome-skip");
   // The hand-off is a pair of timeouts; only those run on the fake clock.
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
