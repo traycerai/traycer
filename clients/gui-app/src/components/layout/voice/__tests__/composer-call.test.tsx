@@ -1,11 +1,15 @@
 /**
  * Call Tracy from a bot's message box, through the REAL `BotMessageComposer`:
- * the send mutation and the tab's host client are the only stand-ins. The
+ * the send mutation and host reads are the stand-ins. The
  * driver is the controller's seam; its `start` takes the store transition the
  * controller takes (`sessionConnecting`), so a click reaches the bar the way a
  * call placed from the box does. What the controller then sends for a target is
  * `call-controller.test.tsx`'s subject.
  */
+import {
+  botMentionHostClientMock,
+  emptyBotMentionHostListsMock,
+} from "@/components/bots/__tests__/bot-mention-host-test-support";
 import type { ReactNode } from "react";
 import {
   act,
@@ -83,6 +87,15 @@ const mocks = vi.hoisted(() => ({
   openLink:
     vi.fn<(url: string, kind: string, event: unknown) => Promise<void>>(),
 }));
+
+vi.mock(
+  "@/hooks/host/use-host-client-for-host-id",
+  () => botMentionHostClientMock,
+);
+vi.mock(
+  "@/hooks/bots/use-environment-host-lists-query",
+  () => emptyBotMentionHostListsMock,
+);
 
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => ({ stub: "tab-host-client" }),
