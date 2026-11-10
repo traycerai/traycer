@@ -376,8 +376,8 @@ describe("the trunk session's status surfaces", () => {
       await settleLegendList();
 
       expect(
-        within(view()).getByTestId("background-header-summary").textContent,
-      ).toBe("0 running");
+        within(view()).getByRole("button", { name: /Background.*0 running$/ }),
+      ).toBeTruthy();
     });
 
     it("counts a periodic task and a trunk subscription as ' · 2 items', alongside the running summary", async () => {
@@ -395,8 +395,10 @@ describe("the trunk session's status surfaces", () => {
       await settleLegendList();
 
       expect(
-        within(view()).getByTestId("background-header-summary").textContent,
-      ).toBe("0 running · 2 items");
+        within(view()).getByRole("button", {
+          name: /Background.*0 running · 2 items$/,
+        }),
+      ).toBeTruthy();
     });
 
     it("does not count the 'Subscriptions unavailable' placeholder as an item", async () => {
@@ -409,8 +411,8 @@ describe("the trunk session's status surfaces", () => {
       await settleLegendList();
 
       expect(
-        within(view()).getByTestId("background-header-summary").textContent,
-      ).toBe("0 running");
+        within(view()).getByRole("button", { name: /Background.*0 running$/ }),
+      ).toBeTruthy();
       openBackground();
       expect(
         within(view()).getByText("Subscriptions unavailable"),
