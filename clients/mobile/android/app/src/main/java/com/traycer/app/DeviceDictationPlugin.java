@@ -77,6 +77,13 @@ public class DeviceDictationPlugin extends Plugin {
 
     private Session session;
 
+    /**
+     * The recognizer last asked to download a language. It is kept because
+     * the request is sent only once the recognizer has connected to the
+     * system, and destroying it before then drops the request.
+     */
+    private SpeechRecognizer downloader;
+
     @PluginMethod
     public void isAvailable(PluginCall call) {
         String language = call.getString("language", "auto");
@@ -105,9 +112,9 @@ public class DeviceDictationPlugin extends Plugin {
             intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, tag);
             intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
             if (!installed) {
-                SpeechRecognizer downloader = SpeechRecognizer.createOnDeviceSpeechRecognizer(getContext());
+                if (downloader != null) downloader.destroy();
+                downloader = SpeechRecognizer.createOnDeviceSpeechRecognizer(getContext());
                 downloader.triggerModelDownload(intent);
-                downloader.destroy();
                 call.reject("Download the language to dictate, then try again.", LANGUAGE_NOT_INSTALLED);
                 return;
             }
@@ -191,6 +198,8 @@ public class DeviceDictationPlugin extends Plugin {
     @Override
     protected void handleOnDestroy() {
         end(session, "Dictation was cancelled.");
+        if (downloader != null) downloader.destroy();
+        downloader = null;
     }
 
     private interface LanguageAnswer {
