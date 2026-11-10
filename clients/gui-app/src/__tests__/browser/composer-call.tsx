@@ -216,6 +216,7 @@ export function Pane(): ReactElement {
             seed={null}
             keptDraft={null}
             quote={null}
+            reply={{ reach: "none", chosen: 0 }}
             onSent={() => false}
           />
         </TabHostContext.Provider>

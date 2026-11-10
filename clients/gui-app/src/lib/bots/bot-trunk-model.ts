@@ -104,7 +104,7 @@ export function taskRequestPost(
 
 /**
  * How the channel opens the thread hung off `row` (decision 114), as its
- * own row's "Reply in thread" does: a member's post opens its own thread,
+ * own row's "Create thread" does: a member's post opens its own thread,
  * and a direct post the box whose first reply starts one; a question or a
  * proposal opens its thread through that box too, and every other row of
  * the bot as well, marked with the thread anchor its thread takes a

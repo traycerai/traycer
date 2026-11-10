@@ -3,6 +3,7 @@ import { useBotSendFailure } from "@/hooks/bots/use-bot-send-failure";
 import { useKeptBoxDraft } from "@/hooks/bots/use-kept-box-draft";
 import { BotIdentityContext } from "@/components/bots/bot-identity-context";
 import { BotMessageComposer } from "@/components/bots/bot-message-composer";
+import { NO_BOT_REPLY } from "@/components/bots/__tests__/bot-box-test-support";
 import { BotTestRunnerHost } from "@/components/bots/__tests__/bot-test-runner-host";
 import {
   BOT_ID,
@@ -42,6 +43,7 @@ function Box(props: { readonly conversation: string }): ReactNode {
         seed={kept.seed}
         keptDraft={kept.keptDraft}
         quote={null}
+        reply={NO_BOT_REPLY}
         onSent={() => false}
       />
     </BotTestRunnerHost>

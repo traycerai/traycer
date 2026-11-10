@@ -303,3 +303,29 @@ describe("a member's answers to a bot's card, sent as one set", () => {
     ).toBe(`${first.text}\nNow\n\n${second.text}\nSkipped`);
   });
 });
+
+describe("a member's reply to a message of the conversation", () => {
+  const { questionAnswer: _questionAnswer, ...MEMBER_ROW } = ANSWER_ROW;
+  const REPLY_ROW = { ...MEMBER_ROW, repliesTo: "message-1" } as const;
+
+  it("keeps the message replied to on the live user row, through chat.subscribe@1.43", () => {
+    expect(userMessageSchema.parse(REPLY_ROW).repliesTo).toBe("message-1");
+    expect(rowOnLine(43, REPLY_ROW)).toEqual(REPLY_ROW);
+  });
+
+  it.each([42, 41])(
+    "chat.subscribe@1.%i drops it, reading the user row as it was sent without one",
+    (minor) => {
+      expect(rowOnLine(minor, REPLY_ROW)).toEqual(rowOnLine(minor, MEMBER_ROW));
+    },
+  );
+
+  it.each([
+    ["an empty message id", ""],
+    ["a message id over 255 characters", "m".repeat(256)],
+  ])("refuses %s", (_name, repliesTo) => {
+    expect(
+      userMessageSchema.safeParse({ ...MEMBER_ROW, repliesTo }).success,
+    ).toBe(false);
+  });
+});

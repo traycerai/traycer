@@ -795,6 +795,15 @@ export const userMessageSchema = lazySchema(() =>
        * strips it on decode and draws the row's text.
        */
       questionAnswers: botQuestionAnswerSetSchema.optional(),
+      /**
+       * The message of the same conversation a member chose to reply to, by
+       * its message id (`chat.subscribe@1.43`, T166): written from the send's
+       * `replyTo`. Absent on every other row, and optional for
+       * `conversationRequest`'s reason; a peer below `1.43` strips it on
+       * decode and draws the row without its badge. Not a bot row's
+       * `repliesTo`, which names the member's message the bot answers.
+       */
+      repliesTo: z.string().min(1).max(255).optional(),
     })
     .superRefine(userMessageSenderKindRefine),
 );

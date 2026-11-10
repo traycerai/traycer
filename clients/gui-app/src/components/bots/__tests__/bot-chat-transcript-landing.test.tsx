@@ -267,6 +267,7 @@ function createLandingStore(
 const THREAD_SURFACE: BotTranscriptSurface = {
   kind: "thread",
   chooseOption: vi.fn(),
+  reply: null,
   answerQuestion: null,
   answerQuestions: null,
   discussQuestion: null,

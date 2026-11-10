@@ -1,13 +1,15 @@
 /**
- * "Reply in thread" on every row of a bot's channel (Tracy Bots,
- * decision 79), through the REAL `BotChannelView`, transcript and
- * `ChatBotMessage`: a member's post, the bot's direct answer, a plain
- * announcement and an announcement carrying a surface each offer it, on
- * hover and on a long press, while the bot's binding names the rows a
- * thread roots on; choosing it on the plain announcement opens the rail on
- * that announcement's own thread. Only the virtualised message list, the
- * chat session registry (scripted sessions by chat id) and the channel's
- * neighbouring reads are replaced.
+ * "Create thread" on every row of a bot's channel (Tracy Bots,
+ * decision 79), and Reply on them (T166), through the REAL
+ * `BotChannelView`, transcript and `ChatBotMessage`: a member's post, the
+ * bot's direct answer, a plain announcement and an announcement carrying a
+ * surface each offer the thread, on hover and on a long press, while the
+ * bot's binding names the rows a thread roots on; choosing it on the plain
+ * announcement opens the rail on that announcement's own thread. Reply names
+ * a row in the box of its own conversation, the channel's or the open
+ * thread's, where the tab's host and the bot's take one. Only the
+ * virtualised message list, the chat session registry (scripted sessions by
+ * chat id) and the channel's neighbouring reads are replaced.
  */
 import {
   botMentionHostClientMock,
@@ -22,9 +24,17 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { QueryClient } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
+import {
+  HostClient,
+  type HostRequester,
+} from "@traycer-clients/shared/host-client/host-client";
+import { mockRemoteHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type {
+  BotConversationSendRequest,
   BotThreadAnchors,
   BotThreadSummary,
 } from "@traycer/protocol/host/bot/conversation-schemas";
@@ -35,18 +45,32 @@ import type {
 import {
   BOT_ID,
   CHANNEL_ID,
+  HOST_ID,
   POST_ID,
   POST_REQUEST,
+  THREAD_ID,
+  THREAD_OPEN,
+  THREAD_REPLY_ID,
   botReply,
   hostClientLocating,
   memberPost,
+  postThread,
   scriptedSession,
 } from "@/components/bots/__tests__/bot-turn-test-support";
 import { MountedChannel } from "@/components/bots/__tests__/bot-turn-channel-harness";
+import {
+  negotiateBotSend,
+  resetBotFailedRequestSupport,
+  signInViewer,
+  VIEWER_USER_ID,
+} from "@/components/bots/__tests__/bot-failed-request-test-support";
+import type { BotActivity } from "@/hooks/bots/use-bot-activity";
 import { LONG_PRESS_MS } from "@/hooks/ui/use-long-press";
-import type { HostRpcRegistry } from "@/lib/host";
+import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
+import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
 import {
   editableIn,
@@ -62,6 +86,8 @@ const mocks = vi.hoisted(() => ({
   locate: { status: "waiting" } as
     | { readonly status: "waiting" }
     | { readonly status: "missing" },
+  /** What the bot is doing, as `useBotActivity` reads it. */
+  activity: null as BotActivity | null,
 }));
 
 vi.mock(
@@ -142,7 +168,7 @@ vi.mock("@/providers/use-resolved-theme", () => ({
 }));
 vi.mock("@/hooks/bots/use-bot-activity", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/hooks/bots/use-bot-activity")>()),
-  useBotActivity: () => null,
+  useBotActivity: () => mocks.activity,
 }));
 vi.mock("@/components/chat/chat-messages", async () => {
   const { ChatExpansionTestProviders: Providers } =
@@ -251,6 +277,9 @@ afterEach(() => {
   mocks.threadAnchors = null;
   mocks.threads = [];
   mocks.locate = { status: "waiting" };
+  mocks.activity = null;
+  resetBotFailedRequestSupport();
+  useBotDraftsStore.setState({ answers: {}, threadBoxes: {}, unsentBoxes: {} });
 });
 
 function rowOf(messageId: string): HTMLElement {
@@ -259,25 +288,25 @@ function rowOf(messageId: string): HTMLElement {
   return holder;
 }
 
-function replyInThreadOn(messageId: string): HTMLElement | null {
+function createThreadOn(messageId: string): HTMLElement | null {
   return within(rowOf(messageId)).queryByRole("button", {
-    name: "Reply in thread",
+    name: "Create thread",
   });
 }
 
 const EVERY_ROW = [POST_ID, ANSWER_ID, NOTICE_ID, SURFACE_ROW_ID];
 
-describe("Reply in thread on every row of a bot's channel", () => {
+describe("Create thread on every row of a bot's channel", () => {
   it("is offered on a member's post, the bot's answer, a plain announcement and a surface card, and opens the plain announcement's own thread", async () => {
     const user = userEvent.setup();
     mocks.threadAnchors = anchorsNaming(["answer", "message"]);
     render(<MountedChannel />);
 
     for (const messageId of EVERY_ROW) {
-      expect(replyInThreadOn(messageId), messageId).not.toBeNull();
+      expect(createThreadOn(messageId), messageId).not.toBeNull();
     }
 
-    const action = replyInThreadOn(NOTICE_ID);
+    const action = createThreadOn(NOTICE_ID);
     if (action === null) throw new Error("expected the action");
     await user.click(action);
 
@@ -298,10 +327,10 @@ describe("Reply in thread on every row of a bot's channel", () => {
     mocks.threadAnchors = anchorsNaming(["answer"]);
     render(<MountedChannel />);
 
-    expect(replyInThreadOn(POST_ID)).not.toBeNull();
-    expect(replyInThreadOn(ANSWER_ID)).not.toBeNull();
-    expect(replyInThreadOn(NOTICE_ID)).toBeNull();
-    expect(replyInThreadOn(SURFACE_ROW_ID)).toBeNull();
+    expect(createThreadOn(POST_ID)).not.toBeNull();
+    expect(createThreadOn(ANSWER_ID)).not.toBeNull();
+    expect(createThreadOn(NOTICE_ID)).toBeNull();
+    expect(createThreadOn(SURFACE_ROW_ID)).toBeNull();
   });
 
   it.each(EVERY_ROW)(
@@ -327,10 +356,8 @@ describe("Reply in thread on every row of a bot's channel", () => {
       });
       vi.useRealTimers();
 
-      const choice = await screen.findByTestId(
-        "bot-reply-sheet-reply-in-thread",
-      );
-      expect(choice.textContent).toBe("Reply in thread");
+      const choice = await screen.findByTestId("bot-reply-sheet-thread");
+      expect(choice.textContent).toBe("Create thread");
       await user.click(choice);
 
       expect(useBotOpenThreadStore.getState().byBotId[BOT_ID]).toMatchObject({
@@ -462,4 +489,198 @@ describe("the box of a listed thread under a row of the bot, opened by its ancho
       expect(sendEnabledAfterTyping()).toBe(false);
     },
   );
+});
+
+describe("Reply on a row of a bot's channel", () => {
+  const WITH_REPLIES = ["answer", "message", "replies"];
+  /** The first `bot.conversation.send` line that carries a reply. */
+  const REPLIES_MINOR = 6;
+  let sent: ReadonlyArray<BotConversationSendRequest>;
+
+  /** The tab's host client: it records each send, and locates no turn. */
+  function hostClientRecordingSends(): HostRequester<HostRpcRegistry> {
+    let seq = 0;
+    const messenger = new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => `request-${String(++seq)}`,
+      handlers: {
+        "bot.turn.locate": () => Promise.resolve({ turns: [] }),
+        "bot.conversation.send": (params) => {
+          sent = [...sent, params];
+          return Promise.resolve({
+            messageId: "message-new",
+            requestId: "req-new",
+            delivery: "written" as const,
+            threadId: null,
+          });
+        },
+      },
+    });
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: createHostQueryInvalidator(new QueryClient()),
+      findHostById: (hostId) =>
+        hostId === mockRemoteHostEntry.hostId ? mockRemoteHostEntry : null,
+      messenger,
+    });
+    spine.setRequestContext(
+      createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+    );
+    return spine.createRequester(mockRemoteHostEntry);
+  }
+
+  beforeEach(() => {
+    sent = [];
+    mocks.client = hostClientRecordingSends();
+    mocks.threadAnchors = anchorsNaming(WITH_REPLIES);
+    negotiateBotSend(HOST_ID, { major: 1, minor: REPLIES_MINOR });
+    signInViewer(VIEWER_USER_ID);
+  });
+
+  function replyOn(messageId: string): HTMLElement | null {
+    return within(rowOf(messageId)).queryByRole("button", { name: "Reply" });
+  }
+
+  function chooseReplyOn(messageId: string): Promise<void> {
+    const reply = replyOn(messageId);
+    if (reply === null) throw new Error(`no Reply on ${messageId}`);
+    return userEvent.setup().click(reply);
+  }
+
+  it("puts the strip in the channel's box when Reply is chosen on a row, and the send names that row", async () => {
+    const user = userEvent.setup();
+    render(<MountedChannel />);
+
+    await chooseReplyOn(POST_ID);
+
+    const strip = screen.getByTestId("bot-channel-composer-reply");
+    expect(
+      within(strip).getByTestId("bot-channel-composer-reply-author")
+        .textContent,
+    ).toBe("Olive Owner");
+    expect(
+      within(strip).getByTestId("bot-channel-composer-reply-line").textContent,
+    ).toBe("Is CI green?");
+    expect(screen.queryByTestId("bot-thread-composer-reply")).toBeNull();
+    typeInto(
+      editableIn(screen.getByTestId("bot-channel-composer-input")),
+      "Yes",
+    );
+    await user.click(screen.getByTestId("bot-channel-composer-send"));
+
+    expect(sent).toEqual([
+      {
+        botId: BOT_ID,
+        conversationId: CHANNEL_ID,
+        text: "Yes",
+        threadId: null,
+        announcementId: null,
+        redeliver: null,
+        supersedes: null,
+        answer: null,
+        replyTo: POST_ID,
+      },
+    ]);
+    expect(screen.queryByTestId("bot-channel-composer-reply")).toBeNull();
+  });
+
+  it.each([
+    [
+      "another host than the tab's, whose thread list does not say it takes replies",
+      REPLIES_MINOR,
+      ["answer", "message"],
+    ],
+    [
+      "a tab host that negotiated bot.conversation.send below the line that carries a reply",
+      REPLIES_MINOR - 1,
+      WITH_REPLIES,
+    ],
+  ])("is offered on no row of a bot bound to %s", (_label, minor, kinds) => {
+    mocks.threadAnchors = anchorsNaming(kinds);
+    negotiateBotSend(HOST_ID, { major: 1, minor });
+    render(<MountedChannel />);
+
+    for (const messageId of EVERY_ROW) {
+      expect(replyOn(messageId), messageId).toBeNull();
+    }
+    expect(createThreadOn(POST_ID)).not.toBeNull();
+  });
+
+  it("puts the strip in the open thread's box, not the channel's, when Reply is chosen on a row of the thread", async () => {
+    mocks.sessions[THREAD_ID] = scriptedSession(THREAD_ID, [
+      botReply({
+        messageId: THREAD_REPLY_ID,
+        text: "Yes, the thread agrees.",
+        timestamp: 3_000,
+      }),
+    ]).handle;
+    mocks.threads = [postThread()];
+    useBotOpenThreadStore
+      .getState()
+      .setRail(BOT_ID, { kind: "thread", ...THREAD_OPEN });
+    render(<MountedChannel />);
+    const panel = screen.getByTestId("bot-thread-panel");
+
+    await userEvent
+      .setup()
+      .click(within(panel).getByRole("button", { name: "Reply" }));
+
+    const strip = within(panel).getByTestId("bot-thread-composer-reply");
+    expect(
+      within(strip).getByTestId("bot-thread-composer-reply-line").textContent,
+    ).toBe("Yes, the thread agrees.");
+    expect(screen.queryByTestId("bot-channel-composer-reply")).toBeNull();
+  });
+
+  it("is offered on no row while the channel's box edits a failed message", async () => {
+    mocks.activity = {
+      trunk: {
+        state: "failed",
+        startedAt: 1_000,
+        step: null,
+        requestId: POST_REQUEST,
+        reason: null,
+      },
+      threads: {},
+    };
+    render(<MountedChannel />);
+    expect(replyOn(ANSWER_ID)).not.toBeNull();
+
+    await userEvent
+      .setup()
+      .click(within(rowOf(POST_ID)).getByTestId("bot-message-edit"));
+
+    expect(screen.getByTestId("bot-channel-composer-editing")).toBeTruthy();
+    for (const messageId of EVERY_ROW) {
+      expect(replyOn(messageId), messageId).toBeNull();
+    }
+  });
+
+  it("keeps naming the message by the line it was chosen with when the row's text changes", async () => {
+    render(<MountedChannel />);
+    await chooseReplyOn(POST_ID);
+
+    act(() => {
+      mocks.sessions[CHANNEL_ID].store.setState((state) => ({
+        messages: state.messages.map((message) =>
+          message.messageId === POST_ID
+            ? memberPost({
+                messageId: POST_ID,
+                requestId: POST_REQUEST,
+                lines: ["Is the nightly green?"],
+                timestamp: 1_000,
+                resolvedBy: null,
+              })
+            : message,
+        ),
+      }));
+    });
+
+    expect(
+      within(rowOf(POST_ID)).getByText("Is the nightly green?"),
+    ).toBeTruthy();
+    expect(
+      screen.getByTestId("bot-channel-composer-reply-line").textContent,
+    ).toBe("Is CI green?");
+  });
 });

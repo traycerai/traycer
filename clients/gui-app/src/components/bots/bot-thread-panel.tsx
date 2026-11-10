@@ -53,7 +53,9 @@ import { useBotFailedRequest } from "@/hooks/bots/use-bot-failed-request";
 import type {
   BotAnswerReach,
   BotImageReach,
+  BotReplyReach,
 } from "@/hooks/bots/use-bot-send-version";
+import type { BotReplyTarget } from "@/lib/bots/bot-reply-target";
 import type {
   BotTranscriptFold,
   BotTranscriptLanding,
@@ -172,6 +174,9 @@ const PANEL_LAYOUT: BotThreadLayout = { kind: "panel" };
  * their draft in it unsent - a question's own thread for a question in the
  * channel, this thread for one asked here. What the box holds is kept under
  * the bot (`useBotDraftsStore`), so it outlives the panel, until it is sent.
+ *
+ * Reply on a row of the thread names it in the thread's box (T166), which
+ * takes the focus; the thread's rows offer no thread of their own.
  */
 export function BotThreadPanel(props: {
   readonly botId: string;
@@ -183,6 +188,8 @@ export function BotThreadPanel(props: {
   readonly imageReach: BotImageReach;
   /** How a question card's answers reach the bot. */
   readonly answerReach: BotAnswerReach;
+  /** Where a Reply on a row of the thread reaches the bot (T166). */
+  readonly replyReach: BotReplyReach;
   readonly botTitle: string;
   /** The channel the thread's post is in. */
   readonly conversationId: string;
@@ -332,6 +339,7 @@ type ThreadPanelBodyProps = {
   readonly boundHostId: string | null;
   readonly imageReach: BotImageReach;
   readonly answerReach: BotAnswerReach;
+  readonly replyReach: BotReplyReach;
   readonly botTitle: string;
   readonly conversationId: string;
   readonly originMessageId: string;
@@ -693,6 +701,7 @@ function originPresentation(
     openAnnouncementThread: null,
     threadAnchorKinds: [],
     chooseOption: null,
+    reply: null,
     questions,
     failedRequest,
     failedRecovery: turns.failedRecovery,
@@ -751,6 +760,21 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
       seedThreadBox(botId, originMessageId, draft),
     [botId, originMessageId, seedThreadBox],
   );
+  // Reply on a row of the thread names it in this box; none while the box
+  // edits a failed message, whose send replaces it and replies to nothing.
+  const setReplyTarget = useBotDraftsStore((state) => state.setReplyTarget);
+  const [replyChosen, setReplyChosen] = useState(0);
+  const { replyReach } = props;
+  const chooseReply = useMemo(
+    () =>
+      replyReach !== "delivered" || edit !== null
+        ? null
+        : (target: BotReplyTarget) => {
+            setReplyTarget(botId, originMessageId, target);
+            setReplyChosen((chosen) => chosen + 1);
+          },
+    [botId, edit, originMessageId, replyReach, setReplyTarget],
+  );
   if (thread.kind === "pending" || thread.kind === "failed") {
     return (
       <UnlistedThread
@@ -780,6 +804,7 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
           sendable={thread.sendable}
           onEdit={setEdit}
           onDiscuss={discuss}
+          onReply={chooseReply}
         />
       )}
       <BotRoutingCard
@@ -807,6 +832,7 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
         seed={seed}
         keptDraft={keptDraft}
         quote={props.quote}
+        reply={{ reach: replyReach, chosen: replyChosen }}
         onSent={keepOpenThread}
       />
     </>
@@ -892,6 +918,8 @@ function KnownThread(
     readonly onEdit: (edit: BotComposerEdit) => void;
     /** Discuss on an overtaken answer to a question here: its draft goes in the panel's box. */
     readonly onDiscuss: (questionMessageId: string, draft: string) => void;
+    /** Reply on a row of the thread: it is named in the panel's box; `null` where none can. */
+    readonly onReply: ((target: BotReplyTarget) => void) | null;
   },
 ): ReactNode {
   const {
@@ -911,6 +939,7 @@ function KnownThread(
     sendFailure,
     onEdit,
     onDiscuss,
+    onReply,
     onOpenTurn,
     landOn,
     layout,
@@ -1040,6 +1069,7 @@ function KnownThread(
                 { onError: () => failSend(null) },
               );
             },
+      reply: sendable ? onReply : null,
       answerQuestion:
         sendable && answerReach !== "none" ? answerQuestion : null,
       answerQuestions:
@@ -1062,6 +1092,7 @@ function KnownThread(
       listed?.sessionChatId,
       onDiscuss,
       onOpenTurn,
+      onReply,
       opening,
       send,
       sendable,

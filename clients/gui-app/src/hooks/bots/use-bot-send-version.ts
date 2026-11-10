@@ -3,10 +3,12 @@ import {
   botConversationSendV13,
   botConversationSendV14,
   botConversationSendV15,
+  botConversationSendV16,
 } from "@traycer/protocol/host/bot/contracts";
 import {
   BOT_HOST_TAKES_ANSWER_SETS,
   BOT_HOST_TAKES_IMAGES,
+  BOT_HOST_TAKES_REPLIES,
 } from "@traycer/protocol/host/bot/conversation-schemas";
 import { useHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
 
@@ -49,6 +51,14 @@ export const BOT_CONVERSATION_IMAGES_VERSION =
  */
 export const BOT_CONVERSATION_ANSWER_SET_VERSION =
   botConversationSendV15.schemaVersion;
+
+/**
+ * The `bot.conversation.send` line that names the message a member chose to
+ * reply to (`replyTo`, T166): an older host would drop it and post the
+ * message without the badge that links the two.
+ */
+export const BOT_CONVERSATION_REPLY_VERSION =
+  botConversationSendV16.schemaVersion;
 
 /** Whether a host that negotiated `negotiated` for `bot.conversation.send` takes a send that needs `required`. */
 export function botSendTakes(
@@ -125,6 +135,37 @@ export function useBotImageReach(input: {
   if (!taken) return "none";
   return boundHostId === hostId ||
     boundHostTakes.includes(BOT_HOST_TAKES_IMAGES)
+    ? "delivered"
+    : "held-back";
+}
+
+/**
+ * Where a member's Reply (T166) reaches the bot:
+ * - `none`: the host serving the tab takes no reply, so no row offers Reply,
+ *   and a box that kept one from before shows none and sends without it;
+ * - `delivered`: rows offer Reply, and the box's send names the message;
+ * - `held-back`: the tab's host takes replies, the bot's bound host has not
+ *   said it does. No row offers Reply; a box that kept one says so, and Send
+ *   carries the message without it.
+ */
+export type BotReplyReach = "none" | "delivered" | "held-back";
+
+export function useBotReplyReach(input: {
+  /** The host serving the tab. */
+  readonly hostId: string;
+  /** The host that runs the bot; `null` when none does. */
+  readonly boundHostId: string | null;
+  /** What that host said it takes, as its thread list reports it. */
+  readonly boundHostTakes: readonly string[];
+}): BotReplyReach {
+  const { hostId, boundHostId, boundHostTakes } = input;
+  const taken = botSendTakes(
+    useHostMethodSchemaVersion(hostId, "bot.conversation.send"),
+    BOT_CONVERSATION_REPLY_VERSION,
+  );
+  if (!taken) return "none";
+  return boundHostId === hostId ||
+    boundHostTakes.includes(BOT_HOST_TAKES_REPLIES)
     ? "delivered"
     : "held-back";
 }

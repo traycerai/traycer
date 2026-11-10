@@ -6,10 +6,11 @@ import {
   useMemo,
   useRef,
   useState,
+  type KeyboardEventHandler,
   type ReactNode,
   type RefObject,
 } from "react";
-import { SendHorizontal } from "lucide-react";
+import { Reply, SendHorizontal, X } from "lucide-react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import {
   BOT_CONVERSATION_IMAGES_ONLY_TEXT,
@@ -31,8 +32,12 @@ import {
 } from "@/hooks/bots/use-bot-box-images";
 import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
 import type { BotSendFailure } from "@/hooks/bots/use-bot-send-failure";
-import type { BotImageReach } from "@/hooks/bots/use-bot-send-version";
+import type {
+  BotImageReach,
+  BotReplyReach,
+} from "@/hooks/bots/use-bot-send-version";
 import { isAttachmentIngestPending } from "@/hooks/composer/use-composer-paste";
+import type { BotReplyTarget } from "@/lib/bots/bot-reply-target";
 import type { BotUnsentMessage } from "@/stores/bots/bot-drafts-store";
 import {
   BotQueuedNotice,
@@ -175,6 +180,17 @@ const BOX_ONE_ROW = {
  * the box shows, as markdown quote lines - an edit in progress included,
  * which stays an edit - and the box takes the focus with the caret after it.
  *
+ * Reply on a row of the box's conversation (T166) names that message in a
+ * strip at the top of the box, inside its frame: "Replying to", its writer
+ * and its first line as they were when Reply was chosen, and a cancel; Escape
+ * in the box cancels too, once a menu open in it has closed. The draft kept
+ * outside the box keeps the message with it (`keptDraft`), so the strip comes
+ * back after a restart. The send names the message, and its row then draws
+ * the badge, which reads the message as it is by then. The strip waits while
+ * the box edits a failed message: that send replaces the failed one and
+ * replies to nothing. Where the bot's host has not said it takes replies the
+ * strip says so, and Send posts the message without it (`reply`).
+ *
  * `@` completes a member of the team's environment (decision 137), or a bot
  * or a task of the bot's environment (decision 177); the box shows the name
  * and the send writes its token, so the bot's host knows what was named.
@@ -228,6 +244,8 @@ export function BotMessageComposer(props: {
   readonly keptDraft: BotKeptDraft | null;
   /** A quote to add to what the box shows; `null` for none. */
   readonly quote: BotComposerQuote | null;
+  /** How the box replies to the message a member chose. */
+  readonly reply: BotComposerReply;
   /**
    * The host accepted `text`, what the box sent; not called once the box
    * is gone. Answers whether the owner says the send's delivery itself, where the
@@ -257,6 +275,7 @@ export function BotMessageComposer(props: {
     seed,
     keptDraft,
     quote,
+    reply,
     onSent,
   } = props;
   const client = useTabHostClient();
@@ -295,7 +314,8 @@ export function BotMessageComposer(props: {
     editorRef.current?.focusAtEnd("reveal-caret");
     quote.taken();
   }, [quote, takenQuoteId]);
-  const emptyRef = useBoxEmptyRef(text, imageCount, edit);
+  const replying = useBoxReply(keptDraft, edit, reply, editorRef);
+  const emptyRef = useBoxEmptyRef(text, imageCount, edit, replying.kept);
   // Whether the box is still there to say anything.
   const mountedRef = useRef(false);
   useEffect(() => {
@@ -343,6 +363,7 @@ export function BotMessageComposer(props: {
     }
     if (edit !== null) onEditEnd();
     loadBox(unsent.content);
+    keptDraft?.setReplyTo(unsent.replyTo);
   };
   const submit = (): void => {
     if (!canSend) return;
@@ -354,10 +375,13 @@ export function BotMessageComposer(props: {
       supersedes: edit?.requestId ?? null,
       content,
       sessionThreadId: edit?.sessionThreadId,
+      replyTo: edit === null ? replying.kept : null,
     };
+    const replyTo = replying.sentTo;
     // The box empties as the send starts, which drops the draft kept outside
-    // it, and the edit it held ends: the row the host writes reaches the
-    // list before the host answers.
+    // it and the message it replies to, and the edit it held ends: the row
+    // the host writes reaches the list before the host answers.
+    if (unsent.replyTo !== null) keptDraft?.setReplyTo(null);
     loadBox(EMPTY_BOT_BOX);
     setLastDelivery(null);
     if (unsent.supersedes !== null) onEditEnd();
@@ -374,6 +398,7 @@ export function BotMessageComposer(props: {
         supersedes: unsent.supersedes,
         answer: null,
         ...(carried.length === 0 ? {} : { attachments: [...carried] }),
+        ...(replyTo === null ? {} : { replyTo }),
       })
       .then(
         (response) => {
@@ -402,6 +427,7 @@ export function BotMessageComposer(props: {
             failure.fail(null);
           } else if (unsent.supersedes === null && !keptDraft.hasDraft()) {
             keptDraft.keep(unsent.text, unsent.content);
+            keptDraft.setReplyTo(unsent.replyTo);
           } else {
             keptDraft.offer(unsent);
           }
@@ -471,6 +497,15 @@ export function BotMessageComposer(props: {
         )}
         <ComposerCallSwap shown={call.barShown} testId={testId}>
           {mentions.menu}
+          <ReplyStrip
+            target={replying.shown}
+            heldBack={reply.reach === "held-back"}
+            testId={`${testId}-reply`}
+            onCancel={() => {
+              replying.cancel();
+              editorRef.current?.focusAtEnd("reveal-caret");
+            }}
+          />
           {takesImages && imageCount > 0 ? (
             <div
               className="col-span-2 flex flex-col gap-1 px-3 pt-2"
@@ -550,7 +585,7 @@ export function BotMessageComposer(props: {
               onPaste={takesImages ? paste.onPaste : noop}
               onDragOver={noop}
               onDrop={noop}
-              onKeyDown={undefined}
+              onKeyDown={replying.onKeyDown}
               interceptKeyDown={null}
               onFocus={() => setFocused(true)}
               onBlur={() => setFocused(false)}
@@ -681,15 +716,17 @@ function canSendBotBox(args: {
 
 /**
  * Whether the box is empty now, for a send that settles after the person may
- * have begun another draft: a newer draft is any text or image, or an edit
- * loaded.
+ * have begun another draft: a newer draft is any text or image, an edit
+ * loaded, or a message chosen to reply to.
  */
 function useBoxEmptyRef(
   text: string,
   imageCount: number,
   edit: BotComposerEdit | null,
+  replyTo: BotReplyTarget | null,
 ): RefObject<boolean> {
-  const empty = text.length === 0 && imageCount === 0 && edit === null;
+  const empty =
+    text.length === 0 && imageCount === 0 && edit === null && replyTo === null;
   const emptyRef = useRef(empty);
   useEffect(() => {
     emptyRef.current = empty;
@@ -801,6 +838,112 @@ function useBotBoxDocument(
 }
 
 /**
+ * The message the box replies to (`keptDraft.replyTo`, T166): `kept` while the
+ * draft holds one; `shown` while the box shows it, which it does not while it
+ * edits a failed message, or where the host serving the tab takes no reply;
+ * and `sentTo`, the id the send carries, only where the bot's host takes it.
+ * Each Reply chosen (`reply.chosen`) puts the focus in the box, and Escape
+ * there, or `cancel`, drops the reply.
+ */
+function useBoxReply(
+  keptDraft: BotKeptDraft | null,
+  edit: BotComposerEdit | null,
+  reply: BotComposerReply,
+  editorRef: RefObject<ComposerPromptEditorHandle | null>,
+): {
+  readonly kept: BotReplyTarget | null;
+  readonly shown: BotReplyTarget | null;
+  readonly sentTo: string | null;
+  readonly cancel: () => void;
+  readonly onKeyDown: KeyboardEventHandler<HTMLElement> | undefined;
+} {
+  const kept = keptDraft?.replyTo ?? null;
+  const shown = edit === null && reply.reach !== "none" ? kept : null;
+  const { chosen } = reply;
+  useEffect(() => {
+    if (chosen > 0) editorRef.current?.focusAtEnd("reveal-caret");
+  }, [chosen, editorRef]);
+  const cancel = (): void => keptDraft?.setReplyTo(null);
+  return {
+    kept,
+    shown,
+    sentTo:
+      shown !== null && reply.reach === "delivered" ? shown.messageId : null,
+    cancel,
+    onKeyDown:
+      shown === null
+        ? undefined
+        : (event) => {
+            // A menu open in the box takes its own Escape first.
+            if (
+              event.key !== "Escape" ||
+              event.defaultPrevented ||
+              event.nativeEvent.isComposing
+            ) {
+              return;
+            }
+            event.preventDefault();
+            cancel();
+          },
+  };
+}
+
+/**
+ * The message the box replies to, at the top of its frame: its writer and its
+ * first line as the box kept them, cut to one line, and a cancel; nothing
+ * while the box shows none. Where the bot's host takes no reply (`heldBack`)
+ * it says the message goes without it.
+ */
+function ReplyStrip(props: {
+  readonly target: BotReplyTarget | null;
+  readonly heldBack: boolean;
+  readonly testId: string;
+  readonly onCancel: () => void;
+}): ReactNode {
+  const { target, heldBack, testId } = props;
+  if (target === null) return null;
+  return (
+    <div
+      className="col-span-2 flex flex-col gap-1 px-3 pt-2 text-ui-xs text-muted-foreground"
+      data-testid={testId}
+    >
+      <div className="flex min-w-0 items-center gap-1.5">
+        <Reply aria-hidden="true" className="size-3.5 shrink-0" />
+        <span className="shrink-0">Replying to</span>
+        <span
+          className="max-w-1/2 shrink-0 truncate font-semibold text-foreground"
+          data-testid={`${testId}-author`}
+        >
+          {target.author}
+        </span>
+        <span
+          className="min-w-0 flex-1 truncate"
+          data-testid={`${testId}-line`}
+        >
+          {target.line ?? ""}
+        </span>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm-touch"
+          aria-label="Cancel reply"
+          data-testid={`${testId}-cancel`}
+          onClick={props.onCancel}
+        >
+          <X aria-hidden="true" className="size-3.5" />
+        </Button>
+      </div>
+      {heldBack ? (
+        <p data-testid={`${testId}-held-back`}>
+          This bot&apos;s host can&apos;t take replies yet, so this will be sent
+          as a new message.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/**
  * What the box says under it: a failed send offered back (from the draft
  * kept outside the box, else from the failure), a failed send whose text is
  * in the box, or a queued send.
@@ -841,7 +984,7 @@ export type BotComposerSeed = {
 
 /** Where a box's unsent draft is kept, outside the box. */
 export type BotKeptDraft = {
-  /** What the box holds now, as the person types it; empty keeps nothing. */
+  /** What the box holds now, as the person types it; empty keeps nothing, unless it replies to a message. */
   readonly keep: (text: string, content: JsonContent | null) => void;
   /** Whether a draft is kept now, read when a send settles. */
   readonly hasDraft: () => boolean;
@@ -849,6 +992,18 @@ export type BotKeptDraft = {
   readonly unsent: BotUnsentMessage | null;
   /** Offers a failed send back; `null` takes the offer away. */
   readonly offer: (unsent: BotUnsentMessage | null) => void;
+  /** The message the box replies to (T166); `null` for none. */
+  readonly replyTo: BotReplyTarget | null;
+  /** Sets the message the box replies to, the draft's text left as it is; `null` cancels the reply. */
+  readonly setReplyTo: (target: BotReplyTarget | null) => void;
+};
+
+/** How a box replies to the message a member chose (T166). */
+export type BotComposerReply = {
+  /** Whether the send names the message (`BotReplyReach`). */
+  readonly reach: BotReplyReach;
+  /** How many times the member chose Reply for this box: each takes the focus to it. */
+  readonly chosen: number;
 };
 
 /** Quotes of selections, for the box to add to what it shows. */

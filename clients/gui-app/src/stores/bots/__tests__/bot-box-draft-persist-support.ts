@@ -2,7 +2,10 @@ import { vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 import type * as DraftStorage from "@/lib/bots/bot-box-draft-storage";
-import type { StoredBoxDrafts } from "@/lib/bots/bot-box-draft-storage";
+import type {
+  StoredBoxDraft,
+  StoredBoxDrafts,
+} from "@/lib/bots/bot-box-draft-storage";
 import { isRecord } from "@/lib/editor/prosemirror-json";
 import { BOT_TOKEN_CONTEXT_TYPE } from "@/lib/composer/tiptap-json-content";
 import type { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
@@ -159,8 +162,16 @@ export function hashedImage(hash: string): JsonContent {
   };
 }
 
+/**
+ * A draft as a run of the app leaves it: a run from before replies (Tracy
+ * Bots T166) leaves none of the `replyTo` key.
+ */
+type DraftAsLeft = StoredBoxDraft | Omit<StoredBoxDraft, "replyTo">;
+
 /** Writes `drafts` where a run of the app - this window's or another's - leaves them. */
-export function storeDraftsAsLeft(drafts: StoredBoxDrafts): void {
+export function storeDraftsAsLeft(
+  drafts: Readonly<Record<string, Readonly<Record<string, DraftAsLeft>>>>,
+): void {
   localStorage.setItem(
     BOX_DRAFTS_KEY,
     JSON.stringify({ state: { threadBoxes: drafts }, version: 1 }),

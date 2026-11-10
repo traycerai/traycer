@@ -709,6 +709,8 @@ import {
   botConversationSendUpgradeV13ToV14,
   botConversationSendV15,
   botConversationSendUpgradeV14ToV15,
+  botConversationSendV16,
+  botConversationSendUpgradeV15ToV16,
   botThreadListV10,
   botThreadListV11,
   botThreadListV12,
@@ -9722,7 +9724,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   "bot.conversation.send": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 5,
+      latestMinor: 6,
       versions: {
         0: {
           contract: botConversationSendV10,
@@ -9756,6 +9758,12 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         5: {
           contract: botConversationSendV15,
           upgradeFromPreviousVersion: botConversationSendUpgradeV14ToV15,
+        },
+        // @1.6 names the message a member chose to reply to (`replyTo`,
+        // T166).
+        6: {
+          contract: botConversationSendV16,
+          upgradeFromPreviousVersion: botConversationSendUpgradeV15ToV16,
         },
       },
       downgradePathsFromLatest: {},

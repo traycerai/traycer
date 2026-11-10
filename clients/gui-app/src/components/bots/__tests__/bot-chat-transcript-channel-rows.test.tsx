@@ -324,6 +324,7 @@ describe("<BotChatTranscript /> in the channel", () => {
       openAnnouncementThread,
       threadAnchorKinds: [],
       chooseOption,
+      reply: null,
       answerQuestion: null,
       answerQuestions: null,
       discussQuestion: null,
@@ -344,7 +345,7 @@ describe("<BotChatTranscript /> in the channel", () => {
     );
 
     expect(screen.queryByTestId("bot-thread-line")).toBeNull();
-    await user.click(screen.getByRole("button", { name: "Reply in thread" }));
+    await user.click(screen.getByRole("button", { name: "Create thread" }));
 
     expect(openAnnouncementThread).toHaveBeenCalledTimes(1);
     expect(openAnnouncementThread).toHaveBeenCalledWith(QUESTION_ID, null);
@@ -406,6 +407,7 @@ describe("<BotChatTranscript /> a bot that answers posts in the channel", () => 
       openAnnouncementThread: vi.fn(),
       threadAnchorKinds: [],
       chooseOption,
+      reply: null,
       answerQuestion: null,
       answerQuestions: null,
       discussQuestion: null,
@@ -529,6 +531,28 @@ describe("<BotChatTranscript /> a bot that answers posts in the channel", () => 
     ).toBeTruthy();
   });
 
+  it("badges a member's message with the message it replies to, though that message is the row directly above", () => {
+    mountTranscript(
+      [
+        reply(),
+        {
+          ...otherUserMessage(),
+          messageId: "chosen-1",
+          timestamp: 3_000,
+          repliesTo: REPLY_ID,
+        },
+      ],
+      channel(null, () => null),
+    );
+
+    const memberRow = within(scrollStub()).getByTestId("bot-member-row");
+    expect(
+      within(memberRow).getByRole("button", {
+        name: "Replying to Release Bot: Here is my review",
+      }),
+    ).toBeTruthy();
+  });
+
   it("holds the badge's line while the post the reply names is fetched", () => {
     mountTranscript(
       [otherUserMessage(), { ...reply(), repliesTo: "older-1" }],
@@ -605,6 +629,7 @@ describe("<BotChatTranscript /> a member's answers to a bot's question card", ()
         openAnnouncementThread: null,
         threadAnchorKinds: [],
         chooseOption: null,
+        reply: null,
         answerQuestion: null,
         answerQuestions: null,
         discussQuestion: null,

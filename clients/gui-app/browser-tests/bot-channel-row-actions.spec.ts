@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 
 import { centreOf, fixture, nextFrames } from "./support/fixtures.ts";
 
-// A bot channel's row floats its actions (Reply in thread) at its top right
+// A bot channel's row floats its actions (Create thread) at its top right
 // while it is hovered or one of them has keyboard focus (Tracy Bots,
 // decision 176). A touch screen has no hover, so at rest the actions neither
 // show nor take a tap there; a long press is the way in, which the Vitest
@@ -12,7 +12,7 @@ import { centreOf, fixture, nextFrames } from "./support/fixtures.ts";
 
 const ROW = '[data-testid="bot-member-row"]';
 const ACTIONS = '[data-testid="bot-message-actions"]';
-const REPLY = '[data-testid="bot-message-reply-in-thread"]';
+const THREAD = '[data-testid="bot-message-thread"]';
 const OPENED = '[data-testid="opened"]';
 
 async function actionsStyle(
@@ -45,8 +45,8 @@ test.describe("on a touch screen", () => {
       pointerEvents: "none",
     });
 
-    // A tap where Reply in thread sits lands on the row, not on the action.
-    const at = await centreOf(page.locator(REPLY));
+    // A tap where Create thread sits lands on the row, not on the action.
+    const at = await centreOf(page.locator(THREAD));
     await page.touchscreen.tap(at.x, at.y);
     await nextFrames(page, 3);
 
@@ -61,7 +61,7 @@ test.describe("on a touch screen", () => {
     page,
   }) => {
     await open(page);
-    await page.locator(REPLY).focus();
+    await page.locator(THREAD).focus();
 
     await expect.poll(async () => (await actionsStyle(page)).opacity).toBe("1");
     expect((await actionsStyle(page)).pointerEvents).toBe("auto");
@@ -82,6 +82,6 @@ test("on a fine pointer, hovering the row reveals its actions", async ({
   await page.locator(ROW).hover();
 
   await expect.poll(async () => (await actionsStyle(page)).opacity).toBe("1");
-  await page.locator(REPLY).click();
+  await page.locator(THREAD).click();
   await expect(page.locator(OPENED)).toHaveText("1");
 });

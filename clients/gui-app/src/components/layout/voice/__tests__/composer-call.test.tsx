@@ -34,6 +34,7 @@ import { BotMessageComposer } from "@/components/bots/bot-message-composer";
 import {
   boxInput,
   boxText,
+  NO_BOT_REPLY,
 } from "@/components/bots/__tests__/bot-box-test-support";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { BotSendFailure } from "@/hooks/bots/use-bot-send-failure";
@@ -189,6 +190,7 @@ function box(kind: BoxKind): ReactNode {
       seed={null}
       keptDraft={null}
       quote={null}
+      reply={NO_BOT_REPLY}
       onSent={() => false}
     />
   );

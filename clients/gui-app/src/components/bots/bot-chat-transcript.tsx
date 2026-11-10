@@ -16,6 +16,7 @@ import {
 import { botMutationKeys } from "@/lib/query-keys/bot-mutation-keys";
 import type { TranscriptRowLocator } from "@traycer/protocol/persistence/chat-transcript/locate-row";
 import { useChatLocateRowAnswer } from "@/hooks/chats/use-chat-locate-row";
+import type { BotReplyTarget } from "@/lib/bots/bot-reply-target";
 import { replyRowIdFor, sendCardFor } from "@/lib/bots/reply-row";
 import { botTurnIndexOf, turnOfMessages } from "@/lib/bots/bot-turn-receipt";
 import type { BotTurnRef } from "@traycer/protocol/host/bot/conversation-schemas";
@@ -99,6 +100,8 @@ export type BotTranscriptSurface =
       readonly threadAnchorKinds: readonly string[];
       /** Posts a direct reply's chosen option as a new post; `null` while one is being sent. */
       readonly chooseOption: ((choice: string) => void) | null;
+      /** Names a row of the channel in the channel's box as the message its send replies to (T166); `null` where none can. */
+      readonly reply: ((target: BotReplyTarget) => void) | null;
       /** Sends a question card's answer at the channel's top level; `null` where nothing can send it. */
       readonly answerQuestion: QuestionAnswerSend | null;
       /** Sends a card's answers together at the channel's top level; `null` where they go one at a time. */
@@ -131,6 +134,8 @@ export type BotTranscriptSurface =
       readonly kind: "thread";
       /** Posts a reply's chosen option in the thread; `null` while one is being sent. */
       readonly chooseOption: ((choice: string) => void) | null;
+      /** Names a row of the thread in the thread's box as the message its send replies to (T166); `null` where none can. */
+      readonly reply: ((target: BotReplyTarget) => void) | null;
       /** Sends a question card's answer in the thread; `null` where the thread takes no send. */
       readonly answerQuestion: QuestionAnswerSend | null;
       /** Sends a card's answers together in the thread; `null` where they go one at a time. */
@@ -636,6 +641,7 @@ function BotChatTranscriptBody(props: {
         openAnnouncementThread: null,
         threadAnchorKinds: [],
         chooseOption: surface.chooseOption,
+        reply: surface.reply,
         questions,
         failedRequest: surface.failedRequest,
         ...turns,
@@ -648,6 +654,7 @@ function BotChatTranscriptBody(props: {
       openAnnouncementThread: surface.openAnnouncementThread,
       threadAnchorKinds: surface.threadAnchorKinds,
       chooseOption: surface.chooseOption,
+      reply: surface.reply,
       questions,
       failedRequest: surface.failedRequest,
       ...turns,

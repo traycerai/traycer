@@ -106,7 +106,11 @@ import {
 import { useBotAnswerReach } from "@/hooks/bots/use-bot-send-version";
 import { useBotBoxEdit } from "@/hooks/bots/use-bot-box-edit";
 import { useBotFailedRequest } from "@/hooks/bots/use-bot-failed-request";
-import { useBotImageReach } from "@/hooks/bots/use-bot-send-version";
+import {
+  useBotImageReach,
+  useBotReplyReach,
+} from "@/hooks/bots/use-bot-send-version";
+import type { BotReplyTarget } from "@/lib/bots/bot-reply-target";
 import {
   failedOnRequest,
   useBotActivity,
@@ -232,8 +236,8 @@ function useThreadPanelLanding(
 /**
  * A bot's channel and its open thread, side by side as Slack lays them out
  * (Tracy Bots, decision 41): members' posts and the bot's announcements at
- * the top level, "Reply in thread" among each row's hover actions and a
- * line under a post whose thread has replies, and the thread panel beside
+ * the top level, Reply and "Create thread" among each row's hover actions
+ * and a line under a post whose thread has replies, and the thread panel beside
  * the channel, as wide as the person dragged it - over it on a narrow pane.
  * The channel's box posts at the top level; the thread panel's box replies
  * in its thread. A post the bot answers in a thread opens that thread as
@@ -483,6 +487,26 @@ export function BotChannelView(props: {
   // retried as it is or edited in the channel's box, which posts its
   // replacement.
   const { edit, setEdit, endEdit } = useBotBoxEdit(activity, channelId);
+  // Reply on a row of the channel names it in the channel's box, which takes
+  // the focus; none while the box edits a failed message, whose send replaces
+  // it and replies to nothing (T166).
+  const replyReach = useBotReplyReach({
+    hostId,
+    boundHostId,
+    boundHostTakes: threadAnchorKinds,
+  });
+  const setReplyTarget = useBotDraftsStore((state) => state.setReplyTarget);
+  const [replyChosen, setReplyChosen] = useState(0);
+  const replyInChannel = useMemo(
+    () =>
+      replyReach !== "delivered" || edit !== null || channelId === null
+        ? null
+        : (target: BotReplyTarget) => {
+            setReplyTarget(botId, channelId, target);
+            setReplyChosen((chosen) => chosen + 1);
+          },
+    [botId, channelId, edit, replyReach, setReplyTarget],
+  );
   const failedOnChannel = useCallback(
     (requestId: string) => failedOnRequest(activity, requestId),
     [activity],
@@ -630,6 +654,7 @@ export function BotChannelView(props: {
         : null,
       threadAnchorKinds,
       chooseOption: sending ? null : chooseOption,
+      reply: replyInChannel,
       answerQuestion: answerReach === "none" ? null : answerQuestion,
       answerQuestions: answerReach === "together" ? answerQuestions : null,
       discussQuestion,
@@ -657,6 +682,7 @@ export function BotChannelView(props: {
       openAnnouncementThread,
       openThreadPostId,
       onOpenTurn,
+      replyInChannel,
       resolveMember,
       sending,
       setupHistory,
@@ -918,6 +944,7 @@ export function BotChannelView(props: {
                 seed={channelSeed}
                 keptDraft={channelKeptDraft}
                 quote={quoteFor(null)}
+                reply={{ reach: replyReach, chosen: replyChosen }}
                 onSent={openPostedThread}
               />
             </section>
@@ -978,6 +1005,7 @@ export function BotChannelView(props: {
                     botTitle={botTitle}
                     imageReach={imageReach}
                     answerReach={answerReach}
+                    replyReach={replyReach}
                     conversationId={channel.conversationId}
                     originMessageId={postId}
                     sent={open?.sent ?? null}

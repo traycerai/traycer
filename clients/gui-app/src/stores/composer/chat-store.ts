@@ -846,9 +846,10 @@ export interface ChatMessage {
    */
   surface?: BotSurfaceReference;
   /**
-   * The member's post a bot's direct reply answers, by its message id (Tracy
-   * Bots, reply mode `direct`), on the bot's row in its channel. Absent on
-   * every other row.
+   * The message a row answers, by its message id: on a bot's row, the
+   * member's post its direct reply answers (Tracy Bots, reply mode
+   * `direct`); on a member's row, the message they chose to reply to (T166).
+   * Absent on every other row.
    */
   repliesTo?: string;
   /**

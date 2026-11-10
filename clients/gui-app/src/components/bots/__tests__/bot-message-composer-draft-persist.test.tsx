@@ -174,6 +174,7 @@ describe("<BotMessageComposer /> and its draft on the device", () => {
           text: "Ask @Ada",
           content: boxDoc("Ask ", [MENTION]),
           seedId: 1,
+          replyTo: null,
         },
       },
     });

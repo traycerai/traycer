@@ -30,6 +30,7 @@ import {
   boxText,
   clearBox,
   findBoxInput,
+  NO_BOT_REPLY,
   typeKeys,
 } from "@/components/bots/__tests__/bot-box-test-support";
 import { BotTestRunnerHost } from "@/components/bots/__tests__/bot-test-runner-host";
@@ -160,6 +161,7 @@ function composer(
         seed={null}
         keptDraft={null}
         quote={quote}
+        reply={NO_BOT_REPLY}
         onSent={onSent}
       />
     </BotTestRunnerHost>
@@ -214,6 +216,7 @@ function Harness(props: {
         seed={props.keepDraft ? kept.seed : null}
         keptDraft={props.keepDraft ? kept.keptDraft : null}
         quote={null}
+        reply={NO_BOT_REPLY}
         onSent={onSent}
       />
     </BotTestRunnerHost>
