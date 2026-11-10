@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useContext,
   useEffect,
   useEffectEvent,
   useLayoutEffect,
@@ -25,6 +26,7 @@ import type { JsonObject } from "@traycer/protocol/persistence/chat-sync/json";
 import type { EpicReadArtifactObjectResponse } from "@traycer/protocol/host/epic/artifact-objects";
 import type { ToolCallMcpAppStamp } from "@traycer/protocol/persistence/epic/content-blocks";
 import { useChatAttachmentScope } from "@/components/chat/chat-attachment-scope-context";
+import { ChatStatusReadOnlyContext } from "@/components/chat/chat-status-capabilities";
 import { useBlockingLayerClaim } from "@/components/layout/shell/blocking-layer-claim";
 import { SandboxFrame } from "@/components/sandbox/sandbox-frame";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -140,7 +142,8 @@ function grantedPermissions(
  */
 export function McpAppRow(props: McpAppRowProps): ReactNode {
   const scope = useChatAttachmentScope();
-  if (scope === null) return props.fallback;
+  const readOnly = useContext(ChatStatusReadOnlyContext);
+  if (scope === null || readOnly) return props.fallback;
   return (
     <LiveMcpApp
       id={props.id}

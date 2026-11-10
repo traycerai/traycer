@@ -1227,6 +1227,36 @@ describe("<BotActivityPage /> actions", () => {
   });
 });
 
+describe("<BotActivityPage /> trunk door", () => {
+  it("opens the trunk's own session, not a task or a thread, regardless of what else is on the page", async () => {
+    const user = userEvent.setup();
+    mount([periodic("t-every", {})], { boundHere: true });
+
+    await user.click(
+      screen.getByRole("button", { name: "Open trunk session" }),
+    );
+
+    expect(mocks.openSession).toHaveBeenCalledWith({
+      chatId: "bot-trunk",
+      threadId: null,
+      messageId: null,
+      sendPostId: null,
+    });
+  });
+
+  it("is a plain door, not a task row: it carries no task id and takes no row actions with it", async () => {
+    const user = userEvent.setup();
+    mount([periodic("t-every", {})], { boundHere: true });
+
+    await user.click(
+      screen.getByRole("button", { name: "Open trunk session" }),
+    );
+
+    expect(mocks.openSession).toHaveBeenCalledTimes(1);
+    expect(mocks.navigateToTabIntent).not.toHaveBeenCalled();
+  });
+});
+
 describe("<BotActivityPage /> the task's agents", () => {
   it("rule 4: a warm task folds its agents under a chevron, in tree order, each with its own state", async () => {
     const user = userEvent.setup();
