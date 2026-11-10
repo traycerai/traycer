@@ -82,14 +82,24 @@ type ThrownIdentityInterpolation = {
   readonly fieldText: string;
 };
 
+type ThrownPayloadInterpolation = {
+  readonly filePath: string;
+  readonly line: number;
+  readonly column: number;
+  readonly source: "message-event data" | "JSON.stringify";
+  readonly expressionText: string;
+};
+
 type ErrorMessageScan = {
   readonly violations: readonly ThrownIdentityInterpolation[];
+  readonly payloadViolations: readonly ThrownPayloadInterpolation[];
   readonly constructionCount: number;
 };
 
 type ScanContext = {
   readonly sourceFile: ts.SourceFile;
   readonly violations: ThrownIdentityInterpolation[];
+  readonly payloadViolations: ThrownPayloadInterpolation[];
   constructionCount: number;
 };
 
@@ -97,6 +107,7 @@ type ProductionPopulation = {
   readonly fileCount: number;
   readonly constructionCount: number;
   readonly violations: readonly ThrownIdentityInterpolation[];
+  readonly payloadViolations: readonly ThrownPayloadInterpolation[];
   readonly files: readonly string[];
 };
 
@@ -119,11 +130,13 @@ function findThrownIdentityInterpolations(
   const ctx: ScanContext = {
     sourceFile,
     violations: [],
+    payloadViolations: [],
     constructionCount: 0,
   };
   visit(sourceFile, ctx);
   return {
     violations: ctx.violations,
+    payloadViolations: ctx.payloadViolations,
     constructionCount: ctx.constructionCount,
   };
 }
@@ -292,15 +305,118 @@ function functionWithBody(node: ts.Node): ts.FunctionLikeDeclaration | null {
 }
 
 function enclosingFunctionBody(node: ts.Node): ts.Node | null {
+  const declaration = enclosingFunction(node);
+  return declaration?.body ?? null;
+}
+
+function enclosingFunction(node: ts.Node): ts.FunctionLikeDeclaration | null {
   let current = node.parent;
   while (current !== undefined) {
     const declaration = functionWithBody(current);
-    if (declaration !== null && declaration.body !== undefined) {
-      return declaration.body;
-    }
+    if (declaration !== null) return declaration;
     current = current.parent;
   }
   return null;
+}
+
+function messageEventType(typeNode: ts.TypeNode | undefined): boolean {
+  if (typeNode === undefined || !ts.isTypeReferenceNode(typeNode)) return false;
+  let name: ts.EntityName = typeNode.typeName;
+  while (ts.isQualifiedName(name)) name = name.right;
+  return name.text === "MessageEvent" || name.text.endsWith("MessageEvent");
+}
+
+function isMessageEventBinding(name: ts.Identifier): boolean {
+  const declaration = enclosingFunction(name);
+  if (declaration === null) return false;
+  return declaration.parameters.some(
+    (parameter) =>
+      ts.isIdentifier(parameter.name) &&
+      parameter.name.text === name.text &&
+      messageEventType(parameter.type),
+  );
+}
+
+function isLengthOfDataAccess(node: ts.PropertyAccessExpression): boolean {
+  let access: ts.Node = node;
+  let parent = access.parent;
+  while (
+    ts.isParenthesizedExpression(parent) ||
+    ts.isAsExpression(parent) ||
+    ts.isSatisfiesExpression(parent) ||
+    ts.isTypeAssertionExpression(parent) ||
+    ts.isNonNullExpression(parent)
+  ) {
+    access = parent;
+    parent = access.parent;
+  }
+  return (
+    ts.isPropertyAccessExpression(parent) &&
+    parent.expression === access &&
+    parent.name.text === "length"
+  );
+}
+
+function isJsonStringifyCall(node: ts.CallExpression): boolean {
+  const callee = unwrap(node.expression);
+  return (
+    ts.isPropertyAccessExpression(callee) &&
+    ts.isIdentifier(callee.expression) &&
+    callee.expression.text === "JSON" &&
+    callee.name.text === "stringify"
+  );
+}
+
+function messageExpressionForScan(
+  message: ts.Expression,
+  sourceFile: ts.SourceFile,
+): ts.Expression {
+  const bare = unwrap(message);
+  if (!ts.isIdentifier(bare)) return message;
+  return initializerInFunction(bare, sourceFile) ?? message;
+}
+
+function inspectPayloadMessage(
+  message: ts.Expression,
+  at: ts.Node,
+  ctx: ScanContext,
+): void {
+  const expression = messageExpressionForScan(message, ctx.sourceFile);
+  const position = ctx.sourceFile.getLineAndCharacterOfPosition(
+    at.getStart(ctx.sourceFile),
+  );
+  const note = (
+    source: ThrownPayloadInterpolation["source"],
+    node: ts.Node,
+  ) => {
+    ctx.payloadViolations.push({
+      filePath: ctx.sourceFile.fileName,
+      line: position.line + 1,
+      column: position.character + 1,
+      source,
+      expressionText: node.getText(ctx.sourceFile),
+    });
+  };
+
+  // This recognizes a wire access in the message's call arguments, enough for
+  // `truncate(event.data)`. It is a one-hop syntactic check, not general taint
+  // tracking: callees, parameters, and alias chains are not followed.
+  const visitPayload = (node: ts.Node): void => {
+    if (ts.isCallExpression(node) && isJsonStringifyCall(node)) {
+      note("JSON.stringify", node);
+    }
+    if (
+      ts.isPropertyAccessExpression(node) &&
+      node.name.text === "data" &&
+      ts.isIdentifier(node.expression) &&
+      isMessageEventBinding(node.expression) &&
+      !isLengthOfDataAccess(node)
+    ) {
+      note("message-event data", node);
+    }
+    ts.forEachChild(node, visitPayload);
+  };
+  visitPayload(expression);
 }
 
 function initializerInFunction(
@@ -352,16 +468,18 @@ function inspectMessage(
   ctx: ScanContext,
 ): void {
   const fieldText = fieldTextOfMessage(message, ctx.sourceFile);
-  if (fieldText === null) return;
-  const position = ctx.sourceFile.getLineAndCharacterOfPosition(
-    at.getStart(ctx.sourceFile),
-  );
-  ctx.violations.push({
-    filePath: ctx.sourceFile.fileName,
-    line: position.line + 1,
-    column: position.character + 1,
-    fieldText,
-  });
+  if (fieldText !== null) {
+    const position = ctx.sourceFile.getLineAndCharacterOfPosition(
+      at.getStart(ctx.sourceFile),
+    );
+    ctx.violations.push({
+      filePath: ctx.sourceFile.fileName,
+      line: position.line + 1,
+      column: position.character + 1,
+      fieldText,
+    });
+  }
+  inspectPayloadMessage(message, at, ctx);
 }
 
 function noteMessages(
@@ -452,6 +570,7 @@ function scanProductionPopulation(): ProductionPopulation {
     ...ts.sys.readDirectory(PROTOCOL_SRC, SOURCE_EXTENSIONS, SOURCE_EXCLUDES),
   ].map(forwardSlashes);
   const violations: ThrownIdentityInterpolation[] = [];
+  const payloadViolations: ThrownPayloadInterpolation[] = [];
   let constructionCount = 0;
   for (const file of files) {
     let result: ErrorMessageScan;
@@ -462,15 +581,19 @@ function scanProductionPopulation(): ProductionPopulation {
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : "scan failed";
-      throw new Error(`identity scan failed for ${file}: ${message}`);
+      throw new Error(
+        `thrown Error message scan failed for ${file}: ${message}`,
+      );
     }
     constructionCount += result.constructionCount;
     violations.push(...result.violations);
+    payloadViolations.push(...result.payloadViolations);
   }
   return {
     fileCount: files.length,
     constructionCount,
     violations,
+    payloadViolations,
     files,
   };
 }
@@ -503,6 +626,25 @@ function expectClean(filePath: string, lines: readonly string[]): void {
   const result = scanLines(filePath, lines);
   expect(result.constructionCount).toBe(1);
   expect(result.violations).toEqual([]);
+}
+
+function expectPayloadFlagged(
+  filePath: string,
+  lines: readonly string[],
+  source: ThrownPayloadInterpolation["source"],
+  expressionText: string,
+): void {
+  const result = scanLines(filePath, lines);
+  expect(result.constructionCount).toBe(1);
+  expect(result.payloadViolations).toEqual([
+    expect.objectContaining({ filePath, source, expressionText }),
+  ]);
+}
+
+function expectPayloadClean(filePath: string, lines: readonly string[]): void {
+  const result = scanLines(filePath, lines);
+  expect(result.constructionCount).toBe(1);
+  expect(result.payloadViolations).toEqual([]);
 }
 
 describe("no account identifier in thrown Error messages", () => {
@@ -548,6 +690,11 @@ describe("no account identifier in thrown Error messages", () => {
       false,
     );
     expect(productionScan.violations).toEqual([]);
+  });
+
+  it(`finds no inbound payload interpolation across ${productionScan.fileCount} production files`, () => {
+    expect(productionScan.fileCount).toBeGreaterThan(100);
+    expect(productionScan.payloadViolations).toEqual([]);
   });
 
   it("flags the pre-fix bearer-source template", () => {
@@ -724,6 +871,149 @@ describe("no account identifier in thrown Error messages", () => {
         "      `Cannot open host WebSocket: ${cause.message}`,",
         "    );",
         "  }",
+        "}",
+      ],
+    );
+  });
+
+  it("flags message-event data passed to a formatting call", () => {
+    expectPayloadFlagged(
+      join("clients", "shared", "host-transport", "ws-rpc-client.ts"),
+      [
+        "function onMessage(event: WebSocketMessageEvent): void {",
+        "  throw new Error(`Malformed host frame: ${truncate(event.data)}`);",
+        "}",
+      ],
+      "message-event data",
+      "event.data",
+    );
+  });
+
+  it("flags JSON.stringify of a whole value in a thrown message", () => {
+    expectPayloadFlagged(
+      join("clients", "shared", "replica-runtime", "stream-proxy-host.ts"),
+      [
+        "function assertNever(value: never): never {",
+        "  throw new Error(`Unhandled stream proxy event ${JSON.stringify(value)}`);",
+        "}",
+      ],
+      "JSON.stringify",
+      "JSON.stringify(value)",
+    );
+  });
+
+  it("allows a message-event length from data.length", () => {
+    expectPayloadClean(
+      join("clients", "shared", "host-transport", "ws-rpc-client.ts"),
+      [
+        "function onMessage(event: WebSocketMessageEvent): void {",
+        "  throw new Error(`Malformed host frame (length ${event.data.length})`);",
+        "}",
+      ],
+    );
+  });
+
+  it("allows forwarding cause.message", () => {
+    expectPayloadClean(join("in-memory", "cause-message.ts"), [
+      "function rethrow(cause: Error): never {",
+      "  throw new Error(`Request failed: ${cause.message}`);",
+      "}",
+    ]);
+  });
+
+  it("allows forwarding error.message", () => {
+    expectPayloadClean(join("in-memory", "error-message.ts"), [
+      "function rethrow(error: Error): never {",
+      "  throw new Error(`Request failed: ${error.message}`);",
+      "}",
+    ]);
+  });
+
+  it("allows forwarding String(cause)", () => {
+    expectPayloadClean(join("in-memory", "string-cause.ts"), [
+      "function rethrow(cause: Error): never {",
+      "  throw new Error(`Request failed: ${String(cause)}`);",
+      "}",
+    ]);
+  });
+
+  it("allows a zod validation error message", () => {
+    expectPayloadClean(join("in-memory", "zod-error-message.ts"), [
+      "function requireValidRecord(value: unknown): void {",
+      "  const parsed = recordSchema.safeParse(value);",
+      "  if (!parsed.success) {",
+      "    throw new Error(`Invalid record: ${parsed.error.message}`);",
+      "  }",
+      "}",
+    ]);
+  });
+
+  it("allows a protocol version number", () => {
+    expectPayloadClean(join("in-memory", "version-number.ts"), [
+      "function requireSupportedVersion(version: number): void {",
+      "  throw new Error(`Unsupported protocol version ${version}`);",
+      "}",
+    ]);
+  });
+
+  it("allows a retry count", () => {
+    expectPayloadClean(join("in-memory", "count.ts"), [
+      "function requireRetryBudget(count: number): void {",
+      "  throw new Error(`Retry count ${count} exceeded`);",
+      "}",
+    ]);
+  });
+
+  it("allows a method name", () => {
+    expectPayloadClean(join("in-memory", "method-name.ts"), [
+      "function requireMethod(method: string): void {",
+      "  throw new Error(`Unsupported method ${method}`);",
+      "}",
+    ]);
+  });
+
+  it("allows a union kind", () => {
+    expectPayloadClean(join("in-memory", "union-kind.ts"), [
+      "function requireFrame(frame: { readonly kind: string }): void {",
+      "  throw new Error(`Unexpected frame kind ${frame.kind}`);",
+      "}",
+    ]);
+  });
+
+  it("allows an environment-variable name", () => {
+    expectPayloadClean(join("in-memory", "env-variable-name.ts"), [
+      "function requireSetting(envVarName: string): void {",
+      "  throw new Error(`Missing setting ${envVarName}`);",
+      "}",
+    ]);
+  });
+
+  it("allows a label", () => {
+    expectPayloadClean(join("in-memory", "label.ts"), [
+      "function requireEntry(label: string): void {",
+      "  throw new Error(`Missing entry ${label}`);",
+      "}",
+    ]);
+  });
+
+  it("allows a locally supplied budget plane id", () => {
+    expectPayloadClean(
+      join("clients", "shared", "replica-runtime", "memory-accountant.ts"),
+      [
+        "function requireRegistered(): never {",
+        '  const planeId = "chat-windows";',
+        "  throw new Error(`memory accountant: plane ${planeId} is not registered`);",
+        "}",
+      ],
+    );
+  });
+
+  it("allows typeof of an unvalidated schema value", () => {
+    expectPayloadClean(
+      join("protocol", "src", "framework", "json-schema-fingerprint.ts"),
+      [
+        "function rejectSchemaNode(node: unknown): never {",
+        "  throw new Error(`Unsupported schema (received ${typeof node})`);",
         "}",
       ],
     );

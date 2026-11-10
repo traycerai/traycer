@@ -343,9 +343,11 @@ function requireRegistered(
 ): PlaneState {
   const plane = planes.get(planeId);
   if (plane === undefined) {
-    throw new Error(
-      `memory accountant: plane ${JSON.stringify(planeId)} is not registered`,
-    );
+    // The id stays: a plane id is a registry key this runtime supplies when it
+    // registers a plane, not something read off a boundary, and naming it is
+    // the whole diagnostic. Only the `JSON.stringify` wrapper goes, which added
+    // quotes and nothing else.
+    throw new Error(`memory accountant: plane ${planeId} is not registered`);
   }
   return plane;
 }
@@ -415,8 +417,10 @@ export function createMemoryAccountant(
 
     register(spec: PlaneBudgetSpec): BudgetRegistration {
       if (planes.has(spec.planeId)) {
+        // The id stays, for the reason given at `requireRegistered`: a plane id
+        // is a registry key this runtime supplies, not boundary data.
         throw new Error(
-          `memory accountant: plane ${JSON.stringify(spec.planeId)} is already registered`,
+          `memory accountant: plane ${spec.planeId} is already registered`,
         );
       }
       requireFiniteNonNegative(spec.softLimitBytes, "softLimit");

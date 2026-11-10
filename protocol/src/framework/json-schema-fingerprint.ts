@@ -536,8 +536,13 @@ function convertJsonSchemaShape(
     };
   }
 
+  // `node` is unvalidated structure - every branch above reaches it through a
+  // `typeof` probe - so a slice of it is the echoed-payload shape, capped
+  // length and all. `context` is the path to the offending node and is the
+  // part that locates it; `typeof` is a closed set of JS type tags and carries
+  // nothing from the schema.
   throw new Error(
-    `Unsupported schema for ${context}; expected an object, enum, union, or array (got ${JSON.stringify(node).slice(0, 200)}).`,
+    `Unsupported schema for ${context}; expected an object, enum, union, or array (received ${typeof node}).`,
   );
 }
 
