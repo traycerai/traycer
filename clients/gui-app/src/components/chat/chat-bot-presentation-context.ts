@@ -257,3 +257,43 @@ export interface ChatBotPresentation {
 
 export const ChatBotPresentationContext =
   createContext<ChatBotPresentation | null>(null);
+
+/**
+ * What a reply's badge (Tracy Bots T165) reads from the list it is drawn in:
+ * where the message it answers is, the row drawn directly above each row,
+ * and how to show a message. A bot's channel and thread lists provide it; a
+ * row drawn anywhere else draws no badge. Its own context rather than part
+ * of the presentation, so as the list's rows change only the rows that draw
+ * a badge read it again.
+ */
+export interface ChatBotReplies {
+  readonly botId: string;
+  readonly hostId: string;
+  /** The conversation the list draws, which holds every answered message but the post a thread opens on. */
+  readonly conversationId: string;
+  /** The bot's name, as the writer of one of its own rows. */
+  readonly botTitle: string;
+  /** A member's name, as the writer of their message; `null` for a writer that is no member. */
+  readonly memberName: (userId: string | null) => string;
+  /**
+   * The message id of the row drawn directly above `messageId`'s: in a
+   * thread, the post it opens on above its first reply. `null` above a
+   * channel's first row, below a row not loaded yet, and for a row not drawn.
+   */
+  readonly above: (messageId: string) => string | null;
+  /** Shows one of the list's messages, highlighted; `null` where nothing can. */
+  readonly open: ((messageId: string) => void) | null;
+  /** The post a thread opens on; `null` in a channel. */
+  readonly opening: ChatBotThreadOpening | null;
+}
+
+/** The post a thread opens on, at the top of the thread, apart from its replies. */
+export interface ChatBotThreadOpening {
+  readonly messageId: string;
+  /** The channel the post was written in. */
+  readonly conversationId: string;
+  /** Shows the post at the top of the thread, highlighted. */
+  readonly show: () => void;
+}
+
+export const ChatBotRepliesContext = createContext<ChatBotReplies | null>(null);

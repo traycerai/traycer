@@ -25,7 +25,15 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -58,6 +66,7 @@ import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
 import type { MobileLevel2Form } from "@/lib/layout/mobile-layout-form";
 import type { TabNavigationIntent } from "@/lib/tab-navigation/intents";
 import { BotTestRunnerHost } from "@/components/bots/__tests__/bot-test-runner-host";
+import { CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME } from "@/components/chat/chat-navigation-highlight";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
@@ -1170,6 +1179,126 @@ describe("<BotThreadsView />", () => {
     expect(mocks.writes).toEqual([
       { botId: TRACY, threadId: "tracy-old", state: "unfollowed" },
     ]);
+  });
+
+  describe("a reply's badge in a card", () => {
+    const ANCHOR_ID = conversationRequestMessageId("req-team-new");
+
+    /**
+     * `count` rows alternating member, bot, member... as `m1`, `b2`, `m3`...
+     * (a reply row is never next to another, which would merge them), with
+     * the bot rows' `repliesTo` by row id.
+     */
+    function alternatingRows(
+      count: number,
+      repliesTo: Readonly<Partial<Record<string, string>>>,
+    ): Message[] {
+      return Array.from({ length: count }, (_, index) => {
+        const n = index + 1;
+        const text = `reply ${String(n)}`;
+        const timestamp = 2_000 + n;
+        if (n % 2 === 1) {
+          return { ...postRow(`m${String(n)}`, text), timestamp };
+        }
+        const id = `b${String(n)}`;
+        const to = repliesTo[id];
+        return {
+          ...botReply({ messageId: id, text, timestamp }),
+          ...(to === undefined ? {} : { repliesTo: to }),
+        };
+      });
+    }
+
+    /** The row that draws `text` as its own message, not as a badge's line. */
+    function rowOf(text: string): Element | null | undefined {
+      return within(card("team-new"))
+        .getAllByText(text)
+        .find(
+          (node) => node.closest('[data-testid="bot-reply-badge"]') === null,
+        )
+        ?.closest("[data-message-id]");
+    }
+
+    async function foldedCard(rows: Message[]): Promise<HTMLElement> {
+      mocks.posts[TEAM] = { [ANCHOR_ID]: "Ship the release?" };
+      mocks.replyRows["team-new"] = rows;
+      mount();
+      await waitFor(() => expect(listed()).toContain("team-new"));
+      return revealFull("team-new");
+    }
+
+    it("badges the first reply drawn when the message it answers is folded away behind the fold line", async () => {
+      // m7 is folded away; b8 and m9 are drawn.
+      const full = within(await foldedCard(alternatingRows(9, { b8: "m7" })));
+
+      expect(
+        (await full.findByTestId("bot-chat-transcript-unfold")).textContent,
+      ).toBe("Show 7 more replies");
+      expect(
+        full.getByRole("button", { name: /^Replying to .*: reply 7$/ }),
+      ).toBeTruthy();
+    });
+
+    it("badges the first reply drawn when it answers the thread's opening post, which the fold hides from above it", async () => {
+      const full = within(
+        await foldedCard(alternatingRows(9, { b8: ANCHOR_ID })),
+      );
+
+      await full.findByTestId("bot-chat-transcript-unfold");
+      expect(
+        full.getByRole("button", {
+          name: /^Replying to .*: Ship the release\?$/,
+        }),
+      ).toBeTruthy();
+    });
+
+    it("draws no badge on a drawn reply directly under the message it answers", async () => {
+      const full = within(await foldedCard(alternatingRows(8, { b8: "m7" })));
+
+      await full.findByTestId("bot-chat-transcript-unfold");
+      expect(full.getByText("reply 8")).toBeTruthy();
+      expect(full.queryByTestId("bot-reply-badge")).toBeNull();
+    });
+
+    it("unfolds a card to show the message a badge names when it is folded away, then scrolls to it and highlights it", async () => {
+      const user = userEvent.setup();
+      const scrolled = vi.spyOn(Element.prototype, "scrollIntoView");
+      scrolled.mockImplementation(() => undefined);
+      onTestFinished(() => scrolled.mockRestore());
+      const full = within(await foldedCard(alternatingRows(9, { b8: "m3" })));
+
+      await user.click(
+        await full.findByRole("button", { name: /^Replying to .*: reply 3$/ }),
+      );
+
+      expect(full.queryByTestId("bot-chat-transcript-unfold")).toBeNull();
+      const answered = rowOf("reply 3");
+      await waitFor(() => expect(scrolled.mock.contexts).toEqual([answered]));
+      expect(scrolled).toHaveBeenCalledWith({ block: "nearest" });
+      for (const token of CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME.split(" ")) {
+        expect(answered?.classList.contains(token)).toBe(true);
+      }
+    });
+
+    it("scrolls to and highlights a drawn message a badge names, in a card with no fold", async () => {
+      const user = userEvent.setup();
+      const scrolled = vi.spyOn(Element.prototype, "scrollIntoView");
+      scrolled.mockImplementation(() => undefined);
+      onTestFinished(() => scrolled.mockRestore());
+      const full = within(await foldedCard(alternatingRows(5, { b4: "m1" })));
+      await full.findByText("reply 5");
+      expect(full.queryByTestId("bot-chat-transcript-unfold")).toBeNull();
+
+      await user.click(
+        full.getByRole("button", { name: /^Replying to .*: reply 1$/ }),
+      );
+
+      const answered = rowOf("reply 1");
+      await waitFor(() => expect(scrolled.mock.contexts).toEqual([answered]));
+      for (const token of CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME.split(" ")) {
+        expect(answered?.classList.contains(token)).toBe(true);
+      }
+    });
   });
 });
 
