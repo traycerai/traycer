@@ -5,11 +5,13 @@ import {
   CHAT_ARTIFACT_DND_TYPE,
   GIT_DIFF_TILE_DND_TYPE,
   SIDEBAR_NODE_DND_TYPE,
+  SIMULATOR_TILE_DND_TYPE,
   TERMINAL_TILE_DND_TYPE,
   WORKSPACE_FILE_DND_TYPE,
   WORKSPACE_FOLDER_DND_TYPE,
   type EpicCanvasDragSourceData,
 } from "@/components/epic-canvas/dnd/dnd";
+import { makeSimulatorTileRef } from "@/stores/epics/canvas/tile-schema/simulator-tile";
 import { mentionAttachmentFromDragSource } from "@/components/chat/composer/composer-drag-attachment";
 
 const { peekOpenEpicMock, epicTreeRecordMock } = vi.hoisted(() => ({
@@ -308,6 +310,17 @@ describe("mentionAttachmentFromDragSource", () => {
         cwd: "/repo",
       },
     };
+    const simulatorSource: EpicCanvasDragSourceData = {
+      kind: SIMULATOR_TILE_DND_TYPE,
+      ...SCOPE,
+      tile: makeSimulatorTileRef({
+        hostId: "host-1",
+        simulatorId: "udid-1",
+        platform: "ios",
+        name: "iPhone 16",
+        instanceKey: "udid-1",
+      }),
+    };
 
     expect(
       mentionAttachmentFromDragSource(gitFileSource, TARGET_HOST_ID),
@@ -321,6 +334,9 @@ describe("mentionAttachmentFromDragSource", () => {
     ).toBeNull();
     expect(
       mentionAttachmentFromDragSource(terminalSource, TARGET_HOST_ID),
+    ).toBeNull();
+    expect(
+      mentionAttachmentFromDragSource(simulatorSource, TARGET_HOST_ID),
     ).toBeNull();
   });
 
