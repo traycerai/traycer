@@ -905,6 +905,7 @@ describe("GeneralSettingsPanel", () => {
         phoneLayout: true,
         soundtrackOffered: false,
         soundtrackRecordingOffered: false,
+        soundtrackSetPiecesOffered: false,
         soundtrackOn: false,
       };
       expect(isVoiceInputRowAvailable(context)).toBe(true);
