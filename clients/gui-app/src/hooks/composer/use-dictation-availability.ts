@@ -77,6 +77,9 @@ export function useDictationAvailability(
       queryFn: () => deviceDictation?.isAvailable(language) ?? false,
     }),
     enabled: enabled && deviceDictation !== null,
+    // The device's answer changes outside the app (a language installed in
+    // the OS settings), so it is asked again each time the app comes back.
+    refetchOnWindowFocus: "always",
   });
   // The installed mobile app never offers HOST dictation, whatever the setting
   // says: `speech.dictate` streams live microphone audio to the app-wide host

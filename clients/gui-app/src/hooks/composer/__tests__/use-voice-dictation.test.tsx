@@ -1,4 +1,4 @@
-import { act, renderHook } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import {
@@ -1561,6 +1561,13 @@ describe("useVoiceDictation with a device recognizer", () => {
     return sessions;
   }
 
+  /** Recording needs the capture graph as well as the session's `onReady`. */
+  async function captureGraphWired(): Promise<void> {
+    await waitFor(() => {
+      expect(lastAudioContext().processor).not.toBeNull();
+    });
+  }
+
   function lastSession(sessions: FakeDeviceSession[]): FakeDeviceSession {
     const session = sessions.at(-1);
     if (session === undefined) throw new Error("no device session was opened");
@@ -1574,7 +1581,7 @@ describe("useVoiceDictation with a device recognizer", () => {
     act(() => {
       result.current.start();
     });
-    await flushAsync();
+    await captureGraphWired();
     expect(result.current.failureClass).toBeNull();
     expect(result.current.state).toBe("requesting");
 
@@ -1608,7 +1615,7 @@ describe("useVoiceDictation with a device recognizer", () => {
     act(() => {
       result.current.start();
     });
-    await flushAsync();
+    await captureGraphWired();
     const { callbacks } = lastSession(sessions);
     act(() => {
       callbacks.onReady();
@@ -1639,13 +1646,12 @@ describe("useVoiceDictation with a device recognizer", () => {
     },
   ] as const)(
     "classifies a recognizer error with permissionDenied=$permissionDenied as $failureClass",
-    async ({ permissionDenied, failureClass }) => {
+    ({ permissionDenied, failureClass }) => {
       const sessions = installDeviceRecognizer();
       const { result } = renderDictation();
       act(() => {
         result.current.start();
       });
-      await flushAsync();
 
       act(() => {
         lastSession(sessions).callbacks.onError({

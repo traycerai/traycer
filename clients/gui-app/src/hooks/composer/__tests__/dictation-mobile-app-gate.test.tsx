@@ -17,10 +17,11 @@
  */
 import type { RefObject } from "react";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { focusManager, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setMobileApp } from "@/lib/mobile-app";
+import { createAppQueryClient } from "@/lib/query-client";
 import { useComposerDictation } from "@/hooks/composer/use-composer-dictation";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
@@ -107,7 +108,8 @@ vi.mock("@/hooks/host/use-host-query", () => ({
 }));
 
 function renderComposerDictation() {
-  const queryClient = new QueryClient();
+  // The app's own client: it re-reads nothing on focus unless a query asks.
+  const queryClient = createAppQueryClient();
   const editorRef: RefObject<ComposerPromptEditorHandle | null> = {
     current: null,
   };
@@ -150,6 +152,7 @@ afterEach(() => {
   cleanup();
   vi.clearAllMocks();
   setMobileApp(false);
+  focusManager.setFocused(undefined);
   useSettingsStore.setState({ voiceInputEnabled: true });
 });
 
@@ -211,6 +214,31 @@ describe("dictation on the installed mobile app with a recognizer of its own", (
     pressDictationChord();
     expect(recorder.start).not.toHaveBeenCalled();
     expect(host.statusQueryEnabled).not.toContain(true);
+  });
+
+  it("offers the mic when the device becomes able to transcribe while the app was away", async () => {
+    setMobileApp(true);
+    let available = false;
+    const isAvailable = vi.fn(() => Promise.resolve(available));
+    runnerHostState.deviceDictation = {
+      ...deviceRecognizer(false),
+      isAvailable,
+    };
+    const { result } = renderComposerDictation();
+    await waitFor(() => {
+      expect(isAvailable).toHaveBeenCalledTimes(1);
+    });
+    expect(result.current.dictationControl).toBeNull();
+
+    available = true;
+    act(() => {
+      focusManager.setFocused(false);
+      focusManager.setFocused(true);
+    });
+
+    await waitFor(() => {
+      expect(result.current.dictationControl).not.toBeNull();
+    });
   });
 });
 
