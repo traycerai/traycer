@@ -424,6 +424,9 @@ export function EnvOverrideEditor(props: {
   const feedback = (
     <EnvWriteFeedback pendingLabel={pendingLabel} writeError={writeError} />
   );
+  // Every phone sheet shows the editor's one write error, so opening or
+  // closing a sheet clears it: an error never shows in a sheet it is not from.
+  const clearSheetError = (): void => setWriteError(null);
 
   return (
     <div className="overflow-hidden rounded-lg border border-border/60">
@@ -467,6 +470,7 @@ export function EnvOverrideEditor(props: {
                 <EnvMaskedRow
                   phone={phone}
                   feedback={feedback}
+                  onSheetToggle={clearSheetError}
                   key={entry.key}
                   entry={entry}
                   disabled={disabled}
@@ -481,6 +485,7 @@ export function EnvOverrideEditor(props: {
               <EnvOverrideRow
                 phone={phone}
                 feedback={feedback}
+                onSheetToggle={clearSheetError}
                 key={entry.key}
                 entry={entry}
                 otherKeys={keys.filter((k) => k !== entry.key)}
@@ -511,7 +516,10 @@ export function EnvOverrideEditor(props: {
           onAdd={(key, value) => {
             onCommit("", key, value);
           }}
-          onCancel={() => setAdding(false)}
+          onCancel={() => {
+            setAdding(false);
+            if (phone) clearSheetError();
+          }}
         />
       ) : (
         <div className="border-t border-border/40 px-3 py-2">
@@ -520,7 +528,10 @@ export function EnvOverrideEditor(props: {
             size="sm"
             variant="outline"
             disabled={disabled}
-            onClick={() => setAdding(true)}
+            onClick={() => {
+              setAdding(true);
+              if (phone) clearSheetError();
+            }}
           >
             <Plus className="size-3.5" />
             Add a variable
@@ -555,6 +566,7 @@ function EnvWriteFeedback(props: {
 function EnvOverrideRow(props: {
   readonly phone: boolean;
   readonly feedback: ReactNode;
+  readonly onSheetToggle: () => void;
   readonly entry: EnvOverrideValue;
   readonly otherKeys: readonly string[];
   readonly disabled: boolean;
@@ -718,14 +730,7 @@ function EnvOverrideRow(props: {
           />
         )}
       </div>
-      {props.note === null ? null : (
-        <p
-          data-testid="env-row-note"
-          className="text-ui-xs text-muted-foreground"
-        >
-          {props.note}
-        </p>
-      )}
+      <EnvRowNote note={props.note} />
       <EnvRowFooter
         draft={draft}
         disabled={disabled}
@@ -737,9 +742,7 @@ function EnvOverrideRow(props: {
           setDraft(draftOf(entry));
         }}
       />
-      {props.details === null ? null : (
-        <div className="flex justify-end">{props.details}</div>
-      )}
+      <EnvRowDetails details={props.details} />
     </>
   );
   if (!props.phone)
@@ -749,6 +752,7 @@ function EnvOverrideRow(props: {
     setOpen(false);
     setFollowing(false);
     setDraft(draftOf(entry));
+    props.onSheetToggle();
   };
   return (
     <li className="flex min-w-0 flex-col gap-1">
@@ -763,8 +767,16 @@ function EnvOverrideRow(props: {
           setFollowing(true);
           setDraft(draftOf(entry));
           setOpen(true);
+          props.onSheetToggle();
         }}
       />
+      {open ? null : (
+        <EnvPhoneRowStatus
+          note={props.note}
+          refusal={null}
+          details={props.details}
+        />
+      )}
       <VariableEditSheet
         open={open}
         title={entry.key}
@@ -793,6 +805,7 @@ function EnvOverrideRow(props: {
 function EnvMaskedRow(props: {
   readonly phone: boolean;
   readonly feedback: ReactNode;
+  readonly onSheetToggle: () => void;
   readonly entry: EnvOverrideValue;
   readonly disabled: boolean;
   readonly keyRefusal: KeyRefusalFor;
@@ -802,6 +815,14 @@ function EnvMaskedRow(props: {
 }) {
   const { entry, disabled } = props;
   const [open, setOpen] = useState(false);
+  const refusal =
+    props.keyRefusal === null ? null : (
+      <KeyRefusalLine
+        refusal={props.keyRefusal(entry.key)}
+        disabled={disabled}
+        onLink={(refusal) => refusal.onLink(entry.key, entry.value ?? "")}
+      />
+    );
   const editor = (
     <>
       <div className={GRID}>
@@ -826,24 +847,9 @@ function EnvMaskedRow(props: {
           />
         )}
       </div>
-      {props.note === null ? null : (
-        <p
-          data-testid="env-row-note"
-          className="text-ui-xs text-muted-foreground"
-        >
-          {props.note}
-        </p>
-      )}
-      {props.keyRefusal === null ? null : (
-        <KeyRefusalLine
-          refusal={props.keyRefusal(entry.key)}
-          disabled={disabled}
-          onLink={(refusal) => refusal.onLink(entry.key, entry.value ?? "")}
-        />
-      )}
-      {props.details === null ? null : (
-        <div className="flex justify-end">{props.details}</div>
-      )}
+      <EnvRowNote note={props.note} />
+      {refusal}
+      <EnvRowDetails details={props.details} />
     </>
   );
   if (!props.phone)
@@ -869,8 +875,18 @@ function EnvMaskedRow(props: {
         }
         badge={null}
         disabled={disabled}
-        onEdit={() => setOpen(true)}
+        onEdit={() => {
+          setOpen(true);
+          props.onSheetToggle();
+        }}
       />
+      {open ? null : (
+        <EnvPhoneRowStatus
+          note={props.note}
+          refusal={refusal}
+          details={props.details}
+        />
+      )}
       <VariableEditSheet
         open={open}
         title={entry.key}
@@ -879,12 +895,49 @@ function EnvMaskedRow(props: {
         removeLabel={`Remove ${entry.key}`}
         onSave={null}
         onRemove={() => props.onDelete(entry.key)}
-        onDismiss={() => setOpen(false)}
+        onDismiss={() => {
+          setOpen(false);
+          props.onSheetToggle();
+        }}
       >
         {editor}
         {props.feedback}
       </VariableEditSheet>
     </li>
+  );
+}
+
+function EnvRowNote(props: { readonly note: ReactNode }): ReactNode {
+  if (props.note === null) return null;
+  return (
+    <p data-testid="env-row-note" className="text-ui-xs text-muted-foreground">
+      {props.note}
+    </p>
+  );
+}
+
+function EnvRowDetails(props: { readonly details: ReactNode }): ReactNode {
+  if (props.details === null) return null;
+  return <div className="flex justify-end">{props.details}</div>;
+}
+
+/**
+ * Under a closed phone row: its note, refusal and details, as the desktop row
+ * shows them. An open sheet shows them in the sheet instead.
+ */
+function EnvPhoneRowStatus(props: {
+  readonly note: ReactNode;
+  readonly refusal: ReactNode;
+  readonly details: ReactNode;
+}): ReactNode {
+  if (props.note === null && props.refusal === null && props.details === null)
+    return null;
+  return (
+    <div className="flex min-w-0 flex-col gap-1 px-3 pb-2">
+      <EnvRowNote note={props.note} />
+      {props.refusal}
+      <EnvRowDetails details={props.details} />
+    </div>
   );
 }
 

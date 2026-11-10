@@ -47,6 +47,8 @@ interface EditorInput {
   readonly keyRefusal: KeyRefusalFor;
   readonly applyingHostsCount: number | null;
   readonly staleRefusal: EnvStaleRefusal | null;
+  readonly rowNotes: ReadonlyMap<string, ReactNode>;
+  readonly renderDetails: ((key: string) => ReactNode) | undefined;
 }
 
 const NO_REFUSAL = {
@@ -54,9 +56,16 @@ const NO_REFUSAL = {
   keyRefusal: null,
   applyingHostsCount: null,
   staleRefusal: null,
+  rowNotes: NO_NOTES,
+  renderDetails: undefined,
 } satisfies Pick<
   EditorInput,
-  "credentialRefusal" | "keyRefusal" | "applyingHostsCount" | "staleRefusal"
+  | "credentialRefusal"
+  | "keyRefusal"
+  | "applyingHostsCount"
+  | "staleRefusal"
+  | "rowNotes"
+  | "renderDetails"
 >;
 
 beforeEach(() => {
@@ -75,7 +84,7 @@ function editorElement(input: EditorInput): ReactNode {
         overrides={input.overrides}
         disabled={false}
         credentialRefusal={input.credentialRefusal}
-        rowNotes={NO_NOTES}
+        rowNotes={input.rowNotes}
         claimedBy={NOT_CLAIMED}
         keyRefusal={input.keyRefusal}
         staleRefusal={input.staleRefusal}
@@ -84,6 +93,7 @@ function editorElement(input: EditorInput): ReactNode {
         applyingHostsCount={input.applyingHostsCount}
         onCommit={input.onCommit}
         onDelete={input.onDelete}
+        renderDetails={input.renderDetails}
       />
     </PhoneTheme>
   );
@@ -256,6 +266,118 @@ describe("EnvOverrideEditor on a phone", () => {
 
     expect(onCommit).not.toHaveBeenCalled();
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("clears a failed row save when opening another row", async () => {
+    const onCommit = vi.fn<EnvCommit>(() =>
+      Promise.reject(new Error("Row A could not be saved.")),
+    );
+    renderEditor({
+      ...NO_REFUSAL,
+      overrides: [
+        { key: "ROW_A", value: "first" },
+        { key: "ROW_B", value: "second" },
+      ],
+      onCommit,
+      onDelete: vi.fn<EnvDelete>(),
+    });
+
+    const rowA = await openPreview("ROW_A", "first");
+    fireEvent.change(within(rowA).getByLabelText("Value for ROW_A"), {
+      target: { value: "updated" },
+    });
+    await userEvent.click(within(rowA).getByRole("button", { name: "Save" }));
+    expect(await within(rowA).findByRole("alert")).toHaveProperty(
+      "textContent",
+      "Row A could not be saved.",
+    );
+
+    await userEvent.click(within(rowA).getByRole("button", { name: "Cancel" }));
+    const rowB = await openPreview("ROW_B", "second");
+
+    expect(within(rowB).queryByRole("alert")).toBeNull();
+  });
+
+  it("clears a failed row save when opening the Add sheet", async () => {
+    const onCommit = vi.fn<EnvCommit>(() =>
+      Promise.reject(new Error("Row A could not be saved.")),
+    );
+    renderEditor({
+      ...NO_REFUSAL,
+      overrides: [{ key: "ROW_A", value: "first" }],
+      onCommit,
+      onDelete: vi.fn<EnvDelete>(),
+    });
+
+    const rowA = await openPreview("ROW_A", "first");
+    fireEvent.change(within(rowA).getByLabelText("Value for ROW_A"), {
+      target: { value: "updated" },
+    });
+    await userEvent.click(within(rowA).getByRole("button", { name: "Save" }));
+    expect(await within(rowA).findByRole("alert")).toHaveProperty(
+      "textContent",
+      "Row A could not be saved.",
+    );
+
+    await userEvent.click(within(rowA).getByRole("button", { name: "Cancel" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Add a variable" }),
+    );
+    const addSheet = await screen.findByRole("dialog");
+
+    expect(within(addSheet).queryByRole("alert")).toBeNull();
+  });
+
+  it("shows row notes and details under the row and once in its sheet", async () => {
+    const note = "Waiting for the host.";
+    const detail = "Details for NODE_ENV";
+    renderEditor({
+      ...NO_REFUSAL,
+      overrides: [{ key: "NODE_ENV", value: "development" }],
+      rowNotes: new Map([["NODE_ENV", note]]),
+      renderDetails: (key) => <span>{`Details for ${key}`}</span>,
+      onCommit: vi.fn<EnvCommit>(),
+      onDelete: vi.fn<EnvDelete>(),
+    });
+
+    const row = previewButton("NODE_ENV", "development").closest("li");
+    if (row === null) throw new Error("The preview is outside its row.");
+    expect(within(row).getByText(note)).toBeTruthy();
+    expect(within(row).getByText(detail)).toBeTruthy();
+
+    const dialog = await openPreview("NODE_ENV", "development");
+
+    expect(within(dialog).getAllByText(note)).toHaveLength(1);
+    expect(within(dialog).getAllByText(detail)).toHaveLength(1);
+    expect(screen.getAllByText(note)).toHaveLength(1);
+    expect(screen.getAllByText(detail)).toHaveLength(1);
+  });
+
+  it("shows the saved key refusal under a masked phone row", () => {
+    const keyRefusal: KeyRefusalFor = () => ({
+      before: "This looks like a key. ",
+      link: "Add it as a secret.",
+      after: "",
+      clearsValue: false,
+      onLink: vi.fn<(name: string, value: string) => void>(),
+    });
+    renderEditor({
+      ...NO_REFUSAL,
+      overrides: [{ key: "ANTHROPIC_API_KEY", value: KEY_VALUE }],
+      keyRefusal,
+      onCommit: vi.fn<EnvCommit>(),
+      onDelete: vi.fn<EnvDelete>(),
+    });
+
+    const row = screen.getByTestId("env-masked-row");
+    expect(within(row).getByTestId("env-key-refusal")).toHaveProperty(
+      "textContent",
+      "This looks like a key. Add it as a secret.",
+    );
+    expect(
+      within(row).getByRole("button", { name: "Add it as a secret." }),
+    ).toBeTruthy();
+    expect(document.body.textContent).not.toContain(KEY_VALUE);
   });
 
   it("does not write on blur or Cancel", async () => {
