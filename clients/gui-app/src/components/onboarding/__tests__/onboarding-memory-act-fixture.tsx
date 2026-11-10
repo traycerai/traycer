@@ -85,6 +85,8 @@ interface Deferred {
 /** What the faked host holds and answers. Reset for every test. */
 interface World {
   memoriesOn: boolean;
+  /** The configuration the host serves; a rebound host answers with another. */
+  environmentId: string;
   providers: ProviderSpec[];
   /** Answers to `config.agentMemories.set` in order; the last one repeats. */
   setAnswers: SetAnswer[];
@@ -116,6 +118,7 @@ export function defaultProviders(): ProviderSpec[] {
 function freshWorld(): World {
   return {
     memoriesOn: false,
+    environmentId: ENVIRONMENT_ID,
     providers: defaultProviders(),
     setAnswers: ["applied"],
     nativeFailures: new Map(),
@@ -243,7 +246,7 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) => {
       "config.agentMemories.get": () => ({
         enabled: world.memoriesOn,
         revision: 4,
-        environmentId: ENVIRONMENT_ID,
+        environmentId: world.environmentId,
       }),
       "config.agentMemories.set": async (request) => {
         const answer =
@@ -256,7 +259,7 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) => {
             enabled: world.memoriesOn,
             state: "queued" as const,
             revision: null,
-            environmentId: ENVIRONMENT_ID,
+            environmentId: world.environmentId,
             uploadId: "upload-1",
           };
         world.memoriesOn = request.enabled;
@@ -264,7 +267,7 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) => {
           enabled: request.enabled,
           state: "applied" as const,
           revision: 5,
-          environmentId: ENVIRONMENT_ID,
+          environmentId: world.environmentId,
           uploadId: null,
         };
       },

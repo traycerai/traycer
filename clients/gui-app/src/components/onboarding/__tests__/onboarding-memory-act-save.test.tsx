@@ -249,6 +249,62 @@ describe("the Memory act: a queued Traycer write", () => {
     await expectOnStep("session-import");
     expect(paramsOf("config.agentMemories.set")).toHaveLength(2);
   });
+
+  it("does not take an on read for the held write while the receipt is missing", async () => {
+    world.setAnswers = ["queued"];
+    await openMemoryAct();
+    await chooseTraycer();
+    await continueFromMemory();
+    await screen.findByTestId("onboarding-memory-save-report");
+
+    // Another revision reads as on; nothing says this write was taken.
+    world.memoriesOn = true;
+    await continueFromMemory();
+    await settled();
+
+    expect(paramsOf("providers.setNativeMemory")).toEqual([]);
+    expect(
+      screen.getByTestId("onboarding-memory-save-report").textContent,
+    ).toContain("waiting to reach your configuration");
+    expect(currentStepId()).toBe("agent-memories");
+    expect(paramsOf("config.agentMemories.set")).toHaveLength(1);
+  });
+
+  it("starts over, not on the old receipt, once the host serves another configuration", async () => {
+    world.setAnswers = ["queued", "applied"];
+    await openMemoryAct();
+    await chooseTraycer();
+    await continueFromMemory();
+    await screen.findByTestId("onboarding-memory-save-report");
+
+    // Rebound: the receipt belongs to the configuration the host left.
+    world.environmentId = "env-rebound";
+    world.accepted = [{ uploadId: "upload-1", environmentId: ENVIRONMENT_ID }];
+    await continueFromMemory();
+    await expectOnStep("session-import");
+
+    expect(paramsOf("config.agentMemories.set")).toHaveLength(2);
+    const order = methodsInOrder();
+    expect(order.indexOf("providers.setNativeMemory")).toBeGreaterThan(
+      order.lastIndexOf("config.agentMemories.set"),
+    );
+  });
+
+  it("takes an on read as saved once the host serves another configuration", async () => {
+    world.setAnswers = ["queued"];
+    await openMemoryAct();
+    await chooseTraycer();
+    await continueFromMemory();
+    await screen.findByTestId("onboarding-memory-save-report");
+
+    world.environmentId = "env-rebound";
+    world.memoriesOn = true;
+    await continueFromMemory();
+    await expectOnStep("session-import");
+
+    expect(paramsOf("config.agentMemories.set")).toHaveLength(1);
+    expect(paramsOf("providers.setNativeMemory")).toHaveLength(2);
+  });
 });
 
 describe("the Memory act: the report and the switch after a save", () => {
