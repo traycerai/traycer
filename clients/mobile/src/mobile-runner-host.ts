@@ -399,13 +399,13 @@ export class MobileRunnerHost implements IRunnerHost {
   readonly deviceFlow: MobileDeviceFlowHost;
   private readonly authSheet: MobileAuthSheet | null;
   private readonly voiceAudio: MobileVoiceAudio | null;
+  readonly deviceDictation: IDeviceDictationHost | null;
   /**
    * The phone's own notification switch. `null` wherever this shell cannot
    * both read the permission AND open the OS page to repair it (the dev web
    * entry, tests) - so the GUI's one branch on `null` hides the Settings row
    * wherever it would have nothing to report or no working button.
    */
-  readonly deviceDictation: IDeviceDictationHost | null;
   readonly pushPermission: IPushPermissionHost | null;
   readonly systemBack: ISystemBackHost | null;
   readonly statusBarTap: IStatusBarTapHost | null;

@@ -31,7 +31,7 @@ public class DeviceDictationPlugin: CAPPlugin, CAPBridgedPlugin {
         var text: String?
         var failure: String?
         var finishCall: CAPPluginCall?
-        /// Set once  has ended the audio.
+        /// Set once `finish` has ended the audio.
         var audioEnded = false
 
         init(id: String, recognizer: SFSpeechRecognizer, request: SFSpeechAudioBufferRecognitionRequest, format: AVAudioFormat) {
@@ -44,6 +44,13 @@ public class DeviceDictationPlugin: CAPPlugin, CAPBridgedPlugin {
 
     /// Read and written on the main queue only.
     private var session: Session?
+
+    /// The recognizer's "No speech detected". Any other error is a failure,
+    /// so a transcript lost while decoding is reported, never returned empty.
+    private static func isNoSpeech(_ error: Error) -> Bool {
+        let error = error as NSError
+        return error.domain == "kAFAssistantErrorDomain" && error.code == 1110
+    }
 
     /// `"auto"` is the device's own language.
     private func recognizer(for language: String) -> SFSpeechRecognizer? {
@@ -98,11 +105,9 @@ public class DeviceDictationPlugin: CAPPlugin, CAPBridgedPlugin {
                         if let result, result.isFinal {
                             session.text = result.bestTranscription.formattedString
                         } else if let error {
-                            if session.audioEnded {
-                                // The recognizer answers audio with no speech
-                                // in it with an error; that is an empty
-                                // transcript, not a failed dictation.
-                                CAPLog.print("[DeviceDictation] no transcript:", error.localizedDescription)
+                            if session.audioEnded, Self.isNoSpeech(error) {
+                                // Audio with no speech in it is an empty transcript,
+                                // not a failed dictation.
                                 session.text = ""
                             } else {
                                 session.failure = error.localizedDescription
