@@ -96,8 +96,15 @@ function sessionStatusControls(
   return { stoppable: canAct && managed, managed };
 }
 
-function statusSummary(fresh: boolean, base: string): string {
-  return fresh ? base : "Status unavailable";
+function statusSummary(
+  fresh: boolean,
+  base: string,
+  extraCount: number,
+): string {
+  const summary = fresh ? base : "Status unavailable";
+  return extraCount > 0
+    ? `${summary} · ${extraCount} ${extraCount === 1 ? "item" : "items"}`
+    : summary;
 }
 
 function useFreshChatBackgroundState(
@@ -985,7 +992,8 @@ export function BackgroundItemsPanel(props: {
       portForwardCount: portForwards.length,
     }),
   );
-  const headerSummary = statusSummary(fresh, baseSummary);
+  const extraCount = extraRows.filter((row) => row.countable).length;
+  const headerSummary = statusSummary(fresh, baseSummary, extraCount);
   const deliverHeld = useManagedCommandDeliverHeld(props.chatId);
   const deliverHeldPending = useManagedCommandDeliverHeldIsPending(
     props.chatId,

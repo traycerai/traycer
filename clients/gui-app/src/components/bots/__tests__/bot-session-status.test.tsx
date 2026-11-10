@@ -310,12 +310,79 @@ describe("the trunk session's status surfaces", () => {
     await settleLegendList();
     openBackground();
 
-    expect(
-      within(view()).getByRole("button", { name: /Nightly audit · Check-ins/ }),
-    ).toBeTruthy();
-    expect(
-      within(view()).getByText(/Notifications · Every 2 hours/),
-    ).toBeTruthy();
+    const taskButton = within(view()).getByRole("button", {
+      name: /Nightly audit · Check-ins/,
+    });
+    expect(taskButton).toBeTruthy();
+    const taskRow = taskButton.closest("li");
+    if (taskRow === null) throw new Error("task row not found");
+    // The task row's own navigate-to-task link is its only control: no Stop,
+    // no Pin, nothing that would act on the check-in task from here.
+    expect(within(taskRow).getAllByRole("button")).toEqual([taskButton]);
+    expect(within(taskRow).queryByRole("button", { name: /stop/i })).toBeNull();
+    expect(within(taskRow).queryByRole("button", { name: /pin/i })).toBeNull();
+
+    const subscriptionText = within(view()).getByText(
+      /Notifications · Every 2 hours/,
+    );
+    expect(subscriptionText).toBeTruthy();
+    const subscriptionRow = subscriptionText.closest("li");
+    if (subscriptionRow === null) throw new Error("subscription row not found");
+    // Pure display: a notification row offers no control at all.
+    expect(within(subscriptionRow).queryAllByRole("button")).toEqual([]);
+  });
+
+  describe("the collapsed header's summary", () => {
+    it("says '0 running' with no item suffix when there are no tasks or subscriptions", async () => {
+      mountSession({
+        chatId: TRUNK_ID,
+        threadId: null,
+        tasks: [],
+        subscriptions: [],
+      });
+      await settleLegendList();
+
+      expect(
+        within(view()).getByTestId("background-header-summary").textContent,
+      ).toBe("0 running");
+    });
+
+    it("counts a periodic task and a trunk subscription as ' · 2 items', alongside the running summary", async () => {
+      mountSession({
+        chatId: TRUNK_ID,
+        threadId: null,
+        tasks: [
+          task("task-periodic", {
+            cadence: { kind: "every", seconds: 3_600 },
+            label: "Nightly audit",
+          }),
+        ],
+        subscriptions: [subscription({ target: { kind: "trunk" } })],
+      });
+      await settleLegendList();
+
+      expect(
+        within(view()).getByTestId("background-header-summary").textContent,
+      ).toBe("0 running · 2 items");
+    });
+
+    it("does not count the 'Subscriptions unavailable' placeholder as an item", async () => {
+      mountSession({
+        chatId: TRUNK_ID,
+        threadId: null,
+        tasks: [],
+        subscriptions: null,
+      });
+      await settleLegendList();
+
+      expect(
+        within(view()).getByTestId("background-header-summary").textContent,
+      ).toBe("0 running");
+      openBackground();
+      expect(
+        within(view()).getByText("Subscriptions unavailable"),
+      ).toBeTruthy();
+    });
   });
 
   it("does not list a thread's own one-off task or a thread-targeted subscription", async () => {

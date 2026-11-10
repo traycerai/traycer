@@ -58,6 +58,7 @@ export function BotSessionStatus(props: {
     });
     const taskRows = tasks.map((task) => ({
       id: `task:${task.taskId}`,
+      countable: true,
       content: (
         <button
           type="button"
@@ -93,6 +94,7 @@ export function BotSessionStatus(props: {
     );
     const subscriptionRows = subscriptions.map((subscription) => ({
       id: `subscription:${subscription.target.kind === "trunk" ? "trunk" : subscription.target.threadId}`,
+      countable: true,
       content: (
         <>
           <Bell aria-hidden className="size-3.5 shrink-0 text-primary/80" />
@@ -119,6 +121,7 @@ export function BotSessionStatus(props: {
         ? [
             {
               id: "subscriptions-unavailable",
+              countable: false,
               content: <span>Subscriptions unavailable</span>,
             },
           ]

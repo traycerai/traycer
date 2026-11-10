@@ -6,6 +6,7 @@ export const ChatStatusReadOnlyContext = createContext(false);
 export interface ChatStatusExtraRow {
   readonly id: string;
   readonly content: ReactNode;
+  readonly countable: boolean;
 }
 
 export const ChatStatusExtraRowsContext = createContext<
