@@ -13,7 +13,6 @@ import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostNotificationsIndicatorStateResponse } from "@traycer/protocol/host/notifications/contracts";
-import { managedCommandSchema } from "@traycer/protocol/host/managed-command/unary-schemas";
 import type { BotTurnRef } from "@traycer/protocol/host/bot/conversation-schemas";
 import type {
   BotInputNeeded,
@@ -37,7 +36,6 @@ import {
   __setAgentActivityStateForTests,
 } from "@/stores/agent-activity-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { installManagedCommandChatSession } from "@/stores/managed-commands/test-support/managed-command-chat-session";
 import {
   EMPTY_NOTIFICATION_INDICATOR_STATE,
   type NotificationIndicatorState,
@@ -696,8 +694,8 @@ describe("<BotActivityPage /> check-ins and subscriptions", () => {
   });
 });
 
-describe("<BotActivityPage /> shells in open sessions", () => {
-  it("shows only loaded thread sessions and names thread subscriptions and shells", () => {
+describe("<BotActivityPage /> thread subscriptions", () => {
+  it("names threads by excerpt or thread ID without showing a shell section", () => {
     const first = postThread();
     if (first.anchor === null) throw new Error("thread fixture has no anchor");
     const named = {
@@ -711,162 +709,41 @@ describe("<BotActivityPage /> shells in open sessions", () => {
       threadId: "thread-fallback",
       sessionChatId: "chat-fallback",
     };
-    const unloaded = {
-      ...first,
-      threadId: "thread-unloaded",
-      sessionChatId: "chat-unloaded",
-    };
-    const session = installManagedCommandChatSession({
-      epicId: BOT_ID,
-      chatId: named.sessionChatId,
-      hostId: HOST_ID,
+    render(
+      <Harness
+        tasks={[]}
+        threads={[named, unnamed]}
+        boundHere
+        notificationSubscriptions={[
+          {
+            target: { kind: "thread", threadId: named.threadId },
+            attentionOnly: true,
+            everySeconds: null,
+            since: null,
+            digests: null,
+          },
+          {
+            target: { kind: "thread", threadId: unnamed.threadId },
+            attentionOnly: false,
+            everySeconds: null,
+            since: null,
+            digests: null,
+          },
+        ]}
+      />,
+    );
+    const subscriptions = screen.getByRole("region", {
+      name: "Notification subscriptions",
     });
-    const fallback = installManagedCommandChatSession({
-      epicId: BOT_ID,
-      chatId: unnamed.sessionChatId,
-      hostId: HOST_ID,
-    });
-    const command = managedCommandSchema.parse({
-      id: "thread-shell",
-      monitoring: true,
-      description: "Thread watcher",
-      command: "watch",
-      cwd: "/work",
-      cadence: { debounceMs: 500, maxWaitMs: 15_000, throttleMs: 5_000 },
-      status: { state: "running", pid: 42, startedAtMs: NOW },
-      chatId: named.sessionChatId,
-      relaunchOnHostRestart: false,
-      createdAtMs: NOW,
-      updatedAtMs: NOW,
-    });
-    try {
-      session.setCommands([command]);
-      session.setConnectionStatus("open");
-      fallback.setCommands([]);
-      fallback.setConnectionStatus("open");
-      render(
-        <Harness
-          tasks={[]}
-          threads={[named, unnamed, unloaded]}
-          boundHere
-          notificationSubscriptions={[
-            {
-              target: { kind: "thread", threadId: named.threadId },
-              attentionOnly: true,
-              everySeconds: null,
-              since: null,
-              digests: null,
-            },
-            {
-              target: { kind: "thread", threadId: unnamed.threadId },
-              attentionOnly: false,
-              everySeconds: null,
-              since: null,
-              digests: null,
-            },
-          ]}
-        />,
-      );
-      const shells = screen.getByRole("region", {
-        name: "Shells and monitors",
-      });
-      const subscriptions = screen.getByRole("region", {
-        name: "Notification subscriptions",
-      });
-      expect(
-        within(shells).getByText("Thread: Release discussion"),
-      ).toBeTruthy();
-      expect(within(shells).getByText("Thread: thread-fallback")).toBeTruthy();
-      expect(within(shells).getByText("Thread watcher")).toBeTruthy();
-      expect(within(shells).getByText("No shells")).toBeTruthy();
-      expect(within(shells).queryByText("thread-unloaded")).toBeNull();
-      expect(within(shells).getAllByText("Shells unavailable")).toHaveLength(1);
-      expect(
-        within(shells).getByText(/Other sessions may have shells/),
-      ).toBeTruthy();
-      expect(
-        within(subscriptions).getByText("Thread: Release discussion"),
-      ).toBeTruthy();
-      expect(
-        within(subscriptions).getByText("Thread: thread-fallback"),
-      ).toBeTruthy();
-      act(() => fallback.setConnectionStatus("closed"));
-      expect(within(shells).getAllByText("Shells unavailable")).toHaveLength(2);
-    } finally {
-      cleanup();
-      session.dispose();
-      fallback.dispose();
-    }
-  });
-
-  it("tracks the existing host-scoped session and opens the owning transcript", async () => {
-    const user = userEvent.setup();
-    const otherHost = installManagedCommandChatSession({
-      epicId: BOT_ID,
-      chatId: "bot-trunk",
-      hostId: "other-host",
-    });
-    const session = installManagedCommandChatSession({
-      epicId: BOT_ID,
-      chatId: "bot-trunk",
-      hostId: HOST_ID,
-    });
-    try {
-      otherHost.setCommands([]);
-      otherHost.setConnectionStatus("open");
-      mount([], { boundHere: true });
-      expect(screen.getByText("Shells unavailable")).toBeTruthy();
-      expect(screen.queryByText("No shells")).toBeNull();
-
-      act(() => {
-        session.setCommands([]);
-        session.setConnectionStatus("open");
-      });
-      expect(screen.getByText("No shells")).toBeTruthy();
-
-      const command = managedCommandSchema.parse({
-        id: "shell-deploy",
-        monitoring: true,
-        description: "deploy watcher",
-        command: "tail -f deploy.log",
-        cwd: "/work/repo",
-        cadence: { debounceMs: 500, maxWaitMs: 15_000, throttleMs: 5_000 },
-        status: { state: "running", pid: 42, startedAtMs: NOW },
-        chatId: "bot-trunk",
-        relaunchOnHostRestart: false,
-        createdAtMs: NOW,
-        updatedAtMs: NOW,
-      });
-      act(() => session.setCommands([command]));
-      expect(screen.getByText("deploy watcher")).toBeTruthy();
-      expect(screen.getByText("running")).toBeTruthy();
-      expect(screen.getByText("Monitor on")).toBeTruthy();
-      await user.click(screen.getByRole("button", { name: "Open session" }));
-      expect(mocks.openSession).toHaveBeenCalledWith({
-        chatId: "bot-trunk",
-        threadId: null,
-        messageId: null,
-        sendPostId: null,
-      });
-
-      act(() => session.setCommands([{ ...command, monitoring: false }]));
-      expect(screen.getByText("Monitor off")).toBeTruthy();
-      expect(screen.queryByText("Monitor on")).toBeNull();
-      act(() => session.setConnectionStatus("closed"));
-      expect(screen.getByText("Shells unavailable")).toBeTruthy();
-      expect(screen.queryByText("deploy watcher")).toBeNull();
-      act(() => session.setConnectionStatus("open"));
-      expect(screen.getByText("Shells unavailable")).toBeTruthy();
-      expect(screen.queryByText("deploy watcher")).toBeNull();
-      act(() => session.sendSnapshot([{ ...command, monitoring: false }]));
-      expect(screen.getByText("deploy watcher")).toBeTruthy();
-      expect(screen.getByText("Monitor off")).toBeTruthy();
-      expect(screen.queryByText("Shells unavailable")).toBeNull();
-    } finally {
-      cleanup();
-      session.dispose();
-      otherHost.dispose();
-    }
+    expect(
+      within(subscriptions).getByText("Thread: Release discussion"),
+    ).toBeTruthy();
+    expect(
+      within(subscriptions).getByText("Thread: thread-fallback"),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("region", { name: "Shells and monitors" }),
+    ).toBeNull();
   });
 });
 

@@ -25,7 +25,6 @@ import {
   type ChatDescendantStatusRollup,
 } from "@/components/epic-canvas/sidebar/use-chat-archive-hidden-ids";
 import { useChatRowOpenRef } from "@/components/epic-canvas/sidebar/use-chat-row-open-ref";
-import { BotActivityShells } from "@/components/bots/bot-activity-shells";
 import type { BotSessionOpen } from "@/stores/bots/bot-open-thread-store";
 import { BotActivityDetails } from "@/components/bots/bot-activity-details";
 import type { BotTurnOpen } from "@/stores/bots/bot-open-thread-store";
@@ -166,13 +165,6 @@ export function BotActivityPage(props: {
           ))}
         </ul>
       )}
-      <BotActivityShells
-        botId={botId}
-        hostId={hostId}
-        trunkChatId={props.trunkChatId}
-        threads={props.threads}
-        onOpenSession={props.onOpenSession}
-      />
       <BotActivityDetails
         botId={botId}
         hostId={hostId}
