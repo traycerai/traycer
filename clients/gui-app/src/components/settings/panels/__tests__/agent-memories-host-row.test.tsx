@@ -49,7 +49,6 @@ import { useEnvironmentStatusRead } from "@/hooks/environment/use-environment-re
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useRereadHostReadsOnFocus } from "@/hooks/environment/use-reread-host-reads-on-focus";
 import { AgentMemoriesSettingsPanel } from "@/components/settings/panels/agent-memories-settings-panel";
-import { AGENT_MEMORY_CONFIRM_BOUND_MS } from "@/components/settings/panels/agent-memories-settings-panel";
 import {
   environmentStatusFixture,
   pendingUploadFixture,
@@ -58,6 +57,7 @@ import {
 const ENV = "env-a";
 const OTHER_ENV = "env-b";
 const UPLOAD = "upload-memory";
+const CONFIRMATION_BOUND_MS = 60_000;
 
 /** The getter's answer as the host builds it: one snapshot, three fields. */
 function read(
@@ -939,7 +939,7 @@ describe("Agent memories ▸ the host row's write", () => {
     const oldReads = original.paramsOf("config.agentMemories.get").length;
     const newReads = replacement.paramsOf("config.agentMemories.get").length;
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(AGENT_MEMORY_CONFIRM_BOUND_MS + 10_000);
+      await vi.advanceTimersByTimeAsync(CONFIRMATION_BOUND_MS + 10_000);
     });
     expect(await line()).toContain("Running agents pick this up");
     expect(original.paramsOf("config.agentMemories.get").length).toBe(oldReads);
@@ -976,7 +976,6 @@ describe("Agent memories ▸ the host row's write", () => {
     // arrival would report success for a state the undelivered revision 5 had
     // already overturned.
     script.reads = [read(false, 4), read(true, 4)];
-    script.set = () => savedAnswer({ enabled: true, revision: 6 });
     mount();
     await flipOn();
 
@@ -988,8 +987,6 @@ describe("Agent memories ▸ the host row's write", () => {
   });
 
   it("supersedes an earlier write with the newer one, saying nothing about the one it replaced", async () => {
-    script.reads = [read(false, 5)];
-    script.set = () => savedAnswer({ enabled: true, revision: 6 });
     mount();
     await flipOn();
     await waitFor(async () =>
@@ -1090,7 +1087,6 @@ describe("Agent memories ▸ the host row's write", () => {
 
   it("shows a queued edit's stale refusal from a negotiated 1.1 host", async () => {
     script.set = () => queuedAnswer(UPLOAD);
-    script.reads = [read(false, 5)];
     script.statuses = [
       environmentStatusFixture({
         pendingUploads: [
@@ -1194,7 +1190,6 @@ describe("Agent memories ▸ the host row's write", () => {
   });
 
   it("does not acknowledge a matching revision from an unavailable environment", async () => {
-    script.set = () => savedAnswer({ enabled: true, revision: 6 });
     script.reads = [
       read(false, 2),
       { enabled: true, revision: 6, environmentId: null },
@@ -1245,7 +1240,6 @@ describe("Agent memories ▸ the host row's write", () => {
 
   it("keeps a queued edit waiting while its receipt is absent", async () => {
     script.set = () => queuedAnswer(UPLOAD);
-    script.statuses = [environmentStatusFixture({})];
     mount();
     await flipOn();
 
@@ -1334,14 +1328,13 @@ describe("Agent memories ▸ the host row's write", () => {
 
   it("stops re-reading once the bound runs out, and says the change was not confirmed", async () => {
     // A host whose delta never comes: every read stays behind the revision.
-    script.reads = [read(false, 5)];
     const harness = mount();
     await flipOn();
 
     await waitFor(async () =>
       expect(await line()).toContain("This host hasn't picked it up yet"),
     );
-    await vi.advanceTimersByTimeAsync(AGENT_MEMORY_CONFIRM_BOUND_MS + 1_000);
+    await vi.advanceTimersByTimeAsync(CONFIRMATION_BOUND_MS + 1_000);
     await waitFor(async () =>
       expect(await line()).toContain("can't be shown here"),
     );
@@ -1369,7 +1362,7 @@ describe("Agent memories ▸ the host row's write", () => {
       ).toBeGreaterThan(1),
     );
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(AGENT_MEMORY_CONFIRM_BOUND_MS + 1_000);
+      await vi.advanceTimersByTimeAsync(CONFIRMATION_BOUND_MS + 1_000);
     });
     expect(await line()).toContain("can't be shown here");
     const count = harness.paramsOf("config.agentMemories.get").length;

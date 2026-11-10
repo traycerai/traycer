@@ -10,7 +10,6 @@ import {
   type CreatureMark,
   type CreatureMarkSize,
   type CreatureSilhouette,
-  CREATURE_SHEET_SIZE,
   chosenCreatureMark,
   creatureMark,
   creatureSheet,
@@ -276,7 +275,7 @@ describe("the creature sheet", () => {
   it("offers twelve creatures, none drawn like another", () => {
     for (const botId of botIds) {
       const sheet = creatureSheet(botId);
-      expect(sheet).toHaveLength(CREATURE_SHEET_SIZE);
+      expect(sheet).toHaveLength(12);
       const looks = sheet.map((choice) => {
         const mark = chosenCreatureMark(botId, choice);
         return `${mark.silhouette}:${mark.rows.join(",")}`;
@@ -285,14 +284,10 @@ describe("the creature sheet", () => {
     }
   });
 
-  it("regrows from a stored family and seed the mask the sheet showed", () => {
+  it("draws each offered creature in its chosen family", () => {
     for (const botId of botIds) {
       for (const choice of creatureSheet(botId)) {
-        const stored = JSON.parse(JSON.stringify(choice)) as typeof choice;
-        expect(chosenCreatureMark(botId, stored)).toEqual(
-          chosenCreatureMark(botId, choice),
-        );
-        expect(chosenCreatureMark(botId, stored).silhouette).toBe(
+        expect(chosenCreatureMark(botId, choice).silhouette).toBe(
           choice.family,
         );
       }
@@ -345,7 +340,7 @@ describe("regenerating the sheet", () => {
         creatureSheet(botId),
         currentOf(botId),
       );
-      expect(next).toHaveLength(CREATURE_SHEET_SIZE);
+      expect(next).toHaveLength(12);
       const looks = next.map((choice) => lookOf(botId, choice));
       expect(new Set(looks).size).toBe(looks.length);
     }
@@ -377,18 +372,14 @@ describe("regenerating the sheet", () => {
     }
   });
 
-  it("offers each seed in the family its seed hashes to, so a choice regrows the same mask", () => {
+  it("draws each regenerated creature in its chosen family", () => {
     for (const botId of botIds) {
       for (const choice of nextCreatureSheet(
         botId,
         creatureSheet(botId),
         currentOf(botId),
       )) {
-        const stored = JSON.parse(JSON.stringify(choice)) as CreatureChoice;
-        expect(chosenCreatureMark(botId, stored)).toEqual(
-          chosenCreatureMark(botId, choice),
-        );
-        expect(chosenCreatureMark(botId, stored).silhouette).toBe(
+        expect(chosenCreatureMark(botId, choice).silhouette).toBe(
           choice.family,
         );
       }

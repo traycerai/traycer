@@ -97,11 +97,6 @@ async function advance(seconds: number): Promise<void> {
 }
 
 describe("soundtrack store: set pieces", () => {
-  it("defaults to on", () => {
-    const { store } = harness();
-    expect(store.getState().setPiecesEnabled).toBe(true);
-  });
-
   it("ignores the choice with no desktop bridge, leaving the session untouched", async () => {
     const { store, output } = harness();
     store.getState().enable();

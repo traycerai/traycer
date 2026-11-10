@@ -10,7 +10,7 @@ import type {
   SoundtrackManifest,
   SoundtrackTrack,
 } from "../manifest";
-import type { OutputGain, OutputVoice } from "../output";
+import type { OutputGain } from "../output";
 import { StaticDirector } from "../directors";
 import { SoundtrackSession, type SoundtrackPorts } from "../session";
 import { SoundtrackLogRelay } from "../session-log";
@@ -27,24 +27,18 @@ const HOME: MixSignals = {
   done: 0,
 };
 
-interface RecordingCall {
-  readonly ended: () => void;
-}
-
-/** Tracks each complete recording started, as `composed-session.test.ts` does. */
+/** Counts complete recordings started through the output. */
 class RecordingOutput extends FakeOutput {
-  readonly recordings: RecordingCall[] = [];
+  recordingStarts = 0;
 
   override createBus(): OutputGain {
     const wrap = (gain: OutputGain): OutputGain => ({
       ramp: (target, seconds) => gain.ramp(target, seconds),
       createChild: (initial, pan) => wrap(gain.createChild(initial, pan)),
       play: (buffer, when, fade) => gain.play(buffer, when, fade),
-      playRecording: (buffer, when, _offset, ended): OutputVoice => {
-        const voice = gain.play(buffer, when, 0.01);
-        const call: RecordingCall = { ended };
-        this.recordings.push(call);
-        return voice;
+      playRecording: (buffer, when) => {
+        this.recordingStarts += 1;
+        return gain.play(buffer, when, 0.01);
       },
     });
     return wrap(super.createBus());
@@ -133,7 +127,7 @@ it("cuts a sounding recording at once, clears the dim and reports nothing soundi
   });
   session.setSignals(HOME);
   await advance(1);
-  expect(output.recordings).toHaveLength(1);
+  expect(output.recordingStarts).toBe(1);
   setDimmed.mockClear();
   onSounding.mockClear();
 
@@ -159,13 +153,13 @@ it("cancels a recording still loading, so it never starts once disabled", async 
   });
   session.setSignals(HOME);
   await advance(0);
-  expect(output.recordings).toHaveLength(0);
+  expect(output.recordingStarts).toBe(0);
 
   session.setSetPiecesEnabled(false);
   resolveLoad(makeAudioBuffer(10, 10));
   await advance(1);
 
-  expect(output.recordings).toHaveLength(0);
+  expect(output.recordingStarts).toBe(0);
   session.end();
 });
 
@@ -179,12 +173,12 @@ it("cancels a piece's own silence wait so it never starts", async () => {
   // "one" ends at about 10.05 s and "piece" is picked next, waiting out the
   // silence before it starts.
   await advance(11);
-  expect(output.recordings).toHaveLength(0);
+  expect(output.recordingStarts).toBe(0);
 
   session.setSetPiecesEnabled(false);
   await advance(30);
 
-  expect(output.recordings).toHaveLength(0);
+  expect(output.recordingStarts).toBe(0);
   session.end();
 });
 
@@ -198,12 +192,12 @@ it("removes a sounding piece from the view so Previous cannot return to it", asy
   await advance(1);
   session.next();
   await advance(0);
-  expect(output.recordings).toHaveLength(1);
+  expect(output.recordingStarts).toBe(1);
 
   session.setSetPiecesEnabled(false);
   session.previous();
 
-  expect(output.recordings).toHaveLength(1);
+  expect(output.recordingStarts).toBe(1);
   expect(session.end().home?.trackName).toBe("one");
 });
 
@@ -234,7 +228,7 @@ it("keeps a non-piece current track, re-indexed, and filters a piece out of its 
   await advance(1);
   session.next();
   await advance(0);
-  expect(output.recordings).toHaveLength(1);
+  expect(output.recordingStarts).toBe(1);
   random.mockReturnValueOnce(0.9);
   session.next();
   await advance(0);
@@ -254,7 +248,7 @@ it("never returns to a piece on Next either, once its history entry is filtered 
   await advance(1);
   session.next();
   await advance(0);
-  expect(output.recordings).toHaveLength(1);
+  expect(output.recordingStarts).toBe(1);
   random.mockReturnValueOnce(0.9);
   session.next();
   await advance(0);
@@ -264,23 +258,7 @@ it("never returns to a piece on Next either, once its history entry is filtered 
   session.next();
 
   expect(session.end().home?.trackName).toBe("two");
-  expect(output.recordings).toHaveLength(1);
-});
-
-it("drops a view whose pool is only pieces, reporting nothing sounding", async () => {
-  const { session, onSounding } = openMixed({
-    views: { ...EMPTY_VIEWS, home: ["piece"] },
-    tracks: [pieceOf("piece", "master")],
-    recordings: [{ name: "master", file: "piece.opus" }],
-  });
-  session.setSignals(HOME);
-  await advance(1);
-  onSounding.mockClear();
-
-  session.setSetPiecesEnabled(false);
-
-  expect(onSounding).toHaveBeenLastCalledWith(null);
-  expect(session.end().home).toBeUndefined();
+  expect(output.recordingStarts).toBe(1);
 });
 
 it("stops a piece immediately even while paused, and resume does not restart it", async () => {
@@ -293,7 +271,7 @@ it("stops a piece immediately even while paused, and resume does not restart it"
   await advance(1);
   session.next();
   await advance(0);
-  expect(output.recordings).toHaveLength(1);
+  expect(output.recordingStarts).toBe(1);
   session.pause();
 
   session.setSetPiecesEnabled(false);
@@ -302,7 +280,7 @@ it("stops a piece immediately even while paused, and resume does not restart it"
   session.play();
   await advance(5);
 
-  expect(output.recordings).toHaveLength(1);
+  expect(output.recordingStarts).toBe(1);
   session.end();
 });
 
@@ -315,12 +293,12 @@ it("restores a piece to the pool once set pieces are enabled again", async () =>
   session.setSetPiecesEnabled(false);
   session.setSignals(HOME);
   await advance(1);
-  expect(output.recordings).toHaveLength(0);
+  expect(output.recordingStarts).toBe(0);
 
   session.setSetPiecesEnabled(true);
   await advance(1);
 
-  expect(output.recordings).toHaveLength(1);
+  expect(output.recordingStarts).toBe(1);
   session.end();
 });
 

@@ -186,7 +186,7 @@ export function creatureMark(botId: string): CreatureMark {
 }
 
 /** How many creatures the settings offer a bot, its own first. */
-export const CREATURE_SHEET_SIZE = 12;
+const CREATURE_SHEET_SIZE = 12;
 /** Seeds tried for a sheet before it is cut short; duplicates are skipped. */
 const MAX_SHEET_SEEDS = 64;
 
