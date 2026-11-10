@@ -262,23 +262,26 @@ export function useOnboardingAgentMemories(input: {
     return kind === "saved";
   }
 
-  async function save(): Promise<boolean> {
-    if (view.chosen !== true || !ready) return true;
-    if (savingRef.current) return false;
+  async function writeChoices(forHost: string | null): Promise<boolean> {
+    if (!(await ensureTraycer(forHost))) return false;
+    const writes = view.rows
+      .filter(memoryRowNeedsWrite)
+      .map((row) => writeProvider(forHost, row));
+    const results = await Promise.all(writes);
+    return results.every(Boolean);
+  }
+
+  function save(): Promise<boolean> {
+    if (view.chosen !== true || !ready) return Promise.resolve(true);
+    if (savingRef.current) return Promise.resolve(false);
     savingRef.current = true;
     setSaving(true);
-    const forHost = hostId;
-    try {
-      if (!(await ensureTraycer(forHost))) return false;
-      const writes = view.rows
-        .filter(memoryRowNeedsWrite)
-        .map((row) => writeProvider(forHost, row));
-      const results = await Promise.all(writes);
-      return results.every(Boolean);
-    } finally {
+    // `.finally` rather than try/finally: React Compiler cannot lower a try
+    // without a catch, and would leave this whole hook unmemoized.
+    return writeChoices(hostId).finally(() => {
       savingRef.current = false;
       setSaving(false);
-    }
+    });
   }
 
   return {
