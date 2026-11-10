@@ -9,10 +9,11 @@ import {
   acceptHeldWrite,
   deliverAcceptedWrites,
   deliverSavedWrite,
-  entryIsStale,
   entryReaderAnswer,
+  enterTour,
+  expectSettingsReaderIsCurrent,
   mountEntryReader,
-  refreshMemoryEntry,
+  unmountEntryReader,
   deferred,
   walkToMemoryAct,
   writesAnswered,
@@ -35,6 +36,7 @@ import {
   switchOf,
   world,
 } from "@/components/onboarding/__tests__/onboarding-memory-act-fixture";
+import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 
 vi.mock("@/components/auth/cinematic-backdrop", () => ({
   BrandMark: () => <span aria-hidden="true" />,
@@ -490,15 +492,11 @@ describe("the Memory act: a write the host has not read back, and one overturned
 
 describe("the Memory act: a read is only as fresh as when it was taken", () => {
   it.each([
-    ["the host is rebound to an off configuration", "rebind", "env-rebound"],
-    [
-      "the setting is turned off by a later revision",
-      "overturn",
-      ENVIRONMENT_ID,
-    ],
+    ["the host is rebound to an off configuration", "rebind"],
+    ["the setting is turned off by a later revision", "overturn"],
   ] as const)(
-    "accepts that %s right after the final read, moves on without reading again, and leaves the entry stale for the next reader",
-    async (_name, overtakenBy, environmentId) => {
+    "accepts that %s right after the final read, and moves on without reading again",
+    async (_name, overtakenBy) => {
       world.rebindAfterNativeWrites = 2;
       world.overtakenBy = overtakenBy;
       await openMemoryAct();
@@ -516,84 +514,119 @@ describe("the Memory act: a read is only as fresh as when it was taken", () => {
       ]);
       expect(paramsOf("config.agentMemories.set")).toHaveLength(1);
       expect(hostCalls()).toHaveLength(callsWhenFinished);
-
-      // The next reader of the act's entry asks the host instead of being
-      // handed the answer the act took.
-      expect(entryIsStale(HOST_ID)).toBe(true);
-      const reads = paramsOf("config.agentMemories.get").length;
-      mountEntryReader(HOST_ID);
-      await waitFor(() =>
-        expect(entryReaderAnswer()).toMatchObject({
-          enabled: false,
-          environmentId,
-        }),
-      );
-      expect(paramsOf("config.agentMemories.get").length).toBeGreaterThan(
-        reads,
-      );
     },
   );
+});
 
-  it("marks the entry stale on Not now", async () => {
-    await openMemoryAct();
-    await screen.findByTestId("onboarding-memory-not-now");
+describe("the Memory act: Settings reads the host after any way out", () => {
+  // Each case leaves the act a different way; Settings' own reader must then
+  // send its own `get` and show what the host answers, never the act's read.
+  const ways: ReadonlyArray<readonly [string, () => Promise<void>]> = [
+    [
+      "done on a read that a rebind then overtook",
+      async () => {
+        world.rebindAfterNativeWrites = 2;
+        world.overtakenBy = "rebind";
+        await openMemoryAct();
+        await chooseTraycer();
+        await continueFromMemory();
+        await expectOnStep("session-import");
+      },
+    ],
+    [
+      "done on a read that an overturn then overtook",
+      async () => {
+        world.rebindAfterNativeWrites = 2;
+        world.overtakenBy = "overturn";
+        await openMemoryAct();
+        await chooseTraycer();
+        await continueFromMemory();
+        await expectOnStep("session-import");
+      },
+    ],
+    [
+      "Not now",
+      async () => {
+        await openMemoryAct();
+        fireEvent.click(await screen.findByTestId("onboarding-memory-not-now"));
+        await expectOnStep("session-import");
+      },
+    ],
+    [
+      "an overturn, then Traycer switched off and Continue",
+      async () => {
+        world.nativeFailures.set("claude", 1);
+        await openMemoryAct();
+        await chooseTraycer();
+        await continueFromMemory();
+        await screen.findByTestId("onboarding-memory-save-report");
+        overturnWrite();
+        await continueFromMemory();
+        await settled();
+        fireEvent.click(switchOf("onboarding-memory-traycer"));
+        await continueFromMemory();
+        await expectOnStep("session-import");
+      },
+    ],
+    [
+      "Back while a save is running",
+      async () => {
+        world.setGate = deferred();
+        await walkToMemoryAct();
+        await chooseTraycer();
+        await continueFromMemory();
+        await waitFor(() =>
+          expect(paramsOf("config.agentMemories.set")).toHaveLength(1),
+        );
+        fireEvent.click(screen.getByTestId("onboarding-back"));
+        await expectOnStep("providers");
+        act(() => world.setGate?.resolve());
+        await writesAnswered();
+      },
+    ],
+    [
+      "a read still in flight as the act is left",
+      async () => {
+        world.getGate = deferred();
+        await openMemoryAct();
+        fireEvent.click(await screen.findByTestId("onboarding-memory-not-now"));
+        await expectOnStep("session-import");
+        act(() => world.getGate?.resolve());
+      },
+    ],
+  ];
+  it.each(ways)("after %s", async (_name, leave) => {
+    await leave();
     await settled();
-    await act(() => refreshMemoryEntry());
-    expect(entryIsStale(HOST_ID)).toBe(false);
-
-    fireEvent.click(screen.getByTestId("onboarding-memory-not-now"));
-    await expectOnStep("session-import");
-
-    expect(entryIsStale(HOST_ID)).toBe(true);
+    await expectSettingsReaderIsCurrent(HOST_ID);
   });
 
-  it("marks the entry stale when Continue moves on after Traycer was switched off following an overturn", async () => {
-    world.nativeFailures.set("claude", 1);
-    await openMemoryAct();
-    await chooseTraycer();
-    await continueFromMemory();
-    await screen.findByTestId("onboarding-memory-save-report");
-    overturnWrite();
-    await continueFromMemory();
-    await settled();
-    fireEvent.click(switchOf("onboarding-memory-traycer"));
-    await act(() => refreshMemoryEntry());
-    expect(entryIsStale(HOST_ID)).toBe(false);
-
-    await continueFromMemory();
-    await expectOnStep("session-import");
-
-    expect(entryIsStale(HOST_ID)).toBe(true);
-  });
-
-  it("marks the entry stale when a save that was running as the person went Back ends", async () => {
-    world.setGate = deferred();
-    await walkToMemoryAct();
-    await chooseTraycer();
-    await continueFromMemory();
+  it("sees the write the act made, though it held an answer from before", async () => {
+    await enterTour();
+    mountEntryReader(HOST_ID);
     await waitFor(() =>
-      expect(paramsOf("config.agentMemories.set")).toHaveLength(1),
+      expect(entryReaderAnswer()).toMatchObject({ enabled: false }),
     );
-    fireEvent.click(screen.getByTestId("onboarding-back"));
-    await expectOnStep("providers");
+    unmountEntryReader();
+    const readsBefore = paramsOf("config.agentMemories.get").length;
 
-    act(() => world.setGate?.resolve());
-    await writesAnswered();
-    await settled();
-
-    expect(entryIsStale(HOST_ID)).toBe(true);
-  });
-
-  it("does not let a read still in flight when the act is left clear the mark", async () => {
-    world.getGate = deferred();
-    await openMemoryAct();
-    await screen.findByTestId("onboarding-memory-not-now");
-    fireEvent.click(screen.getByTestId("onboarding-memory-not-now"));
+    act(() => useOnboardingStore.getState().reseat(2));
+    await screen.findByTestId("onboarding-memory-stage");
+    await chooseTraycer();
+    await continueFromMemory();
     await expectOnStep("session-import");
-
-    act(() => world.getGate?.resolve());
     await settled();
+    expect(paramsOf("config.agentMemories.set")).toHaveLength(1);
+    const readsAfterSave = paramsOf("config.agentMemories.get").length;
+    expect(readsAfterSave).toBeGreaterThan(readsBefore);
 
-    expect(entryIsStale(HOST_ID)).toBe(true);
+    // Settings opens: the write swept its entry, so it asks again.
+    mountEntryReader(HOST_ID);
+    await waitFor(() =>
+      expect(entryReaderAnswer()).toMatchObject({ enabled: true }),
+    );
+    expect(paramsOf("config.agentMemories.get").length).toBeGreaterThan(
+      readsAfterSave,
+    );
   });
 });

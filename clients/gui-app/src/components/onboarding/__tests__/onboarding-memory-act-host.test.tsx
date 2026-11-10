@@ -21,9 +21,7 @@ import {
   continueFromMemory,
   currentStepId,
   deferred,
-  entryIsStale,
-  entryReaderAnswer,
-  mountEntryReader,
+  expectSettingsReaderIsCurrent,
   invalidateAllQueries,
   readsAnswered,
   refreshHostDirectory,
@@ -372,8 +370,9 @@ describe("the Memory act's save: a held write outlives a choice made on another 
   });
 });
 
-describe("the Memory act: leaving it while another host's save is running", () => {
-  it("cancels the late read on the host the person moved to, so its entry stays stale for the next reader", async () => {
+describe("the Memory act: Settings reads the host after the act is left mid-save", () => {
+  /** The hook with a save held on the first host, in a binding that can move. */
+  async function startHeldSave(): Promise<() => RebindProbe> {
     world.otherHosts = [OTHER_HOST];
     let latest: RebindProbe | null = null;
     const current = (): RebindProbe => {
@@ -390,8 +389,11 @@ describe("the Memory act: leaving it while another host's save is running", () =
     await waitFor(() => expect(current().memory.rows).toHaveLength(2));
     act(() => current().memory.choose());
     await waitFor(() => expect(current().memory.chosen).toBe(true));
+    return current;
+  }
 
-    // A's save is held at its set.
+  it("on the host the person moved to, when its first read lands after the act was left", async () => {
+    const current = await startHeldSave();
     world.setGate = deferred();
     act(() => {
       void current().memory.save();
@@ -400,7 +402,7 @@ describe("the Memory act: leaving it while another host's save is running", () =
       expect(paramsOf("config.agentMemories.set")).toHaveLength(1),
     );
 
-    // The person moves to B, whose first read is held open, and leaves the act.
+    // The person moves to B, whose first read is held open, and leaves.
     world.getGate = deferred();
     act(() => current().bindTo(OTHER_HOST.hostId));
     await waitFor(() =>
@@ -411,27 +413,42 @@ describe("the Memory act: leaving it while another host's save is running", () =
       ).toHaveLength(1),
     );
     act(() => current().leave());
-
-    // B's late read lands, then A's save ends.
-    world.memoriesOn = false;
     act(() => world.getGate?.resolve());
     await readsAnswered();
     act(() => world.setGate?.resolve());
     await writesAnswered();
     await settled();
 
-    // The host has moved on since B's late answer was taken.
-    world.memoriesOn = true;
-    expect(entryIsStale(OTHER_HOST.hostId)).toBe(true);
-    const readsOfB = (): number =>
-      callsTo(OTHER_HOST.hostId).filter(
-        (call) => call.method === "config.agentMemories.get",
-      ).length;
-    const before = readsOfB();
-    mountEntryReader(OTHER_HOST.hostId);
+    await expectSettingsReaderIsCurrent(OTHER_HOST.hostId);
+  });
+
+  it("on the first host, when the person went to another and back while a provider write was held", async () => {
+    const current = await startHeldSave();
+    world.nativeGate = deferred();
+    act(() => {
+      void current().memory.save();
+    });
     await waitFor(() =>
-      expect(entryReaderAnswer()).toMatchObject({ enabled: true }),
+      expect(paramsOf("providers.setNativeMemory")).toHaveLength(1),
     );
-    expect(readsOfB()).toBeGreaterThan(before);
+
+    // Back on the first host, an ordinary read is held open as the act is left.
+    act(() => current().bindTo(OTHER_HOST.hostId));
+    world.getGate = deferred();
+    act(() => current().bindTo(HOST_ID));
+    await waitFor(() =>
+      expect(
+        callsTo(HOST_ID).filter(
+          (call) => call.method === "config.agentMemories.get",
+        ).length,
+      ).toBeGreaterThan(2),
+    );
+    act(() => current().leave());
+    act(() => world.nativeGate?.resolve());
+    await writesAnswered();
+    act(() => world.getGate?.resolve());
+    await settled();
+
+    await expectSettingsReaderIsCurrent(HOST_ID);
   });
 });

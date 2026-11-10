@@ -444,9 +444,11 @@ const captureDirectory = (directory: HostDirectoryService | null): void => {
   hostDirectory = directory;
 };
 
-let mountReader: ((hostId: string) => void) | null = null;
+let mountReader: ((hostId: string | null) => void) | null = null;
 let readerAnswer: ConfigAgentMemoriesResponse | null = null;
-const captureReaderMount = (mount: ((hostId: string) => void) | null): void => {
+const captureReaderMount = (
+  mount: ((hostId: string | null) => void) | null,
+): void => {
   mountReader = mount;
 };
 const captureReaderAnswer = (
@@ -455,9 +457,14 @@ const captureReaderAnswer = (
   readerAnswer = answer;
 };
 
-/** Mounts a second reader of the act's `config.agentMemories.get` entry. */
+/** Mounts Settings' reader of `config.agentMemories.get` for a host. */
 export function mountEntryReader(hostId: string): void {
   act(() => mountReader?.(hostId));
+}
+
+export function unmountEntryReader(): void {
+  act(() => mountReader?.(null));
+  readerAnswer = null;
 }
 
 /** What that reader was given, once it has an answer. */
@@ -465,30 +472,49 @@ export function entryReaderAnswer(): ConfigAgentMemoriesResponse | null {
   return readerAnswer;
 }
 
-function memoryEntries(hostId: string) {
+function getsTo(hostId: string): number {
+  return callsTo(hostId).filter(
+    (call) => call.method === "config.agentMemories.get",
+  ).length;
+}
+
+/** Settings' entry for the host holds an answer: the act is meant never to fill it. */
+function settingsEntryFilled(hostId: string): boolean {
   return queryClient
     .getQueryCache()
     .getAll()
-    .filter((entry) => {
+    .some((entry) => {
       const key = JSON.stringify(entry.queryKey);
-      return key.includes("config.agentMemories.get") && key.includes(hostId);
+      return (
+        key.includes("config.agentMemories.get") &&
+        key.includes(hostId) &&
+        !key.includes("onboarding-agent-memories") &&
+        entry.state.data !== undefined
+      );
     });
 }
 
-/** The act's `config.agentMemories.get` entry for a host is marked stale. */
-export function entryIsStale(hostId: string): boolean {
-  const entries = memoryEntries(hostId);
-  return (
-    entries.length > 0 && entries.every((entry) => entry.state.isInvalidated)
+/**
+ * Settings opened after the act: the host now reads Traycer memories on at a
+ * newer revision, and its reader (kept fresh for a minute, as the app's
+ * client does) must send its own `get` and show that, not what the act saw.
+ */
+export async function expectSettingsReaderIsCurrent(
+  hostId: string,
+): Promise<void> {
+  expect(settingsEntryFilled(hostId)).toBe(false);
+  world.memoriesOn = true;
+  world.revision += 1;
+  const before = getsTo(hostId);
+  mountEntryReader(hostId);
+  await waitFor(() =>
+    expect(entryReaderAnswer()).toEqual({
+      enabled: true,
+      revision: world.revision,
+      environmentId: world.environmentId,
+    }),
   );
-}
-
-/** Reads the entry again now, so it stands fresh. */
-export function refreshMemoryEntry(): Promise<void> {
-  return queryClient.refetchQueries({
-    predicate: (entry) =>
-      JSON.stringify(entry.queryKey).includes("config.agentMemories.get"),
-  });
+  expect(getsTo(hostId)).toBeGreaterThan(before);
 }
 
 /** The window's host directory reads the host list again, from `world.otherHosts`. */

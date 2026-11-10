@@ -4,18 +4,18 @@ import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 
 /**
- * A second reader of the cache entry the act reads, as Settings → Agent
- * memories is: same method, no cache identity, the same client. A test mounts
+ * Settings → Agent memories' reader of the setting: same method, no cache
+ * identity (the act reads under its own), the client of the host it names. A test mounts
  * it once the tour has moved on and sees what the entry gives a later reader.
  */
 export function EntryReaderSlot(props: {
-  readonly onMount: (mount: ((hostId: string) => void) | null) => void;
+  readonly onMount: (mount: ((hostId: string | null) => void) | null) => void;
   readonly onAnswer: (answer: ConfigAgentMemoriesResponse | null) => void;
 }): ReactNode {
   const [mounted, setMounted] = useState<string | null>(null);
   const { onMount } = props;
   useEffect(() => {
-    onMount((hostId) => setMounted(hostId));
+    onMount(setMounted);
     return () => onMount(null);
   }, [onMount]);
   return mounted === null ? null : (
