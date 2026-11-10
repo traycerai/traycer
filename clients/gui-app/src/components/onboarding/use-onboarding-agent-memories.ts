@@ -30,10 +30,11 @@ const AGENT_MEMORIES_GET = "config.agentMemories.get";
 const AGENT_MEMORIES_SET = "config.agentMemories.set";
 const STATUS_IDENTITY = ["onboarding-agent-memories"];
 
-/** Where a save is going: the host its requests reach, and the picker's host. */
+/** One save: the host its answers are filed against, and when it started. */
 interface SaveTarget {
   readonly hostId: string | null;
-  readonly pickedHostId: string | null;
+  /** The act's host selection when the save started; see `selectionRef`. */
+  readonly selection: number;
 }
 
 /** Whether the act can offer the choice at all on its host. */
@@ -81,6 +82,7 @@ export function useOnboardingAgentMemories(input: {
    * The host the tour's picker names. While a picked host cannot be reached
    * the binding falls back to the app's own host, so the client alone cannot
    * tell that the person has moved on from the host a save started on.
+   * A change here stops a running save, as a change of the client's host does.
    */
   readonly pickedHostId: string | null;
 }): OnboardingAgentMemories {
@@ -109,7 +111,8 @@ export function useOnboardingAgentMemories(input: {
     emptyMemoryDraft(hostId),
   );
   // Choices belong to the host they were made on: a different host shows a
-  // fresh draft, and coming back to the first one does not restore it.
+  // fresh draft. Coming back to the first host shows its choices again, unless
+  // a choice made since on another host replaced them.
   const draft =
     storedDraft.hostId === hostId ? storedDraft : emptyMemoryDraft(hostId);
   /** A choice on screen, made for the host the act shows now. */
@@ -121,7 +124,7 @@ export function useOnboardingAgentMemories(input: {
     );
   /**
    * A write's answer, filed against the host it was SENT to: one that lands
-   * after the picker moved on updates nothing on screen.
+   * after the picker moved on never shows among another host's choices.
    */
   const record = (
     forHost: string | null,
@@ -170,22 +173,21 @@ export function useOnboardingAgentMemories(input: {
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
   const { pickedHostId } = input;
-  // The host the act shows, as of the last commit. The observers above follow
-  // the binding, so a save still running when the picker moves would send the
-  // first host's choices to the second; every request of a save checks this
-  // first. A layout effect, so it moves no later than the observers, which
-  // take their new options in passive effects.
-  const shownRef = useRef<SaveTarget>({ hostId, pickedHostId });
+  // Counts every change of the act's host, whether the host its requests
+  // reach or the host the picker names. The observers above follow the
+  // binding, so a save still running when either moves would send one host's
+  // choices to another; every request of a save checks this first. A count,
+  // not the ids: picking another host and then the first one again leaves the
+  // ids as they were, and the save must stay stopped. A layout effect, so it
+  // moves no later than the observers, which take their new options in
+  // passive effects.
+  const selectionRef = useRef(0);
   useLayoutEffect(() => {
-    shownRef.current = { hostId, pickedHostId };
+    selectionRef.current += 1;
   }, [hostId, pickedHostId]);
-  /**
-   * The save started for `target` may still send: the act still shows that
-   * host, both as the one its requests reach and as the one the picker names.
-   */
+  /** The save may still send: the act's host has not changed since it began. */
   const sendsTo = (target: SaveTarget): boolean =>
-    shownRef.current.hostId === target.hostId &&
-    shownRef.current.pickedHostId === target.pickedHostId;
+    selectionRef.current === target.selection;
 
   const providerControls = providerMemoryControls({
     nativeSetSupported,
@@ -315,7 +317,7 @@ export function useOnboardingAgentMemories(input: {
     if (savingRef.current) return Promise.resolve(false);
     savingRef.current = true;
     setSaving(true);
-    const target: SaveTarget = { hostId, pickedHostId };
+    const target: SaveTarget = { hostId, selection: selectionRef.current };
     // `.finally` rather than try/finally: React Compiler cannot lower a try
     // without a catch, and would leave this whole hook unmemoized.
     return (
