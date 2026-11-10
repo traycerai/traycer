@@ -8804,6 +8804,46 @@ const ultracodeFallbackFields = {
   pendingReturn: lazySchema(() => pendingReturnSchema.optional()),
   lastFailedAttempt: lazySchema(() => lastFailedAttemptSchema.optional()),
 };
+/**
+ * The status of a provider thread's goal, as Codex reports it. All six values
+ * from the first line that carries a goal: adding a value to a host-to-client
+ * enum later would break every peer that binds this one.
+ */
+export const chatGoalStatusSchema = lazySchema(() =>
+  z.enum([
+    "active",
+    "paused",
+    "blocked",
+    "usageLimited",
+    "budgetLimited",
+    "complete",
+  ]),
+);
+export type ChatGoalStatus = z.infer<typeof chatGoalStatusSchema>;
+/**
+ * The goal the chat's provider thread holds (Tracy Bots T176): what done means,
+ * its status, and what it has used. `tokensUsed` is the provider's own count,
+ * which leaves out cached input, so it is not the chat's token usage.
+ * `turnOrdinal` is the latest goal turn the host has counted, the turn that
+ * set the goal being 1; null when the host has counted none.
+ */
+export const chatGoalSchema = lazySchema(() =>
+  z.object({
+    objective: z.string(),
+    status: chatGoalStatusSchema,
+    tokenBudget: z.number().nullable(),
+    tokensUsed: z.number(),
+    timeUsedSeconds: z.number(),
+    turnOrdinal: z.number().nullable(),
+    updatedAt: z.number(),
+  }),
+);
+export type ChatGoal = z.infer<typeof chatGoalSchema>;
+// The chat's goal (`chat.subscribe@1.43`). Absent means the host cannot say:
+// it predates goals, or its harness has none. Null means there is no goal.
+const chatGoalFields = {
+  goal: lazySchema(() => chatGoalSchema.nullable().optional()),
+};
 // The delivery with its worktree obligation (`chat.subscribe@1.42`).
 const deliveryWorktreeIntentFields = {
   messageDelivery: lazySchema(() =>
@@ -8816,6 +8856,7 @@ export const chatSnapshotSchema = lazySchema(() =>
     queue: chatQueueStateSchema,
     ...ultracodeFallbackFields,
     ...deliveryWorktreeIntentFields,
+    ...chatGoalFields,
   }),
 );
 export const openChatSnapshotSchema = lazySchema(() =>
@@ -8824,6 +8865,7 @@ export const openChatSnapshotSchema = lazySchema(() =>
     queue: openChatQueueStateSchema,
     ...ultracodeFallbackFields,
     ...deliveryWorktreeIntentFields,
+    ...chatGoalFields,
   }),
 );
 export const chatWindowedSnapshotSchema = lazySchema(() =>
@@ -8832,6 +8874,7 @@ export const chatWindowedSnapshotSchema = lazySchema(() =>
     queue: chatQueueStateSchema,
     ...ultracodeFallbackFields,
     ...deliveryWorktreeIntentFields,
+    ...chatGoalFields,
   }),
 );
 const openChatWindowedSnapshotSchemaV141 = lazySchema(() =>
@@ -8852,6 +8895,7 @@ export const openChatWindowedSnapshotSchema = lazySchema(() =>
   openChatWindowedSnapshotSchemaPreSlack.extend({
     queue: openChatQueueStateSchema,
     tail: openChatTranscriptWindowSchema,
+    ...chatGoalFields,
   }),
 );
 const chatSubscribeCommonServerFrameSchemasOpenHarnessV141 =
@@ -8877,6 +8921,10 @@ const chatSubscribeTurnStateChangedServerFrameSchemaV141 = lazySchema(() =>
   chatSubscribeTurnStateChangedServerFrameSchemaV134.extend(
     ultracodeFallbackFields,
   ),
+);
+/** The live `turnStateChanged` (`chat.subscribe@1.43`): `1.41`'s with the chat's goal. */
+const chatSubscribeTurnStateChangedServerFrameSchemaV143 = lazySchema(() =>
+  chatSubscribeTurnStateChangedServerFrameSchemaV141.extend(chatGoalFields),
 );
 const openChatSubscribeWindowedServerFrameSchemaV141 = lazySchema(() =>
   z.discriminatedUnion("kind", [
@@ -8958,7 +9006,7 @@ export const openChatSubscribeWindowedServerFrameSchema = lazySchema(() =>
     chatSubscribeAccumulatedChangesServerFrameSchema,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchemaOpenHarnessV143,
-    chatSubscribeTurnStateChangedServerFrameSchemaV141,
+    chatSubscribeTurnStateChangedServerFrameSchemaV143,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribePortForwardsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
@@ -8973,7 +9021,7 @@ export const chatSubscribeServerFrameSchema = lazySchema(() =>
     chatSubscribeSnapshotServerFrameSchema.extend({
       snapshot: chatSnapshotSchema,
     }),
-    chatSubscribeTurnStateChangedServerFrameSchemaV141,
+    chatSubscribeTurnStateChangedServerFrameSchemaV143,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribePortForwardsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
@@ -9103,6 +9151,14 @@ export const chatSubscribeV142 = defineStreamRpcContract({
  * below 1.43 drops it on decode and draws the divider it always did; `1.42`
  * and every older line bind the trigger without it
  * (`autonomousResumeTriggerSchemaPreConversationMessage`).
+ *
+ * The snapshot and `turnStateChanged` may carry `goal`, the goal the chat's
+ * provider thread holds (T176). Optional, so a peer below 1.43 strips it on
+ * decode and shows no goal; `1.42` and every older line bind both frames
+ * without it. A resume divider may name the goal turn it opens (`goal` on
+ * the `autonomous_resume` block), optional for the same reason; `1.42` and
+ * every older line bind the block without it
+ * (`autonomousResumeBlockSchemaPreConversationMessage`).
  */
 export const chatSubscribeV143 = defineStreamRpcContract({
   method: "chat.subscribe",
@@ -9140,7 +9196,7 @@ export const chatSubscribeWindowedServerFrameSchema = lazySchema(() =>
     chatSubscribeAccumulatedChangesServerFrameSchema,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchema,
-    chatSubscribeTurnStateChangedServerFrameSchemaV141,
+    chatSubscribeTurnStateChangedServerFrameSchemaV143,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribePortForwardsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,

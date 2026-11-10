@@ -2073,9 +2073,29 @@ type RawStoredAutonomousResumeBlockPreConversationMessage = Omit<
   deliveryPlacement?: AutonomousResumeDeliveryPlacement;
 };
 
+// The goal turn a resume divider opens (Tracy Bots T176): the goal by its
+// creation time, so a reader tells two goals on one thread apart, and the
+// turn's place in it, the turn that set the goal being 1.
+export const autonomousResumeGoalSchema = lazySchema(() =>
+  z.object({
+    createdAt: z.number(),
+    ordinal: z.number().int().positive(),
+  }),
+);
+export type AutonomousResumeGoal = z.infer<typeof autonomousResumeGoalSchema>;
+
 // The live shape: the 1.11-1.42 checkpoint with `triggers` swapped for the
-// live trigger, which can carry the member's message a delivery carried. Same
-// key order as the checkpoint for the same reason.
+// live trigger, which can carry the member's message a delivery carried, and
+// the goal turn the divider opens. Same key order as the checkpoint for the
+// same reason, with `goal` last.
+//
+// `goal` is optional rather than defaulted: absent means the divider opens no
+// goal turn, which is every divider written before the key and every divider
+// that is not a goal's, and a writer that knows nothing of goals builds the
+// block unchanged. Added in place on the unreleased `chat.subscribe@1.43`;
+// every line through `1.42` binds
+// `autonomousResumeBlockSchemaPreConversationMessage`, which an older peer
+// decodes by dropping the key.
 const persistedAutonomousResumeBlockSchema = lazySchema(() =>
   persistedAutonomousResumeBlockSchemaV18
     .omit({ triggers: true, wakeTriggers: true })
@@ -2083,6 +2103,7 @@ const persistedAutonomousResumeBlockSchema = lazySchema(() =>
       deliveryPlacement: autonomousResumeDeliveryPlacementSchema,
       triggers: z.array(autonomousResumeTriggerSchema),
       wakeTriggers: persistedAutonomousResumeBlockSchemaV18.shape.wakeTriggers,
+      goal: autonomousResumeGoalSchema.optional(),
     }),
 );
 export type PersistedAutonomousResumeBlock = z.infer<
@@ -2093,6 +2114,7 @@ const domainAutonomousResumeBlockSchema = lazySchema(() =>
   domainAutonomousResumeBlockSchemaV18.omit({ triggers: true }).extend({
     deliveryPlacement: autonomousResumeDeliveryPlacementSchema,
     triggers: z.array(autonomousResumeTriggerSchema),
+    goal: autonomousResumeGoalSchema.optional(),
   }),
 );
 export type AutonomousResumeBlock = z.infer<

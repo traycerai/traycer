@@ -20,6 +20,7 @@ import {
   providerNoticeKindSchema,
   providerNoticeKindSchemaPreFallback,
   autonomousResumeBlockSchema,
+  autonomousResumeBlockSchemaPreConversationMessage,
   autonomousResumeBlockSchemaV18,
   providerNoticeMetadataSchema,
   providerNoticeNormalizedMetadataSchema,
@@ -892,6 +893,49 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
     expect(() =>
       toCanonicalJsonSchema(contentBlockSchema, { io: "input" }),
     ).not.toThrow();
+  });
+});
+
+describe("autonomousResumeBlockSchema goal (the goal turn a divider opens)", () => {
+  const stored = {
+    type: "autonomous_resume" as const,
+    blockId: "resume-goal",
+    status: "completed" as const,
+    timestamp: 1,
+    deliveryPlacement: null,
+    triggers: [],
+    wakeTriggers: [],
+  };
+  const goal = { createdAt: 1_700_000_000_000, ordinal: 3 };
+
+  it("decodes a stored block's goal and encodes it back", () => {
+    const domain = autonomousResumeBlockSchema.decode({ ...stored, goal });
+    expect(domain.goal).toEqual(goal);
+    expect(autonomousResumeBlockSchema.encode(domain).goal).toEqual(goal);
+  });
+
+  it("decodes a block without a goal to one with no goal key", () => {
+    const domain = autonomousResumeBlockSchema.decode(stored);
+    expect("goal" in domain).toBe(false);
+    expect("goal" in autonomousResumeBlockSchema.encode(domain)).toBe(false);
+  });
+
+  it.each([0, 1.5])("refuses ordinal %s", (ordinal) => {
+    expect(
+      autonomousResumeBlockSchema.safeParse({
+        ...stored,
+        goal: { ...goal, ordinal },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("is dropped by the 1.11-1.42 checkpoint", () => {
+    const storedByNewerWriter = { ...stored, goal };
+    const domain =
+      autonomousResumeBlockSchemaPreConversationMessage.decode(
+        storedByNewerWriter,
+      );
+    expect("goal" in domain).toBe(false);
   });
 });
 

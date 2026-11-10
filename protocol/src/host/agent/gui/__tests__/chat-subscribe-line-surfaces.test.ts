@@ -181,6 +181,11 @@ const FEEDBACK_DRAFT_NEEDLES = ['"feedbackDraft":'];
 // resume divider's trigger, server frames only.
 const RESUME_CONVERSATION_MESSAGE_MINOR = 43;
 const RESUME_CONVERSATION_MESSAGE_NEEDLES = ['"conversationMessage":'];
+// `1.43`: the provider thread's goal, on the snapshot and `turnStateChanged`,
+// server frames only. `"goal":` is not the needle: the `1.42` feedback draft
+// carries an unrelated `goal` string, so the goal's own `turnOrdinal` pins it.
+const GOAL_MINOR = 43;
+const GOAL_NEEDLES = ['"turnOrdinal":'];
 const CONVERSATION_NEEDLES = [
   '"conversationRequest":',
   '"resolvedByMessageId":',
@@ -508,6 +513,22 @@ describe("chat.subscribe line surfaces", () => {
           carriesResumeConversationMessage
             ? RESUME_CONVERSATION_MESSAGE_NEEDLES
             : [],
+        );
+      });
+
+      const carriesGoal = minor >= GOAL_MINOR;
+
+      it(`server frames ${carriesGoal ? "carry" : "hold back"} the provider thread's goal`, () => {
+        const text = schemaText(contract.serverFrameSchema);
+        expect(GOAL_NEEDLES.filter((needle) => text.includes(needle))).toEqual(
+          carriesGoal ? GOAL_NEEDLES : [],
+        );
+      });
+
+      it("client frames never carry the goal", () => {
+        const text = schemaText(contract.clientFrameSchema);
+        expect(GOAL_NEEDLES.filter((needle) => text.includes(needle))).toEqual(
+          [],
         );
       });
 

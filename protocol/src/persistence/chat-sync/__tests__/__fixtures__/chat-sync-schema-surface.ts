@@ -5429,6 +5429,24 @@ export const chatSyncSchemaSurfaceBaseline = {
                                                 ],
                                                 "additionalProperties": false
                                               }
+                                            },
+                                            "goal": {
+                                              "type": "object",
+                                              "properties": {
+                                                "createdAt": {
+                                                  "type": "number"
+                                                },
+                                                "ordinal": {
+                                                  "type": "integer",
+                                                  "exclusiveMinimum": 0,
+                                                  "maximum": 9007199254740991
+                                                }
+                                              },
+                                              "required": [
+                                                "createdAt",
+                                                "ordinal"
+                                              ],
+                                              "additionalProperties": false
                                             }
                                           },
                                           "required": [
