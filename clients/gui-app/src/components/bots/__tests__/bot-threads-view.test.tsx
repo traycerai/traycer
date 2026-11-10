@@ -35,10 +35,14 @@ import {
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
 import type {
+  BotThreadAnchors,
   BotThreadSummary,
   BotTurnRef,
 } from "@traycer/protocol/host/bot/conversation-schemas";
-import type { Message } from "@traycer/protocol/persistence/epic/schemas";
+import type {
+  BotQuestionItem,
+  Message,
+} from "@traycer/protocol/persistence/epic/schemas";
 import type {
   BotNotificationLevel,
   BotReadCursorReadResponse,
@@ -46,7 +50,10 @@ import type {
   BotThreadFollow,
   BotThreadFollowSetRequest,
 } from "@traycer/protocol/host/bot/schemas";
-import { conversationRequestMessageId } from "@traycer/protocol/persistence/epic/messages";
+import {
+  botQuestionsText,
+  conversationRequestMessageId,
+} from "@traycer/protocol/persistence/epic/messages";
 import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
 import type { MobileLevel2Form } from "@/lib/layout/mobile-layout-form";
 import type { TabNavigationIntent } from "@/lib/tab-navigation/intents";
@@ -54,6 +61,7 @@ import { BotTestRunnerHost } from "@/components/bots/__tests__/bot-test-runner-h
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
+  negotiateBotSend,
   signInViewer,
   resetBotFailedRequestSupport,
 } from "@/components/bots/__tests__/bot-failed-request-test-support";
@@ -71,6 +79,8 @@ import {
 /** What the host answers for one bot. */
 type BotScript = {
   threads: BotThreadSummary[];
+  /** The rows the bot's bound host says it opens a thread under; `null` for a host that says none. */
+  threadAnchors: BotThreadAnchors | null;
   follows: Record<string, BotThreadFollow>;
   cursors: BotReadCursorReadResponse;
   levels: Record<string, BotNotificationLevel>;
@@ -304,6 +314,7 @@ function script(
 ): BotScript {
   return {
     threads,
+    threadAnchors: null,
     follows,
     cursors: { cursors: {}, latest: {} },
     levels: {},
@@ -338,11 +349,11 @@ function mount(): void {
       handlers: {
         "bot.thread.list": (params) => {
           mocks.reads.push({ method: "bot.thread.list", params });
-          const { threads } = mocks.hosted[params.botId];
+          const { threads, threadAnchors } = mocks.hosted[params.botId];
           return {
             threads,
             trunkCostUsd: null,
-            threadAnchors: null,
+            threadAnchors,
             nextCursor: null,
             total: threads.length,
           };
@@ -1159,6 +1170,100 @@ describe("<BotThreadsView />", () => {
     expect(mocks.writes).toEqual([
       { botId: TRACY, threadId: "tracy-old", state: "unfollowed" },
     ]);
+  });
+});
+
+describe("<BotThreadsView /> a card whose bot asks several questions at once", () => {
+  const BOUND_ELSEWHERE = "host-elsewhere";
+  const BOUND_EPOCH = 3;
+  const DEPLOY: BotQuestionItem = {
+    text: "Deploy to staging now or after the train?",
+    options: ["Now", "After the train"],
+    allowFreeText: false,
+    settlement: null,
+  };
+  const HOLD: BotQuestionItem = {
+    text: "Anything to hold back from the train?",
+    options: [],
+    allowFreeText: true,
+    settlement: null,
+  };
+
+  /** The bot's reply in the thread: a card of both questions, its text just the questions. */
+  function askedBoth(): Message {
+    const questions = [DEPLOY, HOLD];
+    return {
+      ...botReply({
+        messageId: "team-new-question",
+        text: botQuestionsText(questions),
+        timestamp: 3_000,
+      }),
+      question: { requestId: "req-question", questions },
+    };
+  }
+
+  /**
+   * The Team bot runs on a host other than the tab's, which lists `kinds` in
+   * its thread list, and its thread holds the card; the tab's host
+   * negotiated `bot.conversation.send` at 1.5. Mounts the view.
+   */
+  function mountCardOfBotBoundElsewhere(kinds: readonly string[]): void {
+    negotiateBotSend("host-1", { major: 1, minor: 5 });
+    mocks.bots = [
+      bot(TRACY, "Tracy"),
+      {
+        ...bot(TEAM, "Team Tracy"),
+        boundHostId: BOUND_ELSEWHERE,
+        hostEpoch: BOUND_EPOCH,
+      },
+    ];
+    mocks.hosted[TEAM] = {
+      ...script([thread(TEAM, "team-new", 3_000)], {
+        "team-new": FOLLOWING,
+      }),
+      threadAnchors: {
+        hostId: BOUND_ELSEWHERE,
+        epoch: BOUND_EPOCH,
+        kinds: [...kinds],
+      },
+    };
+    mocks.hosted[TRACY] = script([], {});
+    mocks.replyRows["team-new"] = [askedBoth()];
+    mount();
+  }
+
+  it("draws one Submit and the tally under the card, none under a question, when the bot's host lists answers and this host takes them", async () => {
+    mountCardOfBotBoundElsewhere(["answer", "answers"]);
+    await waitFor(() => expect(listed()).toContain("team-new"));
+
+    const full = within(await revealFull("team-new"));
+    const questionCard = within(await full.findByTestId("question-card"));
+
+    expect(
+      (await questionCard.findByTestId("question-card-tally")).textContent,
+    ).toBe("0 of 2 answered. Answer or skip each one to submit.");
+    expect(questionCard.getAllByTestId("question-card-submit")).toHaveLength(1);
+    for (const item of questionCard.getAllByTestId("question-card-item")) {
+      expect(within(item).queryByTestId("question-card-submit")).toBeNull();
+    }
+  });
+
+  it("draws a Submit under each question, and no tally, when the bot's host does not list answers", async () => {
+    mountCardOfBotBoundElsewhere(["answer"]);
+    await waitFor(() => expect(listed()).toContain("team-new"));
+
+    const full = within(await revealFull("team-new"));
+    const questionCard = within(await full.findByTestId("question-card"));
+
+    expect(questionCard.queryByTestId("question-card-tally")).toBeNull();
+    const items = questionCard.getAllByTestId("question-card-item");
+    expect(items).toHaveLength(2);
+    for (const item of items) {
+      expect(within(item).getAllByTestId("question-card-submit")).toHaveLength(
+        1,
+      );
+    }
+    expect(questionCard.getAllByTestId("question-card-submit")).toHaveLength(2);
   });
 });
 

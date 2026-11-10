@@ -513,11 +513,10 @@ export const botQuestionSettlerSchema = lazySchema(() =>
 export type BotQuestionSettler = z.infer<typeof botQuestionSettlerSchema>;
 
 /**
- * How one of a bot's questions was settled, once: the answer (`null` for a
- * Skip), who settled it and when. The host writes it with the first answer
- * that lands and refuses every later one.
+ * A settlement as `chat.subscribe` lines through `1.42` and the epic records
+ * carry it: without `requestId`.
  */
-export const botQuestionSettlementSchema = lazySchema(() =>
+const botQuestionSettlementSchemaPreAnswerSet = lazySchema(() =>
   z.object({
     answer: z.string().min(1).nullable(),
     skipped: z.boolean(),
@@ -525,11 +524,29 @@ export const botQuestionSettlementSchema = lazySchema(() =>
     at: z.number(),
   }),
 );
+/**
+ * How one of a bot's questions was settled, once: the answer (`null` for a
+ * Skip), who settled it and when. The host writes it with the first answer
+ * that lands and refuses every later one.
+ */
+export const botQuestionSettlementSchema = lazySchema(() =>
+  botQuestionSettlementSchemaPreAnswerSet.extend({
+    /**
+     * The request of the member's message that settled this question with
+     * the row's other open questions, as one set (`chat.subscribe@1.43`,
+     * T167); that message's id is `conversationRequestMessageId` of it.
+     * Absent for an answer sent alone and for the bot's own, and on a
+     * settlement read by a peer below `1.43`, which strips it on decode.
+     */
+    requestId: z.string().min(1).optional(),
+  }),
+);
 export type BotQuestionSettlement = z.infer<typeof botQuestionSettlementSchema>;
 
 /**
  * One of a bot's questions as `chat.subscribe` lines through `1.42` and the
- * epic records carry it: without `multiSelect`.
+ * epic records carry it: without `multiSelect`, its settlement without
+ * `requestId`.
  */
 const botQuestionItemSchemaPreMultiSelect = lazySchema(() =>
   z.object({
@@ -539,7 +556,7 @@ const botQuestionItemSchemaPreMultiSelect = lazySchema(() =>
     /** Whether the person may answer in their own words. */
     allowFreeText: z.boolean(),
     /** `null` while the question is open. */
-    settlement: botQuestionSettlementSchema.nullable(),
+    settlement: botQuestionSettlementSchemaPreAnswerSet.nullable(),
   }),
 );
 export const botQuestionItemSchema = lazySchema(() =>
@@ -552,6 +569,8 @@ export const botQuestionItemSchema = lazySchema(() =>
      * `allowFreeText`. Optional for `turnProfile`'s reason.
      */
     multiSelect: z.boolean().optional(),
+    /** `null` while the question is open. */
+    settlement: botQuestionSettlementSchema.nullable(),
   }),
 );
 export type BotQuestionItem = z.infer<typeof botQuestionItemSchema>;
@@ -603,6 +622,48 @@ export const botQuestionAnswerSchema = lazySchema(() =>
   }),
 );
 export type BotQuestionAnswer = z.infer<typeof botQuestionAnswerSchema>;
+
+/**
+ * The bot's questions a member's message answers together (T167): the row
+ * that asks them, by its message id, and each of its questions that was open
+ * when the message settled it, with the question as the row asked it and
+ * what it was settled with (`answer: null` for a Skip).
+ */
+export const botQuestionAnswerSetSchema = lazySchema(() =>
+  z.object({
+    questionMessageId: z.string().min(1),
+    answers: z
+      .array(
+        z.object({
+          questionIndex: z.number().int().nonnegative(),
+          question: z.string().min(1),
+          answer: z.string().min(1).nullable(),
+          skipped: z.boolean(),
+        }),
+      )
+      .min(1),
+  }),
+);
+export type BotQuestionAnswerSet = z.infer<typeof botQuestionAnswerSetSchema>;
+
+/** The line a member's message carries for a question they skipped. */
+export const BOT_QUESTION_SKIPPED_TEXT = "Skipped";
+
+/**
+ * The text of a member's message that answers several of a bot's questions
+ * at once: each question, and under it the answer or that it was skipped. A
+ * reader that draws the list shows the list instead.
+ */
+export function botQuestionAnswersText(
+  answers: BotQuestionAnswerSet["answers"],
+): string {
+  return answers
+    .map(
+      (entry) =>
+        `${entry.question}\n${entry.answer ?? BOT_QUESTION_SKIPPED_TEXT}`,
+    )
+    .join("\n\n");
+}
 
 /**
  * How a surface a bot's post points at stopped waiting, once its task's host
@@ -727,6 +788,13 @@ export const userMessageSchema = lazySchema(() =>
        * `conversationRequest`'s reason.
        */
       spoken: z.literal(true).optional(),
+      /**
+       * The bot's questions this message answers together, from the card's
+       * one Submit (`chat.subscribe@1.43`, T167). Absent on every other row,
+       * and optional for `conversationRequest`'s reason; a peer below `1.43`
+       * strips it on decode and draws the row's text.
+       */
+      questionAnswers: botQuestionAnswerSetSchema.optional(),
     })
     .superRefine(userMessageSenderKindRefine),
 );

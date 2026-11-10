@@ -27,12 +27,16 @@ import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-m
 import type { OpenMessage } from "@traycer/protocol/persistence/epic/open-harness-records";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import type { ChatBotThreadLine } from "@/components/chat/chat-bot-presentation-context";
+import {
+  answerEntries,
+  type ChatBotThreadLine,
+} from "@/components/chat/chat-bot-presentation-context";
 import {
   BotChatTranscript,
   type BotTranscriptLanding,
   type BotTranscriptSurface,
   type QuestionAnswerSend,
+  type QuestionAnswersSend,
 } from "@/components/bots/bot-chat-transcript";
 import { BotRoutingCard } from "@/components/bots/bot-routing-card";
 import { useChatSessionHandleForContainer } from "@/lib/registries/chat-session-registry";
@@ -99,7 +103,7 @@ import {
   anchorSendable,
   boundThreadAnchorKinds,
 } from "@/components/bots/bot-thread-sendable";
-import { useBotSendTakesAnswers } from "@/hooks/bots/use-bot-send-version";
+import { useBotAnswerReach } from "@/hooks/bots/use-bot-send-version";
 import { useBotBoxEdit } from "@/hooks/bots/use-bot-box-edit";
 import { useBotFailedRequest } from "@/hooks/bots/use-bot-failed-request";
 import { useBotImageReach } from "@/hooks/bots/use-bot-send-version";
@@ -422,8 +426,13 @@ export function BotChannelView(props: {
   // channel's top level: the person's message goes to the bot itself and
   // opens no thread. A send that fails says so where a failed message does,
   // and the card keeps the person's draft. A host that cannot take the
-  // answer gets a card without actions.
-  const answersTaken = useBotSendTakesAnswers(hostId);
+  // answer gets a card without actions; where both hosts take a card's
+  // answers together, one Submit sends them as one message.
+  const answerReach = useBotAnswerReach({
+    hostId,
+    boundHostId,
+    boundHostTakes: threadAnchorKinds,
+  });
   const answerQuestion = useCallback<QuestionAnswerSend>(
     async (questionMessageId, given) => {
       if (channelId === null) return;
@@ -442,6 +451,27 @@ export function BotChannelView(props: {
             questionIndex: given.questionIndex,
             skipped: given.skipped,
           },
+        },
+        { onError: () => failSend(null) },
+      );
+    },
+    [botId, channelId, clearSendFailure, failSend, sendAsync],
+  );
+  const answerQuestions = useCallback<QuestionAnswersSend>(
+    async (questionMessageId, given) => {
+      if (channelId === null) return;
+      clearSendFailure();
+      await sendAsync(
+        {
+          botId,
+          conversationId: channelId,
+          text: given.text,
+          threadId: null,
+          announcementId: null,
+          redeliver: null,
+          supersedes: null,
+          answer: null,
+          answers: { questionMessageId, entries: answerEntries(given) },
         },
         { onError: () => failSend(null) },
       );
@@ -600,7 +630,8 @@ export function BotChannelView(props: {
         : null,
       threadAnchorKinds,
       chooseOption: sending ? null : chooseOption,
-      answerQuestion: answersTaken ? answerQuestion : null,
+      answerQuestion: answerReach === "none" ? null : answerQuestion,
+      answerQuestions: answerReach === "together" ? answerQuestions : null,
       discussQuestion,
       failedRequest,
       openTurn: onOpenTurn,
@@ -610,7 +641,8 @@ export function BotChannelView(props: {
     }),
     [
       answerQuestion,
-      answersTaken,
+      answerQuestions,
+      answerReach,
       botTitle,
       activity?.threads,
       chooseOption,
@@ -945,6 +977,7 @@ export function BotChannelView(props: {
                     boundHostId={boundHostId}
                     botTitle={botTitle}
                     imageReach={imageReach}
+                    answerReach={answerReach}
                     conversationId={channel.conversationId}
                     originMessageId={postId}
                     sent={open?.sent ?? null}

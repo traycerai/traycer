@@ -12,10 +12,13 @@ import {
   RotateCcw,
 } from "lucide-react";
 import {
+  BOT_QUESTION_SKIPPED_TEXT,
+  botQuestionAnswersText,
   botQuestionsText,
   type BotAnnouncement,
   type BotAnnouncementKind,
   type BotQuestion,
+  type BotQuestionAnswerSet,
 } from "@traycer/protocol/persistence/epic/messages";
 import { BOT_THREAD_ANCHOR_ANSWER } from "@traycer/protocol/host/bot/conversation-schemas";
 import { UnreadCountBadge } from "@/components/notifications/unread-count-badge";
@@ -72,8 +75,11 @@ import { QuestionCard, type QuestionCardQuestion } from "./question-card";
 import {
   EMPTY_QUESTION_CARD_DRAFT,
   botQuestionCardSettlement,
+  draftText,
   questionCardView,
 } from "./question-card-view";
+import { mayHaveReachedHost } from "@traycer-clients/shared/host-transport/host-messenger";
+import { NO_TRANSCRIPT_BASELINE } from "@/stores/chats/chat-announcements";
 import { TextSegment } from "./segments/text-segment";
 import { UserMessageAttachmentGallery } from "./user-message-attachment-gallery";
 
@@ -127,7 +133,12 @@ export function ChatBotMessage(props: {
 }): ReactElement {
   const { message, presentation, hoverActions, timeLink } = props;
   const sentAt = message.sentAt ?? message.createdAt;
-  const body = <BotMessageText message={message} />;
+  const body =
+    message.questionAnswers === undefined ? (
+      <BotMessageText message={message} />
+    ) : (
+      <QuestionAnswerList set={message.questionAnswers} />
+    );
   if (message.role === "assistant") {
     return (
       <BotRow
@@ -309,6 +320,9 @@ function DeliveredPostBody(props: {
       </p>
     );
   }
+  if (props.message.questionAnswers !== undefined) {
+    return <QuestionAnswerList set={props.message.questionAnswers} />;
+  }
   return (
     <div className="flex min-w-0 flex-col gap-1">
       {props.message.segments.map((segment) =>
@@ -323,6 +337,38 @@ function DeliveredPostBody(props: {
         ) : null,
       )}
     </div>
+  );
+}
+
+/**
+ * A member's answers to a bot's card sent together (T167): each question as
+ * the card asked it, and under it their answer, or Skipped.
+ */
+function QuestionAnswerList(props: {
+  readonly set: BotQuestionAnswerSet;
+}): ReactElement {
+  return (
+    <dl
+      data-testid="bot-question-answers"
+      className="flex min-w-0 flex-col gap-1.5"
+    >
+      {props.set.answers.map((entry) => (
+        <div key={entry.questionIndex} className="flex min-w-0 flex-col">
+          <dt className="text-ui-xs break-words whitespace-pre-wrap text-muted-foreground">
+            {entry.question}
+          </dt>
+          <dd
+            className={
+              entry.answer === null
+                ? "text-ui-sm text-muted-foreground"
+                : "text-ui-sm break-words whitespace-pre-wrap text-foreground"
+            }
+          >
+            {entry.answer ?? BOT_QUESTION_SKIPPED_TEXT}
+          </dd>
+        </div>
+      ))}
+    </dl>
   );
 }
 
@@ -629,6 +675,13 @@ function BotAskingBody(props: {
  * edit; one whose question shows settled, or a draft with nothing of the
  * person's left in it, is spent. Discuss takes the draft off the card into
  * the discussion's box.
+ *
+ * On a card of two or more questions whose answers go together (`answerAll`,
+ * T167), one Submit sends them all. A send the host refused gives them all
+ * back. One that ended without saying whether it reached the host waits,
+ * nothing sent again, for the transcript's next baseline, from this session
+ * store or the one that replaced it: settled by then, the answers are spent;
+ * still open, they are given back to edit as they were.
  */
 function BotQuestionCard(props: {
   /** The row, by its message id; `null` before it is written. */
@@ -638,7 +691,15 @@ function BotQuestionCard(props: {
   readonly questions: ChatBotQuestions;
 }): ReactElement {
   const { messageId, question, botTitle, questions } = props;
-  const { botId, viewerUserId, memberName, answer, discuss } = questions;
+  const {
+    botId,
+    viewerUserId,
+    memberName,
+    answer,
+    answerAll,
+    baseline,
+    discuss,
+  } = questions;
   const drafts = useBotDraftsStore((state) => state.answers[botId]);
   const setAnswer = useBotDraftsStore((state) => state.setAnswer);
   const cardQuestions = question.questions.map(
@@ -677,6 +738,35 @@ function BotQuestionCard(props: {
     if (spent.length === 0) return;
     for (const key of spent.split("\n")) setAnswer(botId, key, null);
   }, [botId, setAnswer, spent]);
+  // A baseline from another session store is a later one too: the registry
+  // replaced the store, whose epochs start again, and its snapshot is new.
+  const resynced =
+    messageId === null ||
+    baseline === null ||
+    baseline.epoch === NO_TRANSCRIPT_BASELINE
+      ? ""
+      : cardQuestions
+          .filter((item) => {
+            const since =
+              drafts?.[answerDraftKey(messageId, item.index)]?.unsureSince ??
+              null;
+            return (
+              item.settlement === null &&
+              since !== null &&
+              (since.store !== baseline.store || since.epoch !== baseline.epoch)
+            );
+          })
+          .map((item) => answerDraftKey(messageId, item.index))
+          .join("\n");
+  useEffect(() => {
+    if (resynced.length === 0) return;
+    for (const key of resynced.split("\n")) {
+      const latest = useBotDraftsStore.getState().answers[botId]?.[key];
+      if (latest !== undefined) {
+        setAnswer(botId, key, { ...latest, sent: null, unsureSince: null });
+      }
+    }
+  }, [botId, resynced, setAnswer]);
   const keyOf = (index: number): string | null =>
     messageId === null ? null : answerDraftKey(messageId, index);
   return (
@@ -688,7 +778,9 @@ function BotQuestionCard(props: {
           ? null
           : (index, draft) => {
               const key = keyOf(index);
-              if (key !== null) setAnswer(botId, key, draft);
+              if (key !== null) {
+                setAnswer(botId, key, { ...draft, unsureSince: null });
+              }
             }
       }
       onAnswer={(given) => {
@@ -701,6 +793,52 @@ function BotQuestionCard(props: {
           }
         });
       }}
+      onAnswerAll={
+        // A card of one question keeps its own Submit and Skip, and `answer`.
+        answerAll === null ||
+        messageId === null ||
+        baseline === null ||
+        question.questions.length < 2
+          ? null
+          : (entries) => {
+              const sentUnder = baseline;
+              const text = botQuestionAnswersText(
+                entries.map((entry) => {
+                  const item = cardQuestions.find(
+                    (candidate) => candidate.index === entry.questionIndex,
+                  );
+                  return {
+                    questionIndex: entry.questionIndex,
+                    question: item?.text ?? "",
+                    answer:
+                      entry.skipped || item === undefined
+                        ? null
+                        : draftText(item.draft, item.several),
+                    skipped: entry.skipped,
+                  };
+                }),
+              );
+              answerAll(messageId, { entries, text }).catch(
+                (error: unknown) => {
+                  const unsure = mayHaveReachedHost(error);
+                  const current =
+                    useBotDraftsStore.getState().answers[botId] ?? {};
+                  for (const entry of entries) {
+                    const key = answerDraftKey(messageId, entry.questionIndex);
+                    const latest = current[key];
+                    if (latest === undefined) continue;
+                    setAnswer(
+                      botId,
+                      key,
+                      unsure
+                        ? { ...latest, unsureSince: sentUnder }
+                        : { ...latest, sent: null },
+                    );
+                  }
+                },
+              );
+            }
+      }
       onDiscuss={
         messageId === null || discuss === null
           ? null
