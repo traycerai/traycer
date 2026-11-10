@@ -1057,11 +1057,7 @@ function OnboardingActions(props: {
         </p>
       ) : (
         <>
-          <MemorySkipButton
-            memory={props.memory}
-            label={skipLabel}
-            onSkip={props.onSkip}
-          />
+          <MemorySkipButton memory={props.memory} onSkip={props.onSkip} />
           <OnboardingAdvanceButton
             quiet={quiet}
             block={props.phone ? !props.quietOnly : false}
@@ -1104,10 +1100,12 @@ function footerClassName(
 /**
  * The way past a save that stopped short. It writes nothing more: whatever
  * landed stays, and the act's report has said what that was.
+ *
+ * "Skip for now" on a phone too: the phone header's "Skip" ends the tour,
+ * and this leaves only the act.
  */
 function MemorySkipButton(props: {
   readonly memory: MemoryFooter | null;
-  readonly label: string;
   readonly onSkip: () => void;
 }) {
   if (props.memory?.kind !== "save" || !props.memory.interrupted) return null;
@@ -1119,7 +1117,7 @@ function MemorySkipButton(props: {
       onClick={props.onSkip}
       className="onboarding-button onboarding-button--quiet"
     >
-      {props.label}
+      Skip for now
     </button>
   );
 }
