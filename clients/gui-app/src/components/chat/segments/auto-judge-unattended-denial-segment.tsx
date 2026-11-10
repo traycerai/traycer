@@ -9,16 +9,16 @@ interface AutoJudgeUnattendedDenialSegmentProps {
 /**
  * An auto-mode refusal that was never put to a person.
  *
- * Under the attendance rule a chat a human created and merely looked away from
- * PARKS its card and waits. A chat an agent created, with nobody subscribed,
- * does not: parking there is a promise to a person who does not exist, and it
- * would pin the session for the host's life - so the judge's refusal becomes a
- * tool error the model reads, and the run continues.
+ * Hosts used to refuse a judge-escalated approval in a chat an agent created,
+ * with nobody subscribed, instead of parking its card: the refusal became a
+ * tool error the model read, and the run continued. Hosts now park those
+ * cards for a person and write no such denial; journals from before still
+ * carry them.
  *
- * That leaves the human who opens the chat tomorrow as its only other reader,
- * and until this row they had nothing: a denial with no card looks exactly like
- * a judge that simply refused. "Refused without asking" names the thing they
- * would otherwise have to infer.
+ * The human who opens such a chat later is the denial's only other reader,
+ * and without this row a denial with no card looks exactly like a judge that
+ * simply refused. "Refused without asking" names the thing they would
+ * otherwise have to infer.
  *
  * `role="note"` for the same reason as the provenance marker beside it -
  * ancillary content about the conversation rather than part of it.

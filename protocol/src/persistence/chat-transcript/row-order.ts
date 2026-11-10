@@ -216,7 +216,7 @@ export function importedChatMarkerRowSource(
 /**
  * The ONE gate on the unattended-refusal row, and it is deliberately narrow.
  *
- * A judge refusal in a chat nobody was watching is journaled as an ordinary
+ * A judge refusal in a chat nobody was watching was journaled as an ordinary
  * `approval.denied`, and so are the human denials that have always been there.
  * Only the `agent-created` attendance reason draws a row, so:
  *
@@ -264,11 +264,12 @@ export interface AutoJudgeUnattendedDenialRowSource {
  * The unattended auto-mode refusal row's content, or `null` when this event
  * draws no row.
  *
- * Under the attendance rule a chat running for another agent gets a tool error
- * instead of a card: the model learns why, and a human who opens that chat
- * tomorrow is the only other reader it will ever have - and today they get
- * nothing that distinguishes "refused without asking anyone" from "a judge
- * simply refused". This is that row. Shaped like
+ * Hosts used to refuse a judge-escalated approval in a chat running for another
+ * agent with a tool error instead of a card, leaving a human who opened that
+ * chat later nothing that distinguished "refused without asking anyone" from
+ * "a judge simply refused". This is that row. Hosts now park those approvals
+ * for a person and write no such denial; journals from before still carry
+ * them, so the row stays. Shaped like
  * {@link forkedChatLinkRowSource} for the same reason: the renderer filters on
  * this rather than on a copy of it.
  */
