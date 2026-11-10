@@ -56,10 +56,13 @@ import {
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
+import type { HostScopeSandbox } from "@/components/settings/host-scope/host-scope-model";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
 import {
   buildOverviewHostFixture,
+  openHostOverviewMenu,
+  updateCheckManifest,
   type OverviewHostFixture,
 } from "@/components/settings/panels/__tests__/host-overview-test-support";
 import { hostQueryKeys } from "@/lib/query-keys";
@@ -117,6 +120,43 @@ function makeRunnerHost(): IRunnerHost {
     hasLocalHost: undefined,
     traycerCli: undefined,
   });
+}
+
+function mountInactiveWithUpdate(input: {
+  readonly hostId: string;
+  readonly isLocalMachine: boolean;
+  readonly kind: "personal" | "sandbox";
+  readonly sandbox: HostScopeSandbox | null;
+}): void {
+  const fixture = buildOverviewHostFixture({
+    hostId: input.hostId,
+    isLocalMachine: input.isLocalMachine,
+    hostVersion: "1.5.0",
+    overrideHandlers: {
+      "host.update.check": () => ({
+        outcome: "ok" as const,
+        effectiveIncludePreReleases: false,
+        includePreReleasesSource: "stable-default" as const,
+        manifest: updateCheckManifest("1.6.0"),
+      }),
+    },
+  });
+  recordNegotiatedHostMethods(input.hostId, ALL_OVERVIEW_METHODS);
+  hostBindingMock.current = { hostClient: fixture.client };
+  scopeOverrides.current = {
+    host: hostScopeOptionFixture({
+      hostId: input.hostId,
+      isLocalMachine: input.isLocalMachine,
+      connectable: true,
+      isActive: false,
+      kind: input.kind,
+      sandbox: input.sandbox,
+    }),
+    hostId: input.hostId,
+    status: "ready",
+    client: fixture.client,
+  };
+  renderPanel(undefined);
 }
 
 function renderPanel(queryClient: QueryClient | undefined): void {
@@ -596,6 +636,57 @@ describe("<HostSettingsPanel /> Overview identity card — window binding", () =
     expect(within(menu).queryByText("Active")).toBeNull();
     expect(within(menu).queryByTestId("host-active-in-window")).toBeNull();
     expect(within(menu).getByTestId("host-overview-restart")).not.toBeNull();
+  });
+
+  it("keeps Activate inline beside Update now on an inactive computer, and a sandbox's binding in More", async () => {
+    mountInactiveWithUpdate({
+      hostId: "host-a",
+      isLocalMachine: true,
+      kind: "personal",
+      sandbox: null,
+    });
+
+    const row = await screen.findByTestId("host-identity-name-row");
+    const line = row.parentElement;
+    if (line === null) throw new Error("the name row sits in no line");
+    await within(line).findByRole("button", { name: "Update now" });
+    const activate = within(line).getByRole("button", { name: "Activate" });
+    expect(activate.getAttribute("data-testid")).toBe("host-make-active");
+
+    await openHostOverviewMenu();
+    const menu = screen.getByRole("menu");
+    expect(within(menu).queryByTestId("host-make-active")).toBeNull();
+    expect(
+      within(menu).queryByRole("menuitem", { name: "Activate" }),
+    ).toBeNull();
+
+    cleanup();
+    resetNegotiatedManifests();
+    mountInactiveWithUpdate({
+      hostId: "host-sbx",
+      isLocalMachine: false,
+      kind: "sandbox",
+      sandbox: {
+        state: "awake",
+        frozen: false,
+        summary: sandboxSummaryFixture({
+          hostId: "host-sbx",
+          kind: "agent",
+          burst: false,
+        }),
+        teamOwned: false,
+      },
+    });
+
+    const sandboxRow = await screen.findByTestId("host-identity-name-row");
+    const sandboxLine = sandboxRow.parentElement;
+    if (sandboxLine === null) throw new Error("the name row sits in no line");
+    expect(
+      within(sandboxLine).queryByRole("button", { name: "Activate" }),
+    ).toBeNull();
+    await openHostOverviewMenu();
+    const sandboxMenu = screen.getByRole("menu");
+    expect(within(sandboxMenu).getByTestId("host-make-active")).not.toBeNull();
   });
 });
 
