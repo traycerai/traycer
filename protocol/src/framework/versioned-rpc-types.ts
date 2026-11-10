@@ -85,6 +85,12 @@ export const RPC_ERROR_CODES = [
   // environment is bound to it, and a host belongs to exactly one
   // environment. Same additive degrade story as E_INVALID_ARGUMENT.
   "E_HOST_HAS_BOTS_OF_ANOTHER_ENVIRONMENT",
+  // Team-target bind refusals, carried through the ordinary error envelope.
+  // Older clients narrow unknown codes to RPC_ERROR and retain the message.
+  "E_ENVIRONMENT_NOT_A_MEMBER",
+  "E_ENVIRONMENT_SEAT_NOT_ACCEPTED",
+  "E_ENVIRONMENT_SEAT_WITHOUT_WRITE",
+  "E_HOST_IS_SANDBOX",
   // A keyed unary was refused before resolver dispatch because the bounded
   // replay cache had no safe slot. The command definitely did not run and may
   // retry with the SAME key once capacity returns. This meaning is part of the
@@ -299,6 +305,12 @@ export const RPC_ERROR_CODES = [
   // deleted since. Nothing was created; the bot the key made, if live, is in
   // the person's list. Additive, as above.
   "E_BOT_REQUEST_KEY_REUSED",
+  // `bot.conversation.send` carried a card's `answers` for a bot whose bound
+  // host has not said it takes them (`BOT_HOST_TAKES_ANSWER_SETS`): a host
+  // that predates them would take the set as an ordinary post. Nothing was
+  // written or queued; each question is answered on its own instead.
+  // Additive, as above.
+  "E_BOT_ANSWER_SETS_UNSUPPORTED",
   // ─── Evicted chats ──────────────────────────────────────────────────────
   //
   // A host dropped a chat's records once the cloud held them, and could not

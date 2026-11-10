@@ -357,12 +357,13 @@ export function markMayHaveReachedHost(error: HostRpcError): void {
  *
  * False means one of two things, and the second is not "did not run": the
  * transport attests the request never reached the host (a pre-send abort, an
- * unkeyed retryable failure, a failure the host attested), or the host
- * answered with its own error envelope. A host error can follow the method's
- * run (a partial failure, a result rejected after the resolver completed, a
- * response too large to send), and whether one did is the method's contract,
- * judged by the caller from the error's code; the transport cannot know. Any
- * value that is not a `HostRpcError` reads false too.
+ * unkeyed retryable failure, a failure the host attested, a refusal from
+ * {@link transportFailureBeforeSend}), or the host answered with its own
+ * error envelope. A host error can follow the method's run (a partial
+ * failure, a result rejected after the resolver completed, a response too
+ * large to send), and whether one did is the method's contract, judged by
+ * the caller from the error's code; the transport cannot know. Any value
+ * that is not a `HostRpcError` reads false too.
  */
 export function mayHaveReachedHost(error: unknown): boolean {
   if (!(error instanceof HostRpcError)) return false;
@@ -374,4 +375,35 @@ export function mayHaveReachedHost(error: unknown): boolean {
   return (
     error instanceof HostTransportFailureError && error.fatalDetails === null
   );
+}
+
+/**
+ * A refusal decided before any frame of this attempt was written.
+ *
+ * A `HostTransportFailureError` with null `fatalDetails` reads as having
+ * reached the host: that shape is the unattested post-send drop. Non-null
+ * `fatalDetails` is the not-reached shape. These details are minted here,
+ * not copied off a host frame, because this attempt never left and there is
+ * no frame. `retryable` stays absent, so the refusal is not retried. An
+ * earlier attempt of the same episode is a different error; the retry
+ * messenger wraps this one when that earlier attempt was sent, and the
+ * wrapper is what reads as uncertain.
+ */
+export function transportFailureBeforeSend(details: {
+  readonly message: string;
+  readonly requestId: string;
+  readonly method: string;
+}): HostTransportFailureError {
+  return new HostTransportFailureError({
+    code: "RPC_ERROR",
+    message: details.message,
+    requestId: details.requestId,
+    method: details.method,
+    fatalDetails: {
+      code: "RPC_ERROR",
+      reason: details.message,
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    },
+  });
 }

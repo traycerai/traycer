@@ -1,3 +1,4 @@
+import { readDesktopHorizontalWheelOwnership } from "@/components/layout/shell/desktop-history-gesture-ownership";
 import {
   act,
   cleanup,
@@ -756,18 +757,20 @@ describe("the fullscreen board", () => {
 
   it("keeps owning horizontal swipes across the whole surface once a board is fullscreen", () => {
     mount({ live: true });
-    expect(canvasSurface().hasAttribute("data-history-gesture-owner")).toBe(
-      true,
-    );
+    expect(readDesktopHorizontalWheelOwnership(canvasSurface())).toEqual({
+      back: true,
+      forward: true,
+    });
 
     fireEvent.click(
       screen.getByRole("button", { name: "Play Home fullscreen" }),
     );
 
     expect(isFullscreen()).toBe(true);
-    expect(canvasSurface().hasAttribute("data-history-gesture-owner")).toBe(
-      true,
-    );
+    expect(readDesktopHorizontalWheelOwnership(canvasSurface())).toEqual({
+      back: true,
+      forward: true,
+    });
   });
 
   it("shows the page's error with a way to send it to chat", () => {

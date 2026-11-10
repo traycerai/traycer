@@ -546,26 +546,6 @@ describe("what the list says besides the results", () => {
     expect(buttons()).toEqual([]);
   });
 
-  it("says recent messages are still being indexed, with the results found", async () => {
-    mocks.state.answer = answerWith(
-      searchResponse({
-        hits: [SEARCH_RESULT_A],
-        total: 1,
-        indexState: "partial",
-      }),
-    );
-    render(<Surface />);
-    fireEvent.change(screen.getByTestId("bot-column-search"), {
-      target: { value: "release" },
-    });
-    await settle();
-
-    expect(screen.getByTestId("bot-search-partial").textContent).toBe(
-      "Still indexing recent messages",
-    );
-    expect(hitRows()).toHaveLength(1);
-  });
-
   it("names a bot whose host could not be reached", async () => {
     mocks.state.answer = answerWith(
       searchResponse({

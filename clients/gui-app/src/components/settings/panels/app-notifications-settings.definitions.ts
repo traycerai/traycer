@@ -1,5 +1,6 @@
 import {
   alwaysAvailable,
+  isSetPiecesRowAvailable,
   isSoundtrackRecordingRowAvailable,
   isPlaybackControlsRowAvailable,
   isSoundtrackRowAvailable,
@@ -89,6 +90,15 @@ export const APP_NOTIFICATIONS = defineSettingsSection("app-notifications", {
     description: "Shows previous, pause and next in a task's status bar.",
     availableWhen: isPlaybackControlsRowAvailable,
     keywords: ["music", "skip"],
+  },
+  soundtrackSetPieces: {
+    kind: "row",
+    group: "soundtrack",
+    search: { anchor: "sounds-soundtrack-set-pieces" },
+    label: "Set pieces",
+    description: "Turn off to hear and record only generative music.",
+    availableWhen: isSetPiecesRowAvailable,
+    keywords: ["music", "composed", "generative", "recording"],
   },
   soundtrackVolume: {
     kind: "row",

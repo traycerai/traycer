@@ -81,6 +81,7 @@ import type {
   ILinkCodeScanner,
   ILinkLoginDeepLinkSource,
   INotificationHost,
+  IDeviceDictationHost,
   IPushPermissionHost,
   IRunnerHost,
   ISecureStorage,
@@ -321,6 +322,11 @@ export interface MobileRunnerHostOptions {
    * `getUserMedia` drives the browser's own prompt.
    */
   readonly voiceAudio: MobileVoiceAudio | null;
+  /**
+   * On-device dictation, or `null` where the app has no native recognizer -
+   * see `IRunnerHost.deviceDictation`. Decided by the entry point.
+   */
+  readonly deviceDictation: IDeviceDictationHost | null;
 }
 
 const STEP_UP_EXPIRY_SKEW_MS = 5_000;
@@ -393,6 +399,7 @@ export class MobileRunnerHost implements IRunnerHost {
   readonly deviceFlow: MobileDeviceFlowHost;
   private readonly authSheet: MobileAuthSheet | null;
   private readonly voiceAudio: MobileVoiceAudio | null;
+  readonly deviceDictation: IDeviceDictationHost | null;
   /**
    * The phone's own notification switch. `null` wherever this shell cannot
    * both read the permission AND open the OS page to repair it (the dev web
@@ -454,6 +461,7 @@ export class MobileRunnerHost implements IRunnerHost {
     this.statusBarTap = options.statusBarTap;
     this.authSheet = options.authSheet;
     this.voiceAudio = options.voiceAudio;
+    this.deviceDictation = options.deviceDictation;
     this.notifications = buildNotifications(options.pushRegistration);
     this.tokenStore = new MobileTokenStore(
       this.secureStorage,

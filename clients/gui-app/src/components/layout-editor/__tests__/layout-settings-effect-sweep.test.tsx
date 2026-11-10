@@ -34,9 +34,9 @@ import { LAYOUT } from "@/components/settings/panels/layout-settings.definitions
 import {
   asBarRegionId,
   DEFAULT_ARRANGEMENT,
-  railPanelToStackBelow,
   type LayoutArrangement,
 } from "@/lib/layout/layout-arrangement";
+import { BROWSERS_SIMULATORS_STACK_ID } from "@/lib/layout/rail";
 import { isMobileApp } from "@/lib/mobile-app";
 import type { SettingsAvailabilityContext } from "@/lib/settings/settings-availability";
 import {
@@ -88,6 +88,7 @@ const AVAILABILITY: SettingsAvailabilityContext = {
   phoneLayout: false,
   soundtrackOffered: false,
   soundtrackRecordingOffered: false,
+  soundtrackSetPiecesOffered: false,
   soundtrackOn: false,
 };
 
@@ -118,22 +119,15 @@ const CONFIGURED_PREFIXES = SWEEP_CONFIGURED_PROVIDERS.map(
 );
 
 /**
- * The "Stack … with the panel below" entry whose pair joins Mobile simulators
- * to a panel with nothing else shown: the verb on the panel directly above it.
- * Read off the shipped rail through the product's own neighbour rule, so the
- * pair follows the canonical order rather than being named here. Mobile
- * simulators' own verb is not here: the panel below it is Git Diff, already
- * stacked with Pull Requests, so joining it grows a stack that draws.
+ * The shipped Browsers and Simulators stack and the two members' unstack
+ * verbs: Mobile simulators draws in neither window, so the stack is left with
+ * one shown member and taking it apart changes nothing on screen.
  */
-const STACKS_JOINING_SIMULATORS: ReadonlySet<string> = new Set(
-  DEFAULT_ARRANGEMENT.rail.flatMap((entry) => {
-    if (entry.kind !== "panel") return [];
-    const joins =
-      railPanelToStackBelow(DEFAULT_ARRANGEMENT.rail, entry.id) ===
-      "railSimulators";
-    return joins ? [`rail-structure:stack-below:${entry.id}`] : [];
-  }),
-);
+const SIMULATORS_STACK_ENTRIES: ReadonlySet<string> = new Set([
+  `rail-structure:remove-stack:${BROWSERS_SIMULATORS_STACK_ID}`,
+  "rail-structure:unstack:railBrowsers",
+  "rail-structure:unstack:railSimulators",
+]);
 
 const EXPECTED_SILENT: ReadonlyArray<SilentExemption> = [
   {
@@ -167,8 +161,8 @@ const EXPECTED_SILENT: ReadonlyArray<SilentExemption> = [
   },
   {
     id: "simulators-stack",
-    matches: (entry) => STACKS_JOINING_SIMULATORS.has(entry.id),
-    why: "it joins Mobile simulators, which draws in neither window, so the stack is left with one shown member and the rail draws that member standing alone (T3)",
+    matches: (entry) => SIMULATORS_STACK_ENTRIES.has(entry.id),
+    why: "the stack holds Mobile simulators, which draws in neither window, so it is left with one shown member and the rail draws that member standing alone with or without the link (T3)",
   },
   {
     id: "file-tree-stack",

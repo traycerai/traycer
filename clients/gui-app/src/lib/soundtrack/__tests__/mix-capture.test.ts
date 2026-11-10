@@ -18,6 +18,7 @@ import {
 } from "vitest";
 import { openMixCapture, type MixTap } from "../mix-capture";
 import type { CaptureSummary, MixCapture } from "../recording";
+import { opusHead } from "./opus-head-fixture";
 
 const OPUS_RATE = 48_000;
 const FRAME_US = 20_000;
@@ -96,16 +97,6 @@ function fakeChunk(bytes: Uint8Array, durationUs: number): EncodedChunk {
     byteLength: bytes.length,
     copyTo: (target) => target.set(bytes),
   };
-}
-
-/** A synthetic but structurally valid `OpusHead`, as a real encoder reports. */
-function opusHead(preSkip: number): Uint8Array {
-  const bytes = new Uint8Array(19);
-  bytes.set(new TextEncoder().encode("OpusHead"), 0);
-  bytes[8] = 1;
-  bytes[9] = CHANNELS;
-  new DataView(bytes.buffer).setUint16(10, preSkip, true);
-  return bytes;
 }
 
 type EncodeOutput = (
@@ -226,7 +217,6 @@ interface FakeHandlers {
 }
 
 async function openCapture(): Promise<{
-  readonly context: AudioContext;
   readonly node: FakeAudioWorkletNode;
   readonly encoder: FakeAudioEncoder;
   readonly handlers: FakeHandlers;
@@ -245,7 +235,7 @@ async function openCapture(): Promise<{
   capture.start(handlers);
   const [node] = FakeAudioWorkletNode.instances;
   const [encoder] = FakeAudioEncoder.instances;
-  return { context, node, encoder, handlers, capture };
+  return { node, encoder, handlers, capture };
 }
 
 describe("openMixCapture, compressed", () => {

@@ -177,7 +177,7 @@ ReturnType<typeof fn>          // name the concrete type
 | Keep runtime declarations with no production consumer.          | Remove unused declarations and tests that exercise only them.                         |
 | Check for a result the private implementation cannot return.    | Make its return type exact and remove the unreachable branch.                         |
 | Cast a partial fixture to a constructible browser type.         | Use the real constructor to create the fixture.                                       |
-| Write a comment that restates the next line or assertion.       | Remove it; comment only a reason or invariant the code cannot show.                   |
+| Write a comment that restates the code or comment beside it.    | Remove it; comment only a reason or invariant the code cannot show.                   |
 | Copy a fixture another test file already builds.                | Import or spread the shared fixture; override only the fields that differ.            |
 | Reassign a fixture to the value its setup already gave it.      | Keep the shared setup; override only what the test changes.                           |
 

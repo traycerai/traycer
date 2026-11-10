@@ -17,11 +17,14 @@ import {
 } from "./environment-stale-write";
 
 /**
- * Wire-level frame types for the per-request WebSocket RPC protocol.
+ * Wire-level frame types for the local WebSocket RPC protocol.
  *
- * Each accepted WebSocket connection carries exactly one RPC call and the
- * preceding open/manifest dance. Frames are JSON text frames discriminated
- * by `kind`.
+ * A connection that does not negotiate {@link UNARY_CAPABILITY_PERSISTENT_SESSION}
+ * carries exactly one RPC call and the preceding open/manifest dance, which is
+ * what every released peer does. A connection that does negotiate it carries
+ * many unary calls on that one socket: the manifest is exchanged once, and
+ * each call is its own request and response. Frames are JSON text frames
+ * discriminated by `kind`.
  *
  * This module is the authoritative home for the full WS session contract:
  * every frame type and the canonical Zod schema that validates it on the
@@ -88,6 +91,18 @@ export const RPC_REQUEST_TIMEOUT_FATAL_CODE = "RPC_REQUEST_TIMEOUT";
  * new name must be introduced; this string must never be redefined in place.
  */
 export const UNARY_CAPABILITY_IDEMPOTENCY_KEY = "unary.idempotencyKey";
+
+/**
+ * Host-to-client unary capability: this host keeps the socket open after the
+ * response and accepts further `request` frames on it. Each request carries
+ * its own bearer. A host advertises the name on `openAck`; a client opts in
+ * by listing the same name on `open`. Either side omitting it keeps the
+ * one-request socket.
+ *
+ * Capability names are semantic versions. A different session rule needs a
+ * new name; this string must never be redefined in place.
+ */
+export const UNARY_CAPABILITY_PERSISTENT_SESSION = "unary.persistentSession";
 
 /**
  * The invariant fragment of the sentence the host writes when its idempotency
@@ -264,11 +279,11 @@ export type ClientOpenFrame = {
    * presence is the declaration, absence is a peer that predates the capability
    * and is therefore authorized in fact.
    *
-   * There is deliberately NO control frame on this carrier and no capability tag
-   * for one. A `/rpc` socket carries a single request and closes, so its verdict
-   * cannot go stale mid-connection: the next call opens a new socket and asserts
-   * the verdict again. Only the long-lived carriers (`/stream`, the mux session)
-   * need `cloudVerdictUpdate`.
+   * On a one-request socket the open frame is the only carrier: the socket
+   * closes with the response, so the verdict cannot go stale under it. On a
+   * persistent session the open frame still carries the handshake's verdict,
+   * and each `request` carries its own, because a later call can be demoted
+   * without the session being torn down.
    */
   readonly cloudAuthorized?: boolean;
 };
@@ -292,6 +307,30 @@ export type ClientRequestFrame = {
    * safety.
    */
   readonly idempotencyKey?: string | null;
+  /**
+   * The bearer THIS call is admitted under. Present only on a persistent
+   * session ({@link UNARY_CAPABILITY_PERSISTENT_SESSION}); a one-request
+   * socket carries the bearer on `open` and omits this field. An older host
+   * strips the key. A session request without it is refused as that call's
+   * authorization failure and the socket stays up.
+   */
+  readonly token?: string;
+  /**
+   * Whether THIS call may spend a cloud capability. Same presence rule as
+   * the open frame's field. Omitted on a one-request socket, whose verdict
+   * travelled on `open`.
+   */
+  readonly cloudAuthorized?: boolean;
+};
+
+/**
+ * Drops one in-flight call on a persistent session. The socket stays open.
+ * A host that did not advertise the session never receives one: the client
+ * closes the one-request socket instead, which is how that call is cancelled.
+ */
+export type ClientCancelFrame = {
+  readonly kind: "cancel";
+  readonly requestId: string;
 };
 
 /**
@@ -310,6 +349,7 @@ export type ClientFatalErrorFrame = {
 export type ClientFrame =
   | ClientOpenFrame
   | ClientRequestFrame
+  | ClientCancelFrame
   | ClientFatalErrorFrame;
 
 /**
@@ -342,6 +382,13 @@ export type HostResponseFrame = {
     readonly holders?: readonly WorktreeBusyHolder[];
     readonly holdersRevision?: string;
     readonly staleWrite?: EnvironmentStaleWrite;
+    /**
+     * A persistent-session request whose bearer check failed transiently
+     * (the validator's `NETWORK_ERROR`, the same class `fatalError.retryable`
+     * carries on the open frame). Absent on every other envelope, including
+     * a permanent `UNAUTHORIZED` and any host that predates the field.
+     */
+    readonly retryable?: boolean;
   } | null;
 };
 
@@ -482,6 +529,16 @@ export const clientRequestFrameSchema = z.object({
   schemaVersion: schemaVersionSchema,
   params: z.unknown(),
   idempotencyKey: z.string().min(1).nullable().optional(),
+  // Additive on a persistent session. A one-request peer omits both, and a
+  // host that predates the session strips them.
+  token: z.string().min(1).optional(),
+  cloudAuthorized: z.boolean().optional(),
+});
+
+/** Canonical schema for the client `cancel` frame. */
+export const clientCancelFrameSchema = z.object({
+  kind: z.literal("cancel"),
+  requestId: z.string().min(1),
 });
 
 /** Canonical schema for the client `fatalError` frame. */
@@ -498,6 +555,7 @@ export const clientFatalErrorFrameSchema = z.object({
 export const clientFrameSchema = z.discriminatedUnion("kind", [
   clientOpenFrameSchema,
   clientRequestFrameSchema,
+  clientCancelFrameSchema,
   clientFatalErrorFrameSchema,
 ]);
 
@@ -525,6 +583,11 @@ export const hostResponseErrorSchema = z.object({
   holdersRevision: holdersRevisionWireFieldSchema,
   // `ENVIRONMENT_WRITE_STALE`'s detail; sanitized to absent like `holders`.
   staleWrite: staleWriteWireFieldSchema,
+  // A persistent-session request whose bearer check failed transiently
+  // (the validator's `NETWORK_ERROR`, the same class `fatalError.retryable`
+  // carries on the open frame). Absent on every other envelope, including
+  // a permanent `UNAUTHORIZED` and any host that predates the field.
+  retryable: z.boolean().optional(),
 });
 
 /** Canonical schema for the host `response` frame. */

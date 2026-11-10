@@ -5,6 +5,10 @@
  * the channel PASSES them is what is asserted: the thread line it draws under
  * each post, the chat the thread panel reads, and where each box writes.
  */
+import {
+  botMentionHostClientMock,
+  emptyBotMentionHostListsMock,
+} from "@/components/bots/__tests__/bot-mention-host-test-support";
 import type { MobileTileCount } from "@/lib/layout/mobile-layout-form";
 import type { ComponentProps, ReactNode } from "react";
 import { act, cleanup, render, screen, within } from "@testing-library/react";
@@ -143,6 +147,15 @@ const mocks = vi.hoisted(() => {
     },
   };
 });
+
+vi.mock(
+  "@/hooks/host/use-host-client-for-host-id",
+  () => botMentionHostClientMock,
+);
+vi.mock(
+  "@/hooks/bots/use-environment-host-lists-query",
+  () => emptyBotMentionHostListsMock,
+);
 
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => mocks.client,

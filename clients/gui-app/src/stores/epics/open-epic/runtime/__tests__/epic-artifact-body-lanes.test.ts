@@ -34,7 +34,8 @@ import type {
 import type { ReplicaReplacementReason } from "@traycer-clients/shared/replica-runtime";
 import {
   artifactSubscribeServerFrameSchemaV10,
-  type ArtifactSubscribeUnavailableCode,
+  artifactSubscribeServerFrameSchemaV12,
+  type ArtifactSubscribeUnavailableCodeV12,
 } from "@traycer/protocol/host/epic/artifact-subscribe";
 import {
   createEpicArtifactBodyLanes,
@@ -83,10 +84,10 @@ function buildDocFrame(fields: {
 function buildUnavailableFrame(fields: {
   readonly authorityEpoch: string;
   readonly artifactId: string;
-  readonly code: ArtifactSubscribeUnavailableCode;
+  readonly code: ArtifactSubscribeUnavailableCodeV12;
   readonly terminal: boolean;
 }): ArtifactUnavailableFrame {
-  const parsed = artifactSubscribeServerFrameSchemaV10.parse({
+  const parsed = artifactSubscribeServerFrameSchemaV12.parse({
     kind: "unavailable",
     authorityEpoch: fields.authorityEpoch,
     artifactId: fields.artifactId,
@@ -177,6 +178,11 @@ interface LanesRig {
    */
   laneUnsupportedCount(): number;
   setAuthorityEpoch(epoch: string | null): void;
+  /**
+   * Runs inside every room event delivery, after it is recorded: the seam a
+   * consumer reacts to an availability change through, synchronously.
+   */
+  setRoomEventReaction(reaction: (() => void) | null): void;
 }
 
 /**
@@ -195,6 +201,7 @@ function createLanesRig(initialAuthorityEpoch: string | null): LanesRig {
    */
   let laneUnsupportedCount = 0;
   let authorityEpoch = initialAuthorityEpoch;
+  let roomEventReaction: (() => void) | null = null;
   const lanes = createEpicArtifactBodyLanes({
     epicId: "epic-1",
     environment: createRendererRuntimeEnvironment(),
@@ -204,6 +211,7 @@ function createLanesRig(initialAuthorityEpoch: string | null): LanesRig {
     isDisposed: () => false,
     onRoomEvent: (event) => {
       roomEvents.push(event);
+      roomEventReaction?.();
     },
     onReplacementRequested: (reason) => {
       replacementReasons.push(reason);
@@ -220,6 +228,9 @@ function createLanesRig(initialAuthorityEpoch: string | null): LanesRig {
     laneUnsupportedCount: () => laneUnsupportedCount,
     setAuthorityEpoch: (epoch) => {
       authorityEpoch = epoch;
+    },
+    setRoomEventReaction: (reaction) => {
+      roomEventReaction = reaction;
     },
   };
 }
@@ -471,5 +482,111 @@ describe("createEpicArtifactBodyLanes - demand-tracked artifact body lanes", () 
     // closed a second time.
     expect(rig.artifacts.clients).toHaveLength(1);
     expect(client.closeCount()).toBe(1);
+  });
+
+  describe("a terminal frame that ends a lane while its body is still demanded", () => {
+    it("(l) bodyMoved detaches the lane and opens exactly one replacement at once under the current epoch", () => {
+      const rig = createLanesRig("epoch-1");
+      rig.lanes.ensureAttached("art-1");
+      const first = requireAt(rig.artifacts.clients, 0);
+
+      first.callbacks.onUnavailable(
+        buildUnavailableFrame({
+          authorityEpoch: "epoch-1",
+          artifactId: "art-1",
+          code: "bodyMoved",
+          terminal: true,
+        }),
+      );
+
+      expect(first.closeCount()).toBe(1);
+      expect(rig.artifacts.clients).toHaveLength(2);
+      const second = requireAt(rig.artifacts.clients, 1);
+      expect(second.artifactId).toBe("art-1");
+      expect(second.authorityEpoch).toBe("epoch-1");
+      expect(second.closeCount()).toBe(0);
+      expect(rig.lanes.attachedArtifactIds()).toEqual(["art-1"]);
+      // The tile reads the transient state until the replacement seeds it.
+      expect(rig.roomEvents).toEqual([
+        {
+          kind: "room-availability",
+          artifactRoomId: "art-1",
+          availability: "retrying",
+        },
+      ]);
+    });
+
+    it("(m) bodyMoved with no epoch to reattach under opens nothing and does not refuse the body: the next reconcile at the same epoch opens it", () => {
+      const rig = createLanesRig("epoch-1");
+      rig.lanes.ensureAttached("art-1");
+      // A reconcile at the epoch records it as the one already synced, so the
+      // reconcile below cannot clear a refusal by seeing the epoch change.
+      rig.lanes.syncToAuthorityEpoch();
+      const first = requireAt(rig.artifacts.clients, 0);
+      rig.setAuthorityEpoch(null);
+
+      first.callbacks.onUnavailable(
+        buildUnavailableFrame({
+          authorityEpoch: "epoch-1",
+          artifactId: "art-1",
+          code: "bodyMoved",
+          terminal: true,
+        }),
+      );
+
+      expect(first.closeCount()).toBe(1);
+      expect(rig.artifacts.clients).toHaveLength(1);
+      expect(rig.lanes.attachedArtifactIds()).toEqual([]);
+
+      rig.setAuthorityEpoch("epoch-1");
+      rig.lanes.syncToAuthorityEpoch();
+
+      expect(rig.artifacts.clients).toHaveLength(2);
+      expect(rig.lanes.attachedArtifactIds()).toEqual(["art-1"]);
+    });
+
+    it("(n) bodyMoved delivered as the last demand is released leaves nothing to reattach", () => {
+      const rig = createLanesRig("epoch-1");
+      rig.lanes.ensureAttached("art-1");
+      const first = requireAt(rig.artifacts.clients, 0);
+      // The tile closes in response to the availability change it is told of.
+      rig.setRoomEventReaction(() => {
+        rig.lanes.release("art-1", "superseded");
+      });
+
+      first.callbacks.onUnavailable(
+        buildUnavailableFrame({
+          authorityEpoch: "epoch-1",
+          artifactId: "art-1",
+          code: "bodyMoved",
+          terminal: true,
+        }),
+      );
+
+      expect(first.closeCount()).toBe(1);
+      expect(rig.artifacts.clients).toHaveLength(1);
+      expect(rig.lanes.attachedArtifactIds()).toEqual([]);
+    });
+
+    it("(o) a terminal bodyUnavailable is a refusal: the lane closes and no reconcile at the same epoch reopens it", () => {
+      const rig = createLanesRig("epoch-1");
+      rig.lanes.ensureAttached("art-1");
+      rig.lanes.syncToAuthorityEpoch();
+      const first = requireAt(rig.artifacts.clients, 0);
+
+      first.callbacks.onUnavailable(
+        buildUnavailableFrame({
+          authorityEpoch: "epoch-1",
+          artifactId: "art-1",
+          code: "bodyUnavailable",
+          terminal: true,
+        }),
+      );
+      rig.lanes.syncToAuthorityEpoch();
+
+      expect(first.closeCount()).toBe(1);
+      expect(rig.artifacts.clients).toHaveLength(1);
+      expect(rig.lanes.attachedArtifactIds()).toEqual([]);
+    });
   });
 });

@@ -11,6 +11,10 @@
  * indicators, the tab navigation and the browser's IntersectionObserver are
  * replaced.
  */
+import {
+  botMentionHostClientMock,
+  emptyBotMentionHostListsMock,
+} from "@/components/bots/__tests__/bot-mention-host-test-support";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
@@ -21,7 +25,15 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -31,10 +43,14 @@ import {
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
 import type {
+  BotThreadAnchors,
   BotThreadSummary,
   BotTurnRef,
 } from "@traycer/protocol/host/bot/conversation-schemas";
-import type { Message } from "@traycer/protocol/persistence/epic/schemas";
+import type {
+  BotQuestionItem,
+  Message,
+} from "@traycer/protocol/persistence/epic/schemas";
 import type {
   BotNotificationLevel,
   BotReadCursorReadResponse,
@@ -42,14 +58,19 @@ import type {
   BotThreadFollow,
   BotThreadFollowSetRequest,
 } from "@traycer/protocol/host/bot/schemas";
-import { conversationRequestMessageId } from "@traycer/protocol/persistence/epic/messages";
+import {
+  botQuestionsText,
+  conversationRequestMessageId,
+} from "@traycer/protocol/persistence/epic/messages";
 import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
 import type { MobileLevel2Form } from "@/lib/layout/mobile-layout-form";
 import type { TabNavigationIntent } from "@/lib/tab-navigation/intents";
 import { BotTestRunnerHost } from "@/components/bots/__tests__/bot-test-runner-host";
+import { CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME } from "@/components/chat/chat-navigation-highlight";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
+  negotiateBotSend,
   signInViewer,
   resetBotFailedRequestSupport,
 } from "@/components/bots/__tests__/bot-failed-request-test-support";
@@ -67,6 +88,8 @@ import {
 /** What the host answers for one bot. */
 type BotScript = {
   threads: BotThreadSummary[];
+  /** The rows the bot's bound host says it opens a thread under; `null` for a host that says none. */
+  threadAnchors: BotThreadAnchors | null;
   follows: Record<string, BotThreadFollow>;
   cursors: BotReadCursorReadResponse;
   levels: Record<string, BotNotificationLevel>;
@@ -102,6 +125,15 @@ const mocks = vi.hoisted(() => ({
   refetchBots: vi.fn<() => Promise<unknown>>(),
   back: vi.fn<() => void>(),
 }));
+
+vi.mock(
+  "@/hooks/host/use-host-client-for-host-id",
+  () => botMentionHostClientMock,
+);
+vi.mock(
+  "@/hooks/bots/use-environment-host-lists-query",
+  () => emptyBotMentionHostListsMock,
+);
 
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   ...(await importOriginal<
@@ -291,6 +323,7 @@ function script(
 ): BotScript {
   return {
     threads,
+    threadAnchors: null,
     follows,
     cursors: { cursors: {}, latest: {} },
     levels: {},
@@ -325,11 +358,11 @@ function mount(): void {
       handlers: {
         "bot.thread.list": (params) => {
           mocks.reads.push({ method: "bot.thread.list", params });
-          const { threads } = mocks.hosted[params.botId];
+          const { threads, threadAnchors } = mocks.hosted[params.botId];
           return {
             threads,
             trunkCostUsd: null,
-            threadAnchors: null,
+            threadAnchors,
             nextCursor: null,
             total: threads.length,
           };
@@ -1146,6 +1179,220 @@ describe("<BotThreadsView />", () => {
     expect(mocks.writes).toEqual([
       { botId: TRACY, threadId: "tracy-old", state: "unfollowed" },
     ]);
+  });
+
+  describe("a reply's badge in a card", () => {
+    const ANCHOR_ID = conversationRequestMessageId("req-team-new");
+
+    /**
+     * `count` rows alternating member, bot, member... as `m1`, `b2`, `m3`...
+     * (a reply row is never next to another, which would merge them), with
+     * the bot rows' `repliesTo` by row id.
+     */
+    function alternatingRows(
+      count: number,
+      repliesTo: Readonly<Partial<Record<string, string>>>,
+    ): Message[] {
+      return Array.from({ length: count }, (_, index) => {
+        const n = index + 1;
+        const text = `reply ${String(n)}`;
+        const timestamp = 2_000 + n;
+        if (n % 2 === 1) {
+          return { ...postRow(`m${String(n)}`, text), timestamp };
+        }
+        const id = `b${String(n)}`;
+        const to = repliesTo[id];
+        return {
+          ...botReply({ messageId: id, text, timestamp }),
+          ...(to === undefined ? {} : { repliesTo: to }),
+        };
+      });
+    }
+
+    /** The row that draws `text` as its own message, not as a badge's line. */
+    function rowOf(text: string): Element | null | undefined {
+      return within(card("team-new"))
+        .getAllByText(text)
+        .find(
+          (node) => node.closest('[data-testid="bot-reply-badge"]') === null,
+        )
+        ?.closest("[data-message-id]");
+    }
+
+    async function foldedCard(rows: Message[]): Promise<HTMLElement> {
+      mocks.posts[TEAM] = { [ANCHOR_ID]: "Ship the release?" };
+      mocks.replyRows["team-new"] = rows;
+      mount();
+      await waitFor(() => expect(listed()).toContain("team-new"));
+      return revealFull("team-new");
+    }
+
+    it("badges the first reply drawn when the message it answers is folded away behind the fold line", async () => {
+      // m7 is folded away; b8 and m9 are drawn.
+      const full = within(await foldedCard(alternatingRows(9, { b8: "m7" })));
+
+      expect(
+        (await full.findByTestId("bot-chat-transcript-unfold")).textContent,
+      ).toBe("Show 7 more replies");
+      expect(
+        full.getByRole("button", { name: /^Replying to .*: reply 7$/ }),
+      ).toBeTruthy();
+    });
+
+    it("badges the first reply drawn when it answers the thread's opening post, which the fold hides from above it", async () => {
+      const full = within(
+        await foldedCard(alternatingRows(9, { b8: ANCHOR_ID })),
+      );
+
+      await full.findByTestId("bot-chat-transcript-unfold");
+      expect(
+        full.getByRole("button", {
+          name: /^Replying to .*: Ship the release\?$/,
+        }),
+      ).toBeTruthy();
+    });
+
+    it("draws no badge on a drawn reply directly under the message it answers", async () => {
+      const full = within(await foldedCard(alternatingRows(8, { b8: "m7" })));
+
+      await full.findByTestId("bot-chat-transcript-unfold");
+      expect(full.getByText("reply 8")).toBeTruthy();
+      expect(full.queryByTestId("bot-reply-badge")).toBeNull();
+    });
+
+    it("unfolds a card to show the message a badge names when it is folded away, then scrolls to it and highlights it", async () => {
+      const user = userEvent.setup();
+      const scrolled = vi.spyOn(Element.prototype, "scrollIntoView");
+      scrolled.mockImplementation(() => undefined);
+      onTestFinished(() => scrolled.mockRestore());
+      const full = within(await foldedCard(alternatingRows(9, { b8: "m3" })));
+
+      await user.click(
+        await full.findByRole("button", { name: /^Replying to .*: reply 3$/ }),
+      );
+
+      expect(full.queryByTestId("bot-chat-transcript-unfold")).toBeNull();
+      const answered = rowOf("reply 3");
+      await waitFor(() => expect(scrolled.mock.contexts).toEqual([answered]));
+      expect(scrolled).toHaveBeenCalledWith({ block: "nearest" });
+      for (const token of CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME.split(" ")) {
+        expect(answered?.classList.contains(token)).toBe(true);
+      }
+    });
+
+    it("scrolls to and highlights a drawn message a badge names, in a card with no fold", async () => {
+      const user = userEvent.setup();
+      const scrolled = vi.spyOn(Element.prototype, "scrollIntoView");
+      scrolled.mockImplementation(() => undefined);
+      onTestFinished(() => scrolled.mockRestore());
+      const full = within(await foldedCard(alternatingRows(5, { b4: "m1" })));
+      await full.findByText("reply 5");
+      expect(full.queryByTestId("bot-chat-transcript-unfold")).toBeNull();
+
+      await user.click(
+        full.getByRole("button", { name: /^Replying to .*: reply 1$/ }),
+      );
+
+      const answered = rowOf("reply 1");
+      await waitFor(() => expect(scrolled.mock.contexts).toEqual([answered]));
+      for (const token of CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME.split(" ")) {
+        expect(answered?.classList.contains(token)).toBe(true);
+      }
+    });
+  });
+});
+
+describe("<BotThreadsView /> a card whose bot asks several questions at once", () => {
+  const BOUND_ELSEWHERE = "host-elsewhere";
+  const BOUND_EPOCH = 3;
+  const DEPLOY: BotQuestionItem = {
+    text: "Deploy to staging now or after the train?",
+    options: ["Now", "After the train"],
+    allowFreeText: false,
+    settlement: null,
+  };
+  const HOLD: BotQuestionItem = {
+    text: "Anything to hold back from the train?",
+    options: [],
+    allowFreeText: true,
+    settlement: null,
+  };
+
+  /** The bot's reply in the thread: a card of both questions, its text just the questions. */
+  function askedBoth(): Message {
+    const questions = [DEPLOY, HOLD];
+    return {
+      ...botReply({
+        messageId: "team-new-question",
+        text: botQuestionsText(questions),
+        timestamp: 3_000,
+      }),
+      question: { requestId: "req-question", questions },
+    };
+  }
+
+  /**
+   * The Team bot runs on a host other than the tab's, which lists `kinds` in
+   * its thread list, and its thread holds the card; the tab's host
+   * negotiated `bot.conversation.send` at 1.5. Mounts the view.
+   */
+  function mountCardOfBotBoundElsewhere(kinds: readonly string[]): void {
+    negotiateBotSend("host-1", { major: 1, minor: 5 });
+    mocks.bots = [
+      bot(TRACY, "Tracy"),
+      {
+        ...bot(TEAM, "Team Tracy"),
+        boundHostId: BOUND_ELSEWHERE,
+        hostEpoch: BOUND_EPOCH,
+      },
+    ];
+    mocks.hosted[TEAM] = {
+      ...script([thread(TEAM, "team-new", 3_000)], {
+        "team-new": FOLLOWING,
+      }),
+      threadAnchors: {
+        hostId: BOUND_ELSEWHERE,
+        epoch: BOUND_EPOCH,
+        kinds: [...kinds],
+      },
+    };
+    mocks.hosted[TRACY] = script([], {});
+    mocks.replyRows["team-new"] = [askedBoth()];
+    mount();
+  }
+
+  it("draws one Submit and the tally under the card, none under a question, when the bot's host lists answers and this host takes them", async () => {
+    mountCardOfBotBoundElsewhere(["answer", "answers"]);
+    await waitFor(() => expect(listed()).toContain("team-new"));
+
+    const full = within(await revealFull("team-new"));
+    const questionCard = within(await full.findByTestId("question-card"));
+
+    expect(
+      (await questionCard.findByTestId("question-card-tally")).textContent,
+    ).toBe("0 of 2 answered. Answer or skip each one to submit.");
+    expect(questionCard.getAllByTestId("question-card-submit")).toHaveLength(1);
+    for (const item of questionCard.getAllByTestId("question-card-item")) {
+      expect(within(item).queryByTestId("question-card-submit")).toBeNull();
+    }
+  });
+
+  it("draws a Submit under each question, and no tally, when the bot's host does not list answers", async () => {
+    mountCardOfBotBoundElsewhere(["answer"]);
+    await waitFor(() => expect(listed()).toContain("team-new"));
+
+    const full = within(await revealFull("team-new"));
+    const questionCard = within(await full.findByTestId("question-card"));
+
+    expect(questionCard.queryByTestId("question-card-tally")).toBeNull();
+    const items = questionCard.getAllByTestId("question-card-item");
+    expect(items).toHaveLength(2);
+    for (const item of items) {
+      expect(within(item).getAllByTestId("question-card-submit")).toHaveLength(
+        1,
+      );
+    }
+    expect(questionCard.getAllByTestId("question-card-submit")).toHaveLength(2);
   });
 });
 

@@ -146,6 +146,19 @@ describe("resolveHostStageTarget", () => {
       );
     });
 
+    it("pins the newest stable on any line, past its own line's stable", () => {
+      // One hop: with `2.0.0` already superseded by `2.1.0`, the follower goes
+      // straight to `2.1.0` rather than to `2.0.0` and then, relaunched as a
+      // stable host, to `2.1.0`. The newer line's RC is still not a candidate.
+      expect(
+        target(["2.0.0", "2.1.0", "2.1.0-rc.1", "2.0.0-rc.2"], "2.1.0"),
+      ).toBe("2.1.0");
+    });
+
+    it("pins a newer stable on another line when its own line never shipped one", () => {
+      expect(target(["2.1.0", "1.9.0"], "2.1.0")).toBe("2.1.0");
+    });
+
     it("falls back to the highest later RC on the line when stable is unpublished", () => {
       expect(target(["2.0.0-rc.2", "2.0.0-rc.10", "2.0.0-rc.3"], "1.9.0")).toBe(
         "2.0.0-rc.10",
@@ -153,11 +166,11 @@ describe("resolveHostStageTarget", () => {
     });
 
     it.each([
-      // Newer, but a different line - the jump implicit following never makes.
+      // Newer, but another line's RC - the jump implicit following never makes.
       [["2.1.0-rc.1"], "2.1.0-rc.1 (another RC line)"],
-      [["2.1.0"], "2.1.0 (another line's stable)"],
-      [["3.0.0"], "3.0.0 (a much newer line)"],
-      [["2.0.1"], "2.0.1 (a patch line of its own)"],
+      [["3.0.0-rc.1"], "3.0.0-rc.1 (a much newer RC line)"],
+      // Stable, but not newer.
+      [["1.9.0"], "1.9.0 (an older line's stable)"],
       // Same line, but not newer.
       [["2.0.0-rc.1", "2.0.0-rc.0"], "only itself and an older RC"],
       // Right core, wrong prerelease grammar: not on the 2.0.0 line at all.

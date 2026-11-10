@@ -170,6 +170,10 @@ function loadedOriginRow(
     {
       ...originRowBase(post.messageId, "user", post.timestamp, text),
       attachments: buildAttachmentsFromJSONContent(post.message.content),
+      // A card's answers sent together draw as the channel draws them.
+      ...(post.questionAnswers === undefined
+        ? {}
+        : { questionAnswers: post.questionAnswers }),
     },
     userId,
     post.conversationRequest ?? null,
@@ -186,7 +190,6 @@ function loadedOriginRow(
 export function deliveredMessageRow(input: {
   readonly delivered: AutonomousResumeConversationMessage;
   readonly post: OpenMessage | null;
-  /** The writer's name, as the channel shows it; `null` for a sender that is no member. */
   readonly senderLabel: (senderUserId: string | null) => string;
   readonly senderAvatarUrl: (senderUserId: string) => string | null;
 }): ChatMessage {

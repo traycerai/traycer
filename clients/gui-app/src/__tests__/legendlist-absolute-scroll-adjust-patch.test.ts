@@ -230,7 +230,6 @@ interface AdjustFixture {
     };
     values: Map<string, unknown>;
   };
-  readonly scroller: { scrollTop: number };
   readonly recalculations: { count: number };
 }
 
@@ -335,7 +334,6 @@ function adjustFixture(scrollTop: number): AdjustFixture {
         ["scrollAdjustPending", 0],
       ]),
     },
-    scroller,
     recalculations: { count: 0 },
   };
 }

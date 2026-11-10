@@ -196,6 +196,9 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 // field), on the same rule. Optional, so an older record parses unchanged and
 // reads as one pick, and a row's raw re-emission carries the key through an
 // older reader. No reader floor: an older reader draws a one-pick card.
+// 1.13 also carries `questionAnswers` on a member's row and `requestId` on a
+// question's settlement (`chat.subscribe@1.43` fields, T167), on the same
+// rule. No reader floor: an older reader draws the row's text and the card.
 export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 13 } as const;
 
 export type ChatSyncSchemaVersion = typeof CHAT_SYNC_SCHEMA_VERSION;

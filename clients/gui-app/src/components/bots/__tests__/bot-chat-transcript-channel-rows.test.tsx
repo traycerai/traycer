@@ -54,6 +54,10 @@ type TranscriptState = Pick<
 
 const mocks = vi.hoisted(() => ({
   handle: null as ChatSessionStoreHandle | null,
+  /** What the host's locate answers for a message the session has not loaded. */
+  locateAnswer: { status: "waiting" } as {
+    readonly status: "waiting" | "missing";
+  },
 }));
 
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
@@ -77,7 +81,7 @@ vi.mock("@/hooks/bots/use-bot-turn-locate-query", () => ({
   useBotTurnLocateQuery: () => ({ data: undefined }),
 }));
 vi.mock("@/hooks/chats/use-chat-locate-row", () => ({
-  useChatLocateRowAnswer: () => ({ status: "waiting" }),
+  useChatLocateRowAnswer: () => mocks.locateAnswer,
 }));
 vi.mock("@/components/chat/chat-messages", async () => {
   const { ChatExpansionTestProviders } =
@@ -285,6 +289,7 @@ function scrollStub(): HTMLElement {
 beforeEach(() => {
   vi.clearAllMocks();
   members = UNRESOLVED_BOT_MEMBERS;
+  mocks.locateAnswer = { status: "waiting" };
 });
 
 afterEach(() => {
@@ -320,6 +325,7 @@ describe("<BotChatTranscript /> in the channel", () => {
       threadAnchorKinds: [],
       chooseOption,
       answerQuestion: null,
+      answerQuestions: null,
       discussQuestion: null,
       failedRequest: () => null,
       openTurn: null,
@@ -401,6 +407,7 @@ describe("<BotChatTranscript /> a bot that answers posts in the channel", () => 
       threadAnchorKinds: [],
       chooseOption,
       answerQuestion: null,
+      answerQuestions: null,
       discussQuestion: null,
       failedRequest: () => null,
       openTurn: null,
@@ -412,7 +419,7 @@ describe("<BotChatTranscript /> a bot that answers posts in the channel", () => 
 
   it("draws a direct reply as its own row, with nothing of the post it answers above it", () => {
     mountTranscript(
-      [directPost(DIRECT_REQUEST), otherUserMessage(), directReply(null)],
+      [directPost(DIRECT_REQUEST), directReply(null)],
       channel(null, () => null),
     );
 
@@ -503,4 +510,116 @@ describe("<BotChatTranscript /> a bot that answers posts in the channel", () => 
     expect(chooseOption).toHaveBeenCalledTimes(1);
     expect(chooseOption).toHaveBeenCalledWith("Production");
   });
+
+  it("badges a reply with its post's writer and first line when another row sits between them", () => {
+    members = (userId) =>
+      userId === "owner-1"
+        ? { displayName: "Olive Owner", avatarUrl: null }
+        : null;
+    mountTranscript(
+      [directPost(DIRECT_REQUEST), otherUserMessage(), directReply(null)],
+      channel(null, () => null),
+    );
+
+    const replyRow = within(scrollStub()).getByTestId("bot-reply-row");
+    expect(
+      within(replyRow).getByRole("button", {
+        name: "Replying to Olive Owner: Please review",
+      }),
+    ).toBeTruthy();
+  });
+
+  it("holds the badge's line while the post the reply names is fetched", () => {
+    mountTranscript(
+      [otherUserMessage(), { ...reply(), repliesTo: "older-1" }],
+      channel(null, () => null),
+    );
+
+    expect(
+      screen.getByRole("status", { name: "Loading message" }),
+    ).toBeTruthy();
+  });
+
+  it("says Message unavailable, with no writer, when the post the reply names cannot be read", () => {
+    mocks.locateAnswer = { status: "missing" };
+    mountTranscript(
+      [otherUserMessage(), { ...reply(), repliesTo: "gone-1" }],
+      channel(null, () => null),
+    );
+
+    const badge = screen.getByTestId("bot-reply-badge-unavailable");
+    expect(badge.textContent).toBe("Message unavailable");
+    expect(
+      screen.queryByRole("button", { name: /Message unavailable/ }),
+    ).toBeNull();
+  });
+});
+
+describe("<BotChatTranscript /> a member's answers to a bot's question card", () => {
+  const CARD_ID = "card-1";
+
+  function card(text: string): Extract<Message, { role: "assistant" }> {
+    return {
+      ...assistantMessage({
+        messageId: CARD_ID,
+        turnId: null,
+        timestamp: 2_000,
+        text,
+      }),
+      announcement: { kind: "proposal", link: null },
+    };
+  }
+
+  function answers(count: number): Extract<Message, { role: "user" }> {
+    return {
+      ...otherUserMessage(),
+      messageId: "answers-1",
+      questionAnswers: {
+        questionMessageId: CARD_ID,
+        answers: Array.from({ length: count }, (_, questionIndex) => ({
+          questionIndex,
+          question: `Question ${String(questionIndex + 1)}?`,
+          answer: "Staging",
+          skipped: false,
+        })),
+      },
+    };
+  }
+
+  it.each([
+    [
+      "ends in a colon",
+      "Three things before I start:\nMore below",
+      3,
+      "Three things before I start: 3 questions",
+    ],
+    ["ends a sentence", "Ready to deploy?", 1, "Ready to deploy? 1 question"],
+    ["has no text", "", 2, "2 questions"],
+  ])(
+    "badges the answers, though the card is the row above, with the count after a card line that %s",
+    (_case, cardText, count, line) => {
+      mountTranscript([card(cardText), answers(count)], {
+        kind: "channel",
+        threadLine: () => null,
+        openThread: null,
+        openAnnouncementThread: null,
+        threadAnchorKinds: [],
+        chooseOption: null,
+        answerQuestion: null,
+        answerQuestions: null,
+        discussQuestion: null,
+        failedRequest: () => null,
+        openTurn: null,
+        sessionChatId: null,
+        intro: { botTitle: "Release Bot", directive: null },
+        history: null,
+      });
+
+      expect(
+        screen.getByRole("button", {
+          name: `Replying to Release Bot: ${line}`,
+        }),
+      ).toBeTruthy();
+    },
+  );
 });

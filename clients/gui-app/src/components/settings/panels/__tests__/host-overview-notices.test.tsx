@@ -402,7 +402,7 @@ describe("<HostOverviewAnswerCard/> draws only an answer with something to say, 
     ["available", "Update available"],
     ["needs-cli", "Needs newer CLI tools"],
     ["restart-to-finish", "Restart to finish"],
-    ["stranded", "Newer version on another release line"],
+    ["stranded", "Release candidate on another release line"],
     ["not-installable", "Update unavailable for this host"],
     ["unreachable", "Update check failed"],
     ["check-failed", "Update check failed"],
@@ -1528,17 +1528,17 @@ describe("a stranded answer's sentence points at the version list below it, with
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,
-      // A host on an installed pre-release line whose OWN line has run out
-      // (no newer rc/beta to offer) while the catalog lists a newer stable —
-      // the "stranded" shape `host-overview-updates.test.tsx`'s stranded
-      // fixtures use: nothing on the installed line, something elsewhere.
+      // A host on an installed pre-release line with no newer stable anywhere
+      // and nothing later on its OWN line, while the catalog lists a newer RC
+      // on another line — the "stranded" shape
+      // `host-overview-updates.test.tsx`'s stranded fixtures use.
       hostVersion: "1.5.0-rc.1",
       overrideHandlers: {
         "host.update.check": () => ({
           outcome: "ok" as const,
           effectiveIncludePreReleases: true,
           includePreReleasesSource: "installed-rc" as const,
-          manifest: updateCheckManifest("1.6.0"),
+          manifest: updateCheckManifest("1.6.0-rc.1"),
         }),
       },
     });

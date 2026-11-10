@@ -21,15 +21,17 @@ import type {
   BotConversationSendRequest,
   BotConversationSendResponse,
 } from "@traycer/protocol/host/bot/conversation-schemas";
-import type {
+import {
   HostRpcError,
-  RequiredHostMethodVersion,
+  type RequiredHostMethodVersion,
 } from "@traycer-clients/shared/host-transport/host-messenger";
+import { finalRefusalOf } from "@traycer-clients/shared/host-transport/retrying-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import {
+  BOT_CONVERSATION_ANSWER_SET_VERSION,
   BOT_CONVERSATION_ANSWER_VERSION,
   BOT_CONVERSATION_CALL_VERSION,
   BOT_CONVERSATION_RETRY_VERSION,
@@ -217,11 +219,15 @@ interface BotConversationSendContext {
  * toast on error - the composer states the refusal inline, under the field.
  * A retry or an edit's replacement is refused before it leaves by a host
  * below {@link BOT_CONVERSATION_RETRY_VERSION}, a question card's answer by
- * one below {@link BOT_CONVERSATION_ANSWER_VERSION}, and a call's words by one
- * below {@link BOT_CONVERSATION_CALL_VERSION}.
+ * one below {@link BOT_CONVERSATION_ANSWER_VERSION}, a card's answers sent
+ * together by one below {@link BOT_CONVERSATION_ANSWER_SET_VERSION}, and a
+ * call's words by one below {@link BOT_CONVERSATION_CALL_VERSION}.
  *
  * A send may change a thread, so the channel's thread list is read again on
- * the host the send went through.
+ * the host the send went through. So is a card's answers sent together that
+ * the bot's host does not take (`E_BOT_ANSWER_SETS_UNSUPPORTED`): the list
+ * says what that host takes, and a card answers each question on its own
+ * once it says so.
  */
 export function useBotConversationSendMutation(
   client: HostClient<HostRpcRegistry> | null,
@@ -250,6 +256,19 @@ export function useBotConversationSendMutation(
           variables.botId,
           context.hostId,
         );
+      },
+      onError: (error, _variables, context) => {
+        const hostId = context?.hostId ?? null;
+        const refusal = finalRefusalOf(error);
+        if (
+          hostId !== null &&
+          refusal instanceof HostRpcError &&
+          refusal.code === "E_BOT_ANSWER_SETS_UNSUPPORTED"
+        ) {
+          void queryClient.invalidateQueries({
+            queryKey: hostQueryKeys.methodScope(hostId, "bot.thread.list"),
+          });
+        }
       },
     },
   });
@@ -317,7 +336,7 @@ export function useBotCallSendMutation(): UseMutationResult<
   });
 }
 
-/** The send line a request needs: a retry, an answer and a call's words came later. */
+/** The send line a request needs: a retry, an answer, a call's words and a card's answers together came later. */
 function conversationSendVersion(
   variables: BotConversationSendRequest,
 ): RequiredHostMethodVersion | null {
@@ -325,6 +344,12 @@ function conversationSendVersion(
     return {
       method: "bot.conversation.send",
       version: BOT_CONVERSATION_CALL_VERSION,
+    };
+  }
+  if (variables.answers !== undefined) {
+    return {
+      method: "bot.conversation.send",
+      version: BOT_CONVERSATION_ANSWER_SET_VERSION,
     };
   }
   if (variables.answer !== null) {

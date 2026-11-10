@@ -8,10 +8,11 @@
  * frame, and a payload that contradicts the declaration is dropped rather than
  * reinterpreted.
  *
- * Frames are parsed with the `@1.1` union whatever minor the connection
- * negotiated. That is safe in the one direction it has to be: `@1.1` is a
- * strict superset of `@1.0`, and a host on `@1.0` simply never sends the
- * frame the wider union adds.
+ * Frames are parsed with the `@1.2` union whatever minor the connection
+ * negotiated. That is safe in the one direction it has to be: each minor is a
+ * strict superset of the one before (`@1.1` adds the `bodySync` frame, `@1.2`
+ * the `bodyMoved` code), and a host on a lower minor simply never sends what
+ * the wider union adds.
  *
  * ## The attach is bound to ONE authority epoch, for life
  *
@@ -37,10 +38,10 @@
  * attach.
  */
 import {
-  artifactSubscribeServerFrameSchemaV11,
+  artifactSubscribeServerFrameSchemaV12,
   type ArtifactSubscribeClientFrameV10,
   type ArtifactSubscribeSeedOffer,
-  type ArtifactSubscribeServerFrameV11,
+  type ArtifactSubscribeServerFrameV12,
 } from "@traycer/protocol/host/epic/artifact-subscribe";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type {
@@ -52,8 +53,8 @@ import type { IStreamClient } from "./i-stream-client";
 
 export const ARTIFACT_SUBSCRIBE_METHOD = "artifact.subscribe";
 
-type ArtifactServerFrame<Kind extends ArtifactSubscribeServerFrameV11["kind"]> =
-  Extract<ArtifactSubscribeServerFrameV11, { readonly kind: Kind }>;
+type ArtifactServerFrame<Kind extends ArtifactSubscribeServerFrameV12["kind"]> =
+  Extract<ArtifactSubscribeServerFrameV12, { readonly kind: Kind }>;
 
 export type ArtifactDocFrame = ArtifactServerFrame<"doc">;
 export type ArtifactDocUpdateFrame = ArtifactServerFrame<"docUpdate">;
@@ -176,7 +177,7 @@ export class ArtifactStreamClient {
     binaryPayload: Uint8Array | null,
   ): void {
     if (this.closed) return;
-    const parsed = artifactSubscribeServerFrameSchemaV11.safeParse(envelope);
+    const parsed = artifactSubscribeServerFrameSchemaV12.safeParse(envelope);
     if (!parsed.success) return;
     const frame = parsed.data;
     // The address invariant the contract STATES but cannot enforce: every

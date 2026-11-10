@@ -453,6 +453,11 @@ export function ActivityTab(): ReactElement {
           botTitle="Tracy"
           boundHere
           active={active}
+          tasks={tasks}
+          notificationSubscriptions={null}
+          onOpenTurn={() => {}}
+          trunkChatId="bot-trunk"
+          onOpenSession={() => {}}
           resolveMember={UNRESOLVED_BOT_MEMBERS}
           threads={[thread]}
         />

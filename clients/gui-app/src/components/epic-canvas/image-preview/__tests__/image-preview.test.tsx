@@ -1,3 +1,4 @@
+import { readDesktopHorizontalWheelOwnership } from "@/components/layout/shell/desktop-history-gesture-ownership";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   cleanup,
@@ -148,8 +149,8 @@ describe("<ImagePreview />", () => {
       });
 
       expect(
-        container.firstElementChild?.hasAttribute("data-history-gesture-owner"),
-      ).toBe(gesturesEnabled);
+        readDesktopHorizontalWheelOwnership(container.firstElementChild),
+      ).toEqual({ back: gesturesEnabled, forward: gesturesEnabled });
     },
   );
 

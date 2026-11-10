@@ -8,6 +8,10 @@
  * receipt suite replaces them.
  */
 import {
+  botMentionHostClientMock,
+  emptyBotMentionHostListsMock,
+} from "@/components/bots/__tests__/bot-mention-host-test-support";
+import {
   cleanup,
   render,
   screen,
@@ -69,6 +73,15 @@ const mocks = vi.hoisted(() => ({
   sessions: {} as Record<string, ChatSessionStoreHandle>,
   threads: [] as BotThreadSummary[],
 }));
+
+vi.mock(
+  "@/hooks/host/use-host-client-for-host-id",
+  () => botMentionHostClientMock,
+);
+vi.mock(
+  "@/hooks/bots/use-environment-host-lists-query",
+  () => emptyBotMentionHostListsMock,
+);
 
 vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
   ...(await importOriginal<

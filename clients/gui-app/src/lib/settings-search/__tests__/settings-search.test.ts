@@ -36,6 +36,7 @@ const DESKTOP: SettingsAvailabilityContext = {
   phoneLayout: false,
   soundtrackOffered: false,
   soundtrackRecordingOffered: false,
+  soundtrackSetPiecesOffered: false,
   soundtrackOn: false,
 };
 
@@ -58,6 +59,7 @@ const MOBILE: SettingsAvailabilityContext = {
   phoneLayout: true,
   soundtrackOffered: false,
   soundtrackRecordingOffered: false,
+  soundtrackSetPiecesOffered: false,
   soundtrackOn: false,
 };
 

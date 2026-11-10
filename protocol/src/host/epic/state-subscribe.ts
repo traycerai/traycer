@@ -166,6 +166,7 @@ import {
   deletedSpecArtifactSchema,
   deletedStoryArtifactSchema,
   deletedTicketArtifactSchema,
+  MARKDOWN_BODY_FIELD,
   reviewArtifactSchema,
   specArtifactSchema,
   storyArtifactSchema,
@@ -243,6 +244,31 @@ export const epicArtifactRecordSchema = lazySchema(() =>
     fileArtifactSchema.extend(epicLaneRowRevisionFields),
   ]),
 );
+// State minors through 1.5 predate markdown object bodies. Keep their live
+// records frozen even as the persistence schemas gain body-home metadata.
+const epicArtifactRecordSchemaPreMarkdownObject = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    specArtifactSchema
+      .omit({ artifactRoomId: true, head: true, [MARKDOWN_BODY_FIELD]: true })
+      .extend(epicLaneRowRevisionFields),
+    ticketArtifactSchema
+      .omit({ artifactRoomId: true, head: true, [MARKDOWN_BODY_FIELD]: true })
+      .extend(epicLaneRowRevisionFields),
+    storyArtifactSchema
+      .omit({ artifactRoomId: true, head: true, [MARKDOWN_BODY_FIELD]: true })
+      .extend(epicLaneRowRevisionFields),
+    reviewArtifactSchema
+      .omit({ artifactRoomId: true, head: true, [MARKDOWN_BODY_FIELD]: true })
+      .extend(epicLaneRowRevisionFields),
+    htmlArtifactSchema
+      .omit({ artifactRoomId: true })
+      .extend(epicLaneRowRevisionFields),
+    canvasArtifactSchema
+      .omit({ artifactRoomId: true })
+      .extend(epicLaneRowRevisionFields),
+    fileArtifactSchema.extend(epicLaneRowRevisionFields),
+  ]),
+);
 export type EpicArtifactRecord = z.infer<typeof epicArtifactRecordSchema>;
 
 /**
@@ -268,16 +294,16 @@ export type EpicArtifactRecord = z.infer<typeof epicArtifactRecordSchema>;
 export const epicDeletedArtifactRecordSchemaPreHtml = lazySchema(() =>
   z.discriminatedUnion("kind", [
     deletedSpecArtifactSchema
-      .omit({ artifactRoomId: true })
+      .omit({ artifactRoomId: true, [MARKDOWN_BODY_FIELD]: true })
       .extend(epicLaneRowRevisionFields),
     deletedTicketArtifactSchema
-      .omit({ artifactRoomId: true })
+      .omit({ artifactRoomId: true, [MARKDOWN_BODY_FIELD]: true })
       .extend(epicLaneRowRevisionFields),
     deletedStoryArtifactSchema
-      .omit({ artifactRoomId: true })
+      .omit({ artifactRoomId: true, [MARKDOWN_BODY_FIELD]: true })
       .extend(epicLaneRowRevisionFields),
     deletedReviewArtifactSchema
-      .omit({ artifactRoomId: true })
+      .omit({ artifactRoomId: true, [MARKDOWN_BODY_FIELD]: true })
       .extend(epicLaneRowRevisionFields),
   ]),
 );
@@ -285,16 +311,16 @@ export const epicDeletedArtifactRecordSchemaPreHtml = lazySchema(() =>
 export const epicDeletedArtifactRecordSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
     deletedSpecArtifactSchema
-      .omit({ artifactRoomId: true })
+      .omit({ artifactRoomId: true, [MARKDOWN_BODY_FIELD]: true })
       .extend(epicLaneRowRevisionFields),
     deletedTicketArtifactSchema
-      .omit({ artifactRoomId: true })
+      .omit({ artifactRoomId: true, [MARKDOWN_BODY_FIELD]: true })
       .extend(epicLaneRowRevisionFields),
     deletedStoryArtifactSchema
-      .omit({ artifactRoomId: true })
+      .omit({ artifactRoomId: true, [MARKDOWN_BODY_FIELD]: true })
       .extend(epicLaneRowRevisionFields),
     deletedReviewArtifactSchema
-      .omit({ artifactRoomId: true })
+      .omit({ artifactRoomId: true, [MARKDOWN_BODY_FIELD]: true })
       .extend(epicLaneRowRevisionFields),
     deletedHtmlArtifactSchema
       .omit({ artifactRoomId: true, deletionUnderstood: true })
@@ -997,13 +1023,13 @@ export const epicStateSubscribeV12 = defineStreamRpcContract({
 /** 1.3 carries all seven artifact kinds; older frames keep their frozen unions. */
 const epicStateSubscribeSnapshotFrameSchemaV13 = lazySchema(() =>
   epicStateSubscribeSnapshotFrameSchemaV11.extend({
-    artifactRecords: z.array(epicArtifactRecordSchema),
+    artifactRecords: z.array(epicArtifactRecordSchemaPreMarkdownObject),
     deletedArtifacts: z.array(epicDeletedArtifactRecordSchema),
   }),
 );
 const epicStateSubscribeDeltaFrameSchemaV13 = lazySchema(() =>
   epicStateSubscribeDeltaFrameSchemaV11.extend({
-    artifactUpserts: z.array(epicArtifactRecordSchema),
+    artifactUpserts: z.array(epicArtifactRecordSchemaPreMarkdownObject),
     artifactTombstones: z.array(epicDeletedArtifactRecordSchema),
   }),
 );
@@ -1096,5 +1122,38 @@ export const epicStateSubscribeV15 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 5 } as const,
   openRequestSchema: epicStateSubscribeOpenRequestSchemaV10,
   serverFrameSchema: epicStateSubscribeServerFrameSchemaV15,
+  clientFrameSchema: epicStateSubscribeClientFrameSchemaV10,
+});
+
+/** 1.6 carries markdown revision heads and the born-object body marker. */
+const epicStateSubscribeSnapshotFrameSchemaV16 = lazySchema(() =>
+  epicStateSubscribeSnapshotFrameSchemaV15.extend({
+    artifactRecords: z.array(epicArtifactRecordSchema),
+  }),
+);
+const epicStateSubscribeDeltaFrameSchemaV16 = lazySchema(() =>
+  epicStateSubscribeDeltaFrameSchemaV15.extend({
+    artifactUpserts: z.array(epicArtifactRecordSchema),
+  }),
+);
+export const epicStateSubscribeServerFrameSchemaV16 = lazySchema(() =>
+  z
+    .discriminatedUnion("kind", [
+      epicStateSubscribeSnapshotFrameSchemaV16,
+      epicStateSubscribeResumedFrameSchemaV10,
+      epicStateSubscribeDeltaFrameSchemaV16,
+      epicStateSubscribeTrustChangedFrameSchemaV10,
+      z.object({ kind: z.literal("pong"), ...epicLaneTextFrameFields }),
+    ])
+    .superRefine(refineDeltaCarriesChange),
+);
+export type EpicStateSubscribeServerFrameV16 = z.infer<
+  typeof epicStateSubscribeServerFrameSchemaV16
+>;
+export const epicStateSubscribeV16 = defineStreamRpcContract({
+  method: "epic.state.subscribe",
+  schemaVersion: { major: 1, minor: 6 } as const,
+  openRequestSchema: epicStateSubscribeOpenRequestSchemaV10,
+  serverFrameSchema: epicStateSubscribeServerFrameSchemaV16,
   clientFrameSchema: epicStateSubscribeClientFrameSchemaV10,
 });

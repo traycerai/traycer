@@ -235,6 +235,37 @@ export const environmentHostReadV10 = defineRpcContract({
 });
 
 /**
+ * The sharing arrangement reported by this host. Null means the host cannot
+ * report the generation, including an answer upgraded from `@1.0`.
+ * The frozen binding schema also serves methods that have not gained it.
+ */
+export const environmentHostReadResponseSchemaV11 = lazySchema(() =>
+  environmentHostBindingSchema.extend({
+    sharingGeneration: z.number().int().nonnegative().nullable(),
+  }),
+);
+export type EnvironmentHostReadResponseV11 = z.infer<
+  typeof environmentHostReadResponseSchemaV11
+>;
+
+export const environmentHostReadV11 = defineRpcContract({
+  method: "environment.host.read",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: environmentHostReadRequestSchema,
+  responseSchema: environmentHostReadResponseSchemaV11,
+});
+
+export const environmentHostReadUpgradeV10ToV11 = defineUpgradePath<
+  typeof environmentHostReadV10,
+  typeof environmentHostReadV11
+>({
+  from: environmentHostReadV10.schemaVersion,
+  to: environmentHostReadV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({ ...response, sharingGeneration: null }),
+});
+
+/**
  * The environment the named host is bound to, as the signed-in user sees it:
  * the same answer `environment.host.read` gives on that host, read from
  * authn's host directory instead of asking the host. Served by the server

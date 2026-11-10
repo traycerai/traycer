@@ -57,12 +57,16 @@ export type LaneBodyTranslation =
  * `"body-unavailable"` is genuinely both retrying and given-up, and the event
  * carries a separate boolean precisely so neither has to be inferred from the
  * code. A retrying body shows a transient state without tearing the tile down;
- * a terminal one is unavailable until the consumer reattaches.
+ * a terminal one is unavailable until the consumer reattaches. The one
+ * exception is `"body-moved"`: terminal, but the consumer reattaches at once,
+ * so the tile shows the transient state until the reattach seeds it.
  */
 function availabilityOfUnavailable(
   event: DocUnavailableEvent,
 ): EpicArtifactRoomAvailability {
-  return event.terminal ? "unavailable" : "retrying";
+  return event.terminal && event.code !== "body-moved"
+    ? "unavailable"
+    : "retrying";
 }
 
 /**
