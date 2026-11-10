@@ -2232,7 +2232,7 @@ export function extractBearerForOpenFrame(
   }
   if (token.length === 0) {
     throw new MissingBearerTokenForOpenFrameError(
-      `Cannot open host WebSocket with an empty bearer token for user '${source.identity.userId}'`,
+      "Cannot open host WebSocket with an empty bearer token",
     );
   }
   return token;

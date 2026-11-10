@@ -1968,7 +1968,7 @@ describe("WsRpcClient", () => {
         error instanceof HostRpcError &&
         error.code === "RPC_ERROR" &&
         error.requestId === "req-no-auth" &&
-        error.message.includes("No bearer available for user 'test-user'"),
+        error.message.includes("No bearer available for this credential lease"),
     );
     expect(sockets).toHaveLength(0);
   });
