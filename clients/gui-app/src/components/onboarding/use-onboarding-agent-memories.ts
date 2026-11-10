@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import {
   emptyMemoryDraft,
@@ -157,6 +157,18 @@ export function useOnboardingAgentMemories(input: {
 
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
+  // The host the act shows, as of the last commit. The observers above follow
+  // the binding, so a save still running when the picker moves would send the
+  // first host's choices to the second; every request of a save checks this
+  // first. A layout effect, so it moves no later than the observers, which
+  // take their new options in passive effects.
+  const shownHostRef = useRef(hostId);
+  useLayoutEffect(() => {
+    shownHostRef.current = hostId;
+  }, [hostId]);
+  /** The save started for `forHost` may still send: the act shows that host. */
+  const sendsTo = (forHost: string | null): boolean =>
+    shownHostRef.current === forHost;
 
   const providerControls = providerMemoryControls({
     nativeSetSupported,
@@ -175,6 +187,7 @@ export function useOnboardingAgentMemories(input: {
   async function ensureTraycer(forHost: string | null): Promise<boolean> {
     const outcome = draft.traycerOutcome;
     if (outcome?.kind === "saved") return true;
+    if (!sendsTo(forHost)) return false;
     // Read before writing: a configuration that has it on already needs no
     // write, and a held edit shows here only once it has been saved and
     // received - until then the host still reads the old value.
@@ -187,10 +200,11 @@ export function useOnboardingAgentMemories(input: {
       return true;
     }
     if (outcome?.kind === "queued") {
-      const held = await heldEditOutcome(outcome);
+      const held = await heldEditOutcome(forHost, outcome);
       record(forHost, (current) => ({ ...current, traycerOutcome: held }));
       return held.kind === "saved";
     }
+    if (!sendsTo(forHost)) return false;
     try {
       const answer = await setTraycerMemories.mutateAsync({ enabled: true });
       const next: TraycerMemoryOutcome =
@@ -220,9 +234,10 @@ export function useOnboardingAgentMemories(input: {
    * retry may send a fresh one); no word either way leaves it held.
    */
   async function heldEditOutcome(
+    forHost: string | null,
     held: Extract<TraycerMemoryOutcome, { kind: "queued" }>,
   ): Promise<TraycerMemoryOutcome> {
-    if (held.uploadId === null) return held;
+    if (held.uploadId === null || !sendsTo(forHost)) return held;
     const status = (await statusRead.refetch()).data;
     if (status === undefined) return held;
     const accepted = status.acceptedUploads.some(
@@ -244,6 +259,7 @@ export function useOnboardingAgentMemories(input: {
     forHost: string | null,
     row: OnboardingMemoryRow,
   ): Promise<boolean> {
+    if (!sendsTo(forHost)) return false;
     let kind: "saved" | "failed" = "failed";
     try {
       await setNativeMemory.mutateAsync({
@@ -276,12 +292,19 @@ export function useOnboardingAgentMemories(input: {
     if (savingRef.current) return Promise.resolve(false);
     savingRef.current = true;
     setSaving(true);
+    const forHost = hostId;
     // `.finally` rather than try/finally: React Compiler cannot lower a try
     // without a catch, and would leave this whole hook unmemoized.
-    return writeChoices(hostId).finally(() => {
-      savingRef.current = false;
-      setSaving(false);
-    });
+    return (
+      writeChoices(forHost)
+        // Done only while the act still shows the host it was for: a save
+        // that finished after the picker moved does not move the tour on.
+        .then((done) => done && sendsTo(forHost))
+        .finally(() => {
+          savingRef.current = false;
+          setSaving(false);
+        })
+    );
   }
 
   return {

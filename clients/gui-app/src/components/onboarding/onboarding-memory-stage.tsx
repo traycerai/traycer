@@ -165,11 +165,7 @@ function MemoryChoices(props: {
         <MemorySwitchRow
           testId="onboarding-memory-traycer"
           title="Use Traycer memories"
-          description={
-            memory.traycerLocked
-              ? "On. Turn it off later in Settings → Agent memories."
-              : "Agents can read, add, update and remove shared memories."
-          }
+          description={traycerDescription(memory)}
           checked={memory.chosen === true}
           disabled={memory.traycerLocked || memory.saving}
           ariaLabel="Use Traycer memories"
@@ -184,6 +180,14 @@ function MemoryChoices(props: {
       </p>
     </div>
   );
+}
+
+function traycerDescription(memory: OnboardingAgentMemories): string {
+  if (!memory.traycerLocked)
+    return "Agents can read, add, update and remove shared memories.";
+  return memory.draft.traycerOutcome?.kind === "queued"
+    ? "Waiting for your configuration. Change this later in Settings → Agent memories."
+    : "On. Turn it off later in Settings → Agent memories.";
 }
 
 function ProviderMemories(props: {
@@ -358,9 +362,11 @@ function providerReportLines(
     off.length === 0
       ? null
       : `${joinProviderNames(off.map((row) => row.name))} memories are now off.`,
+    // A switch turned back on removes Traycer's override; the provider's own
+    // setting decides from there, and it may well be off.
     on.length === 0
       ? null
-      : `${joinProviderNames(on.map((row) => row.name))} memories are now on.`,
+      : `Traycer no longer turns off ${joinProviderNames(on.map((row) => row.name))} memories.`,
     `Couldn't change ${joinProviderNames(failed.map((row) => row.name))} memories.`,
   ].filter((line) => line !== null);
 }

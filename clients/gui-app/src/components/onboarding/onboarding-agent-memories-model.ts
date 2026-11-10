@@ -177,7 +177,11 @@ export interface OnboardingMemoryView {
    * choice made before the read arrived yields to the read.
    */
   readonly chosen: boolean | null;
-  /** The setting is on, from before or by this act's own save. */
+  /**
+   * The setting is on - from before, or by this act's own save - or this
+   * act's change to it is held for the configuration. The act cannot take
+   * either back, so its switch cannot offer to.
+   */
   readonly traycerLocked: boolean;
   readonly rows: ReadonlyArray<OnboardingMemoryRow>;
   readonly withoutSwitch: ReadonlyArray<string>;
@@ -206,8 +210,13 @@ export function memoryViewFor(input: {
     providerControls === "unsupported"
       ? [...listed.rows.map((row) => row.name), ...listed.withoutSwitch]
       : listed.withoutSwitch;
+  // A held change is in the configuration's queue, not in this draft: turning
+  // the switch off would neither withdraw it nor stop it landing, and the
+  // receipt a retry looks it up by would be dropped with the choice.
   const traycerLocked =
-    input.alreadyOn || draft.traycerOutcome?.kind === "saved";
+    input.alreadyOn ||
+    draft.traycerOutcome?.kind === "saved" ||
+    draft.traycerOutcome?.kind === "queued";
   const chosen = draft.traycer === null ? null : draft.traycer || traycerLocked;
   const traycerShort =
     draft.traycerOutcome !== null && draft.traycerOutcome.kind !== "saved";
