@@ -16,10 +16,10 @@ import {
  * `always` draws it there too: a reply the member chose, which always shows
  * what it answers.
  */
-export type ChatReplyBadgeAdjacency = "when-apart" | "always";
+type ChatReplyBadgeAdjacency = "when-apart" | "always";
 
 /** The message a badge names: read, being read, or unreadable. */
-export type ChatReplyBadgeAnswered =
+type ChatReplyBadgeAnswered =
   | {
       readonly kind: "message";
       readonly author: string;
@@ -36,7 +36,7 @@ export type ChatReplyBadgeAnswered =
  * line holds its place, and a message that cannot be read says only that,
  * since a reply names its message by id alone.
  */
-export function ChatReplyBadge(props: {
+function ChatReplyBadge(props: {
   readonly answered: ChatReplyBadgeAnswered;
   /** Shows the answered message; `null` where it cannot be shown. */
   readonly onOpen: (() => void) | null;
