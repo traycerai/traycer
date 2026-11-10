@@ -284,6 +284,7 @@ function baseArgs(
   overrides: Partial<HostInstallArgsShape>,
 ): HostInstallArgsShape {
   return {
+    team: null,
     versionRequest: "latest",
     fromPath: null,
     enableLinger: true,

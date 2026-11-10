@@ -20,6 +20,8 @@ export function HostEnvironmentSection(props: {
       client={scope.client}
       hostId={scope.hostId}
       hostName={props.hostName}
+      owner={scope.host?.item?.owner ?? null}
+      isLocalMachine={scope.host?.isLocalMachine ?? false}
       usable={isHostScopeUsable(scope.status) && scope.client !== null}
     />
   );

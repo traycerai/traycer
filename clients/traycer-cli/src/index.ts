@@ -107,8 +107,7 @@ import { buildHostAvailableCommand } from "./commands/host-available";
 import { buildHostDownloadCommand } from "./commands/host-download";
 import { hostDoctorCommand } from "./commands/host-doctor";
 import { buildHostEnsureCommand } from "./commands/host-ensure";
-import { buildHostJoinCommand } from "./commands/host-join";
-import { readInstallToken } from "./commands/host-join-token";
+import { buildHostUseCommand } from "./commands/host-use";
 import { buildHostFreePortCommand } from "./commands/host-free-port";
 import { buildHostFreePortAndRestartCommand } from "./commands/host-free-port-and-restart";
 import { buildHostInstallCommand } from "./commands/host-install";
@@ -1495,6 +1494,10 @@ function registerHostCommands(program: Command): void {
   withRunner(
     host
       .command("install")
+      .option(
+        "--team <team>",
+        "Add this computer to the team after installing.",
+      )
       .description(
         "Install a host version from the registry (defaults to latest), or a local archive with --from, then register the OS service and start the host. Prompts for browser sign-in first when you are signed out and the terminal can ask, and provisions the started host's credential (best effort). Use --no-service-register for bytes only.",
       )
@@ -1582,6 +1585,7 @@ function registerHostCommands(program: Command): void {
           });
         }
         return buildHostInstallCommand({
+          team: typeof opts.team === "string" ? opts.team : null,
           attemptAdoption: attemptAdoptionNonce(opts),
           lifecycleOrigin: hostStartOriginFromOption(opts.lifecycleOrigin),
           // Registry path defaults to "latest" when neither flag is set.
@@ -1607,6 +1611,10 @@ function registerHostCommands(program: Command): void {
   withRunner(
     host
       .command("ensure")
+      .option(
+        "--team <team>",
+        "Add this computer to the team, or keep it there.",
+      )
       .description(
         "Make sure the host is installed, registered as a service, and running - installing or starting it if needed. Safe to run repeatedly.",
       )
@@ -1676,6 +1684,7 @@ function registerHostCommands(program: Command): void {
           });
         }
         return buildHostEnsureCommand({
+          team: typeof opts.team === "string" ? opts.team : null,
           attemptAdoption: attemptAdoptionNonce(opts),
           lifecycleOrigin: hostStartOriginFromOption(opts.lifecycleOrigin),
           versionRequest: explicitVersion,
@@ -1696,15 +1705,9 @@ function registerHostCommands(program: Command): void {
 
   withRunner(
     host
-      .command("join")
-      .description(
-        "Make this machine a team's host with the one-time install token from the app, then install and start the host. Asks for the token, or reads it from stdin. Refused on a machine that already has a Traycer host.",
-      ),
-    () =>
-      buildHostJoinCommand({
-        readToken: (canPrompt) =>
-          readInstallToken(process.stdin, process.stderr, canPrompt),
-      }),
+      .command("use <team>")
+      .description("Give this computer to a team you belong to."),
+    (_opts, [team]) => buildHostUseCommand(team ?? ""),
   );
 
   withRunner(

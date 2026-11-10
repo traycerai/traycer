@@ -49,6 +49,7 @@ const mocks = vi.hoisted(() => ({
   ensureHostMock: vi.fn(),
   runSignInPreflightMock: vi.fn(),
   maybeProvisionCredentialMock: vi.fn(),
+  completeTeamInstallMock: vi.fn(),
   pidMetadata: null as { pid: number; websocketUrl: string } | null,
 }));
 
@@ -97,6 +98,13 @@ vi.mock("../../host/install-auth", async (importOriginal) => {
       mocks.callOrder.push("credential-provision");
       return mocks.maybeProvisionCredentialMock(...callArgs);
     },
+    runTeamInstallAuthPreflight: async () => ({
+      preflight: await mocks.runSignInPreflightMock(),
+      inlineSignInToken: null,
+    }),
+    completeTeamInstall: (
+      ...callArgs: Parameters<typeof actual.completeTeamInstall>
+    ) => mocks.completeTeamInstallMock(...callArgs),
   };
 });
 
@@ -106,9 +114,25 @@ import type { HostEnsureResult } from "../../host/ensure";
 import type { HostProvisionServiceLifecycle } from "../../host/provision";
 import type { HostCredentialProvisionOutcome } from "../../host/credential-provisioning";
 import type { HostInstallAuthPreflight } from "../../host/install-auth";
+import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
+
+const teamBindingFixture = {
+  hostId: "host-local",
+  environment: {
+    environmentId: "environment-acme",
+    ownerKind: "organization",
+    ownerId: "organization-acme",
+    roomId: "room-acme",
+    label: "Acme",
+  },
+  explicit: true,
+  enrolledByUserId: "member-1",
+  canUnbind: true,
+} satisfies EnvironmentHostBinding;
 
 function baseArgs(overrides: Partial<HostEnsureArgs>): HostEnsureArgs {
   return {
+    team: null,
     versionRequest: null,
     fromPath: null,
     enableLinger: true,
@@ -205,6 +229,7 @@ describe("buildHostEnsureCommand", () => {
     mocks.runSignInPreflightMock.mockResolvedValue(signedInPreflight());
     mocks.maybeProvisionCredentialMock.mockResolvedValue(null);
     mocks.ensureHostMock.mockResolvedValue(baseEnsureResult({}));
+    mocks.completeTeamInstallMock.mockResolvedValue(teamBindingFixture);
   });
 
   afterEach(() => {
@@ -222,6 +247,26 @@ describe("buildHostEnsureCommand", () => {
       "ensure-exit",
       "credential-provision",
     ]);
+  });
+
+  it("sends --team ensure through the shared team completion step, including an already-running no-op", async () => {
+    mocks.ensureHostMock.mockResolvedValue(
+      baseEnsureResult({ action: "noop", serviceLifecycle: null }),
+    );
+
+    const result = await buildHostEnsureCommand(baseArgs({ team: "acme" }))(
+      fakeCtx(),
+    );
+
+    expect(result.data).toMatchObject({ teamBinding: teamBindingFixture });
+
+    expect(mocks.completeTeamInstallMock).toHaveBeenCalledWith(
+      "acme",
+      expect.objectContaining({
+        preflight: { state: "signed-in", reason: null },
+        inlineSignInToken: null,
+      }),
+    );
   });
 
   it("maps a serviceLifecycle with a successful post-swap start into that exact postSwapAction", async () => {

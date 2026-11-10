@@ -298,6 +298,7 @@ describe.skipIf(process.platform === "win32")(
 
         const { buildHostInstallCommand } = await import("../host-install");
         const command = buildHostInstallCommand({
+          team: null,
           versionRequest: "2.0.0",
           fromPath: null,
           enableLinger: true,
@@ -354,6 +355,7 @@ describe.skipIf(process.platform === "win32")(
 
         const { buildHostInstallCommand } = await import("../host-install");
         const command = buildHostInstallCommand({
+          team: null,
           versionRequest: "2.0.0",
           fromPath: null,
           enableLinger: true,

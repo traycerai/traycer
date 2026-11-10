@@ -67,6 +67,10 @@ export const RunnerHostInvoke = {
   // reason as the two above — and, like them, a registry-only write that needs
   // no route to the machine, which is why it does not live on the host-
   // management bridge next to the OS-service verbs it must not be confused with.
+  listTeamComputers: "runnerHost:teams:listComputers",
+  setEnvironmentBotHost: "runnerHost:teams:setBotHost",
+  mintTeamComputerInstallToken: "runnerHost:teams:mintComputerInstallToken",
+  releaseTeamComputer: "runnerHost:hosts:releaseTeamComputer",
   deregisterHostFromAccount: "runnerHost:hosts:deregisterFromAccount",
   // The team's soundtrack set on a staging build, with its samples' links
   // signed: `electron-main/soundtrack/`. Only main holds the key.

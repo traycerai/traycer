@@ -1,3 +1,9 @@
+import {
+  listTeamComputersViaHttp,
+  setEnvironmentBotHostViaHttp,
+} from "@traycer-clients/shared/host-client/team-computers";
+import { mintTeamComputerInstallTokenViaHttp } from "@traycer-clients/shared/host-client/team-computer-install";
+import { releaseTeamComputerViaHttp } from "@traycer-clients/shared/host-client/team-computer-release";
 import { sandboxCatalogueReadinessRequestSchema } from "@traycer/protocol/host/sandbox-control";
 import {
   RunnerHostEvent,
@@ -689,6 +695,78 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
         bridge.options.authnBaseUrl,
         bearerToken,
         hostId,
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.releaseTeamComputer,
+    async (
+      _event,
+      bearer: unknown,
+      hostId: unknown,
+      environmentId: unknown,
+    ) => {
+      assertString(bearer, "releaseTeamComputer.bearer");
+      assertString(hostId, "releaseTeamComputer.hostId");
+      assertString(environmentId, "releaseTeamComputer.environmentId");
+      return releaseTeamComputerViaHttp(
+        bridge.options.authnBaseUrl,
+        bearer,
+        hostId,
+        environmentId,
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.listTeamComputers,
+    async (_event, bearer: unknown, environmentId: unknown) => {
+      assertString(bearer, "listTeamComputers.bearer");
+      assertString(environmentId, "listTeamComputers.environmentId");
+      return listTeamComputersViaHttp(
+        bridge.options.authnBaseUrl,
+        bearer,
+        environmentId,
+      );
+    },
+  );
+  bridge.handleInvoke(
+    RunnerHostInvoke.mintTeamComputerInstallToken,
+    async (_event, bearer: unknown, environmentId: unknown) => {
+      assertString(bearer, "mintTeamComputerInstallToken.bearer");
+      assertString(environmentId, "mintTeamComputerInstallToken.environmentId");
+      return mintTeamComputerInstallTokenViaHttp(
+        bridge.options.authnBaseUrl,
+        bearer,
+        environmentId,
+      );
+    },
+  );
+  bridge.handleInvoke(
+    RunnerHostInvoke.setEnvironmentBotHost,
+    async (
+      _event,
+      bearer: unknown,
+      environmentId: unknown,
+      hostId: unknown,
+      sharingGeneration: unknown,
+    ) => {
+      assertString(bearer, "setEnvironmentBotHost.bearer");
+      assertString(environmentId, "setEnvironmentBotHost.environmentId");
+      assertString(hostId, "setEnvironmentBotHost.hostId");
+      if (
+        typeof sharingGeneration !== "number" ||
+        !Number.isSafeInteger(sharingGeneration) ||
+        sharingGeneration < 0
+      )
+        throw new Error("Invalid computer arrangement.");
+      return setEnvironmentBotHostViaHttp(
+        bridge.options.authnBaseUrl,
+        bearer,
+        environmentId,
+        hostId,
+        sharingGeneration,
       );
     },
   );

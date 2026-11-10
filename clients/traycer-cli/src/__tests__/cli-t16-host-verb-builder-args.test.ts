@@ -12,6 +12,8 @@ import {
 } from "vitest";
 import { Command } from "commander";
 import { buildProgram } from "../index";
+import * as cgroupRelocationModule from "../host/cgroup-relocation";
+import * as hostEnsureModule from "../commands/host-ensure";
 import * as hostInstallModule from "../commands/host-install";
 import * as hostLifecycleModule from "../commands/host-lifecycle";
 import * as hostRestartModule from "../commands/host-restart";
@@ -99,6 +101,14 @@ function stubCommand(): () => Promise<{
 describe("host verb --if-idle / mode builder arguments", () => {
   let exitSpy: MockInstance;
   beforeEach(() => {
+    vi.spyOn(
+      cgroupRelocationModule,
+      "relocateOutOfHostCgroupIfNeeded",
+    ).mockResolvedValue({ kind: "not-needed" });
+    vi.spyOn(
+      cgroupRelocationModule,
+      "acknowledgeRelocationEntry",
+    ).mockImplementation(() => undefined);
     exitSpy = vi
       .spyOn(process, "exit")
       .mockImplementation((code: string | number | null | undefined): never => {
@@ -132,7 +142,7 @@ describe("host verb --if-idle / mode builder arguments", () => {
     expect(spy.mock.calls[0]?.[0]).toMatchObject({ ifIdle: true });
   });
 
-  it("`host install --if-idle` reaches buildHostInstallCommand as { ifIdle: true }", async () => {
+  it("`host install --if-idle` reaches buildHostInstallCommand with team null by default", async () => {
     const spy = vi
       .spyOn(hostInstallModule, "buildHostInstallCommand")
       .mockImplementation(() => async () => ({
@@ -142,7 +152,28 @@ describe("host verb --if-idle / mode builder arguments", () => {
       }));
     await parseCommand(["host", "install"], ["--if-idle"]);
     expect(spy).toHaveBeenCalledTimes(1);
-    expect(spy.mock.calls[0]?.[0]).toMatchObject({ ifIdle: true });
+    expect(spy.mock.calls[0]?.[0]).toMatchObject({
+      team: null,
+      ifIdle: true,
+    });
+  });
+
+  it("`host install --team` forwards the selected team to buildHostInstallCommand", async () => {
+    const spy = vi
+      .spyOn(hostInstallModule, "buildHostInstallCommand")
+      .mockImplementation(stubCommand);
+    await parseCommand(["host", "install"], ["--team", "acme"]);
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls[0]?.[0]).toMatchObject({ team: "acme" });
+  });
+
+  it("`host ensure --team` forwards the selected team to buildHostEnsureCommand", async () => {
+    const spy = vi
+      .spyOn(hostEnsureModule, "buildHostEnsureCommand")
+      .mockImplementation(stubCommand);
+    await parseCommand(["host", "ensure"], ["--team", "acme"]);
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls[0]?.[0]).toMatchObject({ team: "acme" });
   });
 
   it("`host lifecycle set linked` reaches buildHostLifecycleSetCommand as { mode: 'linked', refreshServiceDefinition: refreshServiceDefinitionUnderContender }", async () => {

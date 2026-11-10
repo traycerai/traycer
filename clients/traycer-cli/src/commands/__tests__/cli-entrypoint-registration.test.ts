@@ -722,10 +722,24 @@ describe("traycer CLI entrypoint registration", () => {
     expect(flags).toContain("--no-service-register");
   });
 
-  it("host join takes no token argument", () => {
+  it("host use takes a team argument", () => {
     const program = buildProgram();
-    const cmd = expectCommand(program, ["host", "join"]);
-    expect(cmd.registeredArguments).toEqual([]);
+    const cmd = expectCommand(program, ["host", "use"]);
+    expect(cmd.registeredArguments.map((arg) => arg.name())).toEqual(["team"]);
+  });
+
+  it("host install and ensure accept a team", () => {
+    const program = buildProgram();
+    expect(
+      expectCommand(program, ["host", "install"]).options.map(
+        (option) => option.long,
+      ),
+    ).toContain("--team");
+    expect(
+      expectCommand(program, ["host", "ensure"]).options.map(
+        (option) => option.long,
+      ),
+    ).toContain("--team");
   });
 
   it("service lifecycle commands live under host service", () => {

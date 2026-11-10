@@ -1,3 +1,4 @@
+import { TeamComputersSection } from "@/components/settings/team/team-computers-section";
 import type { ReactNode } from "react";
 import { MembersPage } from "@/components/settings/members/members-page";
 import { MEMBERS } from "@/components/settings/environment/members-page.definitions";
@@ -19,7 +20,10 @@ export function MembersSettingsPanel(): ReactNode {
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >
       {pick.kind === "team" ? (
-        <MembersPage environmentId={pick.environmentId} />
+        <>
+          <MembersPage environmentId={pick.environmentId} />
+          <TeamComputersSection environmentId={pick.environmentId} />
+        </>
       ) : null}
     </SettingsPanelShell>
   );

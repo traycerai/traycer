@@ -1,3 +1,9 @@
+import type {
+  TeamComputersResult,
+  SetEnvironmentBotHostResult,
+} from "@traycer-clients/shared/host-client/team-computers";
+import type { TeamComputerInstallTokenResult } from "@traycer-clients/shared/host-client/team-computer-install";
+import type { TeamComputerReleaseResult } from "@traycer-clients/shared/host-client/team-computer-release";
 import type { SandboxCatalogueReadinessRequest } from "@traycer/protocol/host/sandbox-control";
 import type {
   CredentialsMigrationOutcome,
@@ -3119,6 +3125,42 @@ export class AuthService {
       throw new Error("Sign in to update this host.");
     }
     return this.runnerHost.updateHostVersionPolicy(bearer, hostId, input);
+  }
+
+  async listTeamComputers(environmentId: string): Promise<TeamComputersResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return this.runnerHost.listTeamComputers(bearer, environmentId);
+  }
+  async setEnvironmentBotHost(
+    environmentId: string,
+    hostId: string,
+    sharingGeneration: number,
+  ): Promise<SetEnvironmentBotHostResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return this.runnerHost.setEnvironmentBotHost(
+      bearer,
+      environmentId,
+      hostId,
+      sharingGeneration,
+    );
+  }
+  async mintTeamComputerInstallToken(
+    environmentId: string,
+  ): Promise<TeamComputerInstallTokenResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return this.runnerHost.mintTeamComputerInstallToken(bearer, environmentId);
+  }
+
+  async releaseTeamComputer(
+    hostId: string,
+    environmentId: string,
+  ): Promise<TeamComputerReleaseResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) throw new Error("Sign in to return this computer.");
+    return this.runnerHost.releaseTeamComputer(bearer, hostId, environmentId);
   }
 
   /**

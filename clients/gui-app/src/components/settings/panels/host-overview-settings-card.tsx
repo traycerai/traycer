@@ -1,3 +1,18 @@
+import { TEAM_TRANSFER_REFUSALS } from "@traycer-clients/shared/host-client/team-computer-refusals";
+import type { HostOwnerPrincipal } from "@traycer/protocol/host/host-status";
+import { TEAM_TRANSFER_DISCLOSURE } from "@traycer/protocol/host/environment/team-transfer-disclosure";
+import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
+import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
+import { environmentMutationKeys } from "@/lib/query-keys";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
+import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
@@ -49,6 +64,8 @@ export function HostOverviewSettingsCard(props: {
   readonly hostName: string;
   readonly status: EnvironmentStatusResponseV11 | null;
   readonly binding: EnvironmentHostBinding | null;
+  readonly owner: HostOwnerPrincipal | null;
+  readonly isLocalMachine: boolean;
 }): ReactNode {
   const openMoveSheet = useMoveSheetStore((state) => state.openSheet);
   const [stopOpen, setStopOpen] = useState(false);
@@ -94,17 +111,14 @@ export function HostOverviewSettingsCard(props: {
     hostName: props.hostName,
     status: props.status,
   };
-  if (model.kind === "team") {
+  const teamOwner = props.owner?.kind === "team" ? props.owner : null;
+  if (model.kind === "team" || teamOwner !== null) {
     return (
-      <SettingsRow
-        row={HOST_OVERVIEW.definitions.settingsRow}
-        status={
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <span>{model.description}</span>
-            <OverviewCardDetailsLine {...lineProps} />
-          </div>
-        }
-        control={<FixedSettingsSource value={model.label} />}
+      <TeamOwnedHostSettingsRow
+        {...lineProps}
+        owner={teamOwner}
+        fallback={model.kind === "team" ? model : null}
+        isLocalMachine={props.isLocalMachine}
       />
     );
   }
@@ -142,7 +156,11 @@ export function HostOverviewSettingsCard(props: {
             </div>
           }
           control={
-            <EnvironmentSourceSelect
+            <EnvironmentSourceControl
+              client={props.client}
+              hostId={props.hostId}
+              hostName={props.hostName}
+              mayTransfer={false}
               value={model.value}
               options={model.options}
               onChoose={(option) => {
@@ -166,6 +184,146 @@ export function HostOverviewSettingsCard(props: {
         open={stopOpen}
         onOpenChange={setStopOpen}
       />
+    </>
+  );
+}
+
+function TeamOwnedHostSettingsRow(props: {
+  readonly client: HostClient<HostRpcRegistry>;
+  readonly hostId: string;
+  readonly hostName: string;
+  readonly status: EnvironmentStatusResponseV11;
+  readonly owner: Extract<HostOwnerPrincipal, { readonly kind: "team" }> | null;
+  readonly fallback: Extract<
+    HostSettingsRowModel,
+    { readonly kind: "team" }
+  > | null;
+  readonly isLocalMachine: boolean;
+}): ReactNode {
+  return (
+    <SettingsRow
+      row={HOST_OVERVIEW.definitions.settingsRow}
+      status={
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span>
+            {props.owner === null
+              ? props.fallback?.description
+              : `This computer belongs to ${props.owner.name}.`}
+          </span>
+          <OverviewCardDetailsLine
+            client={props.client}
+            hostId={props.hostId}
+            hostName={props.hostName}
+            status={props.status}
+          />
+        </div>
+      }
+      control={
+        <div className="flex flex-wrap items-center gap-2">
+          <FixedSettingsSource
+            value={props.owner?.name ?? props.fallback?.label ?? "Team"}
+          />
+          {props.isLocalMachine && props.owner !== null ? (
+            <ReturnLocalTeamComputer
+              client={props.client}
+              hostId={props.hostId}
+              hostName={props.hostName}
+            />
+          ) : null}
+        </div>
+      }
+    />
+  );
+}
+
+function ReturnLocalTeamComputer(props: {
+  readonly client: HostClient<HostRpcRegistry>;
+  readonly hostId: string;
+  readonly hostName: string;
+}): ReactNode {
+  const [open, setOpen] = useState(false);
+  const [returned, setReturned] = useState(false);
+  const mutation = useHostScopedMutationForClient(props.client, {
+    method: "environment.move.stop",
+    mutationKey: environmentMutationKeys.moveStop(),
+    errorMessage: null,
+    invalidateMethods: [
+      "environment.host.read",
+      "environment.status",
+      "environment.host.list",
+    ],
+  });
+  return (
+    <>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={() => {
+          mutation.reset();
+          setOpen(true);
+        }}
+      >
+        Return this computer
+      </Button>
+      <Dialog
+        open={open}
+        onOpenChange={(next) => {
+          if (!mutation.isPending) setOpen(next);
+        }}
+      >
+        <DialogContent className="w-full sm:max-w-prose">
+          <DialogHeader>
+            <DialogTitle>Return {props.hostName}?</DialogTitle>
+            <DialogDescription>
+              The team will lose access to this computer. It will return to the
+              person who brought it.
+            </DialogDescription>
+          </DialogHeader>
+          {mutation.isError ||
+          (mutation.data !== undefined &&
+            mutation.data.outcome !== "stopped") ? (
+            <p role="alert" className="text-ui-sm text-destructive">
+              Could not confirm that this computer was returned. Refresh its
+              Overview before trying again.
+            </p>
+          ) : null}
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={mutation.isPending}
+              onClick={() => setOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={mutation.isPending}
+              onClick={() =>
+                mutation.mutate(
+                  { choices: [] },
+                  {
+                    onSuccess: (answer) => {
+                      if (answer.outcome === "stopped") {
+                        setReturned(true);
+                        setOpen(false);
+                      }
+                    },
+                  },
+                )
+              }
+            >
+              {mutation.isPending ? "Returning…" : "Return computer"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+      {returned ? (
+        <p role="status" className="text-ui-sm">
+          This computer was returned. The team can no longer run work on it.
+        </p>
+      ) : null}
     </>
   );
 }
@@ -199,16 +357,160 @@ function FixedSettingsSource(props: { readonly value: string }): ReactNode {
   );
 }
 
-function EnvironmentSourceSelect(props: {
+interface EnvironmentSourceSelectProps {
   readonly value: HostSettingsRowOption["value"];
   readonly options: readonly HostSettingsRowOption[];
   readonly onChoose: (option: HostSettingsRowOption) => void;
-}): ReactNode {
+}
+
+function EnvironmentSourceControl(
+  props: EnvironmentSourceSelectProps & {
+    readonly client: HostClient<HostRpcRegistry>;
+    readonly hostId: string;
+    readonly hostName: string;
+    readonly mayTransfer: boolean;
+  },
+): ReactNode {
+  return props.mayTransfer ? (
+    <TeamEnvironmentSourceControl {...props} />
+  ) : (
+    <EnvironmentSourceSelect
+      {...props}
+      teams={[]}
+      onChooseTeam={() => undefined}
+    />
+  );
+}
+
+function TeamEnvironmentSourceControl(
+  props: EnvironmentSourceSelectProps & {
+    readonly client: HostClient<HostRpcRegistry>;
+    readonly hostId: string;
+    readonly hostName: string;
+  },
+): ReactNode {
+  const environments = useEnvironmentListQuery(props.client, true);
+  const teams = (environments.data?.environments ?? []).filter(
+    (environment) => environment.ownerKind === "organization",
+  );
+  const [selected, setSelected] = useState<EnvironmentDescriptorV11 | null>(
+    null,
+  );
+  const [receipt, setReceipt] = useState<string | null>(null);
+  const mutation = useHostScopedMutationForClient(props.client, {
+    method: "environment.host.bind",
+    mutationKey: environmentMutationKeys.hostBind(),
+    errorMessage: null,
+    invalidateMethods: [
+      "environment.host.read",
+      "environment.status",
+      "environment.host.list",
+    ],
+  });
+  return (
+    <>
+      <EnvironmentSourceSelect
+        {...props}
+        teams={teams}
+        onChooseTeam={(team) => {
+          mutation.reset();
+          setSelected(team);
+        }}
+      />
+      <Dialog
+        open={selected !== null}
+        onOpenChange={(open) => {
+          if (!open && !mutation.isPending) setSelected(null);
+        }}
+      >
+        <DialogContent className="w-full sm:max-w-prose">
+          <DialogHeader>
+            <DialogTitle>
+              Use {props.hostName} for {selected?.label}?
+            </DialogTitle>
+            <DialogDescription>
+              The team will own this computer until it is returned.
+            </DialogDescription>
+          </DialogHeader>
+          <ul className="list-disc space-y-2 pl-5 text-ui-sm">
+            {TEAM_TRANSFER_DISCLOSURE.map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+          {mutation.isError ? (
+            <p role="alert" className="text-ui-sm text-destructive">
+              {TEAM_TRANSFER_REFUSALS.find(
+                (refusal) => refusal.code === mutation.error.code,
+              )?.message ??
+                "Could not add this computer. Check your team membership and try again."}
+            </p>
+          ) : null}
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={mutation.isPending}
+              onClick={() => setSelected(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={mutation.isPending || selected === null}
+              onClick={() => {
+                if (selected === null) return;
+                const team = selected;
+                mutation.mutate(
+                  { environmentId: team.environmentId },
+                  {
+                    onSuccess: (binding) => {
+                      if (
+                        binding.hostId === props.hostId &&
+                        binding.explicit &&
+                        binding.environment.environmentId === team.environmentId
+                      ) {
+                        setReceipt(
+                          `${props.hostName} now belongs to ${team.label}. Return it from this computer's Overview when you want it back.`,
+                        );
+                        setSelected(null);
+                      }
+                    },
+                  },
+                );
+              }}
+            >
+              {mutation.isPending ? "Adding…" : "Confirm at this computer"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+      {receipt !== null ? (
+        <p role="status" className="text-ui-sm">
+          {receipt}
+        </p>
+      ) : null}
+    </>
+  );
+}
+
+function EnvironmentSourceSelect(
+  props: EnvironmentSourceSelectProps & {
+    readonly teams: readonly EnvironmentDescriptorV11[];
+    readonly onChooseTeam: (team: EnvironmentDescriptorV11) => void;
+  },
+): ReactNode {
   const current = props.options.find((option) => option.value === props.value);
   return (
     <Select
       value={props.value}
       onValueChange={(value) => {
+        const team = props.teams.find(
+          (item) => `team:${item.environmentId}` === value,
+        );
+        if (team !== undefined) {
+          props.onChooseTeam(team);
+          return;
+        }
         const option = props.options.find((item) => item.value === value);
         if (option === undefined || value === props.value) return;
         props.onChoose(option);
@@ -231,6 +533,17 @@ function EnvironmentSourceSelect(props: {
         </span>
       </TooltipWrapper>
       <SelectContent align="end">
+        {props.teams.map((team) => (
+          <SelectItem
+            key={team.environmentId}
+            value={`team:${team.environmentId}`}
+          >
+            <EnvironmentOptionLabel
+              label={team.label}
+              detail="Use this computer for the team"
+            />
+          </SelectItem>
+        ))}
         {props.options.map((option) => (
           <SelectItem key={option.value} value={option.value}>
             <EnvironmentOptionLabel
@@ -349,6 +662,8 @@ export function HostOverviewSettingsCardSlot(props: {
   readonly hostId: string | null;
   readonly hostName: string;
   readonly usable: boolean;
+  readonly owner: HostOwnerPrincipal | null;
+  readonly isLocalMachine: boolean;
 }): ReactNode {
   const status = useEnvironmentStatusRead(
     props.client,
@@ -385,6 +700,8 @@ export function HostOverviewSettingsCardSlot(props: {
       hostName={props.hostName}
       status={status.data}
       binding={binding.data ?? null}
+      owner={props.owner}
+      isLocalMachine={props.isLocalMachine}
     />
   );
 }
