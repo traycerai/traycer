@@ -98,13 +98,20 @@ export const STREAM_CAPABILITY_CLOUD_VERDICT_UPDATE = "cloudVerdictUpdate";
  *   - `needs-reauth` - the host held one and its refresh family is dead
  *                      (revoked, superseded, or expired); a fresh handoff is
  *                      the recovery door.
+ *   - `team-unavailable` - the team credential cannot currently be obtained.
+ *                      The host renews it; a user credential handoff is refused.
  */
-export type HostCredentialState = "missing" | "active" | "needs-reauth";
+export type HostCredentialState =
+  | "missing"
+  | "active"
+  | "needs-reauth"
+  | "team-unavailable";
 
 export const hostCredentialStateSchema = z.enum([
   "missing",
   "active",
   "needs-reauth",
+  "team-unavailable",
 ]);
 
 /**
