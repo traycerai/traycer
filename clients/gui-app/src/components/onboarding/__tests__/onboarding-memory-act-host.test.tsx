@@ -64,8 +64,8 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
 beforeEach(resetMemoryActFixture);
 afterEach(cleanupMemoryActFixture);
 
-/** Picks the second machine, and waits until the act is reading from it. */
-async function pickOtherHost(): Promise<void> {
+/** Picks a machine in the host picker, and waits until the picker names it. */
+async function pickHost(label: string): Promise<void> {
   const trigger = await waitFor(() =>
     within(screen.getByTestId("onboarding-host-picker-bar")).getByRole(
       "button",
@@ -73,15 +73,17 @@ async function pickOtherHost(): Promise<void> {
   );
   fireEvent.click(trigger);
   fireEvent.click(
-    await screen.findByRole("option", { name: new RegExp(OTHER_HOST.label) }),
+    await screen.findByRole("option", { name: new RegExp(label) }),
   );
   // The act follows the picker: its reads and writes now address this host.
   await waitFor(() =>
     expect(
       screen.getByTestId("onboarding-host-picker-bar").textContent,
-    ).toContain(OTHER_HOST.label),
+    ).toContain(label),
   );
 }
+
+const pickOtherHost = (): Promise<void> => pickHost(OTHER_HOST.label);
 
 function methodsSentTo(hostId: string): string[] {
   return callsTo(hostId).map((call) => call.method);
@@ -139,6 +141,30 @@ describe("the Memory act: the host is picked while a save is running", () => {
         (call) => call.method === "providers.setNativeMemory",
       ),
     ).toHaveLength(2);
+    expect(methodsSentTo(OTHER_HOST.hostId)).not.toContain(
+      "providers.setNativeMemory",
+    );
+    expect(useOnboardingStore.getState().step).toBe(2);
+    expect(currentStepId()).toBe("agent-memories");
+  });
+
+  it("keeps a stopped save stopped when the first host is picked again", async () => {
+    world.otherHosts = [OTHER_HOST];
+    world.setGate = deferred();
+    await openMemoryAct();
+    await chooseTraycer();
+    await providerSwitch("codex");
+    await continueFromMemory();
+    await waitFor(() =>
+      expect(paramsOf("config.agentMemories.set")).toHaveLength(1),
+    );
+
+    await pickOtherHost();
+    await pickHost("MacBook Pro");
+    act(() => world.setGate?.resolve());
+    await writesAnswered();
+
+    expect(methodsSentTo(HOST_ID)).not.toContain("providers.setNativeMemory");
     expect(methodsSentTo(OTHER_HOST.hostId)).not.toContain(
       "providers.setNativeMemory",
     );
