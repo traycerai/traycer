@@ -1,4 +1,5 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import {
   emptyMemoryDraft,
@@ -17,7 +18,10 @@ import {
   type MemorySaveIo,
   type SaveEvidence,
 } from "@/components/onboarding/onboarding-memory-save";
-import { useHostQuery } from "@/hooks/host/use-host-query";
+import {
+  useHostQuery,
+  useHostQueryEntryHash,
+} from "@/hooks/host/use-host-query";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import {
@@ -66,7 +70,9 @@ export interface OnboardingAgentMemories extends OnboardingMemoryView {
    * Writes what is still unsaved and answers whether everything has landed.
    * Traycer first, and each provider only after a read finds Traycer
    * memories on in the configuration the host serves: a failure can leave a
-   * provider's memories on beside Traycer's, never both off.
+   * provider's memories on beside Traycer's. Both end up off only when the
+   * host moves or the setting changes after the read a write or "done"
+   * rested on.
    */
   readonly save: () => Promise<boolean>;
   readonly reloadProviders: () => void;
@@ -195,6 +201,35 @@ export function useOnboardingAgentMemories(input: {
   const sendsTo = (target: SaveTarget): boolean =>
     selectionRef.current === target.selection;
 
+  // Settings → Agent memories reads this same cache entry. A read the act took
+  // can be overtaken without anything reading again (a rebind, a later change
+  // turning the setting off), so it is marked stale, without a request, when
+  // the person leaves the act by any way out and when a save ends: the next
+  // reader asks the host.
+  const queryClient = useQueryClient();
+  const readEntry = useHostQueryEntryHash<
+    HostRpcRegistry,
+    "config.agentMemories.get"
+  >({
+    cacheKeyIdentity: undefined,
+    client,
+    method: AGENT_MEMORIES_GET,
+    params: {},
+  });
+  const { active } = input;
+  useEffect(() => {
+    if (!active) return undefined;
+    return () => {
+      // A read still in flight would land after the mark and clear it. A
+      // running save's own reads are left alone: it marks the entry as it ends.
+      if (!savingRef.current)
+        void queryClient.cancelQueries({
+          predicate: (entry) => entry.queryHash === readEntry,
+        });
+      markEntryStale(queryClient, readEntry);
+    };
+  }, [active, readEntry, queryClient]);
+
   const providerControls = providerMemoryControls({
     nativeSetSupported,
     nativeReadable,
@@ -285,6 +320,7 @@ export function useOnboardingAgentMemories(input: {
     savingRef.current = true;
     setSaving(true);
     const target: SaveTarget = { hostId, selection: selectionRef.current };
+    const savedEntry = readEntry;
     // `.finally` rather than try/finally: React Compiler cannot lower a try
     // without a catch, and would leave this whole hook unmemoized.
     return runMemorySave(saveIo(target), view.rows)
@@ -299,6 +335,7 @@ export function useOnboardingAgentMemories(input: {
       .finally(() => {
         savingRef.current = false;
         setSaving(false);
+        markEntryStale(queryClient, savedEntry);
       });
   }
 
@@ -318,6 +355,14 @@ export function useOnboardingAgentMemories(input: {
     save,
     reloadProviders: () => void providersQuery.refetch(),
   };
+}
+
+/** Stale, so its next reader asks the host; nothing is fetched now. */
+function markEntryStale(queryClient: QueryClient, entryHash: string): void {
+  void queryClient.invalidateQueries({
+    predicate: (entry) => entry.queryHash === entryHash,
+    refetchType: "none",
+  });
 }
 
 function memoryAvailability(input: {
