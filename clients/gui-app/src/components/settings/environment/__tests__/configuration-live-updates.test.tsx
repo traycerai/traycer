@@ -339,11 +339,13 @@ function mountSecrets(
 
 beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
+  vi.spyOn(document, "hasFocus").mockReturnValue(true);
   useSettingsEnvironmentPickStore.setState({ pick: null });
 });
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   vi.useRealTimers();
   resetTeamPageHarness();
   resetNegotiatedManifests();
