@@ -1374,6 +1374,8 @@ import {
   environmentHostListV11,
   environmentHostListV12,
   environmentHostReadV10,
+  environmentHostReadV11,
+  environmentHostReadUpgradeV10ToV11,
   environmentListUpgradeV10ToV11,
   environmentListV10,
   environmentListV11,
@@ -9349,11 +9351,15 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   "environment.host.read": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: environmentHostReadV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: environmentHostReadV11,
+          upgradeFromPreviousVersion: environmentHostReadUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
