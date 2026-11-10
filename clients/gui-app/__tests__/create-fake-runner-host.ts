@@ -235,6 +235,9 @@ export function createFakeRunnerHost(
     // Desktop-shaped by default; a phone-shaped test passes its own
     // `pushPermission` double through `overrides`.
     pushPermission: null,
+    // A test of on-device dictation passes its own double through
+    // `overrides`.
+    deviceDictation: null,
     // Likewise: a shell that raises an OS back request passes its own
     // `systemBack` double through `overrides`.
     systemBack: null,

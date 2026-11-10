@@ -2,9 +2,12 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
+  type RefObject,
 } from "react";
+import type { ChatBotThreadOpening } from "@/components/chat/chat-bot-presentation-context";
 import { X } from "lucide-react";
 import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { BotTaskEntry } from "@traycer/protocol/host/bot/schemas";
@@ -76,6 +79,10 @@ import type {
 import type { BotSentPost } from "@/stores/bots/bot-open-thread-store";
 import { useKeyboardFocusLayoutWithin } from "@/hooks/ui/use-keyboard-focus-layout";
 import { cn } from "@/lib/utils";
+import {
+  CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME,
+  CHAT_NAVIGATION_HIGHLIGHT_DURATION_MS,
+} from "@/components/chat/chat-navigation-highlight";
 
 /**
  * The open post's thread as the channel's thread list has it: listed; not
@@ -895,6 +902,7 @@ function KnownThread(
     answerReach,
     botTitle,
     conversationId,
+    originMessageId,
     threadId,
     listed,
     retry,
@@ -908,6 +916,11 @@ function KnownThread(
     layout,
   } = props;
   const client = useTabHostClient();
+  const {
+    opening,
+    ref: openingRef,
+    highlighted: openingHighlighted,
+  } = useThreadOpening(originMessageId, conversationId);
   const {
     mutate: send,
     mutateAsync: sendAsync,
@@ -1035,6 +1048,7 @@ function KnownThread(
       failedRequest: failedRequestShown,
       openTurn: onOpenTurn,
       sessionChatId: listed?.sessionChatId ?? null,
+      opening,
     }),
     [
       answerQuestion,
@@ -1048,6 +1062,7 @@ function KnownThread(
       listed?.sessionChatId,
       onDiscuss,
       onOpenTurn,
+      opening,
       send,
       sendable,
       sending,
@@ -1063,7 +1078,16 @@ function KnownThread(
     () =>
       hasReplies ? (
         <>
-          {origin}
+          <div
+            ref={openingRef}
+            className={cn(
+              "rounded-md",
+              openingHighlighted && CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME,
+            )}
+            data-testid="bot-thread-opening"
+          >
+            {origin}
+          </div>
           <div
             className="flex items-center gap-3 px-4 pt-2 text-ui-xs text-muted-foreground"
             data-testid="bot-thread-reply-count"
@@ -1085,7 +1109,7 @@ function KnownThread(
           </div>
         </>
       ) : null,
-    [hasReplies, openThread, origin, replies],
+    [hasReplies, openThread, openingHighlighted, openingRef, origin, replies],
   );
   const flow = useMemo(
     () =>
@@ -1135,6 +1159,44 @@ function KnownThread(
       />
     </>
   );
+}
+
+/**
+ * The post the thread opens on, as a reply's badge names it (T165): `ref`
+ * goes on the post at the top of the replies' list, and `show` scrolls it
+ * into view and highlights it for as long as a landed row is highlighted.
+ */
+function useThreadOpening(
+  messageId: string,
+  conversationId: string,
+): {
+  readonly opening: ChatBotThreadOpening;
+  readonly ref: RefObject<HTMLDivElement | null>;
+  readonly highlighted: boolean;
+} {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const timer = useRef<number | null>(null);
+  const [highlighted, setHighlighted] = useState(false);
+  useEffect(
+    () => () => {
+      if (timer.current !== null) window.clearTimeout(timer.current);
+    },
+    [],
+  );
+  const show = useCallback(() => {
+    ref.current?.scrollIntoView({ block: "nearest" });
+    if (timer.current !== null) window.clearTimeout(timer.current);
+    setHighlighted(true);
+    timer.current = window.setTimeout(() => {
+      timer.current = null;
+      setHighlighted(false);
+    }, CHAT_NAVIGATION_HIGHLIGHT_DURATION_MS);
+  }, []);
+  const opening = useMemo(
+    () => ({ messageId, conversationId, show }),
+    [conversationId, messageId, show],
+  );
+  return { opening, ref, highlighted };
 }
 
 /** A failed read of the thread list, with Retry; nothing while it has not failed. */
