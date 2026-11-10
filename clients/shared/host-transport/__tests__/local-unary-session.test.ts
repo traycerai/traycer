@@ -2394,7 +2394,7 @@ describe("local unary session", () => {
     const ownerBearer = new MutableBearerLease("stale-token", USER_A);
     const waiterBearer = new MutableBearerLease("fresh-token", USER_A);
     const revalidated: MutableBearerLease[] = [];
-    const wrapped = createAuthAwareMessenger(
+    const wrapped = createAuthAwareMessenger<typeof testRegistry>(
       client,
       {
         revalidateExpectedBearer: (expected) => {
@@ -2556,7 +2556,7 @@ describe("local unary session", () => {
     const client = makeClient(factory, 0);
     const bearer = new MutableBearerLease("token-a", USER_A);
     const revalidated: MutableBearerLease[] = [];
-    const wrapped = createAuthAwareMessenger(
+    const wrapped = createAuthAwareMessenger<typeof testRegistry>(
       client,
       {
         revalidateExpectedBearer: (expected) => {
@@ -4171,22 +4171,26 @@ describe("local unary session", () => {
     });
     session.retainDialRelease();
     const signal = new AbortController().signal;
-    let queued: Promise<unknown> | null = null;
+    const queuedCalls: Promise<unknown>[] = [];
     const send = socket.send.bind(socket);
     socket.send = (frame) => {
       send(frame);
-      if (frame.kind !== "request" || queued !== null) {
+      if (frame.kind !== "request" || queuedCalls.length > 0) {
         return;
       }
-      queued = captureRejection(echoCall(session, "req-queued", signal));
+      queuedCalls.push(
+        captureRejection(echoCall(session, "req-queued", signal)),
+      );
       session.handlers.onTransportClosed("peer dropped", false);
     };
-    const sent = await captureRejection(echoCall(session, "req-sent", signal));
-    const waiting = queued;
-    if (waiting === null) {
+    const sent: unknown = await captureRejection(
+      echoCall(session, "req-sent", signal),
+    );
+    const waiting = queuedCalls[0];
+    if (waiting === undefined) {
       throw new Error("expected the queued call");
     }
-    const queuedError = await waiting;
+    const queuedError: unknown = await waiting;
     expect(sent).toBeInstanceOf(HostTransportFailureError);
     if (!(sent instanceof HostTransportFailureError)) {
       throw new Error("expected the sent call to be uncertain");
@@ -4216,14 +4220,16 @@ describe("local unary session", () => {
     });
     session.retainDialRelease();
     const signal = new AbortController().signal;
-    let queued: Promise<unknown> | null = null;
+    const queuedCalls: Promise<unknown>[] = [];
     const send = socket.send.bind(socket);
     socket.send = (frame) => {
       send(frame);
-      if (frame.kind !== "request" || queued !== null) {
+      if (frame.kind !== "request" || queuedCalls.length > 0) {
         return;
       }
-      queued = captureRejection(echoCall(session, "req-queued", signal));
+      queuedCalls.push(
+        captureRejection(echoCall(session, "req-queued", signal)),
+      );
       session.handlers.onFrame({
         kind: "fatalError",
         details: {
@@ -4234,12 +4240,14 @@ describe("local unary session", () => {
         },
       });
     };
-    const sent = await captureRejection(echoCall(session, "req-sent", signal));
-    const waiting = queued;
-    if (waiting === null) {
+    const sent: unknown = await captureRejection(
+      echoCall(session, "req-sent", signal),
+    );
+    const waiting = queuedCalls[0];
+    if (waiting === undefined) {
       throw new Error("expected the queued call");
     }
-    const queuedError = await waiting;
+    const queuedError: unknown = await waiting;
     expect(sent).toBeInstanceOf(HostRpcError);
     expect(queuedError).toBeInstanceOf(HostRpcError);
     if (
