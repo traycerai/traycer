@@ -33,10 +33,7 @@ import {
   HOST_METHOD_POLL_TABLE,
   stampHostRpcMethod,
 } from "@/lib/host-rpc-policy/host-method-policy-table";
-import {
-  getConditionPollEpisodeCoordinator,
-  type ConditionPollRefetchInterval,
-} from "@/lib/query/condition-poll-episode-coordinator";
+import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
 
 type ConditionHostRpcMethod = {
   [
@@ -310,39 +307,10 @@ export function useHostQueryWithResponseMap<
   const baseOptions = args.options ?? {};
   const { meta, poll, select, ...queryOptionsWithoutReservedFields } =
     baseOptions;
-  const pollPolicy = HOST_METHOD_POLL_TABLE[method].poll;
-  let tablePollingOptions:
-    | {
-        readonly refetchInterval: ConditionPollRefetchInterval;
-        readonly retry: false;
-      }
-    | { readonly refetchInterval: false }
-    | {
-        readonly refetchInterval: number | false;
-        readonly refetchIntervalInBackground: false;
-      }
-    | Record<never, never> = {};
-  if (pollPolicy !== null && pollPolicy.kind === "condition") {
-    // `retry: false` belongs to the BRANDED poller, whose episode re-asks on
-    // its error lanes - which is why the coordinator asks for it of that
-    // observer alone. A reader that opts out owns no episode, so those lanes
-    // can never recover it: it keeps the ordinary retry, the only recovery it
-    // has left, and a single transient failure does not freeze it on a stale
-    // answer until some other producer happens to read the key.
-    tablePollingOptions =
-      poll === false
-        ? { refetchInterval: false }
-        : {
-            refetchInterval:
-              conditionPollCoordinator.refetchIntervalFor(method),
-            retry: false,
-          };
-  } else if (pollPolicy !== null) {
-    tablePollingOptions = {
-      refetchInterval: poll === true ? pollPolicy.intervalMs : false,
-      refetchIntervalInBackground: false,
-    };
-  }
+  const tablePollingOptions = conditionPollCoordinator.pollOptionsFor(
+    method,
+    poll,
+  );
   // The boundary normalizes every non-control-flow failure into the declared
   // `HostRpcError`, including throws from caller-supplied `mapResponse`.
   // Coordinator control flow deliberately remains TanStack cancellation.

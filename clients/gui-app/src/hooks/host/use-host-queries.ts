@@ -23,14 +23,8 @@ import {
   type HostQueryTanstackOptions,
 } from "@/hooks/host/use-host-query";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
-import {
-  HOST_METHOD_POLL_TABLE,
-  stampHostRpcMethod,
-} from "@/lib/host-rpc-policy/host-method-policy-table";
-import {
-  getConditionPollEpisodeCoordinator,
-  type ConditionPollRefetchInterval,
-} from "@/lib/query/condition-poll-episode-coordinator";
+import { stampHostRpcMethod } from "@/lib/host-rpc-policy/host-method-policy-table";
+import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
 
 export interface HostRequestSpec<
   Registry extends HostRpcRegistry,
@@ -273,40 +267,10 @@ export function useHostQueriesWithResponseMap<
         }
         return mapResponse({ response, queryClient, queryKey });
       });
-    const pollPolicy = HOST_METHOD_POLL_TABLE[request.method].poll;
-    let tablePollingOptions:
-      | {
-          readonly refetchInterval: ConditionPollRefetchInterval;
-          readonly retry: false;
-        }
-      | { readonly refetchInterval: false }
-      | {
-          readonly refetchInterval: number | false;
-          readonly refetchIntervalInBackground: false;
-        }
-      | Record<never, never> = {};
-    if (pollPolicy !== null && pollPolicy.kind === "condition") {
-      // Same split as `useHostQuery`'s, and for the same reason: `retry: false`
-      // belongs to the BRANDED poller, whose episode re-asks on its error
-      // lanes. A reader that opts out owns no episode, so those lanes can never
-      // recover it - it keeps the ordinary retry, the only recovery it has
-      // left. The two helpers answer one contract, so they say this once each
-      // rather than differently.
-      tablePollingOptions =
-        poll === false
-          ? { refetchInterval: false }
-          : {
-              refetchInterval: conditionPollCoordinator.refetchIntervalFor(
-                request.method,
-              ),
-              retry: false,
-            };
-    } else if (pollPolicy !== null) {
-      tablePollingOptions = {
-        refetchInterval: poll === true ? pollPolicy.intervalMs : false,
-        refetchIntervalInBackground: false,
-      };
-    }
+    const tablePollingOptions = conditionPollCoordinator.pollOptionsFor(
+      request.method,
+      poll,
+    );
     return queryOptions<TData, HostRpcError, TData>({
       ...queryOptionsWithoutReservedFields,
       ...tablePollingOptions,
