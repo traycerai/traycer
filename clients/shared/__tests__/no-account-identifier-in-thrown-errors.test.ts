@@ -333,14 +333,32 @@ function messageEventType(typeNode: ts.TypeNode | undefined): boolean {
 }
 
 function isMessageEventBinding(name: ts.Identifier): boolean {
-  const declaration = enclosingFunction(name);
-  if (declaration === null) return false;
-  return declaration.parameters.some(
-    (parameter) =>
-      ts.isIdentifier(parameter.name) &&
-      parameter.name.text === name.text &&
-      messageEventType(parameter.type),
-  );
+  // Walks OUTWARD to the nearest function that declares this name. Asking only
+  // the immediately enclosing function missed every reference captured by a
+  // closure - `onMessage(event: MessageEvent)` whose body does
+  // `queueMicrotask(() => { throw new Error(`${event.data}`) })` resolved
+  // `event` against the arrow's empty parameter list, so the raw frame was
+  // visited and then not classified as inbound. An immediately-invoked arrow,
+  // `${(() => event.data)()}`, is the same miss spelled differently.
+  //
+  // Stopping at the FIRST function that declares the name is what keeps
+  // shadowing correct: an inner parameter of some other type answers for the
+  // name and the walk ends there, rather than asking whether any enclosing
+  // function happens to declare it as a MessageEvent.
+  //
+  // Two limits this does not reach, for the same reason the rule is syntactic:
+  // a `const event = ...` inside the closure shadows without being a
+  // parameter, and a destructured parameter declares no identifier to match.
+  let declaration = enclosingFunction(name);
+  while (declaration !== null) {
+    const parameter = declaration.parameters.find(
+      (candidate) =>
+        ts.isIdentifier(candidate.name) && candidate.name.text === name.text,
+    );
+    if (parameter !== undefined) return messageEventType(parameter.type);
+    declaration = enclosingFunction(declaration);
+  }
+  return false;
 }
 
 function dataPropertyReceiver(node: ts.Node): ts.Expression | null {
@@ -964,6 +982,101 @@ describe("no account identifier in thrown Error messages", () => {
       [
         "function onMessage(event: WebSocketMessageEvent, key: string): void {",
         "  throw new Error(`Malformed host frame: ${event[key]}`);",
+        "}",
+      ],
+    );
+  });
+
+  it("flags message-event data captured by a closure", () => {
+    expectPayloadFlagged(
+      join("clients", "shared", "host-transport", "ws-rpc-client.ts"),
+      [
+        "function onMessage(event: WebSocketMessageEvent): void {",
+        "  queueMicrotask(() => {",
+        "    throw new Error(`Malformed host frame: ${event.data}`);",
+        "  });",
+        "}",
+      ],
+      "message-event data",
+      "event.data",
+    );
+  });
+
+  it("flags message-event data captured two closures deep", () => {
+    expectPayloadFlagged(
+      join("clients", "shared", "host-transport", "ws-rpc-client.ts"),
+      [
+        "function onMessage(event: WebSocketMessageEvent): void {",
+        "  queueMicrotask(() => {",
+        "    settle(() => {",
+        "      throw new Error(`Malformed host frame: ${event.data}`);",
+        "    });",
+        "  });",
+        "}",
+      ],
+      "message-event data",
+      "event.data",
+    );
+  });
+
+  it("lets an inner parameter shadow the message-event binding", () => {
+    // The outward walk must STOP at the nearest declaration of the name. Here
+    // the inner `event` is a different type, so its `data` is not frame data
+    // and the outer parameter must not answer for it.
+    expectPayloadClean(
+      join("clients", "shared", "host-transport", "ws-rpc-client.ts"),
+      [
+        "function onMessage(event: WebSocketMessageEvent): void {",
+        "  forEachRetry((event: RetryRecord) => {",
+        "    throw new Error(`Retry rejected: ${event.data}`);",
+        "  });",
+        "}",
+      ],
+    );
+  });
+
+  it("flags message-event data reached through a bare-identifier message", () => {
+    // Reaches `messageExpressionForScan`'s identifier branch: the message is
+    // the local itself, not a template containing it, which is a different
+    // path from the hoisted-template-local case below.
+    expectPayloadFlagged(
+      join("clients", "shared", "host-transport", "ws-rpc-client.ts"),
+      [
+        "function onMessage(event: WebSocketMessageEvent): void {",
+        "  const detail = String(event.data);",
+        "  throw new Error(detail);",
+        "}",
+      ],
+      "message-event data",
+      "event.data",
+    );
+  });
+
+  it("allows a message-event length read through a type assertion", () => {
+    // Exercises the wrapper-unwrapping loop in `isLengthOfDataAccess`: a
+    // length stays a length through `as`, parentheses and `!`.
+    expectPayloadClean(
+      join("clients", "shared", "host-transport", "ws-rpc-client.ts"),
+      [
+        "function onMessage(event: WebSocketMessageEvent): void {",
+        "  throw new Error(",
+        "    `Malformed host frame (length ${(event.data as string).length})`,",
+        "  );",
+        "}",
+      ],
+    );
+  });
+
+  it("does not flag data on a receiver that is not a message event", () => {
+    // The binding check is keyed on the parameter's TYPE, not on the property
+    // name, so a validated frame's own `data` stays legal - the invariant
+    // holds at the origin, which is the same reason forwarding
+    // `cause.message` is legal.
+    expectPayloadClean(
+      join("clients", "shared", "host-transport", "ws-rpc-client.ts"),
+      [
+        "function onFrame(frame: ParsedFrame): void {",
+        "  throw new Error(`Unsupported frame: ${frame.data}`);",
         "}",
       ],
     );
