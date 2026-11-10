@@ -733,3 +733,138 @@ describe("the Memory act: Continue and the host's providers", () => {
     expect(paramsOf("providers.setNativeMemory")).toEqual([]);
   });
 });
+
+describe("the Memory act: its own provider writes outrank the list read", () => {
+  const nativeWrites = (): unknown[] => paramsOf("providers.setNativeMemory");
+
+  it.each(["pending", "failing"] as const)(
+    "writes a provider the person switched back on after the act turned it off, while the list refetch is %s",
+    async (refetch) => {
+      world.applyNativeWrites = true;
+      world.nativeFailures.set("codex", 1);
+      await openMemoryAct();
+      await chooseTraycer();
+      await providerSwitch("codex");
+      // The list the act read is from before its own writes; the read they
+      // ask for is held or fails.
+      if (refetch === "pending") world.providersGate = deferred();
+      else world.providersFail = true;
+
+      await continueFromMemory();
+      const report = await screen.findByTestId("onboarding-memory-save-report");
+      expect(report.textContent).toContain("Couldn't change Codex memories.");
+      expect(nativeWrites()).toEqual([
+        { harnessId: "claude", nativeMemory: false },
+        { harnessId: "codex", nativeMemory: false },
+      ]);
+
+      fireEvent.click(await providerSwitch("claude-code"));
+      await continueFromMemory();
+      await expectOnStep("session-import");
+
+      expect(nativeWrites().slice(2)).toEqual([
+        { harnessId: "claude", nativeMemory: true },
+        { harnessId: "codex", nativeMemory: false },
+      ]);
+      expect(
+        world.providers.map((provider) => [
+          provider.providerId,
+          provider.nativeMemory,
+        ]),
+      ).toEqual([
+        ["claude-code", true],
+        ["codex", false],
+      ]);
+    },
+  );
+
+  it("sends a provider again after its write failed, whatever the list says next", async () => {
+    world.nativeFailures.set("claude", 1);
+    await openMemoryAct();
+    await chooseTraycer();
+    await providerSwitch("codex");
+
+    await continueFromMemory();
+    const report = await screen.findByTestId("onboarding-memory-save-report");
+    expect(report.textContent).toContain(
+      "Couldn't change Claude Code memories.",
+    );
+
+    // The host did take it, and says so; the act cannot know that the write
+    // it lost is the reason.
+    world.providers = world.providers.map((provider) => ({
+      ...provider,
+      nativeMemory:
+        provider.providerId === "claude-code" ? false : provider.nativeMemory,
+    }));
+    await invalidateAllQueries();
+    await settled();
+
+    await continueFromMemory();
+    await expectOnStep("session-import");
+    expect(
+      nativeWrites().filter(
+        (p) => (p as { harnessId: string }).harnessId === "claude",
+      ),
+    ).toEqual([
+      { harnessId: "claude", nativeMemory: false },
+      { harnessId: "claude", nativeMemory: false },
+    ]);
+  });
+
+  it("keeps what it wrote when Traycer is turned off and on again", async () => {
+    world.applyNativeWrites = true;
+    world.nativeFailures.set("codex", 1);
+    await openMemoryAct();
+    await chooseTraycer();
+    await providerSwitch("codex");
+    await continueFromMemory();
+    await screen.findByTestId("onboarding-memory-save-report");
+    expect(nativeWrites()).toEqual([
+      { harnessId: "claude", nativeMemory: false },
+      { harnessId: "codex", nativeMemory: false },
+    ]);
+
+    // A later revision turns Traycer off; the switch is then the person's.
+    overturnWrite();
+    await invalidateAllQueries();
+    await settled();
+    fireEvent.click(switchOf("onboarding-memory-traycer"));
+    await waitFor(() =>
+      expect(
+        screen.queryByTestId("onboarding-memory-provider-claude-code"),
+      ).toBeNull(),
+    );
+    fireEvent.click(switchOf("onboarding-memory-traycer"));
+    expect(isOn(await providerSwitch("claude-code"))).toBe(false);
+
+    // Claude is off on the host and the act wrote it: nothing to send for it.
+    await continueFromMemory();
+    await settled();
+    expect(
+      nativeWrites().filter(
+        (call) => (call as { harnessId: string }).harnessId === "claude",
+      ),
+    ).toEqual([{ harnessId: "claude", nativeMemory: false }]);
+  });
+
+  it("disables every switch while a save runs, and gives them back after", async () => {
+    world.setGate = deferred();
+    await openMemoryAct();
+    await chooseTraycer();
+    await providerSwitch("codex");
+    const traycer = switchOf("onboarding-memory-traycer");
+    expect(traycer.hasAttribute("disabled")).toBe(false);
+
+    await continueFromMemory();
+    await waitFor(() => expect(traycer.hasAttribute("disabled")).toBe(true));
+    for (const id of ["claude-code", "codex"])
+      expect((await providerSwitch(id)).hasAttribute("disabled")).toBe(true);
+
+    world.nativeFailures.set("codex", 1);
+    act(() => world.setGate?.resolve());
+    await screen.findByTestId("onboarding-memory-save-report");
+    for (const id of ["claude-code", "codex"])
+      expect((await providerSwitch(id)).hasAttribute("disabled")).toBe(false);
+  });
+});

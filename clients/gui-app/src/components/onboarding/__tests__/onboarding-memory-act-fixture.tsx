@@ -39,12 +39,11 @@ import {
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { IStreamSession } from "@traycer/protocol/host-transport/stream-session";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
-import {
-  DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
-  type ProviderCliState,
-  type ProviderId,
-} from "@traycer/protocol/host/provider-schemas";
 import { environmentStatusResponseSchemaV12 } from "@traycer/protocol/host/environment-schemas";
+import {
+  providerState,
+  type ProviderSpec,
+} from "@/components/onboarding/__tests__/onboarding-memory-act-provider-state";
 import { DirectoryProbe } from "@/components/onboarding/__tests__/onboarding-memory-act-directory-probe";
 import { SettingsPanelSlot } from "@/components/onboarding/__tests__/onboarding-memory-act-settings-panel";
 import { RequestContext } from "@/components/onboarding/__tests__/onboarding-memory-act-request-context";
@@ -67,12 +66,6 @@ export const HOST_ID = "memory-act-host";
 export const OTHER_HOST = remoteEntry("memory-act-other-host", null);
 export const ENVIRONMENT_ID = "env-personal";
 
-interface ProviderSpec {
-  readonly providerId: ProviderId;
-  readonly enabled: boolean;
-  readonly supported: boolean;
-  readonly nativeMemory: boolean;
-}
 type SetAnswer = "applied" | "saved" | "queued" | "fail";
 interface Receipt {
   readonly uploadId: string;
@@ -114,6 +107,12 @@ interface World {
   setAnswers: SetAnswer[];
   /** Per harness id: how many more `providers.setNativeMemory` calls fail. */
   nativeFailures: Map<string, number>;
+  /**
+   * A landed `providers.setNativeMemory` changes what the next
+   * `providers.list` says. Off by default: the list then stays as it was
+   * first read, which is what an act holding an old list sees.
+   */
+  applyNativeWrites: boolean;
   accepted: Receipt[];
   refused: string[];
   /** Holds `config.agentMemories.set` open until resolved. */
@@ -152,6 +151,7 @@ function freshWorld(): World {
     providers: defaultProviders(),
     setAnswers: ["applied"],
     nativeFailures: new Map(),
+    applyNativeWrites: false,
     accepted: [],
     refused: [],
     setGate: null,
@@ -180,36 +180,6 @@ function hostFailure(method: string): HostRpcError {
     method,
     fatalDetails: null,
   });
-}
-
-function providerState(spec: ProviderSpec): ProviderCliState {
-  return {
-    providerId: spec.providerId,
-    enabled: spec.enabled,
-    disabledBy: null,
-    selected: { kind: "bundled" },
-    candidates: [],
-    auth: {
-      status: "authenticated",
-      badgeText: null,
-      label: null,
-      detail: null,
-    },
-    authPending: false,
-    checkedAt: null,
-    apiKey: { supported: false, configured: false, source: null },
-    terminalAgentArgs: "",
-    envOverrides: [],
-    loginCapability: null,
-    availabilityPending: false,
-    nativeCapabilities: DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
-    managedInstallState: null,
-    versionVisibility: null,
-    advisory: null,
-    profiles: [],
-    nativeMemory: spec.nativeMemory,
-    nativeMemorySupported: spec.supported,
-  };
 }
 
 function statusAnswer() {
@@ -339,6 +309,15 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) => {
         if (failures > 0) {
           world.nativeFailures.set(request.harnessId, failures - 1);
           throw hostFailure("providers.setNativeMemory");
+        }
+        if (world.applyNativeWrites) {
+          const providerId =
+            request.harnessId === "claude" ? "claude-code" : request.harnessId;
+          world.providers = world.providers.map((provider) =>
+            provider.providerId === providerId
+              ? { ...provider, nativeMemory: request.nativeMemory }
+              : provider,
+          );
         }
         return { nativeMemory: request.nativeMemory };
       },

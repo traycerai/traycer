@@ -273,6 +273,25 @@ describe("the memory act's save, over every order of host events", () => {
     // The walk must reach the places the invariants are about.
     expect(between.states.length).toBeGreaterThan(5000);
     expect(between.undiscovered).toBeGreaterThan(0);
+    // The Codex trace: a provider the act's own write turned off, the list
+    // read still old, and the person switching it back on.
+    expect(
+      between.states.some(
+        (state) =>
+          state.world.choice["claude-code"] &&
+          state.world.writes["claude-code"]?.value === false &&
+          state.world.snapshot["claude-code"] &&
+          !state.world.providers["claude-code"],
+      ),
+    ).toBe(true);
+    // A write that failed, then the person's choice moving.
+    expect(
+      between.states.some((state) =>
+        (["claude-code", "codex"] as const).some(
+          (provider) => state.world.writes[provider]?.kind === "failed",
+        ),
+      ),
+    ).toBe(true);
     expect(inside.exemptWindows).toBeGreaterThan(0);
     expect(inside.oneAfterRebind).toBeGreaterThan(0);
     expect(inside.staleDone).toBeGreaterThan(0);
@@ -305,6 +324,26 @@ describe("a provider's own memory turned back on elsewhere after the host was re
     ]).toEqual([]);
     expect(walk.elsewhereDone).toBeGreaterThan(0);
     expect(inside.elsewhereDone).toBeGreaterThan(0);
+  });
+});
+
+describe("a switch flipped while a save runs", () => {
+  // The act disables both switches while saving. This is why: a flip after
+  // the save took its rows leaves the host different from the choice, and the
+  // save still says done.
+  it("would leave the host different from the choice, which the disabled switches prevent", async () => {
+    const world = initialWorld();
+    const run = await runSave(world, {
+      after: 2,
+      label: "toggle",
+      apply: (changed) => {
+        applyWorldEvent(changed, { kind: "toggle", provider: "codex" });
+      },
+    });
+    expect(run.result).toBe("done");
+    expect(run.violations.map((violation) => violation.cls)).toEqual([
+      "D done though the host's provider is not what the person chose",
+    ]);
   });
 });
 

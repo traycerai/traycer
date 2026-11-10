@@ -452,3 +452,60 @@ describe("the Memory act: Settings reads the host after the act is left mid-save
     await expectSettingsIsCurrent(HOST_ID);
   });
 });
+
+describe("the Memory act: the provider writes are kept for the host they went to", () => {
+  it("does not take one host's landed write for what another host holds", async () => {
+    world.otherHosts = [OTHER_HOST];
+    let latest: RebindProbe | null = null;
+    const current = (): RebindProbe => {
+      if (latest === null) throw new Error("the hook has not rendered yet");
+      return latest;
+    };
+    renderInHost(
+      <RebindableMemoryHost
+        onRender={(probe) => {
+          latest = probe;
+        }}
+      />,
+    );
+    const storedOf = (providerId: string): boolean | null | undefined =>
+      current().memory.rows.find((row) => row.providerId === providerId)
+        ?.stored;
+    await waitFor(() => expect(current().memory.rows).toHaveLength(2));
+    act(() => current().memory.choose());
+    await waitFor(() => expect(current().memory.chosen).toBe(true));
+    await act(async () => {
+      await current().memory.save();
+    });
+    expect(
+      callsTo(HOST_ID).filter((call) =>
+        call.method.endsWith("setNativeMemory"),
+      ),
+    ).toHaveLength(2);
+    // The first host holds what the act wrote there.
+    await waitFor(() => expect(storedOf("claude-code")).toBe(false));
+
+    // The other host was never written: its row is what its list says.
+    act(() => current().bindTo(OTHER_HOST.hostId));
+    await waitFor(() => expect(current().memory.rows).toHaveLength(2));
+    expect(storedOf("claude-code")).toBe(true);
+    act(() => current().memory.choose());
+    await waitFor(() => expect(current().memory.chosen).toBe(true));
+    await act(async () => {
+      await current().memory.save();
+    });
+    expect(
+      callsTo(OTHER_HOST.hostId)
+        .filter((call) => call.method.endsWith("setNativeMemory"))
+        .map((call) => call.params),
+    ).toEqual([
+      { harnessId: "claude", nativeMemory: false },
+      { harnessId: "codex", nativeMemory: false },
+    ]);
+
+    // Back on the first host its write is still what that host holds.
+    act(() => current().bindTo(HOST_ID));
+    await waitFor(() => expect(current().memory.rows).toHaveLength(2));
+    expect(storedOf("claude-code")).toBe(false);
+  });
+});

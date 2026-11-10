@@ -10,6 +10,13 @@ import type {
   ConfigAgentMemoriesSetResponse,
 } from "@traycer/protocol/host/config/schemas";
 import {
+  emptyMemoryDraft,
+  memoryRowsFor,
+  withProviderChoice,
+  type ProviderMemoryOutcome,
+} from "@/components/onboarding/onboarding-agent-memories-model";
+import { providerState } from "@/components/onboarding/__tests__/onboarding-memory-act-provider-state";
+import {
   NO_SAVE_EVIDENCE,
   type MemorySaveRows,
   runMemorySave,
@@ -21,6 +28,8 @@ import {
 } from "@/components/onboarding/onboarding-memory-save";
 
 export type Env = "A" | "B";
+export type Switchable = "claude-code" | "codex";
+const SWITCHABLE: ReadonlyArray<Switchable> = ["claude-code", "codex"];
 export type SetMode = "applied" | "saved" | "queued";
 type UploadState = "pending" | "refused" | "accepted";
 
@@ -55,9 +64,13 @@ export interface World {
    * list read, and no fresh read or landed write has settled it since. The
    * accepted limit: a save skips a row whose `stored` already matches.
    */
-  elsewhere: Record<"claude-code" | "codex", boolean>;
-  /** What discovery last read of each provider's own memory (`stored`). */
-  snapshot: Record<"claude-code" | "codex", boolean>;
+  elsewhere: Record<Switchable, boolean>;
+  /** What the act's last `providers.list` read says of each provider's own memory. */
+  snapshot: Record<Switchable, boolean>;
+  /** The person's switch for each provider: `false` is "turn it off". */
+  choice: Record<Switchable, boolean>;
+  /** The act's own last write of each provider on this host, as the hook records it. */
+  writes: Record<Switchable, ProviderMemoryOutcome | null>;
   cfg: Record<Env, ConfigState>;
   received: Record<Env, ConfigState>;
   bound: Env;
@@ -67,7 +80,8 @@ export interface World {
   /** A set of this act the configuration saved at once (applied or saved). */
   wrote: Record<Env, boolean>;
   nextId: number;
-  providers: Record<"claude-code" | "codex", boolean>;
+  /** What the host really holds of each provider's own memory. */
+  providers: Record<Switchable, boolean>;
   failNext: boolean;
   evidence: SaveEvidence;
 }
@@ -77,6 +91,8 @@ export function initialWorld(): World {
     discovery: "known",
     elsewhere: { "claude-code": false, codex: false },
     snapshot: { "claude-code": true, codex: true },
+    choice: { "claude-code": false, codex: false },
+    writes: { "claude-code": null, codex: null },
     cfg: { A: { revision: 1, value: false }, B: { revision: 1, value: false } },
     received: {
       A: { revision: 1, value: false },
@@ -118,6 +134,12 @@ export type WorldEvent =
   | { readonly kind: "discover"; readonly outcome: "known" | "none" | "failed" }
   /** The act moves to a host whose providers are not known yet. */
   | { readonly kind: "switch-host" }
+  /** The person flips one provider's switch. Disabled while a save runs. */
+  | { readonly kind: "toggle"; readonly provider: Switchable }
+  /** Traycer is switched off: every provider choice is dropped. */
+  | { readonly kind: "traycer-off" }
+  /** The act's provider list is read again. */
+  | { readonly kind: "refresh" }
   /** A provider's own memory is turned back on elsewhere after discovery. */
   | { readonly kind: "elsewhere" }
   /** A later revision turns Traycer memories off and this host reads it. Only injected inside a save: no save can undo it. */
@@ -127,6 +149,7 @@ export type WorldEvent =
 export function eventLabel(event: WorldEvent): string {
   if (event.kind === "mode") return `mode:${event.mode}`;
   if (event.kind === "discover") return `discover:${event.outcome}`;
+  if (event.kind === "toggle") return `toggle:${event.provider}`;
   return event.kind;
 }
 
@@ -134,6 +157,20 @@ function oldestPending(world: World): Upload | undefined {
   return world.uploads.find(
     (upload) => upload.env === world.bound && upload.state === "pending",
   );
+}
+
+/** What the person and the act's list read can do once the providers are known. */
+function personEvents(world: World): WorldEvent[] {
+  if (world.discovery !== "known") return [];
+  const events: WorldEvent[] = SWITCHABLE.map((provider) => ({
+    kind: "toggle",
+    provider,
+  }));
+  if (SWITCHABLE.some((provider) => world.choice[provider]))
+    events.push({ kind: "traycer-off" });
+  if (SWITCHABLE.some((p) => world.snapshot[p] !== world.providers[p]))
+    events.push({ kind: "refresh" });
+  return events;
 }
 
 /** The events that change the world and make sense from here. */
@@ -146,6 +183,7 @@ export function applicableEvents(
     for (const outcome of ["known", "none", "failed"] as const)
       events.push({ kind: "discover", outcome });
   else events.push({ kind: "switch-host" });
+  events.push(...personEvents(world));
   if (
     elsewhere &&
     world.discovery === "known" &&
@@ -165,11 +203,42 @@ export function applicableEvents(
   return events;
 }
 
-/** Everything but a save, which needs the save's own run. */
-export function applyWorldEvent(world: World, event: WorldEvent): void {
+function applyPersonEvent(world: World, event: WorldEvent): void {
   switch (event.kind) {
-    case "save":
-      throw new Error("a save is run, not applied");
+    case "discover":
+      world.discovery = event.outcome;
+      world.snapshot = { ...world.providers };
+      world.elsewhere = { "claude-code": false, codex: false };
+      return;
+    case "elsewhere": {
+      const turned = world.providers["claude-code"] ? "codex" : "claude-code";
+      world.providers[turned] = true;
+      world.elsewhere[turned] = true;
+      return;
+    }
+    case "switch-host":
+      world.discovery = "unknown";
+      world.choice = { "claude-code": false, codex: false };
+      world.writes = { "claude-code": null, codex: null };
+      return;
+    case "toggle":
+      world.choice[event.provider] = !world.choice[event.provider];
+      return;
+    case "traycer-off":
+      world.choice = { "claude-code": false, codex: false };
+      return;
+    case "refresh":
+      world.snapshot = { ...world.providers };
+      for (const provider of SWITCHABLE)
+        if (world.writes[provider] === null) world.elsewhere[provider] = false;
+      return;
+    default:
+      throw new Error(`not a person's event: ${event.kind}`);
+  }
+}
+
+function applyHostEvent(world: World, event: WorldEvent): void {
+  switch (event.kind) {
     case "accept": {
       const upload = oldestPending(world);
       if (upload === undefined) return;
@@ -198,20 +267,6 @@ export function applyWorldEvent(world: World, event: WorldEvent): void {
     case "provider-fail":
       world.failNext = true;
       return;
-    case "discover":
-      world.discovery = event.outcome;
-      world.snapshot = { ...world.providers };
-      world.elsewhere = { "claude-code": false, codex: false };
-      return;
-    case "switch-host":
-      world.discovery = "unknown";
-      return;
-    case "elsewhere": {
-      const turned = world.providers["claude-code"] ? "codex" : "claude-code";
-      world.providers[turned] = true;
-      world.elsewhere[turned] = true;
-      return;
-    }
     case "overturn": {
       const config = world.cfg[world.bound];
       config.revision += 1;
@@ -219,8 +274,29 @@ export function applyWorldEvent(world: World, event: WorldEvent): void {
       world.received[world.bound] = { ...config };
       return;
     }
+    default:
+      throw new Error(`not a host event: ${event.kind}`);
+  }
+}
+
+/** Everything but a save, which needs the save's own run. */
+export function applyWorldEvent(world: World, event: WorldEvent): void {
+  switch (event.kind) {
+    case "save":
+      throw new Error("a save is run, not applied");
+    case "accept":
+    case "refuse":
+    case "deliver":
+    case "rebind":
+    case "provider-fail":
+    case "overturn":
+      applyHostEvent(world, event);
+      return;
     case "mode":
       world.mode = event.mode;
+      return;
+    default:
+      applyPersonEvent(world, event);
   }
 }
 
@@ -237,7 +313,7 @@ function actWriteIn(world: World, env: Env): boolean {
 }
 
 export type ViolationClass =
-  | "D done though a provider write did not land"
+  | "D done though the host's provider is not what the person chose"
   | "U a save with undiscovered providers sent a request or finished"
   | "X a request followed the stale read that done stood on"
   | "X a request after the save finished"
@@ -302,17 +378,34 @@ export interface SaveRun {
   readonly elsewhereDone: number;
 }
 
-/** The rows a save is given: what the act's host has said about its providers. */
+/**
+ * The rows a save is given: the real model's, from the list the act last
+ * read, the person's choices and the act's own writes.
+ */
 const rowsFor = (world: World): MemorySaveRows => {
   if (world.discovery === "unknown") return null;
   if (world.discovery !== "known") return [];
-  return (["claude-code", "codex"] as const).map((providerId) => ({
-    providerId,
-    name: providerId,
-    value: false,
-    stored: world.snapshot[providerId],
-    outcome: null,
-  }));
+  let draft = emptyMemoryDraft("host");
+  for (const provider of SWITCHABLE)
+    draft = withProviderChoice(draft, provider, world.choice[provider]);
+  const writes = new Map(
+    SWITCHABLE.flatMap((provider) => {
+      const written = world.writes[provider];
+      return written === null ? [] : [[provider, written] as const];
+    }),
+  );
+  return memoryRowsFor(
+    SWITCHABLE.map((providerId) =>
+      providerState({
+        providerId,
+        enabled: true,
+        supported: true,
+        nativeMemory: world.snapshot[providerId],
+      }),
+    ),
+    draft,
+    writes,
+  ).rows;
 };
 
 /** One save, run to its end against `world`, which it changes. */
@@ -517,11 +610,15 @@ export async function runSave(
         world.failNext = false;
         landed = false;
       } else {
-        world.providers[key] = false;
-        // The provider list is read again after the act's own write.
-        world.snapshot[key] = false;
+        world.providers[key] = row.value;
         world.elsewhere[key] = false;
       }
+      // The hook keeps its own write apart from the list, which may be a
+      // read from before it.
+      world.writes[key] = {
+        kind: landed ? "saved" : "failed",
+        value: row.value,
+      };
       await answered();
       return landed;
     },
@@ -538,7 +635,8 @@ export async function runSave(
     // Done means every provider the host can switch has its own memory off,
     // checked against the host and not against the rows the save was given.
     const atDone = providersAtDone(world);
-    if (atDone === "on") flag("D done though a provider write did not land");
+    if (atDone === "on")
+      flag("D done though the host's provider is not what the person chose");
     if (atDone === "elsewhere") elsewhereDone += 1;
     // A failed list was said on the act; the person went on without it.
     if (atDone === "unread") failedDiscoveryDone += 1;
@@ -585,20 +683,19 @@ export async function runSave(
 
 /**
  * Where the host's switchable providers stand when a save returns done:
- * `on` if one still has its own memory on, `elsewhere` if every one left on
- * was turned back on elsewhere after the list read (the accepted limit),
- * `unread` if the provider list failed (so none are known), `off` otherwise.
+ * `on` if one differs from the person's choice for no named reason,
+ * `elsewhere` if every one that differs was changed elsewhere after the list
+ * read (the accepted limit), `unread` if the provider list failed (so none
+ * are known), `off` if every one is what the person chose.
  */
 function providersAtDone(world: World): "off" | "on" | "unread" | "elsewhere" {
   if (world.discovery === "failed") return "unread";
   if (world.discovery !== "known") return "off";
-  const left = (["claude-code", "codex"] as const).filter(
-    (provider) => world.providers[provider],
+  const differing = SWITCHABLE.filter(
+    (provider) => world.providers[provider] !== world.choice[provider],
   );
-  if (left.length === 0) return "off";
-  // The accepted limit covers a provider only if it was turned back on
-  // elsewhere after the list read; any other provider left on is a failure.
-  return left.every((provider) => world.elsewhere[provider])
+  if (differing.length === 0) return "off";
+  return differing.every((provider) => world.elsewhere[provider])
     ? "elsewhere"
     : "on";
 }
