@@ -475,4 +475,63 @@ describe("<ProviderProfileScopedSection /> profile summary email reveal", () => 
       badge.compareDocumentPosition(cause) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
   });
+
+  it.each([
+    [{ kind: "admitted", bindingVersion: 1 }, []],
+    [{ kind: "no-home" }, ["Not on this device yet"]],
+    [
+      { kind: "placeholder-only" },
+      ["Used from the environment. Nothing is kept on this sandbox."],
+    ],
+  ] as const)(
+    "tells a signed-out profile with %j presence apart by its own line only",
+    (presence, lines) => {
+      renderProfile({
+        ...managedProfile(),
+        auth: {
+          status: "unauthenticated",
+          badgeText: null,
+          label: null,
+          detail: null,
+        },
+        presence,
+      });
+
+      const badge = screen.getByText("Signed out");
+      expect(badge.getAttribute("data-slot")).toBe("badge");
+      expect(
+        screen
+          .getByRole("button", { name: "Sign in" })
+          .getAttribute("data-variant"),
+      ).toBe("secondary");
+      const rendered = [
+        ...(summaryColumn(badge)?.querySelectorAll("p") ?? []),
+      ].map((line) => line.textContent);
+      expect(rendered).toEqual(lines);
+    },
+  );
+
+  it("keeps an unknown credential cause visible beside the no-home presence line", () => {
+    renderProfile({
+      ...profileWithStanding(
+        {
+          cause: "probe timed out",
+          observation: {
+            source: "custodian",
+            status: "unknown",
+            capturedAt: 1,
+          },
+        },
+        {},
+      ),
+      presence: { kind: "no-home" },
+    });
+
+    const badge = screen.getByText("Unknown");
+    expect(badge.getAttribute("data-slot")).toBe("badge");
+    const rendered = [
+      ...(summaryColumn(badge)?.querySelectorAll("p") ?? []),
+    ].map((line) => line.textContent);
+    expect(rendered).toEqual(["Not on this device yet", "probe timed out"]);
+  });
 });

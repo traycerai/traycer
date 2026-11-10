@@ -644,6 +644,16 @@ function ProfileSummary({
         ) : null}
       </div>
       <div>
+        {profile.presence?.kind === "no-home" ? (
+          <p className="min-w-0 whitespace-normal break-words">
+            Not on this device yet
+          </p>
+        ) : null}
+        {profile.presence?.kind === "placeholder-only" ? (
+          <p className="min-w-0 whitespace-normal break-words">
+            Used from the environment. Nothing is kept on this sandbox.
+          </p>
+        ) : null}
         {inventory.detail === null ? null : (
           <p className="min-w-0 whitespace-normal break-words">
             {inventory.detail}
