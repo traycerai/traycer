@@ -7,7 +7,10 @@ import {
   type DictationPreparingStatus,
 } from "@/hooks/composer/use-dictation-availability";
 import { useDictationHotkey } from "@/hooks/composer/use-dictation-hotkey";
-import { useVoiceDictation } from "@/hooks/composer/use-voice-dictation";
+import {
+  useVoiceDictation,
+  type DictationFailureClass,
+} from "@/hooks/composer/use-voice-dictation";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
@@ -26,6 +29,14 @@ interface UseComposerDictationArgs {
 export interface ComposerDictation {
   readonly dictationControl: ComposerDictationControl | null;
   readonly dictationPreparing: DictationPreparingStatus | null;
+}
+
+function permissionReportMessage(
+  failureClass: DictationFailureClass | null,
+): string {
+  return failureClass === "speech_recognition_denied"
+    ? "Speech recognition permission was unavailable."
+    : "Microphone permission was unavailable.";
 }
 
 /**
@@ -66,7 +77,9 @@ export function useComposerDictation(
       dictationPermissionDenied
         ? {
             description:
-              "Enable microphone access for Traycer, then try again.",
+              dictationFailureClass === "speech_recognition_denied"
+                ? "Enable speech recognition for Traycer, then try again."
+                : "Enable microphone access for Traycer, then try again.",
             action: {
               label: "Open Settings",
               onClick: () => {
@@ -82,7 +95,7 @@ export function useComposerDictation(
       createReportIssueDraftContext({
         title: "Dictation failed",
         message: dictationPermissionDenied
-          ? "Microphone permission was unavailable."
+          ? permissionReportMessage(dictationFailureClass)
           : null,
         code: dictationFailureClass,
         source: "Dictation",
@@ -106,7 +119,10 @@ export function useComposerDictation(
   // self-heals a missing model and keeps the mic (and the OS permission prompt)
   // hidden where the engine/model isn't available. While it downloads, a
   // preparing indicator shows in the mic slot.
-  const dictationAvailability = useDictationAvailability(voiceInputEnabled);
+  const dictationAvailability = useDictationAvailability(
+    voiceInputEnabled,
+    voiceLanguage,
+  );
   const dictationActive = dictationAvailability.ready;
   // If availability drops mid-session (model evicted / host swap), the mic +
   // stop UI disappear - cancel so the OS mic isn't left open with no affordance.

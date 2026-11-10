@@ -138,6 +138,54 @@ export type SystemResumeEvent = {
   readonly screenLocked: boolean;
 };
 
+/** What a device dictation session tells its caller. */
+export interface DeviceDictationCallbacks {
+  /** The recognizer accepts audio from now on. */
+  readonly onReady: () => void;
+  /** The transcript of the audio sent before `flush`. */
+  readonly onTranscript: (text: string) => void;
+  /** Everything sent before `flush` has been transcribed; the session is over. */
+  readonly onFlushed: () => void;
+  /**
+   * The session failed and is over. `permissionDenied` is true when the OS
+   * refuses this app speech recognition, which the person repairs on the
+   * page `openMicrophoneSettings` opens.
+   */
+  readonly onError: (error: {
+    readonly message: string;
+    readonly permissionDenied: boolean;
+  }) => void;
+}
+
+export interface DeviceDictationSession {
+  /** PCM16 mono, little endian, at the rate the session was opened with. */
+  sendAudio(pcm: Uint8Array): void;
+  /** No more audio: transcribe what was sent, then `onTranscript` and `onFlushed`. */
+  flush(): void;
+  /** Ends the session and discards what was not transcribed. */
+  close(): void;
+}
+
+/**
+ * Dictation transcribed by the device's own recognizer. The renderer captures
+ * the microphone itself and hands the audio over, so the native side opens no
+ * microphone. Audio is never sent anywhere: a language the device cannot
+ * transcribe by itself is reported unavailable, not transcribed elsewhere.
+ */
+export interface IDeviceDictationHost {
+  /**
+   * Whether the device can transcribe `language` by itself right now.
+   * `"auto"` is the device's own language.
+   */
+  isAvailable(language: string): Promise<boolean>;
+  /** No callback is raised before `open` returns. */
+  open(options: {
+    readonly language: string;
+    readonly sampleRate: number;
+    readonly callbacks: DeviceDictationCallbacks;
+  }): DeviceDictationSession;
+}
+
 /**
  * Composite runner-host surface consumed by `gui-app` on standalone desktop
  * and mobile shells.
@@ -972,6 +1020,14 @@ export interface IRunnerHost {
    * Never a host RPC: the setting has to work while the host is down.
    */
   readonly hostLifecycle: IHostLifecycleHost | null;
+
+  /**
+   * Speech recognition that runs on the device this renderer is on, or `null`
+   * where the shell has none (desktop, web, tests, Android): dictation then
+   * goes to the person's own host or is not offered. See
+   * {@link IDeviceDictationHost}.
+   */
+  readonly deviceDictation: IDeviceDictationHost | null;
 
   /**
    * OS push permission of the DEVICE running this renderer - the phone's own
