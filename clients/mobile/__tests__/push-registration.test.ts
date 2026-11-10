@@ -750,6 +750,35 @@ describe("MobilePushRegistration", () => {
     expect(push.registrationState()).toBe("registered");
   });
 
+  it("sends a bearer that only the device clock calls expired once the grace passes", async () => {
+    vi.useFakeTimers();
+    const plugin = fakePlugin({
+      permission: "granted",
+      afterRequest: "granted",
+    });
+    // authn judges the token on its own clock and accepts it; the phone's
+    // clock is hours ahead, so the same token reads as expired here.
+    const { push, calls } = controller({
+      plugin,
+      registerResult: OK,
+      removeResult: OK,
+    });
+    const source = new FakeTokenSource();
+    await source.setSignedIn(credentials("user-1", EXPIRED_BEARER));
+    push.start(source, NO_RESUME);
+    await drain();
+    plugin.emitRegistration("apns-token-1");
+    await drain();
+    expect(calls.registered).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    expect(calls.registered.map((call) => call.bearer)).toEqual([
+      EXPIRED_BEARER,
+    ]);
+    expect(push.registrationState()).toBe("registered");
+  });
+
   it("still shows a failure when authn refuses a bearer that has not expired", async () => {
     const plugin = fakePlugin({
       permission: "granted",
