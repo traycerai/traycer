@@ -11,7 +11,7 @@ import {
   localManagedCommandDoor,
   useManagedCommandDoor,
 } from "@/lib/managed-commands/use-managed-command-door";
-import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
+import { useChatContainerId } from "@/components/chat/chat-container-context";
 import { useManagedCommandPresence } from "@/stores/managed-commands/managed-commands-for-chat";
 import { useMaybeChatTranscript } from "@/components/chat/chat-transcript-context";
 import {
@@ -53,8 +53,7 @@ export function ManagedCommandRestartSegment(
   props: ManagedCommandRestartSegmentProps,
 ) {
   const { restart, variant } = props;
-  const epicHandle = useMaybeOpenEpicHandle();
-  const epicId = epicHandle?.epicId ?? null;
+  const epicId = useChatContainerId();
   const presence = useManagedCommandPresence({
     epicId,
     commandId: restart.commandId,

@@ -248,7 +248,7 @@ describe("the session's canvas", () => {
     expect(useLayoutEditorStore.getState().hovered).toBe("minimap");
     // The name AND the state the region is in, which is the question hovering
     // asks. The name alone labelled something already under the pointer.
-    expect(chip()?.textContent).toBe("Minimap · Left");
+    expect(chip()?.textContent).toBe("Minimap · Right");
     expect(chip()?.hidden).toBe(false);
   });
 
@@ -264,14 +264,14 @@ describe("the session's canvas", () => {
       />,
     );
     fireEvent.pointerMove(view.getByTestId("map-inner"), MOUSE);
-    expect(chip()?.textContent).toBe("Minimap · Left");
+    expect(chip()?.textContent).toBe("Minimap · Right");
 
     act(() => {
       const layout = useLayoutStore.getState();
-      layout.setArrangement({ ...layout.arrangement, minimapSide: "right" });
+      layout.setArrangement({ ...layout.arrangement, minimapSide: "left" });
     });
 
-    expect(chip()?.textContent).toBe("Minimap · Right");
+    expect(chip()?.textContent).toBe("Minimap · Left");
   });
 
   // The mic's state word reads General > Voice input, which lives in the

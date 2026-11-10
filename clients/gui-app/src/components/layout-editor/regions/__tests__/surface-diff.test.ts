@@ -94,7 +94,7 @@ const LIT_CASES: ReadonlyArray<LitCase> = [
   {
     name: "chat: moving the minimap's side, both as the region's Position row and as the surface's own field",
     surface: "chat",
-    snapshot: withArrangement({ minimapSide: "right" }),
+    snapshot: withArrangement({ minimapSide: "left" }),
   },
   {
     name: "chat: the wide column width (C5)",

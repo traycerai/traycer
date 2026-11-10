@@ -15,7 +15,9 @@ import {
 } from "@/stores/layout/layout-store";
 import { currentLayoutArrangement } from "@/lib/layout/rail-view";
 import {
+  BROWSERS_SIMULATORS_STACK_ID,
   DEFAULT_RAIL,
+  GIT_DIFF_PULL_REQUESTS_STACK_ID,
   visibleRailPanelIds,
   type RailEntry,
 } from "@/lib/layout/rail";
@@ -25,6 +27,11 @@ import {
 } from "@/lib/layout/layout-arrangement";
 import { useEpicSidebarExpansionStore } from "@/stores/epics/epic-sidebar-expansion-store";
 import { makeGitFileDiffTile } from "@/lib/git/git-diff-tile";
+import { makeSimulatorTileRef } from "@/stores/epics/canvas/tile-schema/simulator-tile";
+import {
+  pendingSimulatorConnectRequest,
+  resetSimulatorConnectRequestsForTests,
+} from "@/lib/simulator-view/simulator-connect-requests";
 import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
 
 const TILE_SOURCE = {
@@ -235,6 +242,20 @@ const TERMINAL_TILE = {
   cwd: "/repo",
 } as const;
 
+const SIMULATOR_TILE = makeSimulatorTileRef({
+  hostId: TEST_HOST_ID,
+  simulatorId: "udid-1",
+  platform: "ios",
+  name: "iPhone 16",
+  instanceKey: "udid-1",
+});
+const SIMULATOR_SOURCE = {
+  kind: "simulator-tile",
+  epicId: EPIC_ID,
+  viewTabId: VIEW_TAB_ID,
+  tile: SIMULATOR_TILE,
+} as const satisfies EpicCanvasDragSourceData;
+
 const rawNestedFocus: NavigateNestedFocus = (_epicId, _tabId, prepare) =>
   prepare();
 
@@ -262,12 +283,15 @@ function seedCanvasWithTerminalTile(): void {
 }
 
 /**
- * The shipped rail without its Git Diff and Pull Requests stack. The drop
- * cases below are written against Agents stacked on Artifacts as the only
- * stack, so each expectation names the one stack it is about.
+ * The shipped rail without its Browsers and Simulators and Git Diff and Pull
+ * Requests stacks. The drop cases below are written against Agents stacked on
+ * Artifacts as the only stack, so each expectation names the one stack it is
+ * about.
  */
 const ONE_STACK_RAIL: ReadonlyArray<RailEntry> = DEFAULT_RAIL.filter(
-  (entry) => entry.id !== "stack:railGitDiff+railPullRequests",
+  (entry) =>
+    entry.id !== BROWSERS_SIMULATORS_STACK_ID &&
+    entry.id !== GIT_DIFF_PULL_REQUESTS_STACK_ID,
 );
 const ONE_STACK_ARRANGEMENT: LayoutArrangement = {
   ...DEFAULT_ARRANGEMENT,
@@ -1213,6 +1237,70 @@ describe("root dnd commits - tile source commit routing", () => {
       VIEW_TAB_ID,
       TERMINAL_TILE,
     );
+  });
+});
+
+describe("root dnd commits - simulator tile connect request", () => {
+  beforeEach(() => {
+    resetStores();
+    resetSimulatorConnectRequestsForTests();
+  });
+  afterEach(() => {
+    resetStores();
+    resetSimulatorConnectRequestsForTests();
+  });
+
+  it("files a connect request for a simulator row dropped on the canvas", () => {
+    const placed = commitResolvedCanvasDrop(
+      {
+        source: SIMULATOR_SOURCE,
+        target: {
+          kind: "empty-shell",
+          epicId: EPIC_ID,
+          viewTabId: VIEW_TAB_ID,
+        },
+        preview: { kind: "empty-shell" },
+      },
+      rawNestedFocus,
+    );
+
+    expect(placed).toBe(true);
+    expect(testState.canvasStore.openTileInTab).toHaveBeenCalledWith(
+      VIEW_TAB_ID,
+      SIMULATOR_TILE,
+    );
+    expect(pendingSimulatorConnectRequest(SIMULATOR_TILE.id)).not.toBeNull();
+  });
+
+  it("files no request when the drop is refused", () => {
+    const placed = commitResolvedCanvasDrop(
+      {
+        source: SIMULATOR_SOURCE,
+        target: {
+          kind: "empty-shell",
+          epicId: "other-epic",
+          viewTabId: "target-view",
+        },
+        preview: { kind: "empty-shell" },
+      },
+      rawNestedFocus,
+    );
+
+    expect(placed).toBe(false);
+    expect(pendingSimulatorConnectRequest(SIMULATOR_TILE.id)).toBeNull();
+  });
+
+  it("files a request when the row opens a new header tab, and none when no tab opens", () => {
+    testState.canvasStore.openTileInNewTab = vi.fn(() => null);
+    expect(commitHeaderStripDrop(SIMULATOR_SOURCE, 0)).toBeNull();
+    expect(pendingSimulatorConnectRequest(SIMULATOR_TILE.id)).toBeNull();
+
+    testState.canvasStore.openTileInNewTab = vi.fn(() => "new-tab");
+    expect(commitHeaderStripDrop(SIMULATOR_SOURCE, 0)).toEqual({
+      epicId: EPIC_ID,
+      tabId: "new-tab",
+    });
+    expect(pendingSimulatorConnectRequest(SIMULATOR_TILE.id)).not.toBeNull();
   });
 });
 
