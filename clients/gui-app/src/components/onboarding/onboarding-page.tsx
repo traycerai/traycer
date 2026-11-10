@@ -423,8 +423,20 @@ function OnboardingTour(props: {
     });
   }, []);
 
+  // Set once this tour is left: finished, skipped or unmounted. The memory
+  // act's save runs on after that, and must not then finish a tour that is
+  // gone or move it a step.
+  const left = useRef(false);
+  useEffect(() => {
+    left.current = false;
+    return () => {
+      left.current = true;
+    };
+  }, []);
+
   const finish = useCallback(
     (outcome: "completed" | "skipped"): void => {
+      left.current = true;
       Analytics.getInstance().track(
         outcome === "completed"
           ? AnalyticsEvent.OnboardingCompleted
@@ -465,7 +477,7 @@ function OnboardingTour(props: {
 
   // The footer's primary, Enter and the arrow key. On the memory act with
   // Traycer memories chosen it saves first and moves on only once everything
-  // has landed - and only if the person is still on the act it saved.
+  // has landed - and only if the tour is still open on the act it saved.
   const proceed = (): void => {
     if (memoryFooter?.kind !== "save") {
       advance();
@@ -474,11 +486,12 @@ function OnboardingTour(props: {
     if (memory.saving) return;
     const savedOnStep = index;
     void memory.save().then((done) => {
+      if (!done || left.current) return;
       const now = clampOnboardingStep(
         useOnboardingStore.getState().step,
         steps.length,
       );
-      if (done && now === savedOnStep) advance();
+      if (now === savedOnStep) advance();
     });
   };
 
