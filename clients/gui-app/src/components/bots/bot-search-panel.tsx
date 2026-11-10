@@ -286,7 +286,6 @@ export function BotSearchPanel(props: {
           scope={scope}
           selectedKey={selectedKey}
           total={pages.at(0)?.total ?? null}
-          partial={pages.some((page) => page.indexState === "partial")}
           unreachable={botSearchUnreachableOf(pages)}
           loading={search.loading}
           loadingMore={search.loadingMore}
@@ -519,7 +518,6 @@ function BotSearchResultList(props: {
   readonly scope: BotSearchScope;
   readonly selectedKey: string | null;
   readonly total: number | null;
-  readonly partial: boolean;
   readonly unreachable: ReadonlyArray<BotConversationSearchUnreachable>;
   readonly loading: boolean;
   readonly loadingMore: boolean;
@@ -533,7 +531,7 @@ function BotSearchResultList(props: {
   readonly scopeTitle: string | null;
   readonly onOpenHit: (hit: BotConversationSearchHit) => void;
 }): ReactNode {
-  const { bots, hits, hasMore, loadingMore, onLoadMore, partial } = props;
+  const { bots, hits, hasMore, loadingMore, onLoadMore } = props;
   const sort = useBotSearchStore((state) => state.filters.sort);
   const setFilters = useBotSearchStore((state) => state.setFilters);
   const missedKey = useBotSearchStore((state) => state.missedKey);
@@ -588,15 +586,6 @@ function BotSearchResultList(props: {
   }
   const notes = (
     <>
-      {partial ? (
-        <p
-          role="status"
-          data-testid="bot-search-partial"
-          className="mx-4 mt-2 rounded-md bg-foreground/5 px-2.5 py-1.5 text-ui-xs text-muted-foreground"
-        >
-          Still indexing recent messages
-        </p>
-      ) : null}
       {props.unreachable.map((entry) => (
         <p
           key={entry.botId}
