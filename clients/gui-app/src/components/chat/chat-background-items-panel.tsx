@@ -1,7 +1,13 @@
-import { useId, useMemo, useState, type ReactNode } from "react";
+import { useContext, useId, useMemo, useState, type ReactNode } from "react";
+import {
+  ChatStatusExtraRowsContext,
+  ChatStatusFreshContext,
+  ChatStatusReadOnlyContext,
+} from "@/components/chat/chat-status-capabilities";
 import { useDraggable } from "@dnd-kit/core";
 import { ChevronDown, PauseCircle, Square } from "lucide-react";
 import type { BackgroundItem } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { ChatPortForward } from "@traycer/protocol/host/port-forward";
 import { BACKGROUND_KIND_ICONS } from "@/lib/chat/background-kind-icon";
 import {
   Collapsible,
@@ -77,6 +83,45 @@ import {
 } from "@/lib/chat/background-item-tree";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+const NO_MANAGED_COMMANDS: readonly ManagedCommand[] = [];
+const NO_HELD_COMMANDS: readonly HeldManagedCommandUpdate[] = [];
+const NO_PORT_FORWARDS: readonly ChatPortForward[] = [];
+
+function sessionStatusControls(
+  canAct: boolean,
+  readOnly: boolean,
+  statusReadOnly: boolean,
+) {
+  const managed = !readOnly && !statusReadOnly;
+  return { stoppable: canAct && managed, managed };
+}
+
+function statusSummary(fresh: boolean, base: string): string {
+  return fresh ? base : "Status unavailable";
+}
+
+function useFreshChatBackgroundState(
+  epicId: string,
+  chatId: string,
+  hostId: string,
+  fresh: boolean,
+) {
+  const identity = { epicId, chatId, hostId };
+  const commands = useRunningManagedCommandsForChat(identity);
+  const held = useHeldManagedCommandsForChat(identity);
+  // Forwards are scoped like shells, but have their own Stop rather than
+  // participating in Stop all.
+  const forwards = usePortForwardsForChat(identity);
+  return {
+    commands: fresh ? commands : NO_MANAGED_COMMANDS,
+    held: fresh ? held : NO_HELD_COMMANDS,
+    forwards: fresh ? forwards : NO_PORT_FORWARDS,
+  };
+}
+
+function statusActionVisible(readOnly: boolean, available: boolean): boolean {
+  return !readOnly && available;
+}
 function backgroundKindLabel(kind: BackgroundItem["kind"]): string {
   switch (kind) {
     // A nested execution inside this turn, NOT a durable Agent in the Task.
@@ -315,6 +360,15 @@ function HeldManagedCommandRow(props: {
   readonly onOpen: ((commandId: string) => void) | null;
 }) {
   const { held, command, onOpen } = props;
+  const readOnly = useContext(ChatStatusReadOnlyContext);
+  if (readOnly)
+    return (
+      <li className={CHAT_DOCK_PANEL_ROW_CONTENT}>
+        <PauseCircle aria-hidden className="size-3.5" />
+        <span>{held.description}</span>
+        <span>Held</span>
+      </li>
+    );
   return (
     <li className="m-0">
       <div
@@ -416,6 +470,7 @@ function ManagedCommandRow(props: {
   readonly onOpen: ((commandId: string) => void) | null;
 }) {
   const { command, epicId, hostId, viewTabId, onOpen } = props;
+  const readOnly = useContext(ChatStatusReadOnlyContext);
   const title = managedCommandTitle(command);
   const tile = useMemo(
     () => makeManagedCommandOutputTileRef({ commandId: command.id, hostId }),
@@ -442,9 +497,47 @@ function ManagedCommandRow(props: {
       getManagedCommandOutputDragId(`${command.id}:${occurrenceId}`),
     ),
     data: dragData,
-    disabled: dragDisabled,
+    disabled: dragDisabled || readOnly,
   });
   const grabCursor = isDragging ? "cursor-grabbing" : "cursor-grab";
+
+  if (readOnly)
+    return (
+      <li
+        className="m-0"
+        data-testid={`managed-command-background-row-${command.id}`}
+      >
+        <div
+          className={CHAT_DOCK_PANEL_ROW}
+          style={{ paddingLeft: chatDockPanelRowTreeInset(0) }}
+        >
+          <div className={CHAT_DOCK_PANEL_ROW_BUTTON}>
+            <ManagedCommandMonitorIcon
+              monitoring={command.monitoring}
+              decorative
+              className="size-3.5 text-primary/80"
+            />
+            <span
+              className={cn(
+                "block min-w-0 flex-1 truncate text-foreground/85",
+                CHAT_DOCK_PANEL_ROW_TEXT,
+              )}
+            >
+              {title}
+            </span>
+            {command.status.state === "running" ? (
+              <>
+                <span>Running</span>
+                <LiveElapsed startedAt={command.status.startedAtMs} />
+              </>
+            ) : null}
+            <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 uppercase text-muted-foreground">
+              {command.monitoring ? "Monitor" : "Shell"}
+            </span>
+          </div>
+        </div>
+      </li>
+    );
 
   return (
     <li className="m-0">
@@ -544,6 +637,7 @@ function BackgroundTreeRow(props: {
   readonly onItemClick: (item: BackgroundItem) => void;
   readonly onStopItem: (taskId: string) => string | null;
 }) {
+  const readOnly = useContext(ChatStatusReadOnlyContext);
   const { node } = props;
   const item = node.item;
   // `now` matters only on the `fallback-wait` branch of
@@ -641,9 +735,8 @@ function BackgroundTreeRow(props: {
               sideOffset={undefined}
               align={undefined}
             >
-              <button
-                type="button"
-                className={cn(CHAT_DOCK_PANEL_ROW_BUTTON, "cursor-pointer")}
+              <BackgroundItemTarget
+                readOnly={readOnly}
                 onClick={() => props.onItemClick(item)}
               >
                 <BackgroundKindIcon kind={item.kind} />
@@ -666,9 +759,9 @@ function BackgroundTreeRow(props: {
                 >
                   {backgroundKindLabel(item.kind)}
                 </span>
-              </button>
+              </BackgroundItemTarget>
             </TooltipWrapper>
-            <span className="inline-flex opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 pointer-coarse:opacity-100">
+            <BackgroundTreeStop readOnly={readOnly}>
               <BackgroundStopButton
                 label={
                   individualStopUnavailableLabel(item) ??
@@ -683,7 +776,7 @@ function BackgroundTreeRow(props: {
                 testId={undefined}
                 onClick={() => props.onStopItem(item.taskId)}
               />
-            </span>
+            </BackgroundTreeStop>
           </>
         )}
       </div>
@@ -701,6 +794,36 @@ function BackgroundTreeRow(props: {
         </ul>
       ) : null}
     </li>
+  );
+}
+
+function BackgroundItemTarget(props: {
+  readonly readOnly: boolean;
+  readonly onClick: () => void;
+  readonly children: ReactNode;
+}) {
+  if (props.readOnly)
+    return <div className={CHAT_DOCK_PANEL_ROW_BUTTON}>{props.children}</div>;
+  return (
+    <button
+      type="button"
+      className={cn(CHAT_DOCK_PANEL_ROW_BUTTON, "cursor-pointer")}
+      onClick={props.onClick}
+    >
+      {props.children}
+    </button>
+  );
+}
+
+function BackgroundTreeStop(props: {
+  readonly readOnly: boolean;
+  readonly children: ReactNode;
+}) {
+  if (props.readOnly) return null;
+  return (
+    <span className="inline-flex opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 pointer-coarse:opacity-100">
+      {props.children}
+    </span>
   );
 }
 
@@ -768,6 +891,9 @@ export function BackgroundItemsPanel(props: {
   readonly onStopAll: () => string | null;
   readonly onStopSession: () => string | null;
 }) {
+  const statusReadOnly = useContext(ChatStatusReadOnlyContext);
+  const extraRows = useContext(ChatStatusExtraRowsContext);
+  const fresh = useContext(ChatStatusFreshContext);
   // Attached above the composer because its pill is the open one (L-142).
   const attached = useChatDockSectionAttached("background");
   const [open, setOpen] = useState(false);
@@ -777,14 +903,17 @@ export function BackgroundItemsPanel(props: {
   // needs that stream open. A managed command is stopped by an RPC to its
   // host, which a reconnecting chat has no bearing on - gating it on `canAct`
   // too left a reconnecting chat with no way to stop a runaway shell.
-  const stoppable = props.canAct && !props.readOnly;
-  const managedStoppable = !props.readOnly;
+  const { stoppable, managed: managedStoppable } = sessionStatusControls(
+    props.canAct,
+    props.readOnly,
+    statusReadOnly,
+  );
   // Deliver takes `managedStoppable`'s rule and not `stoppable`'s, for the
   // reason written above it: it is an RPC to the shell's own host, so a
   // reconnecting chat stream has no bearing on it. A viewer is a different
   // matter - the host refuses their Deliver, so offering it could only ever
   // produce an error toast.
-  const managedDeliverable = !props.readOnly;
+  const managedDeliverable = managedStoppable;
   const items = useMemo(() => dedupeByTaskId(props.items), [props.items]);
   const rememberedByTaskId = useMemo(
     () => buildRememberedBackgroundNodes(items, committedRememberedByTaskId),
@@ -823,11 +952,11 @@ export function BackgroundItemsPanel(props: {
   // Read from the same store the rows below read, so the header can never
   // claim a count the list does not show. Scoped to the TAB's bound host,
   // which is the host this panel's chat session was opened under.
-  const managedCommands = useRunningManagedCommandsForChat({
-    epicId: props.epicId,
-    chatId: props.chatId,
-    hostId,
-  });
+  const {
+    commands: managedCommands,
+    held: heldManagedCommands,
+    forwards: portForwards,
+  } = useFreshChatBackgroundState(props.epicId, props.chatId, hostId, fresh);
   const { scheduledJobCount, harnessStopAllReady, showStopAll, stopAllLabel } =
     cronStopControlState({
       items,
@@ -836,11 +965,6 @@ export function BackgroundItemsPanel(props: {
       stopAllPending: props.stopAllPending,
       hasSessionStopEscalation: sessionStopEscalation !== null,
     });
-  const heldManagedCommands = useHeldManagedCommandsForChat({
-    epicId: props.epicId,
-    chatId: props.chatId,
-    hostId,
-  });
   // The two lists OVERLAP, which is the one thing about them that is easy to
   // get wrong. `managedCommands` is what is running now and a hold usually
   // outlives the process, so most held shells are absent from it - but the host
@@ -862,16 +986,8 @@ export function BackgroundItemsPanel(props: {
     () => managedCommands.filter((command) => !heldCommandIds.has(command.id)),
     [managedCommands, heldCommandIds],
   );
-  // Same store, same host scoping as the shells above. Forwards are NOT part
-  // of "Stop all": that button ends work the agent is doing, and a forward is
-  // plumbing a person may still be looking through - it has its own Stop.
-  const portForwards = usePortForwardsForChat({
-    epicId: props.epicId,
-    chatId: props.chatId,
-    hostId,
-  });
   // The chip's number comes from the same helper, so the two cannot disagree.
-  const headerSummary = backgroundHeaderSummary(
+  const baseSummary = backgroundHeaderSummary(
     backgroundSectionCounts({
       tree,
       runningManagedCommandIds: managedCommands.map((command) => command.id),
@@ -879,6 +995,7 @@ export function BackgroundItemsPanel(props: {
       portForwardCount: portForwards.length,
     }),
   );
+  const headerSummary = statusSummary(fresh, baseSummary);
   const deliverHeld = useManagedCommandDeliverHeld(props.chatId);
   const deliverHeldPending = useManagedCommandDeliverHeldIsPending(
     props.chatId,
@@ -953,7 +1070,7 @@ export function BackgroundItemsPanel(props: {
 
   const actions = (
     <>
-      {heldManagedCommands.length > 0 ? (
+      {statusActionVisible(statusReadOnly, heldManagedCommands.length > 0) ? (
         <TooltipWrapper
           label="Wake the agent now with the output Stop held back. Otherwise it arrives when the chat next wakes (a message or a resume)."
           side="top"
@@ -995,7 +1112,7 @@ export function BackgroundItemsPanel(props: {
           </span>
         </TooltipWrapper>
       ) : null}
-      {showStopAll ? (
+      {statusActionVisible(statusReadOnly, showStopAll) ? (
         <BackgroundStopButton
           label={stopAllLabel}
           iconOnly={false}
@@ -1009,6 +1126,22 @@ export function BackgroundItemsPanel(props: {
 
   const list = (
     <ul className={cn("m-0 list-none", CHAT_DOCK_PANEL_LIST)}>
+      {!fresh && (
+        <li className="m-0">
+          <div className={CHAT_DOCK_PANEL_ROW}>
+            <div className={CHAT_DOCK_PANEL_ROW_CONTENT}>
+              Status unavailable
+            </div>
+          </div>
+        </li>
+      )}
+      {extraRows.map((row) => (
+        <li key={row.id} className="m-0">
+          <div className={CHAT_DOCK_PANEL_ROW}>
+            <div className={CHAT_DOCK_PANEL_ROW_CONTENT}>{row.content}</div>
+          </div>
+        </li>
+      ))}
       {heldManagedCommands.map((held) => (
         <HeldManagedCommandRow
           key={`held-${held.commandId}`}

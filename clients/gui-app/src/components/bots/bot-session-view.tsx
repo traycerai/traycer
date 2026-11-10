@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from "react";
+import { useCallback, useMemo, type ReactNode } from "react";
 import { ChevronLeft } from "lucide-react";
 import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
 import { Badge } from "@/components/ui/badge";
@@ -23,6 +23,9 @@ import { getChatSessionRegistry } from "@/lib/registries/chat-session-registry";
 import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
+import { BotSessionStatusSlotContext } from "@/components/bots/bot-session-status-context";
+import { BotSessionStatus } from "@/components/bots/bot-session-status";
+import { TabHostContext } from "@/components/epic-canvas/hooks/use-tab-host-id";
 
 /**
  * One of the bot's own sessions shown in place of its channel: the trunk's
@@ -122,6 +125,17 @@ export function BotSessionView(props: {
 }): ReactNode {
   const { botId, hostId, botTitle, session, threads, resolveMember } = props;
   const { onClose, onOpenChannel, onOpenThread } = props;
+  const statusSlot = useCallback(
+    (handle: ChatSessionStoreHandle) => (
+      <BotSessionStatus
+        handle={handle}
+        botId={botId}
+        chatId={session.chatId}
+        threadId={session.threadId}
+      />
+    ),
+    [botId, session.chatId, session.threadId],
+  );
   const instanceId = `bot-session:${session.chatId}`;
   const title = `${botTitle} · ${session.threadId === null ? "trunk session" : "thread session"}`;
   const listed =
@@ -232,21 +246,25 @@ export function BotSessionView(props: {
         >
           {/* A session has no box to quote into: its text selects and
               copies, and no Quote is offered. */}
-          <QuoteSinkContext value={null}>
-            <BotChatTranscript
-              botId={botId}
-              chatId={session.chatId}
-              hostId={hostId}
-              title={botTitle}
-              instanceId={instanceId}
-              surface={null}
-              resolveMember={resolveMember}
-              showConnecting
-              header={null}
-              landOn={session.landOn}
-              flow={null}
-            />
-          </QuoteSinkContext>
+          <TabHostContext value={hostId}>
+            <BotSessionStatusSlotContext value={statusSlot}>
+              <QuoteSinkContext value={null}>
+                <BotChatTranscript
+                  botId={botId}
+                  chatId={session.chatId}
+                  hostId={hostId}
+                  title={botTitle}
+                  instanceId={instanceId}
+                  surface={null}
+                  resolveMember={resolveMember}
+                  showConnecting
+                  header={null}
+                  landOn={session.landOn}
+                  flow={null}
+                />
+              </QuoteSinkContext>
+            </BotSessionStatusSlotContext>
+          </TabHostContext>
         </TileFindScope>
       </BotSessionContext>
       <footer
