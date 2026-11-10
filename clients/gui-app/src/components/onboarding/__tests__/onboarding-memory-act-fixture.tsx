@@ -700,6 +700,7 @@ export function negotiateManifest(
 /** Every test file's beforeEach: a fresh host, manifest, store and scroll stub. */
 export function resetMemoryActFixture(): void {
   mountSettings = null;
+  tourSlot.leave = null;
   // Motion keeps its frame loop at module level for the whole worker; a file
   // that ran before this one on a fake clock can leave it stalled, and the
   // tour's step changes then never finish. Without animations they do not
