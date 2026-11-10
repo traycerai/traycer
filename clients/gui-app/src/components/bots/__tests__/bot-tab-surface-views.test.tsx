@@ -931,7 +931,7 @@ describe("<BotTabSurface /> views", () => {
     expect(visibleTabText()).toBe("Activity");
   });
 
-  it("T179: the Activity tab's trunk door swaps the whole Tabs view for the trunk's own session, not a thread", async () => {
+  it("the Activity tab's trunk door swaps the whole Tabs view for the trunk's own session, not a thread", async () => {
     const user = userEvent.setup();
     render(surface());
     await user.click(activityTab());

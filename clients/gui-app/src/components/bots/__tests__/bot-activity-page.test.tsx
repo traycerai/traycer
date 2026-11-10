@@ -1227,7 +1227,7 @@ describe("<BotActivityPage /> actions", () => {
   });
 });
 
-describe("<BotActivityPage /> trunk door (T179)", () => {
+describe("<BotActivityPage /> trunk door", () => {
   it("opens the trunk's own session, not a task or a thread, regardless of what else is on the page", async () => {
     const user = userEvent.setup();
     mount([periodic("t-every", {})], { boundHere: true });

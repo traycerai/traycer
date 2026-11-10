@@ -875,10 +875,10 @@ describe("ContextUsageChip", () => {
   });
 });
 
-describe("ContextUsageChip in a read-only session (T179 / Astra)", () => {
+describe("ContextUsageChip in a read-only session", () => {
   it("never registers the contextUsage region, so an active layout editor cannot hover, select or drag it through this chip", () => {
     // A real editing session, hovering exactly the region this chip would
-    // otherwise name itself as - the scenario Astra found: a read-only bot
+    // otherwise name itself as: a read-only bot
     // session's chip was still reachable through whatever editor session
     // happens to be live elsewhere in the window.
     requestContextUsageGhost();

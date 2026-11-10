@@ -1056,7 +1056,7 @@ describe("<BackgroundItemsPanel />", () => {
     }
   });
 
-  it("T179/Astra: a read-only held row shows the live glyph while its shell is still running, never the stopped glyph", () => {
+  it("a read-only held row shows the live glyph while its shell is still running, never the stopped glyph", () => {
     const session = installManagedCommandChatSession({
       epicId: "epic-1",
       chatId: "chat-1",
@@ -1099,7 +1099,7 @@ describe("<BackgroundItemsPanel />", () => {
     }
   });
 
-  it("T179/Astra: a read-only running shell/monitor row matches the live row's grammar - no 'Running' text, no duplicate kind pill", () => {
+  it("a read-only running shell/monitor row matches the live row's grammar - no 'Running' text, no duplicate kind pill", () => {
     const session = installManagedCommandChatSession({
       epicId: "epic-1",
       chatId: "chat-1",

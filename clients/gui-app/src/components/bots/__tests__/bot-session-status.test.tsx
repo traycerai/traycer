@@ -1,5 +1,5 @@
 /**
- * T179: the read-only bot session's status surfaces - the real context usage
+ * The read-only bot session's status surfaces - the real context usage
  * chip and the real background items listing, mounted the way the tab
  * actually mounts them (`BotSessionStatusDataContext` around the real
  * `BotSessionView`, which hands the viewed session's transcript handle to
