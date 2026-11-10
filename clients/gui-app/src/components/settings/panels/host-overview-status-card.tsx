@@ -450,8 +450,8 @@ function hostOverviewActivateReason(
 
 /**
  * Activate's slot. The bound computer shows Active here. `activateInMenu`
- * leaves the slot empty because a sandbox lifecycle, or Update now on an
- * unbound computer, already owns it and More carries the binding.
+ * leaves the slot empty because a sandbox lifecycle already owns it and More
+ * carries the binding.
  */
 function hostOverviewInlineBinding(props: {
   readonly isActive: boolean;
@@ -543,9 +543,8 @@ export function HostOverviewHeaderActions(props: {
   readonly onCopyHostId: () => void;
   /**
    * The binding lives in More. A sandbox sets this because its lifecycle owns
-   * the inline slot. An unbound computer sets it when Update now owns that
-   * slot, so Activate stays in More. A bound computer passes false: Active is
-   * the inline badge, beside Update now when that button is there.
+   * the inline slot. A computer passes false: Active or Activate sits inline,
+   * beside Update now when that button is there.
    */
   readonly activateInMenu: boolean;
 }): ReactNode {

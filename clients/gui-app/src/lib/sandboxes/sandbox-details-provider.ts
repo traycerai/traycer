@@ -120,25 +120,9 @@ function creatorName(input: SandboxDetailsInput): string | null {
 /** What starts Automations: its row is made by the first shell opened on it. */
 const AUTOMATIONS_STARTER = "the first shell";
 
-/**
- * Who started the sandbox. The shown row names the agent that started a kept
- * sandbox; the export keeps the agent's name out, like the rest of what an
- * agent authored.
- */
-function starter(
-  input: SandboxDetailsInput,
-  audience: "shown" | "exported",
-): string | null {
-  const { summary } = input;
-  if (
-    audience === "shown" &&
-    !summary.burst &&
-    summary.createdByAgentId !== null
-  ) {
-    return summary.createdByAgentName ?? "an agent";
-  }
-  if (summary.kind === "automation") return AUTOMATIONS_STARTER;
-  if (summary.burst) return "An agent";
+function starter(input: SandboxDetailsInput): string | null {
+  if (input.summary.kind === "automation") return AUTOMATIONS_STARTER;
+  if (input.summary.burst) return "An agent";
   return creatorName(input);
 }
 
@@ -177,10 +161,7 @@ function idleRows(summary: SandboxSummary): SandboxDetailsRow[] {
   ];
 }
 
-function statusRows(
-  input: SandboxDetailsInput,
-  audience: "shown" | "exported",
-): SandboxDetailsRow[] {
+function statusRows(input: SandboxDetailsInput): SandboxDetailsRow[] {
   const { summary, now, viewerUserId } = input;
   const reportedAt = sandboxReportedAt(summary.lastActivityAt);
   const rows: SandboxDetailsRow[] = [
@@ -210,7 +191,7 @@ function statusRows(
       value: sandboxMemberName(summary.wakePayer, viewerUserId),
     });
   }
-  const startedBy = starter(input, audience);
+  const startedBy = starter(input);
   if (startedBy !== null) rows.push({ label: "Started by", value: startedBy });
   if (summary.keptBy !== null) {
     rows.push({
@@ -459,7 +440,7 @@ function byTime(a: SandboxDetailsEvent, b: SandboxDetailsEvent): number {
 export function sandboxDetailsEntry(
   input: SandboxDetailsInput,
 ): SandboxDetailsEntry {
-  const status = statusRows(input, "shown");
+  const status = statusRows(input);
   const history = historyEvents(input);
   return {
     kind: "sandbox",
@@ -469,9 +450,7 @@ export function sandboxDetailsEntry(
       kind: "sandbox",
       sandboxId: input.summary.id,
       exportedAt: input.now,
-      status: Object.fromEntries(
-        exportStatusEntries(statusRows(input, "exported"), input.summary),
-      ),
+      status: Object.fromEntries(exportStatusEntries(status, input.summary)),
       history: history.map((event) => ({
         at: event.at === null ? null : new Date(event.at).toISOString(),
         event: event.label,
