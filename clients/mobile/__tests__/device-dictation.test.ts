@@ -27,8 +27,19 @@ function deferred<T>(): Deferred<T> {
   return { promise, resolve, reject };
 }
 
+type TranscriptListener = Parameters<
+  DeviceDictationPluginSlice["addListener"]
+>[1];
+
 function fakePlugin(overrides: Partial<DeviceDictationPluginSlice>) {
+  const listeners: TranscriptListener[] = [];
   const plugin = {
+    addListener: vi.fn(
+      (_eventName: "transcript", listener: TranscriptListener) => {
+        listeners.push(listener);
+        return Promise.resolve({ remove: () => Promise.resolve() });
+      },
+    ),
     isAvailable: vi.fn(() => Promise.resolve({ available: true })),
     start: vi.fn(() => Promise.resolve()),
     appendAudio: vi.fn(() => Promise.resolve()),
@@ -36,7 +47,13 @@ function fakePlugin(overrides: Partial<DeviceDictationPluginSlice>) {
     cancel: vi.fn(() => Promise.resolve()),
     ...overrides,
   } satisfies DeviceDictationPluginSlice;
-  return plugin;
+  return {
+    ...plugin,
+    /** The native side raising what was said before a pause. */
+    raiseTranscript: (sessionId: string, text: string) => {
+      for (const listener of listeners) listener({ sessionId, text });
+    },
+  };
 }
 
 function fakeCallbacks() {
@@ -115,6 +132,21 @@ describe("MobileDeviceDictation", () => {
     });
     expect(plugin.finish).toHaveBeenCalledWith({ sessionId: "1" });
     expect(callbacks.onTranscript).toHaveBeenCalledWith("hello there");
+  });
+
+  it("passes on a transcript raised mid-session, and only the open session's", async () => {
+    const plugin = fakePlugin({});
+    const { session, callbacks } = await openStartedSession(plugin);
+
+    plugin.raiseTranscript("1", "before the pause");
+    plugin.raiseTranscript("7", "another session");
+
+    expect(callbacks.onTranscript.mock.calls).toEqual([["before the pause"]]);
+
+    session.close();
+    plugin.raiseTranscript("1", "after close");
+
+    expect(callbacks.onTranscript).toHaveBeenCalledTimes(1);
   });
 
   it("reports a refused speech-recognition permission and cancels natively", async () => {

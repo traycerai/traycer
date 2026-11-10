@@ -142,7 +142,10 @@ export type SystemResumeEvent = {
 export interface DeviceDictationCallbacks {
   /** The recognizer accepts audio from now on. */
   readonly onReady: () => void;
-  /** The transcript of the audio sent before `flush`. */
+  /**
+   * A transcript of audio sent so far that no earlier call has covered. A
+   * recognizer may raise one at each pause; the last comes after `flush`.
+   */
   readonly onTranscript: (text: string) => void;
   /** Everything sent before `flush` has been transcribed; the session is over. */
   readonly onFlushed: () => void;
@@ -1023,7 +1026,7 @@ export interface IRunnerHost {
 
   /**
    * Speech recognition that runs on the device this renderer is on, or `null`
-   * where the shell has none (desktop, web, tests, Android): dictation then
+   * where the shell has none (desktop, web, tests): dictation then
    * goes to the person's own host or is not offered. See
    * {@link IDeviceDictationHost}.
    */
