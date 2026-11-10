@@ -15,7 +15,6 @@ import {
 } from "@testing-library/react";
 
 import type { ReactNode } from "react";
-import type { ConfigAgentMemoriesResponse } from "@traycer/protocol/host/config/schemas";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   createMemoryHistory,
@@ -47,7 +46,7 @@ import {
 } from "@traycer/protocol/host/provider-schemas";
 import { environmentStatusResponseSchemaV12 } from "@traycer/protocol/host/environment-schemas";
 import { DirectoryProbe } from "@/components/onboarding/__tests__/onboarding-memory-act-directory-probe";
-import { EntryReaderSlot } from "@/components/onboarding/__tests__/onboarding-memory-act-entry-reader";
+import { SettingsPanelSlot } from "@/components/onboarding/__tests__/onboarding-memory-act-settings-panel";
 import { RequestContext } from "@/components/onboarding/__tests__/onboarding-memory-act-request-context";
 import { OnboardingPage } from "@/components/onboarding/onboarding-page";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -269,12 +268,14 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) => {
         native: null,
       }),
       "config.agentMemories.get": async () => {
-        if (world.getGate !== null) await world.getGate.promise;
+        // The answer is taken when the call arrives; a held gate delays only
+        // its delivery, so a late answer can be an old one.
         const answer = {
           enabled: world.memoriesOn,
           revision: world.revision,
           environmentId: world.environmentId,
         };
+        if (world.getGate !== null) await world.getGate.promise;
         if (
           world.rebindAfterNativeWrites !== null &&
           world.nativeWrites >= world.rebindAfterNativeWrites
@@ -444,32 +445,28 @@ const captureDirectory = (directory: HostDirectoryService | null): void => {
   hostDirectory = directory;
 };
 
-let mountReader: ((hostId: string | null) => void) | null = null;
-let readerAnswer: ConfigAgentMemoriesResponse | null = null;
-const captureReaderMount = (
+let mountSettings: ((hostId: string | null) => void) | null = null;
+const captureSettingsMount = (
   mount: ((hostId: string | null) => void) | null,
 ): void => {
-  mountReader = mount;
-};
-const captureReaderAnswer = (
-  answer: ConfigAgentMemoriesResponse | null,
-): void => {
-  readerAnswer = answer;
+  mountSettings = mount;
 };
 
-/** Mounts Settings' reader of `config.agentMemories.get` for a host. */
-export function mountEntryReader(hostId: string): void {
-  act(() => mountReader?.(hostId));
+/** Opens Settings → Agent memories, the real panel, on a host. */
+export function openSettings(hostId: string): void {
+  act(() => mountSettings?.(hostId));
 }
 
-export function unmountEntryReader(): void {
-  act(() => mountReader?.(null));
-  readerAnswer = null;
+export function closeSettings(): void {
+  act(() => mountSettings?.(null));
 }
 
-/** What that reader was given, once it has an answer. */
-export function entryReaderAnswer(): ConfigAgentMemoriesResponse | null {
-  return readerAnswer;
+/** What the panel's switch shows. */
+export async function settingsSwitchOn(): Promise<boolean> {
+  const toggle = await screen.findByRole("switch", {
+    name: "Use Traycer memories for agents",
+  });
+  return toggle.getAttribute("aria-checked") === "true";
 }
 
 function getsTo(hostId: string): number {
@@ -494,26 +491,23 @@ function settingsEntryFilled(hostId: string): boolean {
     });
 }
 
+/** Gets sent to a host so far. */
+export function getsSentTo(hostId: string): number {
+  return getsTo(hostId);
+}
+
 /**
- * Settings opened after the act: the host now reads Traycer memories on at a
- * newer revision, and its reader (kept fresh for a minute, as the app's
- * client does) must send its own `get` and show that, not what the act saw.
+ * Settings opened after the act: the host now reads Traycer memories on, and
+ * the panel (the real one, under the app's minute of freshness) must send its
+ * own `get` and show that, not anything the act saw.
  */
-export async function expectSettingsReaderIsCurrent(
-  hostId: string,
-): Promise<void> {
+export async function expectSettingsIsCurrent(hostId: string): Promise<void> {
   expect(settingsEntryFilled(hostId)).toBe(false);
   world.memoriesOn = true;
   world.revision += 1;
   const before = getsTo(hostId);
-  mountEntryReader(hostId);
-  await waitFor(() =>
-    expect(entryReaderAnswer()).toEqual({
-      enabled: true,
-      revision: world.revision,
-      environmentId: world.environmentId,
-    }),
-  );
+  openSettings(hostId);
+  await waitFor(async () => expect(await settingsSwitchOn()).toBe(true));
   expect(getsTo(hostId)).toBeGreaterThan(before);
 }
 
@@ -530,7 +524,11 @@ export function invalidateAllQueries(): Promise<void> {
 /** Renders `ui` inside the faked host's real providers. */
 export function renderInHost(ui: ReactNode): void {
   queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    // The app's minute of freshness: a reader that reuses a fresh entry is seen.
+    defaultOptions: {
+      queries: { retry: false, staleTime: 60_000, gcTime: 300_000 },
+      mutations: { retry: false },
+    },
   });
   const runnerHost = new MockRunnerHost({
     signInUrl: "http://127.0.0.1:9/sign-in",
@@ -566,10 +564,7 @@ export function renderInHost(ui: ReactNode): void {
                   <DirectoryProbe onDirectory={captureDirectory}>
                     <RequestContext>
                       <LazyMotion features={domMax}>{ui}</LazyMotion>
-                      <EntryReaderSlot
-                        onMount={captureReaderMount}
-                        onAnswer={captureReaderAnswer}
-                      />
+                      <SettingsPanelSlot onMount={captureSettingsMount} />
                     </RequestContext>
                   </DirectoryProbe>
                 </TooltipProvider>
@@ -700,8 +695,7 @@ export function negotiateManifest(
 
 /** Every test file's beforeEach: a fresh host, manifest, store and scroll stub. */
 export function resetMemoryActFixture(): void {
-  readerAnswer = null;
-  mountReader = null;
+  mountSettings = null;
   // Motion keeps its frame loop at module level for the whole worker; a file
   // that ran before this one on a fake clock can leave it stalled, and the
   // tour's step changes then never finish. Without animations they do not

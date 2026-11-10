@@ -21,7 +21,7 @@ import {
   continueFromMemory,
   currentStepId,
   deferred,
-  expectSettingsReaderIsCurrent,
+  expectSettingsIsCurrent,
   invalidateAllQueries,
   readsAnswered,
   refreshHostDirectory,
@@ -419,7 +419,7 @@ describe("the Memory act: Settings reads the host after the act is left mid-save
     await writesAnswered();
     await settled();
 
-    await expectSettingsReaderIsCurrent(OTHER_HOST.hostId);
+    await expectSettingsIsCurrent(OTHER_HOST.hostId);
   });
 
   it("on the first host, when the person went to another and back while a provider write was held", async () => {
@@ -449,6 +449,6 @@ describe("the Memory act: Settings reads the host after the act is left mid-save
     act(() => world.getGate?.resolve());
     await settled();
 
-    await expectSettingsReaderIsCurrent(HOST_ID);
+    await expectSettingsIsCurrent(HOST_ID);
   });
 });

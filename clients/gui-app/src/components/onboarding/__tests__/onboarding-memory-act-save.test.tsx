@@ -9,11 +9,12 @@ import {
   acceptHeldWrite,
   deliverAcceptedWrites,
   deliverSavedWrite,
-  entryReaderAnswer,
   enterTour,
-  expectSettingsReaderIsCurrent,
-  mountEntryReader,
-  unmountEntryReader,
+  expectSettingsIsCurrent,
+  closeSettings,
+  getsSentTo,
+  openSettings,
+  settingsSwitchOn,
   deferred,
   walkToMemoryAct,
   writesAnswered,
@@ -598,16 +599,32 @@ describe("the Memory act: Settings reads the host after any way out", () => {
   it.each(ways)("after %s", async (_name, leave) => {
     await leave();
     await settled();
-    await expectSettingsReaderIsCurrent(HOST_ID);
+    await expectSettingsIsCurrent(HOST_ID);
+  });
+
+  it("asks for its own answer when the act's read is still in flight as Settings opens", async () => {
+    world.getGate = deferred();
+    await openMemoryAct();
+    fireEvent.click(await screen.findByTestId("onboarding-memory-not-now"));
+    await expectOnStep("session-import");
+
+    // The act's read was taken off; the host reads on by the time Settings
+    // opens. The host takes Settings' read after the act's, so it is its own.
+    world.memoriesOn = true;
+    world.revision += 1;
+    const before = getsSentTo(HOST_ID);
+    openSettings(HOST_ID);
+    act(() => world.getGate?.resolve());
+    await waitFor(async () => expect(await settingsSwitchOn()).toBe(true));
+    expect(getsSentTo(HOST_ID)).toBe(before + 1);
   });
 
   it("sees the write the act made, though it held an answer from before", async () => {
     await enterTour();
-    mountEntryReader(HOST_ID);
-    await waitFor(() =>
-      expect(entryReaderAnswer()).toMatchObject({ enabled: false }),
-    );
-    unmountEntryReader();
+    openSettings(HOST_ID);
+    await settled();
+    expect(await settingsSwitchOn()).toBe(false);
+    closeSettings();
     const readsBefore = paramsOf("config.agentMemories.get").length;
 
     act(() => useOnboardingStore.getState().reseat(2));
@@ -620,13 +637,38 @@ describe("the Memory act: Settings reads the host after any way out", () => {
     const readsAfterSave = paramsOf("config.agentMemories.get").length;
     expect(readsAfterSave).toBeGreaterThan(readsBefore);
 
-    // Settings opens: the write swept its entry, so it asks again.
-    mountEntryReader(HOST_ID);
-    await waitFor(() =>
-      expect(entryReaderAnswer()).toMatchObject({ enabled: true }),
-    );
+    openSettings(HOST_ID);
+    await waitFor(async () => expect(await settingsSwitchOn()).toBe(true));
     expect(paramsOf("config.agentMemories.get").length).toBeGreaterThan(
       readsAfterSave,
     );
+  });
+
+  it("shows the host's answer, not the one Settings read earlier, when the setting was already on and the act sent no set", async () => {
+    world.memoriesOn = true;
+    await enterTour();
+    openSettings(HOST_ID);
+    await settled();
+    expect(await settingsSwitchOn()).toBe(true);
+    closeSettings();
+
+    // The setting is on already: the act writes only the provider switches,
+    // and its last read is overtaken by a rebind to an off configuration.
+    world.rebindAfterNativeWrites = 2;
+    world.overtakenBy = "rebind";
+    act(() => useOnboardingStore.getState().reseat(2));
+    await screen.findByTestId("onboarding-memory-stage");
+    fireEvent.click(await screen.findByTestId("onboarding-memory-use"));
+    await continueFromMemory();
+    await expectOnStep("session-import");
+    await settled();
+    expect(paramsOf("config.agentMemories.set")).toEqual([]);
+    expect(paramsOf("providers.setNativeMemory")).toHaveLength(2);
+    expect(world.memoriesOn).toBe(false);
+
+    const before = getsSentTo(HOST_ID);
+    openSettings(HOST_ID);
+    await waitFor(async () => expect(await settingsSwitchOn()).toBe(false));
+    expect(getsSentTo(HOST_ID)).toBeGreaterThan(before);
   });
 });
