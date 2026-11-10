@@ -39,9 +39,11 @@ import { useArrangementValue } from "@/lib/layout-overrides";
  * including the presence-gated `pull-requests` / `comments`, where an explicit
  * check keeps the icon there even before the thing that would reveal it exists.
  *
- * A choice is stored only when it disagrees with the panel's own rule (see
- * `setPanelVisibilityOverride`), so checking an already-auto-visible panel
- * leaves it following that rule rather than pinning today's answer forever.
+ * A choice is stored only when it disagrees with what the layout says without
+ * it: the applied preset's value, which is the panel's own rule wherever the
+ * preset leaves it on `auto`. So checking an already-auto-visible panel leaves
+ * it following that rule rather than pinning today's answer forever, and
+ * checking a panel the preset ships hidden (File Tree) stores the choice.
  *
  * The last SHOWN panel cannot be unchecked: the sidebar body always renders
  * some panel, so an empty rail would leave the two disagreeing with no icon to
@@ -68,10 +70,15 @@ export function RailContextMenuContent(props: {
   const rail = useLayoutRail();
   const snapshot = useLayoutSnapshot();
   const values = effectiveLayoutValues(snapshot.basePreset, snapshot.overrides);
+  const presetValues = effectiveLayoutValues(snapshot.basePreset, {});
   const reasonIdBase = useId();
   const entries = LEFT_PANEL_DEFINITIONS.map((definition) => {
     const visible = isLeftPanelVisible(definition, context);
     const autoVisible = definition.isAutoVisible(context);
+    const presetShown =
+      presetValues[railRegionForLeftPanelId(definition.id)].shown;
+    const unchosenVisible =
+      presetShown === "auto" ? autoVisible : presetShown === "shown";
     // The last one standing stays put; see the note above. Asked of the
     // SAVED values, exactly as the layout form asks it (T3), not of what this
     // task happens to draw: the layout must hold in a task with no pull
@@ -84,6 +91,7 @@ export function RailContextMenuContent(props: {
       definition,
       visible,
       autoVisible,
+      unchosenVisible,
       locked,
       // The forced-on hint is a fact about a live item; a locked one says
       // why it is off instead, as its description.
@@ -144,7 +152,7 @@ export function RailContextMenuContent(props: {
               const next = !entry.visible;
               setRailVisibilityOverride(
                 entry.definition.id,
-                next === entry.autoVisible ? null : next,
+                next === entry.unchosenVisible ? null : next,
               );
             },
           })}

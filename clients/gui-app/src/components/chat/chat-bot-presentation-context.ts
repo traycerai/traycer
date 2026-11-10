@@ -1,6 +1,30 @@
 import { createContext, type ReactNode } from "react";
 import type { StackedIdentity } from "@/components/bots/bot-avatars";
 import type { QuestionCardAnswer } from "@/components/chat/question-card";
+import type { QuestionCardEntry } from "@/components/chat/question-card-view";
+import type { BotConversationQuestionAnswerEntry } from "@traycer/protocol/host/bot/conversation-schemas";
+import type { BotTranscriptBaseline } from "@/stores/bots/bot-drafts-store";
+
+/**
+ * A member's answers to every open question of a card at once (T167), and
+ * the message's text as the bot's host writes it from them.
+ */
+export interface ChatBotQuestionAnswers {
+  readonly entries: ReadonlyArray<QuestionCardEntry>;
+  readonly text: string;
+}
+
+/** A card's answers as `bot.conversation.send@1.5` carries them. */
+export function answerEntries(
+  answers: ChatBotQuestionAnswers,
+): BotConversationQuestionAnswerEntry[] {
+  return answers.entries.map((entry) => ({
+    questionIndex: entry.questionIndex,
+    skipped: entry.skipped,
+    selected: [...entry.selected],
+    text: entry.text,
+  }));
+}
 
 /**
  * The thread a channel post opened (Tracy Bots), as the line under the post
@@ -118,6 +142,25 @@ export interface ChatBotQuestions {
   readonly answer:
     | ((questionMessageId: string, answer: QuestionCardAnswer) => Promise<void>)
     | null;
+  /**
+   * Sends the person's answers to every open question of the row
+   * `questionMessageId` as one message (T167): resolves once the host takes
+   * them, rejects when it does not, as `answer` does. `null` where the
+   * answers do not go together, and each question is answered on its own.
+   */
+  readonly answerAll:
+    | ((
+        questionMessageId: string,
+        answers: ChatBotQuestionAnswers,
+      ) => Promise<void>)
+    | null;
+  /**
+   * The transcript's baseline. A card's answers whose send ended without
+   * saying whether they reached the host wait for a later one - a resync, or
+   * a new session's first snapshot - which shows them settled or still open.
+   * `null` where no transcript backs the card and nothing can send it.
+   */
+  readonly baseline: BotTranscriptBaseline | null;
   /**
    * Opens the question's discussion - its thread, or the thread it was asked
    * in - with `draft` in the box, unsent; `null` where there is none.

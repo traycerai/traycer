@@ -9092,6 +9092,12 @@ export const chatSubscribeV142 = defineStreamRpcContract({
  * question as one pick; `1.42` and every older line bind the assistant row
  * without it (`assistantMessageSchemaPreMultiSelect`).
  *
+ * A member's row may say `questionAnswers`, the bot's questions it answers
+ * together, and a question's settlement the `requestId` of that row (T167).
+ * Both optional, so a peer below 1.43 strips them on decode and draws the
+ * row's text and the settled card it always did; `1.42` and every older line
+ * bind the rows without them.
+ *
  * A resume divider's trigger may carry `conversationMessage`, the member's
  * message a bot conversation delivery carried. Defaulted `null`, so a peer
  * below 1.43 drops it on decode and draws the divider it always did; `1.42`

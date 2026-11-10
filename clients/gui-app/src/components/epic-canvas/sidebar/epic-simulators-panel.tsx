@@ -1,4 +1,5 @@
-import { useCallback, useLayoutEffect, useRef } from "react";
+import { useDraggable } from "@dnd-kit/core";
+import { useCallback, useLayoutEffect, useMemo, useRef } from "react";
 import { RotateCcw, Smartphone, TriangleAlert, X } from "lucide-react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -8,6 +9,13 @@ import {
   SidebarGroupContent,
 } from "@/components/ui/sidebar";
 import { SimulatorAgentBadge } from "@/components/simulator-tile/simulator-agent-badge";
+import {
+  SIMULATOR_TILE_DND_TYPE,
+  getPaneScopedDndId,
+  getSimulatorTileDragId,
+  type EpicCanvasSimulatorTileDragData,
+} from "@/components/epic-canvas/dnd/dnd";
+import { useDragSourceDisabled } from "@/components/epic-canvas/dnd/use-drag-source-disabled";
 import type { LeftPanelSlotProps } from "@/components/epic-canvas/sidebar/left-panel-registry";
 import {
   revealSidebarNode,
@@ -23,6 +31,7 @@ import {
   simulatorVersionLabel,
 } from "@/lib/simulator-view/simulator-labels";
 import { useIsActiveTile } from "@/stores/epics/canvas/store";
+import { makeSimulatorTileRef } from "@/stores/epics/canvas/tile-schema/simulator-tile";
 import type { SimulatorTileRef } from "@/stores/epics/canvas/types";
 import {
   clearSidebarNodeRevealRequest,
@@ -275,6 +284,44 @@ function SimulatorLiveRowItem(props: {
     row.simulatorId,
     row.version,
   ]);
+  // The catalog's records name this pair, so the ref carries both.
+  const dragData = useMemo<EpicCanvasSimulatorTileDragData>(
+    () => ({
+      kind: SIMULATOR_TILE_DND_TYPE,
+      epicId,
+      viewTabId: tabId,
+      tile: makeSimulatorTileRef({
+        hostId: row.hostId,
+        simulatorId: row.simulatorId,
+        platform: row.platform,
+        name: row.name,
+        instanceKey: row.instanceKey,
+      }),
+    }),
+    [
+      epicId,
+      row.hostId,
+      row.instanceKey,
+      row.name,
+      row.platform,
+      row.simulatorId,
+      tabId,
+    ],
+  );
+  const coarsePointer = useDragSourceDisabled();
+  const {
+    attributes,
+    listeners,
+    setNodeRef: dragRef,
+    isDragging,
+  } = useDraggable({
+    id: getPaneScopedDndId(
+      tabId,
+      getSimulatorTileDragId(row.hostId, row.instanceKey),
+    ),
+    data: dragData,
+    disabled: props.offline || coarsePointer,
+  });
   const versionLabel = simulatorVersionLabel(row);
   const countdown = simulatorIdleCountdownLabel(row.idleUntil, props.nowMs);
   const rowClosing = row.records.some((record) => closing(record.sessionId));
@@ -288,10 +335,14 @@ function SimulatorLiveRowItem(props: {
           isActive
             ? "bg-accent text-accent-foreground"
             : "text-foreground/75 hover:bg-accent/70 hover:text-accent-foreground",
+          isDragging && "cursor-grabbing opacity-60",
           SIDEBAR_REVEAL_HIGHLIGHT_CLASS,
         )}
       >
         <button
+          ref={dragRef}
+          {...attributes}
+          {...listeners}
           type="button"
           data-testid={`epic-simulator-row-${row.instanceKey}`}
           aria-label={[
@@ -303,7 +354,7 @@ function SimulatorLiveRowItem(props: {
             .filter((part) => part !== null)
             .join(", ")}
           disabled={props.offline}
-          className="flex min-h-8 min-w-0 cursor-pointer flex-col justify-center rounded-md px-2 py-1 text-left text-ui-sm outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default"
+          className="flex min-h-8 min-w-0 cursor-pointer flex-col justify-center rounded-md px-2 py-1 text-left text-ui-sm outline-none focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing disabled:cursor-default"
           onClick={openRow}
         >
           <span className="flex min-w-0 items-center gap-2">

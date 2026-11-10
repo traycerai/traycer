@@ -1324,6 +1324,25 @@ describe("<EpicLeftPanelRail />", () => {
       expect(screen.getByTestId("epic-rail-pull-requests")).not.toBeNull();
     });
 
+    it("reveals a panel the layout ships hidden, and hides it again", () => {
+      // As a new install has it: no choice stored, so File Tree is off.
+      useLayoutStore.setState({ overrides: {} });
+      renderRail();
+      expect(screen.queryByTestId("epic-rail-file-tree")).toBeNull();
+
+      openRailMenu();
+      fireEvent.click(screen.getByTestId("epic-rail-toggle-file-tree"));
+
+      expect(screen.getByTestId("epic-rail-file-tree")).not.toBeNull();
+
+      // Back to what the layout says without a choice, so nothing is stored.
+      openRailMenu();
+      fireEvent.click(screen.getByTestId("epic-rail-toggle-file-tree"));
+
+      expect(screen.queryByTestId("epic-rail-file-tree")).toBeNull();
+      expect(useLayoutStore.getState().overrides).toEqual({});
+    });
+
     it("stores nothing when the checked value already matches the panel's rule", () => {
       renderRail();
       openRailMenu();

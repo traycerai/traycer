@@ -268,6 +268,7 @@ const THREAD_SURFACE: BotTranscriptSurface = {
   kind: "thread",
   chooseOption: vi.fn(),
   answerQuestion: null,
+  answerQuestions: null,
   discussQuestion: null,
   failedRequest: () => null,
   openTurn: null,

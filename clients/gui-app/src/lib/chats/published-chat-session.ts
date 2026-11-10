@@ -584,6 +584,7 @@ export function createPublishedChatSessionHandle(
     epicId: input.epicId,
     chatId: input.chatId,
     userId: input.ownerUserId,
+    sessionGeneration: 0,
     store: boundStore,
     deliveredNotices: {
       notices: new WeakSet(),
