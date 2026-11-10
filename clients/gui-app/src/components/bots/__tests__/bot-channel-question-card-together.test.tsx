@@ -124,6 +124,9 @@ vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => mocks.client,
 }));
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => ({ stub: "host-client" }),
+}));
 vi.mock("@/hooks/host/use-host-supports-method", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/hooks/host/use-host-supports-method")
