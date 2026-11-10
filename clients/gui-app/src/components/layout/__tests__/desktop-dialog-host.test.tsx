@@ -451,6 +451,7 @@ function createBaseRunnerHost(): IRunnerHost {
     pushPermission: null,
     systemBack: null,
     statusBarTap: null,
+    deviceDictation: null,
   };
 }
 
