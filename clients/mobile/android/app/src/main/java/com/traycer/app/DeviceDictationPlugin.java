@@ -121,7 +121,8 @@ public class DeviceDictationPlugin extends Plugin {
             end(session, "Dictation was replaced.");
             try {
                 session = open(id, intent, sampleRate);
-            } catch (IOException error) {
+            } catch (IOException | RuntimeException error) {
+                // The recognizer can be gone between the support check and here.
                 call.reject("Dictation could not start.");
                 return;
             }
@@ -269,14 +270,20 @@ public class DeviceDictationPlugin extends Plugin {
 
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     private Session open(String id, Intent intent, int sampleRate) throws IOException {
-        ParcelFileDescriptor[] pipe = ParcelFileDescriptor.createPipe();
+        SpeechRecognizer recognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(getContext());
+        ParcelFileDescriptor[] pipe;
+        try {
+            pipe = ParcelFileDescriptor.createPipe();
+        } catch (IOException error) {
+            recognizer.destroy();
+            throw error;
+        }
         intent.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, pipe[0]);
         intent.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_CHANNEL_COUNT, 1);
         intent.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING, AudioFormat.ENCODING_PCM_16BIT);
         intent.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, sampleRate);
         // The session lasts as long as the audio does, through any pause.
         intent.putExtra(RecognizerIntent.EXTRA_SEGMENTED_SESSION, RecognizerIntent.EXTRA_AUDIO_SOURCE);
-        SpeechRecognizer recognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(getContext());
         Session opened = new Session(id, intent, recognizer, pipe[0], new ParcelFileDescriptor.AutoCloseOutputStream(pipe[1]));
         recognizer.setRecognitionListener(
             new RecognitionListener() {
