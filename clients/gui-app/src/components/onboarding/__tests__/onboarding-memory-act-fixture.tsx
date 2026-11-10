@@ -22,7 +22,7 @@ import {
   createRouter,
   RouterProvider,
 } from "@tanstack/react-router";
-import { LazyMotion, domMax } from "motion/react";
+import { LazyMotion, MotionGlobalConfig, domMax } from "motion/react";
 import {
   MockRunnerHost,
   MockTraycerCli,
@@ -443,6 +443,9 @@ export async function enterTour(): Promise<void> {
   await waitFor(() =>
     expect(screen.queryByTestId("onboarding-welcome-skip")).toBeNull(),
   );
+  // The tour starts itself over when it mounts, so a position set before it
+  // is up would be undone.
+  await screen.findByTestId("onboarding-step", {});
 }
 
 /** The Memory act, reached by the store's own re-seat. */
@@ -496,6 +499,8 @@ export async function settled(): Promise<void> {
   });
 }
 
+const skipAnimationsBefore = MotionGlobalConfig.skipAnimations;
+
 const scrollToDescriptor = Object.getOwnPropertyDescriptor(
   HTMLElement.prototype,
   "scrollTo",
@@ -511,6 +516,11 @@ export function negotiateManifest(
 
 /** Every test file's beforeEach: a fresh host, manifest, store and scroll stub. */
 export function resetMemoryActFixture(): void {
+  // Motion keeps its frame loop at module level for the whole worker; a file
+  // that ran before this one on a fake clock can leave it stalled, and the
+  // tour's step changes then never finish. Without animations they do not
+  // need it.
+  MotionGlobalConfig.skipAnimations = true;
   Object.defineProperty(HTMLElement.prototype, "scrollTo", {
     configurable: true,
     value: vi.fn(),
@@ -525,6 +535,7 @@ export function resetMemoryActFixture(): void {
 
 /** Every test file's afterEach. */
 export function cleanupMemoryActFixture(): void {
+  MotionGlobalConfig.skipAnimations = skipAnimationsBefore;
   cleanup();
   if (scrollToDescriptor === undefined)
     Reflect.deleteProperty(HTMLElement.prototype, "scrollTo");
