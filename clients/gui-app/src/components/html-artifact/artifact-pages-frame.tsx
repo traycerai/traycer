@@ -297,7 +297,6 @@ export interface ArtifactPagesNavigator {
 
 interface ArtifactPagesFrameProps {
   readonly ref?: Ref<ArtifactPagesNavigator>;
-  readonly initialHistory?: PageHistory;
   readonly source: Extract<SandboxSource, { kind: "artifact" }>;
   readonly title: string;
   readonly className: string;
@@ -400,9 +399,7 @@ export function ArtifactPagesFrame(props: ArtifactPagesFrameProps) {
   const [provenPage, setProvenPage] = useState<ProvenPage | null>(null);
   const coarsePointer = useCoarsePointer();
   const controlSize = coarsePointer ? "icon-touch" : "icon-sm";
-  const [history, setHistory] = useState(
-    () => props.initialHistory ?? freshHistory(entryPath),
-  );
+  const [history, setHistory] = useState(() => freshHistory(entryPath));
   let current = history;
   if (history.entryPath !== entryPath) {
     current = freshHistory(entryPath);

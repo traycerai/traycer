@@ -610,11 +610,6 @@ export function inlineEditIsPending(
   return inlineEdit !== null && inlineEdit.pendingClientActionId !== null;
 }
 
-/** The same rule every composer sends by: text, an image, or a file. */
-function inlineEditHasDraftContent(inlineEdit: InlineEditState): boolean {
-  return contentIsSubmittable(inlineEdit.currentContent);
-}
-
 export function chatMessageEditingForInlineEdit(input: {
   readonly editing: InlineEditState | null;
   readonly canModifyMessages: boolean;
@@ -639,7 +634,7 @@ export function chatMessageEditingForInlineEdit(input: {
     canSubmit:
       input.canModifyMessages &&
       input.editSettings !== null &&
-      inlineEditHasDraftContent(editing),
+      contentIsSubmittable(editing.currentContent),
     slashProviderId: input.editSettings?.harnessId ?? DEFAULT_SLASH_PROVIDER_ID,
     slashProfileId: input.editSettings?.profileId ?? null,
     mentionRoots: input.mentionRoots,

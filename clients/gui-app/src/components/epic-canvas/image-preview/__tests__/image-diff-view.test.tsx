@@ -1,3 +1,4 @@
+import { readDesktopHorizontalWheelOwnership } from "@/components/layout/shell/desktop-history-gesture-ownership";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useState } from "react";
 import {
@@ -373,8 +374,8 @@ describe("<ImageDiffView />", () => {
       const { container } = renderDiff({ compact });
 
       expect(
-        container.firstElementChild?.hasAttribute("data-history-gesture-owner"),
-      ).toBe(!compact);
+        readDesktopHorizontalWheelOwnership(container.firstElementChild),
+      ).toEqual({ back: !compact, forward: !compact });
     },
   );
 

@@ -41,7 +41,6 @@ describe("settings search for Record session", () => {
         recordingHits(query, {
           ...SOUNDTRACK_DESKTOP,
           soundtrackRecordingOffered: false,
-          soundtrackSetPiecesOffered: false,
         }),
       ).toEqual([]);
     },

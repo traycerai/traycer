@@ -25,7 +25,6 @@ import {
   restart,
   startFresh,
   storeDraftsAsLeft,
-  storedDrafts,
   waitForStore,
   type App,
 } from "@/stores/bots/__tests__/bot-box-draft-persist-support";
@@ -226,6 +225,5 @@ describe("<BotMessageComposer /> and its draft on the device", () => {
       app,
       (stored) => stored?.[BOT_ID]?.[CHANNEL]?.text === "Is CI green?",
     );
-    expect(storedDrafts(app)?.[BOT_ID]?.[CHANNEL]?.text).toBe("Is CI green?");
   });
 });

@@ -186,7 +186,6 @@ function loadedOriginRow(
 export function deliveredMessageRow(input: {
   readonly delivered: AutonomousResumeConversationMessage;
   readonly post: OpenMessage | null;
-  /** The writer's name, as the channel shows it; `null` for a sender that is no member. */
   readonly senderLabel: (senderUserId: string | null) => string;
   readonly senderAvatarUrl: (senderUserId: string) => string | null;
 }): ChatMessage {

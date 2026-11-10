@@ -147,7 +147,7 @@ const SETTING_STATUS = `${AGENT_MEMORIES.definitions.traycerMemories.description
  * host whose delta never comes would otherwise be re-read for ever, and the
  * extra reads promise the person nothing the line does not already say.
  */
-export const AGENT_MEMORY_CONFIRM_BOUND_MS = 60_000;
+const AGENT_MEMORY_CONFIRM_BOUND_MS = 60_000;
 
 /** The line under the host row, in the order the person needs it. */
 function hostRowStatus(input: {

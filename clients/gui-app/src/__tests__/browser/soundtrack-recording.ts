@@ -106,7 +106,7 @@ interface Recorded {
   readonly logLines: readonly unknown[];
   readonly sampleRate: number;
   readonly decodedSeconds: number;
-  /** The decoder's own reported frame count; null for a WAV. */
+  /** The decoder's reported frame count; null when no audio was decoded. */
   readonly decodedFrames: number | null;
   /**
    * The real `decodeAudioData` error, when the recording's own bytes could not
@@ -176,7 +176,7 @@ interface Recorded {
   readonly firstSampleStartClockSeconds: number | null;
   /**
    * Each packet's distance from the one before it, in ms, over the whole
-   * file; null for a WAV. This is the container's own 20 ms media clock, one
+   * file; empty for a WAV. This is the container's own 20 ms media clock, one
    * step per Opus frame in the packet SEQUENCE — never the wall-clock cadence
    * the worklet's batches actually arrive in (bursty, since a batch holds a
    * non-whole number of 20 ms frames), and never widened by a pause: a
