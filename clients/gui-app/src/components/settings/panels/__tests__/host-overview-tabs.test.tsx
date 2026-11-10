@@ -342,6 +342,7 @@ describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
           explicit: false,
           enrolledByUserId: null,
           canUnbind: false,
+          sharingGeneration: null,
         }),
         "environment.status": () =>
           environmentStatusFixture({
