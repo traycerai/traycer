@@ -126,9 +126,6 @@ function useFreshChatBackgroundState(
   };
 }
 
-function statusActionVisible(readOnly: boolean, available: boolean): boolean {
-  return !readOnly && available;
-}
 function backgroundKindLabel(kind: BackgroundItem["kind"]): string {
   switch (kind) {
     // A nested execution inside this turn, NOT a durable Agent in the Task.
@@ -865,6 +862,67 @@ function CronNextRun({
   return <p className="mt-1 text-ui-xs text-foreground/85">Next run {time}</p>;
 }
 
+function BackgroundPanelActions(props: {
+  readonly readOnly: boolean;
+  readonly heldCount: number;
+  readonly managedDeliverable: boolean;
+  readonly deliverHeldPending: boolean;
+  readonly showStopAll: boolean;
+  readonly stopAllLabel: string;
+  readonly stopAllDisabled: boolean;
+  readonly onDeliver: () => void;
+  readonly onStopAll: () => void;
+}) {
+  return (
+    <>
+      {!props.readOnly && props.heldCount > 0 ? (
+        <TooltipWrapper
+          label="Wake the agent now with the output Stop held back. Otherwise it arrives when the chat next wakes (a message or a resume)."
+          side="top"
+          sideOffset={undefined}
+          align={undefined}
+        >
+          <span className="inline-flex">
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              className="shrink-0"
+              disabled={!props.managedDeliverable || props.deliverHeldPending}
+              data-testid="background-deliver-held"
+              onClick={() => {
+                // Null, not the rendered ids: Deliver means "everything you
+                // are holding for me", and naming the ids this panel happens
+                // to show would silently skip a hold installed between
+                // render and click.
+                props.onDeliver();
+              }}
+            >
+              {props.deliverHeldPending ? (
+                <AgentSpinningDots
+                  className={undefined}
+                  testId="background-deliver-held-spinner"
+                  variant={undefined}
+                />
+              ) : null}
+              {props.heldCount === 1 ? "Deliver" : `Deliver ${props.heldCount}`}
+            </Button>
+          </span>
+        </TooltipWrapper>
+      ) : null}
+      {!props.readOnly && props.showStopAll ? (
+        <BackgroundStopButton
+          label={props.stopAllLabel}
+          iconOnly={false}
+          disabled={props.stopAllDisabled}
+          testId="background-stop-all"
+          onClick={props.onStopAll}
+        />
+      ) : null}
+    </>
+  );
+}
+
 export function BackgroundItemsPanel(props: {
   readonly items: ReadonlyArray<BackgroundItem>;
   readonly epicId: string;
@@ -1067,59 +1125,24 @@ export function BackgroundItemsPanel(props: {
     managedCommands.length;
 
   const actions = (
-    <>
-      {statusActionVisible(statusReadOnly, heldManagedCommands.length > 0) ? (
-        <TooltipWrapper
-          label="Wake the agent now with the output Stop held back. Otherwise it arrives when the chat next wakes (a message or a resume)."
-          side="top"
-          sideOffset={undefined}
-          align={undefined}
-        >
-          <span className="inline-flex">
-            <Button
-              type="button"
-              variant="ghost"
-              size="xs"
-              className="shrink-0"
-              disabled={!managedDeliverable || deliverHeldPending}
-              data-testid="background-deliver-held"
-              onClick={() => {
-                // Null, not the rendered ids: Deliver means "everything you
-                // are holding for me", and naming the ids this panel happens
-                // to show would silently skip a hold installed between
-                // render and click.
-                deliverHeld.mutate({
-                  hostId,
-                  epicId: props.epicId,
-                  chatId: props.chatId,
-                  commandIds: null,
-                });
-              }}
-            >
-              {deliverHeldPending ? (
-                <AgentSpinningDots
-                  className={undefined}
-                  testId="background-deliver-held-spinner"
-                  variant={undefined}
-                />
-              ) : null}
-              {heldManagedCommands.length === 1
-                ? "Deliver"
-                : `Deliver ${heldManagedCommands.length}`}
-            </Button>
-          </span>
-        </TooltipWrapper>
-      ) : null}
-      {statusActionVisible(statusReadOnly, showStopAll) ? (
-        <BackgroundStopButton
-          label={stopAllLabel}
-          iconOnly={false}
-          disabled={stopAllDisabled}
-          testId="background-stop-all"
-          onClick={stopAll}
-        />
-      ) : null}
-    </>
+    <BackgroundPanelActions
+      readOnly={statusReadOnly}
+      heldCount={heldManagedCommands.length}
+      managedDeliverable={managedDeliverable}
+      deliverHeldPending={deliverHeldPending}
+      showStopAll={showStopAll}
+      stopAllLabel={stopAllLabel}
+      stopAllDisabled={stopAllDisabled}
+      onStopAll={stopAll}
+      onDeliver={() => {
+        deliverHeld.mutate({
+          hostId,
+          epicId: props.epicId,
+          chatId: props.chatId,
+          commandIds: null,
+        });
+      }}
+    />
   );
 
   const list = (

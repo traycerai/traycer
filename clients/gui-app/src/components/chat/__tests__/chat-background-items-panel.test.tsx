@@ -1147,6 +1147,77 @@ describe("<BackgroundItemsPanel />", () => {
       disposeManagedCommandChatSessions();
     }
   });
+
+  it("hides the Deliver held-output action while read-only, even with genuinely held output on a still-running shell", () => {
+    const session = installManagedCommandChatSession({
+      epicId: "epic-1",
+      chatId: "chat-1",
+      hostId: "host-1",
+    });
+    const running = managedCommand({
+      id: "cmd-held-running",
+      monitoring: true,
+      description: "deploy watcher",
+    });
+    session.setCommands([running]);
+    session.setHeldUpdates([
+      {
+        commandId: running.id,
+        description: running.description,
+        heldAtMs: 10,
+      },
+    ]);
+    try {
+      renderPanel({
+        items: [],
+        onItemClick: () => undefined,
+        onStopItem: () => null,
+        onStopAll: () => null,
+        readOnly: true,
+        canAct: false,
+      });
+      fireEvent.click(screen.getByRole("button", { name: /Background/ }));
+      // Held output is genuinely present (the row itself still renders), so
+      // the absence of the action below can only be the read-only guard.
+      expect(screen.getByText("deploy watcher")).toBeTruthy();
+      expect(screen.queryByTestId("background-deliver-held")).toBeNull();
+    } finally {
+      session.dispose();
+      disposeManagedCommandChatSessions();
+    }
+  });
+
+  it("hides the Stop all action while read-only, even with a running managed command present", () => {
+    const session = installManagedCommandChatSession({
+      epicId: "epic-1",
+      chatId: "chat-1",
+      hostId: "host-1",
+    });
+    const running = managedCommand({
+      id: "cmd-shell",
+      monitoring: false,
+      description: "db migration",
+    });
+    session.setCommands([running]);
+    try {
+      renderPanel({
+        items: [],
+        onItemClick: () => undefined,
+        onStopItem: () => null,
+        onStopAll: () => null,
+        readOnly: true,
+        canAct: false,
+      });
+      fireEvent.click(screen.getByRole("button", { name: /Background/ }));
+      // The command is genuinely present (the row itself still renders), so
+      // the absence of the action below can only be the read-only guard.
+      expect(screen.getByText("Shell · db migration")).toBeTruthy();
+      expect(screen.queryByTestId("background-stop-all")).toBeNull();
+    } finally {
+      session.dispose();
+      disposeManagedCommandChatSessions();
+    }
+  });
 });
 
 function managedCommand(fields: {
