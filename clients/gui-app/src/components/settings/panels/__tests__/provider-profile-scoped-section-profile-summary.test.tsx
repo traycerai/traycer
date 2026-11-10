@@ -59,23 +59,29 @@ vi.mock("@/hooks/bots/use-environment-list-query", () => ({
 vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
   useCloudChatViewerId: () => "test-user",
 }));
-vi.mock("@/components/settings/panels/provider-profile-edit-dialog", () => ({
-  ProfileEditDialog: (props: {
-    readonly open: boolean;
-    readonly startInReauth: boolean;
-    readonly onOpenChange: (open: boolean) => void;
-  }) =>
-    props.open ? (
-      <div
-        role="dialog"
-        aria-label={props.startInReauth ? "Sign in editor" : "Profile editor"}
-      >
-        <button type="button" onClick={() => props.onOpenChange(false)}>
-          Close editor
-        </button>
-      </div>
-    ) : null,
-}));
+vi.mock(
+  "@/components/settings/panels/provider-profile-edit-dialog",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/components/settings/panels/provider-profile-edit-dialog")
+    >()),
+    ProfileEditDialog: (props: {
+      readonly open: boolean;
+      readonly startInReauth: boolean;
+      readonly onOpenChange: (open: boolean) => void;
+    }) =>
+      props.open ? (
+        <div
+          role="dialog"
+          aria-label={props.startInReauth ? "Sign in editor" : "Profile editor"}
+        >
+          <button type="button" onClick={() => props.onOpenChange(false)}>
+            Close editor
+          </button>
+        </div>
+      ) : null,
+  }),
+);
 
 import { ProviderProfileScopedSection } from "@/components/settings/panels/provider-profile-scoped-section";
 import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-native-schemas";
