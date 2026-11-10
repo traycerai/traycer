@@ -183,7 +183,8 @@ export function useOnboardingAgentMemories(input: {
   });
 
   const [saving, setSaving] = useState(false);
-  const savingRef = useRef(false);
+  /** The cache entry the running save reads; `null` while none runs. */
+  const savingEntryRef = useRef<string | null>(null);
   const { pickedHostId } = input;
   // Counts every change of the act's host, whether the host its requests
   // reach or the host the picker names. The observers above follow the
@@ -220,9 +221,11 @@ export function useOnboardingAgentMemories(input: {
   useEffect(() => {
     if (!active) return undefined;
     return () => {
-      // A read still in flight would land after the mark and clear it. A
-      // running save's own reads are left alone: it marks the entry as it ends.
-      if (!savingRef.current)
+      // A read still in flight would land after the mark and clear it. Only
+      // the entry a running save reads keeps its read: the save marks that
+      // entry as it ends. Any other entry, such as another host's, is
+      // cancelled.
+      if (savingEntryRef.current !== readEntry)
         void queryClient.cancelQueries({
           predicate: (entry) => entry.queryHash === readEntry,
         });
@@ -316,11 +319,11 @@ export function useOnboardingAgentMemories(input: {
 
   function save(): Promise<boolean> {
     if (view.chosen !== true || !ready) return Promise.resolve(true);
-    if (savingRef.current) return Promise.resolve(false);
-    savingRef.current = true;
+    if (savingEntryRef.current !== null) return Promise.resolve(false);
+    const savedEntry = readEntry;
+    savingEntryRef.current = savedEntry;
     setSaving(true);
     const target: SaveTarget = { hostId, selection: selectionRef.current };
-    const savedEntry = readEntry;
     // `.finally` rather than try/finally: React Compiler cannot lower a try
     // without a catch, and would leave this whole hook unmemoized.
     return runMemorySave(saveIo(target), view.rows)
@@ -333,7 +336,7 @@ export function useOnboardingAgentMemories(input: {
         return result === "done";
       })
       .finally(() => {
-        savingRef.current = false;
+        savingEntryRef.current = null;
         setSaving(false);
         markEntryStale(queryClient, savedEntry);
       });
