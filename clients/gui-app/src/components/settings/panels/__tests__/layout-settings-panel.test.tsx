@@ -748,7 +748,7 @@ describe("Settings - Layout", () => {
         useLayoutStore.getState().setArrangement({
           ...DEFAULT_ARRANGEMENT,
           usageHost: "header",
-          minimapSide: "right",
+          minimapSide: "left",
           mobileFooter: true,
           hiddenProviders: [DEFAULT_ARRANGEMENT.usageProviders[0]],
           providerLimits: {
@@ -804,7 +804,7 @@ describe("Settings - Layout", () => {
       act(() => {
         useLayoutStore.getState().setArrangement({
           ...DEFAULT_ARRANGEMENT,
-          minimapSide: "right",
+          minimapSide: "left",
         });
       });
       renderPanel();
@@ -1428,7 +1428,7 @@ describe("Settings - Layout", () => {
       act(() => {
         useLayoutStore.getState().setArrangement({
           ...DEFAULT_ARRANGEMENT,
-          minimapSide: "right", // chat
+          minimapSide: "left", // chat
           sidebarSide: "left", // sidebar
         });
       });
@@ -1563,7 +1563,7 @@ describe("Settings - Layout", () => {
       act(() => {
         useLayoutStore.getState().setArrangement({
           ...DEFAULT_ARRANGEMENT,
-          minimapSide: "right", // Chat
+          minimapSide: "left", // Chat
         });
       });
     }

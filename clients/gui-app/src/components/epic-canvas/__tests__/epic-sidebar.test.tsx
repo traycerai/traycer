@@ -37,7 +37,11 @@ import {
   currentLayoutArrangement,
   setRailVisibilityOverride,
 } from "@/lib/layout/rail-view";
-import { panelVisibilityOverridesFromValues } from "@/lib/layout/rail";
+import {
+  BROWSERS_SIMULATORS_STACK_ID,
+  DEFAULT_RAIL,
+  panelVisibilityOverridesFromValues,
+} from "@/lib/layout/rail";
 import {
   moveRailPanelBeside,
   stackRailPanels,
@@ -1570,6 +1574,15 @@ describe("a stacked pair vs a lone panel in the body (L-166)", () => {
     resetDndStore();
     resetTestState();
     setPullRequestPresence(false);
+    // The cases below stack Browsers themselves, so they start from a rail
+    // where it stands alone.
+    act(() => {
+      applyRail(
+        DEFAULT_RAIL.filter(
+          (entry) => entry.id !== BROWSERS_SIMULATORS_STACK_ID,
+        ),
+      );
+    });
   });
 
   afterEach(() => {

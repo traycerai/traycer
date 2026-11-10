@@ -143,7 +143,7 @@ const MOVED_ARRANGEMENT = {
   usageSide: "right" as const,
   resourceHost: "header" as const,
   resourceSide: "left" as const,
-  minimapSide: "right" as const,
+  minimapSide: "left" as const,
 };
 
 /** Whether `query` finds `id` through Find a setting - by name, option, state or keyword. */
@@ -324,10 +324,10 @@ describe("state words", () => {
       regionStateWord("usageLimits", values, MOVED_ARRANGEMENT, FACTS),
     ).toBe("Tab strip, right");
     expect(regionStateWord("minimap", values, DEFAULT_ARRANGEMENT, FACTS)).toBe(
-      "Left",
+      "Right",
     );
     expect(regionStateWord("minimap", values, MOVED_ARRANGEMENT, FACTS)).toBe(
-      "Right",
+      "Left",
     );
     expect(
       regionStateWord("resourceMonitor", values, DEFAULT_ARRANGEMENT, FACTS),
@@ -481,7 +481,7 @@ describe("the Position row against the default arrangement (L-57)", () => {
     expect(dockRow.dock).toEqual([...DEFAULT_ARRANGEMENT.dock].reverse());
     const dockBack = revertOrderGroup(moved, "dock");
     expect(dockBack.dock).toEqual(DEFAULT_ARRANGEMENT.dock);
-    expect(dockBack.minimapSide).toBe("right");
+    expect(dockBack.minimapSide).toBe("left");
 
     // A bar reading has two Position rows now, and the whole-region revert
     // puts both of its own back without touching the other reading (L-156).

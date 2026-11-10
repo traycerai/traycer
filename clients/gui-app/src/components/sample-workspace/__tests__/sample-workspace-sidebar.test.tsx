@@ -22,7 +22,10 @@ import {
   insertRailDivider,
   unstackRail,
 } from "@/lib/layout/layout-arrangement";
-import { leftPanelIdForRailRegion } from "@/lib/layout/rail";
+import {
+  BROWSERS_SIMULATORS_STACK_ID,
+  leftPanelIdForRailRegion,
+} from "@/lib/layout/rail";
 import {
   DEFAULT_LAYOUT_SNAPSHOT,
   useLayoutStore,
@@ -135,14 +138,18 @@ describe("the sample sidebar's icon rail", () => {
     const rail = useLayoutStore.getState().arrangement.rail;
     expect(rail.filter((entry) => entry.kind === "divider")).toHaveLength(1);
     // The sample task holds no simulator on a machine that runs none, so the
-    // auto Mobile simulators entry draws nothing, and File Tree is off.
+    // auto Mobile simulators entry draws nothing, and with it the Browsers
+    // and Simulators stack, which has no partner left to join; File Tree is
+    // off.
     expect(
       railEntries().map((node) => node.getAttribute("aria-label")),
     ).toEqual(
       rail
         .filter(
           (entry) =>
-            entry.id !== "railSimulators" && entry.id !== "railFileTree",
+            entry.id !== "railSimulators" &&
+            entry.id !== BROWSERS_SIMULATORS_STACK_ID &&
+            entry.id !== "railFileTree",
         )
         .map((entry) =>
           entry.kind === "panel"
@@ -255,7 +262,10 @@ describe("the sample sidebar's icon rail", () => {
     const rail = useLayoutStore
       .getState()
       .arrangement.rail.filter(
-        (entry) => entry.id !== "railSimulators" && entry.id !== "railFileTree",
+        (entry) =>
+          entry.id !== "railSimulators" &&
+          entry.id !== BROWSERS_SIMULATORS_STACK_ID &&
+          entry.id !== "railFileTree",
       );
     const nodes = railEntries();
     expect(nodes).toHaveLength(rail.length);

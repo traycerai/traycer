@@ -118,7 +118,7 @@ describe("what the page can see as changed", () => {
     ).toEqual([]);
     const eachOne: ReadonlyArray<Partial<LayoutArrangement>> = [
       { usageHost: "header" },
-      { minimapSide: "right" },
+      { minimapSide: "left" },
       { resourceSide: "left" },
       { mobileFooter: true },
       { hiddenProviders: [PROVIDER] },
