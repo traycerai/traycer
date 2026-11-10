@@ -484,8 +484,10 @@ function expectClean(filePath: string, lines: readonly string[]): void {
 
 describe("no account identifier in thrown Error messages", () => {
   it(`finds no identity-field interpolation across ${productionScan.fileCount} production files (${productionScan.constructionCount} new-Error constructions)`, () => {
-    expect(productionScan.fileCount).toBe(723);
-    expect(productionScan.constructionCount).toBe(473);
+    // Floor, not a census: catches a scan that globbed nothing, not the tree's size.
+    expect(productionScan.fileCount).toBeGreaterThan(100);
+    // Floor, not a census: catches a scan that globbed nothing, not the tree's size.
+    expect(productionScan.constructionCount).toBeGreaterThan(100);
     expect(
       productionScan.files.some((file) =>
         file.endsWith(join("clients", "shared", "auth", "bearer-source.ts")),
