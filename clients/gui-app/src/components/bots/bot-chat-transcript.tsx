@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -79,6 +80,7 @@ import { Button } from "@/components/ui/button";
 import { ChatMessage as ChatMessageRow } from "@/components/chat/chat-message";
 import { rowPaintsNothing } from "@/components/chat/chat-special-segment";
 import { cn } from "@/lib/utils";
+import { BotSessionStatusSlotContext } from "@/components/bots/bot-session-status-context";
 
 /**
  * What a bot chat is to the person reading it: the bot's channel or one of
@@ -349,6 +351,7 @@ export function BotChatTranscript(props: {
     header,
   } = props;
   const handle = useChatSessionHandleForContainer(botId, chatId, hostId, true);
+  const statusSlot = useContext(BotSessionStatusSlotContext);
   if (handle === null) {
     if (!props.showConnecting) return null;
     const connecting = (
@@ -395,6 +398,7 @@ export function BotChatTranscript(props: {
             landOn={props.landOn}
             flow={props.flow}
           />
+          {statusSlot?.(handle)}
         </TracyTranscriptOriginScope>
       </BotTranscriptImageScope>
     </TileErrorBoundary>
