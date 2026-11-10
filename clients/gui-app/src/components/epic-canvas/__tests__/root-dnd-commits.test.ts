@@ -15,7 +15,9 @@ import {
 } from "@/stores/layout/layout-store";
 import { currentLayoutArrangement } from "@/lib/layout/rail-view";
 import {
+  BROWSERS_SIMULATORS_STACK_ID,
   DEFAULT_RAIL,
+  GIT_DIFF_PULL_REQUESTS_STACK_ID,
   visibleRailPanelIds,
   type RailEntry,
 } from "@/lib/layout/rail";
@@ -281,12 +283,15 @@ function seedCanvasWithTerminalTile(): void {
 }
 
 /**
- * The shipped rail without its Git Diff and Pull Requests stack. The drop
- * cases below are written against Agents stacked on Artifacts as the only
- * stack, so each expectation names the one stack it is about.
+ * The shipped rail without its Browsers and Simulators and Git Diff and Pull
+ * Requests stacks. The drop cases below are written against Agents stacked on
+ * Artifacts as the only stack, so each expectation names the one stack it is
+ * about.
  */
 const ONE_STACK_RAIL: ReadonlyArray<RailEntry> = DEFAULT_RAIL.filter(
-  (entry) => entry.id !== "stack:railGitDiff+railPullRequests",
+  (entry) =>
+    entry.id !== BROWSERS_SIMULATORS_STACK_ID &&
+    entry.id !== GIT_DIFF_PULL_REQUESTS_STACK_ID,
 );
 const ONE_STACK_ARRANGEMENT: LayoutArrangement = {
   ...DEFAULT_ARRANGEMENT,

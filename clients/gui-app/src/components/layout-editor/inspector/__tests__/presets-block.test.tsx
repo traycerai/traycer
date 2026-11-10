@@ -359,7 +359,7 @@ describe("View changes' revert keeps focus in the list, or moves it to the appli
         ...DEFAULT_ARRANGEMENT,
         tabStripPlacement: "right",
         sidebarSide: "left",
-        minimapSide: "right",
+        minimapSide: "left",
       });
     });
     openViewChanges();
