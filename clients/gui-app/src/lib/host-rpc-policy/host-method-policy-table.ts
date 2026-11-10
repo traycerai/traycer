@@ -24,10 +24,11 @@ import { USAGE_SUMMARY_RESPONSE_TIMEOUT_MS } from "@/lib/usage-analytics/usage-s
 const SECOND_MS = 1_000;
 const MINUTE_MS = 60 * SECOND_MS;
 
-// Mounted configuration reads reuse the apply-status cadence.
+// Configuration reads keep their cadence only while the window is attended.
 const CONFIGURATION_READ_POLL = {
   kind: "fixed",
   intervalMs: 5 * SECOND_MS,
+  requiresWindowAttention: true,
 } as const;
 
 export type ConditionPollLane = {
@@ -49,7 +50,11 @@ export type ErasedConditionPollPolicy<
 
 type HostMethodPollPolicy<Method extends keyof HostRpcRegistry & string> =
   | null
-  | { readonly kind: "fixed"; readonly intervalMs: number }
+  | {
+      readonly kind: "fixed";
+      readonly intervalMs: number;
+      readonly requiresWindowAttention?: true;
+    }
   | ErasedConditionPollPolicy<Method>;
 
 type HostMethodScheduling<Method extends keyof HostRpcRegistry & string> = {

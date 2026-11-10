@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useContext } from "react";
 import { AlertTriangle } from "lucide-react";
 import { ENV_CREDENTIAL_AUTH_ERROR_CODE } from "@traycer/protocol/host/agent/gui/agent-runtime";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
@@ -7,6 +7,7 @@ import type {
   AgentFailureReason,
 } from "@traycer/protocol/persistence/epic/content-blocks";
 import { FallbackManualRungActions } from "@/components/chat/fallback/fallback-manual-rungs";
+import { ChatStatusReadOnlyContext } from "@/components/chat/chat-status-capabilities";
 import {
   RoutingSettledCard,
   type RoutingSettledNotice,
@@ -211,6 +212,7 @@ export function ErrorSegment({
   settledNotice,
   settledNoticeFindUnitId,
 }: ErrorSegmentProps) {
+  const readOnly = useContext(ChatStatusReadOnlyContext);
   // Built at CLICK time, never at render. This row is durable transcript: it
   // mounts whenever the chat is opened, which is one or more commits BEFORE
   // `SupportContextRegistryBridge`'s effects publish that chat's own
@@ -261,7 +263,7 @@ export function ErrorSegment({
       ),
     [code, hostTimestamp, message, recoverable, reportTurnId, settledNotice],
   );
-  const reportAction = (
+  const reportAction = readOnly ? null : (
     <ReportIssueAction
       context={buildReportContext}
       presentation="icon"

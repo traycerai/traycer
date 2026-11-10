@@ -1,10 +1,12 @@
 import {
+  useContext,
   useId,
   useState,
   type MouseEvent,
   type PointerEvent,
   type ReactNode,
 } from "react";
+import { ChatStatusReadOnlyContext } from "@/components/chat/chat-status-capabilities";
 import { useNavigate, type UseNavigateResult } from "@tanstack/react-router";
 import { Eye, EyeOff, Layers, Mic, PanelTop } from "lucide-react";
 import { toast } from "sonner";
@@ -339,7 +341,9 @@ export function LayoutRegionContextMenuWithItems(props: {
   // block and spacer, the header row); the drag regions stand down while it
   // is open so its items and an outside click land in the renderer.
   const [open, setOpen] = useState(false);
+  const readOnly = useContext(ChatStatusReadOnlyContext);
   useTitleBarDragSuppression(`region-menu:${useId()}`, open);
+  if (readOnly) return props.children;
   return (
     <ContextMenu onOpenChange={setOpen}>
       {/* `display: contents` generates no box, so the chrome this wraps keeps
@@ -403,6 +407,8 @@ export function LayoutClusterContextMenu(props: {
   readonly children: ReactNode;
 }): ReactNode {
   const [regionId, setRegionId] = useState<RegionId | null>(null);
+  const readOnly = useContext(ChatStatusReadOnlyContext);
+  if (readOnly) return props.children;
   return (
     <ContextMenu>
       <ContextMenuTrigger

@@ -300,8 +300,11 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
       ),
     );
 
+    const signOut = screen.getByRole("button", { name: "Sign out" });
+    expect(signOut.closest('[data-slot="dialog-footer"]')).not.toBeNull();
+
     act(() => {
-      fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+      fireEvent.click(signOut);
     });
 
     await waitFor(() => expect(messenger.calls).toHaveLength(1));

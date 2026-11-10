@@ -78,6 +78,7 @@ const profile = (enabled: boolean, revision: number) =>
       accountIdentity: "ada@example.com",
       needsLink: false,
       enabled,
+      mergedInto: "kept-work",
     },
     revision,
   });
@@ -212,6 +213,55 @@ function accessibleName(element: HTMLElement): string {
     hidden.remove();
   }
   return clone.textContent.replace(/\s+/g, " ").trim();
+}
+
+function teamProfile(input: {
+  readonly key: string;
+  readonly name: string;
+  readonly revision: number;
+  readonly enabled: boolean;
+  readonly mergedInto: string;
+  readonly accountIdentity: string | null;
+  readonly color?: string | null;
+}): EnvironmentConfigurationItem {
+  return configurationItem({
+    kind: "managed_profile",
+    key: input.key,
+    revision: input.revision,
+    value: {
+      name: input.name,
+      color: input.color ?? null,
+      harnessId: "claude",
+      accountIdentity: input.accountIdentity,
+      needsLink: false,
+      enabled: input.enabled,
+      mergedInto: input.mergedInto,
+    },
+  });
+}
+
+function profileTriggerName(profileName: string, disabled: boolean): string {
+  return disabled
+    ? `Claude Code profile: ${profileName}, Disabled`
+    : `Claude Code profile: ${profileName}`;
+}
+
+function openProfileMenu(accessibleName: string): HTMLElement {
+  const trigger = screen.getByRole("button", { name: accessibleName });
+  fireEvent.pointerDown(trigger);
+  fireEvent.click(trigger);
+  return trigger;
+}
+
+function profileRowSwitch(profileName: string): HTMLElement {
+  return within(
+    screen.getByRole("group", { name: `${profileName} profile controls` }),
+  ).getByRole("switch", { name: `Allow agents to use ${profileName}` });
+}
+
+async function openProfileEditor(): Promise<HTMLElement> {
+  await userEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+  return screen.findByRole("dialog", { name: "Edit profile" });
 }
 
 function handlers(items: () => EnvironmentConfigurationItem[]) {
@@ -493,7 +543,7 @@ describe("TeamProviders items", () => {
 
     expect(await screen.findByText("Work")).toBeTruthy();
     const checkboxItem = screen.getByRole("switch", {
-      name: "Use Work",
+      name: "Allow agents to use Work",
     });
     expect(checkboxItem.getAttribute("aria-checked")).toBe("true");
     await userEvent.click(checkboxItem);
@@ -511,6 +561,7 @@ describe("TeamProviders items", () => {
           accountIdentity: "ada@example.com",
           needsLink: false,
           enabled: false,
+          mergedInto: "kept-work",
         },
         revision: 4,
       },
@@ -518,16 +569,131 @@ describe("TeamProviders items", () => {
     expect(
       await screen.findByText("Changed by Grace a moment ago"),
     ).toBeTruthy();
-    expect(screen.getByText("Use")).toBeTruthy();
     expect(screen.queryByText("Off")).toBeNull();
-    if (screen.queryByRole("menu") !== null) {
-      await userEvent.keyboard("{Escape}");
-    }
+    expect(
+      screen.getByRole("button", {
+        name: profileTriggerName("Work", true),
+      }),
+    ).toBeTruthy();
     await waitFor(() => {
       const updatedCheckboxItem = screen.getByRole("switch", {
-        name: "Use Work",
+        name: "Allow agents to use Work",
       });
       expect(updatedCheckboxItem.getAttribute("aria-checked")).toBe("false");
+    });
+  });
+
+  it("does not label an editor profile control Use", async () => {
+    const harness = mountTeamPage(
+      poolSource("editor"),
+      handlers(() => [profile(true, 4)]),
+    );
+    render(<TeamProviders />, { wrapper: harness.Wrapper });
+
+    expect(await screen.findByText("Work")).toBeTruthy();
+    expect(screen.queryByText("Use")).toBeNull();
+    expect(screen.queryByRole("switch", { name: "Use Work" })).toBeNull();
+    expect(harness.paramsOf("environment.configuration.items.put")).toEqual([]);
+  });
+
+  it("lists every team profile and writes each row switch with that item's revision and stored record", async () => {
+    const workValue = {
+      name: "Work",
+      color: null,
+      harnessId: "claude",
+      accountIdentity: "Work label",
+      needsLink: false,
+      enabled: true,
+      mergedInto: "kept-work",
+    };
+    const homeValue = {
+      name: "Home",
+      color: null,
+      harnessId: "claude",
+      accountIdentity: "Home label",
+      needsLink: false,
+      enabled: true,
+      mergedInto: "kept-home",
+    };
+    const work = configurationItem({
+      kind: "managed_profile",
+      key: "claude:work",
+      value: workValue,
+      revision: 4,
+    });
+    const home = configurationItem({
+      kind: "managed_profile",
+      key: "claude:home",
+      value: homeValue,
+      revision: 9,
+    });
+    const harness = mountTeamPage(poolSource("editor"), {
+      ...handlers(() => [work, home]),
+      "environment.configuration.items.put": () => ({
+        outcome: "saved",
+        revision: 10,
+      }),
+    });
+    render(<TeamProviders />, { wrapper: harness.Wrapper });
+
+    const trigger = await screen.findByRole("button", {
+      name: profileTriggerName("Work", false),
+    });
+    const account = screen.getByText("Work label");
+    expect(
+      trigger.compareDocumentPosition(account) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(screen.queryByText("Home label")).toBeNull();
+    openProfileMenu(profileTriggerName("Work", false));
+    const workRow = screen.getByRole("menuitem", { name: "Work" });
+    const homeRow = screen.getByRole("menuitem", { name: "Home" });
+    expect(
+      workRow.compareDocumentPosition(homeRow) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("menuitem", { name: "Create new profile" }),
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add a profile" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Create new profile" }),
+    ).toBeNull();
+
+    fireEvent.click(profileRowSwitch("Home"));
+    await waitFor(() => {
+      expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
+        {
+          environmentId: "env-a",
+          kind: "managed_profile",
+          key: "claude:home",
+          os: null,
+          value: { ...homeValue, enabled: false },
+          revision: 9,
+        },
+      ]);
+    });
+    fireEvent.click(profileRowSwitch("Work"));
+    await waitFor(() => {
+      expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
+        {
+          environmentId: "env-a",
+          kind: "managed_profile",
+          key: "claude:home",
+          os: null,
+          value: { ...homeValue, enabled: false },
+          revision: 9,
+        },
+        {
+          environmentId: "env-a",
+          kind: "managed_profile",
+          key: "claude:work",
+          os: null,
+          value: { ...workValue, enabled: false },
+          revision: 4,
+        },
+      ]);
     });
   });
 
@@ -544,10 +710,7 @@ describe("TeamProviders items", () => {
     });
     render(<TeamProviders />, { wrapper: harness.Wrapper });
 
-    expect(
-      await screen.findByRole("combobox", { name: "Profile" }),
-    ).toBeTruthy();
-    const identity = screen.getByText("ada@example.com");
+    const identity = await screen.findByText("ada@example.com");
     expect(identity.className).toContain("whitespace-normal");
     expect(identity.className).toContain("break-words");
     expect(screen.queryByText("Off")).toBeNull();
@@ -561,6 +724,70 @@ describe("TeamProviders items", () => {
     expect(screen.queryByRole("button", { name: "Manage profile" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Add a key" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Open Secrets" })).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "Profile" })).toBeNull();
+    expect(
+      screen.getByRole("button", { name: profileTriggerName("Work", false) }),
+    ).toBeTruthy();
+  });
+
+  it("lets a reader select a disabled profile and keeps On or Off with no Manage", async () => {
+    const harness = mountTeamPage(poolSource("viewer"), {
+      ...handlers(() => [
+        teamProfile({
+          key: "claude:work",
+          name: "Work",
+          revision: 4,
+          enabled: true,
+          mergedInto: "kept-work",
+          accountIdentity: "Work label",
+        }),
+        teamProfile({
+          key: "claude:home",
+          name: "Home",
+          revision: 8,
+          enabled: false,
+          mergedInto: "kept-home",
+          accountIdentity: "Home label",
+        }),
+      ]),
+    });
+    render(<TeamProviders />, { wrapper: harness.Wrapper });
+
+    await screen.findByRole("button", {
+      name: profileTriggerName("Work", false),
+    });
+    expect(screen.queryByRole("button", { name: "Manage profile" })).toBeNull();
+    expect(screen.queryByRole("switch")).toBeNull();
+    openProfileMenu(profileTriggerName("Work", false));
+    const homeGroup = screen.getByRole("group", {
+      name: "Home profile controls",
+    });
+    expect(within(homeGroup).getByText("Off")).toBeTruthy();
+    expect(within(homeGroup).queryByRole("switch")).toBeNull();
+    const homeRow = within(homeGroup).getByRole("menuitem", {
+      name: "Home, Disabled",
+    });
+    expect(homeRow.getAttribute("aria-disabled")).not.toBe("true");
+    const workGroup = screen.getByRole("group", {
+      name: "Work profile controls",
+    });
+    expect(within(workGroup).getByText("On")).toBeTruthy();
+    expect(within(workGroup).queryByRole("switch")).toBeNull();
+    fireEvent.click(homeRow);
+
+    expect(
+      await screen.findByRole("button", {
+        name: profileTriggerName("Home", true),
+      }),
+    ).toBeTruthy();
+    expect(screen.getByText("Home label")).toBeTruthy();
+    expect(screen.queryByText("Work label")).toBeNull();
+    expect(screen.getByText("Off")).toBeTruthy();
+    expect(screen.queryByRole("switch")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Manage profile" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add a profile" })).toBeNull();
+    expect(harness.paramsOf("environment.configuration.items.put")).toEqual([]);
   });
 
   it("saves a variable override under the provider's prefix at the displayed revision", async () => {
@@ -798,9 +1025,13 @@ describe("TeamProviders items", () => {
       );
       render(<TeamProviders />, { wrapper: harness.Wrapper });
 
-      expect(
-        await screen.findByRole("combobox", { name: "Profile" }),
-      ).toBeTruthy();
+      expect(await screen.findByText("On")).toBeTruthy();
+      const profileCombobox = screen.queryByRole("combobox", {
+        name: "Profile",
+      });
+      const profileTrigger = screen.queryByRole("button", {
+        name: profileTriggerName("Work", false),
+      });
       expect(screen.queryByRole("button", { name: "Details" })).toBeNull();
       expect(screen.queryByText("Signed in")).toBeNull();
       expect(
@@ -826,9 +1057,478 @@ describe("TeamProviders items", () => {
         kind: "env_override",
         key: "claude:ANTHROPIC_BASE_URL",
       });
+      expect(profileCombobox).toBeNull();
+      expect(profileTrigger).toBeTruthy();
     } finally {
       unregister();
     }
+  });
+
+  it("renames the selected profile through Manage and keeps the stored record", async () => {
+    const work = teamProfile({
+      key: "claude:work",
+      name: "Work",
+      revision: 4,
+      enabled: true,
+      mergedInto: "kept-work",
+      accountIdentity: "Work label",
+    });
+    const harness = mountTeamPage(poolSource("editor"), {
+      ...handlers(() => [work]),
+      "environment.configuration.items.put": () => ({
+        outcome: "saved",
+        revision: 5,
+      }),
+    });
+    render(<TeamProviders />, { wrapper: harness.Wrapper });
+
+    await screen.findByRole("button", {
+      name: profileTriggerName("Work", false),
+    });
+    const dialog = await openProfileEditor();
+    expect(within(dialog).getByText("Update how Work appears.")).toBeTruthy();
+    fireEvent.change(within(dialog).getByLabelText("Profile name"), {
+      target: { value: "Desk" },
+    });
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Save changes" }),
+    );
+
+    await waitFor(() => {
+      expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
+        {
+          environmentId: "env-a",
+          kind: "managed_profile",
+          key: "claude:work",
+          os: null,
+          value: {
+            name: "Desk",
+            color: null,
+            harnessId: "claude",
+            accountIdentity: "Work label",
+            needsLink: false,
+            enabled: true,
+            mergedInto: "kept-work",
+          },
+          revision: 4,
+        },
+      ]);
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Edit profile" })).toBeNull();
+    });
+  });
+
+  it("recolors the selected profile through Manage and warns when another profile uses that color", async () => {
+    const sharedColor = "#3b82f6";
+    const work = teamProfile({
+      key: "claude:work",
+      name: "Work",
+      revision: 6,
+      enabled: true,
+      mergedInto: "kept-work",
+      accountIdentity: "Work label",
+    });
+    const home = teamProfile({
+      key: "claude:home",
+      name: "Home",
+      revision: 2,
+      enabled: true,
+      mergedInto: "kept-home",
+      accountIdentity: "Home label",
+      color: sharedColor,
+    });
+    const harness = mountTeamPage(poolSource("editor"), {
+      ...handlers(() => [work, home]),
+      "environment.configuration.items.put": () => ({
+        outcome: "saved",
+        revision: 7,
+      }),
+    });
+    render(<TeamProviders />, { wrapper: harness.Wrapper });
+
+    await screen.findByRole("button", {
+      name: profileTriggerName("Work", false),
+    });
+    const dialog = await openProfileEditor();
+    expect(within(dialog).queryByText(/already uses this color/)).toBeNull();
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: `Use color ${sharedColor}` }),
+    );
+    expect(
+      within(dialog).getByText(/Home already uses this color/),
+    ).toBeTruthy();
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Save changes" }),
+    );
+
+    await waitFor(() => {
+      expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
+        {
+          environmentId: "env-a",
+          kind: "managed_profile",
+          key: "claude:work",
+          os: null,
+          value: {
+            name: "Work",
+            color: sharedColor,
+            harnessId: "claude",
+            accountIdentity: "Work label",
+            needsLink: false,
+            enabled: true,
+            mergedInto: "kept-work",
+          },
+          revision: 6,
+        },
+      ]);
+    });
+  });
+
+  it("removes the selected profile through Manage at its revision", async () => {
+    const work = teamProfile({
+      key: "claude:work",
+      name: "Work",
+      revision: 11,
+      enabled: true,
+      mergedInto: "kept-work",
+      accountIdentity: "Work label",
+    });
+    const harness = mountTeamPage(poolSource("editor"), {
+      ...handlers(() => [work]),
+      "environment.configuration.items.delete": () => ({
+        outcome: "saved",
+        revision: null,
+      }),
+    });
+    render(<TeamProviders />, { wrapper: harness.Wrapper });
+
+    await screen.findByRole("button", {
+      name: profileTriggerName("Work", false),
+    });
+    const dialog = await openProfileEditor();
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Remove profile" }),
+    );
+    const confirm = await screen.findByRole("dialog", {
+      name: "Remove Work?",
+    });
+    expect(
+      within(confirm).getByText("Remove this profile from the team."),
+    ).toBeTruthy();
+    await userEvent.click(
+      within(confirm).getByRole("button", { name: "Remove" }),
+    );
+
+    await waitFor(() => {
+      expect(
+        harness.paramsOf("environment.configuration.items.delete"),
+      ).toEqual([
+        {
+          environmentId: "env-a",
+          kind: "managed_profile",
+          key: "claude:work",
+          os: null,
+          revision: 11,
+        },
+      ]);
+    });
+    expect(harness.paramsOf("environment.configuration.items.put")).toEqual([]);
+  });
+
+  it("refuses a blank profile name and a name past 64 characters, and saves a name at the limit", async () => {
+    const work = teamProfile({
+      key: "claude:work",
+      name: "Work",
+      revision: 3,
+      enabled: true,
+      mergedInto: "kept-work",
+      accountIdentity: "Work label",
+    });
+    const limit = "a".repeat(64);
+    const harness = mountTeamPage(poolSource("editor"), {
+      ...handlers(() => [work]),
+      "environment.configuration.items.put": () => ({
+        outcome: "saved",
+        revision: 4,
+      }),
+    });
+    render(<TeamProviders />, { wrapper: harness.Wrapper });
+
+    await screen.findByRole("button", {
+      name: profileTriggerName("Work", false),
+    });
+    const dialog = await openProfileEditor();
+    const nameField = within(dialog).getByLabelText("Profile name");
+    expect(nameField).toHaveProperty("maxLength", 64);
+    fireEvent.change(nameField, { target: { value: "   " } });
+    expect(
+      within(dialog).getByRole("button", { name: "Save changes" }),
+    ).toHaveProperty("disabled", true);
+    fireEvent.change(nameField, { target: { value: "a".repeat(65) } });
+    expect(nameField).toHaveProperty("value", "a".repeat(65));
+    expect(
+      within(dialog).getByRole("button", { name: "Save changes" }),
+    ).toHaveProperty("disabled", true);
+    expect(harness.paramsOf("environment.configuration.items.put")).toEqual([]);
+    fireEvent.change(nameField, { target: { value: limit } });
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Save changes" }),
+    );
+
+    await waitFor(() => {
+      expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
+        {
+          environmentId: "env-a",
+          kind: "managed_profile",
+          key: "claude:work",
+          os: null,
+          value: {
+            name: limit,
+            color: null,
+            harnessId: "claude",
+            accountIdentity: "Work label",
+            needsLink: false,
+            enabled: true,
+            mergedInto: "kept-work",
+          },
+          revision: 3,
+        },
+      ]);
+    });
+  });
+
+  it("leaves the edit dialog open when a rename conflicts", async () => {
+    const work = teamProfile({
+      key: "claude:work",
+      name: "Work",
+      revision: 4,
+      enabled: true,
+      mergedInto: "kept-work",
+      accountIdentity: "Work label",
+    });
+    const harness = mountTeamPage(poolSource("editor"), {
+      ...handlers(() => [work]),
+      "environment.configuration.items.put": () => ({
+        outcome: "conflict",
+        current: { revision: 5, changedBy: "Nora", changedAt: 2 },
+      }),
+    });
+    render(<TeamProviders />, { wrapper: harness.Wrapper });
+
+    await screen.findByRole("button", {
+      name: profileTriggerName("Work", false),
+    });
+    const dialog = await openProfileEditor();
+    fireEvent.change(within(dialog).getByLabelText("Profile name"), {
+      target: { value: "Desk" },
+    });
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Save changes" }),
+    );
+
+    expect(
+      await screen.findByText("Changed by Nora a moment ago"),
+    ).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "Edit profile" })).toBeTruthy();
+    expect(screen.getByLabelText("Profile name")).toHaveProperty(
+      "value",
+      "Desk",
+    );
+    expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
+      {
+        environmentId: "env-a",
+        kind: "managed_profile",
+        key: "claude:work",
+        os: null,
+        value: {
+          name: "Desk",
+          color: null,
+          harnessId: "claude",
+          accountIdentity: "Work label",
+          needsLink: false,
+          enabled: true,
+          mergedInto: "kept-work",
+        },
+        revision: 4,
+      },
+    ]);
+    expect(harness.paramsOf("environment.configuration.items.delete")).toEqual(
+      [],
+    );
+  });
+
+  it("retries a rename after a conflict with the colour from the re-read", async () => {
+    const stored = {
+      name: "Work",
+      color: null,
+      harnessId: "claude",
+      accountIdentity: "Work label",
+      needsLink: false,
+      enabled: true,
+      mergedInto: "kept-work",
+    };
+    const teammateColor = "#3b82f6";
+    const reread = { ...stored, color: teammateColor };
+    let current = teamProfile({
+      key: "claude:work",
+      name: stored.name,
+      revision: 4,
+      enabled: stored.enabled,
+      mergedInto: stored.mergedInto,
+      accountIdentity: stored.accountIdentity,
+      color: stored.color,
+    });
+    const harness = mountTeamPage(poolSource("editor"), {
+      ...handlers(() => [current]),
+      "environment.configuration.items.put": () => {
+        if (current.revision === 4) {
+          current = teamProfile({
+            key: "claude:work",
+            name: reread.name,
+            revision: 5,
+            enabled: reread.enabled,
+            mergedInto: reread.mergedInto,
+            accountIdentity: reread.accountIdentity,
+            color: reread.color,
+          });
+          return {
+            outcome: "conflict",
+            current: { revision: 5, changedBy: "Nora", changedAt: 2 },
+          };
+        }
+        return { outcome: "saved", revision: 6 };
+      },
+    });
+    render(<TeamProviders />, { wrapper: harness.Wrapper });
+
+    await screen.findByRole("button", {
+      name: profileTriggerName("Work", false),
+    });
+    const dialog = await openProfileEditor();
+    const reads = harness.paramsOf("environment.configuration.items").length;
+    fireEvent.change(within(dialog).getByLabelText("Profile name"), {
+      target: { value: "Desk" },
+    });
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Save changes" }),
+    );
+    expect(
+      await screen.findByText("Changed by Nora a moment ago"),
+    ).toBeTruthy();
+    await waitFor(() => {
+      expect(
+        harness.paramsOf("environment.configuration.items").length,
+      ).toBeGreaterThan(reads);
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => {
+      expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
+        {
+          environmentId: "env-a",
+          kind: "managed_profile",
+          key: "claude:work",
+          os: null,
+          value: { ...stored, name: "Desk" },
+          revision: 4,
+        },
+        {
+          environmentId: "env-a",
+          kind: "managed_profile",
+          key: "claude:work",
+          os: null,
+          value: { ...reread, name: "Desk" },
+          revision: 5,
+        },
+      ]);
+    });
+  });
+
+  it("retries a recolor after a conflict with the name from the re-read", async () => {
+    const stored = {
+      name: "Work",
+      color: null,
+      harnessId: "claude",
+      accountIdentity: "Work label",
+      needsLink: false,
+      enabled: true,
+      mergedInto: "kept-work",
+    };
+    const pickedColor = "#ef4444";
+    const reread = { ...stored, name: "Home" };
+    let current = teamProfile({
+      key: "claude:work",
+      name: stored.name,
+      revision: 4,
+      enabled: stored.enabled,
+      mergedInto: stored.mergedInto,
+      accountIdentity: stored.accountIdentity,
+      color: stored.color,
+    });
+    const harness = mountTeamPage(poolSource("editor"), {
+      ...handlers(() => [current]),
+      "environment.configuration.items.put": () => {
+        if (current.revision === 4) {
+          current = teamProfile({
+            key: "claude:work",
+            name: reread.name,
+            revision: 5,
+            enabled: reread.enabled,
+            mergedInto: reread.mergedInto,
+            accountIdentity: reread.accountIdentity,
+            color: reread.color,
+          });
+          return {
+            outcome: "conflict",
+            current: { revision: 5, changedBy: "Nora", changedAt: 2 },
+          };
+        }
+        return { outcome: "saved", revision: 6 };
+      },
+    });
+    render(<TeamProviders />, { wrapper: harness.Wrapper });
+
+    await screen.findByRole("button", {
+      name: profileTriggerName("Work", false),
+    });
+    const dialog = await openProfileEditor();
+    const reads = harness.paramsOf("environment.configuration.items").length;
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: `Use color ${pickedColor}` }),
+    );
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Save changes" }),
+    );
+    expect(
+      await screen.findByText("Changed by Nora a moment ago"),
+    ).toBeTruthy();
+    await waitFor(() => {
+      expect(
+        harness.paramsOf("environment.configuration.items").length,
+      ).toBeGreaterThan(reads);
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => {
+      expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
+        {
+          environmentId: "env-a",
+          kind: "managed_profile",
+          key: "claude:work",
+          os: null,
+          value: { ...stored, color: pickedColor },
+          revision: 4,
+        },
+        {
+          environmentId: "env-a",
+          kind: "managed_profile",
+          key: "claude:work",
+          os: null,
+          value: { ...reread, color: pickedColor },
+          revision: 5,
+        },
+      ]);
+    });
   });
 
   it("lists every rail row in the Provider select, including one that is not configured", async () => {

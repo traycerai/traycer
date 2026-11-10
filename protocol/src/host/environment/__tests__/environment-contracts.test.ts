@@ -7,6 +7,7 @@ import {
 } from "@traycer/protocol/framework/versioned-rpc";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
+import { decodeResponsePayload } from "@traycer/protocol/host-transport/remote/rpc-codec";
 import {
   environmentConfigurationRevisionV10,
   environmentConfigurationGuideGetUpgradeV10ToV11,
@@ -49,6 +50,7 @@ import {
   environmentHostListV10,
   environmentHostListV11,
   environmentHostReadV10,
+  environmentHostReadV11,
   environmentListUpgradeV10ToV11,
   environmentListV10,
   environmentListV11,
@@ -194,6 +196,74 @@ describe("environment.host.read / .bind / .list protocol contracts", () => {
     ).toBe(false);
   });
 
+  it("round-trips both read versions and upgrades an old host with an explicit null", () => {
+    const legacyResponse = environmentHostReadV10.responseSchema.parse({
+      hostId: "host-1",
+      environment: TEAM,
+      explicit: true,
+      enrolledByUserId: "user-1",
+      canUnbind: true,
+    });
+    const upgraded = decodeResponsePayload(
+      hostRpcRegistry["environment.host.read"],
+      { major: 1, minor: 1 },
+      { major: 1, minor: 0 },
+      legacyResponse,
+      "request-1",
+      "environment.host.read",
+    );
+    const newHostResponse = environmentHostReadV11.responseSchema.parse({
+      ...legacyResponse,
+      sharingGeneration: 12,
+    });
+    const decodedNewHostResponse = decodeResponsePayload(
+      hostRpcRegistry["environment.host.read"],
+      { major: 1, minor: 0 },
+      { major: 1, minor: 1 },
+      newHostResponse,
+      "request-2",
+      "environment.host.read",
+    );
+    const decodedNewHostForNewClient = decodeResponsePayload(
+      hostRpcRegistry["environment.host.read"],
+      { major: 1, minor: 1 },
+      { major: 1, minor: 1 },
+      newHostResponse,
+      "request-3",
+      "environment.host.read",
+    );
+    const legacyClientResponse = environmentHostReadV10.responseSchema.parse(
+      decodedNewHostResponse,
+    );
+
+    expect({
+      upgraded,
+      decodedNewHostAtNewClient: decodedNewHostForNewClient,
+      decodedNewHostAtOldClient: legacyClientResponse,
+      rejectedMissingGeneration:
+        environmentHostReadV11.responseSchema.safeParse(legacyResponse).success,
+      rejectedNegativeGeneration:
+        environmentHostReadV11.responseSchema.safeParse({
+          ...legacyResponse,
+          sharingGeneration: -1,
+        }).success,
+      acceptedNullGeneration: environmentHostReadV11.responseSchema.safeParse({
+        ...legacyResponse,
+        sharingGeneration: null,
+      }).success,
+    }).toEqual({
+      upgraded: { ...legacyResponse, sharingGeneration: null },
+      decodedNewHostAtNewClient: {
+        ...legacyResponse,
+        sharingGeneration: 12,
+      },
+      decodedNewHostAtOldClient: legacyResponse,
+      rejectedMissingGeneration: false,
+      rejectedNegativeGeneration: false,
+      acceptedNullGeneration: true,
+    });
+  });
+
   it("register off the released floor with unsupported degrade", () => {
     for (const [method, contract] of [
       ["environment.host.read", environmentHostReadV10],
@@ -206,9 +276,9 @@ describe("environment.host.read / .bind / .list protocol contracts", () => {
       expect(entry.degrade).toEqual({ kind: "unsupported" });
       expect(entry[1].versions[0].contract).toBe(contract);
     }
-    // read and bind stay at @1.0; host.list grew @1.1 and @1.2 MINORs,
-    // members @1.1 and @1.2.
-    expect(hostRpcRegistry["environment.host.read"][1].latestMinor).toBe(0);
+    // read grew @1.1; bind stays @1.0. Host.list and members gained two
+    // minors each.
+    expect(hostRpcRegistry["environment.host.read"][1].latestMinor).toBe(1);
     expect(hostRpcRegistry["environment.host.bind"][1].latestMinor).toBe(0);
     expect(hostRpcRegistry["environment.host.list"][1].latestMinor).toBe(2);
     expect(hostRpcRegistry["environment.members"][1].latestMinor).toBe(2);

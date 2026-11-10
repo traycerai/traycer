@@ -1,10 +1,11 @@
 import { v4 as uuidv4 } from "uuid";
-import { useId, useState, type ReactNode } from "react";
+import { useContext, useId, useState, type ReactNode } from "react";
 import { MessageSquareText } from "lucide-react";
 import { create, useStore } from "zustand";
 import type { ToolCallFeedbackDraftStamp } from "@traycer/protocol/persistence/epic/content-blocks";
 import type { ChatFeedbackDraftDecision } from "@traycer/protocol/host/chat/feedback-draft";
 import { useChatAttachmentScope } from "@/components/chat/chat-attachment-scope-context";
+import { ChatStatusReadOnlyContext } from "@/components/chat/chat-status-capabilities";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -86,7 +87,8 @@ interface FeedbackDraftCardProps {
  */
 export function FeedbackDraftCard(props: FeedbackDraftCardProps): ReactNode {
   const scope = useChatAttachmentScope();
-  if (scope === null) {
+  const readOnly = useContext(ChatStatusReadOnlyContext);
+  if (scope === null || readOnly) {
     return <FeedbackDraftView {...props} live={null} />;
   }
   return (
@@ -288,12 +290,15 @@ function FeedbackDraftActions(props: {
   );
   const [viewing, setViewing] = useState(false);
   const checkboxId = useId();
+  const sessionReadOnly = useContext(ChatStatusReadOnlyContext);
   const readOnly: FeedbackDraftReadOnlyReason | null =
     live === null ? "no-chat" : live.readOnly;
   if (live === null || readOnly !== null) {
     return (
       <p className="text-muted-foreground">
-        {READ_ONLY_COPY[readOnly ?? "no-chat"]}
+        {sessionReadOnly
+          ? "This session is read-only."
+          : READ_ONLY_COPY[readOnly ?? "no-chat"]}
       </p>
     );
   }

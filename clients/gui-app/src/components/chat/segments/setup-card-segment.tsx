@@ -6,7 +6,7 @@ import {
   GitBranch,
   X,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useContext, useMemo, useState } from "react";
 import type {
   WorktreeBindingOwnerKind,
   WorktreeFolderIntent,
@@ -42,6 +42,7 @@ import { isVisibleRawTerminalSession } from "@/lib/terminals/terminal-session-fi
 import { getChatSessionRegistry } from "@/lib/registries/chat-session-registry";
 import { cn } from "@/lib/utils";
 import { useReadingWidthStyle } from "@/lib/layout-overrides";
+import { ChatStatusReadOnlyContext } from "@/components/chat/chat-status-capabilities";
 import { LiveElapsed } from "./segment-elapsed";
 
 /**
@@ -479,6 +480,7 @@ interface SharedHandlers {
 function WorkspaceSetupDetail(
   props: SharedHandlers & { readonly entry: SetupCardWorkspace },
 ) {
+  const readOnly = useContext(ChatStatusReadOnlyContext);
   const {
     entry,
     focusTerminal,
@@ -494,7 +496,9 @@ function WorkspaceSetupDetail(
   const setupActive = !provisionFailed && entry.state !== "creating" && active;
   const liveness = livenessFor(entry.terminalSessionId);
   const retry =
-    (entry.state === "failed" || entry.state === "cancelled") && tabReady ? (
+    !readOnly &&
+    (entry.state === "failed" || entry.state === "cancelled") &&
+    tabReady ? (
       <RetryButton
         pending={retryPending}
         onRetry={() => onRetry(entry)}
@@ -502,7 +506,7 @@ function WorkspaceSetupDetail(
       />
     ) : null;
   const reportIssue =
-    entry.state === "failed" ? (
+    !readOnly && entry.state === "failed" ? (
       <ReportIssueAction
         context={createReportIssueContext({
           title: provisionFailed

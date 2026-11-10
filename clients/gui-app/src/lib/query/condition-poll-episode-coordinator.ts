@@ -22,6 +22,19 @@ export type ConditionPollRefetchInterval = (
   query: CacheQuery,
 ) => number | false | undefined;
 
+type HostQueryPollingOptions =
+  | {
+      readonly refetchInterval: ConditionPollRefetchInterval;
+      readonly retry: false;
+    }
+  | { readonly refetchInterval: false }
+  | {
+      readonly refetchInterval: number | ConditionPollRefetchInterval;
+      readonly refetchIntervalInBackground: boolean;
+      readonly refetchOnWindowFocus?: false;
+    }
+  | Record<never, never>;
+
 type EpisodeState = {
   readonly subscribedObservers: Set<CacheObserver>;
   readonly activeObservers: Set<CacheObserver>;
@@ -41,7 +54,8 @@ const shouldAssertPolicy =
   import.meta.env.DEV || import.meta.env.MODE === "test";
 
 /**
- * Owns condition-poll attempts for one QueryClient. Query metadata is only
+ * Owns table polling for one QueryClient, including configuration attention
+ * and condition-poll attempts. Query metadata is only
  * used to latch a query's method once; aggregate polling ownership lives in
  * QueryCache observer events so unmount/remount transitions remain visible.
  */
@@ -56,6 +70,16 @@ export class ConditionPollEpisodeCoordinator {
     ConditionPollRefetchInterval,
     HostRpcMethod
   >();
+  private readonly configurationIntervals = new Map<
+    HostRpcMethod,
+    ConditionPollRefetchInterval
+  >();
+  private readonly configurationObservers = new Map<
+    CacheQuery,
+    Set<CacheObserver>
+  >();
+  private windowAttended = false;
+  private listeningToAttention = false;
   private readonly unsubscribe: () => void;
   private disposed = false;
 
@@ -63,6 +87,39 @@ export class ConditionPollEpisodeCoordinator {
     this.unsubscribe = client
       .getQueryCache()
       .subscribe((event) => this.handleCacheEvent(event));
+  }
+
+  pollOptionsFor(
+    method: HostRpcMethod,
+    poll: boolean | undefined,
+  ): HostQueryPollingOptions {
+    const policy = HOST_METHOD_POLL_TABLE[method].poll;
+    if (policy === null) return {};
+    if (policy.kind === "condition") {
+      // Only the branded poller owns retry episodes. Opted-out readers keep
+      // ordinary retries so a transient failure can still recover.
+      return poll === false
+        ? { refetchInterval: false }
+        : { refetchInterval: this.refetchIntervalFor(method), retry: false };
+    }
+    if (poll !== true) return { refetchInterval: false };
+    if (!("requiresWindowAttention" in policy)) {
+      return {
+        refetchInterval: policy.intervalMs,
+        refetchIntervalInBackground: false,
+      };
+    }
+    let interval = this.configurationIntervals.get(method);
+    if (interval === undefined) {
+      interval = () => (isWindowAttended() ? policy.intervalMs : false);
+      this.configurationIntervals.set(method, interval);
+    }
+    return {
+      refetchInterval: interval,
+      // Native window events own this gate; TanStack only follows visibility.
+      refetchIntervalInBackground: true,
+      refetchOnWindowFocus: false,
+    };
   }
 
   /**
@@ -120,6 +177,9 @@ export class ConditionPollEpisodeCoordinator {
     if (this.disposed) return;
     this.disposed = true;
     this.unsubscribe();
+    this.stopAttentionEvents();
+    this.configurationObservers.clear();
+    this.configurationIntervals.clear();
     this.episodes.clear();
     this.intervalByMethod.clear();
     if (coordinatorByClient.get(this.client) === this) {
@@ -131,6 +191,8 @@ export class ConditionPollEpisodeCoordinator {
     if (this.disposed) return;
 
     if (event.type === "removed") {
+      this.configurationObservers.delete(event.query);
+      if (this.configurationObservers.size === 0) this.stopAttentionEvents();
       this.latchedMethods.delete(event.query);
       this.episodes.delete(event.query);
       return;
@@ -140,11 +202,26 @@ export class ConditionPollEpisodeCoordinator {
     // meta and turn cleanup after an already-surfaced identity violation into
     // another assertion failure.
     if (event.type === "observerRemoved") {
+      this.updateConfigurationObserver(event.query, event.observer, false);
       this.handleObserverRemoved(event.query, event.observer);
       return;
     }
 
     const method = this.latchMethod(event.query);
+    if (
+      event.type === "observerAdded" ||
+      event.type === "observerOptionsUpdated"
+    ) {
+      this.updateConfigurationObserver(
+        event.query,
+        event.observer,
+        event.query.observers.includes(event.observer) &&
+          method !== undefined &&
+          this.configurationIntervals.has(method) &&
+          this.configurationIntervals.get(method) ===
+            event.observer.options.refetchInterval,
+      );
+    }
 
     switch (event.type) {
       case "observerAdded":
@@ -159,6 +236,67 @@ export class ConditionPollEpisodeCoordinator {
       default:
         return;
     }
+  }
+
+  private updateConfigurationObserver(
+    query: CacheQuery,
+    observer: CacheObserver,
+    subscribed: boolean,
+  ): void {
+    if (subscribed) {
+      if (this.configurationObservers.size === 0) {
+        this.windowAttended = isWindowAttended();
+        this.listeningToAttention = true;
+        window.addEventListener("focus", this.onAttentionChange);
+        window.addEventListener("blur", this.onAttentionChange);
+        document.addEventListener("visibilitychange", this.onAttentionChange);
+      }
+      let observers = this.configurationObservers.get(query);
+      if (observers === undefined) {
+        observers = new Set();
+        this.configurationObservers.set(query, observers);
+      }
+      observers.add(observer);
+    } else {
+      const observers = this.configurationObservers.get(query);
+      observers?.delete(observer);
+      if (observers?.size === 0) this.configurationObservers.delete(query);
+      if (this.configurationObservers.size === 0) this.stopAttentionEvents();
+    }
+  }
+
+  private readonly onAttentionChange = (): void => {
+    const attended = isWindowAttended();
+    if (this.windowAttended === attended) return;
+    this.windowAttended = attended;
+    // Re-evaluate the interval synchronously, without a React render or a
+    // TanStack focus-manager transition. Each observer owns its own timer.
+    this.configurationObservers.forEach((observers) => {
+      observers.forEach((observer) => observer.setOptions(observer.options));
+    });
+    if (!attended) return;
+    void this.client.refetchQueries(
+      {
+        predicate: (query) => {
+          const observers = this.configurationObservers.get(query);
+          return (
+            observers !== undefined &&
+            [...observers].some((observer) =>
+              isObserverEnabled(observer, query),
+            )
+          );
+        },
+      },
+      { cancelRefetch: false },
+    );
+  };
+
+  private stopAttentionEvents(): void {
+    if (!this.listeningToAttention) return;
+    this.listeningToAttention = false;
+    window.removeEventListener("focus", this.onAttentionChange);
+    window.removeEventListener("blur", this.onAttentionChange);
+    document.removeEventListener("visibilitychange", this.onAttentionChange);
   }
 
   private latchMethod(query: CacheQuery): HostRpcMethod | undefined {
@@ -479,6 +617,16 @@ export class ConditionPollEpisodeCoordinator {
       return;
     }
 
+    if ("requiresWindowAttention" in policy) {
+      this.assertPolicy(
+        observer.options.refetchInterval ===
+          this.configurationIntervals.get(method) &&
+          observer.options.refetchIntervalInBackground === true &&
+          observer.options.refetchOnWindowFocus === false,
+        `Configuration poller ${method} on ${query.queryHash} must use its window-attention interval.`,
+      );
+      return;
+    }
     this.assertPolicy(
       observer.options.refetchInterval === policy.intervalMs &&
         observer.options.refetchIntervalInBackground === false,
@@ -586,4 +734,8 @@ function matchesHostScope(queryKey: unknown, hostId: string | null): boolean {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isWindowAttended(): boolean {
+  return document.visibilityState !== "hidden" && document.hasFocus();
 }

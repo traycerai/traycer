@@ -203,40 +203,25 @@ describe("sandboxDetailsEntry", () => {
     expect(mine.export().status["Started by"]).toBe("you");
   });
 
-  it("shows the agent that started a kept sandbox, and keeps its name out of the export", () => {
-    const input = {
-      cost: null,
-      wakeString: null,
-      viewerUserId: "u-me",
-      personal: false,
-      now: NOW,
-    };
-    const named = sandboxDetailsEntry({
-      ...input,
+  it("reads a kept sandbox's member starter, and keeps the agent's name out of the status and the export", () => {
+    const entry = sandboxDetailsEntry({
       summary: sandboxSummaryFixture({
         createdBy: null,
         burst: false,
         createdByAgentId: "agent-planner",
         createdByAgentName: "Planner",
       }),
+      cost: null,
+      wakeString: null,
+      viewerUserId: "u-me",
+      personal: true,
+      now: NOW,
     });
-    expect(named.status.find((row) => row.label === "Started by")?.value).toBe(
-      "Planner",
-    );
-    expect(named.export().status["Started by"]).toBeUndefined();
-    expect(JSON.stringify(named.export())).not.toContain("Planner");
-    const unnamed = sandboxDetailsEntry({
-      ...input,
-      summary: sandboxSummaryFixture({
-        createdBy: null,
-        burst: false,
-        createdByAgentId: "agent-planner",
-        createdByAgentName: null,
-      }),
-    });
-    expect(
-      unnamed.status.find((row) => row.label === "Started by")?.value,
-    ).toBe("an agent");
+    const startedBy = entry.status.find((row) => row.label === "Started by");
+    expect(startedBy?.value).toBe("you");
+    expect(JSON.stringify(entry.status)).not.toContain("Planner");
+    expect(entry.export().status["Started by"]).toBe("you");
+    expect(JSON.stringify(entry.export())).not.toContain("Planner");
   });
 
   it("gives an agent's sandbox no Resting row beside its self-destroying Idle row", () => {
