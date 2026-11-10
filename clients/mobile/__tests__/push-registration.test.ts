@@ -727,6 +727,7 @@ describe("MobilePushRegistration", () => {
     source: FakeTokenSource;
     sent: string[];
     registrations: DependencyCalls<PushTokenFetchResult>;
+    permissionChecks: DependencyCalls<PermissionResult>;
   }> {
     const plugin = fakePlugin({
       permission: "granted",
@@ -746,12 +747,12 @@ describe("MobilePushRegistration", () => {
       removeToken: async () => OK,
     });
     const source = new FakeTokenSource();
-    const { pluginRegisters } = observePluginCalls(plugin);
+    const { permissionChecks, pluginRegisters } = observePluginCalls(plugin);
     source.emitSignedIn(credentials("user-1", stored));
     const startup = pluginRegisters.count;
     push.start(source, NO_RESUME);
     await completed(pluginRegisters, startup);
-    return { push, plugin, source, sent, registrations };
+    return { push, plugin, source, sent, registrations, permissionChecks };
   }
 
   it("holds an expired stored bearer back until the refreshed one arrives", async () => {
@@ -791,6 +792,25 @@ describe("MobilePushRegistration", () => {
 
     expect(sent).toEqual([EXPIRED_BEARER]);
     expect(push.registrationState()).toBe("registered");
+  });
+
+  it("keeps the grace to its end when a muted-set change re-arms the send", async () => {
+    vi.useFakeTimers();
+    const { push, plugin, sent, registrations, permissionChecks } =
+      await startedWith(EXPIRED_BEARER, () => OK);
+    plugin.emitRegistration("apns-token-1");
+    expect(sent).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(3_000);
+    await push.setMutedSeverities(["info"]);
+    const scheduledCheck = permissionChecks.count;
+    await vi.advanceTimersByTimeAsync(1_000);
+    await completed(permissionChecks, scheduledCheck);
+    expect(sent).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(11_000);
+    await completed(registrations, 0);
+    expect(sent).toEqual([EXPIRED_BEARER]);
   });
 
   it("still shows a failure when authn refuses a bearer that has not expired", async () => {

@@ -214,8 +214,11 @@ export class MobilePushRegistration {
    * by authn for exactly the remove call it is retained for.
    */
   private bearerToken: string | null = null;
-  /** The expired-looking bearer already held back once (see `registerCurrentToken`). */
-  private heldExpiredBearer: string | null = null;
+  /** The expired-looking bearer held back, and when its grace ends (see `registerCurrentToken`). */
+  private expiredBearerHold: {
+    readonly bearer: string;
+    readonly graceEndsAt: number;
+  } | null = null;
   /**
    * `userId:deviceToken:<sorted muted set>` last accepted by the server (see
    * `registrationKey`), or `null` when that is not known. A routine bearer
@@ -564,14 +567,21 @@ export class MobilePushRegistration {
     // hours ahead sees every fresh token as expired, so after the grace the
     // same bearer is sent and authn's answer decides.
     const expiresAtMs = readAccessTokenExpiryMs(bearer);
-    if (
-      expiresAtMs !== null &&
-      expiresAtMs <= Date.now() &&
-      this.heldExpiredBearer !== bearer
-    ) {
-      this.heldExpiredBearer = bearer;
-      this.scheduleRegistration(EXPIRED_BEARER_GRACE_MS);
-      return;
+    if (expiresAtMs !== null && expiresAtMs <= Date.now()) {
+      const now = Date.now();
+      if (this.expiredBearerHold?.bearer !== bearer) {
+        this.expiredBearerHold = {
+          bearer,
+          graceEndsAt: now + EXPIRED_BEARER_GRACE_MS,
+        };
+      }
+      // Whatever re-armed the timer (a muted-set change, a failed send), the
+      // grace runs to its own end before this bearer goes out.
+      const remainingMs = this.expiredBearerHold.graceEndsAt - now;
+      if (remainingMs > 0) {
+        this.scheduleRegistration(remainingMs);
+        return;
+      }
     }
     const mutedSeverities = readMutedSeverities(userId);
     const key = registrationKey(userId, token, mutedSeverities);
@@ -682,7 +692,7 @@ export class MobilePushRegistration {
     this.lastResumeRevalidationAt = null;
     this.setRegistrationState("pending");
     this.bearerToken = null;
-    this.heldExpiredBearer = null;
+    this.expiredBearerHold = null;
     this.userId = null;
     this.lastRegisteredKey = null;
     // The stored set stays for this account's next sign-in, which sends it.
