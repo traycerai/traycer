@@ -3,7 +3,7 @@
  * host picker. The faked host and the helpers are in
  * `onboarding-memory-act-fixture.tsx`.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -36,6 +36,7 @@ import {
   useOnboardingAgentMemories,
   type OnboardingAgentMemories,
 } from "@/components/onboarding/use-onboarding-agent-memories";
+import { HostRuntimeContext, useHostBinding } from "@/lib/host";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 
 vi.mock("@/components/auth/cinematic-backdrop", () => ({
@@ -133,8 +134,9 @@ describe("the Memory act: the host is picked while a save is running", () => {
     await chooseTraycer();
     await providerSwitch("codex");
     await continueFromMemory();
+    // Writes go one at a time, each after a read: the first is held open.
     await waitFor(() =>
-      expect(paramsOf("providers.setNativeMemory")).toHaveLength(2),
+      expect(paramsOf("providers.setNativeMemory")).toHaveLength(1),
     );
 
     await pickOtherHost();
@@ -146,7 +148,7 @@ describe("the Memory act: the host is picked while a save is running", () => {
       callsTo(HOST_ID).filter(
         (call) => call.method === "providers.setNativeMemory",
       ),
-    ).toHaveLength(2);
+    ).toHaveLength(1);
     expect(methodsSentTo(OTHER_HOST.hostId)).not.toContain(
       "providers.setNativeMemory",
     );
@@ -267,5 +269,99 @@ describe("the Memory act's save: the picker names another host but the client st
 
     await expect(saved).resolves.toBe(false);
     expect(methodsSentTo(HOST_ID)).not.toContain("providers.setNativeMemory");
+  });
+});
+
+interface RebindProbe {
+  readonly memory: OnboardingAgentMemories;
+  readonly bindTo: (hostId: string) => void;
+}
+
+/**
+ * The hook under a binding a test can move between hosts, as the tour's
+ * picker does: the client and the host it names change together.
+ */
+function RebindableMemoryHost(props: {
+  readonly onRender: (probe: RebindProbe) => void;
+}) {
+  const ambient = useHostBinding();
+  const [boundHost, setBoundHost] = useState<string>(HOST_ID);
+  const binding = useMemo(
+    () =>
+      ambient === null
+        ? null
+        : {
+            ...ambient,
+            hostClient: ambient.hostClient.createRequesterForHostId(boundHost),
+            hostId: boundHost,
+          },
+    [ambient, boundHost],
+  );
+  return (
+    <HostRuntimeContext.Provider value={binding}>
+      <BoundMemoryHook
+        pickedHostId={boundHost}
+        bindTo={setBoundHost}
+        onRender={props.onRender}
+      />
+    </HostRuntimeContext.Provider>
+  );
+}
+
+function BoundMemoryHook(props: {
+  readonly pickedHostId: string;
+  readonly bindTo: (hostId: string) => void;
+  readonly onRender: (probe: RebindProbe) => void;
+}) {
+  const memory = useOnboardingAgentMemories({
+    active: true,
+    hostUsable: true,
+    pickedHostId: props.pickedHostId,
+  });
+  const { onRender, bindTo } = props;
+  useEffect(() => {
+    onRender({ memory, bindTo });
+  }, [memory, bindTo, onRender]);
+  return null;
+}
+
+describe("the Memory act's save: a held write outlives a choice made on another host", () => {
+  it("sends the first host no second set after a choice on another host replaced its draft", async () => {
+    world.otherHosts = [OTHER_HOST];
+    world.setAnswers = ["queued"];
+    let latest: RebindProbe | null = null;
+    const current = (): RebindProbe => {
+      if (latest === null) throw new Error("the hook has not rendered yet");
+      return latest;
+    };
+    renderInHost(
+      <RebindableMemoryHost
+        onRender={(probe) => {
+          latest = probe;
+        }}
+      />,
+    );
+    await waitFor(() => expect(current().memory.rows).toHaveLength(2));
+    act(() => current().memory.choose());
+    await waitFor(() => expect(current().memory.chosen).toBe(true));
+    await act(async () => {
+      await current().memory.save();
+    });
+    expect(paramsOf("config.agentMemories.set")).toHaveLength(1);
+
+    // A choice on the other host replaces the draft kept for the first.
+    act(() => current().bindTo(OTHER_HOST.hostId));
+    act(() => current().memory.choose());
+    act(() => current().bindTo(HOST_ID));
+    await waitFor(() => expect(current().memory.rows).toHaveLength(2));
+    act(() => current().memory.choose());
+    await waitFor(() => expect(current().memory.chosen).toBe(true));
+    let saved = true;
+    await act(async () => {
+      saved = await current().memory.save();
+    });
+
+    expect(saved).toBe(false);
+    expect(paramsOf("config.agentMemories.set")).toHaveLength(1);
   });
 });

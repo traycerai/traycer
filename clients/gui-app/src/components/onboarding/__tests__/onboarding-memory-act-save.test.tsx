@@ -2,9 +2,13 @@
  * The Memory act's saves: what Continue writes, the order, a failed write and a queued one. The faked host and the helpers are in `onboarding-memory-act-fixture.tsx`.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import {
   ENVIRONMENT_ID,
+  acceptHeldWrite,
+  deliverAcceptedWrites,
+  deliverSavedWrite,
+  overturnWrite,
   cleanupMemoryActFixture,
   resetMemoryActFixture,
   chooseTraycer,
@@ -12,6 +16,7 @@ import {
   currentStepId,
   defaultProviders,
   expectOnStep,
+  invalidateAllQueries,
   hostCalls,
   isOn,
   methodsInOrder,
@@ -217,7 +222,8 @@ describe("the Memory act: a queued Traycer write", () => {
     expect(paramsOf("providers.setNativeMemory")).toEqual([]);
     expect(currentStepId()).toBe("agent-memories");
 
-    world.accepted = [{ uploadId: "upload-1", environmentId: ENVIRONMENT_ID }];
+    acceptHeldWrite("upload-1", ENVIRONMENT_ID);
+    deliverAcceptedWrites();
     await continueFromMemory();
     await expectOnStep("session-import");
 
@@ -228,26 +234,23 @@ describe("the Memory act: a queued Traycer write", () => {
     ]);
   });
 
-  it("sends a fresh set only on the retry after the configuration refused it", async () => {
+  it("sends a fresh set once the configuration refused the held one, and only then", async () => {
     world.setAnswers = ["queued", "applied"];
     await openMemoryAct();
     await chooseTraycer();
     await continueFromMemory();
     await screen.findByTestId("onboarding-memory-save-report");
+    expect(paramsOf("config.agentMemories.set")).toHaveLength(1);
 
     world.refused = ["upload-1"];
     await continueFromMemory();
-    await waitFor(() =>
-      expect(
-        screen.getByTestId("onboarding-memory-save-report").textContent,
-      ).toContain("turned this change away"),
-    );
-    expect(paramsOf("config.agentMemories.set")).toHaveLength(1);
-    expect(paramsOf("providers.setNativeMemory")).toEqual([]);
-
-    await continueFromMemory();
     await expectOnStep("session-import");
+
     expect(paramsOf("config.agentMemories.set")).toHaveLength(2);
+    const order = methodsInOrder();
+    expect(order.indexOf("environment.status")).toBeLessThan(
+      order.lastIndexOf("config.agentMemories.set"),
+    );
   });
 
   it("does not take an on read for the held write while the receipt is missing", async () => {
@@ -279,7 +282,7 @@ describe("the Memory act: a queued Traycer write", () => {
 
     // Rebound: the receipt belongs to the configuration the host left.
     world.environmentId = "env-rebound";
-    world.accepted = [{ uploadId: "upload-1", environmentId: ENVIRONMENT_ID }];
+    acceptHeldWrite("upload-1", ENVIRONMENT_ID);
     await continueFromMemory();
     await expectOnStep("session-import");
 
@@ -343,5 +346,136 @@ describe("the Memory act: the report and the switch after a save", () => {
     );
     expect(report.textContent).toContain("Couldn't change Codex memories.");
     expect(report.textContent).not.toContain("now on");
+  });
+});
+
+describe("the Memory act: what a retry trusts after the host moves", () => {
+  it("reads the configuration the host serves now before it writes any provider", async () => {
+    world.nativeFailures.set("claude", 1);
+    await openMemoryAct();
+    await chooseTraycer();
+    await continueFromMemory();
+    await screen.findByTestId("onboarding-memory-save-report");
+    expect(paramsOf("config.agentMemories.set")).toHaveLength(1);
+
+    // The host is rebound to a configuration where Traycer memories are off.
+    world.environmentId = "env-rebound";
+    world.memoriesOn = false;
+    await continueFromMemory();
+    await expectOnStep("session-import");
+
+    expect(paramsOf("config.agentMemories.set")).toHaveLength(2);
+    const order = methodsInOrder();
+    expect(order.lastIndexOf("providers.setNativeMemory")).toBeGreaterThan(
+      order.lastIndexOf("config.agentMemories.set"),
+    );
+  });
+
+  it("shows the state of the configuration its last read named, not the one it saved to", async () => {
+    world.nativeFailures.set("claude", 1);
+    await openMemoryAct();
+    await chooseTraycer();
+    await continueFromMemory();
+    const report = await screen.findByTestId("onboarding-memory-save-report");
+    expect(report.textContent).toContain("Traycer memories are on.");
+
+    world.environmentId = "env-rebound";
+    world.memoriesOn = false;
+    await act(() => invalidateAllQueries());
+
+    // Nothing of the act's is written in the configuration the read names.
+    await waitFor(() =>
+      expect(screen.queryByTestId("onboarding-memory-save-report")).toBeNull(),
+    );
+    expect(switchOf("onboarding-memory-traycer").hasAttribute("disabled")).toBe(
+      false,
+    );
+  });
+
+  it("does not send a second set to a configuration whose held write is still pending", async () => {
+    world.setAnswers = ["queued"];
+    await openMemoryAct();
+    await chooseTraycer();
+    await continueFromMemory();
+    await screen.findByTestId("onboarding-memory-save-report");
+
+    world.environmentId = "env-rebound";
+    await continueFromMemory();
+    await settled();
+    expect(paramsOf("config.agentMemories.set")).toHaveLength(2);
+
+    world.environmentId = ENVIRONMENT_ID;
+    await continueFromMemory();
+    await settled();
+
+    expect(paramsOf("config.agentMemories.set")).toHaveLength(2);
+    expect(currentStepId()).toBe("agent-memories");
+  });
+});
+
+describe("the Memory act: a write the host has not read back, and one overturned", () => {
+  it("holds the providers while a saved write has not reached this computer, then finishes once it has", async () => {
+    world.setAnswers = ["saved"];
+    await openMemoryAct();
+    await chooseTraycer();
+    await continueFromMemory();
+
+    const report = await screen.findByTestId("onboarding-memory-save-report");
+    expect(report.textContent).toContain(
+      "Traycer memories are saved to your configuration but haven't reached this computer yet.",
+    );
+    expect(report.textContent).toContain(
+      "Your providers' memories weren't changed.",
+    );
+    expect(
+      screen.getByTestId("onboarding-memory-traycer").textContent,
+    ).toContain(
+      "Waiting for your configuration. Change this later in Settings → Agent memories.",
+    );
+    expect(switchOf("onboarding-memory-traycer").hasAttribute("disabled")).toBe(
+      true,
+    );
+    expect(paramsOf("providers.setNativeMemory")).toEqual([]);
+
+    // Retrying before it arrives sends nothing new.
+    await continueFromMemory();
+    await settled();
+    expect(paramsOf("config.agentMemories.set")).toHaveLength(1);
+    expect(paramsOf("providers.setNativeMemory")).toEqual([]);
+
+    deliverSavedWrite();
+    await continueFromMemory();
+    await expectOnStep("session-import");
+    expect(paramsOf("config.agentMemories.set")).toHaveLength(1);
+    expect(paramsOf("providers.setNativeMemory")).toHaveLength(2);
+  });
+
+  it("stops on a write a later revision turned off, never sends it again, and lets the person move on", async () => {
+    world.nativeFailures.set("claude", 1);
+    await openMemoryAct();
+    await chooseTraycer();
+    await continueFromMemory();
+    await screen.findByTestId("onboarding-memory-save-report");
+    expect(paramsOf("config.agentMemories.set")).toHaveLength(1);
+    const providerWrites = paramsOf("providers.setNativeMemory").length;
+
+    overturnWrite();
+    await continueFromMemory();
+    await settled();
+    expect(paramsOf("config.agentMemories.set")).toHaveLength(1);
+    expect(
+      screen.queryByTestId("onboarding-memory-save-report")?.textContent,
+    ).toContain("Couldn't turn on Traycer memories.");
+    expect(paramsOf("providers.setNativeMemory")).toHaveLength(providerWrites);
+    expect(switchOf("onboarding-memory-traycer").hasAttribute("disabled")).toBe(
+      false,
+    );
+
+    // Turned off, Continue has nothing to write and moves on.
+    fireEvent.click(switchOf("onboarding-memory-traycer"));
+    await continueFromMemory();
+    await expectOnStep("session-import");
+    expect(paramsOf("config.agentMemories.set")).toHaveLength(1);
+    expect(paramsOf("providers.setNativeMemory")).toHaveLength(providerWrites);
   });
 });

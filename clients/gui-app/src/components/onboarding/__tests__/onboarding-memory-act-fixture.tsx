@@ -72,10 +72,12 @@ interface ProviderSpec {
   readonly supported: boolean;
   readonly nativeMemory: boolean;
 }
-type SetAnswer = "applied" | "queued" | "fail";
+type SetAnswer = "applied" | "saved" | "queued" | "fail";
 interface Receipt {
   readonly uploadId: string;
   readonly environmentId: string;
+  /** The configuration revision the edit was saved as. */
+  readonly revision: number;
 }
 interface Deferred {
   readonly promise: Promise<void>;
@@ -85,6 +87,10 @@ interface Deferred {
 /** What the faked host holds and answers. Reset for every test. */
 interface World {
   memoriesOn: boolean;
+  /** A write the configuration saved that this host has not received: its revision. */
+  undelivered: number | null;
+  /** The revision this host has read the configuration at; `get` answers it. */
+  revision: number;
   /** The configuration the host serves; a rebound host answers with another. */
   environmentId: string;
   providers: ProviderSpec[];
@@ -118,6 +124,8 @@ export function defaultProviders(): ProviderSpec[] {
 function freshWorld(): World {
   return {
     memoriesOn: false,
+    undelivered: null,
+    revision: 4,
     environmentId: ENVIRONMENT_ID,
     providers: defaultProviders(),
     setAnswers: ["applied"],
@@ -209,7 +217,7 @@ function statusAnswer() {
       key: "memory",
       os: "any",
       environmentId: receipt.environmentId,
-      revision: 3,
+      revision: receipt.revision,
       acceptedAt: 1,
     })),
   });
@@ -245,7 +253,7 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) => {
       }),
       "config.agentMemories.get": () => ({
         enabled: world.memoriesOn,
-        revision: 4,
+        revision: world.revision,
         environmentId: world.environmentId,
       }),
       "config.agentMemories.set": async (request) => {
@@ -262,11 +270,22 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) => {
             environmentId: world.environmentId,
             uploadId: "upload-1",
           };
+        if (answer === "saved") {
+          world.undelivered = world.revision + 1;
+          return {
+            enabled: world.memoriesOn,
+            state: "saved" as const,
+            revision: world.undelivered,
+            environmentId: world.environmentId,
+            uploadId: null,
+          };
+        }
         world.memoriesOn = request.enabled;
+        world.revision += 1;
         return {
           enabled: request.enabled,
           state: "applied" as const,
-          revision: 5,
+          revision: world.revision,
           environmentId: world.environmentId,
           uploadId: null,
         };
@@ -286,6 +305,42 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) => {
   messengers.push(messenger);
   return messenger;
 };
+
+/**
+ * The configuration takes a held edit: its receipt names the revision it was
+ * saved as. This host has not received that revision yet, so it still reads
+ * what it did before until `deliverAcceptedWrites`.
+ */
+export function acceptHeldWrite(uploadId: string, environmentId: string): void {
+  world.accepted.push({
+    uploadId,
+    environmentId,
+    revision: world.revision + 1,
+  });
+}
+
+/** The host receives every revision the configuration has taken, and reads Traycer memories as on. */
+export function deliverAcceptedWrites(): void {
+  for (const receipt of world.accepted)
+    if (receipt.environmentId === world.environmentId) {
+      world.revision = Math.max(world.revision, receipt.revision);
+      world.memoriesOn = true;
+    }
+}
+
+/** The host receives the revision a `saved` answer named, and reads Traycer memories as on. */
+export function deliverSavedWrite(): void {
+  if (world.undelivered === null) return;
+  world.revision = world.undelivered;
+  world.memoriesOn = true;
+  world.undelivered = null;
+}
+
+/** A later revision turns Traycer memories off, and this host reads it. */
+export function overturnWrite(): void {
+  world.revision += 1;
+  world.memoriesOn = false;
+}
 
 /** Every recorded call of one method, in the order the host received them. */
 export function paramsOf(method: string): unknown[] {
