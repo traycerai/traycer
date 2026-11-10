@@ -102,7 +102,12 @@ export class ConditionPollEpisodeCoordinator {
         ? { refetchInterval: false }
         : { refetchInterval: this.refetchIntervalFor(method), retry: false };
     }
-    if (poll !== true) return { refetchInterval: false };
+    if (poll !== true) {
+      return {
+        refetchInterval: false,
+        refetchIntervalInBackground: false,
+      };
+    }
     if (!("requiresWindowAttention" in policy)) {
       return {
         refetchInterval: policy.intervalMs,
