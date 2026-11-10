@@ -319,8 +319,6 @@ describe("the trunk session's status surfaces", () => {
     // The task row's own navigate-to-task link is its only control: no Stop,
     // no Pin, nothing that would act on the check-in task from here.
     expect(within(taskRow).getAllByRole("button")).toEqual([taskButton]);
-    expect(within(taskRow).queryByRole("button", { name: /stop/i })).toBeNull();
-    expect(within(taskRow).queryByRole("button", { name: /pin/i })).toBeNull();
 
     const subscriptionText = within(view()).getByText(
       /Notifications · Every 2 hours/,
