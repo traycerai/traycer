@@ -207,24 +207,36 @@ export function useOnboardingAgentMemories(input: {
     const outcome = draft.traycerOutcome;
     if (outcome?.kind === "saved") return true;
     if (!sendsTo(target)) return false;
-    // Read before writing: a configuration that has it on already needs no
-    // write, and a held edit shows here only once it has been saved and
-    // received - until then the host still reads the old value.
     const reread = await memoryRead.refetch();
-    if (reread.status === "success" && reread.data.enabled) {
+    const read = reread.status === "success" ? reread.data : null;
+    if (outcome?.kind === "queued") {
+      // A held edit is answered by `environment.status` alone, and only while
+      // this host still serves the configuration it was made in. A read that
+      // says on cannot answer it: it may be an earlier revision that a later,
+      // undelivered one overturns. Nor can a receipt once the host has been
+      // rebound: the edit landing in the old configuration leaves this one
+      // as it was, so its providers must not be turned off on the strength
+      // of it.
+      if (read === null) return false;
+      if (read.environmentId === outcome.environmentId) {
+        const held = await heldEditOutcome(target, outcome);
+        record(target.hostId, (current) => ({
+          ...current,
+          traycerOutcome: held,
+        }));
+        return held.kind === "saved";
+      }
+      // Rebound: the held edit is the old configuration's business, and the
+      // one this host serves now starts over below.
+    }
+    // Read before writing: a configuration that has it on already needs no
+    // write.
+    if (read?.enabled === true) {
       record(target.hostId, (current) => ({
         ...current,
         traycerOutcome: { kind: "saved" },
       }));
       return true;
-    }
-    if (outcome?.kind === "queued") {
-      const held = await heldEditOutcome(target, outcome);
-      record(target.hostId, (current) => ({
-        ...current,
-        traycerOutcome: held,
-      }));
-      return held.kind === "saved";
     }
     if (!sendsTo(target)) return false;
     try {
