@@ -278,6 +278,13 @@ describe("a failed turn's error row, in a read-only bot session", () => {
       mountSession();
       await settleLegendList();
 
+      // Positive control: the row itself is reached and the error block's
+      // own message renders as plain text - proof the row genuinely mounted,
+      // not that it was absent for an unrelated reason (a crash, a missing
+      // mock) that would make the negative assertions below pass vacuously.
+      expect(
+        within(view()).getByText("The turn could not be completed."),
+      ).toBeTruthy();
       expect(screen.queryByLabelText("Report issue")).toBeNull();
       expect(screen.queryByTestId("failed-turn-actions")).toBeNull();
       expect(screen.queryByRole("button", { name: /Retry/ })).toBeNull();
@@ -298,6 +305,12 @@ describe("a failed turn's error row, in a read-only bot session", () => {
       mountSession();
       await settleLegendList();
 
+      // Positive control: same reason as the sibling suite above - the row
+      // itself rendered its error message, not merely "no Update button"
+      // for an unrelated reason.
+      expect(
+        within(view()).getByText("The turn could not be completed."),
+      ).toBeTruthy();
       expect(within(view()).queryByText("Update")).toBeNull();
     });
   });
