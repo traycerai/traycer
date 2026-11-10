@@ -11,3 +11,4 @@ b57b45ea2f27489bec709f1dd4a3ca08009a9adb:clients/gui-app/src/components/settings
 5b403e6c438ff700bd9ecc2b601b358be3df3e65:clients/gui-app/src/components/settings/panels/__tests__/providers-settings-panel.test.tsx:generic-api-key:3475
 5b403e6c438ff700bd9ecc2b601b358be3df3e65:clients/gui-app/src/components/settings/panels/__tests__/providers-settings-panel.test.tsx:generic-api-key:3583
 9bd9be0173f9de50e15971c70cb3591a96b2dd50:clients/gui-app/src/components/bots/__tests__/bot-tab-surface.test.tsx:generic-api-key:1153
+31a1c4933f80367f97da990662190a7964ea801b:clients/gui-app/src/components/settings/panels/__tests__/env-override-editor-phone.test.tsx:generic-api-key:27
