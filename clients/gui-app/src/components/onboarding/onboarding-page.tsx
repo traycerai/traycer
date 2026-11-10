@@ -19,6 +19,7 @@ import {
 } from "motion/react";
 import * as m from "motion/react-m";
 import { ChevronLeft } from "lucide-react";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Kbd } from "@/components/ui/kbd";
 import { ShortcutHint } from "@/components/ui/shortcut-hint";
 import { BrandMark } from "@/components/auth/cinematic-backdrop";
@@ -39,6 +40,11 @@ import {
   OnboardingHostUnavailableNotice,
 } from "@/components/onboarding/onboarding-host-picker";
 import { OnboardingSessionImportStage } from "@/components/onboarding/onboarding-session-import-stage";
+import { OnboardingMemoryStage } from "@/components/onboarding/onboarding-memory-stage";
+import {
+  useOnboardingAgentMemories,
+  type OnboardingAgentMemories,
+} from "@/components/onboarding/use-onboarding-agent-memories";
 import { OnboardingWorkspaceIllustration } from "@/components/onboarding/onboarding-workspace-illustration";
 import { useOnboardingHorizontalDrag } from "@/components/onboarding/use-onboarding-swipe";
 import { escapeOwnedElsewhere } from "@/components/onboarding/guide-overlays";
@@ -47,6 +53,7 @@ import {
   type SessionImportScanHandle,
 } from "@/components/session-import/use-session-import-scan";
 import { useSessionImportAvailable } from "@/hooks/session-import/use-session-import-available";
+import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { HostRuntimeContext, useHostBinding } from "@/lib/host";
 import {
   useHostScopeFor,
@@ -262,11 +269,27 @@ function OnboardingActs() {
   // The ambient capability fixes the tour's shape. The import stage checks
   // the picked host again before offering its live wizard.
   const sessionImportAvailable = useSessionImportAvailable();
+  // The memory act, on the same terms as import: only a host that negotiated
+  // the setting's reader or writer AWAY drops it, so an unanswered handshake
+  // does not blink the act out of the rail. Asked of the tour's host, which
+  // is where the choice would be saved.
+  const memoriesReadable = useHostMethodSupport(
+    scope.hostId,
+    "config.agentMemories.get",
+  );
+  const memoriesWritable = useHostMethodSupport(
+    scope.hostId,
+    "config.agentMemories.set",
+  );
   // The phone layout is a VIEWPORT answer, not a product one: a narrow desktop
   // window gets the same shell, the same scenes and the same copy, and an
   // installed app on a tablet gets the desktop stage.
   const phone = useIsMobileViewport();
-  const steps = onboardingStepsFor(sessionImportAvailable, phone);
+  const steps = onboardingStepsFor({
+    sessionImport: sessionImportAvailable,
+    agentMemories: memoriesReadable !== false && memoriesWritable !== false,
+    phone,
+  });
   const scopedBinding = useScopedHostBinding(scope);
   const ambientBinding = useHostBinding();
   const scopedStreamBinding = useScopedStreamBinding(scope);
@@ -358,6 +381,12 @@ function OnboardingTour(props: {
       setScopedHostId(personalFallbackHostId);
     }
   }, [personalFallbackHostId, setScopedHostId]);
+  // Held here, not by the act, so its choices survive Back and Next.
+  const memory = useOnboardingAgentMemories({
+    active: step.id === "agent-memories",
+    hostUsable: onboardingHostIsUsable(hostPicker),
+  });
+  const memoryFooter = memoryFooterFor(step, memory);
 
   useLayoutEffect(() => {
     restart();
@@ -433,6 +462,25 @@ function OnboardingTour(props: {
     });
   }, [advanceStep, finish, index, isLastStep, steps]);
 
+  // The footer's primary, Enter and the arrow key. On the memory act with
+  // Traycer memories chosen it saves first and moves on only once everything
+  // has landed - and only if the person is still on the act it saved.
+  const proceed = (): void => {
+    if (memoryFooter?.kind !== "save") {
+      advance();
+      return;
+    }
+    if (memory.saving) return;
+    const savedOnStep = index;
+    void memory.save().then((done) => {
+      const now = clampOnboardingStep(
+        useOnboardingStore.getState().step,
+        steps.length,
+      );
+      if (done && now === savedOnStep) advance();
+    });
+  };
+
   const handleKeyboard = useEffectEvent((event: KeyboardEvent): void => {
     if (welcomePhase !== "ready") return;
     if (
@@ -460,7 +508,7 @@ function OnboardingTour(props: {
       return;
     if (event.key === "ArrowRight" || event.key === "Enter") {
       event.preventDefault();
-      advance();
+      proceed();
     } else if (event.key === "ArrowLeft") {
       event.preventDefault();
       back();
@@ -479,8 +527,12 @@ function OnboardingTour(props: {
   // the scenes pages them and only their last one hands an act swipe over.
   const actOffset = useOnboardingHorizontalDrag(stageRef, {
     enabled: phone && welcomePhase === "ready",
+    // A swipe never saves: with choices waiting on the memory act, Continue
+    // is the one way forward that writes them.
     canCommit: (direction) =>
-      direction === "forward" ? !isLastStep : index > 0,
+      direction === "forward"
+        ? !isLastStep && memoryFooter?.kind !== "save"
+        : index > 0,
     onCommit: (direction) => {
       if (direction === "forward") advance();
       else back();
@@ -613,6 +665,7 @@ function OnboardingTour(props: {
                     hostPicker={hostPicker}
                     scopeHostId={scope.hostId}
                     sessionImportScan={sessionImportScan}
+                    memory={memory}
                     onAdvance={advance}
                     onImportStarted={() => {
                       if (streamHostId !== null)
@@ -641,8 +694,10 @@ function OnboardingTour(props: {
             isLastStep={isLastStep}
             skipImport={skipImport}
             quietOnly={wizardOwnsPrimary}
+            memory={memoryFooter}
             onBack={back}
-            onAdvance={advance}
+            onAdvance={proceed}
+            onSkip={advance}
           />
         </section>
       </div>
@@ -780,6 +835,7 @@ function TourActStage(props: {
   readonly hostPicker: OnboardingHostPicker;
   readonly scopeHostId: string | null;
   readonly sessionImportScan: SessionImportScanHandle;
+  readonly memory: OnboardingAgentMemories;
   readonly onAdvance: () => void;
   readonly onImportStarted: () => void;
   readonly onBeforeTaskOpen: () => Promise<boolean>;
@@ -790,6 +846,7 @@ function TourActStage(props: {
     hostPicker,
     scopeHostId,
     sessionImportScan,
+    memory,
     onAdvance,
     onImportStarted,
     onBeforeTaskOpen,
@@ -815,6 +872,14 @@ function TourActStage(props: {
             />
           )}
         </div>
+      );
+    case "agent-memories":
+      return (
+        <OnboardingMemoryStage
+          memory={memory}
+          hostPicker={hostPicker}
+          onNotNow={onAdvance}
+        />
       );
     case "session-import":
       return (
@@ -912,6 +977,36 @@ function ProgressRail(props: {
 }
 
 /**
+ * What the footer does on the memory act, which is the one act whose primary
+ * can write: `choose` while its cards are up (they hold the way forward),
+ * `save` once Traycer memories are chosen. `null` everywhere else, including
+ * the act on a host that cannot take the choice - Continue only moves on there.
+ */
+type MemoryFooter =
+  | { readonly kind: "choose" }
+  | {
+      readonly kind: "save";
+      readonly saving: boolean;
+      /** The last save stopped short; offer a way on that writes nothing more. */
+      readonly interrupted: boolean;
+    };
+
+function memoryFooterFor(
+  step: OnboardingStep,
+  memory: OnboardingAgentMemories,
+): MemoryFooter | null {
+  if (step.id !== "agent-memories" || memory.availability !== "ready")
+    return null;
+  if (memory.chosen === null) return { kind: "choose" };
+  if (!memory.choosing) return null;
+  return {
+    kind: "save",
+    saving: memory.saving,
+    interrupted: memory.interrupted,
+  };
+}
+
+/**
  * The footer. One shape on every act and on both layouts, so the thumb finds
  * the same button in the same place all the way through: a full-width primary
  * on a phone, the desktop's right-hand pair otherwise. Back left the phone's
@@ -924,8 +1019,11 @@ function OnboardingActions(props: {
   readonly isLastStep: boolean;
   readonly skipImport: boolean;
   readonly quietOnly: boolean;
+  readonly memory: MemoryFooter | null;
   readonly onBack: () => void;
   readonly onAdvance: () => void;
+  /** On to the next act without saving anything more. */
+  readonly onSkip: () => void;
 }) {
   const quiet = props.quietOnly || props.skipImport;
   // "Skip for now" and "Skip intro" are the same word twice on a 393pt row, and
@@ -935,13 +1033,7 @@ function OnboardingActions(props: {
   return (
     <footer
       data-quiet={props.quietOnly}
-      className={cn(
-        "onboarding-actions flex shrink-0 items-center gap-2",
-        // Act 3's lone text button belongs in the middle of the row; every
-        // other footer is the desktop's right-hand cluster or one block button,
-        // both of which read the same either way.
-        props.quietOnly ? "justify-center" : "justify-end",
-      )}
+      className={footerClassName(props.phone, props.quietOnly, props.memory)}
     >
       {props.canGoBack && !props.phone ? (
         <button
@@ -954,30 +1046,135 @@ function OnboardingActions(props: {
           Back
         </button>
       ) : null}
-      <button
-        type="button"
-        data-testid="onboarding-advance"
-        onClick={props.onAdvance}
-        className={cn(
-          "onboarding-button",
-          quiet ? "onboarding-button--quiet" : "onboarding-button--primary",
-          props.phone && !props.quietOnly && "onboarding-button--block",
-        )}
-      >
-        {props.isLastStep ? lastStepLabel : "Continue"}
-        {/* The cap rides the button's own foreground: these are plain
-            `.onboarding-button` elements, so `Kbd`'s in-Button rules - the ones
-            that keep a cap readable on a filled primary - never fire here. */}
-        <ShortcutHint>
-          <Kbd
-            aria-hidden="true"
-            variant="inherit"
-            className="hidden md:inline-flex"
-          >
-            ↵
-          </Kbd>
-        </ShortcutHint>
-      </button>
+      {props.memory?.kind === "choose" ? (
+        // The cards are the way forward here, as on the approved board: a
+        // Continue beside them would be a third answer to a two-way question.
+        <p
+          data-testid="onboarding-memory-later-hint"
+          className="text-ui-xs text-muted-foreground"
+        >
+          You can change these choices later.
+        </p>
+      ) : (
+        <>
+          <MemorySkipButton
+            memory={props.memory}
+            label={skipLabel}
+            onSkip={props.onSkip}
+          />
+          <OnboardingAdvanceButton
+            quiet={quiet}
+            block={props.phone ? !props.quietOnly : false}
+            label={advanceLabel({
+              isLastStep: props.isLastStep,
+              lastStepLabel,
+              memory: props.memory,
+            })}
+            pending={props.memory?.kind === "save" && props.memory.saving}
+            onAdvance={props.onAdvance}
+          />
+        </>
+      )}
     </footer>
+  );
+}
+
+function footerClassName(
+  phone: boolean,
+  quietOnly: boolean,
+  memory: MemoryFooter | null,
+): string {
+  return cn(
+    "onboarding-actions flex shrink-0 items-center gap-2",
+    // Act 3's lone text button belongs in the middle of the row, as does the
+    // memory cards' hint on a phone; every other footer is the desktop's
+    // right-hand cluster or one block button, both of which read the same
+    // either way.
+    quietOnly || (phone && memory?.kind === "choose")
+      ? "justify-center"
+      : "justify-end",
+    // A phone with two ways on stacks them, the primary on top.
+    phone &&
+      memory?.kind === "save" &&
+      memory.interrupted &&
+      "flex-col-reverse items-stretch",
+  );
+}
+
+/**
+ * The way past a save that stopped short. It writes nothing more: whatever
+ * landed stays, and the act's report has said what that was.
+ */
+function MemorySkipButton(props: {
+  readonly memory: MemoryFooter | null;
+  readonly label: string;
+  readonly onSkip: () => void;
+}) {
+  if (props.memory?.kind !== "save" || !props.memory.interrupted) return null;
+  return (
+    <button
+      type="button"
+      data-testid="onboarding-memory-skip"
+      disabled={props.memory.saving}
+      onClick={props.onSkip}
+      className="onboarding-button onboarding-button--quiet"
+    >
+      {props.label}
+    </button>
+  );
+}
+
+function advanceLabel(input: {
+  readonly isLastStep: boolean;
+  readonly lastStepLabel: string;
+  readonly memory: MemoryFooter | null;
+}): string {
+  if (input.memory?.kind === "save" && input.memory.interrupted)
+    return "Try again";
+  return input.isLastStep ? input.lastStepLabel : "Continue";
+}
+
+function OnboardingAdvanceButton(props: {
+  readonly quiet: boolean;
+  readonly block: boolean;
+  readonly label: string;
+  /** A save is in flight: unchanged label, an inline spinner, no second press. */
+  readonly pending: boolean;
+  readonly onAdvance: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      data-testid="onboarding-advance"
+      disabled={props.pending}
+      aria-busy={props.pending}
+      onClick={props.onAdvance}
+      className={cn(
+        "onboarding-button",
+        props.quiet ? "onboarding-button--quiet" : "onboarding-button--primary",
+        props.block && "onboarding-button--block",
+      )}
+    >
+      {props.label}
+      {props.pending ? (
+        <AgentSpinningDots
+          className={undefined}
+          testId={undefined}
+          variant={undefined}
+        />
+      ) : null}
+      {/* The cap rides the button's own foreground: these are plain
+          `.onboarding-button` elements, so `Kbd`'s in-Button rules - the ones
+          that keep a cap readable on a filled primary - never fire here. */}
+      <ShortcutHint>
+        <Kbd
+          aria-hidden="true"
+          variant="inherit"
+          className="hidden md:inline-flex"
+        >
+          ↵
+        </Kbd>
+      </ShortcutHint>
+    </button>
   );
 }

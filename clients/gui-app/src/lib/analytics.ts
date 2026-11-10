@@ -328,6 +328,7 @@ export type AnalyticsResourcePressureTier = "elevated" | "high" | "critical";
  * allowed-values pinning below. */
 export type AnalyticsOnboardingStep =
   | "agent-guide"
+  | "agent-memories"
   | "command-theme"
   | "login-import"
   | "mobile-switcher"
@@ -1628,6 +1629,7 @@ const ANALYTICS_THEMES = new Set<string>([
 
 const ANALYTICS_ONBOARDING_STEPS = new Set<string>([
   "agent-guide",
+  "agent-memories",
   "command-theme",
   "mobile-switcher",
   "mobile-tasks",
