@@ -186,9 +186,16 @@ function answeredOf(
   if (questionCount === null) return { kind: "message", author, line: first };
   const count =
     questionCount === 1 ? "1 question" : `${questionCount} questions`;
-  return {
-    kind: "message",
-    author,
-    line: first === null ? count : `${first}: ${count}`,
-  };
+  return { kind: "message", author, line: cardLine(first, count) };
+}
+
+/**
+ * A card's first line with how many questions were answered: "Three things
+ * before I start: 3 questions". A line that already ends in a colon keeps
+ * one, and one that ends a sentence takes the count after a space.
+ */
+function cardLine(first: string | null, count: string): string {
+  const stem = first?.replace(/[\s:]+$/u, "") ?? "";
+  if (stem.length === 0) return count;
+  return /[.!?]$/u.test(stem) ? `${stem} ${count}` : `${stem}: ${count}`;
 }
