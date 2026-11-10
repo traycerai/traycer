@@ -36,6 +36,7 @@ import {
 import {
   providersListRequestSchema,
   providersListRequestSchemaBeforeV70,
+  providersListResponseSchema,
   providersListResponseSchemaV108Preimage,
   providersListResponseSchemaV100Preimage,
   providersListResponseSchemaV101Preimage,
@@ -307,6 +308,9 @@ const LIVE_FROZEN_EXPORTS = {
   // 10.8 froze when credential projections opened 10.9; its released shape
   // must stay byte-identical.
   "providers.list@10.8": providersListResponseSchemaV108Preimage,
+  // The head line. It names the LIVE response, so the next attempt to grow the
+  // provider state goes red on this line.
+  "providers.list@10.9": providersListResponseSchema,
   // 1.0 is hand-frozen at the three-code failure arm when `macos-ineligible`
   // opened 1.1; its dump did not change by the freeze.
   "providers.usePackVersion@1.0": providersUsePackVersionResponseSchemaV10,

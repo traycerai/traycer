@@ -382,54 +382,58 @@ afterEach(() => {
 });
 
 describe("useProviderProfileLoginFlow - a provider that refuses the completed sign-in", () => {
-  it("shows the reader wait and Cancel control, then completes when the host reports authentication", async () => {
-    const secondAwaitStarted = deferred<void>();
-    const secondAwaitResult = deferred<AwaitLoginResponse>();
-    const identityReached = deferred<void>();
-    let awaitCount = 0;
+  it.each([
+    { readerCount: 1, title: "Waiting for 1 agent on this profile" },
+    { readerCount: 2, title: "Waiting for 2 agents on this profile" },
+  ])(
+    "shows the wait for $readerCount reader(s) and Cancel control, then completes when the host reports authentication",
+    async ({ readerCount, title }) => {
+      const secondAwaitStarted = deferred<void>();
+      const secondAwaitResult = deferred<AwaitLoginResponse>();
+      const identityReached = deferred<void>();
+      let awaitCount = 0;
 
-    renderFlow({
-      mode: "create",
-      existingProfileId: null,
-      startLoginImpl: () => Promise.resolve(startedAnswer({})),
-      onIdentity: () => identityReached.resolve(),
-      awaitLoginImpl: (variables) => {
-        awaitCount += 1;
-        if (awaitCount === 1) {
-          return Promise.resolve(
-            awaitAnswer({
-              installation: {
-                kind: "waiting-for-readers",
-                admissionId: "admission-reader-wait",
-                count: 2,
-              },
-            }),
-          );
-        }
-        expect(variables.request.profileId).toBe("admission-reader-wait");
-        expect(variables.request.lastSeenReaderCount).toBe(2);
-        secondAwaitStarted.resolve();
-        return secondAwaitResult.promise;
-      },
-    });
+      renderFlow({
+        mode: "create",
+        existingProfileId: null,
+        startLoginImpl: () => Promise.resolve(startedAnswer({})),
+        onIdentity: () => identityReached.resolve(),
+        awaitLoginImpl: (variables) => {
+          awaitCount += 1;
+          if (awaitCount === 1) {
+            return Promise.resolve(
+              awaitAnswer({
+                installation: {
+                  kind: "waiting-for-readers",
+                  admissionId: "admission-reader-wait",
+                  count: readerCount,
+                },
+              }),
+            );
+          }
+          expect(variables.request.profileId).toBe("admission-reader-wait");
+          expect(variables.request.lastSeenReaderCount).toBe(readerCount);
+          secondAwaitStarted.resolve();
+          return secondAwaitResult.promise;
+        },
+      });
 
-    await act(async () => {
-      await secondAwaitStarted.promise;
-    });
-    expect(
-      screen.getByText("Waiting for 2 agents on this profile"),
-    ).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Cancel sign-in" })).toBeTruthy();
+      await act(async () => {
+        await secondAwaitStarted.promise;
+      });
+      expect(screen.getByText(title)).toBeTruthy();
+      expect(
+        screen.getByRole("button", { name: "Cancel sign-in" }),
+      ).toBeTruthy();
 
-    await act(async () => {
-      secondAwaitResult.resolve(awaitAnswer({ state: authenticatedState() }));
-      await identityReached.promise;
-    });
-    expect(flowState()).toBe("identity");
-    expect(
-      screen.queryByText("Waiting for 2 agents on this profile"),
-    ).toBeNull();
-  });
+      await act(async () => {
+        secondAwaitResult.resolve(awaitAnswer({ state: authenticatedState() }));
+        await identityReached.promise;
+      });
+      expect(flowState()).toBe("identity");
+      expect(screen.queryByText(title)).toBeNull();
+    },
+  );
 
   it("uses the waiting admission id for follow-up await, code submission, and cancellation", async () => {
     const secondAwaitStarted = deferred<void>();

@@ -236,11 +236,28 @@ describe("<ProviderProfileScopedSection /> profile summary email reveal", () => 
   it("reveals the raw email in the truncated address and its tooltip", () => {
     renderSection({});
 
-    fireEvent.click(screen.getByRole("button", { name: /Reveal email/ }));
+    const reveal = screen.getByRole("button", { name: /^Reveal email for / });
+    expect(reveal.hasAttribute("aria-pressed")).toBe(false);
+    fireEvent.click(reveal);
 
     const emailSpan = screen.getByText(RAW_EMAIL);
     expect(emailSpan.className).toContain("truncate");
     expect(tooltipTextFor(emailSpan)).toBe(RAW_EMAIL);
+
+    const hide = screen.getByRole("button", { name: /^Hide email for / });
+    expect(hide.hasAttribute("aria-pressed")).toBe(false);
+    expect(
+      screen.queryByRole("button", { name: /^Reveal email for / }),
+    ).toBeNull();
+    fireEvent.click(hide);
+
+    expect(screen.queryByText(RAW_EMAIL)).toBeNull();
+    expect(screen.getByText(REDACTED_EMAIL)).toBeTruthy();
+    expect(
+      screen
+        .getByRole("button", { name: /^Reveal email for / })
+        .hasAttribute("aria-pressed"),
+    ).toBe(false);
   });
 
   it("truncates the address and the plan chip, and badges a usable row Signed in", () => {

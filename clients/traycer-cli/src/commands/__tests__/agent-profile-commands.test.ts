@@ -711,10 +711,12 @@ describe("command registration", () => {
     );
   });
 
-  it("does not make --profile required on create, where omission means last-used", () => {
-    expect(requiredOptionFlags(expectAgentCommand("create"))).not.toContain(
-      "--profile",
-    );
+  it("does not make --profile required on create, where omission defaults to ambient", () => {
+    const create = expectAgentCommand("create");
+    expect(requiredOptionFlags(create)).not.toContain("--profile");
+    const description = optionDescription(create, "--profile");
+    expect(description).toContain("Omit to use 'ambient'");
+    expect(description).not.toContain("last-used");
   });
 
   it("requires full access in create and configure help unless the guide explicitly overrides it", () => {

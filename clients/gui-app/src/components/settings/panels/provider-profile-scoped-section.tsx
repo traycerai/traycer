@@ -546,7 +546,6 @@ function ProfileIdentity({
               ? `Hide email for ${profileDisplayLabel(profile)}`
               : `Reveal email for ${profileDisplayLabel(profile)}`
           }
-          aria-pressed={emailRevealed}
           className="shrink-0 rounded p-0.5 text-current opacity-70 transition-opacity hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
           onClick={() => setEmailRevealed(!emailRevealed)}
         >

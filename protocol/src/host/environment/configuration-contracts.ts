@@ -1266,7 +1266,7 @@ export const environmentPlansUnlinkPreviewV10 = defineRpcContract({
   responseSchema: environmentPlansUnlinkPreviewResponseSchema,
 });
 
-/** `environment.plans.unlink@1.0`: `not_linked` is a profile with no plan. */
+/** `environment.plans.unlink@1.1`: compare the held binding; `not_linked` has no plan. */
 export const environmentPlansUnlinkRequestSchema = lazySchema(() =>
   environmentPlanTargetRequestSchema.extend({
     expectedBindingVersion: z

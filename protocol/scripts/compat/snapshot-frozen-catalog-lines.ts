@@ -59,6 +59,7 @@ import {
 import {
   providersListRequestSchema,
   providersListRequestSchemaBeforeV70,
+  providersListResponseSchema,
   providersListResponseSchemaV100Preimage,
   providersListResponseSchemaV101Preimage,
   providersListResponseSchemaV102Preimage,
@@ -240,6 +241,9 @@ const FIXTURES = {
   // 10.8 froze when credential projections opened 10.9. Dump the released
   // preimage, so generation cannot copy the current credential-bearing shape.
   "providers.list@10.8": dump(providersListResponseSchemaV108Preimage),
+  // The head line. It dumps LIVE, so the next attempt to grow the provider
+  // state goes red on this line.
+  "providers.list@10.9": dump(providersListResponseSchema),
   "providers.usePackVersion@1.0": dump(providersUsePackVersionResponseSchemaV10),
   "providers.usePackVersion@1.1": dump(providersUsePackVersionResponseSchema),
   // The REQUEST lines carry their own freeze history (`native` grew the

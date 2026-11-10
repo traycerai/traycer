@@ -868,7 +868,7 @@ export function AddProfileWaitingStep({
           <div className="text-ui-sm font-medium text-foreground">
             {readerCount === undefined
               ? title
-              : `Waiting for ${readerCount} agents on this profile`}
+              : `Waiting for ${readerCount} ${readerCount === 1 ? "agent" : "agents"} on this profile`}
           </div>
           {readerCount === undefined && guidance !== null ? (
             <p className="mt-0.5 text-ui-xs leading-relaxed text-muted-foreground">
@@ -944,7 +944,6 @@ export function AddProfileIdentityStep({
             <button
               type="button"
               aria-label={emailRevealed ? "Hide email" : "Reveal email"}
-              aria-pressed={emailRevealed}
               className="rounded p-0.5 text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
               onClick={() => setEmailRevealed(!emailRevealed)}
             >
