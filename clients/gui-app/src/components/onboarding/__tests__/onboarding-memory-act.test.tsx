@@ -450,14 +450,29 @@ async function clickAdvance(): Promise<void> {
 /** The tour past its welcome, on the first act. */
 async function enterTour(): Promise<void> {
   renderTour();
-  fireEvent.click(await screen.findByTestId("onboarding-welcome-skip"));
-  await waitFor(
-    () => expect(screen.queryByTestId("onboarding-welcome-skip")).toBeNull(),
-    { timeout: 3000 },
+  const skipWelcome = await screen.findByTestId("onboarding-welcome-skip");
+  // The hand-off is a pair of timeouts; only those run on the fake clock.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    fireEvent.click(skipWelcome);
+    void act(() => vi.advanceTimersByTime(320));
+  } finally {
+    vi.useRealTimers();
+  }
+  await waitFor(() =>
+    expect(screen.queryByTestId("onboarding-welcome-skip")).toBeNull(),
   );
 }
 
+/** The Memory act, reached by the store's own re-seat. */
 async function openMemoryAct(): Promise<void> {
+  await enterTour();
+  act(() => useOnboardingStore.getState().reseat(2));
+  await screen.findByTestId("onboarding-memory-stage");
+}
+
+/** The Memory act, reached the way a person does: Continue through Providers. */
+async function walkToMemoryAct(): Promise<void> {
   await enterTour();
   await clickAdvance();
   await expectOnStep("providers");
@@ -492,10 +507,11 @@ async function writesAnswered(): Promise<void> {
   await waitFor(() => expect(queryClient.isMutating()).toBe(0));
   await act(() => Promise.resolve());
 }
-/** Lets queued renders and reads that send nothing run before a negative check. */
+/** Every read and write the page started has been answered. */
 async function settled(): Promise<void> {
-  await act(async () => {
-    await new Promise((done) => setTimeout(done, 0));
+  await waitFor(() => {
+    expect(queryClient.isFetching()).toBe(0);
+    expect(queryClient.isMutating()).toBe(0);
   });
 }
 
@@ -589,7 +605,7 @@ describe("the Memory act: what it shows", () => {
   });
 
   it("keeps explicit overrides across Back and Next", async () => {
-    await openMemoryAct();
+    await walkToMemoryAct();
     await chooseTraycer();
     fireEvent.click(await providerSwitch("codex"));
     expect(isOn(switchOf("onboarding-memory-provider-codex"))).toBe(true);
@@ -604,7 +620,7 @@ describe("the Memory act: what it shows", () => {
   });
 
   it("reconciles a changed selection by provider id", async () => {
-    await openMemoryAct();
+    await walkToMemoryAct();
     await chooseTraycer();
     fireEvent.click(await providerSwitch("codex"));
 
@@ -678,9 +694,10 @@ describe("the Memory act: what Continue writes", () => {
   it("does not write Traycer when the host already has it on, and locks its switch", async () => {
     world.memoriesOn = true;
     await openMemoryAct();
-    expect(
-      (await screen.findByText(/Traycer memories stay on/)).textContent,
-    ).toMatch(/stay on/);
+    await screen.findByText(/Traycer memories stay on/);
+    expect(screen.getByTestId("onboarding-memory-use").textContent).toBe(
+      "Set up provider memories",
+    );
 
     await chooseTraycer();
     const traycer = switchOf("onboarding-memory-traycer");
@@ -873,7 +890,7 @@ describe("the Memory act: host gates", () => {
   ])("offers no provider switches when %s", async (_name, manifest) => {
     resetNegotiatedManifests();
     recordNegotiatedHostManifest(HOST_ID, manifest);
-    await openMemoryAct();
+    await walkToMemoryAct();
     await chooseTraycer();
 
     const line = await screen.findByTestId("onboarding-memory-without-switch");
@@ -904,10 +921,7 @@ describe("the Memory act: finishing", () => {
     );
     expect(useOnboardingStore.getState().completedAt).toBeNull();
 
-    await act(async () => {
-      world.setGate?.resolve();
-      await new Promise((done) => setTimeout(done, 0));
-    });
+    act(() => world.setGate?.resolve());
     await waitFor(() =>
       expect(useOnboardingStore.getState().completedAt).toEqual(
         expect.any(Number),
@@ -917,7 +931,7 @@ describe("the Memory act: finishing", () => {
 
   it("does not advance a person who pressed Back while the save was in flight", async () => {
     world.setGate = deferred();
-    await openMemoryAct();
+    await walkToMemoryAct();
     await chooseTraycer();
     await continueFromMemory();
     await waitFor(() =>
@@ -926,10 +940,7 @@ describe("the Memory act: finishing", () => {
 
     fireEvent.click(screen.getByTestId("onboarding-back"));
     await expectOnStep("providers");
-    await act(async () => {
-      world.setGate?.resolve();
-      await new Promise((done) => setTimeout(done, 0));
-    });
+    act(() => world.setGate?.resolve());
     await waitFor(() =>
       expect(paramsOf("providers.setNativeMemory")).toHaveLength(2),
     );
