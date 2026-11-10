@@ -2,6 +2,17 @@
  * Query-key builders for non-Traycer Host `AuthService` reads.
  */
 export const authQueryKeys = {
+  teamComputers: (
+    auth: object | null,
+    userId: string | null,
+    environmentId: string,
+  ): readonly unknown[] => [
+    "auth",
+    "team-computers",
+    auth,
+    userId,
+    environmentId,
+  ],
   environmentInvitations: (
     authService: object | null,
     userId: string,

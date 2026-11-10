@@ -1,3 +1,9 @@
+import type {
+  TeamComputersResult,
+  SetEnvironmentBotHostResult,
+} from "@traycer-clients/shared/host-client/team-computers";
+import type { TeamComputerInstallTokenResult } from "@traycer-clients/shared/host-client/team-computer-install";
+import type { TeamComputerReleaseResult } from "@traycer-clients/shared/host-client/team-computer-release";
 import type { SandboxCatalogueReadinessRequest } from "@traycer/protocol/host/sandbox-control";
 import type { WindowCaptureRect } from "../ipc-contracts/window-capture-types";
 import type { SandboxArtifactBridge } from "@traycer-clients/shared/platform/sandbox-artifacts";
@@ -250,6 +256,27 @@ export interface DesktopPreloadBridge {
     hostId: string,
     input: UpdateHostVersionPolicyInput,
   ): Promise<UpdateHostVersionPolicyFetchResult>;
+  listTeamComputers(
+    bearer: string,
+    environmentId: string,
+  ): Promise<TeamComputersResult>;
+  setEnvironmentBotHost(
+    bearer: string,
+    environmentId: string,
+    hostId: string,
+    sharingGeneration: number,
+  ): Promise<SetEnvironmentBotHostResult>;
+  mintTeamComputerInstallToken(
+    bearerToken: string,
+    environmentId: string,
+  ): Promise<TeamComputerInstallTokenResult>;
+
+  releaseTeamComputer(
+    bearer: string,
+    hostId: string,
+    environmentId: string,
+  ): Promise<TeamComputerReleaseResult>;
+
   deregisterHostFromAccount(
     bearerToken: string,
     hostId: string,
@@ -1282,6 +1309,40 @@ export class DesktopRunnerHost implements IRunnerHost {
     input: UpdateHostVersionPolicyInput,
   ): Promise<UpdateHostVersionPolicyFetchResult> {
     return this.bridge.updateHostVersionPolicy(bearerToken, hostId, input);
+  }
+
+  listTeamComputers(
+    bearer: string,
+    environmentId: string,
+  ): Promise<TeamComputersResult> {
+    return this.bridge.listTeamComputers(bearer, environmentId);
+  }
+  setEnvironmentBotHost(
+    bearer: string,
+    environmentId: string,
+    hostId: string,
+    sharingGeneration: number,
+  ): Promise<SetEnvironmentBotHostResult> {
+    return this.bridge.setEnvironmentBotHost(
+      bearer,
+      environmentId,
+      hostId,
+      sharingGeneration,
+    );
+  }
+  mintTeamComputerInstallToken(
+    bearerToken: string,
+    environmentId: string,
+  ): Promise<TeamComputerInstallTokenResult> {
+    return this.bridge.mintTeamComputerInstallToken(bearerToken, environmentId);
+  }
+
+  releaseTeamComputer(
+    bearer: string,
+    hostId: string,
+    environmentId: string,
+  ): Promise<TeamComputerReleaseResult> {
+    return this.bridge.releaseTeamComputer(bearer, hostId, environmentId);
   }
 
   deregisterHostFromAccount(

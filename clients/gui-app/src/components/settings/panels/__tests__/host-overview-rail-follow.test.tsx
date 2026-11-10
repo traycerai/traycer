@@ -116,6 +116,8 @@ function mount(status: EnvironmentStatusResponseV11): void {
         hostName="Old laptop"
         status={status}
         binding={BINDING}
+        owner={null}
+        isLocalMachine={false}
       />
     </QueryClientProvider>,
   );

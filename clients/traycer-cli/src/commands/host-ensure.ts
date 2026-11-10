@@ -6,11 +6,14 @@ import { ensureHost, type HostEnsureResult } from "../host/ensure";
 import type { HostStartOrigin } from "../host/lifecycle-origin";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import type { Environment } from "../runner/environment";
+import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import { formatServiceLifecycleWarning } from "../service";
 import {
   formatCredentialProvisionNote,
   maybeProvisionCredential,
   runSignInPreflight,
+  runTeamInstallAuthPreflight,
+  completeTeamInstall,
   type HostInstallAuthPreflight,
 } from "../host/install-auth";
 import type { HostCredentialProvisionOutcome } from "../host/credential-provisioning";
@@ -22,6 +25,7 @@ import type { HostCredentialProvisionOutcome } from "../host/credential-provisio
 // itself. See host/ensure.ts for the source-resolution order and the
 // state machine.
 export interface HostEnsureArgs {
+  readonly team: string | null;
   readonly versionRequest: string | null;
   readonly fromPath: string | null;
   readonly bundledPath?: string | null;
@@ -57,6 +61,19 @@ export interface HostEnsureArgs {
 
 export function buildHostEnsureCommand(args: HostEnsureArgs): CommandFn {
   return async (ctx): Promise<CommandResult> => {
+    if (args.team !== null && args.noServiceRegister) {
+      throw cliError({
+        code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+        message:
+          "--team needs the host running; leave out --no-service-register.",
+        details: null,
+        exitCode: 1,
+      });
+    }
+    // A team request must authenticate even when the install is a no-op.
+    // Running this before ensure also refuses before any bytes are staged.
+    const teamSession =
+      args.team === null ? null : await runTeamInstallAuthPreflight(ctx);
     // This command can install + register + START a host (three of its four
     // actions), so it owns the same sign-in pre-flight and post-start
     // credential provisioning as `host install` and `host service install` -
@@ -75,7 +92,7 @@ export function buildHostEnsureCommand(args: HostEnsureArgs): CommandFn {
     // report: we never looked, so we make no claim either way about a host
     // this run did not touch. Bytes-only mirrors host-install -
     // `--no-service-register` starts nothing itself.
-    let authPreflight: HostInstallAuthPreflight = {
+    let authPreflight: HostInstallAuthPreflight = teamSession?.preflight ?? {
       state: "not-checked",
       reason: "nothing-to-start",
     };
@@ -101,7 +118,9 @@ export function buildHostEnsureCommand(args: HostEnsureArgs): CommandFn {
       keepInstalled: args.keepInstalled,
       onProgress: (info) => ctx.progress(info),
       beforeMutate: async () => {
-        authPreflight = await runSignInPreflight(ctx, args.noServiceRegister);
+        if (teamSession === null) {
+          authPreflight = await runSignInPreflight(ctx, args.noServiceRegister);
+        }
       },
     });
     // (A deliberate downgrade through `host ensure --release X` records its
@@ -136,8 +155,22 @@ export function buildHostEnsureCommand(args: HostEnsureArgs): CommandFn {
         : "none",
       authPreflight,
     );
+    const teamBinding =
+      args.team !== null &&
+      teamSession !== null &&
+      result.postSwapError === null &&
+      result.running
+        ? await completeTeamInstall(args.team, teamSession)
+        : null;
+    const human = buildHuman(
+      result,
+      responsiveness,
+      authPreflight,
+      credentialProvision,
+    );
     return {
       data: {
+        teamBinding,
         installed: result.installed,
         registered: result.registered,
         running: result.running,
@@ -153,17 +186,21 @@ export function buildHostEnsureCommand(args: HostEnsureArgs): CommandFn {
         authPreflight,
         credentialProvision,
       },
-      human: buildHuman(
-        result,
-        responsiveness,
-        authPreflight,
-        credentialProvision,
-      ),
+      human:
+        teamBinding !== null
+          ? `${human}; runs ${teamBinding.environment.label}`
+          : args.team !== null
+            ? `${human}; the computer was not added to the team`
+            : human,
       // An ensure whose post-swap start failed did not ensure anything is
       // running, so it exits non-zero - the same rule as `host install`. The
       // payload is unchanged: Desktop trusts a terminal `ok` line over a
       // non-zero exit and already maps `postSwapError` to a failed converge.
-      exitCode: result.postSwapError !== null ? 1 : 0,
+      exitCode:
+        result.postSwapError !== null ||
+        (args.team !== null && teamBinding === null)
+          ? 1
+          : 0,
     };
   };
 }

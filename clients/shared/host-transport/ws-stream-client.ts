@@ -42,6 +42,7 @@ import {
   hostStreamOpenAckFrameSchema,
   hostStreamFatalErrorFrameSchema,
   streamMethodFrameEnvelopeSchema,
+  STREAM_CAPABILITY_TEAM_CREDENTIAL_STATE,
   STREAM_CAPABILITY_CREDENTIAL_UPDATE,
   STREAM_CAPABILITY_CLOUD_VERDICT_UPDATE,
   STREAM_CAPABILITY_HOST_CREDENTIAL_PROVISION,
@@ -393,6 +394,7 @@ export class WsStreamClient<
    * credential it asks for.
    */
   private readonly provisionRetryTimers = new Map<string, TimerHandle>();
+  private readonly provisionGenerations = new Map<string, number>();
   /**
    * Hosts THIS client handed a credential to.
    *
@@ -537,13 +539,19 @@ export class WsStreamClient<
         ),
       onTransportReconnect: (reconnectingMethod) =>
         this.resetMethodSupport(reconnectingMethod),
-      onHostCredentialAck: (hostId, state) => {
-        this.handleHostCredentialAck(hostId, state);
+      onHostCredentialAck: (hostId, state, canProvision) => {
+        this.handleHostCredentialAck(hostId, state, canProvision);
       },
       // The passive tap is delivered by the session itself, ahead of the
       // compatibility abort, so it fires on EVERY state-carrying ack rather
       // than only the ones whose method version also happened to negotiate.
-      onHostCredentialState: this.options.onHostCredentialState,
+      onHostCredentialState: (hostId, state) => {
+        // Ownership can change even when this method's version cannot open.
+        if (state === "team-unavailable") {
+          this.handleHostCredentialAck(hostId, state, false);
+        }
+        this.options.onHostCredentialState?.(hostId, state);
+      },
       onAvailabilityRecovered: (kind) => {
         this.emitAvailabilityRecovered(kind);
       },
@@ -854,6 +862,7 @@ export class WsStreamClient<
   private handleHostCredentialAck(
     hostId: string,
     state: HostCredentialState,
+    canProvision: boolean,
   ): void {
     if (this.closed) {
       return;
@@ -864,6 +873,20 @@ export class WsStreamClient<
     // would then read as "unchanged" against a stale predecessor.
     const previousState = this.lastHostCredentialState.get(hostId) ?? null;
     this.lastHostCredentialState.set(hostId, state);
+    if (state === "team-unavailable") {
+      if (previousState !== state) {
+        this.provisionGenerations.set(
+          hostId,
+          (this.provisionGenerations.get(hostId) ?? 0) + 1,
+        );
+      }
+      this.discardPendingProvision(hostId);
+      this.clearProvisionRetry(hostId);
+      this.provisionAttemptedHostIds.delete(hostId);
+      this.handedOffHostIds.delete(hostId);
+      return;
+    }
+    if (!canProvision) return;
     if (
       previousState !== state &&
       (state === "missing" || state === "needs-reauth")
@@ -911,8 +934,9 @@ export class WsStreamClient<
   private async runMintFlow(
     mint: HostCredentialMintFlow,
     hostId: string,
-    state: Exclude<HostCredentialState, "active">,
+    state: Exclude<HostCredentialState, "active" | "team-unavailable">,
   ): Promise<void> {
+    const generation = this.provisionGenerations.get(hostId) ?? 0;
     let outcome: HostCredentialMintOutcome;
     try {
       outcome = await mint({ hostId, reason: state });
@@ -923,6 +947,7 @@ export class WsStreamClient<
       );
       return;
     }
+    if (generation !== (this.provisionGenerations.get(hostId) ?? 0)) return;
     if (outcome.kind === "pending-elsewhere") {
       // This client has not actually spent an attempt - the app is waiting on
       // a claim or a backoff window, not refusing. Give the marker back, and
@@ -1023,7 +1048,7 @@ export class WsStreamClient<
   private armProvisionRetry(
     hostId: string,
     retryAfterMs: number,
-    reason: Exclude<HostCredentialState, "active">,
+    reason: Exclude<HostCredentialState, "active" | "team-unavailable">,
   ): void {
     if (this.closed) {
       return;
@@ -1511,6 +1536,7 @@ interface StreamSessionOptions<Registry extends VersionedStreamRpcRegistry> {
   readonly onHostCredentialAck: (
     hostId: string,
     state: HostCredentialState,
+    canProvision: boolean,
   ) => void;
   /**
    * Passive observation of the same state, delivered EARLIER than
@@ -2262,6 +2288,7 @@ class StreamSession<
     this.openFrameCloudAuthorized = sentCloudAuthorized;
     const openFrame: ClientStreamOpenFrame = {
       kind: "open",
+      capabilities: [STREAM_CAPABILITY_TEAM_CREDENTIAL_STATE],
       token,
       manifest,
       clientIdentity: this.config.clientIdentity,
@@ -2668,30 +2695,25 @@ class StreamSession<
     // the owning client may respond to this synchronously by flushing a
     // credential minted on an earlier, now-dead socket.
     const hostId = this.openFrameHostId;
-    if (
-      this.supportsHostCredentialProvision &&
-      hostCredentialState !== null &&
-      hostId !== null
-    ) {
-      this.config.onHostCredentialAck(hostId, hostCredentialState);
+    if (hostCredentialState !== null && hostId !== null) {
+      this.config.onHostCredentialAck(
+        hostId,
+        hostCredentialState,
+        this.supportsHostCredentialProvision,
+      );
     }
   }
 
   /**
    * Passive observation of the ack's credential state, split out from the mint
-   * hook so it can fire before a compatibility abort. Guarded the same way the
-   * mint is (capability + state + host id) and never allowed to throw into the
-   * handshake.
+   * hook so it can fire before a compatibility abort. A team's unavailable
+   * state is still observable while provisioning is deliberately unsupported.
+   * An observer cannot throw into the handshake.
    */
   private reportHostCredentialState(state: HostCredentialState | null): void {
     const observe = this.config.onHostCredentialState;
     const hostId = this.openFrameHostId;
-    if (
-      observe === null ||
-      !this.supportsHostCredentialProvision ||
-      state === null ||
-      hostId === null
-    ) {
+    if (observe === null || state === null || hostId === null) {
       return;
     }
     try {

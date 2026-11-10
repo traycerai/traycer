@@ -11,6 +11,8 @@ import {
   formatCredentialProvisionNote,
   maybeProvisionCredential,
   runSignInPreflight,
+  runTeamInstallAuthPreflight,
+  completeTeamInstall,
 } from "../host/install-auth";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type {
@@ -95,6 +97,7 @@ import { holdVersionOnSwapCommitted } from "../host/held-host-version";
 // own `aud: "host"` credential instead of waiting for the first minting
 // client. Best-effort and deadline-bounded; failures warn.
 export interface HostInstallArgs {
+  readonly team: string | null;
   // Always a concrete version token - "latest" or a semver. A local
   // file is signalled by a non-null `fromPath` and supersedes
   // `versionRequest`. The entrypoint resolves "" / null at the
@@ -200,6 +203,15 @@ async function gateInstallStoreFormatFloor(
 
 export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
   return async (ctx): Promise<CommandResult> => {
+    if (args.team !== null && args.noServiceRegister) {
+      throw cliError({
+        code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+        message:
+          "--team needs the host running; leave out --no-service-register.",
+        details: null,
+        exitCode: 1,
+      });
+    }
     if (args.noServiceRegister && currentInstallPlatform() === "win32") {
       throw cliError({
         code: CLI_ERROR_CODES.INVALID_ARGUMENT,
@@ -229,7 +241,12 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
       ifIdle: args.ifIdle,
       force: args.force,
     });
-    const authPreflight = await runSignInPreflight(ctx, args.noServiceRegister);
+    const teamSession =
+      args.team === null ? null : await runTeamInstallAuthPreflight(ctx);
+    const authPreflight =
+      teamSession === null
+        ? await runSignInPreflight(ctx, args.noServiceRegister)
+        : teamSession.preflight;
     ctx.runtime.logger.info("Host install sign-in pre-flight resolved", {
       environment: ctx.runtime.environment,
       state: authPreflight.state,
@@ -397,6 +414,14 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
         : "none",
       authPreflight,
     );
+    const teamBinding =
+      args.team !== null &&
+      teamSession !== null &&
+      handle !== null &&
+      handle.state.postSwapError === null &&
+      handle.state.postSwapWarning === null
+        ? await completeTeamInstall(args.team, teamSession)
+        : null;
     const lifecycleData =
       handle !== null
         ? {
@@ -426,8 +451,14 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
     if (provisionNote !== null) {
       human = `${human}; ${provisionNote}`;
     }
+    if (teamBinding !== null) {
+      human = `${human}; runs ${teamBinding.environment.label}`;
+    } else if (args.team !== null) {
+      human = `${human}; the computer was not added to the team`;
+    }
     return {
       data: {
+        teamBinding,
         version: result.record.version,
         runtimeVersion: result.record.runtimeVersion,
         installedAt: result.record.installedAt,
@@ -451,7 +482,11 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
       // runners and reads `serviceLifecycle.postSwapError` exactly as before.
       // Not `host apply`'s contract: that primitive's exit 0 answers "did the
       // swap commit?" by design (see host-apply.ts).
-      exitCode: handle !== null && handle.state.postSwapError !== null ? 1 : 0,
+      exitCode:
+        (handle !== null && handle.state.postSwapError !== null) ||
+        (args.team !== null && teamBinding === null)
+          ? 1
+          : 0,
     };
   };
 }

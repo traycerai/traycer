@@ -82,6 +82,7 @@ export type HostCredentialProvisionOutcome =
   // provisioned it or the host already held one (a re-install keeps the
   // host's own credential store).
   | { readonly kind: "active"; readonly minted: boolean }
+  | { readonly kind: "team-unavailable" }
   // No `openAck` arrived inside the deadline - the host never came up (or
   // never became reachable) while we watched.
   | { readonly kind: "unreachable" }
@@ -498,6 +499,10 @@ export async function provisionInstalledHostCredential(
           // This ack carried a state, so any silent-open streak was a race
           // with the grace timer, not a capability gap - start it over.
           consecutiveSilentOpens = 0;
+          if (observation.state === "team-unavailable") {
+            session.close();
+            return { kind: "team-unavailable" };
+          }
           if (observation.state === "active") {
             session.close();
             // `minted` claims THIS run provisioned it, so only a mint that

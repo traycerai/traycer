@@ -7,6 +7,7 @@
  * retrospective sheet's held items.
  */
 export const environmentMutationKeys = {
+  hostBind: () => ["environment.host.bind"] as const,
   agentDefinitionsPut: () => ["environment.agentDefinitions.put"] as const,
   agentDefinitionsDelete: () =>
     ["environment.agentDefinitions.delete"] as const,

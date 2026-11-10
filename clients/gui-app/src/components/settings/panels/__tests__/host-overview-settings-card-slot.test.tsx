@@ -60,6 +60,8 @@ function mount(usable: boolean, hostId: string | null): void {
         hostId={hostId}
         hostName="A computer"
         usable={usable}
+        owner={null}
+        isLocalMachine={false}
       />
     </QueryClientProvider>,
   );

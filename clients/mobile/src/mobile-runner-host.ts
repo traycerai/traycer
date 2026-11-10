@@ -1,3 +1,17 @@
+import {
+  listTeamComputersViaHttp,
+  setEnvironmentBotHostViaHttp,
+  type TeamComputersResult,
+  type SetEnvironmentBotHostResult,
+} from "@traycer-clients/shared/host-client/team-computers";
+import {
+  mintTeamComputerInstallTokenViaHttp,
+  type TeamComputerInstallTokenResult,
+} from "@traycer-clients/shared/host-client/team-computer-install";
+import {
+  releaseTeamComputerViaHttp,
+  type TeamComputerReleaseResult,
+} from "@traycer-clients/shared/host-client/team-computer-release";
 import type { SandboxCatalogueReadinessRequest } from "@traycer/protocol/host/sandbox-control";
 import {
   MobileSandboxArtifacts,
@@ -756,6 +770,50 @@ export class MobileRunnerHost implements IRunnerHost {
       bearerToken,
       hostId,
       input,
+    );
+  }
+
+  listTeamComputers(
+    bearer: string,
+    environmentId: string,
+  ): Promise<TeamComputersResult> {
+    return listTeamComputersViaHttp(this.authnBaseUrl, bearer, environmentId);
+  }
+  setEnvironmentBotHost(
+    bearer: string,
+    environmentId: string,
+    hostId: string,
+    sharingGeneration: number,
+  ): Promise<SetEnvironmentBotHostResult> {
+    return setEnvironmentBotHostViaHttp(
+      this.authnBaseUrl,
+      bearer,
+      environmentId,
+      hostId,
+      sharingGeneration,
+    );
+  }
+  mintTeamComputerInstallToken(
+    bearerToken: string,
+    environmentId: string,
+  ): Promise<TeamComputerInstallTokenResult> {
+    return mintTeamComputerInstallTokenViaHttp(
+      this.authnBaseUrl,
+      bearerToken,
+      environmentId,
+    );
+  }
+
+  releaseTeamComputer(
+    bearer: string,
+    hostId: string,
+    environmentId: string,
+  ): Promise<TeamComputerReleaseResult> {
+    return releaseTeamComputerViaHttp(
+      this.authnBaseUrl,
+      bearer,
+      hostId,
+      environmentId,
     );
   }
 

@@ -1,3 +1,8 @@
+import type {
+  TeamComputersResult,
+  SetEnvironmentBotHostResult,
+} from "../host-client/team-computers";
+import type { TeamComputerInstallTokenResult } from "../host-client/team-computer-install";
 import type { SandboxCatalogueReadinessRequest } from "@traycer/protocol/host/sandbox-control";
 import type { SandboxArtifactBridge } from "./sandbox-artifacts";
 import type {
@@ -28,6 +33,7 @@ import type {
   UpdateHostVersionPolicyFetchResult,
   UpdateHostVersionPolicyInput,
 } from "../host-client/host-version-policy-fetcher";
+import type { TeamComputerReleaseResult } from "../host-client/team-computer-release";
 import type { DeregisterHostFetchResult } from "../host-client/host-deregister-fetcher";
 import type {
   SandboxAutomationFetchResult,
@@ -441,6 +447,27 @@ export interface IRunnerHost {
     hostId: string,
     input: UpdateHostVersionPolicyInput,
   ): Promise<UpdateHostVersionPolicyFetchResult>;
+
+  listTeamComputers(
+    bearer: string,
+    environmentId: string,
+  ): Promise<TeamComputersResult>;
+  setEnvironmentBotHost(
+    bearer: string,
+    environmentId: string,
+    hostId: string,
+    sharingGeneration: number,
+  ): Promise<SetEnvironmentBotHostResult>;
+  mintTeamComputerInstallToken(
+    bearerToken: string,
+    environmentId: string,
+  ): Promise<TeamComputerInstallTokenResult>;
+
+  releaseTeamComputer(
+    bearer: string,
+    hostId: string,
+    environmentId: string,
+  ): Promise<TeamComputerReleaseResult>;
 
   /**
    * "Remove from account" — `POST /api/v3/hosts/:hostId/deregister` with the
