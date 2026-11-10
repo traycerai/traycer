@@ -961,6 +961,11 @@ Account; the rest is the app itself.
     has not received yet overturns it - and neither is a revision from another
     configuration, which a rebind can serve without the host's id changing.
     The host applies the same test before it says `applied`.
+    The host row reads the getter every time it opens, however fresh the
+    cache, showing the cached answer until the read lands: the host may have
+    moved to another configuration, or the setting changed elsewhere, since
+    that answer. A write's read is cached only once the host has reached it,
+    so the read on opening agrees with it or is newer.
     The host row observes each write for at most 60 seconds from submission.
     One single-flight loop reads the getter, and while queued reads
     `environment.status` for an exact upload id, environment and item

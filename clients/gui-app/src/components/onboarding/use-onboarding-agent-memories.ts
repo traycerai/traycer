@@ -145,7 +145,7 @@ export function useOnboardingAgentMemories(input: {
 
   // The act's own cache entry, never the one Settings → Agent memories reads:
   // a read the act took can be overtaken (a rebind, a later change), and
-  // Settings must not start from it.
+  // Settings' read on opening would join one still in flight.
   const memoryRead = useHostQuery<HostRpcRegistry, "config.agentMemories.get">({
     cacheKeyIdentity: ACT_IDENTITY,
     client,
@@ -169,8 +169,8 @@ export function useOnboardingAgentMemories(input: {
     mutationKey: configMutationKeys.agentMemoriesSet(),
     // Reported on the act, beside the change it is about.
     errorMessage: null,
-    // Every entry of the method on that host, the act's and Settings' alike,
-    // once the write settles: Settings may hold an answer from before it.
+    // Every entry of the method on that host once the write settles: an
+    // answer from before it is out of date.
     invalidateMethods: [AGENT_MEMORIES_GET],
   });
   // One observer for every provider. Each provider's write is its own request
