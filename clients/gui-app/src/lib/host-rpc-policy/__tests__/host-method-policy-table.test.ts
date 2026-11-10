@@ -354,7 +354,11 @@ describe("host method poll policy table", () => {
       expect(HOST_METHOD_POLL_TABLE[method]).toEqual({
         mode: "latest",
         joinResponseTimeoutMs: null,
-        poll: { kind: "fixed", intervalMs: 5_000 },
+        poll: {
+          kind: "fixed",
+          intervalMs: 5_000,
+          requiresWindowAttention: true,
+        },
       });
     }
     for (const method of [
