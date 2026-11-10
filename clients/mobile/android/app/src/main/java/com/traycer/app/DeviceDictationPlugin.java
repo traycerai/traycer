@@ -52,7 +52,6 @@ public class DeviceDictationPlugin extends Plugin {
     private static final class Session {
         final String id;
         final Intent intent;
-        final SpeechRecognizer recognizer;
         /** The pipe's read end, held only until the recognizer has its own copy. */
         final ParcelFileDescriptor source;
         final OutputStream pipe;
@@ -66,10 +65,9 @@ public class DeviceDictationPlugin extends Plugin {
         boolean ended;
         PluginCall finishCall;
 
-        Session(String id, Intent intent, SpeechRecognizer recognizer, ParcelFileDescriptor source, OutputStream pipe) {
+        Session(String id, Intent intent, ParcelFileDescriptor source, OutputStream pipe) {
             this.id = id;
             this.intent = intent;
-            this.recognizer = recognizer;
             this.source = source;
             this.pipe = pipe;
         }
@@ -85,11 +83,14 @@ public class DeviceDictationPlugin extends Plugin {
     private String startingId;
 
     /**
-     * The recognizer last asked to download a language. It is kept because
-     * the request is sent only once the recognizer has connected to the
-     * system, and destroying it before then drops the request.
+     * The one recognizer behind every language check, language download and
+     * session, created on first use and kept. All of an app's recognizers
+     * share one connection to the system, and destroying one that is not
+     * listening closes it for the others, so a request made around a destroy
+     * can be lost. It is destroyed only once it has failed, to be replaced
+     * by a new one on the next use.
      */
-    private SpeechRecognizer downloader;
+    private SpeechRecognizer recognizer;
 
     @PluginMethod
     public void isAvailable(PluginCall call) {
@@ -98,6 +99,7 @@ public class DeviceDictationPlugin extends Plugin {
             JSObject result = new JSObject();
             result.put("available", tag != null);
             call.resolve(result);
+            return false;
         });
     }
 
@@ -109,38 +111,45 @@ public class DeviceDictationPlugin extends Plugin {
             call.reject("Dictation could not start.");
             return;
         }
-        getActivity().runOnUiThread(() -> startingId = id);
-        resolveLanguage(call.getString("language", "auto"), (tag, installed) -> {
-            if (!id.equals(startingId)) {
-                call.reject("Dictation was cancelled.");
-                return;
-            }
-            startingId = null;
-            if (tag == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
-                call.reject("Dictation is not available on this device.");
-                return;
-            }
-            Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
-            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
-            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, tag);
-            intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
-            if (!installed) {
-                if (downloader != null) downloader.destroy();
-                downloader = SpeechRecognizer.createOnDeviceSpeechRecognizer(getContext());
-                downloader.triggerModelDownload(intent);
-                call.reject("Download the language to dictate, then try again.", LANGUAGE_NOT_INSTALLED);
-                return;
-            }
-            end(session, "Dictation was replaced.");
-            try {
-                session = open(id, intent, sampleRate);
-            } catch (IOException | RuntimeException error) {
-                // The recognizer can be gone between the support check and here.
-                call.reject("Dictation could not start.");
-                return;
-            }
-            call.resolve();
+        String language = call.getString("language", "auto");
+        getActivity().runOnUiThread(() -> {
+            startingId = id;
+            resolveLanguage(language, (tag, installed) -> open(call, id, sampleRate, tag, installed));
         });
+    }
+
+    /**
+     * Opens the session a start asked for, once its language is known.
+     * Returns whether the language should be downloaded instead.
+     */
+    private boolean open(PluginCall call, String id, int sampleRate, String tag, boolean installed) {
+        if (!id.equals(startingId)) {
+            call.reject("Dictation was cancelled.");
+            return false;
+        }
+        startingId = null;
+        if (tag == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            call.reject("Dictation is not available on this device.");
+            return false;
+        }
+        if (!installed) {
+            call.reject("Download the language to dictate, then try again.", LANGUAGE_NOT_INSTALLED);
+            return true;
+        }
+        Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, tag);
+        intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
+        end(session, "Dictation was replaced.");
+        try {
+            session = open(id, intent, sampleRate);
+        } catch (IOException | RuntimeException error) {
+            // The recognizer can be gone between the support check and here.
+            call.reject("Dictation could not start.");
+            return false;
+        }
+        call.resolve();
+        return false;
     }
 
     @PluginMethod
@@ -166,7 +175,7 @@ public class DeviceDictationPlugin extends Plugin {
             // holds the microphone permission the recognizer also checks.
             if (!current.listening) {
                 current.listening = true;
-                current.recognizer.startListening(current.intent);
+                recognizer().startListening(current.intent);
             }
             current.writer.execute(() -> {
                 try {
@@ -213,13 +222,16 @@ public class DeviceDictationPlugin extends Plugin {
     @Override
     protected void handleOnDestroy() {
         end(session, "Dictation was cancelled.");
-        if (downloader != null) downloader.destroy();
-        downloader = null;
+        dropRecognizer();
     }
 
     private interface LanguageAnswer {
-        /** `tag` is null when the device cannot transcribe the language by itself. */
-        void answer(String tag, boolean installed);
+        /**
+         * `tag` is null when the device cannot transcribe the language by
+         * itself. Returns whether to ask the system to download a language
+         * that is not installed.
+         */
+        boolean answer(String tag, boolean installed);
     }
 
     /**
@@ -236,13 +248,18 @@ public class DeviceDictationPlugin extends Plugin {
                 answer.answer(null, false);
                 return;
             }
-            askSupport("auto".equals(language) ? Locale.getDefault().toLanguageTag() : language, answer);
+            try {
+                askSupport("auto".equals(language) ? Locale.getDefault().toLanguageTag() : language, answer);
+            } catch (RuntimeException error) {
+                // The recognizer went away after the check above.
+                answer.answer(null, false);
+            }
         });
     }
 
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     private void askSupport(String wanted, LanguageAnswer answer) {
-        SpeechRecognizer recognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(getContext());
+        SpeechRecognizer recognizer = recognizer();
         Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
         intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, wanted);
         recognizer.checkRecognitionSupport(
@@ -251,7 +268,6 @@ public class DeviceDictationPlugin extends Plugin {
             new RecognitionSupportCallback() {
                 @Override
                 public void onSupportResult(RecognitionSupport support) {
-                    recognizer.destroy();
                     String installed = match(wanted, support.getInstalledOnDeviceLanguages());
                     if (installed != null) {
                         answer.answer(installed, true);
@@ -259,12 +275,16 @@ public class DeviceDictationPlugin extends Plugin {
                     }
                     List<String> downloadable = new ArrayList<>(support.getSupportedOnDeviceLanguages());
                     downloadable.addAll(support.getPendingOnDeviceLanguages());
-                    answer.answer(match(wanted, downloadable), false);
+                    String tag = match(wanted, downloadable);
+                    if (!answer.answer(tag, false) || tag == null) return;
+                    Intent download = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+                    download.putExtra(RecognizerIntent.EXTRA_LANGUAGE, tag);
+                    recognizer.triggerModelDownload(download);
                 }
 
                 @Override
                 public void onError(int error) {
-                    recognizer.destroy();
+                    if (session == null) dropRecognizer();
                     answer.answer(null, false);
                 }
             }
@@ -284,21 +304,15 @@ public class DeviceDictationPlugin extends Plugin {
 
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     private Session open(String id, Intent intent, int sampleRate) throws IOException {
-        SpeechRecognizer recognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(getContext());
-        ParcelFileDescriptor[] pipe;
-        try {
-            pipe = ParcelFileDescriptor.createPipe();
-        } catch (IOException error) {
-            recognizer.destroy();
-            throw error;
-        }
+        SpeechRecognizer recognizer = recognizer();
+        ParcelFileDescriptor[] pipe = ParcelFileDescriptor.createPipe();
         intent.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, pipe[0]);
         intent.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_CHANNEL_COUNT, 1);
         intent.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING, AudioFormat.ENCODING_PCM_16BIT);
         intent.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, sampleRate);
         // The session lasts as long as the audio does, through any pause.
         intent.putExtra(RecognizerIntent.EXTRA_SEGMENTED_SESSION, RecognizerIntent.EXTRA_AUDIO_SOURCE);
-        Session opened = new Session(id, intent, recognizer, pipe[0], new ParcelFileDescriptor.AutoCloseOutputStream(pipe[1]));
+        Session opened = new Session(id, intent, pipe[0], new ParcelFileDescriptor.AutoCloseOutputStream(pipe[1]));
         recognizer.setRecognitionListener(
             new RecognitionListener() {
                 @Override
@@ -405,24 +419,37 @@ public class DeviceDictationPlugin extends Plugin {
         if (current == null) return;
         if (current.finishCall != null) current.finishCall.reject(message);
         current.finishCall = null;
-        current.recognizer.cancel();
+        if (current == session && current.listening && recognizer != null) recognizer.cancel();
         release(current);
     }
 
     /**
      * Frees the session at once: audio still queued for the pipe is dropped,
-     * and a write blocked on a full pipe fails because both read ends close.
+     * and a write blocked on a full pipe fails because both read ends close:
+     * this one here, the recognizer's when it is cancelled or has ended.
      */
     private void release(Session current) {
         current.writer.shutdownNow();
-        current.recognizer.destroy();
         closeQuietly(current.source);
         try {
             current.pipe.close();
         } catch (IOException error) {
             // Already closed.
         }
-        if (session == current) session = null;
+        if (session != current) return;
+        session = null;
+        if (current.failure != null) dropRecognizer();
+    }
+
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
+    private SpeechRecognizer recognizer() {
+        if (recognizer == null) recognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(getContext());
+        return recognizer;
+    }
+
+    private void dropRecognizer() {
+        if (recognizer != null) recognizer.destroy();
+        recognizer = null;
     }
 
     private static void closeQuietly(ParcelFileDescriptor descriptor) {
