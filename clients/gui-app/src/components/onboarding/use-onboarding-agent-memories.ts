@@ -2,7 +2,6 @@ import { useLayoutEffect, useRef, useState } from "react";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import {
   emptyMemoryDraft,
-  memoryRowNeedsWrite,
   memoryViewFor,
   withProviderChoice,
   withTraycerChoice,
@@ -10,8 +9,11 @@ import {
   type OnboardingMemoryRow,
   type OnboardingMemoryView,
   type ProviderMemoryControls,
-  type TraycerMemoryOutcome,
 } from "@/components/onboarding/onboarding-agent-memories-model";
+import {
+  runMemorySave,
+  type MemorySaveIo,
+} from "@/components/onboarding/onboarding-memory-save";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
@@ -203,100 +205,41 @@ export function useOnboardingAgentMemories(input: {
     providerControls,
   });
 
-  async function ensureTraycer(target: SaveTarget): Promise<boolean> {
-    const outcome = draft.traycerOutcome;
-    if (outcome?.kind === "saved") return true;
-    if (!sendsTo(target)) return false;
-    const reread = await memoryRead.refetch();
-    const read = reread.status === "success" ? reread.data : null;
-    if (outcome?.kind === "queued") {
-      // A held edit is answered by `environment.status` alone, and only while
-      // this host still serves the configuration it was made in. A read that
-      // says on cannot answer it: it may be an earlier revision that a later,
-      // undelivered one overturns. Nor can a receipt once the host has been
-      // rebound: the edit landing in the old configuration leaves this one
-      // as it was, so its providers must not be turned off on the strength
-      // of it.
-      if (read === null) return false;
-      if (read.environmentId === outcome.environmentId) {
-        const held = await heldEditOutcome(target, outcome);
+  /** The requests of one save, each filing its answer against `target`'s host. */
+  function saveIo(target: SaveTarget): MemorySaveIo {
+    return {
+      current: () => sendsTo(target),
+      read: async () => {
+        const reread = await memoryRead.refetch();
+        return reread.status === "success" ? reread.data : null;
+      },
+      lookUp: async () => (await statusRead.refetch()).data ?? null,
+      set: async () => {
+        try {
+          const answer = await setTraycerMemories.mutateAsync({
+            enabled: true,
+          });
+          if (answer.state !== "queued")
+            trackSettingChanged("agent-memories", "useTraycerMemories");
+          return answer;
+        } catch {
+          return null;
+        }
+      },
+      writeProvider: (row) => writeProvider(target, row),
+      evidence: () => draft.traycerOutcome,
+      record: (next) =>
         record(target.hostId, (current) => ({
           ...current,
-          traycerOutcome: held,
-        }));
-        return held.kind === "saved";
-      }
-      // Rebound: the held edit is the old configuration's business, and the
-      // one this host serves now starts over below.
-    }
-    // Read before writing: a configuration that has it on already needs no
-    // write.
-    if (read?.enabled === true) {
-      record(target.hostId, (current) => ({
-        ...current,
-        traycerOutcome: { kind: "saved" },
-      }));
-      return true;
-    }
-    if (!sendsTo(target)) return false;
-    try {
-      const answer = await setTraycerMemories.mutateAsync({ enabled: true });
-      const next: TraycerMemoryOutcome =
-        answer.state === "queued"
-          ? {
-              kind: "queued",
-              uploadId: answer.uploadId,
-              environmentId: answer.environmentId,
-            }
-          : { kind: "saved" };
-      if (next.kind === "saved")
-        trackSettingChanged("agent-memories", "useTraycerMemories");
-      record(target.hostId, (current) => ({
-        ...current,
-        traycerOutcome: next,
-      }));
-      return next.kind === "saved";
-    } catch {
-      record(target.hostId, (current) => ({
-        ...current,
-        traycerOutcome: { kind: "failed", refused: false },
-      }));
-      return false;
-    }
-  }
-
-  /**
-   * A held edit is never sent twice. `environment.status` names it once the
-   * configuration took it (saved) or turned it away (failed, so the next
-   * retry may send a fresh one); no word either way leaves it held.
-   */
-  async function heldEditOutcome(
-    target: SaveTarget,
-    held: Extract<TraycerMemoryOutcome, { kind: "queued" }>,
-  ): Promise<TraycerMemoryOutcome> {
-    if (held.uploadId === null || !sendsTo(target)) return held;
-    const status = (await statusRead.refetch()).data;
-    if (status === undefined) return held;
-    const accepted = status.acceptedUploads.some(
-      (entry) =>
-        entry.uploadId === held.uploadId &&
-        entry.environmentId === held.environmentId &&
-        entry.kind === "agent_memory" &&
-        entry.key === "memory",
-    );
-    if (accepted) return { kind: "saved" };
-    const refused = status.pendingUploads.some(
-      (entry) =>
-        entry.uploadId === held.uploadId && entry.receipt === "refused",
-    );
-    return refused ? { kind: "failed", refused: true } : held;
+          traycerOutcome: next,
+        })),
+    };
   }
 
   async function writeProvider(
     target: SaveTarget,
     row: OnboardingMemoryRow,
   ): Promise<boolean> {
-    if (!sendsTo(target)) return false;
     let kind: "saved" | "failed" = "failed";
     try {
       await setNativeMemory.mutateAsync({
@@ -315,15 +258,6 @@ export function useOnboardingAgentMemories(input: {
     return kind === "saved";
   }
 
-  async function writeChoices(target: SaveTarget): Promise<boolean> {
-    if (!(await ensureTraycer(target))) return false;
-    const writes = view.rows
-      .filter(memoryRowNeedsWrite)
-      .map((row) => writeProvider(target, row));
-    const results = await Promise.all(writes);
-    return results.every(Boolean);
-  }
-
   function save(): Promise<boolean> {
     if (view.chosen !== true || !ready) return Promise.resolve(true);
     if (savingRef.current) return Promise.resolve(false);
@@ -332,16 +266,12 @@ export function useOnboardingAgentMemories(input: {
     const target: SaveTarget = { hostId, selection: selectionRef.current };
     // `.finally` rather than try/finally: React Compiler cannot lower a try
     // without a catch, and would leave this whole hook unmemoized.
-    return (
-      writeChoices(target)
-        // Done only while the act still shows the host it was for: a save
-        // that finished after the picker moved does not move the tour on.
-        .then((done) => done && sendsTo(target))
-        .finally(() => {
-          savingRef.current = false;
-          setSaving(false);
-        })
-    );
+    return runMemorySave(saveIo(target), view.rows)
+      .then((result) => result === "done")
+      .finally(() => {
+        savingRef.current = false;
+        setSaving(false);
+      });
   }
 
   return {
