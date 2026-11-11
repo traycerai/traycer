@@ -6,6 +6,7 @@ import {
 } from "@traycer/protocol/host/provider-schemas";
 import {
   hiddenModelProvidersForHarness,
+  modelProviderHidden,
   modelProviderGroupId,
   providersListReportsHiddenModelProviders,
   hiddenModelProviderCount,
@@ -69,6 +70,23 @@ describe("hidden model provider helpers", () => {
     expect(
       modelProviderGroupId({ metadata: { openCodeProviderId: "" } }),
     ).toBeNull();
+  });
+
+  it("matches models only when their OpenCode provider is hidden", () => {
+    const hidden = new Set(["openrouter"]);
+    expect(
+      modelProviderHidden(
+        { metadata: { openCodeProviderId: "openrouter" } },
+        hidden,
+      ),
+    ).toBe(true);
+    expect(
+      modelProviderHidden(
+        { metadata: { openCodeProviderId: "anthropic" } },
+        hidden,
+      ),
+    ).toBe(false);
+    expect(modelProviderHidden({ metadata: {} }, hidden)).toBe(false);
   });
 
   it("filters hidden groups for picker rows and search while keeping the selected row", () => {

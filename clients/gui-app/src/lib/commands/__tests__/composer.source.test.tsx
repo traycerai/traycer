@@ -5,6 +5,11 @@ import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import {
+  providerCliStateSchema,
+  type ProviderCliState,
+  type ProviderId,
+} from "@traycer/protocol/host/provider-schemas";
+import {
   registerFocusedComposerControls as registerFocusedComposerControlsWithCatalog,
   resetFocusedComposerControlsForTests,
   type ComposerControls,
@@ -125,6 +130,15 @@ const focusedComposerCatalogMock = vi.hoisted(() => ({
 
 const latestConversationWorkspaceSeedMock = vi.hoisted(() => ({
   seed: null as { readonly intent: WorktreeIntent | null } | null,
+}));
+
+const providersListMock = vi.hoisted(() => ({
+  providers: [] as ProviderCliState[],
+}));
+vi.mock("@/hooks/providers/use-providers-list-query", () => ({
+  useProvidersListForClient: () => ({
+    data: { providers: providersListMock.providers },
+  }),
 }));
 
 // The app-wide client the palette falls back to with no focused composer. It
@@ -352,6 +366,24 @@ function resetCanvasStore(): void {
   });
 }
 
+function providerRow(
+  providerId: ProviderId,
+  hiddenModelProviders: ReadonlyArray<string>,
+): ProviderCliState {
+  return providerCliStateSchema.parse({
+    providerId,
+    enabled: true,
+    disabledBy: null,
+    selected: { kind: "bundled" },
+    candidates: [],
+    authPending: false,
+    checkedAt: null,
+    apiKey: { supported: false, configured: false, source: null },
+    auth: { status: "unknown", badgeText: null, label: null, detail: null },
+    hiddenModelProviders,
+  });
+}
+
 describe("composerSource", () => {
   beforeEach(() => {
     latestConversationWorkspaceSeedMock.seed = null;
@@ -359,6 +391,7 @@ describe("composerSource", () => {
     focusedComposerCatalogMock.lineCalls.length = 0;
     focusedComposerCatalogMock.modelProfileCalls.length = 0;
     catalogMock.profileCatalogs.clear();
+    providersListMock.providers = [];
     resetCanvasStore();
     resetFocusedComposerControlsForTests();
     resetActiveModelPickerForTests();
@@ -375,6 +408,7 @@ describe("composerSource", () => {
     focusedComposerCatalogMock.lineCalls.length = 0;
     focusedComposerCatalogMock.modelProfileCalls.length = 0;
     catalogMock.profileCatalogs.clear();
+    providersListMock.providers = [];
     resetCanvasStore();
     resetFocusedComposerControlsForTests();
     resetActiveModelPickerForTests();
@@ -677,6 +711,62 @@ describe("composerSource", () => {
     // The leaf funnels through `selectModel` (memory-aware), NOT bare
     // `setSelection`, so the pick restores that pair's remembered effort/tier.
     expect(picks).toEqual([{ harnessId: "codex", modelSlug: "gpt-live" }]);
+  });
+
+  it("omits models from hidden providers only in the matching harness", () => {
+    const original = catalogMock.harnesses;
+    const codex = original[0];
+    const hiddenOpenCodeModel = {
+      ...codex.models[0],
+      harnessId: "opencode",
+      slug: "hidden-provider-model",
+      label: "Hidden Provider Model",
+      metadata: { openCodeProviderId: "openrouter" },
+    };
+    const visibleOpenCodeModel = {
+      ...hiddenOpenCodeModel,
+      slug: "visible-provider-model",
+      label: "Visible Provider Model",
+      metadata: { openCodeProviderId: "anthropic" },
+    };
+    catalogMock.harnesses = [
+      codex,
+      {
+        ...codex,
+        id: "opencode",
+        label: "OpenCode",
+        models: [hiddenOpenCodeModel, visibleOpenCodeModel],
+      },
+    ];
+    providersListMock.providers = [providerRow("opencode", ["openrouter"])];
+
+    try {
+      registerFocusedComposerControls(
+        "landing",
+        stubControls({}),
+        TEST_HOST_CLIENT,
+        null,
+      );
+      const modelSubpage = captureItems(null, "landing").find(
+        (item) => item.id === "composer:switch-model",
+      )?.subpage;
+      if (modelSubpage === null || modelSubpage === undefined) {
+        throw new Error("expected a model subpage");
+      }
+      const modelIds = collectSubpageItems(modelSubpage, "landing").map(
+        (item) => item.id,
+      );
+
+      expect(modelIds).toContain(
+        "composer:model:opencode:visible-provider-model",
+      );
+      expect(modelIds).not.toContain(
+        "composer:model:opencode:hidden-provider-model",
+      );
+      expect(modelIds).toContain("composer:model:codex:gpt-live");
+    } finally {
+      catalogMock.harnesses = original;
+    }
   });
 
   it("lists only the focused managed profile's cached models and dispatches its row", () => {
