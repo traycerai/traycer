@@ -642,6 +642,8 @@ type Session = RemoteSession<VersionedRpcRegistry, VersionedStreamRpcRegistry>;
 
 interface GrantCalls {
   count: number;
+  /** The fake time each grant was requested, which is when the server minted it. */
+  readonly mintedAt: number[];
 }
 
 interface RelayFixture {
@@ -650,20 +652,36 @@ interface RelayFixture {
   readonly grants: GrantCalls;
 }
 
-function countingGrants(relay: FakeRelay): {
+/**
+ * Grants the relay dates from the moment of the request, as a server stamps
+ * the expiry when it mints; the answer reaches the client `latencyMs` later.
+ */
+function countingGrants(
+  relay: FakeRelay,
+  latencyMs: number,
+): {
   readonly provider: AttachGrantProvider;
   readonly calls: GrantCalls;
 } {
-  const calls: GrantCalls = { count: 0 };
+  const calls: GrantCalls = { count: 0, mintedAt: [] };
   return {
     calls,
     provider: () => {
       calls.count += 1;
       const grant = `grant-${calls.count}`;
+      calls.mintedAt.push(Date.now());
       relay.recordMint(grant, Date.now(), GRANT_LIFETIME_SECONDS);
-      return Promise.resolve({
+      const answer = {
         kind: "ok" as const,
         grant: { grant, expiresInSeconds: GRANT_LIFETIME_SECONDS },
+      };
+      if (latencyMs === 0) {
+        return Promise.resolve(answer);
+      }
+      return new Promise((resolve) => {
+        setTimeout(() => {
+          resolve(answer);
+        }, latencyMs);
       });
     },
   };
@@ -711,6 +729,13 @@ const POOL_ENTRY: PoolHostDirectoryEntry = {
   transportDialability: "dialable",
 };
 
+/** How long the grant request takes to be answered. */
+const SLOW_GRANT_MS = 5_000;
+/** After the relay expiry (request + 300 s) but before receipt + 300 s. */
+const SLOW_RELEASE_MS = 302_000;
+/** Before the relay expiry. */
+const SLOW_LIVE_RELEASE_MS = 298_000;
+
 /** The session redial backoff after a dropped leg. */
 const REDIAL_MS = 1_000;
 
@@ -745,9 +770,12 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     return evidence.refusals.slice(alreadyReported).map((at) => at - origin);
   }
 
-  function buildRelayFixture(hostId: string): RelayFixture {
+  function buildRelayFixture(
+    hostId: string,
+    grantLatencyMs: number,
+  ): RelayFixture {
     const evidence = new RecordingEvidence<"remote-relay">();
-    const grants = countingGrants(relay);
+    const grants = countingGrants(relay, grantLatencyMs);
     let nextRequestId = 0;
     const session: Session = new RemoteSession({
       hostId,
@@ -898,8 +926,10 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
 
   it("does not count time queued for a dial slot against an initial relay attach", async () => {
     const holders = await holdEverySlot();
-    const { session, evidence, grants } =
-      buildRelayFixture("host-queued-attach");
+    const { session, evidence, grants } = buildRelayFixture(
+      "host-queued-attach",
+      0,
+    );
     session.start();
     // The relay socket exists, and waits for a slot, once Noise has begun.
     await advanceUntil(() => hostDialGate.stats().queued === 1, 5_000);
@@ -919,7 +949,7 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
 
   it("times the attach ack from the socket open, not from the dial request", async () => {
     relay.autoOpen = "hold";
-    const { session, evidence } = buildRelayFixture("host-late-open");
+    const { session, evidence } = buildRelayFixture("host-late-open", 0);
     session.start();
     await advanceUntil(() => relay.legs.length === 1, 5_000);
 
@@ -975,8 +1005,10 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
   });
 
   it("does not count time queued for a dial slot against a relink claim dial", async () => {
-    const { session, evidence, grants } =
-      buildRelayFixture("host-queued-claim");
+    const { session, evidence, grants } = buildRelayFixture(
+      "host-queued-claim",
+      0,
+    );
     session.start();
     await advanceUntil(() => session.isReady(), 5_000);
     const hostSession = relay.host();
@@ -1008,6 +1040,7 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     const holders = await holdEverySlot();
     const { session, evidence, grants } = buildRelayFixture(
       "host-expired-attach",
+      0,
     );
     session.start();
     await advanceUntil(() => hostDialGate.stats().queued === 1, 5_000);
@@ -1031,8 +1064,10 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
   });
 
   it("retires a claim dial whose grant expired in the queue as indeterminate, then claims again on a fresh grant", async () => {
-    const { session, evidence, grants } =
-      buildRelayFixture("host-expired-claim");
+    const { session, evidence, grants } = buildRelayFixture(
+      "host-expired-claim",
+      0,
+    );
     session.start();
     await advanceUntil(() => session.isReady(), 5_000);
     const hostSession = relay.host();
@@ -1068,7 +1103,7 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
 
   it("still reports a refusal when an admitted dial on a live grant fails before it opens", async () => {
     relay.autoOpen = "fail";
-    const { session, evidence } = buildRelayFixture("host-failed-upgrade");
+    const { session, evidence } = buildRelayFixture("host-failed-upgrade", 0);
     session.start();
     await advanceUntil(() => relay.legs.length === 1, 5_000);
     await step(0);
@@ -1078,7 +1113,7 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
   });
 
   it("still reports a refusal when a live leg drops after its grant expired", async () => {
-    const { session, evidence } = buildRelayFixture("host-live-leg-drop");
+    const { session, evidence } = buildRelayFixture("host-live-leg-drop", 0);
     session.start();
     await advanceUntil(() => session.isReady(), 5_000);
 
@@ -1097,6 +1132,7 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
   it("still reports a refusal when a claim dial on a fresh grant fails before open, after the first grant expired", async () => {
     const { session, evidence, grants } = buildRelayFixture(
       "host-fresh-claim-fails",
+      0,
     );
     session.start();
     await advanceUntil(() => session.isReady(), 5_000);
@@ -1113,6 +1149,76 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     expect(grants.count).toBe(grantsBeforeDrop + 1);
     expect(evidence.refusals.length).toBeGreaterThan(reportedAtDrop);
   });
+  it("retires a dial the relay rejected for an expired grant as indeterminate when the grant took a while to arrive", async () => {
+    const holders = await holdEverySlot();
+    const { session, evidence, grants } = buildRelayFixture(
+      "host-slow-grant-attach",
+      SLOW_GRANT_MS,
+    );
+    session.start();
+    await advanceUntil(() => hostDialGate.stats().queued === 1, 20_000);
+    await step(grants.mintedAt[0] + SLOW_RELEASE_MS - Date.now());
+
+    holders[0].fire("close", "", 1006, "released");
+    await advanceUntil(() => relay.legs.length === 1, 5_000);
+    await step(0);
+
+    expect(evidence.refusals).toEqual([]);
+    expect(evidence.indeterminates).toHaveLength(1);
+
+    await advanceUntil(() => grants.count === 2, 60_000);
+    await advanceUntil(() => session.isReady(), 60_000);
+
+    expect(evidence.refusals).toEqual([]);
+  });
+
+  it("retires a claim dial the relay rejected for an expired grant as indeterminate when the grant took a while to arrive", async () => {
+    const { session, evidence, grants } = buildRelayFixture(
+      "host-slow-grant-claim",
+      SLOW_GRANT_MS,
+    );
+    session.start();
+    await advanceUntil(() => session.isReady(), 20_000);
+
+    const holders = await holdEverySlot();
+    relay.dropLeg(1006, "net");
+    await advanceUntil(() => hostDialGate.stats().queued === 1, 20_000);
+    const reportedAtDrop = evidence.refusals.length;
+    const indeterminateAtDrop = evidence.indeterminates.length;
+    await step(grants.mintedAt[1] + SLOW_RELEASE_MS - Date.now());
+
+    holders[0].fire("close", "", 1006, "released");
+    await advanceUntil(() => relay.legs.length === 2, 5_000);
+    await step(0);
+
+    expect(evidence.refusals).toHaveLength(reportedAtDrop);
+    expect(evidence.indeterminates).toHaveLength(indeterminateAtDrop + 1);
+
+    await advanceUntil(() => relay.resumes.length === 1, 120_000);
+    await advanceUntil(() => session.isReady(), 60_000);
+
+    expect(evidence.refusals).toHaveLength(reportedAtDrop);
+  });
+
+  it("still reports one refusal when a dial on a live grant that took a while to arrive fails before it opens", async () => {
+    relay.autoOpen = "fail";
+    const holders = await holdEverySlot();
+    const { session, evidence, grants } = buildRelayFixture(
+      "host-slow-grant-live",
+      SLOW_GRANT_MS,
+    );
+    session.start();
+    await advanceUntil(() => hostDialGate.stats().queued === 1, 20_000);
+    await step(grants.mintedAt[0] + SLOW_LIVE_RELEASE_MS - Date.now());
+
+    holders[0].fire("close", "", 1006, "released");
+    await advanceUntil(() => relay.legs.length === 1, 5_000);
+    await step(0);
+
+    expect(evidence.refusals).toHaveLength(1);
+    expect(evidence.indeterminates).toEqual([]);
+  });
+
   it("sends no other-identity bearer in the OPEN frame when the account switched during the queued attach", async () => {
     const provider = new DefaultRequestContextProvider({ origin: "renderer" });
     signIn(provider, USER_A, "token-a");

@@ -2666,6 +2666,7 @@ export class RemoteSession<
       this.attachDirect(generation, dial.poolUrl);
       return;
     }
+    const grantRequestedAt = Date.now();
     const provision = await dial.grantProvider();
     if (generation !== this.connectGeneration || this.isClosed()) {
       return;
@@ -2675,7 +2676,7 @@ export class RemoteSession<
       return;
     }
     const grant = provision.grant;
-    const grantExpiresAt = attachGrantExpiresAt(grant);
+    const grantExpiresAt = attachGrantExpiresAt(grant, grantRequestedAt);
 
     const noise = await NoiseChannel.begin(dial.hostStaticPublicKey);
     if (generation !== this.connectGeneration || this.isClosed()) {
@@ -2775,12 +2776,18 @@ export class RemoteSession<
       startedAt: Date.now(),
     };
     void (async () => {
+      const grantRequestedAt = Date.now();
       const provision = await grantProvider();
       if (!ownsSession()) {
         return;
       }
       if (provision.kind === "ok") {
-        this.dialClaim(connection, attachBaseUrl, provision.grant);
+        this.dialClaim(
+          connection,
+          attachBaseUrl,
+          provision.grant,
+          grantRequestedAt,
+        );
         return;
       }
       connection.activeClaimDial = null;
@@ -2803,6 +2810,7 @@ export class RemoteSession<
     connection: ActiveConnection,
     attachBaseUrl: string,
     grant: AttachGrant,
+    grantRequestedAt: number,
   ): void {
     const relaySocket: RelaySocket = new RelaySocket({
       attachBaseUrl,
@@ -2814,7 +2822,10 @@ export class RemoteSession<
     });
     connection.socket = relaySocket;
     connection.attachGrant = grant;
-    connection.attachGrantExpiresAt = attachGrantExpiresAt(grant);
+    connection.attachGrantExpiresAt = attachGrantExpiresAt(
+      grant,
+      grantRequestedAt,
+    );
     connection.legEnd = null;
     connection.legAttached = false;
     // The attach_ack budget starts at open: see `onLegOpen`.
@@ -7574,14 +7585,17 @@ function indexMethodRegistry(
 
 /**
  * When an attach grant expires, by this client clock: its `expiresInSeconds`
- * from the moment it was received. Later than the JWT `exp` by the mint
- * response latency, so a close inside that sliver still counts as the host.
- * It is wall-clock time (`Date.now`): a backward clock change can count a leg
- * on an already expired grant as the host, and a forward one can discard the
- * failure of a leg on a live grant.
+ * from the moment it was requested. The server mints it after that moment,
+ * so this is at or before the JWT `exp`: a leg the relay refused for an
+ * expired grant is never counted as the host, and one that failed for a host
+ * reason between this and the real `exp` is discarded instead, at most once
+ * per grant. It is wall-clock time (`Date.now`): a backward clock change can
+ * count a leg on an already expired grant as the host, and a forward one can
+ * discard the failure of a leg on a live grant; so can a difference between
+ * the authn and relay clocks.
  */
-function attachGrantExpiresAt(grant: AttachGrant): number {
-  return Date.now() + grant.expiresInSeconds * 1000;
+function attachGrantExpiresAt(grant: AttachGrant, requestedAt: number): number {
+  return requestedAt + grant.expiresInSeconds * 1000;
 }
 
 /**
