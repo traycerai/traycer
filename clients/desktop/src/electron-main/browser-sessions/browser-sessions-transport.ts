@@ -16,12 +16,14 @@ import {
   fetchRegisteredHostsViaHttp,
   hostListItemToDirectoryEntry,
   isRemoteHostDirectoryEntry,
-  isSandboxHostDirectoryEntry,
   type RemoteHostDirectoryEntry,
 } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
-import { createRemoteHostTransport } from "@traycer-clients/shared/host-transport/remote/index";
+import {
+  createRemoteHostTransport,
+  remoteOpenAuthFor,
+} from "@traycer-clients/shared/host-transport/remote/index";
 import {
   DEFAULT_DIAL_TIMEOUT_MS,
   DEFAULT_INITIAL_BACKOFF_MS,
@@ -350,7 +352,7 @@ export function openBrowserSessionsTransport(
 /**
  * Which jar transport `target` may have, or `null` for none. The two lanes
  * are the whole allowlist: this machine's own host, and a registry host that
- * is a well-formed personal (non-sandbox) remote.
+ * is a well-formed personal remote. Team-owned computers never receive the jar.
  */
 function jarTransportLane(target: HostDirectoryEntry):
   | { readonly kind: "local" }
@@ -365,7 +367,7 @@ function jarTransportLane(target: HostDirectoryEntry):
   if (
     target.kind === "remote" &&
     isRemoteHostDirectoryEntry(target) &&
-    !isSandboxHostDirectoryEntry(target)
+    remoteOpenAuthFor(target) === "user-bearer"
   ) {
     return { kind: "personal-remote", entry: target };
   }

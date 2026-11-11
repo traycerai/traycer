@@ -23,7 +23,12 @@ import {
   createAttachGrantProvider,
   createSandboxAttachGrantProvider,
 } from "./grant-client";
-import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+import type { RemoteOpenAuth } from "./open-auth";
+export {
+  remoteOpenAuthFor,
+  type RemoteOpenAuth,
+  type HostOpenAuthFacts,
+} from "./open-auth";
 import { decodeHostPublicKey } from "./noise-channel";
 import {
   acquireRemoteSession,
@@ -75,9 +80,9 @@ export interface CreateRemoteTransportOptions<
    * {@link remoteOpenAuthFor}.
    *
    * Part of the session cache identity (`RemoteSessionIdentity.openAuth`): a
-   * host's kind is fixed for its life, but a stale directory read can project
-   * a sandbox row as a personal host, and a session built from that read must
-   * never be adopted by a consumer that knows the host is a sandbox.
+   * host's kind is fixed for its life, but a directory correction or ownership change
+   * can require a session grant, and a consumer must not adopt an earlier
+   * user-bearer session for that target.
    */
   readonly openAuth: RemoteOpenAuth;
   /**
@@ -190,7 +195,7 @@ export interface CreateRemoteTransportOptions<
   /**
    * Mints the member credential a team host spends for this session's member
    * (`RemoteSessionOptions.mintMemberCredential`). Handed to the session only
-   * when {@link openAuth} is `session-grant`; a personal host takes the user
+   * when {@link openAuth} is `session-grant`; a personal computer takes the user
    * bearer on `open` and never offers the capability.
    *
    * Not part of the cache identity: every consumer in the process passes the
@@ -200,16 +205,6 @@ export interface CreateRemoteTransportOptions<
   readonly mintMemberCredential:
     | ((hostId: string) => Promise<MemberCredentialHandoff | null>)
     | null;
-}
-
-/** See {@link CreateRemoteTransportOptions.openAuth}. */
-export type RemoteOpenAuth = "user-bearer" | "session-grant";
-
-/** The `OPEN` credential a remote directory entry's host takes. */
-export function remoteOpenAuthFor(
-  entry: RemoteHostDirectoryEntry,
-): RemoteOpenAuth {
-  return entry.sandbox === null ? "user-bearer" : "session-grant";
 }
 
 export interface RemoteHostTransport<
@@ -296,6 +291,7 @@ export function createRemoteHostTransport<
               authnBaseUrl: options.authnBaseUrl,
               hostId: options.hostId,
               getBearerToken,
+              purpose: "remote",
             })
           : null;
       const grantProvider =

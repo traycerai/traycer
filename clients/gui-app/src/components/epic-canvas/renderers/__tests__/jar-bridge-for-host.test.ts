@@ -7,16 +7,18 @@ import { jarBridgeForHost } from "../use-browser-sessions";
 
 /**
  * The desktop bridge routes a host's `browser.sessions` stream through main,
- * which carries the desktop's whole cookie jar on it. A sandbox must never
- * receive that, so its stream takes the jar-free path (`null` bridge).
+ * which carries the desktop's whole cookie jar on it. A sandbox or a team
+ * host must never receive that, so its stream takes the jar-free path.
  */
 
-function remoteEntry(kind: "personal" | "sandbox"): HostDirectoryEntry {
+function remoteEntry(
+  kind: "personal" | "sandbox" | "team",
+): HostDirectoryEntry {
   const item: HostListItem = {
     hostId: "host-r",
     displayName: "Remote",
     platform: "linux",
-    kind,
+    kind: kind === "sandbox" ? "sandbox" : "personal",
     publicKey: "pk",
     createdAt: "2026-01-01T00:00:00.000Z",
     updatePolicy: "manual",
@@ -30,6 +32,9 @@ function remoteEntry(kind: "personal" | "sandbox"): HostDirectoryEntry {
     },
     ...(kind === "sandbox"
       ? { sandboxState: "awake", sandboxFrozen: false, profile: "agent" }
+      : {}),
+    ...(kind === "team"
+      ? { owner: { kind: "team", id: "team-a", name: "Alpha" } }
       : {}),
   };
   return hostListItemToDirectoryEntry(item, "wss://relay.example.test");
@@ -49,6 +54,11 @@ describe("jarBridgeForHost", () => {
 
   it("withholds the jar bridge from a sandbox host", () => {
     expect(jarBridgeForHost(bridge, remoteEntry("sandbox"))).toBeNull();
+  });
+
+  it("withholds the jar bridge from a physical team host", () => {
+    expect(remoteEntry("team")).toMatchObject({ sandbox: null });
+    expect(jarBridgeForHost(bridge, remoteEntry("team"))).toBeNull();
   });
 
   it("hands the bridge on for a personal remote host, this machine's host, and a host the directory has not answered for", () => {

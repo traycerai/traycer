@@ -24,7 +24,10 @@ import {
   remoteOpenAuthFor,
   type RemoteOpenAuth,
 } from "@traycer-clients/shared/host-transport/remote/index";
-import type { HostStatusDTO } from "@traycer/protocol/host/host-status";
+import type {
+  HostStatusDTO,
+  HostOwnerPrincipal,
+} from "@traycer/protocol/host/host-status";
 import {
   hostRpcRegistry,
   hostStreamRpcRegistry,
@@ -102,13 +105,40 @@ const PLACEHOLDER_SANDBOX_FACTS: RemoteHostSandboxFacts = {
   ownerTeamId: null,
 };
 
-/** What a remote target's `OPEN` presents; `null` for a local target or none. */
-function openAuthOfTarget(
+interface RemoteEndpointIdentity {
+  readonly publicKey: string | null;
+  readonly ownerKind: HostOwnerPrincipal["kind"] | null;
+  readonly ownerId: string | null;
+  readonly ownerName: string | null;
+  readonly hasSandbox: boolean;
+  readonly openAuth: RemoteOpenAuth | null;
+}
+
+/** Primitive identity keeps equivalent directory publications on one client. */
+function remoteEndpointIdentity(
   target: HostDirectoryEntry | null,
-): RemoteOpenAuth | null {
-  return target !== null && isRemoteHostDirectoryEntry(target)
-    ? remoteOpenAuthFor(target)
-    : null;
+): RemoteEndpointIdentity {
+  const remote =
+    target !== null && isRemoteHostDirectoryEntry(target) ? target : null;
+  const owner = remote?.owner ?? null;
+  return {
+    publicKey: remote?.publicKey ?? null,
+    ownerKind: owner?.kind ?? null,
+    ownerId: owner?.id ?? null,
+    ownerName: owner?.kind === "team" ? owner.name : null,
+    hasSandbox: remote !== null && remote.sandbox !== null,
+    openAuth: remote === null ? null : remoteOpenAuthFor(remote),
+  };
+}
+
+function ownerFromEndpointIdentity(
+  kind: HostOwnerPrincipal["kind"] | null,
+  id: string | null,
+  name: string | null,
+): HostOwnerPrincipal | null {
+  if (id === null) return null;
+  if (kind === "user") return { kind, id };
+  return kind === "team" && name !== null ? { kind, id, name } : null;
 }
 
 export interface HostStreamClientBinding {
@@ -445,13 +475,14 @@ export function useHostStreamClientBindingFor(
   const endpointHostId = target?.hostId ?? null;
   const endpointWebsocketUrl = target?.websocketUrl ?? null;
   const endpointKind = target?.kind ?? null;
-  const endpointPublicKey =
-    target !== null && isRemoteHostDirectoryEntry(target)
-      ? target.publicKey
-      : null;
-  // A primitive, like the three above: what `OPEN` presents is fixed for a
-  // host id's life, and the entry object's identity must not churn the build.
-  const endpointOpenAuth = openAuthOfTarget(target);
+  const {
+    publicKey: endpointPublicKey,
+    ownerKind: endpointOwnerKind,
+    ownerId: endpointOwnerId,
+    ownerName: endpointOwnerName,
+    hasSandbox: endpointHasSandbox,
+    openAuth: endpointOpenAuth,
+  } = remoteEndpointIdentity(target);
 
   const [binding, setBinding] = useState<HostStreamClientBinding | null>(null);
   const [rebuildNonce, setRebuildNonce] = useState(0);
@@ -516,6 +547,11 @@ export function useHostStreamClientBindingFor(
     // decided to dial, not a directory row carrying a verdict about a machine.
     // The gate that decides whether to dial at all ran above this, against the
     // real entry.
+    const owner = ownerFromEndpointIdentity(
+      endpointOwnerKind,
+      endpointOwnerId,
+      endpointOwnerName,
+    );
     const memoizedTarget =
       endpointKind === "remote" && endpointPublicKey !== null
         ? ({
@@ -529,13 +565,10 @@ export function useHostStreamClientBindingFor(
             remoteStatus: PLACEHOLDER_REMOTE_STATUS,
             // Fabricated endpoint, not a directory verdict: never in fuse grace.
             relayFuseGrace: false,
-            // Only its PRESENCE is read here (`remoteOpenAuthFor`, so a
-            // sandbox's OPEN presents a session grant); the facts themselves
-            // are the real entry's business, not this fabricated one's.
-            sandbox:
-              endpointOpenAuth === "session-grant"
-                ? PLACEHOLDER_SANDBOX_FACTS
-                : null,
+            owner,
+            // Ownership and sandbox presence are independent. A physical team
+            // computer must never acquire fabricated sandbox facts.
+            sandbox: endpointHasSandbox ? PLACEHOLDER_SANDBOX_FACTS : null,
           } satisfies RemoteHostDirectoryEntry)
         : ({
             hostId: endpointHostId,
@@ -563,6 +596,7 @@ export function useHostStreamClientBindingFor(
         publicKey: endpointPublicKey ?? "",
         authnBaseUrl,
         authRecovery: auth === null ? "terminal" : "revalidate",
+        openAuth: endpointOpenAuth,
       },
       () =>
         buildHostStreamClient({
@@ -624,6 +658,10 @@ export function useHostStreamClientBindingFor(
     authnBaseUrl,
     endpointHostId,
     endpointKind,
+    endpointOwnerKind,
+    endpointOwnerId,
+    endpointOwnerName,
+    endpointHasSandbox,
     endpointOpenAuth,
     endpointPublicKey,
     endpointWebsocketUrl,

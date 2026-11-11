@@ -780,6 +780,7 @@ function ownerIdentityRemoteTarget(
     version: "1.0.0",
     transportDialability: "dialable",
     publicKey,
+    owner: null,
     relayFuseGrace: false,
     sandbox: null,
     remoteStatus: {
