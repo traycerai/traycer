@@ -156,7 +156,7 @@ export function EnvironmentProfileSignIn(props: {
           certified: response.state === "linked" && response.profileId !== null,
         });
       }
-    } else {
+    } else if (!current.connected) {
       setState((previous) => incompleteSignInState(previous, response));
     }
   };
@@ -266,7 +266,7 @@ export function EnvironmentProfileSignIn(props: {
           )
           .then((response) => acceptRef.current(current, response))
           .catch(() => {
-            if (!current.closed)
+            if (!current.closed && !current.connected)
               setState({
                 kind: "failed",
                 line: "Couldn't check this sign-in. Try again.",
@@ -366,7 +366,7 @@ export function EnvironmentProfileSignIn(props: {
         ),
       );
     } catch {
-      if (!current.closed)
+      if (!current.closed && !current.connected)
         setState({
           kind: "failed",
           line: "Sign-in did not finish. Try again.",

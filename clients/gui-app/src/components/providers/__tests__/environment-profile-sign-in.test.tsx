@@ -101,7 +101,9 @@ type CompleteHandler = (
   | Promise<ProvidersLinkCompleteResponseV12>;
 type ProviderListHandler = (
   callNumber: number,
-) => ResponseOfMethod<typeof hostRpcRegistry, "providers.list">;
+) =>
+  | ResponseOfMethod<typeof hostRpcRegistry, "providers.list">
+  | Promise<ResponseOfMethod<typeof hostRpcRegistry, "providers.list">>;
 
 interface EnvironmentSignInHostOptions {
   readonly link?: LinkHandler;
@@ -124,7 +126,7 @@ function negotiatedManifest(): ConnectionManifest {
   return {
     "providers.link": V12,
     "providers.linkComplete": V12,
-    "providers.linkCancel": V12,
+    "providers.linkCancel": { major: 1, minor: 0 },
     "providers.list": { major: 10, minor: 9 },
   };
 }
@@ -544,6 +546,110 @@ describe("<EnvironmentProfileSignIn />", () => {
       environmentProfileId: ENVIRONMENT_PROFILE_ID,
       profile: linkedProfile,
     });
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
+  it("keeps a connected profile pending through a poll failure and unavailable reply", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const profile = managedProfile(
+      MANAGED_PROFILE_ID,
+      "Claude on this computer",
+      ENVIRONMENT_PROFILE_ID,
+      { kind: "admitted", bindingVersion: 1 },
+    );
+    const host = makeHost({
+      complete: (_request, callNumber) => {
+        if (callNumber === 1) {
+          return {
+            state: "installing",
+            code: null,
+            account: null,
+            expectedAccount: null,
+            environmentProfileId: ENVIRONMENT_PROFILE_ID,
+            profileId: null,
+          };
+        }
+        if (callNumber === 2)
+          return Promise.reject(new Error("Fake completion read failed."));
+        if (callNumber === 3) {
+          return {
+            state: "unavailable",
+            code: null,
+            account: null,
+            expectedAccount: null,
+            environmentProfileId: ENVIRONMENT_PROFILE_ID,
+            profileId: null,
+          };
+        }
+        return {
+          state: "linked",
+          code: null,
+          account: null,
+          expectedAccount: null,
+          environmentProfileId: ENVIRONMENT_PROFILE_ID,
+          profileId: MANAGED_PROFILE_ID,
+        };
+      },
+      providersList: () => ({
+        providers: [providerState("claude-code", [profile])],
+        native: null,
+      }),
+    });
+    const onComplete = vi.fn();
+    const onCancel = vi.fn();
+    renderSignIn({
+      host,
+      request: EXISTING_PROFILE_REQUEST,
+      autoStart: true,
+      waitForLocalProfile: true,
+      onComplete,
+      onCancel,
+    });
+
+    await screen.findByLabelText("One-time code");
+    fireEvent.change(screen.getByLabelText("One-time code"), {
+      target: { value: CODE },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    await screen.findByText("Waiting for this profile on this computer…");
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    await flushRequests();
+    expect(host.completeRequests).toHaveLength(2);
+    expect(host.linkRequests).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(onComplete).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    await flushRequests();
+    expect(host.completeRequests).toHaveLength(3);
+    expect(host.linkRequests).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(onComplete).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    await flushRequests();
+    await waitFor(() => {
+      expect(onComplete).toHaveBeenCalledExactlyOnceWith({
+        environmentProfileId: ENVIRONMENT_PROFILE_ID,
+        profile,
+      });
+    });
+    expect(host.completeRequests).toEqual([
+      { linkId: "link-attempt", code: CODE, environmentId: ENVIRONMENT_ID },
+      { linkId: "link-attempt", code: null, environmentId: ENVIRONMENT_ID },
+      { linkId: "link-attempt", code: null, environmentId: ENVIRONMENT_ID },
+      { linkId: "link-attempt", code: null, environmentId: ENVIRONMENT_ID },
+    ]);
+    expect(host.linkRequests).toEqual([
+      { ...EXISTING_PROFILE_REQUEST, replaceAccount: false },
+    ]);
     expect(onCancel).not.toHaveBeenCalled();
   });
 

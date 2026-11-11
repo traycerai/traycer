@@ -100,6 +100,17 @@ function RoutedProviderProfileReauthPanel(
   const refusal = useHostCredentialRefusal(client.getActiveHostId());
   if (route.kind === "environment") {
     if (refusal !== null) return <CredentialRefusalNote refusal={refusal} />;
+    if (!route.canSignIn)
+      return (
+        <div className="flex flex-col gap-3">
+          <p role="status" className="text-ui-sm text-muted-foreground">
+            Ask a teammate to sign in on Providers.
+          </p>
+          <Button variant="ghost" onClick={props.onCancel}>
+            Cancel
+          </Button>
+        </div>
+      );
     return (
       <EnvironmentProfileSignIn
         client={client}

@@ -179,6 +179,22 @@ function RoutedAddProviderProfileDialog(
   },
 ): ReactNode {
   const route = useProfileSignInEnvironment(props.client);
+  if (route.kind === "environment" && !route.canSignIn)
+    return (
+      <Dialog open={props.open} onOpenChange={props.onOpenChange}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Sign in</DialogTitle>
+            <DialogDescription>
+              Ask a teammate to sign in on Providers.
+            </DialogDescription>
+          </DialogHeader>
+          <Button variant="ghost" onClick={() => props.onOpenChange(false)}>
+            Cancel
+          </Button>
+        </DialogContent>
+      </Dialog>
+    );
   if (route.kind === "environment") {
     return (
       <EnvironmentAddProfileDialog

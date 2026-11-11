@@ -250,12 +250,16 @@ export function buildProfileLoginCommand(
         exitCode: 1,
       });
     }
-    const environmentSignIn =
+    const supportsEnvironmentSignIn =
       (target.create !== null || target.profileId !== null) &&
       usesEnvironmentSignIn(
         providerId,
         await readLocalHostMethodVersion("providers.link"),
       );
+    const environmentSignIn =
+      supportsEnvironmentSignIn &&
+      (await callHostRpcWithDispatch("environment.status", {}, PLAIN_DISPATCH))
+        .principal !== null;
     if (
       environmentSignIn &&
       providerId === "claude-code" &&

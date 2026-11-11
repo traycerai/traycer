@@ -1,3 +1,4 @@
+import type { ProvidersLinkCompleteResponseV12 } from "@traycer/protocol/host/environment-schemas";
 import type {
   ProviderCliState,
   ProviderId,
@@ -125,13 +126,30 @@ export async function runEnvironmentProfileLogin(
       }
       for (;;) {
         if (abort.signal.aborted) return { status: "cancelled" };
-        const response = await callHostRpcWithDispatch(
-          "providers.linkComplete",
-          { linkId, environmentId, code },
-          dispatch("providers.linkComplete"),
-        );
+        let response: ProvidersLinkCompleteResponseV12;
+        try {
+          response = await callHostRpcWithDispatch(
+            "providers.linkComplete",
+            { linkId, environmentId, code },
+            dispatch("providers.linkComplete"),
+          );
+        } catch (error) {
+          if (!connected) throw error;
+          await io.wait(2_000, abort.signal);
+          continue;
+        }
         code = null;
         if (abort.signal.aborted) return { status: "cancelled" };
+        if (
+          connected &&
+          response.state !== "linked" &&
+          response.state !== "installing"
+        ) {
+          if (response.state === "expired")
+            return { status: "signed-in-pending" };
+          await io.wait(2_000, abort.signal);
+          continue;
+        }
         if (response.state === "linked" || response.state === "installing") {
           connected = true;
           if (
@@ -145,7 +163,14 @@ export async function runEnvironmentProfileLogin(
             "Waiting for this profile on this computer…",
           );
           for (;;) {
-            const providers = await readProviderStates();
+            let providers: readonly ProviderCliState[];
+            try {
+              providers = await readProviderStates();
+            } catch {
+              await io.wait(2_000, abort.signal);
+              if (abort.signal.aborted) return { status: "cancelled" };
+              continue;
+            }
             const installed = installedEnvironmentProfile(
               providers,
               providerId,
@@ -187,8 +212,6 @@ export async function runEnvironmentProfileLogin(
           replaceAccount = true;
           break;
         }
-        if (response.state === "expired" && connected)
-          return { status: "signed-in-pending" };
         if (response.state !== "pending") return { status: "not-completed" };
         if (
           response.code === "harness_token_shape" &&

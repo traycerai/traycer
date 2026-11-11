@@ -15,6 +15,7 @@ import type {
   ProvidersLinkRequestV12,
   ProvidersLinkResponseV12,
 } from "@traycer/protocol/host/environment-schemas";
+import { environmentStatusResponseSchemaV12 } from "@traycer/protocol/host/environment-schemas";
 import type { SchemaVersion } from "@traycer/protocol/framework/index";
 import type { HostRpcRegistry } from "@traycer/protocol/host/registry";
 import type { ResponseOfMethod } from "../../../../shared/host-transport/host-messenger";
@@ -84,6 +85,21 @@ const ENVIRONMENT_BINDING: ResponseOfMethod<
   canUnbind: false,
   sharingGeneration: null,
 };
+
+const ENVIRONMENT_STATUS = environmentStatusResponseSchemaV12.parse({
+  principal: { kind: "personal" },
+  reachability: "connected",
+  bindingGeneration: 1,
+  desiredRevision: 1,
+  receivedRevision: 1,
+  appliedRevision: 1,
+  receiptAgeMs: 0,
+  items: [],
+  pendingUploads: [],
+  setup: null,
+  remoteAccess: "off",
+});
+const NO_ENVIRONMENT_STATUS = { ...ENVIRONMENT_STATUS, principal: null };
 
 function profile(
   profileId: string,
@@ -211,17 +227,32 @@ interface HarnessOptions {
   readonly laterProfiles?: (listCall: number) => readonly ProviderProfile[];
   readonly methodVersion?: (method: string) => SchemaVersion | null;
   readonly link?: ProvidersLinkResponseV12;
-  readonly complete?: (callNumber: number) => ProvidersLinkCompleteResponseV12;
+  readonly complete?: (
+    callNumber: number,
+  ) =>
+    | ProvidersLinkCompleteResponseV12
+    | Promise<ProvidersLinkCompleteResponseV12>;
   readonly start?: ProvidersStartLoginResponseV13;
   readonly await?: ProvidersAwaitLoginResponse;
+  readonly environmentStatus?: (
+    callNumber: number,
+  ) =>
+    | ResponseOfMethod<HostRpcRegistry, "environment.status">
+    | Promise<ResponseOfMethod<HostRpcRegistry, "environment.status">>;
+  readonly failingProviderListCalls?: readonly number[];
 }
 
 function makeHost(options: HarnessOptions): void {
   let completeCalls = 0;
   let listCalls = 0;
+  let statusCalls = 0;
   const initialState = providerState(options.providerId, options.profiles);
   methodVersionMock.mockImplementation(async (method) =>
-    options.methodVersion === undefined ? V12 : options.methodVersion(method),
+    options.methodVersion === undefined
+      ? method === "providers.linkCancel"
+        ? { major: 1, minor: 0 }
+        : V12
+      : options.methodVersion(method),
   );
   dispatchMock.mockImplementation((method) => {
     switch (method) {
@@ -232,6 +263,11 @@ function makeHost(options: HarnessOptions): void {
             new Error(
               `Fake provider inventory exceeded its ${MAX_FAKE_LIST_READS}-read budget.`,
             ),
+          );
+        }
+        if (options.failingProviderListCalls?.includes(listCalls) === true) {
+          return Promise.reject(
+            new Error("Fake provider inventory read failed."),
           );
         }
         const profiles =
@@ -245,6 +281,12 @@ function makeHost(options: HarnessOptions): void {
       }
       case "environment.host.read":
         return Promise.resolve(ENVIRONMENT_BINDING);
+      case "environment.status": {
+        statusCalls += 1;
+        return Promise.resolve(
+          options.environmentStatus?.(statusCalls) ?? ENVIRONMENT_STATUS,
+        );
+      }
       case "providers.link":
         return Promise.resolve(options.link ?? linkAnswer(SIGN_IN_URL_PROMPT));
       case "providers.linkComplete":
@@ -275,6 +317,7 @@ function makeIo(options: {
   readonly terminal: boolean;
   readonly lines?: readonly string[];
   readonly interruptOnWait?: boolean;
+  readonly onWait?: (waitCalls: number) => void;
 }): FakeIo {
   const interruptHandlers: (() => void)[] = [];
   const lines = [...(options.lines ?? [])];
@@ -293,6 +336,7 @@ function makeIo(options: {
           ),
         );
       }
+      options.onWait?.(waitCalls);
       if (options.interruptOnWait === true && !interruptedDuringWait) {
         interruptedDuringWait = true;
         interruptHandlers[0]?.();
@@ -371,6 +415,32 @@ afterEach(() => {
 });
 
 describe("environment profile sign-in through the CLI", () => {
+  it("keeps a create local when status has no principal despite a Personal binding", async () => {
+    makeHost({
+      providerId: "claude-code",
+      profiles: [],
+      environmentStatus: () => NO_ENVIRONMENT_STATUS,
+    });
+    const fake = makeIo({ terminal: true });
+
+    await runLogin(
+      "claude",
+      { kind: "create", label: "Work profile" },
+      fake.io,
+    );
+
+    expect(onlyCallTo("providers.startLogin")[1]).toMatchObject({
+      providerId: "claude-code",
+      profileId: null,
+      createProfile: {
+        label: "Work profile",
+        shareSkillsAndPlugins: false,
+      },
+    });
+    expect(callsTo("providers.link")).toEqual([]);
+    expect(callsTo("environment.host.read")).toEqual([]);
+  });
+
   it("creates a Claude profile with its label, sharing disabled, and the pasted code", async () => {
     const admitted = profile(
       MANAGED_PROFILE_ID,
@@ -531,6 +601,90 @@ describe("environment profile sign-in through the CLI", () => {
       created: false,
       profile: { profileId: MANAGED_PROFILE_ID },
     });
+  });
+
+  it("keeps a connected existing profile pending through poll and inventory failures", async () => {
+    const selected = profile(
+      MANAGED_PROFILE_ID,
+      "managed",
+      "Selected profile",
+      ENVIRONMENT_PROFILE_ID,
+    );
+    makeHost({
+      providerId: "claude-code",
+      profiles: [selected],
+      laterProfiles: () => [selected],
+      link: linkAnswer(SIGN_IN_URL_PROMPT),
+      complete: (callNumber) => {
+        if (callNumber === 1) return completeAnswer("installing", null, null);
+        if (callNumber === 2)
+          return Promise.reject(new Error("Fake completion read failed."));
+        if (callNumber === 3) return completeAnswer("unavailable", null, null);
+        return completeAnswer("linked", MANAGED_PROFILE_ID, null);
+      },
+      failingProviderListCalls: [2],
+    });
+    const context = makeContext();
+    const humanRequired = vi.spyOn(context.output, "humanRequired");
+    const completionWaitsAfterErrors: number[] = [];
+    let inventoryFailureObserved = false;
+    const fake = makeIo({
+      terminal: true,
+      lines: [CODE],
+      onWait: () => {
+        const completedPolls = callsTo("providers.linkComplete").length;
+        if (completedPolls === 2 || completedPolls === 3) {
+          expect(callsTo("providers.link")).toHaveLength(1);
+          expect(humanRequired).not.toHaveBeenCalledWith(
+            expect.stringContaining("Retry"),
+          );
+          completionWaitsAfterErrors.push(completedPolls);
+        }
+        if (callsTo("providers.list").length === 2) {
+          expect(callsTo("providers.link")).toHaveLength(1);
+          expect(humanRequired).not.toHaveBeenCalledWith(
+            expect.stringContaining("Retry"),
+          );
+          inventoryFailureObserved = true;
+        }
+      },
+    });
+    const result = await buildProfileLoginCommand(
+      {
+        provider: "claude",
+        target: { kind: "existing", profile: MANAGED_PROFILE_ID },
+      },
+      fake.io,
+    )(context);
+
+    expect(callsTo("providers.link")).toHaveLength(1);
+    expect(callsTo("providers.startLogin")).toEqual([]);
+    expect(callsTo("providers.linkComplete").map((call) => call[1])).toEqual([
+      { linkId: "link-attempt", environmentId: ENVIRONMENT_ID, code: CODE },
+      { linkId: "link-attempt", environmentId: ENVIRONMENT_ID, code: null },
+      { linkId: "link-attempt", environmentId: ENVIRONMENT_ID, code: null },
+      { linkId: "link-attempt", environmentId: ENVIRONMENT_ID, code: null },
+    ]);
+    expect(callsTo("providers.list")).toHaveLength(3);
+    expect(completionWaitsAfterErrors).toEqual([2, 3]);
+    expect(inventoryFailureObserved).toBe(true);
+    expect(result.data).toEqual({
+      providerId: "claude-code",
+      status: "signed-in",
+      profile: {
+        profileId: MANAGED_PROFILE_ID,
+        label: "Selected profile",
+        kind: "managed",
+        email: null,
+        enabled: true,
+        authStatus: "authenticated",
+        rateLimitStatus: "unknown",
+      },
+      created: false,
+    });
+    expect(humanRequired).not.toHaveBeenCalledWith(
+      expect.stringContaining("Retry"),
+    );
   });
 
   it("refuses a typed existing-profile mismatch without replacing the account", async () => {

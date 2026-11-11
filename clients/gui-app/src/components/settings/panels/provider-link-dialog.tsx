@@ -30,6 +30,7 @@ import { usesEnvironmentSignIn } from "@traycer-clients/shared/providers/environ
 import {
   useConfigurationEnvironmentId,
   useConfigurationIsPersonal,
+  useCanEditConfiguration,
 } from "@/components/settings/environment/configuration-source";
 import { usePickedTeamLabel } from "@/components/settings/environment/team-pick-label";
 import { useAddressedEnvironment } from "@/hooks/environment/use-addressed-environment";
@@ -84,10 +85,15 @@ const STARTING: LinkDialogState = { kind: "starting" };
 type SignInState = Extract<LinkDialogState, { readonly kind: "sign_in" }>;
 
 export function ProviderLinkDialog(): ReactNode {
+  const canEdit = useCanEditConfiguration();
   const target = useProviderLinkDialogStore((state) => state.target);
   const close = useProviderLinkDialogStore((state) => state.close);
   const environmentId = useConfigurationEnvironmentId();
-  if (target === null || (target.environmentId ?? null) !== environmentId)
+  if (
+    !canEdit ||
+    target === null ||
+    (target.environmentId ?? null) !== environmentId
+  )
     return null;
   return (
     <RoutedProviderLinkDialog
