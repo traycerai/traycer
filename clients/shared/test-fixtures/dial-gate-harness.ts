@@ -194,7 +194,6 @@ export function requireContext(
   return context;
 }
 
-/** The decoded control frames of one kind a client sent on one fake socket. */
 /** Every token any frame sent on any fake socket carried, in send order. */
 export function sentTokens(): unknown[] {
   const tokens: unknown[] = [];
@@ -209,6 +208,7 @@ export function sentTokens(): unknown[] {
   return tokens;
 }
 
+/** The decoded control frames of one kind a client sent on one fake socket. */
 export function sentFramesOfKind(
   native: FakeNativeWebSocket,
   kind: string,
