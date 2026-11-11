@@ -230,6 +230,8 @@ function ProviderLinkDialogFor(props: {
         providerId: providerId.data,
         profileId: linkTarget.profileId,
         environmentId,
+        createProfile: null,
+        replaceAccount: false,
       });
       setState(stateOfLinkStart(response));
     } catch (error) {

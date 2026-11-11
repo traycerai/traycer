@@ -112,7 +112,9 @@ describe("providers.link@1.2 wire fields", () => {
       prompt: { kind: "local_handoff" },
       environmentProfileId: null,
     };
-    expect(env.providersLinkResponseSchemaV12.parse(response)).toEqual(response);
+    expect(env.providersLinkResponseSchemaV12.parse(response)).toEqual(
+      response,
+    );
     expect(
       env.providersLinkResponseSchemaV12.safeParse({
         linkId: "link-1",
@@ -224,6 +226,36 @@ describe("providers.linkComplete@1.2 response", () => {
         profileId: undefined,
       }).success,
     ).toBe(false);
+  });
+});
+
+describe("providers.linkCancel@1.0 wire contract", () => {
+  it("requires the link id and explicit nullable environment id, and returns an empty object", () => {
+    const request = {
+      linkId: "link-1",
+      environmentId: "env_team_1",
+    };
+    expect(env.providersLinkCancelRequestSchema.parse(request)).toEqual(
+      request,
+    );
+    expect(
+      env.providersLinkCancelRequestSchema.parse({
+        linkId: "link-2",
+        environmentId: null,
+      }),
+    ).toEqual({ linkId: "link-2", environmentId: null });
+    expect(
+      env.providersLinkCancelRequestSchema.safeParse({
+        linkId: "link-1",
+      }).success,
+    ).toBe(false);
+    expect(
+      env.providersLinkCancelRequestSchema.safeParse({
+        linkId: "",
+        environmentId: null,
+      }).success,
+    ).toBe(false);
+    expect(env.providersLinkCancelResponseSchema.parse({})).toEqual({});
   });
 });
 

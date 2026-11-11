@@ -768,28 +768,41 @@ export type ProvidersLinkCompleteRequestV11 = z.infer<
 /** One environment sign-in; layout sharing applies only on the asking host. */
 export const providersLinkRequestSchemaV12 = lazySchema(() =>
   providersLinkRequestSchemaV11.extend({
-    createProfile: z.object({
-      label: z.string().max(64),
-      shareSkillsAndPlugins: z.boolean(),
-    }).nullable(),
+    createProfile: z
+      .object({
+        label: z.string().max(64),
+        shareSkillsAndPlugins: z.boolean(),
+      })
+      .nullable(),
     /** Explicit permission to replace the environment profile's account. */
     replaceAccount: z.boolean(),
   }),
 );
-export type ProvidersLinkRequestV12 = z.infer<typeof providersLinkRequestSchemaV12>;
+export type ProvidersLinkRequestV12 = z.infer<
+  typeof providersLinkRequestSchemaV12
+>;
 
 export const providersLinkResponseSchemaV12 = lazySchema(() =>
   providersLinkResponseSchema.extend({
     environmentProfileId: z.string().min(1).nullable(),
   }),
 );
-export type ProvidersLinkResponseV12 = z.infer<typeof providersLinkResponseSchemaV12>;
+export type ProvidersLinkResponseV12 = z.infer<
+  typeof providersLinkResponseSchemaV12
+>;
 
 /** Open on the wire so a future host can add a state without failing a read. */
 export const PROVIDERS_LINK_COMPLETE_STATES = [
-  "pending", "linked", "installing", "failed", "expired", "mismatch", "unavailable",
+  "pending",
+  "linked",
+  "installing",
+  "failed",
+  "expired",
+  "mismatch",
+  "unavailable",
 ] as const;
-export type ProvidersLinkCompleteState = (typeof PROVIDERS_LINK_COMPLETE_STATES)[number];
+export type ProvidersLinkCompleteState =
+  (typeof PROVIDERS_LINK_COMPLETE_STATES)[number];
 
 export const providersLinkCompleteResponseSchemaV12 = lazySchema(() =>
   providersLinkCompleteResponseSchema.extend({
@@ -799,7 +812,18 @@ export const providersLinkCompleteResponseSchemaV12 = lazySchema(() =>
     profileId: z.string().min(1).nullable(),
   }),
 );
-export type ProvidersLinkCompleteResponseV12 = z.infer<typeof providersLinkCompleteResponseSchemaV12>;
+export type ProvidersLinkCompleteResponseV12 = z.infer<
+  typeof providersLinkCompleteResponseSchemaV12
+>;
+
+/** Idempotently abandons a sign-in; an existing profile is never removed. */
+export const providersLinkCancelRequestSchema = lazySchema(() =>
+  z.object({
+    linkId: z.string().min(1),
+    environmentId: z.string().min(1).nullable(),
+  }),
+);
+export const providersLinkCancelResponseSchema = emptyRequestSchema;
 
 // ── environment.agentDefinitions.* ──────────────────────────────────────────
 

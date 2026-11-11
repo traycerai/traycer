@@ -71,7 +71,12 @@ export function useTeamPlanLinkStartMutation(
     method: "providers.link",
     mapVariables: (variables) => {
       cloudVerdictPreflight("providers.link")();
-      return { ...variables, environmentId };
+      return {
+        ...variables,
+        environmentId,
+        createProfile: null,
+        replaceAccount: false,
+      };
     },
     requiredHostMethodVersion: () => teamLinkFloor("providers.link"),
     options: { mutationKey: environmentMutationKeys.providersLink() },

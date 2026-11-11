@@ -68,7 +68,7 @@ import { supportMatrix } from "./__fixtures__/support-matrix";
 import { RETIRED_SECRET_CREATE_FIELDS } from "@traycer/protocol/host/released-wire-rows";
 
 /**
- * The wire of the environment family: the 26 environment methods, the
+ * The wire of the environment family: the 28 environment methods, the
  * executable-write grant on every method that reaches an execution sink, the
  * `providers.list@10.5` envelope keys, `providers.nativeMutate@1.3`'s
  * `promoteToPersonal`, and the five secret shapes, field for field.
@@ -212,8 +212,8 @@ function expectDowngradeUnsupported(thrown: unknown): void {
 
 describe("new methods are off every released floor", () => {
   it("registers exactly 27 environment methods", () => {
-    expect(ENVIRONMENT_METHOD_NAMES).toHaveLength(27);
-    expect(Object.keys(ENVIRONMENT_RPC_METHODS)).toHaveLength(27);
+    expect(ENVIRONMENT_METHOD_NAMES).toHaveLength(28);
+    expect(Object.keys(ENVIRONMENT_RPC_METHODS)).toHaveLength(28);
   });
 
   it("keeps all of them out of RELEASED_FLOOR_METHOD_NAMES", () => {
@@ -256,6 +256,30 @@ describe("new methods are off every released floor", () => {
     expect(hostRpcRegistry["environment.status"].degrade).toEqual({
       kind: "unsupported",
     });
+  });
+});
+
+describe("providers.linkCancel@1.0 wire contract", () => {
+  it("registers the idempotent cancel request at @1.0 with no upgrade path", () => {
+    const registry = hostRpcRegistry["providers.linkCancel"];
+    expect(registry.degrade).toEqual({ kind: "unsupported" });
+    expect(registry[1].latestMinor).toBe(0);
+    expect(Object.keys(registry[1].versions)).toEqual(["0"]);
+    const contract = registry[1].versions[0].contract;
+    const request = {
+      linkId: "link-1",
+      environmentId: "env_team_1",
+    };
+    expect(contract.requestSchema.parse(request)).toEqual(request);
+    expect(
+      contract.requestSchema.parse({
+        linkId: "link-2",
+        environmentId: null,
+      }),
+    ).toEqual({ linkId: "link-2", environmentId: null });
+    expect(contract.responseSchema.parse({})).toEqual({});
+    expect(registry[1].versions[0].upgradeFromPreviousVersion).toBeNull();
+    expect(registry[1].downgradePathsFromLatest).toEqual({});
   });
 });
 
@@ -2373,16 +2397,11 @@ describe("providers.link and linkComplete@1.2 profile wire compatibility", () =>
       environmentId: "env_team_1",
     });
     expect(
-      upgradeRequestToVersion(
-        completeRegistry,
-        ONE_ONE,
-        ONE_TWO,
-        requestV11,
-      ),
+      upgradeRequestToVersion(completeRegistry, ONE_ONE, ONE_TWO, requestV11),
     ).toEqual(requestV11);
-    expect(
-      env.providersLinkCompleteRequestSchemaV11.parse(requestV11),
-    ).toEqual(requestV11);
+    expect(env.providersLinkCompleteRequestSchemaV11.parse(requestV11)).toEqual(
+      requestV11,
+    );
   });
 
   it("upgrades @1.1 host responses to explicit null profile ids for a @1.2 client", () => {
@@ -2429,7 +2448,9 @@ describe("providers.link and linkComplete@1.2 profile wire compatibility", () =>
       prompt: { kind: "local_handoff" },
       environmentProfileId: "env-profile-1",
     };
-    expect(env.providersLinkResponseSchemaV12.parse(startV12)).toEqual(startV12);
+    expect(env.providersLinkResponseSchemaV12.parse(startV12)).toEqual(
+      startV12,
+    );
     expect(env.providersLinkResponseSchema.parse(startV12)).toEqual({
       linkId: "link-1",
       prompt: { kind: "local_handoff" },
@@ -2446,9 +2467,7 @@ describe("providers.link and linkComplete@1.2 profile wire compatibility", () =>
     expect(
       env.providersLinkCompleteResponseSchemaV12.parse(completeV12),
     ).toEqual(completeV12);
-    expect(
-      env.providersLinkCompleteResponseSchema.parse(completeV12),
-    ).toEqual({
+    expect(env.providersLinkCompleteResponseSchema.parse(completeV12)).toEqual({
       state: "installing",
       code: null,
       account: null,
