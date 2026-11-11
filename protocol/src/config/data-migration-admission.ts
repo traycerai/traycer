@@ -243,7 +243,7 @@ async function tryCreateLock(
       if (HARD_LINK_REFUSED_CODES.has(errorCode(error) ?? "")) {
         throw new MigrationAdmissionError(
           "bootstrap-unusable",
-          "This filesystem does not allow hard links, which Traycer's startup lock needs, so Traycer cannot run on it.",
+          "This filesystem does not allow hard links, so Traycer cannot run on it.",
           null,
         );
       }
