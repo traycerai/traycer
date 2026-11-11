@@ -581,7 +581,7 @@ describe("useHostNotificationIndicators across crossed chunks", () => {
 
 describe("useHostNotificationIndicators freshness modes over one key", () => {
   it("keeps an answered, un-invalidated read fresh for the Activity observer after 61 s while the ordinary observer of the same key goes stale, with no new read", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.useFakeTimers();
     const queryClient = createAppQueryClient();
     queryClient.setDefaultOptions({
       queries: { ...queryClient.getDefaultOptions().queries, retry: false },
@@ -630,20 +630,17 @@ describe("useHostNotificationIndicators freshness modes over one key", () => {
       );
 
     const activity = observe("activity");
-    await waitFor(() => {
+    await vi.waitFor(() => {
       expect(activity.result.current.hasAnswer).toBe(true);
     });
     const base = observe("base");
-    await waitFor(() => {
+    await vi.waitFor(() => {
       expect(base.result.current.hasAnswer).toBe(true);
     });
     expect(requestCount.value).toBe(1);
 
-    vi.setSystemTime(Date.now() + 61_000);
-    activity.rerender();
-    base.rerender();
     await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      await vi.advanceTimersByTimeAsync(61_000);
     });
 
     expect(activity.result.current.hasAnswer).toBe(true);

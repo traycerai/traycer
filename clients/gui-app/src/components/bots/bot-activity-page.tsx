@@ -30,8 +30,10 @@ import { BotActivityDetails } from "@/components/bots/bot-activity-details";
 import { BotTaskControls } from "@/components/bots/bot-task-actions";
 import { ChannelPost } from "@/components/bots/bot-channel-post";
 import { ChatIndicatorHostScopes } from "@/components/notifications/chat-indicator-host-scopes";
-import { ChatIndicatorFreshHostsContext } from "@/components/notifications/chat-indicator-fresh-hosts-context";
-import { NotificationIndicatorsContext } from "@/components/notifications/notification-indicator-context";
+import {
+  ChatIndicatorAttestedContext,
+  ChatIndicatorFreshHostsContext,
+} from "@/components/notifications/chat-indicator-fresh-hosts-context";
 import type { BotActiveTasks } from "@/hooks/bots/use-bot-active-tasks";
 import {
   useBotTaskAgents,
@@ -69,12 +71,14 @@ import {
 } from "@/lib/tab-navigation";
 import { openEpicFromListIntent } from "@/lib/tab-navigation/intents";
 import { cn } from "@/lib/utils";
-import { useAttestedEpicAgentActivity } from "@/stores/agent-activity-store";
+import {
+  useAgentActivityCoverage,
+  useAttestedEpicAgentActivity,
+} from "@/stores/agent-activity-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useChatTranscriptJumpStore } from "@/stores/chats/chat-transcript-jump-store";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
 import {
-  EMPTY_INDICATOR_STATE_RESPONSE,
   EMPTY_NOTIFICATION_INDICATOR_STATE,
   selectNotificationIndicatorState,
   type NotificationIndicatorState,
@@ -419,6 +423,7 @@ function ActiveTaskRowBody(
           agentStates={agentStates}
           tiers={tiers}
           inputNeeded={inputNeeded}
+          waitingFresh={task.inputNeeded !== null}
         />
       ) : null}
     </div>
@@ -434,7 +439,7 @@ function useTaskAgentStates(
   taskId: string,
   agents: BotTaskAgents | null,
 ): ReadonlyArray<TaskAgentState> {
-  const chatIndicators = useContext(NotificationIndicatorsContext);
+  const chatIndicators = useContext(ChatIndicatorAttestedContext);
   const freshHosts = useContext(ChatIndicatorFreshHostsContext);
   const localRows = useAppLocalNotificationsStore((state) => state.byId);
   return useMemo(
@@ -446,9 +451,7 @@ function useTaskAgentStates(
           { byId: localRows },
           { epicId: taskId, chatId: node.id },
           agentHostOf(node, agents),
-          freshHosts[agentHostOf(node, agents)]
-            ? chatIndicators
-            : EMPTY_INDICATOR_STATE_RESPONSE,
+          chatIndicators,
         ),
       })),
     [agents, chatIndicators, freshHosts, localRows, taskId],
@@ -721,6 +724,7 @@ function TaskAgentRows(props: {
   readonly agentStates: ReadonlyArray<TaskAgentState>;
   readonly tiers: ReadonlyMap<string, AgentActivityTier>;
   readonly inputNeeded: ReadonlyArray<BotInputNeeded>;
+  readonly waitingFresh: boolean;
 }): ReactNode {
   const { taskId, agents, tiers, inputNeeded } = props;
   const { nodes, archiveHidden, tree } = agents;
@@ -755,13 +759,16 @@ function TaskAgentRows(props: {
             taskId={taskId}
             node={node}
             sessionHostId={agents.sessionHostId}
-            kind={ownChatStatusKind(
-              stateById.get(node.id) ?? EMPTY_NOTIFICATION_INDICATOR_STATE,
-              tiers.get(node.id),
-              props.agentStates.find((agent) => agent.id === node.id)?.fresh
-                ? "covered"
-                : "unserved",
-            )}
+            indicator={
+              stateById.get(node.id) ?? EMPTY_NOTIFICATION_INDICATOR_STATE
+            }
+            tier={tiers.get(node.id)}
+            sourcesFresh={
+              props.waitingFresh
+                ? props.agentStates.find((agent) => agent.id === node.id)
+                    ?.fresh === true
+                : false
+            }
           />
         </li>
       ))}
@@ -785,10 +792,21 @@ function TaskAgentRow(props: {
   readonly taskId: string;
   readonly node: BotTaskAgentNode;
   readonly sessionHostId: string | null;
-  readonly kind: ChatDescendantStatusKind | "unknown" | null;
+  readonly indicator: NotificationIndicatorState;
+  readonly tier: AgentActivityTier | undefined;
+  readonly sourcesFresh: boolean;
 }): ReactNode {
   const { taskId, node, sessionHostId } = props;
-  const kind = props.kind;
+  const activityCoverage = useAgentActivityCoverage(
+    node.ownerHostId ?? sessionHostId,
+  );
+  const kind = ownChatStatusKind(
+    props.indicator,
+    props.tier,
+    props.sourcesFresh && activityCoverage === "covered"
+      ? "covered"
+      : "unserved",
+  );
   let statusWords = "idle";
   if (kind === "unknown") statusWords = "Status unknown";
   else if (kind !== null) statusWords = AGENT_STATE_WORDS[kind];

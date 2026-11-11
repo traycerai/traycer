@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useContext, type ReactNode } from "react";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
@@ -1181,10 +1181,14 @@ function renderObservers(
 
 const settleReads = (): Promise<void> =>
   act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await vi.advanceTimersByTimeAsync(0);
   });
 
 describe("ordinary and Activity notification indicator observers over one key", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
   afterEach(() => {
     vi.useRealTimers();
   });
@@ -1193,7 +1197,7 @@ describe("ordinary and Activity notification indicator observers over one key", 
     const harness = createHarness(EPIC_ANSWER);
     applyCloudSnapshot([], 1);
     const view = renderObservers(harness, <BaseObserver testId="a" />);
-    await waitFor(() => {
+    await vi.waitFor(() => {
       expect(indicatorText("a")).toBe("has-epic");
     });
     expect(harness.hostIndicators.requestCount.value).toBe(1);
@@ -1214,7 +1218,7 @@ describe("ordinary and Activity notification indicator observers over one key", 
     const harness = createHarness(EPIC_ANSWER);
     applyCloudSnapshot([], 1);
     const view = renderObservers(harness, <BaseObserver testId="a" />);
-    await waitFor(() => {
+    await vi.waitFor(() => {
       expect(indicatorText("a")).toBe("has-epic");
     });
     expect(harness.hostIndicators.requestCount.value).toBe(1);
@@ -1226,7 +1230,7 @@ describe("ordinary and Activity notification indicator observers over one key", 
         <ActivityObserver testId="y" />
       </>,
     );
-    await waitFor(() => {
+    await vi.waitFor(() => {
       expect(indicatorText("x")).toBe("fresh/has-epic");
     });
     await settleReads();
@@ -1235,16 +1239,17 @@ describe("ordinary and Activity notification indicator observers over one key", 
   });
 
   it("an ordinary mount after 60 s still reads, though an Activity observer holds the same key", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
     const harness = createHarness(EPIC_ANSWER);
     applyCloudSnapshot([], 1);
     const view = renderObservers(harness, <ActivityObserver testId="x" />);
-    await waitFor(() => {
+    await vi.waitFor(() => {
       expect(indicatorText("x")).toBe("fresh/has-epic");
     });
     expect(harness.hostIndicators.requestCount.value).toBe(1);
 
-    vi.setSystemTime(Date.now() + 61_000);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(61_000);
+    });
     view.rerender(
       <>
         <ActivityObserver testId="x" />
@@ -1276,7 +1281,7 @@ describe("ordinary and Activity notification indicator observers over one key", 
         <ActivityObserver testId="x" />
       </>,
     );
-    await waitFor(() => {
+    await vi.waitFor(() => {
       expect(indicatorText("x")).toBe("fresh/has-epic");
     });
 
@@ -1297,7 +1302,7 @@ describe("ordinary and Activity notification indicator observers over one key", 
     hold = false;
     await act(async () => {
       release?.();
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      await vi.advanceTimersByTimeAsync(0);
     });
     expect(indicatorText("x")).toBe("fresh/has-epic");
   });
@@ -1306,7 +1311,7 @@ describe("ordinary and Activity notification indicator observers over one key", 
     const alone = createHarness(EPIC_ANSWER);
     applyCloudSnapshot([], 1);
     renderObservers(alone, <BaseObserver testId="b" />);
-    await waitFor(() => {
+    await vi.waitFor(() => {
       expect(indicatorText("b")).toBe("has-epic");
     });
     await settleReads();
@@ -1323,7 +1328,7 @@ describe("ordinary and Activity notification indicator observers over one key", 
         <BaseObserver testId="b" />
       </>,
     );
-    await waitFor(() => {
+    await vi.waitFor(() => {
       expect(indicatorText("b")).toBe("has-epic");
     });
     await settleReads();

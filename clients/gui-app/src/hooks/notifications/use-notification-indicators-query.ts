@@ -89,6 +89,8 @@ export function useNotificationIndicatorsWithFreshness(
   readonly fresh: boolean;
   readonly positiveFresh: boolean;
   readonly freshIndicators: SurfaceNotificationIndicators;
+  readonly cloudPositiveIndicators: SurfaceNotificationIndicators;
+  readonly hostPositiveIndicators: SurfaceNotificationIndicators;
   readonly hostId: string | null;
 } {
   return useNotificationIndicatorsBase(args, "activity");
@@ -102,6 +104,8 @@ function useNotificationIndicatorsBase(
   readonly fresh: boolean;
   readonly positiveFresh: boolean;
   readonly freshIndicators: SurfaceNotificationIndicators;
+  readonly cloudPositiveIndicators: SurfaceNotificationIndicators;
+  readonly hostPositiveIndicators: SurfaceNotificationIndicators;
   readonly hostId: string | null;
 } {
   const feedMode = useNotificationFeedMode();
@@ -170,9 +174,43 @@ function useNotificationIndicatorsBase(
   return {
     indicators,
     freshIndicators,
+    ...attestedPositivePartitions({
+      cloudFresh: isMixed && cloudFresh,
+      cloud: cloudIndicators,
+      hostFresh: positiveFresh,
+      host: hostIndicators.data,
+      hostId: readHostId,
+    }),
     fresh,
     positiveFresh,
     hostId: readHostId,
+  };
+}
+
+/** Positive facts contribute independently from each attested source. */
+function attestedPositivePartitions({
+  cloudFresh,
+  cloud,
+  hostFresh,
+  host,
+  hostId,
+}: {
+  cloudFresh: boolean;
+  cloud: SurfaceNotificationIndicators;
+  hostFresh: boolean;
+  host: SurfaceNotificationIndicators;
+  hostId: string | null;
+}): {
+  cloudPositiveIndicators: SurfaceNotificationIndicators;
+  hostPositiveIndicators: SurfaceNotificationIndicators;
+} {
+  return {
+    cloudPositiveIndicators: cloudFresh
+      ? cloud
+      : EMPTY_INDICATOR_STATE_RESPONSE,
+    hostPositiveIndicators: hostFresh
+      ? scopeIndicatorsToOrigin(host, hostId)
+      : EMPTY_INDICATOR_STATE_RESPONSE,
   };
 }
 

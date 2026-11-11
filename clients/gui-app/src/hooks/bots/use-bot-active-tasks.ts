@@ -15,6 +15,7 @@ import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-
 import {
   EMPTY_INDICATOR_STATE_RESPONSE,
   EMPTY_NOTIFICATION_INDICATOR_STATE,
+  mergeIndicatorStateResponses,
   selectNotificationIndicatorState,
   type NotificationIndicatorState,
 } from "@/stores/notifications/notification-indicator-state";
@@ -48,7 +49,8 @@ export function useBotActiveTasks(
   const workingCounts = useAttestedEpicsWorkingCounts(taskIds);
   const fleetCoverage = useActivityFleetCoverage();
   const {
-    freshIndicators: indicators,
+    cloudPositiveIndicators,
+    hostPositiveIndicators,
     fresh,
     positiveFresh,
     hostId,
@@ -72,9 +74,12 @@ export function useBotActiveTasks(
           { byId: localRows },
           { epicId },
           null,
-          positiveFresh && reachability.status === "reachable"
-            ? indicators
-            : EMPTY_INDICATOR_STATE_RESPONSE,
+          mergeIndicatorStateResponses(
+            cloudPositiveIndicators,
+            positiveFresh && reachability.status === "reachable"
+              ? hostPositiveIndicators
+              : EMPTY_INDICATOR_STATE_RESPONSE,
+          ),
         ),
       ]),
     );
@@ -105,7 +110,8 @@ export function useBotActiveTasks(
       indicatorOf,
     };
   }, [
-    indicators,
+    cloudPositiveIndicators,
+    hostPositiveIndicators,
     localRows,
     taskIds,
     tasks,
