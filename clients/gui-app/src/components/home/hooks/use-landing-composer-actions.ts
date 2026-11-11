@@ -259,6 +259,9 @@ export interface TerminalAgentLaunch {
  * never a toast-and-proceed, and never a silent fallback onto another host.
  */
 export interface LandingComposerActions {
+  readonly resolveOwnerForCreate: (
+    owner: LandingOwnerTeam | null,
+  ) => LandingOwnerTeam | null | Promise<LandingOwnerTeam | null>;
   readonly submit: (
     args: LandingComposerSubmitArgs,
   ) => LandingPlacementRefusal | null;
@@ -385,26 +388,59 @@ export function useLandingComposerActions(
     [auth, localHostId, queryClient],
   );
   const ownerForCreate = useCallback(
-    async (
+    (
       hostId: string,
-      fallback: EpicCreateOwner | null,
-    ): Promise<EpicCreateOwner | null> => {
+      fallback: LandingOwnerTeam | null,
+    ): LandingOwnerTeam | null | Promise<LandingOwnerTeam | null> => {
       const query = localOwnerQuery(hostId);
       if (query === undefined) return fallback;
       const userId = useAuthStore.getState().contextMetadata?.userId ?? null;
+      const readOwner = (): LandingOwnerTeam | null => {
+        if (query.state.error instanceof SupersededAuthEraError)
+          throw query.state.error;
+        const owner =
+          query.state.status === "success" ? query.state.data?.owner : null;
+        if (owner?.kind !== "team") return null;
+        return {
+          teamId: owner.id,
+          slug:
+            useAuthStore
+              .getState()
+              .shareableTeams.find((team) => team.teamId === owner.id)?.slug ??
+            owner.name,
+        };
+      };
       // A submit may hold a null owner from the render before this read settled.
-      if (query.state.status === "pending") {
-        await query.promise?.catch(() => undefined);
-        if (
-          userId !== (useAuthStore.getState().contextMetadata?.userId ?? null)
-        )
-          throw new SupersededAuthEraError();
+      if (
+        query.state.status === "pending" &&
+        query.state.fetchStatus === "fetching" &&
+        query.promise !== undefined
+      ) {
+        return query.promise
+          .catch((error: unknown) => {
+            if (error instanceof SupersededAuthEraError) throw error;
+          })
+          .then(() => {
+            if (
+              userId !==
+              (useAuthStore.getState().contextMetadata?.userId ?? null)
+            )
+              throw new SupersededAuthEraError();
+            return readOwner();
+          });
       }
-      const owner =
-        query.state.status === "success" ? query.state.data?.owner : null;
-      return owner?.kind === "team" ? { kind: "team", teamId: owner.id } : null;
+      return readOwner();
     },
     [localOwnerQuery],
+  );
+  const resolveOwnerForCreate = useCallback(
+    (
+      owner: LandingOwnerTeam | null,
+    ): LandingOwnerTeam | null | Promise<LandingOwnerTeam | null> =>
+      target.resolvedHostId === null
+        ? owner
+        : ownerForCreate(target.resolvedHostId, owner),
+    [ownerForCreate, target.resolvedHostId],
   );
   const createEpic = useEpicCreateForClient(target.client);
   const attachClient = useEpicAttachmentClient(target.client);
@@ -455,7 +491,8 @@ export function useLandingComposerActions(
       readonly initialUserPrompt: string;
       readonly chat: CreateEpicChatSeedV14 | null;
       /** `epic.create@1.3`'s owner; `null` is the person. */
-      readonly owner: EpicCreateOwner | null;
+      readonly owner: LandingOwnerTeam | null;
+      readonly ownerState: "resolve" | "settled";
       readonly workspaceFolders: ReadonlyArray<string>;
       readonly workspaceFolderInfoByPath: Readonly<
         Record<string, WorkspaceFolderInfo>
@@ -480,7 +517,13 @@ export function useLandingComposerActions(
        */
       readonly captureSeedRecovery: (recover: () => void) => void;
     }): Promise<LandingEpicCreateResult> => {
-      const owner = await ownerForCreate(input.hostId, input.owner);
+      const resolvedOwner =
+        input.ownerState === "settled"
+          ? input.owner
+          : ownerForCreate(input.hostId, input.owner);
+      const owner = epicCreateOwnerFor(
+        resolvedOwner instanceof Promise ? await resolvedOwner : resolvedOwner,
+      );
       const profile = useAuthStore.getState().profile;
       const hostId = input.hostId;
       const optimisticRows = buildOptimisticWorkspaceBindingRows(
@@ -886,7 +929,8 @@ export function useLandingComposerActions(
         captureSeedRecovery: (recover) => {
           seedRecovery.run = recover;
         },
-        owner: epicCreateOwnerFor(args.owner),
+        owner: args.owner,
+        ownerState: "resolve",
         chat: {
           chatId,
           parentId: null,
@@ -1501,7 +1545,8 @@ export function useLandingComposerActions(
         // should stand. Nothing to recover to.
         captureSeedRecovery: () => undefined,
         chat: null,
-        owner: epicCreateOwnerFor(owner),
+        owner,
+        ownerState: "resolve",
       })
         .then(
           (response) => {
@@ -1678,7 +1723,12 @@ export function useLandingComposerActions(
         args.sandboxTeamId !== null && args.sandboxTeamId !== args.owner?.teamId
           ? args.sandboxTeamId
           : null;
-      if (attachTeamId !== null && attachClient === null) {
+      const attachmentHostId = attachClient?.getActiveHostId() ?? null;
+      if (
+        attachTeamId !== null &&
+        (attachmentHostId === null ||
+          (args.owner !== null && attachmentHostId === placement.hostId))
+      ) {
         return { message: ATTACH_ENVIRONMENT_NEEDS_OWN_HOST_COPY };
       }
       const hostId = placement.hostId;
@@ -1757,7 +1807,8 @@ export function useLandingComposerActions(
         // no folders, so there is nothing to recover.
         captureSeedRecovery: () => undefined,
         chat: null,
-        owner: epicCreateOwnerFor(args.owner),
+        owner: args.owner,
+        ownerState: "settled",
       })
         .then(async (response) => {
           if (!sameAccount()) return;
@@ -1812,6 +1863,7 @@ export function useLandingComposerActions(
 
   return useMemo(
     () => ({
+      resolveOwnerForCreate,
       submit,
       selectTerminalAgent,
       startTaskOnStagedSandbox,
@@ -1820,7 +1872,8 @@ export function useLandingComposerActions(
       // without it the composer would report itself idle for the whole of a
       // multi-megabyte `drafts.putBlob` pass and keep Send live through it.
       isPending:
-        (localOwnership.isPending && localOwnership.fetchStatus !== "idle") ||
+        (localOwnership.isPending &&
+          localOwnership.fetchStatus === "fetching") ||
         createEpic.isPending ||
         attachEnvironment.isPending ||
         terminalAgentCreate.isPending ||
@@ -1835,6 +1888,7 @@ export function useLandingComposerActions(
       createEpic.isPending,
       localOwnership.fetchStatus,
       localOwnership.isPending,
+      resolveOwnerForCreate,
       placementAdmitsTask,
       selectTerminalAgent,
       startTaskOnStagedSandbox,

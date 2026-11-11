@@ -1,3 +1,4 @@
+import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
 /**
  * The chat fork dialog holds Fork shut on a harness a team sandbox does not
  * offer.
@@ -367,6 +368,7 @@ function renderDialog(): void {
       tabId="tab-test"
       onOpenChange={() => undefined}
     />,
+    { wrapper: WithTestQueryClient },
   );
 }
 
