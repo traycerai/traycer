@@ -78,9 +78,10 @@ export interface WheelDelta {
 /**
  * Sends `deltas` as wheel input at the mouse's position, `gapFrames` frames
  * apart (0: back to back), and resolves once the page has received every one
- * of them, in an animation frame after the last - when the main thread holds
- * the scroll offset they produced. `page.mouse.wheel` resolves as soon as the
- * input is queued, and on a loaded runner a page task sent next (a read, a
+ * of them, in an animation frame after the last. This observes event
+ * delivery, not the completion of native scrolling: a wheel's default scroll
+ * may still land later. `page.mouse.wheel` resolves as soon as the input is
+ * queued, and on a loaded runner a page task sent next (a read, a
  * hide, a click) can run before the wheel lands: a test that reads a position
  * after wheeling, or acts on the view the wheel left, sends the wheel through
  * here. The gaps count from each send, as a burst of bare `page.mouse.wheel`

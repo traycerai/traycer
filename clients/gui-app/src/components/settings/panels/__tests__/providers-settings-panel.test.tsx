@@ -3688,8 +3688,7 @@ describe("<ProvidersSettingsPanel />", () => {
         }),
       ],
     };
-    const personal =
-      "Sign-ins, keys and tools for each coding agent, on every computer and sandbox running Personal.";
+    const personal = "Sign-ins, keys and tools for each coding agent.";
     // The file's cases pick a Local row; this one starts on Personal.
     useSettingsEnvironmentPickStore.setState({ pick: { kind: "personal" } });
 

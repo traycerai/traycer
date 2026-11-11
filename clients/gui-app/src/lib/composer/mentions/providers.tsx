@@ -72,6 +72,7 @@ const EMPTY_WORKSPACE_REQUESTS: ReadonlyArray<MentionWorkspaceRequest> = [];
 const EMPTY_EPIC_REQUESTS: ReadonlyArray<MentionEpicRequest> = [];
 
 export type MentionProviderId =
+  | "hosts"
   | "files"
   | "folders"
   | "worktree"
@@ -104,7 +105,11 @@ export type MentionFlowStep =
     };
 
 export type MentionMenuAction =
-  | { readonly kind: "navigate"; readonly step: MentionFlowStep }
+  | {
+      readonly kind: "navigate";
+      readonly step: MentionFlowStep;
+      readonly clearQuery?: boolean;
+    }
   | { readonly kind: "back" }
   | { readonly kind: "complete"; readonly mention: MentionAttachment }
   /**
@@ -476,6 +481,21 @@ export abstract class ComposerMentionProvider {
       stepId,
       workspacePath,
     };
+  }
+}
+
+class HostMentionProvider extends ComposerMentionProvider {
+  readonly id = "hosts" as const;
+  readonly rootOrder = 0;
+  protected readonly label = "Hosts";
+  protected readonly description = "Hosts";
+
+  rootEntry(): null {
+    return null;
+  }
+
+  stepEntries(): ReadonlyArray<MentionMenuEntry> {
+    return EMPTY_MENU_ENTRIES;
   }
 }
 
@@ -1437,6 +1457,7 @@ class MentionProviderRegistry {
 }
 
 export const mentionProviderRegistry = new MentionProviderRegistry([
+  new HostMentionProvider(),
   new FileMentionProvider(),
   new FolderMentionProvider(),
   new WorktreeMentionProvider(),

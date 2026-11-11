@@ -1010,8 +1010,8 @@ payer exists. **Resuming changes the payer to you.** is its own line before
 the actions when that team row is resting and the payer is not the viewer.
 **Give it another {period}** is offered on a resting row inside its warning
 lead and precedes the primary action. **Details** stays inline. Setup failures
-show **Retry setup**,
-applicable **Open terminal** and **Stop** controls, **Choose another host**, and
+show **Retry applying** (or **Repair setup** on an older host), applicable
+**Open terminal** and **Stop** controls, **Choose another host**, and
 **Details** once; remaining secondary actions stay in **More**. Rows show
 starter and keeper, agent/task purpose, session counts and names, and setup
 evidence with support references. **Details** retains lifecycle status, settings
@@ -5948,17 +5948,16 @@ wrap`). Each row names the account its first usable match runs on, the
   item. Later storage rows go here too.
   - **The storage policy** (`panels/storage-policy-section.tsx`,
     `data-testid="storage-policy"`), two groups:
-    - **Tasks you haven't used lately**, a card of three rows:
+    - **Tasks you haven't used lately**, a card of two rows:
       - **Chats**, a switch: "Keep them in the cloud instead of on disk."
-      - **Artifacts**, a switch, with the same description.
       - **When**, a select: "When to clean up a task nobody has used."
         Options "When the disk is getting full" (no window), "After 7 days",
-        "After 14 days", "After 30 days", "After 90 days". Disabled only while
-        both switches are off, since the window cleans whichever kinds are on.
+        "After 14 days", "After 30 days", "After 90 days". Disabled while
+        Chats is off, since the window cleans only chats.
     - **Archived chats**, a card of one row:
       - **When**, a select: "Counted from the chat's last activity." Options
         "Never", "After 4 hours", "After 1 day", "After 7 days", "After 30
-        days". It is independent of both switches, so no switch disables it.
+        days". It is independent of Chats, so the switch never disables it.
     - A stored window that is not one of the options is listed too, so the
       select shows what is in force: "After N days" for idle tasks, and for
       archived chats "After N hours" below 24 or when it is not a whole
@@ -5966,20 +5965,20 @@ wrap`). Each row names the account its first usable match runs on, the
       for one).
     - Each select's accessible name adds its group ("Archived chats: When"),
       since both rows read "When".
-    - A line under the groups says what applies. "Applies on every host in
-      this environment." shows while anything can be cleaned, and "A chat
-      comes back when an agent continues it." follows it only while Chats is
-      on or Archived chats is not Never. With nothing cleanable there is no
-      line.
+    - A line under the groups says what applies: "Applies on every host in
+      this environment. A chat comes back when an agent continues it." It
+      shows while Chats is on, and there is no line while it is off.
   - It is the configuration's `storage_policy` item (key `storage`, value
-    `{ chats, artifacts, idleTaskDays, archivedChatHours }`, the idle window
+    `{ chats, idleTaskDays, archivedChatHours }`, the idle window
     in whole days and the archived-chat window in whole hours, each or
     `null`; `hooks/environment/use-storage-policy.ts`), read through the pool
     tier like the sandbox defaults. The pick names the environment:
-    Personal's own, or the team's. **No item reads as the defaults**, both
-    switches on, no idle window and archived chats after 4 hours. An item
-    whose value does not parse reads as nothing cleanable, both switches off
-    and Archived chats Never, because the hosts then clean up nothing.
+    Personal's own, or the team's. **No item reads as the defaults**, Chats
+    on, no idle window and archived chats after 4 hours. An item whose value
+    does not parse reads as nothing cleanable, Chats off and Archived chats
+    Never, because the hosts then clean up nothing. A value saved while the
+    page still had an Artifacts switch carries `artifacts`; it reads as any
+    other value, and a save drops the key.
   - Every control writes the whole value through
     `environment.configuration.items.put` with the revision it read (`null`
     creates the item), so a concurrent edit of one field cannot lose
