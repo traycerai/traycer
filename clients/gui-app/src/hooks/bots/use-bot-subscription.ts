@@ -119,7 +119,6 @@ type BotStreamEvent =
         BotSubscribeServerFrame,
         { kind: "snapshot" }
       > | null;
-      readonly held: boolean;
     }
   | { readonly kind: "closed"; readonly message: string };
 
@@ -353,9 +352,7 @@ function createSharedSubscription(
       applyActivity(frame);
       return;
     }
-    shared.lastEvent = streamOpen
-      ? frame
-      : { kind: "stale", baseline: frame, held };
+    shared.lastEvent = streamOpen ? frame : { kind: "stale", baseline: frame };
     notifyConsumers();
     const key = botQueryKeys.subscription(args);
     const previous =
@@ -392,7 +389,7 @@ function createSharedSubscription(
     streamOpen = status === "open";
     if (continuity === "held") held = true;
     if (status !== "open" && shared.lastEvent?.kind === "snapshot") {
-      shared.lastEvent = { kind: "stale", baseline: shared.lastEvent, held };
+      shared.lastEvent = { kind: "stale", baseline: shared.lastEvent };
       notifyConsumers();
     }
     if (

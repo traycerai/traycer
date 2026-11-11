@@ -381,24 +381,6 @@ export function useEpicAgentActivity(epicId: string | null): EpicAgentActivity {
   return useAgentActivityStore(selector);
 }
 
-/**
- * How many agents are working in each of `epicIds`, in that order, unioned
- * across hosts as {@link useEpicAgentActivity} reads one epic: a list of
- * epics read under one subscription, as a bot's Activity page reads its
- * tasks. Re-renders only when a count moves.
- */
-export function useEpicsWorkingCounts(
-  epicIds: ReadonlyArray<string>,
-): ReadonlyArray<number> {
-  return useAgentActivityStore(
-    useShallow((state) =>
-      epicIds.map(
-        (epicId) => selectEpicAgentActivity(state.byHost, epicId).working.size,
-      ),
-    ),
-  );
-}
-
 function makeSelectEpicAgentActivity(
   epicId: string | null,
 ): (state: AgentActivityState) => EpicAgentActivity {
