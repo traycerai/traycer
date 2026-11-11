@@ -61,6 +61,10 @@ import {
   USER_A,
   USER_B,
 } from "../../../test-fixtures/dial-gate-harness";
+import {
+  countWebCrypto,
+  settleNoise,
+} from "@traycer/protocol/host-transport/remote/__tests__/web-crypto-completion-fixture";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 import type { PoolHostDirectoryEntry } from "../../../host-client/host-directory";
@@ -79,58 +83,6 @@ const EMPTY_AD = new Uint8Array(0);
 /** The authn default and cap for an attach grant. */
 const GRANT_LIFETIME_SECONDS = 300;
 const GRANT_LIFETIME_MS = GRANT_LIFETIME_SECONDS * 1_000;
-
-/** Captured before fake timers: a real turn lets WebCrypto completions in. */
-const realSetImmediate = globalThis.setImmediate;
-
-/**
- * The fake clock moves everything here but Noise, which runs on WebCrypto in
- * a thread pool. These count its operations so a test awaits them finishing
- * rather than sleeping for as long as they usually take.
- */
-let webCryptoInFlight = 0;
-
-function countedWebCrypto<T>(operation: Promise<T>): Promise<T> {
-  webCryptoInFlight += 1;
-  return operation.finally(() => {
-    webCryptoInFlight -= 1;
-  });
-}
-
-function countWebCrypto(): void {
-  const subtle = globalThis.crypto.subtle;
-  const decrypt = subtle.decrypt.bind(subtle);
-  const digest = subtle.digest.bind(subtle);
-  const encrypt = subtle.encrypt.bind(subtle);
-  const importKey = subtle.importKey.bind(subtle);
-  const sign = subtle.sign.bind(subtle);
-  vi.spyOn(subtle, "decrypt").mockImplementation((...args) =>
-    countedWebCrypto(decrypt(...args)),
-  );
-  vi.spyOn(subtle, "digest").mockImplementation((...args) =>
-    countedWebCrypto(digest(...args)),
-  );
-  vi.spyOn(subtle, "encrypt").mockImplementation((...args) =>
-    countedWebCrypto(encrypt(...args)),
-  );
-  vi.spyOn(subtle, "importKey").mockImplementation((...args) =>
-    countedWebCrypto(importKey(...args)),
-  );
-  vi.spyOn(subtle, "sign").mockImplementation((...args) =>
-    countedWebCrypto(sign(...args)),
-  );
-}
-
-/** Returns once no Noise operation is running, after two quiet turns. */
-async function settleNoise(): Promise<void> {
-  let quietTurns = 0;
-  while (quietTurns < 2) {
-    await new Promise((resolve) => {
-      realSetImmediate(resolve);
-    });
-    quietTurns = webCryptoInFlight === 0 ? quietTurns + 1 : 0;
-  }
-}
 
 /** Moves the fake clock, then lets the real async work it started finish. */
 async function step(ms: number): Promise<void> {
