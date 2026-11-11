@@ -604,14 +604,14 @@ describe("<ChatDeadTileBanner />", () => {
 });
 
 describe("<ChatDeadTileBanner /> for a team environment's chat (environmentOwned)", () => {
-  const SANDBOX_FACT = "This chat's sandbox isn't available.";
+  const HOST_FACT = "This chat's host isn't available.";
 
-  it("says the sandbox is out and the copy shown, with no clone clause and no collaborator", () => {
+  it("says the host is out and the copy shown, with no clone clause and no collaborator", () => {
     for (const reason of ["host-offline", "chat-not-visible"] as const) {
       const testId = `chat-dead-env-${reason}`;
       const { unmount } = render(
         <ChatDeadTileBanner
-          hostLabel="team-sandbox"
+          hostLabel="team-computer"
           reason={reason}
           ownedByViewer={false}
           ownerName={null}
@@ -627,12 +627,10 @@ describe("<ChatDeadTileBanner /> for a team environment's chat (environmentOwned
       );
 
       const text = screen.getByTestId(testId).textContent;
-      expect(text).toContain(
-        `${SANDBOX_FACT} Showing the last published copy.`,
-      );
+      expect(text).toContain(`${HOST_FACT} Showing the last published copy.`);
       expect(text).not.toContain("collaborator");
       expect(text).not.toContain("Cloning creates");
-      expect(text).not.toContain("team-sandbox");
+      expect(text).not.toContain("team-computer");
       unmount();
     }
   });
@@ -656,15 +654,15 @@ describe("<ChatDeadTileBanner /> for a team environment's chat (environmentOwned
     );
 
     const text = screen.getByTestId("chat-dead-env-live").textContent;
-    expect(text).toContain(SANDBOX_FACT);
+    expect(text).toContain(HOST_FACT);
     expect(text).not.toContain("published copy");
     expect(text).not.toContain("mac-mini");
   });
 
-  it("files a report that names the sandbox, not a collaborator's machine", () => {
+  it("files a report that names the host without assuming its kind", () => {
     render(
       <ChatDeadTileBanner
-        hostLabel="team-sandbox"
+        hostLabel="team-computer"
         reason="host-offline"
         ownedByViewer={false}
         ownerName={null}
@@ -680,11 +678,9 @@ describe("<ChatDeadTileBanner /> for a team environment's chat (environmentOwned
     );
 
     const report = screen.getByTestId("report-context");
-    expect(report.getAttribute("data-title")).toBe(
-      "Chat sandbox isn't available",
-    );
+    expect(report.getAttribute("data-title")).toBe("Chat host isn't available");
     expect(report.getAttribute("data-message")).toBe(
-      "The chat's team sandbox isn't available.",
+      "The chat's host isn't available.",
     );
   });
 
@@ -708,7 +704,7 @@ describe("<ChatDeadTileBanner /> for a team environment's chat (environmentOwned
 
     const text = screen.getByTestId("chat-dead-env-revoked").textContent;
     expect(text).toContain("no longer shared with you");
-    expect(text).not.toContain("sandbox isn't available");
+    expect(text).not.toContain(HOST_FACT);
   });
 
   describe("removed sandbox continue target", () => {

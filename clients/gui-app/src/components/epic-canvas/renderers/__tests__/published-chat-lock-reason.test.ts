@@ -165,8 +165,8 @@ describe("publishedChatLockReason", () => {
     );
   });
 
-  it("says the team sandbox is out - not a collaborator, not a machine - for an environment-owned chat", () => {
-    // A team sandbox's chat is owned by the environment, so the viewer's
+  it("uses kind-neutral host copy for an environment-owned chat", () => {
+    // A team host's chat is owned by the environment, so the viewer's
     // user id never matches it and `ownedByViewer` reads false. The
     // environment arm outranks that foreign arm and both reachability arms,
     // for either reachability answer and a refusing owner alike.
@@ -185,7 +185,7 @@ describe("publishedChatLockReason", () => {
         refresh: { kind: "idle" },
       });
       expect(reason).toBe(
-        "This chat's sandbox isn't available — showing the last published copy.",
+        "This chat's host isn't available — showing the last published copy.",
       );
     }
   });
@@ -644,7 +644,7 @@ describe("replicaChatLockReason", () => {
     }
   });
 
-  it("says the team sandbox is out for an environment-owned chat, ahead of the collaborator arm", () => {
+  it("uses kind-neutral host copy for an environment-owned chat, ahead of the collaborator arm", () => {
     for (const ownerIsReachable of [false, true]) {
       const reason = replicaChatLockReason({
         ownerIsReachable,
@@ -657,7 +657,7 @@ describe("replicaChatLockReason", () => {
         unreadableCount: 0,
       });
       expect(reason).toBe(
-        "This chat's sandbox isn't available — showing this device's synced copy.",
+        "This chat's host isn't available — showing this device's synced copy.",
       );
     }
   });

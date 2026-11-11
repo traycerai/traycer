@@ -73,7 +73,7 @@ export function publishedChatLockReason(input: {
   readonly ownedByViewer: boolean;
   /**
    * Whether the owner is one of the viewer's team environments: a team
-   * sandbox's chat. It outranks `ownedByViewer`, whose foreign arm would call
+   * host's chat. It outranks `ownedByViewer`, whose foreign arm would call
    * a team chat another collaborator's, and both reachability arms, which
    * name a machine and promise a resume this copy is not waiting on.
    */
@@ -207,10 +207,10 @@ function publishedCopySentence(input: {
   readonly ownerLabel: string;
 }): string {
   // A team environment's chat, ahead of the collaborator arm: it is no
-  // collaborator's, and its sandbox is what is out. Aligned with the
-  // dead-tile banner's environment sentence.
+  // collaborator's, and its host may be a computer or a sandbox. Aligned
+  // with the dead-tile banner's kind-neutral environment sentence.
   if (input.environmentOwned) {
-    return `This chat's sandbox isn't available — showing the last published copy.`;
+    return `This chat's host isn't available — showing the last published copy.`;
   }
   // A collaborator's chat, checked before either reachability arm: every
   // clause below it is written for the viewer's own fleet (see the
@@ -251,7 +251,7 @@ function replicaCopySentence(input: {
   // Same precedence, same reason, as `publishedCopySentence`'s environment
   // and foreign arms.
   if (input.environmentOwned) {
-    return `This chat's sandbox isn't available — showing this device's synced copy.`;
+    return `This chat's host isn't available — showing this device's synced copy.`;
   }
   if (!input.ownedByViewer) {
     return `This agent belongs to ${collaboratorReference(input.ownerName)} — showing this device's synced copy.`;

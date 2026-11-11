@@ -490,7 +490,7 @@ export interface ChatDeadTileBannerProps {
   readonly cloneTargetLabel: string | null;
   /**
    * Whether the source chat's owner is one of the viewer's team environments:
-   * a team sandbox's chat. Outranks `ownedByViewer` on the same reasons: the
+   * a team host's chat. Outranks `ownedByViewer` on the same reasons: the
    * foreign-owner sentence would call a team chat another collaborator's, and
    * the own-chat ones name a machine. Those reasons swap to the environment
    * sentence instead.
@@ -675,10 +675,10 @@ function foreignOwnerMessage(input: {
 }
 
 /**
- * A team environment's chat: what is out is its sandbox, whichever reason
- * brought the banner up, and whether this is the last published copy. Nothing
- * else: the clone clause's "your own agent" may be false when the active host
- * is itself a team's.
+ * Team ownership does not identify the host as a computer or a sandbox.
+ * Keep the unavailability sentence kind-neutral and say whether this is the
+ * last published copy. The clone clause's "your own agent" may be false when
+ * the active host is itself a team's.
  */
 function environmentOwnerMessage(input: {
   readonly showsPublishedCopy: boolean;
@@ -686,7 +686,7 @@ function environmentOwnerMessage(input: {
   const copyClause = input.showsPublishedCopy
     ? " Showing the last published copy."
     : "";
-  return `This chat's sandbox isn't available.${copyClause}`;
+  return `This chat's host isn't available.${copyClause}`;
 }
 
 /** The published-copy and clone clauses the collaborator sentence ends with. */
@@ -702,8 +702,8 @@ function copyClauses(input: {
 }
 
 const ENVIRONMENT_OWNER_REPORT = {
-  reportTitle: "Chat sandbox isn't available",
-  reportMessage: "The chat's team sandbox isn't available.",
+  reportTitle: "Chat host isn't available",
+  reportMessage: "The chat's host isn't available.",
 };
 
 const FOREIGN_OWNER_UNREACHABLE_REPORT = {
