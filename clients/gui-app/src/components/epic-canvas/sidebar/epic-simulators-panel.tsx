@@ -284,7 +284,6 @@ function SimulatorLiveRowItem(props: {
     row.simulatorId,
     row.version,
   ]);
-  // The catalog's records name this pair, so the ref carries both.
   const dragData = useMemo<EpicCanvasSimulatorTileDragData>(
     () => ({
       kind: SIMULATOR_TILE_DND_TYPE,

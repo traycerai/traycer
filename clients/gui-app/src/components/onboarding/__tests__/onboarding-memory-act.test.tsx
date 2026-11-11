@@ -6,7 +6,6 @@ import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import {
   chooseTraycer,
   clickAdvance,
-  continueFromMemory,
   currentStepId,
   defaultProviders,
   deferred,
@@ -141,7 +140,7 @@ describe("the Memory act: what it shows", () => {
     await expectOnStep("providers");
     // Providers act: Claude Code deselected, Cursor newly enabled.
     world.providers = [
-      { ...defaultProviders()[1], nativeMemory: true },
+      defaultProviders()[1],
       {
         providerId: "cursor",
         enabled: true,
@@ -163,7 +162,7 @@ describe("the Memory act: what it shows", () => {
     expect(isOn(await providerSwitch("codex"))).toBe(true);
     expect(isOn(await providerSwitch("cursor"))).toBe(false);
 
-    await continueFromMemory();
+    await clickAdvance();
     await expectOnStep("session-import");
     expect(paramsOf("providers.setNativeMemory")).toEqual([
       { harnessId: "cursor", nativeMemory: false },
@@ -214,7 +213,7 @@ describe("the Memory act: host gates", () => {
     );
     expect(screen.queryAllByRole("switch")).toHaveLength(1);
 
-    await continueFromMemory();
+    await clickAdvance();
     await expectOnStep("session-import");
     expect(paramsOf("providers.setNativeMemory")).toEqual([]);
   });
@@ -230,7 +229,7 @@ describe("the Memory act: finishing", () => {
       "Start building",
     );
 
-    await continueFromMemory();
+    await clickAdvance();
     await waitFor(() =>
       expect(paramsOf("config.agentMemories.set")).toHaveLength(1),
     );
@@ -248,7 +247,7 @@ describe("the Memory act: finishing", () => {
     world.setGate = deferred();
     await walkToMemoryAct();
     await chooseTraycer();
-    await continueFromMemory();
+    await clickAdvance();
     await waitFor(() =>
       expect(paramsOf("config.agentMemories.set")).toHaveLength(1),
     );

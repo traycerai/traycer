@@ -54,7 +54,6 @@ export type OnboardingMemoryAvailability =
 
 export interface OnboardingAgentMemories extends OnboardingMemoryView {
   readonly availability: OnboardingMemoryAvailability;
-  readonly draft: OnboardingMemoryDraft;
   /** This host reads Traycer memories as on for its configuration already. */
   readonly alreadyOn: boolean;
   readonly providerControls: ProviderMemoryControls;
@@ -331,7 +330,6 @@ export function useOnboardingAgentMemories(input: {
   return {
     ...view,
     availability,
-    draft,
     alreadyOn,
     providerControls,
     saving,

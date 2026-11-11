@@ -541,10 +541,13 @@ async function land(): Promise<void> {
   });
 }
 
-/** Lets what the last click set going run to its end. */
-async function settle(): Promise<void> {
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(0);
+let channelQueryClient: QueryClient;
+
+/** The channel's reads and mutations have answered. */
+async function settleRequests(): Promise<void> {
+  await vi.waitFor(() => {
+    expect(channelQueryClient.isFetching()).toBe(0);
+    expect(channelQueryClient.isMutating()).toBe(0);
   });
 }
 
@@ -554,6 +557,7 @@ function mountChannel(args: {
   readonly openThread: BotOpenThread | null;
 }): void {
   const queryClient = new QueryClient();
+  channelQueryClient = queryClient;
   // The thread list is read before the first render, as it is on a channel
   // already open, so the card's reach is not decided by a read in flight.
   queryClient.setQueryData(
@@ -1022,7 +1026,7 @@ describe("<BotChannelView tiles={null} /> a card's answers the host refused", ()
       "Hold the migration",
     );
     await user.click(submitButton(card));
-    await settle();
+    await settleRequests();
   }
 
   it("gives every draft back to edit when the host answers with an error: nothing picked or typed is lost, and sending again carries the same set", async () => {
@@ -1069,7 +1073,7 @@ describe("<BotChannelView tiles={null} /> a card's answers the host refused", ()
     );
     session(CHANNEL_ID, [questionRow([deploy(null), hold(null)])]);
     mountChannel({ boundHostId: ELSEWHERE_HOST_ID, openThread: null });
-    await settle();
+    await settleRequests();
     expect(formOf(channelCard()).submits).toBe(1);
     const readsBefore = threadListReads;
     // What the bot's host says when the list is read again.
@@ -1133,7 +1137,7 @@ describe("<BotChannelView tiles={null} /> a card's answers whose send ended with
       "Hold the migration",
     );
     await user.click(submitButton(card));
-    await settle();
+    await settleRequests();
     return transcript;
   }
 
@@ -1212,7 +1216,11 @@ describe("<BotChannelView tiles={null} /> a card's answers held while the channe
       within(cardQuestion(card, WATCH)).getByTestId("question-card-skip"),
     );
     await user.click(submitButton(card));
-    await settle();
+    if (outcome === holding) {
+      await vi.waitFor(() => expect(heldSends).toHaveLength(1));
+    } else {
+      await settleRequests();
+    }
   }
 
   /**
@@ -1223,7 +1231,8 @@ describe("<BotChannelView tiles={null} /> a card's answers held while the channe
   async function returnToANewSession(): Promise<void> {
     const evicted = mocks.handles.get(CHANNEL_ID);
     cleanup();
-    await settle();
+    // Run Tiptap's deferred unmount destruction, as the file cleanup does.
+    await act(async () => vi.advanceTimersByTimeAsync(1));
     session(CHANNEL_ID, [OPEN_THREE()]);
     const replacement = mocks.handles.get(CHANNEL_ID);
     expect(replacement).not.toBe(evicted);
