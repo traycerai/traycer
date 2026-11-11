@@ -305,6 +305,9 @@ function menuEntries(
   query: string,
   offered: ReadonlyArray<BotMentionCandidate>,
 ): RankedRootSearch {
+  if (step.kind === "provider" && step.providerId === "hosts") {
+    return { entries: [], matchedCount: null };
+  }
   if (step.kind === "root") {
     if (query.trim().length === 0) {
       return {
@@ -374,7 +377,8 @@ function categoryOf(step: MentionFlowStep): BotMentionCategory {
 }
 
 function botMentionMenuCopy(step: MentionFlowStep): MentionMenuCopy {
-  if (step.kind === "root") return mentionProviderRegistry.menuCopy(step);
+  if (step.kind === "root" || step.providerId === "hosts")
+    return mentionProviderRegistry.menuCopy(step);
   const { label } = categoryOf(step);
   return { header: label, empty: `No matching ${label.toLowerCase()}` };
 }

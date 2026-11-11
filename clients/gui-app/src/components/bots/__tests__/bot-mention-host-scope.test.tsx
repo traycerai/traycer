@@ -95,8 +95,24 @@ it("offers only hosts from the bot's environment", async () => {
   await waitFor(() =>
     expect(
       result.current.pickerStore.getState().items.map((item) => item.id),
-    ).toEqual(["host:team-host"]),
+    ).toEqual(["provider:hosts"]),
   );
+  act(() =>
+    result.current.pickerStore.getState().setStep({
+      kind: "provider",
+      providerId: "hosts",
+      stepId: "root",
+      workspacePath: null,
+    }),
+  );
+  await waitFor(() =>
+    expect(
+      result.current.pickerStore.getState().items.map((item) => item.id),
+    ).toEqual(["mention-back", "host:team-host"]),
+  );
+  expect(result.current.pickerStore.getState().items[1]).toMatchObject({
+    entry: { action: { kind: "complete", mention: { hostId: "team-host" } } },
+  });
   expect(requests.ids).toEqual(["team-a"]);
 });
 
