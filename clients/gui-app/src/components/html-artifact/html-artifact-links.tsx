@@ -28,6 +28,19 @@ const ENTRY_DOCUMENT = /(^|\/)(?:index\.html|canvas\.json)$/u;
  */
 const SEPARATOR_READ_OTHERWISE = /\\|%(?:2f|5c)/iu;
 
+/**
+ * Whitespace the frame and the tree read differently. The frame's URL parser
+ * drops a tab, LF or CR anywhere and a C0 control or space at either end, and
+ * keeps all other whitespace; `classifyHref` trims the ends with
+ * `String.prototype.trim` and keeps the rest. So `../si<TAB>bling/` is
+ * `a/sibling` to the frame and missing in the tree, and `<NBSP>/x` is a name
+ * in the page's folder to the frame and the rooted `/x` in the tree. A C0
+ * control anywhere is refused, and so is whitespace other than an ASCII space
+ * at either end; both drop ASCII spaces at the ends.
+ */
+// eslint-disable-next-line no-control-regex -- the C0 controls the URL parser drops
+const WHITESPACE_READ_OTHERWISE = /[\x00-\x1f]|^\s*[^\S ]|[^\S ]\s*$/u;
+
 /** An href that names an origin: a scheme, or a bare `//authority`. */
 const NAMES_ORIGIN = /^(?:[a-z][a-z\d+.-]*:|\/\/)/iu;
 
@@ -81,8 +94,8 @@ function hrefFromTreeRoot(href: string, pageUrl: string): string | null {
  * (`…/epics/<id>/artifacts/…`, by markdown's rule) is read as the tree path it
  * names. The result is `null` for an href that names no place in this Epic's
  * tree: one that names no file, or another Epic's artifact. It is `null` too
- * for an href holding a separator the frame reads differently, whose place the
- * two would disagree on.
+ * for an href holding a separator or whitespace the frame reads differently,
+ * whose place the two would disagree on.
  */
 function treeLinkFor(
   link: SandboxArtifactLink,
@@ -91,7 +104,11 @@ function treeLinkFor(
   readonly path: string;
   readonly folderChain: readonly string[];
 } | null {
-  if (SEPARATOR_READ_OTHERWISE.test(link.href)) return null;
+  if (
+    SEPARATOR_READ_OTHERWISE.test(link.href) ||
+    WHITESPACE_READ_OTHERWISE.test(link.href)
+  )
+    return null;
   const href = hrefFromTreeRoot(link.href, link.pageUrl);
   if (href === null) return null;
   // A query or fragment addresses a place inside the target; the tile opens

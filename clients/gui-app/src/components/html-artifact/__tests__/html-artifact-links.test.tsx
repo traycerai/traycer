@@ -444,6 +444,21 @@ describe("HtmlArtifactLinks", () => {
       "..%2F..%2Ftop/index.html",
       TRAYCER_PAGE,
     ],
+    [
+      "a tab inside a name, which the frame drops",
+      "../si\tbling/index.html",
+      TRAYCER_PAGE,
+    ],
+    [
+      "a line feed inside a name, which the frame drops",
+      "../si\nbling/index.html",
+      TRAYCER_PAGE,
+    ],
+    [
+      "a leading no-break space, which the frame keeps as a name",
+      " /research/top/index.html",
+      TRAYCER_PAGE,
+    ],
   ])(
     "toasts for %s, with no lookup, probe or tile",
     async (_label, href, pageUrl) => {
