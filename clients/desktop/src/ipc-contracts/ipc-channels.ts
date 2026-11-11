@@ -553,6 +553,19 @@ export const RunnerHostEvent = {
    * one that saw the refusal.
    */
   authVerificationRevoked: "runnerHost:event:windows:authSession:revoked",
+  /**
+   * Main's own re-check of a PENDING session reached a verdict against its
+   * bearer (`DesktopAuthSessionPendingRefused`), fanned to every window.
+   *
+   * The set that reported `pending` returned long ago, so this is the only way
+   * its sender learns the answer, and `authSessionChange` cannot carry it:
+   * main withdraws any local hold of the bearer without fanning that out
+   * (windows never ingested the hold), and the nearest status a withdrawal
+   * could flatten to would sign every window out. Carries the bearer so each
+   * window applies it only to the session it wrote.
+   */
+  authSessionPendingRefused:
+    "runnerHost:event:windows:authSession:pendingRefused",
   menuCommand: "runnerHost:event:menu:command",
   menuChanged: "runnerHost:event:menu:changed",
   migrationRunChange: "runnerHost:event:migration:runChange",

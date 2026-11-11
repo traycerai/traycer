@@ -56,12 +56,14 @@ import { mintExecutableWriteGrantViaHttp } from "@traycer-clients/shared/host-cl
 import { config } from "../../config";
 import type {
   DesktopAuthSessionPendingReason,
+  DesktopAuthSessionPendingRefused,
   DesktopAuthSessionRefusalReason,
   DesktopAuthSessionSetResult,
   DesktopAuthSessionSnapshot,
   DesktopAuthVerificationRevoked,
 } from "../../ipc-contracts/window-types";
 import { createDesktopBearerVerifier } from "../auth/bearer-verifier";
+import type { DesktopAuthSessionChangeKind } from "../auth/desktop-auth-session";
 import {
   createCachedIapTokenProvider,
   resolveIapKeyFilePath,
@@ -898,9 +900,19 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
     }
     pendingCheck = null;
     if (reason !== null) {
-      // Whatever main holds for it stays as it is; the window's next bearer
-      // is a new set.
-      log.warn("[auth] a pending auth session failed its check", { reason });
+      // A verdict against the bearer: main stops holding it, so this machine's
+      // host is no longer selectable on it, and every window that wrote it is
+      // told, since the set that answered `pending` returned long ago.
+      const withdrawn = bridge.authSession.withdrawLocal(check.token);
+      log.warn("[auth] a pending auth session failed its check", {
+        reason,
+        withdrawn,
+      });
+      const refused: DesktopAuthSessionPendingRefused = {
+        token: check.token,
+        reason,
+      };
+      bridge.fanOut(RunnerHostEvent.authSessionPendingRefused, refused);
       return;
     }
     const committed = bridge.authSession.setVerified(
@@ -945,6 +957,18 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
           HELD_LOCALLY_WHILE_PENDING.has(reason) &&
           (await restoreLocalSession({ userId, token })) === "restored";
         if (sequence !== setSequence) return { outcome: "superseded" };
+        // A sibling window's set of this same pair can have verified while
+        // this one waited (its fetch counted against the cooldown this one
+        // hit). That verified session already fanned out, so `pending` would
+        // leave the sender a notice nothing ever takes down.
+        const held = bridge.authSession.get();
+        if (
+          held.verified &&
+          held.token === token &&
+          held.profile?.userId === userId
+        ) {
+          return { outcome: "accepted" };
+        }
         const check: PendingSessionCheck = {
           snapshot: parsed,
           token,
@@ -969,9 +993,13 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
       }
       // Reported, not swallowed: an `accepted` for a set main did not install
       // would leave the sender believing main holds what it sent.
-      return bridge.authSession.setVerified(parsed, generation)
-        ? { outcome: "accepted" }
-        : { outcome: "superseded" };
+      if (!bridge.authSession.setVerified(parsed, generation)) {
+        return { outcome: "superseded" };
+      }
+      // A sibling's set of this bearer that answered `pending` meanwhile has
+      // nothing left to check.
+      if (pendingCheck?.token === token) dropPendingCheck();
+      return { outcome: "accepted" };
     },
   );
 
@@ -1007,8 +1035,15 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
     },
   );
 
-  const onAuthSessionChange = (snapshot: DesktopAuthSessionSnapshot): void => {
+  const onAuthSessionChange = (
+    snapshot: DesktopAuthSessionSnapshot,
+    kind: DesktopAuthSessionChangeKind,
+  ): void => {
     retainedStepUpCredential = null;
+    // Windows never ingest main's unverified hold, so its withdrawal is not
+    // theirs to see either: as a status it would read as a sign-out. They hear
+    // the verdict on `authSessionPendingRefused` instead.
+    if (kind === "local-hold-withdrawn") return;
     bridge.fanOut(RunnerHostEvent.authSessionChange, snapshot);
   };
   bridge.authSession.on("change", onAuthSessionChange);

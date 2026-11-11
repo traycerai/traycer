@@ -9,6 +9,7 @@ import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/
 import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
 import type { DesktopNotificationForegroundDisplay } from "../../ipc-contracts/notification-types";
 import type {
+  DesktopAuthSessionRefusalReason,
   DesktopLocalAuthSessionRestoreResult,
   DesktopMenuSnapshot,
 } from "../../ipc-contracts/window-types";
@@ -152,6 +153,12 @@ interface PreloadBridge {
         handler: (
           rejectedToken: string,
           revocation: "user-epoch" | null,
+        ) => void,
+      ): { dispose: () => void };
+      onPendingRefused(
+        handler: (
+          token: string,
+          reason: DesktopAuthSessionRefusalReason,
         ) => void,
       ): { dispose: () => void };
     };
@@ -1077,6 +1084,43 @@ describe("preload new-capability wiring", () => {
     fakeElectron.emit(RunnerHostEvent.authVerificationRevoked, {
       token: "bearer-c",
       revocation: "user-epoch",
+    });
+    expect(observed).toHaveLength(2);
+  });
+
+  it("hands a pending sign-in's verdict to its subscriber as a token and a reason, until disposed", async () => {
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn: undefined,
+      sendSyncFn: undefined,
+    });
+
+    const observed: Array<readonly [string, DesktopAuthSessionRefusalReason]> =
+      [];
+    const subscription = bridge.windows.authSession.onPendingRefused(
+      (token, reason) => {
+        observed.push([token, reason]);
+      },
+    );
+    fakeElectron.emit(RunnerHostEvent.authSessionPendingRefused, {
+      token: "bearer-a",
+      reason: "bad-signature",
+    });
+    fakeElectron.emit(RunnerHostEvent.authSessionPendingRefused, {
+      token: "bearer-b",
+      reason: "expired",
+    });
+    expect(observed).toEqual([
+      ["bearer-a", "bad-signature"],
+      ["bearer-b", "expired"],
+    ]);
+
+    subscription.dispose();
+    fakeElectron.emit(RunnerHostEvent.authSessionPendingRefused, {
+      token: "bearer-c",
+      reason: "bad-signature",
     });
     expect(observed).toHaveLength(2);
   });

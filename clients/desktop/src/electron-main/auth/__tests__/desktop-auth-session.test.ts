@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { DesktopAuthSession } from "../desktop-auth-session";
+import {
+  DesktopAuthSession,
+  type DesktopAuthSessionChangeKind,
+  type VerifiedDesktopAuthSessionSnapshot,
+} from "../desktop-auth-session";
 
 /**
  * A bearer-SHAPED token: three base64url segments with a numeric `exp`. Not
@@ -341,5 +345,107 @@ describe("DesktopAuthSession.revokeVerification", () => {
 
     expect(session.setVerified(SIGNED_IN, verificationGeneration)).toBe(false);
     expect(session.get()).toEqual({ ...localSnapshot, verified: false });
+  });
+});
+
+interface ObservedChange {
+  readonly snapshot: VerifiedDesktopAuthSessionSnapshot;
+  readonly kind: DesktopAuthSessionChangeKind;
+}
+
+function observeChanges(session: DesktopAuthSession): ObservedChange[] {
+  const observed: ObservedChange[] = [];
+  session.on("change", (snapshot, kind) => {
+    observed.push({ snapshot, kind });
+  });
+  return observed;
+}
+
+const LOCAL_HOLD = {
+  status: "unverified" as const,
+  token: BEARER_2,
+  profile: SIGNED_IN.profile,
+};
+const SIGNED_OUT = {
+  status: "signed-out" as const,
+  token: null,
+  profile: null,
+};
+
+describe("DesktopAuthSession.withdrawLocal", () => {
+  it("drops an unverified hold of that bearer back to signed-out and announces it as a withdrawal", () => {
+    const session = new DesktopAuthSession();
+    session.setLocal(LOCAL_HOLD, session.beginSet());
+    const observed = observeChanges(session);
+
+    expect(session.withdrawLocal(BEARER_2)).toBe(true);
+
+    const signedOut = { ...SIGNED_OUT, verified: false };
+    expect(session.get()).toEqual(signedOut);
+    expect(observed).toEqual([
+      { snapshot: signedOut, kind: "local-hold-withdrawn" },
+    ]);
+  });
+
+  it("leaves a hold of another bearer, a signed-in session and a signed-out session alone", () => {
+    const holdOfAnother = new DesktopAuthSession();
+    holdOfAnother.setLocal(LOCAL_HOLD, holdOfAnother.beginSet());
+    const verified = new DesktopAuthSession();
+    verified.setVerified(SIGNED_IN, verified.beginSet());
+    const unverifiedSignedIn = new DesktopAuthSession();
+    unverifiedSignedIn.set(SIGNED_IN);
+    const signedOut = new DesktopAuthSession();
+
+    const cases = [
+      { session: holdOfAnother, token: BEARER_3 },
+      { session: verified, token: BEARER_1 },
+      { session: unverifiedSignedIn, token: BEARER_1 },
+      { session: signedOut, token: BEARER_1 },
+    ];
+    for (const { session, token } of cases) {
+      const before = session.get();
+      const observed = observeChanges(session);
+
+      expect(session.withdrawLocal(token)).toBe(false);
+
+      expect(session.get()).toEqual(before);
+      expect(observed).toEqual([]);
+    }
+  });
+
+  it("does not fence a verification begun before the withdrawal", () => {
+    const session = new DesktopAuthSession();
+    session.setLocal(LOCAL_HOLD, session.beginSet());
+    const verification = session.beginSet();
+
+    expect(session.withdrawLocal(BEARER_2)).toBe(true);
+
+    expect(
+      session.setVerified({ ...SIGNED_IN, token: BEARER_2 }, verification),
+    ).toBe(true);
+    expect(session.get()).toEqual({
+      ...SIGNED_IN,
+      token: BEARER_2,
+      verified: true,
+    });
+  });
+
+  it("announces every ordinary change as a transition", () => {
+    const session = new DesktopAuthSession();
+    const observed = observeChanges(session);
+
+    session.set(SIGNED_IN);
+    session.setVerified(SIGNED_IN, session.beginSet());
+    session.revokeVerification(SIGNED_IN.token);
+    session.set(SIGNED_OUT);
+    session.setLocal(LOCAL_HOLD, session.beginSet());
+
+    expect(observed.map(({ kind }) => kind)).toEqual([
+      "transition",
+      "transition",
+      "transition",
+      "transition",
+      "transition",
+    ]);
   });
 });

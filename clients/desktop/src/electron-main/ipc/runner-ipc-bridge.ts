@@ -70,6 +70,7 @@ import type {
 } from "@traycer-clients/shared/platform/runner-host";
 import {
   DesktopAuthSession,
+  type DesktopAuthSessionChangeKind,
   type VerifiedDesktopAuthSessionSnapshot,
 } from "../auth/desktop-auth-session";
 import {
@@ -261,6 +262,7 @@ export interface IpcShellQuitState {
 
 type IpcAuthSessionChangeListener = (
   snapshot: VerifiedDesktopAuthSessionSnapshot,
+  kind: DesktopAuthSessionChangeKind,
 ) => void;
 
 export interface IpcDesktopAuthSession {
@@ -288,6 +290,11 @@ export interface IpcDesktopAuthSession {
    * bearer held; see `DesktopAuthSession.revokeVerification`.
    */
   revokeVerification(rejectedToken: string): void;
+  /**
+   * Drops main's unverified hold of exactly this bearer; see
+   * `DesktopAuthSession.withdrawLocal`. `false` when main holds anything else.
+   */
+  withdrawLocal(token: string): boolean;
   on(event: "change", listener: IpcAuthSessionChangeListener): void;
   off(event: "change", listener: IpcAuthSessionChangeListener): void;
 }

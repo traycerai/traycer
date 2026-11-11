@@ -181,6 +181,17 @@ export type DesktopAuthSessionRefusalReason =
   | "subject-mismatch";
 
 /**
+ * The payload of `authSessionPendingRefused`: main's re-check of a session it
+ * had answered `pending` for reached a verdict against this bearer. Main no
+ * longer holds the bearer locally and has stopped checking it; each window
+ * that wrote it shows the verdict as it would a refused set.
+ */
+export interface DesktopAuthSessionPendingRefused {
+  readonly token: string;
+  readonly reason: DesktopAuthSessionRefusalReason;
+}
+
+/**
  * The reasons main cannot decide on yet: the key set could not be fetched, or
  * the token's key is missing from a set this check could not refresh. Neither
  * is a statement against the token, so main keeps checking it.

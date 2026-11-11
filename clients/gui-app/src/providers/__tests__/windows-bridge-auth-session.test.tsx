@@ -17,6 +17,7 @@ import type {
 } from "@/lib/auth/auth-service";
 import type {
   DesktopLocalAuthSessionRestoreResult,
+  DesktopAuthSessionRefusalReason,
   DesktopAuthSessionSetResult,
   DesktopAuthSessionSnapshot,
 } from "@/lib/windows/types";
@@ -62,9 +63,16 @@ const UNVERIFIED_DESKTOP_SNAPSHOT: DesktopAuthSessionSnapshot = {
   profile: SIGNED_IN_SNAPSHOT.profile,
 };
 
+const SIGNED_IN_DESKTOP_SNAPSHOT: DesktopAuthSessionSnapshot = {
+  status: "signed-in",
+  token: SIGNED_IN_TOKEN,
+  profile: SIGNED_IN_PROFILE,
+};
+
+const ROTATED_TOKEN = "rotated-bearer-token";
 const ROTATED_SNAPSHOT: AuthSessionSnapshot = {
   ...SIGNED_IN_SNAPSHOT,
-  token: "rotated-bearer-token",
+  token: ROTATED_TOKEN,
 };
 
 const SIGNED_OUT_SNAPSHOT: AuthSessionSnapshot = {
@@ -81,6 +89,7 @@ type RenderWithFakesOptions = {
   readonly replayOutboundSnapshot?: AuthSessionSnapshot;
   readonly deferSet?: boolean;
   readonly omitRestoreLocal?: boolean;
+  readonly omitPendingRefused?: boolean;
 };
 
 type AuthSessionSetResolution =
@@ -90,6 +99,10 @@ type AuthSessionSetResolution =
 interface AuthSessionBridgeTestHarness {
   readonly emitInbound: (snapshot: DesktopAuthSessionSnapshot) => void;
   readonly emitOutbound: (snapshot: AuthSessionSnapshot) => void;
+  readonly emitPendingRefused: (
+    token: string,
+    reason: DesktopAuthSessionRefusalReason,
+  ) => void;
   readonly emitRevoked: (token: string, revocation: RevocationScope) => void;
   readonly emitVerificationRevoked: (
     token: string,
@@ -108,6 +121,7 @@ interface AuthSessionBridgeTestHarness {
   >;
   readonly inboundDispose: Mock<() => void>;
   readonly outboundDispose: Mock<() => void>;
+  readonly pendingRefusedDispose: Mock<() => void>;
   readonly resolveSet: (resolution: AuthSessionSetResolution) => void;
   readonly revoke: Mock<
     (rejectedToken: string, revocation: RevocationScope) => Promise<void>
@@ -142,6 +156,9 @@ function renderWithFakes(
   let verificationRevokedListener:
     | ((rejectedToken: string, revocation: RevocationScope) => void)
     | null = null;
+  let pendingRefusedListener:
+    | ((token: string, reason: DesktopAuthSessionRefusalReason) => void)
+    | null = null;
   const pendingSetResolvers: Array<
     (resolution: AuthSessionSetResolution) => void
   > = [];
@@ -151,6 +168,9 @@ function renderWithFakes(
   });
   const outboundDispose = vi.fn(() => {
     outboundListener = null;
+  });
+  const pendingRefusedDispose = vi.fn(() => {
+    pendingRefusedListener = null;
   });
 
   const ingest = vi.fn((_snapshot: AuthSessionSnapshot): Promise<void> =>
@@ -222,6 +242,19 @@ function renderWithFakes(
       set,
       revoke,
       ...(options.omitRestoreLocal === true ? {} : { restoreLocal }),
+      ...(options.omitPendingRefused === true
+        ? {}
+        : {
+            onPendingRefused: (
+              handler: (
+                token: string,
+                reason: DesktopAuthSessionRefusalReason,
+              ) => void,
+            ) => {
+              pendingRefusedListener = handler;
+              return { dispose: pendingRefusedDispose };
+            },
+          }),
       onChange: (handler: (snapshot: DesktopAuthSessionSnapshot) => void) => {
         inboundListener = handler;
         return { dispose: inboundDispose };
@@ -255,6 +288,7 @@ function renderWithFakes(
     restoreLocal,
     inboundDispose,
     outboundDispose,
+    pendingRefusedDispose,
     resolveSet: (resolution) => {
       const resolveOldest = pendingSetResolvers.shift();
       if (resolveOldest === undefined) {
@@ -271,6 +305,12 @@ function renderWithFakes(
     },
     emitOutbound: (snapshot) => {
       act(() => outboundListener?.(snapshot));
+    },
+    emitPendingRefused: (token, reason) => {
+      if (pendingRefusedListener === null) {
+        throw new Error("no pending-refused listener");
+      }
+      act(() => pendingRefusedListener?.(token, reason));
     },
     emitRevoked: (token, revocation) => {
       if (revokedListener === null) throw new Error("no revoke listener");
@@ -343,13 +383,26 @@ function onlyNotice(): HTMLElement {
   return row;
 }
 
-interface NoticeCase {
-  readonly label: string;
-  readonly result: DesktopAuthSessionSetResult;
+interface NoticeCopy {
   readonly title: string;
   readonly description: string;
   readonly code: string;
+}
+
+interface NoticeCase extends NoticeCopy {
+  readonly label: string;
+  readonly result: DesktopAuthSessionSetResult;
   readonly offersSignOut: boolean;
+}
+
+function expectNoticeCopy(row: HTMLElement, copy: NoticeCopy): void {
+  expect(within(row).getByText(copy.title)).toBeTruthy();
+  expect(within(row).getByText(copy.description)).toBeTruthy();
+  expect(within(row).getByText(copy.code)).toBeTruthy();
+}
+
+function hasSignOutAction(row: HTMLElement): boolean {
+  return within(row).queryByRole("button", { name: "Sign out" }) !== null;
 }
 
 const CANNOT_REACH = "Can't reach Traycer's sign-in service.";
@@ -358,17 +411,33 @@ const KEEPS_TRYING = "Traycer will keep trying.";
 const NOT_CONFIRMED = "Traycer couldn't confirm this sign-in.";
 const RESTART_ONLINE = "Restart Traycer once you're back online.";
 
+const UNREACHABLE_HELD_COPY: NoticeCopy = {
+  title: CANNOT_REACH,
+  description: "Hosts on your other devices will appear once it's back.",
+  code: "key-source-unavailable",
+};
+const EXPIRED_COPY: NoticeCopy = {
+  title: NOT_CONFIRMED,
+  description: "Sign out and back in.",
+  code: "expired",
+};
+
+const PENDING_UNREACHABLE: DesktopAuthSessionSetResult = {
+  outcome: "pending",
+  reason: "key-source-unavailable",
+  heldLocally: true,
+};
+const PENDING_UNCONFIRMED: DesktopAuthSessionSetResult = {
+  outcome: "pending",
+  reason: "signing-key-unconfirmed",
+  heldLocally: true,
+};
+
 const NOTICE_CASES: readonly NoticeCase[] = [
   {
     label: "pending, key source unreachable, held locally",
-    result: {
-      outcome: "pending",
-      reason: "key-source-unavailable",
-      heldLocally: true,
-    },
-    title: CANNOT_REACH,
-    description: "Hosts on your other devices will appear once it's back.",
-    code: "key-source-unavailable",
+    result: PENDING_UNREACHABLE,
+    ...UNREACHABLE_HELD_COPY,
     offersSignOut: false,
   },
   {
@@ -410,9 +479,7 @@ const NOTICE_CASES: readonly NoticeCase[] = [
   {
     label: "refused as expired",
     result: { outcome: "refused", reason: "expired" },
-    title: NOT_CONFIRMED,
-    description: "Sign out and back in.",
-    code: "expired",
+    ...EXPIRED_COPY,
     offersSignOut: true,
   },
   {
@@ -455,6 +522,59 @@ const PENDING_AND_REFUSED = [
     result: { outcome: "refused" as const, reason: "expired" as const },
   },
 ];
+
+interface InboundAdoptionCase {
+  readonly label: string;
+  readonly inbound: DesktopAuthSessionSnapshot;
+  readonly adopted: AuthSessionSnapshot;
+}
+
+const INBOUND_ADOPTIONS: readonly InboundAdoptionCase[] = [
+  {
+    label: "a newer session",
+    inbound: { ...SIGNED_IN_DESKTOP_SNAPSHOT, token: ROTATED_TOKEN },
+    adopted: ROTATED_SNAPSHOT,
+  },
+  {
+    label: "a sibling's sign-out",
+    inbound: SIGNED_OUT_DESKTOP_SNAPSHOT,
+    adopted: SIGNED_OUT_SNAPSHOT,
+  },
+];
+
+interface VerdictSource {
+  readonly label: string;
+  readonly result: DesktopAuthSessionSetResult;
+  readonly reachVerdict: (
+    harness: AuthSessionBridgeTestHarness,
+  ) => Promise<void>;
+}
+
+const VERDICT_SOURCES: readonly VerdictSource[] = [
+  {
+    label: "a refused answer",
+    result: { outcome: "refused", reason: "expired" },
+    reachVerdict: () => Promise.resolve(),
+  },
+  {
+    label: "a late re-check verdict",
+    result: PENDING_UNREACHABLE,
+    reachVerdict: async (harness) => {
+      harness.emitPendingRefused(SIGNED_IN_TOKEN, "expired");
+      await settle();
+    },
+  },
+];
+
+const VERDICT_THEN_ADOPTION = VERDICT_SOURCES.flatMap((source) =>
+  INBOUND_ADOPTIONS.map((adoption) => ({
+    label: `${source.label}, then ${adoption.label}`,
+    result: source.result,
+    reachVerdict: source.reachVerdict,
+    inbound: adoption.inbound,
+    adopted: adoption.adopted,
+  })),
+);
 
 describe("<WindowsBridgeAuthSessionBridge />", () => {
   beforeEach(() => {
@@ -546,15 +666,11 @@ describe("<WindowsBridgeAuthSessionBridge />", () => {
       await writeSession(harness, SIGNED_IN_SNAPSHOT);
 
       const row = onlyNotice();
-      expect(within(row).getByText(title)).toBeTruthy();
-      expect(within(row).getByText(description)).toBeTruthy();
-      expect(within(row).getByText(code)).toBeTruthy();
+      expectNoticeCopy(row, { title, description, code });
       expect(
         within(row).getByRole("button", { name: "Report issue" }),
       ).toBeTruthy();
-      expect(
-        within(row).queryByRole("button", { name: "Sign out" }) !== null,
-      ).toBe(offersSignOut);
+      expect(hasSignOutAction(row)).toBe(offersSignOut);
     },
   );
 
@@ -588,14 +704,7 @@ describe("<WindowsBridgeAuthSessionBridge />", () => {
   });
 
   it("keeps the latch and the notice when main answers pending, so the same session is not sent again", async () => {
-    const harness = renderWithFakes(
-      {
-        outcome: "pending",
-        reason: "key-source-unavailable",
-        heldLocally: true,
-      },
-      {},
-    );
+    const harness = renderWithFakes(PENDING_UNREACHABLE, {});
 
     await writeSession(harness, SIGNED_IN_SNAPSHOT);
     expect(harness.set).toHaveBeenCalledTimes(1);
@@ -616,14 +725,7 @@ describe("<WindowsBridgeAuthSessionBridge />", () => {
   });
 
   it("keeps the pending notice on screen until it is dismissed", async () => {
-    const harness = renderWithFakes(
-      {
-        outcome: "pending",
-        reason: "signing-key-unconfirmed",
-        heldLocally: true,
-      },
-      {},
-    );
+    const harness = renderWithFakes(PENDING_UNCONFIRMED, {});
 
     await writeSession(harness, SIGNED_IN_SNAPSHOT);
     await advanceTimers(60_000);
@@ -632,22 +734,11 @@ describe("<WindowsBridgeAuthSessionBridge />", () => {
   });
 
   it("dismisses the pending notice when main fans out the session it was written for", async () => {
-    const harness = renderWithFakes(
-      {
-        outcome: "pending",
-        reason: "signing-key-unconfirmed",
-        heldLocally: true,
-      },
-      {},
-    );
+    const harness = renderWithFakes(PENDING_UNCONFIRMED, {});
     await writeSession(harness, SIGNED_IN_SNAPSHOT);
     expect(noticeRows()).toHaveLength(1);
 
-    harness.emitInbound({
-      status: "signed-in",
-      token: SIGNED_IN_SNAPSHOT.token,
-      profile: SIGNED_IN_SNAPSHOT.profile,
-    });
+    harness.emitInbound(SIGNED_IN_DESKTOP_SNAPSHOT);
     await letToastsLeave();
 
     expect(noticeRows()).toHaveLength(0);
@@ -655,14 +746,7 @@ describe("<WindowsBridgeAuthSessionBridge />", () => {
   });
 
   it("keeps the pending notice up when main fans out its unverified hold of the session", async () => {
-    const harness = renderWithFakes(
-      {
-        outcome: "pending",
-        reason: "key-source-unavailable",
-        heldLocally: true,
-      },
-      {},
-    );
+    const harness = renderWithFakes(PENDING_UNREACHABLE, {});
     await writeSession(harness, SIGNED_IN_SNAPSHOT);
 
     harness.emitInbound(UNVERIFIED_DESKTOP_SNAPSHOT);
@@ -760,6 +844,130 @@ describe("<WindowsBridgeAuthSessionBridge />", () => {
       expect(noticeRows()).toHaveLength(0);
     },
   );
+
+  it("replaces the pending notice with the verdict when main's own re-check refuses the written session, and sends the session again", async () => {
+    const harness = renderWithFakes(PENDING_UNREACHABLE, {});
+    await writeSession(harness, SIGNED_IN_SNAPSHOT);
+    expectNoticeCopy(onlyNotice(), UNREACHABLE_HELD_COPY);
+
+    harness.emitPendingRefused(SIGNED_IN_TOKEN, "expired");
+    await settle();
+
+    const row = onlyNotice();
+    expectNoticeCopy(row, EXPIRED_COPY);
+    expect(
+      within(row).getByRole("button", { name: "Report issue" }),
+    ).toBeTruthy();
+    fireEvent.click(within(row).getByRole("button", { name: "Sign out" }));
+    expect(harness.signOut).toHaveBeenCalledTimes(1);
+
+    await writeSession(harness, SIGNED_IN_SNAPSHOT);
+    expect(harness.set).toHaveBeenCalledTimes(2);
+  });
+
+  it("ignores a re-check verdict for a bearer this window did not write", async () => {
+    const harness = renderWithFakes(PENDING_UNREACHABLE, {});
+    await writeSession(harness, SIGNED_IN_SNAPSHOT);
+
+    harness.emitPendingRefused(ROTATED_TOKEN, "expired");
+    await settle();
+
+    const row = onlyNotice();
+    expectNoticeCopy(row, UNREACHABLE_HELD_COPY);
+    expect(hasSignOutAction(row)).toBe(false);
+    await writeSession(harness, SIGNED_IN_SNAPSHOT);
+    expect(harness.set).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows only the verdict when main's re-check refuses the session before the write is answered pending", async () => {
+    const harness = renderWithFakes(
+      { outcome: "accepted" },
+      { deferSet: true },
+    );
+    await writeSession(harness, SIGNED_IN_SNAPSHOT);
+
+    harness.emitPendingRefused(SIGNED_IN_TOKEN, "expired");
+    harness.resolveSet({ kind: "resolve", result: PENDING_UNREACHABLE });
+    await settle();
+
+    const row = onlyNotice();
+    expectNoticeCopy(row, EXPIRED_COPY);
+    expect(hasSignOutAction(row)).toBe(true);
+  });
+
+  it("shows no notice when the verified fan-out of the written session arrives before its pending answer", async () => {
+    const harness = renderWithFakes(
+      { outcome: "accepted" },
+      { deferSet: true },
+    );
+    await writeSession(harness, SIGNED_IN_SNAPSHOT);
+
+    harness.emitInbound(SIGNED_IN_DESKTOP_SNAPSHOT);
+    harness.resolveSet({ kind: "resolve", result: PENDING_UNCONFIRMED });
+    await settle();
+
+    expect(noticeRows()).toHaveLength(0);
+    expect(harness.ingest).not.toHaveBeenCalled();
+  });
+
+  it("still shows a pending notice for a session written again after an earlier write's verified fan-out", async () => {
+    const harness = renderWithFakes(
+      { outcome: "accepted" },
+      { deferSet: true },
+    );
+    await writeSession(harness, SIGNED_IN_SNAPSHOT);
+    harness.emitInbound(SIGNED_IN_DESKTOP_SNAPSHOT);
+    await writeSession(harness, SIGNED_OUT_SNAPSHOT);
+    await writeSession(harness, SIGNED_IN_SNAPSHOT);
+
+    harness.resolveSet({ kind: "resolve", result: { outcome: "accepted" } });
+    harness.resolveSet({ kind: "resolve", result: { outcome: "accepted" } });
+    harness.resolveSet({ kind: "resolve", result: PENDING_UNREACHABLE });
+    await settle();
+
+    expectNoticeCopy(onlyNotice(), UNREACHABLE_HELD_COPY);
+  });
+
+  it.each(INBOUND_ADOPTIONS)(
+    "dismisses the pending notice and adopts $label from main",
+    async ({ inbound, adopted }) => {
+      const harness = renderWithFakes(PENDING_UNCONFIRMED, {});
+      await writeSession(harness, SIGNED_IN_SNAPSHOT);
+      expect(noticeRows()).toHaveLength(1);
+
+      harness.emitInbound(inbound);
+      await letToastsLeave();
+
+      expect(noticeRows()).toHaveLength(0);
+      expect(harness.ingest).toHaveBeenCalledExactlyOnceWith(adopted);
+    },
+  );
+
+  it.each(VERDICT_THEN_ADOPTION)(
+    "dismisses a verdict notice when this window then adopts another session from main: $label",
+    async ({ result, reachVerdict, inbound, adopted }) => {
+      const harness = renderWithFakes(result, {});
+      await writeSession(harness, SIGNED_IN_SNAPSHOT);
+      await reachVerdict(harness);
+      expectNoticeCopy(onlyNotice(), EXPIRED_COPY);
+
+      harness.emitInbound(inbound);
+      await letToastsLeave();
+
+      expect(noticeRows()).toHaveLength(0);
+      expect(harness.ingest).toHaveBeenCalledExactlyOnceWith(adopted);
+    },
+  );
+
+  it("shows the pending notice on a shell with no re-check channel", async () => {
+    const harness = renderWithFakes(PENDING_UNREACHABLE, {
+      omitPendingRefused: true,
+    });
+
+    await writeSession(harness, SIGNED_IN_SNAPSHOT);
+
+    expectNoticeCopy(onlyNotice(), UNREACHABLE_HELD_COPY);
+  });
 
   it.each([
     {
@@ -938,7 +1146,7 @@ describe("<WindowsBridgeAuthSessionBridge />", () => {
     });
   });
 
-  it("suppresses an accepted write's echo and cleans up both subscriptions", async () => {
+  it("suppresses an accepted write's echo and cleans up its subscriptions", async () => {
     const harness = renderWithFakes(
       { outcome: "accepted" },
       {
@@ -955,16 +1163,13 @@ describe("<WindowsBridgeAuthSessionBridge />", () => {
       await drainMicrotasks();
     });
 
-    harness.emitInbound({
-      status: "signed-in",
-      token: SIGNED_IN_SNAPSHOT.token,
-      profile: SIGNED_IN_SNAPSHOT.profile,
-    });
+    harness.emitInbound(SIGNED_IN_DESKTOP_SNAPSHOT);
     expect(harness.ingest).not.toHaveBeenCalled();
 
     harness.unmount();
     expect(harness.outboundDispose).toHaveBeenCalledTimes(1);
     expect(harness.inboundDispose).toHaveBeenCalledTimes(1);
+    expect(harness.pendingRefusedDispose).toHaveBeenCalledTimes(1);
 
     harness.emitInbound(SIGNED_OUT_DESKTOP_SNAPSHOT);
     harness.emitOutbound({

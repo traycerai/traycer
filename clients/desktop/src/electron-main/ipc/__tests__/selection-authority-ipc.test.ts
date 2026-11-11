@@ -1189,8 +1189,15 @@ interface JwksServer {
   serve(keys: readonly BearerSigningKey[]): void;
   fail(): void;
   hold(): void;
+  /** Answers every held request with a failure. */
   releaseHeld(): void;
+  /** Answers every held request with this key set. */
+  releaseHeldServing(keys: readonly BearerSigningKey[]): void;
   close(): Promise<void>;
+}
+
+function jwksBody(keys: readonly BearerSigningKey[]): string {
+  return JSON.stringify({ keys: keys.map((key) => key.publicJwk) });
 }
 
 /**
@@ -1234,10 +1241,7 @@ async function startJwksServer(): Promise<JwksServer> {
     baseUrl: `http://127.0.0.1:${address.port}`,
     hitCount: () => hits,
     serve: (keys) => {
-      behaviour = {
-        kind: "serve",
-        body: JSON.stringify({ keys: keys.map((key) => key.publicJwk) }),
-      };
+      behaviour = { kind: "serve", body: jwksBody(keys) };
     },
     fail: () => {
       behaviour = { kind: "fail" };
@@ -1249,6 +1253,13 @@ async function startJwksServer(): Promise<JwksServer> {
       for (const response of held) {
         response.writeHead(503);
         response.end();
+      }
+      held.clear();
+    },
+    releaseHeldServing: (keys) => {
+      for (const response of held) {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(jwksBody(keys));
       }
       held.clear();
     },
@@ -1264,9 +1275,24 @@ async function startJwksServer(): Promise<JwksServer> {
   };
 }
 
-function mintUserToken(signingKey: BearerSigningKey, userId: string): string {
-  return signingKey.sign(userBearerClaims(userId, Date.now() + 60 * 60_000));
+function mintTokenLasting(
+  signingKey: BearerSigningKey,
+  userId: string,
+  lifetimeMs: number,
+): string {
+  return signingKey.sign(userBearerClaims(userId, Date.now() + lifetimeMs));
 }
+
+function mintUserToken(signingKey: BearerSigningKey, userId: string): string {
+  return mintTokenLasting(signingKey, userId, 60 * 60_000);
+}
+
+/**
+ * Long enough to verify when a window sends it, gone by the time a re-check
+ * scheduled a cooldown later would run: a check that was meant to be dropped
+ * shows itself as a verdict.
+ */
+const SHORT_LIVED_TOKEN_MS = 20_000;
 
 interface SigninScenario {
   readonly key: BearerSigningKey;
@@ -1282,6 +1308,12 @@ interface SigninScenario {
   advancePastKeyFetchCooldown(): Promise<void>;
   /** What main's own credentials store holds for the window's user. */
   storeHolds(token: string): void;
+  /** Main's credentials reads wait until the returned function is called. */
+  gateStoreReads(): () => void;
+  storeReads(): number;
+  /** Another window of the same user, beside window 101. */
+  addWindow(webContentsId: number): CapturingWindow;
+  setFromWindow(webContentsId: number, token: string): Promise<unknown>;
   set(token: string): Promise<unknown>;
   signOut(): Promise<unknown>;
   revoke(token: string): Promise<unknown>;
@@ -1310,9 +1342,14 @@ async function setUpSigninScenario(): Promise<SigninScenario> {
   const { host, directory } = await createLocalHost();
   const token = mintUserToken(key, WINDOW_USER_ID);
   let stored = buildStoredCredentials(WINDOW_USER_ID, token);
+  let storeGate: Promise<void> | null = null;
+  const store = new FakeAuthTokenStore(async () => {
+    if (storeGate !== null) await storeGate;
+    return stored;
+  });
   const { bridge, registry, authSession } = buildBridge({
     authnBaseUrl: jwks.baseUrl,
-    authTokenStore: new FakeAuthTokenStore(async () => stored),
+    authTokenStore: store,
     host,
   });
   const window = buildWindow();
@@ -1321,6 +1358,11 @@ async function setUpSigninScenario(): Promise<SigninScenario> {
   const keyFetchResults = () =>
     fetchSpy.mock.results.filter(
       (_result, index) => fetchSpy.mock.calls[index]?.[0] === jwksUrl,
+    );
+  const setFromWindow = async (webContentsId: number, setToken: string) =>
+    authSessionSetHandler()(
+      sender(webContentsId),
+      signedInSnapshot(WINDOW_USER_ID, setToken),
     );
   return {
     key,
@@ -1343,15 +1385,28 @@ async function setUpSigninScenario(): Promise<SigninScenario> {
     },
     advancePastKeyFetchCooldown: async () => {
       await vi.advanceTimersByTimeAsync(KEY_FETCH_COOLDOWN_MS + 1_000);
+      // A re-check answered from the key set in hand runs on microtasks only.
+      await new Promise<void>((resolve) => setImmediate(resolve));
     },
     storeHolds: (storedToken) => {
       stored = buildStoredCredentials(WINDOW_USER_ID, storedToken);
     },
-    set: async (setToken) =>
-      authSessionSetHandler()(
-        sender(101),
-        signedInSnapshot(WINDOW_USER_ID, setToken),
-      ),
+    gateStoreReads: () => {
+      const gate = Promise.withResolvers<void>();
+      storeGate = gate.promise;
+      return () => {
+        storeGate = null;
+        gate.resolve();
+      };
+    },
+    storeReads: () => store.readCount,
+    addWindow: (webContentsId) => {
+      const added = buildWindow();
+      registry.add(`window-${webContentsId}`, webContentsId, added);
+      return added;
+    },
+    setFromWindow,
+    set: (setToken) => setFromWindow(101, setToken),
     signOut: async () =>
       authSessionSetHandler()(sender(101), {
         status: "signed-out",
@@ -1369,6 +1424,26 @@ async function setUpSigninScenario(): Promise<SigninScenario> {
       vi.unstubAllGlobals();
     },
   };
+}
+
+function messagesOn(window: CapturingWindow, channel: string): SentMessage[] {
+  return window.sentMessages.filter((message) => message.channel === channel);
+}
+
+/**
+ * Waits until the engine has told this attached window to attach again more
+ * than `told` times: its effective host moved, which is what losing the fleet
+ * looks like to a window.
+ */
+async function awaitReattachRequiredBeyond(
+  window: CapturingWindow,
+  told: number,
+): Promise<void> {
+  await vi.waitFor(() => {
+    expect(
+      messagesOn(window, RunnerHostEvent.selectionReattachRequired).length,
+    ).toBeGreaterThan(told);
+  });
 }
 
 /** A verify that fetches the key set and refuses on the subject alone. */
@@ -1701,6 +1776,224 @@ describe("a sign-in main cannot check yet", () => {
         token: null,
         verified: false,
       });
+    } finally {
+      await scenario.dispose();
+    }
+  });
+
+  it("withdraws the hold and tells the window when the re-check reaches a verdict against the bearer", async () => {
+    const scenario = await setUpSigninScenario();
+    try {
+      await expect(scenario.set(scenario.token)).resolves.toMatchObject({
+        outcome: "pending",
+        heldLocally: true,
+      });
+      await awaitSelectionTarget(scenario.window, LOCAL_HOST_ID);
+      expect((await attachToRunningLocalHost()).effectiveHostId).toBe(
+        LOCAL_HOST_ID,
+      );
+      const changesBefore = messagesOn(
+        scenario.window,
+        RunnerHostEvent.authSessionChange,
+      ).length;
+      const reattachesBefore = messagesOn(
+        scenario.window,
+        RunnerHostEvent.selectionReattachRequired,
+      ).length;
+
+      scenario.jwks.serve([createSigningKey("kid-1", "bearer")]);
+      await scenario.advancePastKeyFetchCooldown();
+
+      await vi.waitFor(() => {
+        expect(
+          messagesOn(
+            scenario.window,
+            RunnerHostEvent.authSessionPendingRefused,
+          ).map((message) => message.payload),
+        ).toEqual([{ token: scenario.token, reason: "bad-signature" }]);
+      });
+      expect(scenario.authSession.get()).toMatchObject({
+        status: "signed-out",
+        token: null,
+        verified: false,
+      });
+      expect(
+        messagesOn(scenario.window, RunnerHostEvent.authSessionChange),
+      ).toHaveLength(changesBefore);
+
+      await awaitReattachRequiredBeyond(scenario.window, reattachesBefore);
+      expect((await attachToRunningLocalHost()).effectiveHostId).toBeNull();
+
+      await scenario.advancePastKeyFetchCooldown();
+      expect(scenario.jwksFetches()).toBe(2);
+      expect(
+        messagesOn(scenario.window, RunnerHostEvent.authSessionPendingRefused),
+      ).toHaveLength(1);
+    } finally {
+      await scenario.dispose();
+    }
+  });
+
+  it("tells the window of a verdict against a bearer main never held", async () => {
+    const scenario = await setUpSigninScenario();
+    try {
+      scenario.storeHolds("another-token");
+      await expect(scenario.set(scenario.token)).resolves.toMatchObject({
+        outcome: "pending",
+        heldLocally: false,
+      });
+      const changesBefore = messagesOn(
+        scenario.window,
+        RunnerHostEvent.authSessionChange,
+      ).length;
+
+      scenario.jwks.serve([createSigningKey("kid-1", "bearer")]);
+      await scenario.advancePastKeyFetchCooldown();
+
+      await vi.waitFor(() => {
+        expect(
+          messagesOn(
+            scenario.window,
+            RunnerHostEvent.authSessionPendingRefused,
+          ).map((message) => message.payload),
+        ).toEqual([{ token: scenario.token, reason: "bad-signature" }]);
+      });
+      expect(scenario.authSession.get()).toMatchObject({
+        status: "signed-out",
+        token: null,
+        verified: false,
+      });
+      expect(
+        messagesOn(scenario.window, RunnerHostEvent.authSessionChange),
+      ).toHaveLength(changesBefore);
+    } finally {
+      await scenario.dispose();
+    }
+  });
+
+  it("accepts a sibling's set of the same pair that was still reading main's credentials when the first window's check verified it", async () => {
+    const scenario = await setUpSigninScenario();
+    try {
+      const token = mintTokenLasting(
+        scenario.key,
+        WINDOW_USER_ID,
+        SHORT_LIVED_TOKEN_MS,
+      );
+      scenario.storeHolds(token);
+      scenario.addWindow(102);
+      const openStore = scenario.gateStoreReads();
+      scenario.jwks.hold();
+      const first = scenario.setFromWindow(101, token);
+      await vi.waitFor(() => {
+        expect(scenario.jwks.hitCount()).toBe(1);
+      });
+      const second = scenario.setFromWindow(102, token);
+      await vi.waitFor(() => {
+        expect(scenario.storeReads()).toBe(1);
+      });
+
+      scenario.jwks.releaseHeldServing([scenario.key]);
+      await expect(first).resolves.toEqual({ outcome: "accepted" });
+      expect(scenario.authSession.get()).toMatchObject({
+        status: "signed-in",
+        token,
+        verified: true,
+      });
+
+      openStore();
+      await expect(second).resolves.toEqual({ outcome: "accepted" });
+      await scenario.advancePastKeyFetchCooldown();
+      expect(scenario.jwksFetches()).toBe(1);
+      expect(
+        messagesOn(scenario.window, RunnerHostEvent.authSessionPendingRefused),
+      ).toEqual([]);
+    } finally {
+      await scenario.dispose();
+    }
+  });
+
+  it("drops a sibling's pending check of the same pair when the first window's check verifies it", async () => {
+    const scenario = await setUpSigninScenario();
+    try {
+      const token = mintTokenLasting(
+        scenario.key,
+        WINDOW_USER_ID,
+        SHORT_LIVED_TOKEN_MS,
+      );
+      scenario.storeHolds(token);
+      const windowB = scenario.addWindow(102);
+      scenario.jwks.hold();
+      const first = scenario.setFromWindow(101, token);
+      await vi.waitFor(() => {
+        expect(scenario.jwks.hitCount()).toBe(1);
+      });
+      await expect(scenario.setFromWindow(102, token)).resolves.toEqual({
+        outcome: "pending",
+        reason: "key-source-unavailable",
+        heldLocally: true,
+      });
+
+      scenario.jwks.releaseHeldServing([scenario.key]);
+      await expect(first).resolves.toEqual({ outcome: "accepted" });
+
+      await vi.waitFor(() => {
+        expect(
+          messagesOn(windowB, RunnerHostEvent.authSessionChange).at(-1)
+            ?.payload,
+        ).toMatchObject({ status: "signed-in", token, verified: true });
+      });
+      await scenario.advancePastKeyFetchCooldown();
+      expect([
+        ...messagesOn(
+          scenario.window,
+          RunnerHostEvent.authSessionPendingRefused,
+        ),
+        ...messagesOn(windowB, RunnerHostEvent.authSessionPendingRefused),
+      ]).toEqual([]);
+      expect(scenario.authSession.get()).toMatchObject({
+        status: "signed-in",
+        token,
+        verified: true,
+      });
+    } finally {
+      await scenario.dispose();
+    }
+  });
+
+  it("stops checking a held bearer when another window verifies a different bearer of the same user", async () => {
+    const scenario = await setUpSigninScenario();
+    try {
+      const windowB = scenario.addWindow(102);
+      await fetchKeySetOnce(scenario);
+      const heldToken = mintUserToken(
+        createSigningKey("kid-2", "bearer"),
+        WINDOW_USER_ID,
+      );
+      scenario.storeHolds(heldToken);
+      await expect(scenario.set(heldToken)).resolves.toEqual({
+        outcome: "pending",
+        reason: "signing-key-unconfirmed",
+        heldLocally: true,
+      });
+
+      await expect(
+        scenario.setFromWindow(102, scenario.token),
+      ).resolves.toEqual({ outcome: "accepted" });
+      expect(scenario.authSession.get()).toMatchObject({
+        status: "signed-in",
+        token: scenario.token,
+        verified: true,
+      });
+      await scenario.advancePastKeyFetchCooldown();
+
+      expect(scenario.jwksFetches()).toBe(1);
+      expect([
+        ...messagesOn(
+          scenario.window,
+          RunnerHostEvent.authSessionPendingRefused,
+        ),
+        ...messagesOn(windowB, RunnerHostEvent.authSessionPendingRefused),
+      ]).toEqual([]);
     } finally {
       await scenario.dispose();
     }

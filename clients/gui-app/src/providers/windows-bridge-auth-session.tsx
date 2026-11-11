@@ -33,10 +33,13 @@ import type {
  *     `bridge.authSession.set(...)`. Same-user refresh and signed-out
  *     transitions are forwarded so sibling windows stay in sync.
  *   - Main's answer is shown as one notice. `pending` (main could not check
- *     the token yet and keeps checking it) says what waits and stays until
- *     main's verified fan-out of the same session arrives. `refused` names
- *     its reason and, for a verdict against the token, offers Sign out. Every
- *     notice shows the reason code and offers Report issue.
+ *     the token yet and keeps checking it) says what waits. It stays until
+ *     main fans out a session (its verified echo of this one, or a newer
+ *     one), or until main's re-check reaches a verdict, which replaces it
+ *     with the refused notice. `refused` names its reason and, for a verdict
+ *     against the token, offers Sign out; it stays until this window writes
+ *     or main fans out another session. Every notice shows the reason code
+ *     and offers Report issue.
  *   - Inbound (bridge → this window): subscribes to
  *     `bridge.authSession.onChange` and forwards each inbound snapshot to
  *     `auth.ingestProjectedSessionSnapshot(...)`. The auth service
@@ -64,15 +67,13 @@ export function WindowsBridgeAuthSessionBridge(
 
     let projectingInbound = false;
     let lastWrittenSerialized: string | null = null;
+    // The bearer of `lastWrittenSerialized`; read only while that is set.
+    let lastWrittenToken: string | null = null;
+    // Main's verified fan-out of the write in flight, when it arrived before
+    // that write's own answer: a sibling's set of the same session can verify
+    // first, and a `pending` answer after it would be stale.
+    let verifiedEchoSerialized: string | null = null;
     let lastLocalRestoreSerialized: string | null = null;
-    // The session the on-screen pending notice is about. Main fans it out once
-    // its check succeeds, and that arrival takes the notice down.
-    let pendingNoticeSerialized: string | null = null;
-
-    const dismissNotice = (): void => {
-      pendingNoticeSerialized = null;
-      authSessionRefusedToast.dismiss();
-    };
 
     const signOutFromNotice = (): void => {
       Analytics.getInstance().track(AnalyticsEvent.SignOutRequested, {
@@ -141,15 +142,17 @@ export function WindowsBridgeAuthSessionBridge(
         return;
       }
       lastWrittenSerialized = serialized;
+      lastWrittenToken = desktopSnapshot.token;
+      verifiedEchoSerialized = null;
       // A newer session makes any notice about an older one stale.
-      dismissNotice();
+      authSessionRefusedToast.dismiss();
       void bridge.authSession.set(desktopSnapshot).then(
         (result) => {
           if (result.outcome === "pending") {
             // Main holds this exact session and keeps checking it, so the latch
             // stays: its fan-out once verified is this window's own echo.
             if (lastWrittenSerialized !== serialized) return;
-            pendingNoticeSerialized = serialized;
+            if (verifiedEchoSerialized === serialized) return;
             showAuthSessionNotice(
               pendingNotice(result.reason, result.heldLocally),
               null,
@@ -190,12 +193,17 @@ export function WindowsBridgeAuthSessionBridge(
       // Main's local selection identity is neither a cloud verdict nor a
       // sign-out. Each window restores it through its own AuthService.
       if (snapshot.status === "unverified") return;
+      // Main moved: to the session this window wrote, now verified, or to one
+      // it adopts below. Either way a notice about the session it held is
+      // stale, a verdict's included.
+      authSessionRefusedToast.dismiss();
       const serialized = serializeDesktopSnapshot(snapshot);
-      if (serialized === pendingNoticeSerialized) dismissNotice();
       if (serialized === lastWrittenSerialized) {
+        verifiedEchoSerialized = serialized;
         return;
       }
       lastWrittenSerialized = serialized;
+      lastWrittenToken = snapshot.token;
       projectingInbound = true;
       const projection = fromDesktopSnapshot(snapshot);
       void auth.ingestProjectedSessionSnapshot(projection).finally(() => {
@@ -246,6 +254,24 @@ export function WindowsBridgeAuthSessionBridge(
         },
       ) ?? null;
 
+    // Main's own re-check of a session it answered `pending` for reached a
+    // verdict. The set's answer came long ago, so this is the refused answer
+    // arriving late, and it is applied exactly as one: the latch clears and the
+    // verdict notice replaces the pending one. Fenced to the bearer this window
+    // wrote; any other bearer is not this window's verdict.
+    const pendingRefusedSubscription =
+      bridge.authSession.onPendingRefused?.((token, reason) => {
+        if (lastWrittenSerialized === null || lastWrittenToken !== token) {
+          return;
+        }
+        lastWrittenSerialized = null;
+        const notice = refusalNotice(reason);
+        showAuthSessionNotice(
+          notice,
+          notice.offersSignOut ? signOutFromNotice : null,
+        );
+      }) ?? null;
+
     // HostRuntimeProvider has already awaited auth.start(), restoring the
     // shared credentials file. Subscribing synchronously replays that session
     // to main. Do not read main's initial projection back: its signed-in write
@@ -259,6 +285,7 @@ export function WindowsBridgeAuthSessionBridge(
       inboundSubscription.dispose();
       revokeSubscription.dispose();
       verdictLossSubscription?.dispose();
+      pendingRefusedSubscription?.dispose();
     };
   }, [auth, bridge]);
 
