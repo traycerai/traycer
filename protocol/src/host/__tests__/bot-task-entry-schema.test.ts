@@ -13,7 +13,6 @@ import {
   type BotSurfaceActionState,
   type BotActivity,
   type BotSessionActivity,
-  type BotTaskCheckinRecord,
   type BotTaskEntry,
   type BotTaskLastCheckin,
 } from "@traycer/protocol/host/bot/schemas";
@@ -31,7 +30,6 @@ const TRACKING_EVERY: BotTaskEntry = {
   label: null,
   originRequestId: null,
   createdByChatId: null,
-  checkins: null,
   inputNeeded: null,
   pause: null,
   stop: null,
@@ -51,7 +49,6 @@ const TRACKING_ON_COMPLETION: BotTaskEntry = {
   label: null,
   originRequestId: null,
   createdByChatId: null,
-  checkins: null,
   inputNeeded: null,
   pause: null,
   stop: null,
@@ -452,7 +449,6 @@ describe("bot.subscribe@1.3 task provenance", () => {
     const frame = snapshotWith([{ ...TRACKING_EVERY, ...PROVENANCE }]);
 
     const {
-      checkins: _checkins,
       inputNeeded: _inputNeeded,
       pause: _pause,
       stop: _stop,
@@ -480,16 +476,15 @@ describe("bot.subscribe@1.3 task provenance", () => {
   });
 });
 
-describe("bot.subscribe@1.4 check-in history", () => {
+describe("bot.subscribe@1.4 watch start", () => {
   const line = hostStreamRpcRegistry["bot.subscribe"][1];
-  const HISTORY: BotTaskCheckinRecord[] = [
-    {
-      kind: "missed",
-      dueAt: 1_760_000_000_000,
-      missedThrough: 1_760_001_800_000,
-      reason: "no-host-reported",
-      caughtUpAt: 1_760_003_000_000,
-    },
+  const WATCH = {
+    target: { kind: "trunk" },
+    attentionOnly: true,
+    everySeconds: null,
+  } as const;
+  /** What a task entry's `checkins` once carried: no version keeps it. */
+  const REMOVED_HISTORY = [
     {
       kind: "received",
       receivedAt: 1_759_999_000_000,
@@ -500,15 +495,10 @@ describe("bot.subscribe@1.4 check-in history", () => {
       ticketsOpened: 1,
       ticketsClosed: 0,
       backgroundEvents: 3,
-      turn: { chatId: "trunk-1", turnId: "turn-1" },
+      turn: null,
       requestedByUserId: null,
     },
   ];
-  const WATCH = {
-    target: { kind: "trunk" },
-    attentionOnly: true,
-    everySeconds: null,
-  } as const;
 
   function snapshotWith(
     tasks: ReadonlyArray<object>,
@@ -521,59 +511,48 @@ describe("bot.subscribe@1.4 check-in history", () => {
     };
   }
 
-  it("carries the history and a watch's start to a 1.4 subscriber", () => {
+  it("carries a watch's start to a 1.4 subscriber and strips it for a 1.3 and a 1.2 subscriber", () => {
     const frame = snapshotWith(
-      [{ ...TRACKING_EVERY, checkins: HISTORY }],
+      [TRACKING_EVERY],
       [{ ...WATCH, since: 1_759_000_000_000 }],
     );
 
-    const { inputNeeded: _inputNeeded, ...v14Entry } = TRACKING_EVERY;
     const latest = line.versions[4].contract.serverFrameSchema.parse(frame);
-    expect(latest.kind === "snapshot" ? latest.tasks : null).toEqual([
-      { ...v14Entry, checkins: HISTORY },
-    ]);
     expect(
       latest.kind === "snapshot" ? latest.notificationSubscriptions : null,
     ).toEqual([{ ...WATCH, since: 1_759_000_000_000, digests: null }]);
-  });
-
-  it("strips both for a 1.3 and a 1.2 subscriber", () => {
-    const frame = snapshotWith(
-      [{ ...TRACKING_EVERY, checkins: HISTORY }],
-      [{ ...WATCH, since: 1_759_000_000_000 }],
-    );
-
     for (const minor of [2, 3] as const) {
       const parsed =
         line.versions[minor].contract.serverFrameSchema.parse(frame);
       if (parsed.kind !== "snapshot") throw new Error("not a snapshot");
-      expect(parsed.tasks[0]).not.toHaveProperty("checkins");
       expect(parsed.notificationSubscriptions).toEqual([WATCH]);
     }
   });
 
-  it("reads an entry and a watch from a host that predates them as unknown", () => {
-    const {
-      checkins: _omitted,
-      inputNeeded: _later,
-      ...withoutHistory
-    } = TRACKING_EVERY;
+  it("reads a watch from a host that predates the start as unknown", () => {
     const parsed = botSubscribeServerFrameSchema.parse(
-      snapshotWith([withoutHistory], [WATCH]),
+      snapshotWith([TRACKING_EVERY], [WATCH]),
     );
 
     if (parsed.kind !== "snapshot") throw new Error("not a snapshot");
-    expect(parsed.tasks[0]?.checkins).toBeNull();
     expect(parsed.notificationSubscriptions?.[0]?.since).toBeNull();
   });
 
-  it("refuses a missed record with a reason it does not know", () => {
-    expect(
-      botTaskEntrySchema.safeParse({
-        ...TRACKING_EVERY,
-        checkins: [{ ...HISTORY[0], reason: "host-asleep" }],
-      }).success,
-    ).toBe(false);
+  it("serves no check-in history on a task, whatever a host still sends, in any version", () => {
+    const frame = snapshotWith(
+      [{ ...TRACKING_EVERY, checkins: REMOVED_HISTORY }],
+      [],
+    );
+
+    for (const minor of [2, 3, 4] as const) {
+      const parsed =
+        line.versions[minor].contract.serverFrameSchema.parse(frame);
+      if (parsed.kind !== "snapshot") throw new Error("not a snapshot");
+      expect(parsed.tasks[0]).not.toHaveProperty("checkins");
+    }
+    expect(botTaskEntrySchema.parse(TRACKING_EVERY)).not.toHaveProperty(
+      "checkins",
+    );
   });
 });
 
@@ -695,18 +674,6 @@ describe("bot.subscribe@1.4 member actions", () => {
     attentionCount: 1,
     queueItemId: "queue-item-1",
   } as const;
-  const RECEIVED = {
-    kind: "received",
-    receivedAt: 1_760_000_300_000,
-    hostId: "host-1",
-    hostName: "laptop",
-    outcome: "idle",
-    agentsStarted: 0,
-    ticketsOpened: 0,
-    ticketsClosed: 0,
-    backgroundEvents: 0,
-    turn: null,
-  } as const;
   const WATCH = {
     target: { kind: "trunk" },
     attentionOnly: true,
@@ -731,7 +698,6 @@ describe("bot.subscribe@1.4 member actions", () => {
         ...entryV14,
         pause: PAUSE,
         runRequest: RUN,
-        checkins: [{ ...RECEIVED, requestedByUserId: "member-1" }],
       },
       {
         ...entryV14,
@@ -779,7 +745,6 @@ describe("bot.subscribe@1.4 member actions", () => {
           nextAt: TRACKING_EVERY.nextAt,
           state: "tracking",
           endedReason: null,
-          checkins: [RECEIVED],
         },
       ],
       notificationSubscriptions: [WATCH],
@@ -790,7 +755,6 @@ describe("bot.subscribe@1.4 member actions", () => {
       pause: null,
       stop: null,
       runRequest: null,
-      checkins: [{ ...RECEIVED, requestedByUserId: null }],
     });
     expect(parsed.notificationSubscriptions?.[0]?.digests).toBeNull();
     expect(parsed.stoppedNotificationWatches).toBeNull();

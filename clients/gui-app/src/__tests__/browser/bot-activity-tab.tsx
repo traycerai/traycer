@@ -98,7 +98,6 @@ function entry(
     label: null,
     originRequestId: null,
     createdByChatId: null,
-    checkins: null,
     inputNeeded: null,
     pause: null,
     stop: null,
@@ -423,7 +422,7 @@ export function RequestContext(props: {
 }
 
 export function ActivityTab(): ReactElement {
-  const active = useBotActiveTasks(tasks);
+  const active = useBotActiveTasks(tasks, HOST_ID, true);
   return (
     <Tabs
       defaultValue="activity"
@@ -448,14 +447,12 @@ export function ActivityTab(): ReactElement {
       </header>
       <TabsContent value="activity" className="flex min-h-0 flex-1 flex-col">
         <BotActivityPage
+          roomFresh
           botId={BOT_ID}
           hostId={HOST_ID}
-          botTitle="Tracy"
           boundHere
           active={active}
-          tasks={tasks}
           notificationSubscriptions={null}
-          onOpenTurn={() => {}}
           trunkChatId="bot-trunk"
           onOpenSession={() => {}}
           resolveMember={UNRESOLVED_BOT_MEMBERS}

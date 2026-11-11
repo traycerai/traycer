@@ -16451,9 +16451,8 @@ const HOST_STREAM_RPC_REGISTRY_FEATURE_DEFINITION = {
       // @1.3 says where each task came from (`spun`, `label`,
       // `originRequestId`, `createdByChatId`, T82); @1.2 and earlier bind
       // the task entry frozen without them.
-      // @1.4 carries each task's check-in history (`checkins`) and when each
-      // notification subscription started (`since`, T86); @1.3 is frozen
-      // without them.
+      // @1.4 carries when each notification subscription started (`since`);
+      // @1.3 is frozen without it.
       // @1.5 carries what each task's agents wait on a person for
       // (`inputNeeded`) and the subscriber's own card actions in flight
       // (`surfaceActions`, T89); @1.4 is frozen without them.

@@ -92,6 +92,8 @@ export interface BotSubscriptionSnapshot {
  */
 export interface BotSubscriptionResult {
   readonly snapshot: BotSubscriptionSnapshot | null;
+  /** The current stream has delivered a snapshot since its last reconnect. */
+  readonly snapshotFresh: boolean;
   readonly deleted: boolean;
   readonly error: string | null;
   readonly isPending: boolean;
@@ -111,6 +113,13 @@ export interface BotSubscriptionResult {
  */
 type BotStreamEvent =
   | Extract<BotSubscribeServerFrame, { kind: "snapshot" | "deleted" }>
+  | {
+      readonly kind: "stale";
+      readonly baseline: Extract<
+        BotSubscribeServerFrame,
+        { kind: "snapshot" }
+      > | null;
+    }
   | { readonly kind: "closed"; readonly message: string };
 
 type SharedSubscription = SharedStreamSubscription<BotStreamEvent>;
@@ -247,6 +256,7 @@ export function useBotSubscriptionForClient(args: {
   const error = lastEvent?.kind === "closed" ? lastEvent.message : null;
   return {
     snapshot,
+    snapshotFresh: lastEvent?.kind === "snapshot",
     deleted,
     error,
     isPending: snapshot === null && !deleted && error === null,
@@ -280,6 +290,8 @@ function createSharedSubscription(
   });
 
   let sessionClosed = false;
+  let streamOpen = true;
+  let held = false;
   const shared: SharedSubscription = {
     refCount: 0,
     unsubscribeFromStream: () => {
@@ -307,6 +319,25 @@ function createSharedSubscription(
     notifyConsumers();
   };
 
+  const applyActivity = (
+    frame: Extract<BotSubscribeServerFrame, { kind: "activity" }>,
+  ): void => {
+    const last = shared.lastEvent;
+    let baseline = null;
+    if (last?.kind === "snapshot") baseline = last;
+    else if (last?.kind === "stale") baseline = last.baseline;
+    if (baseline === null || baseline.activity === null) return;
+    const activity = withActivityEntry(baseline.activity, frame);
+    const updated = { ...baseline, activity };
+    shared.lastEvent =
+      last?.kind === "stale" ? { ...last, baseline: updated } : updated;
+    notifyConsumers();
+    const key = botQueryKeys.subscription(args);
+    const cached =
+      queryClient.getQueryData<BotSubscriptionSnapshot | null>(key) ?? null;
+    if (cached !== null) queryClient.setQueryData(key, { ...cached, activity });
+  };
+
   session.onServerFrame((envelope) => {
     if (sessionClosed) return;
     const parsed = botSubscribeServerFrameSchema.safeParse(envelope);
@@ -318,20 +349,10 @@ function createSharedSubscription(
       return;
     }
     if (frame.kind === "activity") {
-      // One entry moved; the snapshot it patches came first on this session.
-      const last = shared.lastEvent;
-      if (last?.kind !== "snapshot" || last.activity === null) return;
-      const activity = withActivityEntry(last.activity, frame);
-      shared.lastEvent = { ...last, activity };
-      notifyConsumers();
-      const key = botQueryKeys.subscription(args);
-      const cached =
-        queryClient.getQueryData<BotSubscriptionSnapshot | null>(key) ?? null;
-      if (cached !== null)
-        queryClient.setQueryData(key, { ...cached, activity });
+      applyActivity(frame);
       return;
     }
-    shared.lastEvent = frame;
+    shared.lastEvent = streamOpen ? frame : { kind: "stale", baseline: frame };
     notifyConsumers();
     const key = botQueryKeys.subscription(args);
     const previous =
@@ -363,8 +384,25 @@ function createSharedSubscription(
     }
   });
 
-  session.onStatusChange((status, reason) => {
+  session.onStatusChange((status, reason, _retryCause, continuity) => {
     if (sessionClosed) return;
+    streamOpen = status === "open";
+    if (continuity === "held") held = true;
+    if (status !== "open" && shared.lastEvent?.kind === "snapshot") {
+      shared.lastEvent = { kind: "stale", baseline: shared.lastEvent };
+      notifyConsumers();
+    }
+    if (
+      status === "open" &&
+      continuity === "continued" &&
+      held &&
+      shared.lastEvent?.kind === "stale" &&
+      shared.lastEvent.baseline !== null
+    ) {
+      shared.lastEvent = shared.lastEvent.baseline;
+      notifyConsumers();
+    }
+    if (status === "open") held = false;
     if (status !== "closed") return;
     const message = describeStreamClose(reason);
     // A retryable close is the transport reconnecting; the next snapshot

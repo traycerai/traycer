@@ -851,6 +851,7 @@ function BotTabBody(props: {
       reopenError={openError}
       onReopen={reopen}
       streamError={subscription.error}
+      snapshotFresh={subscription.snapshotFresh}
       onRetry={resubscribe}
       view={view}
       onViewChange={changeView}
@@ -1356,6 +1357,7 @@ function BotTabContent(props: {
   readonly reopenError: string | null;
   readonly onReopen: () => void;
   readonly streamError: string | null;
+  readonly snapshotFresh: boolean;
   readonly onRetry: () => void;
   readonly view: BotTabView;
   readonly onViewChange: (view: BotTabView) => void;
@@ -1379,6 +1381,7 @@ function BotTabContent(props: {
     reopenError,
     onReopen,
     streamError,
+    snapshotFresh,
     onRetry,
     view,
     onViewChange,
@@ -1505,7 +1508,7 @@ function BotTabContent(props: {
     onViewChange,
   });
   useRailDrawnReport(place, threadListSupported, onRailDrawn);
-  const activeTasks = useBotActiveTasks(snapshot.tasks);
+  const activeTasks = useBotActiveTasks(snapshot.tasks, hostId, snapshotFresh);
   const showMessages = useCallback(() => {
     closeSession();
     changeView("messages");
@@ -1650,16 +1653,14 @@ function BotTabContent(props: {
                     className="flex min-h-0 flex-1 flex-col"
                   >
                     <BotActivityPage
+                      roomFresh={activeTasks.roomFresh}
                       botId={botId}
                       hostId={hostId}
-                      botTitle={snapshot.bot.title}
                       boundHere={snapshot.boundHost.isThisHost}
                       active={activeTasks}
-                      tasks={snapshot.tasks}
                       notificationSubscriptions={
                         snapshot.notificationSubscriptions
                       }
-                      onOpenTurn={openTurn}
                       trunkChatId={snapshot.bot.trunkChatId}
                       onOpenSession={openSession}
                       resolveMember={resolveMember}

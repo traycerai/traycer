@@ -21,7 +21,10 @@ const EMPTY_INDICATOR_STATE: HostNotificationsIndicatorStateResponse = {
   complete: null,
 };
 
+export type IndicatorFreshnessMode = "base" | "activity";
+
 export interface UseHostNotificationIndicatorsArgs {
+  readonly freshnessMode: IndicatorFreshnessMode;
   /**
    * The host to ASK. Required, and required to be explicit: this RPC is
    * computed over ONE host's SQLite rows, so an answer is only about the
@@ -55,6 +58,8 @@ export interface UseHostNotificationIndicatorsArgs {
 
 export interface HostNotificationIndicatorsQuery {
   readonly data: HostNotificationsIndicatorStateResponse;
+  /** Every requested chunk has returned an answer in the current query. */
+  readonly hasAnswer: boolean;
   readonly isPending: boolean;
   readonly isFetching: boolean;
   readonly error: HostRpcError | null;
@@ -142,6 +147,9 @@ export function useHostNotificationIndicators(
           },
     options: {
       enabled: args.enabled && userId !== null,
+      ...(args.freshnessMode === "activity"
+        ? { staleTime: Infinity, refetchOnMount: "always" as const }
+        : {}),
     },
     combine: (
       results: Array<
@@ -149,6 +157,15 @@ export function useHostNotificationIndicators(
       >,
     ) => ({
       data: mergeIndicatorResponses(results),
+      hasAnswer:
+        results.length > 0 &&
+        results.every(
+          (result) =>
+            result.data !== undefined &&
+            result.error === null &&
+            !result.isFetching &&
+            !result.isStale,
+        ),
       isPending: results.some((result) => result.isPending),
       isFetching: results.some((result) => result.isFetching),
       error: firstSupportedHostError(results),

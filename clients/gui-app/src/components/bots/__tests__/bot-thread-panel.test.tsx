@@ -2246,7 +2246,6 @@ describe("<BotThreadPanel /> the thread's tasks", () => {
       label: null,
       originRequestId: null,
       createdByChatId: THREAD_ID,
-      checkins: null,
       inputNeeded: null,
       pause: null,
       stop: null,

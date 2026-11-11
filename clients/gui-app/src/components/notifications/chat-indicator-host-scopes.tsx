@@ -1,4 +1,9 @@
 import { useContext, useMemo, type ReactNode } from "react";
+import {
+  ChatIndicatorAttestedContext,
+  ChatIndicatorFreshHostsContext,
+} from "@/components/notifications/chat-indicator-fresh-hosts-context";
+import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { useHostLease } from "@/hooks/host/use-host-lease";
 import { useHostNotificationIndicators } from "@/hooks/notifications/use-host-notification-indicators-query";
 import {
@@ -46,6 +51,7 @@ import {
 const NO_EPIC_IDS: ReadonlyArray<string> = [];
 
 export function ChatIndicatorHostScopes(props: {
+  readonly freshnessMode: "base" | "activity";
   readonly scopes: ReadonlyArray<ChatIndicatorHostScope>;
   /**
    * Owning epic per chat id, when the surface knows it. Chat ids do not
@@ -64,6 +70,9 @@ export function ChatIndicatorHostScopes(props: {
     [props.scopes],
   );
   const cloudRows = useCloudNotificationsStore((state) => state.rows);
+  const cloudFresh = useCloudNotificationsStore(
+    (state) => state.hasSnapshot && state.connectionState === "connected",
+  );
   // The cloud snapshot is the base every host layer folds into, and it is
   // host-INDEPENDENT: a cloud row produced on any machine is already in this
   // client's snapshot, which is the whole reason cloud mode exists. Only the
@@ -100,20 +109,36 @@ export function ChatIndicatorHostScopes(props: {
       byOriginHostId,
     };
   }, [isCloud, inherited, cloudRows, allChatIds]);
+  const attestedCloud = useMemo(() => {
+    if (!isCloud || !cloudFresh) return EMPTY_INDICATOR_STATE_RESPONSE;
+    const projection = selectCloudNotificationIndicatorProjection(
+      cloudRows,
+      NO_EPIC_IDS,
+      allChatIds,
+    );
+    return {
+      ...projection.aggregate,
+      byOriginHostId: projection.byOriginHostId,
+    };
+  }, [isCloud, cloudFresh, cloudRows, allChatIds]);
   return (
-    <NotificationIndicatorsProvider indicators={base}>
-      <ChatIndicatorHostLayers
-        scopes={props.scopes}
-        chatEpicIds={props.chatEpicIds}
-        isCloud={isCloud}
-      >
-        {props.children}
-      </ChatIndicatorHostLayers>
-    </NotificationIndicatorsProvider>
+    <ChatIndicatorAttestedContext.Provider value={attestedCloud}>
+      <NotificationIndicatorsProvider indicators={base}>
+        <ChatIndicatorHostLayers
+          scopes={props.scopes}
+          freshnessMode={props.freshnessMode}
+          chatEpicIds={props.chatEpicIds}
+          isCloud={isCloud}
+        >
+          {props.children}
+        </ChatIndicatorHostLayers>
+      </NotificationIndicatorsProvider>
+    </ChatIndicatorAttestedContext.Provider>
   );
 }
 
 function ChatIndicatorHostLayers(props: {
+  readonly freshnessMode: "base" | "activity";
   readonly scopes: ReadonlyArray<ChatIndicatorHostScope>;
   readonly chatEpicIds: Readonly<Record<string, string>> | undefined;
   readonly isCloud: boolean;
@@ -123,6 +148,7 @@ function ChatIndicatorHostLayers(props: {
   const [head, ...rest] = props.scopes;
   return (
     <ChatIndicatorHostLayer
+      freshnessMode={props.freshnessMode}
       hostId={head.hostId}
       chatIds={head.chatIds}
       chatEpicIds={props.chatEpicIds}
@@ -130,6 +156,7 @@ function ChatIndicatorHostLayers(props: {
     >
       <ChatIndicatorHostLayers
         scopes={rest}
+        freshnessMode={props.freshnessMode}
         chatEpicIds={props.chatEpicIds}
         isCloud={props.isCloud}
       >
@@ -150,6 +177,7 @@ function ChatIndicatorHostLayers(props: {
  * response IS the answer, so it merges whole.
  */
 function ChatIndicatorHostLayer(props: {
+  readonly freshnessMode: "base" | "activity";
   readonly hostId: string;
   readonly chatIds: ReadonlyArray<string>;
   readonly chatEpicIds: Readonly<Record<string, string>> | undefined;
@@ -169,7 +197,12 @@ function ChatIndicatorHostLayer(props: {
   // The query keeps its last answer while disabled and refetches the moment
   // the lease recovers, so the dot goes stale rather than dark.
   const hostDead = useHostLease(props.hostId)?.status === "dead";
+  const reachable = useHostReachability(props.hostId).status === "reachable";
+  const cloudFresh = useCloudNotificationsStore(
+    (state) => state.hasSnapshot && state.connectionState === "connected",
+  );
   const host = useHostNotificationIndicators({
+    freshnessMode: props.freshnessMode,
     hostId: props.hostId,
     epicIds: NO_EPIC_IDS,
     chatIds: props.chatIds,
@@ -181,6 +214,16 @@ function ChatIndicatorHostLayer(props: {
       !(props.isCloud && feedModeSettling),
   });
   const inherited = useContext(NotificationIndicatorsContext);
+  const inheritedFresh = useContext(ChatIndicatorFreshHostsContext);
+  const inheritedAttested = useContext(ChatIndicatorAttestedContext);
+  const hostFresh =
+    !hostDead &&
+    reachable &&
+    !feedModeSettling &&
+    host.hasAnswer &&
+    !host.isPending &&
+    host.error === null;
+  const fresh = hostFresh && (!props.isCloud || cloudFresh);
   const merged: SurfaceNotificationIndicators = useMemo(
     () =>
       props.isCloud
@@ -205,9 +248,28 @@ function ChatIndicatorHostLayer(props: {
           },
     [props.isCloud, inherited, host.data, props.hostId, props.chatIds],
   );
+  const attested = hostFresh
+    ? {
+        ...mergeIndicatorStateResponses(inheritedAttested, host.data),
+        byOriginHostId: {
+          ...inheritedAttested.byOriginHostId,
+          [props.hostId]: mergeIndicatorStateResponses(
+            inheritedAttested.byOriginHostId?.[props.hostId] ??
+              EMPTY_INDICATOR_STATE_RESPONSE,
+            host.data,
+          ),
+        },
+      }
+    : inheritedAttested;
   return (
-    <NotificationIndicatorsProvider indicators={merged}>
-      {props.children}
-    </NotificationIndicatorsProvider>
+    <ChatIndicatorFreshHostsContext.Provider
+      value={{ ...inheritedFresh, [props.hostId]: fresh }}
+    >
+      <ChatIndicatorAttestedContext.Provider value={attested}>
+        <NotificationIndicatorsProvider indicators={merged}>
+          {props.children}
+        </NotificationIndicatorsProvider>
+      </ChatIndicatorAttestedContext.Provider>
+    </ChatIndicatorFreshHostsContext.Provider>
   );
 }
