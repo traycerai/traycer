@@ -27,7 +27,13 @@ import {
   type GuiHarnessCatalog,
 } from "@/hooks/harnesses/use-gui-harness-catalog";
 import { isHarnessRowSignedOut } from "@/lib/providers/provider-ambient-auth";
-import { useHostBinding } from "@/lib/host";
+import {
+  hiddenModelProvidersForHarness,
+  modelProviderHidden,
+} from "@/lib/providers/provider-hidden-model-providers";
+import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
+import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { resolveSubtreeHostClient } from "@/lib/host/binding-host-client";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useFocusedComposerEntry } from "@/hooks/command-palette/use-focused-composer-entry";
@@ -304,7 +310,8 @@ const MODEL_SUBPAGE: CommandSubpage = {
  * composer whose host client has not resolved, nothing is listed rather than
  * another host's.
  */
-function useFocusedComposerCatalog(): GuiHarnessCatalog {
+/** The focused composer's host client, or the app's default host without one. */
+function useFocusedComposerClient(): HostClient<HostRpcRegistry> | null {
   const entry = useFocusedComposerEntry();
   const defaultBinding = useHostBinding();
   const defaultEffectiveHostId = useEffectiveHostId();
@@ -312,6 +319,12 @@ function useFocusedComposerCatalog(): GuiHarnessCatalog {
     () => resolveSubtreeHostClient(defaultBinding, defaultEffectiveHostId),
     [defaultBinding, defaultEffectiveHostId],
   );
+  return entry === null ? defaultClient : entry.hostClient;
+}
+
+function useFocusedComposerCatalog(): GuiHarnessCatalog {
+  const entry = useFocusedComposerEntry();
+  const client = useFocusedComposerClient();
   // `"cached-only"`: opening a palette subpage must not cold-start every
   // provider on the focused composer's host. The subpages list what the host's
   // cache already holds: at least the focused composer's selected harness,
@@ -319,7 +332,7 @@ function useFocusedComposerCatalog(): GuiHarnessCatalog {
   // providers in that picker. OpenCode's models are the focused chat's line,
   // the entries its toolbar warms.
   return useGuiHarnessCatalogForClientLine(
-    entry === null ? defaultClient : entry.hostClient,
+    client,
     null,
     entry === null ? null : entry.opencodeLine,
     {
@@ -402,14 +415,27 @@ function useProviderSubpageItems(): ReadonlyArray<CommandItem> {
   );
 }
 
+/**
+ * Leaves out the models of every model provider hidden in Settings, as the
+ * model picker does. Unlike the picker it keeps no exception for the focused
+ * chat's own model: this is a list of models to switch TO, and the chat keeps
+ * running on its model whether or not it is listed here.
+ */
 function useModelSubpageItems(): ReadonlyArray<CommandItem> {
   const catalog = useFocusedComposerCatalog();
+  const providers = useProvidersListForClient(useFocusedComposerClient(), {
+    enabled: true,
+    subscribed: true,
+  }).data?.providers;
   return useMemo(
     () =>
-      paletteProviderOrder(catalog.harnesses).flatMap((provider) =>
-        provider.models.map((model) => buildModelItem(provider, model)),
-      ),
-    [catalog.harnesses],
+      paletteProviderOrder(catalog.harnesses).flatMap((provider) => {
+        const hidden = hiddenModelProvidersForHarness(providers, provider.id);
+        return provider.models
+          .filter((model) => !modelProviderHidden(model, hidden))
+          .map((model) => buildModelItem(provider, model));
+      }),
+    [catalog.harnesses, providers],
   );
 }
 
