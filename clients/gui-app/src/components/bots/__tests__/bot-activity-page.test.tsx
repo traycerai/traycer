@@ -400,6 +400,7 @@ function HarnessBody(props: HarnessProps): ReactNode {
   const active = useBotActiveTasks(props.tasks, HOST_ID, true);
   return (
     <BotActivityPage
+      snapshotFresh
       botId={BOT_ID}
       hostId={HOST_ID}
       boundHere={props.boundHere}

@@ -188,6 +188,7 @@ function mountOver(session: StubSession): void {
     if (subscription.snapshot === null) return null;
     return (
       <BotActivityPage
+        snapshotFresh={subscription.snapshotFresh}
         botId={BOT_ID}
         hostId={HOST_ID}
         boundHere
