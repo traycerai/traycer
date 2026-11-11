@@ -41,7 +41,7 @@ jobs:
       - uses: ./.github/actions/bootstrap-ci-tools
         with:
           mirror-base-url: ${{ vars.CI_TOOLS_MIRROR_BASE_URL }}
-          bun-version: "1.4.4"
+          # No bun-version: the action asserts the Bun its checked-out ref's lock pins.
           tools: bun electron
       - name: Cache bun global install cache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
