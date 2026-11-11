@@ -27,8 +27,8 @@ import "@/index.css";
 /**
  * The real `HtmlArtifactFrame` showing a page at tree path `a/b` that links to
  * other artifacts in the tree, under a context that records what the frame
- * hands the app. Only a real browser can make a click trusted, and the frame
- * reports only the reader's own clicks.
+ * hands the app. Only a real browser can make a click trusted, and the prelude
+ * reports only trusted clicks.
  */
 interface ProbeWindow extends Window {
   __treeLinks?: {

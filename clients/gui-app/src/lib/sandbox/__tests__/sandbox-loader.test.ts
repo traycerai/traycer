@@ -465,10 +465,9 @@ describe("served artifact page links", () => {
     });
   }
 
-  // The app opens the target with no confirm, so only the reader's click is
-  // reported; jsdom cannot make one, so what it can show is that a click the
-  // page's script makes is dropped. The reader's own click, by mouse and by
-  // Enter, is in the browser spec.
+  // The prelude reports only a trusted click. jsdom cannot make one, so what
+  // it can show is that a click the page's script makes is dropped. A trusted
+  // click, by mouse and by Enter, is in the browser spec.
   it.each([
     ["a dispatched click", "dispatch"],
     ["the anchor's own click()", "click"],

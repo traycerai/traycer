@@ -342,34 +342,55 @@ describe("HtmlArtifactLinks", () => {
     },
   );
 
-  it("toasts for a plain file the tree lacks, without racing a workspace file of that name", async () => {
+  // The host does not resolve a loose markdown file from the `notes.md/index.md`
+  // spelling the resolver sends (T199), so the request is made and answers null.
+  it("toasts for a loose markdown file, asking for exactly the spelling the host cannot resolve, without racing a workspace file", async () => {
     mocks.fetchWorkspaceFileExists.mockResolvedValue(true);
     const open = mountFrame(IN_EPIC_TAB);
 
-    open(linkOn("../sibling/notes.txt"));
+    open(linkOn("../sibling/notes.md"));
     await vi.waitFor(() =>
       expect(mocks.toast).toHaveBeenCalledWith("Couldn't open link"),
     );
 
+    expect(mocks.resolveArtifactByPath.mock.calls).toEqual([
+      [
+        expect.objectContaining({
+          filePath: "epics/epic-1/artifacts/a/sibling/notes.md/index.md",
+        }),
+      ],
+    ]);
     expect(mocks.fetchWorkspaceFileExists).not.toHaveBeenCalled();
     expect(mocks.openTile).not.toHaveBeenCalled();
   });
 
-  it("opens a plain file that is an artifact of the tree, without probing the workspace", async () => {
-    mocks.resolveArtifactByPath.mockResolvedValue(FOUND);
-    mocks.fetchWorkspaceFileExists.mockResolvedValue(true);
-    const open = mountFrame(IN_EPIC_TAB);
+  it.each([
+    ["a loose html file", "../sibling/report.html", "a/sibling/report.html"],
+    [
+      "a file inside an html artifact's folder, which the host answers with the owning artifact",
+      "../report/shots/a.png",
+      "a/report/shots/a.png",
+    ],
+  ])(
+    "opens %s, asking the host for exactly its spelling and not probing the workspace",
+    async (_label, href, treePath) => {
+      const filePath = `epics/epic-1/artifacts/${treePath}/index.md`;
+      mocks.resolveArtifactByPath.mockImplementation((args) =>
+        Promise.resolve(args.filePath === filePath ? FOUND : null),
+      );
+      mocks.fetchWorkspaceFileExists.mockResolvedValue(true);
+      const open = mountFrame(IN_EPIC_TAB);
 
-    open(linkOn("../sibling/notes.txt"));
-    await vi.waitFor(() => expect(mocks.openTile).toHaveBeenCalled());
+      open(linkOn(href));
+      await vi.waitFor(() => expect(mocks.openTile).toHaveBeenCalled());
 
-    expect(mocks.resolveArtifactByPath).toHaveBeenCalledWith(
-      expect.objectContaining({
-        filePath: "epics/epic-1/artifacts/a/sibling/notes.txt/index.md",
-      }),
-    );
-    expect(mocks.fetchWorkspaceFileExists).not.toHaveBeenCalled();
-  });
+      expect(mocks.resolveArtifactByPath.mock.calls).toEqual([
+        [expect.objectContaining({ filePath })],
+      ]);
+      expect(mocks.fetchWorkspaceFileExists).not.toHaveBeenCalled();
+      expect(mocks.toast).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     [

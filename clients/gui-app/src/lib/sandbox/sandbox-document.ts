@@ -762,10 +762,10 @@ function bootstrapMain(config: BootstrapConfig): void {
     // leads nowhere else and is dropped. Either way it never reaches
     // `ui/open-link`, whose `https:` it shares on Android.
     //
-    // The app opens the target with no confirm, so only the reader's own
-    // click counts: page script can click an anchor (`click()`,
-    // `dispatchEvent`) but cannot make that event trusted, and its click is
-    // dropped. Enter on a focused link is a trusted click.
+    // Only a trusted click is reported, so a page that calls `click()` or
+    // `dispatchEvent` opens nothing; Enter on a focused link is trusted.
+    // That is no proof the reader clicked: the page's own script can read
+    // the nonce and post this report itself.
     if (
       config.artifactPage !== null &&
       url.protocol === location.protocol &&

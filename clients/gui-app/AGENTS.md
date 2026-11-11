@@ -380,9 +380,10 @@ frame.contentWindow` (the origin is always `"null"`), armed by the loader's
   `McpAppRpc` seam (`lib/sandbox/mcp-app-rpc.ts`).
 - **Links.** Every `ui/open-link` shows `SandboxLinkConfirm` (D42), on every
   client: the frame cannot prove the reader clicked. Never open a frame's link
-  without it. The one exception is a link into the artifacts tree from a proven
-  artifact page, which opens in the app without the confirm, and only on a
-  trusted click. Anything that leaves the app stays behind the confirm.
+  without it. The one exception: a link from an artifact page into this Epic's
+  artifacts tree opens in an app tile without the confirm. The app cannot prove
+  that click either, so the path must never reach anything outside the tree (no
+  workspace file, no other Epic, no URL). Every other frame link keeps it.
 - **Fullscreen** (`lib/sandbox/overlay-owner.ts`). One TOP-LAYER SURFACE per
   window, counting both a fullscreen app and an expanded artifact
   (`components/artifacts/artifact-expansion.tsx`), so the two are mutually
