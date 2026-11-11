@@ -40,7 +40,8 @@ vi.mock("react-virtuoso", () => ({
     readonly role: string | undefined;
     readonly totalCount: number | undefined;
     readonly itemContent:
-      ((index: number, item: undefined) => ReactNode) | undefined;
+      | ((index: number, item: undefined) => ReactNode)
+      | undefined;
   }) => (
     <div id={props.id} role={props.role}>
       {Array.from({ length: props.totalCount ?? 0 }, (_, index) => (
