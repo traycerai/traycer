@@ -28,6 +28,7 @@ const SKIP_DIR_NAMES = new Set([
   ".git",
   "__tests__",
   "__fixtures__",
+  "test-fixtures",
 ]);
 
 const FACTORY_NAMES = new Set([
@@ -974,8 +975,15 @@ describe("static registry tripwire", () => {
     ).toEqual([{ sourceFile: "inline.mjs", kind: "unary-rpc" }]);
   });
 
-  it("the lister's filter rejects a __fixtures__ path", () => {
+  it("the lister's filter rejects fixture directories by exact segment", () => {
     expect(shouldSkipListedPath("src/__fixtures__/registry.ts")).toBe(true);
+    expect(
+      shouldSkipListedPath("clients/shared/test-fixtures/dial-gate-harness.ts"),
+    ).toBe(true);
+    expect(shouldSkipListedPath("src/test-fixtures-extra/registry.ts")).toBe(
+      false,
+    );
+    expect(shouldSkipListedPath("src/test-fixtures.ts")).toBe(false);
     expect(shouldSkipListedPath("protocol/src/auth/registry.ts")).toBe(false);
   });
 
