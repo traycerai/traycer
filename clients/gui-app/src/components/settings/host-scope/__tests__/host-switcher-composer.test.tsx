@@ -7,6 +7,10 @@ import {
   screen,
   within,
 } from "@testing-library/react";
+import type {
+  HostListItem,
+  HostOwnerPrincipal,
+} from "@traycer/protocol/host/host-status";
 import { HostSwitcher } from "@/components/settings/host-scope/host-switcher";
 import type { HostSwitcherComposerMode } from "@/components/settings/host-scope/host-switcher";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -31,6 +35,11 @@ vi.mock("@/lib/sandboxes/sandbox-wake", () => ({
 import { wakeSandboxOnPick } from "@/lib/sandboxes/sandbox-wake";
 
 const VIEWER = "user-me";
+const TEAM_A: HostOwnerPrincipal = {
+  kind: "team",
+  id: "team-a",
+  name: "Alpha",
+};
 
 /** Calls in the order they happened, across the composer and the surface. */
 const calls: string[] = [];
@@ -74,6 +83,37 @@ function sandboxHost(
       teamOwned: true,
       ...overrides,
     },
+  });
+}
+
+function physicalTeamHost(hostId: string): HostScopeOption {
+  const item: HostListItem = {
+    hostId,
+    displayName: hostId,
+    platform: "linux-x64",
+    kind: "machine",
+    publicKey: "pk",
+    createdAt: new Date(0).toISOString(),
+    updatePolicy: "manual",
+    status: {
+      connectivity: "connectable",
+      viewerReachability: "unknown",
+      clientCloud: "ok",
+      updateState: "current",
+      appVersion: "1.4.2",
+      lastSeenAt: null,
+    },
+    owner: TEAM_A,
+  };
+  return hostScopeOptionFixture({
+    hostId,
+    name: hostId,
+    isLocalMachine: false,
+    isActive: false,
+    connectable: true,
+    kind: "machine",
+    item,
+    sandbox: null,
   });
 }
 
@@ -260,6 +300,29 @@ describe("<HostSwitcher /> composer mode picks", () => {
 });
 
 describe("<HostSwitcher /> composer mode groups", () => {
+  it("keeps a physical team computer in its team group and lets the composer pick it", () => {
+    const teamMachine = physicalTeamHost("team-machine");
+    renderSwitcher({
+      hosts: [LAPTOP, AWAKE, teamMachine],
+      composer: composerMode({}),
+      intent: "pin",
+    });
+
+    const team = screen.getByTestId("settings-host-switcher-team-team-a");
+    expect(team.contains(row("team-machine"))).toBe(true);
+    expect(
+      screen.getByTestId("host-switcher-yours").contains(row("team-machine")),
+    ).toBe(false);
+    expect(
+      screen
+        .getByTestId("host-switcher-sandboxes-you-started")
+        .contains(row("team-machine")),
+    ).toBe(false);
+
+    fireEvent.click(row("team-machine"));
+    expect(calls).toEqual(["pick:team-machine", "select:team-machine"]);
+  });
+
   it("lists Yours, then Sandboxes you started collapsed behind `N · M awake`", () => {
     renderSwitcher({
       hosts: [LAPTOP, AWAKE, SUSPENDED],

@@ -887,12 +887,15 @@ function HostSwitcherGroups(props: {
           key={team.teamId}
           title={team.teamName}
           countLabel={String(
-            team.sandboxes.length + team.agentSandboxes.length,
+            team.computers.length +
+              team.sandboxes.length +
+              team.agentSandboxes.length,
           )}
           defaultOpen
           forceOpen={props.searching}
           testId={`settings-host-switcher-team-${team.teamId}`}
         >
+          {team.computers.map(props.renderRow)}
           {team.sandboxes.map(props.renderRow)}
           {team.agentSandboxes.length === 0 ? null : (
             <HostSwitcherCollapsible
@@ -913,7 +916,8 @@ function HostSwitcherGroups(props: {
 
 /**
  * The composer mode's groups: `In this task` (in-task pickers), `Yours`,
- * `Sandboxes you started` collapsed behind its count, then the New sandbox
+ * team computers under their team names, `Sandboxes you started` collapsed
+ * behind its count, then the New sandbox
  * group headed by the defining line.
  */
 function HostSwitcherComposerGroups(props: {
@@ -937,11 +941,20 @@ function HostSwitcherComposerGroups(props: {
   // A host the task already uses is listed once, under In this task.
   const yours = groups.yours.filter((host) => !inTaskIds.has(host.hostId));
   const started = groups.started.filter((host) => !inTaskIds.has(host.hostId));
+  const teams = groups.teams
+    .map((team) => ({
+      ...team,
+      computers: team.computers.filter((host) => !inTaskIds.has(host.hostId)),
+    }))
+    .filter((team) => team.computers.length > 0);
   const noHostMatches =
     props.search.trim().length > 0 &&
-    ![...inTask, ...yours, ...started].some((host) =>
-      composerHostMatches(host, props.search),
-    );
+    ![
+      ...inTask,
+      ...yours,
+      ...started,
+      ...teams.flatMap((team) => team.computers),
+    ].some((host) => composerHostMatches(host, props.search));
   return (
     <>
       {noHostMatches ? <HostSwitcherNoMatch search={props.search} /> : null}
@@ -961,6 +974,15 @@ function HostSwitcherComposerGroups(props: {
           {yours.map(props.renderRow)}
         </CommandGroup>
       )}
+      {teams.map((team) => (
+        <CommandGroup
+          key={team.teamId}
+          heading={team.teamName}
+          data-testid={`settings-host-switcher-team-${team.teamId}`}
+        >
+          {team.computers.map(props.renderRow)}
+        </CommandGroup>
+      ))}
       {started.length === 0 ? null : (
         <HostSwitcherSandboxGroup
           title={SANDBOXES_YOU_STARTED_LABEL}
