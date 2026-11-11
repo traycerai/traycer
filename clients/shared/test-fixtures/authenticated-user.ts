@@ -7,6 +7,9 @@
  */
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
 
+/** The id of the user every default fixture, and every context built from it, belongs to. */
+export const AUTHENTICATED_USER_FIXTURE_ID = "user-fixture-1";
+
 /**
  * Returns a deeply-populated AuthenticatedUser fixture.
  * Pass overrides to customise individual fields per test.
@@ -17,7 +20,7 @@ export function createAuthenticatedUserFixture(
   const effectiveOverrides = overrides ?? {};
   const base: AuthenticatedUser = {
     user: {
-      id: "user-fixture-1",
+      id: AUTHENTICATED_USER_FIXTURE_ID,
       name: "Test User",
       providerId: "github|12345",
       providerHandle: "testuser",
@@ -33,7 +36,7 @@ export function createAuthenticatedUserFixture(
     } as AuthenticatedUser["user"],
     userSubscription: {
       id: "sub-fixture-1",
-      userID: "user-fixture-1",
+      userID: AUTHENTICATED_USER_FIXTURE_ID,
       orgID: null,
       teamID: null,
       customerId: "cus_fixture1",

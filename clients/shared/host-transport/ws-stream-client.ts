@@ -19,7 +19,11 @@ import {
   MissingBearerTokenForOpenFrameError,
   type HostEndpointProvider,
 } from "./ws-rpc-client";
-import type { BearerSourceProvider } from "@traycer-clients/shared/auth/bearer-source";
+import {
+  bearerSourceForUser,
+  cloudVerdictForUser,
+  type BearerSourceProvider,
+} from "@traycer-clients/shared/auth/bearer-source";
 import { readAccessTokenExpiryMs } from "@traycer-clients/shared/auth/jwt-exp";
 import type {
   RevalidateOutcome,
@@ -77,6 +81,7 @@ import type {
   StreamWebSocketMessageEvent,
 } from "./ws-stream-factory";
 import type { WebSocketCloseEvent, WebSocketErrorEvent } from "./ws-factory";
+import { whenDialStarted } from "@traycer/protocol/host-transport/websocket";
 import type { IntervalHandle, TimerHandle } from "./timer-handle";
 import type { ReconnectAllOptions } from "./host-stream-client";
 import type { AvailabilityRecoveryKind } from "./availability-recovery-kind";
@@ -105,6 +110,18 @@ export interface WsStreamClientOptions<
    * confusing two hosts would matter. `null` simply declines the seed.
    */
   readonly hostId: string | null;
+  /**
+   * The user this client speaks for, for its whole life. Every read it makes
+   * of the live account answers only for this user: a bearer of any other
+   * identity reads as none at each dial, open, credential push and openAck
+   * reconcile; the cloud verdict reads `false` while the live bearer is not
+   * this user's; and no host-credential mint starts while it is not.
+   *
+   * Required, not taken from the first bearer the client reads: every owner
+   * builds a client for a user it already knows, and the first read can come
+   * after a switch (a lazy client's first subscribe) or find no bearer.
+   */
+  readonly userId: string;
   readonly endpoint: HostEndpointProvider;
   readonly bearer: BearerSourceProvider;
   /**
@@ -302,6 +319,34 @@ let nextStreamClientId = 1;
  */
 let streamSessionSeq = 0;
 
+/**
+ * A stream dial timeout is reachability evidence, counted once per ROUND: every
+ * stream dial to a host granted before the last timeout counted for that host.
+ * One stall catches every stream dialing through it, and counting each would
+ * let a single stall reach the death streak by itself. A host that never
+ * answers still counts again, once its redials are granted after the counted
+ * timeout. Per process, so each window counts its own rounds.
+ */
+let streamDialGrantSeq = 0;
+const countedStreamDialTimeoutThrough = new Map<string, number>();
+
+function reportStreamDialTimeout(
+  evidence: TransportEvidenceReporter,
+  hostId: string,
+  grantSeq: number,
+): void {
+  const attemptId = `local-stream:d${grantSeq}`;
+  const countedThrough = countedStreamDialTimeoutThrough.get(hostId);
+  if (countedThrough !== undefined && grantSeq <= countedThrough) {
+    // Still one outcome per attempt, as the unary dial reports; this one says
+    // nothing the counted timeout of its round did not.
+    evidence.reportDialIndeterminate(hostId, attemptId, "local-ws");
+    return;
+  }
+  countedStreamDialTimeoutThrough.set(hostId, streamDialGrantSeq);
+  evidence.reportDialTimeout(hostId, attemptId, "local-ws");
+}
+
 export class WsStreamClient<
   Registry extends VersionedStreamRpcRegistry,
 > implements IStreamClient<Registry> {
@@ -314,6 +359,21 @@ export class WsStreamClient<
   readonly instanceId: string;
 
   private readonly options: WsStreamClientOptions<Registry>;
+  /**
+   * `options.bearer`, bound to `options.userId`. Every session this client
+   * owns reads through it at each dial, open, credential push and openAck
+   * reconcile. The provider is usually a live read of the current context, so
+   * after an account switch it can return the new user lease while this
+   * client is still held; such a bearer reads as none and takes the existing
+   * missing-bearer paths, which report no host evidence.
+   */
+  private readonly bearer: BearerSourceProvider;
+  /**
+   * `options.cloudAuthorized`, bound to `options.userId`: `false` while the
+   * live bearer is not this client's user. Every session reads it at its open
+   * frame, at both openAck reconciles and at every verdict push.
+   */
+  private readonly cloudAuthorized: (() => boolean) | undefined;
   /**
    * Serialized once here rather than per session: every member is a process
    * constant, and this client hands the same value to every session it owns
@@ -433,6 +493,12 @@ export class WsStreamClient<
 
   constructor(options: WsStreamClientOptions<Registry>) {
     this.options = options;
+    this.bearer = bearerSourceForUser(options.bearer, options.userId);
+    const cloudAuthorized = options.cloudAuthorized;
+    this.cloudAuthorized =
+      cloudAuthorized === undefined
+        ? undefined
+        : cloudVerdictForUser(options.bearer, options.userId, cloudAuthorized);
     this.clientIdentity = toClientHandshakeIdentity(options.clientIdentity);
     this.instanceId = `stream-client-${nextStreamClientId}`;
     nextStreamClientId += 1;
@@ -514,8 +580,8 @@ export class WsStreamClient<
       requiredSchemaVersion,
       registry: this.options.registry,
       endpoint: this.options.endpoint,
-      bearer: this.options.bearer,
-      cloudAuthorized: this.options.cloudAuthorized,
+      bearer: this.bearer,
+      cloudAuthorized: this.cloudAuthorized,
       auth: this.options.auth,
       clock: this.options.clock,
       evidence: this.options.evidence,
@@ -887,7 +953,7 @@ export class WsStreamClient<
     if (state === "active") {
       return;
     }
-    const mint = this.options.hostCredentialMint;
+    const mint = this.liveHostCredentialMint();
     if (mint === null) {
       return;
     }
@@ -906,6 +972,18 @@ export class WsStreamClient<
     }
     this.provisionAttemptedHostIds.add(hostId);
     void this.runMintFlow(mint, hostId, state);
+  }
+
+  /**
+   * The host-credential mint flow, or `null` while the live bearer is not this
+   * client's user. The flow mints with the live account's bearer and the
+   * credential travels on this client's connection, which opened as
+   * `options.userId`; after a switch it would be the next user's credential on
+   * that connection. What a mint already running at a switch returns is the
+   * flow's own decision.
+   */
+  private liveHostCredentialMint(): HostCredentialMintFlow | null {
+    return this.bearer() === null ? null : this.options.hostCredentialMint;
   }
 
   private async runMintFlow(
@@ -1043,7 +1121,7 @@ export class WsStreamClient<
       if (this.closed) {
         return;
       }
-      const mint = this.options.hostCredentialMint;
+      const mint = this.liveHostCredentialMint();
       if (mint === null) {
         return;
       }
@@ -2184,7 +2262,6 @@ class StreamSession<
       dialPriorityForMethod(this.config.method),
     );
     this.activeSocket = socket;
-    this.openFrameToken = token;
     this.openFrameHostId = selected.hostId;
     this.phase = "dialing";
     this.pendingBinaryEnvelope = null;
@@ -2221,13 +2298,26 @@ class StreamSession<
       this.handleSocketClose(event);
     };
 
-    this.dialTimer = setTimeout(() => {
-      this.dialTimer = null;
-      if (this.phase === "dialing") {
-        this.teardownSocket(4000, "dial-timeout");
-        this.onTransportDrop();
+    // Time queued for a dial slot says nothing about the host.
+    whenDialStarted(socket, () => {
+      if (socket !== this.activeSocket) {
+        return;
       }
-    }, this.config.dialTimeoutMs);
+      streamDialGrantSeq += 1;
+      const grantSeq = streamDialGrantSeq;
+      this.dialTimer = setTimeout(() => {
+        this.dialTimer = null;
+        if (this.phase === "dialing") {
+          reportStreamDialTimeout(
+            this.config.evidence,
+            selected.hostId,
+            grantSeq,
+          );
+          this.teardownSocket(4000, "dial-timeout");
+          this.onTransportDrop();
+        }
+      }, this.config.dialTimeoutMs);
+    });
   }
 
   private handleOpen(): void {
@@ -2243,12 +2333,16 @@ class StreamSession<
       return;
     }
 
-    const token = this.openFrameToken;
+    // Read the bearer again rather than reuse the one `connect` read: this
+    // dial may have waited for a slot (`ws-dial-gate.ts`), a wait with no
+    // bound of its own, and the bearer can rotate or expire during it.
+    const token = this.currentBearerToken();
     if (token === null) {
       this.teardownSocket(4000, "missing-open-token");
       this.onTransportDrop();
       return;
     }
+    this.openFrameToken = token;
     const manifest = buildStreamManifest(
       this.config.registry,
       CLIENT_SERVED_STREAM_MAJORS,
