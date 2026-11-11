@@ -10,13 +10,14 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { HostRpcRegistry } from "@/lib/host";
 
-import type {
-  PermissionMode,
-  HarnessModelSelection,
-  ModelOption,
-  ProviderId,
-  ReasoningLevel,
-  ServiceTier,
+import {
+  findSelectedModel,
+  type PermissionMode,
+  type HarnessModelSelection,
+  type ModelOption,
+  type ProviderId,
+  type ReasoningLevel,
+  type ServiceTier,
 } from "@/components/home/data/landing-options";
 import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
 import { useSurfaceActivity } from "@/components/home/composer/surface-activity-hooks";
@@ -49,8 +50,11 @@ import { useSandboxHostConfiguration } from "@/hooks/sandboxes/use-on-team-sandb
 import { useSandboxTraycerModels } from "@/hooks/sandboxes/use-sandbox-traycer-models-query";
 import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
+import { useHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
 import {
   hiddenModelProvidersForHarness,
+  modelProviderGroupId,
+  providersListReportsHiddenModelProviders,
   withoutHiddenModelProviders,
 } from "@/lib/providers/provider-hidden-model-providers";
 
@@ -299,34 +303,15 @@ export function useComposerToolbarStore(
   // was invisible while an inactive surface was also a hidden one, and became a
   // visible defect with split panes, where the unfocused pane stays on screen.
   const harnesses = harnessesQuery.data?.harnesses;
-  const providersQuery = useProvidersListForClient(hostClient, {
-    enabled: activityEnabled,
-    subscribed: activityEnabled,
+  const { models, modelsLoaded } = useShownToolbarModels({
+    store,
+    hostClient,
+    hostId,
+    harnessId,
+    modelsData,
+    activityEnabled,
+    seedIsAuthoritative,
   });
-  const hiddenModelProviders = useMemo(
-    () =>
-      hiddenModelProvidersForHarness(providersQuery.data?.providers, harnessId),
-    [providersQuery.data, harnessId],
-  );
-  // A chat's own settings keep the whole catalog, so a chat already on a model
-  // whose provider is hidden keeps it. Every other seed resolves against the
-  // models still shown, so a new composer's default, and a remembered model
-  // whose provider has since been hidden, land on a shown model instead.
-  const models = useMemo(
-    () =>
-      seedIsAuthoritative
-        ? (modelsData ?? EMPTY_MODELS)
-        : withoutHiddenModelProviders(
-            modelsData ?? EMPTY_MODELS,
-            hiddenModelProviders,
-          ),
-    [seedIsAuthoritative, modelsData, hiddenModelProviders],
-  );
-  // Explicit load status for the CURRENT `harnessId`'s models query, threaded to
-  // the store so it can tell "loading" from "loaded empty" (the query is keyed
-  // on `harnessId`, so `data` resets to undefined during a cross-harness switch
-  // until the new harness's models land). Never inferred from `models.length`.
-  const modelsLoaded = modelsData !== undefined;
   const keepsUnavailablePick =
     useSandboxHostConfiguration(hostId) !== null || sandboxRunTarget !== null;
   // Before the catalog push below: a stage's push reads these to keep the pick
@@ -469,6 +454,92 @@ function useToolbarModelsData(input: {
   return {
     models: cloudTraycer ? cloudModelsQuery.data : modelsQuery.data?.models,
     failed: selectedQuery.isError && selectedQuery.data === undefined,
+  };
+}
+
+/**
+ * The models the store resolves against once hidden model providers are taken
+ * out, and whether they count as loaded.
+ *
+ * Which providers are hidden is known once `providers.list` answers on a host
+ * whose line carries the list. Until then a catalog with provider groups
+ * counts as still loading: resolving it early would confirm, and record, a
+ * default whose provider turns out to be hidden. A host whose line has no
+ * list, a read that failed, and a catalog without groups hide nothing, so
+ * they never wait.
+ *
+ * A chat's own model stays listed when its provider is hidden, so the chat
+ * keeps running on it. Anything the composer resolves by itself (a new
+ * composer's default, a remembered model, the default of a provider switched
+ * to) lands on a model that is still shown.
+ */
+function useShownToolbarModels(input: {
+  readonly store: ComposerToolbarStore;
+  readonly hostClient: HostClient<HostRpcRegistry> | null;
+  readonly hostId: string | null;
+  readonly harnessId: ProviderId;
+  readonly modelsData: ReadonlyArray<ModelOption> | undefined;
+  readonly activityEnabled: boolean;
+  readonly seedIsAuthoritative: boolean;
+}): {
+  readonly models: ReadonlyArray<ModelOption>;
+  readonly modelsLoaded: boolean;
+} {
+  const {
+    store,
+    hostClient,
+    hostId,
+    harnessId,
+    modelsData,
+    activityEnabled,
+    seedIsAuthoritative,
+  } = input;
+  const providersQuery = useProvidersListForClient(hostClient, {
+    enabled: activityEnabled,
+    subscribed: activityEnabled,
+  });
+  const providersListCarriesHidden = providersListReportsHiddenModelProviders(
+    useHostMethodSchemaVersion(hostId, "providers.list"),
+  );
+  const hiddenModelProviders = useMemo(
+    () =>
+      hiddenModelProvidersForHarness(providersQuery.data?.providers, harnessId),
+    [providersQuery.data, harnessId],
+  );
+  const visibilityPending =
+    providersListCarriesHidden &&
+    providersQuery.data === undefined &&
+    !providersQuery.isError &&
+    (modelsData?.some((model) => modelProviderGroupId(model) !== null) ??
+      false);
+  const rawSelection = useStore(store, (s) => s.values.selection);
+  const chatModel = useMemo(
+    () =>
+      seedIsAuthoritative &&
+      rawSelection.modelSlug.length > 0 &&
+      modelsData !== undefined
+        ? findSelectedModel(modelsData, rawSelection)
+        : null,
+    [seedIsAuthoritative, rawSelection, modelsData],
+  );
+  const models = useMemo(
+    () =>
+      visibilityPending
+        ? EMPTY_MODELS
+        : withoutHiddenModelProviders(
+            modelsData ?? EMPTY_MODELS,
+            hiddenModelProviders,
+            chatModel,
+          ),
+    [visibilityPending, modelsData, hiddenModelProviders, chatModel],
+  );
+  // Explicit load status for the CURRENT `harnessId`'s models query, threaded to
+  // the store so it can tell "loading" from "loaded empty" (the query is keyed
+  // on `harnessId`, so `data` resets to undefined during a cross-harness switch
+  // until the new harness's models land). Never inferred from `models.length`.
+  return {
+    models,
+    modelsLoaded: modelsData !== undefined && !visibilityPending,
   };
 }
 

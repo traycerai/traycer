@@ -142,16 +142,12 @@ const EFFORT_FOOTER: ReasoningFooterConfig = {
 function renderPanel(input: {
   readonly ultracodeFooter: UltracodeFooterConfig | null;
   readonly reasoningFooter: ReasoningFooterConfig | null;
-  readonly hiddenCount: number;
-  readonly onOpenProviderSettings: (tab: string) => void;
   readonly visibleRows: ReadonlyArray<HarnessModelRow>;
   readonly hiddenModelProviders: ReadonlySet<string>;
 }): void {
   const {
     ultracodeFooter,
     reasoningFooter,
-    hiddenCount,
-    onOpenProviderSettings,
     visibleRows,
     hiddenModelProviders,
   } = input;
@@ -190,14 +186,13 @@ function renderPanel(input: {
     onProfileChange: noop,
     onRefreshCatalog: () => Promise.resolve(),
     hostUnavailableLabel: null,
-    onOpenProviderSettings,
+    onOpenProviderSettings: noop,
     onOpenHostUpdates: noop,
     onClosePicker: noop,
     listRef,
     listKey: "list",
     visibleRows,
     hiddenModelProviders,
-    hiddenModelProviderCount: hiddenCount,
     selectedRowId: "",
     effectiveActiveRowId: "",
     hoveredRowId: "",
@@ -229,28 +224,10 @@ function groupedRowOf(
   return { ...rowOf(harnessId), providerGroupId, providerGroupLabel };
 }
 
-it("shows the singular hidden-provider footer and opens its settings tab", () => {
-  const onOpenProviderSettings = vi.fn();
-  renderPanel({
-    ultracodeFooter: null,
-    reasoningFooter: null,
-    hiddenCount: 1,
-    onOpenProviderSettings,
-    visibleRows: [rowOf("claude")],
-    hiddenModelProviders: new Set(),
-  });
-  expect(screen.getByText("1 provider hidden")).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "Manage" }));
-  expect(onOpenProviderSettings).toHaveBeenCalledWith("modelProviders");
-  cleanup();
-});
-
 it("marks only the hidden provider group header in the model list", () => {
   renderPanel({
     ultracodeFooter: null,
     reasoningFooter: null,
-    hiddenCount: 0,
-    onOpenProviderSettings: noop,
     visibleRows: [
       groupedRowOf("claude", "openrouter", "OpenRouter"),
       groupedRowOf("claude", "anthropic", "Anthropic"),
@@ -289,8 +266,6 @@ describe("the picker panel's Ultracode row with the global switch off", () => {
         onChange,
       },
       reasoningFooter: EFFORT_FOOTER,
-      hiddenCount: 0,
-      onOpenProviderSettings: noop,
       visibleRows: [rowOf("claude")],
       hiddenModelProviders: new Set(),
     });
@@ -317,8 +292,6 @@ describe("the picker panel's Ultracode row with the global switch off", () => {
     renderPanel({
       ultracodeFooter: null,
       reasoningFooter: EFFORT_FOOTER,
-      hiddenCount: 0,
-      onOpenProviderSettings: noop,
       visibleRows: [rowOf("claude")],
       hiddenModelProviders: new Set(),
     });

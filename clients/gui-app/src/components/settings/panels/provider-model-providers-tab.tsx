@@ -1414,7 +1414,7 @@ function ModelProviderIdentity(props: {
   const { entry } = props;
   return (
     <div className="flex min-w-0 items-center gap-2.5">
-      <span className="grid size-6 shrink-0 place-items-center rounded-md bg-muted">
+      <span className="grid size-6 shrink-0 place-items-center rounded-md bg-foreground/8">
         {/* A user-declared provider has no brand, so it takes the generic
          * mark the same way an id we have no logo for does. */}
         <ModelProviderMark

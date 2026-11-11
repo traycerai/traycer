@@ -58,9 +58,9 @@ describe("handleHarnessModelPickerKeyDown", () => {
         >
           <input aria-label="Search models" />
           <button aria-label="Model row" aria-selected="true" role="option" />
-          <button aria-label="Manage" />
+          <button aria-label="Sign in" />
           <div role="menuitem" tabIndex={0}>
-            Manage menu item
+            Account menu item
           </div>
         </div>
       );
@@ -79,7 +79,7 @@ describe("handleHarnessModelPickerKeyDown", () => {
       bubbles: true,
       cancelable: true,
     });
-    view.getByLabelText("Manage").dispatchEvent(buttonEvent);
+    view.getByLabelText("Sign in").dispatchEvent(buttonEvent);
     expect(buttonEvent.defaultPrevented).toBe(false);
     expect(onSelectRow).toHaveBeenCalledTimes(2);
 

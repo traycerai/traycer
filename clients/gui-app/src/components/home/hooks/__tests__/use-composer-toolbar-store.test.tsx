@@ -103,7 +103,10 @@ vi.mock("@/hooks/sandboxes/use-sandbox-traycer-models-query", () => ({
   useSandboxTraycerModels: () => ({ data: undefined }),
 }));
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
-  useProvidersListForClient: () => ({ data: providerListData.value }),
+  useProvidersListForClient: () => ({
+    data: providerListData.value,
+    isError: false,
+  }),
 }));
 
 // `data` is returned regardless of `enabled`, because that is what TanStack
@@ -384,6 +387,173 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     await waitFor(() =>
       expect(chatComposer.result.current.getState().selection.modelSlug).toBe(
         "hidden-model",
+      ),
+    );
+  });
+
+  it("waits for providers.list on 10.10 before confirming or recording a hidden default", async () => {
+    seedDefault("opencode");
+    useSettingsStore.setState({
+      defaultSelection: {
+        harnessId: "opencode",
+        modelSlug: "hidden-model",
+        profileId: null,
+      },
+    });
+    harnessesData.value = { harnesses: [{ id: "opencode", available: true }] };
+    modelsData.value = {
+      models: [
+        {
+          ...modelOption("opencode", "hidden-model"),
+          metadata: { openCodeProviderId: "openrouter" },
+        },
+        {
+          ...modelOption("opencode", "visible-model"),
+          metadata: { openCodeProviderId: "anthropic" },
+        },
+      ],
+    };
+    recordNegotiatedHostManifest(TEST_HOST_ID, {
+      "providers.list": { major: 10, minor: 10 },
+    });
+    const onSettingsChange = vi.fn();
+    const { result, rerender } = renderHook(() =>
+      useComposerToolbarStore(
+        null,
+        { kind: "none" },
+        onSettingsChange,
+        catalogScope(false),
+      ),
+    );
+
+    await waitFor(() =>
+      expect(result.current.getState().selection.modelSlug).toBe(
+        "hidden-model",
+      ),
+    );
+    expect(result.current.getState().selectionCatalogConfirmed).toBe(false);
+    act(() => result.current.getState().setReasoning("high"));
+    expect(
+      useComposerHarnessMemoryStore
+        .getState()
+        .resolveHarnessSwitch(TEST_HOST_ID, "opencode").modelSlug,
+    ).toBe("");
+
+    providerListData.value = {
+      providers: [
+        { providerId: "opencode", hiddenModelProviders: ["openrouter"] },
+      ],
+    };
+    rerender();
+    await waitFor(() =>
+      expect(result.current.getState().selection.modelSlug).toBe(
+        "visible-model",
+      ),
+    );
+    act(() => {
+      result.current.getState().applyComposerSelection({
+        selection: {
+          harnessId: "opencode",
+          modelSlug: "visible-model",
+          profileId: null,
+        },
+        reasoning: "medium",
+        serviceTier: "",
+      });
+    });
+    expect(onSettingsChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ model: "visible-model" }),
+    );
+    expect(
+      useComposerHarnessMemoryStore.getState().byHost[TEST_HOST_ID]
+        ?.lastModelByHarness.opencode,
+    ).toBe("visible-model");
+  });
+
+  it("does not wait for providers.list on a host below 10.10", async () => {
+    seedDefault("opencode");
+    harnessesData.value = { harnesses: [{ id: "opencode", available: true }] };
+    modelsData.value = {
+      models: [
+        {
+          ...modelOption("opencode", "hidden-model"),
+          metadata: { openCodeProviderId: "openrouter" },
+        },
+        modelOption("opencode", "visible-model"),
+      ],
+    };
+    recordNegotiatedHostManifest(TEST_HOST_ID, {
+      "providers.list": { major: 10, minor: 9 },
+    });
+
+    const { result } = renderHook(() =>
+      useComposerToolbarStore(
+        null,
+        { kind: "none" },
+        null,
+        catalogScope(false),
+      ),
+    );
+    await waitFor(() =>
+      expect(result.current.getState().selection.modelSlug).toBe(
+        "hidden-model",
+      ),
+    );
+  });
+
+  it("switches an authoritative chat with no OpenCode slug to a shown model", async () => {
+    harnessesData.value = {
+      harnesses: [
+        { id: "claude", available: true },
+        { id: "opencode", available: true },
+      ],
+    };
+    providerListData.value = {
+      providers: [
+        { providerId: "opencode", hiddenModelProviders: ["openrouter"] },
+      ],
+    };
+    modelsData.value = {
+      models: [
+        {
+          ...modelOption("opencode", "hidden-model"),
+          metadata: { openCodeProviderId: "openrouter" },
+        },
+        {
+          ...modelOption("opencode", "visible-model"),
+          metadata: { openCodeProviderId: "anthropic" },
+        },
+      ],
+    };
+    recordNegotiatedHostManifest(TEST_HOST_ID, {
+      "providers.list": { major: 10, minor: 10 },
+    });
+    const { result } = renderHook(() =>
+      useComposerToolbarStore(
+        null,
+        {
+          kind: "authoritative",
+          settings: runSettings("claude", "claude-model"),
+        },
+        null,
+        catalogScope(false),
+      ),
+    );
+    await waitFor(() =>
+      expect(result.current.getState().catalog.models).toHaveLength(2),
+    );
+
+    act(() => {
+      result.current.getState().applyComposerSelection({
+        selection: { harnessId: "opencode", modelSlug: "", profileId: null },
+        reasoning: "",
+        serviceTier: "",
+      });
+    });
+
+    await waitFor(() =>
+      expect(result.current.getState().selection.modelSlug).toBe(
+        "visible-model",
       ),
     );
   });

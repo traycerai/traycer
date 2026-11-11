@@ -56,16 +56,22 @@ export function modelProviderHidden(
 }
 
 /**
- * The models whose provider is not hidden. When every model's provider is
- * hidden the list is returned whole, so a composer always has a model to
- * resolve against.
+ * The models whose provider is not hidden, plus `kept` (a chat's own model)
+ * where it is listed. Empty when every model's provider is hidden: the picker
+ * then says so, and the composer has no model to send with.
  */
 export function withoutHiddenModelProviders<
   M extends { readonly metadata: Readonly<Record<string, unknown>> },
->(models: ReadonlyArray<M>, hidden: ReadonlySet<string>): ReadonlyArray<M> {
+>(
+  models: ReadonlyArray<M>,
+  hidden: ReadonlySet<string>,
+  kept: M | null,
+): ReadonlyArray<M> {
   if (hidden.size === 0) return models;
-  const shown = models.filter((model) => !modelProviderHidden(model, hidden));
-  return shown.length === 0 ? models : shown;
+  const shown = models.filter(
+    (model) => model === kept || !modelProviderHidden(model, hidden),
+  );
+  return shown.length === models.length ? models : shown;
 }
 
 type ModelProviderGroupedRow = {
@@ -92,19 +98,4 @@ export function withoutHiddenModelProviderRows<
       !hidden.has(row.providerGroupId) ||
       row.id === selectedRowId,
   );
-}
-
-/** How many hidden model providers have models among `rows`. */
-export function hiddenModelProviderCount(
-  rows: ReadonlyArray<ModelProviderGroupedRow>,
-  hidden: ReadonlySet<string>,
-): number {
-  if (hidden.size === 0) return 0;
-  const present = new Set<string>();
-  for (const row of rows) {
-    if (row.providerGroupId !== null && hidden.has(row.providerGroupId)) {
-      present.add(row.providerGroupId);
-    }
-  }
-  return present.size;
 }
