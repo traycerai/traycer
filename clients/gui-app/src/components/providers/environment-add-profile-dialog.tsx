@@ -36,7 +36,8 @@ export function EnvironmentAddProfileDialog(
   const [started, setStarted] = useState(false);
   const [label, setLabel] = useState("New profile");
   const [color, setColor] = useState(props.initialAccentColor);
-  const [share, setShare] = useState(props.sharesSkillsAndPlugins);
+  const [shareTerminalTools, setShareTerminalTools] = useState(true);
+  const share = props.sharesSkillsAndPlugins && shareTerminalTools;
   const [completion, setCompletion] =
     useState<EnvironmentSignInCompletion | null>(null);
   const recolor = useRecolorProviderProfileForClient(props.client);
@@ -101,7 +102,9 @@ export function EnvironmentAddProfileDialog(
               <Checkbox
                 id={shareId}
                 checked={share}
-                onCheckedChange={(checked) => setShare(checked === true)}
+                onCheckedChange={(checked) =>
+                  setShareTerminalTools(checked === true)
+                }
                 disabled={started}
               />
               Use terminal skills and plugins on this computer

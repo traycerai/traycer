@@ -371,9 +371,8 @@ export function EnvironmentProfileSignIn(props: {
           kind: "failed",
           line: "Sign-in did not finish. Try again.",
         });
-    } finally {
-      setSubmitting(false);
     }
+    setSubmitting(false);
   };
   const cancel = (): void => {
     if (attempt.current !== null) release(attempt.current);
