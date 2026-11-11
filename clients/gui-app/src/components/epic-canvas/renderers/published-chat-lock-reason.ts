@@ -73,9 +73,9 @@ export function publishedChatLockReason(input: {
   readonly ownedByViewer: boolean;
   /**
    * Whether the owner is one of the viewer's team environments: a team
-   * sandbox's chat. It outranks `ownedByViewer`, whose foreign arm would call
-   * a team chat another collaborator's, and both reachability arms, which
-   * name a machine and promise a resume this copy is not waiting on.
+   * host's chat. It outranks `ownedByViewer`, whose foreign arm would call
+   * a team chat another collaborator's. A reachable team host keeps the
+   * same history and update facts as a reachable personal host.
    */
   readonly environmentOwned: boolean;
   /**
@@ -206,18 +206,17 @@ function publishedCopySentence(input: {
   readonly ownerName: string | null;
   readonly ownerLabel: string;
 }): string {
-  // A team environment's chat, ahead of the collaborator arm: it is no
-  // collaborator's, and its sandbox is what is out. Aligned with the
-  // dead-tile banner's environment sentence.
-  if (input.environmentOwned) {
-    return `This chat's sandbox isn't available — showing the last published copy.`;
+  // Team ownership does not identify the host's kind. Reachable hosts keep
+  // their history or update facts below instead of an unavailability claim.
+  if (input.environmentOwned && !input.ownerIsReachable) {
+    return `This chat's host isn't available — showing the last published copy.`;
   }
   // A collaborator's chat, checked before either reachability arm: every
   // clause below it is written for the viewer's own fleet (see the
   // `ownedByViewer` doc above) and turns false for a machine this account
   // cannot observe. Aligned with the dead-tile banner's foreign-owner
   // sentence, which sits directly above this footer.
-  if (!input.ownedByViewer) {
+  if (!input.environmentOwned && !input.ownedByViewer) {
     return `This agent belongs to ${collaboratorReference(input.ownerName)} — showing the last published copy.`;
   }
   if (!input.ownerIsReachable) {
@@ -250,10 +249,10 @@ function replicaCopySentence(input: {
 }): string {
   // Same precedence, same reason, as `publishedCopySentence`'s environment
   // and foreign arms.
-  if (input.environmentOwned) {
-    return `This chat's sandbox isn't available — showing this device's synced copy.`;
+  if (input.environmentOwned && !input.ownerIsReachable) {
+    return `This chat's host isn't available — showing this device's synced copy.`;
   }
-  if (!input.ownedByViewer) {
+  if (!input.environmentOwned && !input.ownedByViewer) {
     return `This agent belongs to ${collaboratorReference(input.ownerName)} — showing this device's synced copy.`;
   }
   if (!input.ownerIsReachable) {
