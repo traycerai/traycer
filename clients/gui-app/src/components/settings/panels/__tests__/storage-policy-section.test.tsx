@@ -153,10 +153,6 @@ async function chatsSwitch(): Promise<HTMLElement> {
   return screen.findByRole("switch", { name: "Chats" });
 }
 
-function artifactsSwitch(): HTMLElement {
-  return screen.getByRole("switch", { name: "Artifacts" });
-}
-
 function idleTasksSelect(): HTMLElement {
   return screen.getByRole("combobox", { name: `${IDLE_GROUP}: When` });
 }
@@ -215,7 +211,6 @@ describe("<StoragePolicySection />", () => {
 
     await settled();
     expect((await chatsSwitch()).getAttribute("aria-checked")).toBe("true");
-    expect(artifactsSwitch().getAttribute("aria-checked")).toBe("true");
     expect(idleTasksSelect().textContent).toContain(
       "When the disk is getting full",
     );
@@ -232,18 +227,13 @@ describe("<StoragePolicySection />", () => {
     await waitFor(() => {
       expectPut(
         PERSONAL_ENV,
-        {
-          chats: false,
-          artifacts: true,
-          idleTaskDays: null,
-          archivedChatHours: 4,
-        },
+        { chats: false, idleTaskDays: null, archivedChatHours: 4 },
         null,
       );
     });
   });
 
-  it("writes the whole stored value under the item's revision when Artifacts is switched off", async () => {
+  it("reads a value saved with the retired artifacts field and writes it back without the field", async () => {
     host.items = [
       storageItem(
         {
@@ -258,17 +248,16 @@ describe("<StoragePolicySection />", () => {
     renderSection(PERSONAL_SECTION);
     await settled();
 
-    await userEvent.click(artifactsSwitch());
+    expect((await chatsSwitch()).getAttribute("aria-checked")).toBe("true");
+    expect(idleTasksSelect().textContent).toContain("After 14 days");
+    expect(archivedChatsSelect().textContent).toContain("After 90 days");
+
+    await userEvent.click(await chatsSwitch());
 
     await waitFor(() => {
       expectPut(
         PERSONAL_ENV,
-        {
-          chats: true,
-          artifacts: false,
-          idleTaskDays: 14,
-          archivedChatHours: 2160,
-        },
+        { chats: false, idleTaskDays: 14, archivedChatHours: 2160 },
         4,
       );
     });
@@ -277,12 +266,7 @@ describe("<StoragePolicySection />", () => {
   it("writes the whole value under the item's revision when a task window is picked", async () => {
     host.items = [
       storageItem(
-        {
-          chats: true,
-          artifacts: false,
-          idleTaskDays: null,
-          archivedChatHours: 168,
-        },
+        { chats: true, idleTaskDays: null, archivedChatHours: 168 },
         6,
       ),
     ];
@@ -294,12 +278,7 @@ describe("<StoragePolicySection />", () => {
     await waitFor(() => {
       expectPut(
         PERSONAL_ENV,
-        {
-          chats: true,
-          artifacts: false,
-          idleTaskDays: 14,
-          archivedChatHours: 168,
-        },
+        { chats: true, idleTaskDays: 14, archivedChatHours: 168 },
         6,
       );
     });
@@ -314,12 +293,7 @@ describe("<StoragePolicySection />", () => {
     await waitFor(() => {
       expectPut(
         PERSONAL_ENV,
-        {
-          chats: true,
-          artifacts: true,
-          idleTaskDays: null,
-          archivedChatHours: null,
-        },
+        { chats: true, idleTaskDays: null, archivedChatHours: null },
         null,
       );
     });
@@ -334,12 +308,7 @@ describe("<StoragePolicySection />", () => {
     await waitFor(() => {
       expectPut(
         PERSONAL_ENV,
-        {
-          chats: true,
-          artifacts: true,
-          idleTaskDays: null,
-          archivedChatHours: 168,
-        },
+        { chats: true, idleTaskDays: null, archivedChatHours: 168 },
         null,
       );
     });
@@ -369,7 +338,6 @@ describe("<StoragePolicySection />", () => {
     await waitFor(() => {
       expect(control.getAttribute("aria-checked")).toBe("false");
     });
-    expect(artifactsSwitch().getAttribute("aria-checked")).toBe("false");
     expect(archivedChatsSelect().textContent).toContain("Never");
     expect(idleTasksSelect().hasAttribute("disabled")).toBe(true);
     expect(screen.queryByText(/Applies on every host/)).toBeNull();
@@ -379,12 +347,7 @@ describe("<StoragePolicySection />", () => {
     await waitFor(() => {
       expectPut(
         PERSONAL_ENV,
-        {
-          chats: false,
-          artifacts: false,
-          idleTaskDays: null,
-          archivedChatHours: 168,
-        },
+        { chats: false, idleTaskDays: null, archivedChatHours: 168 },
         2,
       );
     });
@@ -396,9 +359,8 @@ describe("<StoragePolicySection />", () => {
 
     const idle = within(groupOf(IDLE_GROUP));
     expect(idle.getByRole("switch", { name: "Chats" })).toBeTruthy();
-    expect(idle.getByRole("switch", { name: "Artifacts" })).toBeTruthy();
     expect(idle.getByRole("combobox")).toBe(idleTasksSelect());
-    expect(idle.getAllByText(SWITCH_DESCRIPTION)).toHaveLength(2);
+    expect(idle.getAllByText(SWITCH_DESCRIPTION)).toHaveLength(1);
     const archived = within(groupOf(ARCHIVED_GROUP));
     expect(archived.getByRole("combobox")).toBe(archivedChatsSelect());
     expect(archived.queryByRole("switch")).toBeNull();
@@ -407,27 +369,17 @@ describe("<StoragePolicySection />", () => {
   it.each([
     {
       state: "nothing cleanable",
-      value: { chats: false, artifacts: false, archivedChatHours: null },
+      value: { chats: false, archivedChatHours: null },
       line: null,
     },
     {
-      state: "artifacts only",
-      value: { chats: false, artifacts: true, archivedChatHours: null },
-      line: APPLIES,
-    },
-    {
       state: "chats on",
-      value: { chats: true, artifacts: false, archivedChatHours: null },
+      value: { chats: true, archivedChatHours: null },
       line: FOOTNOTE,
     },
     {
       state: "archived chats only",
-      value: { chats: false, artifacts: false, archivedChatHours: 168 },
-      line: FOOTNOTE,
-    },
-    {
-      state: "artifacts and archived chats",
-      value: { chats: false, artifacts: true, archivedChatHours: 4 },
+      value: { chats: false, archivedChatHours: 168 },
       line: FOOTNOTE,
     },
   ])("draws the line under the groups for $state", async ({ value, line }) => {
@@ -440,34 +392,10 @@ describe("<StoragePolicySection />", () => {
     ).toBe(line);
   });
 
-  it("keeps both windows enabled while Chats is off and Artifacts is on", async () => {
+  it("disables only the task window while Chats is off", async () => {
     host.items = [
       storageItem(
-        {
-          chats: false,
-          artifacts: true,
-          idleTaskDays: null,
-          archivedChatHours: 720,
-        },
-        3,
-      ),
-    ];
-    renderSection(PERSONAL_SECTION);
-    await settled();
-
-    expect(idleTasksSelect().hasAttribute("disabled")).toBe(false);
-    expect(archivedChatsSelect().hasAttribute("disabled")).toBe(false);
-  });
-
-  it("disables only the task window while both switches are off", async () => {
-    host.items = [
-      storageItem(
-        {
-          chats: false,
-          artifacts: false,
-          idleTaskDays: null,
-          archivedChatHours: 720,
-        },
+        { chats: false, idleTaskDays: null, archivedChatHours: 720 },
         3,
       ),
     ];
@@ -503,15 +431,7 @@ describe("<StoragePolicySection />", () => {
 
   it("lists a stored idle window that is not a preset and shows it selected", async () => {
     host.items = [
-      storageItem(
-        {
-          chats: true,
-          artifacts: true,
-          idleTaskDays: 45,
-          archivedChatHours: 720,
-        },
-        5,
-      ),
+      storageItem({ chats: true, idleTaskDays: 45, archivedChatHours: 720 }, 5),
     ];
     renderSection(PERSONAL_SECTION);
     await settled();
@@ -528,12 +448,7 @@ describe("<StoragePolicySection />", () => {
     async ({ hours, shown }) => {
       host.items = [
         storageItem(
-          {
-            chats: true,
-            artifacts: true,
-            idleTaskDays: null,
-            archivedChatHours: hours,
-          },
+          { chats: true, idleTaskDays: null, archivedChatHours: hours },
           5,
         ),
       ];
@@ -565,15 +480,7 @@ describe("<StoragePolicySection />", () => {
   it("disables every control after a retired viewer role is decoded, even with a loaded policy", async () => {
     host.teamRole = "viewer";
     host.teamItems = [
-      storageItem(
-        {
-          chats: false,
-          artifacts: false,
-          idleTaskDays: 14,
-          archivedChatHours: 24,
-        },
-        3,
-      ),
+      storageItem({ chats: false, idleTaskDays: 14, archivedChatHours: 24 }, 3),
     ];
     renderSection(
       <StoragePolicySection pick={{ kind: "team", environmentId: TEAM_ENV }} />,
@@ -584,7 +491,6 @@ describe("<StoragePolicySection />", () => {
       expect(control.getAttribute("aria-checked")).toBe("false");
     });
     expect(control.hasAttribute("disabled")).toBe(true);
-    expect(artifactsSwitch().hasAttribute("disabled")).toBe(true);
     expect(idleTasksSelect().hasAttribute("disabled")).toBe(true);
     expect(archivedChatsSelect().hasAttribute("disabled")).toBe(true);
     await userEvent.click(control);
@@ -594,25 +500,12 @@ describe("<StoragePolicySection />", () => {
   it("reads and writes the picked team's environment, not Personal's", async () => {
     host.items = [
       storageItem(
-        {
-          chats: false,
-          artifacts: false,
-          idleTaskDays: null,
-          archivedChatHours: 720,
-        },
+        { chats: false, idleTaskDays: null, archivedChatHours: 720 },
         9,
       ),
     ];
     host.teamItems = [
-      storageItem(
-        {
-          chats: true,
-          artifacts: false,
-          idleTaskDays: 7,
-          archivedChatHours: null,
-        },
-        2,
-      ),
+      storageItem({ chats: true, idleTaskDays: 7, archivedChatHours: null }, 2),
     ];
     const pick: EnvironmentPick = { kind: "team", environmentId: TEAM_ENV };
     renderSection(<StoragePolicySection pick={pick} />);
@@ -624,12 +517,7 @@ describe("<StoragePolicySection />", () => {
     await waitFor(() => {
       expectPut(
         TEAM_ENV,
-        {
-          chats: false,
-          artifacts: false,
-          idleTaskDays: 7,
-          archivedChatHours: null,
-        },
+        { chats: false, idleTaskDays: 7, archivedChatHours: null },
         2,
       );
     });
