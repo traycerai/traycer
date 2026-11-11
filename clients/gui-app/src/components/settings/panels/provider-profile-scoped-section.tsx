@@ -21,6 +21,7 @@ import {
 } from "@/components/providers/provider-signin-availability";
 import { cn } from "@/lib/utils";
 import { ProviderOnHostOnlyLine } from "./provider-on-host-only-line";
+import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { EmbeddedProviderRateLimitForProvider } from "./provider-rate-limit-section";
 import { ProfileSummaryActions } from "./profile-summary-actions";
 import { ProfileEditDialog } from "./provider-profile-edit-dialog";
@@ -46,6 +47,24 @@ import {
 // has no picker leader scope, so every row opts out of the shortcut hint.
 function noProfileShortcutHint(): ProfileDropdownShortcutHint | null {
   return null;
+}
+
+function LocalProfileLocation(props: {
+  readonly providerId: string;
+  readonly profileId: string;
+  readonly hostName: string | null;
+}): ReactNode {
+  const inventory = useProvidersList({ enabled: true, subscribed: true });
+  const onlyHere = inventory.data?.onHostOnly?.some(
+    (entry) =>
+      entry.providerId === props.providerId &&
+      entry.profileId === props.profileId,
+  );
+  return onlyHere === true ? (
+    <p className="text-ui-xs text-muted-foreground">
+      On {props.hostName ?? "this host"} only.
+    </p>
+  ) : null;
 }
 
 function profileRateLimitFetchEligible(
@@ -380,11 +399,21 @@ export function ProviderProfileScopedSection(
           admissionByProfileId={null}
           showTerminalBadge={false}
         />
-        <ProviderOnHostOnlyLine
-          hostId={hostId}
-          providerId={state.providerId}
-          profileId={selectedProfile.profileId}
-        />
+        {selectedProfile.kind === "managed" &&
+          (state.providerId === "claude-code" ||
+          state.providerId === "codex" ? (
+            <LocalProfileLocation
+              providerId={state.providerId}
+              profileId={selectedProfile.profileId}
+              hostName={hostName}
+            />
+          ) : (
+            <ProviderOnHostOnlyLine
+              hostId={hostId}
+              providerId={state.providerId}
+              profileId={selectedProfile.profileId}
+            />
+          ))}
         <SelectedProfileRow
           state={state}
           profile={selectedProfile}
