@@ -56,6 +56,9 @@ const ATTACH_URL = "wss://relay.test/attach";
 const POOL_URL = "wss://pool.test/stream";
 const HOLDER_URL = "wss://holder.test/dial";
 const EMPTY_AD = new Uint8Array(0);
+/** The authn default and cap for an attach grant. */
+const GRANT_LIFETIME_SECONDS = 300;
+const GRANT_LIFETIME_MS = GRANT_LIFETIME_SECONDS * 1_000;
 
 /** Captured before fake timers: a real turn lets WebCrypto completions in. */
 const realSetImmediate = globalThis.setImmediate;
@@ -144,6 +147,7 @@ class Leg {
   onopen: (() => void) | null = null;
   onmessage: ((event: LegEvent) => void) | null = null;
   onclose: ((code: number, reason: string) => void) | null = null;
+  onerror: (() => void) | null = null;
   readonly params: URLSearchParams;
   closed = false;
   binarySends = 0;
@@ -207,8 +211,27 @@ class FakeRelay {
   readonly sessions: HostSession[] = [];
   readonly resumes: number[] = [];
   private nextSid = 1;
-  /** What a dial does once the gate has built its native: "hold" waits for the test. */
-  autoOpen: OpenBehavior | "hold" = "ack";
+  /**
+   * What a dial does once the gate has built its native: "hold" waits for the
+   * test, "fail" errors and closes it without ever opening, as a refused
+   * upgrade does.
+   */
+  autoOpen: OpenBehavior | "hold" | "fail" = "ack";
+  private readonly mints = new Map<
+    string,
+    { readonly at: number; readonly lifetimeMs: number }
+  >();
+
+  /** Remembers when a grant was minted, so the relay can refuse it once stale. */
+  recordMint(grant: string, at: number, expiresInSeconds: number): void {
+    this.mints.set(grant, { at, lifetimeMs: expiresInSeconds * 1_000 });
+  }
+
+  private rejectUpgrade(leg: Leg): void {
+    leg.closed = true;
+    leg.onerror?.();
+    leg.onclose?.(1006, "");
+  }
 
   get publicKey(): Uint8Array {
     return this.keys.publicKey;
@@ -228,6 +251,15 @@ class FakeRelay {
       );
     };
     leg.onclose = (code, reason) => native.fire("close", "", code, reason);
+    leg.onerror = () => native.fire("error", "", 0, "");
+    const grant = leg.params.get("grant");
+    const minted = grant === null ? undefined : this.mints.get(grant);
+    const stale =
+      minted !== undefined && Date.now() >= minted.at + minted.lifetimeMs;
+    if (stale || this.autoOpen === "fail") {
+      queueMicrotask(() => this.rejectUpgrade(leg));
+      return leg;
+    }
     if (this.autoOpen !== "hold") {
       const behavior = this.autoOpen;
       queueMicrotask(() => this.openLeg(leg, behavior));
@@ -504,11 +536,20 @@ class RecordingEvidence<
   /** The fake time of each refusal, in report order. */
   readonly refusals: number[] = [];
 
+  /** The attempt id and fake time of each indeterminate outcome. */
+  readonly indeterminates: {
+    readonly attemptId: string;
+    readonly at: number;
+  }[] = [];
+
   sessionEstablished(): void {}
   sessionLost(): void {}
   reportDialSuccess(): void {}
-  reportDialIndeterminate(): void {}
   reportRestartIntent(): void {}
+
+  reportDialIndeterminate(_hostId: string, attemptId: string): void {
+    this.indeterminates.push({ attemptId, at: Date.now() });
+  }
 
   reportDialRefusal(): void {
     this.refusals.push(Date.now());
@@ -547,7 +588,7 @@ interface RelayFixture {
   readonly grants: GrantCalls;
 }
 
-function countingGrants(): {
+function countingGrants(relay: FakeRelay): {
   readonly provider: AttachGrantProvider;
   readonly calls: GrantCalls;
 } {
@@ -556,9 +597,11 @@ function countingGrants(): {
     calls,
     provider: () => {
       calls.count += 1;
+      const grant = `grant-${calls.count}`;
+      relay.recordMint(grant, Date.now(), GRANT_LIFETIME_SECONDS);
       return Promise.resolve({
         kind: "ok" as const,
-        grant: { grant: "grant-jws", expiresInSeconds: 300 },
+        grant: { grant, expiresInSeconds: GRANT_LIFETIME_SECONDS },
       });
     },
   };
@@ -595,7 +638,7 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
 
   function buildRelayFixture(hostId: string): RelayFixture {
     const evidence = new RecordingEvidence<"remote-relay">();
-    const grants = countingGrants();
+    const grants = countingGrants(relay);
     let nextRequestId = 0;
     const session: Session = new RemoteSession({
       hostId,
@@ -754,5 +797,115 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     expect(relay.legs).toHaveLength(2);
     expect(relay.legs[1].claim).toBe(`${hostSession.sid}:${hostSession.key}`);
     expect(relay.sessions).toHaveLength(1);
+  });
+
+  it("retires a dial whose grant expired in the queue as indeterminate, then attaches on a fresh grant", async () => {
+    const holders = await holdEverySlot();
+    const { session, evidence, grants } = buildRelayFixture(
+      "host-expired-attach",
+    );
+    session.start();
+    await advanceUntil(() => hostDialGate.stats().queued === 1, 5_000);
+    const queuedAt = Date.now();
+    await step(GRANT_LIFETIME_MS + 1_000);
+    expect(refusalOffsets(evidence, queuedAt, 0)).toEqual([]);
+    expect(grants.count).toBe(1);
+
+    holders[0].fire("close", "", 1006, "released");
+    await advanceUntil(() => relay.legs.length === 1, 5_000);
+    await step(0);
+
+    expect(refusalOffsets(evidence, queuedAt, 0)).toEqual([]);
+    expect(evidence.indeterminates).toHaveLength(1);
+
+    await advanceUntil(() => grants.count === 2, 30_000);
+    await advanceUntil(() => session.isReady(), 30_000);
+
+    expect(refusalOffsets(evidence, queuedAt, 0)).toEqual([]);
+    expect(grants.count).toBe(2);
+  });
+
+  it("retires a claim dial whose grant expired in the queue as indeterminate, then claims again on a fresh grant", async () => {
+    const { session, evidence, grants } =
+      buildRelayFixture("host-expired-claim");
+    session.start();
+    await advanceUntil(() => session.isReady(), 5_000);
+    const hostSession = relay.host();
+    expect(grants.count).toBe(1);
+
+    const holders = await holdEverySlot();
+    relay.dropLeg(1006, "net");
+    await advanceUntil(() => hostDialGate.stats().queued === 1, 5_000);
+    const queuedAt = Date.now();
+    const reportedAtDrop = evidence.refusals.length;
+    const indeterminateAtDrop = evidence.indeterminates.length;
+    await step(GRANT_LIFETIME_MS + 1_000);
+    expect(refusalOffsets(evidence, queuedAt, reportedAtDrop)).toEqual([]);
+    expect(grants.count).toBe(2);
+
+    holders[0].fire("close", "", 1006, "released");
+    await advanceUntil(() => relay.legs.length === 2, 5_000);
+    await step(0);
+
+    expect(refusalOffsets(evidence, queuedAt, reportedAtDrop)).toEqual([]);
+    expect(evidence.indeterminates).toHaveLength(indeterminateAtDrop + 1);
+
+    await advanceUntil(() => relay.resumes.length === 1, 60_000);
+    await advanceUntil(() => session.isReady(), 5_000);
+
+    expect(refusalOffsets(evidence, queuedAt, reportedAtDrop)).toEqual([]);
+    expect(grants.count).toBe(3);
+    expect(relay.sessions).toHaveLength(1);
+    expect(relay.legs[relay.legs.length - 1].claim).toBe(
+      `${hostSession.sid}:${hostSession.key}`,
+    );
+  });
+
+  it("still reports a refusal when an admitted dial on a live grant fails before it opens", async () => {
+    relay.autoOpen = "fail";
+    const { session, evidence } = buildRelayFixture("host-failed-upgrade");
+    session.start();
+    await advanceUntil(() => relay.legs.length === 1, 5_000);
+    await step(0);
+
+    expect(evidence.refusals).toHaveLength(1);
+    expect(evidence.indeterminates).toEqual([]);
+  });
+
+  it("still reports a refusal when a live leg drops after its grant expired", async () => {
+    const { session, evidence } = buildRelayFixture("host-live-leg-drop");
+    session.start();
+    await advanceUntil(() => session.isReady(), 5_000);
+
+    await step(GRANT_LIFETIME_MS + 1_000);
+    expect(session.isReady()).toBe(true);
+    const reportedBeforeDrop = evidence.refusals.length;
+
+    relay.dropLeg(1006, "net");
+    await step(0);
+
+    expect(
+      evidence.refusals.length - reportedBeforeDrop,
+    ).toBeGreaterThanOrEqual(1);
+  });
+
+  it("still reports a refusal when a claim dial on a fresh grant fails before open, after the first grant expired", async () => {
+    const { session, evidence, grants } = buildRelayFixture(
+      "host-fresh-claim-fails",
+    );
+    session.start();
+    await advanceUntil(() => session.isReady(), 5_000);
+    await step(GRANT_LIFETIME_MS + 1_000);
+    expect(session.isReady()).toBe(true);
+    const grantsBeforeDrop = grants.count;
+
+    relay.autoOpen = "fail";
+    relay.dropLeg(1006, "net");
+    const reportedAtDrop = evidence.refusals.length;
+    await advanceUntil(() => relay.legs.length === 2, 5_000);
+    await step(0);
+
+    expect(grants.count).toBe(grantsBeforeDrop + 1);
+    expect(evidence.refusals.length).toBeGreaterThan(reportedAtDrop);
   });
 });
