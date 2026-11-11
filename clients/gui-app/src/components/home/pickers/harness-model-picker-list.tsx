@@ -190,11 +190,13 @@ function ProviderGroupHeader(props: {
   return (
     <div
       role="presentation"
-      className="flex items-center gap-1.5 px-2 pb-1 pt-2 text-overline font-medium uppercase text-muted-foreground/70"
+      className="flex items-center gap-1.5 px-2 pb-1 pt-2"
     >
-      <span className="truncate">{props.label}</span>
+      <span className="truncate text-overline font-medium uppercase text-muted-foreground/70">
+        {props.label}
+      </span>
       {props.hidden ? (
-        <Badge variant="muted" size="xs" className="normal-case">
+        <Badge variant="muted" size="xs">
           Hidden
         </Badge>
       ) : null}
