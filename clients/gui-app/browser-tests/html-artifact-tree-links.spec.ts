@@ -2,10 +2,10 @@ import { expect, test, type Page } from "@playwright/test";
 
 import { fixture } from "./support/fixtures.ts";
 
-// A link on an artifact's page to another artifact in the tree is reported to
-// the app only when the reader clicks it: the app opens the target with no
-// confirm, so a click that page script makes (`a.click()`) must not count.
-// Whether a click is trusted is something only a real browser decides.
+// The prelude reports a link on an artifact's page to another artifact in the
+// tree only on a trusted click, so a click that page script makes
+// (`a.click()`) reports nothing. Whether a click is trusted is something only
+// a real browser decides.
 
 test.use({ viewport: { width: 900, height: 700 }, actionTimeout: 10_000 });
 

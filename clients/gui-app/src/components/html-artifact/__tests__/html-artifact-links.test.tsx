@@ -403,11 +403,6 @@ describe("HtmlArtifactLinks", () => {
       "/C:/repo/secret.txt",
       "epics/epic-1/artifacts/C:/repo/secret.txt/index.md",
     ],
-    [
-      "a percent-encoded drive path",
-      "%43%3A%5Crepo%5Csecret.txt",
-      "epics/epic-1/artifacts/a/b/C:/repo/secret.txt/index.md",
-    ],
   ])(
     "asks only this Epic's tree about %s, and toasts when it is missing",
     async (_label, href, filePath) => {
@@ -431,18 +426,31 @@ describe("HtmlArtifactLinks", () => {
     [
       "a backslash after the origin",
       "https://artifact-a1--m1.traycer-artifact.invalid\\research/top/index.html",
+      ANDROID_PAGE,
     ],
     [
       "an extra slash after the scheme",
       "https:///artifact-a1--m1.traycer-artifact.invalid/research/top/index.html",
+      ANDROID_PAGE,
+    ],
+    [
+      "a leading backslash, which the frame reads as a slash",
+      "\\research/top/index.html",
+      ANDROID_PAGE,
+    ],
+    ["an encoded backslash", "%5Cresearch/top/index.html", TRAYCER_PAGE],
+    [
+      "encoded slashes, which the frame keeps as part of a name",
+      "..%2F..%2Ftop/index.html",
+      TRAYCER_PAGE,
     ],
   ])(
-    "toasts for %s on the page's own origin, with no lookup, probe or tile",
-    async (_label, href) => {
+    "toasts for %s, with no lookup, probe or tile",
+    async (_label, href, pageUrl) => {
       mocks.fetchWorkspaceFileExists.mockResolvedValue(true);
       const open = mountFrame(IN_EPIC_TAB);
 
-      open(linkAt(href, ANDROID_PAGE));
+      open(linkAt(href, pageUrl));
       await vi.waitFor(() =>
         expect(mocks.toast).toHaveBeenCalledWith("Couldn't open link"),
       );

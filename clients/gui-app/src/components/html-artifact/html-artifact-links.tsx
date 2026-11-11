@@ -16,10 +16,20 @@ import { HtmlArtifactLinkContext } from "./html-artifact-link-context";
  * artifact, so it is spelled as a markdown link to that artifact would be: by
  * the folder's `index.md`, which the resolver reads as the folder itself.
  */
-const ENTRY_DOCUMENT = /(^|[\\/])(?:index\.html|canvas\.json)$/u;
+const ENTRY_DOCUMENT = /(^|\/)(?:index\.html|canvas\.json)$/u;
+
+/**
+ * A separator the frame and the tree read differently. The frame's URL parser
+ * reads a backslash as `/` on an https page (Android) and as part of a name on
+ * a `traycer-artifact:` page, and reads `%5C` and `%2F` as part of a name; a
+ * tree path is decoded once and split at both. So on Android `\x` is read from
+ * the root by the frame and from the page's folder by the tree, and on every
+ * page `..%2F..%2Fx` walks up in the tree and not in the frame.
+ */
+const SEPARATOR_READ_OTHERWISE = /\\|%(?:2f|5c)/iu;
 
 /** An href that names an origin: a scheme, or a bare `//authority`. */
-const NAMES_ORIGIN = /^(?:[a-z][a-z\d+.-]*:|[\\/]{2})/iu;
+const NAMES_ORIGIN = /^(?:[a-z][a-z\d+.-]*:|\/\/)/iu;
 
 const parseUrl = (href: string, base: string | URL | undefined): URL | null => {
   try {
@@ -38,9 +48,10 @@ const parseUrl = (href: string, base: string | URL | undefined): URL | null => {
  * `https://artifact-a1--m1.traycer-artifact.invalid/research/index.html`), so
  * cutting `protocol//host` off the href leaves the path from the tree root.
  * The cut is made only where the text begins with exactly the origin the URL
- * parser vetted, then `/`, `?`, `#` or nothing, with no backslash anywhere;
- * otherwise the parser and the cut could name different places, so any other
- * spelling of this origin, and any other origin, is `null`.
+ * parser vetted, then `/`, `?`, `#` or nothing; otherwise the parser and the
+ * cut could name different places, so any other spelling of this origin, and
+ * any other origin, is `null`. The href holds no backslash: the caller refused
+ * it.
  */
 function hrefFromTreeRoot(href: string, pageUrl: string): string | null {
   if (!NAMES_ORIGIN.test(href)) return href;
@@ -50,8 +61,7 @@ function hrefFromTreeRoot(href: string, pageUrl: string): string | null {
     page === null ||
     target === null ||
     target.protocol !== page.protocol ||
-    target.host !== page.host ||
-    href.includes("\\")
+    target.host !== page.host
   )
     return null;
   for (const origin of [`${page.protocol}//${page.host}`, `//${page.host}`]) {
@@ -70,7 +80,9 @@ function hrefFromTreeRoot(href: string, pageUrl: string): string | null {
  * it. An href that names an artifact of this Epic on disk
  * (`…/epics/<id>/artifacts/…`, by markdown's rule) is read as the tree path it
  * names. The result is `null` for an href that names no place in this Epic's
- * tree: one that names no file, or another Epic's artifact.
+ * tree: one that names no file, or another Epic's artifact. It is `null` too
+ * for an href holding a separator the frame reads differently, whose place the
+ * two would disagree on.
  */
 function treeLinkFor(
   link: SandboxArtifactLink,
@@ -79,6 +91,7 @@ function treeLinkFor(
   readonly path: string;
   readonly folderChain: readonly string[];
 } | null {
+  if (SEPARATOR_READ_OTHERWISE.test(link.href)) return null;
   const href = hrefFromTreeRoot(link.href, link.pageUrl);
   if (href === null) return null;
   // A query or fragment addresses a place inside the target; the tile opens
