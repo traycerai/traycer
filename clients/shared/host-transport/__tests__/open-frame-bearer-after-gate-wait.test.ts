@@ -11,7 +11,6 @@ import {
 } from "@traycer-clients/shared/auth/bearer-source";
 import { mockLocalHostEntry } from "../../host-client/mock/mock-host-directory";
 import {
-  echoRegistry,
   FakeNativeWebSocket,
   GATE_SLOTS,
   holdEveryGateSlot,
@@ -26,6 +25,7 @@ import {
   userFixture,
   sentTokens,
 } from "../../test-fixtures/dial-gate-harness";
+import { echoRegistry } from "./__fixtures__/echo-registry";
 import { HostRpcError } from "../host-messenger";
 import type { StreamConnectionStatus } from "../i-stream-session";
 import { createWhatwgStreamWebSocketFactory } from "../whatwg-stream-ws-factory";

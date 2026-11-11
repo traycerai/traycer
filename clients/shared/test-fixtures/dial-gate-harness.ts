@@ -1,5 +1,4 @@
 import { expect, vi } from "vitest";
-import { z } from "zod";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { SERVES_EVERY_INSTALLED_MAJOR } from "@traycer/protocol/framework/capability-manifest";
@@ -8,10 +7,6 @@ import {
   identityFromAuthenticatedUser,
   type RequestContext,
 } from "@traycer/protocol/auth/request-context";
-import {
-  defineRpcContract,
-  defineVersionedRpcRegistry,
-} from "@traycer/protocol/framework/index";
 import type { BearerSourceProvider } from "@traycer-clients/shared/auth/bearer-source";
 import { DefaultRequestContextProvider } from "@traycer-clients/shared/auth/request-context-provider";
 import { createWhatwgWebSocketFactory } from "../host-transport/whatwg-ws-factory";
@@ -21,7 +16,7 @@ import { createAuthenticatedUserFixture } from "./authenticated-user";
 /**
  * Fixtures for tests that drive a real transport through the process-wide
  * dial gate over a fake global `WebSocket`: the fake socket, the gate-holder
- * setup, an echo contract, and the signed-in user helpers.
+ * setup, and the signed-in user helpers.
  */
 
 export const GATE_SLOTS = 6;
@@ -91,25 +86,6 @@ export class FakeNativeWebSocket {
     }
   }
 }
-
-const echoV10 = defineRpcContract({
-  method: "host.echo",
-  schemaVersion: { major: 1, minor: 0 } as const,
-  requestSchema: z.object({ message: z.string() }),
-  responseSchema: z.object({ echoed: z.string() }),
-});
-
-export const echoRegistry = defineVersionedRpcRegistry({
-  "host.echo": {
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: { contract: echoV10, upgradeFromPreviousVersion: null },
-      },
-      downgradePathsFromLatest: {},
-    },
-  },
-});
 
 export async function settle(): Promise<void> {
   await vi.advanceTimersByTimeAsync(0);
