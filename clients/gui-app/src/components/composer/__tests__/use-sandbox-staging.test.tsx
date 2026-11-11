@@ -693,6 +693,22 @@ describe("useSandboxStaging New rows", () => {
       expect(menu?.contains(document.activeElement)).toBe(true);
     });
     expect(readStagedSandbox(SURFACE)).toEqual(priorStage);
+
+    const command = document.querySelector('[data-slot="command"]');
+    expect(command?.contains(document.activeElement)).toBe(true);
+    try {
+      const arrowTarget = document.activeElement;
+      if (arrowTarget === null) throw new Error("expected focused picker");
+      fireEvent.keyDown(arrowTarget, { key: "ArrowDown" });
+      const enterTarget = document.activeElement;
+      if (enterTarget === null) throw new Error("expected focused picker");
+      fireEvent.keyDown(enterTarget, { key: "Enter" });
+      await screen.findByRole("heading", { name: "New acme sandbox" });
+    } finally {
+      const close = screen.queryByRole("button", { name: "Close" });
+      if (close !== null) fireEvent.click(close);
+    }
+    expect(readStagedSandbox(SURFACE)).toEqual(priorStage);
   });
 
   it("adds the own-settings line only for a known Local computer", () => {

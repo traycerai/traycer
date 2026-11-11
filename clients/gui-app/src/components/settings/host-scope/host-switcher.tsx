@@ -487,9 +487,18 @@ export function HostSwitcher(props: {
                   action={props.action}
                   composer={props.composer}
                   onPickNew={(configurationKey) => {
-                    // A retry sheet restores focus here when it closes, including
-                    // pointer picks on browsers that do not focus menu items.
-                    contentRef.current?.focus();
+                    // Keep the return target inside the keyboard menu without
+                    // focusing its search field on a touch-only pick.
+                    const command =
+                      contentRef.current?.querySelector<HTMLElement>(
+                        '[data-slot="command"]',
+                      ) ?? null;
+                    if (
+                      command !== null &&
+                      !command.contains(document.activeElement)
+                    ) {
+                      command.focus();
+                    }
                     if (props.composer?.onPickNew(configurationKey) !== false) {
                       setOpen(false);
                     }
