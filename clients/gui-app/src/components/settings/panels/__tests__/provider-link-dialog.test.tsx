@@ -35,9 +35,9 @@ import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ProvidersLinkCompleteRequestV11,
-  ProvidersLinkCompleteResponse,
-  ProvidersLinkRequestV11,
-  ProvidersLinkResponse,
+  ProvidersLinkCompleteResponseV12,
+  ProvidersLinkRequestV12,
+  ProvidersLinkResponseV12,
 } from "@traycer/protocol/host/environment-schemas";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { ProviderLinkDialog } from "@/components/settings/panels/provider-link-dialog";
@@ -64,23 +64,25 @@ const LINK_ID = "link-1";
 const SIGN_IN_URL = "https://claude.ai/oauth/authorize?state=abc";
 
 type LinkHandler = (
-  request: ProvidersLinkRequestV11,
-) => Promise<ProvidersLinkResponse>;
+  request: ProvidersLinkRequestV12,
+) => Promise<ProvidersLinkResponseV12>;
 type CompleteHandler = (
   request: ProvidersLinkCompleteRequestV11,
-) => Promise<ProvidersLinkCompleteResponse>;
+) => Promise<ProvidersLinkCompleteResponseV12>;
 
 const linkMock = vi.hoisted(() => ({
   link: vi.fn<LinkHandler>(),
   complete: vi.fn<CompleteHandler>(),
 }));
 
-const SIGN_IN_RESPONSE: ProvidersLinkResponse = {
+const SIGN_IN_RESPONSE: ProvidersLinkResponseV12 = {
   linkId: LINK_ID,
+  environmentProfileId: null,
   prompt: { kind: "sign_in_url", url: SIGN_IN_URL, codePrompt: "Code" },
 };
-const DEVICE_RESPONSE: ProvidersLinkResponse = {
+const DEVICE_RESPONSE: ProvidersLinkResponseV12 = {
   linkId: LINK_ID,
+  environmentProfileId: null,
   prompt: {
     kind: "device_code",
     verificationUrl: "https://auth.example.test/device",
@@ -88,19 +90,22 @@ const DEVICE_RESPONSE: ProvidersLinkResponse = {
     expiresAt: 1_900_000_000,
   },
 };
-const HANDOFF_RESPONSE: ProvidersLinkResponse = {
+const HANDOFF_RESPONSE: ProvidersLinkResponseV12 = {
   linkId: LINK_ID,
+  environmentProfileId: null,
   prompt: { kind: "local_handoff" },
 };
 
 function answer(
-  overrides: Partial<ProvidersLinkCompleteResponse>,
-): ProvidersLinkCompleteResponse {
+  overrides: Partial<ProvidersLinkCompleteResponseV12>,
+): ProvidersLinkCompleteResponseV12 {
   return {
     state: "pending",
     code: null,
     account: null,
     expectedAccount: null,
+    environmentProfileId: null,
+    profileId: null,
     ...overrides,
   };
 }
@@ -262,6 +267,8 @@ describe("the intro", () => {
       providerId: "claude-code",
       profileId: PROFILE_ID,
       environmentId: PERSONAL_ENV_ID,
+      createProfile: null,
+      replaceAccount: false,
     });
   });
 
@@ -275,6 +282,8 @@ describe("the intro", () => {
       providerId: "claude-code",
       profileId: null,
       environmentId: PERSONAL_ENV_ID,
+      createProfile: null,
+      replaceAccount: false,
     });
   });
 });
@@ -381,6 +390,8 @@ describe("a mismatch", () => {
       providerId: "claude-code",
       profileId: PROFILE_ID,
       environmentId: PERSONAL_ENV_ID,
+      createProfile: null,
+      replaceAccount: false,
     });
   });
 
@@ -398,6 +409,8 @@ describe("a mismatch", () => {
       providerId: "claude-code",
       profileId: null,
       environmentId: PERSONAL_ENV_ID,
+      createProfile: null,
+      replaceAccount: false,
     });
 
     linkMock.complete.mockResolvedValueOnce(
@@ -417,6 +430,8 @@ describe("a mismatch", () => {
       providerId: "claude-code",
       profileId: null,
       environmentId: PERSONAL_ENV_ID,
+      createProfile: null,
+      replaceAccount: false,
     });
   });
 });
@@ -522,6 +537,8 @@ describe("a device code", () => {
       providerId: "codex",
       profileId: PROFILE_ID,
       environmentId: PERSONAL_ENV_ID,
+      createProfile: null,
+      replaceAccount: false,
     });
     expect(dialogState()).toBe("device");
   });
@@ -596,6 +613,8 @@ describe("an expired sign-in", () => {
       providerId: "claude-code",
       profileId: PROFILE_ID,
       environmentId: PERSONAL_ENV_ID,
+      createProfile: null,
+      replaceAccount: false,
     });
   });
 });
@@ -649,6 +668,8 @@ describe("a refused start", () => {
       providerId: "claude-code",
       profileId: PROFILE_ID,
       environmentId: PERSONAL_ENV_ID,
+      createProfile: null,
+      replaceAccount: false,
     });
   });
 

@@ -48,6 +48,7 @@ const PASTED_CODE = "ONE-TIME-CODE-4821";
 const linkHandlers = {
   "providers.link": () => ({
     linkId: "link-1",
+    environmentProfileId: null,
     prompt: {
       kind: "sign_in_url" as const,
       url: "https://claude.ai/login",
@@ -59,6 +60,8 @@ const linkHandlers = {
     code: null,
     account: "ada@example.com",
     expectedAccount: null,
+    environmentProfileId: null,
+    profileId: null,
   }),
 } as const;
 
@@ -147,7 +150,13 @@ describe("ProviderLinkDialog", () => {
     await linkWithCode(harness);
 
     expect(harness.paramsOf("providers.link")).toEqual([
-      { providerId: "claude-code", profileId: null, environmentId: "env-a" },
+      {
+        providerId: "claude-code",
+        profileId: null,
+        environmentId: "env-a",
+        createProfile: null,
+        replaceAccount: false,
+      },
     ]);
     expect(harness.paramsOf("providers.linkComplete")).toEqual([
       { linkId: "link-1", code: PASTED_CODE, environmentId: "env-a" },
@@ -187,6 +196,7 @@ describe("ProviderLinkDialog", () => {
       ...linkHandlers,
       "providers.link": () => ({
         linkId: "link-2",
+        environmentProfileId: null,
         prompt: { kind: "local_handoff" as const },
       }),
       "providers.linkComplete": () => {
@@ -197,6 +207,8 @@ describe("ProviderLinkDialog", () => {
               code: null,
               account: null,
               expectedAccount: null,
+              environmentProfileId: null,
+              profileId: null,
             }
           : linkHandlers["providers.linkComplete"]();
       },
@@ -241,6 +253,8 @@ describe("ProviderLinkDialog", () => {
         code: null,
         account: "ada@example.com",
         expectedAccount: null,
+        environmentProfileId: null,
+        profileId: null,
       },
     ]);
     expect(harness.paramsOf("providers.linkComplete")).toEqual([
@@ -338,6 +352,7 @@ describe("ProviderLinkDialog", () => {
         ...linkHandlers,
         "providers.link": () => ({
           linkId: "link-3",
+          environmentProfileId: null,
           prompt: { kind: "local_handoff" as const },
         }),
       },
@@ -370,7 +385,13 @@ describe("ProviderLinkDialog", () => {
     await linkWithCode(harness);
 
     expect(harness.paramsOf("providers.link")).toEqual([
-      { providerId: "claude-code", profileId: null, environmentId: null },
+      {
+        providerId: "claude-code",
+        profileId: null,
+        environmentId: null,
+        createProfile: null,
+        replaceAccount: false,
+      },
     ]);
     expect(harness.paramsOf("providers.linkComplete")).toEqual([
       { linkId: "link-1", code: PASTED_CODE, environmentId: null },
