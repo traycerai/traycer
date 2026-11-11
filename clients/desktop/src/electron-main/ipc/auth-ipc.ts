@@ -55,6 +55,8 @@ import { mintTeamHostInstallTokenViaHttp } from "@traycer-clients/shared/host-cl
 import { mintExecutableWriteGrantViaHttp } from "@traycer-clients/shared/host-client/executable-write-grant";
 import { config } from "../../config";
 import type {
+  DesktopAuthSessionPendingReason,
+  DesktopAuthSessionRefusalReason,
   DesktopAuthSessionSetResult,
   DesktopAuthSessionSnapshot,
   DesktopAuthVerificationRevoked,
@@ -561,8 +563,40 @@ function registerSandboxControlPlaneIpc(bridge: RunnerIpcBridge): void {
   );
 }
 
+/**
+ * A sign-in main could not check yet. `generation` is the set's own, so a
+ * successful re-check commits it under the same fences as the set would have.
+ */
+interface PendingSessionCheck {
+  readonly snapshot: DesktopAuthSessionSnapshot;
+  readonly token: string;
+  readonly userId: string;
+  readonly generation: number;
+  timer: NodeJS.Timeout | null;
+}
+
+/**
+ * The pending reasons for which main holds the window's session unverified
+ * while it keeps checking. Each opens this machine's host only, and only when
+ * main's stored credentials carry the same user and token. Taking a reason out
+ * of this set stops that opening and leaves its re-check as it is.
+ */
+const HELD_LOCALLY_WHILE_PENDING: ReadonlySet<DesktopAuthSessionPendingReason> =
+  new Set<DesktopAuthSessionPendingReason>([
+    "key-source-unavailable",
+    "signing-key-unconfirmed",
+  ]);
+
+function isPendingReason(
+  reason: DesktopAuthSessionRefusalReason,
+): reason is DesktopAuthSessionPendingReason {
+  return (
+    reason === "key-source-unavailable" || reason === "signing-key-unconfirmed"
+  );
+}
+
 export function registerAuthIpc(bridge: RunnerIpcBridge): void {
-  registerLocalAuthSessionRestore(bridge);
+  const restoreLocalSession = registerLocalAuthSessionRestore(bridge);
   let retainedStepUpCredential: RetainedStepUpCredential | null = null;
   /**
    * The retained step-up bearer if it is still usable, dropping an expired one
@@ -827,26 +861,105 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
     now: () => Date.now(),
   });
 
+  // The one sign-in main is still checking, for every window: the newest set
+  // replaces it, and a revoke of its bearer or the bridge's disposal drops it.
+  let pendingCheck: PendingSessionCheck | null = null;
+  // Counts sets as they arrive. A set whose number is no longer the newest
+  // when its verification returns is an older intent and changes nothing.
+  let setSequence = 0;
+
+  const dropPendingCheck = (): void => {
+    if (pendingCheck === null) return;
+    if (pendingCheck.timer !== null) clearTimeout(pendingCheck.timer);
+    pendingCheck = null;
+  };
+  bridge.disposeFns.push(dropPendingCheck);
+
+  // Waits for the verifier's own cooldown: a check before it would answer
+  // from the same keys, and authn sees no more fetches than it does today.
+  function schedulePendingCheck(check: PendingSessionCheck): void {
+    const delayMs = Math.max(
+      0,
+      bearerVerifier.nextFetchAllowedAtMs() - Date.now(),
+    );
+    check.timer = setTimeout(() => {
+      check.timer = null;
+      void runPendingCheck(check);
+    }, delayMs);
+  }
+
+  async function runPendingCheck(check: PendingSessionCheck): Promise<void> {
+    if (pendingCheck !== check) return;
+    const reason = await bearerVerifier.verify(check.token, check.userId);
+    if (pendingCheck !== check) return;
+    if (reason !== null && isPendingReason(reason)) {
+      schedulePendingCheck(check);
+      return;
+    }
+    pendingCheck = null;
+    if (reason !== null) {
+      // Whatever main holds for it stays as it is; the window's next bearer
+      // is a new set.
+      log.warn("[auth] a pending auth session failed its check", { reason });
+      return;
+    }
+    const committed = bridge.authSession.setVerified(
+      check.snapshot,
+      check.generation,
+    );
+    log.info("[auth] verified a pending auth session", { committed });
+  }
+
   bridge.handleInvoke(
     RunnerHostInvoke.authSessionSet,
     async (_event, snapshot: unknown): Promise<DesktopAuthSessionSetResult> => {
       const parsed = parseDesktopAuthSession(snapshot);
+      setSequence += 1;
+      const sequence = setSequence;
+      // Any set is the newest intent: a sign-out, another account or a newer
+      // bearer replaces the sign-in main was still checking.
+      dropPendingCheck();
       if (parsed.token === null || parsed.profile === null) {
         // No bearer to verify: signing-in and signed-out are the renderer's
         // own UX states and carry nothing main can be made to speak for.
         bridge.authSession.set(parsed);
         return { outcome: "accepted" };
       }
+      const token = parsed.token;
+      const userId = parsed.profile.userId;
       // Taken before the await: this set is the newest intent from here until
       // another begins, and the JWKS round-trip is where a sibling window's
       // set (or sign-out) can overtake it. The commit below is dropped if a
       // newer one COMMITTED meanwhile - a newer set that was refused, or is
       // still verifying, supersedes nothing (`DesktopAuthSession.setVerified`).
       const generation = bridge.authSession.beginSet();
-      const reason = await bearerVerifier.verify(
-        parsed.token,
-        parsed.profile.userId,
-      );
+      const reason = await bearerVerifier.verify(token, userId);
+      if (reason !== null && isPendingReason(reason)) {
+        // A newer set owns what happens next; this one neither holds nor
+        // schedules anything.
+        if (sequence !== setSequence) return { outcome: "superseded" };
+        // Main's own stored credentials, never this window's word: the same
+        // rule a window's offline restore uses, so it grants this machine's
+        // host and nothing that speaks for the account.
+        const heldLocally =
+          HELD_LOCALLY_WHILE_PENDING.has(reason) &&
+          (await restoreLocalSession({ userId, token })) === "restored";
+        if (sequence !== setSequence) return { outcome: "superseded" };
+        const check: PendingSessionCheck = {
+          snapshot: parsed,
+          token,
+          userId,
+          generation,
+          timer: null,
+        };
+        pendingCheck = check;
+        schedulePendingCheck(check);
+        log.warn("[auth] could not check an auth session yet", {
+          reason,
+          heldLocally,
+        });
+        return { outcome: "pending", reason, heldLocally };
+      }
       if (reason !== null) {
         // The previous session - possibly a verified one - stays exactly as it
         // was. The reason is a statement about the token, never about who sent
@@ -874,6 +987,8 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
     RunnerHostInvoke.authSessionRevoke,
     (_event, rejectedToken: unknown, revocation: unknown) => {
       if (typeof rejectedToken !== "string") return;
+      // A bearer authn has refused is never worth checking again.
+      if (pendingCheck?.token === rejectedToken) dropPendingCheck();
       bridge.authSession.revokeVerification(rejectedToken);
       // Withdrawing main's verification protects what MAIN speaks for. It
       // does nothing for the other renderers: the fan-out above republishes

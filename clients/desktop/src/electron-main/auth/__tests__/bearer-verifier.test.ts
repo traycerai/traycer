@@ -148,9 +148,11 @@ describe("desktop bearer verifier", () => {
     const rotated = newKey.sign(userBearerClaims(USER_ID, nowMs + 60_000));
 
     // Inside the cooldown an unknown `kid` is not chased - the same bound the
-    // host runs with, so a forged `kid` cannot become a refetch storm.
+    // host runs with, so a forged `kid` cannot become a refetch storm. The
+    // set that stays silent about it was fetched before the rotation, so its
+    // silence is not a verdict.
     expect(await harness.verifier.verify(rotated, USER_ID)).toBe(
-      "unknown-signing-key",
+      "signing-key-unconfirmed",
     );
 
     harness.advance(61_000);
@@ -189,7 +191,7 @@ describe("desktop bearer verifier", () => {
     expect(harness.urls).toHaveLength(1);
   });
 
-  it("calls an unknown kid unknown once the live set is fresh again", async () => {
+  it("keeps an unknown kid unconfirmed after a failed refetch until a refetch answers", async () => {
     const key = createSigningKey("kid-1", "bearer");
     const harness = buildHarness([key.publicJwk], nowMs);
     const stranger = createSigningKey("kid-stranger", "bearer");
@@ -212,12 +214,127 @@ describe("desktop bearer verifier", () => {
       "key-source-unavailable",
     );
 
-    // Inside the cooldown there is no new attempt, and the set we hold is
-    // still the one that was confirmed live - so its silence is an answer.
+    // Inside the cooldown there is no new attempt. The set we hold is inside
+    // its max age again, so this is no outage - but a check that fetched
+    // nothing cannot call the `kid` unknown either.
     harness.advance(1_000);
+    expect(await harness.verifier.verify(strangerToken, USER_ID)).toBe(
+      "signing-key-unconfirmed",
+    );
+    expect(harness.urls).toHaveLength(2);
+
+    // A full cooldown after the failed attempt the refetch is made, and a set
+    // that still lacks the `kid` is the answer.
+    harness.serve([key.publicJwk]);
+    harness.advance(60_000);
     expect(await harness.verifier.verify(strangerToken, USER_ID)).toBe(
       "unknown-signing-key",
     );
+    expect(harness.urls).toHaveLength(3);
+  });
+
+  it("calls a kid missing from the set it just fetched unknown", async () => {
+    const key = createSigningKey("kid-1", "bearer");
+    const stranger = createSigningKey("kid-stranger", "bearer");
+    const harness = buildHarness([key.publicJwk], nowMs);
+
+    expect(
+      await harness.verifier.verify(
+        stranger.sign(userBearerClaims(USER_ID, nowMs + 60_000)),
+        USER_ID,
+      ),
+    ).toBe("unknown-signing-key");
+    expect(harness.urls).toHaveLength(1);
+  });
+
+  it("calls a kid missing from a cached set unconfirmed, without a fetch, inside the cooldown", async () => {
+    const key = createSigningKey("kid-1", "bearer");
+    const stranger = createSigningKey("kid-stranger", "bearer");
+    const harness = buildHarness([key.publicJwk], nowMs);
+
+    // Another verify fetched the set moments ago.
+    expect(
+      await harness.verifier.verify(
+        key.sign(userBearerClaims(USER_ID, nowMs + 60_000)),
+        USER_ID,
+      ),
+    ).toBeNull();
+    expect(harness.urls).toHaveLength(1);
+
+    harness.advance(1_000);
+    expect(
+      await harness.verifier.verify(
+        stranger.sign(userBearerClaims(USER_ID, nowMs + 60_000)),
+        USER_ID,
+      ),
+    ).toBe("signing-key-unconfirmed");
+    expect(harness.urls).toHaveLength(1);
+  });
+
+  it("allows the next key fetch one cooldown after a successful attempt", async () => {
+    const key = createSigningKey("kid-1", "bearer");
+    const stranger = createSigningKey("kid-stranger", "bearer");
+    const harness = buildHarness([key.publicJwk], nowMs);
+    const strangerToken = stranger.sign(
+      userBearerClaims(USER_ID, nowMs + 60_000),
+    );
+
+    harness.advance(5_000);
+    expect(
+      await harness.verifier.verify(
+        key.sign(userBearerClaims(USER_ID, nowMs + 60_000)),
+        USER_ID,
+      ),
+    ).toBeNull();
+    const attemptedAtMs = nowMs + 5_000;
+    expect(harness.verifier.nextFetchAllowedAtMs()).toBe(
+      attemptedAtMs + 60_000,
+    );
+
+    // One millisecond early the forced refetch is still skipped.
+    harness.advance(59_999);
+    expect(await harness.verifier.verify(strangerToken, USER_ID)).toBe(
+      "signing-key-unconfirmed",
+    );
+    expect(harness.urls).toHaveLength(1);
+
+    // At the allowed instant it is made, and the allowance moves with it.
+    harness.advance(1);
+    expect(await harness.verifier.verify(strangerToken, USER_ID)).toBe(
+      "unknown-signing-key",
+    );
+    expect(harness.urls).toHaveLength(2);
+    expect(harness.verifier.nextFetchAllowedAtMs()).toBe(
+      attemptedAtMs + 60_000 + 60_000,
+    );
+  });
+
+  it("allows the next key fetch one cooldown after a failed attempt", async () => {
+    const key = createSigningKey("kid-1", "bearer");
+    const harness = buildHarness([key.publicJwk], nowMs);
+    const token = key.sign(userBearerClaims(USER_ID, nowMs + 10 * 60_000));
+    harness.fail();
+
+    harness.advance(5_000);
+    expect(await harness.verifier.verify(token, USER_ID)).toBe(
+      "key-source-unavailable",
+    );
+    const attemptedAtMs = nowMs + 5_000;
+    expect(harness.verifier.nextFetchAllowedAtMs()).toBe(
+      attemptedAtMs + 60_000,
+    );
+
+    // One millisecond early nothing is fetched, though the source is back.
+    harness.serve([key.publicJwk]);
+    harness.advance(59_999);
+    expect(await harness.verifier.verify(token, USER_ID)).toBe(
+      "key-source-unavailable",
+    );
+    expect(harness.urls).toHaveLength(1);
+
+    harness.advance(1);
+    expect(await harness.verifier.verify(token, USER_ID)).toBeNull();
+    expect(harness.urls).toHaveLength(2);
   });
 
   it("keeps verifying against the stale set while the key source is down", async () => {

@@ -10,6 +10,8 @@ import {
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { createServer, type ServerResponse } from "node:http";
+import type { AddressInfo } from "node:net";
 import type { HostListFetchResult } from "@traycer-clients/shared/host-client/remote-fetcher";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
 import type {
@@ -52,6 +54,11 @@ import type {
   UninstallOk,
 } from "../../host/host-controller-types";
 import { DesktopAuthSession } from "../../auth/desktop-auth-session";
+import {
+  createSigningKey,
+  userBearerClaims,
+  type BearerSigningKey,
+} from "../../auth/__tests__/jws-fixture";
 import type { DesktopAuthSessionSnapshot } from "../../../ipc-contracts/window-types";
 import { EpicWindowOwnership } from "../../windows/epic-window-ownership";
 import { PerWindowState } from "../../windows/per-window-state";
@@ -642,6 +649,7 @@ function buildBridge(options: {
   readonly signedIn?: { readonly userId: string; readonly token: string };
   readonly authTokenStore?: IpcAuthTokenStore;
   readonly host?: FakeHost;
+  readonly authnBaseUrl?: string;
 }) {
   const mod = runnerIpcModule;
   if (mod === null) throw new Error("runner IPC module was not initialized");
@@ -656,7 +664,7 @@ function buildBridge(options: {
   const bridge = new mod.RunnerIpcBridge({
     host: options.host ?? new FakeHost(),
     hostController: new FakeHostController(),
-    authnBaseUrl: "http://localhost:5005",
+    authnBaseUrl: options.authnBaseUrl ?? "http://localhost:5005",
     authRedirectUri: null,
     tray: null,
     zoomController: undefined,
@@ -845,6 +853,72 @@ function attachHandler(): InvokeHandler {
   if (handler === undefined) throw new Error("attach handler missing");
   return handler;
 }
+
+const LOCAL_HOST_ID = "local-host";
+const LOCAL_SESSION = [
+  {
+    hostId: LOCAL_HOST_ID,
+    sessionId: "already-running-local-host",
+    transportKind: "local-ws",
+  },
+];
+
+/** The host this machine's enrollment file names, with a running snapshot. */
+async function createLocalHost(): Promise<{
+  readonly host: FakeHost;
+  readonly directory: string;
+}> {
+  const directory = await mkdtemp(join(tmpdir(), "traycer-local-auth-"));
+  const enrollmentFile = join(directory, "identity", "enrollment.json");
+  await mkdir(dirname(enrollmentFile), { recursive: true });
+  await writeFile(
+    enrollmentFile,
+    JSON.stringify({ hostId: LOCAL_HOST_ID }),
+    "utf8",
+  );
+  const host = new FakeHost();
+  host.identityEnrollmentFile = enrollmentFile;
+  host.setSnapshot({
+    hostId: LOCAL_HOST_ID,
+    websocketUrl: "ws://127.0.0.1:1",
+    version: "1.0.0",
+    pid: 123,
+    systemHostName: "test-host",
+    displayName: "Test Host",
+    availability: "available",
+  });
+  return { host, directory };
+}
+
+/** Window 101 attaching while the local host's session is already live. */
+async function attachToRunningLocalHost(): Promise<Snapshot> {
+  const attachSeq = invokeSyncWithSender(
+    RunnerHostSync.selectionAttachSeq,
+    101,
+  );
+  const attached = await attachOk(
+    attachHandler(),
+    101,
+    attachSeq,
+    LOCAL_SESSION,
+  );
+  return attached.snapshot;
+}
+
+function authSessionSetHandler(): InvokeHandler {
+  const handler = ipcMainState.handlers.get(RunnerHostInvoke.authSessionSet);
+  if (handler === undefined)
+    throw new Error("auth session set handler missing");
+  return handler;
+}
+
+function authSessionRevokeHandler(): InvokeHandler {
+  const handler = ipcMainState.handlers.get(RunnerHostInvoke.authSessionRevoke);
+  if (handler === undefined) {
+    throw new Error("auth session revoke handler missing");
+  }
+  return handler;
+}
 function evidenceHandler(): InvokeHandler {
   const handler = ipcMainState.handlers.get(
     SelectionAuthorityChannels.invoke.reportEvidence,
@@ -873,25 +947,7 @@ describe("local auth-session restore", () => {
       throw new Error("unexpected local inventory connection");
     });
     vi.stubGlobal("WebSocket", webSocketConstructor);
-    const directory = await mkdtemp(join(tmpdir(), "traycer-local-auth-"));
-    const enrollmentFile = join(directory, "identity", "enrollment.json");
-    await mkdir(dirname(enrollmentFile), { recursive: true });
-    await writeFile(
-      enrollmentFile,
-      JSON.stringify({ hostId: "local-host" }),
-      "utf8",
-    );
-    const host = new FakeHost();
-    host.identityEnrollmentFile = enrollmentFile;
-    host.setSnapshot({
-      hostId: "local-host",
-      websocketUrl: "ws://127.0.0.1:1",
-      version: "1.0.0",
-      pid: 123,
-      systemHostName: "test-host",
-      displayName: "Test Host",
-      availability: "available",
-    });
+    const { host, directory } = await createLocalHost();
     const stored = buildStoredCredentials("user-a", "stored-token");
     const tokenStore = new FakeAuthTokenStore(async () => stored);
     const { bridge, registry, authSession } = await buildBridge({
@@ -926,21 +982,12 @@ describe("local auth-session restore", () => {
         },
         verified: false,
       });
-      await awaitSelectionTarget(window, "local-host");
+      await awaitSelectionTarget(window, LOCAL_HOST_ID);
       expect(fetchRegisteredHostsMock).not.toHaveBeenCalled();
 
-      const attachSeq = invokeSyncWithSender(
-        RunnerHostSync.selectionAttachSeq,
-        101,
+      expect((await attachToRunningLocalHost()).effectiveHostId).toBe(
+        LOCAL_HOST_ID,
       );
-      const attached = await attachOk(attachHandler(), 101, attachSeq, [
-        {
-          hostId: "local-host",
-          sessionId: "already-running-local-host",
-          transportKind: "local-ws",
-        },
-      ]);
-      expect(attached.snapshot.effectiveHostId).toBe("local-host");
       expect(authSession.get().verified).toBe(false);
       expect(fetchRegisteredHostsMock).not.toHaveBeenCalled();
       expect(webSocketConstructor).not.toHaveBeenCalled();
@@ -984,14 +1031,8 @@ describe("local auth-session restore", () => {
     bridge.install();
 
     try {
-      const setHandler = ipcMainState.handlers.get(
-        RunnerHostInvoke.authSessionSet,
-      );
-      if (setHandler === undefined) {
-        throw new Error("auth session set handler missing");
-      }
       await expect(
-        setHandler(sender(101), {
+        authSessionSetHandler()(sender(101), {
           status: "unverified",
           token: "stored-token",
           profile: {
@@ -1027,13 +1068,8 @@ describe("local auth-session restore", () => {
         userId: "user-a",
         token: "stored-token",
       });
-      const setHandler = ipcMainState.handlers.get(
-        RunnerHostInvoke.authSessionSet,
-      );
-      if (setHandler === undefined)
-        throw new Error("auth session set handler missing");
       await expect(
-        setHandler(sender(101), {
+        authSessionSetHandler()(sender(101), {
           status: "signed-out",
           token: null,
           profile: null,
@@ -1134,6 +1170,539 @@ describe("local auth-session restore", () => {
       expect(authSession.get().status).toBe("signed-out");
     } finally {
       bridge.dispose();
+    }
+  });
+});
+
+const WINDOW_USER_ID = "user-a";
+/** The verifier's own refetch cooldown, which a pending re-check waits for. */
+const KEY_FETCH_COOLDOWN_MS = 60_000;
+
+type JwksBehaviour =
+  | { readonly kind: "serve"; readonly body: string }
+  | { readonly kind: "fail" }
+  | { readonly kind: "hold" };
+
+interface JwksServer {
+  readonly baseUrl: string;
+  hitCount(): number;
+  serve(keys: readonly BearerSigningKey[]): void;
+  fail(): void;
+  hold(): void;
+  releaseHeld(): void;
+  close(): Promise<void>;
+}
+
+/**
+ * A real `node:http` key source on loopback, so the verifier inside the auth
+ * IPC fetches through the real `fetch`. A held request stays open until
+ * `releaseHeld` or until the client gives up, which is what a slow fetch is.
+ */
+async function startJwksServer(): Promise<JwksServer> {
+  let behaviour: JwksBehaviour = { kind: "fail" };
+  let hits = 0;
+  const held = new Set<ServerResponse>();
+  const server = createServer((request, response) => {
+    if (request.method !== "GET" || request.url !== "/api/jwks") {
+      response.writeHead(404);
+      response.end();
+      return;
+    }
+    hits += 1;
+    if (behaviour.kind === "hold") {
+      held.add(response);
+      response.once("close", () => held.delete(response));
+      return;
+    }
+    if (behaviour.kind === "fail") {
+      response.writeHead(503);
+      response.end();
+      return;
+    }
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(behaviour.body);
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => resolve());
+  });
+  const address: AddressInfo | string | null = server.address();
+  if (address === null || typeof address === "string") {
+    throw new Error("jwks server has no TCP address");
+  }
+  return {
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    hitCount: () => hits,
+    serve: (keys) => {
+      behaviour = {
+        kind: "serve",
+        body: JSON.stringify({ keys: keys.map((key) => key.publicJwk) }),
+      };
+    },
+    fail: () => {
+      behaviour = { kind: "fail" };
+    },
+    hold: () => {
+      behaviour = { kind: "hold" };
+    },
+    releaseHeld: () => {
+      for (const response of held) {
+        response.writeHead(503);
+        response.end();
+      }
+      held.clear();
+    },
+    close: async () => {
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error === undefined) resolve();
+          else reject(error);
+        });
+      });
+    },
+  };
+}
+
+function mintUserToken(signingKey: BearerSigningKey, userId: string): string {
+  return signingKey.sign(userBearerClaims(userId, Date.now() + 60 * 60_000));
+}
+
+interface SigninScenario {
+  readonly key: BearerSigningKey;
+  /** A bearer `key` signed for the window's user. */
+  readonly token: string;
+  readonly jwks: JwksServer;
+  readonly window: CapturingWindow;
+  readonly authSession: DesktopAuthSession;
+  /** Key fetches the verifier has started, counted as it calls `fetch`. */
+  jwksFetches(): number;
+  /** Waits until the latest key fetch has settled and its caller has run. */
+  settleLastKeyFetch(): Promise<void>;
+  advancePastKeyFetchCooldown(): Promise<void>;
+  /** What main's own credentials store holds for the window's user. */
+  storeHolds(token: string): void;
+  set(token: string): Promise<unknown>;
+  signOut(): Promise<unknown>;
+  revoke(token: string): Promise<unknown>;
+  dispose(): Promise<void>;
+}
+
+/**
+ * Main with a real key source behind it, the window's user stored on this
+ * machine, and the local host running. Only `setTimeout`, `clearTimeout` and
+ * `Date` are faked: the pending re-check waits on the verifier's 60 s
+ * cooldown, while the fetch's own 3 s timeout and the loopback I/O stay real.
+ * The key source starts out failing.
+ */
+async function setUpSigninScenario(): Promise<SigninScenario> {
+  const key = createSigningKey("kid-1", "bearer");
+  const jwks = await startJwksServer();
+  const jwksUrl = `${jwks.baseUrl}/api/jwks`;
+  const fetchSpy = vi.spyOn(globalThis, "fetch");
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  vi.stubGlobal(
+    "WebSocket",
+    vi.fn(function WebSocketConstructor() {
+      throw new Error("unexpected local inventory connection");
+    }),
+  );
+  const { host, directory } = await createLocalHost();
+  const token = mintUserToken(key, WINDOW_USER_ID);
+  let stored = buildStoredCredentials(WINDOW_USER_ID, token);
+  const { bridge, registry, authSession } = buildBridge({
+    authnBaseUrl: jwks.baseUrl,
+    authTokenStore: new FakeAuthTokenStore(async () => stored),
+    host,
+  });
+  const window = buildWindow();
+  registry.add("window-a", 101, window);
+  bridge.install();
+  const keyFetchResults = () =>
+    fetchSpy.mock.results.filter(
+      (_result, index) => fetchSpy.mock.calls[index]?.[0] === jwksUrl,
+    );
+  return {
+    key,
+    token,
+    jwks,
+    window,
+    authSession,
+    jwksFetches: () => keyFetchResults().length,
+    settleLastKeyFetch: async () => {
+      const last = keyFetchResults().at(-1);
+      if (last?.type === "return") {
+        await last.value.then(
+          () => undefined,
+          () => undefined,
+        );
+      }
+      // Everything the verifier does with a settled response runs on
+      // microtasks, which one macrotask turn drains.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    },
+    advancePastKeyFetchCooldown: async () => {
+      await vi.advanceTimersByTimeAsync(KEY_FETCH_COOLDOWN_MS + 1_000);
+    },
+    storeHolds: (storedToken) => {
+      stored = buildStoredCredentials(WINDOW_USER_ID, storedToken);
+    },
+    set: async (setToken) =>
+      authSessionSetHandler()(
+        sender(101),
+        signedInSnapshot(WINDOW_USER_ID, setToken),
+      ),
+    signOut: async () =>
+      authSessionSetHandler()(sender(101), {
+        status: "signed-out",
+        token: null,
+        profile: null,
+      }),
+    revoke: async (revokedToken) =>
+      authSessionRevokeHandler()(sender(101), revokedToken, null),
+    dispose: async () => {
+      bridge.dispose();
+      vi.useRealTimers();
+      fetchSpy.mockRestore();
+      await jwks.close();
+      await rm(directory, { recursive: true, force: true });
+      vi.unstubAllGlobals();
+    },
+  };
+}
+
+/** A verify that fetches the key set and refuses on the subject alone. */
+async function fetchKeySetOnce(scenario: SigninScenario): Promise<void> {
+  scenario.jwks.serve([scenario.key]);
+  await expect(
+    scenario.set(mintUserToken(scenario.key, "user-b")),
+  ).resolves.toEqual({ outcome: "refused", reason: "subject-mismatch" });
+  expect(scenario.jwksFetches()).toBe(1);
+}
+
+describe("a sign-in main cannot check yet", () => {
+  it("holds the window's sign-in unverified and selects the local host when the key fetch outlasts its timeout", async () => {
+    const scenario = await setUpSigninScenario();
+    try {
+      scenario.jwks.hold();
+
+      await expect(scenario.set(scenario.token)).resolves.toEqual({
+        outcome: "pending",
+        reason: "key-source-unavailable",
+        heldLocally: true,
+      });
+      expect(scenario.authSession.get()).toMatchObject({
+        status: "unverified",
+        token: scenario.token,
+        verified: false,
+      });
+
+      await awaitSelectionTarget(scenario.window, LOCAL_HOST_ID);
+      expect((await attachToRunningLocalHost()).effectiveHostId).toBe(
+        LOCAL_HOST_ID,
+      );
+    } finally {
+      await scenario.dispose();
+    }
+  }, 20_000);
+
+  it("promotes the held sign-in once the cooldown has passed and the key source answers", async () => {
+    const scenario = await setUpSigninScenario();
+    try {
+      await expect(scenario.set(scenario.token)).resolves.toMatchObject({
+        outcome: "pending",
+        heldLocally: true,
+      });
+
+      scenario.jwks.serve([scenario.key]);
+      await scenario.advancePastKeyFetchCooldown();
+
+      await vi.waitFor(() => {
+        expect(scenario.authSession.get()).toMatchObject({
+          status: "signed-in",
+          token: scenario.token,
+          verified: true,
+        });
+      });
+      expect(scenario.jwksFetches()).toBe(2);
+      expect(scenario.jwks.hitCount()).toBe(2);
+    } finally {
+      await scenario.dispose();
+    }
+  });
+
+  it("keeps re-checking while the key source stays unreachable and promotes on its first answer", async () => {
+    const scenario = await setUpSigninScenario();
+    try {
+      await expect(scenario.set(scenario.token)).resolves.toMatchObject({
+        outcome: "pending",
+      });
+
+      await scenario.advancePastKeyFetchCooldown();
+      await scenario.settleLastKeyFetch();
+      expect(scenario.jwksFetches()).toBe(2);
+      expect(scenario.authSession.get()).toMatchObject({
+        status: "unverified",
+        token: scenario.token,
+        verified: false,
+      });
+
+      scenario.jwks.serve([scenario.key]);
+      await scenario.advancePastKeyFetchCooldown();
+
+      await vi.waitFor(() => {
+        expect(scenario.authSession.get()).toMatchObject({
+          status: "signed-in",
+          token: scenario.token,
+          verified: true,
+        });
+      });
+      expect(scenario.jwksFetches()).toBe(3);
+    } finally {
+      await scenario.dispose();
+    }
+  });
+
+  it("stops checking when the window signs out", async () => {
+    const scenario = await setUpSigninScenario();
+    try {
+      await expect(scenario.set(scenario.token)).resolves.toMatchObject({
+        outcome: "pending",
+      });
+
+      await expect(scenario.signOut()).resolves.toEqual({
+        outcome: "accepted",
+      });
+      scenario.jwks.serve([scenario.key]);
+      await scenario.advancePastKeyFetchCooldown();
+
+      expect(scenario.jwksFetches()).toBe(1);
+      expect(scenario.authSession.get()).toMatchObject({
+        status: "signed-out",
+        token: null,
+        verified: false,
+      });
+    } finally {
+      await scenario.dispose();
+    }
+  });
+
+  it("answers superseded and holds nothing when a sign-out overtakes the slow check", async () => {
+    const scenario = await setUpSigninScenario();
+    try {
+      scenario.jwks.hold();
+      const overtaken = scenario.set(scenario.token);
+      await vi.waitFor(() => {
+        expect(scenario.jwks.hitCount()).toBe(1);
+      });
+
+      await expect(scenario.signOut()).resolves.toEqual({
+        outcome: "accepted",
+      });
+      scenario.jwks.releaseHeld();
+
+      await expect(overtaken).resolves.toEqual({ outcome: "superseded" });
+      scenario.jwks.serve([scenario.key]);
+      await scenario.advancePastKeyFetchCooldown();
+      expect(scenario.jwksFetches()).toBe(1);
+      expect(scenario.authSession.get()).toMatchObject({
+        status: "signed-out",
+        token: null,
+        verified: false,
+      });
+    } finally {
+      await scenario.dispose();
+    }
+  });
+
+  it("stops checking a bearer the renderer has revoked", async () => {
+    const scenario = await setUpSigninScenario();
+    try {
+      await expect(scenario.set(scenario.token)).resolves.toMatchObject({
+        outcome: "pending",
+      });
+
+      await scenario.revoke(scenario.token);
+      scenario.jwks.serve([scenario.key]);
+      await scenario.advancePastKeyFetchCooldown();
+
+      expect(scenario.jwksFetches()).toBe(1);
+      expect(scenario.authSession.get()).toMatchObject({
+        status: "unverified",
+        token: scenario.token,
+        verified: false,
+      });
+    } finally {
+      await scenario.dispose();
+    }
+  });
+
+  it("holds nothing when main's stored credentials are another token, and opens the local host once the check succeeds", async () => {
+    const scenario = await setUpSigninScenario();
+    try {
+      scenario.storeHolds("another-token");
+
+      await expect(scenario.set(scenario.token)).resolves.toEqual({
+        outcome: "pending",
+        reason: "key-source-unavailable",
+        heldLocally: false,
+      });
+      expect(scenario.authSession.get()).toMatchObject({
+        status: "signed-out",
+        token: null,
+        verified: false,
+      });
+      expect((await attachToRunningLocalHost()).effectiveHostId).toBeNull();
+
+      scenario.jwks.serve([scenario.key]);
+      await scenario.advancePastKeyFetchCooldown();
+      await vi.waitFor(() => {
+        expect(scenario.authSession.get()).toMatchObject({
+          status: "signed-in",
+          token: scenario.token,
+          verified: true,
+        });
+      });
+
+      await awaitSelectionTarget(scenario.window, LOCAL_HOST_ID);
+      expect((await attachToRunningLocalHost()).effectiveHostId).toBe(
+        LOCAL_HOST_ID,
+      );
+    } finally {
+      await scenario.dispose();
+    }
+  });
+
+  it("refuses a bearer that fails its check outright and neither holds nor re-checks it", async () => {
+    const scenario = await setUpSigninScenario();
+    try {
+      const forged = mintUserToken(
+        createSigningKey("kid-1", "bearer"),
+        WINDOW_USER_ID,
+      );
+      scenario.storeHolds(forged);
+      scenario.jwks.serve([scenario.key]);
+
+      await expect(scenario.set(forged)).resolves.toEqual({
+        outcome: "refused",
+        reason: "bad-signature",
+      });
+      await scenario.advancePastKeyFetchCooldown();
+
+      expect(scenario.jwksFetches()).toBe(1);
+      expect(scenario.authSession.get()).toMatchObject({
+        status: "signed-out",
+        token: null,
+        verified: false,
+      });
+    } finally {
+      await scenario.dispose();
+    }
+  });
+
+  it("holds a signing key the fetched set does not carry yet, and promotes it once the key is published", async () => {
+    const scenario = await setUpSigninScenario();
+    try {
+      await fetchKeySetOnce(scenario);
+      const rotatedKey = createSigningKey("kid-2", "bearer");
+      const rotated = mintUserToken(rotatedKey, WINDOW_USER_ID);
+      scenario.storeHolds(rotated);
+
+      await expect(scenario.set(rotated)).resolves.toEqual({
+        outcome: "pending",
+        reason: "signing-key-unconfirmed",
+        heldLocally: true,
+      });
+      expect(scenario.jwksFetches()).toBe(1);
+      expect(scenario.authSession.get()).toMatchObject({
+        status: "unverified",
+        token: rotated,
+        verified: false,
+      });
+      await awaitSelectionTarget(scenario.window, LOCAL_HOST_ID);
+      expect((await attachToRunningLocalHost()).effectiveHostId).toBe(
+        LOCAL_HOST_ID,
+      );
+
+      scenario.jwks.serve([scenario.key, rotatedKey]);
+      await scenario.advancePastKeyFetchCooldown();
+
+      await vi.waitFor(() => {
+        expect(scenario.authSession.get()).toMatchObject({
+          status: "signed-in",
+          token: rotated,
+          verified: true,
+        });
+      });
+      expect(scenario.jwksFetches()).toBe(2);
+    } finally {
+      await scenario.dispose();
+    }
+  });
+
+  it("holds nothing for an unconfirmed signing key when main's stored credentials are another token, and verifies it once the key is published", async () => {
+    const scenario = await setUpSigninScenario();
+    try {
+      await fetchKeySetOnce(scenario);
+      const rotatedKey = createSigningKey("kid-2", "bearer");
+      const rotated = mintUserToken(rotatedKey, WINDOW_USER_ID);
+      scenario.storeHolds("another-token");
+
+      await expect(scenario.set(rotated)).resolves.toEqual({
+        outcome: "pending",
+        reason: "signing-key-unconfirmed",
+        heldLocally: false,
+      });
+      expect(scenario.authSession.get()).toMatchObject({
+        status: "signed-out",
+        token: null,
+        verified: false,
+      });
+      expect((await attachToRunningLocalHost()).effectiveHostId).toBeNull();
+
+      scenario.jwks.serve([scenario.key, rotatedKey]);
+      await scenario.advancePastKeyFetchCooldown();
+      await vi.waitFor(() => {
+        expect(scenario.authSession.get()).toMatchObject({
+          status: "signed-in",
+          token: rotated,
+          verified: true,
+        });
+      });
+
+      await awaitSelectionTarget(scenario.window, LOCAL_HOST_ID);
+      expect((await attachToRunningLocalHost()).effectiveHostId).toBe(
+        LOCAL_HOST_ID,
+      );
+    } finally {
+      await scenario.dispose();
+    }
+  });
+
+  it("refuses a signing key missing from the set it just fetched and neither holds nor re-checks it", async () => {
+    const scenario = await setUpSigninScenario();
+    try {
+      const stranger = mintUserToken(
+        createSigningKey("kid-2", "bearer"),
+        WINDOW_USER_ID,
+      );
+      scenario.storeHolds(stranger);
+      scenario.jwks.serve([scenario.key]);
+
+      await expect(scenario.set(stranger)).resolves.toEqual({
+        outcome: "refused",
+        reason: "unknown-signing-key",
+      });
+      await scenario.advancePastKeyFetchCooldown();
+
+      expect(scenario.jwksFetches()).toBe(1);
+      expect(scenario.authSession.get()).toMatchObject({
+        status: "signed-out",
+        token: null,
+        verified: false,
+      });
+    } finally {
+      await scenario.dispose();
     }
   });
 });

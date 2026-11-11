@@ -1,6 +1,16 @@
-import { act, cleanup, render } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  within,
+} from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { toast } from "sonner";
+import { Toaster } from "@/components/ui/sonner";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { WindowsBridgeAuthSessionBridge } from "@/providers/windows-bridge-auth-session";
+import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import type {
   AuthSessionSnapshot,
   RevokedCloudAuthorization,
@@ -12,11 +22,7 @@ import type {
 } from "@/lib/windows/types";
 import type { Mock } from "vitest";
 
-const toast = vi.hoisted(() => ({
-  warning: vi.fn<(message: string) => void>(),
-}));
-
-vi.mock("sonner", () => ({ toast }));
+vi.mock("next-themes", () => ({ useTheme: () => ({ theme: "dark" }) }));
 
 const mockUseAuthService = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/host", () => ({ useAuthService: mockUseAuthService }));
@@ -27,10 +33,15 @@ vi.mock("@/providers/windows-bridge-context", () => ({
 }));
 
 const SIGNED_IN_TOKEN = "bearer-token";
+const SIGNED_IN_PROFILE = {
+  userId: "u1",
+  userName: "Ada",
+  email: "ada@example.com",
+};
 const SIGNED_IN_SNAPSHOT: AuthSessionSnapshot = {
   status: "signed-in",
   token: SIGNED_IN_TOKEN,
-  profile: { userId: "u1", userName: "Ada", email: "ada@example.com" },
+  profile: SIGNED_IN_PROFILE,
   contextMetadata: null,
 };
 
@@ -49,6 +60,18 @@ const UNVERIFIED_DESKTOP_SNAPSHOT: DesktopAuthSessionSnapshot = {
   status: "unverified",
   token: SIGNED_IN_TOKEN,
   profile: SIGNED_IN_SNAPSHOT.profile,
+};
+
+const ROTATED_SNAPSHOT: AuthSessionSnapshot = {
+  ...SIGNED_IN_SNAPSHOT,
+  token: "rotated-bearer-token",
+};
+
+const SIGNED_OUT_SNAPSHOT: AuthSessionSnapshot = {
+  status: "signed-out",
+  token: null,
+  profile: null,
+  contextMetadata: null,
 };
 
 /** What the cross-window revoke channel says about a refusal. */
@@ -94,6 +117,7 @@ interface AuthSessionBridgeTestHarness {
       snapshot: DesktopAuthSessionSnapshot,
     ) => Promise<DesktopAuthSessionSetResult>
   >;
+  readonly signOut: Mock<() => Promise<void>>;
   readonly unmount: () => void;
 }
 
@@ -118,9 +142,9 @@ function renderWithFakes(
   let verificationRevokedListener:
     | ((rejectedToken: string, revocation: RevocationScope) => void)
     | null = null;
-  let resolveSetPromise:
-    | ((resolution: AuthSessionSetResolution) => void)
-    | null = null;
+  const pendingSetResolvers: Array<
+    (resolution: AuthSessionSetResolution) => void
+  > = [];
   let mainSnapshot = SIGNED_OUT_DESKTOP_SNAPSHOT;
   const inboundDispose = vi.fn(() => {
     inboundListener = null;
@@ -135,6 +159,7 @@ function renderWithFakes(
   const ingestRevoked = vi.fn(
     (_rejectedToken: string, _revocation: RevocationScope): void => undefined,
   );
+  const signOut = vi.fn(() => Promise.resolve());
   mockUseAuthService.mockReturnValue({
     onSessionSnapshotChange: (
       handler: (snapshot: AuthSessionSnapshot) => void,
@@ -160,6 +185,7 @@ function renderWithFakes(
     getIdentityGeneration: () => 0,
     ingestProjectedSessionSnapshot: ingest,
     ingestCloudAuthorizationRevoked: ingestRevoked,
+    signOut,
   });
 
   const revoke = vi.fn((_rejectedToken: string, _revocation: RevocationScope) =>
@@ -173,7 +199,7 @@ function renderWithFakes(
       return Promise.resolve(setResult);
     }
     return new Promise<DesktopAuthSessionSetResult>((resolve, reject) => {
-      resolveSetPromise = (resolution) => {
+      pendingSetResolvers.push((resolution) => {
         if (resolution.kind === "resolve") {
           if (resolution.result.outcome === "accepted") {
             mainSnapshot = snapshot;
@@ -182,7 +208,7 @@ function renderWithFakes(
         } else {
           reject(resolution.cause);
         }
-      };
+      });
     });
   });
   const get = vi.fn(() => Promise.resolve(mainSnapshot));
@@ -214,9 +240,12 @@ function renderWithFakes(
   });
 
   const rendered = render(
-    <WindowsBridgeAuthSessionBridge>
-      <div>content</div>
-    </WindowsBridgeAuthSessionBridge>,
+    <>
+      <WindowsBridgeAuthSessionBridge>
+        <div>content</div>
+      </WindowsBridgeAuthSessionBridge>
+      <Toaster />
+    </>,
   );
 
   return {
@@ -227,13 +256,14 @@ function renderWithFakes(
     inboundDispose,
     outboundDispose,
     resolveSet: (resolution) => {
-      if (resolveSetPromise === null) {
+      const resolveOldest = pendingSetResolvers.shift();
+      if (resolveOldest === undefined) {
         throw new Error("set is not pending");
       }
-      resolveSetPromise(resolution);
-      resolveSetPromise = null;
+      resolveOldest(resolution);
     },
     set,
+    signOut,
     revoke,
     unmount: rendered.unmount,
     emitInbound: (snapshot) => {
@@ -260,10 +290,186 @@ async function drainMicrotasks(): Promise<void> {
   await Promise.resolve();
 }
 
+/** Sonner mounts a toast on the macrotask after it is created. */
+const TOAST_ENTER_MS = 1;
+
+async function settle(): Promise<void> {
+  await act(async () => {
+    await drainMicrotasks();
+    await vi.advanceTimersByTimeAsync(TOAST_ENTER_MS);
+  });
+}
+
+async function advanceTimers(milliseconds: number): Promise<void> {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(milliseconds);
+  });
+}
+
+async function writeSession(
+  harness: AuthSessionBridgeTestHarness,
+  snapshot: AuthSessionSnapshot,
+): Promise<void> {
+  harness.emitOutbound(snapshot);
+  await settle();
+}
+
+/**
+ * A dismissed toast leaves through two animation frames, a render, and a
+ * 200ms unmount timer set only after that render, so one long advance inside
+ * one `act` never reaches the removal.
+ */
+const TOAST_EXIT_STEP_MS = 100;
+const TOAST_EXIT_STEPS = 5;
+
+async function letToastsLeave(): Promise<void> {
+  for (let step = 0; step < TOAST_EXIT_STEPS; step += 1) {
+    await advanceTimers(TOAST_EXIT_STEP_MS);
+  }
+}
+
+function noticeRows(): HTMLElement[] {
+  return Array.from(
+    document.querySelectorAll<HTMLElement>("[data-sonner-toast]"),
+  );
+}
+
+function onlyNotice(): HTMLElement {
+  const rows = noticeRows();
+  const [row] = rows;
+  if (rows.length !== 1) {
+    throw new Error(`Expected exactly one notice, found ${rows.length}`);
+  }
+  return row;
+}
+
+interface NoticeCase {
+  readonly label: string;
+  readonly result: DesktopAuthSessionSetResult;
+  readonly title: string;
+  readonly description: string;
+  readonly code: string;
+  readonly offersSignOut: boolean;
+}
+
+const CANNOT_REACH = "Can't reach Traycer's sign-in service.";
+const STILL_CONFIRMING = "Traycer is still confirming your sign-in.";
+const KEEPS_TRYING = "Traycer will keep trying.";
+const NOT_CONFIRMED = "Traycer couldn't confirm this sign-in.";
+const RESTART_ONLINE = "Restart Traycer once you're back online.";
+
+const NOTICE_CASES: readonly NoticeCase[] = [
+  {
+    label: "pending, key source unreachable, held locally",
+    result: {
+      outcome: "pending",
+      reason: "key-source-unavailable",
+      heldLocally: true,
+    },
+    title: CANNOT_REACH,
+    description: "Hosts on your other devices will appear once it's back.",
+    code: "key-source-unavailable",
+    offersSignOut: false,
+  },
+  {
+    label: "pending, key source unreachable, not held locally",
+    result: {
+      outcome: "pending",
+      reason: "key-source-unavailable",
+      heldLocally: false,
+    },
+    title: CANNOT_REACH,
+    description: KEEPS_TRYING,
+    code: "key-source-unavailable",
+    offersSignOut: false,
+  },
+  {
+    label: "pending, signing key unconfirmed, held locally",
+    result: {
+      outcome: "pending",
+      reason: "signing-key-unconfirmed",
+      heldLocally: true,
+    },
+    title: STILL_CONFIRMING,
+    description: "Hosts on your other devices will appear once it's done.",
+    code: "signing-key-unconfirmed",
+    offersSignOut: false,
+  },
+  {
+    label: "pending, signing key unconfirmed, not held locally",
+    result: {
+      outcome: "pending",
+      reason: "signing-key-unconfirmed",
+      heldLocally: false,
+    },
+    title: STILL_CONFIRMING,
+    description: KEEPS_TRYING,
+    code: "signing-key-unconfirmed",
+    offersSignOut: false,
+  },
+  {
+    label: "refused as expired",
+    result: { outcome: "refused", reason: "expired" },
+    title: NOT_CONFIRMED,
+    description: "Sign out and back in.",
+    code: "expired",
+    offersSignOut: true,
+  },
+  {
+    label: "refused for an unknown signing key",
+    result: { outcome: "refused", reason: "unknown-signing-key" },
+    title: NOT_CONFIRMED,
+    description: "Sign out and back in.",
+    code: "unknown-signing-key",
+    offersSignOut: true,
+  },
+  {
+    label: "refused by an older shell, key source unreachable",
+    result: { outcome: "refused", reason: "key-source-unavailable" },
+    title: CANNOT_REACH,
+    description: RESTART_ONLINE,
+    code: "key-source-unavailable",
+    offersSignOut: false,
+  },
+  {
+    label: "refused by an older shell, signing key unconfirmed",
+    result: { outcome: "refused", reason: "signing-key-unconfirmed" },
+    title: CANNOT_REACH,
+    description: RESTART_ONLINE,
+    code: "signing-key-unconfirmed",
+    offersSignOut: false,
+  },
+];
+
+const PENDING_AND_REFUSED = [
+  {
+    label: "pending",
+    result: {
+      outcome: "pending" as const,
+      reason: "signing-key-unconfirmed" as const,
+      heldLocally: false,
+    },
+  },
+  {
+    label: "refused",
+    result: { outcome: "refused" as const, reason: "expired" as const },
+  },
+];
+
 describe("<WindowsBridgeAuthSessionBridge />", () => {
-  afterEach(() => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    useDesktopDialogStore.setState({ reportIssueAvailable: true });
+  });
+
+  afterEach(async () => {
+    toast.dismiss();
+    await letToastsLeave();
     cleanup();
-    toast.warning.mockClear();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    useDesktopDialogStore.getState().close();
+    useDesktopDialogStore.setState({ reportIssueAvailable: false });
   });
 
   it("asks main to drop its verification on a terminal verdict loss, without projecting a session transition", async () => {
@@ -332,27 +538,25 @@ describe("<WindowsBridgeAuthSessionBridge />", () => {
     },
   );
 
-  it("surfaces a toast naming the reason when main refuses the pushed session", async () => {
-    const { emitOutbound } = renderWithFakes(
-      {
-        outcome: "refused",
-        reason: "expired",
-      },
-      {},
-    );
+  it.each(NOTICE_CASES)(
+    "shows one notice with its copy, its code and Report issue: $label",
+    async ({ result, title, description, code, offersSignOut }) => {
+      const harness = renderWithFakes(result, {});
 
-    await act(async () => {
-      emitOutbound(SIGNED_IN_SNAPSHOT);
-      await Promise.resolve();
-      await Promise.resolve();
-    });
+      await writeSession(harness, SIGNED_IN_SNAPSHOT);
 
-    expect(toast.warning).toHaveBeenCalledTimes(1);
-    const [message] = toast.warning.mock.calls[0] ?? [];
-    expect(message).toContain("could not verify this sign-in");
-    expect(message).toContain("the sign-in token had expired");
-    expect(message).not.toContain("bearer-token");
-  });
+      const row = onlyNotice();
+      expect(within(row).getByText(title)).toBeTruthy();
+      expect(within(row).getByText(description)).toBeTruthy();
+      expect(within(row).getByText(code)).toBeTruthy();
+      expect(
+        within(row).getByRole("button", { name: "Report issue" }),
+      ).toBeTruthy();
+      expect(
+        within(row).queryByRole("button", { name: "Sign out" }) !== null,
+      ).toBe(offersSignOut);
+    },
+  );
 
   it("re-attempts the same session after a refusal instead of latching it", async () => {
     // The refusal is the transient case that matters: authn unreachable at
@@ -383,17 +587,179 @@ describe("<WindowsBridgeAuthSessionBridge />", () => {
     expect(set).toHaveBeenCalledTimes(2);
   });
 
-  it("shows nothing when main accepts the pushed session", async () => {
-    const { emitOutbound } = renderWithFakes({ outcome: "accepted" }, {});
+  it("keeps the latch and the notice when main answers pending, so the same session is not sent again", async () => {
+    const harness = renderWithFakes(
+      {
+        outcome: "pending",
+        reason: "key-source-unavailable",
+        heldLocally: true,
+      },
+      {},
+    );
 
-    await act(async () => {
-      emitOutbound(SIGNED_IN_SNAPSHOT);
-      await Promise.resolve();
-      await Promise.resolve();
-    });
+    await writeSession(harness, SIGNED_IN_SNAPSHOT);
+    expect(harness.set).toHaveBeenCalledTimes(1);
 
-    expect(toast.warning).not.toHaveBeenCalled();
+    await writeSession(harness, SIGNED_IN_SNAPSHOT);
+    await letToastsLeave();
+
+    expect(harness.set).toHaveBeenCalledTimes(1);
+    expect(noticeRows()).toHaveLength(1);
   });
+
+  it("shows nothing when main accepts the pushed session", async () => {
+    const harness = renderWithFakes({ outcome: "accepted" }, {});
+
+    await writeSession(harness, SIGNED_IN_SNAPSHOT);
+
+    expect(noticeRows()).toHaveLength(0);
+  });
+
+  it("keeps the pending notice on screen until it is dismissed", async () => {
+    const harness = renderWithFakes(
+      {
+        outcome: "pending",
+        reason: "signing-key-unconfirmed",
+        heldLocally: true,
+      },
+      {},
+    );
+
+    await writeSession(harness, SIGNED_IN_SNAPSHOT);
+    await advanceTimers(60_000);
+
+    expect(noticeRows()).toHaveLength(1);
+  });
+
+  it("dismisses the pending notice when main fans out the session it was written for", async () => {
+    const harness = renderWithFakes(
+      {
+        outcome: "pending",
+        reason: "signing-key-unconfirmed",
+        heldLocally: true,
+      },
+      {},
+    );
+    await writeSession(harness, SIGNED_IN_SNAPSHOT);
+    expect(noticeRows()).toHaveLength(1);
+
+    harness.emitInbound({
+      status: "signed-in",
+      token: SIGNED_IN_SNAPSHOT.token,
+      profile: SIGNED_IN_SNAPSHOT.profile,
+    });
+    await letToastsLeave();
+
+    expect(noticeRows()).toHaveLength(0);
+    expect(harness.ingest).not.toHaveBeenCalled();
+  });
+
+  it("keeps the pending notice up when main fans out its unverified hold of the session", async () => {
+    const harness = renderWithFakes(
+      {
+        outcome: "pending",
+        reason: "key-source-unavailable",
+        heldLocally: true,
+      },
+      {},
+    );
+    await writeSession(harness, SIGNED_IN_SNAPSHOT);
+
+    harness.emitInbound(UNVERIFIED_DESKTOP_SNAPSHOT);
+    await letToastsLeave();
+
+    expect(noticeRows()).toHaveLength(1);
+    expect(harness.ingest).not.toHaveBeenCalled();
+  });
+
+  it("signs out and tracks it when the person chooses Sign out on a refused sign-in", async () => {
+    const track = vi.spyOn(Analytics.getInstance(), "track");
+    const harness = renderWithFakes(
+      { outcome: "refused", reason: "bad-signature" },
+      {},
+    );
+    await writeSession(harness, SIGNED_IN_SNAPSHOT);
+
+    fireEvent.click(
+      within(onlyNotice()).getByRole("button", { name: "Sign out" }),
+    );
+
+    expect(track).toHaveBeenCalledWith(AnalyticsEvent.SignOutRequested, {
+      source: "notification",
+    });
+    expect(harness.signOut).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(NOTICE_CASES)(
+    "reports the notice's fixed copy and code without identifying the person, and keeps the notice up: $label",
+    async ({ result, title, description, code }) => {
+      const harness = renderWithFakes(result, {});
+      await writeSession(harness, SIGNED_IN_SNAPSHOT);
+      const row = onlyNotice();
+
+      fireEvent.click(
+        within(row).getByRole("button", { name: "Report issue" }),
+      );
+      await letToastsLeave();
+
+      const { reportIssueContext } = useDesktopDialogStore.getState();
+      expect(reportIssueContext).toEqual({
+        title,
+        message: description,
+        code,
+        source: "Desktop sign-in",
+      });
+      const disclosed = JSON.stringify([row.textContent, reportIssueContext]);
+      for (const secret of [
+        SIGNED_IN_PROFILE.userId,
+        SIGNED_IN_PROFILE.email,
+        SIGNED_IN_PROFILE.userName,
+        SIGNED_IN_TOKEN,
+      ]) {
+        expect(disclosed).not.toContain(secret);
+      }
+      expect(noticeRows()).toHaveLength(1);
+    },
+  );
+
+  it.each(PENDING_AND_REFUSED)(
+    "shows nothing for a $label answer to a write that is no longer the latest",
+    async ({ result }) => {
+      const harness = renderWithFakes(
+        { outcome: "accepted" },
+        { deferSet: true },
+      );
+      await writeSession(harness, SIGNED_IN_SNAPSHOT);
+      await writeSession(harness, ROTATED_SNAPSHOT);
+
+      harness.resolveSet({ kind: "resolve", result });
+      await settle();
+      expect(noticeRows()).toHaveLength(0);
+
+      harness.resolveSet({ kind: "resolve", result });
+      await settle();
+      expect(noticeRows()).toHaveLength(1);
+    },
+  );
+
+  it.each(PENDING_AND_REFUSED)(
+    "dismisses a $label notice when this window writes a new session",
+    async ({ result }) => {
+      const harness = renderWithFakes(
+        { outcome: "accepted" },
+        { deferSet: true },
+      );
+      await writeSession(harness, SIGNED_IN_SNAPSHOT);
+      harness.resolveSet({ kind: "resolve", result });
+      await settle();
+      expect(noticeRows()).toHaveLength(1);
+
+      await writeSession(harness, SIGNED_OUT_SNAPSHOT);
+      await letToastsLeave();
+
+      expect(noticeRows()).toHaveLength(0);
+    },
+  );
 
   it.each([
     {

@@ -172,6 +172,7 @@ export type DesktopAuthSessionRefusalReason =
   | "malformed-token"
   | "unsupported-algorithm"
   | "unknown-signing-key"
+  | "signing-key-unconfirmed"
   | "key-source-unavailable"
   | "bad-signature"
   | "expired"
@@ -179,8 +180,29 @@ export type DesktopAuthSessionRefusalReason =
   | "audience-mismatch"
   | "subject-mismatch";
 
+/**
+ * The reasons main cannot decide on yet: the key set could not be fetched, or
+ * the token's key is missing from a set this check could not refresh. Neither
+ * is a statement against the token, so main keeps checking it.
+ */
+export type DesktopAuthSessionPendingReason =
+  | "key-source-unavailable"
+  | "signing-key-unconfirmed";
+
 export type DesktopAuthSessionSetResult =
   | { readonly outcome: "accepted" }
+  /**
+   * Main could not check the token yet and keeps checking it on its own; a
+   * successful check fans the session out as verified, the sender included.
+   * `heldLocally` says whether main meanwhile holds the session unverified -
+   * only when its own stored credentials carry the same user and token - so
+   * this machine's host is selectable before the check succeeds.
+   */
+  | {
+      readonly outcome: "pending";
+      readonly reason: DesktopAuthSessionPendingReason;
+      readonly heldLocally: boolean;
+    }
   /**
    * Verified, but not installed: a set begun after this one had already
    * committed by the time this one's verification came back, so this one is

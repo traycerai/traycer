@@ -66,6 +66,12 @@ export interface DesktopBearerVerifier {
     token: string,
     expectedUserId: string,
   ): Promise<DesktopAuthSessionRefusalReason | null>;
+  /**
+   * The earliest instant the key set may be fetched again. A check before it
+   * answers from the keys already in hand, so a caller that re-checks a
+   * `key-source-unavailable` or `signing-key-unconfirmed` token waits for it.
+   */
+  nextFetchAllowedAtMs(): number;
 }
 
 const jwkSchema = z.object({
@@ -143,52 +149,59 @@ export function createDesktopBearerVerifier(
     return parsed;
   }
 
-  async function refresh(force: boolean): Promise<void> {
+  /** Whether this call fetched the key set successfully. */
+  async function refresh(force: boolean): Promise<boolean> {
     const nowMs = config.now();
     if (keys !== null && !force && nowMs - fetchedAtMs < JWKS_MAX_AGE_MS) {
-      // A set inside its max age was confirmed live when it was fetched, so
-      // its silence about a `kid` is an ANSWER again - even if a later refetch
-      // attempt failed in between.
+      // A set inside its max age was confirmed live when it was fetched, so it
+      // is consulted again rather than reported unreachable - even if a later
+      // refetch attempt failed in between. A `kid` it lacks is still only a
+      // verdict once this check refetches the set (`resolveKey`).
       lastAttemptFailed = false;
-      return;
+      return false;
     }
     // The cooldown applies from the FIRST attempt, cache or no cache:
     // otherwise a cold start with authn down costs two fetches per verify,
     // and a renderer looping the IPC is an amplifier onto authn.
     if (nowMs - lastAttemptAtMs < JWKS_REFETCH_COOLDOWN_MS) {
-      return;
+      return false;
     }
     lastAttemptAtMs = nowMs;
     try {
       keys = await fetchBearerKeys();
       fetchedAtMs = nowMs;
       lastAttemptFailed = false;
+      return true;
     } catch {
       // Keep serving the stale set: it is public key material, and a network
       // blip must not turn every token into a forgery.
       lastAttemptFailed = true;
+      return false;
     }
   }
 
   async function resolveKey(
     kid: string,
   ): Promise<KeyObject | DesktopAuthSessionRefusalReason> {
+    let fetchedThisCall = false;
     for (let attempt = 0; attempt < 2; attempt++) {
       // The second pass forces a refetch: an unrecognized `kid` is what a key
       // rotated in since the last fetch looks like.
-      await refresh(attempt === 1);
+      if (await refresh(attempt === 1)) fetchedThisCall = true;
       const key = keys === null ? undefined : keys.get(kid);
       if (key !== undefined) {
         return key;
       }
     }
-    // "Not in the set" is only an ANSWER when the set was confirmed live.
-    return keys !== null && !lastAttemptFailed
-      ? "unknown-signing-key"
-      : "key-source-unavailable";
+    if (keys === null || lastAttemptFailed) return "key-source-unavailable";
+    // "Not in the set" is only a verdict when this check fetched the set. A
+    // set answered from the cache, with the forced refetch skipped by the
+    // cooldown, predates a key rotated in since its fetch.
+    return fetchedThisCall ? "unknown-signing-key" : "signing-key-unconfirmed";
   }
 
   return {
+    nextFetchAllowedAtMs: () => lastAttemptAtMs + JWKS_REFETCH_COOLDOWN_MS,
     async verify(token, expectedUserId) {
       const parts = token.split(".");
       if (parts.length !== 3) {

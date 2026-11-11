@@ -146,6 +146,7 @@ export type DesktopAuthSessionRefusalReason =
   | "malformed-token"
   | "unsupported-algorithm"
   | "unknown-signing-key"
+  | "signing-key-unconfirmed"
   | "key-source-unavailable"
   | "bad-signature"
   | "expired"
@@ -153,8 +154,26 @@ export type DesktopAuthSessionRefusalReason =
   | "audience-mismatch"
   | "subject-mismatch";
 
+/**
+ * The reasons main cannot decide on yet; it keeps checking the token itself.
+ * See `DesktopAuthSessionSetResult` in the desktop's `window-types.ts`.
+ */
+export type DesktopAuthSessionPendingReason =
+  | "key-source-unavailable"
+  | "signing-key-unconfirmed";
+
+/**
+ * Mirrors the desktop's `DesktopAuthSessionSetResult`. A shell built before
+ * `pending` existed answers `refused` for the same cases.
+ */
 export type DesktopAuthSessionSetResult =
   | { readonly outcome: "accepted" }
+  | {
+      readonly outcome: "pending";
+      readonly reason: DesktopAuthSessionPendingReason;
+      readonly heldLocally: boolean;
+    }
+  | { readonly outcome: "superseded" }
   | {
       readonly outcome: "refused";
       readonly reason: DesktopAuthSessionRefusalReason;
