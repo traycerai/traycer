@@ -109,6 +109,8 @@ function SampleModelPickerBody(): ReactNode {
       listRef={listRef}
       listKey="sample"
       visibleRows={SAMPLE_ROWS}
+      hiddenModelProviders={NO_HIDDEN_MODEL_PROVIDERS}
+      hiddenModelProviderCount={0}
       selectedRowId={selectedRowId}
       effectiveActiveRowId={selectedRowId}
       hoveredRowId=""
@@ -230,6 +232,8 @@ const SAMPLE_HARNESSES: ReadonlyArray<GuiHarnessCatalogEntry> = [
     sampleModel("codex", "sample-model", "Sample model"),
   ]),
 ];
+
+const NO_HIDDEN_MODEL_PROVIDERS: ReadonlySet<string> = new Set();
 
 const SAMPLE_ROWS = buildAllHarnessModelRows([
   { harness: SAMPLE_ACTIVE_HARNESS, models: SAMPLE_ACTIVE_HARNESS.models },

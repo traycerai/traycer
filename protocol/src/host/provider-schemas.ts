@@ -2124,6 +2124,16 @@ const providerCliStateBaseShape = {
   // to say whether it can be enforced" - and the second is the one that must
   // hide the control.
   nativeMemorySupported: lazySchema(() => z.boolean().optional()),
+  // The upstream model providers (OpenCode's own provider ids, the
+  // `openCodeProviderId` its catalog rows carry) whose models Traycer's model
+  // pickers leave out. Visibility only: the catalog still lists them, a chat
+  // already on one keeps it, and nothing is written to OpenCode's config.
+  // Written one id at a time by `providers.setModelProviderHidden`, first
+  // published by `providers.list@10.10`, and present only on the row of a
+  // provider with a Model Providers tab - so absent means "host too old" there
+  // and "not applicable" everywhere else, and readers spell the `[]` default
+  // themselves.
+  hiddenModelProviders: lazySchema(() => z.array(z.string().min(1)).optional()),
 };
 
 const providerCliStateBaseShapeV10 = {
@@ -2188,12 +2198,25 @@ export const providerCliStateSchema = lazySchema(() =>
 export type ProviderCliState = z.infer<typeof providerCliStateSchema>;
 
 /**
+ * The provider row `providers.list@10.8` and `@10.9` published: without
+ * `hiddenModelProviders`, which 10.10 added. 10.9 grew the envelope and the
+ * profile projection but not this row, so the two lines share it. Every older
+ * row derives from this one, so the key reaches no older reader.
+ */
+const providerCliStateSchemaV109 = lazySchema(() =>
+  providerCliStateSchema.omit({ hiddenModelProviders: true }),
+);
+
+/**
  * The provider row `providers.list@10.7` published: without the native-memory
  * pair, which 10.8 added. Every older row derives from this one, so neither
  * key reaches an older reader.
+ *
+ * Derived from the 10.9 row rather than the live one, for the reason the 10.6
+ * row gives.
  */
 const providerCliStateSchemaV107 = lazySchema(() =>
-  providerCliStateSchema.omit({
+  providerCliStateSchemaV109.omit({
     nativeMemory: true,
     nativeMemorySupported: true,
   }),
@@ -2592,10 +2615,14 @@ export type ProvidersListRequestV70 = z.infer<
   typeof providersListRequestSchemaV70
 >;
 
-/** Frozen `providers.list@10.8` response, before credential home projections. */
+/**
+ * Frozen `providers.list@10.8` response, before credential home projections.
+ * Its row is the frozen 10.9 one, so a key added to the live row cannot widen
+ * this line.
+ */
 export const providersListResponseSchemaV108Preimage = lazySchema(() =>
   z.object({
-    providers: z.array(providerCliStateSchema),
+    providers: z.array(providerCliStateSchemaV109),
     native: nativeListResultSchema.nullable().default(null),
     // True on a sandbox host: it stores no provider credential
     // (`SANDBOX_HOST_REFUSES_CREDENTIALS`), so API keys, logins and profiles
@@ -2629,6 +2656,22 @@ export const providersListResponseSchemaV108Preimage = lazySchema(() =>
       .optional(),
   }),
 );
+/**
+ * Frozen `providers.list@10.9` response: the 10.9 envelope and profile
+ * projection over the 10.9 row (`providerCliStateSchemaV109`), before 10.10
+ * added `hiddenModelProviders` to the row.
+ */
+export const providersListResponseSchemaV109Preimage = lazySchema(() =>
+  providersListResponseSchemaV108Preimage.extend({
+    providers: z.array(
+      providerCliStateSchemaV109.extend({
+        usageReporting: z.boolean().optional(),
+        profiles: z.array(providerProfileProjectionSchema).catch([]),
+      }),
+    ),
+  }),
+);
+
 /**
  * Canonical `providers.list` response. Classic callers receive `native: null`;
  * a native query carries its list/discover result or typed error there.
@@ -5248,6 +5291,38 @@ export type ProvidersSetNativeMemoryResponse = z.infer<
   typeof providersSetNativeMemoryResponseSchema
 >;
 
+// ── Hidden model providers ─────────────────────────────────────────────────
+//
+// `providers.setModelProviderHidden` shows or hides ONE upstream model
+// provider in Traycer's model pickers (the row's `hiddenModelProviders`) - a
+// brand-new method at `@1.0`, registered `degrade: unsupported` like
+// `providers.setNativeSubagents`. One id per call rather than the whole list,
+// so two quick flips on different rows cannot overwrite each other: the host
+// applies each one to the list it has stored. The response echoes the stored
+// list so the Settings rows can settle on truth.
+//
+// Keyed by HARNESS on the wire like its neighbours; the host refuses a harness
+// with no Model Providers tab, the only place a person can make this choice.
+export const providersSetModelProviderHiddenRequestSchema = lazySchema(() =>
+  z.object({
+    harnessId: guiHarnessIdSchema,
+    modelProviderId: z.string().min(1),
+    hidden: z.boolean(),
+  }),
+);
+export type ProvidersSetModelProviderHiddenRequest = z.infer<
+  typeof providersSetModelProviderHiddenRequestSchema
+>;
+
+export const providersSetModelProviderHiddenResponseSchema = lazySchema(() =>
+  z.object({
+    hiddenModelProviders: z.array(z.string().min(1)),
+  }),
+);
+export type ProvidersSetModelProviderHiddenResponse = z.infer<
+  typeof providersSetModelProviderHiddenResponseSchema
+>;
+
 // ── On-demand pack discovery refresh ───────────────────────────────────────
 //
 // Another BRAND-NEW method name at `@1.0`, riding the same
@@ -5466,6 +5541,9 @@ export type DowngradableToV10ProviderState = (
   // enforce it, absent from earlier rows.
   nativeMemory?: ProviderCliState["nativeMemory"];
   nativeMemorySupported?: ProviderCliState["nativeMemorySupported"];
+  // (v10.10) the model providers hidden from Traycer's pickers, absent from
+  // earlier rows.
+  hiddenModelProviders?: ProviderCliState["hiddenModelProviders"];
   // `V70` is named explicitly rather than left to ride the `V10` arm on the
   // strength of structural width: the v7.0 and v8.0 list lines are pinned to
   // `providerLoginCapabilitySchemaV70`, so that is the concrete shape those
@@ -5502,6 +5580,8 @@ export function downgradeProviderCliStateToV10(
   // - `chatsFollow` (v10.7) — whether existing chats follow the selection.
   // - `nativeMemory` / `nativeMemorySupported` (v10.8) — the per-provider
   //   native-memory switch and its enforceability.
+  // - `hiddenModelProviders` (v10.10) — the model providers hidden from
+  //   Traycer's pickers.
   // - `packId` / `managedVersions` / `managedVersionsUnavailable` /
   //   `nextRunBinary` (v7.0) — the version manager. Same trap, and it is worth
   //   restating rather than assuming the list above covers it: this parse is
@@ -5548,6 +5628,8 @@ export function downgradeProviderCliStateToV10(
     // (v10.8) the native-memory switch and its enforceability.
     nativeMemory: _nativeMemory,
     nativeMemorySupported: _nativeMemorySupported,
+    // (v10.10) the model providers hidden from Traycer's pickers.
+    hiddenModelProviders: _hiddenModelProviders,
     ...rest
   } = state;
   const parsed = providerCliStateSchemaV10.safeParse({

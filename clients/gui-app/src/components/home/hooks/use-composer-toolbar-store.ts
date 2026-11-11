@@ -48,6 +48,11 @@ import { returnedSandboxRestoredOn } from "@/lib/sandboxes/returned-sandbox";
 import { useSandboxHostConfiguration } from "@/hooks/sandboxes/use-on-team-sandbox";
 import { useSandboxTraycerModels } from "@/hooks/sandboxes/use-sandbox-traycer-models-query";
 import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
+import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
+import {
+  hiddenModelProvidersForHarness,
+  withoutHiddenModelProviders,
+} from "@/lib/providers/provider-hidden-model-providers";
 
 const EMPTY_MODELS: ReadonlyArray<ModelOption> = [];
 
@@ -294,7 +299,29 @@ export function useComposerToolbarStore(
   // was invisible while an inactive surface was also a hidden one, and became a
   // visible defect with split panes, where the unfocused pane stays on screen.
   const harnesses = harnessesQuery.data?.harnesses;
-  const models = modelsData ?? EMPTY_MODELS;
+  const providersQuery = useProvidersListForClient(hostClient, {
+    enabled: activityEnabled,
+    subscribed: activityEnabled,
+  });
+  const hiddenModelProviders = useMemo(
+    () =>
+      hiddenModelProvidersForHarness(providersQuery.data?.providers, harnessId),
+    [providersQuery.data, harnessId],
+  );
+  // A chat's own settings keep the whole catalog, so a chat already on a model
+  // whose provider is hidden keeps it. Every other seed resolves against the
+  // models still shown, so a new composer's default, and a remembered model
+  // whose provider has since been hidden, land on a shown model instead.
+  const models = useMemo(
+    () =>
+      seedIsAuthoritative
+        ? (modelsData ?? EMPTY_MODELS)
+        : withoutHiddenModelProviders(
+            modelsData ?? EMPTY_MODELS,
+            hiddenModelProviders,
+          ),
+    [seedIsAuthoritative, modelsData, hiddenModelProviders],
+  );
   // Explicit load status for the CURRENT `harnessId`'s models query, threaded to
   // the store so it can tell "loading" from "loaded empty" (the query is keyed
   // on `harnessId`, so `data` resets to undefined during a cross-harness switch

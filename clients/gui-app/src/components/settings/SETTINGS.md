@@ -3876,15 +3876,36 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
     - **NO scope picker**, unlike MCP. OpenCode's upstream auth is per-user;
       there are no project-scoped credentials for a `global`/`project` control
       to choose between. The sidebar host picker still scopes the tab.
-    - **ONE list, connected first** (`sortModelProviderEntries`), not a
-      "Connected" section above a searchable catalog. Search has to be able to
-      find a connected provider, and the two-section shape is precisely the one
-      where it cannot. ~180 rows flowing in the panel's own scroll (no internal
-      height cap - an inner `overflow-y-auto` nested a second scrollbar inside
-      the panel's); deliberately NOT virtualized
-      (single-line rows, no per-row queries - and a virtualizer renders an empty
-      viewport under jsdom's zero-height layout, which would put this list's
-      behavior beyond test).
+    - **Two cards, one search: Connected, then All providers**
+      (`ModelProviderCards`). One search and one filter run over the whole
+      catalog first and the result is split after, so a connected provider is
+      found exactly like any other (the earlier objection to a "Connected"
+      section was a section the search could not reach). Each card is one CSS
+      grid whose rows are `grid-cols-subgrid`, so the switch and the buttons line
+      up in every row with no fixed column width. A row is the mark, the name,
+      and one muted line: the id, then the sign-in source as text (its hint on
+      hover), not a badge. ~180 rows flowing in the panel's own scroll (no
+      internal height cap - an inner `overflow-y-auto` nested a second scrollbar
+      inside the panel's); deliberately NOT virtualized (no per-row queries -
+      and a virtualizer renders an empty viewport under jsdom's zero-height
+      layout, which would put this list's behavior beyond test).
+      - **The picker switch** (`use-model-provider-visibility.ts`) sits on
+        Connected rows only, between the name and the buttons, with no column
+        header. Off hides that model provider's models from Traycer's model
+        pickers and from `traycer_list_harness_models`; it stays connected in
+        OpenCode, nothing is written to OpenCode's config, and a chat already on
+        one of its models keeps it. Its tooltip reads "Shown in Traycer", or
+        "Hidden in Traycer. Still connected in OpenCode."; the tab description
+        gains one sentence saying the same, for touch, where there is no
+        tooltip. Stored per computer as `hiddenModelProviders` in
+        `provider-overrides.json`, read off the `providers.list@10.10` row and
+        written one id at a time by `providers.setModelProviderHidden` (an
+        optional method). A host without either draws no switch and no
+        sentence, and its pickers hide nothing. Each row holds its own echo
+        until `providers.list` reads back, as the Memories switch does. A
+        provider that is not connected never reaches a picker, so the All
+        providers card has no switch; a hidden provider that is disconnected and
+        later reconnected comes back with its switch off.
       - **One filter beside the search box**
         (`model-provider-filter.ts` + `model-provider-list-controls.tsx`):
         **All / Browser sign-in**, in the same `ListFilter` menu shape the
@@ -4181,15 +4202,16 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
       reproduce a composited translucent parent it does not own the bounds of.
       The accepted trade is scrolling back up to search a long catalog — one
       gesture, versus an artifact on every frame.
-      **"Add custom provider" is the list's FIRST item** and scrolls with the
-      content. It stays rendered whatever the search or filter says — including
-      when they match nothing, which is why every empty state renders INSIDE the
-      list shell rather than instead of it. It is an affordance, not a result:
-      a query that hid it would remove the one row whose purpose is "what you
-      want isn't in this list", exactly when someone is typing. (It sat above
-      the search box for one round, for that same reason; the user's live pass
-      overruled the placement, and the always-first-row form keeps the property
-      without pinning it.)
+      **"Add custom provider" sits beside the search** (visible text "Custom
+      provider"), on the search row the list shell owns. It stays rendered
+      whatever the search or filter says — including when they match nothing,
+      which is why every empty state renders INSIDE the list shell rather than
+      instead of it, and on an empty catalog, where the row holds it alone. It
+      is an affordance, not a result: a query that hid it would remove the one
+      control whose purpose is "what you want isn't in this list", exactly when
+      someone is typing. (It was the list's first row while the list was one
+      card; with two cards a first row would sit inside Connected and read as a
+      provider.)
     - **Disconnect on a declared custom row is a DISABLE**, and says so. There
       is no separate remove verb on the wire: upstream's disconnect for a
       config-declared custom disables the block rather than deleting a
