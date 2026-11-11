@@ -1,7 +1,10 @@
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import { useState, type ReactNode } from "react";
-import { HOST_FROZEN_WORD } from "@traycer/protocol/host/host-status";
+import {
+  HOST_FROZEN_WORD,
+  HOST_KIND_WORDS,
+} from "@traycer/protocol/host/host-status";
 import {
   ChevronDown,
   ChevronRight,
@@ -1308,10 +1311,29 @@ function HostSwitcherTrigger(props: {
               </span>
             )}
           </span>
+          <HostSwitcherTriggerKind
+            surfaceKind={props.surfaceKind}
+            selected={selected}
+          />
           <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
         </Button>
       </PopoverTrigger>
     </TooltipWrapper>
+  );
+}
+
+/** A panel header's kind word. The rail shows the kind as its glyph instead. */
+function HostSwitcherTriggerKind(props: {
+  readonly surfaceKind: HostSwitcherSurface;
+  readonly selected: HostScopeOption | null;
+}): ReactNode {
+  if (props.surfaceKind !== "panel-header") return null;
+  if (props.selected === null || props.selected.kind === null) return null;
+  return (
+    <span className="shrink-0 text-ui-xs font-normal text-muted-foreground">
+      {" "}
+      {HOST_KIND_WORDS[props.selected.kind]}
+    </span>
   );
 }
 

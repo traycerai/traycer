@@ -5,6 +5,10 @@
  * the send through the callbacks the box handed it, as the host's answer or
  * refusal would land.
  */
+import {
+  botMentionHostClientMock,
+  emptyBotMentionHostListsMock,
+} from "@/components/bots/__tests__/bot-mention-host-test-support";
 import { useState, type ReactNode } from "react";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
@@ -47,6 +51,15 @@ const mocks = vi.hoisted(() => ({
   /** Whether a send is on its way: set at the send, cleared when it settles. */
   pending: false,
 }));
+
+vi.mock(
+  "@/hooks/host/use-host-client-for-host-id",
+  () => botMentionHostClientMock,
+);
+vi.mock(
+  "@/hooks/bots/use-environment-host-lists-query",
+  () => emptyBotMentionHostListsMock,
+);
 
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => ({ stub: "tab-host-client" }),

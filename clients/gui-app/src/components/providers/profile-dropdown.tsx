@@ -74,7 +74,9 @@ export interface ProfileDropdownShortcutHint {
 export interface ProfileDropdownEligibilityControls {
   readonly pending: (profileId: string | null) => boolean;
   readonly disabledReason: (profile: ProviderProfile) => string | null;
-  readonly onSetEnabled: (profileId: string | null, enabled: boolean) => void;
+  readonly onSetEnabled:
+    | ((profileId: string | null, enabled: boolean) => void)
+    | null;
 }
 
 interface ProfileDropdownProps {
@@ -610,8 +612,21 @@ function ProfileEnablementSwitch(props: {
   readonly disabledReason: string | null;
   readonly className: string | undefined;
 }): ReactNode {
-  const controls = props.controls;
-  if (controls === null) return null;
+  if (props.controls === null) return null;
+  const onSetEnabled = props.controls.onSetEnabled;
+  // A reader sees the state where an editor sees the switch.
+  if (onSetEnabled === null) {
+    return (
+      <span
+        className={cn(
+          "shrink-0 text-ui-xs text-muted-foreground",
+          props.className,
+        )}
+      >
+        {props.profile.enabled ? "On" : "Off"}
+      </span>
+    );
+  }
   return (
     <TooltipWrapper
       label={profileEnablementTooltipText(
@@ -639,7 +654,7 @@ function ProfileEnablementSwitch(props: {
           }}
           onCheckedChange={(enabled) => {
             if (props.disabledReason !== null) return;
-            controls.onSetEnabled(props.commitId, enabled);
+            onSetEnabled(props.commitId, enabled);
           }}
         />
       </span>

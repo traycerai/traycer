@@ -15,6 +15,7 @@ const CONTEXT: SettingsAvailabilityContext = {
   phoneLayout: false,
   soundtrackOffered: false,
   soundtrackRecordingOffered: false,
+  soundtrackSetPiecesOffered: false,
   soundtrackOn: false,
 };
 

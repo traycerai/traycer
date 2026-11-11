@@ -1,9 +1,15 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import type { EnvironmentOs } from "@traycer/protocol/host/environment-schemas";
 import { Check, Plus, Trash2, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  VariableEditSheet,
+  VariablePhoneRow,
+} from "@/components/settings/variable-edit-sheet";
+import { useIsSmallViewport } from "@/hooks/ui/use-small-viewport";
 import { configurationTextValueSchema } from "@/hooks/environment/team/configuration-item-values";
 import type { ConfigurationItem } from "@/hooks/environment/team/use-configuration-items-query";
 import { cn } from "@/lib/utils";
@@ -196,25 +202,36 @@ function TeamTextHeader(): ReactNode {
 function AcceptedNewTextItem(props: {
   readonly write: ConfigurationItemWrite;
 }): ReactNode {
+  const phone = useIsSmallViewport();
   const value = configurationTextValueSchema.parse(props.write.value).value;
   return (
     <section
       aria-label={props.write.key}
       className="flex flex-col gap-1 px-3 py-2"
     >
-      <div className={GRID}>
-        <span className="truncate font-mono text-ui-xs text-foreground">
-          {props.write.key}
-        </span>
-        <span
-          className={cn(
-            VALUE_FIELD_PLACEMENT,
-            "truncate font-mono text-ui-xs text-foreground",
-          )}
-        >
-          {value}
-        </span>
-      </div>
+      {phone ? (
+        <VariablePhoneRow
+          name={props.write.key}
+          value={value}
+          badge={null}
+          disabled
+          onEdit={null}
+        />
+      ) : (
+        <div className={GRID}>
+          <span className="truncate font-mono text-ui-xs text-foreground">
+            {props.write.key}
+          </span>
+          <span
+            className={cn(
+              VALUE_FIELD_PLACEMENT,
+              "truncate font-mono text-ui-xs text-foreground",
+            )}
+          >
+            {value}
+          </span>
+        </div>
+      )}
     </section>
   );
 }
@@ -384,7 +401,7 @@ function NewTextRow(props: {
   );
 }
 
-function TeamTextEditor(props: {
+interface TeamTextEditorProps {
   readonly failure: ConfigurationItemWriteFailure | null;
   readonly item: ConfigurationItem | null;
   readonly currentItem: ConfigurationItem | null;
@@ -403,7 +420,237 @@ function TeamTextEditor(props: {
   readonly details: ReactNode;
   readonly onApplied: () => void;
   readonly onDismiss: () => void;
+}
+
+function TeamTextEditor(props: TeamTextEditorProps): ReactNode {
+  const phone = useIsSmallViewport();
+  return phone ? (
+    <PhoneTeamTextEditor {...props} />
+  ) : (
+    <InlineTeamTextEditor {...props} />
+  );
+}
+
+function PhoneTeamTextEditor(props: TeamTextEditorProps): ReactNode {
+  const canEdit = useCanEditConfiguration();
+  const saved = shownText(props.item, props.pending, props.accepted);
+  const displayName =
+    props.item === null ? "" : storedName(props.item.key, props.providerId);
+  const [name, setName] = useState(
+    props.item === null
+      ? textDraftName(props.draft, props.providerId)
+      : displayName,
+  );
+  const [value, setValue] = useState(
+    props.draft === null
+      ? saved
+      : configurationTextValueSchema.parse(props.draft.value).value,
+  );
+  const [open, setOpen] = useState(
+    props.item === null || props.draft !== null || props.saving,
+  );
+  const dismiss = (): void => {
+    if (props.busy) return;
+    setOpen(false);
+    setName(displayName);
+    setValue(saved);
+    if (props.draft !== null) props.onDiscardDraft(props.draft);
+    if (props.item === null) props.onDismiss();
+  };
+  const save = (): void => {
+    if (props.busy) return;
+    if (props.item !== null) {
+      commitSavedText(
+        { ...props, name, value, saved, displayName, snapName: setName },
+        true,
+      );
+      if (value === saved) dismiss();
+      return;
+    }
+    if (!NAME_PATTERN.test(name.trim())) return;
+    props.onApplied();
+    putText({
+      ...props,
+      key:
+        props.providerId === null
+          ? name.trim()
+          : `${props.providerId}:${name.trim()}`,
+      value,
+      original: null,
+    });
+  };
+  return (
+    <PhoneTeamTextContent
+      {...props}
+      name={name}
+      value={value}
+      saved={saved}
+      displayName={displayName}
+      open={open}
+      canEdit={canEdit}
+      onSave={save}
+      onClose={dismiss}
+      onName={setName}
+      onOpen={() => setOpen(true)}
+      onValue={(next) => {
+        setValue(next);
+        if (props.draft !== null)
+          props.onDraftChange({ ...props.draft, value: { value: next } });
+      }}
+    />
+  );
+}
+
+interface PhoneTeamTextContentProps extends TeamTextEditorProps {
+  readonly name: string;
+  readonly value: string;
+  readonly saved: string;
+  readonly displayName: string;
+  readonly open: boolean;
+  readonly canEdit: boolean;
+  readonly onSave: () => void;
+  readonly onClose: () => void;
+  readonly onName: (name: string) => void;
+  readonly onValue: (value: string) => void;
+  readonly onOpen: () => void;
+}
+
+function PhoneTeamTextContent(props: PhoneTeamTextContentProps): ReactNode {
+  const { saved, displayName, open, canEdit } = props;
+  const title = props.item === null ? "New variable" : props.item.key;
+  const label = props.osLabel === null ? title : `${title} · ${props.osLabel}`;
+  const feedback = (
+    <>
+      <ConfigurationPendingWriteStatus
+        write={props.saving ? props.pending : null}
+      />
+      <ConfigurationItemWriteError failure={props.failure} />
+    </>
+  );
+  return (
+    <section className="flex min-w-0 flex-col gap-1" aria-label={label}>
+      {props.item === null ? null : (
+        <VariablePhoneRow
+          name={displayName}
+          value={saved}
+          badge={
+            props.osLabel === null ? null : (
+              <Badge variant="secondary" size="xs">
+                {props.osLabel}
+              </Badge>
+            )
+          }
+          disabled={props.busy}
+          onEdit={canEdit ? props.onOpen : null}
+        />
+      )}
+      <PhoneTeamTextSheet {...props} feedback={feedback} />
+      {open && canEdit ? null : feedback}
+      {open || props.details === null ? null : (
+        <div className="flex justify-end px-3 pb-2">{props.details}</div>
+      )}
+    </section>
+  );
+}
+
+function PhoneTeamTextSheet(
+  props: PhoneTeamTextContentProps & { readonly feedback: ReactNode },
+): ReactNode {
+  if (!props.canEdit) return null;
+  return (
+    <VariableEditSheet
+      open={props.open}
+      title={props.item === null ? "Add a variable" : props.displayName}
+      busy={props.busy}
+      saveDisabled={
+        props.item === null ? !NAME_PATTERN.test(props.name.trim()) : false
+      }
+      removeLabel={`Remove ${props.displayName}`}
+      onSave={props.onSave}
+      onDismiss={props.onClose}
+      onRemove={
+        props.currentItem === null
+          ? null
+          : () => {
+              if (props.item === null) return;
+              void props.onWrite({
+                kind: props.kind,
+                key: props.item.key,
+                os: props.item.os,
+                action: "remove",
+                value: { value: props.saved },
+                original: props.currentItem,
+              });
+            }
+      }
+    >
+      <PhoneTeamTextFields
+        name={props.name}
+        value={props.value}
+        busy={props.busy}
+        isNew={props.item === null}
+        displayName={props.displayName}
+        onName={props.onName}
+        onValue={props.onValue}
+      />
+      {props.feedback}
+      {props.details}
+    </VariableEditSheet>
+  );
+}
+
+function PhoneTeamTextFields(props: {
+  readonly name: string;
+  readonly value: string;
+  readonly busy: boolean;
+  readonly isNew: boolean;
+  readonly displayName: string;
+  readonly onName: (name: string) => void;
+  readonly onValue: (value: string) => void;
 }): ReactNode {
+  const nameId = useId();
+  const valueId = useId();
+  return (
+    <>
+      <label htmlFor={nameId} className="flex flex-col gap-2 text-ui-sm">
+        Name
+        <Input
+          id={nameId}
+          value={props.name}
+          readOnly={!props.isNew}
+          disabled={props.busy}
+          spellCheck={false}
+          font="mono"
+          aria-label={
+            props.isNew ? "New variable name" : `Name for ${props.displayName}`
+          }
+          placeholder={props.isNew ? "NODE_ENV" : undefined}
+          onChange={(event) => props.onName(event.target.value)}
+        />
+      </label>
+      <label htmlFor={valueId} className="flex flex-col gap-2 text-ui-sm">
+        Value
+        <Textarea
+          id={valueId}
+          value={props.value}
+          disabled={props.busy}
+          spellCheck={false}
+          font="mono"
+          rows={4}
+          placeholder="value"
+          aria-label={
+            props.isNew
+              ? "New variable value"
+              : `Value for ${props.displayName}`
+          }
+          onChange={(event) => props.onValue(event.target.value)}
+        />
+      </label>
+    </>
+  );
+}
+
+function InlineTeamTextEditor(props: TeamTextEditorProps): ReactNode {
   const canEdit = useCanEditConfiguration();
   const saved = shownText(props.item, props.pending, props.accepted);
   const displayName =

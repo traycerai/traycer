@@ -9,6 +9,7 @@ const SOUNDTRACK_DESKTOP: SettingsAvailabilityContext = {
   phoneLayout: false,
   soundtrackOffered: true,
   soundtrackRecordingOffered: true,
+  soundtrackSetPiecesOffered: false,
   soundtrackOn: true,
 };
 

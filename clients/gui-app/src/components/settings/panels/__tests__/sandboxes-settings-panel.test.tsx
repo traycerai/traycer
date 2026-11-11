@@ -1104,7 +1104,7 @@ describe("<SandboxesSettingsPanel />", () => {
         failed.getAllByText("Compute is charged while it is awake."),
       ).toHaveLength(1);
       for (const name of [
-        "Retry setup",
+        "Retry applying",
         "Open terminal",
         "Stop",
         "Choose another host",

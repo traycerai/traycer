@@ -406,6 +406,7 @@ export class MockRunnerHost implements IRunnerHost {
   readonly hostTray: null = null;
   readonly hostLifecycle: null = null;
   readonly zoom: null = null;
+  readonly deviceDictation: null = null;
   readonly pushPermission: null = null;
   readonly systemBack: null = null;
   readonly statusBarTap: null = null;

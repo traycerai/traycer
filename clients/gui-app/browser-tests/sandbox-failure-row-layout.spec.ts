@@ -50,7 +50,7 @@ test("at 1280px failure remedies wrap beside a readable sandbox identity", async
   await openPanel(page);
   const failed = page.locator('[data-sandbox-row="settings-failure"]');
   for (const name of [
-    "Retry setup",
+    "Retry applying",
     "Open terminal",
     "Stop",
     "Choose another host",

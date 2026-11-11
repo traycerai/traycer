@@ -119,10 +119,21 @@ class StubWebSocket implements WebSocketLike {
   readonly sent: string[] = [];
   closed: { readonly code: number; readonly reason: string } | null = null;
   readonly sentFrames: ClientFrame[] = [];
+  private readonly sendWaiters: Array<() => void> = [];
 
   send(data: string): void {
     this.sent.push(data);
     this.sentFrames.push(JSON.parse(data) as ClientFrame);
+    const waiters = this.sendWaiters.splice(0, this.sendWaiters.length);
+    for (const resolve of waiters) {
+      resolve();
+    }
+  }
+
+  nextSend(): Promise<void> {
+    return new Promise((resolve) => {
+      this.sendWaiters.push(resolve);
+    });
   }
 
   close(code: number, reason: string): void {
@@ -163,16 +174,30 @@ class StubWebSocket implements WebSocketLike {
 function makeFactory(): {
   readonly factory: IWebSocketFactory;
   readonly sockets: RecordedSocket[];
+  readonly nextSocket: () => Promise<void>;
 } {
   const sockets: RecordedSocket[] = [];
+  const socketWaiters: Array<() => void> = [];
   const factory: IWebSocketFactory = {
     create(url: string, priority: DialPriority): WebSocketLike {
       const socket = new StubWebSocket();
       sockets.push({ url, socket, sent: socket.sentFrames, priority });
+      const waiters = socketWaiters.splice(0, socketWaiters.length);
+      for (const resolve of waiters) {
+        resolve();
+      }
       return socket;
     },
   };
-  return { factory, sockets };
+  return {
+    factory,
+    sockets,
+    nextSocket(): Promise<void> {
+      return new Promise((resolve) => {
+        socketWaiters.push(resolve);
+      });
+    },
+  };
 }
 
 function authorityForToken(token: string | null): HostRequestAuthority {
@@ -1109,7 +1134,7 @@ describe("WsRpcClient", () => {
   });
 
   it("dials the priority `dialPriorityForMethod` computes for the method, not a literal - background for a listed method, interactive for an unlisted one", async () => {
-    const { factory, sockets } = makeFactory();
+    const { factory, sockets, nextSocket } = makeFactory();
     let nextRequestId = 0;
     const client = new WsRpcClient<typeof testRegistry>({
       clientIdentity: TEST_CLIENT_IDENTITY,
@@ -1123,7 +1148,10 @@ describe("WsRpcClient", () => {
     });
     const authority = authorityForToken("token-abc");
 
-    // "host.status" is on `dial-priority.ts`'s background list.
+    // "host.status" is on `dial-priority.ts`'s background list. The first
+    // call to an unclassified host owns the dial; a second call waits until
+    // that handshake says whether the host keeps a session.
+    const backgroundSocket = nextSocket();
     const backgroundPending = client.request(
       "host.status",
       {},
@@ -1134,8 +1162,14 @@ describe("WsRpcClient", () => {
         requiredHostMethodVersion: null,
       },
     );
-    await flush();
-    // "host.echo" is not - it must fall through to the interactive default.
+    await backgroundSocket;
+    expect(sockets).toHaveLength(1);
+    expect(sockets[0].priority).toBe("background");
+
+    // "host.echo" is not on the background list - it must fall through to
+    // the interactive default. It stays queued until the ack below.
+    // `claim` returns before `request` awaits, so a dial of its own would
+    // already have called `create`.
     const interactivePending = client.request(
       "host.echo",
       { message: "hi" },
@@ -1146,18 +1180,24 @@ describe("WsRpcClient", () => {
         requiredHostMethodVersion: null,
       },
     );
-    await flush();
+    expect(sockets).toHaveLength(1);
 
-    expect(sockets).toHaveLength(2);
-    expect(sockets[0].priority).toBe("background");
-    expect(sockets[1].priority).toBe("interactive");
-
+    const backgroundOpen = sockets[0].socket.nextSend();
     sockets[0].socket.fireOpen();
-    await flush();
+    await backgroundOpen;
+    // This ack does not advertise a persistent session, so the waiter dials
+    // its own socket and keeps the method's priority.
+    const waiterSocket = nextSocket();
+    const statusSent = sockets[0].socket.nextSend();
     sockets[0].socket.fireMessage(
       openAckWithOptionalHostEcho({ major: 1, minor: 0 }),
     );
-    await flush();
+    await waiterSocket;
+    await statusSent;
+
+    expect(sockets).toHaveLength(2);
+    expect(sockets[1].priority).toBe("interactive");
+
     const statusRequest = expectRequestFrame(sockets[0].sent[1]);
     sockets[0].socket.fireMessage({
       kind: "response",
@@ -1169,12 +1209,14 @@ describe("WsRpcClient", () => {
     });
     await expect(backgroundPending).resolves.toEqual({ ready: true });
 
+    const echoOpen = sockets[1].socket.nextSend();
     sockets[1].socket.fireOpen();
-    await flush();
+    await echoOpen;
+    const echoSent = sockets[1].socket.nextSend();
     sockets[1].socket.fireMessage(
       openAckWithOptionalHostEcho({ major: 1, minor: 0 }),
     );
-    await flush();
+    await echoSent;
     const echoRequest = expectRequestFrame(sockets[1].sent[1]);
     sockets[1].socket.fireMessage({
       kind: "response",
@@ -1272,7 +1314,7 @@ describe("WsRpcClient", () => {
   });
 
   it("refuses to dispatch a replay the negotiated connection cannot key", async () => {
-    const { factory, sockets } = makeFactory();
+    const { factory, sockets, nextSocket } = makeFactory();
     const raw = new WsRpcClient<typeof testRegistry>({
       clientIdentity: TEST_CLIENT_IDENTITY,
       registry: testRegistry,
@@ -1283,6 +1325,7 @@ describe("WsRpcClient", () => {
       hostAttestationWindowMs: 0,
       evidence: NO_TRANSPORT_EVIDENCE,
     });
+    const created = nextSocket();
     const pending = raw.request(
       "host.echo",
       { message: "hi" },
@@ -1295,18 +1338,17 @@ describe("WsRpcClient", () => {
         authority: authorityForToken("token-abc"),
       },
     );
-    // Captured BEFORE the first `flush()`, unlike the sibling tests above. The
-    // refusal lands while the openAck is being consumed, several microtask
-    // turns before an `expect(...).rejects` could attach - so deferring the
-    // handler leaves the tick in between with an unhandled rejection, and
-    // vitest fails the whole file on it while every assertion still passes.
+    // Attached before the openAck. The refusal lands while that frame is
+    // consumed, before an `expect(...).rejects` could attach, and an
+    // unhandled rejection fails the file while the assertions still pass.
     const outcome = pending.then(
       () => null,
       (reason: unknown) => reason,
     );
-    await flush();
+    await created;
+    const opened = sockets[0].socket.nextSend();
     sockets[0].socket.fireOpen();
-    await flush();
+    await opened;
     sockets[0].socket.fireMessage(
       openAckWithOptionalHostEchoAndCapabilities({ major: 1, minor: 0 }, [
         // The re-dial landed on an incarnation without unary idempotency. The
@@ -1316,17 +1358,22 @@ describe("WsRpcClient", () => {
         "future.capability",
       ]),
     );
-    await flush();
 
     // `sent[0]` is the open frame. Nothing followed it: the refusal is the
     // point, so a rejection alone would not distinguish this from dispatching
     // and then failing.
-    expect(sockets[0].sent).toHaveLength(1);
     const error: unknown = await outcome;
+    expect(sockets[0].sent).toHaveLength(1);
     expect(error).toBeInstanceOf(HostTransportFailureError);
     // Deliberately NOT retryable: the first attempt may already have
     // committed, so the honest answer is ambiguity, not a third attempt.
+    // This attempt itself sent nothing, so it does not read as reached.
     expect(error).not.toBeInstanceOf(RetryableTransportError);
+    expect(mayHaveReachedHost(error)).toBe(false);
+    if (!(error instanceof HostTransportFailureError)) {
+      throw new Error("expected the unkeyed replay refusal");
+    }
+    expect(error.fatalDetails).not.toBeNull();
   });
 
   it("aborting the captured authority closes and settles the in-flight socket", async () => {
@@ -1627,7 +1674,7 @@ describe("WsRpcClient", () => {
   });
 
   it("refcounts the local logical session to one host: overlapping RPCs announce and retract exactly once, on the 0->1 and 1->0 edges only", async () => {
-    const { factory, sockets } = makeFactory();
+    const { factory, sockets, nextSocket } = makeFactory();
     const recorder = new RecordingEvidence();
     let nextRequestId = 0;
     const client = new WsRpcClient<typeof testRegistry>({
@@ -1642,8 +1689,10 @@ describe("WsRpcClient", () => {
     });
     const authority = authorityForToken("token-abc");
 
-    // Fire two overlapping RPCs to the SAME host - neither awaited before the
-    // next is started, so both sockets are open at once.
+    // The first call classifies the host. A second call to the same host
+    // waits on that dial. A non-advertising ack releases it onto its own
+    // socket, and the two sockets are then open together.
+    const firstSocket = nextSocket();
     const pending1 = client.request(
       "host.echo",
       { message: "one" },
@@ -1654,7 +1703,7 @@ describe("WsRpcClient", () => {
         requiredHostMethodVersion: null,
       },
     );
-    await flush();
+    await firstSocket;
     const pending2 = client.request(
       "host.echo",
       { message: "two" },
@@ -1665,23 +1714,33 @@ describe("WsRpcClient", () => {
         requiredHostMethodVersion: null,
       },
     );
-    await flush();
+    // `claim` returns before `request` awaits, so a second dial would
+    // already have called `create`.
+    expect(sockets).toHaveLength(1);
+
+    const firstOpen = sockets[0].socket.nextSend();
+    sockets[0].socket.fireOpen();
+    expect(recorder.callsNamed("sessionEstablished")).toHaveLength(1);
+    await firstOpen;
+
+    const secondSocket = nextSocket();
+    const firstRequest = sockets[0].socket.nextSend();
+    sockets[0].socket.fireMessage(
+      openAckWithOptionalHostEcho({ major: 1, minor: 0 }),
+    );
+    await secondSocket;
+    await firstRequest;
     expect(sockets).toHaveLength(2);
 
-    sockets[0].socket.fireOpen();
-    await flush();
+    const secondOpen = sockets[1].socket.nextSend();
     sockets[1].socket.fireOpen();
-    await flush();
 
     // Only the 0 -> 1 refcount edge (the first socket's open) announces - the
     // second socket opening while one is already live must NOT re-announce.
     expect(recorder.callsNamed("sessionEstablished")).toHaveLength(1);
     expect(recorder.callsNamed("sessionLost")).toHaveLength(0);
+    await secondOpen;
 
-    sockets[0].socket.fireMessage(
-      openAckWithOptionalHostEcho({ major: 1, minor: 0 }),
-    );
-    await flush();
     const req0 = expectRequestFrame(sockets[0].sent[1]);
     sockets[0].socket.fireMessage({
       kind: "response",
@@ -1697,10 +1756,11 @@ describe("WsRpcClient", () => {
     // no retraction on the first completion.
     expect(recorder.callsNamed("sessionLost")).toHaveLength(0);
 
+    const secondRequest = sockets[1].socket.nextSend();
     sockets[1].socket.fireMessage(
       openAckWithOptionalHostEcho({ major: 1, minor: 0 }),
     );
-    await flush();
+    await secondRequest;
     const req1 = expectRequestFrame(sockets[1].sent[1]);
     sockets[1].socket.fireMessage({
       kind: "response",
@@ -1908,7 +1968,10 @@ describe("WsRpcClient", () => {
         error instanceof HostRpcError &&
         error.code === "RPC_ERROR" &&
         error.requestId === "req-no-auth" &&
-        error.message.includes("No bearer available for user 'test-user'"),
+        error.message.includes(
+          "No bearer available for this credential lease",
+        ) &&
+        !error.message.includes("test-user"),
     );
     expect(sockets).toHaveLength(0);
   });

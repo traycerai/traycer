@@ -829,6 +829,7 @@ describe("GeneralSettingsPanel", () => {
         phoneLayout: false,
         soundtrackOffered: false,
         soundtrackRecordingOffered: false,
+        soundtrackSetPiecesOffered: false,
         soundtrackOn: false,
       };
       expect(isAgentRolesRowAvailable(context)).toBe(false);
@@ -859,6 +860,7 @@ describe("GeneralSettingsPanel", () => {
         phoneLayout: false,
         soundtrackOffered: false,
         soundtrackRecordingOffered: false,
+        soundtrackSetPiecesOffered: false,
         soundtrackOn: false,
       };
       expect(isAgentRolesRowAvailable(context)).toBe(true);
@@ -876,6 +878,7 @@ describe("GeneralSettingsPanel", () => {
         phoneLayout: true,
         soundtrackOffered: false,
         soundtrackRecordingOffered: false,
+        soundtrackSetPiecesOffered: false,
         soundtrackOn: false,
       };
       expect(isVoiceInputRowAvailable(context)).toBe(false);
@@ -883,6 +886,41 @@ describe("GeneralSettingsPanel", () => {
       const { container } = render(panelTree());
 
       assertSettingsSearchTargets("general", context, container);
+    });
+
+    it("offers the voice input row in the installed mobile app with a recognizer of its own", () => {
+      setMobileApp(true);
+      const runnerHost = createFakeRunnerHost({
+        deviceDictation: {
+          isAvailable: () => Promise.resolve(true),
+          open: () => {
+            throw new Error("the settings page opens no session");
+          },
+        },
+      });
+      const context: SettingsAvailabilityContext = {
+        runnerHost,
+        featureSettings: null,
+        mobileApp: true,
+        phoneLayout: true,
+        soundtrackOffered: false,
+        soundtrackRecordingOffered: false,
+        soundtrackSetPiecesOffered: false,
+        soundtrackOn: false,
+      };
+      expect(isVoiceInputRowAvailable(context)).toBe(true);
+      const { container } = render(
+        <RunnerHostProvider runnerHost={runnerHost}>
+          {panelTree()}
+        </RunnerHostProvider>,
+      );
+
+      assertSettingsSearchTargets("general", context, container);
+      expect(
+        container.querySelector(
+          `[data-settings-anchor="${GENERAL.definitions.voiceInput.anchor}"]`,
+        ),
+      ).not.toBeNull();
     });
   });
 });

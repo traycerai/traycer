@@ -15,10 +15,11 @@ import { CredentialLeaseReleasedError } from "@traycer/protocol/auth/request-con
 /**
  * Read side of the bearer seam used by the transport open frame.
  *
- * `identity.userId` is consumed only for diagnostics (the empty-token error
- * message) and the same-user rotation guard; the transport never reads the rest
- * of an identity. `getBearerToken()` throws when no bearer is available (e.g. a
- * released credential lease), which the transport maps to a pre-dial failure.
+ * `identity.userId` is consumed only by the same-user rotation guard; the
+ * transport never reads the rest of an identity, and it never reaches an error
+ * message — a sink that logs a whole error object would publish the id above
+ * DEBUG. `getBearerToken()` throws when no bearer is available (e.g. a released
+ * credential lease), which the transport maps to a pre-dial failure.
  */
 export interface OpenFrameBearerSource {
   getBearerToken(): string;
@@ -93,7 +94,7 @@ export class MutableBearerLease implements BearerLease {
   getBearerToken(): string {
     if (this.token.length === 0) {
       throw new CredentialLeaseReleasedError(
-        `No bearer available for user '${this.identity.userId}'`,
+        "No bearer available for this credential lease",
       );
     }
     return this.token;

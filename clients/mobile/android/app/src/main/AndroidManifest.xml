@@ -116,4 +116,14 @@
     <uses-permission
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
+    <!--
+        Dictation (DeviceDictationPlugin.java) binds the device's on-device
+        speech recognition service, which package visibility hides from an
+        app that does not declare the intent it looks services up by.
+    -->
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+    </queries>
 </manifest>

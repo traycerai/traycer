@@ -1,6 +1,7 @@
 import {
   useCallback,
   useLayoutEffect,
+  useContext,
   useRef,
   type CSSProperties,
   type Ref,
@@ -37,6 +38,7 @@ import {
 import type { ContextStyle } from "@/lib/layout/layout-values";
 import { cn } from "@/lib/utils";
 import { useLayoutStore } from "@/stores/layout/layout-store";
+import { ChatStatusReadOnlyContext } from "@/components/chat/chat-status-capabilities";
 
 interface ContextUsageChipProps {
   /**
@@ -93,6 +95,7 @@ function contextUsageChipDraws(
 }
 
 export function ContextUsageChip(props: ContextUsageChipProps) {
+  const readOnly = useContext(ChatStatusReadOnlyContext);
   const tileId = useComposerTileId();
   const { ref, editing, ghost } = useLayoutRegion({
     regionId: "contextUsage",
@@ -101,17 +104,21 @@ export function ContextUsageChip(props: ContextUsageChipProps) {
   // Layout ▸ Chat ▸ Context usage can hide the chip (the switch had no
   // reader). A hidden chip still materialises while the editor points at it
   // (L-14), the same rule every hideable control follows.
-  const shown = useRegionShown("contextUsage") || ghost;
+  const shown = useRegionShown("contextUsage") || (ghost && !readOnly);
   if (!shown) return null;
   const chip = (
-    <ContextUsageChipView {...props} ref={ref} contextEditing={editing} />
+    <ContextUsageChipView
+      {...props}
+      ref={readOnly ? null : ref}
+      contextEditing={readOnly ? false : editing}
+    />
   );
   // L-144: every pointable region offers its verbs on right-click. The one
   // case that gets no menu root is the one with nothing to point AT - the
   // chip hides itself outside an editing session when no turn has carried a
   // usable rollup, and a `display: contents` trigger around nothing would
   // still answer a press landing on whatever is behind it.
-  if (!contextUsageChipDraws(props.usage, editing)) return chip;
+  if (readOnly || !contextUsageChipDraws(props.usage, editing)) return chip;
   return (
     <LayoutRegionContextMenu regionId="contextUsage">
       {chip}
@@ -128,6 +135,7 @@ export function ContextUsageChipView({
   ref: ((node: HTMLElement | null) => void) | null;
   contextEditing: boolean;
 }) {
+  const readOnly = useContext(ChatStatusReadOnlyContext);
   const preserveFocusOnOpenRef = useRef(false);
   const pinBreakdownActionRef = useRef<HTMLButtonElement>(null);
   const compactTriggerRef = useRef<HTMLButtonElement>(null);
@@ -191,7 +199,7 @@ export function ContextUsageChipView({
     setPinContextUsageBreakdown(false);
   };
 
-  if (pinContextUsageBreakdown) {
+  if (pinContextUsageBreakdown && !readOnly) {
     return (
       <span
         ref={contextHotspotRef}
@@ -277,7 +285,9 @@ export function ContextUsageChipView({
       ref={contextHotspotRef}
       className="flex min-w-0 items-center gap-0.5 justify-self-end"
     >
-      {onCompact === null ? null : <CompactAction onCompact={onCompact} />}
+      {onCompact === null || readOnly ? null : (
+        <CompactAction onCompact={onCompact} />
+      )}
       <Popover>
         <PopoverTrigger asChild>
           {indicatorStyle === "ring-only" ? (
@@ -304,7 +314,7 @@ export function ContextUsageChipView({
           onOpenAutoFocus={(event) => {
             if (preserveFocusOnOpenRef.current) {
               event.preventDefault();
-            } else {
+            } else if (!readOnly) {
               event.preventDefault();
               pinBreakdownActionRef.current?.focus();
             }
@@ -317,6 +327,7 @@ export function ContextUsageChipView({
             pinned={pinContextUsageBreakdown}
             onPinnedChange={pinFromPopover}
             actionRef={pinBreakdownActionRef}
+            readOnly={readOnly}
           />
         </PopoverContent>
       </Popover>
@@ -462,6 +473,7 @@ function CompactAction({ onCompact }: CompactActionProps) {
 }
 
 interface ContextUsageBreakdownProps {
+  readonly readOnly: boolean;
   readonly rows: readonly ContextUsageRow[];
   readonly effective: EffectiveContextUsage;
   readonly pinned: boolean;
@@ -470,6 +482,7 @@ interface ContextUsageBreakdownProps {
 }
 
 function ContextUsageBreakdown({
+  readOnly,
   rows,
   effective,
   pinned,
@@ -497,26 +510,28 @@ function ContextUsageBreakdown({
           <UsageRow key={row.key} row={row} />
         ))}
       </div>
-      <Button
-        ref={actionRef}
-        type="button"
-        variant="outline"
-        size="sm"
-        className="mt-1 w-full justify-center"
-        onClick={(event) => {
-          onPinnedChange(
-            !pinned,
-            document.activeElement === event.currentTarget,
-          );
-        }}
-      >
-        {pinned ? (
-          <PinOff className="size-3.5" aria-hidden />
-        ) : (
-          <Pin className="size-3.5" aria-hidden />
-        )}
-        {pinned ? "Unpin breakdown" : "Pin breakdown"}
-      </Button>
+      {readOnly ? null : (
+        <Button
+          ref={actionRef}
+          type="button"
+          variant="outline"
+          size="sm"
+          className="mt-1 w-full justify-center"
+          onClick={(event) => {
+            onPinnedChange(
+              !pinned,
+              document.activeElement === event.currentTarget,
+            );
+          }}
+        >
+          {pinned ? (
+            <PinOff className="size-3.5" aria-hidden />
+          ) : (
+            <Pin className="size-3.5" aria-hidden />
+          )}
+          {pinned ? "Unpin breakdown" : "Pin breakdown"}
+        </Button>
+      )}
     </div>
   );
 }

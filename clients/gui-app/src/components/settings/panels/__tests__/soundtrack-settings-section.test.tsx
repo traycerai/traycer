@@ -251,4 +251,66 @@ describe("the soundtrack settings rows", () => {
     expect(screen.queryByRole("slider")).toBeNull();
     expect(screen.queryByRole("combobox")).toBeNull();
   });
+
+  describe("the Set pieces switch", () => {
+    let hadHost = false;
+    let originalHost: unknown;
+
+    function installStagingBridge(): void {
+      Reflect.set(globalThis, "runnerHost", {
+        soundtrackSourceAvailable: true,
+        readSoundtrackSet: () =>
+          Promise.resolve({ kind: "unavailable" as const }),
+      });
+    }
+
+    beforeEach(() => {
+      hadHost = Reflect.has(globalThis, "runnerHost");
+      originalHost = Reflect.get(globalThis, "runnerHost");
+      Reflect.deleteProperty(globalThis, "runnerHost");
+    });
+
+    afterEach(() => {
+      Reflect.deleteProperty(globalThis, "runnerHost");
+      if (hadHost) Reflect.set(globalThis, "runnerHost", originalHost);
+    });
+
+    it("is absent without the staging bridge, with Music on", () => {
+      useSettingsStore.setState({ soundtrackEnabled: true });
+      render(<SoundtrackSettingsSection />);
+
+      expect(screen.queryByRole("switch", { name: "Set pieces" })).toBeNull();
+    });
+
+    it("is drawn, checked by default, once the staging bridge is present", () => {
+      installStagingBridge();
+      useSettingsStore.setState({ soundtrackEnabled: true });
+      render(<SoundtrackSettingsSection />);
+
+      const row = screen.getByRole("switch", { name: "Set pieces" });
+      expect(row.getAttribute("aria-checked")).toBe("true");
+    });
+
+    it("is drawn with the staging bridge even while Music is off", () => {
+      installStagingBridge();
+      render(<SoundtrackSettingsSection />);
+
+      expect(screen.getByRole("switch", { name: "Set pieces" })).not.toBeNull();
+    });
+
+    it("turns the window's choice off from a click, and back on from the next", async () => {
+      installStagingBridge();
+      useSettingsStore.setState({ soundtrackEnabled: true });
+      render(<SoundtrackSettingsSection />);
+      const row = screen.getByRole("switch", { name: "Set pieces" });
+
+      await userEvent.click(row);
+      expect(row.getAttribute("aria-checked")).toBe("false");
+      expect(useSoundtrackStore.getState().setPiecesEnabled).toBe(false);
+
+      await userEvent.click(row);
+      expect(row.getAttribute("aria-checked")).toBe("true");
+      expect(useSoundtrackStore.getState().setPiecesEnabled).toBe(true);
+    });
+  });
 });

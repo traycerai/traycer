@@ -590,7 +590,9 @@ keyboard, and is still the end of a pairing that shows the code.
 Ask which question a row's absence answers, not which list it would be shorter
 to join.
 
-- **Voice input** (`voice-settings-section.tsx`) - the build refuses dictation.
+- **Voice input** (`voice-settings-section.tsx`) - hidden only where the app
+  has no recognizer of its own (`IRunnerHost.deviceDictation`), where the
+  build refuses dictation.
 - **Prevent sleep while running** (`prevent-sleep-settings-section.tsx`) - the
   setting's only consumer, `PreventSleepController`, holds an OS power-save
   blocker through the desktop power bridge, and `resolveDesktopPowerBridge`
@@ -959,6 +961,11 @@ Account; the rest is the app itself.
     has not received yet overturns it - and neither is a revision from another
     configuration, which a rebind can serve without the host's id changing.
     The host applies the same test before it says `applied`.
+    The host row reads the getter every time it opens, however fresh the
+    cache, showing the cached answer until the read lands: the host may have
+    moved to another configuration, or the setting changed elsewhere, since
+    that answer. A write's read is cached only once the host has reached it,
+    so the read on opening agrees with it or is newer.
     The host row observes each write for at most 60 seconds from submission.
     One single-flight loop reads the getter, and while queued reads
     `environment.status` for an exact upload id, environment and item
@@ -1003,8 +1010,8 @@ payer exists. **Resuming changes the payer to you.** is its own line before
 the actions when that team row is resting and the payer is not the viewer.
 **Give it another {period}** is offered on a resting row inside its warning
 lead and precedes the primary action. **Details** stays inline. Setup failures
-show **Retry setup**,
-applicable **Open terminal** and **Stop** controls, **Choose another host**, and
+show **Retry applying** (or **Repair setup** on an older host), applicable
+**Open terminal** and **Stop** controls, **Choose another host**, and
 **Details** once; remaining secondary actions stay in **More**. Rows show
 starter and keeper, agent/task purpose, session counts and names, and setup
 evidence with support references. **Details** retains lifecycle status, settings

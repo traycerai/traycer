@@ -8,7 +8,8 @@ composed tracks shaped `{ kind: "composed", name, title, recording }`. The
 `stems.tracks` and view pools retain their v1 shape. Track and recording names
 must be unique, every view and recording reference must resolve, and a composed
 track cannot carry generative fields. Desktop picks `v1.json` or `v2.json` through
-`SoundtrackSourceOptions.manifestVersion`; the app reads v1. Paths use
+`SoundtrackSourceOptions.manifestVersion`; staging reads v2, while v1 remains
+available to older clients. Paths use
 exactly the same relative-object restrictions and signed URL handling as stems.
 
 The existing decoded LRU, in-flight deduplication and one-refresh-on-refusal
@@ -28,3 +29,9 @@ neutral. An explicit skip uses the requested crossfade at the actual decoded
 start; starts from silence use a short click-prevention envelope.
 
 For a local owned fixture, run `python3 clients/gui-app/scripts/soundtrack-composed-fixture.py /tmp/traycer-composed-fixture`, serve that directory on the development soundtrack server at port 8765, and use the default dev manifest URL. The generator creates a short synthetic WAV.
+
+The staging source bridge also offers a per-window Set pieces switch in Sounds.
+It starts on after each window reload. Turning it off stops composed voices and
+pending starts immediately, removes them from view histories and pools, and
+continues with a generative track without closing the audio device or recorder.
+It has no persisted preference and is absent outside the staging source bridge.

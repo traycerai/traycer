@@ -4,6 +4,8 @@ import { hostStreamRpcRegistry } from "@traycer/protocol/host/index";
 import {
   assistantMessageSchema,
   assistantMessageSchemaPreMcpApp,
+  botQuestionAnswersText,
+  botQuestionAnswerSetSchema,
   userMessageSchema,
   userMessageSchemaPreConversation,
 } from "@traycer/protocol/persistence/epic/messages";
@@ -88,6 +90,43 @@ const ANSWER_ROW = {
   },
 } as const;
 
+function rangeFrame(row: { readonly messageId: string }): object {
+  return {
+    kind: "range",
+    hasBinaryPayload: false,
+    epicId: "epic-1",
+    chatId: "chat-1",
+    range: {
+      requestId: "range-1",
+      epoch: 0,
+      fromOrdinal: 0,
+      rowIds: [row.messageId],
+      messages: [row],
+      events: [],
+      reachedStart: true,
+      reachedEnd: true,
+    },
+  };
+}
+
+/** The row a `chat.subscribe@1.<minor>` peer decodes from a range frame that carries it. */
+function rowOnLine(
+  minor: number,
+  row: { readonly messageId: string },
+): Record<string, unknown> {
+  const version = hostStreamRpcRegistry["chat.subscribe"][1].versions[minor];
+  if (version === undefined) throw new Error(`no chat.subscribe@1.${minor}`);
+  const frame = version.contract.serverFrameSchema.parse(rangeFrame(row));
+  const parsed = z
+    .object({
+      range: z.object({ messages: z.array(z.record(z.string(), z.unknown())) }),
+    })
+    .parse(frame);
+  const [message] = parsed.range.messages;
+  if (message === undefined) throw new Error("no message in the range");
+  return message;
+}
+
 describe("a bot's question row (decision 121)", () => {
   it("keeps the questions and their settlements on the live row", () => {
     expect(assistantMessageSchema.parse(BOT_ROW).question).toEqual(QUESTION);
@@ -138,45 +177,11 @@ describe("a bot question's cardinality", () => {
     },
   } as const;
 
-  function rangeFrame(row: object): object {
-    return {
-      kind: "range",
-      hasBinaryPayload: false,
-      epicId: "epic-1",
-      chatId: "chat-1",
-      range: {
-        requestId: "range-1",
-        epoch: 0,
-        fromOrdinal: 0,
-        rowIds: [BOT_ROW.messageId],
-        messages: [row],
-        events: [],
-        reachedStart: true,
-        reachedEnd: true,
-      },
-    };
-  }
-
   function questionsOnLine(minor: number): ReadonlyArray<unknown> {
-    const version = hostStreamRpcRegistry["chat.subscribe"][1].versions[minor];
-    if (version === undefined) throw new Error(`no chat.subscribe@1.${minor}`);
-    const frame = version.contract.serverFrameSchema.parse(
-      rangeFrame(MULTI_ROW),
-    );
     const parsed = z
-      .object({
-        range: z.object({
-          messages: z.array(
-            z.object({
-              question: z.object({ questions: z.array(z.unknown()) }),
-            }),
-          ),
-        }),
-      })
-      .parse(frame);
-    const [message] = parsed.range.messages;
-    if (message === undefined) throw new Error("no message in the range");
-    return message.question.questions;
+      .object({ question: z.object({ questions: z.array(z.unknown()) }) })
+      .parse(rowOnLine(minor, MULTI_ROW));
+    return parsed.question.questions;
   }
 
   it("accepts a question with and without multiSelect, keeping what it says", () => {
@@ -210,4 +215,91 @@ describe("a bot question's cardinality", () => {
       });
     },
   );
+});
+
+describe("a member's answers to a bot's card, sent as one set", () => {
+  const [first, second] = QUESTION.questions;
+  const SET_ROW = {
+    role: "user",
+    messageId: "conversation-request:req-set",
+    sender: { type: "user", userId: "user-1" },
+    message: {
+      kind: "user",
+      content: { type: "doc", content: [] },
+      browserAnnotations: [],
+    },
+    timestamp: 2,
+    sessionAnchor: null,
+    conversationRequest: {
+      requestId: "req-set",
+      resolvedAt: null,
+      resolvedByMessageId: null,
+      direct: true,
+    },
+    questionAnswers: {
+      questionMessageId: BOT_ROW.messageId,
+      answers: [
+        {
+          questionIndex: 0,
+          question: first.text,
+          answer: "Now",
+          skipped: false,
+        },
+        {
+          questionIndex: 1,
+          question: second.text,
+          answer: null,
+          skipped: true,
+        },
+      ],
+    },
+  } as const;
+  const { questionAnswers: _questionAnswers, ...PLAIN_ROW } = SET_ROW;
+  const SETTLED_ROW = {
+    ...BOT_ROW,
+    question: {
+      ...QUESTION,
+      questions: [
+        {
+          ...first,
+          settlement: { ...first.settlement, requestId: "req-set" },
+        },
+        second,
+      ],
+    },
+  } as const;
+
+  function firstSettlementOnLine(minor: number): unknown {
+    const parsed = z
+      .object({
+        question: z.object({
+          questions: z.array(z.object({ settlement: z.unknown() })),
+        }),
+      })
+      .parse(rowOnLine(minor, SETTLED_ROW));
+    return parsed.question.questions[0]?.settlement;
+  }
+
+  it("keeps the answers on the live user row and the request on the settlement it wrote, through chat.subscribe@1.43", () => {
+    expect(rowOnLine(43, SET_ROW)).toEqual(SET_ROW);
+    expect(firstSettlementOnLine(43)).toEqual(
+      SETTLED_ROW.question.questions[0].settlement,
+    );
+  });
+
+  it.each([42, 41])(
+    "chat.subscribe@1.%i drops both, reading the user row as sent and the settlement as it was",
+    (minor) => {
+      expect(rowOnLine(minor, SET_ROW)).toEqual(rowOnLine(minor, PLAIN_ROW));
+      expect(firstSettlementOnLine(minor)).toEqual(first.settlement);
+    },
+  );
+
+  it("writes each question with its answer under it, joined by a blank line, and Skipped for a skip", () => {
+    expect(
+      botQuestionAnswersText(
+        botQuestionAnswerSetSchema.parse(SET_ROW.questionAnswers).answers,
+      ),
+    ).toBe(`${first.text}\nNow\n\n${second.text}\nSkipped`);
+  });
 });

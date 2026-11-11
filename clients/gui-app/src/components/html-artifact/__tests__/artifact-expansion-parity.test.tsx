@@ -225,13 +225,6 @@ function expand(): HTMLElement {
   return screen.getByRole("dialog", { name: "Site" });
 }
 
-/** The element that is raised: the dialog sits in it beside the dim. */
-function raisedSurface(dialog: HTMLElement): HTMLElement {
-  const surface = dialog.parentElement;
-  if (surface === null) throw new Error("the dialog has no surface");
-  return surface;
-}
-
 /** The entry page proves itself - it names its page, then says ready. */
 function markReady(): void {
   const frame = frames.latest;
@@ -259,7 +252,7 @@ describe("an expanded html artifact keeps the controls its tile passed in", () =
     );
     // A menu portalled to the body would open behind the raised surface.
     const older = screen.getByRole("menuitemradio", { name: /Version 2/ });
-    expect(raisedSurface(dialog).contains(older)).toBe(true);
+    expect(dialog.contains(older)).toBe(true);
     await user.click(older);
 
     expect(
@@ -279,7 +272,7 @@ describe("an expanded html artifact keeps the controls its tile passed in", () =
       { button: 0 },
     );
     const row = screen.getByRole("menuitem", { name: "Download ZIP" });
-    expect(raisedSurface(dialog).contains(row)).toBe(true);
+    expect(dialog.contains(row)).toBe(true);
     fireEvent.click(row);
 
     expect(download).toHaveBeenCalledTimes(1);
@@ -530,25 +523,21 @@ describe("the comment draft of an expanded html artifact", () => {
       // What conceals them is whatever sits ABOVE them, so each is asked for
       // its own ancestry: a concealed host with the draft elsewhere proves
       // nothing.
-      const concealedBy = (node: Element, selector: string): Element | null =>
-        node.closest(selector);
       for (const node of [draft, mention]) {
         expect(
-          concealedBy(node, '[data-slot="artifact-comment-host"]'),
+          node.closest('[data-slot="artifact-comment-host"]'),
         ).not.toBeNull();
-        expect(concealedBy(node, "[inert]")).toBeNull();
-        expect(concealedBy(node, '[aria-hidden="true"]')).toBeNull();
+        expect(node.closest("[inert]")).toBeNull();
+        expect(node.closest('[aria-hidden="true"]')).toBeNull();
       }
 
       view.rerender(paneTile(false));
 
       expect(root.contains(document.activeElement)).toBe(false);
       for (const node of [draft, mention]) {
-        expect(concealedBy(node, "[inert]")).not.toBeNull();
-        expect(concealedBy(node, '[aria-hidden="true"]')).not.toBeNull();
-        expect(
-          concealedBy(node, ".invisible.pointer-events-none"),
-        ).not.toBeNull();
+        expect(node.closest("[inert]")).not.toBeNull();
+        expect(node.closest('[aria-hidden="true"]')).not.toBeNull();
+        expect(node.closest(".invisible.pointer-events-none")).not.toBeNull();
       }
       expect(composerEditorAt(0)).toBe(editor);
       expect(composerEditorAt(0).getText()).toBe("unsent words @");
@@ -556,9 +545,9 @@ describe("the comment draft of an expanded html artifact", () => {
       view.rerender(paneTile(true));
 
       for (const node of [draft, mention]) {
-        expect(concealedBy(node, "[inert]")).toBeNull();
-        expect(concealedBy(node, '[aria-hidden="true"]')).toBeNull();
-        expect(concealedBy(node, ".invisible")).toBeNull();
+        expect(node.closest("[inert]")).toBeNull();
+        expect(node.closest('[aria-hidden="true"]')).toBeNull();
+        expect(node.closest(".invisible")).toBeNull();
       }
       expect(composerEditorAt(0)).toBe(editor);
       expect(composerEditorAt(0).view.dom).toBe(root);

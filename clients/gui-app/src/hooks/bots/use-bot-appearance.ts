@@ -16,15 +16,11 @@ export type BotLooks = ReadonlyMap<string, BotAppearance>;
  */
 export const BotLooksContext = createContext<BotLooks | null>(null);
 
-function lookOf(bot: BotDirectoryRecord): BotAppearance | null {
-  return bot.appearance ?? null;
-}
-
 /** The looks a list's rows carry; a row without an appearance is left out. */
 export function botLooksOf(bots: ReadonlyArray<BotDirectoryRecord>): BotLooks {
   const looks = new Map<string, BotAppearance>();
   for (const bot of bots) {
-    const look = lookOf(bot);
+    const look = bot.appearance ?? null;
     if (look !== null) looks.set(bot.botId, look);
   }
   return looks;
@@ -53,7 +49,7 @@ export function useBotLook(botId: string): BotAppearance | null {
     directoryRow(state.directory.model, botId),
   );
   if (surface !== null) return surface;
-  return row === null ? null : lookOf(row);
+  return row?.appearance ?? null;
 }
 
 /**

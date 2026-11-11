@@ -1,0 +1,44 @@
+/* -------------------------------------------------- act: agent memories */
+
+/* The host pill sits on its own row, at its own width, the way the import
+   act places it. */
+.onboarding-memory-host {
+  width: max-content;
+  max-width: 100%;
+}
+
+/* The act's content is a reading column, not a board: two cards or a short
+   list of switches, centred in the panel with room either side. */
+.onboarding-memory-body {
+  max-width: 44rem;
+  margin-inline: auto;
+}
+
+.onboarding-memory-card {
+  padding: 1rem;
+  border-radius: 0.875rem;
+  background: color-mix(in srgb, var(--foreground) 4%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--foreground) 8%, transparent);
+}
+
+/* One rounded group of switch rows with hairlines between them, the shape a
+   settings group has. */
+.onboarding-memory-list {
+  border-radius: 0.875rem;
+  background: color-mix(in srgb, var(--foreground) 4%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--foreground) 8%, transparent);
+}
+.onboarding-memory-row {
+  padding: 0.75rem 1rem;
+}
+.onboarding-memory-row + .onboarding-memory-row {
+  border-top: 1px solid color-mix(in srgb, var(--foreground) 8%, transparent);
+}
+
+/* Phone: the shell's panel is full-bleed with no padding, so the act carries
+   its own 16pt gutters, as every other act does. */
+@media (max-width: 767px) {
+  .onboarding-panel[data-step="agent-memories"] .onboarding-memory-stage {
+    padding-inline: 1rem;
+  }
+}

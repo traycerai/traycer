@@ -41,9 +41,17 @@ vi.mock("@/hooks/composer/use-voice-dictation", () => ({
   }),
 }));
 
-vi.mock("@/providers/use-runner-host", () => ({
-  useRunnerHost: () => ({ openMicrophoneSettings: () => Promise.resolve() }),
-}));
+// A shell with no recognizer of its own: dictation is the host's.
+vi.mock("@/providers/use-runner-host", () => {
+  const runnerHost = {
+    deviceDictation: null,
+    openMicrophoneSettings: () => Promise.resolve(),
+  };
+  return {
+    useRunnerHost: () => runnerHost,
+    useRunnerHostOrNull: () => runnerHost,
+  };
+});
 
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => ({

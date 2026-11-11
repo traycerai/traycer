@@ -84,7 +84,7 @@ In **Auto**, reads, searches, and edits run as they would in Auto-accept edits. 
 - If the judge approves it, the command runs without a prompt.
 - If the judge flags it as risky, is unsure, runs out of time, or can't run, you get the normal approval card. The card says why it was sent to you.
 
-The judge never refuses an action on its own; anything it does not approve comes to you. The one exception is a conversation another agent started with nobody watching it: there is no one to ask, so the action is refused and the chat says so.
+The judge never refuses an action on its own; anything it does not approve comes to you, including in a conversation another agent started. The card waits until you answer it, and the agent waits with it.
 
 When Traycer's judge reviews the conversation, switching to Auto mid-turn applies right away, but approvals that are already waiting still ask you. When the coding agent's own classifier reviews instead, Auto can't be switched on during a running turn: the picker disables it and says why. Choose Auto before your next message, or pick **Traycer's judge** on that provider's **Permissions** tab in [Providers](/settings/providers) to switch now.
 
@@ -133,6 +133,8 @@ To give the agent files or folders:
 Voice input turns speech into prompt text. It is useful for longer instructions, quick notes, or hands-free follow-up while reviewing code.
 
 Click the microphone in the composer, or press ⌃⇧M / Ctrl+Shift+M, to start dictating. Tap the shortcut to start and tap again to stop, or hold it to talk and release to stop. Speech is transcribed on the device; the first time, Traycer downloads the speech model. Finalized phrases are inserted as you pause. Click **Stop** to finish transcribing the remaining speech. **Cancel** or Esc discards only unfinished speech; text already inserted stays. Turn voice input off with **Voice input** in [General settings](/settings/general).
+
+In the mobile app, the phone turns your speech into text itself, on phones that can recognize speech without a connection (on Android, version 13 or later). The first time, the phone asks for access to the microphone and to speech recognition. Dictation uses the phone's language; if Android has not downloaded it yet, it offers to. On an iPhone, your text appears when you tap **Stop**.
 
 <FeatureVideo src="https://assets.traycer.ai/docs/videos/voice-input.mp4" label="Dictate a prompt into the composer" />
 

@@ -10,6 +10,7 @@ import { ChevronRight } from "lucide-react";
 import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
 import type {
   BotInputNeeded,
+  BotNotificationSubscription,
   BotTaskEntry,
 } from "@traycer/protocol/host/bot/schemas";
 import { Badge } from "@/components/ui/badge";
@@ -24,6 +25,9 @@ import {
   type ChatDescendantStatusRollup,
 } from "@/components/epic-canvas/sidebar/use-chat-archive-hidden-ids";
 import { useChatRowOpenRef } from "@/components/epic-canvas/sidebar/use-chat-row-open-ref";
+import type { BotSessionOpen } from "@/stores/bots/bot-open-thread-store";
+import { BotActivityDetails } from "@/components/bots/bot-activity-details";
+import type { BotTurnOpen } from "@/stores/bots/bot-open-thread-store";
 import { BotTaskControls } from "@/components/bots/bot-task-actions";
 import { ChannelPost } from "@/components/bots/bot-channel-post";
 import { ChatIndicatorHostScopes } from "@/components/notifications/chat-indicator-host-scopes";
@@ -98,6 +102,11 @@ export function BotActivityPage(props: {
   /** Whether the tab's host is the one running the bot. */
   readonly boundHere: boolean;
   readonly active: BotActiveTasks;
+  readonly tasks: ReadonlyArray<BotTaskEntry>;
+  readonly notificationSubscriptions: ReadonlyArray<BotNotificationSubscription> | null;
+  readonly onOpenTurn: BotTurnOpen;
+  readonly trunkChatId: string;
+  readonly onOpenSession: BotSessionOpen;
   /** Names the members who paused or ran something. */
   readonly resolveMember: BotMemberResolver;
   /** The bot's threads, as listed; `null` while the list is not read. */
@@ -124,6 +133,20 @@ export function BotActivityPage(props: {
       className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto p-4"
       data-testid="bot-activity-page"
     >
+      <button
+        type="button"
+        className="self-start text-ui-xs underline"
+        onClick={() =>
+          props.onOpenSession({
+            chatId: props.trunkChatId,
+            threadId: null,
+            messageId: null,
+            sendPostId: null,
+          })
+        }
+      >
+        Open trunk session
+      </button>
       <h3 className="text-ui-xs tracking-[0.08em] text-muted-foreground uppercase">
         {heading}
       </h3>
@@ -156,6 +179,16 @@ export function BotActivityPage(props: {
           ))}
         </ul>
       )}
+      <BotActivityDetails
+        botId={botId}
+        hostId={hostId}
+        tasks={props.tasks}
+        subscriptions={props.notificationSubscriptions}
+        onOpenTurn={props.onOpenTurn}
+        trunkChatId={props.trunkChatId}
+        threads={props.threads}
+        onOpenSession={props.onOpenSession}
+      />
     </section>
   );
 }

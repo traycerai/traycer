@@ -147,7 +147,7 @@ const SETTING_STATUS = `${AGENT_MEMORIES.definitions.traycerMemories.description
  * host whose delta never comes would otherwise be re-read for ever, and the
  * extra reads promise the person nothing the line does not already say.
  */
-export const AGENT_MEMORY_CONFIRM_BOUND_MS = 60_000;
+const AGENT_MEMORY_CONFIRM_BOUND_MS = 60_000;
 
 /** The line under the host row, in the order the person needs it. */
 function hostRowStatus(input: {
@@ -212,7 +212,13 @@ function AgentMemoriesRow(): ReactNode {
     client,
     method: AGENT_MEMORIES_GET,
     params: {},
-    options: { enabled: true },
+    // Read on every open, however fresh the cache: since any earlier answer
+    // the computer may have moved to another configuration, or the setting
+    // may have changed elsewhere, and this row is where the person checks.
+    // One `get` per open; the cached answer shows until it lands. A write's
+    // read is published here only once the host has reached it, so this read
+    // agrees with it or is newer.
+    options: { enabled: true, refetchOnMount: "always" },
   });
   const hostId = client.getActiveHostId();
   const [observation, setObservation] = useState<{

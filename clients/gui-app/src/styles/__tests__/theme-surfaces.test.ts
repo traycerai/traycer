@@ -10,7 +10,7 @@ const SURFACES_CSS = readFileSync(
 );
 const DIALOG_SCROLL_SURFACES = [
   "components/settings/panels/notification-hook-editor-dialog.tsx",
-  "components/settings/panels/provider-profile-edit-dialog.tsx",
+  "components/settings/panels/profile-edit-dialog-presentation.tsx",
   "components/settings/panels/add-provider-profile-dialog.tsx",
   "components/settings/panels/provider-custom-model-provider-dialog.tsx",
 ].map((file) => readFileSync(path.resolve(ROOT, file), "utf8"));

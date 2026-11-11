@@ -10,6 +10,10 @@
  * is, Edit loads the text into the channel's box and the send replaces the
  * failed post, and Sign in opens the provider on the bot's host.
  */
+import {
+  botMentionHostClientMock,
+  emptyBotMentionHostListsMock,
+} from "@/components/bots/__tests__/bot-mention-host-test-support";
 import { StrictMode, type ReactElement } from "react";
 import {
   act,
@@ -100,6 +104,15 @@ const mocks = vi.hoisted(() => ({
   threads: [] as BotThreadSummary[],
   openSettings: vi.fn<(opts: OpenSettingsModalOpts) => void>(),
 }));
+
+vi.mock(
+  "@/hooks/host/use-host-client-for-host-id",
+  () => botMentionHostClientMock,
+);
+vi.mock(
+  "@/hooks/bots/use-environment-host-lists-query",
+  () => emptyBotMentionHostListsMock,
+);
 
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: () => null,
