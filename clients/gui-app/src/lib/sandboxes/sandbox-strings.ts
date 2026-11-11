@@ -144,7 +144,7 @@ export function computerSubLine(parts: readonly (string | null)[]): string {
 }
 
 /** The sub-line of a computer whose settings are not in Personal yet. */
-export const LOCAL_SUB_LINE = "Local · its own settings, not in Personal yet";
+export const LOCAL_SUB_LINE = "Local · runs its own settings, not Personal's";
 
 /** The search found nothing of the viewer's. */
 export function noHostMatchesLine(term: string): string {

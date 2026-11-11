@@ -54,6 +54,7 @@ import {
 } from "@/components/settings/host-scope/host-scope-model";
 import { useRefreshHostDirectoryOnOpen } from "@/hooks/host/use-refresh-host-directory-on-open";
 import { useCoarsePointerOpenAutoFocus } from "@/hooks/ui/use-coarse-pointer-open-autofocus";
+import { preserveWhenNestedOverlay } from "@/components/home/host-workspace-selector/preserve-when-nested-overlay";
 import { useHostBinding } from "@/lib/host";
 import type { FleetUpdateView } from "@/lib/host/fleet-update/fleet-update-view";
 import { cn } from "@/lib/utils";
@@ -161,7 +162,8 @@ export interface HostSwitcherComposerMode {
   readonly stagedBusy: boolean;
   /** Called with a host row's pick, before `onSelect`. */
   readonly onPickHost: (host: HostScopeOption) => void;
-  readonly onPickNew: (configurationKey: string) => void;
+  /** `false` keeps the chooser open when the pick could not be staged. */
+  readonly onPickNew: (configurationKey: string) => void | boolean;
   /** A New row's gear, or the staged chip's gear: the shape sheet. */
   readonly onOpenShape: (configurationKey: string) => void;
   readonly onManage: () => void;
@@ -443,6 +445,9 @@ export function HostSwitcher(props: {
             // there is no input and Radix's default lands on a host row, which
             // summons nothing.
             onOpenAutoFocus={showSearch ? coarseOpenAutoFocus : undefined}
+            onInteractOutside={(event) =>
+              preserveWhenNestedOverlay(event, contentRef.current)
+            }
             // The list is portalled, but React still bubbles its keys up the
             // tree it was mounted from: a composer above this picker would
             // take the search's keystrokes (an Enter that picks a row would
@@ -482,8 +487,12 @@ export function HostSwitcher(props: {
                   action={props.action}
                   composer={props.composer}
                   onPickNew={(configurationKey) => {
-                    props.composer?.onPickNew(configurationKey);
-                    setOpen(false);
+                    // A retry sheet restores focus here when it closes, including
+                    // pointer picks on browsers that do not focus menu items.
+                    contentRef.current?.focus();
+                    if (props.composer?.onPickNew(configurationKey) !== false) {
+                      setOpen(false);
+                    }
                   }}
                   onOpenShape={(configurationKey) => {
                     setOpen(false);

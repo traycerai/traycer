@@ -49,7 +49,7 @@ const onSelect = vi.fn<(hostId: string) => void>((hostId) => {
 const onPickHost = vi.fn<(host: HostScopeOption) => void>((host) => {
   calls.push(`pick:${host.hostId}`);
 });
-const onPickNew = vi.fn<(configurationKey: string) => void>();
+const onPickNew = vi.fn<(configurationKey: string) => boolean | void>();
 const onOpenShape = vi.fn<(configurationKey: string) => void>();
 const onManage = vi.fn<() => void>();
 
@@ -569,6 +569,26 @@ describe("<HostSwitcher /> composer mode New rows", () => {
     fireEvent.click(screen.getByTestId("host-switcher-new-sandbox-team-acme"));
 
     expect(onPickNew).toHaveBeenCalledWith("team-acme");
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(
+      screen.queryByTestId("host-switcher-new-sandbox-team-acme"),
+    ).toBeNull();
+  });
+
+  it("keeps the chooser open when New could not be staged", () => {
+    renderSwitcher({
+      hosts: [LAPTOP],
+      composer: composerMode({}),
+      intent: "pin",
+    });
+    onPickNew.mockImplementationOnce(() => false);
+
+    fireEvent.click(screen.getByTestId("host-switcher-new-sandbox-team-acme"));
+
+    expect(onPickNew).toHaveBeenCalledWith("team-acme");
+    expect(
+      screen.getByTestId("host-switcher-new-sandbox-team-acme"),
+    ).toBeDefined();
     expect(onSelect).not.toHaveBeenCalled();
   });
 
