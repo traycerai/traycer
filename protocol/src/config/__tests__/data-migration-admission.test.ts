@@ -48,6 +48,28 @@ import { resolveDataRoot, type DataRootResolution } from "../data-root";
 import type { AttemptHolderLivenessVerdict } from "../host-update-attempt-liveness";
 
 const breakStaleLockControl = vi.hoisted(() => ({ contended: false }));
+const hardLinkControl = vi.hoisted(() => ({
+  refuseWith: null as string | null,
+}));
+
+// Passes through to the real `link` unless a test makes the filesystem refuse
+// hard links (Android app storage answers EACCES).
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    link: (existing: string, created: string) => {
+      const code = hardLinkControl.refuseWith;
+      if (code === null) return actual.link(existing, created);
+      return Promise.reject(
+        Object.assign(new Error(`${code}: hard links refused, link`), {
+          code,
+          syscall: "link",
+        }),
+      );
+    },
+  };
+});
 
 // Passes through to the real implementation unless a test makes the removal
 // of a stale lock "contended" (a denied rename, a Windows sharing violation).
@@ -102,6 +124,7 @@ const locks: MigrationCoordinatorLock[] = [];
 
 afterEach(async () => {
   breakStaleLockControl.contended = false;
+  hardLinkControl.refuseWith = null;
   for (const admission of admissions.splice(0)) await admission.release();
   for (const lock of locks.splice(0)) await lock.release();
   for (const home of homes.splice(0)) {
@@ -990,6 +1013,44 @@ describe("withAdmissionMutex", () => {
     expect(code).toBe("admission-busy");
     expect(ran).toBe(false);
     expect(readFileSync(mutexPath(f), "utf8")).toBe(before);
+  });
+
+  it.each(["EACCES", "EPERM", "ENOTSUP"])(
+    "refuses as bootstrap-unusable when the filesystem refuses hard links (%s), leaving no temp file",
+    async (code) => {
+      const f = bootstrapFixture();
+      hardLinkControl.refuseWith = code;
+      let ran = false;
+      const error = await withAdmissionMutex({
+        bootstrapDir: f.bootstrapDir,
+        probe: new FakeProbe(),
+        waitMs: 100,
+        fn: () => {
+          ran = true;
+          return Promise.resolve(null);
+        },
+      }).then(
+        () => null,
+        (rejection: unknown) => rejection,
+      );
+      expect(error).toBeInstanceOf(MigrationAdmissionError);
+      expect(error).toMatchObject({ code: "bootstrap-unusable" });
+      expect(ran).toBe(false);
+      expect(readdirSync(f.bootstrapDir)).toEqual([]);
+    },
+  );
+
+  it("still surfaces a link failure that is not a refusal of hard links", async () => {
+    const f = bootstrapFixture();
+    hardLinkControl.refuseWith = "EIO";
+    await expect(
+      withAdmissionMutex({
+        bootstrapDir: f.bootstrapDir,
+        probe: new FakeProbe(),
+        waitMs: 100,
+        fn: () => Promise.resolve(null),
+      }),
+    ).rejects.toMatchObject({ code: "EIO" });
   });
 
   it("an indeterminate fresh holder is waited out, not overtaken", async () => {

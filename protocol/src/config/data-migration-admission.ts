@@ -205,10 +205,24 @@ function readLockFileSync(path: string): LockRead {
   }
 }
 
+const HARD_LINK_REFUSED_CODES: ReadonlySet<string> = new Set([
+  "EACCES",
+  "EPERM",
+  "ENOTSUP",
+]);
+
 /**
  * Create the lock fully populated: a flushed temp file hard-linked into
  * place, which fails with EEXIST when the lock exists. A lock is therefore
  * never observed empty or half-written.
+ *
+ * The temp file was just created in the same folder, so a `link` refused with
+ * EACCES, EPERM or ENOTSUP is the filesystem refusing hard links (Android app
+ * storage, FAT-family and some network mounts), not a permission problem
+ * with the folder. That is a state of the machine this process cannot work
+ * around without weakening the never-half-written guarantee, so it refuses
+ * like an unusable bootstrap folder instead of escaping as an unexpected
+ * failure.
  */
 async function tryCreateLock(
   path: string,
@@ -223,7 +237,18 @@ async function tryCreateLock(
     } finally {
       await handle.close();
     }
-    await link(tmp, path);
+    try {
+      await link(tmp, path);
+    } catch (error) {
+      if (HARD_LINK_REFUSED_CODES.has(errorCode(error) ?? "")) {
+        throw new MigrationAdmissionError(
+          "bootstrap-unusable",
+          "This filesystem does not allow hard links, which Traycer's startup lock needs, so Traycer cannot run on it.",
+          null,
+        );
+      }
+      throw error;
+    }
     return true;
   } catch (error) {
     if (errorCode(error) === "EEXIST") return false;
