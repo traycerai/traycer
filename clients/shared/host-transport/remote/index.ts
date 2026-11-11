@@ -18,6 +18,7 @@ export {
   type CreateRemoteTransportOptions,
   type RemoteHostTransport,
   type RemoteOpenAuth,
+  type HostOpenAuthFacts,
 } from "./create-remote-transport";
 export {
   RemoteSession,

@@ -1,3 +1,4 @@
+import { unresolvedSetupText } from "@/components/settings/environment/environment-picker-model";
 import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
 import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import { planesOfferStopSharing } from "@/components/settings/move/status-planes";
@@ -71,7 +72,7 @@ export interface HostSettingsRowOption {
   readonly label: string;
   /** The sentence under the name in the menu. Hidden in the closed trigger. */
   readonly detail: string;
-  readonly action: "move" | "stop_sharing";
+  readonly action: "move" | "stop_sharing" | "none";
 }
 
 const RUNS_PERSONAL = "Runs Personal";
@@ -129,6 +130,17 @@ export function hostSettingsRowModel(
       kind: "team",
       label: binding.environment.label,
       description: `Runs ${binding.environment.label}`,
+    };
+  }
+  const setup = unresolvedSetupText(status);
+  if (setup !== null) {
+    return {
+      kind: "select",
+      value: "local",
+      description: setup,
+      options: [
+        { value: "local", label: hostName, detail: setup, action: "none" },
+      ],
     };
   }
   const state = hostSettingsCardState(status);

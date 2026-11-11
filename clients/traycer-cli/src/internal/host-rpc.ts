@@ -1,3 +1,8 @@
+import {
+  createCliLocalOpenAuth,
+  localTeamAdmissionCliError,
+} from "./local-open-auth";
+import { TEAM_TRANSFER_REFUSALS } from "@traycer-clients/shared/host-client/team-computer-refusals";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { randomUUID } from "node:crypto";
 import type { ZodType } from "zod";
@@ -362,7 +367,9 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
     signal: null,
   });
 
+  const localOpenAuth = createCliLocalOpenAuth(auth.authnBaseUrl);
   const client = new WsRpcClient<HostRpcRegistry>({
+    localOpenAuth,
     registry: hostRpcRegistry,
     requestId: () => randomUUID(),
     webSocketFactory: createWhatwgWebSocketFactory(),
@@ -770,6 +777,11 @@ export function hostRpcToCliError(err: unknown): unknown {
  *     is preserved so the user still sees what went wrong.
  */
 function mapHostRpcError(err: HostRpcError): CliError {
+  const admissionError =
+    err.fatalDetails === null
+      ? null
+      : localTeamAdmissionCliError(err.fatalDetails);
+  if (admissionError !== null) return admissionError;
   // Ahead of the unreachable arm below, and the two must never share a code:
   // this is the failure the transport could not prove was pre-dispatch, so
   // the host may have run the call and answered into a connection that was
@@ -817,6 +829,17 @@ function mapHostRpcError(err: HostRpcError): CliError {
     return cliError({
       code: CLI_ERROR_CODES.AGENT_NOT_FOUND,
       message: `traycer: ${err.message} Check --agent-id (or $TRAYCER_AGENT_ID).`,
+      details: null,
+      exitCode: 1,
+    });
+  }
+  const teamRefusal = TEAM_TRANSFER_REFUSALS.find(
+    ({ code }) => code === err.code,
+  );
+  if (teamRefusal !== undefined) {
+    return cliError({
+      code: teamRefusal.code,
+      message: teamRefusal.message,
       details: null,
       exitCode: 1,
     });

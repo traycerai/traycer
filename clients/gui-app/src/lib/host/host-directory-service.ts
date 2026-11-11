@@ -6,12 +6,10 @@ import {
   type HostDirectoryEntry,
   type PoolHostDirectoryEntry,
 } from "@traycer-clients/shared/host-client/host-directory";
+import { hostDirectoryEntryEquals } from "@traycer-clients/shared/host-client/host-connection-registry";
 import type { IHostDirectoryService } from "@traycer-clients/shared/host-client/host-runtime";
 import {
   fetchRemoteHosts,
-  hostUnavailability,
-  isRelayFuseRecoveryCandidate,
-  isRemoteHostDirectoryEntry,
   type RemoteHostFetchOutcome,
   type RemoteHostFetcher,
 } from "@traycer-clients/shared/host-client/remote-fetcher";
@@ -1446,58 +1444,6 @@ function persistLocalHostId(hostId: string): void {
   }
 }
 
-/**
- * Field-equality check mirroring `useHostDirectoryEntry`'s cache (React
- * hooks land, this class predates React entirely, so the comparison is
- * reimplemented rather than imported across that boundary). Remote/local
- * entries are freshly allocated on every fetch/IPC snapshot even when
- * nothing observable changed, so a bound remote selection would otherwise
- * reassign and fan out to every `onSelectionChange` handler on every 60s
- * poll tick for no reason.
- */
-function hostDirectoryEntriesEqual(
-  a: HostDirectoryEntry,
-  b: HostDirectoryEntry,
-): boolean {
-  return (
-    a.hostId === b.hostId &&
-    a.label === b.label &&
-    a.kind === b.kind &&
-    a.websocketUrl === b.websocketUrl &&
-    a.version === b.version &&
-    // The DERIVED verdict, not the coarse bit. Same reason as
-    // `useHostDirectoryEntry`'s twin: a host moving from `indeterminate` to a
-    // confirmed `offline` is not-dialable on both sides, and swallowing that
-    // emit would freeze every surface reading the reason at "we don't know".
-    hostUnavailability(a) === hostUnavailability(b) &&
-    // The recovery-dial window (F7). Computed at projection time from
-    // `lastSeenAt` recency, so an `offline` row whose ONLY change is aging
-    // past RELAY_FUSE_MAX_ATTACH_MS flips this field and nothing else this
-    // comparison reads (the derived verdict stays `offline` on both sides).
-    // Without it that flip was swallowed as a field-identical poll tick, and
-    // every consumer kept a `relayFuseGrace: true` entry forever - recovery
-    // dials permitted indefinitely past the documented 4h cap.
-    isRelayFuseRecoveryCandidate(a) === isRelayFuseRecoveryCandidate(b) &&
-    remotePublicKeyOf(a) === remotePublicKeyOf(b) &&
-    // A sandbox's lifecycle word and frozen flag. Most state moves also move
-    // connectivity, but not all (a frozen flag set on an already-suspended
-    // row moves nothing else), and a surface deciding whether a tab open may
-    // wake the sandbox must see the move.
-    sandboxStateKeyOf(a) === sandboxStateKeyOf(b)
-  );
-}
-
-function sandboxStateKeyOf(entry: HostDirectoryEntry): string | null {
-  if (!isRemoteHostDirectoryEntry(entry) || entry.sandbox === null) {
-    return null;
-  }
-  return `${entry.sandbox.state ?? "none"}:${entry.sandbox.frozen ? "frozen" : "thawed"}`;
-}
-
-function remotePublicKeyOf(entry: HostDirectoryEntry): string | null {
-  return isRemoteHostDirectoryEntry(entry) ? entry.publicKey : null;
-}
-
 function hostDirectorySnapshotsEqual(
   a: readonly HostDirectoryEntry[],
   b: readonly HostDirectoryEntry[],
@@ -1506,7 +1452,7 @@ function hostDirectorySnapshotsEqual(
     return false;
   }
   // Index access is in-bounds for both arrays under the length check above.
-  return a.every((entry, index) => hostDirectoryEntriesEqual(entry, b[index]));
+  return a.every((entry, index) => hostDirectoryEntryEquals(entry, b[index]));
 }
 
 /**

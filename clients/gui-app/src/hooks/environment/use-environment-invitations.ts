@@ -1,4 +1,8 @@
 import { useMemo } from "react";
+import type { RequestContext } from "@traycer/protocol/auth/request-context";
+import { useRunnerHost } from "@/providers/use-runner-host";
+import { readLocalHostIdSnapshot } from "@/lib/host/local-host-id-snapshot";
+import { invalidateLocalTeamAdmission } from "@/lib/host/local-admission-invalidation";
 import {
   queryOptions,
   useMutation,
@@ -201,11 +205,33 @@ export function useEnvironmentInvitationAcceptMutation(
   const auth = binding?.auth ?? null;
   const viewerUserId = useCloudChatViewerId();
   const queryClient = useQueryClient();
+  const runnerHost = useRunnerHost();
+  const captureAdmission = () => ({
+    context: auth?.getRequestContextProvider().current() ?? null,
+    localHostId: readLocalHostIdSnapshot(),
+  });
+  const invalidateAdmission = (captured: {
+    readonly context: RequestContext | null;
+    readonly localHostId: string | null;
+  }): Promise<void> => {
+    if (
+      captured.localHostId === null ||
+      captured.context === null ||
+      captured.context.abortSignal.aborted ||
+      auth?.getRequestContextProvider().current() !== captured.context
+    )
+      return Promise.resolve();
+    return invalidateLocalTeamAdmission(captured.localHostId, runnerHost);
+  };
   const rpc = useHostScopedMutationForClient(route.servingClient, {
     method: "environment.invitations.accept",
     mutationKey: environmentMutationKeys.invitationsAccept(),
     errorMessage: "Couldn't accept this invitation. Try again.",
     invalidateMethods: ["environment.invitations.list", "environment.list"],
+    captureContext: captureAdmission,
+    onSuccess: (answer, _request, _hostId, captured) => {
+      if (answer.outcome === "accepted") void invalidateAdmission(captured);
+    },
   });
   const direct = useMutation({
     mutationKey: environmentMutationKeys.invitationsAccept(),
@@ -213,8 +239,9 @@ export function useEnvironmentInvitationAcceptMutation(
       if (auth === null) throw new Error("Sign in to accept this invitation.");
       return auth.acceptEnvironmentInvitation(request.environmentId);
     },
-    onMutate: () => ({ auth, viewerUserId }),
-    onSuccess: async (_answer, _request, captured) => {
+    onMutate: () => ({ auth, viewerUserId, ...captureAdmission() }),
+    onSuccess: async (answer, _request, captured) => {
+      if (answer.outcome === "accepted") await invalidateAdmission(captured);
       await Promise.all([
         queryClient.invalidateQueries({
           queryKey: authQueryKeys.environmentInvitations(

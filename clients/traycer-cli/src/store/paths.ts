@@ -425,7 +425,7 @@ export function hostEnrollmentRecordPath(
   );
 }
 /**
- * Where `traycer host join` leaves a team computer's one-time install token
+ * Where `traycer host install --team` leaves a team computer's one-time install token
  * for the host to enroll with; the host deletes it once spent.
  */
 export function hostTeamInstallTokenPath(

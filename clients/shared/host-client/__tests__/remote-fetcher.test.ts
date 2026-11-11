@@ -266,7 +266,7 @@ describe("hostListItemToDirectoryEntry", () => {
   });
 });
 
-describe("hostListItemToDirectoryEntry - ownerTeamName", () => {
+describe("hostListItemToDirectoryEntry - owner", () => {
   const sandboxItem = (owner: HostOwnerPrincipal | undefined): HostListItem => {
     const base: HostListItem = {
       ...onlineItem(),
@@ -310,6 +310,37 @@ describe("hostListItemToDirectoryEntry - ownerTeamName", () => {
       RELAY_BASE_URL,
     );
     expect(entry.sandbox).toBeNull();
+  });
+
+  it("retains the owner principal on physical hosts and normalizes an absent owner", () => {
+    const teamEntry = hostListItemToDirectoryEntry(
+      {
+        ...onlineItem(),
+        owner: { kind: "team", id: "team-a", name: "Alpha" },
+      },
+      RELAY_BASE_URL,
+    );
+    const personalEntry = hostListItemToDirectoryEntry(
+      {
+        ...onlineItem(),
+        owner: { kind: "user", id: "user-1" },
+      },
+      RELAY_BASE_URL,
+    );
+    const legacyEntry = hostListItemToDirectoryEntry(
+      onlineItem(),
+      RELAY_BASE_URL,
+    );
+
+    expect(teamEntry).toMatchObject({
+      owner: { kind: "team", id: "team-a", name: "Alpha" },
+      sandbox: null,
+    });
+    expect(personalEntry).toMatchObject({
+      owner: { kind: "user", id: "user-1" },
+      sandbox: null,
+    });
+    expect(legacyEntry).toMatchObject({ owner: null, sandbox: null });
   });
 });
 

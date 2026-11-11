@@ -162,6 +162,7 @@ function remoteTarget(publicKey: string): RemoteHostDirectoryEntry {
     publicKey,
     relayFuseGrace: false,
     sandbox: null,
+    owner: null,
     remoteStatus: {
       connectivity: "connectable",
       viewerReachability: "ok",

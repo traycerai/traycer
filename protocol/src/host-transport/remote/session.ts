@@ -2732,6 +2732,7 @@ export class RemoteSession<
     // prevent. A host that really is down still produces its refusal at the
     // `handleConnectionLost` funnel, which observes the host's own plane.
     this.reportEvidenceOutcome(this.dialAttemptId(generation), "indeterminate");
+    this.markStreamsReconnecting(provision.retryCause ?? null);
     const retryInMs = this.scheduleReconnectForFailedGeneration(generation);
     this.dialFailures.recordFailure({
       cause: `could not mint an attach grant: ${provision.detail}`,

@@ -32,6 +32,27 @@ export const REMOTE_ACCESS_TEXT: Readonly<Record<RemoteAccessState, string>> = {
   off: "Off. Other devices and agents can't reach this computer. Your settings still reach it.",
 };
 
+const TEAM_REMOTE_ACCESS_TEXT: Readonly<Record<RemoteAccessState, string>> = {
+  on: "On. Team members and agents can reach this computer.",
+  turning_off: "Turning off. Team members and agents are being disconnected.",
+  off: "Off. Team members and agents can't reach this computer.",
+};
+
+export function remoteAccessText(
+  state: RemoteAccessState,
+  principal: EnvironmentStatusResponse["principal"],
+): string {
+  return principal?.kind === "team"
+    ? TEAM_REMOTE_ACCESS_TEXT[state]
+    : REMOTE_ACCESS_TEXT[state];
+}
+
+export function remoteAccessFailureText(code: string): string {
+  return code === "FORBIDDEN"
+    ? "You don't have permission to change remote access on this computer."
+    : "Couldn't change remote access. Try again.";
+}
+
 /**
  * The state the section shows. Off answers `turning_off` until the host has
  * closed every session, and the status read can still say `on` for a poll or

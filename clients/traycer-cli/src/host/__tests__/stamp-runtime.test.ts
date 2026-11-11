@@ -720,6 +720,7 @@ describe.skipIf(process.platform === "win32")(
       const sourceA = join(sandboxRoot, "source-a");
       writeLocalHostSource(sourceA);
       const commandAResult = await buildHostInstallCommand({
+        team: null,
         versionRequest: "latest",
         fromPath: sourceA,
         enableLinger: true,

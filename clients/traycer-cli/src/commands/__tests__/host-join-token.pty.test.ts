@@ -106,7 +106,7 @@ describe.skipIf(process.platform === "win32")(
         runs.map((one) => ({
           atPrompt: one.at_prompt,
           echoedTyping: one.output.includes(TOKEN.slice(0, 10)),
-          refused: one.output.includes("REFUSED host join: cancelled."),
+          refused: one.output.includes("REFUSED host install: cancelled."),
           afterRead: one.after_read,
           exitCode: one.exit_code,
           afterExit: one.after_exit,

@@ -46,6 +46,7 @@ import {
   type ActivateResult,
   type AuthorityIdentitySource,
   type HostFleetSnapshot,
+  type HostFleetEntry,
   type HostFleetSource,
   type HostLeaseSnapshot,
   type LiveSessionAnnouncement,
@@ -1069,9 +1070,9 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     if (fleetEntry === null) {
       return Promise.resolve({ ok: false, reason: "unknown-host" });
     }
-    // A team host serves its team's environment, not this person's own, so
-    // the app-wide host is never one. A tab can still be bound to it.
-    if (fleetEntry.teamOwned) {
+    // The person at this computer may use its team-owned physical host as
+    // their app-wide host. Remote team hosts retain the existing tab-only rule.
+    if (!this.ownershipAllowsAppWideSelection(fleetEntry)) {
       return Promise.resolve({ ok: false, reason: "team-host" });
     }
     // D13/C4: an incompatible host is never selectable. Settings offers
@@ -1775,15 +1776,21 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     );
   }
 
+  private ownershipAllowsAppWideSelection(entry: HostFleetEntry): boolean {
+    return (
+      !entry.teamOwned ||
+      (entry.kind === "local" && entry.hostId === this.fleet.localHostId)
+    );
+  }
+
   /**
    * The single sanctioned SYSTEM write to preferred (invariant 1), and F14's
    * load-time degradation - one rule, because they are the same fact observed
    * at different times: the preferred host is no longer in the account's
    * fleet. Deregistering it while the app runs and finding it already gone at
    * startup both land here, and both clear to null so nothing can re-assert a
-   * stale id. A preferred host a team owns is cleared the same way: it was
-   * stored before `activate` refused team hosts, and it can never be the
-   * app-wide host.
+   * stale id. A remote team host is cleared the same way; this machine's
+   * physical team host is permitted by the same rule `activate` uses.
    *
    * An EMPTY fleet never triggers it. "No hosts" is what this port publishes
    * before its first genuine registry answer and while an identity transition
@@ -1799,7 +1806,9 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     if (this.fleet.hosts.length === 0) return false;
     if (
       this.fleet.hosts.some(
-        (entry) => entry.hostId === preferredHostId && !entry.teamOwned,
+        (entry) =>
+          entry.hostId === preferredHostId &&
+          this.ownershipAllowsAppWideSelection(entry),
       )
     ) {
       return false;
@@ -2443,28 +2452,25 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
   ): string | null {
     for (const hostId of this.mruEffectiveHostIds) {
       if (hostId === localHostId) continue;
-      if (this.isSandbox(hostId)) continue;
+      if (!this.allowsAutomaticFallback(hostId)) continue;
       if (!admits(hostId)) continue;
       if (this.isUsable(hostId, leases)) return hostId;
     }
     for (const lease of leases) {
       if (lease.hostId === localHostId) continue;
-      if (this.isSandbox(lease.hostId)) continue;
+      if (!this.allowsAutomaticFallback(lease.hostId)) continue;
       if (!admits(lease.hostId)) continue;
       if (isUsableForSelection(lease)) return lease.hostId;
     }
     return null;
   }
 
-  /**
-   * Whether the fleet lists this host as a sandbox, which the engine's own
-   * choice never lands on (see `HostFleetEntry`). Skipped in the MRU pass too:
-   * a sandbox only reaches the MRU list by being preferred, and preference is
-   * the user's arm, not this one.
-   */
-  private isSandbox(hostId: string): boolean {
-    return this.fleet.hosts.some(
-      (entry) => entry.hostId === hostId && entry.kind === "sandbox",
+  private allowsAutomaticFallback(hostId: string): boolean {
+    const entry = this.fleet.hosts.find((host) => host.hostId === hostId);
+    return (
+      entry !== undefined &&
+      entry.kind !== "sandbox" &&
+      this.ownershipAllowsAppWideSelection(entry)
     );
   }
 

@@ -1,3 +1,12 @@
+import type { MemberCredentialHandoff } from "@traycer/protocol/host-transport/mux";
+import type { HostTransportEndpoint } from "./host-messenger";
+import {
+  LocalOpenAuth,
+  SESSION_GRANT_REQUIRED,
+  TEAM_MEMBERSHIP_REQUIRED,
+  isLocalAdmissionFatal,
+  teamMembershipUnavailable,
+} from "./local-open-auth";
 import type {
   SchemaVersion,
   StreamMethodVersionRegistry,
@@ -23,6 +32,7 @@ import {
   bearerSourceForUser,
   cloudVerdictForUser,
   type BearerSourceProvider,
+  type OpenFrameBearerSource,
 } from "@traycer-clients/shared/auth/bearer-source";
 import { readAccessTokenExpiryMs } from "@traycer-clients/shared/auth/jwt-exp";
 import type {
@@ -46,6 +56,7 @@ import {
   hostStreamOpenAckFrameSchema,
   hostStreamFatalErrorFrameSchema,
   streamMethodFrameEnvelopeSchema,
+  STREAM_CAPABILITY_TEAM_CREDENTIAL_STATE,
   STREAM_CAPABILITY_CREDENTIAL_UPDATE,
   STREAM_CAPABILITY_CLOUD_VERDICT_UPDATE,
   STREAM_CAPABILITY_HOST_CREDENTIAL_PROVISION,
@@ -95,6 +106,11 @@ import { backoffFor } from "./backoff";
  * about the values it wants. The ping loop is gated to ~25s per the tech
  * plan's decision #14; `pongTimeoutMs` is the "N missed pongs" cutoff.
  */
+export interface LocalMemberProvision {
+  readonly mint: (hostId: string) => Promise<MemberCredentialHandoff | null>;
+  readonly onSent: (credential: MemberCredentialHandoff) => void;
+}
+
 export interface WsStreamClientOptions<
   Registry extends VersionedStreamRpcRegistry,
 > {
@@ -124,6 +140,8 @@ export interface WsStreamClientOptions<
   readonly userId: string;
   readonly endpoint: HostEndpointProvider;
   readonly bearer: BearerSourceProvider;
+  readonly localOpenAuth?: LocalOpenAuth;
+  readonly localMemberProvision?: LocalMemberProvision;
   /**
    * Reads whether the session behind `bearer` may spend a CLOUD CAPABILITY,
    * asserted to the host on every `open` frame and updated in place through
@@ -381,6 +399,7 @@ export class WsStreamClient<
    */
   private readonly clientIdentity: ClientHandshakeIdentity;
   private readonly ownedSessions = new Set<StreamSession<Registry>>();
+  private readonly detachAdmissionInvalidation: (() => void) | undefined;
   private readonly methodSupport = new Map<string, StreamMethodSupport>();
   /**
    * Whether any handshake of this client's has settled. Latched on, never off:
@@ -453,6 +472,9 @@ export class WsStreamClient<
    * credential it asks for.
    */
   private readonly provisionRetryTimers = new Map<string, TimerHandle>();
+  private readonly provisionGenerations = new Map<string, number>();
+  private openedCredentialSocketSequence = 0;
+  private readonly teamCredentialSocketBarriers = new Map<string, number>();
   /**
    * Hosts THIS client handed a credential to.
    *
@@ -499,6 +521,13 @@ export class WsStreamClient<
       cloudAuthorized === undefined
         ? undefined
         : cloudVerdictForUser(options.bearer, options.userId, cloudAuthorized);
+    this.detachAdmissionInvalidation = options.localOpenAuth?.onHostInvalidated(
+      (hostId) => {
+        if (this.closed || this.options.endpoint()?.hostId !== hostId) return;
+        for (const session of Array.from(this.ownedSessions))
+          session.reconnectAfterAdmissionInvalidation();
+      },
+    );
     this.clientIdentity = toClientHandshakeIdentity(options.clientIdentity);
     this.instanceId = `stream-client-${nextStreamClientId}`;
     nextStreamClientId += 1;
@@ -581,6 +610,8 @@ export class WsStreamClient<
       registry: this.options.registry,
       endpoint: this.options.endpoint,
       bearer: this.bearer,
+      localOpenAuth: this.options.localOpenAuth,
+      localMemberProvision: this.options.localMemberProvision,
       cloudAuthorized: this.cloudAuthorized,
       auth: this.options.auth,
       clock: this.options.clock,
@@ -603,13 +634,26 @@ export class WsStreamClient<
         ),
       onTransportReconnect: (reconnectingMethod) =>
         this.resetMethodSupport(reconnectingMethod),
-      onHostCredentialAck: (hostId, state) => {
-        this.handleHostCredentialAck(hostId, state);
+      nextCredentialSocketSequence: () => ++this.openedCredentialSocketSequence,
+      onHostCredentialAck: (hostId, state, canProvision, socketSequence) => {
+        this.handleHostCredentialAck(
+          hostId,
+          state,
+          canProvision,
+          socketSequence,
+        );
       },
       // The passive tap is delivered by the session itself, ahead of the
       // compatibility abort, so it fires on EVERY state-carrying ack rather
       // than only the ones whose method version also happened to negotiate.
-      onHostCredentialState: this.options.onHostCredentialState,
+      onHostCredentialState: (hostId, state, socketSequence) => {
+        if (!this.acceptsCredentialSocket(hostId, socketSequence)) return;
+        // Ownership can change even when this method's version cannot open.
+        if (state === "team-unavailable") {
+          this.handleHostCredentialAck(hostId, state, false, socketSequence);
+        }
+        this.options.onHostCredentialState?.(hostId, state);
+      },
       onAvailabilityRecovered: (kind) => {
         this.emitAvailabilityRecovered(kind);
       },
@@ -635,6 +679,7 @@ export class WsStreamClient<
       return;
     }
     this.closed = true;
+    this.detachAdmissionInvalidation?.();
     this.closedReason = reason;
     // Never outlive the transport with a live credential in memory: there is no
     // socket left to deliver it on, and the next client mints its own.
@@ -906,9 +951,19 @@ export class WsStreamClient<
     }
   }
 
+  private acceptsCredentialSocket(
+    hostId: string,
+    socketSequence: number,
+  ): boolean {
+    return (
+      !this.closed &&
+      socketSequence > (this.teamCredentialSocketBarriers.get(hostId) ?? 0)
+    );
+  }
+
   /**
-   * Runs on every `openAck` from a host that advertised the provisioning
-   * capability. Two jobs, in this order:
+   * Team unavailability fences older handshakes. Otherwise a peer that
+   * accepts provisioning has two jobs, in this order:
    *
    *   1. deliver a credential minted earlier that never found a live socket;
    *   2. otherwise start one mint for a host reporting it has none.
@@ -920,8 +975,10 @@ export class WsStreamClient<
   private handleHostCredentialAck(
     hostId: string,
     state: HostCredentialState,
+    canProvision: boolean,
+    socketSequence: number,
   ): void {
-    if (this.closed) {
+    if (!this.acceptsCredentialSocket(hostId, socketSequence)) {
       return;
     }
     // Recorded before anything else can return early, so no path through this
@@ -930,6 +987,26 @@ export class WsStreamClient<
     // would then read as "unchanged" against a stale predecessor.
     const previousState = this.lastHostCredentialState.get(hostId) ?? null;
     this.lastHostCredentialState.set(hostId, state);
+    if (state === "team-unavailable") {
+      // A sibling's delayed ack was formed before this observation. Only a
+      // new open can establish that provisioning became appropriate again.
+      this.teamCredentialSocketBarriers.set(
+        hostId,
+        this.openedCredentialSocketSequence,
+      );
+      if (previousState !== state) {
+        this.provisionGenerations.set(
+          hostId,
+          (this.provisionGenerations.get(hostId) ?? 0) + 1,
+        );
+      }
+      this.discardPendingProvision(hostId);
+      this.clearProvisionRetry(hostId);
+      this.provisionAttemptedHostIds.delete(hostId);
+      this.handedOffHostIds.delete(hostId);
+      return;
+    }
+    if (!canProvision) return;
     if (
       previousState !== state &&
       (state === "missing" || state === "needs-reauth")
@@ -989,8 +1066,9 @@ export class WsStreamClient<
   private async runMintFlow(
     mint: HostCredentialMintFlow,
     hostId: string,
-    state: Exclude<HostCredentialState, "active">,
+    state: Exclude<HostCredentialState, "active" | "team-unavailable">,
   ): Promise<void> {
+    const generation = this.provisionGenerations.get(hostId) ?? 0;
     let outcome: HostCredentialMintOutcome;
     try {
       outcome = await mint({ hostId, reason: state });
@@ -1001,6 +1079,7 @@ export class WsStreamClient<
       );
       return;
     }
+    if (generation !== (this.provisionGenerations.get(hostId) ?? 0)) return;
     if (outcome.kind === "pending-elsewhere") {
       // This client has not actually spent an attempt - the app is waiting on
       // a claim or a backoff window, not refusing. Give the marker back, and
@@ -1101,7 +1180,7 @@ export class WsStreamClient<
   private armProvisionRetry(
     hostId: string,
     retryAfterMs: number,
-    reason: Exclude<HostCredentialState, "active">,
+    reason: Exclude<HostCredentialState, "active" | "team-unavailable">,
   ): void {
     if (this.closed) {
       return;
@@ -1545,6 +1624,8 @@ interface StreamSessionOptions<Registry extends VersionedStreamRpcRegistry> {
   readonly registry: Registry;
   readonly endpoint: HostEndpointProvider;
   readonly bearer: BearerSourceProvider;
+  readonly localOpenAuth: LocalOpenAuth | undefined;
+  readonly localMemberProvision: LocalMemberProvision | undefined;
   /** See `WsStreamClientOptions.cloudAuthorized`. */
   readonly cloudAuthorized: (() => boolean) | undefined;
   readonly auth: StreamAuthRevalidator | null;
@@ -1581,14 +1662,16 @@ interface StreamSessionOptions<Registry extends VersionedStreamRpcRegistry> {
     reconnectingMethod: keyof Registry & string,
   ) => void;
   /**
-   * Reports the connected host's own credential state, once per successful
-   * handshake, and ONLY when that host advertised the provisioning capability
-   * and actually reported a state. The owning client decides what to do; the
-   * session just carries the frame.
+   * Reports the connected host's state after the method's handshake, with
+   * the provisioning capability and the order of this socket's open frame.
+   * The owning client fences reports across sibling sessions.
    */
+  readonly nextCredentialSocketSequence: () => number;
   readonly onHostCredentialAck: (
     hostId: string,
     state: HostCredentialState,
+    canProvision: boolean,
+    socketSequence: number,
   ) => void;
   /**
    * Passive observation of the same state, delivered EARLIER than
@@ -1598,7 +1681,11 @@ interface StreamSessionOptions<Registry extends VersionedStreamRpcRegistry> {
    * this build cannot subscribe to. `null` when nobody is watching.
    */
   readonly onHostCredentialState:
-    | ((hostId: string, state: HostCredentialState) => void)
+    | ((
+        hostId: string,
+        state: HostCredentialState,
+        socketSequence: number,
+      ) => void)
     | null;
   /**
    * Reports positive host-recovery evidence to the owning client, with the
@@ -1725,8 +1812,15 @@ class StreamSession<
    */
   private clockParkUnsubscribe: (() => void) | null = null;
   private disposed = false;
+  private awaitingAdmissionInvalidation = false;
 
   private activeSocket: StreamWebSocketLike | null = null;
+  private grantMintAbort: AbortController | null = null;
+  private usesSessionGrant = false;
+  private grantReprobed = false;
+  private grantOpenAcknowledged = false;
+  private openFrameBearer: OpenFrameBearerSource | null = null;
+  private credentialSocketSequence = 0;
   private openFrameToken: string | null = null;
   /**
    * The verdict this connection's `open` frame actually carried, or `undefined`
@@ -1893,6 +1987,10 @@ class StreamSession<
   }
 
   close(): void {
+    if (this.awaitingAdmissionInvalidation) {
+      this.awaitingAdmissionInvalidation = false;
+      this.config.onDispose();
+    }
     if (!this.disposeSession()) {
       return;
     }
@@ -1920,6 +2018,16 @@ class StreamSession<
     this.reconnectAttempt = 0;
     this.slowClientReconnectStreak = 0;
     this.onTransportDrop();
+  }
+
+  /** A confirmed membership change may retry a denied, still-owned subscription. */
+  reconnectAfterAdmissionInvalidation(): void {
+    if (this.awaitingAdmissionInvalidation) {
+      this.awaitingAdmissionInvalidation = false;
+      this.disposed = false;
+      this.grantReprobed = false;
+    }
+    this.forceReconnect("local-admission-invalidated");
   }
 
   /**
@@ -2014,6 +2122,7 @@ class StreamSession<
    * open frame. Called by `WsStreamClient.notifyBearerRotated`.
    */
   pushCredentialUpdate(): void {
+    if (this.usesSessionGrant) return;
     if (this.disposed) {
       return;
     }
@@ -2024,7 +2133,7 @@ class StreamSession<
     if (socket === null) {
       return;
     }
-    const token = this.currentBearerToken();
+    const token = this.currentUserBearerToken();
     if (token === null) {
       return;
     }
@@ -2186,7 +2295,7 @@ class StreamSession<
     // signal) already re-dialed — without this guard the late connect would
     // orphan the healthy socket (its `onclose`/`onmessage` stay attached and
     // have no identity check), flapping the connection on wake.
-    if (this.activeSocket !== null) {
+    if (this.activeSocket !== null || this.grantMintAbort !== null) {
       return;
     }
 
@@ -2201,9 +2310,12 @@ class StreamSession<
       this.transitionTo("connecting", null, null);
     }
 
+    const bearer = this.config.bearer();
+    this.openFrameBearer = bearer;
+    this.usesSessionGrant = false;
     let token: string;
     try {
-      token = extractBearerForOpenFrame(this.config.bearer());
+      token = extractBearerForOpenFrame(bearer);
     } catch (cause) {
       if (cause instanceof MissingBearerTokenForOpenFrameError) {
         this.transitionTo("reconnecting", null, null);
@@ -2252,6 +2364,116 @@ class StreamSession<
       return;
     }
 
+    if (
+      bearer !== null &&
+      this.config.localOpenAuth?.requiresSessionGrant(selected.hostId)
+    ) {
+      void this.connectWithSessionGrant(
+        selected,
+        bearer,
+        this.config.localOpenAuth,
+      );
+      return;
+    }
+    this.connectWithToken(selected, token);
+  }
+
+  private async connectWithSessionGrant(
+    selected: HostTransportEndpoint,
+    bearer: OpenFrameBearerSource,
+    auth: LocalOpenAuth,
+  ): Promise<void> {
+    const pending = new AbortController();
+    this.grantMintAbort = pending;
+    try {
+      if (this.config.localMemberProvision === undefined) {
+        const readiness = await auth.ensureMemberReady(
+          selected,
+          bearer,
+          pending.signal,
+        );
+        if (
+          this.disposed ||
+          pending.signal.aborted ||
+          this.grantMintAbort !== pending
+        )
+          return;
+        if (readiness.kind === "reprobe") {
+          this.grantMintAbort = null;
+          if (this.grantReprobed) this.goTerminal(readiness.fatal);
+          else {
+            this.grantReprobed = true;
+            this.connect();
+          }
+          return;
+        }
+        if (readiness.kind !== "ready") {
+          if (!auth.requiresSessionGrant(selected.hostId)) {
+            this.grantMintAbort = null;
+            this.connect();
+            return;
+          }
+          this.grantMintAbort = null;
+          if (readiness.kind === "refused") this.goTerminal(readiness.fatal);
+          else
+            this.dropAndReconnect(
+              readiness.retryCause ?? teamMembershipUnavailable(),
+            );
+          return;
+        }
+      }
+      const provision = await auth.mint(
+        selected.hostId,
+        bearer,
+        pending.signal,
+      );
+      if (
+        this.disposed ||
+        pending.signal.aborted ||
+        this.grantMintAbort !== pending
+      )
+        return;
+      // Never open on a lease or endpoint that changed during the cloud check.
+      const current = this.config.endpoint();
+      if (
+        this.config.bearer() !== bearer ||
+        current?.hostId !== selected.hostId ||
+        current.websocketUrl !== selected.websocketUrl
+      ) {
+        this.grantMintAbort = null;
+        this.dropAndReconnect(null);
+        return;
+      }
+      this.grantMintAbort = null;
+      if (provision.kind === "refused") {
+        this.goTerminal(provision.fatal);
+        return;
+      }
+      if (provision.kind === "unavailable") {
+        this.dropAndReconnect(
+          provision.retryCause ?? teamMembershipUnavailable(),
+        );
+        return;
+      }
+      this.usesSessionGrant = true;
+      this.connectWithToken(selected, provision.token);
+    } catch {
+      if (
+        !this.disposed &&
+        !pending.signal.aborted &&
+        this.grantMintAbort === pending
+      ) {
+        this.grantMintAbort = null;
+        this.dropAndReconnect(teamMembershipUnavailable());
+      }
+    }
+  }
+
+  private connectWithToken(
+    selected: HostTransportEndpoint,
+    token: string,
+  ): void {
+    if (selected.websocketUrl === null || this.disposed) return;
     const dialUrl = toStreamDialUrl(selected.websocketUrl);
     const socket = this.config.webSocketFactory.create(
       dialUrl,
@@ -2262,6 +2484,8 @@ class StreamSession<
       dialPriorityForMethod(this.config.method),
     );
     this.activeSocket = socket;
+    if (this.usesSessionGrant) this.openFrameToken = token;
+    this.grantOpenAcknowledged = false;
     this.openFrameHostId = selected.hostId;
     this.phase = "dialing";
     this.pendingBinaryEnvelope = null;
@@ -2333,11 +2557,11 @@ class StreamSession<
       return;
     }
 
-    // Read the bearer again rather than reuse the one `connect` read: this
-    // dial may have waited for a slot (`ws-dial-gate.ts`), a wait with no
-    // bound of its own, and the bearer can rotate or expire during it.
-    const token = this.currentBearerToken();
-    if (token === null) {
+    // A queued dial must still belong to its signed-in user at OPEN. Keep a
+    // minted grant as the wire token, but recheck its user's live bearer too.
+    const liveBearer = this.currentUserBearerToken();
+    const token = this.usesSessionGrant ? this.openFrameToken : liveBearer;
+    if (liveBearer === null || token === null) {
       this.teardownSocket(4000, "missing-open-token");
       this.onTransportDrop();
       return;
@@ -2354,8 +2578,10 @@ class StreamSession<
     // genuinely needed one because the two reads happened to agree.
     const sentCloudAuthorized = this.config.cloudAuthorized?.();
     this.openFrameCloudAuthorized = sentCloudAuthorized;
+    this.credentialSocketSequence = this.config.nextCredentialSocketSequence();
     const openFrame: ClientStreamOpenFrame = {
       kind: "open",
+      capabilities: [STREAM_CAPABILITY_TEAM_CREDENTIAL_STATE],
       token,
       manifest,
       clientIdentity: this.config.clientIdentity,
@@ -2417,7 +2643,7 @@ class StreamSession<
 
     const kind = parsed["kind"];
     if (kind === "openAck") {
-      this.handleOpenAckFrame(parsed);
+      this.handleOpenAckFrame(parsed, false);
       return;
     }
     if (kind === "fatalError") {
@@ -2536,7 +2762,46 @@ class StreamSession<
     this.emitServerFrame(envelope, data);
   }
 
-  private handleOpenAckFrame(parsed: object): void {
+  private async provisionMemberBeforeSubscribe(
+    parsed: object,
+    socket: StreamWebSocketLike,
+    hostId: string,
+    provision: LocalMemberProvision,
+  ): Promise<void> {
+    let credential: MemberCredentialHandoff | null;
+    try {
+      credential = await provision.mint(hostId);
+    } catch {
+      credential = null;
+    }
+    if (
+      this.disposed ||
+      this.activeSocket !== socket ||
+      this.phase !== "awaitingOpenAck"
+    )
+      return;
+    if (credential === null) {
+      this.teardownSocket(1000, "member-provision-unavailable");
+      this.dropAndReconnect(teamMembershipUnavailable());
+      return;
+    }
+    if (
+      !this.sendControlText(socket, {
+        kind: "hostCredentialProvision",
+        ...credential,
+      })
+    ) {
+      this.onSendFailure(socket);
+      return;
+    }
+    provision.onSent(credential);
+    this.handleOpenAckFrame(parsed, true);
+  }
+
+  private handleOpenAckFrame(
+    parsed: object,
+    memberProvisionSent: boolean,
+  ): void {
     if (this.phase !== "awaitingOpenAck") {
       this.teardownSocket(4003, "unexpected-openAck");
       this.onTransportDrop();
@@ -2548,10 +2813,7 @@ class StreamSession<
       this.onTransportDrop();
       return;
     }
-    if (this.openAckTimer !== null) {
-      clearTimeout(this.openAckTimer);
-      this.openAckTimer = null;
-    }
+    this.grantOpenAcknowledged = true;
     this.supportsCredentialUpdate = ackParse.data.capabilities.includes(
       STREAM_CAPABILITY_CREDENTIAL_UPDATE,
     );
@@ -2562,6 +2824,45 @@ class StreamSession<
       STREAM_CAPABILITY_CLOUD_VERDICT_UPDATE,
     );
     const hostCredentialState = ackParse.data.hostCredentialState;
+    if (
+      this.usesSessionGrant &&
+      this.config.localMemberProvision !== undefined &&
+      !memberProvisionSent
+    ) {
+      if (
+        !this.supportsHostCredentialProvision ||
+        this.openFrameHostId === null ||
+        this.activeSocket === null
+      ) {
+        this.teardownSocket(1000, "member-provision-unavailable");
+        this.dropAndReconnect(teamMembershipUnavailable());
+        return;
+      }
+      // Keep the original OPEN_ACK deadline armed while minting. No data
+      // method may start until the actual member frame is written first.
+      void this.provisionMemberBeforeSubscribe(
+        parsed,
+        this.activeSocket,
+        this.openFrameHostId,
+        this.config.localMemberProvision,
+      );
+      return;
+    }
+    if (this.openAckTimer !== null) {
+      clearTimeout(this.openAckTimer);
+      this.openAckTimer = null;
+    }
+    if (
+      this.usesSessionGrant &&
+      this.config.localMemberProvision === undefined &&
+      this.openFrameHostId !== null &&
+      this.openFrameBearer !== null
+    ) {
+      this.config.localOpenAuth?.noteAdmitted(
+        this.openFrameHostId,
+        this.openFrameBearer,
+      );
+    }
 
     const theirManifest = ackParse.data.manifest;
     const selectedManifest = selectConnectionManifestForPeer(
@@ -2763,33 +3064,33 @@ class StreamSession<
     // credential minted on an earlier, now-dead socket.
     const hostId = this.openFrameHostId;
     if (
-      this.supportsHostCredentialProvision &&
+      !this.usesSessionGrant &&
       hostCredentialState !== null &&
       hostId !== null
     ) {
-      this.config.onHostCredentialAck(hostId, hostCredentialState);
+      this.config.onHostCredentialAck(
+        hostId,
+        hostCredentialState,
+        this.supportsHostCredentialProvision,
+        this.credentialSocketSequence,
+      );
     }
   }
 
   /**
    * Passive observation of the ack's credential state, split out from the mint
-   * hook so it can fire before a compatibility abort. Guarded the same way the
-   * mint is (capability + state + host id) and never allowed to throw into the
-   * handshake.
+   * hook so it can fire before a compatibility abort. A team's unavailable
+   * state is still observable while provisioning is deliberately unsupported.
+   * An observer cannot throw into the handshake.
    */
   private reportHostCredentialState(state: HostCredentialState | null): void {
     const observe = this.config.onHostCredentialState;
     const hostId = this.openFrameHostId;
-    if (
-      observe === null ||
-      !this.supportsHostCredentialProvision ||
-      state === null ||
-      hostId === null
-    ) {
+    if (observe === null || state === null || hostId === null) {
       return;
     }
     try {
-      observe(hostId, state);
+      observe(hostId, state, this.credentialSocketSequence);
     } catch (cause) {
       console.warn(
         `[stream] host-credential state observer threw (method=${this.config.method}, host=${hostId})`,
@@ -2864,6 +3165,36 @@ class StreamSession<
       return;
     }
     const details = termParse.data.details;
+    const localAuth = this.config.localOpenAuth;
+    if (localAuth !== undefined && this.openFrameHostId !== null) {
+      if (this.openFrameBearer !== null) {
+        localAuth.noteRefusal(
+          this.openFrameHostId,
+          this.openFrameBearer,
+          details,
+        );
+      }
+      if (
+        this.usesSessionGrant &&
+        !this.grantOpenAcknowledged &&
+        !isLocalAdmissionFatal(details.code) &&
+        !this.grantReprobed
+      ) {
+        const refusedHostId = this.openFrameHostId;
+        this.grantReprobed = true;
+        this.teardownSocket(1000, "local-grant-refused");
+        this.resetConnection();
+        localAuth.invalidateHost(refusedHostId, details);
+        return;
+      }
+      if (details.code === SESSION_GRANT_REQUIRED && !this.usesSessionGrant) {
+        localAuth.noteSessionGrantRequired(this.openFrameHostId);
+        this.teardownSocket(1000, "session-grant-required");
+        this.resetConnection();
+        this.connect();
+        return;
+      }
+    }
     // The restart tombstone (P1.4 / D5 / M1), read BEFORE the frame is routed
     // by `retryable`/`UNAUTHORIZED` so every arm reports it. The host is
     // stating that the outage it is about to cause is deliberate - the one
@@ -2920,7 +3251,11 @@ class StreamSession<
     // dial carries. Every other fatalError (e.g. `INCOMPATIBLE` or a stream
     // domain code such as `CHAT_INVALID`), and the no-revalidator case, stays
     // terminal exactly as before.
-    if (details.code === "UNAUTHORIZED" && this.config.auth !== null) {
+    if (
+      details.code === "UNAUTHORIZED" &&
+      !this.usesSessionGrant &&
+      this.config.auth !== null
+    ) {
       this.handleUnauthorizedFatalError(details, this.config.auth);
       return;
     }
@@ -3227,6 +3562,11 @@ class StreamSession<
 
   /** The bearer the next open frame would carry, or null if none is available. */
   private currentBearerToken(): string | null {
+    if (this.usesSessionGrant) return this.openFrameToken;
+    return this.currentUserBearerToken();
+  }
+
+  private currentUserBearerToken(): string | null {
     try {
       return extractBearerForOpenFrame(this.config.bearer());
     } catch {
@@ -3240,6 +3580,12 @@ class StreamSession<
    * fatalErrors and the bounded/rejected `UNAUTHORIZED` outcomes.
    */
   private goTerminal(details: FatalErrorDetails): void {
+    if (this.disposed) return;
+    // Denial stays terminal until an explicit membership/ownership change.
+    // Retain only the caller's subscription so that signal can restart it.
+    this.awaitingAdmissionInvalidation =
+      details.code === TEAM_MEMBERSHIP_REQUIRED &&
+      this.config.localOpenAuth !== undefined;
     if (!this.disposeSession()) {
       return;
     }
@@ -3396,6 +3742,7 @@ class StreamSession<
    * application frame, the dwell timer, and an elapsed-time dwell settle.
    */
   private resetLoopCounters(): void {
+    this.grantReprobed = false;
     this.reconnectAttempt = 0;
     this.noProgressUnauthorizedReconnects = 0;
     // The retryable-close suppression rides the same proof, for the same
@@ -3412,6 +3759,11 @@ class StreamSession<
    * the transition (see {@link dropAndReconnect}).
    */
   private resetForReconnect(retryCause: FatalErrorDetails | null): void {
+    this.resetConnection();
+    this.transitionTo("reconnecting", null, retryCause);
+  }
+
+  private resetConnection(): void {
     this.negotiatedSchemaVersion = null;
     this.config.onTransportReconnect(this.config.method);
     this.clearHeartbeat();
@@ -3441,7 +3793,6 @@ class StreamSession<
     this.supportsHostCredentialProvision = false;
     this.phase = "idle";
     this.pendingBinaryEnvelope = null;
-    this.transitionTo("reconnecting", null, retryCause);
   }
 
   private scheduleReconnect(): void {
@@ -3570,6 +3921,7 @@ class StreamSession<
     // traycer#892). The dwell remains the separate health proof for quiet
     // non-epic streams.
     this.reconnectAttempt = 0;
+    this.grantReprobed = false;
     if (envelope.kind === "snapshot") {
       this.noProgressUnauthorizedReconnects = 0;
     }
@@ -3609,12 +3961,14 @@ class StreamSession<
       return false;
     }
     this.disposed = true;
+    this.grantMintAbort?.abort();
+    this.grantMintAbort = null;
     // The single choke point for both `close()` and `goTerminal()`. A parked
     // session's tracker subscription is the one handle that is NOT a timer, so
     // `teardownTimers` cannot reach it: left attached it would re-dial a
     // disposed session the next time somebody's clock came right.
     this.clearClockPark();
-    this.config.onDispose();
+    if (!this.awaitingAdmissionInvalidation) this.config.onDispose();
     return true;
   }
 }

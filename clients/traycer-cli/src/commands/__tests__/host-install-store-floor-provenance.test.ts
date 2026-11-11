@@ -315,6 +315,7 @@ function context(): CommandContext {
 
 async function installRelease(version: string): Promise<void> {
   await buildHostInstallCommand({
+    team: null,
     versionRequest: version,
     fromPath: null,
     enableLinger: false,

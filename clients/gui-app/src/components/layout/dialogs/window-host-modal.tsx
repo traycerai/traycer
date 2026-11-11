@@ -54,6 +54,7 @@ import { BackdropDimSource } from "@/components/ui/backdrop-dim-source";
  * overlay, and the gate behind it is already inert.
  */
 export interface WindowHostModalProps {
+  readonly onSwitchAccount?: () => void;
   readonly cause: WindowNarrationCause;
   readonly variant: WindowNarrationVariant;
   readonly progress: HostProgressView | null;
@@ -325,6 +326,17 @@ function NarrationActions(
           Update host
         </Button>
       )}
+      {props.variant.kind === "team-membership-required" &&
+      props.onSwitchAccount !== undefined ? (
+        <Button
+          type="button"
+          size="sm"
+          variant="default"
+          onClick={props.onSwitchAccount}
+        >
+          Switch account
+        </Button>
+      ) : null}
       {props.onRetry === null ? null : (
         <Button
           type="button"
@@ -549,6 +561,37 @@ function modalCopy(
   variant: WindowNarrationVariant,
   cause: WindowNarrationCause,
 ): WindowHostModalCopy {
+  if (variant.kind === "team-membership-required") {
+    return {
+      title: "This computer belongs to a team",
+      description:
+        "This account is not a member. Switch accounts to use Traycer here.",
+      reportTitle: "Team membership required",
+      reportMessage: "This account cannot use this team's computer.",
+      reportCode: "TEAM_MEMBERSHIP_REQUIRED",
+    };
+  }
+  if (variant.kind === "team-membership-unavailable") {
+    return {
+      title: "Team membership could not be checked",
+      description:
+        "Traycer cannot reach the cloud to check team membership. It will try again.",
+      reportTitle: "Team membership check unavailable",
+      reportMessage:
+        "Traycer could not reach the cloud to check team membership.",
+      reportCode: "TEAM_MEMBERSHIP_UNAVAILABLE",
+    };
+  }
+  if (variant.kind === "team-membership-checking") {
+    return {
+      title: "Checking team membership",
+      description: "Traycer will open when this account's access is confirmed.",
+      reportTitle: "Team membership check pending",
+      reportMessage:
+        "Traycer is checking this account's access to the computer.",
+      reportCode: "TEAM_MEMBERSHIP_CHECKING",
+    };
+  }
   if (variant.kind === "update-client") {
     const { requirement } = variant;
     return {

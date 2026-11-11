@@ -103,6 +103,7 @@ function remoteEntry(
     },
     publicKey,
     relayFuseGrace: false,
+    owner: null,
     sandbox: {
       state: null,
       frozen: false,
@@ -129,6 +130,7 @@ const bearer = {
 
 function harness() {
   const sessions: CountingSession[] = [];
+  const openAuths: string[] = [];
   const build = (label: string) => {
     const session = countingSession(label);
     sessions.push(session);
@@ -142,15 +144,29 @@ function harness() {
     };
   };
   mocks.createRemoteHostTransport.mockImplementation(
-    (params: { readonly hostId: string; readonly hostPublicKey: string }) =>
-      build(`${params.hostId}/${params.hostPublicKey}`),
+    (params: {
+      readonly hostId: string;
+      readonly hostPublicKey: string;
+      readonly openAuth: string;
+    }) => {
+      openAuths.push(params.openAuth);
+      return build(`${params.hostId}/${params.hostPublicKey}`);
+    },
   );
   mocks.createPoolHostTransport.mockImplementation(() => build("pool"));
   let sandbox = remoteEntry("sandbox-a", "key-1");
+  let physicalHost: RemoteHostDirectoryEntry = Object.assign(
+    remoteEntry("physical-team", "key-team"),
+    {
+      sandbox: null,
+      owner: { kind: "user" as const, id: "user-a" },
+    },
+  );
   const otherHost = remoteEntry("host-b", "key-b");
   const entries = (): readonly HostDirectoryEntry[] => [
     localEntry,
     sandbox,
+    physicalHost,
     otherHost,
     poolEntry,
   ];
@@ -192,6 +208,15 @@ function harness() {
       sandbox = remoteEntry("sandbox-a", "key-2");
       return sandbox;
     },
+    physicalHost: () => physicalHost,
+    transferPhysicalHostToTeam: () => {
+      physicalHost = Object.assign(remoteEntry("physical-team", "key-team"), {
+        sandbox: null,
+        owner: { kind: "team" as const, id: "team-a", name: "Alpha" },
+      });
+      return physicalHost;
+    },
+    openAuths,
     sandbox: () => sandbox,
     otherHost: () => otherHost,
     dispose: () => binding.dispose(),
@@ -239,6 +264,19 @@ describe("RuntimeHostMessenger binding map", () => {
     expect(sessionFor(h.sessions, "sandbox-a/key-1").closeCalls).toBe(1);
     expect(sessionFor(h.sessions, "sandbox-a/key-2").closeCalls).toBe(0);
     expect(sessionFor(h.sessions, "pool").closeCalls).toBe(0);
+    h.dispose();
+  });
+
+  it("rebuilds the unary binding when an unchanged physical host transfers to a team", async () => {
+    const h = harness();
+    await h.request(h.physicalHost());
+    h.transferPhysicalHostToTeam();
+    await h.request(h.physicalHost());
+
+    expect(h.sessions).toHaveLength(2);
+    expect(h.sessions[0].closeCalls).toBe(1);
+    expect(h.sessions[1].closeCalls).toBe(0);
+    expect(h.openAuths).toEqual(["user-bearer", "session-grant"]);
     h.dispose();
   });
 

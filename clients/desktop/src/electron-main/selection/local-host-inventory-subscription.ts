@@ -1,3 +1,4 @@
+import type { LocalOpenAuth } from "@traycer-clients/shared/host-transport/local-open-auth";
 /**
  * Main's subscription to THIS machine's host for the account's registry.
  *
@@ -424,6 +425,7 @@ export function startLocalHostInventorySubscription(
  * between reconnect attempts is followed to its new port.
  */
 export function createLocalHostInventoryStreamClient(deps: {
+  readonly localOpenAuth?: LocalOpenAuth;
   readonly localHost: () => LocalHostEndpoint | null;
   readonly bearer: BearerSourceProvider;
   readonly appVersion: string | null;
@@ -433,6 +435,7 @@ export function createLocalHostInventoryStreamClient(deps: {
 ) => IHostStreamClient<HostStreamRpcRegistry> {
   return (endpoint, userId) =>
     new WsStreamClient<HostStreamRpcRegistry>({
+      localOpenAuth: deps.localOpenAuth,
       registry: hostStreamRpcRegistry,
       hostId: endpoint.hostId,
       userId,

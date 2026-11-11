@@ -1,3 +1,4 @@
+import { useHostBinding } from "@/lib/host/runtime";
 import { useEffect, type ReactNode } from "react";
 import {
   WindowHostModal,
@@ -147,6 +148,7 @@ function NarratingWindowHostModal(props: {
   >;
 }): ReactNode {
   const { narration } = props;
+  const hostBinding = useHostBinding();
   const progress = useHostProvisioningProgress();
   const controller = useHostReadinessController();
   const shellAdmission = useShellLocalPlaneAdmission();
@@ -238,6 +240,12 @@ function NarratingWindowHostModal(props: {
     updateHost === null &&
     !settled.failed;
   const narrationProps: WindowHostModalProps = {
+    onSwitchAccount:
+      hostBinding === null
+        ? undefined
+        : () => {
+            void hostBinding.auth.signOut();
+          },
     cause: narration.cause,
     variant: narration.variant,
     progress,
