@@ -10,9 +10,8 @@ import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
 
 /**
  * The note above a provider's tabs for a per-computer pick: unfinished setup,
- * or that computer's own settings and the verb that moves them. While the
- * move runs, or once it stopped, it reads as the Overview's settings card
- * does (`MoveProgressLine`), from that computer's own `environment.status`.
+ * or that the settings are that computer's own and the verb that moves the
+ * computer to Personal.
  */
 export function LocalRowNote(): ReactNode {
   const pick = useEnvironmentPick();
@@ -21,8 +20,6 @@ export function LocalRowNote(): ReactNode {
   const status = useEnvironmentStatusRead(client, hostId, hostId !== null);
   const openMoveSheet = useMoveSheetStore((state) => state.openSheet);
   if (pick.kind !== "local") return null;
-  const state =
-    status.data === null ? null : hostSettingsCardState(status.data);
   const setup = status.data === null ? null : unresolvedSetupText(status.data);
   if (setup !== null) {
     return (
@@ -41,37 +38,51 @@ export function LocalRowNote(): ReactNode {
       className="mb-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-md border border-info/30 bg-info/10 px-3 py-2 text-ui-sm text-info-foreground"
       data-testid="local-row-note"
     >
-      {state !== null &&
-      (state.kind === "moving" || state.kind === "move_stopped") &&
-      client !== null &&
-      status.data !== null ? (
-        <MoveProgressLine
-          client={client}
-          hostId={pick.hostId}
-          hostName={pick.hostName}
-          status={status.data}
-          progress={state}
-        />
-      ) : (
-        <>
-          <span className="min-w-0 max-w-[72ch]">
-            These settings are on {pick.hostName} only, not in Personal yet.
-            Move them to Personal to use them on every computer and sandbox; you
-            see every item first.
-          </span>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            data-testid="local-row-note-move"
-            onClick={() =>
-              openMoveSheet({ hostId: pick.hostId, hostName: pick.hostName })
-            }
-          >
-            Move to Personal
-          </Button>
-        </>
-      )}
+      <MoveProgressOr hostId={pick.hostId} hostName={pick.hostName}>
+        <span className="min-w-0 max-w-[72ch]">
+          Settings on {pick.hostName} only. Move this computer to Personal to
+          use the same settings on every computer and sandbox.
+        </span>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          data-testid="local-row-note-move"
+          onClick={() =>
+            openMoveSheet({ hostId: pick.hostId, hostName: pick.hostName })
+          }
+        >
+          Move to Personal
+        </Button>
+      </MoveProgressOr>
     </div>
+  );
+}
+
+/**
+ * While the computer's move runs, or once it stopped, the line the Overview's
+ * settings card shows (`MoveProgressLine`), read from that computer's own
+ * `environment.status`; otherwise `children`, which offer the move.
+ */
+export function MoveProgressOr(props: {
+  readonly hostId: string;
+  readonly hostName: string;
+  readonly children: ReactNode;
+}): ReactNode {
+  const client = useHostClientForHostId(props.hostId);
+  const status = useEnvironmentStatusRead(client, props.hostId, true);
+  if (client === null || status.data === null) return props.children;
+  const state = hostSettingsCardState(status.data);
+  if (state.kind !== "moving" && state.kind !== "move_stopped") {
+    return props.children;
+  }
+  return (
+    <MoveProgressLine
+      client={client}
+      hostId={props.hostId}
+      hostName={props.hostName}
+      status={status.data}
+      progress={state}
+    />
   );
 }

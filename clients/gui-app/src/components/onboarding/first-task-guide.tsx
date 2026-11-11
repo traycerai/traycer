@@ -24,6 +24,10 @@ import {
   type ThisComputer,
 } from "@/components/settings/move/this-computer";
 import { useThisComputersMove } from "@/components/settings/move/use-this-computers-move";
+import { planMovesNothing } from "@/components/settings/move-sheet-model";
+import { useHostQuery } from "@/hooks/host/use-host-query";
+import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import type { HostRpcRegistry } from "@/lib/host";
 import { useEnvironmentReviewRead } from "@/hooks/environment/use-environment-reads";
 import { useRetrospectiveSheetStore } from "@/stores/settings/retrospective-sheet-store";
 import {
@@ -107,6 +111,10 @@ export function FirstTaskChatGuide(props: {
  * computer is on hold it reads `An earlier version shared this computer's
  * settings · Review` and opens the retrospective sheet, instead of the setup
  * reminder; it retires by itself once nothing is on hold.
+ *
+ * The move's invitation is for a computer with settings of its own to move.
+ * One with nothing to move is a new computer's ordinary first run: it is not
+ * asked, and the Getting started card is where the move waits.
  */
 function GettingStartedToast() {
   const computer = useThisComputer();
@@ -114,20 +122,57 @@ function GettingStartedToast() {
   const remindersOn = completedAt !== null;
   const held = useHeldOnThisComputer(computer, remindersOn);
   const move = useThisComputersMove(computer, remindersOn);
-  // No toast until the review and the status answer, so none shows for a
-  // moment before another replaces it.
+  const hasSettingsToMove = useHasSettingsToMove(
+    computer,
+    remindersOn && move === "not_moved",
+  );
+  // No toast until the review, the status and the plan answer, so none shows
+  // for a moment before another replaces it.
   if (held === "pending" || move === "pending") return null;
   if (held === "held") return <HeldOnThisComputerToast computer={computer} />;
+  if (hasSettingsToMove === "pending") return null;
   const moveTarget =
-    move === "not_moved" && computer.hostId !== null
+    move === "not_moved" && hasSettingsToMove && computer.hostId !== null
       ? { hostId: computer.hostId, hostName: computer.hostName }
       : null;
   return <StartToast completedAt={completedAt} moveTarget={moveTarget} />;
 }
 
+const EMPTY_PARAMS = {};
+
+/**
+ * Whether this computer's move plan (`environment.move.plan`, the list the
+ * move sheet shows) has any row that would leave it: `pending` while it is
+ * being read. A host without the plan, or a read that failed, has nothing
+ * known to move.
+ */
+function useHasSettingsToMove(
+  computer: ThisComputer,
+  enabled: boolean,
+): boolean | "pending" {
+  const supported = useHostMethodSupport(
+    computer.hostId,
+    "environment.move.plan",
+  );
+  const plan = useHostQuery<HostRpcRegistry, "environment.move.plan">({
+    cacheKeyIdentity: undefined,
+    client: computer.client,
+    method: "environment.move.plan",
+    params: EMPTY_PARAMS,
+    options: {
+      enabled: enabled && supported === true,
+      refetchOnWindowFocus: false,
+    },
+  });
+  if (!enabled || supported === false) return false;
+  if (supported === null) return "pending";
+  if (plan.data === undefined) return plan.isError ? false : "pending";
+  return !planMovesNothing(plan.data);
+}
+
 /**
  * The Start page's two toasts, under two ids: the move's invitation while
- * this computer's settings are not in Personal, and the setup reminder
+ * this computer has settings of its own to move, and the setup reminder
  * otherwise. The invitation wins while there is one - two things asking for
  * the next move at once is noise - and the reminder is held back for as long
  * as one has been shown and not answered.

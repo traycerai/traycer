@@ -75,7 +75,11 @@ describe("<LocalRowNote />", () => {
       }),
     );
 
+    expect(screen.getByTestId("local-row-note").textContent).toContain(
+      "Settings on Old laptop only. Move this computer to Personal to use the same settings on every computer and sandbox.",
+    );
     const move = await screen.findByTestId("local-row-note-move");
+    expect(move.textContent).toBe("Move to Personal");
     fireEvent.click(move);
     expect(useMoveSheetStore.getState().target).toEqual({
       hostId: HOST_ID,
@@ -104,7 +108,7 @@ describe("<LocalRowNote />", () => {
     );
     expect(screen.queryByTestId("local-row-note-move")).toBeNull();
     expect(screen.getByTestId("local-row-note").textContent).not.toContain(
-      "not in Personal yet",
+      "Settings on Old laptop only.",
     );
   });
 

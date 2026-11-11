@@ -164,11 +164,16 @@ Application. It uses the first settings leader digit; General uses the second.
 The start page offers the checklist through a persistent, dismissible toast once
 the first-task guide ends. Dismissing it is remembered locally across reloads;
 the checklist remains available in Settings. Completed checklists hide the toast.
-While this computer's settings are not in Personal, the move's own invitation
-stands there instead, under an id of its own
-(`MOVE_INVITATION_TOAST_ID`): "This computer's settings aren't in Personal." ·
-Show me what moves · Not now. Only the person takes it down - a status that
-stops naming a move does not, and the reminder never stands in its place.
+While this computer has settings of its own to move (its
+`environment.move.plan` has a Moves row), the move's own invitation stands
+there instead, under an id of its own (`MOVE_INVITATION_TOAST_ID`): "This
+computer's settings aren't in Personal." · Show me what moves · Not now. Only
+the person takes it down - a status that stops naming a move does not, and the
+reminder never stands in its place. A computer with nothing to move is a new
+computer's first run and is not asked: the checklist's move card ("Move this
+computer to Personal" · Move to Personal) is where the move waits. A computer
+that runs a team's settings shows neither (`useThisComputersMove` answers
+`team`).
 
 The Home tab draws the checklist itself, above its task sections
 (`home-focus/home-getting-started-section.tsx`), from the same cards
@@ -1261,7 +1266,10 @@ records acknowledgement (`environment.review.record`) and Escape does not. A
 Local picker row's subtitle (`its own settings, not in Personal yet`,
 `partly in Personal`, `stopped using Personal`) and `Move to Personal` /
 `Finish moving` verb come from those planes (E4's slot); the row's `Local`
-badge reads "Settings on this computer only" on hover. The Secrets page's
+badge reads "Settings on this computer only" on hover. A computer that runs a
+team's settings (`principal.kind === "team"`) has no Local row whatever its
+planes read, and the retrospective sheet lists what is still on it without
+`Move to Personal`. The Secrets page's
 `N commands from {host} are on hold until you choose · Review them` line
 (`1 command … is on hold until you choose · Review it`) opens the same sheet
 for that host's held rows, where Approve and Discard answer one row through
@@ -5965,9 +5973,11 @@ wrap`). Each row names the account its first usable match runs on, the
     feature; per-chat intervention is the actions on the cards themselves.
 - `Storage` (Environment, section id `storage`, route `/settings/storage`,
   `environment/storage-settings-panel.tsx`): what the picked configuration's
-  hosts keep on disk. It is offered for Personal and teams, and not on a
-  Local row (`PAGES_HIDDEN_BY_PICK`), since its settings are an environment
-  item. Later storage rows go here too.
+  hosts keep on disk. Its policy is offered for Personal and teams. On a
+  Local row, as for MCP servers, Skills and Sandboxes, the page stays in the
+  rail and shows the move's offer instead (`environment/local-move-page.tsx`):
+  one line on what the page gives, one on what moving adds, and Move to
+  Personal, which opens the move sheet. Later storage rows go here too.
   - **The storage policy** (`panels/storage-policy-section.tsx`,
     `data-testid="storage-policy"`), two groups:
     - **Tasks you haven't used lately**, a card of two rows:
@@ -6686,7 +6696,10 @@ set-state-in-effect` forbids the effect form, and an effect would also
        Applying your settings, each marked done, running or waiting, with
        "Step 2 of 3". Stalled or failed reads "Setup stopped while <step>."
        (a failed move: "Moving this host's settings to Personal failed.")
-       with Retry (`environment.setup.retry`). Gone once done.
+       with Retry (`environment.setup.retry`). Gone once done, and absent
+       while the state is `awaiting_consent`: the computer runs its own
+       settings until the person moves it, with no deadline, so nothing is
+       being set up.
     3. **Remote access** (`host-scope/remote-access-section.tsx`): On ("Other
        devices and agents signed in to your account can reach this
        computer."), Off ("Other devices and agents can't reach this computer.

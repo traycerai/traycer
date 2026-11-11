@@ -1119,22 +1119,14 @@ describe("<SettingsSidebar /> Environment pick", () => {
     expect(present("credits")).toBe(true);
   });
 
-  it("hides MCP servers, Skills, Sandboxes, Storage and Members while a Local row is picked", async () => {
+  it("keeps MCP servers, Skills, Sandboxes and Storage visible under a Local pick, and hides Members", async () => {
     useSettingsEnvironmentPickStore.setState({
       pick: { kind: "local", hostId: "host-old", hostName: "Old laptop" },
     });
 
     await renderRail();
 
-    expect(environmentRows()).toEqual([
-      "Providers",
-      "Permissions",
-      "Agent memories",
-      "Agents",
-      "Model routing",
-      "Variables & shells",
-      "Secrets",
-    ]);
+    expect(environmentRows()).toEqual(PERSONAL_ROWS);
   });
 
   it("shows Members when a team is picked", async () => {

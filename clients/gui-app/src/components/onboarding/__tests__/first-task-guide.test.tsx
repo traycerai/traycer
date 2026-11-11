@@ -16,6 +16,7 @@ import type {
   EnvironmentReviewEntryV12,
   EnvironmentStatusResponseV12,
 } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentMovePlanResponseV12 } from "@traycer/protocol/host/environment/move-contracts";
 import { reviewEntryFixture } from "@/components/settings/host-scope/__tests__/host-access-test-support";
 import type { ThisComputer } from "@/components/settings/move/this-computer";
 import {
@@ -165,6 +166,7 @@ function computerHolding(entries: readonly EnvironmentReviewEntryV12[]): void {
   const { client } = buildEnvironmentClient({
     hostId: "old",
     handlers: {
+      "environment.move.plan": () => movePlanWithRows(1),
       "environment.review": () => ({
         entries: [...entries],
         shownAt: null,
@@ -175,15 +177,24 @@ function computerHolding(entries: readonly EnvironmentReviewEntryV12[]): void {
   });
   recordNegotiatedHostManifest("old", {
     "environment.review": { major: 1, minor: 2 },
+    "environment.move.plan": { major: 1, minor: 2 },
   });
   thisComputer.current = { hostId: "old", hostName: "Old laptop", client };
 }
 
 /** This computer, with a fake host answering `environment.status` with `status`. */
 function computerWithStatus(status: EnvironmentStatusResponseV12): void {
+  computerWithStatusAndMovePlan(status, 1);
+}
+
+function computerWithStatusAndMovePlan(
+  status: EnvironmentStatusResponseV12,
+  moveRows: number,
+): void {
   const { client } = buildEnvironmentClient({
     hostId: "old",
     handlers: {
+      "environment.move.plan": () => movePlanWithRows(moveRows),
       "environment.review": () => ({
         entries: [],
         shownAt: null,
@@ -196,8 +207,35 @@ function computerWithStatus(status: EnvironmentStatusResponseV12): void {
   recordNegotiatedHostManifest("old", {
     "environment.review": { major: 1, minor: 2 },
     "environment.status": { major: 1, minor: 1 },
+    "environment.move.plan": { major: 1, minor: 2 },
   });
   thisComputer.current = { hostId: "old", hostName: "Old laptop", client };
+}
+
+function movePlanWithRows(count: number): EnvironmentMovePlanResponseV12 {
+  return {
+    personalHoldsSecrets: false,
+    itemChoices: false,
+    planHash: "plan-1",
+    planRevision: 1,
+    hostVersion: "1.5.0",
+    disclosureVersion: 1,
+    rows: {
+      looksLikeAKey: [],
+      sameNameInPersonal: [],
+      moves: Array.from({ length: count }, (_, index) => ({
+        kind: "variable" as const,
+        key: `EDITOR_${index}`,
+        os: null,
+        label: `EDITOR_${index}`,
+        detail: "variable",
+      })),
+      staysOnThisComputer: [],
+      alreadyInPersonal: [],
+      differsMasked: [],
+    },
+    guideDiffers: false,
+  };
 }
 
 /**
@@ -211,6 +249,7 @@ function computerWhoseStatusFailsAfterOneRead(
   const { client } = buildEnvironmentClient({
     hostId: "old",
     handlers: {
+      "environment.move.plan": () => movePlanWithRows(1),
       "environment.review": () => ({
         entries: [],
         shownAt: null,
@@ -227,6 +266,7 @@ function computerWhoseStatusFailsAfterOneRead(
   recordNegotiatedHostManifest("old", {
     "environment.review": { major: 1, minor: 2 },
     "environment.status": { major: 1, minor: 1 },
+    "environment.move.plan": { major: 1, minor: 2 },
   });
   thisComputer.current = { hostId: "old", hostName: "Old laptop", client };
   return { statusReads: () => reads };
@@ -398,6 +438,43 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
     });
   });
 
+  it("shows the setup reminder instead of an invitation when the move plan is empty", async () => {
+    computerWithStatusAndMovePlan(NOT_MOVED_STATUS, 0);
+    renderGuide();
+
+    await waitFor(() =>
+      expect(toastState).toHaveBeenCalledWith(
+        "You're all set",
+        expect.anything(),
+      ),
+    );
+    expect(toastState).not.toHaveBeenCalledWith(
+      "This computer's settings aren't in Personal.",
+      expect.anything(),
+    );
+  });
+
+  it("does not invite a team-owned computer to move its settings", async () => {
+    computerWithStatus(
+      environmentStatusFixture({
+        principal: { kind: "team", teamName: "Designers" },
+        planes: { records: "local", broker: "local", room: "local" },
+      }),
+    );
+    renderGuide();
+
+    await waitFor(() =>
+      expect(toastState).toHaveBeenCalledWith(
+        "You're all set",
+        expect.anything(),
+      ),
+    );
+    expect(toastState).not.toHaveBeenCalledWith(
+      "This computer's settings aren't in Personal.",
+      expect.anything(),
+    );
+  });
+
   describe("on a phone on its side", () => {
     const stubShortLandscape = (shortLandscape: boolean): void => {
       vi.stubGlobal(
@@ -537,6 +614,7 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
       const { client } = buildEnvironmentClient({
         hostId: "old",
         handlers: {
+          "environment.move.plan": () => movePlanWithRows(1),
           "environment.review": () => {
             review += 1;
             return {
@@ -555,6 +633,7 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
       recordNegotiatedHostManifest("old", {
         "environment.review": { major: 1, minor: 2 },
         "environment.status": { major: 1, minor: 1 },
+        "environment.move.plan": { major: 1, minor: 2 },
       });
       thisComputer.current = { hostId: "old", hostName: "Old laptop", client };
       return { reads: () => ({ status, review }) };

@@ -169,7 +169,10 @@ const applyingStalled = environmentStatusFixture({
 });
 const running = environmentStatusFixture({ principal: { kind: "personal" } });
 
-function pickerElement(windowHostId: string) {
+function pickerElementForSection(
+  windowHostId: string,
+  activeSection: "mcp-servers" | "skills" | "sandboxes" | "storage" | "members",
+) {
   const hosts = [
     hostScopeOptionFixture({ hostId: "mac", name: "MacBook Pro" }),
     hostScopeOptionFixture({ hostId: "dev", name: "dev-box" }),
@@ -183,13 +186,24 @@ function pickerElement(windowHostId: string) {
         host: hosts[0],
         activeHostId: windowHostId,
       })}
-      activeSection="mcp-servers"
+      activeSection={activeSection}
     />
   );
 }
 
+function pickerElement(windowHostId: string) {
+  return pickerElementForSection(windowHostId, "mcp-servers");
+}
+
 function renderPicker(windowHostId: string) {
   return render(pickerElement(windowHostId));
+}
+
+function renderPickerForSection(
+  windowHostId: string,
+  activeSection: "mcp-servers" | "skills" | "sandboxes" | "storage" | "members",
+) {
+  return render(pickerElementForSection(windowHostId, activeSection));
 }
 
 function runningHost(name: string, isThisComputer: boolean): RunningHost {
@@ -581,17 +595,35 @@ describe("<EnvironmentPicker />", () => {
     expect(useSettingsHostScopeStore.getState().pendingHostId).toBe("other");
   });
 
-  // A press takes the surface with it, which is the whole point of pressing:
-  // the person is looking at Settings and asked for this. That is the opposite
-  // of what the removal gate does, so it is asserted as the command.
-  it("picking a row that hides the open page leaves it for Providers", () => {
+  it.each(["mcp-servers", "skills", "sandboxes", "storage"] as const)(
+    "keeps the selected %s page when a Local row is picked",
+    (section) => {
+      answer("old", awaiting, V11);
+      renderPickerForSection("mac", section);
+      openMenu();
+
+      act(() => {
+        fireEvent.click(screen.getByTestId("environment-picker-local-old"));
+      });
+      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
+        kind: "local",
+        hostId: "old",
+        hostName: "Old laptop",
+      });
+      expect(surface.openSettings).not.toHaveBeenCalled();
+      expect(surface.setSection).not.toHaveBeenCalled();
+    },
+  );
+
+  it("moves from Members to Providers when a Local row is picked", () => {
     answer("old", awaiting, V11);
-    renderPicker("mac");
+    renderPickerForSection("mac", "members");
     openMenu();
 
     act(() => {
       fireEvent.click(screen.getByTestId("environment-picker-local-old"));
     });
+
     expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
       kind: "local",
       hostId: "old",
