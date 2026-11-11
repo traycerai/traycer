@@ -519,7 +519,6 @@ export class WsRpcClient<
 
     try {
       const clientManifest = this.buildManifest();
-      const token = discovery.token;
       // Construction is inside this try: `create()` throws synchronously when
       // the runtime has no WebSocket global, and that throw has to release the
       // unpublished dial. A slot left in `dialing` would make the next call
@@ -551,7 +550,15 @@ export class WsRpcClient<
 
       session.send({
         kind: "open",
-        token,
+        // Read again after the dial, which may have waited for a slot
+        // (`ws-dial-gate.ts`) with no bound of its own: the bearer can rotate
+        // or expire meanwhile. `prepareDiscoveryOpen` still reads it first,
+        // so a call with no bearer fails before it dials.
+        token: extractBearerOrThrowRpcError(
+          authority.bearer,
+          requestId,
+          method,
+        ),
         manifest: clientManifest.manifest,
         optionalManifest: clientManifest.optionalManifest,
         capabilities:
@@ -2325,7 +2332,7 @@ function prepareDiscoveryOpen(
   requestId: string,
   method: string,
   settleUnpublished: (cause: unknown) => void,
-): { readonly token: string; readonly websocketUrl: string } {
+): { readonly websocketUrl: string } {
   try {
     throwIfAuthorityAborted(authority, requestId, method);
     const websocketUrl = authority.endpoint.websocketUrl;
@@ -2338,10 +2345,8 @@ function prepareDiscoveryOpen(
         fatalDetails: null,
       });
     }
-    return {
-      token: extractBearerOrThrowRpcError(authority.bearer, requestId, method),
-      websocketUrl,
-    };
+    extractBearerOrThrowRpcError(authority.bearer, requestId, method);
+    return { websocketUrl };
   } catch (cause) {
     settleUnpublished(cause);
     throw cause;

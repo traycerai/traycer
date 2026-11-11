@@ -2213,7 +2213,6 @@ class StreamSession<
       dialPriorityForMethod(this.config.method),
     );
     this.activeSocket = socket;
-    this.openFrameToken = token;
     this.openFrameHostId = selected.hostId;
     this.phase = "dialing";
     this.pendingBinaryEnvelope = null;
@@ -2285,12 +2284,16 @@ class StreamSession<
       return;
     }
 
-    const token = this.openFrameToken;
+    // Read the bearer again rather than reuse the one `connect` read: this
+    // dial may have waited for a slot (`ws-dial-gate.ts`), a wait with no
+    // bound of its own, and the bearer can rotate or expire during it.
+    const token = this.currentBearerToken();
     if (token === null) {
       this.teardownSocket(4000, "missing-open-token");
       this.onTransportDrop();
       return;
     }
+    this.openFrameToken = token;
     const manifest = buildStreamManifest(
       this.config.registry,
       CLIENT_SERVED_STREAM_MAJORS,
