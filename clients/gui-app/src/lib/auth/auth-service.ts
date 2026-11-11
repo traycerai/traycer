@@ -70,10 +70,6 @@ import type {
   SlackAppDmsRequest,
   SlackAppRegisterRequest,
 } from "@traycer/protocol/host/slack-app";
-import {
-  TEAM_HOST_UNAVAILABLE_IN_STAGING,
-  type TeamHostInstallTokenResult,
-} from "@traycer-clients/shared/host-client/team-host";
 import type {
   VoiceAvailabilityFetchResult,
   VoiceSessionEndFetchResult,
@@ -3485,26 +3481,6 @@ export class AuthService {
     const bearer = this.cloudBearer();
     if (bearer === null) return { kind: "unauthorized" };
     return this.runnerHost.setSlackAppDms(bearer, request);
-  }
-
-  /**
-   * The one-time install token for a team environment's bot host, on
-   * traycer-server with the person's bearer. A build that cannot reach
-   * traycer-server at all (the Slack floor's signal) answers `unavailable`
-   * without a request; signed out, `unauthorized`.
-   */
-  async mintTeamHostInstallToken(
-    environmentId: string,
-  ): Promise<TeamHostInstallTokenResult> {
-    if (this.runnerHost.sandboxControlUnavailableReason !== null) {
-      return {
-        kind: "unavailable",
-        reason: TEAM_HOST_UNAVAILABLE_IN_STAGING,
-      };
-    }
-    const bearer = this.cloudBearer();
-    if (bearer === null) return { kind: "unauthorized" };
-    return this.runnerHost.mintTeamHostInstallToken(bearer, environmentId);
   }
 
   /** Explicit invitation access when the serving tier predates the host methods. */

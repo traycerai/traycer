@@ -8,7 +8,6 @@
  */
 import type { ReactNode } from "react";
 import { vi, type Mock } from "vitest";
-import type { TeamHostInstallTokenResult } from "@traycer-clients/shared/host-client/team-host";
 import type {
   SandboxCatalogueFetchResult,
   TraycerModelsFetchResult,
@@ -40,9 +39,6 @@ export type ReadScript = { setup: BotOnboardingSetup | null } | "fails";
  */
 export interface TeamCloudBinding extends FakeSandboxBinding {
   readonly auth: FakeSandboxAuth & {
-    readonly mintTeamHostInstallToken: Mock<
-      (environmentId: string) => Promise<TeamHostInstallTokenResult>
-    >;
     readonly getTraycerModels: Mock<() => Promise<TraycerModelsFetchResult>>;
     readonly getSandboxCatalogue: Mock<
       () => Promise<SandboxCatalogueFetchResult>

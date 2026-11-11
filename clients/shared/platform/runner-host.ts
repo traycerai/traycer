@@ -65,7 +65,6 @@ import type {
   SlackAppDmsRequest,
   SlackAppRegisterRequest,
 } from "@traycer/protocol/host/slack-app";
-import type { TeamHostInstallTokenResult } from "../host-client/team-host";
 import type {
   EnvironmentProvidersFetchResult,
   SandboxGrantsFetchResult,
@@ -610,16 +609,6 @@ export interface IRunnerHost {
     bearerToken: string,
     request: SlackAppDmsRequest,
   ): Promise<SlackAppWriteResult>;
-  /**
-   * Mints the one-time install token for a team environment's bot host
-   * (traycer-server `/api/environments/{id}/team-host/install-token`) with the
-   * person's bearer. Same placement as the Slack calls above; see
-   * `host-client/team-host.ts`. Never throws.
-   */
-  mintTeamHostInstallToken(
-    bearerToken: string,
-    environmentId: string,
-  ): Promise<TeamHostInstallTokenResult>;
   /**
    * The secrets broker (authn), with the user's bearer: the grants one
    * sandbox host holds, and the answer to an agent's grant request. See
