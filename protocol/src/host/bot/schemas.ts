@@ -950,15 +950,6 @@ export const botTaskLastCheckinSchema = lazySchema(() =>
 );
 export type BotTaskLastCheckin = z.infer<typeof botTaskLastCheckinSchema>;
 
-/** The turn of the bot's chat that read a check-in: a session chat and its turn. */
-export const botCheckinTurnSchema = lazySchema(() =>
-  z.object({
-    chatId: z.string().min(1),
-    turnId: z.string().min(1),
-  }),
-);
-export type BotCheckinTurn = z.infer<typeof botCheckinTurnSchema>;
-
 /** A member as the bot's records name one: their user id. */
 const botMemberIdSchema = lazySchema(() => z.string().min(1).max(36));
 
@@ -990,51 +981,6 @@ export const botTaskRunRequestSchema = lazySchema(() =>
   }),
 );
 export type BotTaskRunRequest = z.infer<typeof botTaskRunRequestSchema>;
-
-/**
- * One entry of a task's check-in history (`bot.subscribe@1.4`, T86), newest
- * first, as the bot's bound host kept it:
- *
- *  - `received` - a host's report: when the bound host received it, the
- *    host that composed it (`hostId` `null` for a report from before T83,
- *    which names none), what it said in counts (`agentsStarted` `null` when
- *    the host could not read its agents), and the turn of the bot's chat
- *    that read it, `null` until one has;
- *  - `missed` - no host reported for at least one whole period past a due
- *    time: `dueAt` the first due time missed, `missedThrough` the latest,
- *    `reason` why (`no-host-reported`: no report arrived from any host), and
- *    `caughtUpAt` when the next report was received, `null` until one is.
- */
-export const botTaskCheckinRecordSchema = lazySchema(() =>
-  z.discriminatedUnion("kind", [
-    z.object({
-      kind: z.literal("received"),
-      receivedAt: z.number().int(),
-      hostId: hostIdSchema.nullable(),
-      hostName: z.string().min(1),
-      outcome: z.enum(["idle", "still-running", "deleted", "deleted-owner"]),
-      agentsStarted: z.number().int().nonnegative().nullable(),
-      ticketsOpened: z.number().int().nonnegative(),
-      ticketsClosed: z.number().int().nonnegative(),
-      backgroundEvents: z.number().int().nonnegative(),
-      turn: botCheckinTurnSchema.nullable(),
-      /**
-       * The member whose Run now this report answered (T92): the first
-       * report filed after they asked. `null` for a pass on the task's own
-       * cadence, and from a host that predates it.
-       */
-      requestedByUserId: botMemberIdSchema.nullable().default(null),
-    }),
-    z.object({
-      kind: z.literal("missed"),
-      dueAt: z.number().int(),
-      missedThrough: z.number().int(),
-      reason: z.enum(["no-host-reported"]),
-      caughtUpAt: z.number().int().nullable(),
-    }),
-  ]),
-);
-export type BotTaskCheckinRecord = z.infer<typeof botTaskCheckinRecordSchema>;
 
 /**
  * What an agent of one of the bot's tasks waits on a person for, as the
@@ -1209,14 +1155,6 @@ export const botTaskEntrySchema = lazySchema(() =>
        */
       createdByChatId: z.string().min(1).max(36).nullable().default(null),
       /**
-       * The task's check-in history (`bot.subscribe@1.4`, T86), newest
-       * first, kept by the bot's bound host and mirrored into its
-       * environment room like `lastCheckin`. `null` from a host that
-       * predates it, where `lastCheckin` is all there is, and wherever
-       * `lastCheckin` is `null` for want of the room.
-       */
-      checkins: z.array(botTaskCheckinRecordSchema).nullable().default(null),
-      /**
        * What the task's agents wait on a person for now (`bot.subscribe@1.5`,
        * T89), kept by the bot's bound host and mirrored into its environment
        * room like `lastCheckin`; empty when nothing waits. `null` from a
@@ -1227,7 +1165,7 @@ export const botTaskEntrySchema = lazySchema(() =>
       /**
        * What members did to the automation from the Activity page (T92),
        * kept by the bot's bound host and mirrored into its environment room
-       * like `checkins`: who paused it and since when, who stopped it, and a
+       * like `lastCheckin`: who paused it and since when, who stopped it, and a
        * Run now not answered yet. `null` for none, and from a host that
        * predates them.
        */
@@ -1256,7 +1194,7 @@ export type BotTaskEntry = z.infer<typeof botTaskEntrySchema>;
 
 /**
  * The task entry of `bot.subscribe@1.4`, frozen by hand: with the check-in
- * history and the members' pause, stop and Run now (T92), and without the
+ * members' pause, stop and Run now (T92), and without the
  * `@1.5` open surfaces, so a 1.4 peer's re-parse strips them.
  */
 const botTaskEntrySchemaV14 = lazySchema(() =>
@@ -1276,7 +1214,6 @@ const botTaskEntrySchemaV14 = lazySchema(() =>
       label: z.string().min(1).max(64).nullable().default(null),
       originRequestId: z.string().min(1).max(64).nullable().default(null),
       createdByChatId: z.string().min(1).max(36).nullable().default(null),
-      checkins: z.array(botTaskCheckinRecordSchema).nullable().default(null),
       pause: botTaskPauseSchema.nullable().default(null),
       stop: botTaskStopSchema.nullable().default(null),
       runRequest: botTaskRunRequestSchema.nullable().default(null),
@@ -1300,8 +1237,7 @@ const botTaskEntrySchemaV14 = lazySchema(() =>
 );
 
 /**
- * The task entry of `bot.subscribe@1.3`, frozen by hand: with the provenance
- * and without the `@1.4` check-in history, so a 1.3 peer's re-parse strips it.
+ * The task entry of `bot.subscribe@1.3`, frozen by hand with provenance.
  */
 const botTaskEntrySchemaV13 = lazySchema(() =>
   z

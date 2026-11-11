@@ -8,7 +8,8 @@ import {
 } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
-import { isSandboxHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+import { remoteOpenAuthFor } from "@traycer-clients/shared/host-transport/remote/open-auth";
 import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import type { HostResourceScope } from "@traycer/protocol/host/resource-scope";
@@ -192,18 +193,20 @@ export function useBrowserSessions(
  * `null` for the jar-free stream the renderer opens itself.
  *
  * The bridge routes the stream through main, which carries the desktop's whole
- * cookie jar on it (snapshots, deltas, host-requested captures). A sandbox
- * must never receive that, so its stream takes the jar-free path every
- * non-desktop shell already uses, and main refuses to build a jar transport
- * for one as well (`openBrowserSessionsTransport`). A sandbox is never this
- * machine's host, so it loses no native tab: a GUI on a remote host is a
- * viewer either way.
+ * cookie jar on it (snapshots, deltas, host-requested captures). Sandboxes and
+ * team-owned computers take the jar-free path; main independently refuses
+ * their jar transport. A local team door also refuses the initial bearer,
+ * and this lane never upgrades that refusal to a member grant.
  */
 export function jarBridgeForHost(
   browserView: BrowserViewBridge | null,
   hostEntry: HostDirectoryEntry | null,
 ): BrowserViewBridge | null {
-  if (hostEntry !== null && isSandboxHostDirectoryEntry(hostEntry)) {
+  if (
+    hostEntry !== null &&
+    isRemoteHostDirectoryEntry(hostEntry) &&
+    remoteOpenAuthFor(hostEntry) === "session-grant"
+  ) {
     return null;
   }
   return browserView;

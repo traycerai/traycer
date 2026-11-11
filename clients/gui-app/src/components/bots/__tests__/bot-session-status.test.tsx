@@ -121,10 +121,7 @@ import {
   settleLegendList,
 } from "@/components/chat/__tests__/legend-list-test-environment";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import {
-  UNRESOLVED_BOT_MEMBERS,
-  type BotMemberResolver,
-} from "@/lib/bots/bot-member-names";
+import { UNRESOLVED_BOT_MEMBERS } from "@/lib/bots/bot-member-names";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const HOST_ID = "host-tab";
@@ -177,14 +174,8 @@ function staleReconnectingSession(
   chatId: string,
   usage: TokenUsage | null,
 ): ChatSessionStoreHandle {
-  const { handle } = scriptedSession(chatId, [
-    sessionPrompt(`${chatId}-prompt`, 1_000),
-  ]);
-  handle.store.setState({
-    transcriptBaselineEpoch: 0,
-    connectionEpoch: 1,
-    liveTurnUsage: usage,
-  });
+  const handle = freshSession(chatId, usage);
+  handle.store.setState({ connectionEpoch: 1 });
   return handle;
 }
 
@@ -202,7 +193,6 @@ function task(taskId: string, overrides: Partial<BotTaskEntry>): BotTaskEntry {
     label: null,
     originRequestId: null,
     createdByChatId: null,
-    checkins: null,
     pause: null,
     stop: null,
     runRequest: null,
@@ -228,7 +218,6 @@ function mountSession(input: {
   readonly threadId: string | null;
   readonly tasks: ReadonlyArray<BotTaskEntry>;
   readonly subscriptions: ReadonlyArray<BotNotificationSubscription> | null;
-  readonly resolveMember?: BotMemberResolver;
 }): void {
   render(
     <StrictMode>
@@ -248,7 +237,7 @@ function mountSession(input: {
                   landOn: null,
                 }}
                 threads={[]}
-                resolveMember={input.resolveMember ?? UNRESOLVED_BOT_MEMBERS}
+                resolveMember={UNRESOLVED_BOT_MEMBERS}
                 onClose={opened.close}
                 onOpenChannel={opened.channel}
                 onOpenThread={opened.thread}
@@ -340,7 +329,7 @@ describe("the trunk session's status surfaces", () => {
           label: "Nightly audit",
         }),
       ],
-      subscriptions: [subscription({ target: { kind: "trunk" } })],
+      subscriptions: [subscription({})],
     });
     await settleLegendList();
     openBackground();
@@ -390,7 +379,7 @@ describe("the trunk session's status surfaces", () => {
             label: "Nightly audit",
           }),
         ],
-        subscriptions: [subscription({ target: { kind: "trunk" } })],
+        subscriptions: [subscription({})],
       });
       await settleLegendList();
 
@@ -426,9 +415,7 @@ describe("the trunk session's status surfaces", () => {
       threadId: null,
       tasks: [
         task("task-thread-owned", {
-          cadence: { kind: "none" },
           createdByChatId: THREAD_ID,
-          checkins: [],
           lastCheckinAt: 2_000,
           label: "One-off from thread",
         }),
@@ -452,7 +439,6 @@ describe("the trunk session's status surfaces", () => {
       tasks: [],
       subscriptions: [
         subscription({
-          target: { kind: "trunk" },
           attentionOnly: true,
           since,
         }),
@@ -587,7 +573,7 @@ describe("the trunk session's status surfaces", () => {
         tasks: [
           task("task-periodic", { cadence: { kind: "every", seconds: 7_200 } }),
         ],
-        subscriptions: [subscription({ target: { kind: "trunk" } })],
+        subscriptions: [subscription({})],
       });
       await settleLegendList();
       openBackground();
@@ -677,9 +663,7 @@ describe("a thread session's status surfaces", () => {
       threadId: THREAD_ID,
       tasks: [
         task("task-thread-owned", {
-          cadence: { kind: "none" },
           createdByChatId: THREAD_ID,
-          checkins: [],
           lastCheckinAt: 2_000,
           label: "One-off from thread",
         }),
@@ -687,7 +671,7 @@ describe("a thread session's status surfaces", () => {
       ],
       subscriptions: [
         subscription({ target: { kind: "thread", threadId: THREAD_ID } }),
-        subscription({ target: { kind: "trunk" } }),
+        subscription({}),
       ],
     });
     await settleLegendList();

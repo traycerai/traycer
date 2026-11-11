@@ -369,6 +369,30 @@ describe("provisionInstalledHostCredential", () => {
     expectCleanTeardown();
   });
 
+  it("reports team-unavailable without invoking a personal credential mint", async () => {
+    const hostId = "host-1";
+    mocks.onSessionCreated = (): void => {
+      setTimeout(() => {
+        capturedClientOptions().onHostCredentialState(
+          hostId,
+          "team-unavailable",
+        );
+      }, 0);
+    };
+
+    const outcome = await provisionInstalledHostCredential(
+      makeOptions({ deadlineMs: 2_000, progress: vi.fn() }),
+    );
+
+    expect(outcome).toEqual<HostCredentialProvisionOutcome>({
+      kind: "team-unavailable",
+    });
+    expect(mocks.mintFlowMock).not.toHaveBeenCalled();
+    expect(mocks.sessions).toHaveLength(1);
+    expect(mocks.sessions[0].close).toHaveBeenCalledTimes(1);
+    expectCleanTeardown();
+  });
+
   it("the headline path: mints on a missing ack and verifies active on the reconnect lap", async () => {
     const hostId = "host-1";
     mocks.mintFlowMock.mockResolvedValueOnce(provisionedOutcome());

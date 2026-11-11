@@ -12,8 +12,8 @@ import { environmentMutationKeys } from "@/lib/query-keys";
 import { useHostAccessPromptsStore } from "@/stores/hosts/host-access-prompts-store";
 
 /**
- * Turns remote access on or off on the host `client` reaches. Any choice the
- * person makes also answers the one-time question for that host, so it is not
+ * Turns remote access on or off on the host `client` reaches. A successful
+ * change also answers the one-time question for that host, so it is not
  * asked again on this desktop. `onAnswer` receives the host's answer: Off
  * answers `turning_off` until its sessions are closed.
  */
@@ -32,7 +32,7 @@ export function useRemoteAccessSetMutation(
   return useHostScopedMutationForClient(client, {
     method: "host.remoteAccess.set",
     mutationKey: environmentMutationKeys.remoteAccessSet(),
-    errorMessage: "Couldn't change remote access.",
+    errorMessage: null,
     invalidateMethods: ["environment.status"],
     onSuccess: (data, _variables, hostId) => {
       if (hostId !== null) answerRemoteAccess(hostId);

@@ -68,7 +68,6 @@ import type {
   registerSlackAppViaHttp,
   setSlackAppDmsViaHttp,
 } from "@traycer-clients/shared/host-client/slack-app";
-import type { mintTeamHostInstallTokenViaHttp } from "@traycer-clients/shared/host-client/team-host";
 import type {
   decideSecretRequestViaHttp,
   fetchEnvironmentProvidersViaHttp,
@@ -181,12 +180,6 @@ const setSlackAppDmsViaHttpMock = vi.hoisted(() =>
     detail: "unscripted",
   })),
 );
-const mintTeamHostInstallTokenViaHttpMock = vi.hoisted(() =>
-  vi.fn<typeof mintTeamHostInstallTokenViaHttp>(async () => ({
-    kind: "network-error",
-    detail: "unscripted",
-  })),
-);
 /** The secrets broker's grants read and decide the two handlers make, observed. */
 const fetchSandboxGrantsViaHttpMock = vi.hoisted(() =>
   vi.fn<typeof fetchSandboxGrantsViaHttp>(async () => ({
@@ -240,9 +233,6 @@ vi.mock("@traycer-clients/shared/host-client/slack-app", () => ({
   mintSlackAppInstallUrlViaHttp: mintSlackAppInstallUrlViaHttpMock,
   disconnectSlackAppViaHttp: disconnectSlackAppViaHttpMock,
   setSlackAppDmsViaHttp: setSlackAppDmsViaHttpMock,
-}));
-vi.mock("@traycer-clients/shared/host-client/team-host", () => ({
-  mintTeamHostInstallTokenViaHttp: mintTeamHostInstallTokenViaHttpMock,
 }));
 vi.mock("@traycer-clients/shared/host-client/sandbox-secrets", () => ({
   fetchSandboxGrantsViaHttp: fetchSandboxGrantsViaHttpMock,
@@ -860,8 +850,11 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.mintSlackAppInstallUrl,
           RunnerHostInvoke.disconnectSlackApp,
           RunnerHostInvoke.setSlackAppDms,
-          // A team environment's bot-host install token, on traycer-server.
-          RunnerHostInvoke.mintTeamHostInstallToken,
+          RunnerHostInvoke.readHostOwnership,
+          RunnerHostInvoke.listTeamComputers,
+          RunnerHostInvoke.setEnvironmentBotHost,
+          RunnerHostInvoke.releaseTeamComputer,
+          RunnerHostInvoke.mintTeamComputerInstallToken,
           // The secrets broker, on authn.
           RunnerHostInvoke.getSandboxGrants,
           RunnerHostInvoke.getTeamEnvironment,
@@ -1111,6 +1104,7 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.browserViewLoginImportRun,
           RunnerHostInvoke.pipCaptureStart,
           RunnerHostInvoke.pipCaptureStop,
+          RunnerHostInvoke.invalidateLocalTeamAdmission,
           // Selection authority (D16 / P1.1), plus P1.3's fleet-refresh edge.
           RunnerHostInvoke.selectionAttach,
           RunnerHostInvoke.selectionReportEvidence,
@@ -1365,11 +1359,6 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.setSlackAppDms,
         setSlackAppDmsViaHttpMock,
         [{ botId: "bot-1", dmsEnabled: false }],
-      ],
-      [
-        RunnerHostInvoke.mintTeamHostInstallToken,
-        mintTeamHostInstallTokenViaHttpMock,
-        ["env-1"],
       ],
     ];
     for (const [channel, mock, args] of calls) {

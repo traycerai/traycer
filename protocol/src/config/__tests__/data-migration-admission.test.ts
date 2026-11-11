@@ -47,6 +47,13 @@ import {
 import { resolveDataRoot, type DataRootResolution } from "../data-root";
 import type { AttemptHolderLivenessVerdict } from "../host-update-attempt-liveness";
 
+// Files in this worker share one module cache: reset it before this file's
+// imports so data-migration-admission.ts is first evaluated against the mocks
+// below, even when another file already loaded it.
+vi.hoisted(() => {
+  vi.resetModules();
+});
+
 const breakStaleLockControl = vi.hoisted(() => ({ contended: false }));
 const hardLinkControl = vi.hoisted(() => ({
   refuseWith: null as string | null,

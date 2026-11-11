@@ -1,3 +1,4 @@
+import { environmentReadData } from "@/hooks/environment/environment-read-data";
 import { useCallback } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
@@ -25,7 +26,8 @@ const PENDING: AddressedEnvironment = { environmentId: null, resolved: false };
 
 /**
  * Personal's id, from `environment.list` (`ownerKind: "user"`). A list that
- * failed, or holds no Personal, names the host's own.
+ * has no usable answer, or holds no Personal, names the host's own. A failed
+ * refresh retains the last answer unless it explicitly refuses authority.
  */
 export function usePersonalEnvironment(
   client: HostClient<HostRpcRegistry> | null,
@@ -36,9 +38,11 @@ export function usePersonalEnvironment(
   const retry = useCallback(() => {
     void refetch();
   }, [refetch]);
-  if (!enabled || environments.isError) return { ...HOST_OWN, retry };
-  if (environments.data === undefined) return { ...PENDING, retry };
-  const personal = environments.data.environments.find(
+  const data = environmentReadData(environments);
+  if (!enabled || (environments.isError && data === undefined))
+    return { ...HOST_OWN, retry };
+  if (data === undefined) return { ...PENDING, retry };
+  const personal = data.environments.find(
     (environment) => environment.ownerKind === "user",
   );
   return personal === undefined

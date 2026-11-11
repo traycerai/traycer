@@ -1,3 +1,4 @@
+import { environmentReadData } from "@/hooks/environment/environment-read-data";
 import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
 import { useEffect } from "react";
 import { create } from "zustand";
@@ -100,7 +101,10 @@ export function useTeamViewingHost(): TeamViewingHost {
   const pick = useViewingHosts((state) => state.pick);
   const visit = useViewingHosts((state) => state.visit);
   const activeHostId = useEffectiveHostId();
-  const rows = hosts.isError ? NO_HOSTS : (hosts.data?.hosts ?? NO_HOSTS);
+  const rows =
+    source.kind === "pool" && viewerId.length > 0 && authorized
+      ? (environmentReadData(hosts)?.hosts ?? NO_HOSTS)
+      : NO_HOSTS;
   const eligible = rows.filter((host) => isEligible(host, activeHostId));
   const selected =
     eligible.find((host) => host.hostId === pickedId) ??
@@ -143,9 +147,7 @@ export function useTeamViewingHost(): TeamViewingHost {
 export function canSwitchViewingHost(scope: TeamViewingHost): boolean {
   const viewing = scope.viewingHost;
   if (viewing === null) return false;
-  const hosts = scope.hosts.isError
-    ? NO_HOSTS
-    : (scope.hosts.data?.hosts ?? NO_HOSTS);
+  const hosts = environmentReadData(scope.hosts)?.hosts ?? NO_HOSTS;
   return hosts.some(
     (host) =>
       host.hostId !== viewing.hostId && scope.canSelectHost(host.hostId),

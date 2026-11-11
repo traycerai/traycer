@@ -15,6 +15,7 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
+import type { HostOwnerPrincipal } from "@traycer/protocol/host/host-status";
 import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
 import type {
   EnvironmentMoveStopPreviewResponseV11,
@@ -72,6 +73,26 @@ vi.mock(
     }),
   }),
 );
+const memberships = vi.hoisted(() => ({
+  environments: [] as Array<{
+    environmentId: string;
+    ownerKind: "user" | "organization";
+    ownerId: string;
+    roomId: string;
+    label: string;
+  }>,
+  isError: false,
+  refetch: vi.fn<() => Promise<unknown>>(),
+}));
+vi.mock("@/hooks/bots/use-environment-list-query", () => ({
+  useEnvironmentListQuery: () => ({
+    data: memberships.isError
+      ? undefined
+      : { environments: memberships.environments },
+    isError: memberships.isError,
+    refetch: memberships.refetch,
+  }),
+}));
 
 const ACCEPTED_AT = Date.UTC(2026, 9, 20, 12);
 const STOPPED_AT = Date.UTC(2026, 9, 21, 12);
@@ -101,6 +122,14 @@ const TEAM_BINDING: EnvironmentHostBinding = {
   enrolledByUserId: "user-a",
   canUnbind: true,
 };
+const CURRENT_USER: HostOwnerPrincipal = { kind: "user", id: "user-a" };
+
+interface CardRenderOptions {
+  readonly binding: EnvironmentHostBinding;
+  readonly retrySupported: boolean;
+  readonly owner: HostOwnerPrincipal | null;
+  readonly isLocalMachine: boolean;
+}
 
 /**
  * The card over a fake host that negotiated the redesign's methods, so the
@@ -118,14 +147,18 @@ function renderCardWithRetry(
   handlers: MockHandlerMap<HostRpcRegistry>,
   retrySupported: boolean,
 ): void {
-  renderCardWithBinding(status, handlers, PERSONAL_BINDING, retrySupported);
+  renderCardWithBinding(status, handlers, {
+    binding: PERSONAL_BINDING,
+    retrySupported,
+    owner: null,
+    isLocalMachine: false,
+  });
 }
 
 function renderCardWithBinding(
   status: EnvironmentStatusResponseV11,
   handlers: MockHandlerMap<HostRpcRegistry>,
-  binding: EnvironmentHostBinding,
-  retrySupported: boolean,
+  options: CardRenderOptions,
 ): void {
   const { client } = buildEnvironmentClient({ hostId: "old", handlers });
   recordNegotiatedHostManifest("old", {
@@ -134,7 +167,8 @@ function renderCardWithBinding(
     "environment.review.record": { major: 1, minor: 0 },
     "environment.move.stopPreview": { major: 1, minor: 0 },
     "environment.move.stop": { major: 1, minor: 0 },
-    ...(retrySupported
+    "environment.host.bind": { major: 1, minor: 1 },
+    ...(options.retrySupported
       ? { "environment.setup.retry": { major: 1, minor: 0 } }
       : {}),
   });
@@ -148,13 +182,31 @@ function renderCardWithBinding(
         hostId="old"
         hostName="Old laptop"
         status={status}
-        binding={binding}
+        binding={options.binding}
+        owner={options.owner}
+        isLocalMachine={options.isLocalMachine}
       />
     </QueryClientProvider>,
   );
 }
 
+function renderCardOnThisComputer(
+  status: EnvironmentStatusResponseV11,
+  handlers: MockHandlerMap<HostRpcRegistry>,
+): void {
+  renderCardWithBinding(status, handlers, {
+    binding: PERSONAL_BINDING,
+    retrySupported: true,
+    owner: CURRENT_USER,
+    isLocalMachine: true,
+  });
+}
+
 beforeEach(() => {
+  memberships.environments = [];
+  memberships.isError = false;
+  memberships.refetch.mockReset();
+  memberships.refetch.mockResolvedValue(undefined);
   useMoveSheetStore.setState({ target: null });
   useRetrospectiveSheetStore.setState({ target: null, open: false });
   useSettingsEnvironmentPickStore.setState({
@@ -192,6 +244,73 @@ describe("<HostOverviewSettingsCard />", () => {
       hostId: "old",
       hostName: "Old laptop",
     });
+  });
+
+  it("offers team use from a computer whose unresolved setup stopped", async () => {
+    memberships.environments = [
+      {
+        environmentId: "team-a",
+        ownerKind: "organization",
+        ownerId: "org-a",
+        roomId: "room-team",
+        label: "Designers",
+      },
+    ];
+    renderCardOnThisComputer(
+      environmentStatusFixture({
+        principal: null,
+        planes: { records: "moved", broker: "moved", room: "moved" },
+        setup: { stage: "applying", state: "stalled" },
+      }),
+      {},
+    );
+
+    const source = screen.getByTestId("host-settings-source");
+    expect(source.textContent).toContain(
+      "Setup stopped while applying your settings.",
+    );
+    expect(source.textContent).not.toContain("Runs Personal");
+    expect(source.textContent).not.toContain("Runs its own settings");
+    await waitFor(() => {
+      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
+        kind: "local",
+        hostId: "old",
+        hostName: "Old laptop",
+      });
+    });
+
+    const trigger = screen.getByRole("combobox", { name: "Environment" });
+    expect(within(trigger).getByText("Old laptop")).toBeTruthy();
+    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+    const teamOption = await screen.findByRole("option", {
+      name: /Designers/,
+    });
+    expect(teamOption.textContent).toContain("Use this computer for the team");
+    fireEvent.click(teamOption);
+
+    expect(await screen.findByRole("dialog")).toBeTruthy();
+    expect(screen.getByText("Use Old laptop for Designers?")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Confirm at this computer" }),
+    ).toBeTruthy();
+  });
+
+  it("offers Retry when the team list read fails", async () => {
+    memberships.isError = true;
+    renderCardOnThisComputer(environmentStatusFixture({}), {});
+
+    const status = await screen.findByRole("status");
+    expect(status.textContent).toContain("Couldn't load teams.");
+    fireEvent.click(within(status).getByRole("button", { name: "Retry" }));
+    expect(memberships.refetch).toHaveBeenCalledExactlyOnceWith();
+  });
+
+  it("keeps a successful empty team list free of the read error", () => {
+    memberships.environments = [];
+    renderCardOnThisComputer(environmentStatusFixture({}), {});
+
+    expect(screen.queryByText("Couldn't load teams.")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 
   it("shows the Environment row label and keeps Details beside its value", () => {
@@ -431,7 +550,16 @@ describe("<HostOverviewSettingsCard />", () => {
   });
 
   it("shows the team's fixed Settings source in the disabled selector", () => {
-    renderCardWithBinding(environmentStatusFixture({}), {}, TEAM_BINDING, true);
+    renderCardWithBinding(
+      environmentStatusFixture({}),
+      {},
+      {
+        binding: TEAM_BINDING,
+        retrySupported: true,
+        owner: null,
+        isLocalMachine: false,
+      },
+    );
 
     const selector = screen.getByRole("combobox", { name: "Environment" });
     expect(selector.textContent).toBe("Designers");
@@ -440,7 +568,16 @@ describe("<HostOverviewSettingsCard />", () => {
   });
 
   it("says Runs and the team name on a team-owned computer, and the selector value is that name", () => {
-    renderCardWithBinding(environmentStatusFixture({}), {}, TEAM_BINDING, true);
+    renderCardWithBinding(
+      environmentStatusFixture({}),
+      {},
+      {
+        binding: TEAM_BINDING,
+        retrySupported: true,
+        owner: null,
+        isLocalMachine: false,
+      },
+    );
 
     const selector = screen.getByRole("combobox", { name: "Environment" });
     expect(screen.getByText("Runs Designers")).toBeTruthy();
@@ -771,6 +908,32 @@ describe("hostSettingsRowModel", () => {
     });
   });
 
+  it("keeps unresolved setup on this computer with its status as the detail", () => {
+    expect(
+      hostSettingsRowModel(
+        environmentStatusFixture({
+          principal: null,
+          planes: { records: "moved", broker: "moved", room: "moved" },
+          setup: { stage: "applying", state: "stalled" },
+        }),
+        PERSONAL_BINDING,
+        "Old laptop",
+      ),
+    ).toEqual({
+      kind: "select",
+      value: "local",
+      description: "Setup stopped while applying your settings.",
+      options: [
+        {
+          value: "local",
+          label: "Old laptop",
+          detail: "Setup stopped while applying your settings.",
+          action: "none",
+        },
+      ],
+    });
+  });
+
   it("reserves the row while status or binding is unread", () => {
     expect(
       hostSettingsRowModel(null, PERSONAL_BINDING, "Old laptop").kind,
@@ -830,7 +993,16 @@ describe("<HostOverviewSettingsCard /> follows the rail", () => {
       pick: null,
       defaultPick: PERSONAL_PICK,
     });
-    renderCardWithBinding(environmentStatusFixture({}), {}, TEAM_BINDING, true);
+    renderCardWithBinding(
+      environmentStatusFixture({}),
+      {},
+      {
+        binding: TEAM_BINDING,
+        retrySupported: true,
+        owner: null,
+        isLocalMachine: false,
+      },
+    );
     await waitFor(() => {
       expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
         kind: "team",

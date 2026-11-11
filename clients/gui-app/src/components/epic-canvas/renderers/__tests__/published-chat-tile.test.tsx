@@ -1913,7 +1913,7 @@ describe("PublishedChatTile - footer ownership", () => {
 
     const footer = renderFooter();
 
-    expect(footer).toContain("This chat's sandbox isn't available");
+    expect(footer).toContain("This chat's host isn't available");
     expect(footer).not.toContain("belongs to another collaborator");
   });
 
@@ -1921,7 +1921,7 @@ describe("PublishedChatTile - footer ownership", () => {
     signInAsAnotherUser();
     environments.list = TEAM_ENVIRONMENTS;
 
-    expect(renderFooter()).toContain("This chat's sandbox isn't available");
+    expect(renderFooter()).toContain("This chat's host isn't available");
   });
 });
 
@@ -2554,7 +2554,7 @@ describe("PublishedChatTile - a sandbox chat's state, by precedence", () => {
         failureCode: "boot-timeout",
         lastTransitionAt: FAILED_AT,
       },
-      `Couldn't start e2e-sbx-p1 at ${FAILED_TIME} · SBX-0414RetryDetails`,
+      `Couldn't start e2e-sbx-p1 at ${FAILED_TIME} · SBX-0414RetryDetailsDestroy`,
     ],
     [
       "released",

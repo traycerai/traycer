@@ -18,7 +18,7 @@ import {
   callsTo,
   chooseTraycer,
   cleanupMemoryActFixture,
-  continueFromMemory,
+  clickAdvance,
   currentStepId,
   deferred,
   expectSettingsIsCurrent,
@@ -105,7 +105,7 @@ describe("the Memory act: the host is picked while a save is running", () => {
     await openMemoryAct();
     await chooseTraycer();
     await providerSwitch("codex");
-    await continueFromMemory();
+    await clickAdvance();
     await waitFor(() =>
       expect(paramsOf("config.agentMemories.set")).toHaveLength(1),
     );
@@ -135,7 +135,7 @@ describe("the Memory act: the host is picked while a save is running", () => {
     await openMemoryAct();
     await chooseTraycer();
     await providerSwitch("codex");
-    await continueFromMemory();
+    await clickAdvance();
     // Writes go one at a time, each after a read: the first is held open.
     await waitFor(() =>
       expect(paramsOf("providers.setNativeMemory")).toHaveLength(1),
@@ -164,7 +164,7 @@ describe("the Memory act: the host is picked while a save is running", () => {
     await openMemoryAct();
     await chooseTraycer();
     await providerSwitch("codex");
-    await continueFromMemory();
+    await clickAdvance();
     await waitFor(() =>
       expect(paramsOf("config.agentMemories.set")).toHaveLength(1),
     );
@@ -188,7 +188,7 @@ describe("the Memory act: the host is picked while a save is running", () => {
     await openMemoryAct();
     await chooseTraycer();
     await providerSwitch("codex");
-    await continueFromMemory();
+    await clickAdvance();
     await waitFor(() =>
       expect(paramsOf("config.agentMemories.set")).toHaveLength(1),
     );

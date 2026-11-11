@@ -98,6 +98,7 @@ function makeClient(
     endpoint: () => mockLocalHostEntry,
     hostId: mockLocalHostEntry.hostId,
     bearer: () => context.credentials,
+    userId: context.identity.userId,
     auth: null,
     clock: null,
     hostCredentialMint: null,

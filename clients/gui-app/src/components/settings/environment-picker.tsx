@@ -83,7 +83,7 @@ function useEnvironmentPickerModel(scope: HostScope): EnvironmentPickerModel {
 
 /**
  * Settings ▸ Environment's dropdown: Personal, teams and invitations, then
- * computers running their own settings, each a sibling group.
+ * computers running their own settings or still setting up.
  * The pick decides what every page below it
  * shows; it never changes which host this window works on.
  */
@@ -121,7 +121,12 @@ export function EnvironmentPicker(props: {
   return (
     <>
       <DropdownMenu>
-        <EnvironmentPickerTrigger pick={pick} />
+        <EnvironmentPickerTrigger
+          pick={pick}
+          row={model.localRows.find(
+            (row) => pick.kind === "local" && row.hostId === pick.hostId,
+          )}
+        />
         <DropdownMenuContent
           align="start"
           className="w-[min(28rem,calc(100vw-2rem))]"
@@ -162,7 +167,11 @@ export function EnvironmentPicker(props: {
             {model.localRows.length > 0 ? (
               <>
                 <DropdownMenuSeparator />
-                <DropdownMenuLabel>Runs its own settings</DropdownMenuLabel>
+                <DropdownMenuLabel>
+                  {model.localRows.some((row) => row.kind === "setup")
+                    ? "Computers"
+                    : "Runs its own settings"}
+                </DropdownMenuLabel>
               </>
             ) : null}
             {model.localRows.map((row) => (
@@ -271,6 +280,7 @@ function localRowVerb(
 
 function EnvironmentPickerTrigger(props: {
   readonly pick: EnvironmentPick;
+  readonly row: LocalPickerRow | undefined;
 }): ReactNode {
   const { pick } = props;
   const teamLabel = usePickedTeamLabel(
@@ -312,13 +322,19 @@ function EnvironmentPickerTrigger(props: {
           </TooltipWrapper>
           {local ? (
             <TooltipWrapper
-              label={LOCAL_BADGE_TOOLTIP}
+              label={
+                props.row?.kind === "setup"
+                  ? props.row.subtitle
+                  : LOCAL_BADGE_TOOLTIP
+              }
               side="top"
               sideOffset={undefined}
               align={undefined}
             >
               <Badge variant="secondary" size="xs">
-                Runs its own settings
+                {props.row?.kind === "setup"
+                  ? "Setup"
+                  : "Runs its own settings"}
               </Badge>
             </TooltipWrapper>
           ) : null}

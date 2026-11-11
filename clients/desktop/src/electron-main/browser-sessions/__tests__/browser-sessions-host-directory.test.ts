@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { HostOwnerPrincipal } from "@traycer/protocol/host/host-status";
 import type { HostListFetchResult } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { createBrowserSessionsHostDirectory } from "../browser-sessions-transport";
+import { hostListResultForOwner } from "./browser-sessions-stream-fixture";
 
 /**
  * Main resolves a host id itself (H10 ruling 1).
@@ -105,6 +107,45 @@ describe("main resolves the browser.sessions host itself", () => {
       "https://authn.test",
       "bearer",
     );
+  });
+
+  it("publishes a refreshed owner through the trusted directory snapshot", async () => {
+    const hostId = "host-2";
+    let owner: HostOwnerPrincipal = { kind: "user", id: "user-1" };
+    const listRegisteredHosts = vi.fn(
+      (_authnBaseUrl: string, _bearer: string): Promise<HostListFetchResult> =>
+        Promise.resolve(hostListResultForOwner(hostId, owner)),
+    );
+    const directory = createBrowserSessionsHostDirectory({
+      authnBaseUrl: () => "https://authn.test",
+      relayBaseUrl: "wss://relay.test/attach",
+      localHost: () => null,
+      bearerToken: () => "bearer",
+      listRegisteredHosts,
+      now: () => now,
+    });
+    let publications = 0;
+    directory.subscribe(() => {
+      publications += 1;
+    });
+
+    await directory.resolve(hostId);
+    expect(directory.peek(hostId)).toMatchObject({
+      kind: "remote",
+      owner: { kind: "user", id: "user-1" },
+      sandbox: null,
+    });
+
+    owner = { kind: "team", id: "team-1", name: "Team One" };
+    directory.invalidate(hostId);
+    await directory.resolve(hostId);
+
+    expect(directory.peek(hostId)).toMatchObject({
+      kind: "remote",
+      owner: { kind: "team", id: "team-1", name: "Team One" },
+      sandbox: null,
+    });
+    expect(publications).toBe(2);
   });
 
   it("answers null for a host the account does not have, without dialing anything", async () => {

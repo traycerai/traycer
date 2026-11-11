@@ -376,7 +376,6 @@ function task(inputNeeded: ReadonlyArray<BotInputNeeded> | null): BotTaskEntry {
     label: null,
     originRequestId: null,
     createdByChatId: null,
-    checkins: null,
     inputNeeded: inputNeeded === null ? null : [...inputNeeded],
     pause: null,
     stop: null,

@@ -57,6 +57,7 @@ function buildHandlers(): FakeHandlers {
   const closeEvents: { code: number; reason: string }[] = [];
   return {
     onAttachAck: () => undefined,
+    onOpen: () => undefined,
     onData: () => undefined,
     onHostDetached: () => undefined,
     onHostAttached: () => undefined,
@@ -445,6 +446,7 @@ function makeHandlers(
 ): RelaySocketHandlers {
   return {
     onAttachAck: vi.fn(),
+    onOpen: vi.fn(),
     onData: vi.fn(),
     onHostDetached: vi.fn(),
     onHostAttached: vi.fn(),

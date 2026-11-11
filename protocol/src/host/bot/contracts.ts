@@ -720,10 +720,8 @@ export const botSubscribeV13 = defineStreamRpcContract({
 });
 
 /**
- * `bot.subscribe@1.4` (T86): each task entry carries its check-in history
- * (`checkins`), and each notification subscription when it started
- * (`since`). A 1.3 subscriber's snapshot carries neither, and reads the last
- * check-in alone. Grown in place by T92 (the namespace is unreleased): each
+ * `bot.subscribe@1.4`: each notification subscription carries when it started
+ * (`since`). A 1.3 subscriber's snapshot omits that field. Each
  * entry's pause, stop and pending Run now, each received check-in's
  * requester, each subscription's digests and the stopped watches, all
  * defaulted `null`.

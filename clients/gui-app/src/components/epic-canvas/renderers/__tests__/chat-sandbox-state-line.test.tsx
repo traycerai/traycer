@@ -117,11 +117,15 @@ function mount(summary: SandboxSummary) {
   );
 }
 
-async function openMenu(): Promise<HTMLElement> {
+async function openDestroyDialog(
+  summary: SandboxSummary,
+): Promise<HTMLElement> {
   await userEvent.click(
-    screen.getByRole("button", { name: /^More actions for/ }),
+    screen.getByRole("button", { name: `Destroy ${summary.displayName}` }),
   );
-  return screen.findByRole("menu");
+  return screen.findByRole("dialog", {
+    name: `Destroy ${summary.displayName}?`,
+  });
 }
 
 describe("a failed sandbox's chat actions", () => {
@@ -212,12 +216,11 @@ describe("a failed sandbox's chat actions", () => {
 
       expect(screen.queryByRole("menu")).toBeNull();
       expect(screen.getByRole("button", { name: "Details" })).toBeTruthy();
-      const menu = await openMenu();
+      const dialog = await openDestroyDialog(summary);
+      expect(binding.auth.destroySandbox).not.toHaveBeenCalled();
       expect(
-        within(menu)
-          .getAllByRole("menuitem")
-          .map((item) => item.textContent),
-      ).toEqual(["Destroy"]);
+        within(dialog).getByTestId("confirm-action").hasAttribute("disabled"),
+      ).toBe(true);
       await userEvent.keyboard("{Escape}");
       mocks.configurations = [{ kind: "personal" }, TEAM];
       mounted.rerender(
@@ -258,16 +261,7 @@ describe("a failed sandbox's chat actions", () => {
     await userEvent.click(screen.getByRole("button", { name: "Details" }));
     expect(useSandboxDetailsStore.getState().sandboxId).toBe(summary.id);
 
-    const menu = await openMenu();
-    expect(
-      within(menu).queryByRole("menuitem", { name: "Details" }),
-    ).toBeNull();
-    await userEvent.click(
-      within(menu).getByRole("menuitem", { name: "Destroy" }),
-    );
-    const dialog = await screen.findByRole("dialog", {
-      name: "Destroy build-box?",
-    });
+    const dialog = await openDestroyDialog(summary);
     expect(binding.auth.destroySandbox).not.toHaveBeenCalled();
     await userEvent.type(
       within(dialog).getByRole("textbox", { name: "Type the name to confirm" }),

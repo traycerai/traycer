@@ -7,7 +7,10 @@ import {
 } from "@traycer/protocol/framework/versioned-rpc";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
-import { decodeResponsePayload } from "@traycer/protocol/host-transport/remote/rpc-codec";
+import {
+  decodeResponsePayload,
+  prepareRequestPayload,
+} from "@traycer/protocol/host-transport/remote/rpc-codec";
 import {
   environmentConfigurationRevisionV10,
   environmentConfigurationGuideGetUpgradeV10ToV11,
@@ -47,6 +50,7 @@ import {
 } from "@traycer/protocol/host/environment/configuration-contracts";
 import {
   environmentHostBindV10,
+  environmentHostBindV11,
   environmentHostListV10,
   environmentHostListV11,
   environmentHostReadV10,
@@ -264,6 +268,51 @@ describe("environment.host.read / .bind / .list protocol contracts", () => {
     });
   });
 
+  it("keeps both bind minors wire compatible while advertising team transfer on 1.1", () => {
+    const method = "environment.host.bind";
+    const registry = hostRpcRegistry[method];
+    validateVersionedRpcRegistry({ [method]: registry });
+    const params = { environmentId: TEAM.environmentId };
+    const binding = {
+      hostId: "host-1",
+      environment: TEAM,
+      explicit: true,
+      enrolledByUserId: null,
+      canUnbind: true,
+    };
+    for (const minor of [0, 1]) {
+      const version = { major: 1, minor };
+      const prepared = prepareRequestPayload(
+        registry,
+        { major: 1, minor: 1 },
+        version,
+        params,
+        "bind-request",
+        method,
+      );
+      expect(prepared).toEqual({
+        onWireVersion: version,
+        onWirePayload: params,
+      });
+      expect(
+        decodeResponsePayload(
+          registry,
+          { major: 1, minor: 1 },
+          version,
+          binding,
+          "bind-request",
+          method,
+        ),
+      ).toEqual(binding);
+    }
+    expect(environmentHostBindV11.requestSchema).toBe(
+      environmentHostBindV10.requestSchema,
+    );
+    expect(environmentHostBindV11.responseSchema).toBe(
+      environmentHostBindV10.responseSchema,
+    );
+  });
+
   it("register off the released floor with unsupported degrade", () => {
     for (const [method, contract] of [
       ["environment.host.read", environmentHostReadV10],
@@ -276,10 +325,8 @@ describe("environment.host.read / .bind / .list protocol contracts", () => {
       expect(entry.degrade).toEqual({ kind: "unsupported" });
       expect(entry[1].versions[0].contract).toBe(contract);
     }
-    // read grew @1.1; bind stays @1.0. Host.list and members gained two
-    // minors each.
     expect(hostRpcRegistry["environment.host.read"][1].latestMinor).toBe(1);
-    expect(hostRpcRegistry["environment.host.bind"][1].latestMinor).toBe(0);
+    expect(hostRpcRegistry["environment.host.bind"][1].latestMinor).toBe(1);
     expect(hostRpcRegistry["environment.host.list"][1].latestMinor).toBe(2);
     expect(hostRpcRegistry["environment.members"][1].latestMinor).toBe(2);
   });

@@ -90,7 +90,6 @@ export function RailContextMenuContent(props: {
     return {
       definition,
       visible,
-      autoVisible,
       unchosenVisible,
       locked,
       // The forced-on hint is a fact about a live item; a locked one says

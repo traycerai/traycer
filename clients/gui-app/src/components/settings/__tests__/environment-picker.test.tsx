@@ -6,6 +6,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -161,16 +162,21 @@ const partlyMoved = environmentStatusFixture({
   // has finished (`traycer-host/.../migration/migrator.ts`, step 5). A
   // fixture that sets it here invites a reader to key on it.
 });
+const applyingStalled = environmentStatusFixture({
+  principal: null,
+  planes: { records: "moved", broker: "moved", room: "moved" },
+  setup: { stage: "applying", state: "stalled" },
+});
 const running = environmentStatusFixture({ principal: { kind: "personal" } });
 
-function renderPicker(windowHostId: string): void {
+function pickerElement(windowHostId: string) {
   const hosts = [
     hostScopeOptionFixture({ hostId: "mac", name: "MacBook Pro" }),
     hostScopeOptionFixture({ hostId: "dev", name: "dev-box" }),
     hostScopeOptionFixture({ hostId: "old", name: "Old laptop" }),
     hostScopeOptionFixture({ hostId: "tiny", name: "Tiny" }),
   ];
-  render(
+  return (
     <EnvironmentPicker
       scope={hostScopeFixture({
         hosts,
@@ -178,8 +184,12 @@ function renderPicker(windowHostId: string): void {
         activeHostId: windowHostId,
       })}
       activeSection="mcp-servers"
-    />,
+    />
   );
+}
+
+function renderPicker(windowHostId: string) {
+  return render(pickerElement(windowHostId));
 }
 
 function runningHost(name: string, isThisComputer: boolean): RunningHost {
@@ -419,6 +429,48 @@ describe("<EnvironmentPicker />", () => {
     answer("old", running, V11);
     renderPicker("mac");
     expect(useSettingsEnvironmentPickStore.getState().pick).toBeNull();
+  });
+
+  it("keeps an unresolved setup computer selected until it reports Personal", async () => {
+    answer("mac", applyingStalled, V11);
+    const view = renderPicker("mac");
+
+    await waitFor(() => {
+      expect(useSettingsEnvironmentPickStore.getState().defaultPick).toEqual({
+        kind: "local",
+        hostId: "mac",
+        hostName: "MacBook Pro",
+      });
+    });
+    const trigger = screen.getByTestId("environment-picker-trigger");
+    expect(within(trigger).getByText("MacBook Pro")).toBeTruthy();
+    expect(within(trigger).getByText("Setup")).toBeTruthy();
+    expect(within(trigger).queryByText("Runs its own settings")).toBeNull();
+
+    openMenu();
+    const row = screen.getByTestId("environment-picker-local-mac");
+    expect(screen.getByText("Computers")).toBeTruthy();
+    expect(
+      within(row).getByText("Setup stopped while applying your settings."),
+    ).toBeTruthy();
+    expect(row.textContent).not.toContain("Runs its own settings");
+    fireEvent.click(row);
+    expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
+      kind: "local",
+      hostId: "mac",
+      hostName: "MacBook Pro",
+    });
+
+    answer("mac", running, V11);
+    view.rerender(pickerElement("mac"));
+    await waitFor(() => {
+      expect(useSettingsEnvironmentPickStore.getState().pick).toBeNull();
+      expect(useSettingsEnvironmentPickStore.getState().defaultPick).toEqual(
+        PERSONAL_PICK,
+      );
+    });
+    openMenu();
+    expect(screen.queryByTestId("environment-picker-local-mac")).toBeNull();
   });
 
   it("gives this window's own computer its Local row while the account's host list leaves it out, and no other unlisted computer", () => {

@@ -62,13 +62,15 @@ export interface HostRequestAuthority {
    * `cloudAuthorized: true` for a session already demoted.
    *
    * So it is read as LATE as the frame allows - in `WsRpcClient` at the
-   * `session.send({kind: "open"})` that follows the dial. Note this is later
-   * than `bearer`, which `extractBearerOrThrowRpcError` pulls before
-   * `session.dial()`; the two are deliberately NOT level. The skew only runs
-   * one way and that way is closed: a demotion during the dial sends
-   * `cloudAuthorized: false` beside a pre-demotion bearer, which denies. The
-   * opposite pairing - a stale `true` beside a fresh bearer - is the one that
-   * would spend, and reading the verdict last is what makes it unreachable.
+   * `session.send({kind: "open"})` that follows the dial. The bearer the
+   * frame carries is read in that same literal, just BEFORE the verdict
+   * (`token` precedes `cloudAuthorized`), so the verdict is still the last
+   * read; the earlier `extractBearerOrThrowRpcError` in `prepareDiscoveryOpen`
+   * only fails a call that has no bearer before it dials. The order matters
+   * one way: a demotion between the two reads sends `cloudAuthorized: false`
+   * beside the bearer read first, which denies. The opposite pairing - a stale
+   * `true` beside a fresher bearer - is the one that would spend, and reading
+   * the verdict last is what makes it unreachable.
    *
    * OPTIONAL, and the absence is meaningful rather than a default: an authority
    * that does not carry a verdict is one built before this existed, and the

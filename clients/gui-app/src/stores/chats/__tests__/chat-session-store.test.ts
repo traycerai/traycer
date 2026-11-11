@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { AUTHENTICATED_USER_FIXTURE_ID } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   Chat,
@@ -376,6 +377,7 @@ class ProtocolMockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
       hostId: null,
       endpoint: () => null,
       bearer: () => null,
+      userId: AUTHENTICATED_USER_FIXTURE_ID,
       auth: null,
       clock: null,
       hostCredentialMint: null,

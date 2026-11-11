@@ -236,6 +236,11 @@ vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
   useHostDirectoryList: () => ({ data: [] }),
 }));
+// The Activity count reads the notification host's reachability; these
+// suites do not mount a host directory, so it reads as reachable.
+vi.mock("@/hooks/agent/use-host-reachability", () => ({
+  useHostReachability: () => ({ status: "reachable" }),
+}));
 vi.mock("@/hooks/bots/use-bot-list-query", () => ({
   useBotListQuery: () => {
     useSyncExternalStore(subscribeToLists, listsVersion);
@@ -405,6 +410,13 @@ vi.mock("@/hooks/bots/use-bot-activity", async (importOriginal) => ({
 }));
 vi.mock("@/hooks/notifications/use-notification-indicators-query", () => ({
   useNotificationIndicators: () => ({ epics: {}, chats: {} }),
+  useNotificationIndicatorsWithFreshness: () => ({
+    cloudPositiveIndicators: { epics: {}, chats: {} },
+    hostPositiveIndicators: { epics: {}, chats: {} },
+    fresh: true,
+    positiveFresh: true,
+    hostId: "host-notifications",
+  }),
 }));
 vi.mock(
   "@/hooks/notifications/use-notification-mark-entity-read-mutation",

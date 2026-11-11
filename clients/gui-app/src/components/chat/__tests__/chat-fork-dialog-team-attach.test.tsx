@@ -348,6 +348,7 @@ function teamSandboxEntry(
     websocketUrl: "wss://relay.invalid/attach",
     version: "1.2.3",
     transportDialability: "dialable",
+    owner: null,
     remoteStatus: {
       connectivity: "connectable",
       viewerReachability: "ok",

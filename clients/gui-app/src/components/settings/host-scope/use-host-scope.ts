@@ -1,5 +1,19 @@
 import { useCallback, useMemo, useSyncExternalStore } from "react";
+import type { HostIdentityGetResponse } from "@traycer/protocol/host/identity/schemas";
+import { useHostMutation } from "@/hooks/host/use-host-query";
+import { hostMaintenanceMutationKeys } from "@/lib/query-keys";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import {
+  HostRpcError,
+  isTransientHostRpcFailure,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  TEAM_MEMBERSHIP_REQUIRED,
+  TEAM_MEMBERSHIP_REQUIRED_MESSAGE,
+  TEAM_MEMBERSHIP_UNAVAILABLE,
+  TEAM_MEMBERSHIP_UNAVAILABLE_MESSAGE,
+} from "@traycer-clients/shared/host-transport/local-open-auth";
+import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
 import { createLocalMaintenanceFallbackClient } from "@/lib/host/local-maintenance-fallback-client";
 import type {
   ActivateRefusalReason,
@@ -406,6 +420,22 @@ export function useMakeActiveHost(hosts: readonly HostScopeOption[]): {
   readonly activatingHostId: string | null;
 } {
   const authority = useRunnerHost().selectionAuthority;
+  const hostClient = useHostClient();
+  const { mutateAsync: probeLocalHost } = useHostMutation<
+    HostRpcRegistry,
+    "host.identity.get",
+    unknown,
+    HostScopeOption
+  >({
+    client: (option) =>
+      option.entry === null ? null : hostClient.createRequester(option.entry),
+    method: "host.identity.get",
+    mapVariables: () => ({}),
+    options: {
+      mutationKey: hostMaintenanceMutationKeys.identityGet(),
+      retry: false,
+    },
+  });
   const activatingHostId = useSyncExternalStore(
     subscribePendingActivation,
     () => pendingActivations.get(authority) ?? null,
@@ -424,18 +454,89 @@ export function useMakeActiveHost(hosts: readonly HostScopeOption[]): {
       }
       pendingActivations.set(authority, hostId);
       notifyPendingActivation();
-      return requestActivate(authority, hostId, option).finally(() => {
+      const activation =
+        option?.connectable && option.entry?.kind === "local"
+          ? requestLocalHostActivation(
+              authority,
+              hostClient,
+              option,
+              probeLocalHost,
+            )
+          : requestActivate(authority, hostId, option);
+      return activation.finally(() => {
         pendingActivations.delete(authority);
         notifyPendingActivation();
       });
     },
-    [authority, hosts],
+    [authority, hostClient, hosts, probeLocalHost],
   );
   return {
     makeActive,
     isActivating: activatingHostId !== null,
     activatingHostId,
   };
+}
+
+/**
+ * An explicit local pick must ask the local door even when its old lease is
+ * dead. Persisting preference alone can keep a ready remote host serving, so
+ * the effective-host streams never try this computer and never explain its
+ * admission refusal. This one read uses the existing request authority and
+ * grant adapter; automatic selection and background work do not call it.
+ */
+async function requestLocalHostActivation(
+  authority: SelectionAuthorityClient,
+  client: HostClient<HostRpcRegistry>,
+  option: HostScopeOption,
+  probe: (option: HostScopeOption) => Promise<HostIdentityGetResponse>,
+): Promise<boolean> {
+  const context = client.getRequestContext();
+  if (context === null || option.entry === null) return false;
+  try {
+    await probe(option);
+  } catch (error: unknown) {
+    // A different account must not inherit this account's refusal or pick.
+    if (context.abortSignal.aborted || client.getRequestContext() !== context)
+      return false;
+    showLocalHostActivationFailure(error, option.name, () => {
+      if (
+        !context.abortSignal.aborted &&
+        client.getRequestContext() === context
+      )
+        useSignOutConfirmStore.getState().setOpen(true);
+    });
+    return false;
+  }
+  if (context.abortSignal.aborted || client.getRequestContext() !== context)
+    return false;
+  return requestActivate(authority, option.hostId, option);
+}
+
+function showLocalHostActivationFailure(
+  error: unknown,
+  hostName: string,
+  switchAccount: () => void,
+): void {
+  if (error instanceof HostRpcError) {
+    const code = error.fatalDetails?.code ?? error.code;
+    if (code === TEAM_MEMBERSHIP_REQUIRED) {
+      toast.error(TEAM_MEMBERSHIP_REQUIRED_MESSAGE, {
+        action: {
+          label: "Switch account",
+          onClick: switchAccount,
+        },
+      });
+      return;
+    }
+    if (
+      code === TEAM_MEMBERSHIP_UNAVAILABLE ||
+      isTransientHostRpcFailure(error)
+    ) {
+      toast.error(TEAM_MEMBERSHIP_UNAVAILABLE_MESSAGE);
+      return;
+    }
+  }
+  toast.error(activateRefusalMessage("unrecognized", hostName));
 }
 
 /**

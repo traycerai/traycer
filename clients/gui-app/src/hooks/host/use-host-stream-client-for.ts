@@ -1,3 +1,5 @@
+import { appLocalOpenAuthFor } from "@/lib/host/app-local-open-auth";
+import { useHostCredentialStatusStore } from "@/stores/host/host-credential-status-store";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
@@ -23,7 +25,10 @@ import {
   remoteOpenAuthFor,
   type RemoteOpenAuth,
 } from "@traycer-clients/shared/host-transport/remote/index";
-import type { HostStatusDTO } from "@traycer/protocol/host/host-status";
+import type {
+  HostStatusDTO,
+  HostOwnerPrincipal,
+} from "@traycer/protocol/host/host-status";
 import {
   hostRpcRegistry,
   hostStreamRpcRegistry,
@@ -101,13 +106,40 @@ const PLACEHOLDER_SANDBOX_FACTS: RemoteHostSandboxFacts = {
   ownerTeamId: null,
 };
 
-/** What a remote target's `OPEN` presents; `null` for a local target or none. */
-function openAuthOfTarget(
+interface RemoteEndpointIdentity {
+  readonly publicKey: string | null;
+  readonly ownerKind: HostOwnerPrincipal["kind"] | null;
+  readonly ownerId: string | null;
+  readonly ownerName: string | null;
+  readonly hasSandbox: boolean;
+  readonly openAuth: RemoteOpenAuth | null;
+}
+
+/** Primitive identity keeps equivalent directory publications on one client. */
+function remoteEndpointIdentity(
   target: HostDirectoryEntry | null,
-): RemoteOpenAuth | null {
-  return target !== null && isRemoteHostDirectoryEntry(target)
-    ? remoteOpenAuthFor(target)
-    : null;
+): RemoteEndpointIdentity {
+  const remote =
+    target !== null && isRemoteHostDirectoryEntry(target) ? target : null;
+  const owner = remote?.owner ?? null;
+  return {
+    publicKey: remote?.publicKey ?? null,
+    ownerKind: owner?.kind ?? null,
+    ownerId: owner?.id ?? null,
+    ownerName: owner?.kind === "team" ? owner.name : null,
+    hasSandbox: remote !== null && remote.sandbox !== null,
+    openAuth: remote === null ? null : remoteOpenAuthFor(remote),
+  };
+}
+
+function ownerFromEndpointIdentity(
+  kind: HostOwnerPrincipal["kind"] | null,
+  id: string | null,
+  name: string | null,
+): HostOwnerPrincipal | null {
+  if (id === null) return null;
+  if (kind === "user") return { kind, id };
+  return kind === "team" && name !== null ? { kind, id, name } : null;
 }
 
 export interface HostStreamClientBinding {
@@ -219,19 +251,20 @@ export function buildHostStreamClient(params: {
   readonly endpoint: HostEndpointProvider;
   readonly bearer: BearerSourceProvider;
   /**
-   * Gates the remote session's attach-grant MINT only - see
-   * `CreateRemoteTransportOptions.cloudAuthorized`. A parameter rather than an
-   * ambient store read for the same reason as the messenger builder's: this is
-   * the seam tests construct through. Only consulted on the remote and pool
-   * branches, so local hosts are unaffected.
+   * The session's cloud verdict, read live. It gates the remote session's
+   * attach-grant mint (see `CreateRemoteTransportOptions.cloudAuthorized`) and
+   * is asserted to the host on every branch's open frame. A parameter rather
+   * than an ambient store read for the same reason as the messenger builder's:
+   * this is the seam tests construct through.
    */
   readonly cloudAuthorized: () => boolean;
   readonly authnBaseUrl: string;
   readonly auth: StreamAuthRevalidator | null;
   /**
-   * The signed-in user this transport is built for. Part of the shared
-   * `(hostId, userId)` remote-session cache key (S1) - only
-   * consulted on the remote and pool branches.
+   * The signed-in user this transport is built for: part of the shared
+   * `(hostId, userId)` remote-session cache key (S1) on the remote and pool
+   * branches, and the user the local client answers for
+   * (`WsStreamClientOptions.userId`).
    */
   readonly userId: string;
   /**
@@ -330,14 +363,15 @@ export function buildHostStreamClient(params: {
     return remoteTransport.streamClient;
   }
   // An allowlist, not a fall-through: the plain per-socket client presents
-  // the user bearer to whatever endpoint it is given, so only the kinds that
-  // ARE a local socket reach it.
+  // the initial credential to its named endpoint. Only local socket kinds
+  // reach it; a typed team challenge changes the next OPEN to a session grant.
   if (params.target.kind !== "local" && params.target.kind !== "mock") {
     return null;
   }
 
   return new WsStreamClient<HostStreamRpcRegistry>({
     registry: hostStreamRpcRegistry,
+    localOpenAuth: appLocalOpenAuthFor(params.authnBaseUrl),
     // THE SAME READ THE REMOTE BRANCH ABOVE IS GIVEN, now honoured on the local
     // leg too. It was previously consulted only for the remote attach-grant
     // mint, which made "local, and therefore indifferent to cloud
@@ -355,6 +389,9 @@ export function buildHostStreamClient(params: {
     hostId: params.target.hostId,
     endpoint: params.endpoint,
     bearer: params.bearer,
+    // The user every owner builds this client for: the tile cache key, the
+    // app-wide stream's effect dependency, the transport key at open.
+    userId: params.userId,
     auth: params.auth,
     // App-wide for the same reason the mint flow below is: the wall clock is a
     // property of the machine, so every stream in the renderer parks and
@@ -368,15 +405,12 @@ export function buildHostStreamClient(params: {
     // resolves `unavailable` until the provisioning provider is mounted, so
     // dev shells and tests are unaffected.
     hostCredentialMint: appHostCredentialMintFlow,
-    // Kept wired as the one place transports report credential state into,
-    // but the report is deliberately INERT today: an `openAck` state carries
-    // no provenance (which credential, which transport, when), so `active`
-    // must NOT release the app-wide adoption claim - a delayed `active(A)`
-    // observed before A was burned would free B's claim and reopen the
-    // double-mint it exists to prevent. The claim expires on its TTL alone;
-    // see `noteHostCredentialState`'s own doc. If a future frame carries the
-    // credential's identity, this is the seam that starts trusting it.
-    onHostCredentialState: noteHostCredentialState,
+    // Status informs Overview only. A report has no credential provenance,
+    // so the app-wide adoption claim still expires only on its TTL.
+    onHostCredentialState: (hostId, state) => {
+      noteHostCredentialState(hostId, state);
+      useHostCredentialStatusStore.getState().report(hostId, state);
+    },
     // The LOCAL host's long-lived connection, so this is the leg that hears a
     // restart tombstone from a local host restarted by somebody other than
     // this app - a `traycer host restart` on the box, an update install. The
@@ -447,13 +481,14 @@ export function useHostStreamClientBindingFor(
   const endpointHostId = target?.hostId ?? null;
   const endpointWebsocketUrl = target?.websocketUrl ?? null;
   const endpointKind = target?.kind ?? null;
-  const endpointPublicKey =
-    target !== null && isRemoteHostDirectoryEntry(target)
-      ? target.publicKey
-      : null;
-  // A primitive, like the three above: what `OPEN` presents is fixed for a
-  // host id's life, and the entry object's identity must not churn the build.
-  const endpointOpenAuth = openAuthOfTarget(target);
+  const {
+    publicKey: endpointPublicKey,
+    ownerKind: endpointOwnerKind,
+    ownerId: endpointOwnerId,
+    ownerName: endpointOwnerName,
+    hasSandbox: endpointHasSandbox,
+    openAuth: endpointOpenAuth,
+  } = remoteEndpointIdentity(target);
 
   const [binding, setBinding] = useState<HostStreamClientBinding | null>(null);
   const [rebuildNonce, setRebuildNonce] = useState(0);
@@ -518,6 +553,11 @@ export function useHostStreamClientBindingFor(
     // decided to dial, not a directory row carrying a verdict about a machine.
     // The gate that decides whether to dial at all ran above this, against the
     // real entry.
+    const owner = ownerFromEndpointIdentity(
+      endpointOwnerKind,
+      endpointOwnerId,
+      endpointOwnerName,
+    );
     const memoizedTarget =
       endpointKind === "remote" && endpointPublicKey !== null
         ? ({
@@ -531,13 +571,10 @@ export function useHostStreamClientBindingFor(
             remoteStatus: PLACEHOLDER_REMOTE_STATUS,
             // Fabricated endpoint, not a directory verdict: never in fuse grace.
             relayFuseGrace: false,
-            // Only its PRESENCE is read here (`remoteOpenAuthFor`, so a
-            // sandbox's OPEN presents a session grant); the facts themselves
-            // are the real entry's business, not this fabricated one's.
-            sandbox:
-              endpointOpenAuth === "session-grant"
-                ? PLACEHOLDER_SANDBOX_FACTS
-                : null,
+            owner,
+            // Ownership and sandbox presence are independent. A physical team
+            // computer must never acquire fabricated sandbox facts.
+            sandbox: endpointHasSandbox ? PLACEHOLDER_SANDBOX_FACTS : null,
           } satisfies RemoteHostDirectoryEntry)
         : ({
             hostId: endpointHostId,
@@ -565,6 +602,7 @@ export function useHostStreamClientBindingFor(
         publicKey: endpointPublicKey ?? "",
         authnBaseUrl,
         authRecovery: auth === null ? "terminal" : "revalidate",
+        openAuth: endpointOpenAuth,
       },
       () =>
         buildHostStreamClient({
@@ -626,6 +664,10 @@ export function useHostStreamClientBindingFor(
     authnBaseUrl,
     endpointHostId,
     endpointKind,
+    endpointOwnerKind,
+    endpointOwnerId,
+    endpointOwnerName,
+    endpointHasSandbox,
     endpointOpenAuth,
     endpointPublicKey,
     endpointWebsocketUrl,

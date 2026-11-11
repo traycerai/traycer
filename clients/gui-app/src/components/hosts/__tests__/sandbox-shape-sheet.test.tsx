@@ -31,6 +31,7 @@ import {
 } from "@/lib/sandboxes/__tests__/auth-user-fixture";
 import {
   shortPriceLabel,
+  SANDBOXES_CANT_BE_CREATED,
   USE_THIS_SHAPE,
   CHANGE_LABEL,
   idleAndRestingLine,
@@ -335,6 +336,19 @@ describe("<SandboxShapeSheet />", () => {
       cleanup();
     }
   });
+
+  it("does not describe empty-catalogue guidance as a remembered choice", () => {
+    catalogueInUse = { providers: [] };
+    renderSheet(vi.fn());
+
+    expect(screen.getByText(SANDBOXES_CANT_BE_CREATED)).toBeDefined();
+    expect(
+      screen.queryByText(
+        "Used for this sandbox and remembered for your next one.",
+      ),
+    ).toBeNull();
+  });
+
   it("offers a provider's listed shapes in one Size list with the default selected", () => {
     catalogueInUse = catalogueWithShapes();
     renderSheet(vi.fn());

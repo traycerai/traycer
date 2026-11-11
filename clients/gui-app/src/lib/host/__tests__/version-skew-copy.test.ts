@@ -81,6 +81,7 @@ describe("hostAppVersionFromDirectoryEntry", () => {
       version: "1.0.0",
       transportDialability: "dialable",
       publicKey: "pk",
+      owner: null,
       relayFuseGrace: false,
       sandbox: null,
       remoteStatus: {

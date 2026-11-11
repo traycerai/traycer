@@ -1,3 +1,4 @@
+import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
 import {
   act,
   cleanup,
@@ -593,6 +594,7 @@ function renderDialog(
       tabId="tab-test"
       onOpenChange={onOpenChange}
     />,
+    { wrapper: WithTestQueryClient },
   );
 }
 
@@ -1660,6 +1662,7 @@ describe("ChatForkDialog cross-host routing", () => {
     const target = forkTarget({ sourceChatTitle: "Source chat" });
     const view = render(
       <ChatForkDialog {...dialogProps(target, ignoreOpenChange, false)} />,
+      { wrapper: WithTestQueryClient },
     );
     view.rerender(
       <ChatForkDialog {...dialogProps(target, ignoreOpenChange, true)} />,
@@ -1685,6 +1688,7 @@ describe("ChatForkDialog cross-host routing", () => {
       <ChatForkDialog
         {...dialogProps(remoteTarget, ignoreOpenChange, false)}
       />,
+      { wrapper: WithTestQueryClient },
     );
     view.rerender(
       <ChatForkDialog {...dialogProps(remoteTarget, ignoreOpenChange, true)} />,
@@ -1712,6 +1716,7 @@ describe("ChatForkDialog cross-host routing", () => {
       <ChatForkDialog
         {...dialogProps(remoteTarget, ignoreOpenChange, false)}
       />,
+      { wrapper: WithTestQueryClient },
     );
     view.rerender(
       <ChatForkDialog {...dialogProps(remoteTarget, ignoreOpenChange, true)} />,
@@ -1747,6 +1752,7 @@ describe("ChatForkDialog cross-host routing", () => {
       <ChatForkDialog
         {...dialogProps(remoteLatestTarget, ignoreOpenChange, false)}
       />,
+      { wrapper: WithTestQueryClient },
     );
     view.rerender(
       <ChatForkDialog
@@ -1823,6 +1829,7 @@ describe("ChatForkDialog cross-host routing", () => {
       <ChatForkDialog
         {...dialogProps(explicitTarget, ignoreOpenChange, false)}
       />,
+      { wrapper: WithTestQueryClient },
     );
     view.rerender(
       <ChatForkDialog
