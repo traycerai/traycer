@@ -1194,39 +1194,192 @@ describe("optimistic activity history projection", () => {
     vi.setSystemTime(22_000);
     const userId = `remount-settled-${crypto.randomUUID()}`;
     const refetch = vi.fn(() => Promise.resolve());
-    const renderScope = () =>
-      renderHook(() =>
-        useOptimisticActivityHistoryItems({
-          items: [historyItem("epic-a", 1, 22_000)],
-          userId,
-          hostId: "host-remount-settled",
-          enabled: true,
-          refreshScope: "recent:all",
-          refetch,
-        }),
+    const renderScope = (items: readonly HistoryItem[]) =>
+      renderHook(
+        ({ page }) =>
+          useOptimisticActivityHistoryItems({
+            items: page,
+            userId,
+            hostId: "host-remount-settled",
+            enabled: true,
+            refreshScope: "recent:all",
+            refetch,
+          }),
+        { initialProps: { page: items } },
       );
+    const caughtUp = [historyItem("epic-a", 1, 22_000)];
 
     settleHistoryActivity(userId, [historyItem("epic-a", 1, 21_000)]);
     observeOwnHistoryRecordChange(userId, "epic-a", 22_000);
-    const first = renderScope();
+    const first = renderScope([historyItem("epic-a", 1, 21_000)]);
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(750 + 2_000 + 5_000);
+      await vi.advanceTimersByTimeAsync(750);
     });
-    expect(refetch).toHaveBeenCalledTimes(3);
+    expect(refetch).toHaveBeenCalledTimes(1);
+    first.rerender({ page: caughtUp });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    expect(refetch).toHaveBeenCalledTimes(1);
     first.unmount();
 
-    const second = renderScope();
+    const second = renderScope(caughtUp);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(750 + 2_000 + 5_000);
     });
-    expect(refetch).toHaveBeenCalledTimes(3);
+    expect(refetch).toHaveBeenCalledTimes(1);
 
     act(() => observeOwnHistoryRecordChange(userId, "epic-a", Date.now()));
     await act(async () => {
       await vi.advanceTimersByTimeAsync(750);
     });
-    expect(refetch).toHaveBeenCalledTimes(4);
+    expect(refetch).toHaveBeenCalledTimes(2);
     second.unmount();
+  });
+
+  it("reads once when the first read's rows settle the stamp", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(22_000);
+    const userId = `one-read-${crypto.randomUUID()}`;
+    const refetch = vi.fn(() => Promise.resolve());
+    const { rerender } = renderHook(
+      ({ items }) =>
+        useOptimisticActivityHistoryItems({
+          items,
+          userId,
+          hostId: "host-one-read",
+          enabled: true,
+          refetch,
+        }),
+      { initialProps: { items: [historyItem("epic-a", 1, 21_000)] } },
+    );
+
+    settleHistoryActivity(userId, [historyItem("epic-a", 1, 21_000)]);
+    act(() => observeOwnHistoryRecordChange(userId, "epic-a", 22_000));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(750);
+    });
+    expect(refetch).toHaveBeenCalledTimes(1);
+
+    rerender({ items: [historyItem("epic-a", 1, 22_000)] });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    expect(refetch).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads nothing when the mounted page already shows the accepted record time", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(22_000);
+    const userId = `zero-reads-${crypto.randomUUID()}`;
+    const refetch = vi.fn(() => Promise.resolve());
+    settleHistoryActivity(userId, [historyItem("epic-a", 1, 21_000)]);
+    observeOwnHistoryRecordChange(userId, "epic-a", 22_000);
+    renderHook(() =>
+      useOptimisticActivityHistoryItems({
+        items: [historyItem("epic-a", 1, 22_000)],
+        userId,
+        hostId: "host-zero-reads",
+        enabled: true,
+        refetch,
+      }),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(refetch).not.toHaveBeenCalled();
+  });
+
+  it("reads a scope that cannot settle once more after another scope settles the stamp", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(22_000);
+    const userId = `unsettled-scope-${crypto.randomUUID()}`;
+    const settlingRefetch = vi.fn(() => Promise.resolve());
+    const filteredRefetch = vi.fn(() => Promise.resolve());
+    const settling = renderHook(
+      ({ items }) =>
+        useOptimisticActivityHistoryItems({
+          items,
+          userId,
+          hostId: "host-unsettled-scope",
+          enabled: true,
+          refreshScope: "recent:all",
+          refetch: settlingRefetch,
+        }),
+      { initialProps: { items: [historyItem("epic-a", 1, 21_000)] } },
+    );
+    const filtered = renderHook(() =>
+      useOptimisticActivityHistoryItems({
+        items: [],
+        userId,
+        hostId: "host-unsettled-scope",
+        enabled: false,
+        refreshEnabled: true,
+        refreshScope: "recent:query-filter",
+        refetch: filteredRefetch,
+      }),
+    );
+
+    settleHistoryActivity(userId, [historyItem("epic-a", 1, 21_000)]);
+    act(() => observeOwnHistoryRecordChange(userId, "epic-a", 22_000));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(750);
+    });
+    expect(settlingRefetch).toHaveBeenCalledTimes(1);
+    expect(filteredRefetch).toHaveBeenCalledTimes(1);
+
+    settling.rerender({ items: [historyItem("epic-a", 1, 22_000)] });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    expect(filteredRefetch).toHaveBeenCalledTimes(2);
+    expect(settlingRefetch).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(filteredRefetch).toHaveBeenCalledTimes(2);
+    expect(settlingRefetch).toHaveBeenCalledTimes(1);
+    settling.unmount();
+    filtered.unmount();
+  });
+
+  it("follows the retry schedule while a stamp never settles", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(22_000);
+    const userId = `never-settles-${crypto.randomUUID()}`;
+    const refetch = vi.fn(() => Promise.resolve());
+    renderHook(() =>
+      useOptimisticActivityHistoryItems({
+        items: [historyItem("epic-a", 1, 21_000)],
+        userId,
+        hostId: "host-never-settles",
+        enabled: true,
+        refetch,
+      }),
+    );
+
+    settleHistoryActivity(userId, [historyItem("epic-a", 1, 21_000)]);
+    act(() => observeOwnHistoryRecordChange(userId, "epic-a", 22_000));
+    for (const [elapsed, reads] of [
+      [750, 1],
+      [2_000, 2],
+      [5_000, 3],
+      [15_000, 4],
+    ] as const) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(elapsed - 1);
+      });
+      expect(refetch).toHaveBeenCalledTimes(reads - 1);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
+      });
+      expect(refetch).toHaveBeenCalledTimes(reads);
+    }
   });
 
   it("restarts a canceled refresh when a scope remounts", async () => {
@@ -1338,9 +1491,9 @@ describe("optimistic activity history projection", () => {
 
     const newerAt = Date.now();
     act(() => observeOwnHistoryRecordChange(userId, "changed-epic", newerAt));
-    act(() =>
-      settleHistoryActivity(userId, [historyItem("changed-epic", 1, newerAt)]),
-    );
+    act(() => {
+      settleHistoryActivity(userId, [historyItem("changed-epic", 1, newerAt)]);
+    });
     await act(async () => {
       resolveThird?.();
       await Promise.resolve();
@@ -1414,7 +1567,7 @@ describe("optimistic activity history projection", () => {
     expect(refetch).toHaveBeenCalledTimes(4);
   });
 
-  it("keeps ownerless removal refreshes retrying until the bounded TTL", async () => {
+  it("buys an ownerless removal exactly three list reads", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(50_000);
     const userId = `ownerless-removal-${crypto.randomUUID()}`;
@@ -1431,15 +1584,14 @@ describe("optimistic activity history projection", () => {
 
     act(() => requestHistoryActivityRefresh(userId));
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(600_000);
+      await vi.advanceTimersByTimeAsync(750 + 2_000 + 5_000 + 1);
     });
-    const requestsAtTtl = refetch.mock.calls.length;
-    expect(requestsAtTtl).toBeGreaterThan(3);
+    expect(refetch).toHaveBeenCalledTimes(3);
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(60_000);
+      await vi.advanceTimersByTimeAsync(600_000);
     });
-    expect(refetch).toHaveBeenCalledTimes(requestsAtTtl);
+    expect(refetch).toHaveBeenCalledTimes(3);
   });
 
   it("refreshes a scope when it becomes enabled after an own idle record change", async () => {
