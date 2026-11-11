@@ -1,5 +1,5 @@
 /**
- * A bot's picture: a creature mark on a swatch, both from the bot's id
+ * A bot's picture: a mascot on a tile of its colour, both from the bot's id
  * alone. Every surface draws one bot the same way, and a rename changes
  * nothing. A person is
  * still initials or a photo in a circle.
@@ -10,26 +10,25 @@
  * `env_team_s` was found by deriving `env_team_b`, `env_team_c`, ... in turn
  * and keeping the first whose FNV-1a hash lands on `env_team_a`'s hash mod 12
  * (the original 12-swatch palette) and off it mod 24, so the two
- * "Team Tracy" bots shared one swatch then and differ now.
+ * "Team Tracy" bots shared one colour then and differ now.
  */
 import type { ReactElement } from "react";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import type {
-  BotAppearance,
-  BotDirectoryRecord,
+import {
+  BOT_APPEARANCE_UNRECOGNISED,
+  BOT_UNRECOGNISED_MARK,
+  type BotAppearance,
+  type BotDirectoryRecord,
 } from "@traycer/protocol/host/bot/schemas";
 import { BotLooksContext, botLooksOf } from "@/hooks/bots/use-bot-appearance";
 import {
-  chosenCreatureMark,
-  creatureMark,
-  creatureSheet,
-  drawCreatureMark,
-} from "@/lib/bots/creature-mark";
-import {
-  botSwatchAt,
-  derivedBotSwatchIndex,
-} from "@/lib/providers/profile-accent-color";
+  DEFAULT_MASCOT_RAMP,
+  DEFAULT_MASCOT_SHAPE,
+  botMascot,
+  drawMascotMark,
+  mascotRampAt,
+} from "@/lib/bots/mascot-mark";
 import {
   AvatarStack,
   BotAvatar,
@@ -44,9 +43,11 @@ const TEAM_A_MAIN_BOT_ID = "bot_0RVWRHPMH8WPT9KW1NGKJB319D";
 const TEAM_S_MAIN_BOT_ID = "bot_0YVZD4PHYFAZS1MCR0D9GABAGV";
 
 interface DrawnAvatar {
-  readonly path: string;
-  readonly swatch: string;
-  readonly ink: string;
+  /** One path per colour layer, darkest first. */
+  readonly paths: string[];
+  readonly fills: string[];
+  readonly tile: string;
+  readonly tileDark: string;
 }
 
 function fallbackOf(avatar: HTMLElement): HTMLElement {
@@ -57,25 +58,32 @@ function fallbackOf(avatar: HTMLElement): HTMLElement {
   return fallback;
 }
 
-function creatureOf(avatar: HTMLElement): SVGSVGElement {
-  const creature = avatar.querySelector<SVGSVGElement>(
-    '[data-slot="bot-creature"]',
+function mascotOf(avatar: HTMLElement): SVGSVGElement {
+  const mascot = avatar.querySelector<SVGSVGElement>(
+    '[data-slot="bot-mascot"]',
   );
-  if (creature === null) throw new Error("the avatar drew no creature");
-  return creature;
+  if (mascot === null) throw new Error("the avatar drew no mascot");
+  return mascot;
 }
 
 function drawn(): DrawnAvatar[] {
   return screen.getAllByTestId("bot-avatar").map((avatar) => {
     const fallback = fallbackOf(avatar);
-    const paths = creatureOf(avatar).querySelectorAll("path");
-    if (paths.length !== 1) throw new Error("the creature is not one path");
+    const paths = [...mascotOf(avatar).querySelectorAll("path")];
     return {
-      path: paths[0].getAttribute("d") ?? "",
-      swatch: fallback.style.getPropertyValue("--swatch"),
-      ink: fallback.classList.contains("text-white") ? "light" : "dark",
+      paths: paths.map((path) => path.getAttribute("d") ?? ""),
+      fills: paths.map((path) => path.getAttribute("fill") ?? ""),
+      tile: fallback.style.getPropertyValue("--avatar-fill"),
+      tileDark: fallback.style.getPropertyValue("--avatar-fill-dark"),
     };
   });
+}
+
+/** The paths the mascot of `look` is drawn as at the `sm` size. */
+function pathsOf(botId: string, look: BotAppearance | null): string[] {
+  return drawMascotMark(botMascot(botId, look), 24).layers.map(
+    (layer) => layer.path,
+  );
 }
 
 function sideBySide(botIds: readonly string[]): DrawnAvatar[] {
@@ -131,18 +139,18 @@ describe("a bot's picture", () => {
       </InBotContext>,
     ],
   ])(
-    "is %s drawn as a hidden creature in a squircle, with no initials",
+    "is %s drawn as a hidden mascot in a squircle, with no initials",
     (_entry, element) => {
       render(element);
 
       const avatar = screen.getByTestId("bot-avatar");
       expect(avatarShape(avatar)).toBe("squircle");
-      expect(creatureOf(avatar).getAttribute("aria-hidden")).toBe("true");
+      expect(mascotOf(avatar).getAttribute("aria-hidden")).toBe("true");
       expect(fallbackOf(avatar).textContent).toBe("");
     },
   );
 
-  it("is a person's initials in a circle, with no creature", () => {
+  it("is a person's initials in a circle, with no mascot", () => {
     render(
       <>
         <PersonAvatar
@@ -175,28 +183,26 @@ describe("a bot's picture", () => {
     ]);
     for (const person of people) {
       expect(avatarShape(person)).toBe("circle");
-      expect(person.querySelector('[data-slot="bot-creature"]')).toBeNull();
+      expect(person.querySelector('[data-slot="bot-mascot"]')).toBeNull();
     }
   });
 
-  it("draws the personal main bot and a team's main bot with different creatures and swatches", () => {
+  it("draws the personal main bot and a team's main bot in different colours", () => {
     const [personal, team] = sideBySide([
       PERSONAL_MAIN_BOT_ID,
       TEAM_A_MAIN_BOT_ID,
     ]);
 
-    expect(personal.path).not.toBe(team.path);
-    expect(personal.swatch).not.toBe(team.swatch);
+    expect(personal.tile).not.toBe(team.tile);
+    expect(personal.fills).not.toEqual(team.fills);
   });
 
-  it("draws two bots of one name in different environments on different swatches with different creatures", () => {
+  it("draws two bots of one name in different environments with different mascots and colours", () => {
     const [teamA, teamS] = sideBySide([TEAM_A_MAIN_BOT_ID, TEAM_S_MAIN_BOT_ID]);
 
-    // One hue in its two tones: the light swatch takes dark ink, the deep one
-    // white.
-    expect(teamA).toMatchObject({ swatch: "#f97316", ink: "dark" });
-    expect(teamS).toMatchObject({ swatch: "#c2410c", ink: "light" });
-    expect(teamA.path).not.toBe(teamS.path);
+    expect(teamA.paths).not.toEqual(teamS.paths);
+    expect(teamA.tile).not.toBe(teamS.tile);
+    expect(teamA.fills).not.toEqual(teamS.fills);
   });
 
   it("draws one bot the same in a sidebar row as on its own surface's header and message rows", () => {
@@ -213,7 +219,7 @@ describe("a bot's picture", () => {
     expect(row).toEqual(surface);
   });
 
-  it("keeps a bot's creature, swatch and ink through a rename", () => {
+  it("keeps a bot's mascot and colours through a rename", () => {
     // The surface's identity is the one place a bot's title reaches its
     // picture.
     render(
@@ -236,7 +242,7 @@ describe("a bot's picture", () => {
 
 describe("a bot's chosen look", () => {
   const BOT_ID = TEAM_S_MAIN_BOT_ID;
-  const BARE: BotAppearance = { mark: null, swatch: null, background: null };
+  const BARE: BotAppearance = { mark: null, color: null, background: null };
 
   function row(appearance: BotAppearance | undefined): BotDirectoryRecord {
     return {
@@ -275,16 +281,6 @@ describe("a bot's chosen look", () => {
       .outerHTML.replace(/avatar-squircle-[\w-]+/g, "avatar-squircle-ID");
   }
 
-  /** A swatch other than the bot's own, of the given ink. */
-  function otherSwatch(ink: "dark" | "light"): number {
-    const own = derivedBotSwatchIndex(BOT_ID);
-    const found = Array.from({ length: 24 }, (_, index) => index).find(
-      (index) => index !== own && botSwatchAt(index).ink === ink,
-    );
-    if (found === undefined) throw new Error("no such swatch");
-    return found;
-  }
-
   it("draws the derivation when nothing is chosen, as when the bot names no look at all", () => {
     render(looking(undefined));
     const bare = markup();
@@ -294,62 +290,80 @@ describe("a bot's chosen look", () => {
     expect(markup()).toBe(bare);
   });
 
-  it("draws the bot's own creature from its id when no mark is chosen", () => {
+  it("draws the bot's own mascot from its id when no mark is chosen", () => {
     render(looking(BARE));
 
-    expect(drawn()[0].path).toBe(
-      drawCreatureMark(creatureMark(BOT_ID), 24).path,
-    );
+    expect(drawn()[0].paths).toEqual(pathsOf(BOT_ID, null));
   });
 
-  it("draws the creature the person chose, regrown from its family and seed", () => {
-    const choice = creatureSheet(BOT_ID)[5];
+  it("draws the mascot the person chose and keeps the bot's own colours", () => {
     render(looking(BARE));
     const [derived] = drawn();
     cleanup();
-    render(
-      looking({
-        ...BARE,
-        mark: { kind: "creature", family: choice.family, seed: choice.seed },
-      }),
-    );
+    const chosenLook: BotAppearance = {
+      ...BARE,
+      mark: { kind: "mascot", shape: "ghost" },
+    };
+    render(looking(chosenLook));
     const [chosen] = drawn();
 
-    expect(chosen.path).toBe(
-      drawCreatureMark(chosenCreatureMark(BOT_ID, choice), 24).path,
-    );
-    expect(chosen.path).not.toBe(derived.path);
-    expect(chosen.swatch).toBe(derived.swatch);
+    expect(chosen.paths).toEqual(pathsOf(BOT_ID, chosenLook));
+    expect(chosen.paths).not.toEqual(derived.paths);
+    expect(chosen.tile).toBe(derived.tile);
   });
 
-  it.each(["dark", "light"] as const)(
-    "draws the swatch the person chose, in %s ink, and keeps the bot's own creature",
-    (ink) => {
-      const index = otherSwatch(ink);
-      render(looking(BARE));
-      const [derived] = drawn();
-      cleanup();
-      render(looking({ ...BARE, swatch: index }));
-      const [chosen] = drawn();
+  it("draws the colour the person chose and keeps the bot's own mascot", () => {
+    render(looking(BARE));
+    const [derived] = drawn();
+    cleanup();
+    render(looking({ ...BARE, color: 3 }));
+    const [chosen] = drawn();
 
-      expect(chosen.swatch).toBe(botSwatchAt(index).color);
-      expect(chosen.ink).toBe(ink);
-      expect(chosen.swatch).not.toBe(derived.swatch);
-      expect(chosen.path).toBe(derived.path);
-    },
-  );
+    expect(chosen.tile).toBe(mascotRampAt(3).tile.light);
+    expect(chosen.tileDark).toBe(mascotRampAt(3).tile.dark);
+    expect(chosen.fills).toEqual(
+      drawMascotMark(
+        { shape: botMascot(BOT_ID, null).shape, ramp: mascotRampAt(3) },
+        24,
+      ).layers.map((layer) => layer.fill),
+    );
+    expect(chosen.tile).not.toBe(derived.tile);
+    expect(chosen.paths).toEqual(derived.paths);
+  });
+
+  it("draws the default mascot for a mark it cannot read, in the bot's own colours", () => {
+    render(looking(BARE));
+    const [derived] = drawn();
+    cleanup();
+    render(looking({ ...BARE, mark: BOT_UNRECOGNISED_MARK }));
+    const [unreadable] = drawn();
+
+    expect(unreadable.paths).toEqual(
+      drawMascotMark(
+        { shape: DEFAULT_MASCOT_SHAPE, ramp: botMascot(BOT_ID, null).ramp },
+        24,
+      ).layers.map((layer) => layer.path),
+    );
+    expect(unreadable.paths).not.toEqual(derived.paths);
+    expect(unreadable.tile).toBe(derived.tile);
+  });
+
+  it("draws the default colours for a colour it cannot read, in the bot's own mascot", () => {
+    render(looking({ ...BARE, color: BOT_APPEARANCE_UNRECOGNISED }));
+    const [unreadable] = drawn();
+
+    expect(unreadable.tile).toBe(DEFAULT_MASCOT_RAMP.tile.light);
+    expect(unreadable.paths).toEqual(pathsOf(BOT_ID, null));
+  });
 
   it.each([
-    [
-      "a creature",
-      { ...BARE, mark: { kind: "creature", family: "crest", seed: 9 } },
-    ],
-    ["a swatch", { ...BARE, swatch: 17 }],
+    ["a mascot", { ...BARE, mark: { kind: "mascot", shape: "flame" } }],
+    ["a colour", { ...BARE, color: 17 }],
     [
       "all three",
       {
-        mark: { kind: "creature", family: "ears", seed: 4 },
-        swatch: 3,
+        mark: { kind: "mascot", shape: "cat" },
+        color: 3,
         background: 20,
       },
     ],

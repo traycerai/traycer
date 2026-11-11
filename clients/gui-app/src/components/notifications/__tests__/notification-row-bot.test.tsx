@@ -17,7 +17,7 @@ import {
   tracyRecord,
 } from "@/lib/home-bots/__tests__/standalone-bots-fixtures";
 import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
-import { creatureMark, drawCreatureMark } from "@/lib/bots/creature-mark";
+import { botMascot, drawMascotMark } from "@/lib/bots/mascot-mark";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 
@@ -249,10 +249,14 @@ describe("<NotificationRow /> about a bot", () => {
     const avatar = within(entry).getByTestId("bot-avatar");
     expect(avatarShape(avatar)).toBe("squircle");
     expect(
-      avatar
-        .querySelector('[data-slot="bot-creature"] path')
-        ?.getAttribute("d"),
-    ).toBe(drawCreatureMark(creatureMark(BOT_ID), 24).path);
+      [...avatar.querySelectorAll('[data-slot="bot-mascot"] path')].map(
+        (path) => path.getAttribute("d"),
+      ),
+    ).toEqual(
+      drawMascotMark(botMascot(BOT_ID, null), 24).layers.map(
+        (layer) => layer.path,
+      ),
+    );
     expect(mocks.listEnabled).toContain(true);
   });
 

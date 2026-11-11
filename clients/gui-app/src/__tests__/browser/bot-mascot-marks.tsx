@@ -5,18 +5,18 @@ import { cn } from "@/lib/utils";
 import "@/index.css";
 
 /**
- * THE CREATURE MARKS' CONTACT SHEET: bots by real-shaped ids at every
+ * THE BOT MASCOTS' CONTACT SHEET: bots by real-shaped ids at every
  * avatar size, beside people in their circles, in colour and
  * in grayscale, under the light theme or with `?theme=dark` the dark one.
  * Every picture is the production `NamedBotAvatar` or `PersonAvatar`.
  *
  * The first three ids are real derived main-bot ids (`bot-avatars.test.tsx`
  * says how): the personal Tracy and two "Team Tracy" bots on one hue in its
- * two tones. "Twin" is on the personal Tracy's swatch exactly, so the sheet
- * shows two bots told apart by the creature alone. The rest are random ids
+ * two tones. "Twin" is on the personal Tracy's colour exactly, so the sheet
+ * shows two bots told apart by the shape alone. The rest are random ids
  * of the same shape.
  *
- * `browser-tests/bot-creature-marks.spec.ts` reads the painted pixels here;
+ * `browser-tests/bot-mascot-marks.spec.ts` reads the painted pixels here;
  * the sheet itself is what a person looks at when the generator changes.
  */
 const BOTS: ReadonlyArray<{ readonly title: string; readonly botId: string }> =
@@ -118,5 +118,5 @@ export function ContactSheet(): ReactElement {
 }
 
 const root = document.getElementById("root");
-if (root === null) throw new Error("bot-creature-marks: no #root");
+if (root === null) throw new Error("bot-mascot-marks: no #root");
 createRoot(root).render(<ContactSheet />);

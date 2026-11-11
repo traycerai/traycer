@@ -859,7 +859,7 @@ export function BotChannelView(props: {
                   routing card and the box) keeps the page's own. */}
               <div
                 data-testid="bot-channel-messages"
-                data-channel-background={background.swatch}
+                data-channel-background={background.index}
                 style={{ "--channel-tint": background.color } as CSSProperties}
                 className={cn(
                   "flex min-h-0 flex-1 flex-col",
