@@ -271,9 +271,12 @@ describe("environment.binding.read in a pool build", () => {
       () => useEnvironmentHostReadQuery(fixture.client, TARGET_HOST, true),
       { wrapper: fixture.wrapper },
     );
-    const claim = renderHook(() => useTeamComputerClaim("env-team"), {
-      wrapper: fixture.wrapper,
-    });
+    const claim = renderHook(
+      () => useTeamComputerClaim("env-team", undefined),
+      {
+        wrapper: fixture.wrapper,
+      },
+    );
 
     await waitFor(() => {
       expect(binding.result.current.data).toEqual(TEAM_BINDING);

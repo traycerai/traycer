@@ -53,6 +53,10 @@ export interface BrowserSessionsHostTransport {
  */
 export interface BrowserSessionsHostDirectory {
   resolve(hostId: string): Promise<HostDirectoryEntry | null>;
+  /** The last trusted registry answer, without starting a read. */
+  peek(hostId: string): HostDirectoryEntry | null;
+  /** A completed registry refresh may change a live stream's owner. */
+  subscribe(listener: () => void): () => void;
   /**
    * The address to dial RIGHT NOW, re-read on every (re)dial.
    *
@@ -134,6 +138,7 @@ export function createBrowserSessionsHostDirectory(
   let inFlight: Promise<void> | null = null;
   let lastRefreshAt: number | null = null;
   let forced = false;
+  const listeners = new Set<() => void>();
 
   const refresh = async (): Promise<void> => {
     const bearerToken = deps.bearerToken();
@@ -151,6 +156,7 @@ export function createBrowserSessionsHostDirectory(
       );
     }
     cachedRemote = next;
+    for (const listener of Array.from(listeners)) listener();
   };
 
   const refreshOnce = (): Promise<void> => {
@@ -207,6 +213,13 @@ export function createBrowserSessionsHostDirectory(
   };
 
   return {
+    peek: (hostId) => localEntryFor(hostId) ?? cachedRemote.get(hostId) ?? null,
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
     invalidate: (hostId) => {
       cachedRemote.delete(hostId);
       forced = true;
@@ -230,6 +243,20 @@ export function createBrowserSessionsHostDirectory(
       return cachedRemote.get(hostId) ?? null;
     },
   };
+}
+
+/** Names the ownership snapshot, independently of display names and addresses. */
+export function browserSessionsOwnerKey(
+  entry: HostDirectoryEntry | null,
+): string | null {
+  if (entry === null) return null;
+  if (!isRemoteHostDirectoryEntry(entry))
+    return JSON.stringify([entry.kind, entry.hostId]);
+  return JSON.stringify([
+    entry.kind,
+    entry.owner?.kind ?? null,
+    entry.owner?.id ?? null,
+  ]);
 }
 
 export interface BrowserSessionsTransportDeps {

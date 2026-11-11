@@ -569,10 +569,14 @@ describe("HostEnvironmentSection", () => {
       .mockResolvedValueOnce(ownershipResult(TEAM_OWNER))
       .mockResolvedValue(ownershipResult(PERSON_OWNER));
     const claim = Promise.withResolvers<TeamComputerReleaseResult>();
+    const admissionCheck = Promise.withResolvers<void>();
     mocks.auth.releaseTeamComputer.mockReturnValue(claim.promise);
+    invalidateLocalTeamAdmissionAfterClaim.mockReturnValue(
+      admissionCheck.promise,
+    );
     const stopRequests: unknown[] = [];
     let stopPreviewCalls = 0;
-    renderSection("personal", {
+    const queryClient = renderSection("personal", {
       owner: TEAM_OWNER,
       isLocalMachine: true,
       runnerHost,
@@ -612,20 +616,45 @@ describe("HostEnvironmentSection", () => {
       claim.resolve({ kind: "ok" });
       await claim.promise;
     });
+    await waitFor(() => {
+      expect(invalidateLocalTeamAdmissionAfterClaim).toHaveBeenCalledWith(
+        "host-a",
+        runnerHost,
+      );
+    });
 
-    expect((await screen.findByRole("status")).textContent).toContain(
-      "This computer is now yours.",
-    );
+    await act(async () => {
+      await queryClient.invalidateQueries({
+        queryKey: authQueryKeys.hostOwnership(mocks.auth, "user-me", "host-a"),
+      });
+    });
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("button", { name: "Claim this computer" }),
+      ).toBeNull();
+    });
+    expect(
+      screen.queryByText(
+        "This computer is now yours. The team can no longer run work on it.",
+      ),
+    ).toBeNull();
+
+    await act(async () => {
+      admissionCheck.resolve();
+      await admissionCheck.promise;
+    });
+
+    expect(
+      await screen.findByText(
+        "This computer is now yours. The team can no longer run work on it.",
+      ),
+    ).toBeTruthy();
     expect(
       screen.queryByRole("button", { name: "Claim this computer" }),
     ).toBeNull();
     expect(mocks.auth.releaseTeamComputer).toHaveBeenCalledWith(
       "host-a",
       "env-team",
-    );
-    expect(invalidateLocalTeamAdmissionAfterClaim).toHaveBeenCalledWith(
-      "host-a",
-      runnerHost,
     );
     expect(stopRequests).toEqual([]);
     expect(stopPreviewCalls).toBe(0);

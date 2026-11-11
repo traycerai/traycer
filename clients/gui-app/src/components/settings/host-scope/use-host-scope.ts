@@ -1,4 +1,7 @@
 import { useCallback, useMemo, useSyncExternalStore } from "react";
+import type { HostIdentityGetResponse } from "@traycer/protocol/host/identity/schemas";
+import { useHostMutation } from "@/hooks/host/use-host-query";
+import { hostMaintenanceMutationKeys } from "@/lib/query-keys";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import {
   HostRpcError,
@@ -418,6 +421,21 @@ export function useMakeActiveHost(hosts: readonly HostScopeOption[]): {
 } {
   const authority = useRunnerHost().selectionAuthority;
   const hostClient = useHostClient();
+  const { mutateAsync: probeLocalHost } = useHostMutation<
+    HostRpcRegistry,
+    "host.identity.get",
+    unknown,
+    HostScopeOption
+  >({
+    client: (option) =>
+      option.entry === null ? null : hostClient.createRequester(option.entry),
+    method: "host.identity.get",
+    mapVariables: () => ({}),
+    options: {
+      mutationKey: hostMaintenanceMutationKeys.identityGet(),
+      retry: false,
+    },
+  });
   const activatingHostId = useSyncExternalStore(
     subscribePendingActivation,
     () => pendingActivations.get(authority) ?? null,
@@ -438,14 +456,19 @@ export function useMakeActiveHost(hosts: readonly HostScopeOption[]): {
       notifyPendingActivation();
       const activation =
         option?.connectable && option.entry?.kind === "local"
-          ? requestLocalHostActivation(authority, hostClient, option)
+          ? requestLocalHostActivation(
+              authority,
+              hostClient,
+              option,
+              probeLocalHost,
+            )
           : requestActivate(authority, hostId, option);
       return activation.finally(() => {
         pendingActivations.delete(authority);
         notifyPendingActivation();
       });
     },
-    [authority, hostClient, hosts],
+    [authority, hostClient, hosts, probeLocalHost],
   );
   return {
     makeActive,
@@ -465,11 +488,12 @@ async function requestLocalHostActivation(
   authority: SelectionAuthorityClient,
   client: HostClient<HostRpcRegistry>,
   option: HostScopeOption,
+  probe: (option: HostScopeOption) => Promise<HostIdentityGetResponse>,
 ): Promise<boolean> {
   const context = client.getRequestContext();
   if (context === null || option.entry === null) return false;
   try {
-    await client.createRequester(option.entry).request("host.identity.get", {});
+    await probe(option);
   } catch (error: unknown) {
     // A different account must not inherit this account's refusal or pick.
     if (context.abortSignal.aborted || client.getRequestContext() !== context)

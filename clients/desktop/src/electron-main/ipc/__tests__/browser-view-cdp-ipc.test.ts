@@ -116,7 +116,15 @@ vi.mock("../../browser-sessions/browser-sessions-transport", async () => {
   const { FakeStreamClient, LOCAL_HOST_ENTRY } =
     await import("../../browser-sessions/__tests__/browser-sessions-stream-fixture");
   return {
+    browserSessionsOwnerKey: (
+      entry:
+        | import("@traycer-clients/shared/host-client/host-directory").HostDirectoryEntry
+        | null,
+    ): string | null =>
+      entry === null ? null : JSON.stringify([entry.kind, entry.hostId]),
     createBrowserSessionsHostDirectory: () => ({
+      peek: () => LOCAL_HOST_ENTRY,
+      subscribe: () => (): void => undefined,
       invalidate: (): void => undefined,
       reset: (): void => undefined,
       resolve: () => Promise.resolve(LOCAL_HOST_ENTRY),

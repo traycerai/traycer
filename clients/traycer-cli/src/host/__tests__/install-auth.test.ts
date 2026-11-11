@@ -101,8 +101,15 @@ vi.mock(
   },
 );
 
-import { completeTeamInstall, maybeProvisionCredential } from "../install-auth";
-import type { HostInstallAuthPreflight } from "../install-auth";
+import {
+  completeTeamInstall,
+  maybeProvisionCredential,
+  warnIfTeamInstallSignInRemains,
+} from "../install-auth";
+import type {
+  HostInstallAuthPreflight,
+  TeamInstallAuthSession,
+} from "../install-auth";
 import type { HostCredentialProvisionOutcome } from "../credential-provisioning";
 import type { CommandContext } from "../../runner/runner";
 import { CLI_ERROR_CODES } from "../../runner/errors";
@@ -350,6 +357,10 @@ describe("install auth helpers", () => {
   it("does not clear a newer sign-in that replaced the inline token during owner confirmation", async () => {
     const token = "inline-team-token";
     const replacement = "concurrent-login-token";
+    const session: TeamInstallAuthSession = {
+      preflight: { state: "signed-in-inline", reason: null },
+      inlineSignInToken: token,
+    };
     await writeStoredCredentials(token);
     mocks.readHostOwnershipMock
       .mockResolvedValueOnce(
@@ -363,14 +374,29 @@ describe("install auth helpers", () => {
         );
       });
 
-    await completeTeamInstall("acme", {
-      preflight: { state: "signed-in-inline", reason: null },
-      inlineSignInToken: token,
-    });
+    await completeTeamInstall("acme", session);
 
     expect((await readCredentialsFile(mocks.credentialsPath))?.token).toBe(
       replacement,
     );
+
+    const ctx = fakeCtx();
+    await warnIfTeamInstallSignInRemains(ctx, session);
+    expect(ctx.output.humanRequired).toHaveBeenCalledExactlyOnceWith(
+      "Your sign-in could still be on this computer. Run `traycer logout` to remove it.",
+    );
+  });
+
+  it("does not warn when the command-created sign-in is no longer stored", async () => {
+    const ctx = fakeCtx();
+    const session: TeamInstallAuthSession = {
+      preflight: { state: "signed-in-inline", reason: null },
+      inlineSignInToken: "inline-team-token",
+    };
+
+    await warnIfTeamInstallSignInRemains(ctx, session);
+
+    expect(ctx.output.humanRequired).not.toHaveBeenCalled();
   });
 
   it("keeps the inline-created sign-in when the registry does not confirm the team owner after bind", async () => {

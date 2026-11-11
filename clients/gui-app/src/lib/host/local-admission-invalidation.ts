@@ -2,7 +2,7 @@ import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 
 const listeners = new Set<(hostId: string) => void>();
 
-/** Subscribe a local admission cache without coupling claim to its transport. */
+/** Subscribe a local admission cache without coupling mutations to its transport. */
 export function onAppLocalAdmissionInvalidated(
   listener: (hostId: string) => void,
 ): () => void {
@@ -12,8 +12,8 @@ export function onAppLocalAdmissionInvalidated(
   };
 }
 
-/** A confirmed claim changes the owner while keeping the same host id. */
-export async function invalidateLocalTeamAdmissionAfterClaim(
+/** A confirmed ownership or membership change permits a new admission attempt. */
+export async function invalidateLocalTeamAdmission(
   hostId: string,
   runnerHost: IRunnerHost,
 ): Promise<void> {
@@ -21,7 +21,7 @@ export async function invalidateLocalTeamAdmissionAfterClaim(
     try {
       listener(hostId);
     } catch {
-      // A stale consumer must not turn a confirmed claim into a failure.
+      // A stale consumer must not turn a confirmed mutation into a failure.
     }
   }
   try {
@@ -31,3 +31,5 @@ export async function invalidateLocalTeamAdmissionAfterClaim(
     // its admission cache when the local transport next connects.
   }
 }
+
+export { invalidateLocalTeamAdmission as invalidateLocalTeamAdmissionAfterClaim };

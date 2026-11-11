@@ -3,6 +3,7 @@ import type { HostTransportEndpoint } from "./host-messenger";
 import {
   LocalOpenAuth,
   SESSION_GRANT_REQUIRED,
+  TEAM_MEMBERSHIP_REQUIRED,
   isLocalAdmissionFatal,
   teamMembershipUnavailable,
 } from "./local-open-auth";
@@ -524,7 +525,7 @@ export class WsStreamClient<
       (hostId) => {
         if (this.closed || this.options.endpoint()?.hostId !== hostId) return;
         for (const session of Array.from(this.ownedSessions))
-          session.forceReconnect("local-admission-invalidated");
+          session.reconnectAfterAdmissionInvalidation();
       },
     );
     this.clientIdentity = toClientHandshakeIdentity(options.clientIdentity);
@@ -1811,6 +1812,7 @@ class StreamSession<
    */
   private clockParkUnsubscribe: (() => void) | null = null;
   private disposed = false;
+  private awaitingAdmissionInvalidation = false;
 
   private activeSocket: StreamWebSocketLike | null = null;
   private grantMintAbort: AbortController | null = null;
@@ -1985,6 +1987,10 @@ class StreamSession<
   }
 
   close(): void {
+    if (this.awaitingAdmissionInvalidation) {
+      this.awaitingAdmissionInvalidation = false;
+      this.config.onDispose();
+    }
     if (!this.disposeSession()) {
       return;
     }
@@ -2012,6 +2018,16 @@ class StreamSession<
     this.reconnectAttempt = 0;
     this.slowClientReconnectStreak = 0;
     this.onTransportDrop();
+  }
+
+  /** A confirmed membership change may retry a denied, still-owned subscription. */
+  reconnectAfterAdmissionInvalidation(): void {
+    if (this.awaitingAdmissionInvalidation) {
+      this.awaitingAdmissionInvalidation = false;
+      this.disposed = false;
+      this.grantReprobed = false;
+    }
+    this.forceReconnect("local-admission-invalidated");
   }
 
   /**
@@ -2296,17 +2312,6 @@ class StreamSession<
 
     const bearer = this.config.bearer();
     this.openFrameBearer = bearer;
-    if (
-      bearer !== null &&
-      this.config.localOpenAuth?.requiresSessionGrant(selected.hostId)
-    ) {
-      void this.connectWithSessionGrant(
-        selected,
-        bearer,
-        this.config.localOpenAuth,
-      );
-      return;
-    }
     this.usesSessionGrant = false;
     let token: string;
     try {
@@ -2359,6 +2364,17 @@ class StreamSession<
       return;
     }
 
+    if (
+      bearer !== null &&
+      this.config.localOpenAuth?.requiresSessionGrant(selected.hostId)
+    ) {
+      void this.connectWithSessionGrant(
+        selected,
+        bearer,
+        this.config.localOpenAuth,
+      );
+      return;
+    }
     this.connectWithToken(selected, token);
   }
 
@@ -3564,6 +3580,12 @@ class StreamSession<
    * fatalErrors and the bounded/rejected `UNAUTHORIZED` outcomes.
    */
   private goTerminal(details: FatalErrorDetails): void {
+    if (this.disposed) return;
+    // Denial stays terminal until an explicit membership/ownership change.
+    // Retain only the caller's subscription so that signal can restart it.
+    this.awaitingAdmissionInvalidation =
+      details.code === TEAM_MEMBERSHIP_REQUIRED &&
+      this.config.localOpenAuth !== undefined;
     if (!this.disposeSession()) {
       return;
     }
@@ -3720,6 +3742,7 @@ class StreamSession<
    * application frame, the dwell timer, and an elapsed-time dwell settle.
    */
   private resetLoopCounters(): void {
+    this.grantReprobed = false;
     this.reconnectAttempt = 0;
     this.noProgressUnauthorizedReconnects = 0;
     // The retryable-close suppression rides the same proof, for the same
@@ -3945,7 +3968,7 @@ class StreamSession<
     // `teardownTimers` cannot reach it: left attached it would re-dial a
     // disposed session the next time somebody's clock came right.
     this.clearClockPark();
-    this.config.onDispose();
+    if (!this.awaitingAdmissionInvalidation) this.config.onDispose();
     return true;
   }
 }

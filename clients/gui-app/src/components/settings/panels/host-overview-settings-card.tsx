@@ -1,3 +1,4 @@
+import { TeamReadFailed } from "@/components/settings/environment/team-read-failed";
 import { useTeamComputerClaim } from "@/hooks/auth/use-team-computers";
 import { useTeamComputerTransfer } from "@/hooks/environment/use-team-computer-transfer";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -267,7 +268,12 @@ function ClaimLocalTeamComputer(props: {
   readonly onClaimed: (receipt: string) => void;
 }): ReactNode {
   const [open, setOpen] = useState(false);
-  const mutation = useTeamComputerClaim(props.environmentId);
+  const mutation = useTeamComputerClaim(props.environmentId, () => {
+    props.onClaimed(
+      "This computer is now yours. The team can no longer run work on it.",
+    );
+    setOpen(false);
+  });
   return (
     <>
       <Button
@@ -311,16 +317,7 @@ function ClaimLocalTeamComputer(props: {
             <Button
               type="button"
               disabled={mutation.isPending}
-              onClick={() =>
-                mutation.mutate(props.hostId, {
-                  onSuccess: () => {
-                    props.onClaimed(
-                      "This computer is now yours. The team can no longer run work on it.",
-                    );
-                    setOpen(false);
-                  },
-                })
-              }
+              onClick={() => mutation.mutate(props.hostId)}
             >
               {mutation.isPending ? (
                 <AgentSpinningDots
@@ -430,6 +427,12 @@ function TeamEnvironmentSourceControl(
   );
   return (
     <>
+      {environments.isError ? (
+        <TeamReadFailed
+          message="Couldn't load teams."
+          onRetry={() => void environments.refetch()}
+        />
+      ) : null}
       <EnvironmentSourceSelect
         {...props}
         teams={teams}

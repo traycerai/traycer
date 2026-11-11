@@ -73,20 +73,24 @@ vi.mock(
     }),
   }),
 );
-const memberships = vi.hoisted(
-  (): {
-    environments: Array<{
-      environmentId: string;
-      ownerKind: "user" | "organization";
-      ownerId: string;
-      roomId: string;
-      label: string;
-    }>;
-  } => ({ environments: [] }),
-);
+const memberships = vi.hoisted(() => ({
+  environments: [] as Array<{
+    environmentId: string;
+    ownerKind: "user" | "organization";
+    ownerId: string;
+    roomId: string;
+    label: string;
+  }>,
+  isError: false,
+  refetch: vi.fn<() => Promise<unknown>>(),
+}));
 vi.mock("@/hooks/bots/use-environment-list-query", () => ({
   useEnvironmentListQuery: () => ({
-    data: { environments: memberships.environments },
+    data: memberships.isError
+      ? undefined
+      : { environments: memberships.environments },
+    isError: memberships.isError,
+    refetch: memberships.refetch,
   }),
 }));
 
@@ -200,6 +204,9 @@ function renderCardOnThisComputer(
 
 beforeEach(() => {
   memberships.environments = [];
+  memberships.isError = false;
+  memberships.refetch.mockReset();
+  memberships.refetch.mockResolvedValue(undefined);
   useMoveSheetStore.setState({ target: null });
   useRetrospectiveSheetStore.setState({ target: null, open: false });
   useSettingsEnvironmentPickStore.setState({
@@ -286,6 +293,24 @@ describe("<HostOverviewSettingsCard />", () => {
     expect(
       screen.getByRole("button", { name: "Confirm at this computer" }),
     ).toBeTruthy();
+  });
+
+  it("offers Retry when the team list read fails", async () => {
+    memberships.isError = true;
+    renderCardOnThisComputer(environmentStatusFixture({}), {});
+
+    const status = await screen.findByRole("status");
+    expect(status.textContent).toContain("Couldn't load teams.");
+    fireEvent.click(within(status).getByRole("button", { name: "Retry" }));
+    expect(memberships.refetch).toHaveBeenCalledExactlyOnceWith();
+  });
+
+  it("keeps a successful empty team list free of the read error", () => {
+    memberships.environments = [];
+    renderCardOnThisComputer(environmentStatusFixture({}), {});
+
+    expect(screen.queryByText("Couldn't load teams.")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 
   it("shows the Environment row label and keeps Details beside its value", () => {

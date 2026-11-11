@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactNode } from "react";
 import type { RequestContext } from "@traycer/protocol/auth/request-context";
 import { createRequestContext } from "@traycer/protocol/auth/request-context";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
@@ -18,6 +20,7 @@ import type { ActivateResult } from "@traycer-clients/shared/host-selection/sele
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { useMakeActiveHost } from "@/components/settings/host-scope/use-host-scope";
+import { hostMaintenanceMutationKeys } from "@/lib/query-keys";
 import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
 
 interface RecordedRequest {
@@ -103,6 +106,15 @@ vi.mock("sonner", () => ({
 
 const LOCAL_HOST_ID = "local-team-host";
 const REMOTE_HOST_ID = "ready-remote-host";
+let queryClient = new QueryClient();
+
+function renderMakeActiveHost(hosts: readonly HostScopeOption[]) {
+  return renderHook(() => useMakeActiveHost(hosts), {
+    wrapper: ({ children }: { readonly children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    ),
+  });
+}
 
 const localEntry: HostDirectoryEntry = {
   hostId: LOCAL_HOST_ID,
@@ -200,6 +212,9 @@ function switchAccountAction(): () => void {
 }
 
 beforeEach(() => {
+  queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
   mocks.state.activeContext = createContext("user-a");
   mocks.state.requestCalls.length = 0;
   mocks.state.createdEntries.length = 0;
@@ -214,14 +229,14 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  queryClient.clear();
   useSignOutConfirmStore.getState().setOpen(false);
 });
 
 describe("useMakeActiveHost local team admission", () => {
   it("probes an unregistered local entry with unknown registry kind while a remote host is active", async () => {
-    const { result } = renderHook(() =>
-      useMakeActiveHost([localOption(), readyRemoteOption()]),
-    );
+    const local = localOption();
+    const { result } = renderMakeActiveHost([local, readyRemoteOption()]);
     let activated = false;
 
     await act(async () => {
@@ -238,12 +253,17 @@ describe("useMakeActiveHost local team admission", () => {
       },
     ]);
     expect(mocks.state.activationCalls).toEqual([LOCAL_HOST_ID]);
+    const probeMutation = queryClient.getMutationCache().getAll()[0];
+    expect(probeMutation.options.mutationKey).toEqual(
+      hostMaintenanceMutationKeys.identityGet(),
+    );
+    expect(probeMutation.state.variables).toBe(local);
   });
 
   it("shows the fixed nonmember toast and only opens sign-out confirmation for the original account", async () => {
     mocks.state.requestResult = (_method: string, _params: unknown) =>
       Promise.reject<unknown>(admissionFailure(TEAM_MEMBERSHIP_REQUIRED));
-    const { result } = renderHook(() => useMakeActiveHost([localOption()]));
+    const { result } = renderMakeActiveHost([localOption()]);
     let activated = true;
 
     await act(async () => {
@@ -270,7 +290,7 @@ describe("useMakeActiveHost local team admission", () => {
   it("shows the fixed unavailable toast for a typed membership lookup failure", async () => {
     mocks.state.requestResult = (_method: string, _params: unknown) =>
       Promise.reject<unknown>(admissionFailure(TEAM_MEMBERSHIP_UNAVAILABLE));
-    const { result } = renderHook(() => useMakeActiveHost([localOption()]));
+    const { result } = renderMakeActiveHost([localOption()]);
     let activated = true;
 
     await act(async () => {
@@ -287,7 +307,7 @@ describe("useMakeActiveHost local team admission", () => {
   it("shows the fixed unavailable toast for a transient local transport failure", async () => {
     mocks.state.requestResult = (_method: string, _params: unknown) =>
       Promise.reject<unknown>(transportFailure());
-    const { result } = renderHook(() => useMakeActiveHost([localOption()]));
+    const { result } = renderMakeActiveHost([localOption()]);
     let activated = true;
 
     await act(async () => {
@@ -309,14 +329,14 @@ describe("useMakeActiveHost local team admission", () => {
       resolveProbe = resolve;
     });
     mocks.state.requestResult = (_method: string, _params: unknown) => probe;
-    const { result } = renderHook(() => useMakeActiveHost([localOption()]));
+    const { result } = renderMakeActiveHost([localOption()]);
     const activation: { value: Promise<boolean> | null } = { value: null };
 
     act(() => {
       activation.value = result.current.makeActive(LOCAL_HOST_ID);
     });
 
-    expect(mocks.state.requestCalls).toHaveLength(1);
+    await waitFor(() => expect(mocks.state.requestCalls).toHaveLength(1));
     expect(mocks.state.activationCalls).toEqual([]);
     const pendingActivation = activation.value;
     if (pendingActivation === null)
@@ -332,16 +352,17 @@ describe("useMakeActiveHost local team admission", () => {
   });
 
   it("does not probe until the person explicitly selects a host", () => {
-    renderHook(() => useMakeActiveHost([localOption(), readyRemoteOption()]));
+    renderMakeActiveHost([localOption(), readyRemoteOption()]);
 
     expect(mocks.state.requestCalls).toEqual([]);
     expect(mocks.state.activationCalls).toEqual([]);
   });
 
   it("keeps remote activation on its existing immediate authority path", async () => {
-    const { result } = renderHook(() =>
-      useMakeActiveHost([localOption(), readyRemoteOption()]),
-    );
+    const { result } = renderMakeActiveHost([
+      localOption(),
+      readyRemoteOption(),
+    ]);
     const activation: { value: Promise<boolean> | null } = { value: null };
 
     act(() => {
@@ -365,7 +386,7 @@ describe("useMakeActiveHost local team admission", () => {
       rejectProbe = reject;
     });
     mocks.state.requestResult = (_method: string, _params: unknown) => probe;
-    const { result } = renderHook(() => useMakeActiveHost([localOption()]));
+    const { result } = renderMakeActiveHost([localOption()]);
     const activation: { value: Promise<boolean> | null } = { value: null };
 
     act(() => {

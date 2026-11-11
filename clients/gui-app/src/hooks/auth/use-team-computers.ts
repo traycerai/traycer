@@ -92,11 +92,14 @@ export function useTeamComputers(environmentId: string) {
     },
     onSettled: settle,
   });
-  const claim = useTeamComputerClaim(environmentId);
+  const claim = useTeamComputerClaim(environmentId, undefined);
   return { read, setBotHost, claim };
 }
 
-export function useTeamComputerClaim(environmentId: string) {
+export function useTeamComputerClaim(
+  environmentId: string,
+  onClaimed: (() => void) | undefined,
+) {
   const binding = useHostBinding();
   const userId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
   const runnerHost = useRunnerHost();
@@ -129,6 +132,7 @@ export function useTeamComputerClaim(environmentId: string) {
         "Could not claim this computer. Refresh the list to check what changed.",
       );
     },
+    onSuccess: onClaimed,
     onSettled: (_data, _error, hostId) => {
       void queryClient.invalidateQueries({
         queryKey: authQueryKeys.teamComputers(auth, userId, environmentId),

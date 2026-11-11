@@ -459,7 +459,16 @@ export async function warnIfTeamInstallSignInRemains(
     );
     return;
   }
-  if (credentials?.token !== session.inlineSignInToken) return;
+  if (credentials === null) return;
+  // A refresh can supersede the token this command created. Exact-token
+  // deletion must preserve a replacement, but its presence still needs the
+  // manual sign-out warning.
+  if (credentials.token !== session.inlineSignInToken) {
+    ctx.output.humanRequired(
+      "Your sign-in could still be on this computer. Run `traycer logout` to remove it.",
+    );
+    return;
+  }
   ctx.output.humanRequired(
     "Your sign-in stays on this computer. Run `traycer logout` to remove it.",
   );
