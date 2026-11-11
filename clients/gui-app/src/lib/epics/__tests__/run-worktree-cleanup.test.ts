@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { AUTHENTICATED_USER_FIXTURE_ID } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 import type { WorktreeDeleteStreamCallbacks } from "@traycer-clients/shared/host-transport/worktree-delete-stream-client";
 import type { WorktreeDeleteBatchStreamCallbacks } from "@traycer-clients/shared/host-transport/worktree-delete-batch-stream-client";
 import type { WorktreeDeleteBatchTargetV11 } from "@traycer/protocol/host/worktree-delete-batch-stream";
@@ -142,6 +143,7 @@ function stubOpenStreamTransport(): (hostId: string) => DurableStreamTransport {
       hostId: null,
       endpoint: () => null,
       bearer: () => null,
+      userId: AUTHENTICATED_USER_FIXTURE_ID,
       auth: null,
       clock: null,
       hostCredentialMint: null,

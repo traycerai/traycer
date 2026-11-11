@@ -362,6 +362,7 @@ export async function provisionInstalledHostCredential(
       hostId: null,
       endpoint: () => endpoint,
       bearer: () => lease,
+      userId: lease.identity.userId,
       auth: streamAuth,
       // No tracker wired yet on the CLI side: this is a short-lived
       // provisioning probe, not a long-lived session a user could rescue by

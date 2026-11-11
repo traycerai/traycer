@@ -13,6 +13,7 @@
  * `IStreamSession` without a real socket.
  */
 import { describe, expect, it, vi } from "vitest";
+import { AUTHENTICATED_USER_FIXTURE_ID } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
@@ -76,6 +77,7 @@ function makeWsStreamClient(
     endpoint: () => null,
     hostId: null,
     bearer: () => null,
+    userId: AUTHENTICATED_USER_FIXTURE_ID,
     auth: null,
     clock: null,
     hostCredentialMint: null,
