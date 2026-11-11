@@ -1306,6 +1306,8 @@ interface SigninScenario {
   /** Waits until the latest key fetch has settled and its caller has run. */
   settleLastKeyFetch(): Promise<void>;
   advancePastKeyFetchCooldown(): Promise<void>;
+  /** Moves the clock a full cooldown ahead without running any timer. */
+  moveClockPastKeyFetchCooldown(): void;
   /** What main's own credentials store holds for the window's user. */
   storeHolds(token: string): void;
   /** Main's credentials reads wait until the returned function is called. */
@@ -1314,7 +1316,15 @@ interface SigninScenario {
   /** Another window of the same user, beside window 101. */
   addWindow(webContentsId: number): CapturingWindow;
   setFromWindow(webContentsId: number, token: string): Promise<unknown>;
+  /** A set that names `userId` as the account, whoever the bearer is for. */
+  setFromWindowAsUser(
+    webContentsId: number,
+    userId: string,
+    token: string,
+  ): Promise<unknown>;
   set(token: string): Promise<unknown>;
+  /** Window 101 asking main to hold the pair its credentials store has. */
+  restoreLocal(token: string): Promise<unknown>;
   signOut(): Promise<unknown>;
   revoke(token: string): Promise<unknown>;
   dispose(): Promise<void>;
@@ -1359,11 +1369,17 @@ async function setUpSigninScenario(): Promise<SigninScenario> {
     fetchSpy.mock.results.filter(
       (_result, index) => fetchSpy.mock.calls[index]?.[0] === jwksUrl,
     );
-  const setFromWindow = async (webContentsId: number, setToken: string) =>
+  const setFromWindowAsUser = async (
+    webContentsId: number,
+    userId: string,
+    setToken: string,
+  ) =>
     authSessionSetHandler()(
       sender(webContentsId),
-      signedInSnapshot(WINDOW_USER_ID, setToken),
+      signedInSnapshot(userId, setToken),
     );
+  const setFromWindow = async (webContentsId: number, setToken: string) =>
+    setFromWindowAsUser(webContentsId, WINDOW_USER_ID, setToken);
   return {
     key,
     token,
@@ -1388,6 +1404,9 @@ async function setUpSigninScenario(): Promise<SigninScenario> {
       // A re-check answered from the key set in hand runs on microtasks only.
       await new Promise<void>((resolve) => setImmediate(resolve));
     },
+    moveClockPastKeyFetchCooldown: () => {
+      vi.setSystemTime(Date.now() + KEY_FETCH_COOLDOWN_MS + 1_000);
+    },
     storeHolds: (storedToken) => {
       stored = buildStoredCredentials(WINDOW_USER_ID, storedToken);
     },
@@ -1406,7 +1425,13 @@ async function setUpSigninScenario(): Promise<SigninScenario> {
       return added;
     },
     setFromWindow,
+    setFromWindowAsUser,
     set: (setToken) => setFromWindow(101, setToken),
+    restoreLocal: async (restoredToken) =>
+      restoreLocalHandler()(sender(101), {
+        userId: WINDOW_USER_ID,
+        token: restoredToken,
+      }),
     signOut: async () =>
       authSessionSetHandler()(sender(101), {
         status: "signed-out",
@@ -1428,6 +1453,13 @@ async function setUpSigninScenario(): Promise<SigninScenario> {
 
 function messagesOn(window: CapturingWindow, channel: string): SentMessage[] {
   return window.sentMessages.filter((message) => message.channel === channel);
+}
+
+/** What main told this window about checks that reached a verdict. */
+function refusalsSeenBy(window: CapturingWindow): unknown[] {
+  return messagesOn(window, RunnerHostEvent.authSessionPendingRefused).map(
+    (message) => message.payload,
+  );
 }
 
 /**
@@ -1453,6 +1485,32 @@ async function fetchKeySetOnce(scenario: SigninScenario): Promise<void> {
     scenario.set(mintUserToken(scenario.key, "user-b")),
   ).resolves.toEqual({ outcome: "refused", reason: "subject-mismatch" });
   expect(scenario.jwksFetches()).toBe(1);
+}
+
+/**
+ * Window 101's sign-in is held, then window 102 sets `other`, a bearer main's
+ * credentials do not carry: it is answered pending without being held.
+ */
+async function holdThenSetUnheldBearer(
+  scenario: SigninScenario,
+  other: string,
+): Promise<CapturingWindow> {
+  const windowB = scenario.addWindow(102);
+  await expect(scenario.set(scenario.token)).resolves.toMatchObject({
+    outcome: "pending",
+    heldLocally: true,
+  });
+  await expect(scenario.setFromWindow(102, other)).resolves.toEqual({
+    outcome: "pending",
+    reason: "key-source-unavailable",
+    heldLocally: false,
+  });
+  expect(scenario.authSession.get()).toMatchObject({
+    status: "unverified",
+    token: scenario.token,
+    verified: false,
+  });
+  return windowB;
 }
 
 describe("a sign-in main cannot check yet", () => {
@@ -1590,15 +1648,18 @@ describe("a sign-in main cannot check yet", () => {
     }
   });
 
-  it("stops checking a bearer the renderer has revoked", async () => {
+  it("stops checking a bearer the renderer has revoked, and leaves its local hold in place", async () => {
     const scenario = await setUpSigninScenario();
     try {
       await expect(scenario.set(scenario.token)).resolves.toMatchObject({
         outcome: "pending",
       });
+      await awaitSelectionTarget(scenario.window, LOCAL_HOST_ID);
 
       await scenario.revoke(scenario.token);
       scenario.jwks.serve([scenario.key]);
+      await scenario.advancePastKeyFetchCooldown();
+      await scenario.advancePastKeyFetchCooldown();
       await scenario.advancePastKeyFetchCooldown();
 
       expect(scenario.jwksFetches()).toBe(1);
@@ -1607,6 +1668,10 @@ describe("a sign-in main cannot check yet", () => {
         token: scenario.token,
         verified: false,
       });
+      expect(refusalsSeenBy(scenario.window)).toEqual([]);
+      expect((await attachToRunningLocalHost()).effectiveHostId).toBe(
+        LOCAL_HOST_ID,
+      );
     } finally {
       await scenario.dispose();
     }
@@ -1994,6 +2059,487 @@ describe("a sign-in main cannot check yet", () => {
         ),
         ...messagesOn(windowB, RunnerHostEvent.authSessionPendingRefused),
       ]).toEqual([]);
+    } finally {
+      await scenario.dispose();
+    }
+  });
+
+  it("keeps checking a held bearer when a sibling window's set is refused", async () => {
+    const scenario = await setUpSigninScenario();
+    try {
+      scenario.addWindow(102);
+      await expect(scenario.set(scenario.token)).resolves.toMatchObject({
+        outcome: "pending",
+        heldLocally: true,
+      });
+
+      await expect(scenario.setFromWindow(102, "not-a-jwt")).resolves.toEqual({
+        outcome: "refused",
+        reason: "malformed-token",
+      });
+      expect(scenario.authSession.get()).toMatchObject({
+        status: "unverified",
+        token: scenario.token,
+        verified: false,
+      });
+
+      scenario.jwks.serve([scenario.key]);
+      await scenario.advancePastKeyFetchCooldown();
+
+      expect(scenario.jwksFetches()).toBe(2);
+      await vi.waitFor(() => {
+        expect(scenario.authSession.get()).toMatchObject({
+          status: "signed-in",
+          token: scenario.token,
+          verified: true,
+        });
+      });
+    } finally {
+      await scenario.dispose();
+    }
+  });
+
+  it("ends the hold and tells every window when a repeated set of the held bearer gets a verdict", async () => {
+    const scenario = await setUpSigninScenario();
+    try {
+      const windowB = scenario.addWindow(102);
+      const windows = [scenario.window, windowB];
+      await expect(scenario.set(scenario.token)).resolves.toMatchObject({
+        outcome: "pending",
+        heldLocally: true,
+      });
+      const changesBefore = windows.map(
+        (window) =>
+          messagesOn(window, RunnerHostEvent.authSessionChange).length,
+      );
+
+      scenario.jwks.serve([createSigningKey("kid-1", "bearer")]);
+      scenario.moveClockPastKeyFetchCooldown();
+      await expect(
+        scenario.setFromWindow(102, scenario.token),
+      ).resolves.toEqual({ outcome: "refused", reason: "bad-signature" });
+
+      expect(scenario.authSession.get()).toMatchObject({
+        status: "signed-out",
+        token: null,
+        verified: false,
+      });
+      for (const window of windows) {
+        await vi.waitFor(() => {
+          expect(
+            messagesOn(window, RunnerHostEvent.authSessionPendingRefused).map(
+              (message) => message.payload,
+            ),
+          ).toEqual([{ token: scenario.token, reason: "bad-signature" }]);
+        });
+      }
+      windows.forEach((window, index) => {
+        expect(
+          messagesOn(window, RunnerHostEvent.authSessionChange),
+        ).toHaveLength(changesBefore[index]);
+      });
+
+      await scenario.advancePastKeyFetchCooldown();
+      expect(scenario.jwksFetches()).toBe(2);
+      for (const window of windows) {
+        expect(
+          messagesOn(window, RunnerHostEvent.authSessionPendingRefused),
+        ).toHaveLength(1);
+      }
+    } finally {
+      await scenario.dispose();
+    }
+  });
+
+  it("checks a bearer again when a local restore holds it after a verdict", async () => {
+    const scenario = await setUpSigninScenario();
+    try {
+      await expect(scenario.set(scenario.token)).resolves.toMatchObject({
+        outcome: "pending",
+        heldLocally: true,
+      });
+      scenario.jwks.serve([createSigningKey("kid-1", "bearer")]);
+      await scenario.advancePastKeyFetchCooldown();
+      await vi.waitFor(() => {
+        expect(
+          messagesOn(
+            scenario.window,
+            RunnerHostEvent.authSessionPendingRefused,
+          ),
+        ).toHaveLength(1);
+      });
+      expect(scenario.authSession.get()).toMatchObject({
+        status: "signed-out",
+        token: null,
+        verified: false,
+      });
+
+      await expect(scenario.restoreLocal(scenario.token)).resolves.toBe(
+        "restored",
+      );
+      expect(scenario.authSession.get()).toMatchObject({
+        status: "unverified",
+        token: scenario.token,
+        verified: false,
+      });
+
+      await scenario.advancePastKeyFetchCooldown();
+
+      await vi.waitFor(() => {
+        expect(refusalsSeenBy(scenario.window)).toEqual([
+          { token: scenario.token, reason: "bad-signature" },
+          { token: scenario.token, reason: "bad-signature" },
+        ]);
+      });
+      expect(scenario.authSession.get()).toMatchObject({
+        status: "signed-out",
+        token: null,
+        verified: false,
+      });
+      expect(scenario.jwksFetches()).toBe(2);
+    } finally {
+      await scenario.dispose();
+    }
+  });
+
+  it("ends a sign-in main was not holding when a later set of the same bearer gets a verdict", async () => {
+    const scenario = await setUpSigninScenario();
+    try {
+      const windowB = scenario.addWindow(102);
+      const windows = [scenario.window, windowB];
+      scenario.storeHolds("another-token");
+      await expect(scenario.set(scenario.token)).resolves.toMatchObject({
+        outcome: "pending",
+        heldLocally: false,
+      });
+      const changesBefore = windows.map(
+        (window) =>
+          messagesOn(window, RunnerHostEvent.authSessionChange).length,
+      );
+
+      scenario.jwks.serve([createSigningKey("kid-1", "bearer")]);
+      scenario.moveClockPastKeyFetchCooldown();
+      await expect(
+        scenario.setFromWindow(102, scenario.token),
+      ).resolves.toEqual({ outcome: "refused", reason: "bad-signature" });
+
+      expect(scenario.authSession.get()).toMatchObject({
+        status: "signed-out",
+        token: null,
+        verified: false,
+      });
+      for (const window of windows) {
+        await vi.waitFor(() => {
+          expect(refusalsSeenBy(window)).toEqual([
+            { token: scenario.token, reason: "bad-signature" },
+          ]);
+        });
+      }
+      windows.forEach((window, index) => {
+        expect(
+          messagesOn(window, RunnerHostEvent.authSessionChange),
+        ).toHaveLength(changesBefore[index]);
+      });
+
+      await scenario.advancePastKeyFetchCooldown();
+      expect(scenario.jwksFetches()).toBe(2);
+      for (const window of windows) {
+        expect(refusalsSeenBy(window)).toHaveLength(1);
+      }
+    } finally {
+      await scenario.dispose();
+    }
+  });
+
+  it("holds the first bearer and checks a newer one main cannot hold, and ends on the newer one when it verifies", async () => {
+    const scenario = await setUpSigninScenario();
+    try {
+      const newer = mintTokenLasting(
+        scenario.key,
+        WINDOW_USER_ID,
+        2 * 60 * 60_000,
+      );
+      await holdThenSetUnheldBearer(scenario, newer);
+
+      scenario.jwks.serve([scenario.key]);
+      await scenario.advancePastKeyFetchCooldown();
+
+      await vi.waitFor(() => {
+        expect(scenario.authSession.get()).toMatchObject({
+          status: "signed-in",
+          token: newer,
+          verified: true,
+        });
+      });
+      expect(scenario.jwksFetches()).toBe(2);
+      expect(refusalsSeenBy(scenario.window)).toEqual([]);
+    } finally {
+      await scenario.dispose();
+    }
+  });
+
+  it("falls back to the held bearer when the newer one main cannot hold gets a verdict", async () => {
+    const scenario = await setUpSigninScenario();
+    try {
+      const newer = mintUserToken(
+        createSigningKey("kid-2", "bearer"),
+        WINDOW_USER_ID,
+      );
+      const windowB = await holdThenSetUnheldBearer(scenario, newer);
+
+      scenario.jwks.serve([scenario.key]);
+      await scenario.advancePastKeyFetchCooldown();
+
+      await vi.waitFor(() => {
+        expect(scenario.authSession.get()).toMatchObject({
+          status: "signed-in",
+          token: scenario.token,
+          verified: true,
+        });
+      });
+      for (const window of [scenario.window, windowB]) {
+        expect(refusalsSeenBy(window)).toEqual([
+          { token: newer, reason: "unknown-signing-key" },
+        ]);
+      }
+      expect(scenario.jwksFetches()).toBe(2);
+    } finally {
+      await scenario.dispose();
+    }
+  });
+
+  it("moves the hold to a newer bearer main's credentials carry, and checks only that one", async () => {
+    const scenario = await setUpSigninScenario();
+    try {
+      const windowB = scenario.addWindow(102);
+      const heldFirst = mintUserToken(
+        createSigningKey("kid-2", "bearer"),
+        WINDOW_USER_ID,
+      );
+      scenario.storeHolds(heldFirst);
+      await expect(scenario.set(heldFirst)).resolves.toMatchObject({
+        outcome: "pending",
+        heldLocally: true,
+      });
+
+      scenario.storeHolds(scenario.token);
+      await expect(
+        scenario.setFromWindow(102, scenario.token),
+      ).resolves.toMatchObject({ outcome: "pending", heldLocally: true });
+      expect(scenario.authSession.get()).toMatchObject({
+        status: "unverified",
+        token: scenario.token,
+        verified: false,
+      });
+
+      scenario.jwks.serve([scenario.key]);
+      await scenario.advancePastKeyFetchCooldown();
+
+      await vi.waitFor(() => {
+        expect(scenario.authSession.get()).toMatchObject({
+          status: "signed-in",
+          token: scenario.token,
+          verified: true,
+        });
+      });
+      await scenario.advancePastKeyFetchCooldown();
+      expect(scenario.jwksFetches()).toBe(2);
+      for (const window of [scenario.window, windowB]) {
+        expect(refusalsSeenBy(window)).toEqual([]);
+      }
+    } finally {
+      await scenario.dispose();
+    }
+  });
+
+  it("accepts the window's own set of a restored bearer within the cooldown, before any check has fetched", async () => {
+    const scenario = await setUpSigninScenario();
+    try {
+      scenario.jwks.serve([scenario.key]);
+      await expect(scenario.restoreLocal(scenario.token)).resolves.toBe(
+        "restored",
+      );
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(scenario.jwksFetches()).toBe(0);
+
+      await expect(scenario.set(scenario.token)).resolves.toEqual({
+        outcome: "accepted",
+      });
+
+      expect(scenario.authSession.get()).toMatchObject({
+        status: "signed-in",
+        token: scenario.token,
+        verified: true,
+      });
+      await scenario.advancePastKeyFetchCooldown();
+      expect(scenario.jwksFetches()).toBe(1);
+      expect(refusalsSeenBy(scenario.window)).toEqual([]);
+    } finally {
+      await scenario.dispose();
+    }
+  });
+
+  it("keeps a restored hold unverified while its bearer checks out, and withdraws it once the bearer expires", async () => {
+    const scenario = await setUpSigninScenario();
+    try {
+      await fetchKeySetOnce(scenario);
+      const token = mintTokenLasting(scenario.key, WINDOW_USER_ID, 80_000);
+      scenario.storeHolds(token);
+      await expect(scenario.restoreLocal(token)).resolves.toBe("restored");
+
+      await scenario.advancePastKeyFetchCooldown();
+      expect(scenario.authSession.get()).toMatchObject({
+        status: "unverified",
+        token,
+        verified: false,
+      });
+      expect(refusalsSeenBy(scenario.window)).toEqual([]);
+
+      await scenario.advancePastKeyFetchCooldown();
+      expect(scenario.authSession.get()).toMatchObject({
+        status: "signed-out",
+        token: null,
+        verified: false,
+      });
+      expect(refusalsSeenBy(scenario.window)).toEqual([
+        { token, reason: "expired" },
+      ]);
+      expect(scenario.jwksFetches()).toBe(1);
+    } finally {
+      await scenario.dispose();
+    }
+  });
+
+  it("supersedes a sign-in's promotion when a restore holds another pair, and keeps that hold unverified", async () => {
+    const scenario = await setUpSigninScenario();
+    try {
+      const stored = mintTokenLasting(
+        scenario.key,
+        WINDOW_USER_ID,
+        2 * 60 * 60_000,
+      );
+      scenario.storeHolds(stored);
+      await expect(scenario.set(scenario.token)).resolves.toMatchObject({
+        outcome: "pending",
+        heldLocally: false,
+      });
+      await expect(scenario.restoreLocal(stored)).resolves.toBe("restored");
+      const setVerified = vi.spyOn(scenario.authSession, "setVerified");
+
+      scenario.jwks.serve([scenario.key]);
+      await scenario.advancePastKeyFetchCooldown();
+
+      await vi.waitFor(() => {
+        expect(setVerified).toHaveBeenCalled();
+      });
+      expect(setVerified).toHaveLastReturnedWith(false);
+      expect(scenario.authSession.get()).toMatchObject({
+        status: "unverified",
+        token: stored,
+        verified: false,
+      });
+
+      await scenario.advancePastKeyFetchCooldown();
+      expect(scenario.authSession.get()).toMatchObject({
+        status: "unverified",
+        token: stored,
+        verified: false,
+      });
+      expect(refusalsSeenBy(scenario.window)).toEqual([]);
+    } finally {
+      await scenario.dispose();
+    }
+  });
+
+  it("leaves a verified session alone when a bearer of the same user that main could not check gets a verdict", async () => {
+    const scenario = await setUpSigninScenario();
+    try {
+      const windowB = scenario.addWindow(102);
+      const windows = [scenario.window, windowB];
+      scenario.jwks.serve([scenario.key]);
+      await expect(scenario.set(scenario.token)).resolves.toEqual({
+        outcome: "accepted",
+      });
+      const other = mintUserToken(
+        createSigningKey("kid-2", "bearer"),
+        WINDOW_USER_ID,
+      );
+      scenario.storeHolds(other);
+      await expect(scenario.setFromWindow(102, other)).resolves.toEqual({
+        outcome: "pending",
+        reason: "signing-key-unconfirmed",
+        heldLocally: false,
+      });
+      const changesBefore = windows.map(
+        (window) =>
+          messagesOn(window, RunnerHostEvent.authSessionChange).length,
+      );
+
+      await scenario.advancePastKeyFetchCooldown();
+
+      for (const window of windows) {
+        await vi.waitFor(() => {
+          expect(refusalsSeenBy(window)).toEqual([
+            { token: other, reason: "unknown-signing-key" },
+          ]);
+        });
+      }
+      expect(scenario.authSession.get()).toMatchObject({
+        status: "signed-in",
+        token: scenario.token,
+        verified: true,
+      });
+      windows.forEach((window, index) => {
+        expect(
+          messagesOn(window, RunnerHostEvent.authSessionChange),
+        ).toHaveLength(changesBefore[index]);
+      });
+    } finally {
+      await scenario.dispose();
+    }
+  });
+
+  it("keeps holding and checking a bearer when a set of that bearer for another user is refused", async () => {
+    const scenario = await setUpSigninScenario();
+    try {
+      const windowB = scenario.addWindow(102);
+      await expect(scenario.set(scenario.token)).resolves.toMatchObject({
+        outcome: "pending",
+        heldLocally: true,
+      });
+      await awaitSelectionTarget(scenario.window, LOCAL_HOST_ID);
+
+      scenario.jwks.serve([scenario.key]);
+      scenario.moveClockPastKeyFetchCooldown();
+      await expect(
+        scenario.setFromWindowAsUser(102, "user-b", scenario.token),
+      ).resolves.toEqual({ outcome: "refused", reason: "subject-mismatch" });
+
+      for (const window of [scenario.window, windowB]) {
+        expect(refusalsSeenBy(window)).toEqual([]);
+      }
+      expect(scenario.authSession.get()).toMatchObject({
+        status: "unverified",
+        token: scenario.token,
+        verified: false,
+      });
+      expect((await attachToRunningLocalHost()).effectiveHostId).toBe(
+        LOCAL_HOST_ID,
+      );
+
+      await scenario.advancePastKeyFetchCooldown();
+
+      await vi.waitFor(() => {
+        expect(scenario.authSession.get()).toMatchObject({
+          status: "signed-in",
+          token: scenario.token,
+          verified: true,
+        });
+      });
+      expect(scenario.jwksFetches()).toBe(2);
+      for (const window of [scenario.window, windowB]) {
+        expect(refusalsSeenBy(window)).toEqual([]);
+      }
     } finally {
       await scenario.dispose();
     }

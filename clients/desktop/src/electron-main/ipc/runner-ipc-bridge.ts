@@ -295,6 +295,8 @@ export interface IpcDesktopAuthSession {
    * `DesktopAuthSession.withdrawLocal`. `false` when main holds anything else.
    */
   withdrawLocal(token: string): boolean;
+  /** See `DesktopAuthSession.isBearerRevoked`. */
+  isBearerRevoked(token: string): boolean;
   on(event: "change", listener: IpcAuthSessionChangeListener): void;
   off(event: "change", listener: IpcAuthSessionChangeListener): void;
 }

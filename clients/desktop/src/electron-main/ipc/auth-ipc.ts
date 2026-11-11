@@ -62,7 +62,10 @@ import type {
   DesktopAuthSessionSnapshot,
   DesktopAuthVerificationRevoked,
 } from "../../ipc-contracts/window-types";
-import { createDesktopBearerVerifier } from "../auth/bearer-verifier";
+import {
+  createDesktopBearerVerifier,
+  JWKS_REFETCH_COOLDOWN_MS,
+} from "../auth/bearer-verifier";
 import type { DesktopAuthSessionChangeKind } from "../auth/desktop-auth-session";
 import {
   createCachedIapTokenProvider,
@@ -566,15 +569,26 @@ function registerSandboxControlPlaneIpc(bridge: RunnerIpcBridge): void {
 }
 
 /**
- * A sign-in main could not check yet. `generation` is the set's own, so a
- * successful re-check commits it under the same fences as the set would have.
+ * The session a window set, with the generation of that set: a re-check that
+ * verifies the bearer commits it under the same fences the set would have.
+ */
+interface PendingSessionPromotion {
+  readonly snapshot: DesktopAuthSessionSnapshot;
+  readonly generation: number;
+}
+
+/**
+ * A bearer main is still checking. `promotion` is null for a pair main holds
+ * from its own store for a window's local restore: no window claimed that
+ * session, and main's key check cannot see what a window's own validation
+ * with authn sees, so such a hold is only ever withdrawn, never promoted.
  */
 interface PendingSessionCheck {
-  readonly snapshot: DesktopAuthSessionSnapshot;
   readonly token: string;
   readonly userId: string;
-  readonly generation: number;
-  timer: NodeJS.Timeout | null;
+  readonly promotion: PendingSessionPromotion | null;
+  /** When the check may next run. */
+  dueAtMs: number;
 }
 
 /**
@@ -863,63 +877,193 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
     now: () => Date.now(),
   });
 
-  // The one sign-in main is still checking, for every window: the newest set
-  // replaces it, and a revoke of its bearer or the bridge's disposal drops it.
-  let pendingCheck: PendingSessionCheck | null = null;
+  // What main is still checking, at most two bearers:
+  // - `signInCheck`, the newest sign-in a set was answered `pending` for;
+  // - `holdCheck`, the bearer main holds unverified when it is not the
+  //   sign-in's (`reconcileHoldCheck`).
+  // A set ends them only once it commits something of its own: a verified
+  // session, a state with no bearer, or a newer pending sign-in. A refused or
+  // superseded set leaves them as they were.
+  let signInCheck: PendingSessionCheck | null = null;
+  let holdCheck: PendingSessionCheck | null = null;
+  let checkTimer: NodeJS.Timeout | null = null;
+  // One pass verifies the checks one after another, so the verifier's single
+  // fetch per cooldown serves both instead of answering the second
+  // "unreachable" while the first is still fetching.
+  let checkPassRunning = false;
+  let checksDisposed = false;
   // Counts sets as they arrive. A set whose number is no longer the newest
   // when its verification returns is an older intent and changes nothing.
   let setSequence = 0;
 
-  const dropPendingCheck = (): void => {
-    if (pendingCheck === null) return;
-    if (pendingCheck.timer !== null) clearTimeout(pendingCheck.timer);
-    pendingCheck = null;
-  };
-  bridge.disposeFns.push(dropPendingCheck);
+  const isLiveCheck = (check: PendingSessionCheck): boolean =>
+    check === signInCheck || check === holdCheck;
 
-  // Waits for the verifier's own cooldown: a check before it would answer
-  // from the same keys, and authn sees no more fetches than it does today.
-  function schedulePendingCheck(check: PendingSessionCheck): void {
-    const delayMs = Math.max(
-      0,
-      bearerVerifier.nextFetchAllowedAtMs() - Date.now(),
-    );
-    check.timer = setTimeout(() => {
-      check.timer = null;
-      void runPendingCheck(check);
-    }, delayMs);
+  const heldUnverified = (): {
+    readonly token: string;
+    readonly userId: string;
+  } | null => {
+    const held = bridge.authSession.get();
+    if (
+      held.status !== "unverified" ||
+      held.token === null ||
+      held.profile === null
+    ) {
+      return null;
+    }
+    return { token: held.token, userId: held.profile.userId };
+  };
+
+  // When a check that ran without a verdict may run again: at the verifier's
+  // next fetch, or a full cooldown on when that time has already passed (a
+  // check answered from the keys in hand), so a hold check never spins.
+  const nextCheckDueMs = (): number => {
+    const now = Date.now();
+    const allowed = bearerVerifier.nextFetchAllowedAtMs();
+    return allowed > now ? allowed : now + JWKS_REFETCH_COOLDOWN_MS;
+  };
+
+  // Main never holds a bearer it is not checking: the hold check follows the
+  // hold. The exception is a bearer a renderer revoked. Its window was demoted
+  // to local use on purpose (the local plane is kept on a terminal verdict
+  // loss), and a check could only end that.
+  function reconcileHoldCheck(): void {
+    const held = heldUnverified();
+    if (
+      held === null ||
+      held.token === signInCheck?.token ||
+      bridge.authSession.isBearerRevoked(held.token)
+    ) {
+      holdCheck = null;
+      return;
+    }
+    if (holdCheck?.token === held.token) return;
+    holdCheck = {
+      token: held.token,
+      userId: held.userId,
+      promotion: null,
+      // Never before a full cooldown: a window that restores locally at
+      // startup sends its own sign-in moments later, and a check fetching the
+      // keys meanwhile would answer that set "unreachable".
+      dueAtMs: Math.max(
+        bearerVerifier.nextFetchAllowedAtMs(),
+        Date.now() + JWKS_REFETCH_COOLDOWN_MS,
+      ),
+    };
   }
 
-  async function runPendingCheck(check: PendingSessionCheck): Promise<void> {
-    if (pendingCheck !== check) return;
-    const reason = await bearerVerifier.verify(check.token, check.userId);
-    if (pendingCheck !== check) return;
-    if (reason !== null && isPendingReason(reason)) {
-      schedulePendingCheck(check);
-      return;
+  function syncChecks(): void {
+    if (checksDisposed) return;
+    reconcileHoldCheck();
+    if (checkTimer !== null) {
+      clearTimeout(checkTimer);
+      checkTimer = null;
     }
-    pendingCheck = null;
-    if (reason !== null) {
-      // A verdict against the bearer: main stops holding it, so this machine's
-      // host is no longer selectable on it, and every window that wrote it is
-      // told, since the set that answered `pending` returned long ago.
-      const withdrawn = bridge.authSession.withdrawLocal(check.token);
-      log.warn("[auth] a pending auth session failed its check", {
-        reason,
-        withdrawn,
-      });
-      const refused: DesktopAuthSessionPendingRefused = {
-        token: check.token,
-        reason,
-      };
-      bridge.fanOut(RunnerHostEvent.authSessionPendingRefused, refused);
-      return;
-    }
-    const committed = bridge.authSession.setVerified(
-      check.snapshot,
-      check.generation,
+    // A running pass schedules the next one when it ends.
+    if (checkPassRunning) return;
+    const dues: number[] = [];
+    if (signInCheck !== null) dues.push(signInCheck.dueAtMs);
+    if (holdCheck !== null) dues.push(holdCheck.dueAtMs);
+    if (dues.length === 0) return;
+    checkTimer = setTimeout(
+      () => {
+        checkTimer = null;
+        void runCheckPass();
+      },
+      Math.max(0, Math.min(...dues) - Date.now()),
     );
-    log.info("[auth] verified a pending auth session", { committed });
+  }
+
+  // A committed verified session, or a committed state with no bearer, is
+  // what every window follows from here.
+  function endAllChecks(): void {
+    signInCheck = null;
+    holdCheck = null;
+    syncChecks();
+  }
+
+  bridge.disposeFns.push(() => {
+    checksDisposed = true;
+    signInCheck = null;
+    holdCheck = null;
+    if (checkTimer !== null) clearTimeout(checkTimer);
+    checkTimer = null;
+  });
+
+  const isHeldOrChecked = (token: string, userId: string): boolean => {
+    const matches = (
+      candidate: { readonly token: string; readonly userId: string } | null,
+    ): boolean =>
+      candidate !== null &&
+      candidate.token === token &&
+      candidate.userId === userId;
+    return (
+      matches(signInCheck) || matches(holdCheck) || matches(heldUnverified())
+    );
+  };
+
+  /**
+   * A verdict against `token`, from a re-check or from a set of the same pair:
+   * main stops holding it, so this machine's host is no longer selectable on
+   * it, stops checking it, and tells every window, since the sets that were
+   * answered `pending` for it returned long ago.
+   */
+  function applyVerdict(
+    token: string,
+    reason: DesktopAuthSessionRefusalReason,
+  ): void {
+    if (signInCheck?.token === token) signInCheck = null;
+    if (holdCheck?.token === token) holdCheck = null;
+    const withdrawn = bridge.authSession.withdrawLocal(token);
+    syncChecks();
+    log.warn("[auth] a pending auth session failed its check", {
+      reason,
+      withdrawn,
+    });
+    const refused: DesktopAuthSessionPendingRefused = { token, reason };
+    bridge.fanOut(RunnerHostEvent.authSessionPendingRefused, refused);
+  }
+
+  async function runCheckPass(): Promise<void> {
+    checkPassRunning = true;
+    try {
+      // The newest sign-in first: when both verify, it is the one promoted.
+      for (const check of [signInCheck, holdCheck]) {
+        if (check === null || !isLiveCheck(check)) continue;
+        if (check.dueAtMs > Date.now()) continue;
+        const reason = await bearerVerifier.verify(check.token, check.userId);
+        if (!isLiveCheck(check)) continue;
+        if (reason !== null && isPendingReason(reason)) {
+          check.dueAtMs = nextCheckDueMs();
+          continue;
+        }
+        if (reason !== null) {
+          applyVerdict(check.token, reason);
+          continue;
+        }
+        if (check.promotion === null) {
+          // Main's own hold of a stored pair stays a hold, checked again for a
+          // verdict and never promoted.
+          check.dueAtMs = nextCheckDueMs();
+          continue;
+        }
+        const committed = bridge.authSession.setVerified(
+          check.promotion.snapshot,
+          check.promotion.generation,
+        );
+        log.info("[auth] verified a pending auth session", { committed });
+        if (committed) {
+          endAllChecks();
+        } else if (signInCheck === check) {
+          signInCheck = null;
+        } else {
+          holdCheck = null;
+        }
+      }
+    } finally {
+      checkPassRunning = false;
+      syncChecks();
+    }
   }
 
   bridge.handleInvoke(
@@ -928,13 +1072,11 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
       const parsed = parseDesktopAuthSession(snapshot);
       setSequence += 1;
       const sequence = setSequence;
-      // Any set is the newest intent: a sign-out, another account or a newer
-      // bearer replaces the sign-in main was still checking.
-      dropPendingCheck();
       if (parsed.token === null || parsed.profile === null) {
         // No bearer to verify: signing-in and signed-out are the renderer's
         // own UX states and carry nothing main can be made to speak for.
         bridge.authSession.set(parsed);
+        endAllChecks();
         return { outcome: "accepted" };
       }
       const token = parsed.token;
@@ -969,15 +1111,23 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
         ) {
           return { outcome: "accepted" };
         }
-        const check: PendingSessionCheck = {
-          snapshot: parsed,
+        // The newest sign-in main could not check. The one it replaces goes on
+        // being checked, with its own promotion, while main still holds it.
+        const replaced = signInCheck;
+        signInCheck = {
           token,
           userId,
-          generation,
-          timer: null,
+          promotion: { snapshot: parsed, generation },
+          dueAtMs: bearerVerifier.nextFetchAllowedAtMs(),
         };
-        pendingCheck = check;
-        schedulePendingCheck(check);
+        if (
+          replaced !== null &&
+          replaced.token !== token &&
+          replaced.token === heldUnverified()?.token
+        ) {
+          holdCheck = replaced;
+        }
+        syncChecks();
         log.warn("[auth] could not check an auth session yet", {
           reason,
           heldLocally,
@@ -985,9 +1135,12 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
         return { outcome: "pending", reason, heldLocally };
       }
       if (reason !== null) {
-        // The previous session - possibly a verified one - stays exactly as it
-        // was. The reason is a statement about the token, never about who sent
-        // it, so it is the whole of what this line may carry.
+        // A verdict against a pair main is holding or checking ends it here,
+        // exactly as a re-check's would. Anything else - possibly a verified
+        // session - stays as it was. The reason is a statement about the
+        // token, never about who sent it, so it is the whole of what this line
+        // may carry.
+        if (isHeldOrChecked(token, userId)) applyVerdict(token, reason);
         log.warn("[auth] refused an unverifiable auth session", { reason });
         return { outcome: "refused", reason };
       }
@@ -996,9 +1149,7 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
       if (!bridge.authSession.setVerified(parsed, generation)) {
         return { outcome: "superseded" };
       }
-      // A sibling's set of this bearer that answered `pending` meanwhile has
-      // nothing left to check.
-      if (pendingCheck?.token === token) dropPendingCheck();
+      endAllChecks();
       return { outcome: "accepted" };
     },
   );
@@ -1015,9 +1166,13 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
     RunnerHostInvoke.authSessionRevoke,
     (_event, rejectedToken: unknown, revocation: unknown) => {
       if (typeof rejectedToken !== "string") return;
-      // A bearer authn has refused is never worth checking again.
-      if (pendingCheck?.token === rejectedToken) dropPendingCheck();
+      // Revoked first, so the hold check below skips the bearer.
       bridge.authSession.revokeVerification(rejectedToken);
+      // A bearer authn has refused is never worth checking again. A local hold
+      // of it stays (`reconcileHoldCheck`).
+      if (signInCheck?.token === rejectedToken) signInCheck = null;
+      if (holdCheck?.token === rejectedToken) holdCheck = null;
+      syncChecks();
       // Withdrawing main's verification protects what MAIN speaks for. It
       // does nothing for the other renderers: the fan-out above republishes
       // the same snapshot, every window's latch discards it as an echo, and
@@ -1040,6 +1195,9 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
     kind: DesktopAuthSessionChangeKind,
   ): void => {
     retainedStepUpCredential = null;
+    // A hold taken or moved by any path - a window's local restore included -
+    // is checked from here.
+    syncChecks();
     // Windows never ingest main's unverified hold, so its withdrawal is not
     // theirs to see either: as a status it would read as a sign-out. They hear
     // the verdict on `authSessionPendingRefused` instead.

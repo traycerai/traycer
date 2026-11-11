@@ -1008,9 +1008,10 @@ export interface DesktopWindowsBridge {
       dispose(): void;
     };
     /**
-     * Main's own re-check of a session it answered `pending` for reached a
-     * verdict against that bearer, fanned to every window. Main has stopped
-     * checking it and no longer holds it locally; a window that wrote it shows
+     * A bearer main was holding or checking after a `pending` answer reached a
+     * verdict, on main's re-check or on a later set of the same pair, fanned to
+     * every window. Main has stopped checking it and no longer holds it
+     * locally; a window that wrote it shows
      * the verdict as it would a refused set. Optional: a shell built before
      * `pending` existed never answers `pending`, so it has nothing to send.
      */

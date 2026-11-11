@@ -554,8 +554,9 @@ export const RunnerHostEvent = {
    */
   authVerificationRevoked: "runnerHost:event:windows:authSession:revoked",
   /**
-   * Main's own re-check of a PENDING session reached a verdict against its
-   * bearer (`DesktopAuthSessionPendingRefused`), fanned to every window.
+   * A bearer main was holding or checking after a PENDING answer reached a
+   * verdict - on main's own re-check, or on a later set of the same pair
+   * (`DesktopAuthSessionPendingRefused`) - fanned to every window.
    *
    * The set that reported `pending` returned long ago, so this is the only way
    * its sender learns the answer, and `authSessionChange` cannot carry it:

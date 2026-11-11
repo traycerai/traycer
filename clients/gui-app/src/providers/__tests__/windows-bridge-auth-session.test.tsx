@@ -7,13 +7,20 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import {
+  AUTH_FETCH_MAX_ATTEMPTS,
+  authRetryDelayMs,
+} from "@traycer-clients/shared/auth/auth-validation";
 import { Toaster } from "@/components/ui/sonner";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { WindowsBridgeAuthSessionBridge } from "@/providers/windows-bridge-auth-session";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
-import type {
-  AuthSessionSnapshot,
-  RevokedCloudAuthorization,
+import {
+  AuthService,
+  type AuthSessionSnapshot,
+  type RevokedCloudAuthorization,
 } from "@/lib/auth/auth-service";
 import type {
   DesktopLocalAuthSessionRestoreResult,
@@ -21,7 +28,7 @@ import type {
   DesktopAuthSessionSetResult,
   DesktopAuthSessionSnapshot,
 } from "@/lib/windows/types";
-import type { Mock } from "vitest";
+import type { Mock, MockInstance } from "vitest";
 
 vi.mock("next-themes", () => ({ useTheme: () => ({ theme: "dark" }) }));
 
@@ -85,11 +92,27 @@ const SIGNED_OUT_SNAPSHOT: AuthSessionSnapshot = {
 /** What the cross-window revoke channel says about a refusal. */
 type RevocationScope = "user-epoch" | null;
 
+/**
+ * What the AuthService's session becomes when it ingests a projection of
+ * main's session: `null` when it declines (validation failed, or the
+ * projection was dropped), else the snapshot it lands on. A real AuthService
+ * emits that snapshot synchronously, before `ingest` resolves.
+ */
+type IngestLanding = (
+  projection: AuthSessionSnapshot,
+) => AuthSessionSnapshot | null;
+
 type RenderWithFakesOptions = {
   readonly replayOutboundSnapshot?: AuthSessionSnapshot;
   readonly deferSet?: boolean;
   readonly omitRestoreLocal?: boolean;
   readonly omitPendingRefused?: boolean;
+  readonly authService?: AuthService;
+  readonly ingestLands?: IngestLanding;
+  readonly deferIngest?: boolean;
+  readonly restoreLocalAnswer?:
+    | DesktopLocalAuthSessionRestoreResult
+    | "rejects";
 };
 
 type AuthSessionSetResolution =
@@ -109,7 +132,10 @@ interface AuthSessionBridgeTestHarness {
     revocation: RevocationScope,
   ) => void;
   readonly get: Mock<() => Promise<DesktopAuthSessionSnapshot>>;
-  readonly ingest: Mock<(snapshot: AuthSessionSnapshot) => Promise<void>>;
+  readonly ingest: MockInstance<
+    (snapshot: AuthSessionSnapshot) => Promise<void>
+  >;
+  readonly landIngest: (landed: AuthSessionSnapshot | null) => void;
   readonly ingestRevoked: Mock<
     (rejectedToken: string, revocation: RevocationScope) => void
   >;
@@ -131,7 +157,7 @@ interface AuthSessionBridgeTestHarness {
       snapshot: DesktopAuthSessionSnapshot,
     ) => Promise<DesktopAuthSessionSetResult>
   >;
-  readonly signOut: Mock<() => Promise<void>>;
+  readonly signOut: MockInstance<() => Promise<void>>;
   readonly unmount: () => void;
 }
 
@@ -173,40 +199,64 @@ function renderWithFakes(
     pendingRefusedListener = null;
   });
 
-  const ingest = vi.fn((_snapshot: AuthSessionSnapshot): Promise<void> =>
-    Promise.resolve(),
-  );
+  const pendingIngests: Array<(landed: AuthSessionSnapshot | null) => void> =
+    [];
+  const realAuth = options.authService;
+  const ingest =
+    realAuth === undefined
+      ? vi.fn((projection: AuthSessionSnapshot): Promise<void> => {
+          if (options.deferIngest === true) {
+            return new Promise<void>((resolve) => {
+              pendingIngests.push((landed) => {
+                if (landed !== null) outboundListener?.(landed);
+                resolve();
+              });
+            });
+          }
+          const landed =
+            options.ingestLands === undefined
+              ? projection
+              : options.ingestLands(projection);
+          if (landed !== null) outboundListener?.(landed);
+          return Promise.resolve();
+        })
+      : vi.spyOn(realAuth, "ingestProjectedSessionSnapshot");
   const ingestRevoked = vi.fn(
     (_rejectedToken: string, _revocation: RevocationScope): void => undefined,
   );
-  const signOut = vi.fn(() => Promise.resolve());
-  mockUseAuthService.mockReturnValue({
-    onSessionSnapshotChange: (
-      handler: (snapshot: AuthSessionSnapshot) => void,
-    ) => {
-      outboundListener = handler;
-      if (options.replayOutboundSnapshot !== undefined) {
-        handler(options.replayOutboundSnapshot);
-      }
-      return {
-        dispose: outboundDispose,
-      };
+  const signOut =
+    realAuth === undefined
+      ? vi.fn(() => Promise.resolve())
+      : vi.spyOn(realAuth, "signOut");
+  mockUseAuthService.mockReturnValue(
+    realAuth ?? {
+      onSessionSnapshotChange: (
+        handler: (snapshot: AuthSessionSnapshot) => void,
+      ) => {
+        outboundListener = handler;
+        if (options.replayOutboundSnapshot !== undefined) {
+          handler(options.replayOutboundSnapshot);
+        }
+        return {
+          dispose: outboundDispose,
+        };
+      },
+      onCloudAuthorizationRevoked: (
+        handler: (revoked: RevokedCloudAuthorization) => void,
+      ) => {
+        revokedListener = handler;
+        return {
+          dispose: () => {
+            revokedListener = null;
+          },
+        };
+      },
+      getIdentityGeneration: () => 0,
+      ingestProjectedSessionSnapshot: ingest,
+      ingestCloudAuthorizationRevoked: ingestRevoked,
+      signOut,
     },
-    onCloudAuthorizationRevoked: (
-      handler: (revoked: RevokedCloudAuthorization) => void,
-    ) => {
-      revokedListener = handler;
-      return {
-        dispose: () => {
-          revokedListener = null;
-        },
-      };
-    },
-    getIdentityGeneration: () => 0,
-    ingestProjectedSessionSnapshot: ingest,
-    ingestCloudAuthorizationRevoked: ingestRevoked,
-    signOut,
-  });
+  );
 
   const revoke = vi.fn((_rejectedToken: string, _revocation: RevocationScope) =>
     Promise.resolve(),
@@ -233,8 +283,15 @@ function renderWithFakes(
   });
   const get = vi.fn(() => Promise.resolve(mainSnapshot));
   const restoreLocal = vi.fn(
-    (_expected: { readonly userId: string; readonly token: string }) =>
-      Promise.resolve("restored" as const),
+    (_expected: {
+      readonly userId: string;
+      readonly token: string;
+    }): Promise<DesktopLocalAuthSessionRestoreResult> => {
+      const answer = options.restoreLocalAnswer ?? "restored";
+      return answer === "rejects"
+        ? Promise.reject(new Error("ipc closed"))
+        : Promise.resolve(answer);
+    },
   );
   mockUseWindowsBridge.mockReturnValue({
     authSession: {
@@ -284,6 +341,11 @@ function renderWithFakes(
   return {
     get,
     ingest,
+    landIngest: (landed) => {
+      const land = pendingIngests.shift();
+      if (land === undefined) throw new Error("ingest is not pending");
+      act(() => land(landed));
+    },
     ingestRevoked,
     restoreLocal,
     inboundDispose,
@@ -550,21 +612,54 @@ interface VerdictSource {
   ) => Promise<void>;
 }
 
+const REFUSED_ANSWER: VerdictSource = {
+  label: "a refused answer",
+  result: { outcome: "refused", reason: "expired" },
+  reachVerdict: () => Promise.resolve(),
+};
+
+const LATE_VERDICT: VerdictSource = {
+  label: "a late re-check verdict",
+  result: PENDING_UNREACHABLE,
+  reachVerdict: async (harness) => {
+    harness.emitPendingRefused(SIGNED_IN_TOKEN, "expired");
+    await settle();
+  },
+};
+
 const VERDICT_SOURCES: readonly VerdictSource[] = [
+  REFUSED_ANSWER,
+  LATE_VERDICT,
+];
+
+const OWN_SNAPSHOT: AuthSessionSnapshot = {
+  ...SIGNED_IN_SNAPSHOT,
+  token: "own-flow-bearer-token",
+};
+
+const RESTORE_UNAVAILABLE =
+  "Traycer could not read your local session. Reload the window to try again.";
+
+const RESTORE_FAILURES = [
   {
-    label: "a refused answer",
-    result: { outcome: "refused", reason: "expired" },
-    reachVerdict: () => Promise.resolve(),
+    label: "cannot read its local session",
+    answer: "unavailable" as const,
+    title: RESTORE_UNAVAILABLE,
   },
   {
-    label: "a late re-check verdict",
-    result: PENDING_UNREACHABLE,
-    reachVerdict: async (harness) => {
-      harness.emitPendingRefused(SIGNED_IN_TOKEN, "expired");
-      await settle();
-    },
+    label: "cannot restore its local session",
+    answer: "rejects" as const,
+    title:
+      "Traycer could not restore your local session. Reload the window to try again.",
   },
 ];
+
+const FIRST_SIBLING_DESKTOP_SNAPSHOT: DesktopAuthSessionSnapshot = {
+  ...SIGNED_IN_DESKTOP_SNAPSHOT,
+  token: "first-sibling-bearer-token",
+};
+
+const declines: IngestLanding = () => null;
 
 const VERDICT_THEN_ADOPTION = VERDICT_SOURCES.flatMap((source) =>
   INBOUND_ADOPTIONS.map((adoption) => ({
@@ -576,6 +671,139 @@ const VERDICT_THEN_ADOPTION = VERDICT_SOURCES.flatMap((source) =>
   })),
 );
 
+const authServices: AuthService[] = [];
+
+function makeAuthService(): AuthService {
+  const host = new MockRunnerHost({
+    signInUrl:
+      "https://auth.traycer.ai/sign-in?redirect_uri=traycer%3A%2F%2Fauth",
+    authnBaseUrl: "http://localhost:5005",
+    localHost: null,
+    hosts: [],
+    workspaceFolderPickerPaths: undefined,
+    hasLocalHost: undefined,
+    traycerCli: undefined,
+  });
+  const service = new AuthService({ runnerHost: host });
+  authServices.push(service);
+  return service;
+}
+
+function authnUserResponse(): Response {
+  const { userId, userName, email } = SIGNED_IN_PROFILE;
+  const at = "2024-01-01T00:00:00.000Z";
+  return new Response(
+    JSON.stringify({
+      user: {
+        id: userId,
+        name: userName,
+        providerId: `gh-${userId}`,
+        providerHandle: userId,
+        providerType: "GITHUB",
+        email,
+        avatarUrl: null,
+        activatedAt: null,
+        createdAt: at,
+        updatedAt: at,
+        lastSeenAt: null,
+        privacyMode: false,
+        isLearningEnabled: true,
+      },
+      userSubscription: {
+        id: `sub-${userId}`,
+        userID: userId,
+        orgID: null,
+        teamID: null,
+        customerId: `cus-${userId}`,
+        createdAt: at,
+        updatedAt: at,
+        subscriptionExpiry: null,
+        trialEndsAt: null,
+        subscriptionStatus: "FREE",
+        hasPaymentMethod: false,
+        isInTrial: false,
+        rechargeRateSeconds: 0,
+      },
+      teamSubscriptions: [],
+      payAsYouGoUsage: { allowPayAsYouGo: false },
+    }),
+    {
+      status: 200,
+      headers: {
+        "Content-Type": "application/json",
+        "x-traycer-user-record-version": "2.0",
+      },
+    },
+  );
+}
+
+interface AuthnRequestInit {
+  readonly headers?: Record<string, string>;
+}
+
+/** Authn validates every bearer except `unreachableBearer`, which never answers. */
+function stubAuthn(unreachableBearer: string | null): void {
+  vi.stubGlobal(
+    "fetch",
+    (
+      _input: unknown,
+      init: AuthnRequestInit | undefined,
+    ): Promise<Response> => {
+      if (
+        unreachableBearer !== null &&
+        init?.headers?.Authorization === `Bearer ${unreachableBearer}`
+      ) {
+        return Promise.reject(new TypeError("Failed to fetch"));
+      }
+      return Promise.resolve(authnUserResponse());
+    },
+  );
+}
+
+async function letValidationRetriesElapse(): Promise<void> {
+  for (let retry = 1; retry < AUTH_FETCH_MAX_ATTEMPTS; retry += 1) {
+    await advanceTimers(authRetryDelayMs(retry));
+  }
+  await settle();
+}
+
+interface RealAuthWindow {
+  readonly service: AuthService;
+  readonly harness: AuthSessionBridgeTestHarness;
+}
+
+/**
+ * A window whose real AuthService holds the signed-in session and writes it
+ * to main, which answers `result`. Main's later fan-out of `ROTATED_TOKEN`
+ * reaches the AuthService, which validates it against `stubAuthn`.
+ */
+async function startWithRealAuth(
+  result: DesktopAuthSessionSetResult,
+  unreachableBearer: string | null,
+): Promise<RealAuthWindow> {
+  stubAuthn(unreachableBearer);
+  const service = makeAuthService();
+  await service.ingestProjectedSessionSnapshot(SIGNED_IN_SNAPSHOT);
+  const harness = renderWithFakes(result, { authService: service });
+  await settle();
+  return { service, harness };
+}
+
+async function startOnVerdict(
+  source: VerdictSource,
+  unreachableBearer: string | null,
+): Promise<RealAuthWindow> {
+  const window = await startWithRealAuth(source.result, unreachableBearer);
+  await source.reachVerdict(window.harness);
+  expectNoticeCopy(onlyNotice(), EXPIRED_COPY);
+  return window;
+}
+
+const ROTATED_DESKTOP_SNAPSHOT: DesktopAuthSessionSnapshot = {
+  ...SIGNED_IN_DESKTOP_SNAPSHOT,
+  token: ROTATED_TOKEN,
+};
+
 describe("<WindowsBridgeAuthSessionBridge />", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -586,6 +814,12 @@ describe("<WindowsBridgeAuthSessionBridge />", () => {
     toast.dismiss();
     await letToastsLeave();
     cleanup();
+    for (const service of authServices.splice(0)) {
+      service.dispose();
+    }
+    vi.unstubAllGlobals();
+    useAuthStore.getState().setSignedOut();
+    useAuthStore.getState().setCloudVerdictLoss("unreachable");
     vi.useRealTimers();
     vi.restoreAllMocks();
     useDesktopDialogStore.getState().close();
@@ -958,6 +1192,200 @@ describe("<WindowsBridgeAuthSessionBridge />", () => {
       expect(harness.ingest).toHaveBeenCalledExactlyOnceWith(adopted);
     },
   );
+
+  it.each(VERDICT_SOURCES)(
+    "keeps the verdict notice when this window's AuthService does not adopt the session main fans out: $label",
+    async (source) => {
+      const { service, harness } = await startOnVerdict(source, ROTATED_TOKEN);
+
+      harness.emitInbound(ROTATED_DESKTOP_SNAPSHOT);
+      await letValidationRetriesElapse();
+      await letToastsLeave();
+
+      expect(service.getCurrentSessionSnapshot().token).toBe(SIGNED_IN_TOKEN);
+      expect(harness.ingest).toHaveBeenCalledOnce();
+      const row = onlyNotice();
+      expectNoticeCopy(row, EXPIRED_COPY);
+      expect(
+        within(row).getByRole("button", { name: "Report issue" }),
+      ).toBeTruthy();
+      expect(hasSignOutAction(row)).toBe(true);
+    },
+  );
+
+  it.each(VERDICT_SOURCES)(
+    "dismisses the verdict notice once this window's AuthService adopts the session main fans out: $label",
+    async (source) => {
+      const { service, harness } = await startOnVerdict(source, null);
+
+      harness.emitInbound(ROTATED_DESKTOP_SNAPSHOT);
+      await letValidationRetriesElapse();
+      await letToastsLeave();
+
+      expect(service.getCurrentSessionSnapshot().token).toBe(ROTATED_TOKEN);
+      expect(harness.ingest).toHaveBeenCalledOnce();
+      expect(noticeRows()).toHaveLength(0);
+    },
+  );
+
+  it("dismisses a pending notice when main fans out a session this window does not adopt, and keeps the write latched", async () => {
+    const harness = renderWithFakes(PENDING_UNREACHABLE, {
+      ingestLands: declines,
+    });
+    await writeSession(harness, SIGNED_IN_SNAPSHOT);
+    expectNoticeCopy(onlyNotice(), UNREACHABLE_HELD_COPY);
+
+    harness.emitInbound(ROTATED_DESKTOP_SNAPSHOT);
+    await letToastsLeave();
+    expect(noticeRows()).toHaveLength(0);
+
+    await writeSession(harness, SIGNED_IN_SNAPSHOT);
+    expect(harness.set).toHaveBeenCalledTimes(1);
+
+    harness.emitPendingRefused(SIGNED_IN_TOKEN, "expired");
+    await settle();
+    expectNoticeCopy(onlyNotice(), EXPIRED_COPY);
+  });
+
+  it("shows no notice for an own pending answer that arrives after main fanned out another session", async () => {
+    const harness = renderWithFakes(
+      { outcome: "accepted" },
+      { deferSet: true, ingestLands: declines },
+    );
+    await writeSession(harness, SIGNED_IN_SNAPSHOT);
+
+    harness.emitInbound(ROTATED_DESKTOP_SNAPSHOT);
+    harness.resolveSet({ kind: "resolve", result: PENDING_UNREACHABLE });
+    await settle();
+
+    expect(noticeRows()).toHaveLength(0);
+  });
+
+  it.each(PENDING_AND_REFUSED)(
+    "shows nothing for a $label answer to a write that a session of main's this window adopted has superseded",
+    async ({ result }) => {
+      const harness = renderWithFakes(
+        { outcome: "accepted" },
+        { deferSet: true },
+      );
+      await writeSession(harness, SIGNED_IN_SNAPSHOT);
+      harness.emitInbound(ROTATED_DESKTOP_SNAPSHOT);
+      await settle();
+
+      await writeSession(harness, ROTATED_SNAPSHOT);
+      expect(harness.set).toHaveBeenCalledTimes(1);
+
+      harness.resolveSet({ kind: "resolve", result });
+      await settle();
+      expect(noticeRows()).toHaveLength(0);
+    },
+  );
+
+  it("dismisses a verdict notice and keeps the latch when this window's own session changes during a projection of main's", async () => {
+    const harness = renderWithFakes(REFUSED_ANSWER.result, {
+      ingestLands: () => OWN_SNAPSHOT,
+    });
+    await writeSession(harness, SIGNED_IN_SNAPSHOT);
+    expectNoticeCopy(onlyNotice(), EXPIRED_COPY);
+
+    harness.emitInbound(ROTATED_DESKTOP_SNAPSHOT);
+    await letToastsLeave();
+    expect(noticeRows()).toHaveLength(0);
+
+    await writeSession(harness, OWN_SNAPSHOT);
+    expect(harness.set).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the verdict notice when main fans out the bearer this window already holds", async () => {
+    const { service, harness } = await startOnVerdict(REFUSED_ANSWER, null);
+
+    harness.emitInbound(SIGNED_IN_DESKTOP_SNAPSHOT);
+    await letToastsLeave();
+
+    expect(service.getCurrentSessionSnapshot().token).toBe(SIGNED_IN_TOKEN);
+    expect(harness.ingest).toHaveBeenCalledOnce();
+    const row = onlyNotice();
+    expectNoticeCopy(row, EXPIRED_COPY);
+    expect(hasSignOutAction(row)).toBe(true);
+  });
+
+  it("keeps the local-restore warning through a fan-out from main that this window does not adopt", async () => {
+    const harness = renderWithFakes(PENDING_UNREACHABLE, {
+      ingestLands: declines,
+      restoreLocalAnswer: "unavailable",
+    });
+    await writeSession(harness, SIGNED_IN_SNAPSHOT);
+    expectNoticeCopy(onlyNotice(), UNREACHABLE_HELD_COPY);
+
+    harness.emitOutbound(UNVERIFIED_SNAPSHOT);
+    await settle();
+    expect(within(onlyNotice()).getByText(RESTORE_UNAVAILABLE)).toBeTruthy();
+
+    harness.emitInbound(ROTATED_DESKTOP_SNAPSHOT);
+    await letToastsLeave();
+
+    expect(within(onlyNotice()).getByText(RESTORE_UNAVAILABLE)).toBeTruthy();
+  });
+
+  it.each(RESTORE_FAILURES)(
+    "replaces the pending notice entirely with the local-restore warning when this window $label",
+    async ({ answer, title }) => {
+      const harness = renderWithFakes(PENDING_UNREACHABLE, {
+        restoreLocalAnswer: answer,
+      });
+      await writeSession(harness, SIGNED_IN_SNAPSHOT);
+      expectNoticeCopy(onlyNotice(), UNREACHABLE_HELD_COPY);
+
+      harness.emitOutbound(UNVERIFIED_SNAPSHOT);
+      await settle();
+
+      const row = onlyNotice();
+      expect(within(row).getByText(title)).toBeTruthy();
+      expect(
+        within(row).queryByText(UNREACHABLE_HELD_COPY.description),
+      ).toBeNull();
+      expect(within(row).queryByText(UNREACHABLE_HELD_COPY.code)).toBeNull();
+      expect(
+        within(row).queryByRole("button", { name: "Report issue" }),
+      ).toBeNull();
+    },
+  );
+
+  it("writes nothing back and moves the latch when a later projection lands after an earlier one has settled", async () => {
+    const harness = renderWithFakes(
+      { outcome: "accepted" },
+      { deferIngest: true },
+    );
+    await writeSession(harness, SIGNED_IN_SNAPSHOT);
+    harness.emitInbound(FIRST_SIBLING_DESKTOP_SNAPSHOT);
+    harness.emitInbound(ROTATED_DESKTOP_SNAPSHOT);
+
+    harness.landIngest(null);
+    await settle();
+    harness.landIngest(ROTATED_SNAPSHOT);
+    await settle();
+
+    expect(harness.set.mock.calls.map(([snapshot]) => snapshot.token)).toEqual([
+      SIGNED_IN_TOKEN,
+    ]);
+    await writeSession(harness, ROTATED_SNAPSHOT);
+    expect(harness.set).toHaveBeenCalledTimes(1);
+  });
+
+  it("dismisses a pending notice when main fans out a session this window's AuthService cannot validate, and the window keeps its own", async () => {
+    const { service, harness } = await startWithRealAuth(
+      PENDING_UNREACHABLE,
+      ROTATED_TOKEN,
+    );
+    expectNoticeCopy(onlyNotice(), UNREACHABLE_HELD_COPY);
+
+    harness.emitInbound(ROTATED_DESKTOP_SNAPSHOT);
+    await letValidationRetriesElapse();
+    await letToastsLeave();
+
+    expect(service.getCurrentSessionSnapshot().token).toBe(SIGNED_IN_TOKEN);
+    expect(noticeRows()).toHaveLength(0);
+  });
 
   it("shows the pending notice on a shell with no re-check channel", async () => {
     const harness = renderWithFakes(PENDING_UNREACHABLE, {

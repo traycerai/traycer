@@ -44,7 +44,7 @@ const JWKS_PATH = "/api/jwks";
 /** Same tolerances the host runs with. */
 const CLOCK_TOLERANCE_MS = 30_000;
 const JWKS_MAX_AGE_MS = 10 * 60_000;
-const JWKS_REFETCH_COOLDOWN_MS = 60_000;
+export const JWKS_REFETCH_COOLDOWN_MS = 60_000;
 const JWKS_TIMEOUT_MS = 3_000;
 
 export type FetchLike = (input: string, init: RequestInit) => Promise<Response>;

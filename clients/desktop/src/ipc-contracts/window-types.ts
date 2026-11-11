@@ -181,10 +181,11 @@ export type DesktopAuthSessionRefusalReason =
   | "subject-mismatch";
 
 /**
- * The payload of `authSessionPendingRefused`: main's re-check of a session it
- * had answered `pending` for reached a verdict against this bearer. Main no
- * longer holds the bearer locally and has stopped checking it; each window
- * that wrote it shows the verdict as it would a refused set.
+ * The payload of `authSessionPendingRefused`: a bearer main was holding or
+ * checking after a `pending` answer reached a verdict, on main's re-check or on
+ * a later set of the same pair. Main no longer holds the bearer locally and
+ * has stopped checking it; each window that wrote it shows the verdict as it
+ * would a refused set.
  */
 export interface DesktopAuthSessionPendingRefused {
   readonly token: string;

@@ -630,9 +630,10 @@ export interface AuthSessionBridgeSurface {
     handler: (rejectedToken: string, revocation: "user-epoch" | null) => void,
   ): Disposable;
   /**
-   * Main's re-check of a session it answered `pending` for reached a verdict
-   * against that bearer, fanned to every window. Each window applies it only
-   * to the session it wrote, as it would a refused set.
+   * A bearer main was holding or checking after a `pending` answer reached a
+   * verdict, on main's re-check or on a later set of the same pair, fanned to
+   * every window. Each window applies it only to the session it wrote, as it
+   * would a refused set.
    */
   onPendingRefused(
     handler: (token: string, reason: DesktopAuthSessionRefusalReason) => void,

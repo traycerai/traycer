@@ -250,6 +250,15 @@ export class DesktopAuthSession {
     return true;
   }
 
+  /**
+   * Whether a renderer revoked this bearer and the revocation still matters
+   * (`revokedBearers`). Main holds such a bearer for local use only: its
+   * window was demoted on purpose, so main does not check it.
+   */
+  isBearerRevoked(token: string): boolean {
+    return this.isRevoked(token, Date.now());
+  }
+
   private retainRevocation(rejectedToken: string, now: number): void {
     this.pruneRevocations(now);
     const expiresAt = readBearerExpiryMs(rejectedToken);
