@@ -1,4 +1,8 @@
 import {
+  createCliLocalOpenAuth,
+  localTeamAdmissionCliError,
+} from "../internal/local-open-auth";
+import {
   hostStreamRpcRegistry,
   type HostStreamRpcRegistry,
 } from "@traycer/protocol/host/registry";
@@ -16,7 +20,6 @@ import { createWhatwgStreamWebSocketFactory } from "../../../shared/host-transpo
 import type {
   IStreamSession,
   StreamCloseReason,
-  StreamConnectionStatus,
 } from "../../../shared/host-transport/i-stream-session";
 import type { HostTransportEndpoint } from "../../../shared/host-transport/ws-rpc-client";
 import { WsStreamClient } from "../../../shared/host-transport/ws-stream-client";
@@ -354,6 +357,7 @@ export async function provisionInstalledHostCredential(
     };
 
     const activeClient = new WsStreamClient<HostStreamRpcRegistry>({
+      localOpenAuth: createCliLocalOpenAuth(options.auth.authnBaseUrl),
       registry: hostStreamRpcRegistry,
       // `null`, and not a stale read of the slot below: `endpoint` is declared
       // `null` here and filled in by the poller, so at CONSTRUCTION this run
@@ -614,9 +618,10 @@ export async function provisionInstalledHostCredential(
             "Host credential provisioning stream closed fatally",
             {
               environment: options.environment,
-              reason:
-                observation.reason !== null
-                  ? JSON.stringify(observation.reason)
+              reasonKind: observation.reason?.kind ?? null,
+              fatalCode:
+                observation.reason?.kind === "fatalError"
+                  ? observation.reason.details.code
                   : null,
             },
           );
@@ -630,6 +635,9 @@ export async function provisionInstalledHostCredential(
           // `unsupported` through the withheld-mint path instead.)
           const reason = observation.reason;
           if (reason !== null && reason.kind === "fatalError") {
+            const admissionError = localTeamAdmissionCliError(reason.details);
+            if (admissionError !== null)
+              return { kind: "error", message: admissionError.message };
             if (reason.details.code === "INCOMPATIBLE") {
               return { kind: "unsupported" };
             }
@@ -778,32 +786,40 @@ function observeNextAck(
       // handoff on this very session.
       finish({ kind: "state", state }, false);
     });
-    session.onStatusChange(
-      (status: StreamConnectionStatus, reason: StreamCloseReason | null) => {
-        if (status === "open") {
-          // A state-carrying ack settles this promise BEFORE `open` fires
-          // (`handleOpenAckFrame` reports the credential state first, ahead
-          // of the version check), so arming the grace here only matters for
-          // an ack that carried no state - it resolves `opened-silent` once
-          // the grace passes without one.
-          if (silentTimer === null && !settled) {
-            silentTimer = setTimeout(() => {
-              finish({ kind: "opened-silent" }, true);
-            }, SILENT_ACK_GRACE_MS);
-          }
-          return;
+    session.onStatusChange((status, reason, retryCause) => {
+      if (retryCause && localTeamAdmissionCliError(retryCause) !== null) {
+        finish(
+          {
+            kind: "fatal",
+            reason: { kind: "fatalError", details: retryCause },
+          },
+          true,
+        );
+        return;
+      }
+      if (status === "open") {
+        // A state-carrying ack settles this promise BEFORE `open` fires
+        // (`handleOpenAckFrame` reports the credential state first, ahead
+        // of the version check), so arming the grace here only matters for
+        // an ack that carried no state - it resolves `opened-silent` once
+        // the grace passes without one.
+        if (silentTimer === null && !settled) {
+          silentTimer = setTimeout(() => {
+            finish({ kind: "opened-silent" }, true);
+          }, SILENT_ACK_GRACE_MS);
         }
-        if (
-          status === "closed" &&
-          reason !== null &&
-          reason.kind === "fatalError"
-        ) {
-          finish({ kind: "fatal", reason }, true);
-        }
-        // `connecting` / `reconnecting` / a non-fatal close: the client keeps
-        // retrying through the deadline - the host is likely still booting.
-      },
-    );
+        return;
+      }
+      if (
+        status === "closed" &&
+        reason !== null &&
+        reason.kind === "fatalError"
+      ) {
+        finish({ kind: "fatal", reason }, true);
+      }
+      // `connecting` / `reconnecting` / a non-fatal close: the client keeps
+      // retrying through the deadline - the host is likely still booting.
+    });
   });
 }
 

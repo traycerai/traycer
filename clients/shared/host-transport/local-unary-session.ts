@@ -67,6 +67,7 @@ export interface AttachedPersistentSocket {
   readonly clientManifest: ConnectionManifest;
   readonly hostManifest: ConnectionManifest;
   readonly idempotency: boolean;
+  readonly usesSessionGrant?: boolean;
 }
 
 export interface LocalUnarySessionOptions<
@@ -183,6 +184,7 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
   private closeWhenIdle = false;
   /** True while `pump` is dispatching, so `settle` cannot re-enter the loop. */
   private pumping = false;
+  private usesSessionGrant = false;
   /** Set around a close this session initiated, so that close is not a peer drop. */
   private suppressClose = false;
   /** A fatal delivered before any call was queued. The adopter throws this instead of publishing. */
@@ -218,6 +220,7 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
     this.clientManifest = attached.clientManifest;
     this.hostManifest = attached.hostManifest;
     this.idempotency = attached.idempotency;
+    this.usesSessionGrant = attached.usesSessionGrant === true;
     this.suppressClose = false;
   }
 
@@ -488,9 +491,13 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
         }),
       };
     }
-    let token: string;
+    let token: string | undefined;
     try {
-      token = readBearer(call.options.authority, call.requestId, call.method);
+      // A team socket already spent its grant at OPEN. Its admitted context
+      // serves every request; neither a replayed grant nor a user bearer belongs here.
+      token = this.usesSessionGrant
+        ? undefined
+        : readBearer(call.options.authority, call.requestId, call.method);
     } catch (cause) {
       return { accepted: false, error: cause };
     }
@@ -547,7 +554,7 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
             schemaVersion: prepared.onWireVersion,
             params: prepared.onWirePayload,
             idempotencyKey: wireKey,
-            token,
+            ...(token === undefined ? {} : { token }),
             cloudAuthorized: call.options.authority.cloudAuthorized?.(),
           });
         } catch (cause) {

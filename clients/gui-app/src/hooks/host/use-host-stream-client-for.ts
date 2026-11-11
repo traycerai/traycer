@@ -1,3 +1,4 @@
+import { appLocalOpenAuthFor } from "@/lib/host/app-local-open-auth";
 import { useHostCredentialStatusStore } from "@/stores/host/host-credential-status-store";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
@@ -361,14 +362,15 @@ export function buildHostStreamClient(params: {
     return remoteTransport.streamClient;
   }
   // An allowlist, not a fall-through: the plain per-socket client presents
-  // the user bearer to whatever endpoint it is given, so only the kinds that
-  // ARE a local socket reach it.
+  // the initial credential to its named endpoint. Only local socket kinds
+  // reach it; a typed team challenge changes the next OPEN to a session grant.
   if (params.target.kind !== "local" && params.target.kind !== "mock") {
     return null;
   }
 
   return new WsStreamClient<HostStreamRpcRegistry>({
     registry: hostStreamRpcRegistry,
+    localOpenAuth: appLocalOpenAuthFor(params.authnBaseUrl),
     // THE SAME READ THE REMOTE BRANCH ABOVE IS GIVEN, now honoured on the local
     // leg too. It was previously consulted only for the remote attach-grant
     // mint, which made "local, and therefore indifferent to cloud

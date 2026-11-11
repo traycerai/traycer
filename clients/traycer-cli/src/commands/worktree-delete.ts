@@ -1,3 +1,7 @@
+import {
+  createCliLocalOpenAuth,
+  localTeamAdmissionCliError,
+} from "../internal/local-open-auth";
 import { randomUUID } from "node:crypto";
 import {
   hostStreamRpcRegistry,
@@ -143,6 +147,7 @@ async function runWorktreeDelete(
   const endpoint = await resolveEndpoint();
   const lease = new MutableBearerLease(auth.token, auth.userId);
   const client = new WsStreamClient<HostStreamRpcRegistry>({
+    localOpenAuth: createCliLocalOpenAuth(auth.authnBaseUrl),
     registry: hostStreamRpcRegistry,
     // The host this endpoint already resolves to. Safe even where `endpoint` is
     // re-resolved later in the run: the seed is consulted only before this
@@ -298,8 +303,21 @@ function runDeleteCommand(
         onConnectionStatus: (
           status: StreamConnectionStatus,
           reason: StreamCloseReason | null,
+          retryCause: FatalErrorDetails | null,
         ) => {
           if (status === "connecting" || status === "open") return;
+          const admissionError = retryCause
+            ? localTeamAdmissionCliError(retryCause)
+            : null;
+          if (admissionError !== null) {
+            finish({
+              kind: "settled",
+              deleted: false,
+              declined: null,
+              error: admissionError,
+            });
+            return;
+          }
           if (
             status === "closed" &&
             reason !== null &&
@@ -400,7 +418,11 @@ async function runLegacyDeleteStream(
       }
     });
     session.onStatusChange(
-      (status: StreamConnectionStatus, reason: StreamCloseReason | null) => {
+      (
+        status: StreamConnectionStatus,
+        reason: StreamCloseReason | null,
+        retryCause: FatalErrorDetails | null,
+      ) => {
         // The initial dial (`connecting`) and a healthy connection (`open`) are
         // normal; everything else is a drop. For this one-shot DESTRUCTIVE
         // command a drop before an application terminal frame (`complete` /
@@ -409,6 +431,13 @@ async function runLegacyDeleteStream(
         // delete pipeline. So the first `reconnecting`/`closed` transition
         // (before `finish` has run) fails the command with no resubscribe.
         if (status === "connecting" || status === "open") {
+          return;
+        }
+        const admissionError = retryCause
+          ? localTeamAdmissionCliError(retryCause)
+          : null;
+        if (admissionError !== null) {
+          finish(() => reject(admissionError));
           return;
         }
         if (
@@ -543,6 +572,8 @@ function streamDroppedCliError(): CliError {
  * through the whole stream harness would test the harness.
  */
 export function fatalCloseToCliError(details: FatalErrorDetails): CliError {
+  const admissionError = localTeamAdmissionCliError(details);
+  if (admissionError !== null) return admissionError;
   if (details.code === "UNAUTHORIZED") {
     return cliError({
       code: CLI_ERROR_CODES.AUTH_REJECTED,
