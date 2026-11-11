@@ -16,6 +16,7 @@ import {
 import {
   Background,
   ReactFlow,
+  useStore,
   type NodeChange,
   type ReactFlowInstance,
   type Viewport,
@@ -63,6 +64,7 @@ import {
 } from "./canvas-selection-store";
 import { CanvasFullscreen } from "./canvas-fullscreen";
 import { useCanvasPresentation } from "./use-canvas-presentation";
+import { useCanvasWheelCamera } from "./use-canvas-wheel-camera";
 import {
   FrameFullscreenContext,
   FrameCommentPortalContext,
@@ -320,6 +322,23 @@ function canvasCommentSurfaces(
 }
 
 /**
+ * Reports each viewport React Flow draws, from a layout effect of the commit
+ * that draws it. The zoom layer lets go of a gesture there, so the frame
+ * that loses the layer's scale is the frame that has the real one.
+ */
+function CanvasShownViewport({
+  onShown,
+}: {
+  readonly onShown: (viewport: Viewport) => void;
+}) {
+  const [x, y, zoom] = useStore((state) => state.transform);
+  useLayoutEffect(() => {
+    onShown({ x, y, zoom });
+  }, [x, y, zoom, onShown]);
+  return null;
+}
+
+/**
  * The expansion wraps the editor instead of living inside it, because the
  * editor READS it - `useArtifactEscape` registers the canvas's own Escape
  * modes with it - and a component cannot consume a context it renders the
@@ -395,6 +414,7 @@ function CanvasEditorSurface({
     Readonly<Record<string, NodeInteraction | undefined>>
   >({});
   const stageRef = useRef<HTMLDivElement>(null);
+  const zoomLayerRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
   const theme = useSyncExternalStore(
     subscribeResolvedTheme,
@@ -571,19 +591,21 @@ function CanvasEditorSurface({
       flow?.screenToFlowPosition(point) ?? point,
     [flow],
   );
-  const settleTimer = useRef<number | null>(null);
-  const cancelWheelSettlement = useCallback((): void => {
-    if (settleTimer.current !== null) window.clearTimeout(settleTimer.current);
-    settleTimer.current = null;
-  }, []);
-  useEffect(() => cancelWheelSettlement, [cancelWheelSettlement]);
-  const settleAfterWheel = useCallback((): void => {
-    if (settleTimer.current !== null) window.clearTimeout(settleTimer.current);
-    settleTimer.current = window.setTimeout(() => {
-      settleTimer.current = null;
-      if (flow !== null) setSettledViewport(flow.getViewport());
-    }, 200);
-  }, [flow]);
+  const {
+    push: pushWheelStep,
+    cancel: cancelWheelSettlement,
+    settling: wheelSettling,
+    onShown: onShownViewport,
+  } = useCanvasWheelCamera({
+    flow,
+    stageRef,
+    layerRef: zoomLayerRef,
+    // A fullscreen board owns the viewport; a move queued before it took
+    // over must not land under it.
+    suspended: activeFullscreen !== null,
+    onMove: setViewport,
+    onSettle: setSettledViewport,
+  });
   const centerBoard = useCallback(
     (path: string): void => {
       const board = snapshot.boards[path];
@@ -763,34 +785,14 @@ function CanvasEditorSurface({
   ]);
   const zoomAt = useCallback(
     (delta: number, point: CanvasPoint): void => {
-      const stage = stageRef.current;
-      if (activeFullscreen !== null || flow === null || stage === null) return;
-      const bounds = stage.getBoundingClientRect();
-      const current = flow.getViewport();
-      const zoom = Math.min(
-        4,
-        Math.max(
-          0.05,
-          current.zoom *
-            Math.exp(-Math.max(-240, Math.min(240, delta)) * 0.003),
-        ),
-      );
-      const ratio = zoom / current.zoom;
-      const x = point.x - bounds.left;
-      const y = point.y - bounds.top;
-      settleAfterWheel();
-      void flow.setViewport({
-        x: x - (x - current.x) * ratio,
-        y: y - (y - current.y) * ratio,
-        zoom,
-      });
+      if (activeFullscreen === null)
+        pushWheelStep({ kind: "zoom", delta, point });
     },
-    [activeFullscreen, flow, settleAfterWheel],
+    [activeFullscreen, pushWheelStep],
   );
-  // Wheel panning is our own handler, not xyflow's panOnScroll: each event's
-  // delta is capped so momentum tails cannot sling the canvas, while the
-  // uncapped per-pixel gain stays 1. One feel everywhere — the same path takes
-  // the playing board's forwarded fall-through gestures.
+  // Wheel panning is our own handler, not xyflow's panOnScroll, so its feel
+  // is the same everywhere: the same path takes the playing board's
+  // forwarded fall-through gestures.
   const panBy = useCallback(
     (dx: number, dy: number): void => {
       // A fullscreen board's fall-through gesture scrolls the stage that
@@ -799,20 +801,9 @@ function CanvasEditorSurface({
         stageRef.current?.scrollBy({ left: dx, top: dy, behavior: "instant" });
         return;
       }
-      if (flow === null) return;
-      const cap = (delta: number): number =>
-        Math.sign(delta) * Math.min(Math.abs(delta), 80);
-      const current = flow.getViewport();
-      const next = {
-        x: current.x - cap(dx),
-        y: current.y - cap(dy),
-        zoom: current.zoom,
-      };
-      settleAfterWheel();
-      void flow.setViewport(next);
-      setViewport(next);
+      pushWheelStep({ kind: "pan", dx, dy });
     },
-    [flow, activeFullscreen, settleAfterWheel],
+    [activeFullscreen, pushWheelStep],
   );
   useEffect(() => {
     const stage = stageRef.current;
@@ -1221,7 +1212,12 @@ function CanvasEditorSurface({
                 className={cn(
                   "relative min-h-0 min-w-0 flex-1",
                   cursorClassName,
-                  activeFullscreen !== null && "overflow-auto",
+                  // The stage clips the canvas, not React Flow: a zoom-out
+                  // in progress shrinks the zoom layer inside it, and the
+                  // boards around the old view must show past its edges.
+                  activeFullscreen === null
+                    ? "overflow-hidden"
+                    : "overflow-auto",
                 )}
                 onPointerMove={(event) =>
                   pointer.publish(
@@ -1231,12 +1227,16 @@ function CanvasEditorSurface({
                 onPointerLeave={pointer.clear}
               >
                 <div
-                  className="w-full"
+                  ref={zoomLayerRef}
+                  className="relative w-full"
                   style={{
                     height: presentation.height,
                   }}
                 >
                   <ReactFlow<CanvasFlowNode>
+                    className={cn(
+                      !presentation.fullscreen && "overflow-visible!",
+                    )}
                     nodes={nodes}
                     edges={[]}
                     nodeTypes={NODE_TYPES}
@@ -1299,10 +1299,9 @@ function CanvasEditorSurface({
                     onMoveEnd={(_event, value) => {
                       if (activeFullscreen !== null) return;
                       setViewport(value);
-                      // Programmatic wheel moves fire end on every tick.
+                      // Programmatic wheel moves fire end on every frame.
                       // Animated moves still settle here when their glide ends.
-                      if (settleTimer.current === null)
-                        setSettledViewport(value);
+                      if (!wheelSettling()) setSettledViewport(value);
                     }}
                     onNodeDragStop={(_event, node, dragged) =>
                       !readOnly &&
@@ -1350,32 +1349,35 @@ function CanvasEditorSurface({
                       color="var(--border)"
                       className={presentation.backgroundClassName}
                     />
+                    <CanvasShownViewport onShown={onShownViewport} />
                   </ReactFlow>
-                </div>
-                {canvasDrawingEnabled(
-                  readOnly,
-                  activeTool,
-                  activeFullscreen,
-                ) ? (
-                  <CanvasDrawingLayer
-                    key={activeTool}
-                    tool={activeTool}
-                    viewport={viewport}
-                    toCanvas={toCanvas}
-                    onCreate={createNote}
-                  />
-                ) : null}
-                {presentation.fullscreen ? null : (
-                  <>
-                    <CanvasCursors
-                      awareness={awareness}
-                      artifactId={artifactId}
-                      page={page}
+                  {/* Everything placed in canvas coordinates sits in the
+                      zoom layer, so it scales with the boards mid-gesture. */}
+                  {canvasDrawingEnabled(
+                    readOnly,
+                    activeTool,
+                    activeFullscreen,
+                  ) ? (
+                    <CanvasDrawingLayer
+                      key={activeTool}
+                      tool={activeTool}
                       viewport={viewport}
+                      toCanvas={toCanvas}
+                      onCreate={createNote}
                     />
-                    {commentSurfaces.pointPins}
-                  </>
-                )}
+                  ) : null}
+                  {presentation.fullscreen ? null : (
+                    <>
+                      <CanvasCursors
+                        awareness={awareness}
+                        artifactId={artifactId}
+                        page={page}
+                        viewport={viewport}
+                      />
+                      {commentSurfaces.pointPins}
+                    </>
+                  )}
+                </div>
                 {activeFullscreen === null ? (
                   <div className="pointer-events-none absolute inset-0 flex">
                     <div className="flex min-w-0 flex-1 items-start justify-between gap-2 p-2">

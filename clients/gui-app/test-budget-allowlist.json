@@ -18,7 +18,7 @@
   "src/components/settings/panels/permissions/__tests__/judge-tab.test.tsx": "114 cases driving the full Judge tab by keyboard; 8.5 to 14.5 s across five runs",
   "src/lib/comm-graph/office/views/__tests__/office-plans.test.ts": "454 cases laying out and walking every office plan, path-finding included; 6.9 to 13.4 s across five runs",
   "src/components/settings/__tests__/settings-search-fixtures.test.tsx": "23 cases each rendering the Settings page once per platform to land every search result; 6.3 to 12.4 s across five runs",
-  "src/components/canvas-artifact/__tests__/canvas-artifact-editor.test.tsx": "73 cases mounting the full canvas editor; 6.0 to 12.3 s across five runs",
+  "src/components/canvas-artifact/__tests__/canvas-artifact-editor.test.tsx": "101 cases mounting the full canvas editor; 6.0 to 12.3 s across five runs at 73 cases, 9.7 s at 101",
   "src/components/bots/__tests__/bot-memory-pane.test.tsx": "16 cases on the full memory pane, 3.6 s alone; 3.7 to 12.2 s on a loaded shard across five runs",
   "src/components/epic-canvas/sidebar/__tests__/epic-sidebar-selection-mode.test.tsx": "172 cases on the full task sidebar; 8.5 to 12.1 s across five runs",
   "src/__tests__/worktree-selection-key-census.test.ts": "parses every production source file under gui-app and shared with the TypeScript compiler; 6.0 to 11.3 s across five runs",
