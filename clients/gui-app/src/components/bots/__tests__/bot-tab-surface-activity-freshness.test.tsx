@@ -70,6 +70,9 @@ const stream = vi.hoisted(() => ({
   client: null as IHostStreamClient<HostStreamRpcRegistry> | null,
 }));
 
+/** Hosts the directory no longer answers for; every other host is reachable. */
+const reach = vi.hoisted(() => ({ unreachable: new Set<string>() }));
+
 vi.mock(
   "@/hooks/bots/use-environment-host-lists-query",
   () => emptyBotMentionHostListsMock,
@@ -104,7 +107,9 @@ vi.mock(
 );
 vi.mock("@/hooks/host/use-host-queries", () => hostQueriesMock);
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
-  useHostReachability: () => ({ status: "reachable" }),
+  useHostReachability: (hostId: string) => ({
+    status: reach.unreachable.has(hostId) ? "unreachable" : "reachable",
+  }),
 }));
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
@@ -234,6 +239,7 @@ beforeEach(() => {
   stream.current = true;
   stream.real = false;
   stream.client = null;
+  reach.unreachable.clear();
   useAuthStore.setState({
     status: "signed-in",
     profile: { userId: "user-ada", userName: "Ada", email: "ada@example.com" },
@@ -409,6 +415,86 @@ describe("<BotTabSurface /> Activity over the real stream hook, driven through o
 
     expect(screen.getAllByTestId("bot-activity-task")).toHaveLength(1);
     expect(pageText()).toContain("Status unknown");
+    expect(pageText()).not.toContain("No activity yet");
+    expect(screen.getByText("Trunk")).toBeTruthy();
+    expect(pageText()).not.toContain("Subscriptions unavailable");
+  });
+});
+
+describe("<BotTabSurface /> Activity while the serving host is unreachable but the snapshot stream is current", () => {
+  function emptyFrame(): BotSubscribeServerFrame {
+    return botSubscribeServerFrameSchema.parse({
+      kind: "snapshot",
+      bot: BOT,
+      tasks: [],
+      openRequestCount: 0,
+      conversationsRevision: 1,
+      notificationSubscriptions: [],
+      surfaceActions: null,
+      stoppedNotificationWatches: null,
+      boundHost: { hostId: BOUND_HOST, epoch: 1, isThisHost: false },
+      activity: null,
+      hasBinaryPayload: false,
+    });
+  }
+
+  it("scripted stream: an empty snapshot says Status unknown and Subscriptions unavailable, never No activity yet, and says No activity yet again once the host is reachable with the same current snapshot", async () => {
+    mocks.state.snapshot = { ...snapshot(), notificationSubscriptions: [] };
+    stream.current = true;
+    const view = await openActivity();
+    // Control: reachable.
+    expect(pageText()).toContain("No activity yet");
+    expect(pageText()).not.toContain("Status unknown");
+
+    reach.unreachable.add(TAB_HOST);
+    act(() => view.rerender());
+    expect(stream.current).toBe(true);
+    expect(pageText()).not.toContain("No activity yet");
+    expect(pageText()).toContain("Status unknown");
+    expect(pageText()).toContain("Subscriptions unavailable");
+
+    // The snapshot never changed: reachability alone brings the answer back.
+    reach.unreachable.delete(TAB_HOST);
+    act(() => view.rerender());
+    expect(pageText()).toContain("No activity yet");
+    expect(pageText()).not.toContain("Status unknown");
+    expect(screen.queryByText("Notification subscriptions")).toBeNull();
+  });
+
+  it("real stream hook: the session stays open with its empty snapshot while the host is unreachable, and the page still does not say No activity yet", async () => {
+    const session = new StubSession();
+    stream.real = true;
+    stream.client = new StubHostStreamClient(session);
+    const view = render(surface());
+    act(() => session.emit(emptyFrame()));
+    await userEvent.setup().click(screen.getByTestId("bot-tab-view-activity"));
+    expect(pageText()).toContain("No activity yet");
+
+    reach.unreachable.add(TAB_HOST);
+    act(() => view.rerender(surface()));
+
+    // Guard: nothing touched the stream; its empty snapshot is still the
+    // current answer (no status change was emitted).
+    expect(pageText()).not.toContain("No activity yet");
+    expect(pageText()).toContain("Status unknown");
+    expect(pageText()).toContain("Subscriptions unavailable");
+
+    reach.unreachable.delete(TAB_HOST);
+    act(() => view.rerender(surface()));
+    expect(pageText()).toContain("No activity yet");
+    expect(pageText()).not.toContain("Status unknown");
+  });
+
+  it("keeps a cached non-empty snapshot's task and subscription visible while the host is unreachable (control)", async () => {
+    mocks.state.snapshot = {
+      ...snapshot(),
+      tasks: [trackingTask("task-held")],
+      notificationSubscriptions: [SUBSCRIPTION],
+    };
+    reach.unreachable.add(TAB_HOST);
+    await openActivity();
+
+    expect(screen.getAllByTestId("bot-activity-task")).toHaveLength(1);
     expect(pageText()).not.toContain("No activity yet");
     expect(screen.getByText("Trunk")).toBeTruthy();
     expect(pageText()).not.toContain("Subscriptions unavailable");

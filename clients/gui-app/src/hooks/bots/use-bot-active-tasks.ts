@@ -25,6 +25,7 @@ const NO_CHAT_IDS: ReadonlyArray<string> = [];
 /** A bot's Activity list, read once for the tab's count and its page alike. */
 export type BotActiveTasks = {
   readonly rows: ReadonlyArray<BotActiveTask>;
+  readonly roomFresh: boolean;
   /** A listed task's own indicator: what its agents hold unread, together. */
   readonly indicatorOf: (taskId: string) => NotificationIndicatorState;
 };
@@ -90,6 +91,7 @@ export function useBotActiveTasks(
     const indicatorOf = (taskId: string): NotificationIndicatorState =>
       indicatorByTask.get(taskId) ?? EMPTY_NOTIFICATION_INDICATOR_STATE;
     return {
+      roomFresh,
       rows: activeTasksOf({
         tasks: roomFresh
           ? tasks
