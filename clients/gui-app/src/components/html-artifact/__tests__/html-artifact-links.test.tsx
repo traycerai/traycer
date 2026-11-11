@@ -152,6 +152,11 @@ describe("HtmlArtifactLinks", () => {
       "../sibling/canvas.json?v=2#part",
       "epics/epic-1/artifacts/a/sibling/index.md",
     ],
+    ["../sibling/?v=2", "epics/epic-1/artifacts/a/sibling/index.md"],
+    ["../sibling/#intro", "epics/epic-1/artifacts/a/sibling/index.md"],
+    ["/research/top/", "epics/epic-1/artifacts/research/top/index.md"],
+    ["my doc/", "epics/epic-1/artifacts/a/b/my doc/index.md"],
+    ["my%20doc/", "epics/epic-1/artifacts/a/b/my doc/index.md"],
   ])(
     "opens the artifact %s names from page a/b/index.html in a tile",
     async (href, resolvedPath) => {
@@ -175,64 +180,6 @@ describe("HtmlArtifactLinks", () => {
       expect(mocks.toast).not.toHaveBeenCalled();
     },
   );
-
-  it("reads a rooted href from the tree root, not from the page's folder", async () => {
-    mocks.resolveArtifactByPath.mockResolvedValue(FOUND);
-    const open = mountFrame(IN_EPIC_TAB);
-
-    open(linkOn("/top/index.html"));
-    await vi.waitFor(() => expect(mocks.openTile).toHaveBeenCalled());
-
-    expect(mocks.resolveArtifactByPath).toHaveBeenCalledWith(
-      expect.objectContaining({
-        filePath: "epics/epic-1/artifacts/top/index.md",
-      }),
-    );
-  });
-
-  const DISK_SIBLING =
-    "/Users/u/.traycer/epics/epic-1/artifacts/a/sibling/index.html";
-
-  it("reads an href that is an artifact's path on disk as the tree path it names", async () => {
-    mocks.resolveArtifactByPath.mockResolvedValue(FOUND);
-    const open = mountFrame(IN_EPIC_TAB);
-
-    open(linkOn(DISK_SIBLING));
-    await vi.waitFor(() => expect(mocks.openTile).toHaveBeenCalled());
-
-    expect(mocks.resolveArtifactByPath).toHaveBeenCalledWith(
-      expect.objectContaining({
-        filePath: "epics/epic-1/artifacts/a/sibling/index.md",
-      }),
-    );
-  });
-
-  it("toasts for an artifact's path on disk that the tree lacks, without a disk-file or workspace fallback", async () => {
-    mocks.fetchWorkspaceFileExists.mockResolvedValue(true);
-    const open = mountFrame(IN_EPIC_TAB);
-
-    open(linkOn(DISK_SIBLING));
-    await vi.waitFor(() =>
-      expect(mocks.toast).toHaveBeenCalledWith("Couldn't open link"),
-    );
-
-    expect(mocks.fetchWorkspaceFileExists).not.toHaveBeenCalled();
-    expect(mocks.openTile).not.toHaveBeenCalled();
-  });
-
-  it("toasts for another Epic's artifact on disk, without a lookup or probe", async () => {
-    mocks.fetchWorkspaceFileExists.mockResolvedValue(true);
-    const open = mountFrame(IN_EPIC_TAB);
-
-    open(linkOn("/Users/u/.traycer/epics/epic-2/artifacts/x/index.html"));
-    await vi.waitFor(() =>
-      expect(mocks.toast).toHaveBeenCalledWith("Couldn't open link"),
-    );
-
-    expect(mocks.resolveArtifactByPath).not.toHaveBeenCalled();
-    expect(mocks.fetchWorkspaceFileExists).not.toHaveBeenCalled();
-    expect(mocks.openTile).not.toHaveBeenCalled();
-  });
 
   it("toasts when the link names nothing in the tree", async () => {
     const open = mountFrame(IN_EPIC_TAB);
@@ -392,35 +339,26 @@ describe("HtmlArtifactLinks", () => {
     },
   );
 
-  it.each([
-    [
-      "a path that spells another Epic's artifact inside this tree",
-      "/epics/epic-1/artifacts/epics/epic-2/artifacts/top/index.html",
-      "epics/epic-1/artifacts/epics/epic-2/artifacts/top/index.md",
-    ],
-    [
-      "a rooted drive path",
-      "/C:/repo/secret.txt",
-      "epics/epic-1/artifacts/C:/repo/secret.txt/index.md",
-    ],
-  ])(
-    "asks only this Epic's tree about %s, and toasts when it is missing",
-    async (_label, href, filePath) => {
-      mocks.fetchWorkspaceFileExists.mockResolvedValue(true);
-      const open = mountFrame(IN_EPIC_TAB);
+  it("asks only this Epic's tree about a rooted drive path, and toasts when it is missing", async () => {
+    mocks.fetchWorkspaceFileExists.mockResolvedValue(true);
+    const open = mountFrame(IN_EPIC_TAB);
 
-      open(linkOn(href));
-      await vi.waitFor(() =>
-        expect(mocks.toast).toHaveBeenCalledWith("Couldn't open link"),
-      );
+    open(linkOn("/C:/repo/secret.txt"));
+    await vi.waitFor(() =>
+      expect(mocks.toast).toHaveBeenCalledWith("Couldn't open link"),
+    );
 
-      expect(mocks.resolveArtifactByPath.mock.calls).toEqual([
-        [expect.objectContaining({ epicId: "epic-1", filePath })],
-      ]);
-      expect(mocks.fetchWorkspaceFileExists).not.toHaveBeenCalled();
-      expect(mocks.openTile).not.toHaveBeenCalled();
-    },
-  );
+    expect(mocks.resolveArtifactByPath.mock.calls).toEqual([
+      [
+        expect.objectContaining({
+          epicId: "epic-1",
+          filePath: "epics/epic-1/artifacts/C:/repo/secret.txt/index.md",
+        }),
+      ],
+    ]);
+    expect(mocks.fetchWorkspaceFileExists).not.toHaveBeenCalled();
+    expect(mocks.openTile).not.toHaveBeenCalled();
+  });
 
   it.each([
     [
@@ -457,6 +395,36 @@ describe("HtmlArtifactLinks", () => {
     [
       "a leading no-break space, which the frame keeps as a name",
       " /research/top/index.html",
+      TRAYCER_PAGE,
+    ],
+    [
+      "a space before a query, which the frame keeps in the name",
+      "/top ?x=1",
+      TRAYCER_PAGE,
+    ],
+    [
+      "a space before a fragment, which the frame keeps in the name",
+      "/top #part",
+      TRAYCER_PAGE,
+    ],
+    [
+      "a protocol-relative address after a leading space, whose host the tree would read as a folder",
+      " //artifact-a1--m1/top/",
+      TRAYCER_PAGE,
+    ],
+    [
+      "a colon and digits ending a name, which the tree would read as a line",
+      "/release:2026",
+      TRAYCER_PAGE,
+    ],
+    [
+      "this Epic's artifact path on disk",
+      "/Users/u/.traycer/epics/epic-1/artifacts/a/sibling/index.html",
+      TRAYCER_PAGE,
+    ],
+    [
+      "another Epic's artifact path on disk",
+      "/Users/u/.traycer/epics/epic-2/artifacts/x/index.html",
       TRAYCER_PAGE,
     ],
   ])(

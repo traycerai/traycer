@@ -8,6 +8,7 @@ import { TabHostContext } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useArtifactTreeOnlyOpener } from "@/components/epic-canvas/renderers/use-artifact-link-opener";
 import type { SandboxArtifactLink } from "@/lib/sandbox/bridge-host";
 import { classifyHref } from "@/markdown/links/classify-href";
+import { resolveArtifactRelativeLinkPath } from "@/markdown/links/resolve-artifact-relative-link";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { HtmlArtifactLinkContext } from "./html-artifact-link-context";
 
@@ -85,17 +86,51 @@ function hrefFromTreeRoot(href: string, pageUrl: string): string | null {
   return null;
 }
 
+const decodeName = (segment: string): string => {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+};
+
+/**
+ * The path from the tree root the frame names for a link: its own URL parser
+ * reads the href against the page's address, which spells the tree path in
+ * its URL path one encoded name per segment, and each segment is decoded once,
+ * as the tree reads a name. `null` for another origin, and for a segment that
+ * decodes to a separator, which no name in the tree holds.
+ */
+function framePathFor(link: SandboxArtifactLink): string | null {
+  const page = parseUrl(link.pageUrl, undefined);
+  const target = page === null ? null : parseUrl(link.href, page);
+  if (
+    page === null ||
+    target === null ||
+    target.protocol !== page.protocol ||
+    target.host !== page.host
+  )
+    return null;
+  const names = target.pathname.split("/").map(decodeName);
+  if (names.some((name) => /[\\/]/u.test(name))) return null;
+  return names
+    .join("/")
+    .replace(ENTRY_DOCUMENT, `$1${EPIC_ARTIFACT_INDEX_FILENAME}`);
+}
+
 /**
  * The place in the artifacts tree a page's link names: a path, and the folder
- * it is read from. A relative href is read from the page's own folder in the
- * tree. A rooted one (`/research/`), or one written out in full on the page's
- * own origin, is read from the tree's root, as the frame's own URL space reads
- * it. An href that names an artifact of this Epic on disk
- * (`…/epics/<id>/artifacts/…`, by markdown's rule) is read as the tree path it
- * names. The result is `null` for an href that names no place in this Epic's
- * tree: one that names no file, or another Epic's artifact. It is `null` too
- * for an href holding a separator or whitespace the frame reads differently,
- * whose place the two would disagree on.
+ * it is read from, or `null` for an href that names no place in this Epic's
+ * tree. It is `null` for an href holding a separator or whitespace the frame
+ * reads differently, and for one above the tree's root, which is decided from
+ * the href as written because the URL parser stops `..` at the root.
+ *
+ * The last gate, for every route: the place the tree is about to look up must
+ * be the place the frame names, or the link opens nothing. The path is read
+ * from the href's text by markdown's classifier, which trims, splits off a
+ * `:line` suffix and drops a query differently from the frame's URL parser, so
+ * `/top ?x=1` (the frame's `/top%20`) or `/release:2026` would otherwise open
+ * `top` or `release`.
  */
 function treeLinkFor(
   link: SandboxArtifactLink,
@@ -109,6 +144,35 @@ function treeLinkFor(
     WHITESPACE_READ_OTHERWISE.test(link.href)
   )
     return null;
+  const target = authoredTreeLinkFor(link);
+  if (target === null) return null;
+  const lookup = resolveArtifactRelativeLinkPath(
+    epicId,
+    target.folderChain,
+    target.path,
+  );
+  const framePath = framePathFor(link);
+  if (
+    lookup === null ||
+    framePath === null ||
+    lookup !== resolveArtifactRelativeLinkPath(epicId, [], framePath)
+  )
+    return null;
+  return target;
+}
+
+/**
+ * The place {@link treeLinkFor} reads from the href as written. A relative
+ * href is read from the page's own folder in the tree. A rooted one
+ * (`/research/`), or one written out in full on the page's own origin, is read
+ * from the tree's root, as the frame's own URL space reads it. An href that
+ * names no file, or that markdown would read as an artifact's path on disk
+ * (`…/epics/<id>/artifacts/…`), is `null`.
+ */
+function authoredTreeLinkFor(link: SandboxArtifactLink): {
+  readonly path: string;
+  readonly folderChain: readonly string[];
+} | null {
   const href = hrefFromTreeRoot(link.href, link.pageUrl);
   if (href === null) return null;
   // A query or fragment addresses a place inside the target; the tile opens
@@ -120,11 +184,9 @@ function treeLinkFor(
     ENTRY_DOCUMENT,
     `$1${EPIC_ARTIFACT_INDEX_FILENAME}`,
   );
-  const onDisk = artifactLinkPathRootAgnostic(path, null);
-  if (onDisk !== null) {
-    if (onDisk.epicId !== epicId) return null;
-    return { path: onDisk.segments.join("/"), folderChain: [] };
-  }
+  // The frame reads an artifact's path on disk as a path in the tree with
+  // `epics/<id>/artifacts` inside it, which the gate would never let match.
+  if (artifactLinkPathRootAgnostic(path, null) !== null) return null;
   if (path.startsWith("/")) {
     return { path: path.replace(/^\/+/u, ""), folderChain: [] };
   }
