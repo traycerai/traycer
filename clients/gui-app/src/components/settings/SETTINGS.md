@@ -6674,7 +6674,13 @@ set-state-in-effect` forbids the effect form, and an effect would also
 {enabled: false}` answers `turning_off` until the host has closed its
        sessions, and the section keeps saying so until the host's status
        reports `off` (`shownRemoteAccess`), even when a status read still says
-       `on`.
+       `on`. On a team's computer the wording names team members and agents.
+       Its switch is outside the otherwise read-only team sections and is
+       offered only when the bound team's current role is admin or editor,
+       using the host's binding and the environment list, not the selected
+       settings page. An unknown or failed role read offers no switch. A
+       refused change is shown inline and does not mark the question answered
+       or change the displayed state.
     4. **Terminal account**, one row per provider with an ambient profile,
        visibly labelled by provider name with Terminal account beneath it, with
        its switch named
@@ -6690,8 +6696,8 @@ set-state-in-effect` forbids the effect form, and an effect would also
        the executable-write grant) and Clear, under "Agents started after a
        change use the new value; restart the host for the host itself to
        pick it up."
-       On a team's host every section is read-only (`inert`) under "These
-       settings belong to <team>."
+       On a team's host these sections remain read-only (`inert`) under "These
+       settings belong to <team>." Remote access is the separate exception above.
   - **The notices strip, top to bottom, drawing only what applies**
     (`host-overview-notices.tsx`, between the header and the tab bar; its
     decisions are in `host-overview-status-model.ts`, and the panel resolves
@@ -6733,11 +6739,14 @@ set-state-in-effect` forbids the effect form, and an effect would also
        says it with Force update…, and while the host can't be reached,
        because it names live work. Its confirm and its refusal when the work
        changes under the open dialog are unchanged.
-       The unanswered Remote access question lives in Access and setup's Remote access
-       row: Allow other devices and agents on your account to reach this
-       computer?, with On and Not now. Its capability and ownership
-       gates, mutation and per-host remembered choice are unchanged. Once answered,
-       the same row shows On, Off or Turning off. It no longer occupies the header.
+       The unanswered Remote access question lives in Access and setup's Remote
+       access row only on a person's computer with remote access off: Allow other
+       devices and agents on your account to reach this computer?, with On and
+       Not now. A computer already on never asks, and a team's computer never
+       asks. Once answered, the same row shows On, Off or Turning off. The answer
+       is remembered for this computer on this desktop across transfer to a team
+       and return: it records the person's earlier answer, not permission to
+       change the team's switch. It no longer occupies the header.
        `HostEnvironmentSection` mounts the standard Settings row described above.
        The settings source (`panels/host-overview-settings-card.tsx`) uses the
        existing personal/local choices, move sheet and stop-sharing confirmation.
