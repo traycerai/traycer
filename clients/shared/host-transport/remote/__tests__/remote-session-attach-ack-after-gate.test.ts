@@ -872,12 +872,12 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     );
   }
 
-  /** Steps the fake clock to the next instant that is `LATE_IN_SECOND_MS` into a second. */
   /** When the relay starts refusing a grant requested at `requestedAt`: its whole-second `exp`. */
   function relayExpiryMs(requestedAt: number): number {
     return (Math.floor(requestedAt / 1_000) + GRANT_LIFETIME_SECONDS) * 1_000;
   }
 
+  /** Steps the fake clock to the next instant that is `LATE_IN_SECOND_MS` into a second. */
   async function stepToLateInSecond(): Promise<void> {
     const intoSecond = Date.now() % 1_000;
     await step((LATE_IN_SECOND_MS - intoSecond + 1_000) % 1_000);
