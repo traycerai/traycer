@@ -1020,6 +1020,14 @@ describe("<HostSwitcher /> composer mode computers", () => {
     const yourOffline = [
       offlineComputer("your-offline-a", "Work laptop A", undefined),
       offlineComputer("your-offline-b", "Work laptop B", undefined),
+      {
+        ...offlineComputer(
+          "setting-up-offline",
+          "Setting up laptop",
+          undefined,
+        ),
+        settingUp: true,
+      },
       selectedOffline,
     ];
     const teamOffline = [
@@ -1042,16 +1050,23 @@ describe("<HostSwitcher /> composer mode computers", () => {
     const yours = screen.getByTestId("host-switcher-yours");
     const team = screen.getByTestId("settings-host-switcher-team-team-a");
     expect(
-      within(inTask).getByRole("button", { name: "2 offline" }),
+      within(inTask).getByRole("option", {
+        name: "Show 2 offline computers",
+      }),
     ).toBeTruthy();
     expect(
-      within(yours).getByRole("button", { name: "2 offline" }),
+      within(yours).getByRole("option", {
+        name: "Show 2 offline computers",
+      }),
     ).toBeTruthy();
     expect(
-      within(team).getByRole("button", { name: "2 offline" }),
+      within(team).getByRole("option", {
+        name: "Show 2 offline computers",
+      }),
     ).toBeTruthy();
     expect(inTask.contains(row("online-workstation"))).toBe(true);
     expect(yours.contains(row("selected-offline"))).toBe(true);
+    expect(yours.contains(row("setting-up-offline"))).toBe(true);
     expect(
       screen.queryByTestId("settings-host-switcher-option-your-offline-a"),
     ).toBeNull();
@@ -1118,7 +1133,9 @@ describe("<HostSwitcher /> composer mode computers", () => {
       intent: "pin",
     });
 
-    expect(screen.getByRole("button", { name: "2 offline" })).toBeTruthy();
+    expect(
+      screen.getByRole("option", { name: "Show 2 offline computers" }),
+    ).toBeTruthy();
     fireEvent.change(screen.getByPlaceholderText("Search hosts"), {
       target: { value: "studio" },
     });
@@ -1130,7 +1147,7 @@ describe("<HostSwitcher /> composer mode computers", () => {
     expect(row("studio-offline-b")).toBeDefined();
   });
 
-  it("lets arrow navigation expand the offline disclosure without picking a host", async () => {
+  it("lets cmdk arrow navigation expand the offline option without picking a host", async () => {
     const user = userEvent.setup();
     const online = remoteComputer({
       hostId: "online-workstation",
@@ -1160,12 +1177,15 @@ describe("<HostSwitcher /> composer mode computers", () => {
       "true",
     );
     await user.keyboard("{ArrowDown}");
-    const toggle = screen.getByTestId("host-switcher-yours-offline-toggle");
+    const toggle = screen.getByRole("option", {
+      name: "Show 2 offline computers",
+    });
     expect(toggle.getAttribute("aria-selected")).toBe("true");
-    expect(toggle.getAttribute("aria-expanded")).toBe("false");
     await user.keyboard("{Enter}");
 
-    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(
+      screen.getByRole("option", { name: "Hide offline computers" }),
+    ).toBeTruthy();
     expect(row("studio-offline-a")).toBeDefined();
     expect(row("studio-offline-b")).toBeDefined();
     expect(screen.getByPlaceholderText("Search hosts")).toBeDefined();
@@ -1173,13 +1193,8 @@ describe("<HostSwitcher /> composer mode computers", () => {
     expect(onSelect).not.toHaveBeenCalled();
   });
 
-  it("lets a Tab-focused disclosure use Enter and Space without picking, then resets on reopen", async () => {
+  it("resets the offline option closed after the picker is reopened", async () => {
     const user = userEvent.setup();
-    const online = remoteComputer({
-      hostId: "online-workstation",
-      name: "Online workstation",
-      platform: "linux-x64",
-    });
     const offlineA = offlineComputer(
       "studio-offline-a",
       "Studio laptop A",
@@ -1191,42 +1206,30 @@ describe("<HostSwitcher /> composer mode computers", () => {
       undefined,
     );
     renderSwitcher({
-      hosts: [online, offlineA, offlineB],
+      hosts: [offlineA, offlineB],
       composer: composerMode({}),
       intent: "pin",
     });
 
     const search = screen.getByPlaceholderText("Search hosts");
-    await user.click(search);
-    await user.keyboard("{Home}");
-    expect(row("online-workstation").getAttribute("aria-selected")).toBe(
-      "true",
+    await user.click(
+      screen.getByRole("option", { name: "Show 2 offline computers" }),
     );
-    const toggle = screen.getByRole("button", { name: "2 offline" });
-    expect(toggle.getAttribute("aria-expanded")).toBe("false");
-    await user.tab();
-    expect(document.activeElement).toBe(toggle);
-    await user.keyboard("{Enter}");
-
-    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(
+      screen.getByRole("option", { name: "Hide offline computers" }),
+    ).toBeTruthy();
     expect(row("studio-offline-a")).toBeDefined();
     expect(row("studio-offline-b")).toBeDefined();
-    expect(row("online-workstation").getAttribute("aria-selected")).toBe(
-      "true",
-    );
     expect(screen.getByPlaceholderText("Search hosts")).toBe(search);
     expect(onPickHost).not.toHaveBeenCalled();
     expect(onSelect).not.toHaveBeenCalled();
 
-    await user.keyboard(" ");
-    expect(toggle.getAttribute("aria-expanded")).toBe("false");
-    await user.keyboard("{Enter}");
-    expect(toggle.getAttribute("aria-expanded")).toBe("true");
     await user.keyboard("{Escape}");
     await user.click(screen.getByTestId("settings-host-switcher"));
 
-    const reopenedToggle = screen.getByRole("button", { name: "2 offline" });
-    expect(reopenedToggle.getAttribute("aria-expanded")).toBe("false");
+    expect(
+      screen.getByRole("option", { name: "Show 2 offline computers" }),
+    ).toBeTruthy();
     expect(
       screen.queryByTestId("settings-host-switcher-option-studio-offline-a"),
     ).toBeNull();

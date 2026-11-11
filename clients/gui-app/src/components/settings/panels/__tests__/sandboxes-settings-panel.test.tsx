@@ -1186,7 +1186,10 @@ describe("<SandboxesSettingsPanel />", () => {
     expect(
       failed.getByRole("button", { name: "Retry" }).hasAttribute("disabled"),
     ).toBe(false);
-    expect(failed.getByRole("button", { name: "Destroy" })).toBeTruthy();
+    const destroy = failed.getByRole("button", {
+      name: "Destroy build-box",
+    });
+    expect(destroy.textContent).toBe("Destroy");
     expect(failed.getByRole("button", { name: "Details" })).toBeTruthy();
     expect(
       failed.queryByRole("button", { name: "More actions for build-box" }),

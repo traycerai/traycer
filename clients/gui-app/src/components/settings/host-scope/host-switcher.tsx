@@ -1,7 +1,6 @@
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
-import { useId, useState, type ReactNode } from "react";
-import { CommandItem as CommandPrimitiveItem } from "cmdk";
+import { useState, type ReactNode } from "react";
 import {
   HOST_FROZEN_WORD,
   HOST_KIND_WORDS,
@@ -1176,6 +1175,7 @@ function renderComputerRows(props: {
     (host) =>
       host.sandbox === null &&
       host.health.state === "offline" &&
+      !host.settingUp &&
       host.hostId !== props.selectedHostId,
   );
   if (props.searching || offline.length < 2) {
@@ -1217,7 +1217,6 @@ function HostSwitcherCollapsible(props: {
   readonly children: ReactNode;
 }): ReactNode {
   const [open, setOpen] = useState(props.defaultOpen);
-  const contentId = useId();
   const expanded = open || props.forceOpen;
   const label = (
     <>
@@ -1250,37 +1249,20 @@ function HostSwitcherCollapsible(props: {
           {label}
         </CollapsibleTrigger>
       ) : (
-        <CommandPrimitiveItem
-          asChild
+        <CommandItem
           value={props.commandValue}
           onSelect={() => setOpen(!expanded)}
+          aria-label={
+            expanded
+              ? "Hide offline computers"
+              : `Show ${props.title} computers`
+          }
+          data-testid={`${props.testId}-toggle`}
         >
-          <Button
-            type="button"
-            role="button"
-            variant="ghost"
-            size="sm"
-            className="w-full justify-start"
-            onKeyDown={(event) => {
-              if (event.key === "Enter" || event.key === " ") {
-                event.preventDefault();
-                event.stopPropagation();
-                setOpen(!expanded);
-              }
-            }}
-            aria-expanded={expanded}
-            aria-controls={contentId}
-            data-testid={`${props.testId}-toggle`}
-          >
-            {label}
-          </Button>
-        </CommandPrimitiveItem>
+          {label}
+        </CommandItem>
       )}
-      <CollapsibleContent
-        id={props.commandValue === null ? undefined : contentId}
-      >
-        {props.children}
-      </CollapsibleContent>
+      <CollapsibleContent>{props.children}</CollapsibleContent>
     </Collapsible>
   );
 }

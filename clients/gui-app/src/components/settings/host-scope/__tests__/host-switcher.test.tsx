@@ -240,10 +240,14 @@ describe("<HostSwitcher /> offline computer folds", () => {
       "settings-host-switcher-team-team-a-offline",
     );
     expect(
-      within(personalFold).getByRole("button", { name: "2 offline" }),
+      within(personalFold).getByRole("option", {
+        name: "Show 2 offline computers",
+      }),
     ).not.toBeNull();
     expect(
-      within(teamFold).getByRole("button", { name: "2 offline" }),
+      within(teamFold).getByRole("option", {
+        name: "Show 2 offline computers",
+      }),
     ).not.toBeNull();
     expect(
       screen.getByTestId("settings-host-switcher-option-selected-offline"),

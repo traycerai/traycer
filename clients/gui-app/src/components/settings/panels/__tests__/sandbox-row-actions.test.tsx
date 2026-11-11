@@ -292,6 +292,42 @@ function renderRow(element: ReactElement): void {
 }
 
 describe("<SandboxRowActions />", () => {
+  it("names inline Destroy actions across both row components", () => {
+    const alpha = sandboxSummaryFixture({
+      id: "sbx-alpha",
+      hostId: "host-alpha",
+      displayName: "Alpha worker",
+      state: "failed",
+    });
+    const beta = sandboxSummaryFixture({
+      id: "sbx-beta",
+      hostId: "host-beta",
+      displayName: "Beta worker",
+      state: "suspending",
+    });
+    const props = {
+      configuration: { kind: "personal" } as const,
+      unreachable: false,
+      frozenNeedsOwnCredits: false,
+      settingsFailed: false,
+    };
+    renderRow(
+      <>
+        <SandboxRowActions summary={alpha} {...props} />
+        <SandboxRowActions summary={beta} {...props} />
+      </>,
+    );
+
+    const alphaDestroy = screen.getByRole("button", {
+      name: "Destroy Alpha worker",
+    });
+    const betaDestroy = screen.getByRole("button", {
+      name: "Destroy Beta worker",
+    });
+    expect(alphaDestroy.textContent).toBe("Destroy");
+    expect(betaDestroy.textContent).toBe("Destroy");
+  });
+
   it("drops the landing composer's staged New sandbox when a row opens its own sandbox there", async () => {
     useStagedSandboxStore.getState().stage(SURFACE, {
       kind: "new",
@@ -766,7 +802,10 @@ describe("<SandboxRowActions />", () => {
       expect(screen.getByTestId("sandbox-row-open-terminal").textContent).toBe(
         "Open terminal",
       );
-      expect(screen.getByRole("button", { name: "Rename" })).toBeTruthy();
+      const rename = screen.getByRole("button", {
+        name: "Rename Automations",
+      });
+      expect(rename.textContent).toBe("Rename");
       expect(
         screen.queryByRole("button", { name: /^More actions for/ }),
       ).toBeNull();
@@ -853,7 +892,10 @@ describe("<SandboxRowActions />", () => {
 
       expect(screen.getByTestId("sandbox-row-retry").textContent).toBe("Retry");
       expect(screen.queryByTestId("sandbox-row-open-terminal")).toBeNull();
-      expect(screen.getByRole("button", { name: "Rename" })).toBeTruthy();
+      const rename = screen.getByRole("button", {
+        name: "Rename Automations",
+      });
+      expect(rename.textContent).toBe("Rename");
       expect(
         screen.queryByRole("button", { name: /^More actions for/ }),
       ).toBeNull();
@@ -1326,7 +1368,9 @@ describe("<SandboxRowActions /> a sandbox whose settings did not apply", () => {
       (state) => {
         renderFailed({ state }, false);
 
-        expect(screen.getByRole("button", { name: "Destroy" })).toBeTruthy();
+        expect(
+          screen.getByRole("button", { name: "Destroy build-box" }),
+        ).toBeTruthy();
         expect(
           screen.queryByRole("button", { name: /^More actions for/ }),
         ).toBeNull();
@@ -1338,11 +1382,15 @@ describe("<SandboxRowActions /> a sandbox whose settings did not apply", () => {
 
       expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
       expect(screen.getByRole("button", { name: "Details" })).toBeTruthy();
-      expect(screen.getByRole("button", { name: "Destroy" })).toBeTruthy();
+      expect(
+        screen.getByRole("button", { name: "Destroy build-box" }),
+      ).toBeTruthy();
       expect(
         screen.queryByRole("button", { name: /^More actions for/ }),
       ).toBeNull();
-      await userEvent.click(screen.getByRole("button", { name: "Destroy" }));
+      await userEvent.click(
+        screen.getByRole("button", { name: "Destroy build-box" }),
+      );
 
       expect(
         screen.getByRole("alertdialog", {

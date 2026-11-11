@@ -145,6 +145,7 @@ export function SandboxFailedRowActions(props: {
           size="sm"
           disabled={busy}
           data-testid="sandbox-row-menu-destroy"
+          aria-label={`Destroy ${summary.displayName}`}
           onClick={() => setDestroyOpen(true)}
         >
           Destroy

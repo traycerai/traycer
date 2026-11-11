@@ -410,6 +410,7 @@ function SandboxRowMenu(props: {
         size="sm"
         disabled={props.busy}
         data-testid={`sandbox-row-menu-${onlyAction}`}
+        aria-label={`${sandboxRowActionLabel(onlyAction)} ${props.name}`}
         onClick={() => props.run(onlyAction)}
       >
         {sandboxRowActionLabel(onlyAction)}
