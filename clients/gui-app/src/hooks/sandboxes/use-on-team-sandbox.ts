@@ -24,6 +24,8 @@ export function useHostOwnerTeamId(hostId: string | null): string | null {
     if (hostId === null) return null;
     const entry = readHostDirectoryEntry(hostId);
     if (entry === null || !isRemoteHostDirectoryEntry(entry)) return null;
+    if (entry.owner !== null)
+      return entry.owner.kind === "team" ? entry.owner.id : null;
     return entry.sandbox?.ownerTeamId ?? null;
   }, [hostId]);
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
@@ -31,7 +33,7 @@ export function useHostOwnerTeamId(hostId: string | null): string | null {
 
 /** Whether a host is a team's sandbox. */
 export function useOnTeamSandbox(hostId: string | null): boolean {
-  return useHostOwnerTeamId(hostId) !== null;
+  return useSandboxHostConfiguration(hostId)?.kind === "team";
 }
 
 /**
