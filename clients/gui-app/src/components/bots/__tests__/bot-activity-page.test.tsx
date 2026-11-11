@@ -1570,6 +1570,57 @@ describe("<BotActivityPage /> a pending ask is counted once", () => {
   });
 });
 
+describe("<BotActivityPage /> a task that holds an unread failure and a pending ask counts each once", () => {
+  const MIXED = [
+    {
+      flag: "pendingApproval",
+      words: "1 needs attention · 1 waiting for approval",
+    },
+    {
+      flag: "pendingInterview",
+      words: "1 needs attention · 1 waiting for interview",
+    },
+    {
+      flag: "pendingFork",
+      words: "1 needs attention · 1 waiting for fork resolution",
+    },
+  ] as const;
+
+  it.each(MIXED)(
+    "counts a known agent's unread failure once and the task's $flag as its own ask",
+    ({ flag, words }) => {
+      warmTask("t-warm", [
+        { id: "a-fail", parentId: null, title: "Failed", archivedAt: null },
+      ]);
+      agentUnread("a-fail", { unreadFailure: true });
+      taskUnread("t-warm", { unreadFailure: true, [flag]: true });
+      mount([task("t-warm", {})], { boundHere: true });
+
+      expect(glyphLabel("t-warm")).toBe(words);
+    },
+  );
+
+  it.each(MIXED)(
+    "counts a task's unread failure no known agent carries once, beside its $flag",
+    ({ flag, words }) => {
+      working({ "t-cold": { working: ["a-1"], turn: ["a-1"] } });
+      taskUnread("t-cold", { unreadFailure: true, [flag]: true });
+      mount([task("t-cold", {})], { boundHere: true });
+
+      expect(glyphLabel("t-cold")).toBe(`${words} · 1 running`);
+    },
+  );
+
+  it("counts the unread failure once and the approval once for a task with no agent at all", () => {
+    taskUnread("t-bare", { unreadFailure: true, pendingApproval: true });
+    mount([task("t-bare", {})], { boundHere: true });
+
+    expect(glyphLabel("t-bare")).toBe(
+      "1 needs attention · 1 waiting for approval",
+    );
+  });
+});
+
 describe("<BotActivityPage /> an archived agent the bot reports waiting stays listed whatever the read says", () => {
   const AGENTS: ReadonlyArray<WarmAgent> = [
     { id: "a-live", parentId: null, title: "Lead", archivedAt: null },

@@ -218,7 +218,7 @@ function taskRollup(input: {
     withSurfaces(state, input.inputNeeded, id),
   );
   const aggregatePending = {
-    ...input.aggregate,
+    ...EMPTY_NOTIFICATION_INDICATOR_STATE,
     pendingApproval:
       input.aggregate.pendingApproval &&
       !known.some((state) => state.pendingApproval),
