@@ -214,13 +214,26 @@ function taskRollup(input: {
       ),
     );
   }
-  const known = [...states.values()];
+  const known = [...states.entries()].map(([id, state]) =>
+    withSurfaces(state, input.inputNeeded, id),
+  );
+  const aggregatePending = {
+    ...input.aggregate,
+    pendingApproval:
+      input.aggregate.pendingApproval &&
+      !known.some((state) => state.pendingApproval),
+    pendingInterview:
+      input.aggregate.pendingInterview &&
+      !known.some((state) => state.pendingInterview),
+    pendingFork:
+      input.aggregate.pendingFork && !known.some((state) => state.pendingFork),
+  };
   if (
-    input.aggregate.pendingApproval ||
-    input.aggregate.pendingInterview ||
-    input.aggregate.pendingFork
+    aggregatePending.pendingApproval ||
+    aggregatePending.pendingInterview ||
+    aggregatePending.pendingFork
   ) {
-    kinds.push(chatDescendantKind(input.aggregate, undefined));
+    kinds.push(chatDescendantKind(aggregatePending, undefined));
   }
   if (
     input.aggregate.unreadFailure &&
@@ -420,17 +433,17 @@ function useTaskAgentStates(
   const localRows = useAppLocalNotificationsStore((state) => state.byId);
   return useMemo(
     () =>
-      (agents?.nodes ?? [])
-        .filter((node) => freshHosts[agentHostOf(node, agents)])
-        .map((node) => ({
-          id: node.id,
-          indicator: selectNotificationIndicatorState(
-            { byId: localRows },
-            { epicId: taskId, chatId: node.id },
-            agentHostOf(node, agents),
-            chatIndicators,
-          ),
-        })),
+      (agents?.nodes ?? []).map((node) => ({
+        id: node.id,
+        indicator: freshHosts[agentHostOf(node, agents)]
+          ? selectNotificationIndicatorState(
+              { byId: localRows },
+              { epicId: taskId, chatId: node.id },
+              agentHostOf(node, agents),
+              chatIndicators,
+            )
+          : EMPTY_NOTIFICATION_INDICATOR_STATE,
+      })),
     [agents, chatIndicators, freshHosts, localRows, taskId],
   );
 }

@@ -322,6 +322,29 @@ function waiting(
   };
 }
 
+/** A question of `agentChatId` waiting on a person: the interview surface. */
+function waitingQuestion(
+  agentChatId: string,
+  reportedAt: number,
+): BotInputNeeded {
+  return {
+    ...waiting(agentChatId, reportedAt, "unused"),
+    surface: {
+      kind: "question",
+      blockId: `block-${agentChatId}`,
+      questions: [
+        {
+          questionId: "q-1",
+          text: "Which branch?",
+          options: ["main", "dev"],
+          allowsFreeText: true,
+        },
+      ],
+      askedAt: reportedAt,
+    },
+  };
+}
+
 /** Who works where: the agents in each task, and which are mid-turn. */
 function working(
   byEpic: Record<string, { working: string[]; turn: string[] }>,
@@ -340,7 +363,7 @@ function narrowActivity(): void {
 /** Unread done or failure, as the host's indicator read holds it per task. */
 function taskUnread(
   taskId: string,
-  flags: { unreadDone?: boolean; unreadFailure?: boolean },
+  flags: Partial<NotificationIndicatorState>,
 ): void {
   mocks.state.epicFlags[taskId] = { ...flags, unreadCount: 1 };
 }
@@ -348,7 +371,7 @@ function taskUnread(
 /** What one agent chat holds, as the host's indicator read answers for it. */
 function agentUnread(
   chatId: string,
-  flags: { unreadDone?: boolean; unreadFailure?: boolean },
+  flags: Partial<NotificationIndicatorState>,
 ): void {
   mocks.state.chatFlags[chatId] = { ...flags, unreadCount: 1 };
 }
@@ -1442,6 +1465,196 @@ describe("<BotActivityPage /> the row's status", () => {
         .getByTestId("bot-activity-task-glyph")
         .getAttribute("aria-label"),
     ).toBe("1 running · 1 completed");
+  });
+});
+
+function glyphLabel(taskId: string): string | null {
+  return within(row(taskId))
+    .getByTestId("bot-activity-task-glyph")
+    .getAttribute("aria-label");
+}
+
+const PENDING_KINDS = [
+  { flag: "pendingApproval", words: "1 waiting for approval" },
+  { flag: "pendingInterview", words: "1 waiting for interview" },
+  { flag: "pendingFork", words: "1 waiting for fork resolution" },
+] as const;
+
+describe("<BotActivityPage /> a pending ask is counted once", () => {
+  const WARM_ASKER: ReadonlyArray<WarmAgent> = [
+    { id: "a-ask", parentId: null, title: "Asker", archivedAt: null },
+  ];
+
+  it.each(PENDING_KINDS)(
+    "counts an agent's own $flag and the task's same pending as one ask",
+    ({ flag, words }) => {
+      warmTask("t-warm", WARM_ASKER);
+      agentUnread("a-ask", { [flag]: true });
+      taskUnread("t-warm", { [flag]: true });
+      mount([task("t-warm", {})], { boundHere: true });
+
+      expect(glyphLabel("t-warm")).toBe(words);
+    },
+  );
+
+  it("counts an approval the bot reports for an agent and the task's pending approval as one", () => {
+    warmTask("t-warm", WARM_ASKER);
+    taskUnread("t-warm", { pendingApproval: true });
+    mount([task("t-warm", { inputNeeded: [waiting("a-ask", NOW, "Merge")] })], {
+      boundHere: true,
+    });
+
+    expect(glyphLabel("t-warm")).toBe("1 waiting for approval");
+  });
+
+  it("counts a question the bot reports for an agent and the task's pending interview as one", () => {
+    warmTask("t-warm", WARM_ASKER);
+    taskUnread("t-warm", { pendingInterview: true });
+    mount([task("t-warm", { inputNeeded: [waitingQuestion("a-ask", NOW)] })], {
+      boundHere: true,
+    });
+
+    expect(glyphLabel("t-warm")).toBe("1 waiting for interview");
+  });
+
+  it("counts one ask for an agent that is both working and reported waiting, beside the task's pending approval", () => {
+    warmTask("t-warm", WARM_ASKER);
+    working({ "t-warm": { working: ["a-ask"], turn: ["a-ask"] } });
+    taskUnread("t-warm", { pendingApproval: true });
+    mount([task("t-warm", { inputNeeded: [waiting("a-ask", NOW, "Merge")] })], {
+      boundHere: true,
+    });
+
+    expect(glyphLabel("t-warm")).toBe("1 waiting for approval");
+  });
+
+  it("counts two agents' approvals as two, whatever the task's pending says", () => {
+    warmTask("t-warm", [
+      ...WARM_ASKER,
+      { id: "a-ask-2", parentId: null, title: "Second", archivedAt: null },
+    ]);
+    agentUnread("a-ask", { pendingApproval: true });
+    agentUnread("a-ask-2", { pendingApproval: true });
+    taskUnread("t-warm", { pendingApproval: true });
+    mount([task("t-warm", {})], { boundHere: true });
+
+    expect(glyphLabel("t-warm")).toBe("2 waiting for approval");
+  });
+
+  it("keeps a task's pending approval that no known agent carries as one ask", () => {
+    working({ "t-cold": { working: ["a-1"], turn: ["a-1"] } });
+    taskUnread("t-cold", { pendingApproval: true });
+    mount([task("t-cold", {})], { boundHere: true });
+
+    expect(glyphLabel("t-cold")).toBe("1 waiting for approval · 1 running");
+  });
+
+  it("does not let an agent's approval hide the task's pending interview", () => {
+    warmTask("t-warm", WARM_ASKER);
+    agentUnread("a-ask", { pendingApproval: true });
+    taskUnread("t-warm", { pendingInterview: true });
+    mount([task("t-warm", {})], { boundHere: true });
+
+    expect(glyphLabel("t-warm")).toBe(
+      "1 waiting for interview · 1 waiting for approval",
+    );
+  });
+
+  it("counts an unread failure a known agent carries and the task's unread failure as one", () => {
+    warmTask("t-warm", WARM_ASKER);
+    agentUnread("a-ask", { unreadFailure: true });
+    taskUnread("t-warm", { unreadFailure: true });
+    mount([task("t-warm", {})], { boundHere: true });
+
+    expect(glyphLabel("t-warm")).toBe("1 needs attention");
+  });
+});
+
+describe("<BotActivityPage /> an archived agent the bot reports waiting stays listed whatever the read says", () => {
+  const AGENTS: ReadonlyArray<WarmAgent> = [
+    { id: "a-live", parentId: null, title: "Lead", archivedAt: null },
+    { id: "a-old", parentId: null, title: "Old", archivedAt: 5 },
+  ];
+
+  async function openAgents(): Promise<
+    ReadonlyArray<[string | null, string | null]>
+  > {
+    const user = userEvent.setup();
+    await user.click(
+      within(row("t-warm")).getByTestId("bot-activity-task-chevron"),
+    );
+    return screen
+      .getAllByTestId("bot-activity-agent")
+      .map((el) => [
+        el.getAttribute("data-agent-id"),
+        el.getAttribute("data-kind"),
+      ]);
+  }
+
+  it.each(["pending", "error", "unanswered"] as const)(
+    "lists it as waiting for approval while the host's indicator read is %s",
+    async (read) => {
+      mocks.state.feedMode = "cloud";
+      mocks.state.indicatorRead = read;
+      warmTask("t-warm", AGENTS);
+      mount(
+        [task("t-warm", { inputNeeded: [waiting("a-old", NOW, "Merge")] })],
+        { boundHere: true },
+      );
+
+      expect(await openAgents()).toContainEqual(["a-old", "approval"]);
+    },
+  );
+
+  it.each(["pending", "error", "unanswered"] as const)(
+    "lists it as waiting for an interview while the host's indicator read is %s",
+    async (read) => {
+      mocks.state.feedMode = "cloud";
+      mocks.state.indicatorRead = read;
+      warmTask("t-warm", AGENTS);
+      mount(
+        [task("t-warm", { inputNeeded: [waitingQuestion("a-old", NOW)] })],
+        { boundHere: true },
+      );
+
+      expect(await openAgents()).toContainEqual(["a-old", "interview"]);
+    },
+  );
+
+  it("lists it once the read has answered, too", async () => {
+    mocks.state.feedMode = "cloud";
+    warmTask("t-warm", AGENTS);
+    mount([task("t-warm", { inputNeeded: [waiting("a-old", NOW, "Merge")] })], {
+      boundHere: true,
+    });
+
+    expect(await openAgents()).toContainEqual(["a-old", "approval"]);
+  });
+
+  it.each(["pending", "error"] as const)(
+    "keeps an archived agent nothing waits on folded away while the read is %s",
+    async (read) => {
+      mocks.state.feedMode = "cloud";
+      mocks.state.indicatorRead = read;
+      warmTask("t-warm", AGENTS);
+      mount(
+        [task("t-warm", { inputNeeded: [waiting("a-live", NOW, "Merge")] })],
+        { boundHere: true },
+      );
+
+      expect((await openAgents()).map(([id]) => id)).toEqual(["a-live"]);
+    },
+  );
+
+  it("agrees with the row's glyph, which already counts that agent once", () => {
+    mocks.state.feedMode = "cloud";
+    mocks.state.indicatorRead = "pending";
+    warmTask("t-warm", AGENTS);
+    mount([task("t-warm", { inputNeeded: [waiting("a-old", NOW, "Merge")] })], {
+      boundHere: true,
+    });
+
+    expect(glyphLabel("t-warm")).toBe("1 waiting for approval");
   });
 });
 
