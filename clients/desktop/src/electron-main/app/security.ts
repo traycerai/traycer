@@ -1,4 +1,3 @@
-import { normalizeSandboxArtifactPath } from "./sandbox-artifact-path";
 import { URL } from "node:url";
 import { shell, session, type Session, type WebContents } from "electron";
 import { log } from "./logger";
@@ -7,9 +6,9 @@ import { CONTENT_SECURITY_POLICY } from "../../shared/content-security-policy";
 import { isDevBuild } from "../../config";
 import { devRendererOriginFromEnv } from "../../ipc-contracts/dev-renderer-origin";
 import {
-  isSandboxArtifactUrl,
   isSandboxLoaderUrl,
   isSandboxUrl,
+  parseSandboxArtifactUrl,
   sandboxDeclaredGrants,
 } from "./sandbox-protocol";
 
@@ -305,9 +304,15 @@ export function isAllowedAppSubframeNavigation(
 ): boolean {
   if (isSandboxRoot) {
     if (isSandboxLoaderUrl(url)) return true;
-    if (!isSandboxArtifactUrl(url)) return false;
-    const path = normalizeSandboxArtifactPath(url);
-    return path !== null && /\.html?$/i.test(path);
+    // A document is served through its own mount; a URL naming none is a
+    // root-absolute asset reference, never a page to navigate to.
+    const address = parseSandboxArtifactUrl(url);
+    return (
+      address !== null &&
+      address.mountId !== null &&
+      address.pathname !== null &&
+      /\.html?$/i.test(address.pathname)
+    );
   }
   if (url === "about:blank" || url === "about:srcdoc") return true;
   try {

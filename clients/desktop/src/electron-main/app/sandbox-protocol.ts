@@ -1,4 +1,5 @@
 import type { SandboxArtifactServer } from "./sandbox-artifact-server";
+import { normalizeSandboxArtifactRawPath } from "./sandbox-artifact-path";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { net, protocol, type CustomScheme } from "electron";
@@ -85,18 +86,69 @@ export function parseSandboxArtifactHost(
     : null;
 }
 
-export function isSandboxArtifactUrl(url: string): boolean {
+export interface SandboxArtifactAddress {
+  readonly artifactId: string;
+  /**
+   * `null` when the URL names the artifact's site but no mount: a
+   * root-absolute reference (`/assets/x.css`) from a page on that site.
+   */
+  readonly mountId: string | null;
+  /** The artifact-tree path the URL names; `null` when that path is malformed. */
+  readonly pathname: string | null;
+}
+
+// Chromium gives each site its own renderer process, so the host decides how
+// many processes an artifact's frames cost. The renderer builds one site per
+// artifact and names the mount in the first path segments: every board of a
+// canvas then shares one process instead of taking about 100 MB each.
+const ARTIFACT_SITE_HOST = /^artifact-([a-z0-9_-]+)$/;
+const MOUNT_PATH_PREFIX = /^\/m\/([a-z0-9]+)(\/.*)?$/;
+
+/**
+ * The artifact, mount and tree path a sandbox URL names. Two shapes are
+ * served: `traycer-sandbox://artifact-<artifactId>/m/<mountId>/<path>` (a
+ * site per artifact, the shape the renderer builds) and
+ * `traycer-sandbox://artifact-<artifactId>--<mountId>/<path>` (a site per
+ * mount, kept for an artifact id that itself holds `--`).
+ */
+export function parseSandboxArtifactUrl(
+  url: string,
+): SandboxArtifactAddress | null {
+  let parsed: URL;
   try {
-    const parsed = new URL(url);
-    return (
-      parsed.protocol === `${SANDBOX_SCHEME}:` &&
-      parsed.username === "" &&
-      parsed.password === "" &&
-      parseSandboxArtifactHost(parsed.host) !== null
-    );
+    parsed = new URL(url);
   } catch {
-    return false;
+    return null;
   }
+  if (
+    parsed.protocol !== `${SANDBOX_SCHEME}:` ||
+    parsed.username !== "" ||
+    parsed.password !== ""
+  )
+    return null;
+  // URL() removes dot segments before they can be rejected; read the path as written.
+  const rawPath = /^[^:]+:\/\/[^/?#]+([^?#]*)/.exec(url)?.[1] ?? "";
+  const perMount = parseSandboxArtifactHost(parsed.host);
+  if (perMount !== null)
+    return { ...perMount, pathname: normalizeSandboxArtifactRawPath(rawPath) };
+  const site = ARTIFACT_SITE_HOST.exec(parsed.host);
+  if (site === null) return null;
+  const mount = MOUNT_PATH_PREFIX.exec(rawPath);
+  return mount === null
+    ? {
+        artifactId: site[1],
+        mountId: null,
+        pathname: normalizeSandboxArtifactRawPath(rawPath),
+      }
+    : {
+        artifactId: site[1],
+        mountId: mount[1],
+        pathname: normalizeSandboxArtifactRawPath(mount[2] ?? "/"),
+      };
+}
+
+export function isSandboxArtifactUrl(url: string): boolean {
+  return parseSandboxArtifactUrl(url) !== null;
 }
 
 /** The loader URL exactly, with any `?perm=` query. */

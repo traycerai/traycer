@@ -694,6 +694,13 @@ function bootstrapMain(config: BootstrapConfig): void {
     }
   }
 
+  // A site shared by an artifact's mounts (the desktop's) names the mount
+  // ahead of the tree path as `/m/<mountId>`; a host that names the mount
+  // itself has no such prefix.
+  const mountPrefix = location.host.includes("--")
+    ? ""
+    : (/^\/m\/[a-z0-9]+(?=\/)/.exec(location.pathname)?.[0] ?? "");
+
   // Links the frame follows itself: an anchor within this page, and on a
   // served artifact page another `.html` page of the same folder, which loads
   // through the same server and prelude. Any other file would load without
@@ -712,7 +719,7 @@ function bootstrapMain(config: BootstrapConfig): void {
       return false;
     }
     return (
-      targetPath.startsWith(config.artifactRootPath) &&
+      targetPath.startsWith(mountPrefix + config.artifactRootPath) &&
       (/\.html?$/i.test(targetPath) || targetPath.endsWith("/"))
     );
   };
@@ -730,7 +737,16 @@ function bootstrapMain(config: BootstrapConfig): void {
     } catch {
       return;
     }
+    // A root-absolute link resolves against the site and drops the mount.
+    // Put it back, so the page loads through this frame's own mount.
+    const lostMount =
+      mountPrefix !== "" &&
+      url.protocol === location.protocol &&
+      url.host === location.host &&
+      !url.pathname.startsWith(`${mountPrefix}/`);
+    if (lostMount) url.pathname = mountPrefix + url.pathname;
     if (followsInFrame(url)) {
+      if (lostMount) anchor.setAttribute("href", url.href);
       // The sandbox has no popup permission. Override explicit and inherited
       // targets so a page inside this artifact always stays in its frame.
       anchor.setAttribute("target", "_self");

@@ -239,11 +239,32 @@ describe("served artifact page links", () => {
     readonly artifactRootPath: string | undefined;
     readonly anchorTarget: string | null;
     readonly baseTarget: string | null;
-  }): {
+  }): ClickedLink {
+    return clickLinkAt(
+      "traycer-artifact://artifact-a1--m1/site/index.html",
+      input,
+    );
+  }
+
+  interface ClickedLink {
     readonly followed: boolean;
     readonly target: string | null;
+    /** Where the anchor points once the click has been handled. */
+    readonly href: string;
     readonly linkRequests: readonly unknown[];
-  } {
+  }
+
+  /** The same click on a page served at `pageUrl`. */
+  function clickLinkAt(
+    pageUrl: string,
+    input: {
+      readonly artifactPage: ArtifactPageRole;
+      readonly href: string;
+      readonly artifactRootPath: string | undefined;
+      readonly anchorTarget: string | null;
+      readonly baseTarget: string | null;
+    },
+  ): ClickedLink {
     const composed = buildDocument({
       html: "",
       csp: null,
@@ -262,7 +283,7 @@ describe("served artifact page links", () => {
     });
     const { window } = new JSDOM("<!doctype html><html><body></body></html>", {
       runScripts: "dangerously",
-      url: "traycer-artifact://artifact-a1--m1/site/index.html",
+      url: pageUrl,
       // jsdom reports every followed link as an unimplemented navigation.
       virtualConsole: new VirtualConsole(),
     });
@@ -285,6 +306,7 @@ describe("served artifact page links", () => {
       new window.MouseEvent("click", { bubbles: true, cancelable: true }),
     );
     const target = anchor.getAttribute("target");
+    const href = anchor.href;
     window.close();
     // The bootstrap posts other notifications too; only link requests matter here.
     const linkRequests = posted.filter(
@@ -294,7 +316,7 @@ describe("served artifact page links", () => {
         "method" in message &&
         message.method === "ui/open-link",
     );
-    return { followed, target, linkRequests };
+    return { followed, target, href, linkRequests };
   }
 
   it.each([
@@ -358,6 +380,41 @@ describe("served artifact page links", () => {
     expect(clickFollows("found", "../other/page.htm", "/site/")).toBe(false);
     expect(clickFollows("found", "/site-evil/page.html", "/site/")).toBe(false);
     expect(clickFollows("found", "/site-evil/", "/site/")).toBe(false);
+  });
+
+  describe("on a desktop site shared by the artifact's mounts", () => {
+    const PAGE = "traycer-sandbox://artifact-a1/m/m1/site/index.html";
+    const click = (href: string): ClickedLink =>
+      clickLinkAt(PAGE, {
+        artifactPage: "found",
+        href,
+        artifactRootPath: "/site/",
+        anchorTarget: null,
+        baseTarget: null,
+      });
+
+    it("follows a relative link to another page through the page's own mount", () => {
+      const clicked = click("about.html");
+      expect(clicked.followed).toBe(true);
+      expect(clicked.href).toBe(
+        "traycer-sandbox://artifact-a1/m/m1/site/about.html",
+      );
+    });
+
+    it("puts the mount back on a root-absolute link, which resolves against the site and drops it", () => {
+      const clicked = click("/site/about.html");
+      expect(clicked.followed).toBe(true);
+      expect(clicked.href).toBe(
+        "traycer-sandbox://artifact-a1/m/m1/site/about.html",
+      );
+    });
+
+    it("refuses a link outside the artifact's folder, prefixed or not", () => {
+      expect(click("/other/page.html").followed).toBe(false);
+      expect(click("../other/page.html").followed).toBe(false);
+      // Another mount's path is not this page's folder under its own mount.
+      expect(click("/m/m2/site/page.html").followed).toBe(false);
+    });
   });
 
   it("refuses a link whose path cannot be decoded instead of following it", () => {

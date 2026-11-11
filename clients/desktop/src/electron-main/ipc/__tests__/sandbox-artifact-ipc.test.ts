@@ -152,6 +152,10 @@ describe("isSandboxArtifactUrl", () => {
   it.each([
     "traycer-sandbox://artifact-report--mount1/index.html",
     "traycer-sandbox://artifact-report--mount1/docs/page.html?x=1",
+    // One site per artifact: the mount is the path's first segments.
+    "traycer-sandbox://artifact-report/m/mount1/index.html",
+    // A root-absolute reference from a page on that site names no mount.
+    "traycer-sandbox://artifact-report/assets/app.css",
   ])("accepts %s", (url) => {
     expect(isSandboxArtifactUrl(url)).toBe(true);
   });
@@ -311,6 +315,113 @@ describe("SandboxArtifactServer: fetch path handling", () => {
       expect(sent[0]?.request.path).toBe(expectedPath);
     },
   );
+});
+
+describe("SandboxArtifactServer: one site per artifact", () => {
+  it.each([
+    ["/m/mount1", "index.html"],
+    ["/m/mount1/", "index.html"],
+    ["/m/mount1/boards/home.html", "boards/home.html"],
+    ["/m/mount1/docs/", "docs/index.html"],
+  ])(
+    "reads the mount from the path and asks it for the rest (%s -> %s)",
+    async (suffix, expectedPath) => {
+      const { server, sent } = buildAutoRespondingServer(10, "text/html");
+      server.register("mount1", "window-a");
+      const response = await server.fetch(
+        new Request(`traycer-sandbox://artifact-report${suffix}`),
+      );
+      expect(response.status).toBe(200);
+      expect(sent[0]?.request).toMatchObject({
+        mountId: "mount1",
+        path: expectedPath,
+      });
+    },
+  );
+
+  it("answers 400 for a literal '..' after the mount, read from the raw request url", async () => {
+    const server = new SandboxArtifactServer(() => true);
+    server.register("mount1", "window-a");
+    const response = await server.fetch(
+      rawRequest("traycer-sandbox://artifact-report/m/mount1/../secret"),
+    );
+    expect(response.status).toBe(400);
+  });
+
+  it("refuses a mount under another artifact's site once its first request has named its own", async () => {
+    const { server, sent } = buildAutoRespondingServer(10, "text/html");
+    server.register("mount1", "window-a");
+    await server.fetch(
+      new Request("traycer-sandbox://artifact-report/m/mount1/index.html"),
+    );
+    const response = await server.fetch(
+      new Request("traycer-sandbox://artifact-other/m/mount1/index.html"),
+    );
+    expect(response.status).toBe(404);
+    expect(sent).toHaveLength(1);
+  });
+});
+
+describe("SandboxArtifactServer: root-absolute references", () => {
+  // A page served at /m/<mount>/boards/home.html that links "/assets/app.css"
+  // asks the artifact's site for it with no mount in the path.
+  const ASSET = "traycer-sandbox://artifact-report/assets/app.css";
+
+  async function serveFirstPage(
+    server: SandboxArtifactServer,
+    artifactId: string,
+    mountId: string,
+  ): Promise<void> {
+    await server.fetch(
+      new Request(
+        `traycer-sandbox://artifact-${artifactId}/m/${mountId}/index.html`,
+      ),
+    );
+  }
+
+  it("serves it through the newest mount of that artifact", async () => {
+    const { server, sent } = buildAutoRespondingServer(10, "text/css");
+    server.register("mounta", "window-a");
+    server.register("mountb", "window-b");
+    server.register("mountc", "window-a");
+    await serveFirstPage(server, "report", "mounta");
+    await serveFirstPage(server, "report", "mountb");
+    await serveFirstPage(server, "other", "mountc");
+
+    const response = await server.fetch(new Request(ASSET));
+
+    expect(response.status).toBe(200);
+    expect(sent.at(-1)).toMatchObject({
+      windowId: "window-b",
+      request: { mountId: "mountb", path: "assets/app.css" },
+    });
+  });
+
+  it("falls back to an older mount of the artifact once the newest is gone", async () => {
+    const { server, sent } = buildAutoRespondingServer(10, "text/css");
+    server.register("mounta", "window-a");
+    server.register("mountb", "window-a");
+    await serveFirstPage(server, "report", "mounta");
+    await serveFirstPage(server, "report", "mountb");
+    server.unregister("mountb");
+
+    await server.fetch(new Request(ASSET));
+
+    expect(sent.at(-1)?.request.mountId).toBe("mounta");
+  });
+
+  it("answers 404 when no mount has served that artifact", async () => {
+    const { server, sent } = buildAutoRespondingServer(10, "text/css");
+    server.register("mounta", "window-a");
+    server.register("mountb", "window-a");
+    await serveFirstPage(server, "other", "mounta");
+
+    const response = await server.fetch(new Request(ASSET));
+
+    expect(response.status).toBe(404);
+    expect(await response.text()).toBe("Artifact mount not found");
+    expect(sent).toHaveLength(1);
+  });
 });
 
 describe("SandboxArtifactServer: fetch range responses", () => {
@@ -764,8 +875,10 @@ describe("isAllowedAppSubframeNavigation: artifact documents at the sandbox root
     "traycer-sandbox://artifact-report--mount1/docs/page.htm",
     // A trailing-slash directory normalizes to its index document, the same
     // as a real fetch of it would - the navigation guard and the server
-    // share `normalizeSandboxArtifactPath`, so this has to agree with it.
+    // share `parseSandboxArtifactUrl`, so this has to agree with it.
     "traycer-sandbox://artifact-report--mount1/docs/",
+    "traycer-sandbox://artifact-report/m/mount1/boards/home.html",
+    "traycer-sandbox://artifact-report/m/mount1/",
   ])("allows a sandbox root to load an artifact document: %s", (url) => {
     expect(isAllowedAppSubframeNavigation(url, true)).toBe(true);
   });
@@ -773,9 +886,14 @@ describe("isAllowedAppSubframeNavigation: artifact documents at the sandbox root
   it.each([
     "traycer-sandbox://artifact-report--mount1/script.js",
     "traycer-sandbox://artifact-report--mount1/style.css",
-    // A literal ".." segment fails `normalizeSandboxArtifactPath` outright
-    // (null path), independent of it ending in "/" or ".html".
+    // A literal ".." segment fails path normalization outright (null
+    // path), independent of it ending in "/" or ".html".
     "traycer-sandbox://artifact-report--mount1/docs/../x/",
+    "traycer-sandbox://artifact-report/m/mount1/script.js",
+    // A URL naming no mount is an asset reference: a document is only ever
+    // served through its own mount.
+    "traycer-sandbox://artifact-report/index.html",
+    "traycer-sandbox://artifact-report/boards/home.html",
   ])(
     "denies a sandbox root loading a non-document artifact path: %s",
     (url) => {

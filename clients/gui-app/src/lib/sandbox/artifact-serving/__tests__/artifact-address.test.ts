@@ -236,6 +236,40 @@ describe("parseArtifactAddress", () => {
       expect(parseArtifactAddress(url)).toBeNull();
     });
 
+    it.each<[string, string, string]>([
+      ["a page", `/m/${MOUNT}/boards/home.html`, "boards/home.html"],
+      ["the mount alone", `/m/${MOUNT}`, "index.html"],
+      ["a folder", `/m/${MOUNT}/docs/`, "docs/index.html"],
+    ])(
+      "reads the mount from the path of a desktop site shared by an artifact's mounts: %s",
+      (_label, suffix, path) => {
+        expect(
+          parseArtifactAddress(`traycer-sandbox://artifact-myart123${suffix}`),
+        ).toEqual({ artifactId: "myart123", mountId: MOUNT, path });
+      },
+    );
+
+    it.each<[string, string]>([
+      [
+        "a shared site with no mount in the path",
+        "traycer-sandbox://artifact-myart123/boards/home.html",
+      ],
+      [
+        "a dot segment after the mount",
+        `traycer-sandbox://artifact-myart123/m/${MOUNT}/../home.html`,
+      ],
+      [
+        "a mount in the path on the iOS scheme",
+        `traycer-artifact://artifact-myart123/m/${MOUNT}/x`,
+      ],
+      [
+        "a mount in the path on the Android host",
+        `https://artifact-myart123${ANDROID_SUFFIX}/m/${MOUNT}/x`,
+      ],
+    ])("refuses %s", (_label, url) => {
+      expect(parseArtifactAddress(url)).toBeNull();
+    });
+
     it("admits both reserved custom schemes", () => {
       expect(
         parseArtifactAddress(`traycer-sandbox://artifact-myart123--${MOUNT}/x`),
@@ -277,6 +311,54 @@ describe("buildArtifactAddress", () => {
       mountId: MOUNT,
       path: "report.html",
     });
+  });
+
+  it("puts the mount in the path when the origin names only the artifact, so two mounts share a site", () => {
+    const origin = "traycer-sandbox://artifact-myart123";
+    const other = newMountId();
+    const url = buildArtifactAddress({
+      origin,
+      artifactId: "myart123",
+      mountId: MOUNT,
+      treePath: "",
+      path: "boards/home.html",
+    });
+    expect(url).toBe(`${origin}/m/${MOUNT}/boards/home.html`);
+    expect(parseArtifactAddress(url)).toEqual({
+      artifactId: "myart123",
+      mountId: MOUNT,
+      path: "boards/home.html",
+    });
+    const sibling = buildArtifactAddress({
+      origin,
+      artifactId: "myart123",
+      mountId: other,
+      treePath: "",
+      path: "boards/home.html",
+    });
+    expect(new URL(sibling).host).toBe(new URL(url).host);
+    expect(parseArtifactAddress(sibling)?.mountId).toBe(other);
+    // A parent reference stays inside the mount; the artifact's files are
+    // reached through the page's own mount, never around it.
+    expect(
+      parseArtifactAddress(new URL("../assets/app.css", url).href),
+    ).toEqual({
+      artifactId: "myart123",
+      mountId: MOUNT,
+      path: "assets/app.css",
+    });
+  });
+
+  it("throws when a shared site's origin names another artifact", () => {
+    expect(() =>
+      buildArtifactAddress({
+        origin: "traycer-sandbox://artifact-otherart",
+        artifactId: "myart123",
+        mountId: MOUNT,
+        treePath: "",
+        path: "x",
+      }),
+    ).toThrow();
   });
 
   it("throws when the origin's own artifactId/mountId do not match the given fields", () => {
