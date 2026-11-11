@@ -17,12 +17,15 @@ import type {
 } from "@traycer/protocol/host/worktree-schemas";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostOwnership } from "@traycer-clients/shared/host-client/host-ownership";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import { CURRENT_EPIC_VERSION } from "@traycer-clients/shared/epic/epic-version";
 
-import type { HostRpcRegistry } from "@/lib/host";
-import { hostQueryKeys } from "@/lib/query-keys";
+import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
+import { authQueryKeys, hostQueryKeys } from "@/lib/query-keys";
+import { useHostOwnership } from "@/hooks/auth/use-host-ownership";
+import { SupersededAuthEraError } from "@/lib/auth/auth-service";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { readLocalHostIdSnapshot } from "@/lib/host/local-host-id-snapshot";
 import { useEpicCreateForClient } from "@/hooks/epic/use-epic-create-mutation";
@@ -188,8 +191,8 @@ export interface LandingComposerSubmitArgs {
     readonly ultracode: boolean;
   };
   /**
-   * Who the new task belongs to: the resolved host's owner, read by the
-   * caller at submit; `null` is Personal.
+   * The owner known to the caller at submit; `null` is Personal. A pending
+   * local ownership read settles before the create chooses its final owner.
    */
   readonly owner: LandingOwnerTeam | null;
   /**
@@ -299,6 +302,10 @@ export interface LandingPlacementRefusal {
   readonly message: string;
 }
 
+type LandingEpicCreateResult = CreateEpicResponseV12 & {
+  readonly createdOwner: EpicCreateOwner | null;
+};
+
 interface FinalizeLandingSubmissionInput {
   /** What the HOST receives: image hashes inlined back to base64. */
   readonly resolvedContent: JsonContent;
@@ -357,6 +364,48 @@ export function useLandingComposerActions(
 ): LandingComposerActions {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const auth = useHostBinding()?.auth ?? null;
+  const localHostId =
+    target.client?.getActiveHost()?.kind === "local"
+      ? target.resolvedHostId
+      : null;
+  const localOwnership = useHostOwnership(localHostId, localHostId !== null);
+  const localOwnerQuery = useCallback(
+    (hostId: string) => {
+      if (auth === null || localHostId !== hostId) return undefined;
+      return queryClient.getQueryCache().find<HostOwnership>({
+        queryKey: authQueryKeys.hostOwnership(
+          auth,
+          useAuthStore.getState().contextMetadata?.userId ?? null,
+          hostId,
+        ),
+        exact: true,
+      });
+    },
+    [auth, localHostId, queryClient],
+  );
+  const ownerForCreate = useCallback(
+    async (
+      hostId: string,
+      fallback: EpicCreateOwner | null,
+    ): Promise<EpicCreateOwner | null> => {
+      const query = localOwnerQuery(hostId);
+      if (query === undefined) return fallback;
+      const userId = useAuthStore.getState().contextMetadata?.userId ?? null;
+      // A submit may hold a null owner from the render before this read settled.
+      if (query.state.status === "pending") {
+        await query.promise?.catch(() => undefined);
+        if (
+          userId !== (useAuthStore.getState().contextMetadata?.userId ?? null)
+        )
+          throw new SupersededAuthEraError();
+      }
+      const owner =
+        query.state.status === "success" ? query.state.data?.owner : null;
+      return owner?.kind === "team" ? { kind: "team", teamId: owner.id } : null;
+    },
+    [localOwnerQuery],
+  );
   const createEpic = useEpicCreateForClient(target.client);
   const attachClient = useEpicAttachmentClient(target.client);
   const attachEnvironment = useEpicAttachEnvironment(attachClient, "landing");
@@ -398,7 +447,7 @@ export function useLandingComposerActions(
   // frozen type would narrow nothing here - it would simply stop describing the
   // value this returns.
   const createLandingEpic = useCallback(
-    (input: {
+    async (input: {
       readonly epicId: string;
       /** The validated placement host - never re-read off a client here. */
       readonly hostId: string;
@@ -430,7 +479,8 @@ export function useLandingComposerActions(
        * this epic's binding refetches until the window is reloaded.
        */
       readonly captureSeedRecovery: (recover: () => void) => void;
-    }): Promise<CreateEpicResponseV12> => {
+    }): Promise<LandingEpicCreateResult> => {
+      const owner = await ownerForCreate(input.hostId, input.owner);
       const profile = useAuthStore.getState().profile;
       const hostId = input.hostId;
       const optimisticRows = buildOptimisticWorkspaceBindingRows(
@@ -539,7 +589,7 @@ export function useLandingComposerActions(
         chat: input.chat,
         // A team owner is floored at `epic.create@1.3` by the create
         // mutation, so it never reaches a host that would strip it.
-        owner: input.owner,
+        owner,
       })
         .then((response) => {
           // A REFUSAL resolves, so it arrives HERE and not in the `.catch`
@@ -591,9 +641,10 @@ export function useLandingComposerActions(
             queryClient.removeQueries({ queryKey: seededBindingsKey });
           }
           throw error;
-        });
+        })
+        .then((response) => ({ ...response, createdOwner: owner }));
     },
-    [createEpicMutateAsync, queryClient],
+    [createEpicMutateAsync, ownerForCreate, queryClient],
   );
 
   // Everything from building `submittedContent` through the optimistic
@@ -1719,9 +1770,19 @@ export function useLandingComposerActions(
           if (!handed.isCurrent()) return;
           // The task stays on its placement, with its chosen owner. Its team
           // sandbox may serve it only after this personal-host attachment.
-          if (attachTeamId !== null) {
+          const createdOwner = response.createdOwner;
+          const settledAttachTeamId =
+            args.sandboxTeamId !== null &&
+            args.sandboxTeamId !==
+              (createdOwner?.kind === "team" ? createdOwner.teamId : null)
+              ? args.sandboxTeamId
+              : null;
+          if (settledAttachTeamId !== null) {
             try {
-              await attachEnvironmentAsync({ epicId, teamId: attachTeamId });
+              await attachEnvironmentAsync({
+                epicId,
+                teamId: settledAttachTeamId,
+              });
             } catch (error) {
               if (!isAttachEnvironmentUnsupported(error)) {
                 attachRefused(error);
@@ -1759,6 +1820,7 @@ export function useLandingComposerActions(
       // without it the composer would report itself idle for the whole of a
       // multi-megabyte `drafts.putBlob` pass and keep Send live through it.
       isPending:
+        (localOwnership.isPending && localOwnership.fetchStatus !== "idle") ||
         createEpic.isPending ||
         attachEnvironment.isPending ||
         terminalAgentCreate.isPending ||
@@ -1771,6 +1833,8 @@ export function useLandingComposerActions(
       attachmentUpload,
       attachEnvironment.isPending,
       createEpic.isPending,
+      localOwnership.fetchStatus,
+      localOwnership.isPending,
       placementAdmitsTask,
       selectTerminalAgent,
       startTaskOnStagedSandbox,

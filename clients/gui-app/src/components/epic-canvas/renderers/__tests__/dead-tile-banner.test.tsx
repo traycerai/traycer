@@ -606,8 +606,12 @@ describe("<ChatDeadTileBanner />", () => {
 describe("<ChatDeadTileBanner /> for a team environment's chat (environmentOwned)", () => {
   const HOST_FACT = "This chat's host isn't available.";
 
-  it("says the host is out and the copy shown, with no clone clause and no collaborator", () => {
-    for (const reason of ["host-offline", "chat-not-visible"] as const) {
+  it("distinguishes an unavailable host from missing history, with the copy shown", () => {
+    for (const reason of [
+      "host-offline",
+      "chat-not-visible",
+      "chat-not-on-this-host",
+    ] as const) {
       const testId = `chat-dead-env-${reason}`;
       const { unmount } = render(
         <ChatDeadTileBanner
@@ -627,10 +631,23 @@ describe("<ChatDeadTileBanner /> for a team environment's chat (environmentOwned
       );
 
       const text = screen.getByTestId(testId).textContent;
-      expect(text).toContain(`${HOST_FACT} Showing the last published copy.`);
+      const fact =
+        reason === "host-offline"
+          ? HOST_FACT
+          : "This agent's history isn't available here.";
+      expect(text).toContain(`${fact} Showing the last published copy.`);
       expect(text).not.toContain("collaborator");
       expect(text).not.toContain("Cloning creates");
       expect(text).not.toContain("team-computer");
+      if (reason !== "host-offline") {
+        expect(
+          screen.getByTestId("report-context").getAttribute("data-message"),
+        ).toBe(
+          reason === "chat-not-visible"
+            ? "The agent's history could not be found on its bound host."
+            : "The connected host answered that it no longer has this agent's history.",
+        );
+      }
       unmount();
     }
   });

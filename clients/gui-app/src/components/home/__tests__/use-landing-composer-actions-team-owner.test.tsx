@@ -14,6 +14,7 @@
  * owner refusal's `readNegotiatedMethodVersion` read, so the two agree.
  */
 import { useLandingComposerActions } from "@/components/home/hooks/use-landing-composer-actions";
+import { useLandingOwner } from "@/hooks/home/use-landing-owner";
 import type { LandingPlacementTarget } from "@/lib/composer/landing-placement";
 // Type-only, so it is erased before `vi.hoisted` runs and cannot re-enter the
 // module this file mocks.
@@ -50,6 +51,18 @@ import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 import { resetDraftBlobTransportForTests } from "@/lib/drafts/draft-blob-transport";
 import { resetCloudDraftImageRecoveryForTests } from "@/lib/drafts/cloud-draft-image-recovery";
+import { authQueryKeys } from "@/lib/query-keys";
+import {
+  installHostConnectionRegistrySource,
+  resetHostConnectionRegistryForTest,
+} from "@traycer-clients/shared/host-client/host-connection-registry";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { remoteEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
+import type { AuthEra } from "@traycer-clients/shared/auth/request-context-provider";
+import type { HostOwnershipResult } from "@traycer-clients/shared/host-client/host-ownership";
+import type { HostOwnerPrincipal } from "@traycer/protocol/host/host-status";
 
 interface CapturedNavigation {
   readonly search?: (
@@ -64,7 +77,7 @@ const landingMocks = vi.hoisted(() => ({
   getActiveHostId: vi.fn(() => "host-landing"),
   getRequestContextUserId: vi.fn<() => string | null>(() => "user-landing"),
   getLocalHostId: vi.fn<() => string | null>(() => "host-local-typing"),
-  getActiveHost: vi.fn(() => ({
+  getActiveHost: vi.fn<() => HostDirectoryEntry>(() => ({
     hostId: "host-landing",
     label: "Local",
     kind: "local",
@@ -72,6 +85,7 @@ const landingMocks = vi.hoisted(() => ({
     version: "0.0.0-test",
     transportDialability: "dialable",
   })),
+  getHostBinding: vi.fn<() => LandingAuthBinding | null>(() => null),
 }));
 
 vi.mock("@tanstack/react-router", () => ({
@@ -80,7 +94,7 @@ vi.mock("@tanstack/react-router", () => ({
 }));
 
 vi.mock("@/lib/host", () => ({
-  useHostBinding: () => null,
+  useHostBinding: () => landingMocks.getHostBinding(),
   useHostClient: () => ({
     request: landingMocks.request,
     requestWithSignalRequiringHostMethodVersion: (
@@ -178,6 +192,110 @@ const ACME_OWNER = { teamId: "t1", slug: "acme" } as const;
 const HOST_TOO_OLD = "This host can't create team tasks yet. Update the host.";
 const SIGN_IN_FOR_ACME = "Sign in to create a task for acme.";
 const NOT_ON_TEAM_SANDBOXES = "Not available on team sandboxes.";
+const LOCAL_OWNERSHIP_ERA: AuthEra = {
+  identity: "user-landing",
+  credentialGeneration: 1,
+};
+
+interface LandingAuthBinding {
+  readonly directory: {
+    list(): Promise<readonly HostDirectoryEntry[]>;
+    onChange(listener: () => void): { dispose(): void };
+  };
+  readonly auth: {
+    currentAuthEra(): AuthEra;
+    readHostOwnership(
+      hostId: string,
+      era: AuthEra,
+    ): Promise<HostOwnershipResult>;
+  };
+}
+
+interface DeferredValue<T> {
+  readonly promise: Promise<T>;
+  resolve(value: T): void;
+  reject(error: Error): void;
+}
+
+interface PendingLocalOwnership {
+  readonly directory: LandingAuthBinding["directory"];
+  readonly auth: LandingAuthBinding["auth"];
+  readonly reads: Array<{ readonly hostId: string; readonly era: AuthEra }>;
+  resolve(owner: HostOwnerPrincipal): void;
+  refresh(owner: HostOwnerPrincipal): void;
+  reject(error: Error): void;
+}
+
+function deferredValue<T>(): DeferredValue<T> {
+  let resolvePromise: (value: T) => void = () => undefined;
+  let rejectPromise: (error: Error) => void = () => undefined;
+  const promise = new Promise<T>((resolve, reject) => {
+    resolvePromise = resolve;
+    rejectPromise = reject;
+  });
+  return {
+    promise,
+    resolve: (value) => resolvePromise(value),
+    reject: (error) => rejectPromise(error),
+  };
+}
+
+function createPendingLocalOwnership(): PendingLocalOwnership {
+  const deferred = deferredValue<HostOwnershipResult>();
+  const refreshed = deferredValue<HostOwnershipResult>();
+  const reads: Array<{ readonly hostId: string; readonly era: AuthEra }> = [];
+  return {
+    directory: {
+      list: () => Promise.resolve([]),
+      onChange: () => ({ dispose: () => undefined }),
+    },
+    auth: {
+      currentAuthEra: () => LOCAL_OWNERSHIP_ERA,
+      readHostOwnership: (hostId, era) => {
+        reads.push({ hostId, era });
+        return reads.length === 1 ? deferred.promise : refreshed.promise;
+      },
+    },
+    reads,
+    resolve: (owner) => deferred.resolve(ownerResult(owner)),
+    refresh: (owner) => refreshed.resolve(ownerResult(owner)),
+    reject: (error) => deferred.reject(error),
+  };
+}
+
+function installOwnerDirectoryEntry(entry: HostDirectoryEntry): void {
+  const rows = new Map([[entry.hostId, entry]]);
+  installHostConnectionRegistrySource({
+    directory: {
+      findById: (hostId) => rows.get(hostId) ?? null,
+      onDirectoryChanged: () => ({ dispose: () => undefined }),
+    },
+    leases: null,
+  });
+}
+
+function useActionsWithResolvedOwner() {
+  return {
+    owner: useLandingOwner(landingMocks.getActiveHostId()),
+    actions: useLandingComposerActions(useTestPlacementTarget()),
+  };
+}
+
+function ownerResult(owner: HostOwnerPrincipal): HostOwnershipResult {
+  return {
+    kind: "ok",
+    host: {
+      hostId: TEST_HOST_ID,
+      owner,
+      kind: "machine",
+      remoteAccess: false,
+    },
+  };
+}
+
+function localOwnerDirectoryEntry(): HostDirectoryEntry {
+  return { ...mockLocalHostEntry, hostId: TEST_HOST_ID };
+}
 
 function hasEpicCreateRequest(): boolean {
   return landingMocks.request.mock.calls.some(
@@ -243,6 +361,8 @@ describe("useLandingComposerActions team owner and team sandbox refusals", () =>
       version: "0.0.0-test",
       transportDialability: "dialable",
     });
+    landingMocks.getHostBinding.mockReset();
+    landingMocks.getHostBinding.mockReturnValue(null);
     imageStoreMocks.sessionImageBytes.mockReset();
     imageStoreMocks.sessionImageBytes.mockReturnValue(null);
     imageStoreMocks.getImageBytes.mockReset();
@@ -280,10 +400,12 @@ describe("useLandingComposerActions team owner and team sandbox refusals", () =>
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     setSystemTabModalApi(null);
     __resetTabNavigationControllerForTesting();
     draftRuntimeRegistry.resetForTesting();
     cleanup();
+    resetHostConnectionRegistryForTest();
     useAuthStore.getState().setSignedOut();
     resetNegotiatedManifests();
     resetCloudDraftImageRecoveryForTests();
@@ -310,6 +432,266 @@ describe("useLandingComposerActions team owner and team sandbox refusals", () =>
       attached: false,
       effectiveHostId: null,
     });
+  });
+
+  it("waits for local team ownership before creating and uses the resolved owner", async () => {
+    recordNegotiatedHostManifest(TEST_HOST_ID, {
+      "epic.create": { major: 1, minor: 3 },
+    });
+    useAuthStore.setState({
+      shareableTeams: [{ teamId: "t1", slug: "acme", avatarUrl: null }],
+    });
+    const ownership = createPendingLocalOwnership();
+    landingMocks.getHostBinding.mockReturnValue({
+      auth: ownership.auth,
+      directory: ownership.directory,
+    });
+    installOwnerDirectoryEntry(localOwnerDirectoryEntry());
+    const queryClient = newQueryClient();
+    const { result } = renderHook(() => useActionsWithResolvedOwner(), {
+      wrapper: queryClientWrapper(queryClient),
+    });
+
+    await waitFor(() => expect(ownership.reads).toHaveLength(1));
+    expect(result.current.owner).toBeNull();
+    const pendingUi = result.current.actions.isPending;
+    vi.useFakeTimers();
+    let refusal: { readonly message: string } | null = null;
+    act(() => {
+      refusal = result.current.actions.submit({
+        draftId: null,
+        editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
+        owner: result.current.owner,
+        teamSandboxHarnessBlocked: false,
+        settled: null,
+        toolbar: defaultToolbar(),
+      });
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    const createdBeforeOwnershipResolved = hasEpicCreateRequest();
+    ownership.resolve({ kind: "team", id: "t1", name: "Acme" });
+    vi.useRealTimers();
+    await waitFor(() => expect(hasEpicCreateRequest()).toBe(true));
+
+    expect(refusal).toBeNull();
+    expect(createdBeforeOwnershipResolved).toBe(false);
+    expect(ownerFromCreatePayload(epicCreatePayload())).toEqual({
+      kind: "team",
+      teamId: "t1",
+    });
+    expect(pendingUi).toBe(true);
+    expect(ownership.reads).toEqual([
+      { hostId: TEST_HOST_ID, era: LOCAL_OWNERSHIP_ERA },
+    ]);
+    queryClient.clear();
+  });
+
+  it("creates a local personal task with a null owner after ownership resolves", async () => {
+    recordNegotiatedHostManifest(TEST_HOST_ID, {
+      "epic.create": { major: 1, minor: 3 },
+    });
+    const ownership = createPendingLocalOwnership();
+    landingMocks.getHostBinding.mockReturnValue({
+      auth: ownership.auth,
+      directory: ownership.directory,
+    });
+    installOwnerDirectoryEntry(localOwnerDirectoryEntry());
+    const queryClient = newQueryClient();
+    const { result } = renderHook(() => useActionsWithResolvedOwner(), {
+      wrapper: queryClientWrapper(queryClient),
+    });
+
+    await waitFor(() => expect(ownership.reads).toHaveLength(1));
+    const pendingUi = result.current.actions.isPending;
+    vi.useFakeTimers();
+    act(() => {
+      result.current.actions.submit({
+        draftId: null,
+        editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
+        owner: result.current.owner,
+        teamSandboxHarnessBlocked: false,
+        settled: null,
+        toolbar: defaultToolbar(),
+      });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    const createdBeforeOwnershipResolved = hasEpicCreateRequest();
+    ownership.resolve({ kind: "user", id: "user-landing" });
+    vi.useRealTimers();
+    await waitFor(() => expect(hasEpicCreateRequest()).toBe(true));
+
+    expect(pendingUi).toBe(true);
+    expect(createdBeforeOwnershipResolved).toBe(false);
+    expect(ownerFromCreatePayload(epicCreatePayload())).toBeNull();
+    queryClient.clear();
+  });
+
+  it("uses the current personal owner when the local ownership query fails", async () => {
+    recordNegotiatedHostManifest(TEST_HOST_ID, {
+      "epic.create": { major: 1, minor: 3 },
+    });
+    const ownership = createPendingLocalOwnership();
+    landingMocks.getHostBinding.mockReturnValue({
+      auth: ownership.auth,
+      directory: ownership.directory,
+    });
+    installOwnerDirectoryEntry(localOwnerDirectoryEntry());
+    const queryClient = newQueryClient();
+    const { result } = renderHook(() => useActionsWithResolvedOwner(), {
+      wrapper: queryClientWrapper(queryClient),
+    });
+
+    await waitFor(() => expect(ownership.reads).toHaveLength(1));
+    vi.useFakeTimers();
+    act(() => {
+      result.current.actions.submit({
+        draftId: null,
+        editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
+        owner: result.current.owner,
+        teamSandboxHarnessBlocked: false,
+        settled: null,
+        toolbar: defaultToolbar(),
+      });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    const createdBeforeOwnershipSettled = hasEpicCreateRequest();
+    ownership.reject(new Error("ownership unavailable"));
+    vi.useRealTimers();
+    await waitFor(() => expect(hasEpicCreateRequest()).toBe(true));
+
+    expect(createdBeforeOwnershipSettled).toBe(false);
+    expect(ownerFromCreatePayload(epicCreatePayload())).toBeNull();
+    queryClient.clear();
+  });
+
+  it("keeps the trusted remote team owner path unchanged", async () => {
+    recordNegotiatedHostManifest(TEST_HOST_ID, {
+      "epic.create": { major: 1, minor: 3 },
+    });
+    const entry: RemoteHostDirectoryEntry = {
+      ...remoteEntry(TEST_HOST_ID, null),
+      owner: { kind: "team", id: "t1", name: "Acme" },
+    };
+    installOwnerDirectoryEntry(entry);
+    landingMocks.getActiveHost.mockReturnValue(entry);
+    useAuthStore.setState({
+      shareableTeams: [{ teamId: "t1", slug: "acme", avatarUrl: null }],
+    });
+    const queryClient = newQueryClient();
+    const { result } = renderHook(() => useActionsWithResolvedOwner(), {
+      wrapper: queryClientWrapper(queryClient),
+    });
+
+    expect(result.current.owner).toEqual(ACME_OWNER);
+    act(() => {
+      result.current.actions.submit({
+        draftId: null,
+        editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
+        owner: result.current.owner,
+        teamSandboxHarnessBlocked: false,
+        settled: null,
+        toolbar: defaultToolbar(),
+      });
+    });
+    await waitFor(() => expect(hasEpicCreateRequest()).toBe(true));
+
+    expect(ownerFromCreatePayload(epicCreatePayload())).toEqual({
+      kind: "team",
+      teamId: "t1",
+    });
+    expect(landingMocks.getHostBinding()).toBeNull();
+    queryClient.clear();
+  });
+
+  it("keeps staged attachment based on the owner sent while the create is pending", async () => {
+    recordNegotiatedHostManifest(TEST_HOST_ID, {
+      "epic.create": { major: 1, minor: 3 },
+    });
+    useAuthStore.setState({
+      shareableTeams: [{ teamId: "t1", slug: "acme", avatarUrl: null }],
+    });
+    const ownership = createPendingLocalOwnership();
+    landingMocks.getHostBinding.mockReturnValue({
+      auth: ownership.auth,
+      directory: ownership.directory,
+    });
+    installOwnerDirectoryEntry(localOwnerDirectoryEntry());
+    const createResponse = deferredValue<unknown>();
+    landingMocks.request.mockImplementation((method: string) =>
+      method === "epic.create" ? createResponse.promise : Promise.resolve({}),
+    );
+    const queryClient = newQueryClient();
+    const { result } = renderHook(() => useActionsWithResolvedOwner(), {
+      wrapper: queryClientWrapper(queryClient),
+    });
+
+    await waitFor(() => expect(ownership.reads).toHaveLength(1));
+    vi.useFakeTimers();
+    let confirmed = false;
+    act(() => {
+      result.current.actions.startTaskOnStagedSandbox({
+        draftId: null,
+        owner: result.current.owner,
+        sandboxTeamId: "t1",
+        text: SUBMITTED_PROMPT,
+        hand: (_epicId) => ({
+          isCurrent: () => true,
+          confirm: () => {
+            confirmed = true;
+          },
+          giveBack: () => null,
+        }),
+      });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    const createdBeforeOwnershipResolved = hasEpicCreateRequest();
+    ownership.resolve({ kind: "team", id: "t1", name: "Acme" });
+    vi.useRealTimers();
+    await waitFor(() => expect(hasEpicCreateRequest()).toBe(true));
+    expect(createdBeforeOwnershipResolved).toBe(false);
+    expect(ownerFromCreatePayload(epicCreatePayload())).toEqual({
+      kind: "team",
+      teamId: "t1",
+    });
+
+    act(() => {
+      void queryClient.invalidateQueries({
+        queryKey: authQueryKeys.hostOwnership(
+          ownership.auth,
+          "user-landing",
+          TEST_HOST_ID,
+        ),
+      });
+    });
+    await waitFor(() => expect(ownership.reads).toHaveLength(2));
+    ownership.refresh({ kind: "user", id: "user-landing" });
+    await waitFor(() => expect(result.current.owner).toBeNull());
+
+    await act(async () => {
+      createResponse.resolve({ roomInfo: null });
+      await createResponse.promise;
+    });
+    await waitFor(() => expect(confirmed).toBe(true));
+
+    expect(
+      landingMocks.request.mock.calls.some(
+        ([method]) => method === "epic.attachEnvironment",
+      ),
+    ).toBe(false);
+    queryClient.clear();
   });
 
   it("refuses a team create on an epic.create@1.2 host with the update line, and sends nothing", async () => {

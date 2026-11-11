@@ -633,7 +633,7 @@ const CHAT_DEAD_TILE_BANNER_COPY: Record<
  * a live response), so nothing downstream may describe them as a connectivity
  * failure - that would invert the evidence of a host that just spoke.
  *
- * Shared by the foreign-owner sentence and its report metadata deliberately:
+ * Shared by the owner-specific sentences and their report metadata deliberately:
  * they were split before, and the report went on claiming a disconnected host
  * under a sentence that said the opposite.
  * One predicate means the two cannot disagree again.
@@ -681,12 +681,16 @@ function foreignOwnerMessage(input: {
  * the active host is itself a team's.
  */
 function environmentOwnerMessage(input: {
+  readonly reason: ChatDeadTileBannerReason;
   readonly showsPublishedCopy: boolean;
 }): string {
+  const fact = hostAnsweredForReason(input.reason)
+    ? "This agent's history isn't available here."
+    : "This chat's host isn't available.";
   const copyClause = input.showsPublishedCopy
     ? " Showing the last published copy."
     : "";
-  return `This chat's host isn't available.${copyClause}`;
+  return `${fact}${copyClause}`;
 }
 
 /** The published-copy and clone clauses the collaborator sentence ends with. */
@@ -776,7 +780,9 @@ function ownerSwappedCopy(props: ChatDeadTileBannerProps): {
   if (props.environmentOwned) {
     return {
       message: environmentOwnerMessage(props),
-      report: ENVIRONMENT_OWNER_REPORT,
+      report: hostAnsweredForReason(props.reason)
+        ? CHAT_DEAD_TILE_BANNER_COPY[props.reason]
+        : ENVIRONMENT_OWNER_REPORT,
     };
   }
   if (!props.ownedByViewer) {
