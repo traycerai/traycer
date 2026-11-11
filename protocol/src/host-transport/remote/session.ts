@@ -2771,7 +2771,7 @@ export class RemoteSession<
         return;
       }
       if (provision.kind === "ok") {
-        this.dialClaim(generation, connection, attachBaseUrl, provision.grant);
+        this.dialClaim(connection, attachBaseUrl, provision.grant);
         return;
       }
       connection.activeClaimDial = null;
@@ -2791,7 +2791,6 @@ export class RemoteSession<
   }
 
   private dialClaim(
-    generation: number,
     connection: ActiveConnection,
     attachBaseUrl: string,
     grant: AttachGrant,
@@ -2808,7 +2807,8 @@ export class RemoteSession<
     connection.attachGrant = grant;
     connection.legEnd = null;
     connection.legAttached = false;
-    this.armPhaseTimer(generation, ATTACH_ACK_TIMEOUT_MS, "attach-ack-timeout");
+    // The attach_ack budget starts at open: see `onLegOpen`.
+    this.clearPhaseTimer();
   }
 
   /**
@@ -2849,6 +2849,7 @@ export class RemoteSession<
     return {
       onAttachAck: (sid, resumeKey) =>
         deliver((generation) => this.onAttachAck(generation, sid, resumeKey)),
+      onOpen: () => deliver((generation) => this.onLegOpen(generation)),
       onData: (bytes) => {
         // Count delivery before any filtering: a late socket frame still
         // consumed incoming bytes, even when it cannot enter the current mux.
@@ -2962,8 +2963,26 @@ export class RemoteSession<
     };
     this.connection = connection;
     this.parkedRefusals = 0;
-    this.armPhaseTimer(generation, ATTACH_ACK_TIMEOUT_MS, "attach-ack-timeout");
+    // The attach_ack budget starts at open: see `onLegOpen`.
+    this.clearPhaseTimer();
     return connection;
+  }
+
+  /**
+   * The current leg reached WebSocket open. `ATTACH_ACK_TIMEOUT_MS` is the
+   * relay budget after the socket opens (`config.ts`), so it starts here and
+   * not at the dial: until open, the dial timer of the socket bounds the wait
+   * from the dial gate grant, and time this client spent queued behind its
+   * own dials is never reported as a host refusal.
+   */
+  private onLegOpen(generation: number): void {
+    if (this.isCurrent(generation)) {
+      this.armPhaseTimer(
+        generation,
+        ATTACH_ACK_TIMEOUT_MS,
+        "attach-ack-timeout",
+      );
+    }
   }
 
   private onAttachAck(

@@ -259,6 +259,7 @@ function newRelayHandlers(): RecordedRelayHandlers {
     onClose,
     handlers: {
       onAttachAck,
+      onOpen: vi.fn(),
       onData: vi.fn(),
       onHostDetached: vi.fn(),
       onHostAttached: vi.fn(),
