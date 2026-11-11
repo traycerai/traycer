@@ -36,6 +36,7 @@ export function ProfileEditDialogPresentation(props: {
   readonly changed: boolean;
   readonly invalid: boolean;
   readonly onSave: () => void;
+  readonly footerAction: ReactNode;
   readonly removePending: boolean;
   readonly removeDisabledReason: string | null;
   readonly removeAriaLabel: string;
@@ -107,6 +108,7 @@ export function ProfileEditDialogPresentation(props: {
                   </Button>
                 </span>
               </TooltipWrapper>
+              {props.footerAction}
               <div className="flex items-center gap-2">
                 <Button
                   type="button"

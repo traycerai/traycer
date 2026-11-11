@@ -3264,17 +3264,14 @@ function registerAgentCommands(
     ? " Use this with a path returned by 'traycer worktree create'."
     : "";
   const harnessHelp = `Harness id: ${AGENT_FACING_HARNESS_ID_LIST}`;
-  // Deliberately spells out what OMITTING the option does: omission is its own
-  // selection (the remembered last-used profile), not a synonym for 'ambient'.
   const profileHelp =
-    "Provider profile: 'ambient' for the provider's CLI login, or a managed profile id from 'traycer agent list-profiles <harness>'. Omit to use the last-used profile.";
+    "Provider profile: 'ambient' for the provider's CLI login, or a managed profile id from 'traycer agent list-profiles <harness>'. Omit to use 'ambient'.";
   // Rate-limit reads and configuration resolve no last-used fallback - they
   // act on the one profile the caller names - so `--profile` is required there.
   const profileRequiredHelp =
     "Provider profile: 'ambient' for the provider's CLI login, or a managed profile id from 'traycer agent list-profiles <harness>'.";
-  // Fork's own omission default is 'inherit' (continue the SOURCE agent's
-  // profile byte-for-byte) - distinct from create's last-used preference
-  // lookup, so this cannot reuse `profileHelp`'s wording.
+  // Fork inherits the source profile, so it cannot reuse create's
+  // ambient-default wording.
   const forkProfileHelp =
     "Provider profile: 'ambient' for the provider's CLI login, or a managed profile id from 'traycer agent list-profiles <harness>'. Omit to inherit the source agent's own profile.";
   const agent = program

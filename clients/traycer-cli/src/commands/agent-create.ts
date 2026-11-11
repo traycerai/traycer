@@ -38,9 +38,9 @@ import type { CommandFn } from "../runner/runner";
  *   - neither: the child inherits the sender's surface + harness.
  *
  * Profile selection (`--profile`, see `internal/profile-selection.ts`):
- * omission sends `last_used`, `ambient` sends the ambient login, anything
+ * omission and `ambient` select the destination environment's ambient account; anything
  * else sends that managed profile. Against a host too old to speak
- * `agent.create@2.0`, the `last_used` and `ambient` selections have no
+ * `agent.create@2.0`, an `ambient` selection has no
  * representable v1.0 wire value and the transport's downgrade fails the call
  * with upgrade guidance rather than silently falling back to the sender's
  * profile.

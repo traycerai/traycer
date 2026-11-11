@@ -1177,6 +1177,13 @@ export const environmentPlanSchema = lazySchema(() =>
     harness: z.string().min(1).max(64),
     status: z.enum(["linked", "pending", "expired", "empty"]),
     linkedBy: z.object({ name: z.string(), you: z.boolean() }).nullable(),
+    bindingVersion: z
+      .number()
+      .int()
+      .positive()
+      .max(Number.MAX_SAFE_INTEGER)
+      .nullable()
+      .optional(),
   }),
 );
 export type EnvironmentPlan = z.infer<typeof environmentPlanSchema>;
@@ -1199,7 +1206,27 @@ export const environmentPlansListV10 = defineRpcContract({
   method: "environment.plans.list",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: environmentPlansListRequestSchema,
+  responseSchema: lazySchema(() =>
+    z.object({
+      plans: z.array(environmentPlanSchema.omit({ bindingVersion: true })),
+    }),
+  ),
+});
+
+export const environmentPlansListV11 = defineRpcContract({
+  method: "environment.plans.list",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: environmentPlansListRequestSchema,
   responseSchema: environmentPlansListResponseSchema,
+});
+export const environmentPlansListUpgradeV10ToV11 = defineUpgradePath<
+  typeof environmentPlansListV10,
+  typeof environmentPlansListV11
+>({
+  from: environmentPlansListV10.schemaVersion,
+  to: environmentPlansListV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
 });
 
 const environmentPlanTargetRequestSchema = lazySchema(() =>
@@ -1239,9 +1266,17 @@ export const environmentPlansUnlinkPreviewV10 = defineRpcContract({
   responseSchema: environmentPlansUnlinkPreviewResponseSchema,
 });
 
-/** `environment.plans.unlink@1.0`: `not_linked` is a profile with no plan. */
-export const environmentPlansUnlinkRequestSchema =
-  environmentPlanTargetRequestSchema;
+/** `environment.plans.unlink@1.1`: compare the held binding; `not_linked` has no plan. */
+export const environmentPlansUnlinkRequestSchema = lazySchema(() =>
+  environmentPlanTargetRequestSchema.extend({
+    expectedBindingVersion: z
+      .number()
+      .int()
+      .positive()
+      .max(Number.MAX_SAFE_INTEGER)
+      .nullable(),
+  }),
+);
 export type EnvironmentPlansUnlinkRequest = z.infer<
   typeof environmentPlansUnlinkRequestSchema
 >;
@@ -1256,8 +1291,23 @@ export type EnvironmentPlansUnlinkResponse = z.infer<
 export const environmentPlansUnlinkV10 = defineRpcContract({
   method: "environment.plans.unlink",
   schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: environmentPlanTargetRequestSchema,
+  responseSchema: environmentPlansUnlinkResponseSchema,
+});
+export const environmentPlansUnlinkV11 = defineRpcContract({
+  method: "environment.plans.unlink",
+  schemaVersion: { major: 1, minor: 1 } as const,
   requestSchema: environmentPlansUnlinkRequestSchema,
   responseSchema: environmentPlansUnlinkResponseSchema,
+});
+export const environmentPlansUnlinkUpgradeV10ToV11 = defineUpgradePath<
+  typeof environmentPlansUnlinkV10,
+  typeof environmentPlansUnlinkV11
+>({
+  from: environmentPlansUnlinkV10.schemaVersion,
+  to: environmentPlansUnlinkV11.schemaVersion,
+  upgradeRequest: (request) => ({ ...request, expectedBindingVersion: null }),
+  upgradeResponse: (response) => response,
 });
 
 // ── environment.configuration.guide.* ───────────────────────────────────────

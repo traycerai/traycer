@@ -1,6 +1,8 @@
 import {
   chatRunSettingsSchema,
+  chatRunSettingsSchemaPreProfileBinding,
   chatRunSettingsStrictSchema,
+  chatRunSettingsStrictSchemaPreProfileBinding,
 } from "@traycer/protocol/persistence/epic/foundation";
 import { browserAnnotationRecordSchema } from "@traycer/protocol/persistence/epic/messages";
 /**
@@ -3696,14 +3698,16 @@ export type ContinueSubagentResponse = z.infer<
 
 /** The opening and the chat record carry the same per-chat request. */
 export const createChatInitialMessageSchemaV14 = lazySchema(() =>
-  createChatInitialMessageSchemaV12.extend({ settings: chatRunSettingsSchema }),
+  createChatInitialMessageSchemaV12.extend({
+    settings: chatRunSettingsSchemaPreProfileBinding,
+  }),
 );
 export type CreateChatInitialMessageV14 = z.infer<
   typeof createChatInitialMessageSchemaV14
 >;
 export const createChatRequestSchemaV14 = lazySchema(() =>
   createChatRequestSchemaV13.extend({
-    settings: chatRunSettingsSchema.nullable().optional(),
+    settings: chatRunSettingsSchemaPreProfileBinding.nullable().optional(),
     initialMessage: createChatInitialMessageSchemaV14.nullable().optional(),
   }),
 );
@@ -3734,6 +3738,7 @@ export type CreateEpicRequestV14 = z.infer<typeof createEpicRequestSchemaV14>;
  */
 export const createChatInitialMessageSchemaV15 = lazySchema(() =>
   createChatInitialMessageSchemaV14.extend({
+    settings: chatRunSettingsSchema,
     browserAnnotations: z.array(browserAnnotationRecordSchema).optional(),
   }),
 );
@@ -3742,6 +3747,7 @@ export type CreateChatInitialMessageV15 = z.infer<
 >;
 export const createChatRequestSchemaV15 = lazySchema(() =>
   createChatRequestSchemaV14.extend({
+    settings: chatRunSettingsSchema.nullable().optional(),
     initialMessage: createChatInitialMessageSchemaV15.nullable().optional(),
   }),
 );
@@ -3760,9 +3766,19 @@ export const createEpicRequestSchemaV15 = lazySchema(() =>
 export type CreateEpicRequestV15 = z.infer<typeof createEpicRequestSchemaV15>;
 export const updateChatRunSettingsRequestSchemaV12 = lazySchema(() =>
   updateChatRunSettingsRequestSchemaV11.extend({
-    settings: chatRunSettingsStrictSchema,
+    settings: chatRunSettingsStrictSchemaPreProfileBinding,
   }),
 );
 export type UpdateChatRunSettingsRequestV12 = z.infer<
   typeof updateChatRunSettingsRequestSchemaV12
+>;
+
+/** Portable account provenance first rides this settings-write minor. */
+export const updateChatRunSettingsRequestSchemaV13 = lazySchema(() =>
+  updateChatRunSettingsRequestSchemaV12.extend({
+    settings: chatRunSettingsStrictSchema,
+  }),
+);
+export type UpdateChatRunSettingsRequestV13 = z.infer<
+  typeof updateChatRunSettingsRequestSchemaV13
 >;

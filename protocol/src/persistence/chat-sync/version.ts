@@ -199,7 +199,11 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 // 1.13 also carries `questionAnswers` on a member's row and `requestId` on a
 // question's settlement (`chat.subscribe@1.43` fields, T167), on the same
 // rule. No reader floor: an older reader draws the row's text and the card.
-export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 13 } as const;
+// 1.14 adds optional providerSelection to interpreted chat events. Old readers
+// retain it in raw event envelopes; no reader floor changes.
+// The same unreleased line carries optional profileBinding in core.settings;
+// older readers retain the unmodeled key in the core settings residual bag.
+export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 14 } as const;
 
 export type ChatSyncSchemaVersion = typeof CHAT_SYNC_SCHEMA_VERSION;
 

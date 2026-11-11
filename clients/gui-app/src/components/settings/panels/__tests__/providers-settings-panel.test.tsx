@@ -3688,8 +3688,7 @@ describe("<ProvidersSettingsPanel />", () => {
         }),
       ],
     };
-    const personal =
-      "Sign-ins, keys and tools for each coding agent, on every computer and sandbox running Personal.";
+    const personal = "Sign-ins, keys and tools for each coding agent.";
     // The file's cases pick a Local row; this one starts on Personal.
     useSettingsEnvironmentPickStore.setState({ pick: { kind: "personal" } });
 
@@ -5938,6 +5937,7 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(awaitVariables.request).toEqual({
       providerId: "codex",
       profileId: "managed-1",
+      lastSeenReaderCount: null,
     });
     expect(awaitVariables.signal).toBeInstanceOf(AbortSignal);
     expect(typeof awaitOptions.onSuccess).toBe("function");
@@ -6607,6 +6607,7 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(awaitVariables.request).toEqual({
       providerId: "codex",
       profileId: "ambient",
+      lastSeenReaderCount: null,
     });
     expect(awaitVariables.signal).toBeInstanceOf(AbortSignal);
     act(() => {
@@ -6628,6 +6629,7 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(repollCall[0].request).toEqual({
       providerId: "codex",
       profileId: "ambient",
+      lastSeenReaderCount: null,
     });
     expect(repollCall[0].signal).toBeInstanceOf(AbortSignal);
     act(() => {
@@ -7813,6 +7815,7 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(awaitVariables.request).toEqual({
       providerId: "codex",
       profileId: "managed-1",
+      lastSeenReaderCount: null,
     });
     expect(awaitVariables.signal).toBeInstanceOf(AbortSignal);
     act(() => {
