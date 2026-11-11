@@ -329,8 +329,25 @@ describe("useMentionItems mounted publication", () => {
     renderMentionItems(pickerStore, null);
     await waitFor(() => {
       expect(pickerStore.getState().items.map((item) => item.id)).toEqual([
-        "host:offline-1",
+        "provider:hosts",
       ]);
+    });
+    act(() =>
+      pickerStore.getState().setStep({
+        kind: "provider",
+        providerId: "hosts",
+        stepId: "root",
+        workspacePath: null,
+      }),
+    );
+    await waitFor(() =>
+      expect(pickerStore.getState().items.map((item) => item.id)).toEqual([
+        "mention-back",
+        "host:offline-1",
+      ]),
+    );
+    expect(pickerStore.getState().items[1]).toMatchObject({
+      entry: { action: { kind: "complete", mention: { hostId: "offline-1" } } },
     });
   });
 

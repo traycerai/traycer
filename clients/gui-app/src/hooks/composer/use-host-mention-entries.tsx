@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { Monitor } from "lucide-react";
 import {
+  backEntry,
   scoreLabelAndId,
   type MentionFlowStep,
   type MentionMenuEntry,
@@ -30,44 +31,94 @@ export function useHostMentionEntries(
 ): RankedRootSearch {
   const { hosts, answered } = source;
   return useMemo(() => {
-    if (step.kind !== "root") return existing;
-    const candidates: RootSearchCandidate[] = hosts.flatMap((host) => {
-      if (
-        scoreLabelAndId(host.label, host.hostId, query.trim().toLowerCase()) ===
-        null
-      )
-        return [];
-      const entry: MentionMenuEntry = {
-        id: `host:${host.hostId}`,
-        labelPrefix: null,
-        label: host.label,
-        detail: "Host",
-        description: host.hostId,
-        searchText: host.hostId,
-        disabledReason: null,
-        icon: <Monitor className={MENU_ICON_CLASS} aria-hidden />,
-        action: {
-          kind: "complete",
-          mention: {
-            kind: "mention",
-            contextType: "host",
-            hostId: host.hostId,
-            path: host.label,
-            pathKind: null,
-            relPath: null,
-            absolutePath: null,
-            workspacePath: null,
-            label: host.label,
-            description: host.hostId,
+    const inHosts = step.kind === "provider" && step.providerId === "hosts";
+    if (step.kind !== "root" && !inHosts) return existing;
+    const hostEntries: MentionMenuEntry[] = hosts
+      .flatMap((host) => {
+        const score = scoreLabelAndId(
+          host.label,
+          host.hostId,
+          query.trim().toLowerCase(),
+        );
+        if (score === null) return [];
+        const entry: MentionMenuEntry = {
+          id: `host:${host.hostId}`,
+          labelPrefix: null,
+          label: host.label,
+          detail: "Host",
+          description: host.hostId,
+          searchText: host.hostId,
+          disabledReason: null,
+          icon: <Monitor className={MENU_ICON_CLASS} aria-hidden />,
+          action: {
+            kind: "complete",
+            mention: {
+              kind: "mention",
+              contextType: "host",
+              hostId: host.hostId,
+              path: host.label,
+              pathKind: null,
+              relPath: null,
+              absolutePath: null,
+              workspacePath: null,
+              label: host.label,
+              description: host.hostId,
+            },
           },
-        },
-        updatedAt: null,
-        archived: false,
-        dormant: false,
-        preview: null,
+          updatedAt: null,
+          archived: false,
+          dormant: false,
+          preview: null,
+        };
+        return [{ entry, score }];
+      })
+      .toSorted((left, right) => left.score - right.score)
+      .map(({ entry }) => entry);
+    if (inHosts) {
+      return {
+        entries: [backEntry("Mentions"), ...hostEntries],
+        matchedCount: null,
       };
-      return [{ entry, providerId: "hosts", path: null, pickedAt: null }];
-    });
+    }
+    const category: MentionMenuEntry = {
+      id: "provider:hosts",
+      labelPrefix: null,
+      label: "Hosts",
+      detail: "",
+      description: "Hosts",
+      searchText: hostEntries.length > 0 ? query : null,
+      disabledReason: null,
+      icon: <Monitor className={MENU_ICON_CLASS} aria-hidden />,
+      action: {
+        kind: "navigate",
+        step: {
+          kind: "provider",
+          providerId: "hosts",
+          stepId: "root",
+          workspacePath: null,
+        },
+        clearQuery: query.trim().length > 0 && hostEntries.length === 0,
+      },
+      updatedAt: null,
+      archived: false,
+      dormant: false,
+      preview: null,
+    };
+    const categoryMatches =
+      query.trim().length === 0 ||
+      hostEntries.length > 0 ||
+      scoreLabelAndId("Hosts", "hosts", query.trim().toLowerCase()) !== null;
+    const candidates: RootSearchCandidate[] =
+      hosts.length === 0 || !categoryMatches
+        ? []
+        : [
+            {
+              entry: category,
+              providerId: "hosts",
+              path: null,
+              pickedAt: null,
+            },
+          ];
     if (query.trim().length === 0)
       return {
         entries: [...candidates.map(({ entry }) => entry), ...existing.entries],
