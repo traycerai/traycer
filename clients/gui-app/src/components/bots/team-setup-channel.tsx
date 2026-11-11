@@ -1,3 +1,4 @@
+import { TeamComputerUnattendedSetup } from "@/components/settings/team/team-computer-unattended-setup";
 import { useId, useMemo, useState, type ReactNode } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import { v4 as uuidv4 } from "uuid";
@@ -231,7 +232,11 @@ function TeamHostOptionsCard(props: {
             <AddComputerDialog
               teamName={live.teamName}
               teamSelector={live.environmentId}
-              unattended={null}
+              unattended={
+                <TeamComputerUnattendedSetup
+                  environmentId={live.environmentId}
+                />
+              }
               testId="team-host-option-machine"
             />
           )

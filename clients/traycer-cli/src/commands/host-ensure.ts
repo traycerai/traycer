@@ -1,3 +1,8 @@
+import {
+  prepareTeamTokenInstall,
+  waitForTeamTokenInstall,
+} from "../host/team-install-token";
+import { readInstallToken } from "./host-join-token";
 import { resolveAttemptAdoptionFromNonce } from "../host/update-adoption";
 import { probeHostReachable } from "@traycer-clients/shared/host-client/host-activity-probe";
 import { hostHomeDir } from "../store/paths";
@@ -70,10 +75,22 @@ export function buildHostEnsureCommand(args: HostEnsureArgs): CommandFn {
         exitCode: 1,
       });
     }
-    // A team request must authenticate even when the install is a no-op.
-    // Running this before ensure also refuses before any bytes are staged.
+    // A pipe authorizes this install without signing in a person. An attended
+    // team request must authenticate before ensure can stage any bytes.
+    const preparedTeamToken =
+      args.team === null
+        ? null
+        : await prepareTeamTokenInstall(
+            ctx.runtime.environment,
+            args.team,
+            process.stdin.isTTY !== true,
+            (canPrompt) =>
+              readInstallToken(process.stdin, process.stderr, canPrompt),
+          );
     const teamSession =
-      args.team === null ? null : await runTeamInstallAuthPreflight(ctx);
+      args.team !== null && preparedTeamToken === null
+        ? await runTeamInstallAuthPreflight(ctx)
+        : null;
     // This command can install + register + START a host (three of its four
     // actions), so it owns the same sign-in pre-flight and post-start
     // credential provisioning as `host install` and `host service install` -
@@ -94,7 +111,8 @@ export function buildHostEnsureCommand(args: HostEnsureArgs): CommandFn {
     // `--no-service-register` starts nothing itself.
     let authPreflight: HostInstallAuthPreflight = teamSession?.preflight ?? {
       state: "not-checked",
-      reason: "nothing-to-start",
+      reason:
+        preparedTeamToken === null ? "nothing-to-start" : "team-install-token",
     };
     const adoption = await resolveAttemptAdoptionFromNonce(
       hostHomeDir(ctx.runtime.environment),
@@ -118,7 +136,7 @@ export function buildHostEnsureCommand(args: HostEnsureArgs): CommandFn {
       keepInstalled: args.keepInstalled,
       onProgress: (info) => ctx.progress(info),
       beforeMutate: async () => {
-        if (teamSession === null) {
+        if (teamSession === null && preparedTeamToken === null) {
           authPreflight = await runSignInPreflight(ctx, args.noServiceRegister);
         }
       },
@@ -148,19 +166,32 @@ export function buildHostEnsureCommand(args: HostEnsureArgs): CommandFn {
       result,
       ctx.runtime.environment,
     );
-    const credentialProvision = await maybeProvisionCredential(
-      ctx,
-      result.serviceLifecycle !== null && result.postSwapError === null
-        ? result.serviceLifecycle.postSwapAction
-        : "none",
-      authPreflight,
-    );
+    const credentialProvision =
+      preparedTeamToken === null
+        ? await maybeProvisionCredential(
+            ctx,
+            result.serviceLifecycle !== null && result.postSwapError === null
+              ? result.serviceLifecycle.postSwapAction
+              : "none",
+            authPreflight,
+          )
+        : null;
     const teamBinding =
       args.team !== null &&
       teamSession !== null &&
       result.postSwapError === null &&
       result.running
         ? await completeTeamInstall(args.team, teamSession)
+        : null;
+    const teamInstallReceipt =
+      preparedTeamToken !== null &&
+      result.postSwapError === null &&
+      result.running
+        ? await waitForTeamTokenInstall(
+            ctx.runtime.environment,
+            preparedTeamToken,
+            60_000,
+          )
         : null;
     const human = buildHuman(
       result,
@@ -171,6 +202,7 @@ export function buildHostEnsureCommand(args: HostEnsureArgs): CommandFn {
     return {
       data: {
         teamBinding,
+        teamInstallReceipt,
         installed: result.installed,
         registered: result.registered,
         running: result.running,
@@ -189,16 +221,20 @@ export function buildHostEnsureCommand(args: HostEnsureArgs): CommandFn {
       human:
         teamBinding !== null
           ? `${human}; runs ${teamBinding.environment.label}`
-          : args.team !== null
-            ? `${human}; the computer was not added to the team`
-            : human,
+          : teamInstallReceipt !== null
+            ? `${human}; this computer joined the team`
+            : args.team !== null
+              ? `${human}; the computer was not added to the team`
+              : human,
       // An ensure whose post-swap start failed did not ensure anything is
       // running, so it exits non-zero - the same rule as `host install`. The
       // payload is unchanged: Desktop trusts a terminal `ok` line over a
       // non-zero exit and already maps `postSwapError` to a failed converge.
       exitCode:
         result.postSwapError !== null ||
-        (args.team !== null && teamBinding === null)
+        (args.team !== null &&
+          teamBinding === null &&
+          teamInstallReceipt === null)
           ? 1
           : 0,
     };

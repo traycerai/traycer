@@ -1,3 +1,4 @@
+import { TeamComputerUnattendedSetup } from "./team-computer-unattended-setup";
 import { useState, type ReactNode } from "react";
 import type { TeamComputer } from "@traycer-clients/shared/host-client/team-computers";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -117,7 +118,11 @@ function TeamComputers(props: { readonly environmentId: string }): ReactNode {
           <AddComputerDialog
             teamName={teamName}
             teamSelector={props.environmentId}
-            unattended={null}
+            unattended={
+              <TeamComputerUnattendedSetup
+                environmentId={props.environmentId}
+              />
+            }
             testId="team-computers-add"
           />
         ) : null}

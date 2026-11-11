@@ -50,8 +50,30 @@ const mocks = vi.hoisted(() => ({
   runSignInPreflightMock: vi.fn(),
   maybeProvisionCredentialMock: vi.fn(),
   completeTeamInstallMock: vi.fn(),
+  prepareTeamTokenInstallMock: vi.fn(),
+  waitForTeamTokenInstallMock: vi.fn(),
   pidMetadata: null as { pid: number; websocketUrl: string } | null,
 }));
+
+vi.mock("../../host/team-install-token", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../host/team-install-token")>();
+  return {
+    ...actual,
+    prepareTeamTokenInstall: (
+      ...callArgs: Parameters<typeof actual.prepareTeamTokenInstall>
+    ) => {
+      mocks.callOrder.push("team-token-prepare");
+      return mocks.prepareTeamTokenInstallMock(...callArgs);
+    },
+    waitForTeamTokenInstall: (
+      ...callArgs: Parameters<typeof actual.waitForTeamTokenInstall>
+    ) => {
+      mocks.callOrder.push("team-token-wait");
+      return mocks.waitForTeamTokenInstallMock(...callArgs);
+    },
+  };
+});
 
 // The pid record the responsiveness check reads. `null` (nothing published)
 // unless a test stages one, so no test reads the developer's real home.
@@ -109,6 +131,8 @@ vi.mock("../../host/install-auth", async (importOriginal) => {
 });
 
 import { buildHostEnsureCommand, type HostEnsureArgs } from "../host-ensure";
+import * as installAuthModule from "../../host/install-auth";
+import type { PreparedTeamTokenInstall } from "../../host/team-install-token";
 import type { CommandContext } from "../../runner/runner";
 import type { HostEnsureResult } from "../../host/ensure";
 import type { HostProvisionServiceLifecycle } from "../../host/provision";
@@ -230,6 +254,11 @@ describe("buildHostEnsureCommand", () => {
     mocks.maybeProvisionCredentialMock.mockResolvedValue(null);
     mocks.ensureHostMock.mockResolvedValue(baseEnsureResult({}));
     mocks.completeTeamInstallMock.mockResolvedValue(teamBindingFixture);
+    mocks.prepareTeamTokenInstallMock.mockResolvedValue(null);
+    mocks.waitForTeamTokenInstallMock.mockResolvedValue({
+      hostId: "host-local",
+      environmentId: "environment-acme",
+    });
   });
 
   afterEach(() => {
@@ -267,6 +296,84 @@ describe("buildHostEnsureCommand", () => {
         inlineSignInToken: null,
       }),
     );
+  });
+
+  it("uses a prepared team token before auth, waits after ensure, and returns only the target receipt", async () => {
+    const prepared = {
+      environmentId: "environment-acme",
+      tokenHash: "c".repeat(64),
+    } satisfies PreparedTeamTokenInstall;
+    const receipt = {
+      hostId: "host-local",
+      environmentId: "environment-acme",
+    };
+    mocks.prepareTeamTokenInstallMock.mockResolvedValue(prepared);
+    mocks.waitForTeamTokenInstallMock.mockResolvedValue(receipt);
+    mocks.ensureHostMock.mockResolvedValue(
+      baseEnsureResult({
+        action: "started",
+        serviceLifecycle: lifecycle({ postSwapAction: "start" }),
+        postSwapError: null,
+      }),
+    );
+    const teamPreflight = vi.spyOn(
+      installAuthModule,
+      "runTeamInstallAuthPreflight",
+    );
+    const signInPreflight = vi.spyOn(installAuthModule, "runSignInPreflight");
+
+    const result = await buildHostEnsureCommand(
+      baseArgs({ team: "environment-acme" }),
+    )(fakeCtx());
+
+    expect(mocks.callOrder).toEqual([
+      "team-token-prepare",
+      "ensure-enter",
+      "ensure-exit",
+      "team-token-wait",
+    ]);
+    expect(mocks.waitForTeamTokenInstallMock).toHaveBeenCalledWith(
+      "production",
+      prepared,
+      60_000,
+    );
+    expect(teamPreflight).not.toHaveBeenCalled();
+    expect(signInPreflight).not.toHaveBeenCalled();
+    expect(mocks.runSignInPreflightMock).not.toHaveBeenCalled();
+    expect(mocks.maybeProvisionCredentialMock).not.toHaveBeenCalled();
+    expect(mocks.completeTeamInstallMock).not.toHaveBeenCalled();
+    expect(result.data).toMatchObject({ teamInstallReceipt: receipt });
+    expect(JSON.stringify(result.data)).not.toContain(prepared.tokenHash);
+    expect(JSON.stringify(result.data)).not.toContain('"token"');
+  });
+
+  it("propagates a team-token receipt timeout after ensure finishes", async () => {
+    const prepared = {
+      environmentId: "environment-acme",
+      tokenHash: "d".repeat(64),
+    } satisfies PreparedTeamTokenInstall;
+    mocks.prepareTeamTokenInstallMock.mockResolvedValue(prepared);
+    mocks.waitForTeamTokenInstallMock.mockRejectedValue(
+      new Error("team install receipt deadline reached"),
+    );
+    mocks.ensureHostMock.mockResolvedValue(
+      baseEnsureResult({
+        action: "started",
+        serviceLifecycle: lifecycle({ postSwapAction: "start" }),
+        postSwapError: null,
+      }),
+    );
+
+    await expect(
+      buildHostEnsureCommand(baseArgs({ team: "environment-acme" }))(fakeCtx()),
+    ).rejects.toThrow("team install receipt deadline reached");
+    expect(mocks.callOrder).toEqual([
+      "team-token-prepare",
+      "ensure-enter",
+      "ensure-exit",
+      "team-token-wait",
+    ]);
+    expect(mocks.completeTeamInstallMock).not.toHaveBeenCalled();
   });
 
   it("maps a serviceLifecycle with a successful post-swap start into that exact postSwapAction", async () => {

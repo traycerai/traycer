@@ -67,6 +67,8 @@ const mocks = vi.hoisted(() => ({
   readInstalledFloorOperandsMock: vi.fn(),
   publishHostStartAdoptionMock: vi.fn(),
   completeTeamInstallMock: vi.fn(),
+  prepareTeamTokenInstallMock: vi.fn(),
+  waitForTeamTokenInstallMock: vi.fn(),
 }));
 
 vi.mock("../../installer", () => ({
@@ -238,6 +240,28 @@ vi.mock("../../host/host-start-adoption", () => ({
   },
 }));
 
+// Keep command activation real while the token file and receipt I/O have
+// their own helper suite.
+vi.mock("../../host/team-install-token", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../host/team-install-token")>();
+  return {
+    ...actual,
+    prepareTeamTokenInstall: (
+      ...callArgs: Parameters<typeof actual.prepareTeamTokenInstall>
+    ) => {
+      mocks.callOrder.push("team-token-prepare");
+      return mocks.prepareTeamTokenInstallMock(...callArgs);
+    },
+    waitForTeamTokenInstall: (
+      ...callArgs: Parameters<typeof actual.waitForTeamTokenInstall>
+    ) => {
+      mocks.callOrder.push("team-token-wait");
+      return mocks.waitForTeamTokenInstallMock(...callArgs);
+    },
+  };
+});
+
 // Keep the command's branch under test while the lower-level team auth and
 // binding flow has its own real-filesystem coverage in team-install-auth.test.
 vi.mock("../../host/install-auth", async (importOriginal) => {
@@ -272,6 +296,8 @@ vi.mock("../../store/cli-lock", () => ({
 }));
 
 import { buildHostInstallCommand, type HostInstallArgs } from "../host-install";
+import * as installAuthModule from "../../host/install-auth";
+import type { PreparedTeamTokenInstall } from "../../host/team-install-token";
 import { CLI_ERROR_CODES, cliError } from "../../runner/errors";
 import type { CommandContext } from "../../runner/runner";
 import type { HostInstallRecord } from "../../manifest/host-install";
@@ -506,6 +532,11 @@ describe("buildHostInstallCommand", () => {
       site: "host install",
     });
     mocks.completeTeamInstallMock.mockResolvedValue(teamBindingFixture);
+    mocks.prepareTeamTokenInstallMock.mockResolvedValue(null);
+    mocks.waitForTeamTokenInstallMock.mockResolvedValue({
+      hostId: "host-local",
+      environmentId: "environment-acme",
+    });
   });
 
   afterEach(() => {
@@ -581,6 +612,102 @@ describe("buildHostInstallCommand", () => {
         inlineSignInToken: null,
       }),
     );
+  });
+
+  it("uses a prepared team token before auth, waits after commit, and returns only the target receipt", async () => {
+    const prepared = {
+      environmentId: "environment-acme",
+      tokenHash: "e".repeat(64),
+    } satisfies PreparedTeamTokenInstall;
+    const receipt = {
+      hostId: "host-local",
+      environmentId: "environment-acme",
+    };
+    mocks.prepareTeamTokenInstallMock.mockResolvedValue(prepared);
+    mocks.waitForTeamTokenInstallMock.mockResolvedValue(receipt);
+    mocks.stageHostInstallSourceMock.mockResolvedValue(sampleStaged());
+    mocks.createServiceInstallLifecycleMock.mockReturnValue(
+      sampleLifecycleHandle(),
+    );
+    mocks.commitHostInstallSourceMock.mockResolvedValue({
+      record: sampleRecord("2.0.0"),
+      previous: null,
+      installGeneration: "id:install-2.0.0",
+    });
+    const teamPreflight = vi.spyOn(
+      installAuthModule,
+      "runTeamInstallAuthPreflight",
+    );
+    const signInPreflight = vi.spyOn(installAuthModule, "runSignInPreflight");
+    const personalProvision = vi.spyOn(
+      installAuthModule,
+      "maybeProvisionCredential",
+    );
+
+    const result = await buildHostInstallCommand(
+      baseArgs({ team: "environment-acme" }),
+    )(fakeCtx());
+
+    expect(mocks.callOrder).toEqual([
+      "team-token-prepare",
+      "stage",
+      "lock-enter",
+      "commit",
+      "lock-exit",
+      "team-token-wait",
+    ]);
+    expect(mocks.waitForTeamTokenInstallMock).toHaveBeenCalledWith(
+      "production",
+      prepared,
+      60_000,
+    );
+    expect(teamPreflight).not.toHaveBeenCalled();
+    expect(signInPreflight).not.toHaveBeenCalled();
+    expect(personalProvision).not.toHaveBeenCalled();
+    expect(mocks.completeTeamInstallMock).not.toHaveBeenCalled();
+    expect(result.data).toMatchObject({ teamInstallReceipt: receipt });
+    expect(JSON.stringify(result.data)).not.toContain(prepared.tokenHash);
+    expect(JSON.stringify(result.data)).not.toContain('"token"');
+  });
+
+  it("propagates a team-token receipt timeout after the install commits", async () => {
+    const prepared = {
+      environmentId: "environment-acme",
+      tokenHash: "b".repeat(64),
+    } satisfies PreparedTeamTokenInstall;
+    mocks.prepareTeamTokenInstallMock.mockResolvedValue(prepared);
+    mocks.waitForTeamTokenInstallMock.mockRejectedValue(
+      cliError({
+        code: CLI_ERROR_CODES.AUTH_REJECTED,
+        message: "team install receipt deadline reached",
+        details: null,
+        exitCode: 1,
+      }),
+    );
+    mocks.stageHostInstallSourceMock.mockResolvedValue(sampleStaged());
+    mocks.createServiceInstallLifecycleMock.mockReturnValue(
+      sampleLifecycleHandle(),
+    );
+    mocks.commitHostInstallSourceMock.mockResolvedValue({
+      record: sampleRecord("2.0.0"),
+      previous: null,
+      installGeneration: "id:install-2.0.0",
+    });
+
+    await expect(
+      buildHostInstallCommand(baseArgs({ team: "environment-acme" }))(
+        fakeCtx(),
+      ),
+    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.AUTH_REJECTED });
+    expect(mocks.callOrder).toEqual([
+      "team-token-prepare",
+      "stage",
+      "lock-enter",
+      "commit",
+      "lock-exit",
+      "team-token-wait",
+    ]);
+    expect(mocks.completeTeamInstallMock).not.toHaveBeenCalled();
   });
 
   it("passes the inline-created sign-in token into team completion", async () => {

@@ -1,4 +1,9 @@
 import {
+  prepareTeamTokenInstall,
+  waitForTeamTokenInstall,
+} from "../host/team-install-token";
+import { readInstallToken } from "./host-join-token";
+import {
   currentInstallPlatform,
   discardStagedHostInstallSource,
   NO_INSTALL_PHASE_HOOKS,
@@ -13,6 +18,7 @@ import {
   runSignInPreflight,
   runTeamInstallAuthPreflight,
   completeTeamInstall,
+  type HostInstallAuthPreflight,
 } from "../host/install-auth";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type {
@@ -241,12 +247,26 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
       ifIdle: args.ifIdle,
       force: args.force,
     });
+    const preparedTeamToken =
+      args.team === null
+        ? null
+        : await prepareTeamTokenInstall(
+            ctx.runtime.environment,
+            args.team,
+            process.stdin.isTTY !== true,
+            (canPrompt) =>
+              readInstallToken(process.stdin, process.stderr, canPrompt),
+          );
     const teamSession =
-      args.team === null ? null : await runTeamInstallAuthPreflight(ctx);
-    const authPreflight =
-      teamSession === null
-        ? await runSignInPreflight(ctx, args.noServiceRegister)
-        : teamSession.preflight;
+      args.team !== null && preparedTeamToken === null
+        ? await runTeamInstallAuthPreflight(ctx)
+        : null;
+    const authPreflight: HostInstallAuthPreflight =
+      preparedTeamToken !== null
+        ? { state: "not-checked", reason: "team-install-token" }
+        : teamSession === null
+          ? await runSignInPreflight(ctx, args.noServiceRegister)
+          : teamSession.preflight;
     ctx.runtime.logger.info("Host install sign-in pre-flight resolved", {
       environment: ctx.runtime.environment,
       state: authPreflight.state,
@@ -405,15 +425,18 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
     // install - an unprovisioned host self-heals on the next minting client.
     // A registration refused or kept disabled started no host, so there is
     // nothing for the credential probe to dial.
-    const credentialProvision = await maybeProvisionCredential(
-      ctx,
-      handle !== null &&
-        handle.state.postSwapError === null &&
-        handle.state.postSwapWarning === null
-        ? handle.state.postSwapAction
-        : "none",
-      authPreflight,
-    );
+    const credentialProvision =
+      preparedTeamToken === null
+        ? await maybeProvisionCredential(
+            ctx,
+            handle !== null &&
+              handle.state.postSwapError === null &&
+              handle.state.postSwapWarning === null
+              ? handle.state.postSwapAction
+              : "none",
+            authPreflight,
+          )
+        : null;
     const teamBinding =
       args.team !== null &&
       teamSession !== null &&
@@ -421,6 +444,17 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
       handle.state.postSwapError === null &&
       handle.state.postSwapWarning === null
         ? await completeTeamInstall(args.team, teamSession)
+        : null;
+    const teamInstallReceipt =
+      preparedTeamToken !== null &&
+      handle !== null &&
+      handle.state.postSwapError === null &&
+      handle.state.postSwapWarning === null
+        ? await waitForTeamTokenInstall(
+            ctx.runtime.environment,
+            preparedTeamToken,
+            60_000,
+          )
         : null;
     const lifecycleData =
       handle !== null
@@ -453,12 +487,15 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
     }
     if (teamBinding !== null) {
       human = `${human}; runs ${teamBinding.environment.label}`;
+    } else if (teamInstallReceipt !== null) {
+      human = `${human}; this computer joined the team`;
     } else if (args.team !== null) {
       human = `${human}; the computer was not added to the team`;
     }
     return {
       data: {
         teamBinding,
+        teamInstallReceipt,
         version: result.record.version,
         runtimeVersion: result.record.runtimeVersion,
         installedAt: result.record.installedAt,
@@ -484,7 +521,9 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
       // swap commit?" by design (see host-apply.ts).
       exitCode:
         (handle !== null && handle.state.postSwapError !== null) ||
-        (args.team !== null && teamBinding === null)
+        (args.team !== null &&
+          teamBinding === null &&
+          teamInstallReceipt === null)
           ? 1
           : 0,
     };

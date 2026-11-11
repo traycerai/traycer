@@ -67,8 +67,9 @@ import type { CommandContext } from "../runner/runner";
 // sign-in inline; a run that cannot prompt (JSON mode, CI, non-TTY stdout)
 // warns and continues, and so does a declined or failed sign-in. A later
 // `traycer login` can authorize the installed host without a reinstall.
-// A team install requires sign-in before staging: signing in later cannot
-// complete the transfer the person requested.
+// An attended team install requires sign-in before staging: signing in later cannot
+// complete the transfer the person requested. A piped install token instead
+// authorizes the host directly, without reading the CLI sign-in.
 //
 // Provisioning: a signed-in run that started a host follows up with a
 // short-lived stream connection carrying the CLI mint flow
@@ -110,7 +111,7 @@ export type HostInstallAuthPreflight =
   // host's own store, not the CLI credentials file).
   | {
       readonly state: "not-checked";
-      readonly reason: "bytes-only" | "nothing-to-start";
+      readonly reason: "bytes-only" | "nothing-to-start" | "team-install-token";
     };
 
 export const SIGN_IN_LATER_HINT =
