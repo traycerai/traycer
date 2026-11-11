@@ -99,6 +99,7 @@ async function startRig(
         endpoint: () => ({ ...mockLocalHostEntry, hostId }),
         hostId,
         bearer: () => ctx.credentials,
+        userId: ctx.identity.userId,
         auth: null,
         clock: null,
         hostCredentialMint: null,

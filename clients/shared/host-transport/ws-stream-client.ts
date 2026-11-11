@@ -20,7 +20,8 @@ import {
   type HostEndpointProvider,
 } from "./ws-rpc-client";
 import {
-  bearerSourceBoundToFirstIdentity,
+  bearerSourceForUser,
+  cloudVerdictForUser,
   type BearerSourceProvider,
 } from "@traycer-clients/shared/auth/bearer-source";
 import { readAccessTokenExpiryMs } from "@traycer-clients/shared/auth/jwt-exp";
@@ -109,6 +110,18 @@ export interface WsStreamClientOptions<
    * confusing two hosts would matter. `null` simply declines the seed.
    */
   readonly hostId: string | null;
+  /**
+   * The user this client speaks for, for its whole life. Every read it makes
+   * of the live account answers only for this user: a bearer of any other
+   * identity reads as none at each dial, open, credential push and openAck
+   * reconcile; the cloud verdict reads `false` while the live bearer is not
+   * this user's; and no host-credential mint starts while it is not.
+   *
+   * Required, not taken from the first bearer the client reads: every owner
+   * builds a client for a user it already knows, and the first read can come
+   * after a switch (a lazy client's first subscribe) or find no bearer.
+   */
+  readonly userId: string;
   readonly endpoint: HostEndpointProvider;
   readonly bearer: BearerSourceProvider;
   /**
@@ -347,14 +360,20 @@ export class WsStreamClient<
 
   private readonly options: WsStreamClientOptions<Registry>;
   /**
-   * `options.bearer`, bound to the user of the first bearer it returns. Every
-   * session this client owns reads through it at each dial, open, credential
-   * push and openAck reconcile. The provider is usually a live read of the
-   * current context, so after an account switch it can return the new user
-   * lease while this client is still held; such a bearer reads as none and
-   * takes the existing missing-bearer paths, which report no host evidence.
+   * `options.bearer`, bound to `options.userId`. Every session this client
+   * owns reads through it at each dial, open, credential push and openAck
+   * reconcile. The provider is usually a live read of the current context, so
+   * after an account switch it can return the new user lease while this
+   * client is still held; such a bearer reads as none and takes the existing
+   * missing-bearer paths, which report no host evidence.
    */
   private readonly bearer: BearerSourceProvider;
+  /**
+   * `options.cloudAuthorized`, bound to `options.userId`: `false` while the
+   * live bearer is not this client's user. Every session reads it at its open
+   * frame, at both openAck reconciles and at every verdict push.
+   */
+  private readonly cloudAuthorized: (() => boolean) | undefined;
   /**
    * Serialized once here rather than per session: every member is a process
    * constant, and this client hands the same value to every session it owns
@@ -474,7 +493,12 @@ export class WsStreamClient<
 
   constructor(options: WsStreamClientOptions<Registry>) {
     this.options = options;
-    this.bearer = bearerSourceBoundToFirstIdentity(options.bearer);
+    this.bearer = bearerSourceForUser(options.bearer, options.userId);
+    const cloudAuthorized = options.cloudAuthorized;
+    this.cloudAuthorized =
+      cloudAuthorized === undefined
+        ? undefined
+        : cloudVerdictForUser(options.bearer, options.userId, cloudAuthorized);
     this.clientIdentity = toClientHandshakeIdentity(options.clientIdentity);
     this.instanceId = `stream-client-${nextStreamClientId}`;
     nextStreamClientId += 1;
@@ -557,7 +581,7 @@ export class WsStreamClient<
       registry: this.options.registry,
       endpoint: this.options.endpoint,
       bearer: this.bearer,
-      cloudAuthorized: this.options.cloudAuthorized,
+      cloudAuthorized: this.cloudAuthorized,
       auth: this.options.auth,
       clock: this.options.clock,
       evidence: this.options.evidence,
@@ -929,7 +953,7 @@ export class WsStreamClient<
     if (state === "active") {
       return;
     }
-    const mint = this.options.hostCredentialMint;
+    const mint = this.liveHostCredentialMint();
     if (mint === null) {
       return;
     }
@@ -948,6 +972,18 @@ export class WsStreamClient<
     }
     this.provisionAttemptedHostIds.add(hostId);
     void this.runMintFlow(mint, hostId, state);
+  }
+
+  /**
+   * The host-credential mint flow, or `null` while the live bearer is not this
+   * client's user. The flow mints with the live account's bearer and the
+   * credential travels on this client's connection, which opened as
+   * `options.userId`; after a switch it would be the next user's credential on
+   * that connection. What a mint already running at a switch returns is the
+   * flow's own decision.
+   */
+  private liveHostCredentialMint(): HostCredentialMintFlow | null {
+    return this.bearer() === null ? null : this.options.hostCredentialMint;
   }
 
   private async runMintFlow(
@@ -1085,7 +1121,7 @@ export class WsStreamClient<
       if (this.closed) {
         return;
       }
-      const mint = this.options.hostCredentialMint;
+      const mint = this.liveHostCredentialMint();
       if (mint === null) {
         return;
       }

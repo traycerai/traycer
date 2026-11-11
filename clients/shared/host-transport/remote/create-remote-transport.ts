@@ -6,6 +6,7 @@ import type { VersionedStreamRpcRegistry } from "@traycer/protocol/framework/ver
 import type { MemberCredentialHandoff } from "@traycer/protocol/host-transport/mux";
 import {
   bearerSourceForUser,
+  cloudVerdictForUser,
   type BearerSourceProvider,
   type OpenFrameBearerSource,
 } from "@traycer-clients/shared/auth/bearer-source";
@@ -243,11 +244,17 @@ export function createRemoteHostTransport<
     return null;
   }
 
-  // Bound to the user this session is keyed by. `options.bearer` is a live
-  // read, so after an account switch it can return another user lease while
-  // this session is still held; every read below (this build check, the
-  // grant mint, the open frame, the credential push) sees no bearer instead.
+  // Bound to the user this session is keyed by. `options.bearer` and
+  // `options.cloudAuthorized` are live reads, so after an account switch they
+  // answer for another user while this session is still held; every read
+  // below (this build check, the grant mint, the open frame, the credential
+  // and verdict pushes) sees no bearer and a `false` verdict instead.
   const bearer = bearerSourceForUser(options.bearer, options.userId);
+  const cloudAuthorized = cloudVerdictForUser(
+    options.bearer,
+    options.userId,
+    options.cloudAuthorized,
+  );
   const bearerSource = bearer();
   if (bearerSource === null || !canProvideBearer(bearerSource)) {
     // No usable auth context at build time - the same "unconnectable"
@@ -295,7 +302,7 @@ export function createRemoteHostTransport<
       // mode. See `cloudAuthorized` for why the check lives in here and not
       // at build time.
       const getBearerToken = (): string | null =>
-        options.cloudAuthorized() ? deriveBearerToken(bearer) : null;
+        cloudAuthorized() ? deriveBearerToken(bearer) : null;
       const sandboxGrants =
         options.openAuth === "session-grant"
           ? createSandboxAttachGrantProvider({
@@ -325,7 +332,7 @@ export function createRemoteHostTransport<
         // reach the relay; this tells the host what the session it reaches may
         // spend, which is a different question with a different consumer - the
         // host's own background workers, which no client-side gate can reach.
-        cloudAuthorized: options.cloudAuthorized,
+        cloudAuthorized,
         auth: options.auth,
         clock: options.clock,
         rpcRegistry: options.rpcRegistry,
@@ -423,6 +430,11 @@ export function createPoolHostTransport<
   }
   // Bound to the session user, as in `createRemoteHostTransport`.
   const bearer = bearerSourceForUser(options.bearer, options.userId);
+  const cloudAuthorized = cloudVerdictForUser(
+    options.bearer,
+    options.userId,
+    options.cloudAuthorized,
+  );
   const bearerSource = bearer();
   if (bearerSource === null || !canProvideBearer(bearerSource)) {
     return null;
@@ -444,7 +456,7 @@ export function createPoolHostTransport<
         hostId: options.entry.hostId,
         poolUrl,
         bearer,
-        cloudAuthorized: options.cloudAuthorized,
+        cloudAuthorized,
         auth: options.auth,
         clock: options.clock,
         rpcRegistry: options.rpcRegistry,

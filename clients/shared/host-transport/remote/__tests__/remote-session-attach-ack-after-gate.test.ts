@@ -27,6 +27,7 @@ import {
   MuxFrameType,
   NOISE_PROLOGUE,
   QosClass,
+  SESSION_CAPABILITY_CLOUD_VERDICT_UPDATE,
   SESSION_CAPABILITY_RESUME,
   SESSION_CONTROL_STREAM_ID,
 } from "@traycer/protocol/host-transport/mux";
@@ -48,12 +49,14 @@ import {
 } from "@traycer/protocol/host-transport/remote/session";
 import type { BearerSourceProvider } from "@traycer-clients/shared/auth/bearer-source";
 import {
+  cloudVerdictOf,
   FakeNativeWebSocket,
   HOLDER_URL,
   holdEveryGateSlot,
   liveBearer,
   newProvider,
   QUEUED_FOR_MS,
+  requireContext,
   signIn,
   USER_A,
   USER_B,
@@ -229,6 +232,8 @@ class FakeRelay {
   readonly resumes: number[] = [];
   /** The bearer each session OPEN frame carried, in arrival order. */
   readonly openBearers: unknown[] = [];
+  /** The `cloudAuthorized` value of every verdict update frame, in arrival order. */
+  readonly verdictUpdates: unknown[] = [];
   private nextSid = 1;
   /**
    * What a dial does once the gate has built its native: "hold" waits for the
@@ -432,6 +437,13 @@ class FakeRelay {
     if (
       message !== null &&
       message.streamId === SESSION_CONTROL_STREAM_ID &&
+      message.type === MuxFrameType.CLOUD_VERDICT_UPDATE
+    ) {
+      this.verdictUpdates.push((message.json ?? {}).cloudAuthorized);
+    }
+    if (
+      message !== null &&
+      message.streamId === SESSION_CONTROL_STREAM_ID &&
       message.type === MuxFrameType.OPEN
     ) {
       const openJson = message.json ?? {};
@@ -454,7 +466,10 @@ class FakeRelay {
             SERVES_EVERY_INSTALLED_MAJOR,
           ),
         },
-        capabilities: [SESSION_CAPABILITY_RESUME],
+        capabilities: [
+          SESSION_CAPABILITY_RESUME,
+          SESSION_CAPABILITY_CLOUD_VERDICT_UPDATE,
+        ],
       },
       binary: null,
     };
@@ -473,6 +488,13 @@ class FakeRelay {
       this.plainWires.set(leg, wire);
     }
     const message = wire.reassembler.accept(decodeMuxFrame(data));
+    if (
+      message !== null &&
+      message.streamId === SESSION_CONTROL_STREAM_ID &&
+      message.type === MuxFrameType.CLOUD_VERDICT_UPDATE
+    ) {
+      this.verdictUpdates.push((message.json ?? {}).cloudAuthorized);
+    }
     if (
       message === null ||
       message.streamId !== SESSION_CONTROL_STREAM_ID ||
@@ -775,6 +797,7 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
   function buildHostTransport(
     hostId: string,
     bearer: BearerSourceProvider,
+    cloudAuthorized: () => boolean,
   ): TransportView {
     let nextRequestId = 0;
     const transport = createRemoteHostTransport({
@@ -786,7 +809,7 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
       hostPublicKey: Buffer.from(relay.publicKey).toString("hex"),
       bearer,
       openAuth: "user-bearer",
-      cloudAuthorized: () => true,
+      cloudAuthorized,
       auth: null,
       clock: null,
       rpcRegistry: emptyRpcRegistry,
@@ -805,13 +828,16 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
   }
 
   /** The server pool session, for user-a. */
-  function buildPoolTransport(bearer: BearerSourceProvider): TransportView {
+  function buildPoolTransport(
+    bearer: BearerSourceProvider,
+    cloudAuthorized: () => boolean,
+  ): TransportView {
     let nextRequestId = 0;
     const transport = createPoolHostTransport({
       entry: POOL_ENTRY,
       userId: USER_A,
       bearer,
-      cloudAuthorized: () => true,
+      cloudAuthorized,
       auth: null,
       clock: null,
       rpcRegistry: emptyRpcRegistry,
@@ -828,11 +854,17 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     return transport.session;
   }
 
-  /** Lets an attach reach its OPEN frame, stopping before the redial backoff. */
-  async function untilOpenFrameOrBackoff(): Promise<void> {
-    for (let turn = 0; turn < 3 && relay.openBearers.length === 0; turn += 1) {
-      await step(250);
-    }
+  /**
+   * Waits for an attach to reach a state that settles what it sent: either an
+   * OPEN frame arrived at the relay or the session dropped its leg, which is
+   * what a session with no bearer to present does before it backs off.
+   */
+  async function untilOpenFrameOrDroppedLeg(): Promise<void> {
+    await advanceUntil(
+      () =>
+        relay.openBearers.length > 0 || relay.legs.some((leg) => leg.closed),
+      10_000,
+    );
   }
 
   beforeEach(() => {
@@ -1170,6 +1202,7 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     const view = buildHostTransport(
       "host-switched-attach",
       liveBearer(provider),
+      () => true,
     );
     view.start();
     await advanceUntil(() => hostDialGate.stats().queued === 1, 5_000);
@@ -1177,10 +1210,12 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     signIn(provider, USER_B, "token-b");
     await step(QUEUED_FOR_MS);
     holders[0].fireClose(1006, "released");
-    await untilOpenFrameOrBackoff();
+    await untilOpenFrameOrDroppedLeg();
 
     expect(relay.openBearers).not.toContain("token-b");
     expect(mintAuthorizations).not.toContain("Bearer token-b");
+    expect(view.isReady()).toBe(false);
+    expect(view.isClosed()).toBe(false);
   });
 
   it("opens with the new token after a same-user re-sign-in during the queued attach", async () => {
@@ -1191,6 +1226,7 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     const view = buildHostTransport(
       "host-resigned-attach",
       liveBearer(provider),
+      () => true,
     );
     view.start();
     await advanceUntil(() => hostDialGate.stats().queued === 1, 5_000);
@@ -1210,6 +1246,7 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     const view = buildHostTransport(
       "host-switched-redial",
       liveBearer(provider),
+      () => true,
     );
     view.start();
     await advanceUntil(() => relay.openBearers.length === 1, 5_000);
@@ -1232,16 +1269,18 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     const provider = newProvider();
     signIn(provider, USER_A, "token-a");
     const holders = await holdEveryGateSlot();
-    const view = buildPoolTransport(liveBearer(provider));
+    const view = buildPoolTransport(liveBearer(provider), () => true);
     view.start();
     await advanceUntil(() => hostDialGate.stats().queued === 1, 5_000);
 
     signIn(provider, USER_B, "token-b");
     await step(QUEUED_FOR_MS);
     holders[0].fireClose(1006, "released");
-    await untilOpenFrameOrBackoff();
+    await untilOpenFrameOrDroppedLeg();
 
     expect(relay.openBearers).not.toContain("token-b");
+    expect(view.isReady()).toBe(false);
+    expect(view.isClosed()).toBe(false);
   });
 
   it("opens the pool with the new token after a same-user re-sign-in during the queued attach", async () => {
@@ -1249,7 +1288,7 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     const provider = newProvider();
     signIn(provider, USER_A, "token-a");
     const holders = await holdEveryGateSlot();
-    const view = buildPoolTransport(liveBearer(provider));
+    const view = buildPoolTransport(liveBearer(provider), () => true);
     view.start();
     await advanceUntil(() => hostDialGate.stats().queued === 1, 5_000);
 
@@ -1259,5 +1298,93 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     await advanceUntil(() => relay.openBearers.length === 1, 5_000);
 
     expect(relay.openBearers).toEqual(["token-a2"]);
+  });
+
+  it("sends no verdict of the other user over the relay after the account switched", async () => {
+    const provider = newProvider();
+    signIn(provider, USER_A, "token-a");
+    stubGrantEndpoint();
+    const view = buildHostTransport(
+      "host-verdict-switch",
+      liveBearer(provider),
+      cloudVerdictOf(provider),
+    );
+    view.start();
+    await advanceUntil(() => view.isReady(), 10_000);
+    requireContext(provider).setCloudAuthorized(false);
+    view.notifyCloudVerdictChanged();
+    await advanceUntil(() => relay.verdictUpdates.length === 1, 5_000);
+    expect(relay.verdictUpdates).toEqual([false]);
+
+    signIn(provider, USER_B, "token-b");
+    view.notifyCloudVerdictChanged();
+    await step(REDIAL_MS);
+
+    expect(relay.verdictUpdates.slice(1)).not.toContain(true);
+  });
+
+  it("sends no verdict of the other user to the pool after the account switched", async () => {
+    relay.autoOpen = "plain";
+    const provider = newProvider();
+    signIn(provider, USER_A, "token-a");
+    const view = buildPoolTransport(
+      liveBearer(provider),
+      cloudVerdictOf(provider),
+    );
+    view.start();
+    await advanceUntil(() => view.isReady(), 10_000);
+    requireContext(provider).setCloudAuthorized(false);
+    view.notifyCloudVerdictChanged();
+    await advanceUntil(() => relay.verdictUpdates.length === 1, 5_000);
+    expect(relay.verdictUpdates).toEqual([false]);
+
+    signIn(provider, USER_B, "token-b");
+    view.notifyCloudVerdictChanged();
+    await step(REDIAL_MS);
+
+    expect(relay.verdictUpdates.slice(1)).not.toContain(true);
+  });
+
+  it("still pushes a same-user demotion and promotion over the relay", async () => {
+    const provider = newProvider();
+    signIn(provider, USER_A, "token-a");
+    stubGrantEndpoint();
+    const view = buildHostTransport(
+      "host-verdict-same-user",
+      liveBearer(provider),
+      cloudVerdictOf(provider),
+    );
+    view.start();
+    await advanceUntil(() => view.isReady(), 10_000);
+
+    requireContext(provider).setCloudAuthorized(false);
+    view.notifyCloudVerdictChanged();
+    await advanceUntil(() => relay.verdictUpdates.length === 1, 5_000);
+    requireContext(provider).setCloudAuthorized(true);
+    view.notifyCloudVerdictChanged();
+    await advanceUntil(() => relay.verdictUpdates.length === 2, 5_000);
+
+    expect(relay.verdictUpdates).toEqual([false, true]);
+  });
+
+  it("still pushes a same-user demotion and promotion to the pool", async () => {
+    relay.autoOpen = "plain";
+    const provider = newProvider();
+    signIn(provider, USER_A, "token-a");
+    const view = buildPoolTransport(
+      liveBearer(provider),
+      cloudVerdictOf(provider),
+    );
+    view.start();
+    await advanceUntil(() => view.isReady(), 10_000);
+
+    requireContext(provider).setCloudAuthorized(false);
+    view.notifyCloudVerdictChanged();
+    await advanceUntil(() => relay.verdictUpdates.length === 1, 5_000);
+    requireContext(provider).setCloudAuthorized(true);
+    view.notifyCloudVerdictChanged();
+    await advanceUntil(() => relay.verdictUpdates.length === 2, 5_000);
+
+    expect(relay.verdictUpdates).toEqual([false, true]);
   });
 });

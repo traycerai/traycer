@@ -24,6 +24,7 @@ import {
   USER_A,
   USER_B,
   userFixture,
+  sentTokens,
 } from "../../test-fixtures/dial-gate-harness";
 import { HostRpcError } from "../host-messenger";
 import type { StreamConnectionStatus } from "../i-stream-session";
@@ -35,6 +36,7 @@ import { WsStreamClient } from "../ws-stream-client";
 
 const REQUEST_ID = "req-open-frame-bearer";
 const REDIAL_BACKOFF_MS = 50;
+const LEASE_USER_ID = "user-1";
 const REDIAL_WINDOW_MS = 500;
 
 /**
@@ -134,20 +136,6 @@ function startEchoFor(
   return { outcome, isSettled: () => settled };
 }
 
-/** Every token any frame sent on any fake socket carried, in send order. */
-function sentTokens(): unknown[] {
-  const tokens: unknown[] = [];
-  for (const native of FakeNativeWebSocket.instances) {
-    for (const raw of native.sent) {
-      const frame: unknown = JSON.parse(raw);
-      if (typeof frame === "object" && frame !== null && "token" in frame) {
-        tokens.push(frame.token);
-      }
-    }
-  }
-  return tokens;
-}
-
 function openAckAdvertisingCredentialUpdate(): string {
   return JSON.stringify({
     kind: "openAck",
@@ -185,11 +173,12 @@ describe("open frame bearer after a wait for a dial slot", () => {
 
   describe("stream", () => {
     function subscribe(lease: MutableBearerLease): StreamConnectionStatus[] {
-      return subscribeWith(() => lease, NEVER_MS).statuses;
+      return subscribeWith(() => lease, LEASE_USER_ID, NEVER_MS).statuses;
     }
 
     function subscribeWith(
       bearer: BearerSourceProvider,
+      userId: string,
       backoffMs: number,
     ): {
       readonly statuses: StreamConnectionStatus[];
@@ -201,6 +190,7 @@ describe("open frame bearer after a wait for a dial slot", () => {
         endpoint: () => mockLocalHostEntry,
         hostId: mockLocalHostEntry.hostId,
         bearer,
+        userId,
         auth: null,
         clock: null,
         hostCredentialMint: null,
@@ -226,7 +216,7 @@ describe("open frame bearer after a wait for a dial slot", () => {
     }
 
     it("sends the bearer current at the grant, not the one read before the wait", async () => {
-      const lease = new MutableBearerLease("token-a", "user-1");
+      const lease = new MutableBearerLease("token-a", LEASE_USER_ID);
       const holders = await holdEveryGateSlot();
       subscribe(lease);
       await settle();
@@ -241,7 +231,7 @@ describe("open frame bearer after a wait for a dial slot", () => {
     });
 
     it("sends no open frame and redials when the bearer is gone at the grant", async () => {
-      const lease = new MutableBearerLease("token-a", "user-1");
+      const lease = new MutableBearerLease("token-a", LEASE_USER_ID);
       const holders = await holdEveryGateSlot();
       const statuses = subscribe(lease);
       await settle();
@@ -261,7 +251,7 @@ describe("open frame bearer after a wait for a dial slot", () => {
       it("sends no other-identity bearer on the next dial after the account switched while the socket was down", async () => {
         const provider = newProvider();
         signIn(provider, USER_A, "token-a");
-        subscribeWith(liveBearer(provider), REDIAL_BACKOFF_MS);
+        subscribeWith(liveBearer(provider), USER_A, REDIAL_BACKOFF_MS);
         await settle();
         const first = FakeNativeWebSocket.instances[0];
         first.fireOpen();
@@ -285,7 +275,7 @@ describe("open frame bearer after a wait for a dial slot", () => {
         const provider = newProvider();
         signIn(provider, USER_A, "token-a");
         const holders = await holdEveryGateSlot();
-        subscribeWith(liveBearer(provider), NEVER_MS);
+        subscribeWith(liveBearer(provider), USER_A, NEVER_MS);
         await settle();
 
         await grantAndOpenAfterWait(holders, () => {
@@ -298,7 +288,11 @@ describe("open frame bearer after a wait for a dial slot", () => {
       it("sends no other-identity bearer in a rotation push after the account switched", async () => {
         const provider = newProvider();
         signIn(provider, USER_A, "token-a");
-        const { client } = subscribeWith(liveBearer(provider), NEVER_MS);
+        const { client } = subscribeWith(
+          liveBearer(provider),
+          USER_A,
+          NEVER_MS,
+        );
         await settle();
         const native = FakeNativeWebSocket.instances[0];
         native.fireOpen();
@@ -315,7 +309,7 @@ describe("open frame bearer after a wait for a dial slot", () => {
       it("sends no other-identity bearer when the account switched between the open frame and the openAck", async () => {
         const provider = newProvider();
         signIn(provider, USER_A, "token-a");
-        subscribeWith(liveBearer(provider), NEVER_MS);
+        subscribeWith(liveBearer(provider), USER_A, NEVER_MS);
         await settle();
         const native = FakeNativeWebSocket.instances[0];
         native.fireOpen();
@@ -332,7 +326,7 @@ describe("open frame bearer after a wait for a dial slot", () => {
         const provider = newProvider();
         signIn(provider, USER_A, "token-a");
         const holders = await holdEveryGateSlot();
-        subscribeWith(liveBearer(provider), NEVER_MS);
+        subscribeWith(liveBearer(provider), USER_A, NEVER_MS);
         await settle();
 
         const native = await grantAndOpenAfterWait(holders, () => {
@@ -346,7 +340,7 @@ describe("open frame bearer after a wait for a dial slot", () => {
       it("dials with the new token after a same-user re-sign-in while the socket was down", async () => {
         const provider = newProvider();
         signIn(provider, USER_A, "token-a");
-        subscribeWith(liveBearer(provider), REDIAL_BACKOFF_MS);
+        subscribeWith(liveBearer(provider), USER_A, REDIAL_BACKOFF_MS);
         await settle();
         const first = FakeNativeWebSocket.instances[0];
         first.fireOpen();
@@ -367,7 +361,11 @@ describe("open frame bearer after a wait for a dial slot", () => {
       it("sends no other-identity bearer on a new session of a client that already served another user", async () => {
         const provider = newProvider();
         signIn(provider, USER_A, "token-a");
-        const { client } = subscribeWith(liveBearer(provider), NEVER_MS);
+        const { client } = subscribeWith(
+          liveBearer(provider),
+          USER_A,
+          NEVER_MS,
+        );
         await settle();
         const first = FakeNativeWebSocket.instances[0];
         first.fireOpen();
@@ -391,7 +389,11 @@ describe("open frame bearer after a wait for a dial slot", () => {
       it("pushes the rotated token to an open session after a same-user rotation in place", async () => {
         const provider = newProvider();
         signIn(provider, USER_A, "token-a");
-        const { client } = subscribeWith(liveBearer(provider), NEVER_MS);
+        const { client } = subscribeWith(
+          liveBearer(provider),
+          USER_A,
+          NEVER_MS,
+        );
         await settle();
         const native = FakeNativeWebSocket.instances[0];
         native.fireOpen();
@@ -412,7 +414,7 @@ describe("open frame bearer after a wait for a dial slot", () => {
 
   describe("unary", () => {
     it("sends the bearer current at the grant, not the one read before the wait", async () => {
-      const lease = new MutableBearerLease("token-a", "user-1");
+      const lease = new MutableBearerLease("token-a", LEASE_USER_ID);
       const holders = await holdEveryGateSlot();
       startEcho(lease);
       await settle();
@@ -427,7 +429,7 @@ describe("open frame bearer after a wait for a dial slot", () => {
     });
 
     it("sends no open frame and rejects naming the bearer when it is gone at the grant", async () => {
-      const lease = new MutableBearerLease("token-a", "user-1");
+      const lease = new MutableBearerLease("token-a", LEASE_USER_ID);
       const holders = await holdEveryGateSlot();
       const call = startEcho(lease);
       await settle();

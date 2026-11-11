@@ -15,12 +15,13 @@ import { CredentialLeaseReleasedError } from "@traycer/protocol/auth/request-con
 /**
  * Read side of the bearer seam used by the transport open frame.
  *
- * `identity.userId` is consumed only by the same-user guards (rotation, and
- * {@link bearerSourceForUser}, which keeps a transport on its own user); the
- * transport never reads the rest of an identity, and it never reaches an error
- * message — a sink that logs a whole error object would publish the id above
- * DEBUG. `getBearerToken()` throws when no bearer is available (e.g. a released
- * credential lease), which the transport maps to a pre-dial failure.
+ * `identity.userId` is consumed only by the same-user guards (rotation,
+ * {@link bearerSourceForUser} and {@link cloudVerdictForUser}, which keep a
+ * transport on its own user); the transport never reads the rest of an
+ * identity, and it never reaches an error message — a sink that logs a whole
+ * error object would publish the id above DEBUG. `getBearerToken()` throws
+ * when no bearer is available (e.g. a released credential lease), which the
+ * transport maps to a pre-dial failure.
  */
 export interface OpenFrameBearerSource {
   getBearerToken(): string;
@@ -53,25 +54,26 @@ export function bearerSourceForUser(
 }
 
 /**
- * `provider`, bound for its life to the user of the first source it returns:
- * {@link bearerSourceForUser} for a consumer that is not told its user. A
- * consumer whose first read comes after an account switch binds to the new
- * user.
+ * `cloudAuthorized`, answering only for `userId`: `false` while `provider`
+ * returns no source of that user. The verdict a transport is given is usually
+ * a live read of the current session, so after an account switch it is the
+ * next user's; bound, a transport built for the old user reports `false` on
+ * its open frame and in its verdict pushes instead. Same-user promotion and
+ * demotion pass through unchanged.
+ *
+ * Exact while `cloudAuthorized` describes the session whose bearer
+ * `provider` returns at the same moment. A composition keeps that by
+ * committing an identity transition's context and verdict in one synchronous
+ * run: the GUI's `AuthService` commits the request context, then the auth
+ * store, and announces the verdict after both.
  */
-export function bearerSourceBoundToFirstIdentity(
+export function cloudVerdictForUser(
   provider: BearerSourceProvider,
-): BearerSourceProvider {
-  let bound: BearerSourceProvider | null = null;
-  return () => {
-    if (bound !== null) {
-      return bound();
-    }
-    const source = provider();
-    if (source !== null) {
-      bound = bearerSourceForUser(provider, source.identity.userId);
-    }
-    return source;
-  };
+  userId: string,
+  cloudAuthorized: () => boolean,
+): () => boolean {
+  const bearer = bearerSourceForUser(provider, userId);
+  return () => bearer() !== null && cloudAuthorized();
 }
 
 /**

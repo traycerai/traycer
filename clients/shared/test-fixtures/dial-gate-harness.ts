@@ -1,6 +1,13 @@
 import { expect, vi } from "vitest";
 import { z } from "zod";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
+import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import { SERVES_EVERY_INSTALLED_MAJOR } from "@traycer/protocol/framework/capability-manifest";
+import { buildStreamManifest } from "@traycer/protocol/framework/stream-compat";
+import {
+  identityFromAuthenticatedUser,
+  type RequestContext,
+} from "@traycer/protocol/auth/request-context";
 import {
   defineRpcContract,
   defineVersionedRpcRegistry,
@@ -152,4 +159,91 @@ export function liveBearer(
   provider: DefaultRequestContextProvider,
 ): BearerSourceProvider {
   return () => provider.current()?.credentials ?? null;
+}
+
+/**
+ * A sign-in no `/api/v3/user` call has confirmed: the context's bearer is
+ * live but its cloud verdict is false until something promotes it.
+ */
+export function signInUnverified(
+  provider: DefaultRequestContextProvider,
+  userId: string,
+  bearerToken: string,
+): void {
+  provider.setUnverified({
+    identity: identityFromAuthenticatedUser(userFixture(userId)),
+    bearerToken,
+  });
+}
+
+/** The verdict a composition root wires: whatever the current context says. */
+export function cloudVerdictOf(
+  provider: DefaultRequestContextProvider,
+): () => boolean {
+  return () => provider.current()?.cloudAuthorized ?? false;
+}
+
+/** The active context, for a test that changes its verdict in place. */
+export function requireContext(
+  provider: DefaultRequestContextProvider,
+): RequestContext {
+  const context = provider.current();
+  if (context === null) {
+    throw new Error("Expected a signed-in context");
+  }
+  return context;
+}
+
+/** The decoded control frames of one kind a client sent on one fake socket. */
+/** Every token any frame sent on any fake socket carried, in send order. */
+export function sentTokens(): unknown[] {
+  const tokens: unknown[] = [];
+  for (const native of FakeNativeWebSocket.instances) {
+    for (const raw of native.sent) {
+      const frame: unknown = JSON.parse(raw);
+      if (typeof frame === "object" && frame !== null && "token" in frame) {
+        tokens.push(frame.token);
+      }
+    }
+  }
+  return tokens;
+}
+
+export function sentFramesOfKind(
+  native: FakeNativeWebSocket,
+  kind: string,
+): Record<string, unknown>[] {
+  const frames: Record<string, unknown>[] = [];
+  for (const raw of native.sent) {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed === "object" && parsed !== null && "kind" in parsed) {
+      if (parsed.kind === kind) {
+        frames.push({ ...parsed });
+      }
+    }
+  }
+  return frames;
+}
+
+/** Every `cloudAuthorized` value the client sent as a `cloudVerdictUpdate`. */
+export function verdictUpdatesSent(native: FakeNativeWebSocket): unknown[] {
+  return sentFramesOfKind(native, "cloudVerdictUpdate").map(
+    (frame) => frame.cloudAuthorized,
+  );
+}
+
+/** A host `openAck` advertising `capabilities`, reporting `hostCredentialState`. */
+export function openAckFrame(
+  capabilities: readonly string[],
+  hostCredentialState: string | null,
+): string {
+  return JSON.stringify({
+    kind: "openAck",
+    manifest: buildStreamManifest(
+      hostStreamRpcRegistry,
+      SERVES_EVERY_INSTALLED_MAJOR,
+    ),
+    capabilities,
+    hostCredentialState,
+  });
 }
