@@ -149,10 +149,7 @@ import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store"
 import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
 import { useOnTeamSandbox } from "@/hooks/sandboxes/use-on-team-sandbox";
 import { teamSandboxHarnessBlocked } from "@/lib/sandboxes/team-sandbox-harness";
-import {
-  hiddenModelProviderCount,
-  withoutHiddenModelProviderRows,
-} from "@/lib/providers/provider-hidden-model-providers";
+import { withoutHiddenModelProviderRows } from "@/lib/providers/provider-hidden-model-providers";
 
 export type { ReasoningFooterConfig, ServiceTierFooterConfig };
 
@@ -1104,10 +1101,6 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       ),
     [allProviderRows, hiddenModelProviders, selectedRowId],
   );
-  const hiddenProviderCount = useMemo(
-    () => hiddenModelProviderCount(allProviderRows, hiddenModelProviders),
-    [allProviderRows, hiddenModelProviders],
-  );
   const providerSearchIndex = useMemo(
     () => createModelRowSearchIndex(providerRows),
     [providerRows],
@@ -1480,7 +1473,6 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         listKey={listKey}
         visibleRows={visibleRows}
         hiddenModelProviders={hiddenModelProviders}
-        hiddenModelProviderCount={hiddenProviderCount}
         selectedRowId={selectedRowId}
         effectiveActiveRowId={effectiveActiveRowId}
         hoveredRowId={hoveredRowId}

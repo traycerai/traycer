@@ -9,7 +9,6 @@ import {
   modelProviderHidden,
   modelProviderGroupId,
   providersListReportsHiddenModelProviders,
-  hiddenModelProviderCount,
   withoutHiddenModelProviderRows,
   withoutHiddenModelProviders,
 } from "../provider-hidden-model-providers";
@@ -49,14 +48,14 @@ describe("hidden model provider helpers", () => {
     expect(hiddenModelProvidersForHarness(undefined, "opencode").size).toBe(0);
   });
 
-  it("filters hidden groups but preserves ungrouped models and a nonempty fallback", () => {
+  it("filters hidden groups, preserves ungrouped models, and keeps a hidden selected model", () => {
     const models = [
       { id: "a", metadata: { openCodeProviderId: "openrouter" } },
       { id: "b", metadata: { openCodeProviderId: "anthropic" } },
       { id: "c", metadata: {} },
     ];
     expect(
-      withoutHiddenModelProviders(models, new Set(["openrouter"])).map(
+      withoutHiddenModelProviders(models, new Set(["openrouter"]), null).map(
         (model) => model.id,
       ),
     ).toEqual(["b", "c"]);
@@ -65,8 +64,16 @@ describe("hidden model provider helpers", () => {
       withoutHiddenModelProviders(
         onlyHidden,
         new Set(["openrouter", "anthropic"]),
+        null,
       ),
-    ).toBe(onlyHidden);
+    ).toEqual([]);
+    expect(
+      withoutHiddenModelProviders(
+        models,
+        new Set(["openrouter", "anthropic"]),
+        models[1] ?? null,
+      ).map((model) => model.id),
+    ).toEqual(["b", "c"]);
     expect(
       modelProviderGroupId({ metadata: { openCodeProviderId: "" } }),
     ).toBeNull();
@@ -109,22 +116,6 @@ describe("hidden model provider helpers", () => {
       "openrouter:selected",
     ]);
     expect(withoutHiddenModelProviderRows(rows, new Set(), "")).toBe(rows);
-  });
-
-  it("counts distinct hidden provider groups that have rows", () => {
-    const rows = [
-      { id: "a", providerGroupId: "openrouter" },
-      { id: "b", providerGroupId: "openrouter" },
-      { id: "c", providerGroupId: "anthropic" },
-      { id: "d", providerGroupId: null },
-    ];
-    expect(
-      hiddenModelProviderCount(
-        rows,
-        new Set(["openrouter", "anthropic", "absent"]),
-      ),
-    ).toBe(2);
-    expect(hiddenModelProviderCount(rows, new Set())).toBe(0);
   });
 });
 

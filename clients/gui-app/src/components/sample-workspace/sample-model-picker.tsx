@@ -110,7 +110,6 @@ function SampleModelPickerBody(): ReactNode {
       listKey="sample"
       visibleRows={SAMPLE_ROWS}
       hiddenModelProviders={NO_HIDDEN_MODEL_PROVIDERS}
-      hiddenModelProviderCount={0}
       selectedRowId={selectedRowId}
       effectiveActiveRowId={selectedRowId}
       hoveredRowId=""

@@ -178,7 +178,6 @@ export function ModalFixture() {
               listKey="fixture"
               visibleRows={ROWS}
               hiddenModelProviders={NO_HIDDEN_MODEL_PROVIDERS}
-              hiddenModelProviderCount={0}
               selectedRowId={
                 ROWS.find((row) => row.value === selected)?.id ?? ""
               }
