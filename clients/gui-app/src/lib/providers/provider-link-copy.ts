@@ -20,20 +20,15 @@ export const LINK_SIGN_IN_LINE =
   "Sign in on claude.ai, then paste the code it shows.";
 export const LINK_DEVICE_LINE =
   "Open the page below and enter this code to sign in.";
-export const LINK_LINKING = "Linking…";
-export const LINK_UNAVAILABLE = "Connect to Traycer to link this profile.";
+export const LINK_LINKING = "Signing in…";
+export const LINK_UNAVAILABLE = "Connect to Traycer to sign in.";
 export const LINK_EXPIRED = "This sign-in expired.";
-export const LINK_FAILED = "Couldn't link this profile.";
+export const LINK_FAILED = "Sign-in did not finish.";
 export const LINK_PASTE_WHOLE_CODE = "Paste the whole code claude.ai shows.";
-export const LINK_NO_SIGN_IN =
-  "Sign in to this profile on this computer first, then link it.";
+export const LINK_NO_SIGN_IN = "Sign-in did not finish. Try again.";
 
 export function onHostOnlyLine(hostName: string): string {
   return `On ${hostName} only.`;
-}
-
-export function linkedLine(account: string | null): string {
-  return account === null ? "Linked." : `Linked as ${account}.`;
 }
 
 export function mismatchLine(

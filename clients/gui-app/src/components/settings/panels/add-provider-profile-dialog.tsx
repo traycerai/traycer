@@ -1,3 +1,8 @@
+import { EnvironmentAddProfileDialog } from "@/components/providers/environment-add-profile-dialog";
+import {
+  useEnvironmentProfileSignInSupported,
+  useProfileSignInEnvironment,
+} from "@/hooks/providers/use-profile-sign-in-environment";
 import { useProvidersLoginOwnershipForClient } from "@/hooks/providers/use-providers-login-ownership";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import {
@@ -125,7 +130,7 @@ export interface FailedProviderProfileAttempt {
   readonly message: string;
 }
 
-/** Whether "Link account" is held off: any one reason is enough. */
+/** Whether "Sign in" is held off: any one reason is enough. */
 function linkHeldOff(reasons: {
   readonly labelEmpty: boolean;
   readonly busy: boolean;
@@ -140,15 +145,7 @@ function linkHeldOff(reasons: {
   );
 }
 
-export function AddProviderProfileDialog({
-  state,
-  client,
-  isLocalHost,
-  open,
-  onOpenChange,
-  onFailedAttempt,
-  onProfileCreated,
-}: {
+export interface AddProviderProfileDialogProps {
   readonly state: ProviderCliState;
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly isLocalHost: boolean;
@@ -161,7 +158,89 @@ export function AddProviderProfileDialog({
     attempt: FailedProviderProfileAttempt | null,
   ) => void;
   readonly onProfileCreated: (profileId: string) => void;
-}): ReactNode {
+}
+
+export function AddProviderProfileDialog(
+  props: AddProviderProfileDialogProps,
+): ReactNode {
+  const supported = useEnvironmentProfileSignInSupported(
+    props.client,
+    props.state.providerId,
+    true,
+  );
+  if (supported && props.client !== null)
+    return <RoutedAddProviderProfileDialog {...props} client={props.client} />;
+  return <LocalAddProviderProfileDialog {...props} />;
+}
+
+function RoutedAddProviderProfileDialog(
+  props: AddProviderProfileDialogProps & {
+    readonly client: HostClient<HostRpcRegistry>;
+  },
+): ReactNode {
+  const route = useProfileSignInEnvironment(props.client);
+  if (route.kind === "environment" && !route.canSignIn)
+    return (
+      <Dialog open={props.open} onOpenChange={props.onOpenChange}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Sign in</DialogTitle>
+            <DialogDescription>
+              Ask a teammate to sign in on Providers.
+            </DialogDescription>
+          </DialogHeader>
+          <Button variant="ghost" onClick={() => props.onOpenChange(false)}>
+            Cancel
+          </Button>
+        </DialogContent>
+      </Dialog>
+    );
+  if (route.kind === "environment") {
+    return (
+      <EnvironmentAddProfileDialog
+        {...props}
+        client={props.client}
+        environmentId={route.environmentId}
+        initialAccentColor={nextAvailableAccentColor(props.state.profiles)}
+        sharesSkillsAndPlugins={
+          PROVIDER_SHARES_SKILLS_AND_PLUGINS[props.state.providerId]
+        }
+      />
+    );
+  }
+  if (route.kind === "reading" || route.kind === "failed") {
+    return (
+      <Dialog open={props.open} onOpenChange={props.onOpenChange}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Sign in</DialogTitle>
+            <DialogDescription>
+              {route.kind === "reading"
+                ? "Reading where this profile will be available…"
+                : "Couldn't read where this profile will be available."}
+            </DialogDescription>
+          </DialogHeader>
+          {route.kind === "failed" ? (
+            <Button onClick={route.retry}>Retry</Button>
+          ) : (
+            <MutedAgentSpinner />
+          )}
+        </DialogContent>
+      </Dialog>
+    );
+  }
+  return <LocalAddProviderProfileDialog {...props} />;
+}
+
+function LocalAddProviderProfileDialog({
+  state,
+  client,
+  isLocalHost,
+  open,
+  onOpenChange,
+  onFailedAttempt,
+  onProfileCreated,
+}: AddProviderProfileDialogProps): ReactNode {
   const openLink = useOpenLink();
   // Every entry point gates on the target host already; this is the floor
   // under all of them, so no sign-in ever starts on a sandbox.
@@ -324,7 +403,7 @@ export function AddProviderProfileDialog({
   const linkAccount = (): void => {
     if (trimmedLabel.length === 0 || credentialRefusal !== null) return;
     // A fresh attempt supersedes any previously reported failure - covers
-    // both the initial "Link account" and the failed-state Retry.
+    // both the initial "Sign in" and the failed-state Retry.
     onFailedAttempt(null);
     flow.start({
       label: trimmedLabel,
@@ -362,7 +441,7 @@ export function AddProviderProfileDialog({
           </DialogTitle>
           <DialogDescription>
             Name this {PROVIDER_DISPLAY_NAMES[state.providerId]} profile, choose
-            its color, then link the account it should use.
+            its color, then sign in to the account it should use.
           </DialogDescription>
         </DialogHeader>
 
@@ -544,7 +623,7 @@ function AddProfileAccountSection({
     return (
       <button
         type="button"
-        aria-label="Link account"
+        aria-label="Sign in"
         className="group flex w-full items-center gap-3 rounded-lg border border-border/60 bg-foreground/3 p-3 text-left transition-colors hover:bg-foreground/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed disabled:opacity-50"
         disabled={linkDisabled}
         onClick={onLink}
@@ -554,7 +633,7 @@ function AddProfileAccountSection({
         </span>
         <span className="min-w-0 flex-1">
           <span className="block text-ui-sm font-medium text-foreground">
-            Link account
+            Sign in
           </span>
           <span className="block text-ui-xs text-muted-foreground">
             Sign in to the account this profile should use.
@@ -625,7 +704,7 @@ function AddProfileAccountSection({
     return (
       <AddProfileFailureStep
         providerId={providerId}
-        message="The account was linked, but the profile color could not be saved."
+        message="The account is signed in, but the profile color could not be saved."
         refusal={null}
         onCancel={onCancel}
         onRetry={onRetryFinalize}
@@ -636,7 +715,9 @@ function AddProfileAccountSection({
   return (
     <div className="flex items-start gap-2 rounded-lg border border-border/60 bg-foreground/3 p-3 text-ui-sm text-muted-foreground">
       <MutedAgentSpinner />
-      <span>{finalizing ? "Finishing profile setup" : "Account linked"}</span>
+      <span>
+        {finalizing ? "Finishing profile setup" : "Account signed in"}
+      </span>
     </div>
   );
 }
@@ -650,7 +731,7 @@ function DuplicateAccountNotice({
     <div className="flex items-start gap-3 rounded-lg border border-warning/30 bg-warning/10 p-3 text-warning-foreground">
       <CheckCircle2 className="mt-0.5 size-4 shrink-0" />
       <div className="min-w-0">
-        <div className="text-ui-sm font-medium">Account already linked</div>
+        <div className="text-ui-sm font-medium">Account already signed in</div>
         <p className="mt-0.5 text-ui-xs leading-relaxed">
           {profile.label} already uses this account and organization. Sign in
           again and choose a different organization.

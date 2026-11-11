@@ -211,7 +211,7 @@ describe("TeamProviderLiveFacts", () => {
 
     expect(reads.cards).toEqual([]);
     expect(screen.getByRole("status").textContent).toBe(
-      "Link a plan to Acme to see its rate limits.",
+      "Sign in to Acme to see its rate limits.",
     );
   });
 

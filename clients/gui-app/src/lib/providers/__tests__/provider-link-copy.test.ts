@@ -10,7 +10,6 @@ import {
   LINK_NO_SIGN_IN,
   LINK_PASTE_WHOLE_CODE,
   LINK_UNAVAILABLE,
-  linkedLine,
   mismatchLine,
   onHostOnlyLine,
   stateOfLinkComplete,
@@ -57,16 +56,11 @@ describe("the exact copy", () => {
     expect(LINK_INTRO).toBe(
       "This signs Traycer in to your plan once. It will be offered on every host and sandbox you use; it counts as a device on your plan.",
     );
-    expect(LINK_UNAVAILABLE).toBe("Connect to Traycer to link this profile.");
+    expect(LINK_UNAVAILABLE).toBe("Connect to Traycer to sign in.");
     expect(onHostOnlyLine("Studio")).toBe("On Studio only.");
     expect(mismatchLine("a@x.test", "b@x.test")).toBe(
       "You signed in as a@x.test, not b@x.test.",
     );
-  });
-
-  it("names the account on a linked line only when it is known", () => {
-    expect(linkedLine("a@x.test")).toBe("Linked as a@x.test.");
-    expect(linkedLine(null)).toBe("Linked.");
   });
 
   it("falls back to a generic mismatch line when either account is unknown", () => {

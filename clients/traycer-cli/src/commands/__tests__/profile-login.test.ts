@@ -55,6 +55,7 @@ vi.mock("../../internal/host-rpc", async () => {
     ...actual,
     callHostRpc: vi.fn(),
     callHostRpcWithDispatch: vi.fn(),
+    readLocalHostMethodVersion: vi.fn(async () => null),
   };
 });
 

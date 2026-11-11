@@ -418,6 +418,8 @@ function ProfileEditAccountSection(props: {
   if (props.switchingAccount) {
     return (
       <ProviderProfileReauthPanel
+        replaceAccount={!props.startInReauth}
+        onDeliveryPending={props.onCloseAfterSignIn}
         state={props.state}
         profile={props.profile}
         isLocalHost={props.isLocalHost}

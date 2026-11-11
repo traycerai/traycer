@@ -3,6 +3,10 @@ import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { ProviderLinkDialog } from "@/components/settings/panels/provider-link-dialog";
 import { LINK_INTRO } from "@/lib/providers/provider-link-copy";
 import { hostQueryKeys } from "@/lib/query-keys";
@@ -40,6 +44,7 @@ vi.mock("@/lib/links/open-link", () => ({
 afterEach(() => {
   cleanup();
   resetTeamPageHarness();
+  resetNegotiatedManifests();
   useProviderLinkDialogStore.setState({ target: null });
 });
 
@@ -72,7 +77,7 @@ async function linkWithCode(harness: TeamPageHarness): Promise<void> {
     await screen.findByLabelText("Paste the code"),
     PASTED_CODE,
   );
-  await userEvent.click(screen.getByRole("button", { name: "Link" }));
+  await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
   await screen.findByRole("button", { name: "Done" });
 }
 
@@ -112,7 +117,7 @@ describe("ProviderLinkDialog", () => {
     });
     render(<ProviderLinkDialog />, { wrapper: team.Wrapper });
     expect(
-      await screen.findByRole("heading", { name: "Link a plan to Acme" }),
+      await screen.findByRole("heading", { name: "Sign in to Acme" }),
     ).toBeTruthy();
     expect(screen.getByRole("dialog").textContent.match(/Acme/g)).toHaveLength(
       1,
@@ -270,7 +275,104 @@ describe("ProviderLinkDialog", () => {
     );
   });
 
-  it("sends a pasted code through the complete mutation, and its pending state disables Link", async () => {
+  it("creates a team profile through @1.2 and invalidates plans after installation starts", async () => {
+    useProviderLinkDialogStore.setState({
+      target: {
+        providerId: "claude-code",
+        profileId: null,
+        environmentId: "env-a",
+      },
+    });
+    const harness = mountTeamPageNegotiating(
+      poolSource("admin"),
+      {
+        ...linkHandlers,
+        "environment.list": () => TEAM_LIST,
+        "providers.link": () => ({
+          linkId: "link-team-profile",
+          environmentProfileId: "environment-profile-team",
+          prompt: {
+            kind: "sign_in_url" as const,
+            url: "https://claude.ai/login",
+            codePrompt: "Paste the code",
+          },
+        }),
+        "providers.linkComplete": () => ({
+          state: "installing",
+          code: null,
+          account: null,
+          expectedAccount: null,
+          environmentProfileId: "environment-profile-team",
+          profileId: null,
+        }),
+        "providers.linkCancel": () => ({}),
+      },
+      {
+        "providers.link": { major: 1, minor: 2 },
+        "providers.linkComplete": { major: 1, minor: 2 },
+        "providers.linkCancel": { major: 1, minor: 0 },
+      },
+    );
+    recordNegotiatedHostManifest(mockLocalHostEntry.hostId, {
+      "providers.link": { major: 1, minor: 2 },
+      "providers.linkComplete": { major: 1, minor: 2 },
+      "providers.linkCancel": { major: 1, minor: 0 },
+    });
+    const plansKey = [
+      ...hostQueryKeys.method(
+        mockLocalHostEntry.hostId,
+        "environment.plans.list",
+        { environmentId: "env-a" },
+      ),
+      "user-me",
+    ];
+    harness.queryClient.setQueryDefaults(plansKey, {
+      gcTime: Number.POSITIVE_INFINITY,
+    });
+    harness.queryClient.setQueryData(plansKey, { plans: [] });
+
+    render(<ProviderLinkDialog />, { wrapper: harness.Wrapper });
+    await userEvent.clear(await screen.findByLabelText("Profile name"));
+    await userEvent.type(screen.getByLabelText("Profile name"), "Acme Claude");
+    await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    await screen.findByLabelText("Paste the code");
+
+    expect(harness.paramsOf("providers.link")).toEqual([
+      {
+        providerId: "claude-code",
+        profileId: null,
+        environmentId: "env-a",
+        createProfile: { label: "Acme Claude", shareSkillsAndPlugins: false },
+        replaceAccount: false,
+      },
+    ]);
+    expect(floorOf(harness, "providers.link")).toEqual({
+      method: "providers.link",
+      version: { major: 1, minor: 2 },
+    });
+
+    await userEvent.type(screen.getByLabelText("Paste the code"), PASTED_CODE);
+    await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    expect((await screen.findByRole("status")).textContent).toBe("Signed in.");
+    expect(harness.paramsOf("providers.linkComplete")).toEqual([
+      {
+        linkId: "link-team-profile",
+        code: PASTED_CODE,
+        environmentId: "env-a",
+      },
+    ]);
+    expect(floorOf(harness, "providers.linkComplete")).toEqual({
+      method: "providers.linkComplete",
+      version: { major: 1, minor: 2 },
+    });
+    await waitFor(() => {
+      expect(harness.queryClient.getQueryState(plansKey)?.isInvalidated).toBe(
+        true,
+      );
+    });
+  });
+
+  it("sends a pasted code through the complete mutation, and its pending state disables Sign in", async () => {
     useProviderLinkDialogStore.setState({
       target: {
         providerId: "claude-code",
@@ -293,7 +395,7 @@ describe("ProviderLinkDialog", () => {
       await screen.findByLabelText("Paste the code"),
       PASTED_CODE,
     );
-    await userEvent.click(screen.getByRole("button", { name: "Link" }));
+    await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     await waitFor(() => {
       expect(
@@ -310,7 +412,7 @@ describe("ProviderLinkDialog", () => {
       ]);
     });
     expect(
-      screen.getByRole("button", { name: "Link" }).hasAttribute("disabled"),
+      screen.getByRole("button", { name: "Sign in" }).hasAttribute("disabled"),
     ).toBe(true);
     act(() => answerComplete?.());
     await screen.findByRole("button", { name: "Done" });
@@ -334,7 +436,7 @@ describe("ProviderLinkDialog", () => {
 
     expect(
       (await screen.findByTestId("provider-link-failed")).textContent,
-    ).toBe("Linking a plan needs an updated host.");
+    ).toBe("Signing in needs an updated host.");
     expect(harness.paramsOf("providers.link")).toEqual([]);
   });
 
@@ -369,7 +471,7 @@ describe("ProviderLinkDialog", () => {
           { timeout: 4_000 },
         )
       ).textContent,
-    ).toBe("Linking a plan needs an updated host.");
+    ).toBe("Signing in needs an updated host.");
     expect(harness.paramsOf("providers.linkComplete")).toEqual([]);
   });
 
