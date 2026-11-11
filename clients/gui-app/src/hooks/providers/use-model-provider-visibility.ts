@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import {
   useHostMethodSchemaVersion,
@@ -20,10 +20,10 @@ export type ModelProviderVisibility = {
 
 type VisibilityEcho = {
   readonly hidden: boolean;
-  /** The stored value the choice was made against. */
-  readonly against: boolean;
-  /** `providers.list`'s `dataUpdatedAt` when the choice was made. */
-  readonly seenAt: number;
+  /** Which choice on this row this is; a later click replaces it. */
+  readonly generation: number;
+  /** When its write succeeded, or `null` while it is queued or in flight. */
+  readonly settledAt: number | null;
 };
 
 const NO_ECHOES: ReadonlyMap<string, VisibilityEcho> = new Map();
@@ -37,10 +37,15 @@ const NO_ECHOES: ReadonlyMap<string, VisibilityEcho> = new Map();
  * an optional method). A host without either shows no switch, and its pickers
  * hide nothing.
  *
- * Each row holds the choice this window just made until the host's own echo
- * comes back through `providers.list`, as `ProviderNativeMemoryGroup` does: the
- * mutation reports success while the refetch it triggered is still in flight.
- * The echo is per row, so a write on one row never holds another.
+ * Each row holds the choice this window just made until `providers.list` reads
+ * back AFTER that row's own write succeeded. Writes on one host queue behind
+ * each other, so a read that lands after another row's write, or an unrelated
+ * refresh, says nothing about this row: keying the hold on "any newer read"
+ * flipped a queued row back on while its write was still waiting. The
+ * mutation invalidates `providers.list` as it settles, before the per-call
+ * callbacks below run, so a read stamped at or after `settledAt` is that
+ * read-back. A read that fails after it releases the hold too, so a row is
+ * never stuck disabled.
  */
 export function useModelProviderVisibility(args: {
   readonly hostId: string | null;
@@ -63,58 +68,74 @@ export function useModelProviderVisibility(args: {
     enabled: supported,
     subscribed: supported,
   });
-  const updatedAt = providersQuery.dataUpdatedAt;
-  const readBackInFlight = setHidden.isPending || providersQuery.isFetching;
+  const { dataUpdatedAt, errorUpdatedAt } = providersQuery;
   const [echoes, setEchoes] = useState(NO_ECHOES);
+  const generationRef = useRef(0);
   const storedIds = useMemo(() => new Set(stored ?? []), [stored]);
 
-  const liveEcho = useCallback(
+  const heldEcho = useCallback(
     (modelProviderId: string): VisibilityEcho | null => {
       const echo = echoes.get(modelProviderId);
       if (echo === undefined) return null;
-      if (echo.against !== storedIds.has(modelProviderId)) return null;
-      return echo.seenAt === updatedAt ? echo : null;
+      if (echo.settledAt === null) return echo;
+      return dataUpdatedAt < echo.settledAt && errorUpdatedAt < echo.settledAt
+        ? echo
+        : null;
     },
-    [echoes, storedIds, updatedAt],
+    [dataUpdatedAt, echoes, errorUpdatedAt],
   );
 
   const isShown = useCallback(
     (modelProviderId: string) =>
-      !(liveEcho(modelProviderId)?.hidden ?? storedIds.has(modelProviderId)),
-    [liveEcho, storedIds],
+      !(heldEcho(modelProviderId)?.hidden ?? storedIds.has(modelProviderId)),
+    [heldEcho, storedIds],
   );
   const isSettling = useCallback(
-    (modelProviderId: string) =>
-      readBackInFlight && liveEcho(modelProviderId) !== null,
-    [liveEcho, readBackInFlight],
+    (modelProviderId: string) => heldEcho(modelProviderId) !== null,
+    [heldEcho],
   );
-  const mutate = setHidden.mutate;
+  const mutateAsync = setHidden.mutateAsync;
   const setShown = useCallback(
     (modelProviderId: string, shown: boolean) => {
       const hidden = !shown;
+      generationRef.current += 1;
+      const generation = generationRef.current;
+      // Touches only this row's echo, and only while it is still this click's:
+      // a later click on the same row owns it from then on.
+      const settle = (settledAt: number | null): void => {
+        setEchoes((previous) => {
+          const echo = previous.get(modelProviderId);
+          if (echo === undefined || echo.generation !== generation) {
+            return previous;
+          }
+          const next = new Map(previous);
+          if (settledAt === null) next.delete(modelProviderId);
+          else next.set(modelProviderId, { ...echo, settledAt });
+          return next;
+        });
+      };
       setEchoes((previous) =>
         new Map(previous).set(modelProviderId, {
           hidden,
-          against: storedIds.has(modelProviderId),
-          seenAt: updatedAt,
+          generation,
+          settledAt: null,
         }),
       );
-      mutate(
-        { harnessId, modelProviderId, hidden },
-        {
-          // A refused write leaves the stored list where it was; the toast says
-          // what happened and this puts the switch back.
-          onError: () => {
-            setEchoes((previous) => {
-              const next = new Map(previous);
-              next.delete(modelProviderId);
-              return next;
-            });
-          },
+      // `mutateAsync`, not `mutate(vars, callbacks)`: per-call callbacks fire
+      // only for the observer's LATEST call, so a row clicked before another
+      // row's write settled would never settle. The promise is per call.
+      void mutateAsync({ harnessId, modelProviderId, hidden }).then(
+        () => {
+          settle(Date.now());
+        },
+        // A refused write leaves the stored list where it was; the hook's toast
+        // says what happened and this puts the switch back.
+        () => {
+          settle(null);
         },
       );
     },
-    [harnessId, mutate, storedIds, updatedAt],
+    [harnessId, mutateAsync],
   );
 
   return { supported, isShown, isSettling, setShown };

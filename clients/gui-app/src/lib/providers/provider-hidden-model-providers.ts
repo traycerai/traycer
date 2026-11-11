@@ -46,6 +46,15 @@ export function modelProviderGroupId(model: {
   return typeof id === "string" && id.length > 0 ? id : null;
 }
 
+/** Whether the model's provider is one of the hidden ones. */
+export function modelProviderHidden(
+  model: { readonly metadata: Readonly<Record<string, unknown>> },
+  hidden: ReadonlySet<string>,
+): boolean {
+  const groupId = modelProviderGroupId(model);
+  return groupId !== null && hidden.has(groupId);
+}
+
 /**
  * The models whose provider is not hidden. When every model's provider is
  * hidden the list is returned whole, so a composer always has a model to
@@ -55,10 +64,7 @@ export function withoutHiddenModelProviders<
   M extends { readonly metadata: Readonly<Record<string, unknown>> },
 >(models: ReadonlyArray<M>, hidden: ReadonlySet<string>): ReadonlyArray<M> {
   if (hidden.size === 0) return models;
-  const shown = models.filter((model) => {
-    const groupId = modelProviderGroupId(model);
-    return groupId === null || !hidden.has(groupId);
-  });
+  const shown = models.filter((model) => !modelProviderHidden(model, hidden));
   return shown.length === 0 ? models : shown;
 }
 
