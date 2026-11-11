@@ -1,4 +1,5 @@
-import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
+import { TeamComputerUnattendedSetup } from "@/components/settings/team/team-computer-unattended-setup";
+import { useId, useMemo, useState, type ReactNode } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import { v4 as uuidv4 } from "uuid";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -38,13 +39,7 @@ import {
   type SandboxDefaultsRead,
 } from "@/hooks/sandboxes/use-sandbox-defaults";
 import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
-import {
-  useTeamHostInstallTokenLatest,
-  useTeamHostInstallTokenMutation,
-  type TeamHostInstallToken,
-} from "@/hooks/bots/use-team-host-install-token-mutation";
-import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
-import { formatClockTime } from "@/lib/relative-time";
+import { AddComputerDialog } from "@/components/settings/team/add-computer-dialog";
 import { useSandboxTraycerModels } from "@/hooks/sandboxes/use-sandbox-traycer-models-query";
 import {
   configurationStageShape,
@@ -54,7 +49,6 @@ import { createErrorNeedsFreshKey } from "@/lib/sandboxes/staged-sandbox-run";
 import {
   useTeamCloudCreate,
   useTeamCloudCreateStore,
-  type TeamCloudCreate,
 } from "@/stores/bots/team-cloud-create-store";
 
 /**
@@ -201,8 +195,7 @@ function TeamSetupPostBody(props: {
 /**
  * The ways a team gets a host its bots can run on (decision 127): cloud for
  * the team, which starts the team's kept sandbox (decision 130), or a team
- * host on a machine the team keeps running (T141), which joins with a
- * one-time install token.
+ * computer a member adds at the keyboard.
  */
 function TeamHostOptionsCard(props: {
   readonly live: TeamSetupLive | null;
@@ -232,13 +225,18 @@ function TeamHostOptionsCard(props: {
         testId="team-host-option-cloud"
       />
       <TeamHostOption
-        title="Create a team host on a machine"
-        description="A machine the team keeps running, signed in as the team."
+        title="Add a computer"
+        description="A computer the team can open and run agents on."
         action={
           live === null ? null : (
-            <CreateTeamMachineAction
-              environmentId={live.environmentId}
-              machineJoining={live.machineJoining}
+            <AddComputerDialog
+              teamName={live.teamName}
+              teamSelector={live.environmentId}
+              unattended={
+                <TeamComputerUnattendedSetup
+                  environmentId={live.environmentId}
+                />
+              }
               testId="team-host-option-machine"
             />
           )
@@ -266,256 +264,6 @@ function TeamHostOption(props: {
       </div>
       {props.action}
     </div>
-  );
-}
-
-/**
- * Create a team host on a machine (T141): mint the one-time token the
- * machine joins with, and show it with the command to run there and when it
- * lapses; a lapsed token says so and offers a new one. Pressed while the
- * team has a cloud sandbox, or one is on its way, or a machine is joining,
- * it would be refused, so it waits; the server refuses a second host either
- * way. A mint sent before the card unmounted is still shown when it comes
- * back. Once the machine joins and its bot exists, the setup goes live and
- * the channel's history line says how the host came.
- */
-function CreateTeamMachineAction(props: {
-  readonly environmentId: string;
-  readonly machineJoining: boolean;
-  readonly testId: string;
-}): ReactNode {
-  const { environmentId, testId } = props;
-  const noteId = useId();
-  const sandboxes = useSandboxList();
-  const cloud = useTeamCloudCreate(environmentId, sandboxes.data);
-  const mint = useTeamHostInstallTokenMutation(environmentId);
-  const latest = useTeamHostInstallTokenLatest(environmentId);
-  const pending = mint.isPending || latest.pending;
-  const refusal = pending || mint.error === null ? null : mint.error.message;
-  if (latest.token !== null && !pending) {
-    return (
-      <TeamMachineJoin
-        token={latest.token}
-        onRemint={() => mint.mutate()}
-        held={createTeamMachineNote({
-          environmentId,
-          cloud,
-          sandboxes: sandboxes.data,
-          machineJoining: props.machineJoining,
-        })}
-        testId={testId}
-      />
-    );
-  }
-  const note = createTeamMachineNote({
-    environmentId,
-    cloud,
-    sandboxes: sandboxes.data,
-    machineJoining: props.machineJoining && !pending,
-  });
-  return (
-    <div className="flex min-w-0 flex-col items-start gap-1">
-      <Button
-        type="button"
-        size="sm"
-        variant="outline"
-        disabled={note !== null || pending}
-        aria-describedby={note === null ? undefined : noteId}
-        onClick={() => {
-          if (note === null && !pending) mint.mutate();
-        }}
-        data-testid={`${testId}-action`}
-      >
-        {pending ? (
-          <AgentSpinningDots
-            className={undefined}
-            testId={undefined}
-            variant={undefined}
-          />
-        ) : null}
-        Create team host
-      </Button>
-      {note === null ? null : (
-        <p
-          id={noteId}
-          className="text-ui-xs text-muted-foreground"
-          data-testid={`${testId}-note`}
-        >
-          {note}
-        </p>
-      )}
-      {refusal === null ? null : (
-        <p
-          role="alert"
-          className="text-ui-xs text-destructive"
-          data-testid={`${testId}-refusal`}
-        >
-          {refusal}
-        </p>
-      )}
-    </div>
-  );
-}
-
-/**
- * Why Create team host cannot be pressed, as the line under it, or `null`
- * when it can: the team has a cloud sandbox or one on its way, or a machine
- * of the team's own is joining.
- */
-function createTeamMachineNote(input: {
-  readonly environmentId: string;
-  readonly cloud: TeamCloudCreate | undefined;
-  readonly sandboxes: SandboxListResponse | null | undefined;
-  readonly machineJoining: boolean;
-}): string | null {
-  const { cloud } = input;
-  const cloudOnItsWay =
-    cloud !== undefined && (cloud.pending || cloud.acceptedSandboxId !== null);
-  const hasCloudSandbox =
-    input.sandboxes?.sandboxes.some((summary) =>
-      hostsTeamBots(summary, input.environmentId),
-    ) ?? false;
-  if (cloudOnItsWay || hasCloudSandbox) return "The team has a cloud sandbox.";
-  return input.machineJoining ? MACHINE_JOINING_NOTE : null;
-}
-
-/** Takes the install token from a prompt, so no shell history keeps it. */
-const TEAM_HOST_JOIN_COMMAND = "traycer host join";
-
-/** How long "Copied" stays on the copy button. */
-const COPIED_RESET_MS = 2_000;
-
-/**
- * Whether `atMs` has passed, turning true when it does; false for `null`.
- * Read from a timer, never from the clock during render.
- */
-function useLapsed(atMs: number | null): boolean {
-  const [lapsedAt, setLapsedAt] = useState<number | null>(null);
-  useEffect(() => {
-    if (atMs === null) return;
-    const timer = setTimeout(
-      () => setLapsedAt(atMs),
-      Math.max(0, atMs - Date.now()),
-    );
-    return () => clearTimeout(timer);
-  }, [atMs]);
-  return atMs !== null && lapsedAt === atMs;
-}
-
-/**
- * The minted token: the command that joins the machine, the token it asks
- * for, and when the token lapses. The token stays out of the command, where
- * the machine's shell history would keep it. Once it lapses both are gone,
- * and a new token can be made (`onRemint`); the server lets the lapsed one go
- * unless the machine joined with it in time, and then refuses. A refused new
- * token is the newest mint, so the card shows the Create button with the
- * refusal under it.
- *
- * `held` is why the team cannot take another host now (its cloud sandbox,
- * or a computer of its own still joining, past this token's window: the
- * one this token enrolled, waiting for a provider), said in place of the
- * lapse and holding "Create a new token". A token still in its window stays
- * on the card whatever the hold: its own pending machine is listed.
- */
-function TeamMachineJoin(props: {
-  readonly token: TeamHostInstallToken;
-  readonly onRemint: () => void;
-  readonly held: string | null;
-  readonly testId: string;
-}): ReactNode {
-  const { testId, held } = props;
-  const heldId = useId();
-  const lapsed = useLapsed(props.token.expiresAt);
-  if (lapsed) {
-    return (
-      <div
-        className="flex w-full min-w-0 flex-col items-start gap-1.5"
-        data-testid={`${testId}-expired`}
-      >
-        <p
-          id={heldId}
-          className="text-ui-xs text-foreground"
-          data-testid={`${testId}-expired-line`}
-        >
-          {held ?? "The install token expired before the machine joined."}
-        </p>
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          disabled={held !== null}
-          aria-describedby={held === null ? undefined : heldId}
-          onClick={() => {
-            if (held === null) props.onRemint();
-          }}
-          data-testid={`${testId}-remint`}
-        >
-          Create a new token
-        </Button>
-      </div>
-    );
-  }
-  return (
-    <div
-      className="flex w-full min-w-0 flex-col items-start gap-1.5"
-      data-testid={`${testId}-join`}
-    >
-      <p className="text-ui-xs text-foreground">
-        Run this on the machine, then paste the token when it asks. The token
-        works once and is shown only here.
-      </p>
-      <TeamMachineCopyBlock
-        text={TEAM_HOST_JOIN_COMMAND}
-        copyLabel="Copy command"
-        testId={`${testId}-command`}
-        copyTestId={`${testId}-copy`}
-      />
-      <TeamMachineCopyBlock
-        text={props.token.installToken}
-        copyLabel="Copy token"
-        testId={`${testId}-token`}
-        copyTestId={`${testId}-copy-token`}
-      />
-      <p
-        className="text-ui-xs text-muted-foreground"
-        data-testid={`${testId}-expiry`}
-      >
-        {`Expires at ${formatClockTime(props.token.expiresAt)}. The team's bots start once the machine joins.`}
-      </p>
-    </div>
-  );
-}
-
-/** One line to copy to the machine, as the join card shows it. */
-function TeamMachineCopyBlock(props: {
-  readonly text: string;
-  readonly copyLabel: string;
-  readonly testId: string;
-  readonly copyTestId: string;
-}): ReactNode {
-  const { copied, copy } = useClipboardCopy({
-    resetMs: COPIED_RESET_MS,
-    onSuccess: null,
-    onError: null,
-  });
-  return (
-    <>
-      <pre
-        className="w-full overflow-x-auto rounded-md border border-border/60 bg-foreground/3 p-2 font-mono text-ui-xs text-foreground"
-        data-testid={props.testId}
-      >
-        {props.text}
-      </pre>
-      <Button
-        type="button"
-        size="sm"
-        variant="outline"
-        onClick={() => copy(props.text)}
-        data-testid={props.copyTestId}
-      >
-        {copied ? "Copied" : props.copyLabel}
-      </Button>
-    </>
   );
 }
 
@@ -642,14 +390,10 @@ function EnableTeamCloudAction(props: {
   // between must still know the team's sandbox is coming.
   const pressed = useTeamCloudCreate(environmentId, sandboxes.data);
   const pending = pressed?.pending === true;
-  // A machine's token being minted from this app, this card's or an earlier
-  // mount's, holds the team's host as a listed one does.
-  const machineMint = useTeamHostInstallTokenLatest(environmentId);
-
   const shape = teamStageShape(catalogue.data, defaults);
   const blocked = enableTeamCloudBlocked({
     environmentId,
-    machineJoining: props.machineJoining || machineMint.pending,
+    machineJoining: props.machineJoining,
     models,
     sandboxes,
     unlisted: pressed?.acceptedSandboxId ?? null,

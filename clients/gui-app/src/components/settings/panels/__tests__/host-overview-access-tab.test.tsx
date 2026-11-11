@@ -376,7 +376,7 @@ describe("<HostOverviewAccessTab /> setup", () => {
 });
 
 describe("<HostOverviewAccessTab /> on a team's host", () => {
-  it("shows the team line outside, and every section inside, an inert region", async () => {
+  it("keeps remote access outside the team's otherwise inert settings", async () => {
     const host = hostWith(
       {
         principal: { kind: "team", teamName: "Acme" },
@@ -396,9 +396,11 @@ describe("<HostOverviewAccessTab /> on a team's host", () => {
     expect(line.closest("[inert]")).toBeNull();
     expect(within(line).queryByRole("button")).toBeNull();
     expect(within(line).queryByRole("link")).toBeNull();
+    expect(
+      (await screen.findByTestId("remote-access-section")).closest("[inert]"),
+    ).toBeNull();
 
     for (const testId of [
-      "remote-access-section",
       "host-setup-section",
       "terminal-accounts-section",
       "local-values-section",

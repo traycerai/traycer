@@ -536,7 +536,7 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
     ).toEqual([
       "Give the team a host",
       "Enable cloud for the team",
-      "Create a team host on a machine",
+      "Add a computer",
     ]);
     expect(within(card).queryAllByRole("link")).toHaveLength(0);
     expect(channel.textContent).not.toMatch(/github|starter|seat/i);
@@ -1262,7 +1262,7 @@ describe("<BotTabSurface /> a team's main bot once it is live", () => {
     ).toEqual([
       "Give the team a host",
       "Enable cloud for the team",
-      "Create a team host on a machine",
+      "Add a computer",
     ]);
     expect(within(post).queryAllByRole("button")).toEqual([]);
     expect(post.textContent).not.toContain("Not available yet.");

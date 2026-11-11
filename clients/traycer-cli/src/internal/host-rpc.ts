@@ -1,3 +1,4 @@
+import { TEAM_TRANSFER_REFUSALS } from "@traycer-clients/shared/host-client/team-computer-refusals";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { randomUUID } from "node:crypto";
 import type { ZodType } from "zod";
@@ -828,6 +829,17 @@ function mapHostRpcError(err: HostRpcError): CliError {
     return cliError({
       code: CLI_ERROR_CODES.AGENT_NOT_FOUND,
       message: `traycer: ${err.message} Check --agent-id (or $TRAYCER_AGENT_ID).`,
+      details: null,
+      exitCode: 1,
+    });
+  }
+  const teamRefusal = TEAM_TRANSFER_REFUSALS.find(
+    ({ code }) => code === err.code,
+  );
+  if (teamRefusal !== undefined) {
+    return cliError({
+      code: teamRefusal.code,
+      message: teamRefusal.message,
       details: null,
       exitCode: 1,
     });

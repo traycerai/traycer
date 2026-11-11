@@ -1,3 +1,4 @@
+import { useHostCredentialStatusStore } from "@/stores/host/host-credential-status-store";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
@@ -368,15 +369,12 @@ export function buildHostStreamClient(params: {
     // resolves `unavailable` until the provisioning provider is mounted, so
     // dev shells and tests are unaffected.
     hostCredentialMint: appHostCredentialMintFlow,
-    // Kept wired as the one place transports report credential state into,
-    // but the report is deliberately INERT today: an `openAck` state carries
-    // no provenance (which credential, which transport, when), so `active`
-    // must NOT release the app-wide adoption claim - a delayed `active(A)`
-    // observed before A was burned would free B's claim and reopen the
-    // double-mint it exists to prevent. The claim expires on its TTL alone;
-    // see `noteHostCredentialState`'s own doc. If a future frame carries the
-    // credential's identity, this is the seam that starts trusting it.
-    onHostCredentialState: noteHostCredentialState,
+    // Status informs Overview only. A report has no credential provenance,
+    // so the app-wide adoption claim still expires only on its TTL.
+    onHostCredentialState: (hostId, state) => {
+      noteHostCredentialState(hostId, state);
+      useHostCredentialStatusStore.getState().report(hostId, state);
+    },
     // The LOCAL host's long-lived connection, so this is the leg that hears a
     // restart tombstone from a local host restarted by somebody other than
     // this app - a `traycer host restart` on the box, an update install. The

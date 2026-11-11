@@ -149,6 +149,8 @@ function renderCardWithBinding(
         hostName="Old laptop"
         status={status}
         binding={binding}
+        owner={null}
+        isLocalMachine={false}
       />
     </QueryClientProvider>,
   );

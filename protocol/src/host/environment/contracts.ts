@@ -317,6 +317,24 @@ export const environmentHostBindV10 = defineRpcContract({
   responseSchema: environmentHostBindingSchema,
 });
 
+/** Advertises team-target transfer; new hosts serve both minors through one handler. */
+export const environmentHostBindV11 = defineRpcContract({
+  method: "environment.host.bind",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: environmentHostBindRequestSchema,
+  responseSchema: environmentHostBindingSchema,
+});
+
+export const environmentHostBindUpgradeV10ToV11 = defineUpgradePath<
+  typeof environmentHostBindV10,
+  typeof environmentHostBindV11
+>({
+  from: environmentHostBindV10.schemaVersion,
+  to: environmentHostBindV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
 export const environmentHostListRequestSchema = lazySchema(() =>
   z.object({
     environmentId: z.string().min(1),

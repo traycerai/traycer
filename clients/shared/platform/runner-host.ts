@@ -1,3 +1,9 @@
+import type { HostOwnershipResult } from "../host-client/host-ownership";
+import type {
+  TeamComputersResult,
+  SetEnvironmentBotHostResult,
+} from "../host-client/team-computers";
+import type { TeamComputerInstallTokenResult } from "../host-client/team-computer-install";
 import type { SandboxCatalogueReadinessRequest } from "@traycer/protocol/host/sandbox-control";
 import type { SandboxArtifactBridge } from "./sandbox-artifacts";
 import type {
@@ -28,6 +34,7 @@ import type {
   UpdateHostVersionPolicyFetchResult,
   UpdateHostVersionPolicyInput,
 } from "../host-client/host-version-policy-fetcher";
+import type { TeamComputerReleaseResult } from "../host-client/team-computer-release";
 import type { DeregisterHostFetchResult } from "../host-client/host-deregister-fetcher";
 import type {
   SandboxAutomationFetchResult,
@@ -58,7 +65,6 @@ import type {
   SlackAppDmsRequest,
   SlackAppRegisterRequest,
 } from "@traycer/protocol/host/slack-app";
-import type { TeamHostInstallTokenResult } from "../host-client/team-host";
 import type {
   EnvironmentProvidersFetchResult,
   SandboxGrantsFetchResult,
@@ -442,6 +448,31 @@ export interface IRunnerHost {
     input: UpdateHostVersionPolicyInput,
   ): Promise<UpdateHostVersionPolicyFetchResult>;
 
+  readHostOwnership(
+    bearer: string,
+    hostId: string,
+  ): Promise<HostOwnershipResult>;
+  listTeamComputers(
+    bearer: string,
+    environmentId: string,
+  ): Promise<TeamComputersResult>;
+  setEnvironmentBotHost(
+    bearer: string,
+    environmentId: string,
+    hostId: string,
+    sharingGeneration: number,
+  ): Promise<SetEnvironmentBotHostResult>;
+  mintTeamComputerInstallToken(
+    bearerToken: string,
+    environmentId: string,
+  ): Promise<TeamComputerInstallTokenResult>;
+
+  releaseTeamComputer(
+    bearer: string,
+    hostId: string,
+    environmentId: string,
+  ): Promise<TeamComputerReleaseResult>;
+
   /**
    * "Remove from account" — `POST /api/v3/hosts/:hostId/deregister` with the
    * user bearer. Desktop shells run this in Electron main for the same CORS
@@ -578,16 +609,6 @@ export interface IRunnerHost {
     bearerToken: string,
     request: SlackAppDmsRequest,
   ): Promise<SlackAppWriteResult>;
-  /**
-   * Mints the one-time install token for a team environment's bot host
-   * (traycer-server `/api/environments/{id}/team-host/install-token`) with the
-   * person's bearer. Same placement as the Slack calls above; see
-   * `host-client/team-host.ts`. Never throws.
-   */
-  mintTeamHostInstallToken(
-    bearerToken: string,
-    environmentId: string,
-  ): Promise<TeamHostInstallTokenResult>;
   /**
    * The secrets broker (authn), with the user's bearer: the grants one
    * sandbox host holds, and the answer to an agent's grant request. See

@@ -1,4 +1,23 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { LegacyTeamHost } from "./legacy-team-host";
+import { buildHostUseCommand } from "../../commands/host-use";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  readCredentialsFile,
+  writeCredentialsFile,
+} from "@traycer/protocol/config/credentials";
+import type { HostOwnerPrincipal } from "@traycer/protocol/host/host-status";
+import type { HostOwnershipResult } from "@traycer-clients/shared/host-client/host-ownership";
 
 // `maybeProvisionCredential`'s own decision logic, which had no direct
 // coverage: every command suite that exercises it (`host-install`,
@@ -23,6 +42,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   resolveHostAuthMock: vi.fn(),
   provisionInstalledHostCredentialMock: vi.fn(),
+  callHostRpcMock: vi.fn(),
+  readHostOwnershipMock: vi.fn(),
+  credentialsPath: "",
+  legacyHost: null as LegacyTeamHost | null,
 }));
 
 vi.mock("../../internal/host-auth", () => ({
@@ -33,10 +56,130 @@ vi.mock("../credential-provisioning", () => ({
   provisionInstalledHostCredential: mocks.provisionInstalledHostCredentialMock,
 }));
 
-import { maybeProvisionCredential } from "../install-auth";
+// Keep the network out while exercising the real team selection and bind
+// logic in install-auth.ts.
+vi.mock("../../internal/host-rpc", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../internal/host-rpc")>();
+  return {
+    ...actual,
+    callHostRpcWithDispatch: (
+      ...callArgs: Parameters<typeof actual.callHostRpcWithDispatch>
+    ) =>
+      mocks.legacyHost === null
+        ? mocks.callHostRpcMock(callArgs[0], callArgs[1])
+        : mocks.legacyHost.request(...callArgs),
+    callHostRpc: (...callArgs: Parameters<typeof actual.callHostRpc>) =>
+      mocks.callHostRpcMock(...callArgs),
+  };
+});
+
+// Redirect the real credentials mutation store to this suite's private file.
+vi.mock("../../store/paths", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../store/paths")>();
+  return {
+    ...actual,
+    cliCredentialsPath: () => mocks.credentialsPath,
+  };
+});
+
+vi.mock(
+  "@traycer-clients/shared/host-client/host-ownership",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/host-ownership")
+      >();
+    return {
+      ...actual,
+      readHostOwnershipViaHttp: (
+        authnBaseUrl: string,
+        bearerToken: string,
+        hostId: string,
+      ) => mocks.readHostOwnershipMock(authnBaseUrl, bearerToken, hostId),
+    };
+  },
+);
+
+import { completeTeamInstall, maybeProvisionCredential } from "../install-auth";
 import type { HostInstallAuthPreflight } from "../install-auth";
 import type { HostCredentialProvisionOutcome } from "../credential-provisioning";
 import type { CommandContext } from "../../runner/runner";
+import { CLI_ERROR_CODES } from "../../runner/errors";
+
+const credentialsRoot = mkdtempSync(join(tmpdir(), "team-install-auth-test-"));
+let caseCredentialsRoot = "";
+const teamEnvironment = {
+  environmentId: "environment-acme",
+  ownerKind: "organization",
+  ownerId: "organization-acme",
+  roomId: "room-acme",
+  label: "Acme",
+  effectiveRole: "admin",
+  kind: "team",
+  hostCount: 0,
+  providerHandle: "acme",
+} as const;
+const personalEnvironment = {
+  environmentId: "environment-personal",
+  ownerKind: "user",
+  ownerId: "member-1",
+  roomId: "room-personal",
+  label: "Personal",
+} as const;
+const teamBinding = {
+  hostId: "host-local",
+  environment: teamEnvironment,
+  explicit: true,
+  enrolledByUserId: "member-1",
+  canUnbind: true,
+};
+const personalBinding = {
+  hostId: "host-local",
+  environment: personalEnvironment,
+  explicit: false,
+  enrolledByUserId: null,
+  canUnbind: false,
+};
+
+function hostOwnership(
+  owner: HostOwnerPrincipal,
+  kind: "personal" | "sandbox",
+): HostOwnershipResult {
+  return {
+    kind: "ok",
+    host: {
+      hostId: "host-local",
+      owner,
+      kind,
+      remoteAccess: false,
+    },
+  };
+}
+
+afterAll(() => {
+  rmSync(credentialsRoot, { recursive: true, force: true });
+});
+
+afterEach(() => {
+  if (caseCredentialsRoot !== "") {
+    rmSync(caseCredentialsRoot, { recursive: true, force: true });
+    caseCredentialsRoot = "";
+  }
+});
+
+async function writeStoredCredentials(token: string): Promise<void> {
+  await writeCredentialsFile(
+    mocks.credentialsPath,
+    {
+      token,
+      refreshToken: `${token}-refresh`,
+      savedAt: "2026-11-10T00:00:00.000Z",
+      user: { id: "member-1", email: "member@example.test", name: "Member" },
+    },
+    0,
+  );
+}
 
 function fakeCtx(): CommandContext {
   return {
@@ -85,13 +228,250 @@ function storedAuth(): {
   };
 }
 
-describe("maybeProvisionCredential", () => {
+describe("install auth helpers", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    mocks.legacyHost = null;
+    caseCredentialsRoot = mkdtempSync(join(credentialsRoot, "case-"));
+    mocks.credentialsPath = join(caseCredentialsRoot, "cli", "credentials");
+    mocks.callHostRpcMock.mockImplementation((method: string) => {
+      if (method === "environment.list") {
+        return Promise.resolve({ environments: [teamEnvironment] });
+      }
+      if (method === "environment.host.read") {
+        return Promise.resolve(personalBinding);
+      }
+      return Promise.resolve(teamBinding);
+    });
+    mocks.resolveHostAuthMock.mockResolvedValue({
+      token: "stored-bearer",
+      authnBaseUrl: "https://authn.test",
+      userId: "member-1",
+    });
+    mocks.readHostOwnershipMock.mockResolvedValue(
+      hostOwnership({ kind: "user", id: "member-1" }, "personal"),
+    );
     mocks.provisionInstalledHostCredentialMock.mockResolvedValue({
       kind: "active",
       minted: true,
     });
+  });
+
+  it("the CLI does not send a team target to a host that cannot transfer", async () => {
+    const legacyHost = new LegacyTeamHost();
+    mocks.legacyHost = legacyHost;
+
+    await expect(buildHostUseCommand("acme")(fakeCtx())).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_INCOMPATIBLE,
+      message: expect.stringContaining("traycer host update"),
+    });
+    expect(legacyHost.requests).toEqual([]);
+    expect(mocks.callHostRpcMock.mock.calls.map(([method]) => method)).toEqual([
+      "environment.list",
+    ]);
+    expect(mocks.readHostOwnershipMock).not.toHaveBeenCalled();
+  });
+
+  it("lists the signed-in teams and binds the selected team before clearing an inline-created sign-in", async () => {
+    const token = "inline-team-token";
+    await writeStoredCredentials(token);
+    const credentialsAtOwnerChecks: (string | null)[] = [];
+    mocks.readHostOwnershipMock
+      .mockImplementationOnce(async () => {
+        credentialsAtOwnerChecks.push(
+          (await readCredentialsFile(mocks.credentialsPath))?.token ?? null,
+        );
+        return hostOwnership({ kind: "user", id: "member-1" }, "personal");
+      })
+      .mockImplementationOnce(async () => {
+        credentialsAtOwnerChecks.push(
+          (await readCredentialsFile(mocks.credentialsPath))?.token ?? null,
+        );
+        return hostOwnership(
+          { kind: "team", id: "organization-acme", name: "Acme" },
+          "personal",
+        );
+      });
+
+    await completeTeamInstall("team/acme", {
+      preflight: { state: "signed-in-inline", reason: null },
+      inlineSignInToken: token,
+    });
+
+    expect(mocks.callHostRpcMock.mock.calls.map(([method]) => method)).toEqual([
+      "environment.list",
+      "environment.host.read",
+      "environment.host.bind",
+    ]);
+    expect(mocks.callHostRpcMock.mock.calls[2]?.[1]).toEqual({
+      environmentId: "environment-acme",
+    });
+    expect(mocks.readHostOwnershipMock).toHaveBeenCalledTimes(2);
+    expect(mocks.readHostOwnershipMock).toHaveBeenNthCalledWith(
+      1,
+      "https://authn.test",
+      "stored-bearer",
+      "host-local",
+    );
+    expect(mocks.readHostOwnershipMock).toHaveBeenNthCalledWith(
+      2,
+      "https://authn.test",
+      "stored-bearer",
+      "host-local",
+    );
+    const ownershipReads = mocks.readHostOwnershipMock.mock.invocationCallOrder;
+    const bindCalls = mocks.callHostRpcMock.mock.invocationCallOrder;
+    expect(ownershipReads[0]).toBeLessThan(bindCalls[2] ?? Infinity);
+    expect(ownershipReads[1]).toBeGreaterThan(bindCalls[2] ?? -Infinity);
+    expect(credentialsAtOwnerChecks).toEqual([token, token]);
+    expect(await readCredentialsFile(mocks.credentialsPath)).toBeNull();
+  });
+
+  it("keeps the inline-created sign-in when the team bind fails", async () => {
+    const token = "inline-team-token";
+    await writeStoredCredentials(token);
+    mocks.callHostRpcMock
+      .mockResolvedValueOnce({ environments: [teamEnvironment] })
+      .mockResolvedValueOnce(personalBinding)
+      .mockRejectedValueOnce(new Error("bind failed"));
+
+    await expect(
+      completeTeamInstall("acme", {
+        preflight: { state: "signed-in-inline", reason: null },
+        inlineSignInToken: token,
+      }),
+    ).rejects.toThrow();
+
+    expect((await readCredentialsFile(mocks.credentialsPath))?.token).toBe(
+      token,
+    );
+  });
+
+  it("does not clear a newer sign-in that replaced the inline token during owner confirmation", async () => {
+    const token = "inline-team-token";
+    const replacement = "concurrent-login-token";
+    await writeStoredCredentials(token);
+    mocks.readHostOwnershipMock
+      .mockResolvedValueOnce(
+        hostOwnership({ kind: "user", id: "member-1" }, "personal"),
+      )
+      .mockImplementationOnce(async () => {
+        await writeStoredCredentials(replacement);
+        return hostOwnership(
+          { kind: "team", id: "organization-acme", name: "Acme" },
+          "personal",
+        );
+      });
+
+    await completeTeamInstall("acme", {
+      preflight: { state: "signed-in-inline", reason: null },
+      inlineSignInToken: token,
+    });
+
+    expect((await readCredentialsFile(mocks.credentialsPath))?.token).toBe(
+      replacement,
+    );
+  });
+
+  it("keeps the inline-created sign-in when the registry does not confirm the team owner after bind", async () => {
+    const token = "inline-team-token";
+    await writeStoredCredentials(token);
+
+    await expect(
+      completeTeamInstall("acme", {
+        preflight: { state: "signed-in-inline", reason: null },
+        inlineSignInToken: token,
+      }),
+    ).rejects.toMatchObject({ code: "E_HOST_REQUEST_OUTCOME_UNKNOWN" });
+
+    expect((await readCredentialsFile(mocks.credentialsPath))?.token).toBe(
+      token,
+    );
+  });
+
+  it("accepts an existing same-team owner plus explicit binding without changing the stored sign-in", async () => {
+    const token = "pre-existing-token";
+    await writeStoredCredentials(token);
+    mocks.callHostRpcMock.mockImplementation((method: string) => {
+      if (method === "environment.list") {
+        return Promise.resolve({ environments: [teamEnvironment] });
+      }
+      return Promise.resolve(teamBinding);
+    });
+    mocks.readHostOwnershipMock.mockResolvedValue(
+      hostOwnership(
+        { kind: "team", id: "organization-acme", name: "Acme" },
+        "personal",
+      ),
+    );
+
+    const binding = await completeTeamInstall("acme", {
+      preflight: { state: "signed-in", reason: null },
+      inlineSignInToken: null,
+    });
+
+    expect(binding).toEqual(teamBinding);
+    expect(mocks.callHostRpcMock).not.toHaveBeenCalledWith(
+      "environment.host.bind",
+      expect.anything(),
+    );
+    expect(mocks.readHostOwnershipMock).toHaveBeenCalledTimes(1);
+    expect((await readCredentialsFile(mocks.credentialsPath))?.token).toBe(
+      token,
+    );
+  });
+
+  it("refuses a sandbox host before attempting a team bind", async () => {
+    mocks.readHostOwnershipMock.mockResolvedValue(
+      hostOwnership({ kind: "user", id: "member-1" }, "sandbox"),
+    );
+
+    await expect(
+      completeTeamInstall("acme", {
+        preflight: { state: "signed-in", reason: null },
+        inlineSignInToken: null,
+      }),
+    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.HOST_IS_SANDBOX });
+  });
+
+  it("refuses a computer already owned by another team", async () => {
+    mocks.readHostOwnershipMock.mockResolvedValue(
+      hostOwnership(
+        { kind: "team", id: "organization-other", name: "Other" },
+        "personal",
+      ),
+    );
+
+    await expect(
+      completeTeamInstall("acme", {
+        preflight: { state: "signed-in", reason: null },
+        inlineSignInToken: null,
+      }),
+    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.HOST_IN_ANOTHER_TEAM });
+  });
+
+  it("retains a pre-existing sign-in after the team bind", async () => {
+    const token = "pre-existing-token";
+    await writeStoredCredentials(token);
+    mocks.readHostOwnershipMock
+      .mockResolvedValueOnce(
+        hostOwnership({ kind: "user", id: "member-1" }, "personal"),
+      )
+      .mockResolvedValueOnce(
+        hostOwnership(
+          { kind: "team", id: "organization-acme", name: "Acme" },
+          "personal",
+        ),
+      );
+
+    await completeTeamInstall("acme", {
+      preflight: { state: "signed-in", reason: null },
+      inlineSignInToken: null,
+    });
+
+    expect((await readCredentialsFile(mocks.credentialsPath))?.token).toBe(
+      token,
+    );
   });
 
   it("returns null without reading credentials when nothing was started", async () => {

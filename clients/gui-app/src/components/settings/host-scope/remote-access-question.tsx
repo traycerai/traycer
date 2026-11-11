@@ -7,12 +7,13 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import {
   REMOTE_ACCESS_QUESTION,
   remoteAccessQuestionShown,
+  remoteAccessFailureText,
 } from "@/components/settings/host-scope/host-access-model";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { useEnvironmentStatusRead } from "@/hooks/environment/use-environment-reads";
 import { useRemoteAccessSetMutation } from "@/hooks/environment/use-remote-access-set-mutation";
-import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import { useCanSetRemoteAccess } from "@/hooks/environment/use-can-set-remote-access";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useHostAccessPromptsStore } from "@/stores/hosts/host-access-prompts-store";
 
@@ -29,8 +30,6 @@ export function RemoteAccessQuestion(props: {
     props.hostId,
     props.enabled,
   );
-  const writable =
-    useHostMethodSupport(props.hostId, "host.remoteAccess.set") === true;
   const answered = useHostAccessPromptsStore((state) =>
     props.hostId === null
       ? true
@@ -39,14 +38,16 @@ export function RemoteAccessQuestion(props: {
   const answerRemoteAccess = useHostAccessPromptsStore(
     (state) => state.answerRemoteAccess,
   );
+  const eligible =
+    status.data !== null && remoteAccessQuestionShown(status.data, answered);
+  const writable = useCanSetRemoteAccess(
+    props.client,
+    props.hostId,
+    status.data?.principal ?? null,
+    props.enabled && eligible,
+  );
   const set = useRemoteAccessSetMutation(props.client, () => undefined);
-  if (
-    !props.enabled ||
-    !writable ||
-    props.hostId === null ||
-    status.data === null ||
-    !remoteAccessQuestionShown(status.data, answered)
-  ) {
+  if (!props.enabled || !writable || props.hostId === null || !eligible) {
     return props.children ?? null;
   }
   const hostId = props.hostId;
@@ -89,6 +90,11 @@ export function RemoteAccessQuestion(props: {
           Not now
         </Button>
       </div>
+      {set.error !== null ? (
+        <p role="alert" className="w-full text-destructive">
+          {remoteAccessFailureText(set.error.code)}
+        </p>
+      ) : null}
     </div>
   );
 }

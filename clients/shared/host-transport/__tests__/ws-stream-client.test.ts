@@ -632,6 +632,7 @@ describe("WsStreamClient", () => {
     expect(stub.textSent).toHaveLength(1);
     const openFrame = parseText(stub.textSent[0]);
     expect(openFrame.kind).toBe("open");
+    expect(openFrame.capabilities).toEqual(["teamCredentialState"]);
     expect(openFrame.token).toBe("token-abc");
     // The open frame's manifest is the client's raw canonical - no per-method
     // substitution needed. A same-major minor skew (e.g. host-v1.0.0's
@@ -4641,7 +4642,13 @@ describe("WsStreamClient host credential provisioning", () => {
 
   function completeProvisionHandshake(
     socket: StubStreamWebSocket,
-    state: "missing" | "active" | "needs-reauth" | null | "omit",
+    state:
+      | "missing"
+      | "active"
+      | "needs-reauth"
+      | "team-unavailable"
+      | null
+      | "omit",
   ): void {
     socket.fireOpen();
     ackProvisionHandshake(socket, state);
@@ -4657,7 +4664,13 @@ describe("WsStreamClient host credential provisioning", () => {
    */
   function ackProvisionHandshake(
     socket: StubStreamWebSocket,
-    state: "missing" | "active" | "needs-reauth" | null | "omit",
+    state:
+      | "missing"
+      | "active"
+      | "needs-reauth"
+      | "team-unavailable"
+      | null
+      | "omit",
   ): void {
     const openRaw = socket.textSent[0];
     const openParsed = JSON.parse(openRaw) as {
@@ -4713,6 +4726,278 @@ describe("WsStreamClient host credential provisioning", () => {
     await flush();
     expect(mint).not.toHaveBeenCalled();
     expect(allProvisionFrames(sockets)).toHaveLength(0);
+    session.close();
+  });
+
+  it("ignores an older socket's missing ack after team-unavailable, then permits a fresh reconnect to mint", async () => {
+    const mint = vi.fn<HostCredentialMintFlow>().mockResolvedValue({
+      kind: "unavailable",
+    });
+    const { factory, sockets } = makeFactory();
+    const client = makeProvisioningClient({
+      factory,
+      mint,
+      endpoint: () => HOST_A,
+      authToken: undefined,
+    });
+
+    // Each subscription owns a StreamSession/socket, while credential mint
+    // bookkeeping is shared by this WsStreamClient.
+    const olderSession = client.subscribe("epic.subscribe", {
+      epicId: "epic-1",
+    });
+    await flush();
+    const olderSocket = sockets[0].socket;
+    olderSocket.fireOpen();
+    await pollUntil(
+      "older socket to send its open frame",
+      () => olderSocket.textSent.length > 0,
+    );
+
+    const teamSession = client.subscribe("epic.subscribe", {
+      epicId: "epic-1",
+    });
+    const teamSocket = await nthSocket(sockets, 1);
+    teamSocket.fireOpen();
+    await pollUntil(
+      "team socket to send its open frame",
+      () => teamSocket.textSent.length > 0,
+    );
+    ackProvisionHandshake(teamSocket, "team-unavailable");
+    await flush();
+
+    // The earlier handshake is still live in its own session. Its late `missing`
+    // must not undo the team state or start a personal credential mint.
+    ackProvisionHandshake(olderSocket, "missing");
+    await flush();
+    expect(mint).not.toHaveBeenCalled();
+    expect(allProvisionFrames(sockets)).toHaveLength(0);
+
+    // This dial starts after the team-state observation. A fresh `missing` ack
+    // after the team becomes available must remain eligible for provisioning.
+    teamSocket.fireClose(1000, "reconnect-after-team-return", false);
+    const freshSocket = await nthSocket(sockets, 2);
+    freshSocket.fireOpen();
+    await pollUntil(
+      "fresh socket to send its open frame",
+      () => freshSocket.textSent.length > 0,
+    );
+    ackProvisionHandshake(freshSocket, "missing");
+    await flush();
+
+    expect(mint).toHaveBeenCalledTimes(1);
+    expect(mint).toHaveBeenCalledWith({
+      hostId: HOST_A.hostId,
+      reason: "missing",
+    });
+    olderSession.close();
+    teamSession.close();
+  });
+
+  it("observes team-unavailable without minting a personal credential", async () => {
+    const mint = vi.fn(async () =>
+      provisioned({ token: "should-not", refreshToken: "should-not" }),
+    );
+    const observed: Array<{ hostId: string; state: HostCredentialState }> = [];
+    const { factory, sockets } = makeFactory();
+    const client = makeProvisioningClientWithObserver({
+      factory,
+      mint,
+      endpoint: () => HOST_A,
+      authToken: undefined,
+      onState: (hostId, state) => observed.push({ hostId, state }),
+    });
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    await flush();
+    completeProvisionHandshake(sockets[0].socket, "team-unavailable");
+    await flush();
+
+    expect(observed).toEqual([
+      { hostId: HOST_A.hostId, state: "team-unavailable" },
+    ]);
+    expect(mint).not.toHaveBeenCalled();
+    expect(allProvisionFrames(sockets)).toHaveLength(0);
+    session.close();
+  });
+
+  it("team-unavailable discards held credentials and cancels the provision retry", async () => {
+    const mint = vi
+      .fn<HostCredentialMintFlow>()
+      .mockResolvedValueOnce({ kind: "pending-elsewhere", retryAfterMs: 0 })
+      .mockResolvedValue({ kind: "unavailable" });
+    const { factory, sockets } = makeFactory();
+    const client = makeProvisioningClient({
+      factory,
+      mint,
+      endpoint: () => HOST_A,
+      authToken: undefined,
+    });
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    await flush();
+
+    completeProvisionHandshake(sockets[0].socket, "needs-reauth");
+    await flush();
+    expect(mint).toHaveBeenCalledTimes(1);
+
+    // A later ack says this host belongs to a team with no credential yet.
+    // That state supersedes this client's retry and any credential it might
+    // have been holding for delivery.
+    const beforeReconnect = sockets.length;
+    sockets[sockets.length - 1].socket.fireClose(1000, "drop", false);
+    const next = await nthSocket(sockets, beforeReconnect);
+    next.fireOpen();
+    await pollUntil(
+      "reconnected socket to send its open frame",
+      () => next.textSent.length > 0,
+    );
+    ackProvisionHandshake(next, "team-unavailable");
+    await flush();
+
+    await wait(1_600);
+    expect(mint).toHaveBeenCalledTimes(1);
+    expect(allProvisionFrames(sockets)).toHaveLength(0);
+    session.close();
+  });
+
+  it("does not flush a previously minted credential when the host reports team-unavailable", async () => {
+    const deferredMint: { resolve: ((outcome: Provisioned) => void) | null } = {
+      resolve: null,
+    };
+    const mint = vi.fn<HostCredentialMintFlow>().mockImplementationOnce(
+      () =>
+        new Promise<Provisioned>((resolve) => {
+          deferredMint.resolve = resolve;
+        }),
+    );
+    const { factory, sockets } = makeFactory();
+    const client = makeProvisioningClient({
+      factory,
+      mint,
+      endpoint: () => HOST_A,
+      authToken: undefined,
+    });
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    await flush();
+
+    completeProvisionHandshake(sockets[0].socket, "missing");
+    await flush();
+    expect(mint).toHaveBeenCalledTimes(1);
+
+    // Disconnect before the mint settles, leaving its credential held for a
+    // future openAck. The team state must discard that handoff opportunity.
+    sockets[0].socket.fireClose(1000, "drop", false);
+    const next = await nthSocket(sockets, 1);
+    const resolveMint = deferredMint.resolve;
+    if (resolveMint === null) {
+      throw new Error("mint call was never started");
+    }
+    resolveMint(
+      provisioned({ token: "held-token", refreshToken: "held-refresh" }),
+    );
+    await flush();
+    next.fireOpen();
+    await pollUntil(
+      "reconnected socket to send its open frame",
+      () => next.textSent.length > 0,
+    );
+    ackProvisionHandshake(next, "team-unavailable");
+    await flush();
+
+    expect(allProvisionFrames(sockets)).toHaveLength(0);
+    session.close();
+  });
+
+  it("does not deliver a mint started before team-unavailable after later state changes", async () => {
+    const staleMint: { resolve: ((outcome: Provisioned) => void) | null } = {
+      resolve: null,
+    };
+    const freshOutcome = provisioned({
+      token: "fresh-team-credential",
+      refreshToken: "fresh-team-refresh",
+    });
+    const freshMint: { resolve: ((outcome: Provisioned) => void) | null } = {
+      resolve: null,
+    };
+    const mint = vi
+      .fn<HostCredentialMintFlow>()
+      .mockImplementationOnce(
+        () =>
+          new Promise<Provisioned>((resolve) => {
+            staleMint.resolve = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise<Provisioned>((resolve) => {
+            freshMint.resolve = resolve;
+          }),
+      );
+    const { factory, sockets } = makeFactory();
+    const client = makeProvisioningClient({
+      factory,
+      mint,
+      endpoint: () => HOST_A,
+      authToken: undefined,
+    });
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    await flush();
+
+    completeProvisionHandshake(sockets[0].socket, "missing");
+    await flush();
+    expect(mint).toHaveBeenCalledTimes(1);
+
+    const reconnectWith = async (
+      state: "team-unavailable" | "active" | "missing",
+    ): Promise<StubStreamWebSocket> => {
+      const previousCount = sockets.length;
+      sockets[sockets.length - 1].socket.fireClose(1000, "drop", false);
+      const socket = await nthSocket(sockets, previousCount);
+      socket.fireOpen();
+      await pollUntil(
+        "reconnected socket to send its open frame",
+        () => socket.textSent.length > 0,
+      );
+      ackProvisionHandshake(socket, state);
+      await flush();
+      return socket;
+    };
+
+    await reconnectWith("team-unavailable");
+    await reconnectWith("active");
+    const missingSocket = await reconnectWith("missing");
+    expect(mint).toHaveBeenCalledTimes(2);
+
+    // The first mint resolves after the team state, and even after the host
+    // has subsequently reported active then missing. It must not overwrite
+    // or precede the new attempt's credential.
+    const resolveStaleMint = staleMint.resolve;
+    if (resolveStaleMint === null) {
+      throw new Error("first mint call was never started");
+    }
+    resolveStaleMint(
+      provisioned({
+        token: "stale-team-credential",
+        refreshToken: "stale-team-refresh",
+      }),
+    );
+    await flush();
+    expect(provisionFrames(missingSocket)).toHaveLength(0);
+
+    const resolveFreshMint = freshMint.resolve;
+    if (resolveFreshMint === null) {
+      throw new Error("second mint call was never started");
+    }
+    resolveFreshMint(freshOutcome);
+    await flush();
+    expect(provisionFrames(missingSocket)).toEqual([
+      {
+        kind: "hostCredentialProvision",
+        token: freshOutcome.token,
+        refreshToken: freshOutcome.refreshToken,
+        familyId: freshOutcome.familyId,
+        provisionedAt: freshOutcome.provisionedAt,
+      },
+    ]);
     session.close();
   });
 
@@ -5645,6 +5930,40 @@ describe("WsStreamClient host credential provisioning", () => {
       await flush();
 
       expect(observed).toEqual([{ hostId: HOST_A.hostId, state: "missing" }]);
+      session.close();
+    });
+    it("observes team-unavailable when hostCredentialProvision is not advertised", async () => {
+      const mint = vi.fn(async () => ({ kind: "unavailable" as const }));
+      const observed: Array<{ hostId: string; state: HostCredentialState }> =
+        [];
+      const { factory, sockets } = makeFactory();
+      const client = makeProvisioningClientWithObserver({
+        factory,
+        mint,
+        endpoint: () => HOST_A,
+        authToken: undefined,
+        onState: (hostId, state) => observed.push({ hostId, state }),
+      });
+      const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+      await flush();
+
+      const socket = sockets[0].socket;
+      socket.fireOpen();
+      const openParsed = JSON.parse(socket.textSent[0]) as {
+        readonly manifest: Record<string, { major: number; minor: number }>;
+      };
+      // A host can report team ownership while lacking the handoff capability;
+      // passive observers still need the state to distinguish it from failure.
+      socket.fireText({
+        ...streamOpenAck(openParsed.manifest, undefined),
+        hostCredentialState: "team-unavailable",
+      });
+      await flush();
+
+      expect(observed).toEqual([
+        { hostId: HOST_A.hostId, state: "team-unavailable" },
+      ]);
+      expect(mint).not.toHaveBeenCalled();
       session.close();
     });
     it("does not stop the mint flow from running when the observer throws", async () => {

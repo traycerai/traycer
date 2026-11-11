@@ -133,6 +133,14 @@ function buildFakeBridge(
     validateAuthTokenIdentity: async () => ({ kind: "rejected" as const }),
     listRegisteredHosts: async () => ({ kind: "network-error" as const }),
     updateHostVersionPolicy: async () => ({ kind: "network-error" as const }),
+    readHostOwnership: () => Promise.resolve({ kind: "unauthorized" as const }),
+    listTeamComputers: () => Promise.resolve({ kind: "unauthorized" as const }),
+    setEnvironmentBotHost: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
+    mintTeamComputerInstallToken: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
+    releaseTeamComputer: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
     deregisterHostFromAccount: async () => ({ kind: "network-error" as const }),
     listSandboxes: async () => ({
       kind: "network-error" as const,
@@ -213,10 +221,6 @@ function buildFakeBridge(
       detail: "test",
     }),
     setSlackAppDms: async () => ({
-      kind: "network-error" as const,
-      detail: "test",
-    }),
-    mintTeamHostInstallToken: async () => ({
       kind: "network-error" as const,
       detail: "test",
     }),
