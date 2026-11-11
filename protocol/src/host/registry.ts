@@ -1368,6 +1368,8 @@ import {
 import {
   environmentBindingReadV10,
   environmentHostBindV10,
+  environmentHostBindV11,
+  environmentHostBindUpgradeV10ToV11,
   environmentHostListUpgradeV10ToV11,
   environmentHostListUpgradeV11ToV12,
   environmentHostListV10,
@@ -9383,11 +9385,15 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   "environment.host.bind": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: environmentHostBindV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: environmentHostBindV11,
+          upgradeFromPreviousVersion: environmentHostBindUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},

@@ -1,3 +1,5 @@
+import { LegacyTeamHost } from "./legacy-team-host";
+import { buildHostUseCommand } from "../../commands/host-use";
 import {
   afterAll,
   afterEach,
@@ -43,6 +45,7 @@ const mocks = vi.hoisted(() => ({
   callHostRpcMock: vi.fn(),
   readHostOwnershipMock: vi.fn(),
   credentialsPath: "",
+  legacyHost: null as LegacyTeamHost | null,
 }));
 
 vi.mock("../../internal/host-auth", () => ({
@@ -60,6 +63,12 @@ vi.mock("../../internal/host-rpc", async (importOriginal) => {
     await importOriginal<typeof import("../../internal/host-rpc")>();
   return {
     ...actual,
+    callHostRpcWithDispatch: (
+      ...callArgs: Parameters<typeof actual.callHostRpcWithDispatch>
+    ) =>
+      mocks.legacyHost === null
+        ? mocks.callHostRpcMock(callArgs[0], callArgs[1])
+        : mocks.legacyHost.request(...callArgs),
     callHostRpc: (...callArgs: Parameters<typeof actual.callHostRpc>) =>
       mocks.callHostRpcMock(...callArgs),
   };
@@ -222,6 +231,7 @@ function storedAuth(): {
 describe("install auth helpers", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    mocks.legacyHost = null;
     caseCredentialsRoot = mkdtempSync(join(credentialsRoot, "case-"));
     mocks.credentialsPath = join(caseCredentialsRoot, "cli", "credentials");
     mocks.callHostRpcMock.mockImplementation((method: string) => {
@@ -245,6 +255,21 @@ describe("install auth helpers", () => {
       kind: "active",
       minted: true,
     });
+  });
+
+  it("the CLI does not send a team target to a host that cannot transfer", async () => {
+    const legacyHost = new LegacyTeamHost();
+    mocks.legacyHost = legacyHost;
+
+    await expect(buildHostUseCommand("acme")(fakeCtx())).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_INCOMPATIBLE,
+      message: expect.stringContaining("traycer host update"),
+    });
+    expect(legacyHost.requests).toEqual([]);
+    expect(mocks.callHostRpcMock.mock.calls.map(([method]) => method)).toEqual([
+      "environment.list",
+    ]);
+    expect(mocks.readHostOwnershipMock).not.toHaveBeenCalled();
   });
 
   it("lists the signed-in teams and binds the selected team before clearing an inline-created sign-in", async () => {

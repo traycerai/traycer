@@ -1,3 +1,15 @@
+import { mkdirSync, mkdtempSync, renameSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  readCredentialsFile,
+  writeCredentialsFile,
+} from "@traycer/protocol/config/credentials";
+import {
+  LegacyTeamHost,
+  LEGACY_TEAM,
+} from "../../host/__tests__/legacy-team-host";
+import { CLI_ERROR_CODES } from "../../runner/errors";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // `traycer host ensure` is the desktop's idempotent post-auth
@@ -46,6 +58,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   callOrder: [] as string[],
+  credentialsPath: "",
+  legacyHost: null as LegacyTeamHost | null,
   ensureHostMock: vi.fn(),
   runSignInPreflightMock: vi.fn(),
   maybeProvisionCredentialMock: vi.fn(),
@@ -54,6 +68,26 @@ const mocks = vi.hoisted(() => ({
   waitForTeamTokenInstallMock: vi.fn(),
   pidMetadata: null as { pid: number; websocketUrl: string } | null,
 }));
+
+vi.mock("../../store/paths", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../store/paths")>();
+  return { ...actual, cliCredentialsPath: () => mocks.credentialsPath };
+});
+vi.mock("../../internal/host-rpc", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../internal/host-rpc")>();
+  return {
+    ...actual,
+    callHostRpc: async () => ({ environments: [LEGACY_TEAM] }),
+    callHostRpcWithDispatch: (
+      ...callArgs: Parameters<typeof actual.callHostRpcWithDispatch>
+    ) => {
+      if (mocks.legacyHost === null)
+        throw new Error("No legacy host configured");
+      return mocks.legacyHost.request(...callArgs);
+    },
+  };
+});
 
 vi.mock("../../host/team-install-token", async (importOriginal) => {
   const actual =
@@ -263,6 +297,7 @@ function baseEnsureResult(
 describe("buildHostEnsureCommand", () => {
   beforeEach(() => {
     mocks.pidMetadata = null;
+    mocks.legacyHost = null;
     // Every existing test predates the caller needing an explicit default -
     // set one so only the tests that care about auth override it.
     mocks.runSignInPreflightMock.mockResolvedValue(signedInPreflight());
@@ -312,6 +347,95 @@ describe("buildHostEnsureCommand", () => {
       }),
     );
   });
+
+  it("the CLI does not send a team target to a host that cannot transfer", async () => {
+    const legacyHost = new LegacyTeamHost();
+    mocks.legacyHost = legacyHost;
+    const actual = await vi.importActual<
+      typeof import("../../host/install-auth")
+    >("../../host/install-auth");
+    mocks.completeTeamInstallMock.mockImplementation(
+      actual.completeTeamInstall,
+    );
+
+    await expect(
+      buildHostEnsureCommand(baseArgs({ team: "acme" }))(fakeCtx()),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_INCOMPATIBLE,
+      message: expect.stringContaining("traycer host update"),
+    });
+    expect(legacyHost.requests).toEqual([]);
+  });
+
+  it.each(["ensure", "bind", "not-running", "unreadable"] as const)(
+    "warns about the retained sign-in when team %s fails through the real credentials file",
+    async (failure) => {
+      const directory = mkdtempSync(join(tmpdir(), "team-ensure-sign-in-"));
+      mocks.credentialsPath = join(directory, "credentials");
+      const token = "inline-team-token";
+      const ctx = fakeCtx();
+      const preflight = vi
+        .spyOn(installAuthModule, "runTeamInstallAuthPreflight")
+        .mockImplementation(async () => {
+          await writeCredentialsFile(
+            mocks.credentialsPath,
+            {
+              token,
+              refreshToken: "inline-refresh",
+              savedAt: "2026-11-10T00:00:00.000Z",
+              user: {
+                id: "test-person",
+                email: "fixture@example.test",
+                name: "Member",
+              },
+            },
+            0,
+          );
+          return {
+            preflight: { state: "signed-in-inline", reason: null },
+            inlineSignInToken: token,
+          };
+        });
+      if (failure === "ensure")
+        mocks.ensureHostMock.mockRejectedValue(new Error("ensure failed"));
+      if (failure === "unreadable")
+        mocks.ensureHostMock.mockImplementation(async () => {
+          renameSync(mocks.credentialsPath, `${mocks.credentialsPath}.saved`);
+          mkdirSync(mocks.credentialsPath);
+          throw new Error("unreadable failed");
+        });
+      if (failure === "bind")
+        mocks.completeTeamInstallMock.mockRejectedValue(
+          new Error("bind failed"),
+        );
+      if (failure === "not-running")
+        mocks.ensureHostMock.mockResolvedValue(
+          baseEnsureResult({ running: false }),
+        );
+      try {
+        const pending = buildHostEnsureCommand(baseArgs({ team: "acme" }))(ctx);
+        if (failure === "not-running")
+          await expect(pending).resolves.toMatchObject({ exitCode: 1 });
+        else await expect(pending).rejects.toThrow(`${failure} failed`);
+        if (failure === "unreadable") {
+          expect(ctx.output.humanRequired).toHaveBeenCalledWith(
+            "Your sign-in could still be on this computer. Run `traycer logout` to remove it.",
+          );
+        } else {
+          expect(
+            (await readCredentialsFile(mocks.credentialsPath))?.token,
+          ).toBe(token);
+          expect(ctx.output.humanRequired).toHaveBeenCalledWith(
+            "Your sign-in stays on this computer. Run `traycer logout` to remove it.",
+          );
+        }
+      } finally {
+        preflight.mockRestore();
+        rmSync(directory, { recursive: true, force: true });
+        mocks.credentialsPath = "";
+      }
+    },
+  );
 
   it("uses a prepared team token before auth, waits after ensure, and returns only the target receipt", async () => {
     const prepared = {

@@ -1,6 +1,16 @@
 import { readHostOwnershipViaHttp } from "@traycer-clients/shared/host-client/host-ownership";
 import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
-import { callHostRpc, toAgentCliError } from "../internal/host-rpc";
+import {
+  callHostRpc,
+  callHostRpcWithDispatch,
+  PLAIN_DISPATCH,
+  toAgentCliError,
+} from "../internal/host-rpc";
+import {
+  readCredentialsFile,
+  type StoredCredentials,
+} from "@traycer/protocol/config/credentials";
+import { cliCredentialsPath } from "../store/paths";
 import { runWithCliStore, withCommitRetry } from "../store/credentials-store";
 import { runDeviceAuthFlow } from "../auth/login-flow";
 import {
@@ -432,6 +442,29 @@ export async function runTeamInstallAuthPreflight(
   return { preflight, inlineSignInToken };
 }
 
+/** Failed setup retains the command-created sign-in until transfer is confirmed. */
+export async function warnIfTeamInstallSignInRemains(
+  ctx: CommandContext,
+  session: TeamInstallAuthSession | null,
+): Promise<void> {
+  if (session === null || session.inlineSignInToken === null) return;
+  let credentials: StoredCredentials | null;
+  try {
+    credentials = await readCredentialsFile(
+      cliCredentialsPath(ctx.runtime.environment),
+    );
+  } catch {
+    ctx.output.humanRequired(
+      "Your sign-in could still be on this computer. Run `traycer logout` to remove it.",
+    );
+    return;
+  }
+  if (credentials?.token !== session.inlineSignInToken) return;
+  ctx.output.humanRequired(
+    "Your sign-in stays on this computer. Run `traycer logout` to remove it.",
+  );
+}
+
 /** The one team transfer used by host use, install --team and ensure --team. */
 export async function useInstalledHostTeam(
   team: string,
@@ -458,7 +491,17 @@ export async function useInstalledHostTeam(
   }
   const target = matches[0];
   const current = await toAgentCliError(
-    callHostRpc("environment.host.read", {}),
+    callHostRpcWithDispatch(
+      "environment.host.read",
+      {},
+      {
+        ...PLAIN_DISPATCH,
+        requiredHostMethodVersion: {
+          method: "environment.host.bind",
+          version: { major: 1, minor: 1 },
+        },
+      },
+    ),
   );
   const auth = await resolveHostAuth();
   if (auth === null) {
@@ -509,9 +552,17 @@ export async function useInstalledHostTeam(
     });
   }
   const binding = await toAgentCliError(
-    callHostRpc("environment.host.bind", {
-      environmentId: target.environmentId,
-    }),
+    callHostRpcWithDispatch(
+      "environment.host.bind",
+      { environmentId: target.environmentId },
+      {
+        ...PLAIN_DISPATCH,
+        requiredHostMethodVersion: {
+          method: "environment.host.bind",
+          version: { major: 1, minor: 1 },
+        },
+      },
+    ),
   );
   const confirmed = await readHostOwnershipViaHttp(
     auth.authnBaseUrl,

@@ -27,6 +27,8 @@ import type {
   EnvironmentHostBinding,
 } from "@traycer/protocol/host/environment/contracts";
 import type { AuthEra } from "@traycer-clients/shared/auth/request-context-provider";
+import { authQueryKeys } from "@/lib/query-keys";
+import { TEAM_TRANSFER_DISCLOSURE } from "@traycer/protocol/host/environment/team-transfer-disclosure";
 import type { HostOwnershipResult } from "@traycer-clients/shared/host-client/host-ownership";
 import type {
   HostListItem,
@@ -93,10 +95,6 @@ vi.mock("@/lib/host", async (importOriginal) => {
   };
 });
 
-vi.mock("@/hooks/host/use-host-supports-method", () => ({
-  useHostMethodSupport: (_hostId: string | null, method: string) =>
-    method === "environment.host.read",
-}));
 vi.mock("@/hooks/bots/use-environment-host-read-query", () => ({
   useEnvironmentHostReadQuery: () => ({
     isError: false,
@@ -106,21 +104,17 @@ vi.mock("@/hooks/bots/use-environment-host-read-query", () => ({
 vi.mock("@/hooks/environment/use-environment-reads", () => ({
   useEnvironmentStatusRead: () => ({ data: mocks.state.status }),
 }));
-vi.mock("@/hooks/host/use-host-negotiated-method-version", () => ({
-  useHostNegotiatedMethodVersions: (hostIds: readonly string[]) =>
-    new Map(hostIds.map((hostId) => [hostId, { major: 1, minor: 1 }])),
-}));
 import { HostEnvironmentSection } from "@/components/settings/panels/host-environment-section";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 function makeClient(
   handlers: MockHandlerMap<HostRpcRegistry> | undefined,
 ): HostClient<HostRpcRegistry> {
+  const localHost = { ...mockLocalHostEntry, hostId: "host-a" };
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: { invalidateHostScope: () => undefined },
-    findHostById: (hostId) =>
-      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+    findHostById: (hostId) => (hostId === localHost.hostId ? localHost : null),
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => "req-1",
@@ -130,7 +124,7 @@ function makeClient(
   spine.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
   );
-  return spine.createRequester(mockLocalHostEntry);
+  return spine.createRequester(localHost);
 }
 
 const PERSON_OWNER: HostOwnerPrincipal = { kind: "user", id: "user-me" };
@@ -173,10 +167,13 @@ function renderSection(
     readonly isLocalMachine: boolean | undefined;
     readonly handlers: MockHandlerMap<HostRpcRegistry> | undefined;
   },
-): void {
+): QueryClient {
   const handlers: MockHandlerMap<HostRpcRegistry> = {
     "environment.list": () => ({
-      environments: [listedEnvironment(PERSONAL), listedEnvironment(TEAM)],
+      environments: [
+        listedEnvironment(PERSONAL),
+        { ...listedEnvironment(TEAM), effectiveRole: "editor" },
+      ],
     }),
     ...options.handlers,
   };
@@ -212,6 +209,7 @@ function renderSection(
       />
     </QueryClientProvider>,
   );
+  return queryClient;
 }
 
 function teamBinding(canUnbind: boolean): EnvironmentHostBinding {
@@ -250,9 +248,11 @@ beforeEach(() => {
   mocks.auth.readHostOwnership.mockResolvedValue(ownershipResult(PERSON_OWNER));
   mocks.refreshDirectory.mockReset();
   mocks.refreshDirectory.mockResolvedValue(undefined);
-  recordNegotiatedHostManifest(mockLocalHostEntry.hostId, {
+  recordNegotiatedHostManifest("host-a", {
     "environment.list": { major: 1, minor: 1 },
-    "environment.host.bind": { major: 1, minor: 0 },
+    "environment.status": { major: 1, minor: 1 },
+    "environment.host.read": { major: 1, minor: 1 },
+    "environment.host.bind": { major: 1, minor: 1 },
     "environment.move.stopPreview": { major: 1, minor: 0 },
     "environment.move.stop": { major: 1, minor: 0 },
   });
@@ -288,6 +288,115 @@ afterEach(() => {
 });
 
 describe("HostEnvironmentSection", () => {
+  it("the overview card offers Use this computer for a team on the computer the app runs on", async () => {
+    const events: string[] = [];
+    const ownershipResults = [
+      ownershipResult(PERSON_OWNER),
+      ownershipResult(TEAM_OWNER),
+    ];
+    mocks.auth.readHostOwnership.mockImplementation(() => {
+      events.push("ownership-read");
+      return Promise.resolve(
+        ownershipResults.shift() ?? ownershipResult(TEAM_OWNER),
+      );
+    });
+    const movePlanCalls: string[] = [];
+    const queryClient = renderSection("personal", {
+      owner: PERSON_OWNER,
+      isLocalMachine: true,
+      handlers: {
+        "environment.host.bind": ({ environmentId }) => {
+          events.push(`bind:${environmentId}`);
+          return teamBinding(true);
+        },
+        "environment.move.plan": () => {
+          movePlanCalls.push("called");
+          throw new Error("team binding must not plan a Personal move");
+        },
+      },
+    });
+
+    await waitFor(() => {
+      expect(
+        queryClient.getQueryState(
+          authQueryKeys.hostOwnership(mocks.auth, "user-me", "host-a"),
+        )?.status,
+      ).toBe("success");
+    });
+
+    const selector = screen.getByRole("combobox", { name: "Environment" });
+    fireEvent.keyDown(selector, { key: "ArrowDown" });
+    fireEvent.click(await screen.findByRole("option", { name: /Acme/ }));
+
+    const dialog = await screen.findByRole("dialog");
+    for (const disclosure of TEAM_TRANSFER_DISCLOSURE) {
+      expect(within(dialog).getByText(disclosure)).toBeTruthy();
+    }
+    expect(within(dialog).queryByText("Personal")).toBeNull();
+    expect(
+      within(dialog).getByRole("button", { name: "Confirm at this computer" }),
+    ).toBeTruthy();
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Confirm at this computer" }),
+    );
+
+    expect((await screen.findByRole("status")).textContent).toContain(
+      "Mac mini now belongs to Acme.",
+    );
+    expect(events.slice(0, 3)).toEqual([
+      "ownership-read",
+      "bind:env-team",
+      "ownership-read",
+    ]);
+    expect(movePlanCalls).toEqual([]);
+  });
+
+  it.each([
+    ["still reports the person as owner", ownershipResult(PERSON_OWNER)],
+    ["cannot confirm the owner", { kind: "network-error" }],
+  ] as const)(
+    "does not claim a completed transfer when ownership %s",
+    async (_description, postBindOwner) => {
+      const ownershipResults: HostOwnershipResult[] = [
+        ownershipResult(PERSON_OWNER),
+        postBindOwner,
+      ];
+      mocks.auth.readHostOwnership.mockImplementation(() =>
+        Promise.resolve(ownershipResults.shift() ?? postBindOwner),
+      );
+      const queryClient = renderSection("personal", {
+        owner: PERSON_OWNER,
+        isLocalMachine: true,
+        handlers: {
+          "environment.host.bind": () => teamBinding(true),
+        },
+      });
+
+      await waitFor(() => {
+        expect(
+          queryClient.getQueryState(
+            authQueryKeys.hostOwnership(mocks.auth, "user-me", "host-a"),
+          )?.status,
+        ).toBe("success");
+      });
+
+      const selector = screen.getByRole("combobox", { name: "Environment" });
+      fireEvent.keyDown(selector, { key: "ArrowDown" });
+      fireEvent.click(await screen.findByRole("option", { name: /Acme/ }));
+      const dialog = await screen.findByRole("dialog");
+      fireEvent.click(
+        within(dialog).getByRole("button", {
+          name: "Confirm at this computer",
+        }),
+      );
+
+      expect((await screen.findByRole("alert")).textContent).toContain(
+        "The team transfer could not be confirmed.",
+      );
+      expect(screen.queryByText(/now belongs to Acme/)).toBeNull();
+    },
+  );
+
   it("shows the current personal source in the selector", () => {
     renderSection("personal", NO_SECTION_OPTIONS);
 
@@ -362,8 +471,32 @@ describe("HostEnvironmentSection", () => {
     expect(screen.queryByText("Use this computer for the team")).toBeNull();
   });
 
+  it("does not offer team transfer when the host only negotiates bind 1.0", async () => {
+    recordNegotiatedHostManifest("host-a", {
+      "environment.list": { major: 1, minor: 1 },
+      "environment.status": { major: 1, minor: 1 },
+      "environment.host.read": { major: 1, minor: 1 },
+      "environment.host.bind": { major: 1, minor: 0 },
+    });
+    const queryClient = renderSection("personal", NO_SECTION_OPTIONS);
+    await waitFor(() =>
+      expect(
+        queryClient.getQueryState(
+          authQueryKeys.hostOwnership(mocks.auth, "user-me", "host-a"),
+        )?.status,
+      ).toBe("success"),
+    );
+
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Environment" }), {
+      key: "ArrowDown",
+    });
+    expect(
+      await screen.findByRole("option", { name: /^Personal/ }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("option", { name: /Acme/ })).toBeNull();
+  });
+
   it.each([
-    ["a local computer owned by the person", PERSON_OWNER, true],
     ["a remote computer owned by the person", PERSON_OWNER, false],
     ["a computer with unknown ownership", undefined, true],
   ] as const)(

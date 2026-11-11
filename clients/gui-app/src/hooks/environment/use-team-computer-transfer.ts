@@ -19,6 +19,10 @@ export function useTeamComputerTransfer(
   const queryClient = useQueryClient();
   const bind = useHostScopedMutationForClient(client, {
     method: "environment.host.bind",
+    requiredHostMethodVersion: () => ({
+      method: "environment.host.bind",
+      version: { major: 1, minor: 1 },
+    }),
     mutationKey: environmentMutationKeys.hostBind(),
     errorMessage: null,
     invalidateMethods: [

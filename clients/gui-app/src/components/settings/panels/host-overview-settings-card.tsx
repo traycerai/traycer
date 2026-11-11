@@ -51,7 +51,10 @@ import {
   useHostNegotiatedMethodVersions,
   type NegotiatedMethodVersion,
 } from "@/hooks/host/use-host-negotiated-method-version";
-import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import {
+  useHostMethodSupport,
+  useHostMethodSchemaVersion,
+} from "@/hooks/host/use-host-supports-method";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
   environmentPickValue,
@@ -175,7 +178,8 @@ export function HostOverviewSettingsCard(props: {
               client={props.client}
               hostId={props.hostId}
               hostName={props.hostName}
-              mayTransfer={false}
+              isLocalMachine={props.isLocalMachine}
+              owner={props.owner}
               onTransferred={setOwnershipReceipt}
               value={model.value}
               options={model.options}
@@ -391,11 +395,21 @@ function EnvironmentSourceControl(
     readonly client: HostClient<HostRpcRegistry>;
     readonly hostId: string;
     readonly hostName: string;
-    readonly mayTransfer: boolean;
+    readonly isLocalMachine: boolean;
+    readonly owner: HostOwnerPrincipal | null;
     readonly onTransferred: (receipt: string) => void;
   },
 ): ReactNode {
-  return props.mayTransfer ? (
+  const bindVersion = useHostMethodSchemaVersion(
+    props.hostId,
+    "environment.host.bind",
+  );
+  const mayTransfer =
+    props.isLocalMachine &&
+    props.owner?.kind === "user" &&
+    bindVersion?.major === 1 &&
+    bindVersion.minor >= 1;
+  return mayTransfer ? (
     <TeamEnvironmentSourceControl {...props} />
   ) : (
     <EnvironmentSourceSelect
