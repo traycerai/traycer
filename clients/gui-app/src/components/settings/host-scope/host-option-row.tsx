@@ -60,6 +60,8 @@ export function HostOptionRow(props: {
    * place the person changes it.
    */
   readonly environmentLabel: string | null;
+  /** The composer already explains this computer's offline state below its name. */
+  readonly offlineInSubLine?: boolean;
 }): ReactNode {
   const {
     host,
@@ -76,6 +78,8 @@ export function HostOptionRow(props: {
   // window-wide event — the global modal deliberately stays away, and this row
   // plus Settings' progress banner are where it shows instead.
   const statusWord = hostOptionStatusWord(host, surfaceState);
+  const visibleStatusWord =
+    props.offlineInSubLine && statusWord === "offline" ? null : statusWord;
   // Two INDEPENDENT words, and a row may carry both — "offline · update failed"
   // is a real and useful pair. They are not merged because they answer
   // different questions (route/health vs update), which is the distinction
@@ -124,7 +128,7 @@ export function HostOptionRow(props: {
         ) : null}
         <HostOptionMarks
           host={host}
-          statusWord={statusWord}
+          statusWord={visibleStatusWord}
           updateBadge={updateBadge}
           environmentLabel={environmentLabel}
           showActiveTag={showActiveTag}

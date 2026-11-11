@@ -50,6 +50,7 @@ const createMutate = vi.hoisted(() =>
     ) => void
   >(),
 );
+const destroyMutate = vi.hoisted(() => vi.fn());
 
 // The auth service is the network boundary of the Automations open and read.
 const automation = vi.hoisted(() => ({
@@ -109,6 +110,9 @@ vi.mock("@/hooks/host/use-composer-surface-host-pin", () => ({
 vi.mock("@/hooks/sandboxes/use-sandbox-verb-mutation", () => ({
   useSandboxVerb: () => mutation(),
 }));
+vi.mock("@/hooks/sandboxes/use-sandbox-destroy-mutation", () => ({
+  useSandboxDestroy: () => ({ mutate: destroyMutate, isPending: false }),
+}));
 vi.mock("@/hooks/sandboxes/use-sandbox-patch-mutation", () => ({
   useSandboxPatch: () => mutation(),
 }));
@@ -166,9 +170,12 @@ vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHostOrNull: () => ({ signInUrl: "https://example.test" }),
 }));
 vi.mock("@/lib/links/open-link", () => ({ useOpenLink: () => vi.fn() }));
-// The confirm dialogs read the account; this suite never opens one.
+// Keep the confirmation boundary observable without invoking its mutation.
 vi.mock("@/components/hosts/sandbox-confirm-dialogs", () => ({
-  SandboxDestroyDialog: () => null,
+  SandboxDestroyDialog: ({ open }: { readonly open: boolean }) =>
+    open ? (
+      <div role="alertdialog" aria-label="Destroy sandbox confirmation" />
+    ) : null,
   SandboxIdleSettingsDialog: () => null,
   SandboxKeepDialog: () => null,
   SandboxRenameDialog: () => null,
@@ -242,6 +249,7 @@ beforeEach(() => {
     contextMetadata: { userId: "u1", username: "ada" },
   });
   createMutate.mockClear();
+  destroyMutate.mockClear();
   settings.retry.mockReset();
   settings.legacy.mockReset();
   settings.retrySupported.value = false;
@@ -750,7 +758,7 @@ describe("<SandboxRowActions />", () => {
       expect(automation.close).toHaveBeenCalledTimes(1);
     });
 
-    it("offers Open terminal, inline Details and Rename in its menu, with no Destroy or Stop", async () => {
+    it("offers Open terminal, inline Details and Rename, with no Destroy or Stop", () => {
       renderAutomations(new QueryClient(), automationsRow("awake", null), {
         kind: "personal",
       });
@@ -758,15 +766,10 @@ describe("<SandboxRowActions />", () => {
       expect(screen.getByTestId("sandbox-row-open-terminal").textContent).toBe(
         "Open terminal",
       );
-      await userEvent.click(
-        screen.getByRole("button", { name: /^More actions for/ }),
-      );
-      const menu = await screen.findByTestId("sandbox-row-menu-content");
+      expect(screen.getByRole("button", { name: "Rename" })).toBeTruthy();
       expect(
-        within(menu)
-          .getAllByRole("menuitem")
-          .map((item) => item.textContent),
-      ).toEqual(["Rename"]);
+        screen.queryByRole("button", { name: /^More actions for/ }),
+      ).toBeNull();
     });
 
     it("starts Personal's released Automations with no body, then asks for a terminal on it", async () => {
@@ -843,22 +846,17 @@ describe("<SandboxRowActions />", () => {
       expect(screen.getByTestId("automation-terminal-pane")).toBeTruthy();
     });
 
-    it("offers a failed row Retry, inline Details and Rename in its menu", async () => {
+    it("offers a failed row Retry, inline Details and Rename", () => {
       renderAutomations(new QueryClient(), automationsRow("failed", null), {
         kind: "personal",
       });
 
       expect(screen.getByTestId("sandbox-row-retry").textContent).toBe("Retry");
       expect(screen.queryByTestId("sandbox-row-open-terminal")).toBeNull();
-      await userEvent.click(
-        screen.getByRole("button", { name: /^More actions for/ }),
-      );
-      const menu = await screen.findByTestId("sandbox-row-menu-content");
+      expect(screen.getByRole("button", { name: "Rename" })).toBeTruthy();
       expect(
-        within(menu)
-          .getAllByRole("menuitem")
-          .map((item) => item.textContent),
-      ).toEqual(["Rename"]);
+        screen.queryByRole("button", { name: /^More actions for/ }),
+      ).toBeNull();
     });
 
     it("retries a failed row by starting Automations again, and opens no terminal", async () => {
@@ -1321,6 +1319,37 @@ describe("<SandboxRowActions /> a sandbox whose settings did not apply", () => {
         screen.queryByRole("button", { name: "Open terminal" }),
       ).toBeNull();
       expect(screen.queryByRole("button", { name: SETUP_RETRY })).toBeNull();
+    });
+
+    it.each(["stopping", "suspending"] as const)(
+      "shows Destroy inline while a sandbox is %s",
+      (state) => {
+        renderFailed({ state }, false);
+
+        expect(screen.getByRole("button", { name: "Destroy" })).toBeTruthy();
+        expect(
+          screen.queryByRole("button", { name: /^More actions for/ }),
+        ).toBeNull();
+      },
+    );
+
+    it("opens the Destroy confirmation from a failed ordinary sandbox row", async () => {
+      renderFailed({ state: "failed", guestConfigured: true }, false);
+
+      expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Details" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Destroy" })).toBeTruthy();
+      expect(
+        screen.queryByRole("button", { name: /^More actions for/ }),
+      ).toBeNull();
+      await userEvent.click(screen.getByRole("button", { name: "Destroy" }));
+
+      expect(
+        screen.getByRole("alertdialog", {
+          name: "Destroy sandbox confirmation",
+        }),
+      ).toBeTruthy();
+      expect(destroyMutate).not.toHaveBeenCalled();
     });
 
     it("still resumes a suspended sandbox", async () => {

@@ -393,7 +393,7 @@ function settingsFailureInlineActions(
   );
 }
 
-/** The secondary actions that have no inline control on this row. */
+/** A lone secondary action stays visible; larger groups share a menu. */
 function SandboxRowMenu(props: {
   readonly actions: readonly SandboxRowAction[];
   readonly name: string;
@@ -401,6 +401,21 @@ function SandboxRowMenu(props: {
   readonly run: (action: SandboxRowAction) => void;
 }): ReactNode {
   if (props.actions.length === 0) return null;
+  const [onlyAction] = props.actions;
+  if (props.actions.length === 1) {
+    return (
+      <Button
+        type="button"
+        variant={onlyAction === "destroy" ? "destructive-ghost" : "outline"}
+        size="sm"
+        disabled={props.busy}
+        data-testid={`sandbox-row-menu-${onlyAction}`}
+        onClick={() => props.run(onlyAction)}
+      >
+        {sandboxRowActionLabel(onlyAction)}
+      </Button>
+    );
+  }
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>

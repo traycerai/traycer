@@ -1,17 +1,10 @@
 import { useRef, useState, type ReactNode } from "react";
-import { MoreHorizontal } from "lucide-react";
 import { v4 as uuidv4 } from "uuid";
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import { SandboxDestroyDialog } from "@/components/hosts/sandbox-confirm-dialogs";
 import { SandboxOperationFailure } from "@/components/hosts/sandbox-operation-failure";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import {
@@ -146,32 +139,16 @@ export function SandboxFailedRowActions(props: {
         Details
       </Button>
       {pendingVerb === null && actions.menu.includes("destroy") ? (
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              aria-label={`More actions for ${summary.displayName}`}
-              data-testid="sandbox-row-menu"
-            >
-              <MoreHorizontal className="size-3.5" aria-hidden />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent
-            align="end"
-            data-testid="sandbox-row-menu-content"
-          >
-            <DropdownMenuItem
-              variant="destructive"
-              disabled={busy}
-              data-testid="sandbox-row-menu-destroy"
-              onSelect={() => setDestroyOpen(true)}
-            >
-              Destroy
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <Button
+          type="button"
+          variant="destructive-ghost"
+          size="sm"
+          disabled={busy}
+          data-testid="sandbox-row-menu-destroy"
+          onClick={() => setDestroyOpen(true)}
+        >
+          Destroy
+        </Button>
       ) : null}
       <SandboxOperationFailure
         sandboxId={summary.id}
