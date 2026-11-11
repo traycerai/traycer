@@ -9,6 +9,7 @@
  * `android/app/src/main/java/com/traycer/app/DeviceDictationPlugin.java`.
  */
 import { registerPlugin, type PluginListenerHandle } from "@capacitor/core";
+import { encodeBase64 } from "@traycer-clients/shared/cloud-chat/bytes";
 import type {
   DeviceDictationCallbacks,
   DeviceDictationSession,
@@ -68,12 +69,6 @@ function isPermissionDenied(error: unknown): boolean {
     "code" in error &&
     error.code === PERMISSION_DENIED_CODE
   );
-}
-
-function toBase64(bytes: Uint8Array): string {
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary);
 }
 
 export class MobileDeviceDictation implements IDeviceDictationHost {
@@ -152,7 +147,7 @@ export class MobileDeviceDictation implements IDeviceDictationHost {
       sendAudio: (pcm) => {
         if (over) return;
         void plugin
-          .appendAudio({ sessionId, audio: toBase64(pcm) })
+          .appendAudio({ sessionId, audio: encodeBase64(pcm) })
           .catch(fail);
       },
       flush: () => {

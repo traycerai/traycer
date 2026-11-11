@@ -49,6 +49,7 @@ import type {
   WebSocketLike,
   WebSocketMessageEvent,
 } from "./ws-factory";
+import { whenDialStarted } from "@traycer/protocol/host-transport/websocket";
 import {
   CLIENT_CAPABILITY_EPIC_WRITE_PATH_V1,
   checkCompatibility,
@@ -583,9 +584,9 @@ export class WsRpcClient<
 
     try {
       const clientManifest = this.buildManifest();
-      let token = discovery.token;
       const usesSessionGrant =
         this.localOpenAuth?.requiresSessionGrant(selected.hostId) === true;
+      let sessionGrant: string | null = null;
       if (usesSessionGrant && this.localOpenAuth !== undefined) {
         const readiness = await this.localOpenAuth.ensureMemberReady(
           selected,
@@ -637,7 +638,7 @@ export class WsRpcClient<
             "beforeRequest",
           );
         }
-        token = provision.token;
+        sessionGrant = provision.token;
       }
       // Construction is inside this try: `create()` throws synchronously when
       // the runtime has no WebSocket global, and that throw has to release the
@@ -667,9 +668,22 @@ export class WsRpcClient<
       }
 
       await session.dial();
+      throwIfAuthorityAborted(authority, requestId, method);
+      // A queued dial must still belong to its bearer lease at OPEN, even
+      // when the wire token is the grant minted before socket construction.
+      const liveBearer = extractBearerOrThrowRpcError(
+        authority.bearer,
+        requestId,
+        method,
+      );
+      const token = sessionGrant ?? liveBearer;
 
       session.send({
         kind: "open",
+        // Read again after the dial, which may have waited for a slot
+        // (`ws-dial-gate.ts`) with no bound of its own: the bearer can rotate
+        // or expire meanwhile. `prepareDiscoveryOpen` still reads it first,
+        // so a call with no bearer fails before it dials.
         token,
         manifest: clientManifest.manifest,
         optionalManifest: clientManifest.optionalManifest,
@@ -1864,11 +1878,13 @@ function openSession(options: SessionOptions): Session {
       void cause;
     }
   };
-  let dialResolver: {
+  interface PendingDial {
     readonly resolve: () => void;
     readonly reject: (error: HostRpcError) => void;
-    readonly timer: TimerHandle;
-  } | null = null;
+    /** Null until the handshake starts. */
+    timer: TimerHandle | null;
+  }
+  let dialResolver: PendingDial | null = null;
   let frameResolver: {
     readonly resolve: (frame: HostFrame) => void;
     readonly reject: (error: HostRpcError) => void;
@@ -1901,7 +1917,9 @@ function openSession(options: SessionOptions): Session {
     if (dialResolver !== null) {
       const resolver = dialResolver;
       dialResolver = null;
-      clearTimeout(resolver.timer);
+      if (resolver.timer !== null) {
+        clearTimeout(resolver.timer);
+      }
       resolver.reject(settled);
     }
     if (frameResolver !== null) {
@@ -1998,7 +2016,9 @@ function openSession(options: SessionOptions): Session {
     if (dialResolver !== null) {
       const resolver = dialResolver;
       dialResolver = null;
-      clearTimeout(resolver.timer);
+      if (resolver.timer !== null) {
+        clearTimeout(resolver.timer);
+      }
       resolver.resolve();
     }
   };
@@ -2171,15 +2191,22 @@ function openSession(options: SessionOptions): Session {
         return Promise.resolve();
       }
       return new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(() => {
-          reportDialOutcome("timeout");
-          failAll(
-            transientFailure(
-              `WebSocket dial timed out after ${dialTimeoutMs}ms`,
-            ),
-          );
-        }, dialTimeoutMs);
-        dialResolver = { resolve, reject, timer };
+        const pending: PendingDial = { resolve, reject, timer: null };
+        dialResolver = pending;
+        // Time queued for a dial slot says nothing about the host.
+        whenDialStarted(socket, () => {
+          if (dialResolver !== pending) {
+            return;
+          }
+          pending.timer = setTimeout(() => {
+            reportDialOutcome("timeout");
+            failAll(
+              transientFailure(
+                `WebSocket dial timed out after ${dialTimeoutMs}ms`,
+              ),
+            );
+          }, dialTimeoutMs);
+        });
       });
     },
 
@@ -2480,7 +2507,7 @@ function prepareDiscoveryOpen(
   requestId: string,
   method: string,
   settleUnpublished: (cause: unknown) => void,
-): { readonly token: string; readonly websocketUrl: string } {
+): { readonly websocketUrl: string } {
   try {
     throwIfAuthorityAborted(authority, requestId, method);
     const websocketUrl = authority.endpoint.websocketUrl;
@@ -2493,10 +2520,8 @@ function prepareDiscoveryOpen(
         fatalDetails: null,
       });
     }
-    return {
-      token: extractBearerOrThrowRpcError(authority.bearer, requestId, method),
-      websocketUrl,
-    };
+    extractBearerOrThrowRpcError(authority.bearer, requestId, method);
+    return { websocketUrl };
   } catch (cause) {
     settleUnpublished(cause);
     throw cause;

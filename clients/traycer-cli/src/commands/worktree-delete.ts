@@ -156,6 +156,7 @@ async function runWorktreeDelete(
     hostId: endpoint.hostId,
     endpoint: () => endpoint,
     bearer: () => lease,
+    userId: lease.identity.userId,
     auth: null,
     clock: null,
     // Provisioning rides along here too. It used to be opted out because a

@@ -1,9 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  identityFromAuthenticatedUser,
-  createRequestContext,
-} from "@traycer/protocol/auth/request-context";
-import {
   STREAM_CAPABILITY_CREDENTIAL_UPDATE,
   STREAM_CAPABILITY_HOST_CREDENTIAL_PROVISION,
 } from "@traycer/protocol/framework/stream-ws-protocol";
@@ -19,7 +15,11 @@ import {
 import { NO_TRANSPORT_EVIDENCE } from "../../host-selection/transport-evidence";
 import { WsStreamClient } from "../ws-stream-client";
 import { TEST_CLIENT_IDENTITY } from "../../test-fixtures/client-identity";
-import type { OpenFrameBearerSource } from "../../auth/bearer-source";
+import {
+  MutableBearerLease,
+  type BearerSourceProvider,
+  type OpenFrameBearerSource,
+} from "../../auth/bearer-source";
 import { resetNegotiatedStreamVersions } from "../negotiated-stream-version-registry";
 import { resetStreamMethodSupportMemo } from "../stream-method-support-registry";
 import {
@@ -38,30 +38,24 @@ const host: HostDirectoryEntry = {
   transportDialability: "dialable",
 };
 
-function makeBearer(): OpenFrameBearerSource {
+function makeBearer(): MutableBearerLease {
   const user = createAuthenticatedUserFixture(undefined);
-  return createRequestContext({
-    identity: identityFromAuthenticatedUser(user),
-    bearerToken: "user-bearer",
-    origin: "renderer",
-    connectionId: undefined,
-    operationId: undefined,
-    externalAbortSignal: undefined,
-    cloudAuthorized: true,
-  }).credentials;
+  return new MutableBearerLease("user-bearer", user.user.id);
 }
 
 function makeClient(
   factory: LocalGrantStreamSocketFactory["factory"],
   localOpenAuth: LocalOpenAuth,
   bearer: OpenFrameBearerSource,
+  bearerProvider: BearerSourceProvider,
 ): WsStreamClient<typeof hostStreamRpcRegistry> {
   return new WsStreamClient({
     clientIdentity: TEST_CLIENT_IDENTITY,
     registry: hostStreamRpcRegistry,
     hostId: host.hostId,
+    userId: bearer.identity.userId,
     endpoint: () => host,
-    bearer: () => bearer,
+    bearer: bearerProvider,
     localOpenAuth,
     auth: null,
     clock: null,
@@ -139,10 +133,12 @@ describe("WsStreamClient local team session grant", () => {
       kind: "ok" as const,
       token: "one-use-session-grant",
     }));
+    const bearer = makeBearer();
     const client = makeClient(
       factory,
       new LocalOpenAuth({ provisionMember: null, mintSessionGrant }),
-      makeBearer(),
+      bearer,
+      () => bearer,
     );
     const firstSocketPromise = nextSocket();
     const session = client.subscribe("host.notifications.feed.subscribe", {
@@ -168,9 +164,11 @@ describe("WsStreamClient local team session grant", () => {
       (frame) => frame.kind === "open",
       undefined,
     );
+    bearer.rotate("rotated-user-bearer");
     secondSocket.fireOpen();
     const secondOpen = await secondOpenWait;
     expect(secondOpen.token).toBe("one-use-session-grant");
+    expect(secondOpen.token).not.toBe("rotated-user-bearer");
     const subscribeWait = secondSocket.waitForFrame(
       (frame) => frame.kind === "subscribe",
       undefined,
@@ -199,7 +197,8 @@ describe("WsStreamClient local team session grant", () => {
       provisionMember: null,
       mintSessionGrant,
     });
-    const client = makeClient(factory, auth, makeBearer());
+    const bearer = makeBearer();
+    const client = makeClient(factory, auth, bearer, () => bearer);
     const firstSocketPromise = nextSocket();
     const session = client.subscribe("host.notifications.feed.subscribe", {
       initialAttentionLimit: 50,
@@ -248,6 +247,51 @@ describe("WsStreamClient local team session grant", () => {
     client.close("test-teardown");
   });
 
+  it("does not send a session grant after the bound user switches before OPEN", async () => {
+    const { factory, nextSocket } = createLocalGrantStreamSocketFactory();
+    const mintSessionGrant = vi.fn(async () => ({
+      kind: "ok" as const,
+      token: "one-use-session-grant",
+    }));
+    const userBearer = makeBearer();
+    let activeBearer: OpenFrameBearerSource | null = userBearer;
+    const client = makeClient(
+      factory,
+      new LocalOpenAuth({ provisionMember: null, mintSessionGrant }),
+      userBearer,
+      () => activeBearer,
+    );
+    const firstSocketPromise = nextSocket();
+    const session = client.subscribe("host.notifications.feed.subscribe", {
+      initialAttentionLimit: 50,
+      initialRecentLimit: 50,
+    });
+
+    const firstSocket = await firstSocketPromise;
+    const firstOpenWait = firstSocket.waitForFrame(
+      (frame) => frame.kind === "open",
+      undefined,
+    );
+    firstSocket.fireOpen();
+    const firstOpen = await firstOpenWait;
+    expect(firstOpen.token).toBe("user-bearer");
+
+    const grantSocketPromise = nextSocket();
+    firstSocket.fireText(challenge());
+    const grantSocket = await grantSocketPromise;
+    activeBearer = new MutableBearerLease(
+      "next-user-bearer",
+      "different-test-user",
+    );
+    grantSocket.fireOpen();
+
+    const grantFrames = grantSocket.textSent.map(parseLocalGrantStreamText);
+    expect(grantFrames.some((frame) => frame.kind === "open")).toBe(false);
+    expect(mintSessionGrant).toHaveBeenCalledTimes(1);
+    session.close();
+    client.close("test-teardown");
+  });
+
   it("terminates a grant-required session when the account is not a team member", async () => {
     const { factory, sockets, nextSocket } =
       createLocalGrantStreamSocketFactory();
@@ -267,10 +311,12 @@ describe("WsStreamClient local team session grant", () => {
         },
       };
     });
+    const bearer = makeBearer();
     const client = makeClient(
       factory,
       new LocalOpenAuth({ provisionMember: null, mintSessionGrant }),
-      makeBearer(),
+      bearer,
+      () => bearer,
     );
     const socketPromise = nextSocket();
     const session = client.subscribe("host.notifications.feed.subscribe", {
@@ -315,10 +361,12 @@ describe("WsStreamClient local team session grant", () => {
         kind: "ok" as const,
         token: "grant-after-retry",
       });
+    const bearer = makeBearer();
     const client = makeClient(
       factory,
       new LocalOpenAuth({ provisionMember: null, mintSessionGrant }),
-      makeBearer(),
+      bearer,
+      () => bearer,
     );
     const firstSocketPromise = nextSocket();
     const session = client.subscribe("host.notifications.feed.subscribe", {
@@ -372,10 +420,12 @@ describe("WsStreamClient local team session grant", () => {
         resolveMint = resolve;
       });
     });
+    const bearer = makeBearer();
     const client = makeClient(
       factory,
       new LocalOpenAuth({ provisionMember: null, mintSessionGrant }),
-      makeBearer(),
+      bearer,
+      () => bearer,
     );
     const socketPromise = nextSocket();
     const session = client.subscribe("host.notifications.feed.subscribe", {

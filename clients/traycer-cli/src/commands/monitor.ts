@@ -240,6 +240,7 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
     hostId: endpoint?.hostId ?? null,
     endpoint: () => endpoint,
     bearer: () => lease,
+    userId: lease.identity.userId,
     // `auth: null` opts out of the WsStreamClient's built-in stream-auth
     // recovery: the monitor runs its OWN refresh-on-UNAUTHORIZED loop in
     // `runInboxSubscription` (revalidate, then re-subscribe on `rotated` /

@@ -327,6 +327,7 @@ export function openBrowserSessionsTransport(
     hostId: target.hostId,
     endpoint: deps.endpoint,
     bearer: deps.bearer,
+    userId,
     auth: null,
     clock: null,
     hostCredentialMint: null,

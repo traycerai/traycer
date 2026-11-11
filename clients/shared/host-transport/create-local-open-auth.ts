@@ -137,6 +137,7 @@ function provisionLocalMember(input: {
     hostId: endpoint.hostId,
     endpoint: () => endpoint,
     bearer: () => bearer,
+    userId: bearer.identity.userId,
     cloudAuthorized: options.cloudAuthorized,
     localOpenAuth: input.auth,
     // Only this internal control stream bypasses the member readiness gate.

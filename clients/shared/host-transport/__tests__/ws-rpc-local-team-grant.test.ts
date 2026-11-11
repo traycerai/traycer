@@ -54,12 +54,20 @@ const registry = defineVersionedRpcRegistry({
 });
 
 function authorityForBearer(bearerToken: string): HostRequestAuthority {
+  return authorityForBearerLease(
+    new MutableBearerLease(bearerToken, "local-team-grant-test-user"),
+  );
+}
+
+function authorityForBearerLease(
+  bearer: MutableBearerLease,
+): HostRequestAuthority {
   return {
     endpoint: {
       hostId: mockLocalHostEntry.hostId,
       websocketUrl: mockLocalHostEntry.websocketUrl,
     },
-    bearer: new MutableBearerLease(bearerToken, "local-team-grant-test-user"),
+    bearer,
     abortSignal: new AbortController().signal,
   };
 }
@@ -153,7 +161,11 @@ describe("WsRpcClient local team session grant", () => {
       mintSessionGrant,
     });
     const client = makeClient(factory, auth);
-    const authority = authorityForBearer("user-bearer");
+    const bearer = new MutableBearerLease(
+      "user-bearer",
+      "local-team-grant-test-user",
+    );
+    const authority = authorityForBearerLease(bearer);
 
     const options = {
       replayMustBeKeyed: false,
@@ -186,13 +198,11 @@ describe("WsRpcClient local team session grant", () => {
       (frame) => frame.kind === "open",
       undefined,
     );
+    bearer.rotate("rotated-user-bearer");
     secondSocket.fireOpen();
     const secondOpen = await secondOpenWait;
     expect(secondOpen.kind === "open" ? secondOpen.token : null).toBe(
       "one-use-session-grant",
-    );
-    expect(secondOpen.kind === "open" ? secondOpen.token : null).not.toBe(
-      "user-bearer",
     );
     const firstRequestWait = secondSocket.waitForFrame(
       (frame) => frame.kind === "request",
@@ -277,6 +287,57 @@ describe("WsRpcClient local team session grant", () => {
     socket.fireMessage(response());
     await expect(pending).resolves.toEqual({ echoed: "ok" });
     expect(mintSessionGrant).not.toHaveBeenCalled();
+  });
+
+  it("refuses a grant OPEN when the authority bearer is cleared while dialing", async () => {
+    const { factory, nextSocket } = createLocalGrantRpcSocketFactory();
+    const mintSessionGrant = vi.fn(async () => ({
+      kind: "ok" as const,
+      token: "one-use-session-grant",
+    }));
+    const client = makeClient(
+      factory,
+      new LocalOpenAuth({ provisionMember: null, mintSessionGrant }),
+    );
+    const bearer = new MutableBearerLease(
+      "user-bearer",
+      "local-team-grant-test-user",
+    );
+    const authority = authorityForBearerLease(bearer);
+    const firstSocketPromise = nextSocket();
+    const pending = client.request(
+      "host.echo",
+      { message: "cleared-bearer" },
+      {
+        replayMustBeKeyed: false,
+        requiredHostMethodVersion: null,
+        idempotencyKey: null,
+        authority,
+      },
+    );
+    const firstSocket = await firstSocketPromise;
+    const firstOpenWait = firstSocket.waitForFrame(
+      (frame) => frame.kind === "open",
+      undefined,
+    );
+    firstSocket.fireOpen();
+    const firstOpen = await firstOpenWait;
+    expect(firstOpen.kind === "open" ? firstOpen.token : null).toBe(
+      "user-bearer",
+    );
+
+    const grantSocketPromise = nextSocket();
+    firstSocket.fireMessage(grantRequired());
+    const grantSocket = await grantSocketPromise;
+    bearer.rotate("");
+    grantSocket.fireOpen();
+
+    await expect(pending).rejects.toMatchObject({
+      code: "RPC_ERROR",
+      message: expect.stringContaining("Cannot open host WebSocket"),
+    });
+    expect(grantSocket.sent.some((frame) => frame.kind === "open")).toBe(false);
+    expect(mintSessionGrant).toHaveBeenCalledTimes(1);
   });
 
   it("reprobes once with the user bearer when the challenged grant OPEN belongs to a changed door", async () => {

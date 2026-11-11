@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { ChatMessages } from "@/components/chat/chat-messages";
 import { ChatTimelineHeaderContext } from "@/components/chat/chat-timeline-header-context";
@@ -304,7 +305,9 @@ export function Fixture() {
             };
           }),
         ),
-      hide: (kind) => setHideKind(kind),
+      // Commit in the oracle's live-read task: a later commit lets a pending
+      // wheel move the transcript between that reading and the actual hide.
+      hide: (kind) => flushSync(() => setHideKind(kind)),
       show: () => setHideKind("none"),
       remount: (sameInstance) => {
         setInstance((current) => {

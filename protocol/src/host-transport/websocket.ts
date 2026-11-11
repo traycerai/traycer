@@ -30,6 +30,35 @@ export interface WebSocketCloseEvent {
 }
 
 /**
+ * For a socket that may wait its turn before it dials, which a dial timer has
+ * to know: time spent waiting belongs to this client, and only the handshake
+ * says anything about the host.
+ *
+ * `dialStarted` settles when the handshake starts, and never settles on a
+ * socket closed before its turn. It is absent on a socket that dials as it is
+ * constructed, which is every factory with no dial gate.
+ */
+export interface DialStartSignal {
+  readonly dialStarted?: Promise<void>;
+}
+
+/**
+ * Runs `start` once the handshake has started: at once for a socket with no
+ * `dialStarted`, otherwise when it settles. A dial can end during that wait, so
+ * `start` checks that its dial is still the live one.
+ */
+export function whenDialStarted(
+  socket: DialStartSignal,
+  start: () => void,
+): void {
+  if (socket.dialStarted === undefined) {
+    start();
+    return;
+  }
+  void socket.dialStarted.then(start);
+}
+
+/**
  * Subset of the native WebSocket surface required by `WsRpcClient`.
  *
  * The handlers are assignable so the client can install them once and replace
@@ -37,7 +66,7 @@ export interface WebSocketCloseEvent {
  * Only string payloads are exchanged on the wire, so `send` and the message
  * event are typed as `string` rather than the platform `BufferSource` union.
  */
-export interface WebSocketLike {
+export interface WebSocketLike extends DialStartSignal {
   onopen: ((event: WebSocketOpenEvent) => void) | null;
   onmessage: ((event: WebSocketMessageEvent) => void) | null;
   onerror: ((event: WebSocketErrorEvent) => void) | null;

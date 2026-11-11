@@ -58,7 +58,10 @@ describe("main local team grant invalidation", () => {
       bearer: () => bearer,
       appVersion: "test",
     });
-    const inventoryClient = openInventoryStream(endpoint);
+    const inventoryClient = openInventoryStream(
+      endpoint,
+      bearer.identity.userId,
+    );
     const detach = onMainLocalAdmissionInvalidated((hostId) => {
       inventoryAuth.invalidateHost(hostId, null);
     });

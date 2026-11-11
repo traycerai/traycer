@@ -121,7 +121,8 @@ export interface LocalHostInventorySubscriptionDeps {
    */
   readonly onAuthChanged: (listener: () => void) => () => void;
   /**
-   * Opens a stream client for this machine's host.
+   * Opens a stream client for this machine's host, speaking for `userId`, the
+   * account this attach opened under.
    *
    * A port rather than a `new WsStreamClient(...)` inside `attach`, and not
    * for symmetry: everything this module actually decides - when to open, when
@@ -132,6 +133,7 @@ export interface LocalHostInventorySubscriptionDeps {
    */
   readonly openStreamClient: (
     endpoint: LocalHostEndpoint,
+    userId: string,
   ) => IHostStreamClient<HostStreamRpcRegistry>;
   /**
    * One pushed registry answer, with the host's own clock at the read that
@@ -339,7 +341,7 @@ export function startLocalHostInventorySubscription(
     // generation that was in force when THAT stream opened, whatever has
     // happened since and whatever order the callbacks run in.
     const generationAtOpen = identity.generation;
-    client = deps.openStreamClient(endpoint);
+    client = deps.openStreamClient(endpoint, identity.userId);
     unsubscribeSupport = client.subscribeMethodSupport(() => {
       if (disposed) return;
       if (stream === null) {
@@ -427,12 +429,16 @@ export function createLocalHostInventoryStreamClient(deps: {
   readonly localHost: () => LocalHostEndpoint | null;
   readonly bearer: BearerSourceProvider;
   readonly appVersion: string | null;
-}): (endpoint: LocalHostEndpoint) => IHostStreamClient<HostStreamRpcRegistry> {
-  return (endpoint) =>
+}): (
+  endpoint: LocalHostEndpoint,
+  userId: string,
+) => IHostStreamClient<HostStreamRpcRegistry> {
+  return (endpoint, userId) =>
     new WsStreamClient<HostStreamRpcRegistry>({
       localOpenAuth: deps.localOpenAuth,
       registry: hostStreamRpcRegistry,
       hostId: endpoint.hostId,
+      userId,
       endpoint: (): HostTransportEndpoint | null => {
         const current = deps.localHost();
         if (current === null) return null;

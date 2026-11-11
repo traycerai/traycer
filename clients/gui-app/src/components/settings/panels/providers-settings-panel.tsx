@@ -223,8 +223,7 @@ const VIEW_COPY: Readonly<
 > = {
   providers: {
     title: "Providers",
-    description:
-      "Sign-ins, keys and tools for each coding agent, on every computer and sandbox running Personal.",
+    description: "Sign-ins, keys and tools for each coding agent.",
     empty: "No providers on this host.",
   },
   "mcp-servers": {
@@ -1249,6 +1248,8 @@ function HostProviderRailButton(props: {
       type="button"
       aria-current={props.selected ? "true" : undefined}
       onClick={() => props.onSelect(props.state.providerId)}
+      data-settings-provider-id={props.state.providerId}
+      data-settings-provider-enabled={props.state.enabled}
       className={hostRailButtonClass(props.selected)}
     >
       <span className="flex min-w-0 items-start gap-2">

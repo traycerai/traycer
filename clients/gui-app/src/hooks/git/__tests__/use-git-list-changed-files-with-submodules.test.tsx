@@ -7,6 +7,7 @@ import {
   afterEach,
   type Mock,
 } from "vitest";
+import { AUTHENTICATED_USER_FIXTURE_ID } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import {
   CancelledError,
@@ -83,6 +84,7 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
       hostId: null,
       endpoint: () => null,
       bearer: () => null,
+      userId: AUTHENTICATED_USER_FIXTURE_ID,
       auth: null,
       clock: null,
       hostCredentialMint: null,

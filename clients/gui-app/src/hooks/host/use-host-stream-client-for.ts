@@ -251,19 +251,20 @@ export function buildHostStreamClient(params: {
   readonly endpoint: HostEndpointProvider;
   readonly bearer: BearerSourceProvider;
   /**
-   * Gates the remote session's attach-grant MINT only - see
-   * `CreateRemoteTransportOptions.cloudAuthorized`. A parameter rather than an
-   * ambient store read for the same reason as the messenger builder's: this is
-   * the seam tests construct through. Only consulted on the remote and pool
-   * branches, so local hosts are unaffected.
+   * The session's cloud verdict, read live. It gates the remote session's
+   * attach-grant mint (see `CreateRemoteTransportOptions.cloudAuthorized`) and
+   * is asserted to the host on every branch's open frame. A parameter rather
+   * than an ambient store read for the same reason as the messenger builder's:
+   * this is the seam tests construct through.
    */
   readonly cloudAuthorized: () => boolean;
   readonly authnBaseUrl: string;
   readonly auth: StreamAuthRevalidator | null;
   /**
-   * The signed-in user this transport is built for. Part of the shared
-   * `(hostId, userId)` remote-session cache key (S1) - only
-   * consulted on the remote and pool branches.
+   * The signed-in user this transport is built for: part of the shared
+   * `(hostId, userId)` remote-session cache key (S1) on the remote and pool
+   * branches, and the user the local client answers for
+   * (`WsStreamClientOptions.userId`).
    */
   readonly userId: string;
   /**
@@ -388,6 +389,9 @@ export function buildHostStreamClient(params: {
     hostId: params.target.hostId,
     endpoint: params.endpoint,
     bearer: params.bearer,
+    // The user every owner builds this client for: the tile cache key, the
+    // app-wide stream's effect dependency, the transport key at open.
+    userId: params.userId,
     auth: params.auth,
     // App-wide for the same reason the mint flow below is: the wall clock is a
     // property of the machine, so every stream in the renderer parks and

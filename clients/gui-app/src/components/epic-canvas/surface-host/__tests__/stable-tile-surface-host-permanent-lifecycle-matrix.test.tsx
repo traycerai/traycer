@@ -684,7 +684,7 @@ afterEach(() => {
   // The pending-hydration registry is module-scope and private to
   // chat-messages.tsx, so it survives an ordinary cache eviction. Rows 16
   // onward reuse the fixed CHAT_TRACKED/CHAT_SIBLING instance ids - without
-  // this, a missing-anchor mount in one row can leave a pending entry a
+  // this, an unresolved anchor in one row can leave a pending entry a
   // later row's mount still reads, even though its own visible cache was
   // cleared above.
   resetPendingHydrationRestoreForTesting();
@@ -993,14 +993,18 @@ async function gestureToTrueBottom(scrollNode: HTMLElement): Promise<void> {
 }
 
 /**
- * Seed the mount-time clamped free-scrolling restore race (row 16): a saved
- * free-scrolling anchor that is missing from `messages` arms convergence
- * that used to trap `restorePersistencePendingRef` when the reader reached
- * true bottom mid-flight. Call BEFORE first mount of that instance.
+ * Seed the mount-time measured free-scrolling restore race (row 16): a legacy
+ * saved free-scrolling position on a LATER PART of a known assistant turn
+ * (`ownerIndex` must be an odd, assistant-row index of the seeded transcript).
+ * The owner row is drawn and measured, while the named part is not in its
+ * wire blocks, so the restore converges on the owner with the part still
+ * pending. That is the convergence that used to trap
+ * `restorePersistencePendingRef` when the reader reached true bottom
+ * mid-flight. Call BEFORE first mount of that instance.
  */
-function seedMissingFreeScrollingAnchor(
+function seedPendingPartRestore(
   chat: EpicCanvasTileRef,
-  anchorIndex: number,
+  ownerIndex: number,
 ): void {
   saveChatTabState({
     identity: {
@@ -1010,8 +1014,8 @@ function seedMissingFreeScrollingAnchor(
       hostId: chat.hostId,
     },
     mode: "free-scrolling",
-    anchorMessageId: "totally-missing-id",
-    anchorIndex,
+    anchorMessageId: `assistant:${chat.id}-turn-${ownerIndex}#${chat.id}-late-text-${ownerIndex}`,
+    anchorIndex: ownerIndex,
     offset: 12,
   });
 }
@@ -1019,7 +1023,7 @@ function seedMissingFreeScrollingAnchor(
 /**
  * Race the mount-time free-restore: keep forcing true bottom across frames
  * until mode flips to following-end, then settle. Pair with
- * `seedMissingFreeScrollingAnchor` + a mount that has NOT yet settled.
+ * `seedPendingPartRestore` + a mount that has NOT yet settled.
  */
 async function raceTrueBottomPastInFlightFreeRestore(
   scrollNode: HTMLElement,
@@ -1964,12 +1968,11 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
     expect(unmountCount(CHAT_TRACKED.instanceId)).toBe(0);
   });
 
-  it("row 16 - internal-tab-bottom-follow: reaching true bottom past an in-flight clamped free-scrolling restore releases persistence", async () => {
+  it("row 16 - internal-tab-bottom-follow: reaching true bottom past an in-flight measured free-scrolling restore releases persistence", async () => {
     // The live-Electron identity-pinned regression: a saved
-    // free-scrolling anchor that is missing from `messages` at mount
-    // (branch edit / suffix removal) arms a mount-time clamped restore
-    // convergence AND `pendingHydrationRestoreAnchorIdRef`. If the reader
-    // reaches strict bottom (a real, demonstrably-past-the-clamped-target
+    // free-scrolling anchor on a later part of a known assistant owner
+    // arms a mount-time measured restore convergence with the part pending. If the reader
+    // reaches strict bottom (a real, demonstrably-past-the-restore-target
     // scroll) WHILE that convergence is still in flight, its own
     // `isAborted` fires - and `settleChatTimelineNavigation`'s abort path
     // calls neither `onSettledValid` nor `onSettledInvalid`, so nothing
@@ -1993,18 +1996,7 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
         40,
     );
     enableLegendListBrowserScrollEvents();
-    saveChatTabState({
-      identity: {
-        tileInstanceId: CHAT_TRACKED.instanceId,
-        epicId: EPIC_ID,
-        chatId: CHAT_TRACKED.id,
-        hostId: CHAT_TRACKED.hostId,
-      },
-      mode: "free-scrolling",
-      anchorMessageId: "totally-missing-id",
-      anchorIndex: 40,
-      offset: 12,
-    });
+    seedPendingPartRestore(CHAT_TRACKED, 41);
     seedCanvas(
       pane("p1", [
         CHAT_TRACKED.instanceId,
@@ -2016,7 +2008,7 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
     );
     const { container } = renderMatrix(undefined);
     // Deliberately NOT waitForHostedChatLoaded/settleLegendList here: the
-    // mount-time clamped free-scrolling restore convergence must still be
+    // mount-time measured free-scrolling restore convergence must still be
     // IN FLIGHT when the reader reaches true bottom, to reproduce the abort
     // race (isAborted fires once mode flips away from "free-scrolling").
     await waitFor(() => {
@@ -2025,8 +2017,8 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
       expect(record?.querySelector("[data-message-id]")).not.toBeNull();
     });
     const trackedScroll = messagesScroll(container, CHAT_TRACKED.instanceId);
-    // The mount-time clamped free-scrolling restore's own bounded
-    // validate/retry loop is racing to land at row 40. Keep re-asserting the
+    // The mount-time measured free-scrolling restore's own bounded
+    // validate/retry loop is racing to land on the known owner. Keep re-asserting the
     // true-bottom scrollTop across several frames so a real scroll to bottom
     // wins at least one settle-check before that loop's own reissue would
     // otherwise keep winning.
@@ -2074,13 +2066,13 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
   });
 
   it("row 17 - internal-tab-bottom-follow: A bottom survives 3+ A↔B round trips without drift", async () => {
-    // Lock the race across repeated cache round-trips: seed the missing
+    // Lock the race across repeated cache round-trips: seed the pending-part
     // free-scrolling anchor, race true bottom past the in-flight restore,
     // then thrash A↔B. Without the isDemonstrablyPastTarget gate release,
     // every cycle reloads the stale free entry (live A_bottom evidence).
     const trackedMessages = buildLongTranscriptMessages(CHAT_TRACKED, 80);
     const siblingMessages = buildLongTranscriptMessages(CHAT_SIBLING, 80);
-    seedMissingFreeScrollingAnchor(CHAT_TRACKED, 40);
+    seedPendingPartRestore(CHAT_TRACKED, 41);
     seedSamePaneLongPair(trackedMessages, siblingMessages);
     const { container } = renderMatrix(undefined);
     await waitFor(() => {
@@ -2107,12 +2099,12 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
   it("row 18 - internal-tab-bottom-follow: B bottom survives 3+ B↔A round trips (not A-specific)", async () => {
     const trackedMessages = buildLongTranscriptMessages(CHAT_TRACKED, 80);
     const siblingMessages = buildLongTranscriptMessages(CHAT_SIBLING, 80);
-    seedMissingFreeScrollingAnchor(CHAT_SIBLING, 40);
+    seedPendingPartRestore(CHAT_SIBLING, 41);
     seedSamePaneLongPair(trackedMessages, siblingMessages);
     const { container } = renderMatrix(undefined);
     await waitForHostedChatLoaded(container, CHAT_TRACKED.instanceId);
 
-    // Select B without a full settle so the missing-anchor free restore is
+    // Select B without a full settle so the pending-part free restore is
     // still converging when we race true bottom.
     act(() => {
       useEpicCanvasStore
@@ -2198,7 +2190,7 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
   it("row 20 - internal-tab-bottom-follow: rapid A↔B thrash without full settle keeps following-end", async () => {
     const trackedMessages = buildLongTranscriptMessages(CHAT_TRACKED, 80);
     const siblingMessages = buildLongTranscriptMessages(CHAT_SIBLING, 80);
-    seedMissingFreeScrollingAnchor(CHAT_TRACKED, 40);
+    seedPendingPartRestore(CHAT_TRACKED, 41);
     seedSamePaneLongPair(trackedMessages, siblingMessages);
     const { container } = renderMatrix(undefined);
     await waitFor(() => {
@@ -2231,7 +2223,7 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
   it("row 21 - internal-tab-bottom-follow: visible stream growth then same-pane switch keeps following at NEW bottom", async () => {
     let trackedMessages = buildLongTranscriptMessages(CHAT_TRACKED, 60);
     const siblingMessages = buildLongTranscriptMessages(CHAT_SIBLING, 40);
-    seedMissingFreeScrollingAnchor(CHAT_TRACKED, 30);
+    seedPendingPartRestore(CHAT_TRACKED, 31);
     const stream = seedSamePaneLongPair(trackedMessages, siblingMessages);
     const { container } = renderMatrix(undefined);
     await waitFor(() => {
@@ -2512,7 +2504,7 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
   it("row 26 - internal-tab-bottom-follow: reorder then immediate inner-tab switch under growth", async () => {
     let trackedMessages = buildLongTranscriptMessages(CHAT_TRACKED, 70);
     const siblingMessages = buildLongTranscriptMessages(CHAT_SIBLING, 50);
-    seedMissingFreeScrollingAnchor(CHAT_TRACKED, 35);
+    seedPendingPartRestore(CHAT_TRACKED, 35);
     const stream = seedSamePaneLongPair(trackedMessages, siblingMessages);
     const { container } = renderMatrix(undefined);
     await waitFor(() => {

@@ -29,6 +29,7 @@ import {
   SANDBOX_SCROLL_GESTURE_EVENT,
   SandboxBridgeHost,
   type SandboxAppRequestHandler,
+  type SandboxArtifactLink,
   type SandboxDisplayMode,
   type SandboxHostContext,
   type SandboxKind,
@@ -213,6 +214,8 @@ export interface SandboxFrameProps {
   readonly onTextSelection?: (selection: CanvasTextSelection | null) => void;
   readonly onPageError?: (error: CanvasPageError) => void;
   readonly onRelativeLink?: (href: string) => void;
+  /** A served html page's link out of its artifact. */
+  readonly onArtifactLink?: (link: SandboxArtifactLink) => void;
   readonly source: SandboxSource;
   readonly kind: SandboxKind;
   readonly title: string;
@@ -500,6 +503,9 @@ export function SandboxFrame(props: SandboxFrameProps) {
   const onRelativeLink = useEffectEvent((href: string) =>
     props.onRelativeLink?.(href),
   );
+  const onArtifactLink = useEffectEvent((link: SandboxArtifactLink) =>
+    props.onArtifactLink?.(link),
+  );
   const onSize = useEffectEvent((size: SandboxSize) => props.onSize(size));
   const onStatus = useEffectEvent((status: SandboxStatus) =>
     props.onStatus(status),
@@ -768,6 +774,7 @@ export function SandboxFrame(props: SandboxFrameProps) {
         onTextSelection,
         onPageError,
         onRelativeLink,
+        onArtifactLink,
         onStatus: onBridgeStatus,
         onSize,
         onOpenLink,

@@ -337,6 +337,7 @@ describe("createLocalOpenAuth local grant and member readiness", () => {
       clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
       hostId: HOST_ID,
+      userId: bearer.identity.userId,
       endpoint: () => endpoint,
       bearer: () => bearer,
       localOpenAuth: auth,

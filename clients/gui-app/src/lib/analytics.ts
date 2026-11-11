@@ -425,7 +425,6 @@ export type AnalyticsSetting =
   | "startPageWallpaperTint"
   | "steerOnModEnterEnabled"
   | "storageArchivedChats"
-  | "storageArtifacts"
   | "storageChats"
   | "storageIdleTasks"
   | "summonHotkeyChord"
@@ -1585,7 +1584,6 @@ const ANALYTICS_SETTINGS = new Set<string>(
     startPageWallpaperTint: true,
     steerOnModEnterEnabled: true,
     storageArchivedChats: true,
-    storageArtifacts: true,
     storageChats: true,
     storageIdleTasks: true,
     summonHotkeyChord: true,

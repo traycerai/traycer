@@ -11,6 +11,13 @@ import {
   type RefreshResult,
 } from "../credentials-mutation";
 
+// Files in this worker share one module cache: reset it before this file's
+// imports so credentials-lock.ts is first evaluated against the
+// `node:child_process` spy below, even when another file already loaded it.
+vi.hoisted(() => {
+  vi.resetModules();
+});
+
 // Row 5: these tests pin a contended `acquireCredentialsLock` against a
 // live holder (5a), a stale spent-base marker owned by a live process driven
 // through the mutation store's public `rotate` (5b), and a first,

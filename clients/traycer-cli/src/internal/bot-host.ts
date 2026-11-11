@@ -196,6 +196,7 @@ export async function openLocalStreamClient(): Promise<{
     hostId: endpoint.hostId,
     endpoint: () => endpoint,
     bearer: () => lease,
+    userId: lease.identity.userId,
     auth: null,
     clock: null,
     hostCredentialMint: null,

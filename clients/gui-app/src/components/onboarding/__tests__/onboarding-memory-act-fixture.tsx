@@ -477,7 +477,8 @@ export async function settingsSwitchOn(): Promise<boolean> {
   return toggle.getAttribute("aria-checked") === "true";
 }
 
-function getsTo(hostId: string): number {
+/** Gets sent to a host so far. */
+export function getsSentTo(hostId: string): number {
   return callsTo(hostId).filter(
     (call) => call.method === "config.agentMemories.get",
   ).length;
@@ -499,11 +500,6 @@ function settingsEntryFilled(hostId: string): boolean {
     });
 }
 
-/** Gets sent to a host so far. */
-export function getsSentTo(hostId: string): number {
-  return getsTo(hostId);
-}
-
 /**
  * Settings opened after the act: the host now reads Traycer memories on, and
  * the panel (the real one, under the app's minute of freshness) must send its
@@ -513,10 +509,10 @@ export async function expectSettingsIsCurrent(hostId: string): Promise<void> {
   expect(settingsEntryFilled(hostId)).toBe(false);
   world.memoriesOn = true;
   world.revision += 1;
-  const before = getsTo(hostId);
+  const before = getsSentTo(hostId);
   openSettings(hostId);
   await waitFor(async () => expect(await settingsSwitchOn()).toBe(true));
-  expect(getsTo(hostId)).toBeGreaterThan(before);
+  expect(getsSentTo(hostId)).toBeGreaterThan(before);
 }
 
 /** The window's host directory reads the host list again, from `world.otherHosts`. */
@@ -679,9 +675,6 @@ export function isOn(element: HTMLElement): boolean {
   return element.getAttribute("aria-checked") === "true";
 }
 
-export async function continueFromMemory(): Promise<void> {
-  fireEvent.click(await screen.findByTestId("onboarding-advance"));
-}
 export async function expectOnStep(stepId: string): Promise<void> {
   await waitFor(() => expect(currentStepId()).toBe(stepId));
 }
