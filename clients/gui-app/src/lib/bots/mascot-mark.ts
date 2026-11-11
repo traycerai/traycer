@@ -17,8 +17,10 @@ import {
  * person chose one in the bot's settings, so a rename changes neither.
  *
  * A choice this client cannot read (a newer writer's shape, kind or colour,
- * read as {@link BOT_APPEARANCE_UNRECOGNISED}) draws the default mascot:
- * the teal blob, {@link DEFAULT_MASCOT_SHAPE} in {@link DEFAULT_MASCOT_RAMP}.
+ * read as {@link BOT_APPEARANCE_UNRECOGNISED}) falls back per field to the
+ * default mascot's: an unreadable mark draws {@link DEFAULT_MASCOT_SHAPE}, an
+ * unreadable colour {@link DEFAULT_MASCOT_RAMP}, and the other field keeps
+ * its own choice.
  *
  * The tests pin fixed ids to their shapes so a bot keeps its mascot.
  */
