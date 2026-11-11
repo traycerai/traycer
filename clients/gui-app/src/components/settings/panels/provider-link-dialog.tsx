@@ -54,9 +54,7 @@ import {
 } from "@/stores/providers/provider-link-dialog-store";
 
 /**
- * The Link dialog: links a profile that is on
- * this host only, or a new one, to the person's plan. Opened from the
- * Providers page's "On <host> only, link to use everywhere" line through
+ * The environment sign-in dialog, opened from the Providers page through
  * `provider-link-dialog-store`, and mounted once inside the page's host
  * scope, so its calls go to the host the page shows.
  *

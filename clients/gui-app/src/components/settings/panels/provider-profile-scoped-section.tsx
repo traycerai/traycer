@@ -20,7 +20,6 @@ import {
   providerSignInUnavailableReason,
 } from "@/components/providers/provider-signin-availability";
 import { cn } from "@/lib/utils";
-import { ProviderOnHostOnlyLine } from "./provider-on-host-only-line";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { EmbeddedProviderRateLimitForProvider } from "./provider-rate-limit-section";
 import { ProfileSummaryActions } from "./profile-summary-actions";
@@ -399,21 +398,13 @@ export function ProviderProfileScopedSection(
           admissionByProfileId={null}
           showTerminalBadge={false}
         />
-        {selectedProfile.kind === "managed" &&
-          (state.providerId === "claude-code" ||
-          state.providerId === "codex" ? (
-            <LocalProfileLocation
-              providerId={state.providerId}
-              profileId={selectedProfile.profileId}
-              hostName={hostName}
-            />
-          ) : (
-            <ProviderOnHostOnlyLine
-              hostId={hostId}
-              providerId={state.providerId}
-              profileId={selectedProfile.profileId}
-            />
-          ))}
+        {selectedProfile.kind === "managed" ? (
+          <LocalProfileLocation
+            providerId={state.providerId}
+            profileId={selectedProfile.profileId}
+            hostName={hostName}
+          />
+        ) : null}
         <SelectedProfileRow
           state={state}
           profile={selectedProfile}

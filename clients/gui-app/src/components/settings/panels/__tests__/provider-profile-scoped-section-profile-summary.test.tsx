@@ -505,7 +505,7 @@ describe("<ProviderProfileScopedSection /> profile summary", () => {
     expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
   });
 
-  it("keeps the linkable local-only line for a non-target provider", async () => {
+  it("uses the plain local-only marker without Link for a non-target provider", async () => {
     renderSection(
       {},
       {
@@ -515,10 +515,8 @@ describe("<ProviderProfileScopedSection /> profile summary", () => {
       },
     );
 
-    expect(
-      await screen.findByText("On dev-box only, link to use everywhere."),
-    ).toBeTruthy();
-    expect(await screen.findByRole("button", { name: "Link" })).toBeTruthy();
+    expect(await screen.findByText("On dev-box only.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Link" })).toBeNull();
   });
 
   it("badges an ambient row Signed out when the provider is unauthenticated", async () => {
