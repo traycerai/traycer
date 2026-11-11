@@ -30,7 +30,8 @@ import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
  * still holds it (`failedOn`). The reason is the session's, in the words the
  * agent chat's error row gives it. Retry sends the message to the bot again
  * as it is: the same request, re-delivered to the session it went to, with
- * no new row. Edit, on the viewer's own message, hands its text to the box
+ * no new row. Retry and Edit are offered only on the viewer's own message.
+ * Edit hands its text to the box
  * (`onEdit`), whose send replaces it. A retry the host refuses says so where
  * a failed send does (`failure`). Retry and Edit are sends, so neither is
  * offered by a host that cannot do them (`bot.conversation.send` below 1.1)
@@ -126,7 +127,9 @@ export function useBotFailedRequest(args: {
         updateFailure:
           reason?.action === "update-provider" ? updateFailure : null,
         retry:
-          channelId === null
+          channelId === null ||
+          senderUserId === null ||
+          senderUserId !== viewerUserId
             ? null
             : (text) => {
                 clear();

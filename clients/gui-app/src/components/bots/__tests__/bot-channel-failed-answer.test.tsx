@@ -746,41 +746,42 @@ describe("<BotChannelView tiles={null} /> a post the bot parked on", () => {
   });
 });
 
-describe("<BotChannelView tiles={null} /> a teammate's post the bot failed to answer", () => {
-  it("offers Retry, which any member may press, and no Edit, which only its writer may", async () => {
-    const user = userEvent.setup();
+describe("<BotChannelView tiles={null} /> a post the bot failed to answer, seen by someone other than its sender", () => {
+  /** Every member sees that the post failed; only its sender is offered an action. */
+  function lineOnPost(): HTMLElement {
+    return within(screen.getByTestId("bot-member-row")).getByTestId(
+      "bot-message-unanswered",
+    );
+  }
+
+  it("says the post was not answered to a teammate, with no Retry and no Edit, and sends nothing", () => {
     activityStore.setState({ activity: trunkFailedOn(POST_REQUEST) });
     mountChannel(null, memberPost(TEAMMATE_USER_ID));
     const row = screen.getByTestId("bot-member-row");
 
+    expect(lineOnPost().getAttribute("data-state")).toBe("failed");
+    expect(lineOnPost().textContent).toMatch(/^Not answered/);
+    expect(within(row).queryByTestId("bot-message-retry")).toBeNull();
+    expect(
+      within(row).queryByTestId("bot-message-unanswered-retry"),
+    ).toBeNull();
     expect(within(row).queryByTestId("bot-message-edit")).toBeNull();
-    await user.click(within(row).getByTestId("bot-message-retry"));
-
-    expect(sent).toHaveLength(1);
-    expect(sent[0].redeliver).toEqual({ requestId: POST_REQUEST });
-    expect(sent[0].supersedes).toBeNull();
+    expect(within(row).queryAllByRole("button", { name: "Retry" })).toEqual([]);
+    expect(sent).toEqual([]);
   });
 
-  it("says a refused Retry of the teammate's post in the channel's box, without asking for an edit there is none to make", async () => {
-    const user = userEvent.setup();
-    refuseSends = true;
-    activityStore.setState({ activity: trunkFailedOn(POST_REQUEST) });
+  it("offers a teammate no Retry on a post held, not yet started, either", () => {
+    activityStore.setState({
+      activity: { trunk: sessionOn("parked", POST_REQUEST), threads: {} },
+    });
     mountChannel(null, memberPost(TEAMMATE_USER_ID));
+    const row = screen.getByTestId("bot-member-row");
 
-    await user.click(
-      within(screen.getByTestId("bot-member-row")).getByTestId(
-        "bot-message-unanswered-retry",
-      ),
-    );
-
-    const notice = await screen.findByTestId(
-      "bot-channel-composer-send-failed",
-    );
-    expect(notice.textContent).toBe("Couldn't send. Try again.");
-    expect(textOf(channelBox())).toBe("");
+    expect(lineOnPost().getAttribute("data-state")).toBe("parked");
+    expect(within(row).queryAllByRole("button", { name: "Retry" })).toEqual([]);
   });
 
-  it("offers Retry and no Edit on the thread anchor the teammate wrote", () => {
+  it("offers a teammate no Retry on the thread anchor, in the thread the post opened, and says it failed", () => {
     mocks.threads = [postThread(TEAMMATE_USER_ID)];
     activityStore.setState({
       activity: {
@@ -799,21 +800,39 @@ describe("<BotChannelView tiles={null} /> a teammate's post the bot failed to an
     );
 
     const anchor = screen.getByTestId("bot-thread-anchor");
+    expect(within(anchor).getByTestId("bot-message-unanswered")).toBeTruthy();
     expect(
-      within(anchor).getByTestId("bot-message-unanswered-retry"),
-    ).toBeTruthy();
+      within(anchor).queryByTestId("bot-message-unanswered-retry"),
+    ).toBeNull();
     expect(
       within(anchor).queryByTestId("bot-message-unanswered-edit"),
     ).toBeNull();
   });
 
-  it("offers no Edit to a viewer who is not signed in", () => {
+  it("offers a viewer who is not signed in no Retry and no Edit, and still says the post failed", () => {
     useAuthStore.setState({ profile: null });
     activityStore.setState({ activity: trunkFailedOn(POST_REQUEST) });
     mountChannel(null, memberPost(VIEWER_USER_ID));
+    const row = screen.getByTestId("bot-member-row");
 
-    expect(screen.getByTestId("bot-message-retry")).toBeTruthy();
+    expect(lineOnPost().getAttribute("data-state")).toBe("failed");
+    expect(within(row).queryAllByRole("button", { name: "Retry" })).toEqual([]);
     expect(screen.queryByTestId("bot-message-edit")).toBeNull();
+  });
+
+  it("offers the sender both Retry and Edit on the same failure the teammate sees", async () => {
+    const user = userEvent.setup();
+    activityStore.setState({ activity: trunkFailedOn(POST_REQUEST) });
+    mountChannel(null, memberPost(VIEWER_USER_ID));
+    const row = screen.getByTestId("bot-member-row");
+
+    expect(lineOnPost().getAttribute("data-state")).toBe("failed");
+    expect(
+      within(lineOnPost()).getByRole("button", { name: "Retry" }),
+    ).toBeTruthy();
+    await user.click(within(row).getByTestId("bot-message-retry"));
+    expect(sent).toHaveLength(1);
+    expect(sent[0].redeliver).toEqual({ requestId: POST_REQUEST });
   });
 });
 

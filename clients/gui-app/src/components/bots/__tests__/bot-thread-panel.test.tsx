@@ -2190,8 +2190,7 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
     expect(screen.queryByTestId("bot-message-unanswered")).toBeNull();
   });
 
-  it("offers Retry and no Edit on a teammate's reply", async () => {
-    const user = userEvent.setup();
+  it("says a teammate's reply failed, with no Retry and no Edit, and sends nothing", () => {
     activityStore.setState({ activity: threadFailedOn(REPLY_REQUEST) });
     mountPanel(listed(VIEWER_USER_ID), [
       memberMessage(
@@ -2203,15 +2202,14 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
     ]);
     const row = replyRow();
 
+    expect(within(row).getByTestId("bot-message-unanswered")).toBeTruthy();
+    expect(within(row).queryByTestId("bot-message-retry")).toBeNull();
     expect(within(row).queryByTestId("bot-message-edit")).toBeNull();
-    await user.click(within(row).getByTestId("bot-message-retry"));
-
-    expect(sent).toHaveLength(1);
-    expect(sent[0].redeliver).toEqual({ requestId: REPLY_REQUEST });
-    expect(sent[0].threadId).toBe(THREAD_ID);
+    expect(within(row).queryAllByRole("button", { name: "Retry" })).toEqual([]);
+    expect(sent).toEqual([]);
   });
 
-  it("offers Retry and no Edit on the anchor post a teammate wrote", () => {
+  it("says the anchor post a teammate wrote failed, with no Retry and no Edit", () => {
     channelMessages = [
       memberMessage("anchor-1", POST_REQUEST, "Ship it?", "user-teammate"),
     ];
@@ -2219,9 +2217,10 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
     mountPanel(listed("user-teammate"), []);
 
     const anchor = screen.getByTestId("bot-thread-anchor");
+    expect(within(anchor).getByTestId("bot-message-unanswered")).toBeTruthy();
     expect(
-      within(anchor).getByTestId("bot-message-unanswered-retry"),
-    ).toBeTruthy();
+      within(anchor).queryByTestId("bot-message-unanswered-retry"),
+    ).toBeNull();
     expect(
       within(anchor).queryByTestId("bot-message-unanswered-edit"),
     ).toBeNull();
