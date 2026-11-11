@@ -1633,6 +1633,7 @@ import {
   providersListResponseSchemaV106Preimage,
   providersListResponseSchemaV107Preimage,
   providersListResponseSchemaV108Preimage,
+  providersListResponseSchemaV109Preimage,
   providersListResponseSchemaV80,
   providersListResponseSchemaV90,
   providersListResponseSchemaV91,
@@ -1676,6 +1677,8 @@ import {
   providersSetPackPolicyResponseSchema,
   providersSetNativeMemoryRequestSchema,
   providersSetNativeMemoryResponseSchema,
+  providersSetModelProviderHiddenRequestSchema,
+  providersSetModelProviderHiddenResponseSchema,
   providersSetNativeSubagentsRequestSchema,
   providersSetNativeSubagentsResponseSchema,
   providersRefreshPackDiscoveryRequestSchema,
@@ -3211,7 +3214,7 @@ export const providersListV109 = defineRpcContract({
   method: "providers.list",
   schemaVersion: { major: 10, minor: 9 } as const,
   requestSchema: providersListRequestSchema,
-  responseSchema: providersListResponseSchema,
+  responseSchema: providersListResponseSchemaV109Preimage,
 });
 export const providersListUpgradeV108ToV109 = defineUpgradePath<
   typeof providersListV108,
@@ -3220,6 +3223,32 @@ export const providersListUpgradeV108ToV109 = defineUpgradePath<
   from: { major: 10, minor: 8 },
   to: { major: 10, minor: 9 },
   upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+/**
+ * `providers.list@10.10` - the row's `hiddenModelProviders`: the upstream
+ * model providers whose models Traycer's pickers leave out, on the row of a
+ * provider with a Model Providers tab.
+ *
+ * A MINOR with no `responseGrowthProjectionGated`: a new KEY, stripped for an
+ * older peer by the within-major re-parse.
+ */
+export const providersListV1010 = defineRpcContract({
+  method: "providers.list",
+  schemaVersion: { major: 10, minor: 10 } as const,
+  requestSchema: providersListRequestSchema,
+  responseSchema: providersListResponseSchema,
+});
+export const providersListUpgradeV109ToV1010 = defineUpgradePath<
+  typeof providersListV109,
+  typeof providersListV1010
+>({
+  from: { major: 10, minor: 9 },
+  to: { major: 10, minor: 10 },
+  upgradeRequest: (request) => request,
+  // Nothing to fill: a host below 10.10 stores no hidden list, so the key
+  // stays absent and the client hides nothing and offers no switch.
   upgradeResponse: (response) => response,
 });
 
@@ -3930,10 +3959,10 @@ export function downgradeNativeListErrorForPublishedLines(
 }
 
 export const providersListDowngradeV10ToV9 = defineDowngradePath<
-  typeof providersListV109,
+  typeof providersListV1010,
   typeof providersListV92
 >({
-  from: { major: 10, minor: 9 },
+  from: { major: 10, minor: 10 },
   // Lands on 9.2, major 9's latest installed minor; a 9.0 or 9.1 caller's own
   // contract parse then strips the keys its minor predates.
   to: { major: 9, minor: 2 },
@@ -3956,10 +3985,10 @@ export const providersListDowngradeV10ToV9 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV8 = defineDowngradePath<
-  typeof providersListV109,
+  typeof providersListV1010,
   typeof providersListV80
 >({
-  from: { major: 10, minor: 9 },
+  from: { major: 10, minor: 10 },
   to: { major: 8, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -3979,10 +4008,10 @@ export const providersListDowngradeV10ToV8 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV7 = defineDowngradePath<
-  typeof providersListV109,
+  typeof providersListV1010,
   typeof providersListV70
 >({
-  from: { major: 10, minor: 9 },
+  from: { major: 10, minor: 10 },
   to: { major: 7, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -4002,10 +4031,10 @@ export const providersListDowngradeV10ToV7 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV6 = defineDowngradePath<
-  typeof providersListV109,
+  typeof providersListV1010,
   typeof providersListV60
 >({
-  from: { major: 10, minor: 9 },
+  from: { major: 10, minor: 10 },
   to: { major: 6, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -4022,10 +4051,10 @@ export const providersListDowngradeV10ToV6 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV5 = defineDowngradePath<
-  typeof providersListV109,
+  typeof providersListV1010,
   typeof providersListV50
 >({
-  from: { major: 10, minor: 9 },
+  from: { major: 10, minor: 10 },
   to: { major: 5, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -4042,10 +4071,10 @@ export const providersListDowngradeV10ToV5 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV4 = defineDowngradePath<
-  typeof providersListV109,
+  typeof providersListV1010,
   typeof providersListV40
 >({
-  from: { major: 10, minor: 9 },
+  from: { major: 10, minor: 10 },
   to: { major: 4, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -4062,10 +4091,10 @@ export const providersListDowngradeV10ToV4 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV3 = defineDowngradePath<
-  typeof providersListV109,
+  typeof providersListV1010,
   typeof providersListV30
 >({
-  from: { major: 10, minor: 9 },
+  from: { major: 10, minor: 10 },
   to: { major: 3, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -4082,10 +4111,10 @@ export const providersListDowngradeV10ToV3 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV2 = defineDowngradePath<
-  typeof providersListV109,
+  typeof providersListV1010,
   typeof providersListV20
 >({
-  from: { major: 10, minor: 9 },
+  from: { major: 10, minor: 10 },
   to: { major: 2, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -4102,10 +4131,10 @@ export const providersListDowngradeV10ToV2 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV1 = defineDowngradePath<
-  typeof providersListV109,
+  typeof providersListV1010,
   typeof providersListV10
 >({
-  from: { major: 10, minor: 9 },
+  from: { major: 10, minor: 10 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -5319,6 +5348,20 @@ export const providersSetNativeMemoryV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: providersSetNativeMemoryRequestSchema,
   responseSchema: providersSetNativeMemoryResponseSchema,
+});
+
+/**
+ * Show or hide one upstream model provider in Traycer's model pickers
+ * (`providers.list@10.10` reads the list back as the row's
+ * `hiddenModelProviders`). A new name at `@1.0` on the same
+ * optional-capability channel as the mutations above, so a host that predates
+ * it refuses per call and the client offers no switch.
+ */
+export const providersSetModelProviderHiddenV10 = defineRpcContract({
+  method: "providers.setModelProviderHidden",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersSetModelProviderHiddenRequestSchema,
+  responseSchema: providersSetModelProviderHiddenResponseSchema,
 });
 
 /**
@@ -13544,6 +13587,19 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  "providers.setModelProviderHidden": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersSetModelProviderHiddenV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   // Whether the whole provider settings document is unreadable (and, from
   // 1.1, which single provider rows are), the explicit reset that sets it
   // aside unchanged, and the per-provider reset of one unreadable row.
@@ -14473,14 +14529,14 @@ const HOST_RPC_ID_CARRYING_REGISTRY_DEFINITION = {
 } as const;
 
 /**
- * `providers.list` major 10, named. Its ten minors and nine bridges inline
+ * `providers.list` major 10, named. Its eleven minors and nine bridges inline
  * push `HOST_RPC_PROVIDERS_LIST_REGISTRY_DEFINITION` over TS7056's
  * declaration-serialization ceiling; a named slot type is emitted by name,
  * as `HostRpcNotificationMethodMap` is. The literal below is checked against
  * it, so the slot keeps every exact contract and bridge.
  */
 type ProvidersListMajor10 = {
-  readonly latestMinor: 9;
+  readonly latestMinor: 10;
   readonly versions: {
     readonly 0: {
       readonly contract: typeof providersListV100;
@@ -14524,6 +14580,10 @@ type ProvidersListMajor10 = {
       readonly contract: typeof providersListV109;
       readonly upgradeFromPreviousVersion: typeof providersListUpgradeV108ToV109;
     };
+    readonly 10: {
+      readonly contract: typeof providersListV1010;
+      readonly upgradeFromPreviousVersion: typeof providersListUpgradeV109ToV1010;
+    };
   };
   readonly downgradePathsFromLatest: {
     readonly 1: typeof providersListDowngradeV10ToV1;
@@ -14539,7 +14599,7 @@ type ProvidersListMajor10 = {
 };
 
 const PROVIDERS_LIST_MAJOR_10: ProvidersListMajor10 = {
-  latestMinor: 9,
+  latestMinor: 10,
   versions: {
     0: {
       contract: providersListV100,
@@ -14590,6 +14650,11 @@ const PROVIDERS_LIST_MAJOR_10: ProvidersListMajor10 = {
     9: {
       contract: providersListV109,
       upgradeFromPreviousVersion: providersListUpgradeV108ToV109,
+    },
+    // `hiddenModelProviders` on the row: a new KEY again.
+    10: {
+      contract: providersListV1010,
+      upgradeFromPreviousVersion: providersListUpgradeV109ToV1010,
     },
   },
   downgradePathsFromLatest: {

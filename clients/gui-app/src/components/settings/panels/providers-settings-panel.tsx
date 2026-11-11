@@ -2028,6 +2028,7 @@ function ProviderTabBody({
           // is what tells the tab to render that as a WAIT rather than a
           // failure - see `ModelProvidersBody`.
           packPreparing={providerPackPreparingForProvider(state)}
+          hiddenModelProviders={state.hiddenModelProviders}
         />
       );
     }

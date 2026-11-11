@@ -1,4 +1,5 @@
 import { PopoverContent } from "@/components/ui/popover";
+import { Button } from "@/components/ui/button";
 import { useCoarsePointerOpenAutoFocus } from "@/hooks/ui/use-coarse-pointer-open-autofocus";
 import { focusActiveComposer } from "@/lib/composer/composer-focus-registry";
 import { LEADER_SCOPE_MODEL_PICKER } from "@/lib/keybindings/leader-scope";
@@ -106,6 +107,10 @@ export interface HarnessModelPickerPanelBodyProps {
   readonly listRef: RefObject<VirtuosoHandle | null>;
   readonly listKey: string;
   readonly visibleRows: ReadonlyArray<HarnessModelRow>;
+  /** The browsed provider's model providers hidden in Settings. */
+  readonly hiddenModelProviders: ReadonlySet<string>;
+  /** How many of those the browsed catalog actually carries. */
+  readonly hiddenModelProviderCount: number;
   readonly selectedRowId: string;
   readonly effectiveActiveRowId: string;
   readonly hoveredRowId: string;
@@ -289,6 +294,8 @@ export function HarnessModelPickerPanelBody(
     listRef,
     listKey,
     visibleRows,
+    hiddenModelProviders,
+    hiddenModelProviderCount,
     selectedRowId,
     effectiveActiveRowId,
     hoveredRowId,
@@ -434,6 +441,7 @@ export function HarnessModelPickerPanelBody(
               listRef={listRef}
               listKey={listKey}
               rows={visibleRows}
+              hiddenModelProviders={hiddenModelProviders}
               maxModeContextKind={maxModeContextKind ?? "none"}
               selectedRowId={selectedRowId}
               activeRowId={effectiveActiveRowId}
@@ -456,6 +464,12 @@ export function HarnessModelPickerPanelBody(
               rowsDisabled={teamBlocked}
             />
           </div>
+          {hiddenModelProviderCount === 0 ? null : (
+            <HiddenModelProvidersLine
+              count={hiddenModelProviderCount}
+              onManage={() => onOpenProviderSettings("modelProviders")}
+            />
+          )}
           {ultracodeFooter === null ? null : (
             <UltracodeFooterButton {...ultracodeFooter} />
           )}
@@ -468,6 +482,31 @@ export function HarnessModelPickerPanelBody(
         </div>
       </div>
     </>
+  );
+}
+
+/**
+ * Says the list is missing providers the person hid, and takes them to the
+ * Settings tab where they can show them again.
+ */
+function HiddenModelProvidersLine(props: {
+  readonly count: number;
+  readonly onManage: () => void;
+}): ReactNode {
+  return (
+    <div
+      className="flex items-center justify-between gap-2 border-t border-border/60 px-3 py-1"
+      data-testid="picker-hidden-model-providers"
+    >
+      <span className="text-ui-xs text-muted-foreground">
+        {props.count === 1
+          ? "1 provider hidden"
+          : `${props.count} providers hidden`}
+      </span>
+      <Button type="button" variant="muted" size="xs" onClick={props.onManage}>
+        Manage
+      </Button>
+    </div>
   );
 }
 

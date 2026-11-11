@@ -22,6 +22,16 @@ const harnessesData: {
       }
     | undefined;
 } = { value: undefined };
+const providerListData: {
+  value:
+    | {
+        providers: ReadonlyArray<{
+          providerId: string;
+          hiddenModelProviders?: ReadonlyArray<string>;
+        }>;
+      }
+    | undefined;
+} = { value: undefined };
 const modelsData: {
   // `undefined` models the models query still LOADING (no data yet); a `models`
   // object models it RESOLVED. The store now distinguishes the two via the
@@ -91,6 +101,9 @@ const registeredComposerHostClients: Array<HostClient<HostRpcRegistry> | null> =
 // The cloud's Traycer catalog, read only for a Traycer pick sent to a sandbox.
 vi.mock("@/hooks/sandboxes/use-sandbox-traycer-models-query", () => ({
   useSandboxTraycerModels: () => ({ data: undefined }),
+}));
+vi.mock("@/hooks/providers/use-providers-list-query", () => ({
+  useProvidersListForClient: () => ({ data: providerListData.value }),
 }));
 
 // `data` is returned regardless of `enabled`, because that is what TanStack
@@ -288,6 +301,7 @@ function inactiveWrapper(props: { children: ReactNode }) {
 describe("useComposerToolbarStore selection reconciliation", () => {
   beforeEach(() => {
     harnessesData.value = undefined;
+    providerListData.value = undefined;
     // Default to the LOADING window (no model data yet); tests that need a
     // resolved catalog assign `modelsData.value = { models: [...] }` explicitly.
     modelsData.value = undefined;
@@ -318,6 +332,60 @@ describe("useComposerToolbarStore selection reconciliation", () => {
   // re-render a lingering store against the next test's mock catalog.
   afterEach(() => {
     cleanup();
+  });
+
+  it("uses the visible catalog for a new composer and preserves a chat-authoritative hidden model", async () => {
+    seedDefault("opencode");
+    harnessesData.value = { harnesses: [{ id: "opencode", available: true }] };
+    providerListData.value = {
+      providers: [
+        { providerId: "opencode", hiddenModelProviders: ["openrouter"] },
+      ],
+    };
+    modelsData.value = {
+      models: [
+        {
+          ...modelOption("opencode", "hidden-model"),
+          metadata: { openCodeProviderId: "openrouter" },
+        },
+        {
+          ...modelOption("opencode", "visible-model"),
+          metadata: { openCodeProviderId: "anthropic" },
+        },
+      ],
+    };
+
+    const newComposer = renderHook(() =>
+      useComposerToolbarStore(
+        null,
+        { kind: "none" },
+        null,
+        catalogScope(false),
+      ),
+    );
+    await waitFor(() =>
+      expect(newComposer.result.current.getState().selection.modelSlug).toBe(
+        "visible-model",
+      ),
+    );
+    newComposer.unmount();
+
+    const chatComposer = renderHook(() =>
+      useComposerToolbarStore(
+        null,
+        {
+          kind: "authoritative",
+          settings: runSettings("opencode", "hidden-model"),
+        },
+        null,
+        catalogScope(false),
+      ),
+    );
+    await waitFor(() =>
+      expect(chatComposer.result.current.getState().selection.modelSlug).toBe(
+        "hidden-model",
+      ),
+    );
   });
 
   it("falls back by provider order when the default is unavailable", async () => {
