@@ -64,6 +64,7 @@ import {
 import { waitingStepCopy } from "./waiting-step-copy";
 import {
   useProviderProfileLoginFlow,
+  providerProfileLoginProgress,
   type ProviderProfileLoginFlowCodePaste,
   type ProviderProfileLoginFlowState,
 } from "./use-provider-profile-login-flow";
@@ -568,18 +569,13 @@ function AddProfileAccountSection({
     return (
       <div className="border-t border-border/60 pt-4">
         <AddProfileWaitingStep
-          loginUrl={flowState.kind === "waiting" ? flowState.url : null}
-          userCode={flowState.kind === "waiting" ? flowState.userCode : null}
+          {...providerProfileLoginProgress(flowState)}
           loginCapability={loginCapability}
           isLocalHost={isLocalHost}
           queuePending={startPending}
           startingCopy={startingCopy}
-          cancelRequested={
-            flowState.kind === "starting" && flowState.cancelRequested
-          }
           cancelPending={cancelPending}
           cancelDisabled={cancelDisabled}
-          waiting={flowState.kind === "waiting"}
           codePaste={codePaste}
           onOpenExternalLink={onOpenExternalLink}
           onCancel={onCancel}
@@ -815,6 +811,7 @@ export function AddProfileWaitingStep({
   cancelPending,
   cancelDisabled,
   waiting,
+  readerCount,
   codePaste,
   onOpenExternalLink,
   onCancel,
@@ -839,6 +836,7 @@ export function AddProfileWaitingStep({
    *  let a user's paste silently lock the field without ever being sent.
    */
   readonly waiting: boolean;
+  readonly readerCount?: number;
   readonly codePaste: ProviderProfileLoginFlowCodePaste;
   readonly onOpenExternalLink: (url: string) => void;
   readonly onCancel: () => void;
@@ -867,8 +865,12 @@ export function AddProfileWaitingStep({
       <div className="flex items-start gap-2.5">
         <MutedAgentSpinner />
         <div className="min-w-0">
-          <div className="text-ui-sm font-medium text-foreground">{title}</div>
-          {guidance !== null ? (
+          <div className="text-ui-sm font-medium text-foreground">
+            {readerCount === undefined
+              ? title
+              : `Waiting for ${readerCount} ${readerCount === 1 ? "agent" : "agents"} on this profile`}
+          </div>
+          {readerCount === undefined && guidance !== null ? (
             <p className="mt-0.5 text-ui-xs leading-relaxed text-muted-foreground">
               {guidance}
             </p>
@@ -942,7 +944,6 @@ export function AddProfileIdentityStep({
             <button
               type="button"
               aria-label={emailRevealed ? "Hide email" : "Reveal email"}
-              aria-pressed={emailRevealed}
               className="rounded p-0.5 text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
               onClick={() => setEmailRevealed(!emailRevealed)}
             >
