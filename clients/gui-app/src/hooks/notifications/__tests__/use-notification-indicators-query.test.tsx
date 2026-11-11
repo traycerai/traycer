@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useContext, type ReactNode } from "react";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -17,7 +17,10 @@ import type {
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { createAppQueryClient } from "@/lib/query-client";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
+import {
+  useNotificationIndicators,
+  useNotificationIndicatorsWithFreshness,
+} from "@/hooks/notifications/use-notification-indicators-query";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
 import {
   NotificationIndicatorsContext,
@@ -1106,5 +1109,226 @@ describe("local-mode notification indicators", () => {
     await waitFor(() => {
       expect(indicatorText("chat")).toBe("unreadFailure,unreadDone");
     });
+  });
+});
+
+/** The one answer the host gives for the epic, whichever observer asks. */
+const EPIC_ANSWER: HostNotificationsIndicatorStateResponse = {
+  complete: false,
+  epics: {
+    [EPIC_ID]: {
+      unreadFailure: false,
+      pendingFork: false,
+      pendingApproval: false,
+      pendingInterview: false,
+      unreadDone: true,
+      unreadCount: 1,
+    },
+  },
+  chats: {},
+};
+
+/** An ordinary surface: the hook every sidebar, tab and drag chip uses. */
+function BaseObserver(props: { readonly testId: string }): ReactNode {
+  const indicators = useNotificationIndicators({
+    hostId: null,
+    epicIds: [EPIC_ID],
+    chatIds: [],
+    enabled: true,
+  });
+  return (
+    <span data-testid={props.testId}>
+      {Object.hasOwn(indicators.epics, EPIC_ID) ? "has-epic" : "no-epic"}
+    </span>
+  );
+}
+
+/** The Activity list's hook: the same key, read under its own freshness. */
+function ActivityObserver(props: { readonly testId: string }): ReactNode {
+  const read = useNotificationIndicatorsWithFreshness({
+    hostId: null,
+    epicIds: [EPIC_ID],
+    chatIds: [],
+    enabled: true,
+  });
+  return (
+    <span data-testid={props.testId}>
+      {`${read.fresh ? "fresh" : "not-fresh"}/${
+        Object.hasOwn(read.indicators.epics, EPIC_ID) ? "has-epic" : "no-epic"
+      }`}
+    </span>
+  );
+}
+
+function renderObservers(
+  harness: Harness,
+  observers: ReactNode,
+): { readonly rerender: (observers: ReactNode) => void } {
+  const view = render(
+    <QueryClientProvider client={harness.queryClient}>
+      {observers}
+    </QueryClientProvider>,
+  );
+  return {
+    rerender: (next) =>
+      view.rerender(
+        <QueryClientProvider client={harness.queryClient}>
+          {next}
+        </QueryClientProvider>,
+      ),
+  };
+}
+
+const settleReads = (): Promise<void> =>
+  act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  });
+
+describe("ordinary and Activity notification indicator observers over one key", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("an ordinary second mount inside 60 s reads nothing", async () => {
+    const harness = createHarness(EPIC_ANSWER);
+    applyCloudSnapshot([], 1);
+    const view = renderObservers(harness, <BaseObserver testId="a" />);
+    await waitFor(() => {
+      expect(indicatorText("a")).toBe("has-epic");
+    });
+    expect(harness.hostIndicators.requestCount.value).toBe(1);
+
+    view.rerender(
+      <>
+        <BaseObserver testId="a" />
+        <BaseObserver testId="b" />
+      </>,
+    );
+    await settleReads();
+
+    expect(indicatorText("b")).toBe("has-epic");
+    expect(harness.hostIndicators.requestCount.value).toBe(1);
+  });
+
+  it("an Activity mount over an answered ordinary cache starts exactly one read, though two mount together", async () => {
+    const harness = createHarness(EPIC_ANSWER);
+    applyCloudSnapshot([], 1);
+    const view = renderObservers(harness, <BaseObserver testId="a" />);
+    await waitFor(() => {
+      expect(indicatorText("a")).toBe("has-epic");
+    });
+    expect(harness.hostIndicators.requestCount.value).toBe(1);
+
+    view.rerender(
+      <>
+        <BaseObserver testId="a" />
+        <ActivityObserver testId="x" />
+        <ActivityObserver testId="y" />
+      </>,
+    );
+    await waitFor(() => {
+      expect(indicatorText("x")).toBe("fresh/has-epic");
+    });
+    await settleReads();
+
+    expect(harness.hostIndicators.requestCount.value).toBe(2);
+  });
+
+  it("an ordinary mount after 60 s still reads, though an Activity observer holds the same key", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const harness = createHarness(EPIC_ANSWER);
+    applyCloudSnapshot([], 1);
+    const view = renderObservers(harness, <ActivityObserver testId="x" />);
+    await waitFor(() => {
+      expect(indicatorText("x")).toBe("fresh/has-epic");
+    });
+    expect(harness.hostIndicators.requestCount.value).toBe(1);
+
+    vi.setSystemTime(Date.now() + 61_000);
+    view.rerender(
+      <>
+        <ActivityObserver testId="x" />
+        <BaseObserver testId="b" />
+      </>,
+    );
+    await settleReads();
+
+    expect(harness.hostIndicators.requestCount.value).toBe(2);
+    expect(indicatorText("b")).toBe("has-epic");
+  });
+
+  it("an Activity observer is not fresh from an invalidation until the replacement read lands, and an ordinary one keeps showing its answer", async () => {
+    let release: (() => void) | null = null;
+    let hold = false;
+    const harness = createHarnessAnswering(EPIC_ANSWER, async () => {
+      if (hold) {
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      }
+      return EPIC_ANSWER;
+    });
+    applyCloudSnapshot([], 1);
+    renderObservers(
+      harness,
+      <>
+        <BaseObserver testId="b" />
+        <ActivityObserver testId="x" />
+      </>,
+    );
+    await waitFor(() => {
+      expect(indicatorText("x")).toBe("fresh/has-epic");
+    });
+
+    hold = true;
+    act(() => {
+      void harness.queryClient.invalidateQueries({
+        predicate: (query) =>
+          JSON.stringify(query.queryKey).includes("indicatorState"),
+      });
+    });
+    await settleReads();
+
+    // Held: the Activity list has no current answer; the ordinary surface
+    // keeps drawing the last one it had.
+    expect(indicatorText("x")).toBe("not-fresh/has-epic");
+    expect(indicatorText("b")).toBe("has-epic");
+
+    hold = false;
+    await act(async () => {
+      release?.();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(indicatorText("x")).toBe("fresh/has-epic");
+  });
+
+  it("an ordinary surface reads and shows what it would alone, with or without an Activity observer", async () => {
+    const alone = createHarness(EPIC_ANSWER);
+    applyCloudSnapshot([], 1);
+    renderObservers(alone, <BaseObserver testId="b" />);
+    await waitFor(() => {
+      expect(indicatorText("b")).toBe("has-epic");
+    });
+    await settleReads();
+    const aloneReads = alone.hostIndicators.requestCount.value;
+    cleanup();
+    useCloudNotificationsStore.getState().reset();
+
+    const beside = createHarness(EPIC_ANSWER);
+    applyCloudSnapshot([], 1);
+    renderObservers(
+      beside,
+      <>
+        <ActivityObserver testId="x" />
+        <BaseObserver testId="b" />
+      </>,
+    );
+    await waitFor(() => {
+      expect(indicatorText("b")).toBe("has-epic");
+    });
+    await settleReads();
+
+    expect(aloneReads).toBe(1);
+    expect(beside.hostIndicators.requestCount.value).toBe(aloneReads);
   });
 });

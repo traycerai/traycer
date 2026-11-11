@@ -48,6 +48,7 @@ import {
 const NO_EPIC_IDS: ReadonlyArray<string> = [];
 
 export function ChatIndicatorHostScopes(props: {
+  readonly freshnessMode: "base" | "activity";
   readonly scopes: ReadonlyArray<ChatIndicatorHostScope>;
   /**
    * Owning epic per chat id, when the surface knows it. Chat ids do not
@@ -106,6 +107,7 @@ export function ChatIndicatorHostScopes(props: {
     <NotificationIndicatorsProvider indicators={base}>
       <ChatIndicatorHostLayers
         scopes={props.scopes}
+        freshnessMode={props.freshnessMode}
         chatEpicIds={props.chatEpicIds}
         isCloud={isCloud}
       >
@@ -116,6 +118,7 @@ export function ChatIndicatorHostScopes(props: {
 }
 
 function ChatIndicatorHostLayers(props: {
+  readonly freshnessMode: "base" | "activity";
   readonly scopes: ReadonlyArray<ChatIndicatorHostScope>;
   readonly chatEpicIds: Readonly<Record<string, string>> | undefined;
   readonly isCloud: boolean;
@@ -125,6 +128,7 @@ function ChatIndicatorHostLayers(props: {
   const [head, ...rest] = props.scopes;
   return (
     <ChatIndicatorHostLayer
+      freshnessMode={props.freshnessMode}
       hostId={head.hostId}
       chatIds={head.chatIds}
       chatEpicIds={props.chatEpicIds}
@@ -132,6 +136,7 @@ function ChatIndicatorHostLayers(props: {
     >
       <ChatIndicatorHostLayers
         scopes={rest}
+        freshnessMode={props.freshnessMode}
         chatEpicIds={props.chatEpicIds}
         isCloud={props.isCloud}
       >
@@ -152,6 +157,7 @@ function ChatIndicatorHostLayers(props: {
  * response IS the answer, so it merges whole.
  */
 function ChatIndicatorHostLayer(props: {
+  readonly freshnessMode: "base" | "activity";
   readonly hostId: string;
   readonly chatIds: ReadonlyArray<string>;
   readonly chatEpicIds: Readonly<Record<string, string>> | undefined;
@@ -176,6 +182,7 @@ function ChatIndicatorHostLayer(props: {
     (state) => state.hasSnapshot && state.connectionState === "connected",
   );
   const host = useHostNotificationIndicators({
+    freshnessMode: props.freshnessMode,
     hostId: props.hostId,
     epicIds: NO_EPIC_IDS,
     chatIds: props.chatIds,

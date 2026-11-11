@@ -41,6 +41,10 @@ import {
   __setHostAgentActivityStateForTests,
   TEST_LOCAL_ACTIVITY_HOST_ID,
 } from "@/stores/agent-activity-store";
+import {
+  __resetAppLocalNotificationsStoreForTests,
+  useAppLocalNotificationsStore,
+} from "@/stores/notifications/app-local-notifications-store";
 import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
@@ -555,6 +559,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  __resetAppLocalNotificationsStoreForTests();
   useCloudNotificationsStore.getState().reset();
   coolAllEpics();
   __resetAgentActivityStoreForTests();
@@ -1618,6 +1623,213 @@ describe("<BotActivityPage /> a task that holds an unread failure and a pending 
     expect(glyphLabel("t-bare")).toBe(
       "1 needs attention · 1 waiting for approval",
     );
+  });
+});
+
+/** A renderer-local stream failure of `chatId` in `epicId`, which `originHostId` produced. */
+function localFailure(
+  epicId: string,
+  chatId: string,
+  originHostId: string,
+): void {
+  // The store keeps rows only for a signed-in identity.
+  useAppLocalNotificationsStore.getState().activateIdentity("user-ada");
+  useAppLocalNotificationsStore.getState().upsert({
+    id: `stream.transport.error:${originHostId}:${chatId}:test`,
+    originHostId,
+    updatedAt: NOW,
+    readAt: null,
+    kind: "stream.transport.error",
+    sourceRef: chatId,
+    payload: { kind: "chat", epicId, chatId },
+    message: "Agent stream closed unexpectedly.",
+    detail: null,
+  });
+}
+
+/** Every way the remote answer for the task's hosts can fail to vouch. */
+const UNVOUCHED = [
+  {
+    name: "indicator read pending",
+    apply: () => {
+      mocks.state.indicatorRead = "pending";
+    },
+  },
+  {
+    name: "indicator read failed",
+    apply: () => {
+      mocks.state.indicatorRead = "error";
+    },
+  },
+  {
+    name: "indicator read unanswered",
+    apply: () => {
+      mocks.state.indicatorRead = "unanswered";
+    },
+  },
+  {
+    name: "hosts unreachable",
+    apply: () => {
+      mocks.state.unreachable.add("host-notifications");
+      mocks.state.unreachable.add("host-a");
+    },
+  },
+] as const;
+
+function agentKinds(
+  taskId: string,
+): ReadonlyArray<[string | null, string | null]> {
+  return within(row(taskId))
+    .getAllByTestId("bot-activity-agent")
+    .map((el) => [
+      el.getAttribute("data-agent-id"),
+      el.getAttribute("data-kind"),
+    ]);
+}
+
+describe("<BotActivityPage /> an app-local failure is a local fact, whatever the host's remote answer", () => {
+  it.each(UNVOUCHED)(
+    "keeps a task that holds one listed, as unseen, with its glyph, while the $name",
+    ({ apply }) => {
+      mocks.state.feedMode = "cloud";
+      apply();
+      localFailure("t-cold", "a-x", "host-a");
+      mount([task("t-cold", {})], { boundHere: true });
+
+      expect(rowIds()).toEqual(["t-cold"]);
+      expect(row("t-cold").getAttribute("data-band")).toBe("unseen");
+      expect(glyphLabel("t-cold")).toBe("1 needs attention");
+    },
+  );
+
+  it.each(UNVOUCHED)(
+    "keeps an agent's own listed with its failure kind while the $name",
+    async ({ apply }) => {
+      mocks.state.feedMode = "cloud";
+      apply();
+      warmTask("t-warm", [
+        { id: "a-fail", parentId: null, title: "Failed", archivedAt: null },
+        { id: "a-quiet", parentId: null, title: "Quiet", archivedAt: null },
+      ]);
+      localFailure("t-warm", "a-fail", "host-a");
+      mount([task("t-warm", {})], { boundHere: true });
+      await userEvent
+        .setup()
+        .click(within(row("t-warm")).getByTestId("bot-activity-task-chevron"));
+
+      expect(agentKinds("t-warm")).toContainEqual(["a-fail", "failure"]);
+      expect(glyphLabel("t-warm")).toBe("1 needs attention");
+    },
+  );
+
+  it.each(UNVOUCHED)(
+    "shows the local failure but none of the host's own unproven flags while the $name",
+    ({ apply }) => {
+      mocks.state.feedMode = "cloud";
+      apply();
+      warmTask("t-warm", [
+        { id: "a-local", parentId: null, title: "Local", archivedAt: null },
+        { id: "a-remote", parentId: null, title: "Remote", archivedAt: null },
+      ]);
+      localFailure("t-warm", "a-local", "host-a");
+      mocks.state.chatFlags = { "a-remote": { pendingApproval: true } };
+      mocks.state.epicFlags = { "t-warm": { pendingApproval: true } };
+      mount([task("t-warm", {})], { boundHere: true });
+
+      expect(glyphLabel("t-warm")).toBe("1 needs attention");
+    },
+  );
+
+  it("counts the local failure and the host's vouched approval together once the host answers (control)", () => {
+    mocks.state.feedMode = "cloud";
+    warmTask("t-warm", [
+      { id: "a-local", parentId: null, title: "Local", archivedAt: null },
+      { id: "a-remote", parentId: null, title: "Remote", archivedAt: null },
+    ]);
+    localFailure("t-warm", "a-local", "host-a");
+    mocks.state.chatFlags = { "a-remote": { pendingApproval: true } };
+    mocks.state.epicFlags = { "t-warm": { pendingApproval: true } };
+    mount([task("t-warm", {})], { boundHere: true });
+
+    expect(glyphLabel("t-warm")).toBe(
+      "1 needs attention · 1 waiting for approval",
+    );
+  });
+});
+
+describe("<BotActivityPage /> a row whose task band is unknown", () => {
+  it("still names what a vouching agent host holds in its glyph, while the task's own read is unreachable", () => {
+    mocks.state.feedMode = "cloud";
+    mocks.state.unreachable.add("host-notifications");
+    warmTask("t-warm", [
+      { id: "a-ask", parentId: null, title: "Asker", archivedAt: null },
+    ]);
+    mocks.state.chatFlags = { "a-ask": { pendingApproval: true } };
+    mount([task("t-warm", {})], { boundHere: true });
+
+    expect(row("t-warm").getAttribute("data-band")).toBe("unknown");
+    expect(glyphLabel("t-warm")).toBe("1 waiting for approval");
+    expect(
+      within(row("t-warm")).getByTestId("bot-activity-task-line").textContent,
+    ).toContain("waiting on you");
+  });
+
+  it("says a fork waits on the person in its second line, though the band is unknown", () => {
+    mocks.state.feedMode = "cloud";
+    mocks.state.unreachable.add("host-notifications");
+    warmTask("t-warm", [
+      { id: "a-fork", parentId: null, title: "Forker", archivedAt: null },
+    ]);
+    mocks.state.chatFlags = { "a-fork": { pendingFork: true } };
+    mount([task("t-warm", {})], { boundHere: true });
+
+    expect(row("t-warm").getAttribute("data-band")).toBe("unknown");
+    expect(
+      within(row("t-warm")).getByTestId("bot-activity-task-line").textContent,
+    ).toContain("waiting on you: a fork to resolve");
+  });
+});
+
+describe("<BotActivityPage /> an expanded agent whose host cannot vouch", () => {
+  const AGENTS: ReadonlyArray<WarmAgent> = [
+    { id: "a-quiet", parentId: null, title: "Quiet", archivedAt: null },
+    { id: "a-ask", parentId: null, title: "Asker", archivedAt: null },
+  ];
+
+  async function expandedKinds(): Promise<
+    ReadonlyArray<[string | null, string | null]>
+  > {
+    await userEvent
+      .setup()
+      .click(within(row("t-warm")).getByTestId("bot-activity-task-chevron"));
+    return agentKinds("t-warm");
+  }
+
+  it.each(UNVOUCHED)(
+    "reads unknown, not idle, for an agent with nothing known while the $name",
+    async ({ apply }) => {
+      mocks.state.feedMode = "cloud";
+      apply();
+      warmTask("t-warm", AGENTS);
+      mount([task("t-warm", {})], { boundHere: true });
+
+      expect(await expandedKinds()).toEqual([
+        ["a-quiet", "unknown"],
+        ["a-ask", "unknown"],
+      ]);
+    },
+  );
+
+  it("reads idle for the quiet agent and the host's own flag for the other once the host vouches (control)", async () => {
+    mocks.state.feedMode = "cloud";
+    warmTask("t-warm", AGENTS);
+    mocks.state.chatFlags = { "a-ask": { pendingApproval: true } };
+    mount([task("t-warm", {})], { boundHere: true });
+
+    expect(await expandedKinds()).toEqual([
+      ["a-quiet", "idle"],
+      ["a-ask", "approval"],
+    ]);
   });
 });
 

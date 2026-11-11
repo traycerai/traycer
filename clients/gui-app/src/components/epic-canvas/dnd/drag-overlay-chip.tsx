@@ -272,7 +272,11 @@ function HeaderTabOverlayIndicators(props: { readonly children: ReactNode }) {
   const { indicators, chatEpicIds, chatScopes } = useHeaderTabIndicators(tabs);
   return (
     <NotificationIndicatorsProvider indicators={indicators}>
-      <ChatIndicatorHostScopes scopes={chatScopes} chatEpicIds={chatEpicIds}>
+      <ChatIndicatorHostScopes
+        freshnessMode="base"
+        scopes={chatScopes}
+        chatEpicIds={chatEpicIds}
+      >
         {props.children}
       </ChatIndicatorHostScopes>
     </NotificationIndicatorsProvider>

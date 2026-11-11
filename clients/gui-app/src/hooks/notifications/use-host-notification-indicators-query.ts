@@ -21,7 +21,10 @@ const EMPTY_INDICATOR_STATE: HostNotificationsIndicatorStateResponse = {
   complete: null,
 };
 
+export type IndicatorFreshnessMode = "base" | "activity";
+
 export interface UseHostNotificationIndicatorsArgs {
+  readonly freshnessMode: IndicatorFreshnessMode;
   /**
    * The host to ASK. Required, and required to be explicit: this RPC is
    * computed over ONE host's SQLite rows, so an answer is only about the
@@ -144,8 +147,9 @@ export function useHostNotificationIndicators(
           },
     options: {
       enabled: args.enabled && userId !== null,
-      staleTime: Infinity,
-      refetchOnMount: "always",
+      ...(args.freshnessMode === "activity"
+        ? { staleTime: Infinity, refetchOnMount: "always" as const }
+        : {}),
     },
     combine: (
       results: Array<

@@ -74,6 +74,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { useChatTranscriptJumpStore } from "@/stores/chats/chat-transcript-jump-store";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
 import {
+  EMPTY_INDICATOR_STATE_RESPONSE,
   EMPTY_NOTIFICATION_INDICATOR_STATE,
   selectNotificationIndicatorState,
   type NotificationIndicatorState,
@@ -179,6 +180,7 @@ export function BotActivityPage(props: {
 type TaskAgentState = {
   readonly id: string;
   readonly indicator: NotificationIndicatorState;
+  readonly fresh: boolean;
 };
 
 /**
@@ -304,7 +306,11 @@ function ActiveTaskRow(props: ActiveTaskRowProps): ReactNode {
     [agents, taskId],
   );
   return (
-    <ChatIndicatorHostScopes scopes={scopes} chatEpicIds={chatEpicIds}>
+    <ChatIndicatorHostScopes
+      freshnessMode="activity"
+      scopes={scopes}
+      chatEpicIds={chatEpicIds}
+    >
       <ActiveTaskRowBody {...props} agents={agents} />
     </ChatIndicatorHostScopes>
   );
@@ -435,14 +441,15 @@ function useTaskAgentStates(
     () =>
       (agents?.nodes ?? []).map((node) => ({
         id: node.id,
-        indicator: freshHosts[agentHostOf(node, agents)]
-          ? selectNotificationIndicatorState(
-              { byId: localRows },
-              { epicId: taskId, chatId: node.id },
-              agentHostOf(node, agents),
-              chatIndicators,
-            )
-          : EMPTY_NOTIFICATION_INDICATOR_STATE,
+        fresh: freshHosts[agentHostOf(node, agents)],
+        indicator: selectNotificationIndicatorState(
+          { byId: localRows },
+          { epicId: taskId, chatId: node.id },
+          agentHostOf(node, agents),
+          freshHosts[agentHostOf(node, agents)]
+            ? chatIndicators
+            : EMPTY_INDICATOR_STATE_RESPONSE,
+        ),
       })),
     [agents, chatIndicators, freshHosts, localRows, taskId],
   );
@@ -577,8 +584,8 @@ function TaskStateWords(props: {
   readonly waiting: BotInputNeeded | null;
 }): ReactNode {
   const { rollup, entry, waiting } = props;
-  if (entry.band === "unknown") return <span>Status unknown</span>;
-  if (rollup === null) return null;
+  if (rollup === null)
+    return entry.band === "unknown" ? <span>Status unknown</span> : null;
   const working = Math.max(
     entry.working,
     rollup.runningCount + rollup.backgroundCount,
@@ -751,7 +758,9 @@ function TaskAgentRows(props: {
             kind={ownChatStatusKind(
               stateById.get(node.id) ?? EMPTY_NOTIFICATION_INDICATOR_STATE,
               tiers.get(node.id),
-              "covered",
+              props.agentStates.find((agent) => agent.id === node.id)?.fresh
+                ? "covered"
+                : "unserved",
             )}
           />
         </li>
@@ -779,7 +788,10 @@ function TaskAgentRow(props: {
   readonly kind: ChatDescendantStatusKind | "unknown" | null;
 }): ReactNode {
   const { taskId, node, sessionHostId } = props;
-  const kind = props.kind === "unknown" ? null : props.kind;
+  const kind = props.kind;
+  let statusWords = "idle";
+  if (kind === "unknown") statusWords = "Status unknown";
+  else if (kind !== null) statusWords = AGENT_STATE_WORDS[kind];
   const refs = useMemo(
     () => [{ epicId: taskId, agentId: node.id }],
     [taskId, node.id],
@@ -824,14 +836,15 @@ function TaskAgentRow(props: {
       className="flex w-full min-w-0 items-center gap-2 rounded-sm py-1 pr-1 text-left text-ui-xs hover:bg-foreground/6 focus-visible:outline-2 focus-visible:outline-ring"
     >
       <span className="inline-flex size-3.5 shrink-0 items-center justify-center">
-        {kind === null ? null : <NestedChatStatusGlyph kind={kind} />}
+        {kind === null || kind === "unknown" ? null : (
+          <NestedChatStatusGlyph kind={kind} />
+        )}
       </span>
       <span className="min-w-0 flex-1 truncate text-foreground">
         {displayTitle(node.title, "agent")}
       </span>
       <span className="shrink-0 text-muted-foreground">
-        {kind === null ? "idle" : AGENT_STATE_WORDS[kind]} ·{" "}
-        <Age at={node.updatedAt} />
+        {statusWords} · <Age at={node.updatedAt} />
       </span>
     </button>
   );

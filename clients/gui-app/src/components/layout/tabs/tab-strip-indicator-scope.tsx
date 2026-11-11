@@ -15,6 +15,7 @@ export function TabStripIndicatorScope(props: {
   return (
     <NotificationIndicatorsProvider indicators={indicators.indicators}>
       <ChatIndicatorHostScopes
+        freshnessMode="base"
         scopes={indicators.chatScopes}
         chatEpicIds={indicators.chatEpicIds}
       >

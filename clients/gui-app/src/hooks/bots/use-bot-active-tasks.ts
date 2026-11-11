@@ -13,6 +13,7 @@ import {
 } from "@/stores/agent-activity-store";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
 import {
+  EMPTY_INDICATOR_STATE_RESPONSE,
   EMPTY_NOTIFICATION_INDICATOR_STATE,
   selectNotificationIndicatorState,
   type NotificationIndicatorState,
@@ -71,20 +72,18 @@ export function useBotActiveTasks(
           { byId: localRows },
           { epicId },
           null,
-          indicators,
+          positiveFresh && reachability.status === "reachable"
+            ? indicators
+            : EMPTY_INDICATOR_STATE_RESPONSE,
         ),
       ]),
     );
     const notificationFresh = fresh && reachability.status === "reachable";
-    const notificationPositiveFresh =
-      positiveFresh && reachability.status === "reachable";
     const activityFresh = fleetCoverage === "fleet";
     const roomFresh =
       snapshotFresh && servingReachability.status === "reachable";
     const indicatorOf = (taskId: string): NotificationIndicatorState =>
-      notificationPositiveFresh
-        ? (indicatorByTask.get(taskId) ?? EMPTY_NOTIFICATION_INDICATOR_STATE)
-        : EMPTY_NOTIFICATION_INDICATOR_STATE;
+      indicatorByTask.get(taskId) ?? EMPTY_NOTIFICATION_INDICATOR_STATE;
     return {
       rows: activeTasksOf({
         tasks: roomFresh

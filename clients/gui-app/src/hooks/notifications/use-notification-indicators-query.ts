@@ -3,7 +3,10 @@ import {
   useNotificationFeedMode,
   useNotificationFeedModeSettling,
 } from "@/lib/notifications/notification-feed-mode";
-import { useHostNotificationIndicators } from "@/hooks/notifications/use-host-notification-indicators-query";
+import {
+  useHostNotificationIndicators,
+  type IndicatorFreshnessMode,
+} from "@/hooks/notifications/use-host-notification-indicators-query";
 import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
 import {
   EMPTY_INDICATOR_STATE_RESPONSE,
@@ -76,7 +79,7 @@ export interface UseNotificationIndicatorsArgs {
 export function useNotificationIndicators(
   args: UseNotificationIndicatorsArgs,
 ): SurfaceNotificationIndicators {
-  return useNotificationIndicatorsBase(args).indicators;
+  return useNotificationIndicatorsBase(args, "base").indicators;
 }
 
 export function useNotificationIndicatorsWithFreshness(
@@ -88,10 +91,13 @@ export function useNotificationIndicatorsWithFreshness(
   readonly freshIndicators: SurfaceNotificationIndicators;
   readonly hostId: string | null;
 } {
-  return useNotificationIndicatorsBase(args);
+  return useNotificationIndicatorsBase(args, "activity");
 }
 
-function useNotificationIndicatorsBase(args: UseNotificationIndicatorsArgs): {
+function useNotificationIndicatorsBase(
+  args: UseNotificationIndicatorsArgs,
+  freshnessMode: IndicatorFreshnessMode,
+): {
   readonly indicators: SurfaceNotificationIndicators;
   readonly fresh: boolean;
   readonly positiveFresh: boolean;
@@ -107,6 +113,7 @@ function useNotificationIndicatorsBase(args: UseNotificationIndicatorsArgs): {
   // settles either way; its last data stays rendered meanwhile.
   const feedModeSettling = useNotificationFeedModeSettling();
   const hostIndicators = useHostNotificationIndicators({
+    freshnessMode,
     hostId: args.hostId,
     epicIds: args.epicIds,
     chatIds: args.chatIds,
