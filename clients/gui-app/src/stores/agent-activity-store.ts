@@ -425,6 +425,45 @@ const mergedActivityByHostMap = new WeakMap<
   Map<string, EpicAgentActivity>
 >();
 
+const attestedActivityByHostMap = new WeakMap<
+  ReadonlyMap<string, HostAgentActivity>,
+  ReadonlyMap<string, HostAgentActivity>
+>();
+
+function attestedActivityHosts(
+  byHost: ReadonlyMap<string, HostAgentActivity>,
+): ReadonlyMap<string, HostAgentActivity> {
+  const cached = attestedActivityByHostMap.get(byHost);
+  if (cached !== undefined) return cached;
+  const attested = new Map(
+    [...byHost].filter(([, host]) => hostSliceCoversItsOwnHost(host)),
+  );
+  attestedActivityByHostMap.set(byHost, attested);
+  return attested;
+}
+
+export function useAttestedEpicAgentActivity(
+  epicId: string,
+): EpicAgentActivity {
+  return useAgentActivityStore((state) =>
+    selectEpicAgentActivity(attestedActivityHosts(state.byHost), epicId),
+  );
+}
+
+export function useAttestedEpicsWorkingCounts(
+  epicIds: ReadonlyArray<string>,
+): ReadonlyArray<number> {
+  return useAgentActivityStore(
+    useShallow((state) =>
+      epicIds.map(
+        (epicId) =>
+          selectEpicAgentActivity(attestedActivityHosts(state.byHost), epicId)
+            .working.size,
+      ),
+    ),
+  );
+}
+
 function selectEpicAgentActivity(
   byHost: ReadonlyMap<string, HostAgentActivity>,
   epicId: string | null,

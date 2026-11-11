@@ -42,7 +42,6 @@ import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { useEpicGetTaskContexts } from "@/hooks/epic/use-epic-get-task-contexts-query";
 import {
   agentActivityTiers,
-  EMPTY_EPIC_AGENT_ACTIVITY,
   type AgentActivityTier,
 } from "@/lib/agent-activity";
 import {
@@ -70,7 +69,7 @@ import {
 } from "@/lib/tab-navigation";
 import { openEpicFromListIntent } from "@/lib/tab-navigation/intents";
 import { cn } from "@/lib/utils";
-import { useEpicAgentActivity } from "@/stores/agent-activity-store";
+import { useAttestedEpicAgentActivity } from "@/stores/agent-activity-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useChatTranscriptJumpStore } from "@/stores/chats/chat-transcript-jump-store";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
@@ -313,10 +312,8 @@ function ActiveTaskRowBody(
   const { task } = entry;
   const taskId = task.taskId;
   const inputNeeded = task.inputNeeded ?? NO_WAITING;
-  const activity = useEpicAgentActivity(taskId);
-  const tiers = agentActivityTiers(
-    entry.activityFresh ? activity : EMPTY_EPIC_AGENT_ACTIVITY,
-  );
+  const activity = useAttestedEpicAgentActivity(taskId);
+  const tiers = agentActivityTiers(activity);
   const resolvedAgentStates = useTaskAgentStates(taskId, agents);
   const agentStates = resolvedAgentStates;
   const rollup = useMemo(

@@ -432,3 +432,140 @@ describe("the Activity tab over a bot.subscribe snapshot", () => {
     expect(rowEl().getAttribute("data-band")).toBe("needs-you");
   });
 });
+
+describe("a bot.subscribe stream held, reconnected and continued", () => {
+  const IDLE = {
+    state: "idle",
+    startedAt: null,
+    step: null,
+    requestId: null,
+    reason: null,
+  };
+  /** A snapshot that carries the bot's activity, so an `activity` frame has something to patch. */
+  function snapshotWithActivity(
+    tasks: ReadonlyArray<object>,
+  ): BotSubscribeServerFrame {
+    return botSubscribeServerFrameSchema.parse({
+      ...snapshotWith(tasks, []),
+      activity: { trunk: IDLE, threads: {} },
+    });
+  }
+  function trunkReplying(): BotSubscribeServerFrame {
+    return botSubscribeServerFrameSchema.parse({
+      kind: "activity",
+      target: { kind: "trunk" },
+      entry: { ...IDLE, state: "replying", startedAt: NOW, requestId: "r-1" },
+      hasBinaryPayload: false,
+    });
+  }
+  const WAITING = (): object => wireTask("t-held", { inputNeeded: [] });
+
+  /** The hook's own result, read as text: what a surface would act on. */
+  function mountProbe(session: StubSession): void {
+    const streamClient = new StubHostStreamClient(session);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    function Probe(): ReactNode {
+      const subscription = useBotSubscriptionForClient({
+        hostId: HOST_ID,
+        botId: BOT_ID,
+        enabled: true,
+        client: streamClient,
+      });
+      return (
+        <div
+          data-testid="probe"
+          data-fresh={String(subscription.snapshotFresh)}
+          data-tasks={(subscription.snapshot?.tasks ?? [])
+            .map((t) => t.taskId)
+            .join(",")}
+          data-trunk={subscription.snapshot?.activity?.trunk?.state ?? "none"}
+        />
+      );
+    }
+    render(
+      <QueryClientProvider client={queryClient}>
+        <Probe />
+      </QueryClientProvider>,
+    );
+  }
+  const probe = (): HTMLElement => screen.getByTestId("probe");
+
+  it("keeps the last snapshot as the baseline but not as current from the moment the stream leaves open, through open again without a snapshot", () => {
+    const session = new StubSession();
+    mountProbe(session);
+    act(() => session.emit(snapshotWithActivity([WAITING()])));
+    expect(probe().dataset.fresh).toBe("true");
+    expect(probe().dataset.tasks).toBe("t-held");
+
+    act(() => session.status("reconnecting", null));
+    expect(probe().dataset.fresh).toBe("false");
+    expect(probe().dataset.tasks).toBe("t-held");
+
+    act(() => session.status("open", null));
+    expect(probe().dataset.fresh).toBe("false");
+    expect(probe().dataset.tasks).toBe("t-held");
+  });
+
+  it("keeps an activity frame that arrives while the stream is held or stale in its baseline, without making the baseline current", () => {
+    const session = new StubSession();
+    mountProbe(session);
+    act(() => session.emit(snapshotWithActivity([WAITING()])));
+    act(() => session.status("reconnecting", null));
+    // Delivered while the stream is not open: the patch is kept.
+    act(() => session.emit(trunkReplying()));
+    expect(probe().dataset.fresh).toBe("false");
+    expect(probe().dataset.trunk).toBe("replying");
+    expect(probe().dataset.tasks).toBe("t-held");
+
+    act(() => session.status("open", null));
+    expect(probe().dataset.fresh).toBe("false");
+    expect(probe().dataset.trunk).toBe("replying");
+    expect(probe().dataset.tasks).toBe("t-held");
+  });
+
+  it("is current again on the same baseline when a held stream continues with no new snapshot, and that baseline holds the patch it received while held", () => {
+    const session = new StubSession();
+    mountProbe(session);
+    act(() => session.emit(snapshotWithActivity([WAITING()])));
+
+    act(() => session.statusWithContinuity("reconnecting", null, "held"));
+    expect(probe().dataset.fresh).toBe("false");
+    act(() => session.emit(trunkReplying()));
+    expect(probe().dataset.fresh).toBe("false");
+    expect(probe().dataset.trunk).toBe("replying");
+
+    act(() => session.statusWithContinuity("open", null, "continued"));
+    // One subscription outlived the outage: its baseline, patches included, is current.
+    expect(probe().dataset.fresh).toBe("true");
+    expect(probe().dataset.trunk).toBe("replying");
+    expect(probe().dataset.tasks).toBe("t-held");
+  });
+
+  it("is not current on a snapshot that was already in flight while the stream was held, only once the stream is open again with one delivered after", () => {
+    const session = new StubSession();
+    mountProbe(session);
+    act(() => session.emit(snapshotWithActivity([WAITING()])));
+    act(() => session.status("reconnecting", null));
+
+    // A frame the old connection had in flight arrives before open.
+    act(() => session.emit(snapshotWithActivity([WAITING()])));
+    expect(probe().dataset.fresh).toBe("false");
+
+    act(() => session.status("open", null));
+    act(() => session.emit(snapshotWithActivity([WAITING()])));
+    expect(probe().dataset.fresh).toBe("true");
+  });
+
+  it("stays current, and applies an activity frame to its baseline, while the stream is open and continuing", () => {
+    const session = new StubSession();
+    mountProbe(session);
+    act(() => session.emit(snapshotWithActivity([WAITING()])));
+    expect(probe().dataset.trunk).toBe("idle");
+
+    act(() => session.emit(trunkReplying()));
+    expect(probe().dataset.fresh).toBe("true");
+    expect(probe().dataset.trunk).toBe("replying");
+  });
+});

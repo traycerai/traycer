@@ -144,6 +144,8 @@ export function useHostNotificationIndicators(
           },
     options: {
       enabled: args.enabled && userId !== null,
+      staleTime: Infinity,
+      refetchOnMount: "always",
     },
     combine: (
       results: Array<
@@ -154,7 +156,11 @@ export function useHostNotificationIndicators(
       hasAnswer:
         results.length > 0 &&
         results.every(
-          (result) => result.data !== undefined && result.error === null,
+          (result) =>
+            result.data !== undefined &&
+            result.error === null &&
+            !result.isFetching &&
+            !result.isStale,
         ),
       isPending: results.some((result) => result.isPending),
       isFetching: results.some((result) => result.isFetching),

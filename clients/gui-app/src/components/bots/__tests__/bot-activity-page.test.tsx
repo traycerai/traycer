@@ -38,6 +38,7 @@ import {
   __setAgentActivityPlaneAnsweringForTests,
   __setAgentActivityStateForTests,
   __setHostAgentActivityHealthForTests,
+  __setHostAgentActivityStateForTests,
   TEST_LOCAL_ACTIVITY_HOST_ID,
 } from "@/stores/agent-activity-store";
 import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
@@ -1183,6 +1184,87 @@ describe("<BotActivityPage /> what a lost connection leaves cached is never show
     );
     expect(band("t-wait")).toBe("unknown");
     expect(saysStatusUnknownOnce("t-wait")).toBe(true);
+  });
+});
+
+describe("<BotActivityPage /> activity held by two hosts' streams", () => {
+  const A = "host-agents-a";
+  const B = "host-agents-b";
+  const bands = (): ReadonlyArray<string | null> =>
+    rows().map((el) => el.getAttribute("data-band"));
+
+  /** One host's stream open with its `state` frame landed, claiming what it can see. */
+  function hostAnswers(
+    hostId: string,
+    byEpic: Record<string, { working: string[]; turn: string[] }>,
+    servedBy: "cloud" | "local",
+  ): void {
+    __setHostAgentActivityStateForTests(
+      hostId,
+      byEpic,
+      servedBy,
+      servedBy === "cloud" ? "connected" : null,
+    );
+    __setHostAgentActivityHealthForTests(hostId, {
+      connectionStatus: "open",
+      stateFrameSeenThisEpoch: true,
+    });
+  }
+
+  it("does not show working from a host whose stream is held, though another host's fresh fleet answer holds none", () => {
+    __resetAgentActivityStoreForTests();
+    mocks.state.feedMode = "cloud";
+    hostAnswers(A, { "t-run": { working: ["a-1"], turn: ["a-1"] } }, "local");
+    hostAnswers(B, {}, "cloud");
+    const view = render(
+      <Harness
+        threads={[]}
+        tasks={[completed("t-run", { lastCheckinAt: NOW })]}
+        boundHere
+        notificationSubscriptions={null}
+      />,
+    );
+    // While A answers, its agent is working.
+    expect(bands()).toEqual(["working"]);
+
+    // A's stream drops: its slice keeps the count, but no one vouches for it.
+    act(() =>
+      __setHostAgentActivityHealthForTests(A, {
+        connectionStatus: "reconnecting",
+      }),
+    );
+    view.rerender(
+      <Harness
+        threads={[]}
+        tasks={[completed("t-run", { lastCheckinAt: NOW })]}
+        boundHere
+        notificationSubscriptions={null}
+      />,
+    );
+
+    expect(bands()).not.toContain("working");
+  });
+
+  it("still shows working from a host that answers for its own agents when no host vouches for the whole fleet, and keeps a quiet task unproven", () => {
+    __resetAgentActivityStoreForTests();
+    mocks.state.feedMode = "cloud";
+    hostAnswers(A, { "t-run": { working: ["a-1"], turn: ["a-1"] } }, "local");
+    render(
+      <Harness
+        threads={[]}
+        tasks={[
+          completed("t-run", { lastCheckinAt: NOW }),
+          completed("t-quiet", { lastCheckinAt: NOW }),
+        ]}
+        boundHere
+        notificationSubscriptions={null}
+      />,
+    );
+
+    // The positive stands on its own host's word; the absence has no proof.
+    expect(rowIds()).toEqual(["t-run", "t-quiet"]);
+    expect(row("t-run").getAttribute("data-band")).toBe("working");
+    expect(row("t-quiet").getAttribute("data-band")).toBe("unknown");
   });
 });
 

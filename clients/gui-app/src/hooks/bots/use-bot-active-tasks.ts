@@ -9,7 +9,7 @@ import {
 } from "@/lib/bots/bot-activity-model";
 import {
   useActivityFleetCoverage,
-  useEpicsWorkingCounts,
+  useAttestedEpicsWorkingCounts,
 } from "@/stores/agent-activity-store";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
 import {
@@ -44,7 +44,7 @@ export function useBotActiveTasks(
         .map((t) => t.taskId),
     [tasks],
   );
-  const workingCounts = useEpicsWorkingCounts(taskIds);
+  const workingCounts = useAttestedEpicsWorkingCounts(taskIds);
   const fleetCoverage = useActivityFleetCoverage();
   const {
     freshIndicators: indicators,
@@ -91,10 +91,7 @@ export function useBotActiveTasks(
           ? tasks
           : tasks.map((task) => ({ ...task, inputNeeded: null })),
         evidenceFresh: activityFresh && notificationFresh && roomFresh,
-        activityFresh,
-        notificationFresh,
-        workingInTask: (taskId) =>
-          activityFresh ? (working.get(taskId) ?? 0) : 0,
+        workingInTask: (taskId) => working.get(taskId) ?? 0,
         pendingInTask: (taskId) => {
           const state = indicatorOf(taskId);
           return (

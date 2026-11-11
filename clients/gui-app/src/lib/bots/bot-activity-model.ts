@@ -18,8 +18,6 @@ export type BotActiveTask = {
   readonly band: BotActiveBand;
   /** Agents working in the task, as the activity plane counts them. */
   readonly working: number;
-  readonly activityFresh: boolean;
-  readonly notificationFresh: boolean;
   /**
    * The newest activity the list knows of: a surface reported waiting, or
    * the latest check-in; `null` for neither.
@@ -48,8 +46,6 @@ export function activeTasksOf(input: {
   readonly unseenInTask: (taskId: string) => boolean;
   readonly pendingInTask: (taskId: string) => boolean;
   readonly evidenceFresh: boolean;
-  readonly activityFresh: boolean;
-  readonly notificationFresh: boolean;
 }): ReadonlyArray<BotActiveTask> {
   const rows: BotActiveTask[] = [];
   for (const task of input.tasks) {
@@ -70,8 +66,6 @@ export function activeTasksOf(input: {
       band,
       working,
       at: latestActivityAt(task),
-      activityFresh: input.activityFresh,
-      notificationFresh: input.notificationFresh,
     });
   }
   return rows.sort(
