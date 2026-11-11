@@ -531,9 +531,17 @@ describe("useProvidersAwaitLoginForClient - an aborted wait releases the coordin
     readonly client: HostClient<HostRpcRegistry>;
     readonly messenger: MockHostMessenger<HostRpcRegistry>;
     readonly answers: Deferred<AwaitLoginResponse>[];
+    readonly waitForRequest: () => Promise<AwaitLoginRequest>;
   } {
     const answers: Deferred<AwaitLoginResponse>[] = [];
+    const arrivedRequests: AwaitLoginRequest[] = [];
+    const arrivalWaiters: Array<(request: AwaitLoginRequest) => void> = [];
     let nextRequestId = 0;
+    const waitForRequest = (): Promise<AwaitLoginRequest> => {
+      const arrived = arrivedRequests.shift();
+      if (arrived !== undefined) return Promise.resolve(arrived);
+      return new Promise((resolve) => arrivalWaiters.push(resolve));
+    };
     const messenger = new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => {
@@ -541,9 +549,12 @@ describe("useProvidersAwaitLoginForClient - an aborted wait releases the coordin
         return `req-${nextRequestId}`;
       },
       handlers: {
-        "providers.awaitLogin": () => {
+        "providers.awaitLogin": (params) => {
           const answer = deferred<AwaitLoginResponse>();
           answers.push(answer);
+          const waiter = arrivalWaiters.shift();
+          if (waiter === undefined) arrivedRequests.push(params);
+          else waiter(params);
           return answer.promise;
         },
       },
@@ -563,6 +574,7 @@ describe("useProvidersAwaitLoginForClient - an aborted wait releases the coordin
       client: spine.createRequester(mockLocalHostEntry),
       messenger,
       answers,
+      waitForRequest,
     };
   }
 
@@ -699,6 +711,49 @@ describe("useProvidersAwaitLoginForClient - an aborted wait releases the coordin
     answers[0].resolve(awaitAnswer("answer-one"));
     await flushMacrotask();
     expect(result.current.data?.existingProfileId).toBe("answer-two");
+  });
+
+  it("dispatches separate waits when their last-seen reader counts differ", async () => {
+    const { client, messenger, answers, waitForRequest } = realClientFixture();
+    const { wrapper } = makeWrapper();
+    const { result } = renderHook(
+      () =>
+        useProvidersAwaitLoginForClient({
+          client,
+          getCacheHostId: () => HOST_ID,
+        }),
+      { wrapper },
+    );
+
+    const firstRequest: AwaitLoginRequest = {
+      providerId: "copilot",
+      profileId: null,
+      lastSeenReaderCount: 1,
+    };
+    const firstArrival = waitForRequest();
+    const first = startWait(result.current.mutateAsync, {
+      request: firstRequest,
+      signal: undefined,
+    });
+    await expect(firstArrival).resolves.toEqual(firstRequest);
+
+    const secondRequest = { ...firstRequest, lastSeenReaderCount: 2 };
+    const secondArrival = waitForRequest();
+    const second = startWait(result.current.mutateAsync, {
+      request: secondRequest,
+      signal: undefined,
+    });
+    await expect(secondArrival).resolves.toEqual(secondRequest);
+    expect(awaitDispatches(messenger)).toHaveLength(2);
+
+    answers[1].resolve(awaitAnswer("count-two"));
+    await expect(second).resolves.toMatchObject({
+      existingProfileId: "count-two",
+    });
+    answers[0].resolve(awaitAnswer("count-one"));
+    await expect(first).resolves.toMatchObject({
+      existingProfileId: "count-one",
+    });
   });
 
   it("raises no toast when the wait ended because its own signal was aborted", async () => {

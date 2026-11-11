@@ -1,3 +1,9 @@
+import {
+  credentialHomeSchema,
+  credentialVersionSchema,
+  credentialIdentitySchema,
+  environmentPresenceCauseSchema,
+} from "./provider-credential-home-schemas";
 /**
  * Schemas for the `providers.*` host RPC surface. Manages the CLI binary
  * Traycer runs for each provider (Codex / Claude Code / OpenCode).
@@ -1608,13 +1614,120 @@ export const providerProfileSchema = lazySchema(() =>
       .optional(),
   }),
 );
-export type ProviderProfile = z.infer<typeof providerProfileSchema>;
+/**
+ * Unknown row discriminators (record version or readability) fail closed for
+ * the whole row. Unknown additive leaf facts fall back at their own field,
+ * preserving the rest of the inventory entry.
+ */
+export function buildUnreadableProviderProfile(input: {
+  readonly profileId: string;
+  readonly label: string;
+  readonly kind: ProviderProfileKind;
+  readonly reason: string;
+}) {
+  return {
+    profileId: input.profileId,
+    label: input.label,
+    kind: input.kind,
+    authType: "oauth" as const,
+    auth: UNKNOWN_PROVIDER_AUTH,
+    identity: null,
+    usageUpdatedAt: null,
+    rateLimitStatus: "unknown" as const,
+    rateLimitLimitedScopes: null,
+    duplicateOfProfileId: null,
+    ambientDriftNotice: null,
+    accentColor: null,
+    enabled: false,
+    readability: { kind: "unreadable" as const, reason: input.reason },
+  };
+}
+
+export const managedProfileDeliveryRefusalSchema = lazySchema(() =>
+  z.enum([
+    "no-custody-kind",
+    "credential-unusable",
+    "credential-account-mismatch",
+    "team-material-off-computers",
+    "sandbox-placeholder-only",
+  ]),
+);
+export type ManagedProfileDeliveryRefusal = z.infer<
+  typeof managedProfileDeliveryRefusalSchema
+>;
+
+/** Read projection: a future row is one disabled, explained row, never a lost inventory. */
+export const providerProfileProjectionSchema = lazySchema(() =>
+  providerProfileSchema
+    .extend({
+      recordVersion: z.literal(1).optional(),
+      credentialIdentity: credentialIdentitySchema.optional().catch(undefined),
+      credentialHome: credentialHomeSchema.optional().catch(undefined),
+      environmentProfileId: z.string().nullable().optional(),
+      deliveryRefusal: managedProfileDeliveryRefusalSchema
+        .nullable()
+        .catch(null)
+        .optional(),
+      presence: z
+        .discriminatedUnion("kind", [
+          z.object({
+            kind: z.literal("admitted"),
+            bindingVersion: credentialVersionSchema,
+          }),
+          z.object({
+            kind: z.literal("revoking"),
+            cause: environmentPresenceCauseSchema.nullable().catch(null),
+          }),
+          z.object({ kind: z.literal("no-home") }),
+          z.object({ kind: z.literal("placeholder-only") }),
+        ])
+        .optional()
+        .catch(undefined),
+      readability: z
+        .object({
+          kind: z.enum(["readable", "unreadable"]),
+          reason: z.string().nullable(),
+        })
+        .optional(),
+    })
+    .catch((context) => {
+      const input = context.input;
+      const row = typeof input === "object" && input !== null ? input : {};
+      return buildUnreadableProviderProfile({
+        profileId:
+          "profileId" in row && typeof row.profileId === "string"
+            ? row.profileId
+            : "unreadable",
+        label:
+          "label" in row && typeof row.label === "string"
+            ? row.label
+            : "Unreadable profile",
+        kind: "managed",
+        reason: "Profile row uses an unsupported or invalid shape",
+      });
+    }),
+);
+export type ProviderProfile = z.infer<typeof providerProfileProjectionSchema>;
 
 export function isProfileEnabled(profile: {
   readonly enabled?: boolean;
 }): boolean {
   return profile.enabled !== false;
 }
+
+/** The named row resolves an account; a brokered sign-out reaches every home for it. */
+export const providersSignOutProfileRequestSchema = lazySchema(() =>
+  z.object({ providerId: providerIdSchema, profileId: z.string().min(1) }),
+);
+export const providersSignOutProfileResponseSchema = lazySchema(() =>
+  z.object({ signedOut: z.literal(true) }),
+);
+export type ProvidersSignOutProfileRequest = z.infer<
+  typeof providersSignOutProfileRequestSchema
+>;
+export type ProvidersSignOutProfileResponse = z.infer<
+  typeof providersSignOutProfileResponseSchema
+>;
 
 export const providersSetProfileEnabledRequestSchema = lazySchema(() =>
   z.object({
@@ -2479,16 +2592,8 @@ export type ProvidersListRequestV70 = z.infer<
   typeof providersListRequestSchemaV70
 >;
 
-/**
- * Canonical (live) `providers.list` response. Always returns the classic
- * provider catalog; when the request carried a `native` query, `native` holds
- * the list/discover result (or a typed native error). Classic callers receive
- * `native: null`.
- *
- * Earlier lines each bind a frozen response; only the head binds this
- * live schema, so new fields do not widen a released line.
- */
-export const providersListResponseSchema = lazySchema(() =>
+/** Frozen `providers.list@10.8` response, before credential home projections. */
+export const providersListResponseSchemaV108Preimage = lazySchema(() =>
   z.object({
     providers: z.array(providerCliStateSchema),
     native: nativeListResultSchema.nullable().default(null),
@@ -2522,6 +2627,22 @@ export const providersListResponseSchema = lazySchema(() =>
         }),
       )
       .optional(),
+  }),
+);
+/**
+ * Canonical `providers.list` response. Classic callers receive `native: null`;
+ * a native query carries its list/discover result or typed error there.
+ * Home facts are additive keys; earlier lines retain their frozen decoders.
+ */
+export const providersListResponseSchema = lazySchema(() =>
+  providersListResponseSchemaV108Preimage.extend({
+    providers: z.array(
+      providerCliStateSchema.extend({
+        // Older hosts omit the key; current hosts report adapter capability.
+        usageReporting: z.boolean().optional(),
+        profiles: z.array(providerProfileProjectionSchema).catch([]),
+      }),
+    ),
   }),
 );
 export type ProvidersListResponse = z.infer<typeof providersListResponseSchema>;
@@ -3991,10 +4112,16 @@ export type ProvidersStartLoginResponseV13 = z.infer<
 // and the 2.0→2.1 upgrade fills `null`). The v2->v1 downgrade bridge in
 // registry.ts explicitly drops it before the strict v1.0 parse (see
 // `providersAwaitLoginDowngradeV22ToV10`).
-export const providersAwaitLoginRequestSchema = lazySchema(() =>
+export const providersAwaitLoginRequestSchemaV22 = lazySchema(() =>
   z.object({
     providerId: providerIdSchema,
     profileId: z.string().nullable().default(null),
+  }),
+);
+export const providersAwaitLoginRequestSchema = lazySchema(() =>
+  z.object({
+    ...providersAwaitLoginRequestSchemaV22.shape,
+    lastSeenReaderCount: z.number().int().nonnegative().nullable().optional(),
   }),
 );
 export const providersAwaitLoginRequestSchemaV10 = lazySchema(() =>
@@ -4066,7 +4193,7 @@ export const providersAwaitLoginResponseSchemaV21 = lazySchema(() =>
  * `providers.awaitLogin@2.2` response. Returns the re-probed `state`, and
  * `refusal` when the provider turned the sign-in away.
  */
-export const providersAwaitLoginResponseSchema = lazySchema(() =>
+export const providersAwaitLoginResponseSchemaV22 = lazySchema(() =>
   z.object({
     ...providersAwaitLoginResponseSchemaV21.shape,
     // Non-null when the provider refused the sign-in after the browser leg
@@ -4075,6 +4202,27 @@ export const providersAwaitLoginResponseSchema = lazySchema(() =>
     // before. A 2.1 caller drops the key and reads the null state as "the
     // sign-in did not complete", which is still true.
     refusal: providerLoginRefusalSchema.nullable().default(null),
+  }),
+);
+export const providerLoginInstallationSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("waiting-for-readers"),
+    admissionId: z.string(),
+    count: z.number().int().positive(),
+  }),
+);
+export type ProviderLoginInstallation = z.infer<
+  typeof providerLoginInstallationSchema
+>;
+
+/** A pending account change returns no authenticated state until its readers drain. */
+export const providersAwaitLoginResponseSchema = lazySchema(() =>
+  z.object({
+    ...providersAwaitLoginResponseSchemaV22.shape,
+    installation: providerLoginInstallationSchema
+      .nullable()
+      .optional()
+      .catch(null),
   }),
 );
 export const providersAwaitLoginResponseSchemaV20 = lazySchema(() =>

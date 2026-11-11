@@ -189,4 +189,31 @@ describe("useGitPrefetchWorktreeStatus", () => {
 
     expect(hostBClient.request).toHaveBeenCalledTimes(2);
   });
+
+  it("settles when the host refuses the request, leaving the cache empty", async () => {
+    hostBClient.request.mockRejectedValueOnce(
+      new Error("not a git repository"),
+    );
+
+    const { result } = renderHook(() => useGitPrefetchWorktreeStatus(), {
+      wrapper,
+    });
+
+    const hostId = "host-B";
+    const runningDir = "/path/to/removed-worktree";
+    const ignoreWhitespace = false;
+
+    // The panel fires this with `void` for every worktree row, so a rejection
+    // here has no handler anywhere above it and reaches the window as an
+    // unhandled rejection.
+    await expect(
+      result.current({ hostId, runningDir, ignoreWhitespace }),
+    ).resolves.toBeUndefined();
+
+    expect(
+      queryClient.getQueryData(
+        gitQueryKeys.listChangedFiles(hostId, runningDir, ignoreWhitespace),
+      ),
+    ).toBeUndefined();
+  });
 });

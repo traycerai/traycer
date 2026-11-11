@@ -12,6 +12,13 @@ export function useConfigurationPlanUnlinkMutation() {
     usePoolTierHostClient(useHostClient()),
     {
       method: "environment.plans.unlink",
+      requiredHostMethodVersion: (request) =>
+        request.expectedBindingVersion === null
+          ? null
+          : {
+              method: "environment.plans.unlink",
+              version: { major: 1, minor: 1 },
+            },
       mutationKey: environmentMutationKeys.plansUnlink(),
       errorMessage: "Couldn't unlink this plan.",
       invalidateMethods: ["environment.list"],

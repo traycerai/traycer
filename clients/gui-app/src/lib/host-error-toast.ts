@@ -762,6 +762,12 @@ function hostErrorToastMessage(error: HostRpcError, fallback: string) {
 
 /** The plain `code` switchboard, split out to keep either half readable. */
 function codeKeyedMessage(error: HostRpcError, fallback: string): string {
+  if (
+    error.method === "providers.signOutProfile" &&
+    error.code === "binding-changed"
+  ) {
+    return "This connection changed. Refresh and try again.";
+  }
   if (error.code === "FORBIDDEN") {
     return forbiddenToastMessage(error.message);
   }

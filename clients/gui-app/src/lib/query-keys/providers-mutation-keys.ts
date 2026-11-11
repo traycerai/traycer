@@ -1,4 +1,5 @@
 export const providersMutationKeys = {
+  signOutProfile: () => ["providers.signOutProfile"] as const,
   setSelection: () => ["providers.setSelection"] as const,
   addCustomPath: () => ["providers.addCustomPath"] as const,
   removeCustomPath: () => ["providers.removeCustomPath"] as const,

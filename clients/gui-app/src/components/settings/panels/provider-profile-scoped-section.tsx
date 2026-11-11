@@ -31,7 +31,8 @@ import type { FailedProviderProfileAttempt } from "./add-provider-profile-dialog
 import {
   duplicateProfileLabel,
   profileEligibilityToggleDisabledReason,
-  profileAuthStatusText,
+  profileInventorySummary,
+  profileInventoryAttributes,
   profileCommitId,
   profileDisplayLabel,
 } from "@/components/providers/provider-profile-model";
@@ -314,7 +315,11 @@ export function ProviderProfileScopedSection(
   };
 
   return (
-    <section className="flex flex-col gap-3">
+    <section
+      className="flex flex-col gap-3"
+      data-settings-provider-id={state.providerId}
+      {...profileInventoryAttributes(selectedProfile)}
+    >
       <div className="flex flex-col gap-3 rounded-lg border border-border/60 p-3">
         <div className="flex items-center justify-between gap-2">
           <div className="text-ui-sm font-medium text-foreground">Profiles</div>
@@ -511,11 +516,10 @@ function profileReadsSignedOut(
   );
 }
 
-function ProfileSummary({
-  state,
+/** Keeps the address redacted until this profile's reveal control is used. */
+function ProfileIdentity({
   profile,
 }: {
-  readonly state: ProviderCliState;
   readonly profile: ProviderProfile;
 }): ReactNode {
   const [emailRevealed, setEmailRevealed] = useState(false);
@@ -524,13 +528,54 @@ function ProfileSummary({
   if (email !== null) {
     emailText = emailRevealed ? email : redactEmail(email);
   }
+  return (
+    <div className="flex min-w-0 flex-auto items-center gap-1">
+      <TooltipWrapper
+        label={emailRevealed ? email : null}
+        side="top"
+        sideOffset={undefined}
+        align="start"
+      >
+        <span className="min-w-0 truncate">{emailText}</span>
+      </TooltipWrapper>
+      {email !== null ? (
+        <button
+          type="button"
+          aria-label={
+            emailRevealed
+              ? `Hide email for ${profileDisplayLabel(profile)}`
+              : `Reveal email for ${profileDisplayLabel(profile)}`
+          }
+          className="shrink-0 rounded p-0.5 text-current opacity-70 transition-opacity hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+          onClick={() => setEmailRevealed(!emailRevealed)}
+        >
+          {emailRevealed ? (
+            <EyeOff className="size-3" />
+          ) : (
+            <Eye className="size-3" />
+          )}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function ProfileSummary({
+  state,
+  profile,
+}: {
+  readonly state: ProviderCliState;
+  readonly profile: ProviderProfile;
+}): ReactNode {
   const tier = profile.identity?.tier;
   const planText =
     tier === null || tier === undefined || tier.length === 0 ? null : tier;
+  const inventory = profileInventorySummary(profile);
 
   return (
-    <div className="flex min-w-0 flex-auto flex-wrap items-center gap-x-2 gap-y-1 text-ui-xs text-muted-foreground">
-      {/* The email (and its reveal toggle) is the one shrinkable item; the
+    <div className="flex min-w-0 flex-auto flex-col gap-1 text-ui-xs text-muted-foreground">
+      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+        {/* The email (and its reveal toggle) is the one shrinkable item; the
           badges are whole-or-nothing chips. `flex-auto`, not `flex-1`: the
           wrap threshold is computed from each unit's flex BASIS, and `flex-1`
           zeroes it - a zero-basis email reserves no width during line
@@ -539,56 +584,46 @@ function ProfileSummary({
           claims its width first, whole chips move down when the line cannot
           hold everything, and the email truncates only once it has a line
           largely to itself. */}
-      <div className="flex min-w-0 flex-auto items-center gap-1">
-        <TooltipWrapper
-          label={emailRevealed ? email : null}
-          side="top"
-          sideOffset={undefined}
-          align="start"
-        >
-          <span className="min-w-0 truncate">{emailText}</span>
-        </TooltipWrapper>
-        {email !== null ? (
-          <button
-            type="button"
-            aria-label={
-              emailRevealed
-                ? `Hide email for ${profileDisplayLabel(profile)}`
-                : `Reveal email for ${profileDisplayLabel(profile)}`
-            }
-            aria-pressed={emailRevealed}
-            className="shrink-0 rounded p-0.5 text-current opacity-70 transition-opacity hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-            onClick={() => setEmailRevealed(!emailRevealed)}
+        <ProfileIdentity profile={profile} />
+        <Badge variant="outline" size="xs" className="shrink-0">
+          {profile.kind === "ambient" && isProviderAmbientSignedOut(state)
+            ? "Signed out"
+            : inventory.badge}
+        </Badge>
+        {planText !== null ? (
+          <TooltipWrapper
+            label={planText}
+            side="top"
+            sideOffset={undefined}
+            align="end"
           >
-            {emailRevealed ? (
-              <EyeOff className="size-3" />
-            ) : (
-              <Eye className="size-3" />
-            )}
-          </button>
+            <Badge
+              variant="outline"
+              size="xs"
+              className="max-w-[min(28vw,14rem)] shrink-0"
+            >
+              <span className="truncate">{planText}</span>
+            </Badge>
+          </TooltipWrapper>
         ) : null}
       </div>
-      <Badge variant="outline" size="xs" className="shrink-0">
-        {profileReadsSignedOut(state, profile)
-          ? "Signed out"
-          : profileAuthStatusText(profile)}
-      </Badge>
-      {planText !== null ? (
-        <TooltipWrapper
-          label={planText}
-          side="top"
-          sideOffset={undefined}
-          align="end"
-        >
-          <Badge
-            variant="outline"
-            size="xs"
-            className="max-w-[min(28vw,14rem)] shrink-0"
-          >
-            <span className="truncate">{planText}</span>
-          </Badge>
-        </TooltipWrapper>
-      ) : null}
+      <div>
+        {profile.presence?.kind === "no-home" ? (
+          <p className="min-w-0 whitespace-normal break-words">
+            Not on this device yet
+          </p>
+        ) : null}
+        {profile.presence?.kind === "placeholder-only" ? (
+          <p className="min-w-0 whitespace-normal break-words">
+            Used from the environment. Nothing is kept on this sandbox.
+          </p>
+        ) : null}
+        {inventory.detail === null ? null : (
+          <p className="min-w-0 whitespace-normal break-words">
+            {inventory.detail}
+          </p>
+        )}
+      </div>
     </div>
   );
 }

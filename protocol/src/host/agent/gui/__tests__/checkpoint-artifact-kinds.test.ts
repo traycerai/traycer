@@ -6,9 +6,9 @@ import {
 
 /**
  * `chat.subscribe@1.33` is the first line whose accumulated-change tag can
- * name html, canvas or file: `chatSubscribeV133` binds the live windowed
- * server frame schema, whose `accumulatedChanges` chunk carries the widened
- * `checkpointArtifactTagSchema`. `chatSubscribeV132` is frozen one version
+ * name html, canvas or file: `chatSubscribeV133` retains that vocabulary in its
+ * frozen windowed frames, whose `accumulatedChanges` chunk carries the widened
+ * checkpoint tag. `chatSubscribeV132` is frozen one version
  * below it and still binds the pre-html tag (`checkpointArtifactTagSchemaPreHtml`)
  * via `chatAccumulatedChangeChunkSchemaPreHtml`. See
  * `CHAT_SUBSCRIBE_CHECKPOINT_ARTIFACT_KINDS_MINOR` in `chat-frame-compat.ts`.

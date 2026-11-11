@@ -1150,8 +1150,8 @@ const unavailableProviderRateLimitsSchemaV80 = lazySchema(() =>
  * available arm: `host.getRateLimitUsage@4.0` was the last of the three to be
  * frozen here, when that arm opened 5.0.
  *
- * Every other arm is shared with the live union by reference: they carry no
- * provider-id enum, so there is nothing for them to drift on.
+ * The other arms retain their published shapes. Freeze a shared arm here
+ * before adding fields on the current line, even when it has no provider id.
  */
 export const providerRateLimitsSchemaV80 = lazySchema(() =>
   z.union([
@@ -1190,9 +1190,9 @@ const unavailableProviderRateLimitsSchemaV91 = lazySchema(() =>
  * 3.0. `host.getRateLimitUsage@5.0` is not here: its response is an echo of the
  * provider the caller named, which the compat gate excepts.
  *
- * Every available arm is shared with the live union by reference: they carry
- * no provider-id enum, so there is nothing for them to drift on. The first
- * available ARM added after 1.5.0 must not be added here.
+ * Available arms retain their published shapes. Freeze a shared arm here
+ * before adding fields on the current line. An available arm introduced
+ * after 1.5.0 must not be added here.
  */
 export const providerRateLimitsSchemaV91 = lazySchema(() =>
   z.union([

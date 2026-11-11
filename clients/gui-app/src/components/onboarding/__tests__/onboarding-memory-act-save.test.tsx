@@ -30,7 +30,7 @@ import {
   cleanupMemoryActFixture,
   resetMemoryActFixture,
   chooseTraycer,
-  continueFromMemory,
+  clickAdvance,
   currentStepId,
   defaultProviders,
   expectOnStep,
@@ -123,7 +123,7 @@ describe("the Memory act: what Continue writes", () => {
   it("writes Traycer first, then only the rows that differ from the host", async () => {
     world.providers = [
       // Chosen on, host already on: no write.
-      { ...defaultProviders()[0], nativeMemory: true },
+      defaultProviders()[0],
       // Left off, host already off: no write.
       { ...defaultProviders()[1], nativeMemory: false },
       // Left off, host on: written.
@@ -139,7 +139,7 @@ describe("the Memory act: what Continue writes", () => {
     fireEvent.click(await providerSwitch("claude-code"));
     await providerSwitch("cursor");
 
-    await continueFromMemory();
+    await clickAdvance();
     await expectOnStep("session-import");
 
     expect(paramsOf("config.agentMemories.set")).toEqual([{ enabled: true }]);
@@ -165,7 +165,7 @@ describe("the Memory act: what Continue writes", () => {
     expect(isOn(traycer)).toBe(true);
     expect(traycer.hasAttribute("disabled")).toBe(true);
 
-    await continueFromMemory();
+    await clickAdvance();
     await expectOnStep("session-import");
     expect(paramsOf("config.agentMemories.set")).toEqual([]);
     expect(paramsOf("providers.setNativeMemory")).toEqual([
@@ -185,7 +185,7 @@ describe("the Memory act: what Continue writes", () => {
         screen.queryByTestId("onboarding-memory-provider-codex"),
       ).toBeNull(),
     );
-    await continueFromMemory();
+    await clickAdvance();
     await expectOnStep("session-import");
     expect(paramsOf("config.agentMemories.set")).toEqual([]);
     expect(paramsOf("providers.setNativeMemory")).toEqual([]);
@@ -211,7 +211,7 @@ describe("the Memory act: order and failure", () => {
       await chooseTraycer();
       await providerSwitch("codex");
 
-      await continueFromMemory();
+      await clickAdvance();
       await screen.findByTestId("onboarding-memory-save-report");
 
       expect(currentStepId()).toBe("agent-memories");
@@ -226,7 +226,7 @@ describe("the Memory act: order and failure", () => {
     await chooseTraycer();
     await providerSwitch("codex");
 
-    await continueFromMemory();
+    await clickAdvance();
     const report = await screen.findByTestId("onboarding-memory-save-report");
     expect(report.textContent).toContain("Couldn't change Codex memories.");
     expect(report.textContent).toContain("Claude Code memories are now off.");
@@ -236,7 +236,7 @@ describe("the Memory act: order and failure", () => {
     );
     const sentBefore = hostCalls().length;
 
-    await continueFromMemory();
+    await clickAdvance();
     await expectOnStep("session-import");
 
     const retry = hostCalls().slice(sentBefore);
@@ -252,7 +252,7 @@ describe("the Memory act: order and failure", () => {
     world.setAnswers = ["fail"];
     await openMemoryAct();
     await chooseTraycer();
-    await continueFromMemory();
+    await clickAdvance();
     await screen.findByTestId("onboarding-memory-save-report");
     const sentBefore = hostCalls().length;
 
@@ -270,11 +270,11 @@ describe("the Memory act: a queued Traycer write", () => {
     await openMemoryAct();
     await chooseTraycer();
     await providerSwitch("codex");
-    await continueFromMemory();
+    await clickAdvance();
     await screen.findByTestId("onboarding-memory-save-report");
 
     // No word either way yet: still held, nothing sent.
-    await continueFromMemory();
+    await clickAdvance();
     await settled();
     expect(paramsOf("environment.status").length).toBeGreaterThan(0);
     expect(paramsOf("config.agentMemories.set")).toHaveLength(1);
@@ -283,7 +283,7 @@ describe("the Memory act: a queued Traycer write", () => {
 
     acceptHeldWrite("upload-1", ENVIRONMENT_ID);
     deliverAcceptedWrites();
-    await continueFromMemory();
+    await clickAdvance();
     await expectOnStep("session-import");
 
     expect(paramsOf("config.agentMemories.set")).toHaveLength(1);
@@ -297,12 +297,12 @@ describe("the Memory act: a queued Traycer write", () => {
     world.setAnswers = ["queued", "applied"];
     await openMemoryAct();
     await chooseTraycer();
-    await continueFromMemory();
+    await clickAdvance();
     await screen.findByTestId("onboarding-memory-save-report");
     expect(paramsOf("config.agentMemories.set")).toHaveLength(1);
 
     world.refused = ["upload-1"];
-    await continueFromMemory();
+    await clickAdvance();
     await expectOnStep("session-import");
 
     expect(paramsOf("config.agentMemories.set")).toHaveLength(2);
@@ -316,12 +316,12 @@ describe("the Memory act: a queued Traycer write", () => {
     world.setAnswers = ["queued"];
     await openMemoryAct();
     await chooseTraycer();
-    await continueFromMemory();
+    await clickAdvance();
     await screen.findByTestId("onboarding-memory-save-report");
 
     // Another revision reads as on; nothing says this write was taken.
     world.memoriesOn = true;
-    await continueFromMemory();
+    await clickAdvance();
     await settled();
 
     expect(paramsOf("providers.setNativeMemory")).toEqual([]);
@@ -336,13 +336,13 @@ describe("the Memory act: a queued Traycer write", () => {
     world.setAnswers = ["queued", "applied"];
     await openMemoryAct();
     await chooseTraycer();
-    await continueFromMemory();
+    await clickAdvance();
     await screen.findByTestId("onboarding-memory-save-report");
 
     // Rebound: the receipt belongs to the configuration the host left.
     world.environmentId = "env-rebound";
     acceptHeldWrite("upload-1", ENVIRONMENT_ID);
-    await continueFromMemory();
+    await clickAdvance();
     await expectOnStep("session-import");
 
     expect(paramsOf("config.agentMemories.set")).toHaveLength(2);
@@ -356,12 +356,12 @@ describe("the Memory act: a queued Traycer write", () => {
     world.setAnswers = ["queued"];
     await openMemoryAct();
     await chooseTraycer();
-    await continueFromMemory();
+    await clickAdvance();
     await screen.findByTestId("onboarding-memory-save-report");
 
     world.environmentId = "env-rebound";
     world.memoriesOn = true;
-    await continueFromMemory();
+    await clickAdvance();
     await expectOnStep("session-import");
 
     expect(paramsOf("config.agentMemories.set")).toHaveLength(1);
@@ -374,7 +374,7 @@ describe("the Memory act: the report and the switch after a save", () => {
     world.setAnswers = ["queued"];
     await openMemoryAct();
     await chooseTraycer();
-    await continueFromMemory();
+    await clickAdvance();
     await screen.findByTestId("onboarding-memory-save-report");
 
     const row = screen.getByTestId("onboarding-memory-traycer");
@@ -397,7 +397,7 @@ describe("the Memory act: the report and the switch after a save", () => {
     fireEvent.click(await providerSwitch("claude-code"));
     await providerSwitch("codex");
 
-    await continueFromMemory();
+    await clickAdvance();
     const report = await screen.findByTestId("onboarding-memory-save-report");
 
     expect(report.textContent).toContain(
@@ -413,14 +413,14 @@ describe("the Memory act: what a retry trusts after the host moves", () => {
     world.nativeFailures.set("claude", 1);
     await openMemoryAct();
     await chooseTraycer();
-    await continueFromMemory();
+    await clickAdvance();
     await screen.findByTestId("onboarding-memory-save-report");
     expect(paramsOf("config.agentMemories.set")).toHaveLength(1);
 
     // The host is rebound to a configuration where Traycer memories are off.
     world.environmentId = "env-rebound";
     world.memoriesOn = false;
-    await continueFromMemory();
+    await clickAdvance();
     await expectOnStep("session-import");
 
     expect(paramsOf("config.agentMemories.set")).toHaveLength(2);
@@ -434,7 +434,7 @@ describe("the Memory act: what a retry trusts after the host moves", () => {
     world.nativeFailures.set("claude", 1);
     await openMemoryAct();
     await chooseTraycer();
-    await continueFromMemory();
+    await clickAdvance();
     const report = await screen.findByTestId("onboarding-memory-save-report");
     expect(report.textContent).toContain("Traycer memories are on.");
 
@@ -455,16 +455,16 @@ describe("the Memory act: what a retry trusts after the host moves", () => {
     world.setAnswers = ["queued"];
     await openMemoryAct();
     await chooseTraycer();
-    await continueFromMemory();
+    await clickAdvance();
     await screen.findByTestId("onboarding-memory-save-report");
 
     world.environmentId = "env-rebound";
-    await continueFromMemory();
+    await clickAdvance();
     await settled();
     expect(paramsOf("config.agentMemories.set")).toHaveLength(2);
 
     world.environmentId = ENVIRONMENT_ID;
-    await continueFromMemory();
+    await clickAdvance();
     await settled();
 
     expect(paramsOf("config.agentMemories.set")).toHaveLength(2);
@@ -477,7 +477,7 @@ describe("the Memory act: a write the host has not read back, and one overturned
     world.setAnswers = ["saved"];
     await openMemoryAct();
     await chooseTraycer();
-    await continueFromMemory();
+    await clickAdvance();
 
     const report = await screen.findByTestId("onboarding-memory-save-report");
     expect(report.textContent).toContain(
@@ -497,13 +497,13 @@ describe("the Memory act: a write the host has not read back, and one overturned
     expect(paramsOf("providers.setNativeMemory")).toEqual([]);
 
     // Retrying before it arrives sends nothing new.
-    await continueFromMemory();
+    await clickAdvance();
     await settled();
     expect(paramsOf("config.agentMemories.set")).toHaveLength(1);
     expect(paramsOf("providers.setNativeMemory")).toEqual([]);
 
     deliverSavedWrite();
-    await continueFromMemory();
+    await clickAdvance();
     await expectOnStep("session-import");
     expect(paramsOf("config.agentMemories.set")).toHaveLength(1);
     expect(paramsOf("providers.setNativeMemory")).toHaveLength(2);
@@ -513,13 +513,13 @@ describe("the Memory act: a write the host has not read back, and one overturned
     world.nativeFailures.set("claude", 1);
     await openMemoryAct();
     await chooseTraycer();
-    await continueFromMemory();
+    await clickAdvance();
     await screen.findByTestId("onboarding-memory-save-report");
     expect(paramsOf("config.agentMemories.set")).toHaveLength(1);
     const providerWrites = paramsOf("providers.setNativeMemory").length;
 
     overturnWrite();
-    await continueFromMemory();
+    await clickAdvance();
     await settled();
     expect(paramsOf("config.agentMemories.set")).toHaveLength(1);
     expect(
@@ -532,7 +532,7 @@ describe("the Memory act: a write the host has not read back, and one overturned
 
     // Turned off, Continue has nothing to write and moves on.
     fireEvent.click(switchOf("onboarding-memory-traycer"));
-    await continueFromMemory();
+    await clickAdvance();
     await expectOnStep("session-import");
     expect(paramsOf("config.agentMemories.set")).toHaveLength(1);
     expect(paramsOf("providers.setNativeMemory")).toHaveLength(providerWrites);
@@ -550,7 +550,7 @@ describe("the Memory act: a read is only as fresh as when it was taken", () => {
       world.overtakenBy = overtakenBy;
       await openMemoryAct();
       await chooseTraycer();
-      await continueFromMemory();
+      await clickAdvance();
       await expectOnStep("session-import");
       const callsWhenFinished = hostCalls().length;
       await settled();
@@ -578,7 +578,7 @@ describe("the Memory act: Settings reads the host after any way out", () => {
         world.overtakenBy = "rebind";
         await openMemoryAct();
         await chooseTraycer();
-        await continueFromMemory();
+        await clickAdvance();
         await expectOnStep("session-import");
       },
     ],
@@ -589,7 +589,7 @@ describe("the Memory act: Settings reads the host after any way out", () => {
         world.overtakenBy = "overturn";
         await openMemoryAct();
         await chooseTraycer();
-        await continueFromMemory();
+        await clickAdvance();
         await expectOnStep("session-import");
       },
     ],
@@ -607,13 +607,13 @@ describe("the Memory act: Settings reads the host after any way out", () => {
         world.nativeFailures.set("claude", 1);
         await openMemoryAct();
         await chooseTraycer();
-        await continueFromMemory();
+        await clickAdvance();
         await screen.findByTestId("onboarding-memory-save-report");
         overturnWrite();
-        await continueFromMemory();
+        await clickAdvance();
         await settled();
         fireEvent.click(switchOf("onboarding-memory-traycer"));
-        await continueFromMemory();
+        await clickAdvance();
         await expectOnStep("session-import");
       },
     ],
@@ -623,7 +623,7 @@ describe("the Memory act: Settings reads the host after any way out", () => {
         world.setGate = deferred();
         await walkToMemoryAct();
         await chooseTraycer();
-        await continueFromMemory();
+        await clickAdvance();
         await waitFor(() =>
           expect(paramsOf("config.agentMemories.set")).toHaveLength(1),
         );
@@ -678,7 +678,7 @@ describe("the Memory act: Settings reads the host after any way out", () => {
     act(() => useOnboardingStore.getState().reseat(2));
     await screen.findByTestId("onboarding-memory-stage");
     await chooseTraycer();
-    await continueFromMemory();
+    await clickAdvance();
     await expectOnStep("session-import");
     await settled();
     expect(paramsOf("config.agentMemories.set")).toHaveLength(1);
@@ -707,7 +707,7 @@ describe("the Memory act: Settings reads the host after any way out", () => {
     act(() => useOnboardingStore.getState().reseat(2));
     await screen.findByTestId("onboarding-memory-stage");
     fireEvent.click(await screen.findByTestId("onboarding-memory-use"));
-    await continueFromMemory();
+    await clickAdvance();
     await expectOnStep("session-import");
     await settled();
     expect(paramsOf("config.agentMemories.set")).toEqual([]);
@@ -743,7 +743,7 @@ describe("the Memory act: Continue and the host's providers", () => {
     act(() => world.providersGate?.resolve());
     await providerSwitch("codex");
     await waitFor(() => expect(advance().hasAttribute("disabled")).toBe(false));
-    await continueFromMemory();
+    await clickAdvance();
     await expectOnStep("session-import");
     expect(paramsOf("config.agentMemories.set")).toHaveLength(1);
     expect(paramsOf("providers.setNativeMemory")).toEqual([
@@ -759,7 +759,7 @@ describe("the Memory act: Continue and the host's providers", () => {
     await screen.findByText(/Couldn.t read your providers/);
     expect(advance().hasAttribute("disabled")).toBe(false);
 
-    await continueFromMemory();
+    await clickAdvance();
     await expectOnStep("session-import");
     expect(paramsOf("config.agentMemories.set")).toHaveLength(1);
     expect(paramsOf("providers.setNativeMemory")).toEqual([]);
@@ -775,7 +775,7 @@ describe("the Memory act: Continue and the host's providers", () => {
     await screen.findByTestId("onboarding-memory-without-switch");
     expect(advance().hasAttribute("disabled")).toBe(false);
 
-    await continueFromMemory();
+    await clickAdvance();
     await expectOnStep("session-import");
     expect(paramsOf("config.agentMemories.set")).toHaveLength(1);
     expect(paramsOf("providers.setNativeMemory")).toEqual([]);
@@ -798,7 +798,7 @@ describe("the Memory act: its own provider writes outrank the list read", () => 
       if (refetch === "pending") world.providersGate = deferred();
       else world.providersFail = true;
 
-      await continueFromMemory();
+      await clickAdvance();
       const report = await screen.findByTestId("onboarding-memory-save-report");
       expect(report.textContent).toContain("Couldn't change Codex memories.");
       expect(nativeWrites()).toEqual([
@@ -807,7 +807,7 @@ describe("the Memory act: its own provider writes outrank the list read", () => 
       ]);
 
       fireEvent.click(await providerSwitch("claude-code"));
-      await continueFromMemory();
+      await clickAdvance();
       await expectOnStep("session-import");
 
       expect(nativeWrites().slice(2)).toEqual([
@@ -832,7 +832,7 @@ describe("the Memory act: its own provider writes outrank the list read", () => 
     await chooseTraycer();
     await providerSwitch("codex");
 
-    await continueFromMemory();
+    await clickAdvance();
     const report = await screen.findByTestId("onboarding-memory-save-report");
     expect(report.textContent).toContain(
       "Couldn't change Claude Code memories.",
@@ -848,7 +848,7 @@ describe("the Memory act: its own provider writes outrank the list read", () => 
     await invalidateAllQueries();
     await settled();
 
-    await continueFromMemory();
+    await clickAdvance();
     await expectOnStep("session-import");
     expect(
       nativeWrites().filter(
@@ -866,7 +866,7 @@ describe("the Memory act: its own provider writes outrank the list read", () => 
     await openMemoryAct();
     await chooseTraycer();
     await providerSwitch("codex");
-    await continueFromMemory();
+    await clickAdvance();
     await screen.findByTestId("onboarding-memory-save-report");
     expect(nativeWrites()).toEqual([
       { harnessId: "claude", nativeMemory: false },
@@ -887,7 +887,7 @@ describe("the Memory act: its own provider writes outrank the list read", () => 
     expect(isOn(await providerSwitch("claude-code"))).toBe(false);
 
     // Claude is off on the host and the act wrote it: nothing to send for it.
-    await continueFromMemory();
+    await clickAdvance();
     await settled();
     expect(
       nativeWrites().filter(
@@ -904,7 +904,7 @@ describe("the Memory act: its own provider writes outrank the list read", () => 
     const traycer = switchOf("onboarding-memory-traycer");
     expect(traycer.hasAttribute("disabled")).toBe(false);
 
-    await continueFromMemory();
+    await clickAdvance();
     await waitFor(() => expect(traycer.hasAttribute("disabled")).toBe(true));
     for (const id of ["claude-code", "codex"])
       expect((await providerSwitch(id)).hasAttribute("disabled")).toBe(true);
@@ -941,7 +941,7 @@ describe("the Memory act: work that outlives the tour", () => {
     await openMemoryAct();
     await chooseTraycer();
     await providerSwitch("codex");
-    await continueFromMemory();
+    await clickAdvance();
     await waitFor(() =>
       expect(paramsOf("config.agentMemories.set")).toHaveLength(1),
     );
@@ -1064,7 +1064,7 @@ describe("the Memory act: a save that lands after Skip with another act after it
     await openMemoryAct();
     await chooseTraycer();
     await providerSwitch("codex");
-    await continueFromMemory();
+    await clickAdvance();
     await waitFor(() =>
       expect(paramsOf("config.agentMemories.set")).toHaveLength(1),
     );

@@ -332,6 +332,7 @@ describe.each(MOUNT_MODES)(
       expect(awaitParams).toEqual({
         providerId: PROVIDER_ID,
         profileId: PROFILE_ID,
+        lastSeenReaderCount: null,
       });
       expect(typeof awaitOptions.responseTimeoutMs).toBe("number");
       expect(awaitOptions.idempotencyKey).toBeNull();

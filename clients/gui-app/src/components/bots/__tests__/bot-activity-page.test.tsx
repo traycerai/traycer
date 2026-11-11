@@ -1242,16 +1242,6 @@ describe("<BotActivityPage /> trunk door", () => {
       messageId: null,
       sendPostId: null,
     });
-  });
-
-  it("is a plain door, not a task row: it carries no task id and takes no row actions with it", async () => {
-    const user = userEvent.setup();
-    mount([periodic("t-every", {})], { boundHere: true });
-
-    await user.click(
-      screen.getByRole("button", { name: "Open trunk session" }),
-    );
-
     expect(mocks.openSession).toHaveBeenCalledTimes(1);
     expect(mocks.navigateToTabIntent).not.toHaveBeenCalled();
   });

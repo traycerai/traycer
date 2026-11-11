@@ -1,4 +1,8 @@
-import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
+import type { CredentialStanding } from "@traycer/protocol/host/provider-credential-home-schemas";
+import type {
+  ProviderCliState,
+  ProviderProfile,
+} from "@traycer/protocol/host/provider-schemas";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -137,6 +141,46 @@ function opencodeState(): ProviderCliState {
   };
 }
 
+function profileWithStanding(
+  standing: Partial<CredentialStanding>,
+  overrides: Partial<ProviderProfile>,
+): ProviderProfile {
+  return {
+    ...managedProfile(),
+    credentialHome: {
+      homeAddress: "synthetic-home",
+      bindingVersion: 1,
+      materialRevision: 1,
+      custodyVersion: 1,
+      custodyClass: "self-sufficient",
+      environmentPresence: null,
+      handoffEnvironmentId: null,
+      materialFingerprint: "synthetic-material",
+      observation: null,
+      materialMatchesBinding: "yes",
+      standing: {
+        material: "usable",
+        repairDeadline: null,
+        familyVersion: null,
+        authority: null,
+        cause: null,
+        observation: { source: "custodian", status: "answered", capturedAt: 1 },
+        ...standing,
+      },
+    },
+    ...overrides,
+  };
+}
+
+function renderProfile(profile: ProviderProfile) {
+  renderSection({ state: { ...opencodeState(), profiles: [profile] } });
+}
+
+// The status badge's row and the cause line below it share one summary column.
+function summaryColumn(badge: HTMLElement): HTMLElement | null {
+  return badge.parentElement?.parentElement ?? null;
+}
+
 function renderSection(
   overrides: Partial<Parameters<typeof ProviderProfileScopedSection>[0]>,
 ) {
@@ -192,11 +236,28 @@ describe("<ProviderProfileScopedSection /> profile summary email reveal", () => 
   it("reveals the raw email in the truncated address and its tooltip", () => {
     renderSection({});
 
-    fireEvent.click(screen.getByRole("button", { name: /Reveal email/ }));
+    const reveal = screen.getByRole("button", { name: /^Reveal email for / });
+    expect(reveal.hasAttribute("aria-pressed")).toBe(false);
+    fireEvent.click(reveal);
 
     const emailSpan = screen.getByText(RAW_EMAIL);
     expect(emailSpan.className).toContain("truncate");
     expect(tooltipTextFor(emailSpan)).toBe(RAW_EMAIL);
+
+    const hide = screen.getByRole("button", { name: /^Hide email for / });
+    expect(hide.hasAttribute("aria-pressed")).toBe(false);
+    expect(
+      screen.queryByRole("button", { name: /^Reveal email for / }),
+    ).toBeNull();
+    fireEvent.click(hide);
+
+    expect(screen.queryByText(RAW_EMAIL)).toBeNull();
+    expect(screen.getByText(REDACTED_EMAIL)).toBeTruthy();
+    expect(
+      screen
+        .getByRole("button", { name: /^Reveal email for / })
+        .hasAttribute("aria-pressed"),
+    ).toBe(false);
   });
 
   it("truncates the address and the plan chip, and badges a usable row Signed in", () => {
@@ -345,5 +406,149 @@ describe("<ProviderProfileScopedSection /> profile summary email reveal", () => 
     expect(badge.getAttribute("data-variant")).toBe("outline");
     expect(screen.queryByText("Signed out")).toBeNull();
     expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
+  });
+
+  it("badges a refused credential and shows only its cause on the detail line", () => {
+    renderProfile(
+      profileWithStanding(
+        { material: "refused-by-provider", cause: "plan lapsed" },
+        {},
+      ),
+    );
+
+    expect(
+      screen.getByText("Refused by provider").getAttribute("data-slot"),
+    ).toBe("badge");
+    expect(screen.getByText("plan lapsed")).toBeTruthy();
+    expect(screen.queryByText("Signed in")).toBeNull();
+    expect(screen.queryByText(/Refused by provider:/)).toBeNull();
+  });
+
+  it("badges Unknown with the cause when the credential observation is unknown", () => {
+    renderProfile(
+      profileWithStanding(
+        {
+          cause: "probe timed out",
+          observation: {
+            source: "custodian",
+            status: "unknown",
+            capturedAt: 1,
+          },
+        },
+        {},
+      ),
+    );
+
+    expect(screen.getByText("Unknown").getAttribute("data-slot")).toBe("badge");
+    expect(screen.getByText("probe timed out")).toBeTruthy();
+    expect(screen.queryByText(/Status unknown/)).toBeNull();
+  });
+
+  it("renders a usable credential as Signed in without a detail line", () => {
+    renderProfile(profileWithStanding({}, {}));
+
+    const badge = screen.getByText("Signed in");
+    expect(badge.getAttribute("data-slot")).toBe("badge");
+    expect(summaryColumn(badge)?.querySelector("p")).toBeNull();
+  });
+
+  it("keeps the whole revoking notice on the detail line beside the status badge", () => {
+    renderProfile({
+      ...managedProfile(),
+      presence: { kind: "revoking", cause: "signed-out-by-person" },
+    });
+
+    expect(screen.getByText("Signed in").getAttribute("data-slot")).toBe(
+      "badge",
+    );
+    expect(screen.getByText("Disconnecting: signed out.")).toBeTruthy();
+  });
+
+  it("carries the inventory attributes on the root section and the cause below the badge", () => {
+    renderProfile({
+      ...profileWithStanding(
+        { material: "stale", cause: "session expired" },
+        {},
+      ),
+      presence: { kind: "admitted", bindingVersion: 1 },
+    });
+
+    const badge = screen.getByText("Stale");
+    const section = badge.closest("section[data-settings-provider-id]");
+    expect(section?.getAttribute("data-provider-profile-id")).toBe(
+      "profile-managed",
+    );
+    expect(section?.getAttribute("data-provider-profile-presence")).toBe(
+      JSON.stringify({ kind: "admitted", bindingVersion: 1 }),
+    );
+    expect(section?.getAttribute("data-provider-profile-standing")).toContain(
+      '"material":"stale"',
+    );
+    expect(section?.querySelector("[data-provider-profile-id]")).toBeNull();
+
+    const cause = screen.getByText("session expired");
+    expect(summaryColumn(badge)?.contains(cause)).toBe(true);
+    expect(
+      badge.compareDocumentPosition(cause) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it.each([
+    [{ kind: "admitted", bindingVersion: 1 }, []],
+    [{ kind: "no-home" }, ["Not on this device yet"]],
+    [
+      { kind: "placeholder-only" },
+      ["Used from the environment. Nothing is kept on this sandbox."],
+    ],
+  ] as const)(
+    "tells a signed-out profile with %j presence apart by its own line only",
+    (presence, lines) => {
+      renderProfile({
+        ...managedProfile(),
+        auth: {
+          status: "unauthenticated",
+          badgeText: null,
+          label: null,
+          detail: null,
+        },
+        presence,
+      });
+
+      const badge = screen.getByText("Signed out");
+      expect(badge.getAttribute("data-slot")).toBe("badge");
+      expect(
+        screen
+          .getByRole("button", { name: "Sign in" })
+          .getAttribute("data-variant"),
+      ).toBe("secondary");
+      const rendered = [
+        ...(summaryColumn(badge)?.querySelectorAll("p") ?? []),
+      ].map((line) => line.textContent);
+      expect(rendered).toEqual(lines);
+    },
+  );
+
+  it("keeps an unknown credential cause visible beside the no-home presence line", () => {
+    renderProfile({
+      ...profileWithStanding(
+        {
+          cause: "probe timed out",
+          observation: {
+            source: "custodian",
+            status: "unknown",
+            capturedAt: 1,
+          },
+        },
+        {},
+      ),
+      presence: { kind: "no-home" },
+    });
+
+    const badge = screen.getByText("Unknown");
+    expect(badge.getAttribute("data-slot")).toBe("badge");
+    const rendered = [
+      ...(summaryColumn(badge)?.querySelectorAll("p") ?? []),
+    ].map((line) => line.textContent);
+    expect(rendered).toEqual(["Not on this device yet", "probe timed out"]);
   });
 });

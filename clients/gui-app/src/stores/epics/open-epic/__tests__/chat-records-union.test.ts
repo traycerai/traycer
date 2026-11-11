@@ -25,6 +25,8 @@ import type {
 } from "@traycer/protocol/host/epic/chat-records";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
+import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
+import { createTypedMap } from "@traycer/protocol/utils/yjs-utils";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
@@ -69,6 +71,8 @@ function docChatEntry(args: {
   readonly title: string;
   readonly parentId: string | null;
   readonly hostId: string | null;
+  readonly userId?: string;
+  readonly settings?: ChatRunSettings;
 }): Y.Map<unknown> {
   const chat = new Y.Map<unknown>();
   chat.set("id", args.id);
@@ -78,6 +82,10 @@ function docChatEntry(args: {
   chat.set("updatedAt", 1);
   chat.set("isTitleEditedByUser", false);
   if (args.hostId !== null) chat.set("hostId", args.hostId);
+  if (args.userId !== undefined) chat.set("userId", args.userId);
+  if (args.settings !== undefined) {
+    chat.set("settings", createTypedMap(args.settings));
+  }
   return chat;
 }
 
@@ -322,6 +330,75 @@ describe("chats.byId unions the host's records with the doc projection", () => {
     expect(state.chats.byId.both.isTitleEditedByUser).toBe(true);
     expect(state.chats.byId.both.archivedAt).toBe(5_000);
     expect(state.tree.nodeById.both.title).toBe("Renamed since");
+    session.handle.dispose();
+  });
+
+  it("publishes a doc-backed chat update when only its profile binding changes", () => {
+    signedInAs("user-a");
+    const firstSettings: ChatRunSettings = {
+      harnessId: "claude",
+      model: "sonnet-4.5",
+      permissionMode: "full_access",
+      reasoningEffort: null,
+      serviceTier: null,
+      agentMode: "regular",
+      profileId: "work",
+      ultracode: false,
+      profileBinding: {
+        kind: "key",
+        key: {
+          providerId: "claude-code",
+          accountId: "first-synthetic-key",
+          organizationId: null,
+        },
+      },
+    };
+    const nextBinding: NonNullable<ChatRunSettings["profileBinding"]> = {
+      kind: "key",
+      key: {
+        providerId: "claude-code",
+        accountId: "second-synthetic-key",
+        organizationId: null,
+      },
+    };
+    const session = newSession(
+      seedChats([
+        [
+          "bound",
+          docChatEntry({
+            id: "bound",
+            title: "Bound chat",
+            parentId: null,
+            hostId: "host-1",
+            userId: "user-a",
+            settings: firstSettings,
+          }),
+        ],
+      ]),
+    );
+    const store = session.handle.store;
+    store.getState().applyChatRecordDelta({
+      kind: "upsert",
+      epicId: "epic-test",
+      record: record({ chatId: "bound", revision: 1 }),
+    });
+    const before = store.getState().chats.byId.bound;
+    expect(before.settings?.profileBinding).toEqual(
+      firstSettings.profileBinding,
+    );
+
+    session.mutateDoc((chats) => {
+      const chat = chats.get("bound");
+      if (!(chat instanceof Y.Map)) throw new Error("no doc entry");
+      chat.set(
+        "settings",
+        createTypedMap({ ...firstSettings, profileBinding: nextBinding }),
+      );
+    });
+
+    const after = store.getState().chats.byId.bound;
+    expect(after).not.toBe(before);
+    expect(after.settings?.profileBinding).toEqual(nextBinding);
     session.handle.dispose();
   });
 
