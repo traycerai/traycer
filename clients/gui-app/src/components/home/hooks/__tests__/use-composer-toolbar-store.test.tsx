@@ -470,6 +470,87 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     ).toBe("visible-model");
   });
 
+  it("defers a provider switch until providers.list resolves on 10.10", async () => {
+    seedDefault("claude");
+    harnessesData.value = {
+      harnesses: [
+        { id: "claude", available: true },
+        { id: "opencode", available: true },
+      ],
+    };
+    modelsData.value = {
+      models: [modelOption("claude", "saved-model")],
+    };
+    recordNegotiatedHostManifest(TEST_HOST_ID, {
+      "providers.list": { major: 10, minor: 10 },
+    });
+    const onSettingsChange = vi.fn();
+    const { result, rerender } = renderHook(() =>
+      useComposerToolbarStore(
+        null,
+        { kind: "none" },
+        onSettingsChange,
+        catalogScope(false),
+      ),
+    );
+
+    await waitFor(() =>
+      expect(result.current.getState().selection.modelSlug).toBe("saved-model"),
+    );
+    modelsData.value = {
+      models: [
+        {
+          ...modelOption("opencode", "hidden-model"),
+          metadata: { openCodeProviderId: "openrouter" },
+        },
+        {
+          ...modelOption("opencode", "visible-model"),
+          metadata: { openCodeProviderId: "anthropic" },
+        },
+      ],
+    };
+    act(() => {
+      result.current.getState().applyComposerSelection({
+        selection: { harnessId: "opencode", modelSlug: "", profileId: null },
+        reasoning: "",
+        serviceTier: "",
+      });
+    });
+
+    expect(result.current.getState().selectionCatalogConfirmed).toBe(false);
+    expect(onSettingsChange).not.toHaveBeenCalledWith(
+      expect.objectContaining({ model: "hidden-model" }),
+    );
+    expect(
+      useComposerHarnessMemoryStore
+        .getState()
+        .resolveHarnessSwitch(TEST_HOST_ID, "opencode").modelSlug,
+    ).toBe("");
+
+    providerListData.value = {
+      providers: [
+        { providerId: "opencode", hiddenModelProviders: ["openrouter"] },
+      ],
+    };
+    rerender();
+
+    await waitFor(() =>
+      expect(result.current.getState().selection.modelSlug).toBe(
+        "visible-model",
+      ),
+    );
+    expect(onSettingsChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        harnessId: "opencode",
+        model: "visible-model",
+      }),
+    );
+    expect(
+      useComposerHarnessMemoryStore.getState().byHost[TEST_HOST_ID]
+        ?.lastModelByHarness.opencode,
+    ).toBe("visible-model");
+  });
+
   it("does not wait for providers.list on a host below 10.10", async () => {
     seedDefault("opencode");
     harnessesData.value = { harnesses: [{ id: "opencode", available: true }] };
