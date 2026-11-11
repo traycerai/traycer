@@ -80,6 +80,11 @@ interface RefreshState {
    * leaves its earlier read unproven and it reads once more.
    */
   readAfterSettle: boolean;
+  /**
+   * Another scope settled a stamp since this scope's last read began, so this
+   * scope's own rows settling the rest proves nothing about that one.
+   */
+  settledElsewhere: boolean;
   newEdgeInFlight: boolean;
 }
 const refreshes = new Map<string, RefreshState>();
@@ -470,10 +475,14 @@ function hasUnsettledStamps(userId: string, now: number): boolean {
   return false;
 }
 
-/** One list read per scope plus each distinct, mounted context obligation. */
-async function refetchActivityScope(scope: string): Promise<void> {
+/**
+ * One list read per scope plus each distinct, mounted context obligation.
+ * Answers whether the list read delivered a page: a refused dispatch resolves
+ * with nothing and a failed one with its error.
+ */
+async function refetchActivityScope(scope: string): Promise<boolean> {
   const subscribers = scopeSubscribers.get(scope);
-  if (subscribers === undefined || subscribers.size === 0) return;
+  if (subscribers === undefined || subscribers.size === 0) return false;
   const eligible = [...subscribers.values()];
   const listRefetch = eligible[0].listRefetch;
   // Query caches are keyed by the exact request ids. Only identical batches
@@ -486,12 +495,18 @@ async function refetchActivityScope(scope: string): Promise<void> {
       if (!contextRefetches.has(key)) contextRefetches.set(key, batch.refetch);
     }
   }
-  await Promise.all([
+  const [listRead] = await Promise.all([
     Promise.resolve().then(listRefetch),
     ...[...contextRefetches.values()].map((refetch) =>
       Promise.resolve().then(refetch),
     ),
   ]);
+  return (
+    typeof listRead === "object" &&
+    listRead !== null &&
+    "status" in listRead &&
+    listRead.status === "success"
+  );
 }
 
 /** Whether another list read could still change what this scope shows. */
@@ -517,17 +532,20 @@ function scheduleActivityRefresh(state: RefreshState, delay: number): void {
     state.inFlight = true;
     state.attempts += 1;
     state.readAfterSettle = !hasUnsettledStamps(state.userId, startedAt);
+    state.settledElsewhere = false;
     void refetchActivityScope(state.scope)
-      .catch(() => undefined)
-      .finally(() => {
+      .catch(() => false)
+      .then((delivered) => {
         state.inFlight = false;
         if (refreshes.get(state.scope) !== state) return;
         const now = Date.now();
+        // A read that delivered no page pays for nothing and proves nothing.
+        if (!delivered) state.readAfterSettle = false;
         if (state.newEdgeInFlight) {
           // This read began before the new edge, so it pays for none of it.
           state.newEdgeInFlight = false;
           state.attempts = 1;
-        } else if (state.removalReadsOwed > 0) {
+        } else if (delivered && state.removalReadsOwed > 0) {
           state.removalReadsOwed -= 1;
         }
         if (now >= state.deadline || !refreshOwed(state, now)) {
@@ -583,6 +601,7 @@ function queueActivityRefresh(
     deadline: Date.now() + STAMP_TTL_MS,
     removalReadsOwed,
     readAfterSettle: false,
+    settledElsewhere: false,
     newEdgeInFlight: false,
   };
   refreshes.set(scope, state);
@@ -751,10 +770,16 @@ export function useOptimisticActivityHistoryItems(
     if (input.userId === null || !input.enabled) return;
     const settled = settleHistoryActivity(input.userId, input.items);
     settleBackfilledHistoryActivity(input.userId, backfilled);
+    if (!settled) return;
+    for (const other of refreshes.values()) {
+      if (other.userId === input.userId && other.scope !== scope) {
+        other.settledElsewhere = true;
+      }
+    }
     const state = refreshes.get(scope);
     if (
-      settled &&
       state !== undefined &&
+      !state.settledElsewhere &&
       !hasUnsettledStamps(input.userId, Date.now())
     ) {
       state.readAfterSettle = true;

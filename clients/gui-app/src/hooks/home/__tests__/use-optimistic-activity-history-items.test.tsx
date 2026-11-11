@@ -11,6 +11,8 @@ import {
   useOptimisticActivityHistoryItems,
 } from "@/hooks/home/use-optimistic-activity-history-items";
 
+const DELIVERED = { status: "success" } as const;
+
 const hookState = vi.hoisted(() => ({
   workingEpicIds: new Set<string>(),
   contextRequests: [] as string[][],
@@ -187,7 +189,7 @@ describe("optimistic activity history projection", () => {
         userId: null,
         hostId: null,
         enabled: false,
-        refetch: () => Promise.resolve(),
+        refetch: () => Promise.resolve(DELIVERED),
       });
     });
     const observe = (
@@ -236,7 +238,7 @@ describe("optimistic activity history projection", () => {
         userId,
         hostId: "host-retained-backfill-cap",
         enabled: true,
-        refetch: vi.fn(() => Promise.resolve()),
+        refetch: vi.fn(() => Promise.resolve(DELIVERED)),
       }),
     );
 
@@ -488,7 +490,7 @@ describe("optimistic activity history projection", () => {
     vi.setSystemTime(10_000);
     hookState.workingEpicIds = new Set(["missing-a", "missing-b"]);
     const userId = `batch-${crypto.randomUUID()}`;
-    const refetch = vi.fn(() => Promise.resolve());
+    const refetch = vi.fn(() => Promise.resolve(DELIVERED));
 
     renderHook(() =>
       useOptimisticActivityHistoryItems({
@@ -535,7 +537,7 @@ describe("optimistic activity history projection", () => {
           userId,
           hostId: "host-backfill-catch-up",
           enabled: true,
-          refetch: vi.fn(() => Promise.resolve()),
+          refetch: vi.fn(() => Promise.resolve(DELIVERED)),
         });
       },
       { initialProps: { revision: 0 } },
@@ -571,7 +573,7 @@ describe("optimistic activity history projection", () => {
           userId,
           hostId: "host-list-ack-retirement",
           enabled: true,
-          refetch: vi.fn(() => Promise.resolve()),
+          refetch: vi.fn(() => Promise.resolve(DELIVERED)),
         });
       },
       { initialProps: { items: [] as readonly HistoryItem[], revision: 0 } },
@@ -602,7 +604,7 @@ describe("optimistic activity history projection", () => {
       recentAt: 2_000,
     });
     hookState.cachedContexts.set(epicId, staleContext);
-    const refetch = vi.fn(() => Promise.resolve());
+    const refetch = vi.fn(() => Promise.resolve(DELIVERED));
     const { result, rerender } = renderHook(
       ({ revision }) => {
         void revision;
@@ -642,8 +644,8 @@ describe("optimistic activity history projection", () => {
     const staleContext = { ...taskContext(epicId), recentAt: 500 };
     hookState.contexts.set(epicId, { ...taskContext(epicId), recentAt: 2_000 });
     hookState.cachedContexts.set(epicId, staleContext);
-    const injectingRefetch = vi.fn(() => Promise.resolve());
-    const nonInjectingRefetch = vi.fn(() => Promise.resolve());
+    const injectingRefetch = vi.fn(() => Promise.resolve(DELIVERED));
+    const nonInjectingRefetch = vi.fn(() => Promise.resolve(DELIVERED));
     const { result: injectingResult, rerender: rerenderInjecting } = renderHook(
       ({ revision }) => {
         void revision;
@@ -702,8 +704,8 @@ describe("optimistic activity history projection", () => {
       ...taskContext(epicId),
       recentAt: 2_000,
     });
-    const firstRefetch = vi.fn(() => Promise.resolve());
-    const secondRefetch = vi.fn(() => Promise.resolve());
+    const firstRefetch = vi.fn(() => Promise.resolve(DELIVERED));
+    const secondRefetch = vi.fn(() => Promise.resolve(DELIVERED));
     const first = renderHook(() =>
       useOptimisticActivityHistoryItems({
         items: [],
@@ -773,8 +775,8 @@ describe("optimistic activity history projection", () => {
       });
     }
     hookState.useCachedContexts = true;
-    const firstRefetch = vi.fn(() => Promise.resolve());
-    const secondRefetch = vi.fn(() => Promise.resolve());
+    const firstRefetch = vi.fn(() => Promise.resolve(DELIVERED));
+    const secondRefetch = vi.fn(() => Promise.resolve(DELIVERED));
     const first = renderHook(
       ({ items }) =>
         useOptimisticActivityHistoryItems({
@@ -869,7 +871,7 @@ describe("optimistic activity history projection", () => {
           userId,
           hostId: "host-context-page-catch-up",
           enabled: true,
-          refetch: vi.fn(() => Promise.resolve()),
+          refetch: vi.fn(() => Promise.resolve(DELIVERED)),
         });
       },
       {
@@ -927,7 +929,7 @@ describe("optimistic activity history projection", () => {
             hostId: "host-cross-scope-retention",
             enabled: true,
             refreshScope: "recent:all",
-            refetch: vi.fn(() => Promise.resolve()),
+            refetch: vi.fn(() => Promise.resolve(DELIVERED)),
           });
         },
         { initialProps: { revision: 0 } },
@@ -950,7 +952,7 @@ describe("optimistic activity history projection", () => {
           enabled: false,
           refreshEnabled: true,
           refreshScope: "recent:filtered",
-          refetch: vi.fn(() => Promise.resolve()),
+          refetch: vi.fn(() => Promise.resolve(DELIVERED)),
         }),
       {
         initialProps: {
@@ -971,7 +973,7 @@ describe("optimistic activity history projection", () => {
     const userId = `delayed-${crypto.randomUUID()}`;
     hookState.workingEpicIds = new Set(["delayed-epic"]);
     hookState.contexts.set("delayed-epic", taskContext("delayed-epic"));
-    const refetch = vi.fn(() => Promise.resolve());
+    const refetch = vi.fn(() => Promise.resolve(DELIVERED));
     const { result, rerender } = renderHook(
       ({ working, items }) => {
         hookState.workingEpicIds = working;
@@ -1030,7 +1032,7 @@ describe("optimistic activity history projection", () => {
           userId,
           hostId: "host-clock-skew",
           enabled: true,
-          refetch: vi.fn(() => Promise.resolve()),
+          refetch: vi.fn(() => Promise.resolve(DELIVERED)),
         });
       },
       { initialProps: { working: new Set<string>(), items: initialItems } },
@@ -1082,7 +1084,7 @@ describe("optimistic activity history projection", () => {
           userId,
           hostId: "host-accepted-at",
           enabled: true,
-          refetch: vi.fn(() => Promise.resolve()),
+          refetch: vi.fn(() => Promise.resolve(DELIVERED)),
         });
       },
       { initialProps: { working: new Set<string>(), items: initialItems } },
@@ -1120,7 +1122,7 @@ describe("optimistic activity history projection", () => {
           userId,
           hostId: "host-accepted-before-edge",
           enabled: true,
-          refetch: vi.fn(() => Promise.resolve()),
+          refetch: vi.fn(() => Promise.resolve(DELIVERED)),
         }),
       { initialProps: { items: initialItems } },
     );
@@ -1157,8 +1159,8 @@ describe("optimistic activity history projection", () => {
     vi.setSystemTime(20_000);
     const userId = `shared-${crypto.randomUUID()}`;
     requestHistoryActivityRefresh(userId);
-    const firstRefetch = vi.fn(() => Promise.resolve());
-    const secondRefetch = vi.fn(() => Promise.resolve());
+    const firstRefetch = vi.fn(() => Promise.resolve(DELIVERED));
+    const secondRefetch = vi.fn(() => Promise.resolve(DELIVERED));
 
     const first = renderHook(() =>
       useOptimisticActivityHistoryItems({
@@ -1193,7 +1195,7 @@ describe("optimistic activity history projection", () => {
     vi.useFakeTimers();
     vi.setSystemTime(22_000);
     const userId = `remount-settled-${crypto.randomUUID()}`;
-    const refetch = vi.fn(() => Promise.resolve());
+    const refetch = vi.fn(() => Promise.resolve(DELIVERED));
     const renderScope = (items: readonly HistoryItem[]) =>
       renderHook(
         ({ page }) =>
@@ -1241,7 +1243,7 @@ describe("optimistic activity history projection", () => {
     vi.useFakeTimers();
     vi.setSystemTime(22_000);
     const userId = `one-read-${crypto.randomUUID()}`;
-    const refetch = vi.fn(() => Promise.resolve());
+    const refetch = vi.fn(() => Promise.resolve(DELIVERED));
     const { rerender } = renderHook(
       ({ items }) =>
         useOptimisticActivityHistoryItems({
@@ -1276,7 +1278,7 @@ describe("optimistic activity history projection", () => {
     vi.useFakeTimers();
     vi.setSystemTime(22_000);
     const userId = `zero-reads-${crypto.randomUUID()}`;
-    const refetch = vi.fn(() => Promise.resolve());
+    const refetch = vi.fn(() => Promise.resolve(DELIVERED));
     settleHistoryActivity(userId, [historyItem("epic-a", 1, 21_000)]);
     observeOwnHistoryRecordChange(userId, "epic-a", 22_000);
     renderHook(() =>
@@ -1298,8 +1300,8 @@ describe("optimistic activity history projection", () => {
     vi.useFakeTimers();
     vi.setSystemTime(22_000);
     const userId = `unsettled-scope-${crypto.randomUUID()}`;
-    const settlingRefetch = vi.fn(() => Promise.resolve());
-    const filteredRefetch = vi.fn(() => Promise.resolve());
+    const settlingRefetch = vi.fn(() => Promise.resolve(DELIVERED));
+    const filteredRefetch = vi.fn(() => Promise.resolve(DELIVERED));
     const settling = renderHook(
       ({ items }) =>
         useOptimisticActivityHistoryItems({
@@ -1352,7 +1354,7 @@ describe("optimistic activity history projection", () => {
     vi.useFakeTimers();
     vi.setSystemTime(22_000);
     const userId = `never-settles-${crypto.randomUUID()}`;
-    const refetch = vi.fn(() => Promise.resolve());
+    const refetch = vi.fn(() => Promise.resolve(DELIVERED));
     renderHook(() =>
       useOptimisticActivityHistoryItems({
         items: [historyItem("epic-a", 1, 21_000)],
@@ -1386,7 +1388,7 @@ describe("optimistic activity history projection", () => {
     vi.useFakeTimers();
     vi.setSystemTime(23_000);
     const userId = `remount-canceled-${crypto.randomUUID()}`;
-    const refetch = vi.fn(() => Promise.resolve());
+    const refetch = vi.fn(() => Promise.resolve(DELIVERED));
     const renderScope = () =>
       renderHook(() =>
         useOptimisticActivityHistoryItems({
@@ -1415,10 +1417,10 @@ describe("optimistic activity history projection", () => {
     vi.useFakeTimers();
     vi.setSystemTime(25_000);
     const userId = `in-flight-edge-${crypto.randomUUID()}`;
-    let resolveFirst: (() => void) | undefined;
+    let resolveFirst: ((page: typeof DELIVERED) => void) | undefined;
     const refetch = vi.fn(
       () =>
-        new Promise<void>((resolve) => {
+        new Promise<typeof DELIVERED>((resolve) => {
           resolveFirst = resolve;
         }),
     );
@@ -1441,7 +1443,7 @@ describe("optimistic activity history projection", () => {
     act(() => requestHistoryActivityRefresh(userId));
     if (resolveFirst === undefined) throw new Error("refetch did not start");
     await act(async () => {
-      resolveFirst?.();
+      resolveFirst?.(DELIVERED);
       await Promise.resolve();
     });
 
@@ -1460,14 +1462,14 @@ describe("optimistic activity history projection", () => {
     vi.setSystemTime(25_000);
     const userId = `third-in-flight-${crypto.randomUUID()}`;
     let requests = 0;
-    let resolveThird: (() => void) | undefined;
+    let resolveThird: ((page: typeof DELIVERED) => void) | undefined;
     const refetch = vi.fn(() => {
       requests += 1;
       return requests === 3
-        ? new Promise<void>((resolve) => {
+        ? new Promise<typeof DELIVERED>((resolve) => {
             resolveThird = resolve;
           })
-        : Promise.resolve();
+        : Promise.resolve(DELIVERED);
     });
     renderHook(() =>
       useOptimisticActivityHistoryItems({
@@ -1495,7 +1497,7 @@ describe("optimistic activity history projection", () => {
       settleHistoryActivity(userId, [historyItem("changed-epic", 1, newerAt)]);
     });
     await act(async () => {
-      resolveThird?.();
+      resolveThird?.(DELIVERED);
       await Promise.resolve();
       await vi.advanceTimersByTimeAsync(2_000);
     });
@@ -1512,14 +1514,14 @@ describe("optimistic activity history projection", () => {
       recentAt: 500,
     });
     let requests = 0;
-    let resolveThird: (() => void) | undefined;
+    let resolveThird: ((page: typeof DELIVERED) => void) | undefined;
     const refetch = vi.fn(() => {
       requests += 1;
       return requests === 3
-        ? new Promise<void>((resolve) => {
+        ? new Promise<typeof DELIVERED>((resolve) => {
             resolveThird = resolve;
           })
-        : Promise.resolve();
+        : Promise.resolve(DELIVERED);
     });
     const stalePage: readonly HistoryItem[] = [];
     const { result, rerender } = renderHook(
@@ -1555,7 +1557,7 @@ describe("optimistic activity history projection", () => {
     expect(result.current.map((item) => item.epicId)).toContain(epicId);
 
     await act(async () => {
-      resolveThird?.();
+      resolveThird?.(DELIVERED);
       await Promise.resolve();
       rerender({ items: stalePage, revision: 2 });
     });
@@ -1571,7 +1573,7 @@ describe("optimistic activity history projection", () => {
     vi.useFakeTimers();
     vi.setSystemTime(50_000);
     const userId = `ownerless-removal-${crypto.randomUUID()}`;
-    const refetch = vi.fn(() => Promise.resolve());
+    const refetch = vi.fn(() => Promise.resolve(DELIVERED));
     renderHook(() =>
       useOptimisticActivityHistoryItems({
         items: [],
@@ -1594,11 +1596,150 @@ describe("optimistic activity history projection", () => {
     expect(refetch).toHaveBeenCalledTimes(3);
   });
 
+  it("does not spend a removal's reads on failed list reads", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(50_000);
+    const userId = `failed-removal-reads-${crypto.randomUUID()}`;
+    let requests = 0;
+    let delivered = 0;
+    const refetch = vi.fn(() => {
+      requests += 1;
+      if (requests <= 2) return Promise.resolve({ status: "error" } as const);
+      delivered += 1;
+      return Promise.resolve(DELIVERED);
+    });
+    renderHook(() =>
+      useOptimisticActivityHistoryItems({
+        items: [],
+        userId,
+        hostId: "host-failed-removal-reads",
+        enabled: true,
+        refetch,
+      }),
+    );
+
+    act(() => requestHistoryActivityRefresh(userId));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(750 + 2_000 + 5_000 + 1);
+    });
+    expect(refetch).toHaveBeenCalledTimes(3);
+    expect(delivered).toBe(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+    expect(refetch).toHaveBeenCalledTimes(4);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(refetch).toHaveBeenCalledTimes(5);
+    expect(delivered).toBe(3);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600_000);
+    });
+    expect(refetch).toHaveBeenCalledTimes(5);
+  });
+
+  it("keeps retrying a removal whose list reads never deliver a page until the deadline", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(70_000);
+    const userId = `refused-removal-reads-${crypto.randomUUID()}`;
+    const refetch = vi.fn(() => Promise.resolve(undefined));
+    renderHook(() =>
+      useOptimisticActivityHistoryItems({
+        items: [],
+        userId,
+        hostId: "host-refused-removal-reads",
+        enabled: true,
+        refetch,
+      }),
+    );
+
+    act(() => requestHistoryActivityRefresh(userId));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(refetch.mock.calls.length).toBeGreaterThan(3);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(540_001);
+    });
+    const readsAtDeadline = refetch.mock.calls.length;
+    expect(readsAtDeadline).toBeGreaterThan(3);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(refetch).toHaveBeenCalledTimes(readsAtDeadline);
+  });
+
+  it("reads a scope once more when another scope settled a stamp before its own rows settled the last one", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(22_000);
+    const userId = `settled-elsewhere-${crypto.randomUUID()}`;
+    const staleA = historyItem("epic-a", 1, 21_000);
+    const staleB = historyItem("epic-b", 1, 21_000);
+    settleHistoryActivity(userId, [staleA, staleB]);
+    const refetchA = vi.fn(() => Promise.resolve(DELIVERED));
+    const refetchB = vi.fn(() => Promise.resolve(DELIVERED));
+    const renderScope = (
+      refreshScope: string,
+      refetch: () => Promise<unknown>,
+    ) =>
+      renderHook(
+        ({ items }) =>
+          useOptimisticActivityHistoryItems({
+            items,
+            userId,
+            hostId: "host-settled-elsewhere",
+            enabled: true,
+            refreshScope,
+            refetch,
+          }),
+        {
+          initialProps: { items: [staleA, staleB] as readonly HistoryItem[] },
+        },
+      );
+    const scopeA = renderScope("a", refetchA);
+    const scopeB = renderScope("b", refetchB);
+
+    act(() => {
+      observeOwnHistoryRecordChange(userId, "epic-a", 22_000);
+      observeOwnHistoryRecordChange(userId, "epic-b", 22_000);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(750);
+    });
+    expect(refetchA).toHaveBeenCalledTimes(1);
+    expect(refetchB).toHaveBeenCalledTimes(1);
+
+    scopeA.rerender({
+      items: [historyItem("epic-a", 1, 22_000), staleB],
+    });
+    scopeB.rerender({
+      items: [staleA, historyItem("epic-b", 1, 22_000)],
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    expect(refetchB).toHaveBeenCalledTimes(2);
+    expect(refetchA).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600_000);
+    });
+    expect(refetchA).toHaveBeenCalledTimes(2);
+    expect(refetchB).toHaveBeenCalledTimes(2);
+  });
+
   it("refreshes a scope when it becomes enabled after an own idle record change", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(30_000);
     const userId = `reenabled-${crypto.randomUUID()}`;
-    const refetch = vi.fn(() => Promise.resolve());
+    const refetch = vi.fn(() => Promise.resolve(DELIVERED));
     const { rerender } = renderHook(
       ({ enabled }) =>
         useOptimisticActivityHistoryItems({
@@ -1625,7 +1766,7 @@ describe("optimistic activity history projection", () => {
     vi.setSystemTime(100);
     const userId = `ttl-${crypto.randomUUID()}`;
     hookState.workingEpicIds = new Set(["ttl-epic"]);
-    const refetch = vi.fn(() => Promise.resolve());
+    const refetch = vi.fn(() => Promise.resolve(DELIVERED));
     const { result, rerender } = renderHook(() =>
       useOptimisticActivityHistoryItems({
         items: [historyItem("ttl-epic", 1, undefined)],
@@ -1658,7 +1799,7 @@ describe("optimistic activity history projection", () => {
         userId,
         hostId: "host-active-ttl",
         enabled: true,
-        refetch: () => Promise.resolve(),
+        refetch: () => Promise.resolve(DELIVERED),
       }),
     );
     expect(result.current[0]?.recentAtMs).toBe(100);
@@ -1677,7 +1818,7 @@ describe("optimistic activity history projection", () => {
     vi.useFakeTimers();
     vi.setSystemTime(40_000);
     const userId = `idle-delta-${crypto.randomUUID()}`;
-    const refetch = vi.fn(() => Promise.resolve());
+    const refetch = vi.fn(() => Promise.resolve(DELIVERED));
     const { result } = renderHook(() =>
       useOptimisticActivityHistoryItems({
         items: [historyItem("idle-epic", 5, undefined)],
@@ -1704,8 +1845,8 @@ describe("optimistic activity history projection", () => {
     const userId = `filtered-refresh-${crypto.randomUUID()}`;
     const filteredItems: readonly HistoryItem[] = [];
     const unfilteredItems = [historyItem("idle-epic", 5, undefined)];
-    const filteredRefetch = vi.fn(() => Promise.resolve());
-    const recentRefetch = vi.fn(() => Promise.resolve());
+    const filteredRefetch = vi.fn(() => Promise.resolve(DELIVERED));
+    const recentRefetch = vi.fn(() => Promise.resolve(DELIVERED));
     const filtered = renderHook(() =>
       useOptimisticActivityHistoryItems({
         items: filteredItems,
