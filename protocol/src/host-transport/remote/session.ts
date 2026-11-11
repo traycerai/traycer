@@ -7584,18 +7584,23 @@ function indexMethodRegistry(
 }
 
 /**
- * When an attach grant expires, by this client clock: its `expiresInSeconds`
- * from the moment it was requested. The server mints it after that moment,
- * so this is at or before the JWT `exp`: a leg the relay refused for an
- * expired grant is never counted as the host, and one that failed for a host
- * reason between this and the real `exp` is discarded instead, at most once
- * per grant. It is wall-clock time (`Date.now`): a backward clock change can
- * count a leg on an already expired grant as the host, and a forward one can
- * discard the failure of a leg on a live grant; so can a difference between
- * the authn and relay clocks.
+ * When an attach grant expires, by this client clock. Authn mints the grant
+ * after it was requested, stamps `iat` in whole seconds rounded down, and sets
+ * the JWT `exp` to `iat` plus the `expiresInSeconds` it returns; the relay
+ * refuses the grant from `exp` on, with no tolerance. So, read on one clock,
+ * the request time rounded down to its second plus that lifetime is at or
+ * before `exp`: a leg the relay refused for an expired grant is never counted
+ * as the host. The error runs the other way: a leg that failed for a host
+ * reason from this until `exp` is discarded instead, at most once per grant.
+ * That interval is the mint's second minus the request's second: none when
+ * both fall in the same second, and less than the request-to-mint time plus
+ * one second otherwise. It is wall-clock time (`Date.now`): a backward clock
+ * change can count a leg on an already expired grant as the host, and a
+ * forward one can discard the failure of a leg on a live grant; so can a
+ * difference between this clock and the authn or relay clock.
  */
 function attachGrantExpiresAt(grant: AttachGrant, requestedAt: number): number {
-  return requestedAt + grant.expiresInSeconds * 1000;
+  return (Math.floor(requestedAt / 1000) + grant.expiresInSeconds) * 1000;
 }
 
 /**

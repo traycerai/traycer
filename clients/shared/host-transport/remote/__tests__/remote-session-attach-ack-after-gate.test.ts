@@ -241,14 +241,16 @@ class FakeRelay {
    * upgrade does.
    */
   autoOpen: OpenBehavior | "hold" | "fail" = "ack";
-  private readonly mints = new Map<
-    string,
-    { readonly at: number; readonly lifetimeMs: number }
-  >();
+  /** The `exp` of each grant, in whole seconds, as the issuer stamps it. */
+  private readonly expiries = new Map<string, number>();
 
-  /** Remembers when a grant was minted, so the relay can refuse it once stale. */
+  /**
+   * Authn issues `iat` as the whole second of the mint and `exp = iat + TTL`,
+   * so a grant expires at a whole second, earlier than `at + TTL` unless the
+   * mint fell exactly on one.
+   */
   recordMint(grant: string, at: number, expiresInSeconds: number): void {
-    this.mints.set(grant, { at, lifetimeMs: expiresInSeconds * 1_000 });
+    this.expiries.set(grant, Math.floor(at / 1_000) + expiresInSeconds);
   }
 
   private rejectUpgrade(leg: Leg): void {
@@ -277,9 +279,9 @@ class FakeRelay {
     leg.onclose = (code, reason) => native.fire("close", "", code, reason);
     leg.onerror = () => native.fire("error", "", 0, "");
     const grant = leg.params.get("grant");
-    const minted = grant === null ? undefined : this.mints.get(grant);
-    const stale =
-      minted !== undefined && Date.now() >= minted.at + minted.lifetimeMs;
+    const exp = grant === null ? undefined : this.expiries.get(grant);
+    // The relay verifies with no clock tolerance: expired from `exp` on.
+    const stale = exp !== undefined && Math.floor(Date.now() / 1_000) >= exp;
     if (stale || this.autoOpen === "fail") {
       queueMicrotask(() => this.rejectUpgrade(leg));
       return leg;
@@ -658,8 +660,8 @@ interface RelayFixture {
 }
 
 /**
- * Grants the relay dates from the moment of the request, as a server stamps
- * the expiry when it mints; the answer reaches the client `latencyMs` later.
+ * Grants the relay dates from the whole second of the request, as the issuer
+ * stamps `iat` when it mints; the answer reaches the client `latencyMs` later.
  */
 function countingGrants(
   relay: FakeRelay,
@@ -708,10 +710,13 @@ const POOL_ENTRY: PoolHostDirectoryEntry = {
 
 /** How long the grant request takes to be answered. */
 const SLOW_GRANT_MS = 5_000;
-/** After the relay expiry (request + 300 s) but before receipt + 300 s. */
+/** After the relay expiry (the request second + 300 s) but before receipt + 300 s. */
 const SLOW_RELEASE_MS = 302_000;
 /** Before the relay expiry. */
 const SLOW_LIVE_RELEASE_MS = 298_000;
+
+/** Milliseconds into a second at which the requests of the whole-second cases are made. */
+const LATE_IN_SECOND_MS = 900;
 
 /** The session redial backoff after a dropped leg. */
 const REDIAL_MS = 1_000;
@@ -865,6 +870,17 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
         relay.openBearers.length > 0 || relay.legs.some((leg) => leg.closed),
       10_000,
     );
+  }
+
+  /** Steps the fake clock to the next instant that is `LATE_IN_SECOND_MS` into a second. */
+  /** When the relay starts refusing a grant requested at `requestedAt`: its whole-second `exp`. */
+  function relayExpiryMs(requestedAt: number): number {
+    return (Math.floor(requestedAt / 1_000) + GRANT_LIFETIME_SECONDS) * 1_000;
+  }
+
+  async function stepToLateInSecond(): Promise<void> {
+    const intoSecond = Date.now() % 1_000;
+    await step((LATE_IN_SECOND_MS - intoSecond + 1_000) % 1_000);
   }
 
   beforeEach(() => {
@@ -1185,6 +1201,89 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     session.start();
     await advanceUntil(() => hostDialGate.stats().queued === 1, 20_000);
     await step(grants.mintedAt[0] + SLOW_LIVE_RELEASE_MS - Date.now());
+
+    holders[0].fireClose(1006, "released");
+    await advanceUntil(() => relay.legs.length === 1, 5_000);
+    await step(0);
+
+    expect(evidence.refusals).toHaveLength(1);
+    expect(evidence.indeterminates).toEqual([]);
+  });
+
+  it("retires a dial the relay rejected for an expired grant as indeterminate when its grant was requested late in a second", async () => {
+    const holders = await holdEveryGateSlot();
+    const { session, evidence, grants } = buildRelayFixture(
+      "host-late-second-attach",
+      0,
+    );
+    await stepToLateInSecond();
+    session.start();
+    await advanceUntil(() => hostDialGate.stats().queued === 1, 5_000);
+    const requestedAt = grants.mintedAt[0];
+    expect(requestedAt % 1_000).toBe(LATE_IN_SECOND_MS);
+    const expMs = relayExpiryMs(requestedAt);
+    expect(expMs + 100).toBeLessThan(requestedAt + GRANT_LIFETIME_MS);
+    await step(expMs + 100 - Date.now());
+
+    holders[0].fireClose(1006, "released");
+    await advanceUntil(() => relay.legs.length === 1, 5_000);
+    await step(0);
+
+    expect(evidence.refusals).toEqual([]);
+    expect(evidence.indeterminates).toHaveLength(1);
+
+    await advanceUntil(() => grants.count === 2, 60_000);
+    await advanceUntil(() => session.isReady(), 60_000);
+
+    expect(evidence.refusals).toEqual([]);
+  });
+
+  it("retires a claim dial the relay rejected for an expired grant as indeterminate when its grant was requested late in a second", async () => {
+    const { session, evidence, grants } = buildRelayFixture(
+      "host-late-second-claim",
+      0,
+    );
+    session.start();
+    await advanceUntil(() => session.isReady(), 20_000);
+
+    const holders = await holdEveryGateSlot();
+    await stepToLateInSecond();
+    relay.dropLeg(1006, "net");
+    await advanceUntil(() => hostDialGate.stats().queued === 1, 5_000);
+    const requestedAt = grants.mintedAt[1];
+    expect(requestedAt % 1_000).toBe(LATE_IN_SECOND_MS);
+    const expMs = relayExpiryMs(requestedAt);
+    const reportedAtDrop = evidence.refusals.length;
+    const indeterminateAtDrop = evidence.indeterminates.length;
+    await step(expMs + 100 - Date.now());
+
+    holders[0].fireClose(1006, "released");
+    await advanceUntil(() => relay.legs.length === 2, 5_000);
+    await step(0);
+
+    expect(evidence.refusals).toHaveLength(reportedAtDrop);
+    expect(evidence.indeterminates).toHaveLength(indeterminateAtDrop + 1);
+
+    await advanceUntil(() => relay.resumes.length === 1, 120_000);
+    await advanceUntil(() => session.isReady(), 60_000);
+
+    expect(evidence.refusals).toHaveLength(reportedAtDrop);
+  });
+
+  it("still reports one refusal when a dial on a live grant requested late in a second fails before it opens", async () => {
+    relay.autoOpen = "fail";
+    const holders = await holdEveryGateSlot();
+    const { session, evidence, grants } = buildRelayFixture(
+      "host-late-second-live",
+      0,
+    );
+    await stepToLateInSecond();
+    session.start();
+    await advanceUntil(() => hostDialGate.stats().queued === 1, 5_000);
+    const requestedAt = grants.mintedAt[0];
+    expect(requestedAt % 1_000).toBe(LATE_IN_SECOND_MS);
+    const expMs = relayExpiryMs(requestedAt);
+    await step(expMs - 100 - Date.now());
 
     holders[0].fireClose(1006, "released");
     await advanceUntil(() => relay.legs.length === 1, 5_000);
