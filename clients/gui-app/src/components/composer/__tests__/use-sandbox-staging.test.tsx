@@ -670,6 +670,12 @@ describe("useSandboxStaging New rows", () => {
     const priorStage = readStagedSandbox(SURFACE);
 
     fireEvent.click(screen.getByTestId("settings-host-switcher"));
+    const pickerTrigger = screen.getByTestId("settings-host-switcher");
+    pickerTrigger.focus();
+    expect(document.activeElement).toBe(pickerTrigger);
+    expect(
+      screen.getByTestId("host-switcher-new-sandbox-personal"),
+    ).toBeDefined();
     fireEvent.click(screen.getByTestId("host-switcher-new-sandbox-personal"));
 
     try {
@@ -700,6 +706,13 @@ describe("useSandboxStaging New rows", () => {
       const arrowTarget = document.activeElement;
       if (arrowTarget === null) throw new Error("expected focused picker");
       fireEvent.keyDown(arrowTarget, { key: "ArrowDown" });
+      const listbox = screen.getByRole("listbox");
+      expect(document.activeElement).toBe(listbox);
+      expect(
+        screen
+          .getByTestId("host-switcher-new-sandbox-team-1")
+          .getAttribute("data-selected"),
+      ).toBe("true");
       const enterTarget = document.activeElement;
       if (enterTarget === null) throw new Error("expected focused picker");
       fireEvent.keyDown(enterTarget, { key: "Enter" });

@@ -497,7 +497,9 @@ export function HostSwitcher(props: {
                       command !== null &&
                       !command.contains(document.activeElement)
                     ) {
-                      command.focus();
+                      command
+                        .querySelector<HTMLElement>("[cmdk-list]")
+                        ?.focus();
                     }
                     if (props.composer?.onPickNew(configurationKey) !== false) {
                       setOpen(false);
