@@ -57,7 +57,7 @@ export interface ChatScrollProbe {
   readonly seedSaved: (saved: {
     readonly mode: "following-end" | "free-scrolling";
     readonly anchorMessageId: string | null;
-    readonly anchorRowKey: string | null;
+    readonly anchorRowKey?: string | null;
     readonly anchorIndex: number | null;
     readonly offset: number;
   }) => void;
