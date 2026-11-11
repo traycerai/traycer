@@ -55,7 +55,8 @@ import "@/index.css";
  * Rows: a task waiting on the person (its session open in this window, so
  * its agents fold under a chevron), a periodic task with agents working, a
  * finished task whose result is unseen, a periodic task with nothing going
- * on, and a quiet, seen task that the list leaves out. `?empty=1` lists
+ * on, and a quiet, seen task whose unknown waiting state keeps it listed.
+ * `?empty=1` lists
  * nothing; `?theme=dark` the dark theme, set as the app sets it, through the
  * settings store the theme applier follows.
  */
