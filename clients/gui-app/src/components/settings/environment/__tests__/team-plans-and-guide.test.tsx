@@ -171,7 +171,7 @@ describe("TeamPlans", () => {
       wrapper: editor.Wrapper,
     });
 
-    const signIn = await screen.findByRole("button", { name: /link a plan/i });
+    const signIn = await screen.findByRole("button", { name: /sign in/i });
     await userEvent.click(signIn);
     expect(useProviderLinkDialogStore.getState().target).toMatchObject({
       providerId: "claude-code",
@@ -189,7 +189,7 @@ describe("TeamPlans", () => {
       wrapper: viewer.Wrapper,
     });
     await screen.findByText(/Ada.s .* plan/);
-    expect(screen.queryByRole("button", { name: /link a plan/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /sign in/i })).toBeNull();
     expect(screen.queryByRole("button", { name: "Unlink" })).toBeNull();
     expect(
       screen.getByText("Ask a teammate to sign in on Providers."),
@@ -402,7 +402,7 @@ describe("TeamPlans", () => {
     });
 
     await userEvent.click(
-      await screen.findByRole("button", { name: /link a plan/i }),
+      await screen.findByRole("button", { name: /sign in/i }),
     );
     expect(useProviderLinkDialogStore.getState().target).toMatchObject({
       providerId: "claude-code",

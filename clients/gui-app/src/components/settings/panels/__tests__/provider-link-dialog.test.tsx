@@ -243,7 +243,7 @@ function pasteAndLink(code: string): void {
   fireEvent.change(screen.getByTestId("provider-link-code"), {
     target: { value: code },
   });
-  fireEvent.click(screen.getByRole("button", { name: "Link" }));
+  fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 }
 
 describe("the intro", () => {
@@ -289,7 +289,7 @@ describe("the intro", () => {
 });
 
 describe("a sign-in URL with a pasted code", () => {
-  it("opens the sign-in page, sends the trimmed code and ends on Linked as <account>", async () => {
+  it("opens the sign-in page, sends the trimmed code and ends on Signed in", async () => {
     await reachSignIn(PROFILE_ID);
     expect(
       screen.getByText("Sign in on claude.ai, then paste the code it shows."),
@@ -318,7 +318,7 @@ describe("a sign-in URL with a pasted code", () => {
       code: "abc#def",
       environmentId: PERSONAL_ENV_ID,
     });
-    expect(linked.textContent).toBe("Linked as a@x.test.");
+    expect(linked.textContent).toBe("Signed in.");
   });
 
   it("closes and clears the target on Done", async () => {
@@ -493,7 +493,7 @@ describe("a device code", () => {
     });
     expect(linkMock.complete).toHaveBeenCalledTimes(3);
     expect(screen.getByTestId("provider-link-linked").textContent).toBe(
-      "Linked as dev@x.test.",
+      "Signed in.",
     );
 
     // Settled: no further polls.
@@ -557,14 +557,14 @@ describe("a device code", () => {
 });
 
 describe("a local handoff", () => {
-  it("shows Linking…, polls every 2 s, then Linked", async () => {
+  it("shows Signing in…, polls every 2 s, then Signed in", async () => {
     vi.useFakeTimers();
     linkMock.link.mockResolvedValueOnce(HANDOFF_RESPONSE);
     await openDialog("claude-code", PROFILE_ID);
     await clickAndSettle(screen.getByRole("button", { name: "Continue" }));
 
     expect(screen.getByTestId("provider-link-linking").textContent).toBe(
-      "Linking…",
+      "Signing in…",
     );
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1_999);
@@ -591,7 +591,7 @@ describe("a local handoff", () => {
     });
     expect(linkMock.complete).toHaveBeenCalledTimes(2);
     expect(screen.getByTestId("provider-link-linked").textContent).toBe(
-      "Linked as a@x.test.",
+      "Signed in.",
     );
   });
 });
@@ -657,7 +657,7 @@ describe("a refused start", () => {
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
 
     const line = await screen.findByTestId("provider-link-unavailable");
-    expect(line.textContent).toBe("Connect to Traycer to link this profile.");
+    expect(line.textContent).toBe("Connect to Traycer to sign in.");
     expect(screen.queryByText(/internal-detail-xyz/)).toBeNull();
 
     linkMock.link.mockResolvedValueOnce(SIGN_IN_RESPONSE);
@@ -692,9 +692,7 @@ describe("a refused start", () => {
     pasteAndLink("abc#def");
 
     const line = await screen.findByTestId("provider-link-failed");
-    expect(line.textContent).toBe(
-      "Sign in to this profile on this computer first, then link it.",
-    );
+    expect(line.textContent).toBe("Sign-in did not finish. Try again.");
   });
 });
 

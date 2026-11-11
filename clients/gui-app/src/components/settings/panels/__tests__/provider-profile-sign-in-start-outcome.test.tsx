@@ -4,6 +4,14 @@ import type {
   ProviderLoginRefusal,
   ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
+import type {
+  ConnectionManifest,
+  SchemaVersion,
+} from "@traycer/protocol/framework/index";
+import type {
+  ProvidersLinkRequestV12,
+  ProvidersLinkResponseV12,
+} from "@traycer/protocol/host/environment-schemas";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   cleanup,
@@ -12,6 +20,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   HostClient,
@@ -20,6 +29,16 @@ import type {
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { PersonalPageContext } from "@/components/settings/personal/personal-page-context";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  buildEnvironmentClient,
+  environmentStatusFixture,
+} from "@/lib/environment/__tests__/environment-test-support";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 
 // The whole point of this suite is the REAL mutation stack: `useMutation`'s
 // observer, the host-scoped hook's own `onError` toast, and the login flow on
@@ -80,6 +99,9 @@ import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/pro
 
 const PROVIDER_ID = "claude-code";
 const PROFILE_ID = "profile-surya-2";
+const ADD_HOST_ID = "host-profile-add-route";
+const PERSONAL_ENVIRONMENT_ID = "environment-personal-profile-add";
+const SIGN_IN_V12 = { major: 1, minor: 2 } as const;
 
 function signedOutProfile(): ProviderProfile {
   return {
@@ -258,6 +280,169 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  resetNegotiatedManifests();
+  useAuthStore.setState({
+    status: "signed-out",
+    profile: null,
+    contextMetadata: null,
+    signingInAttempt: null,
+    signedOutCause: "retired",
+    hostRefusedHeldBearer: false,
+  });
+});
+
+function renderClaudeAddDialog(client: HostClient<HostRpcRegistry>): void {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  render(
+    <PersonalPageContext.Provider
+      value={{
+        section: "providers",
+        pick: { kind: "personal" },
+        state: { kind: "ready", status: environmentStatusFixture({}) },
+        line: null,
+        hostName: "Studio",
+        localOverrides: [],
+        hostId: ADD_HOST_ID,
+        client,
+        notices: [],
+        review: [],
+      }}
+    >
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <AddProviderProfileDialog
+            state={claudeState(signedOutProfile())}
+            client={client}
+            isLocalHost
+            open
+            onOpenChange={() => undefined}
+            onFailedAttempt={() => undefined}
+            onProfileCreated={() => undefined}
+          />
+        </TooltipProvider>
+      </QueryClientProvider>
+    </PersonalPageContext.Provider>,
+  );
+}
+
+function addRouteManifest(linkVersion: SchemaVersion): ConnectionManifest {
+  return {
+    "providers.link": linkVersion,
+    "providers.linkComplete": SIGN_IN_V12,
+    "providers.linkCancel": { major: 1, minor: 0 },
+    "providers.list": { major: 10, minor: 9 },
+    "environment.list": { major: 1, minor: 0 },
+  };
+}
+
+function buildPersonalAddClient(
+  linkRequests: ProvidersLinkRequestV12[],
+  startRequests: unknown[],
+): HostClient<HostRpcRegistry> {
+  const { client } = buildEnvironmentClient({
+    hostId: ADD_HOST_ID,
+    handlers: {
+      "environment.list": () => ({
+        environments: [
+          {
+            environmentId: PERSONAL_ENVIRONMENT_ID,
+            ownerKind: "user",
+            ownerId: "owner-test",
+            roomId: "room-test",
+            label: "Personal",
+            effectiveRole: "owner",
+            kind: "personal",
+            hostCount: 0,
+            providerHandle: null,
+          },
+        ],
+      }),
+      "providers.link": (request) => {
+        linkRequests.push(request);
+        const response: ProvidersLinkResponseV12 = {
+          linkId: "link-add-route",
+          environmentProfileId: "environment-profile-add-route",
+          prompt: {
+            kind: "sign_in_url",
+            url: "https://auth.example.test/sign-in",
+            codePrompt: "One-time code",
+          },
+        };
+        return response;
+      },
+      "providers.linkComplete": () => ({
+        state: "pending",
+        code: null,
+        account: null,
+        expectedAccount: null,
+        environmentProfileId: null,
+        profileId: null,
+      }),
+      "providers.linkCancel": () => ({}),
+      "providers.list": () => ({ providers: [], native: null }),
+      "providers.startLogin": (request) => {
+        startRequests.push(request);
+        return Promise.reject(refusal());
+      },
+    },
+  });
+  return client;
+}
+
+describe("managed profile add entry-point routing", () => {
+  it("uses the Personal environment on @1.2 and creates a Claude profile there", async () => {
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: {
+        userId: "test-viewer",
+        userName: "Test Viewer",
+        email: "viewer@example.test",
+      },
+      contextMetadata: { userId: "test-viewer", username: "test-viewer" },
+      signingInAttempt: null,
+      signedOutCause: null,
+      hostRefusedHeldBearer: false,
+    });
+    const linkRequests: ProvidersLinkRequestV12[] = [];
+    const startRequests: unknown[] = [];
+    const client = buildPersonalAddClient(linkRequests, startRequests);
+    recordNegotiatedHostManifest(ADD_HOST_ID, addRouteManifest(SIGN_IN_V12));
+
+    renderClaudeAddDialog(client);
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Sign in" }),
+    );
+
+    await waitFor(() => expect(linkRequests).toHaveLength(1));
+    expect(linkRequests[0]).toEqual({
+      providerId: "claude-code",
+      profileId: null,
+      environmentId: PERSONAL_ENVIRONMENT_ID,
+      createProfile: { label: "New profile", shareSkillsAndPlugins: true },
+      replaceAccount: false,
+    });
+    expect(startRequests).toEqual([]);
+  });
+
+  it("keeps the local add flow on a host that negotiates @1.1", async () => {
+    const linkRequests: ProvidersLinkRequestV12[] = [];
+    const startRequests: unknown[] = [];
+    const client = buildPersonalAddClient(linkRequests, startRequests);
+    recordNegotiatedHostManifest(
+      ADD_HOST_ID,
+      addRouteManifest({ major: 1, minor: 1 }),
+    );
+
+    renderClaudeAddDialog(client);
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Sign in" }),
+    );
+
+    await waitFor(() => expect(startRequests).toHaveLength(1));
+    expect(linkRequests).toEqual([]);
+  });
 });
 
 describe.each(MOUNT_MODES)(
@@ -644,7 +829,7 @@ describe("the add-profile dialog when the provider refuses the sign-in", () => {
     const onFailedAttempt = vi.fn<(attempt: unknown) => void>();
     renderAntigravityAddDialog(onFailedAttempt);
 
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     expect(await screen.findByText(REFUSAL_HEADLINE)).toBeTruthy();
     expect(screen.getByText(ANTIGRAVITY_REFUSAL.reason)).toBeTruthy();
@@ -668,7 +853,7 @@ describe("the add-profile dialog when the provider refuses the sign-in", () => {
       refusal: ANTIGRAVITY_REFUSAL,
     });
     renderAntigravityAddDialog(vi.fn());
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     fireEvent.click(
       await screen.findByRole("button", { name: "Verify account" }),
@@ -694,7 +879,7 @@ describe("the add-profile dialog when the provider refuses the sign-in", () => {
       refusal: { reason: "This account cannot be used.", actionUrl: null },
     });
     renderAntigravityAddDialog(vi.fn());
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     expect(await screen.findByText(REFUSAL_HEADLINE)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Verify account" })).toBeNull();
@@ -711,7 +896,7 @@ describe("the add-profile dialog when the provider refuses the sign-in", () => {
       refusal: null,
     });
     renderAntigravityAddDialog(vi.fn());
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     expect(
       await screen.findByText(
@@ -794,7 +979,7 @@ describe.each(MOUNT_MODES)(
       expect(hostCallsFor("providers.ensurePack")).toBe(0);
     });
 
-    it("the add-profile dialog shows the sentence and its Link account control sends nothing", async () => {
+    it("the add-profile dialog shows the sentence and its Sign in control sends nothing", async () => {
       const queryClient = new QueryClient({
         defaultOptions: {
           queries: { retry: false },
@@ -826,7 +1011,7 @@ describe.each(MOUNT_MODES)(
       );
 
       expect(await screen.findByText(MACOS_SENTENCE)).toBeTruthy();
-      const link = screen.getByRole("button", { name: /Link account/u });
+      const link = screen.getByRole("button", { name: /Sign in/u });
       expect(link.hasAttribute("disabled")).toBe(true);
       fireEvent.click(link);
       expect(hostCallsFor("providers.startLogin")).toBe(0);

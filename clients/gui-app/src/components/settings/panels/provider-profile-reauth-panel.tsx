@@ -1,3 +1,10 @@
+import { EnvironmentProfileSignIn } from "@/components/providers/environment-profile-sign-in";
+import {
+  useEnvironmentProfileSignInSupported,
+  useProfileSignInEnvironment,
+} from "@/hooks/providers/use-profile-sign-in-environment";
+import { useOptionalHostClient, type HostRpcRegistry } from "@/lib/host";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { useProvidersLoginOwnership } from "@/hooks/providers/use-providers-login-ownership";
 import {
   useCallback,
@@ -47,6 +54,8 @@ interface ProviderProfileReauthPanelProps {
   readonly state: ProviderCliState;
   readonly profile: ProviderProfile;
   readonly isLocalHost: boolean;
+  readonly replaceAccount: boolean;
+  readonly onDeliveryPending?: () => void;
   /** Settles a reconnect of the SAME account without the acknowledgment card.
    *  The profile is already authenticated and persisted by the time the flow
    *  reaches `identity` - the card only asks the user to confirm something
@@ -67,7 +76,68 @@ interface ProviderProfileReauthPanelProps {
   readonly onDone: () => void;
 }
 
-export function ProviderProfileReauthPanel({
+export function ProviderProfileReauthPanel(
+  props: ProviderProfileReauthPanelProps,
+): ReactNode {
+  const client = useOptionalHostClient();
+  const supported = useEnvironmentProfileSignInSupported(
+    client,
+    props.state.providerId,
+    props.profile.kind === "managed",
+  );
+  if (supported && client !== null)
+    return <RoutedProviderProfileReauthPanel {...props} client={client} />;
+  return <LocalProviderProfileReauthPanel {...props} />;
+}
+
+function RoutedProviderProfileReauthPanel(
+  props: ProviderProfileReauthPanelProps & {
+    readonly client: HostClient<HostRpcRegistry>;
+  },
+): ReactNode {
+  const { client } = props;
+  const route = useProfileSignInEnvironment(client);
+  const refusal = useHostCredentialRefusal(client.getActiveHostId());
+  if (route.kind === "environment") {
+    if (refusal !== null) return <CredentialRefusalNote refusal={refusal} />;
+    return (
+      <EnvironmentProfileSignIn
+        client={client}
+        request={{
+          providerId: props.state.providerId,
+          profileId:
+            props.profile.environmentProfileId ?? props.profile.profileId,
+          environmentId: route.environmentId,
+          createProfile: null,
+          replaceAccount: props.replaceAccount,
+        }}
+        autoStart={!props.replaceAccount}
+        waitForLocalProfile
+        disabled={false}
+        onComplete={({ profile }) => {
+          if (profile === null) return;
+          if (props.onSameAccountReconnected !== null)
+            props.onSameAccountReconnected(profile);
+          else props.onDone();
+        }}
+        onDeliveryPending={props.onDeliveryPending}
+        onCancel={props.onCancel}
+      />
+    );
+  }
+  if (route.kind === "reading") return <MutedAgentSpinner />;
+  if (route.kind === "failed")
+    return (
+      <div>
+        <p>Couldn't read where this profile will be available.</p>
+        <Button onClick={route.retry}>Retry</Button>
+        <Button onClick={props.onCancel}>Back</Button>
+      </div>
+    );
+  return <LocalProviderProfileReauthPanel {...props} />;
+}
+
+function LocalProviderProfileReauthPanel({
   state,
   profile,
   isLocalHost,

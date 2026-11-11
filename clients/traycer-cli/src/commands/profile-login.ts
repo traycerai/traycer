@@ -1,4 +1,9 @@
 import { randomUUID } from "node:crypto";
+import {
+  SIGNED_IN_RECEIVING_LINE,
+  usesEnvironmentSignIn,
+} from "../../../shared/providers/environment-profile-sign-in";
+import { runEnvironmentProfileLogin } from "./profile-environment-login";
 import { createInterface } from "node:readline";
 import {
   PROVIDERS_AWAIT_LOGIN_RESPONSE_BUDGET_MS,
@@ -15,6 +20,7 @@ import { openInBrowser } from "../auth/login-flow";
 import {
   callHostRpcWithDispatch,
   PLAIN_DISPATCH,
+  readLocalHostMethodVersion,
   toAgentCliError,
   type HostRpcDispatch,
 } from "../internal/host-rpc";
@@ -197,7 +203,8 @@ const KEEPALIVE_INTERVAL_MS = 60_000;
 
 const INTERRUPTED_EXIT_CODE = 130;
 
-type LoginOutcome =
+export type LoginOutcome =
+  | { readonly status: "signed-in-pending" }
   | {
       readonly status: "signed-in";
       readonly profile: ProfileListRow | null;
@@ -243,12 +250,26 @@ export function buildProfileLoginCommand(
         exitCode: 1,
       });
     }
-    const outcome = await runLogin(ctx, io, providerId, target, state);
+    const environmentSignIn =
+      (target.create !== null || target.profileId !== null) &&
+      usesEnvironmentSignIn(
+        providerId,
+        await readLocalHostMethodVersion("providers.link"),
+      );
+    if (
+      environmentSignIn &&
+      providerId === "claude-code" &&
+      !io.stdinIsTerminal()
+    )
+      throw notInteractive();
+    const outcome = environmentSignIn
+      ? await runEnvironmentProfileLogin(ctx, io, providerId, target, state)
+      : await runLogin(ctx, io, providerId, target, state);
     return resultOf(providerId, outcome);
   };
 }
 
-interface ResolvedTarget {
+export interface ResolvedTarget {
   readonly create: { readonly label: string | null } | null;
   /** The existing row to sign in; null for a create and for ambient. */
   readonly profileId: string | null;
@@ -826,6 +847,8 @@ function resultOf(
   const provider = describeProvider(providerId);
   const data = { providerId, ...outcome };
   switch (outcome.status) {
+    case "signed-in-pending":
+      return { data, human: SIGNED_IN_RECEIVING_LINE, exitCode: 0 };
     case "signed-in":
       return {
         data,

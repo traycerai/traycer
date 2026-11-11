@@ -39,20 +39,20 @@ function renderPlans(overrides: {
 afterEach(cleanup);
 
 describe("PlansCard", () => {
-  it("gives a viewer no Link or Unlink verbs", () => {
+  it("gives a viewer no Sign in or Unlink actions", () => {
     renderPlans({ canEdit: false });
 
-    expect(screen.queryByRole("button", { name: /link a plan/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
     expect(screen.queryByRole("button", { name: /unlink/i })).toBeNull();
   });
 
   it("says no plan is linked when the team has none", () => {
     renderPlans({ canEdit: true, plans: [] });
 
-    expect(screen.getByText("No plans linked.")).toBeTruthy();
-    const link = screen.getByRole("button", { name: "Link a plan" });
-    expect(link.getAttribute("data-size")).toBe("xs");
-    expect(link.getAttribute("data-variant")).toBe("outline");
+    expect(screen.getByText("No plans yet.")).toBeTruthy();
+    const signIn = screen.getByRole("button", { name: "Sign in" });
+    expect(signIn.getAttribute("data-size")).toBe("xs");
+    expect(signIn.getAttribute("data-variant")).toBe("outline");
     expect(screen.queryByRole("button", { name: "Unlink" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Details" })).toBeNull();
   });
@@ -82,7 +82,7 @@ describe("PlansCard", () => {
       />,
     );
 
-    expect(screen.getByRole("combobox", { name: "Linked plan" })).toBeTruthy();
+    expect(screen.getByRole("combobox", { name: "Plan" })).toBeTruthy();
     expect(screen.getByText("Ada’s Claude Code plan")).toBeTruthy();
     expect(screen.getByText("Signed in")).toBeTruthy();
     expect(
@@ -151,7 +151,7 @@ describe("PlansCard", () => {
     expect(onPreviewUnlink).toHaveBeenCalledExactlyOnceWith(plan);
     expect(onLink).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: /link a plan/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
     expect(onLink).toHaveBeenCalledOnce();
   });
 

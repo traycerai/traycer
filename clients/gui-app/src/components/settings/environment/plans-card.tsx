@@ -30,7 +30,7 @@ export function PlansCard(props: {
     <section className="flex flex-col gap-3" aria-label="Plans">
       <h2 className="text-ui-sm font-medium">Plans</h2>
       {selected === null ? (
-        <p className="text-ui-sm text-muted-foreground">No plans linked.</p>
+        <p className="text-ui-sm text-muted-foreground">No plans yet.</p>
       ) : (
         <LinkedPlanPicker
           plans={props.plans}
@@ -65,7 +65,7 @@ function LinkedPlanPicker(props: {
   return (
     <>
       <SettingsMasterSelect
-        label="Linked plan"
+        label="Plan"
         value={props.selected.id}
         options={props.plans.map((plan) => ({
           value: plan.id,
@@ -100,7 +100,7 @@ function PlanActionRow(props: {
         disabled={props.isPending}
         onClick={props.onLink}
       >
-        Link a plan
+        Sign in
       </Button>
       {selected === null ? null : (
         <Button

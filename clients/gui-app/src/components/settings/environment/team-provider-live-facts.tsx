@@ -133,7 +133,7 @@ function TeamPlanLimits(props: {
   if (props.linkedProfileIds.length === 0)
     return (
       <p role="status" className="text-ui-sm text-muted-foreground">
-        Link a plan to {props.teamName} to see its rate limits.
+        Sign in to {props.teamName} to see its rate limits.
       </p>
     );
   return profiles.map((profile) => (
