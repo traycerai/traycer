@@ -303,6 +303,34 @@ let nextStreamClientId = 1;
  */
 let streamSessionSeq = 0;
 
+/**
+ * A stream dial timeout is reachability evidence, counted once per ROUND: every
+ * stream dial to a host granted before the last timeout counted for that host.
+ * One stall catches every stream dialing through it, and counting each would
+ * let a single stall reach the death streak by itself. A host that never
+ * answers still counts again, once its redials are granted after the counted
+ * timeout. Per process, so each window counts its own rounds.
+ */
+let streamDialGrantSeq = 0;
+const countedStreamDialTimeoutThrough = new Map<string, number>();
+
+function reportStreamDialTimeout(
+  evidence: TransportEvidenceReporter,
+  hostId: string,
+  grantSeq: number,
+): void {
+  const attemptId = `local-stream:d${grantSeq}`;
+  const countedThrough = countedStreamDialTimeoutThrough.get(hostId);
+  if (countedThrough !== undefined && grantSeq <= countedThrough) {
+    // Still one outcome per attempt, as the unary dial reports; this one says
+    // nothing the counted timeout of its round did not.
+    evidence.reportDialIndeterminate(hostId, attemptId, "local-ws");
+    return;
+  }
+  countedStreamDialTimeoutThrough.set(hostId, streamDialGrantSeq);
+  evidence.reportDialTimeout(hostId, attemptId, "local-ws");
+}
+
 export class WsStreamClient<
   Registry extends VersionedStreamRpcRegistry,
 > implements IStreamClient<Registry> {
@@ -2227,9 +2255,16 @@ class StreamSession<
       if (socket !== this.activeSocket) {
         return;
       }
+      streamDialGrantSeq += 1;
+      const grantSeq = streamDialGrantSeq;
       this.dialTimer = setTimeout(() => {
         this.dialTimer = null;
         if (this.phase === "dialing") {
+          reportStreamDialTimeout(
+            this.config.evidence,
+            selected.hostId,
+            grantSeq,
+          );
           this.teardownSocket(4000, "dial-timeout");
           this.onTransportDrop();
         }
