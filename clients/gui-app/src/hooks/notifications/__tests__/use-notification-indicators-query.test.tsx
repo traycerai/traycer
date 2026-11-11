@@ -1152,11 +1152,7 @@ function ActivityObserver(props: { readonly testId: string }): ReactNode {
     enabled: true,
   });
   return (
-    <span data-testid={props.testId}>
-      {`${read.fresh ? "fresh" : "not-fresh"}/${
-        Object.hasOwn(read.indicators.epics, EPIC_ID) ? "has-epic" : "no-epic"
-      }`}
-    </span>
+    <span data-testid={props.testId}>{read.fresh ? "fresh" : "not-fresh"}</span>
   );
 }
 
@@ -1231,7 +1227,7 @@ describe("ordinary and Activity notification indicator observers over one key", 
       </>,
     );
     await vi.waitFor(() => {
-      expect(indicatorText("x")).toBe("fresh/has-epic");
+      expect(indicatorText("x")).toBe("fresh");
     });
     await settleReads();
 
@@ -1243,7 +1239,7 @@ describe("ordinary and Activity notification indicator observers over one key", 
     applyCloudSnapshot([], 1);
     const view = renderObservers(harness, <ActivityObserver testId="x" />);
     await vi.waitFor(() => {
-      expect(indicatorText("x")).toBe("fresh/has-epic");
+      expect(indicatorText("x")).toBe("fresh");
     });
     expect(harness.hostIndicators.requestCount.value).toBe(1);
 
@@ -1282,7 +1278,7 @@ describe("ordinary and Activity notification indicator observers over one key", 
       </>,
     );
     await vi.waitFor(() => {
-      expect(indicatorText("x")).toBe("fresh/has-epic");
+      expect(indicatorText("x")).toBe("fresh");
     });
 
     hold = true;
@@ -1296,7 +1292,7 @@ describe("ordinary and Activity notification indicator observers over one key", 
 
     // Held: the Activity list has no current answer; the ordinary surface
     // keeps drawing the last one it had.
-    expect(indicatorText("x")).toBe("not-fresh/has-epic");
+    expect(indicatorText("x")).toBe("not-fresh");
     expect(indicatorText("b")).toBe("has-epic");
 
     hold = false;
@@ -1304,7 +1300,7 @@ describe("ordinary and Activity notification indicator observers over one key", 
       release?.();
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(indicatorText("x")).toBe("fresh/has-epic");
+    expect(indicatorText("x")).toBe("fresh");
   });
 
   it("an ordinary surface reads and shows what it would alone, with or without an Activity observer", async () => {

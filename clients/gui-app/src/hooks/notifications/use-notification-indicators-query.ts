@@ -85,10 +85,8 @@ export function useNotificationIndicators(
 export function useNotificationIndicatorsWithFreshness(
   args: UseNotificationIndicatorsArgs,
 ): {
-  readonly indicators: SurfaceNotificationIndicators;
   readonly fresh: boolean;
   readonly positiveFresh: boolean;
-  readonly freshIndicators: SurfaceNotificationIndicators;
   readonly cloudPositiveIndicators: SurfaceNotificationIndicators;
   readonly hostPositiveIndicators: SurfaceNotificationIndicators;
   readonly hostId: string | null;
@@ -103,7 +101,6 @@ function useNotificationIndicatorsBase(
   readonly indicators: SurfaceNotificationIndicators;
   readonly fresh: boolean;
   readonly positiveFresh: boolean;
-  readonly freshIndicators: SurfaceNotificationIndicators;
   readonly cloudPositiveIndicators: SurfaceNotificationIndicators;
   readonly hostPositiveIndicators: SurfaceNotificationIndicators;
   readonly hostId: string | null;
@@ -167,13 +164,8 @@ function useNotificationIndicatorsBase(
     !hostIndicators.isPending &&
     hostIndicators.error === null;
   const fresh = positiveFresh && isMixed && cloudFresh;
-  const freshIndicators =
-    isMixed && !cloudFresh
-      ? scopeIndicatorsToOrigin(hostIndicators.data, readHostId)
-      : indicators;
   return {
     indicators,
-    freshIndicators,
     ...attestedPositivePartitions({
       cloudFresh: isMixed && cloudFresh,
       cloud: cloudIndicators,

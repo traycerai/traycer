@@ -325,8 +325,6 @@ vi.mock("@/hooks/bots/use-bot-memory", () => ({
 vi.mock("@/hooks/notifications/use-notification-indicators-query", () => ({
   useNotificationIndicators: () => ({ epics: {}, chats: {} }),
   useNotificationIndicatorsWithFreshness: () => ({
-    indicators: { epics: {}, chats: {} },
-    freshIndicators: { epics: {}, chats: {} },
     cloudPositiveIndicators: { epics: {}, chats: {} },
     hostPositiveIndicators: { epics: {}, chats: {} },
     fresh: true,
