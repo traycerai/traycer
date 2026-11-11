@@ -167,7 +167,7 @@ function TeamComputerReturnDialog(props: {
       <DialogContent className="w-full sm:max-w-prose">
         <DialogHeader>
           <DialogTitle>
-            Return {props.computer?.hostName ?? "this computer"} to its owner?
+            Return {props.computer?.hostName ?? "the computer"} to its owner?
           </DialogTitle>
           <DialogDescription>
             The team will lose access to this computer. Its owner will be

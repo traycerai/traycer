@@ -26,7 +26,6 @@ import type {
 } from "@traycer/protocol/host/environment/contracts";
 import type { AuthEra } from "@traycer-clients/shared/auth/request-context-provider";
 import type { HostOwnershipResult } from "@traycer-clients/shared/host-client/host-ownership";
-import { TEAM_TRANSFER_DISCLOSURE } from "@traycer/protocol/host/environment/team-transfer-disclosure";
 import type {
   HostListItem,
   HostOwnerPrincipal,
@@ -340,99 +339,6 @@ describe("HostEnvironmentSection", () => {
     expect(screen.queryByTestId("host-settings-source")).toBeNull();
   });
 
-  it("offers a team to the local person's computer and confirms its team binding", async () => {
-    const events: string[] = [];
-    const ownershipResults = [
-      ownershipResult(PERSON_OWNER),
-      ownershipResult(TEAM_OWNER),
-    ];
-    mocks.auth.readHostOwnership.mockImplementation(() => {
-      events.push("ownership-read");
-      return Promise.resolve(
-        ownershipResults.shift() ?? ownershipResult(TEAM_OWNER),
-      );
-    });
-    const movePlanCalls: string[] = [];
-    renderSection("personal", {
-      owner: PERSON_OWNER,
-      isLocalMachine: true,
-      handlers: {
-        "environment.host.bind": ({ environmentId }) => {
-          events.push(`bind:${environmentId}`);
-          return teamBinding(true);
-        },
-        "environment.move.plan": () => {
-          movePlanCalls.push("called");
-          throw new Error("team binding must not plan a Personal move");
-        },
-      },
-    });
-
-    const selector = screen.getByRole("combobox", { name: "Environment" });
-    fireEvent.keyDown(selector, { key: "ArrowDown" });
-    fireEvent.click(await screen.findByRole("option", { name: /Acme/ }));
-
-    const dialog = await screen.findByRole("dialog");
-    for (const disclosure of TEAM_TRANSFER_DISCLOSURE) {
-      expect(within(dialog).getByText(disclosure)).toBeTruthy();
-    }
-    expect(within(dialog).queryByText("Personal")).toBeNull();
-    expect(
-      within(dialog).getByRole("button", { name: "Confirm at this computer" }),
-    ).toBeTruthy();
-    fireEvent.click(
-      within(dialog).getByRole("button", { name: "Confirm at this computer" }),
-    );
-
-    expect((await screen.findByRole("status")).textContent).toContain(
-      "Mac mini now belongs to Acme.",
-    );
-    expect(events.slice(0, 3)).toEqual([
-      "ownership-read",
-      "bind:env-team",
-      "ownership-read",
-    ]);
-    expect(movePlanCalls).toEqual([]);
-  });
-
-  it.each([
-    ["still reports the person as owner", ownershipResult(PERSON_OWNER)],
-    ["cannot confirm the owner", { kind: "network-error" }],
-  ] as const)(
-    "does not claim a completed transfer when ownership %s",
-    async (_description, postBindOwner) => {
-      const ownershipResults: HostOwnershipResult[] = [
-        ownershipResult(PERSON_OWNER),
-        postBindOwner,
-      ];
-      mocks.auth.readHostOwnership.mockImplementation(() =>
-        Promise.resolve(ownershipResults.shift() ?? postBindOwner),
-      );
-      renderSection("personal", {
-        owner: PERSON_OWNER,
-        isLocalMachine: true,
-        handlers: {
-          "environment.host.bind": () => teamBinding(true),
-        },
-      });
-
-      const selector = screen.getByRole("combobox", { name: "Environment" });
-      fireEvent.keyDown(selector, { key: "ArrowDown" });
-      fireEvent.click(await screen.findByRole("option", { name: /Acme/ }));
-      const dialog = await screen.findByRole("dialog");
-      fireEvent.click(
-        within(dialog).getByRole("button", {
-          name: "Confirm at this computer",
-        }),
-      );
-
-      expect((await screen.findByRole("alert")).textContent).toContain(
-        "The team transfer could not be confirmed.",
-      );
-      expect(screen.queryByText(/now belongs to Acme/)).toBeNull();
-    },
-  );
-
   it("keeps a team-owned computer fixed to its actual registry owner", async () => {
     mocks.auth.readHostOwnership.mockResolvedValue(ownershipResult(TEAM_OWNER));
     renderSection("personal", {
@@ -441,9 +347,10 @@ describe("HostEnvironmentSection", () => {
       isLocalMachine: true,
     });
 
-    const selector = await screen.findByRole("combobox", {
-      name: "Environment",
-    });
+    expect(
+      await screen.findByText("This computer belongs to Acme."),
+    ).toBeTruthy();
+    const selector = screen.getByRole("combobox", { name: "Environment" });
     expect(selector.textContent).toBe("Acme");
     expect(selector.hasAttribute("disabled")).toBe(true);
     expect(mocks.auth.readHostOwnership).toHaveBeenCalledWith("host-a", {
@@ -454,6 +361,7 @@ describe("HostEnvironmentSection", () => {
   });
 
   it.each([
+    ["a local computer owned by the person", PERSON_OWNER, true],
     ["a remote computer owned by the person", PERSON_OWNER, false],
     ["a computer with unknown ownership", undefined, true],
   ] as const)(
