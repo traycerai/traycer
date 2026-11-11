@@ -380,7 +380,7 @@ describe("<StoragePolicySection />", () => {
     {
       state: "archived chats only",
       value: { chats: false, archivedChatHours: 168 },
-      line: FOOTNOTE,
+      line: null,
     },
   ])("draws the line under the groups for $state", async ({ value, line }) => {
     host.items = [storageItem({ ...value, idleTaskDays: null }, 3)];

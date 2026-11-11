@@ -236,11 +236,9 @@ function windowLabel(group: string, row: string): string {
   return `${group}: ${row}`;
 }
 
-/** The line under the groups, or `null` when nothing can be cleaned. */
+/** The line under the groups, or `null` while Chats is off. */
 function storageFootnote(policy: StoragePolicyValue): string | null {
-  return policy.chats || policy.archivedChatHours !== null
-    ? `${APPLIES_EVERYWHERE} ${CHAT_COMES_BACK}`
-    : null;
+  return policy.chats ? `${APPLIES_EVERYWHERE} ${CHAT_COMES_BACK}` : null;
 }
 
 /**
