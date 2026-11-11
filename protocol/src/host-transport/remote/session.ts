@@ -2984,18 +2984,14 @@ export class RemoteSession<
   }
 
   /**
-   * The current leg reached WebSocket open. `ATTACH_ACK_TIMEOUT_MS` is the
-   * relay budget after the socket opens (`config.ts`), so it starts here and
-   * not at the dial: until open, the dial timer of the socket bounds the wait
-   * from the dial gate grant, and time this client spent queued behind its
-   * own dials is never reported as a host refusal.
-   */
-  /**
    * A leg that ended before it opened, at or after its attach grant expired,
    * says nothing about the host: the relay refuses an expired grant, and the
    * grant can expire while the dial waits for a slot (`ws-dial-gate.ts`), a
-   * wait with no bound of its own. The redial mints a fresh grant, so a host
-   * that really is gone still counts on the next attempt.
+   * wait with no bound of its own. The redial mints a fresh grant, which can
+   * expire in the queue as well. A host that never connects can therefore
+   * stay connecting with only indeterminate outcomes for as long as its dials
+   * keep outliving their grants: one discarded attempt per grant bounds
+   * neither the discarded attempts in a row nor the detection time.
    */
   private legEndProvenance(socket: RelaySocket): ConnectionLossProvenance {
     const expiresAt = this.connection?.attachGrantExpiresAt ?? null;
@@ -3005,6 +3001,13 @@ export class RemoteSession<
     return "host-transport-plane";
   }
 
+  /**
+   * The current leg reached WebSocket open. `ATTACH_ACK_TIMEOUT_MS` is the
+   * relay budget after the socket opens (`config.ts`), so it starts here and
+   * not at the dial: until open, the dial timer of the socket bounds the wait
+   * from the dial gate grant, and time this client spent queued behind its
+   * own dials is never reported as a host refusal.
+   */
   private onLegOpen(generation: number): void {
     if (this.isCurrent(generation)) {
       this.armPhaseTimer(
@@ -7570,6 +7573,18 @@ function indexMethodRegistry(
 }
 
 /**
+ * When an attach grant expires, by this client clock: its `expiresInSeconds`
+ * from the moment it was received. Later than the JWT `exp` by the mint
+ * response latency, so a close inside that sliver still counts as the host.
+ * It is wall-clock time (`Date.now`): a backward clock change can count a leg
+ * on an already expired grant as the host, and a forward one can discard the
+ * failure of a leg on a live grant.
+ */
+function attachGrantExpiresAt(grant: AttachGrant): number {
+  return Date.now() + grant.expiresInSeconds * 1000;
+}
+
+/**
  * A `DialFailureLog` cause for a relay-socket close. The browser WebSocket
  * strips the discriminating fault: a DNS failure (the outage this logging was
  * written for was a relay hostname with NO DNS record), a refused/blocked
@@ -7579,15 +7594,6 @@ function indexMethodRegistry(
  * is the one client-side observable that narrows the fault to the dial
  * itself. Stable per fault (code + reason + phase bucket), so it dedups.
  */
-/**
- * When an attach grant expires, by this client clock: its `expiresInSeconds`
- * from the moment it was received. Later than the JWT `exp` by the mint
- * response latency, so a close inside that sliver still counts as the host.
- */
-function attachGrantExpiresAt(grant: AttachGrant): number {
-  return Date.now() + grant.expiresInSeconds * 1000;
-}
-
 function describeSocketClose(
   phase: SessionPhase,
   info: { readonly code: number; readonly reason: string },
