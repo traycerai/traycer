@@ -326,7 +326,9 @@ vi.mock("@/hooks/notifications/use-notification-indicators-query", () => ({
   useNotificationIndicators: () => ({ epics: {}, chats: {} }),
   useNotificationIndicatorsWithFreshness: () => ({
     indicators: { epics: {}, chats: {} },
+    freshIndicators: { epics: {}, chats: {} },
     fresh: true,
+    positiveFresh: true,
     hostId: "host-notifications",
   }),
 }));

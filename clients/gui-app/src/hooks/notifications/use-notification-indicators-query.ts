@@ -84,6 +84,8 @@ export function useNotificationIndicatorsWithFreshness(
 ): {
   readonly indicators: SurfaceNotificationIndicators;
   readonly fresh: boolean;
+  readonly positiveFresh: boolean;
+  readonly freshIndicators: SurfaceNotificationIndicators;
   readonly hostId: string | null;
 } {
   return useNotificationIndicatorsBase(args);
@@ -92,6 +94,8 @@ export function useNotificationIndicatorsWithFreshness(
 function useNotificationIndicatorsBase(args: UseNotificationIndicatorsArgs): {
   readonly indicators: SurfaceNotificationIndicators;
   readonly fresh: boolean;
+  readonly positiveFresh: boolean;
+  readonly freshIndicators: SurfaceNotificationIndicators;
   readonly hostId: string | null;
 } {
   const feedMode = useNotificationFeedMode();
@@ -143,15 +147,26 @@ function useNotificationIndicatorsBase(args: UseNotificationIndicatorsArgs): {
         { epicIds: args.epicIds, chatIds: args.chatIds },
       )
     : scopeIndicatorsToOrigin(hostIndicators.data, readHostId);
-  const fresh =
+  const positiveFresh =
     args.enabled &&
     !feedModeSettling &&
     feedMode !== "upgrade-required" &&
     readHostId !== null &&
+    hostIndicators.hasAnswer &&
     !hostIndicators.isPending &&
-    hostIndicators.error === null &&
-    (!isMixed || cloudFresh);
-  return { indicators, fresh, hostId: readHostId };
+    hostIndicators.error === null;
+  const fresh = positiveFresh && isMixed && cloudFresh;
+  const freshIndicators =
+    isMixed && !cloudFresh
+      ? scopeIndicatorsToOrigin(hostIndicators.data, readHostId)
+      : indicators;
+  return {
+    indicators,
+    freshIndicators,
+    fresh,
+    positiveFresh,
+    hostId: readHostId,
+  };
 }
 
 function scopeIndicatorsToOrigin(

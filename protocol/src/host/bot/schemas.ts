@@ -1237,8 +1237,7 @@ const botTaskEntrySchemaV14 = lazySchema(() =>
 );
 
 /**
- * The task entry of `bot.subscribe@1.3`, frozen by hand: with the provenance
- * and without the `@1.4` check-in history, so a 1.3 peer's re-parse strips it.
+ * The task entry of `bot.subscribe@1.3`, frozen by hand with provenance.
  */
 const botTaskEntrySchemaV13 = lazySchema(() =>
   z

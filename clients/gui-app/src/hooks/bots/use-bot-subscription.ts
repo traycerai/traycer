@@ -92,6 +92,8 @@ export interface BotSubscriptionSnapshot {
  */
 export interface BotSubscriptionResult {
   readonly snapshot: BotSubscriptionSnapshot | null;
+  /** The current stream has delivered a snapshot since its last reconnect. */
+  readonly snapshotFresh: boolean;
   readonly deleted: boolean;
   readonly error: string | null;
   readonly isPending: boolean;
@@ -111,6 +113,7 @@ export interface BotSubscriptionResult {
  */
 type BotStreamEvent =
   | Extract<BotSubscribeServerFrame, { kind: "snapshot" | "deleted" }>
+  | { readonly kind: "stale" }
   | { readonly kind: "closed"; readonly message: string };
 
 type SharedSubscription = SharedStreamSubscription<BotStreamEvent>;
@@ -247,6 +250,7 @@ export function useBotSubscriptionForClient(args: {
   const error = lastEvent?.kind === "closed" ? lastEvent.message : null;
   return {
     snapshot,
+    snapshotFresh: lastEvent?.kind === "snapshot",
     deleted,
     error,
     isPending: snapshot === null && !deleted && error === null,
@@ -365,6 +369,10 @@ function createSharedSubscription(
 
   session.onStatusChange((status, reason) => {
     if (sessionClosed) return;
+    if (status !== "open" && shared.lastEvent?.kind === "snapshot") {
+      shared.lastEvent = { kind: "stale" };
+      notifyConsumers();
+    }
     if (status !== "closed") return;
     const message = describeStreamClose(reason);
     // A retryable close is the transport reconnecting; the next snapshot

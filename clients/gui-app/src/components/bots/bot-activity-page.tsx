@@ -30,6 +30,7 @@ import { BotActivityDetails } from "@/components/bots/bot-activity-details";
 import { BotTaskControls } from "@/components/bots/bot-task-actions";
 import { ChannelPost } from "@/components/bots/bot-channel-post";
 import { ChatIndicatorHostScopes } from "@/components/notifications/chat-indicator-host-scopes";
+import { ChatIndicatorFreshHostsContext } from "@/components/notifications/chat-indicator-fresh-hosts-context";
 import { NotificationIndicatorsContext } from "@/components/notifications/notification-indicator-context";
 import type { BotActiveTasks } from "@/hooks/bots/use-bot-active-tasks";
 import {
@@ -41,6 +42,7 @@ import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { useEpicGetTaskContexts } from "@/hooks/epic/use-epic-get-task-contexts-query";
 import {
   agentActivityTiers,
+  EMPTY_EPIC_AGENT_ACTIVITY,
   type AgentActivityTier,
 } from "@/lib/agent-activity";
 import {
@@ -215,6 +217,13 @@ function taskRollup(input: {
   }
   const known = [...states.values()];
   if (
+    input.aggregate.pendingApproval ||
+    input.aggregate.pendingInterview ||
+    input.aggregate.pendingFork
+  ) {
+    kinds.push(chatDescendantKind(input.aggregate, undefined));
+  }
+  if (
     input.aggregate.unreadFailure &&
     !known.some((state) => state.unreadFailure)
   ) {
@@ -304,8 +313,12 @@ function ActiveTaskRowBody(
   const { task } = entry;
   const taskId = task.taskId;
   const inputNeeded = task.inputNeeded ?? NO_WAITING;
-  const tiers = agentActivityTiers(useEpicAgentActivity(taskId));
-  const agentStates = useTaskAgentStates(taskId, agents);
+  const activity = useEpicAgentActivity(taskId);
+  const tiers = agentActivityTiers(
+    entry.activityFresh ? activity : EMPTY_EPIC_AGENT_ACTIVITY,
+  );
+  const resolvedAgentStates = useTaskAgentStates(taskId, agents);
+  const agentStates = resolvedAgentStates;
   const rollup = useMemo(
     () =>
       taskRollup({
@@ -406,19 +419,22 @@ function useTaskAgentStates(
   agents: BotTaskAgents | null,
 ): ReadonlyArray<TaskAgentState> {
   const chatIndicators = useContext(NotificationIndicatorsContext);
+  const freshHosts = useContext(ChatIndicatorFreshHostsContext);
   const localRows = useAppLocalNotificationsStore((state) => state.byId);
   return useMemo(
     () =>
-      (agents?.nodes ?? []).map((node) => ({
-        id: node.id,
-        indicator: selectNotificationIndicatorState(
-          { byId: localRows },
-          { epicId: taskId, chatId: node.id },
-          agentHostOf(node, agents),
-          chatIndicators,
-        ),
-      })),
-    [agents, chatIndicators, localRows, taskId],
+      (agents?.nodes ?? [])
+        .filter((node) => freshHosts[agentHostOf(node, agents)])
+        .map((node) => ({
+          id: node.id,
+          indicator: selectNotificationIndicatorState(
+            { byId: localRows },
+            { epicId: taskId, chatId: node.id },
+            agentHostOf(node, agents),
+            chatIndicators,
+          ),
+        })),
+    [agents, chatIndicators, freshHosts, localRows, taskId],
   );
 }
 

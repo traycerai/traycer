@@ -1,4 +1,6 @@
 import { useContext, useMemo, type ReactNode } from "react";
+import { ChatIndicatorFreshHostsContext } from "@/components/notifications/chat-indicator-fresh-hosts-context";
+import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { useHostLease } from "@/hooks/host/use-host-lease";
 import { useHostNotificationIndicators } from "@/hooks/notifications/use-host-notification-indicators-query";
 import {
@@ -169,6 +171,10 @@ function ChatIndicatorHostLayer(props: {
   // The query keeps its last answer while disabled and refetches the moment
   // the lease recovers, so the dot goes stale rather than dark.
   const hostDead = useHostLease(props.hostId)?.status === "dead";
+  const reachable = useHostReachability(props.hostId).status === "reachable";
+  const cloudFresh = useCloudNotificationsStore(
+    (state) => state.hasSnapshot && state.connectionState === "connected",
+  );
   const host = useHostNotificationIndicators({
     hostId: props.hostId,
     epicIds: NO_EPIC_IDS,
@@ -181,6 +187,15 @@ function ChatIndicatorHostLayer(props: {
       !(props.isCloud && feedModeSettling),
   });
   const inherited = useContext(NotificationIndicatorsContext);
+  const inheritedFresh = useContext(ChatIndicatorFreshHostsContext);
+  const fresh =
+    !hostDead &&
+    reachable &&
+    !feedModeSettling &&
+    host.hasAnswer &&
+    !host.isPending &&
+    host.error === null &&
+    (!props.isCloud || cloudFresh);
   const merged: SurfaceNotificationIndicators = useMemo(
     () =>
       props.isCloud
@@ -206,8 +221,12 @@ function ChatIndicatorHostLayer(props: {
     [props.isCloud, inherited, host.data, props.hostId, props.chatIds],
   );
   return (
-    <NotificationIndicatorsProvider indicators={merged}>
-      {props.children}
-    </NotificationIndicatorsProvider>
+    <ChatIndicatorFreshHostsContext.Provider
+      value={{ ...inheritedFresh, [props.hostId]: fresh }}
+    >
+      <NotificationIndicatorsProvider indicators={merged}>
+        {props.children}
+      </NotificationIndicatorsProvider>
+    </ChatIndicatorFreshHostsContext.Provider>
   );
 }

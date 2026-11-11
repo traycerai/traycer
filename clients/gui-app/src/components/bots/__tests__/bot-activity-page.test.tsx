@@ -12,7 +12,10 @@ import { type ReactNode } from "react";
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { HostNotificationsIndicatorStateResponse } from "@traycer/protocol/host/notifications/contracts";
+import type {
+  HostNotificationsCloudFeedRow,
+  HostNotificationsIndicatorStateResponse,
+} from "@traycer/protocol/host/notifications/contracts";
 import type {
   BotInputNeeded,
   BotNotificationSubscription,
@@ -34,6 +37,8 @@ import {
   __resetAgentActivityStoreForTests,
   __setAgentActivityPlaneAnsweringForTests,
   __setAgentActivityStateForTests,
+  __setHostAgentActivityHealthForTests,
+  TEST_LOCAL_ACTIVITY_HOST_ID,
 } from "@/stores/agent-activity-store";
 import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -76,7 +81,11 @@ const mocks = vi.hoisted(() => {
     /** Hosts the directory reports unreachable. */
     unreachable: new Set<string>(),
     /** How the host's indicator read stands: answered, still pending, or failed. */
-    indicatorRead: "ok" as "ok" | "pending" | "error",
+    indicatorRead: "ok" as "ok" | "pending" | "error" | "unanswered",
+    /** The feed mode the notification session negotiated. */
+    feedMode: "cloud" as "local" | "cloud" | "upgrade-required",
+    /** Each host an enabled reachability read asked about. */
+    reachabilityAsked: new Set<string>(),
   };
   const answers = new Map<string, unknown>();
   /** Each agent chat id an enabled indicator read asked a host about. */
@@ -154,9 +163,12 @@ vi.mock("@/hooks/bots/use-bot-activity", () => ({
   useBotActivity: () => null,
 }));
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
-  useHostReachability: (hostId: string) => ({
-    status: mocks.state.unreachable.has(hostId) ? "unreachable" : "reachable",
-  }),
+  useHostReachability: (hostId: string) => {
+    mocks.state.reachabilityAsked.add(hostId);
+    return {
+      status: mocks.state.unreachable.has(hostId) ? "unreachable" : "reachable",
+    };
+  },
 }));
 // The member actions' writes: each records the method and what it was sent.
 vi.mock("@/hooks/bots/use-bot-task-action-mutations", () => {
@@ -203,9 +215,12 @@ vi.mock("@/hooks/host/use-host-queries", () => ({
     return mocks.cached(key, () =>
       args.combine(
         args.requests.map(() => ({
-          data: enabled
-            ? mocks.answerIndicators(hostId, args.requests)
-            : undefined,
+          // "unanswered": settled with no error and no data, as a host that
+          // does not serve the method leaves it.
+          data:
+            enabled && mocks.state.indicatorRead !== "unanswered"
+              ? mocks.answerIndicators(hostId, args.requests)
+              : undefined,
           isPending: mocks.state.indicatorRead === "pending",
           isFetching: false,
           error:
@@ -260,6 +275,8 @@ function periodic(
   return task(taskId, {
     cadence: { kind: "every", seconds: 7_200 },
     nextAt: NOW + 3_600_000,
+    // Known to wait on no one; `null` would say the host cannot tell.
+    inputNeeded: [],
     ...overrides,
   });
 }
@@ -273,6 +290,8 @@ function completed(
     cadence: { kind: "none" },
     state: "ended",
     endedReason: "completed",
+    // Known to wait on no one; `null` would say the host cannot tell.
+    inputNeeded: [],
     ...overrides,
   });
 }
@@ -333,13 +352,24 @@ function agentUnread(
   mocks.state.chatFlags[chatId] = { ...flags, unreadCount: 1 };
 }
 
-function Harness(props: {
+type HarnessProps = {
   readonly tasks: ReadonlyArray<BotTaskEntry>;
   readonly threads: ReadonlyArray<BotThreadSummary>;
   readonly boundHere: boolean;
   readonly notificationSubscriptions: ReadonlyArray<BotNotificationSubscription> | null;
-}): ReactNode {
-  const active = useBotActiveTasks(props.tasks);
+};
+
+/** The hook reads the feed mode from its ancestors, so the provider sits above the component that calls it. */
+function Harness(props: HarnessProps): ReactNode {
+  return (
+    <NotificationFeedModeContext.Provider value={mocks.state.feedMode}>
+      <HarnessBody {...props} />
+    </NotificationFeedModeContext.Provider>
+  );
+}
+
+function HarnessBody(props: HarnessProps): ReactNode {
+  const active = useBotActiveTasks(props.tasks, HOST_ID, true);
   return (
     <BotActivityPage
       botId={BOT_ID}
@@ -360,19 +390,18 @@ function mountInCloudMode(
   tasks: ReadonlyArray<BotTaskEntry>,
   cloud: { readonly connected: boolean },
 ): void {
+  mocks.state.feedMode = "cloud";
   useCloudNotificationsStore.setState({
     hasSnapshot: cloud.connected,
     connectionState: cloud.connected ? "connected" : "unavailable",
   });
   render(
-    <NotificationFeedModeContext.Provider value="cloud">
-      <Harness
-        threads={[]}
-        tasks={tasks}
-        boundHere
-        notificationSubscriptions={null}
-      />
-    </NotificationFeedModeContext.Provider>,
+    <Harness
+      threads={[]}
+      tasks={tasks}
+      boundHere
+      notificationSubscriptions={null}
+    />,
   );
 }
 
@@ -483,11 +512,16 @@ beforeEach(() => {
   mocks.state.chatFlagsByHost = {};
   mocks.state.unreachable = new Set();
   mocks.state.indicatorRead = "ok";
+  mocks.state.feedMode = "local";
+  mocks.state.reachabilityAsked = new Set();
   mocks.actions.length = 0;
   mocks.forgetAnswers();
   __resetAgentActivityStoreForTests();
   // Every case starts with the fleet vouched, so a quiet seen row can leave.
   working({});
+  // Both sources answer: the cloud feed is connected with its snapshot, so a
+  // quiet seen row has been proved quiet everywhere and may leave.
+  holdCloudFeed([]);
   useAuthStore.setState({
     status: "signed-in",
     profile: { userId: "user-ada", userName: "Ada", email: "ada@example.com" },
@@ -497,10 +531,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  useCloudNotificationsStore.setState({
-    hasSnapshot: false,
-    connectionState: "unavailable",
-  });
+  useCloudNotificationsStore.getState().reset();
   coolAllEpics();
   __resetAgentActivityStoreForTests();
   useAuthStore.setState({
@@ -661,7 +692,9 @@ describe("<BotActivityPage /> thread subscriptions", () => {
 describe("<BotActivityPage /> what is listed", () => {
   it("rule 2: lists a task with a working agent, one that waits on a person, one with an unseen result and a periodic one; a quiet seen task is absent", () => {
     working({ "t-working": { working: ["a-1"], turn: ["a-1"] } });
-    taskUnread("t-unseen", { unreadDone: true });
+    // Both sources answer, so the quiet seen task has been proved quiet.
+    mocks.state.feedMode = "cloud";
+    holdCloudFeed([remoteUnseenResult("t-unseen")]);
     mount(
       [
         task("t-working", {}),
@@ -692,7 +725,8 @@ describe("<BotActivityPage /> what is listed", () => {
 
   it("lists a task the bot adopted by the same rule as one it started, once, and drops it when seen and quiet", () => {
     working({ "t-adopted-working": { working: ["a-1"], turn: ["a-1"] } });
-    taskUnread("t-adopted-unseen", { unreadFailure: true });
+    mocks.state.feedMode = "cloud";
+    holdCloudFeed([remoteUnseenResult("t-adopted-unseen")]);
     mount(
       [
         periodic("t-adopted-every", { spun: false }),
@@ -770,6 +804,7 @@ describe("<BotActivityPage /> what is listed", () => {
   });
 
   it("with nothing active, draws no Tasks heading, and says so only when subscriptions are known empty too", () => {
+    mocks.state.feedMode = "cloud";
     const view = render(
       <Harness
         threads={[]}
@@ -817,12 +852,14 @@ describe("<BotActivityPage /> when the evidence is incomplete", () => {
     completed("t-quiet", { lastCheckinAt: NOW });
 
   it("drops a quiet, seen task once every source vouches", () => {
+    mocks.state.feedMode = "cloud";
     mount([QUIET()], { boundHere: true });
 
     expect(rowIds()).toEqual([]);
   });
 
   it("keeps an on-completion task still tracking as status unknown, though nothing works or is unseen yet, and drops its ended and seen counterpart", () => {
+    mocks.state.feedMode = "cloud";
     // Tracking can precede the completion report: no activity and nothing
     // unread is not proof that the task has finished.
     mount(
@@ -849,6 +886,7 @@ describe("<BotActivityPage /> when the evidence is incomplete", () => {
   });
 
   it("keeps it while the host's indicator read is pending, and drops it when the read lands", () => {
+    mocks.state.feedMode = "cloud";
     mocks.state.indicatorRead = "pending";
     const view = render(
       <Harness
@@ -920,16 +958,240 @@ describe("<BotActivityPage /> when the evidence is incomplete", () => {
 
   it("lists an unproven row last, below every row with a known state", () => {
     narrowActivity();
-    mount([QUIET(), periodic("t-every", {})], { boundHere: true });
+    mount(
+      [
+        QUIET(),
+        task("t-waiting", {
+          inputNeeded: [waiting("a-2", NOW, "Merge the release PR")],
+        }),
+      ],
+      { boundHere: true },
+    );
 
-    expect(rowIds()).toEqual(["t-every", "t-quiet"]);
+    expect(rowIds()).toEqual(["t-waiting", "t-quiet"]);
+  });
+});
+
+/** A result no one has read yet, held by the cloud feed for an agent of `taskId` on another host. */
+function remoteUnseenResult(taskId: string): HostNotificationsCloudFeedRow {
+  return {
+    entryId: `entry-${taskId}`,
+    originHostId: "host-remote",
+    coalesceKey: `agent.stopped:chat-${taskId}`,
+    entry: {
+      id: `entry-${taskId}`,
+      updatedAt: NOW,
+      readAt: null,
+      kind: "agent.stopped",
+      sourceRef: `entry-${taskId}`,
+      severity: "done",
+      outcome: "completed",
+      epicId: taskId,
+      chatId: `chat-${taskId}`,
+      payload: {
+        kind: "chat",
+        epicId: taskId,
+        chatId: `chat-${taskId}`,
+        outcome: "completed",
+      },
+    },
+    presentation: { epicTitle: "Epic", chatTitle: "Chat" },
+  };
+}
+
+let cloudFeedVersion = 0;
+
+function holdCloudFeed(
+  rows: ReadonlyArray<HostNotificationsCloudFeedRow>,
+): void {
+  useCloudNotificationsStore.setState({ accountId: "user-a" });
+  useCloudNotificationsStore.getState().applySnapshot({
+    rows,
+    version: ++cloudFeedVersion,
+    summary: {
+      totalCount: rows.length,
+      unreadCount: rows.filter((r) => r.entry.readAt === null).length,
+      attentionCount: 0,
+    },
+  });
+  useCloudNotificationsStore.getState().setConnectionState("connected");
+}
+
+function band(taskId: string): string | null {
+  return row(taskId).getAttribute("data-band");
+}
+
+function saysStatusUnknownOnce(taskId: string): boolean {
+  return row(taskId).textContent.split("Status unknown").length === 2;
+}
+
+describe("<BotActivityPage /> a source that cannot vouch never reads as proof of quiet", () => {
+  /** Ended, seen, nothing working, and waiting on no one: it leaves only on proof from every source. */
+  const QUIET = (overrides: Partial<BotTaskEntry>): BotTaskEntry =>
+    completed("t-quiet", { lastCheckinAt: NOW, ...overrides });
+
+  it("keeps a task whose waiting is unknown (a host that predates it, or a room it cannot read) as status unknown, while a known-empty one leaves", () => {
+    mountInCloudMode([QUIET({ inputNeeded: null })], { connected: true });
+    expect(rowIds()).toEqual(["t-quiet"]);
+    expect(band("t-quiet")).toBe("unknown");
+    expect(saysStatusUnknownOnce("t-quiet")).toBe(true);
+    cleanup();
+
+    mountInCloudMode([QUIET({ inputNeeded: [] })], { connected: true });
+    expect(rowIds()).toEqual([]);
+  });
+
+  it("keeps a task whose waiting is unknown while the indicator read is still pending", () => {
+    mocks.state.indicatorRead = "pending";
+    mountInCloudMode([QUIET({ inputNeeded: null })], { connected: true });
+
+    expect(rowIds()).toEqual(["t-quiet"]);
+    expect(band("t-quiet")).toBe("unknown");
+  });
+
+  it("never lets an unknown waiting list hide a waiting task: a known one keeps its own band", () => {
+    mountInCloudMode(
+      [
+        QUIET({ inputNeeded: null }),
+        task("t-waiting", {
+          inputNeeded: [waiting("a-2", NOW, "Merge the release PR")],
+        }),
+      ],
+      { connected: true },
+    );
+
+    expect(rowIds()).toEqual(["t-waiting", "t-quiet"]);
+    expect(band("t-waiting")).toBe("needs-you");
+  });
+
+  it("keeps a quiet task when the host's indicator read settled with no answer (a host without the method)", () => {
+    mocks.state.indicatorRead = "unanswered";
+    mountInCloudMode([QUIET({})], { connected: true });
+
+    expect(rowIds()).toEqual(["t-quiet"]);
+    expect(band("t-quiet")).toBe("unknown");
+    expect(saysStatusUnknownOnce("t-quiet")).toBe(true);
+  });
+
+  it("keeps a quiet task when the cloud feed is unsupported and only this host answers, though another host holds an unseen result for it", () => {
+    holdCloudFeed([remoteUnseenResult("t-quiet")]);
+    mocks.state.feedMode = "local";
+    mount([QUIET({})], { boundHere: true });
+
+    expect(rowIds()).toEqual(["t-quiet"]);
+    expect(band("t-quiet")).toBe("unknown");
+    expect(saysStatusUnknownOnce("t-quiet")).toBe(true);
+  });
+
+  it("keeps a quiet task while the notification feed needs an upgrade, and drops it over a connected cloud feed", () => {
+    mocks.state.feedMode = "upgrade-required";
+    mount([QUIET({})], { boundHere: true });
+    expect(rowIds()).toEqual(["t-quiet"]);
+    cleanup();
+
+    mocks.state.feedMode = "cloud";
+    mount([QUIET({})], { boundHere: true });
+    expect(rowIds()).toEqual([]);
+  });
+});
+
+describe("<BotActivityPage /> what a lost connection leaves cached is never shown as current", () => {
+  it("shows Status unknown, not working, for an agent the activity plane counted before its stream dropped", () => {
+    working({ "t-run": { working: ["a-1"], turn: ["a-1"] } });
+    const view = render(
+      <Harness
+        threads={[]}
+        tasks={[task("t-run", {})]}
+        boundHere
+        notificationSubscriptions={null}
+      />,
+    );
+    expect(band("t-run")).toBe("working");
+
+    // The counts stay held; the stream that kept them current is gone.
+    act(() =>
+      __setHostAgentActivityHealthForTests(TEST_LOCAL_ACTIVITY_HOST_ID, {
+        connectionStatus: "reconnecting",
+      }),
+    );
+    view.rerender(
+      <Harness
+        threads={[]}
+        tasks={[task("t-run", {})]}
+        boundHere
+        notificationSubscriptions={null}
+      />,
+    );
+
+    expect(rowIds()).toEqual(["t-run"]);
+    expect(band("t-run")).toBe("unknown");
+    expect(saysStatusUnknownOnce("t-run")).toBe(true);
+  });
+
+  it("shows Status unknown, not unread, for a result the cloud feed held before it disconnected", () => {
+    mocks.state.feedMode = "cloud";
+    holdCloudFeed([remoteUnseenResult("t-done")]);
+    mount([completed("t-done", { lastCheckinAt: NOW })], { boundHere: true });
+    expect(band("t-done")).toBe("unseen");
+
+    act(() =>
+      useCloudNotificationsStore.getState().setConnectionState("reconnecting"),
+    );
+
+    expect(band("t-done")).toBe("unknown");
+    expect(saysStatusUnknownOnce("t-done")).toBe(true);
+  });
+
+  it("shows Status unknown, not waiting, for a surface the bot's serving host reported before that host became unreachable, and ignores an unrelated host", () => {
+    const tasks = [
+      task("t-wait", {
+        inputNeeded: [waiting("a-2", NOW, "Merge the release PR")],
+      }),
+    ];
+    const view = render(
+      <Harness
+        threads={[]}
+        tasks={tasks}
+        boundHere
+        notificationSubscriptions={null}
+      />,
+    );
+    // The hook reads the serving host's reachability, not only the notification host's.
+    expect(mocks.state.reachabilityAsked.has(HOST_ID)).toBe(true);
+    expect(mocks.state.reachabilityAsked.has("host-notifications")).toBe(true);
+    expect(band("t-wait")).toBe("needs-you");
+
+    mocks.state.unreachable.add("host-unrelated");
+    view.rerender(
+      <Harness
+        threads={[]}
+        tasks={[...tasks]}
+        boundHere
+        notificationSubscriptions={null}
+      />,
+    );
+    expect(band("t-wait")).toBe("needs-you");
+
+    mocks.state.unreachable.add(HOST_ID);
+    view.rerender(
+      <Harness
+        threads={[]}
+        tasks={[...tasks]}
+        boundHere
+        notificationSubscriptions={null}
+      />,
+    );
+    expect(band("t-wait")).toBe("unknown");
+    expect(saysStatusUnknownOnce("t-wait")).toBe(true);
   });
 });
 
 describe("<BotActivityPage /> order", () => {
   it("rule 6: needs you, then working, then unseen, then periodic, whatever order the tasks arrive in", () => {
     working({ "t-working": { working: ["a-1"], turn: ["a-1"] } });
-    taskUnread("t-unseen", { unreadDone: true });
+    // A scheduled row is "periodic" only on proof from every source.
+    mocks.state.feedMode = "cloud";
+    holdCloudFeed([remoteUnseenResult("t-unseen")]);
     mount(
       [
         periodic("t-every", {}),
@@ -1102,57 +1364,125 @@ describe("<BotActivityPage /> the row's status", () => {
 });
 
 describe("<BotActivityPage /> agents on several hosts", () => {
-  it("rule 3: an agent on another host than its task's session is read from the host that owns it", async () => {
-    const user = userEvent.setup();
-    warmTask("t-split", [
-      { id: "a-lead", parentId: null, title: "Lead", archivedAt: null },
-      {
-        id: "a-remote",
-        parentId: "a-lead",
-        title: "Remote reviewer",
-        archivedAt: null,
-      },
-    ]);
-    const handle = getOpenEpicRegistry().peek("t-split");
-    if (handle === null) throw new Error("t-split is not warm");
-    act(() => {
-      handle.store.setState((state) => ({
-        chats: {
-          ...state.chats,
-          byId: {
-            ...state.chats.byId,
-            "a-remote": { ...state.chats.byId["a-remote"], hostId: "host-b" },
-          },
+  it.each(["local", "cloud"] as const)(
+    "rule 3: an agent on another host than its task's session is read from the host that owns it (%s feed)",
+    async (feedMode) => {
+      mocks.state.feedMode = feedMode;
+      const user = userEvent.setup();
+      warmTask("t-split", [
+        { id: "a-lead", parentId: null, title: "Lead", archivedAt: null },
+        {
+          id: "a-remote",
+          parentId: "a-lead",
+          title: "Remote reviewer",
+          archivedAt: null,
         },
-      }));
-    });
-    // The lead's host knows nothing of the reviewer; only the reviewer's own
-    // host holds its fork.
-    mocks.state.chatFlagsByHost = {
-      "host-b": { "a-remote": { pendingFork: true } },
-    };
-    mount([periodic("t-split", {})], { boundHere: true });
+      ]);
+      const handle = getOpenEpicRegistry().peek("t-split");
+      if (handle === null) throw new Error("t-split is not warm");
+      act(() => {
+        handle.store.setState((state) => ({
+          chats: {
+            ...state.chats,
+            byId: {
+              ...state.chats.byId,
+              "a-remote": { ...state.chats.byId["a-remote"], hostId: "host-b" },
+            },
+          },
+        }));
+      });
+      // The lead's host knows nothing of the reviewer; only the reviewer's own
+      // host holds its fork.
+      mocks.state.chatFlagsByHost = {
+        "host-b": { "a-remote": { pendingFork: true } },
+      };
+      mount([periodic("t-split", {})], { boundHere: true });
 
-    expect(
-      within(row("t-split"))
-        .getByTestId("bot-activity-task-glyph")
-        .getAttribute("aria-label"),
-    ).toBe("1 waiting for fork resolution");
-    await user.click(
-      within(row("t-split")).getByTestId("bot-activity-task-chevron"),
-    );
-    const remote = within(row("t-split"))
-      .getAllByTestId("bot-activity-agent")
-      .find((agent) => agent.getAttribute("data-agent-id") === "a-remote");
-    expect(remote?.getAttribute("data-kind")).toBe("fork");
-    expect([
-      ...new Set(
-        mocks.asked
-          .filter((read) => read.chatId === "a-remote")
-          .map((read) => read.hostId),
-      ),
-    ]).toEqual(["host-b"]);
-  });
+      expect(
+        within(row("t-split"))
+          .getByTestId("bot-activity-task-glyph")
+          .getAttribute("aria-label"),
+      ).toBe("1 waiting for fork resolution");
+      await user.click(
+        within(row("t-split")).getByTestId("bot-activity-task-chevron"),
+      );
+      const remote = within(row("t-split"))
+        .getAllByTestId("bot-activity-agent")
+        .find((agent) => agent.getAttribute("data-agent-id") === "a-remote");
+      expect(remote?.getAttribute("data-kind")).toBe("fork");
+      expect([
+        ...new Set(
+          mocks.asked
+            .filter((read) => read.chatId === "a-remote")
+            .map((read) => read.hostId),
+        ),
+      ]).toEqual(["host-b"]);
+    },
+  );
+});
+
+describe("<BotActivityPage /> an agent's host that cannot vouch", () => {
+  it.each(["local", "cloud"] as const)(
+    "never shows a fork an agent's own host reported before that host became unreachable, while the lead's host still answers (%s feed)",
+    (feedMode) => {
+      mocks.state.feedMode = feedMode;
+      warmTask("t-split", [
+        { id: "a-lead", parentId: null, title: "Lead", archivedAt: null },
+        {
+          id: "a-remote",
+          parentId: "a-lead",
+          title: "Remote reviewer",
+          archivedAt: null,
+        },
+      ]);
+      const handle = getOpenEpicRegistry().peek("t-split");
+      if (handle === null) throw new Error("t-split is not warm");
+      act(() => {
+        handle.store.setState((state) => ({
+          chats: {
+            ...state.chats,
+            byId: {
+              ...state.chats.byId,
+              "a-remote": { ...state.chats.byId["a-remote"], hostId: "host-b" },
+            },
+          },
+        }));
+      });
+      mocks.state.chatFlagsByHost = {
+        "host-b": { "a-remote": { pendingFork: true } },
+      };
+      const view = render(
+        <Harness
+          threads={[]}
+          tasks={[periodic("t-split", {})]}
+          boundHere
+          notificationSubscriptions={null}
+        />,
+      );
+      // Current while host-b answers and is reachable.
+      expect(
+        within(row("t-split"))
+          .getByTestId("bot-activity-task-glyph")
+          .getAttribute("aria-label"),
+      ).toBe("1 waiting for fork resolution");
+
+      mocks.state.unreachable.add("host-b");
+      view.rerender(
+        <Harness
+          threads={[]}
+          tasks={[periodic("t-split", {})]}
+          boundHere
+          notificationSubscriptions={null}
+        />,
+      );
+
+      expect(
+        within(row("t-split"))
+          .queryByTestId("bot-activity-task-glyph")
+          ?.getAttribute("aria-label") ?? null,
+      ).not.toBe("1 waiting for fork resolution");
+    },
+  );
 });
 
 describe("<BotActivityPage /> badges and words", () => {
@@ -1340,71 +1670,84 @@ describe("<BotActivityPage /> actions", () => {
 });
 
 describe("<BotActivityPage /> the task's agents", () => {
-  it("rule 4: a warm task folds its agents under a chevron, in tree order, each with its own state", async () => {
-    const user = userEvent.setup();
-    warmTask("t-warm", [
-      { id: "a-root", parentId: null, title: "Release lead", archivedAt: null },
-      {
-        id: "a-child",
-        parentId: "a-root",
-        title: "Changelog",
-        archivedAt: null,
-      },
-      { id: "a-idle", parentId: null, title: "Spare", archivedAt: null },
-    ]);
-    working({ "t-warm": { working: ["a-root"], turn: ["a-root"] } });
-    agentUnread("a-child", { unreadDone: true });
-    mount([task("t-warm", {})], { boundHere: true });
+  it.each(["local", "cloud"] as const)(
+    "rule 4: a warm task folds its agents under a chevron, in tree order, each with its own state (%s feed)",
+    async (feedMode) => {
+      mocks.state.feedMode = feedMode;
+      const user = userEvent.setup();
+      warmTask("t-warm", [
+        {
+          id: "a-root",
+          parentId: null,
+          title: "Release lead",
+          archivedAt: null,
+        },
+        {
+          id: "a-child",
+          parentId: "a-root",
+          title: "Changelog",
+          archivedAt: null,
+        },
+        { id: "a-idle", parentId: null, title: "Spare", archivedAt: null },
+      ]);
+      working({ "t-warm": { working: ["a-root"], turn: ["a-root"] } });
+      agentUnread("a-child", { unreadDone: true });
+      mount([task("t-warm", {})], { boundHere: true });
 
-    expect(screen.queryByTestId("bot-activity-task-agents")).toBeNull();
-    await user.click(
-      within(row("t-warm")).getByTestId("bot-activity-task-chevron"),
-    );
+      expect(screen.queryByTestId("bot-activity-task-agents")).toBeNull();
+      await user.click(
+        within(row("t-warm")).getByTestId("bot-activity-task-chevron"),
+      );
 
-    const agents = within(
-      within(row("t-warm")).getByTestId("bot-activity-task-agents"),
-    ).getAllByTestId("bot-activity-agent");
-    expect(
-      agents.map((el) => [
-        el.getAttribute("data-agent-id"),
-        el.getAttribute("data-kind"),
-      ]),
-    ).toEqual([
-      ["a-root", sidebarRollupKind([{ state: {}, tier: "turn" }])],
-      [
-        "a-child",
-        sidebarRollupKind([{ state: { unreadDone: true }, tier: undefined }]),
-      ],
-      ["a-idle", "idle"],
-    ]);
-    expect(agents.map((el) => el.getAttribute("data-kind"))).toEqual([
-      "running",
-      "done",
-      "idle",
-    ]);
-  });
+      const agents = within(
+        within(row("t-warm")).getByTestId("bot-activity-task-agents"),
+      ).getAllByTestId("bot-activity-agent");
+      expect(
+        agents.map((el) => [
+          el.getAttribute("data-agent-id"),
+          el.getAttribute("data-kind"),
+        ]),
+      ).toEqual([
+        ["a-root", sidebarRollupKind([{ state: {}, tier: "turn" }])],
+        [
+          "a-child",
+          sidebarRollupKind([{ state: { unreadDone: true }, tier: undefined }]),
+        ],
+        ["a-idle", "idle"],
+      ]);
+      expect(agents.map((el) => el.getAttribute("data-kind"))).toEqual([
+        "running",
+        "done",
+        "idle",
+      ]);
+    },
+  );
 
-  it("rule 4: an archived agent stays folded away unless it is working or holds something unread", async () => {
-    const user = userEvent.setup();
-    warmTask("t-warm", [
-      { id: "a-live", parentId: null, title: "Lead", archivedAt: null },
-      { id: "a-old", parentId: null, title: "Old", archivedAt: 5 },
-      { id: "a-unseen", parentId: null, title: "Unseen", archivedAt: 5 },
-    ]);
-    working({ "t-warm": { working: ["a-live"], turn: ["a-live"] } });
-    agentUnread("a-unseen", { unreadDone: true });
-    mount([task("t-warm", {})], { boundHere: true });
+  it.each(["local", "cloud"] as const)(
+    "rule 4: an archived agent stays folded away unless it is working or holds something unread (%s feed)",
+    async (feedMode) => {
+      mocks.state.feedMode = feedMode;
+      const user = userEvent.setup();
+      warmTask("t-warm", [
+        { id: "a-live", parentId: null, title: "Lead", archivedAt: null },
+        { id: "a-old", parentId: null, title: "Old", archivedAt: 5 },
+        { id: "a-unseen", parentId: null, title: "Unseen", archivedAt: 5 },
+      ]);
+      working({ "t-warm": { working: ["a-live"], turn: ["a-live"] } });
+      agentUnread("a-unseen", { unreadDone: true });
+      mount([task("t-warm", {})], { boundHere: true });
 
-    await user.click(
-      within(row("t-warm")).getByTestId("bot-activity-task-chevron"),
-    );
+      await user.click(
+        within(row("t-warm")).getByTestId("bot-activity-task-chevron"),
+      );
 
-    expect(
-      screen
-        .getAllByTestId("bot-activity-agent")
-        .map((el) => el.getAttribute("data-agent-id")),
-    ).toEqual(["a-live", "a-unseen"]);
-  });
+      expect(
+        screen
+          .getAllByTestId("bot-activity-agent")
+          .map((el) => el.getAttribute("data-agent-id")),
+      ).toEqual(["a-live", "a-unseen"]);
+    },
+  );
 
   it("rule 4: a cold task, whose agents this window cannot name, has no chevron", () => {
     working({ "t-cold": { working: ["a-1"], turn: ["a-1"] } });

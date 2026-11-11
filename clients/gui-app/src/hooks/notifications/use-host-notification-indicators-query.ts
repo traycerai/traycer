@@ -55,6 +55,8 @@ export interface UseHostNotificationIndicatorsArgs {
 
 export interface HostNotificationIndicatorsQuery {
   readonly data: HostNotificationsIndicatorStateResponse;
+  /** Every requested chunk has returned an answer in the current query. */
+  readonly hasAnswer: boolean;
   readonly isPending: boolean;
   readonly isFetching: boolean;
   readonly error: HostRpcError | null;
@@ -149,6 +151,11 @@ export function useHostNotificationIndicators(
       >,
     ) => ({
       data: mergeIndicatorResponses(results),
+      hasAnswer:
+        results.length > 0 &&
+        results.every(
+          (result) => result.data !== undefined && result.error === null,
+        ),
       isPending: results.some((result) => result.isPending),
       isFetching: results.some((result) => result.isFetching),
       error: firstSupportedHostError(results),

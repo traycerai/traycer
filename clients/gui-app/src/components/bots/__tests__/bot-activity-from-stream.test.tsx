@@ -26,6 +26,8 @@ import {
   __setAgentActivityPlaneAnsweringForTests,
   __setAgentActivityStateForTests,
 } from "@/stores/agent-activity-store";
+import { NotificationFeedModeContext } from "@/lib/notifications/notification-feed-mode-context";
+import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
 import {
   StubHostStreamClient,
   StubSession,
@@ -178,7 +180,11 @@ function mountOver(session: StubSession): void {
       client: streamClient,
     });
     const tasks = subscription.snapshot?.tasks ?? [];
-    const active = useBotActiveTasks(tasks);
+    const active = useBotActiveTasks(
+      tasks,
+      HOST_ID,
+      subscription.snapshotFresh,
+    );
     if (subscription.snapshot === null) return null;
     return (
       <BotActivityPage
@@ -197,9 +203,11 @@ function mountOver(session: StubSession): void {
     );
   }
   render(
-    <QueryClientProvider client={queryClient}>
-      <Page />
-    </QueryClientProvider>,
+    <NotificationFeedModeContext.Provider value="cloud">
+      <QueryClientProvider client={queryClient}>
+        <Page />
+      </QueryClientProvider>
+    </NotificationFeedModeContext.Provider>,
   );
 }
 
@@ -209,10 +217,16 @@ beforeEach(() => {
   // The activity plane vouches the whole fleet, so a quiet seen task can leave.
   __setAgentActivityPlaneAnsweringForTests();
   __setAgentActivityStateForTests({}, "cloud", "connected");
+  // The cloud feed answers too, so both sources vouch for a quiet seen task.
+  useCloudNotificationsStore.setState({
+    hasSnapshot: true,
+    connectionState: "connected",
+  });
 });
 
 afterEach(() => {
   cleanup();
+  useCloudNotificationsStore.getState().reset();
   __resetBotSubscriptionsForTesting();
   __resetAgentActivityStoreForTests();
 });
@@ -233,6 +247,7 @@ describe("the Activity tab over a bot.subscribe snapshot", () => {
             // Unlabelled, started by Tracy, ended with a report not yet read:
             // nothing unread is held, so it is a finished seen one-off.
             wireTask("t-finished", {
+              inputNeeded: [],
               cadence: { kind: "none" },
               state: "ended",
               endedReason: "completed",
@@ -307,6 +322,7 @@ describe("the Activity tab over a bot.subscribe snapshot", () => {
         snapshotWith(
           [
             wireTask("t-untitled-77c1", {
+              inputNeeded: [],
               cadence: { kind: "every", seconds: 7_200 },
               state: "ended",
               endedReason: "by-bot",
@@ -319,5 +335,100 @@ describe("the Activity tab over a bot.subscribe snapshot", () => {
     );
 
     expect(screen.queryAllByTestId("bot-activity-task")).toHaveLength(0);
+  });
+
+  it("shows a waiting surface as Status unknown from the moment the stream leaves open until a fresh snapshot lands, and as waiting again after it", () => {
+    const waitingTask = (): object =>
+      wireTask("t-wait", {
+        // On completion: with the surface no longer current, nothing else
+        // earns the task a band, so it reads as unknown, not periodic.
+        inputNeeded: [
+          {
+            hostId: "host-agents",
+            hostName: "Studio Mac",
+            agentChatId: "a-2",
+            surfaceId: "surface-a-2",
+            surface: {
+              kind: "approval",
+              approvalId: "approval-a-2",
+              tool: "gh pr merge",
+              summary: "Merge the release PR",
+              tier: null,
+              requiresPerson: true,
+              askedAt: NOW,
+            },
+            reportedAt: NOW,
+            acceptsActions: true,
+          },
+        ],
+      });
+    const bandOf = (): string | null =>
+      screen.getByTestId("bot-activity-task").getAttribute("data-band");
+    const session = new StubSession();
+    mountOver(session);
+    act(() => session.emit(snapshotWith([waitingTask()], [])));
+    // The real stream delivered it: this is the current state.
+    expect(bandOf()).toBe("needs-you");
+
+    // The transport drops: what the last snapshot held is no longer current.
+    act(() => session.status("reconnecting", null));
+    expect(bandOf()).toBe("unknown");
+    expect(
+      screen
+        .getByTestId("bot-activity-task")
+        .textContent.split("Status unknown"),
+    ).toHaveLength(2);
+
+    // Open again, but no snapshot yet: still not current.
+    act(() => session.status("open", null));
+    expect(bandOf()).toBe("unknown");
+
+    // The reconnect's snapshot makes it current again.
+    act(() => session.emit(snapshotWith([waitingTask()], [])));
+    expect(bandOf()).toBe("needs-you");
+  });
+
+  it("keeps a scheduled task with a stale waiting surface listed as Status unknown, not relabelled periodic, until a fresh snapshot lands", () => {
+    const periodicWaiting = (): object =>
+      wireTask("t-sched", {
+        cadence: { kind: "every", seconds: 7_200 },
+        nextAt: NOW + 3_600_000,
+        inputNeeded: [
+          {
+            hostId: "host-agents",
+            hostName: "Studio Mac",
+            agentChatId: "a-3",
+            surfaceId: "surface-a-3",
+            surface: {
+              kind: "approval",
+              approvalId: "approval-a-3",
+              tool: "gh pr merge",
+              summary: "Merge the nightly PR",
+              tier: null,
+              requiresPerson: true,
+              askedAt: NOW,
+            },
+            reportedAt: NOW,
+            acceptsActions: true,
+          },
+        ],
+      });
+    const rowEl = (): HTMLElement => screen.getByTestId("bot-activity-task");
+    const session = new StubSession();
+    mountOver(session);
+    act(() => session.emit(snapshotWith([periodicWaiting()], [])));
+    expect(rowEl().getAttribute("data-band")).toBe("needs-you");
+
+    act(() => session.status("reconnecting", null));
+    // Listed, and says its status is unknown; never the periodic band.
+    expect(screen.getAllByTestId("bot-activity-task")).toHaveLength(1);
+    expect(rowEl().getAttribute("data-band")).toBe("unknown");
+    expect(rowEl().textContent.split("Status unknown")).toHaveLength(2);
+
+    act(() => session.status("open", null));
+    expect(rowEl().getAttribute("data-band")).toBe("unknown");
+
+    act(() => session.emit(snapshotWith([periodicWaiting()], [])));
+    expect(rowEl().getAttribute("data-band")).toBe("needs-you");
   });
 });

@@ -34,6 +34,8 @@ export type BotActiveTasks = {
  */
 export function useBotActiveTasks(
   tasks: ReadonlyArray<BotTaskEntry>,
+  servingHostId: string,
+  snapshotFresh: boolean,
 ): BotActiveTasks {
   const taskIds = useMemo(
     () =>
@@ -44,13 +46,19 @@ export function useBotActiveTasks(
   );
   const workingCounts = useEpicsWorkingCounts(taskIds);
   const fleetCoverage = useActivityFleetCoverage();
-  const { indicators, fresh, hostId } = useNotificationIndicatorsWithFreshness({
+  const {
+    freshIndicators: indicators,
+    fresh,
+    positiveFresh,
+    hostId,
+  } = useNotificationIndicatorsWithFreshness({
     hostId: null,
     epicIds: taskIds,
     chatIds: NO_CHAT_IDS,
     enabled: taskIds.length > 0,
   });
   const reachability = useHostReachability(hostId ?? UNKNOWN_HOST_PLACEHOLDER);
+  const servingReachability = useHostReachability(servingHostId);
   const localRows = useAppLocalNotificationsStore((state) => state.byId);
   return useMemo(() => {
     const working = new Map(
@@ -67,16 +75,32 @@ export function useBotActiveTasks(
         ),
       ]),
     );
+    const notificationFresh = fresh && reachability.status === "reachable";
+    const notificationPositiveFresh =
+      positiveFresh && reachability.status === "reachable";
+    const activityFresh = fleetCoverage === "fleet";
+    const roomFresh =
+      snapshotFresh && servingReachability.status === "reachable";
     const indicatorOf = (taskId: string): NotificationIndicatorState =>
-      indicatorByTask.get(taskId) ?? EMPTY_NOTIFICATION_INDICATOR_STATE;
+      notificationPositiveFresh
+        ? (indicatorByTask.get(taskId) ?? EMPTY_NOTIFICATION_INDICATOR_STATE)
+        : EMPTY_NOTIFICATION_INDICATOR_STATE;
     return {
       rows: activeTasksOf({
-        tasks,
-        evidenceFresh:
-          fleetCoverage === "fleet" &&
-          fresh &&
-          reachability.status === "reachable",
-        workingInTask: (taskId) => working.get(taskId) ?? 0,
+        tasks: roomFresh
+          ? tasks
+          : tasks.map((task) => ({ ...task, inputNeeded: null })),
+        evidenceFresh: activityFresh && notificationFresh && roomFresh,
+        activityFresh,
+        notificationFresh,
+        workingInTask: (taskId) =>
+          activityFresh ? (working.get(taskId) ?? 0) : 0,
+        pendingInTask: (taskId) => {
+          const state = indicatorOf(taskId);
+          return (
+            state.pendingApproval || state.pendingInterview || state.pendingFork
+          );
+        },
         unseenInTask: (taskId) => {
           const state = indicatorOf(taskId);
           return state.unreadDone || state.unreadFailure;
@@ -92,6 +116,9 @@ export function useBotActiveTasks(
     workingCounts,
     fleetCoverage,
     fresh,
+    positiveFresh,
     reachability.status,
+    servingReachability.status,
+    snapshotFresh,
   ]);
 }

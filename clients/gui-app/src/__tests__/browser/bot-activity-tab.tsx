@@ -422,7 +422,7 @@ export function RequestContext(props: {
 }
 
 export function ActivityTab(): ReactElement {
-  const active = useBotActiveTasks(tasks);
+  const active = useBotActiveTasks(tasks, HOST_ID, true);
   return (
     <Tabs
       defaultValue="activity"

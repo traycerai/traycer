@@ -18,6 +18,8 @@ export type BotActiveTask = {
   readonly band: BotActiveBand;
   /** Agents working in the task, as the activity plane counts them. */
   readonly working: number;
+  readonly activityFresh: boolean;
+  readonly notificationFresh: boolean;
   /**
    * The newest activity the list knows of: a surface reported waiting, or
    * the latest check-in; `null` for neither.
@@ -44,7 +46,10 @@ export function activeTasksOf(input: {
   readonly workingInTask: (taskId: string) => number;
   /** Whether an agent in the task carries an unread done or failure. */
   readonly unseenInTask: (taskId: string) => boolean;
+  readonly pendingInTask: (taskId: string) => boolean;
   readonly evidenceFresh: boolean;
+  readonly activityFresh: boolean;
+  readonly notificationFresh: boolean;
 }): ReadonlyArray<BotActiveTask> {
   const rows: BotActiveTask[] = [];
   for (const task of input.tasks) {
@@ -53,11 +58,21 @@ export function activeTasksOf(input: {
     const band = activeBandOf(
       task,
       working,
-      input.unseenInTask(task.taskId),
+      {
+        unseen: input.unseenInTask(task.taskId),
+        pending: input.pendingInTask(task.taskId),
+      },
       input.evidenceFresh,
     );
     if (band === null) continue;
-    rows.push({ task, band, working, at: latestActivityAt(task) });
+    rows.push({
+      task,
+      band,
+      working,
+      at: latestActivityAt(task),
+      activityFresh: input.activityFresh,
+      notificationFresh: input.notificationFresh,
+    });
   }
   return rows.sort(
     (a, b) =>
@@ -70,16 +85,17 @@ export function activeTasksOf(input: {
 function activeBandOf(
   task: BotTaskEntry,
   working: number,
-  unseen: boolean,
+  indicators: { readonly unseen: boolean; readonly pending: boolean },
   evidenceFresh: boolean,
 ): BotActiveBand | null {
-  if ((task.inputNeeded ?? []).length > 0) return "needs-you";
+  if ((task.inputNeeded ?? []).length > 0 || indicators.pending)
+    return "needs-you";
   if (working > 0) return "working";
-  if (unseen) return "unseen";
+  if (indicators.unseen) return "unseen";
+  if (!evidenceFresh || task.inputNeeded === null) return "unknown";
   if (isPeriodicTask(task)) return "periodic";
   if (task.state === "tracking" && task.cadence.kind === "on-completion")
     return "unknown";
-  if (!evidenceFresh) return "unknown";
   return null;
 }
 
