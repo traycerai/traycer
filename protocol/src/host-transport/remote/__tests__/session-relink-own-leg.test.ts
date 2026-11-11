@@ -79,7 +79,7 @@ import {
 } from "../config";
 import type { AttachGrantProvider, AttachGrantProvision } from "../grant";
 import { NoiseChannel } from "../noise-channel";
-import type { RelaySocketHandlers, RelaySocketOptions } from "../relay-socket";
+import * as relaySocketModule from "../relay-socket";
 import { HostTransportFailureError } from "../rpc-types";
 import { RemoteSession, type RemoteSessionEvidence } from "../session";
 import { countWebCrypto, settleNoise } from "./web-crypto-completion-fixture";
@@ -103,22 +103,6 @@ const EMPTY_AD = new Uint8Array(0);
 const STATUS_METHOD = "host.status";
 const STREAM_METHOD = "cursor.subscribe";
 const RELINK_CLOSE_CODE = 4007;
-
-/** The handlers the session gave each relay socket, in dial order. */
-const capturedLegs = vi.hoisted(() => ({
-  handlers: [] as RelaySocketHandlers[],
-}));
-
-vi.mock("../relay-socket", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../relay-socket")>();
-  class RecordingRelaySocket extends actual.RelaySocket {
-    constructor(options: RelaySocketOptions) {
-      super(options);
-      capturedLegs.handlers.push(options.handlers);
-    }
-  }
-  return { ...actual, RelaySocket: RecordingRelaySocket };
-});
 
 const statusContract = defineRpcContract({
   method: STATUS_METHOD,
@@ -953,7 +937,6 @@ describe("RemoteSession relink on an own-leg loss", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     countWebCrypto();
-    capturedLegs.handlers.length = 0;
     vi.spyOn(console, "info").mockImplementation(() => undefined);
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
   });
@@ -1662,12 +1645,15 @@ describe("RemoteSession relink on an own-leg loss", () => {
 
   describe("leg identity", () => {
     it("ignores every late event from a superseded leg", async () => {
+      // A spy on the export, not `vi.mock`: files in this worker share one
+      // module cache, and a mock misses a session another file loaded first.
+      const dials = vi.spyOn(relaySocketModule, "RelaySocket");
       const fixture = await readyFixture(LIVE);
       const { relay, session } = fixture;
       relay.dropLeg(1006, "net");
       await advanceUntil(() => relay.legs.length === 2, 30_000);
       await untilResumed(fixture, 1);
-      const old = capturedLegs.handlers[0];
+      const old = dials.mock.calls[0]?.[0].handlers;
       if (old === undefined) {
         throw new Error("the first leg's handlers were not captured");
       }
