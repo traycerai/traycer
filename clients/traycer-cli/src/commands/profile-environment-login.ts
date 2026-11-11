@@ -139,6 +139,8 @@ export async function runEnvironmentProfileLogin(
           continue;
         }
         code = null;
+        if (response.state === "linked" || response.state === "installing")
+          connected = true;
         if (abort.signal.aborted) return { status: "cancelled" };
         if (
           connected &&
@@ -151,7 +153,6 @@ export async function runEnvironmentProfileLogin(
           continue;
         }
         if (response.state === "linked" || response.state === "installing") {
-          connected = true;
           if (
             target.profileId !== null &&
             (response.state !== "linked" || response.profileId === null)

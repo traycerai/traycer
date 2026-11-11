@@ -311,6 +311,7 @@ function makeHost(options: HarnessOptions): void {
 
 interface FakeIo {
   readonly io: ProfileLoginIo;
+  readonly interrupt: () => void;
 }
 
 function makeIo(options: {
@@ -354,7 +355,10 @@ function makeIo(options: {
       return () => undefined;
     },
   };
-  return { io };
+  return {
+    io,
+    interrupt: () => interruptHandlers[0]?.(),
+  };
 }
 
 function makeContext(): CommandContext {
@@ -818,4 +822,66 @@ describe("environment profile sign-in through the CLI", () => {
       environmentId: ENVIRONMENT_ID,
     });
   });
+
+  it.each([
+    ["linked", completeAnswer("linked", MANAGED_PROFILE_ID, null)],
+    ["installing", completeAnswer("installing", null, null)],
+  ] as const)(
+    "does not cancel a connection when Ctrl+C races with an in-flight %s reply",
+    async (state, response) => {
+      expect(response.state).toBe(state);
+      const selected = profile(
+        MANAGED_PROFILE_ID,
+        "managed",
+        "Selected profile",
+        ENVIRONMENT_PROFILE_ID,
+      );
+      let notifyCompleteStarted: () => void = () => {};
+      const completeStarted = new Promise<void>((resolve) => {
+        notifyCompleteStarted = () => resolve();
+      });
+      let resolveComplete: (
+        answer: ProvidersLinkCompleteResponseV12,
+      ) => void = () => {};
+      makeHost({
+        providerId: "claude-code",
+        profiles: [selected],
+        link: linkAnswer({ kind: "local_handoff" }),
+        complete: () =>
+          new Promise<ProvidersLinkCompleteResponseV12>((resolve) => {
+            resolveComplete = (answer) => resolve(answer);
+            notifyCompleteStarted();
+          }),
+      });
+      const fake = makeIo({ terminal: true });
+      const context = makeContext();
+      const run = buildProfileLoginCommand(
+        {
+          provider: "claude",
+          target: { kind: "existing", profile: MANAGED_PROFILE_ID },
+        },
+        fake.io,
+      )(context);
+
+      await Promise.race([
+        completeStarted,
+        run.then(() => {
+          throw new Error(
+            "CLI sign-in ended before its first completion request started.",
+          );
+        }),
+      ]);
+      fake.interrupt();
+      resolveComplete(response);
+      const result = await run;
+
+      expect(result.data).toEqual({
+        providerId: "claude-code",
+        status: "cancelled",
+      });
+      expect(result.exitCode).toBe(130);
+      expect(callsTo("providers.linkComplete")).toHaveLength(1);
+      expect(callsTo("providers.linkCancel")).toEqual([]);
+    },
+  );
 });
