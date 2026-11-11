@@ -27,16 +27,26 @@ const mocks = vi.hoisted(() => ({
     vi.fn<(args: { readonly workspacePath: string }) => Promise<boolean>>(),
   openProjectedSidebarNodeInTabWhenAvailable:
     vi.fn<(args: ProjectedSidebarNodeOpenArgs) => () => void>(),
+  worktrees: vi.fn<() => WorktreeList>(),
 }));
+
+interface WorktreeList {
+  readonly data:
+    | {
+        readonly rows: readonly {
+          readonly runningDir: string;
+          readonly disabledReason: null;
+        }[];
+      }
+    | undefined;
+  readonly isError: boolean;
+}
 
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => mocks.tabClient,
 }));
 vi.mock("@/hooks/worktree/use-worktree-list-bindings-for-epic-query", () => ({
-  useWorktreeListBindingsForEpicForClient: () => ({
-    data: { rows: [{ runningDir: "/tab/repo", disabledReason: null }] },
-    isError: false,
-  }),
+  useWorktreeListBindingsForEpicForClient: () => mocks.worktrees(),
 }));
 vi.mock("@/lib/host/probe-workspace-file-exists", () => ({
   fetchWorkspaceFileExists: (args: { readonly workspacePath: string }) =>
@@ -118,6 +128,11 @@ const IN_EPIC_TAB = {
 } as const;
 
 beforeEach(() => {
+  mocks.worktrees.mockReset();
+  mocks.worktrees.mockReturnValue({
+    data: { rows: [{ runningDir: "/tab/repo", disabledReason: null }] },
+    isError: false,
+  });
   mocks.openTile.mockReset();
   mocks.toast.mockClear();
   mocks.resolveArtifactByPath.mockReset();
@@ -177,6 +192,23 @@ describe("HtmlArtifactLinks", () => {
         expect.objectContaining({ target: { tabId: "tab-1" } }),
         "user",
       );
+      expect(mocks.toast).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["still loading", false],
+    ["failing", true],
+  ])(
+    "opens a link while the Epic's worktree list is %s, which the tree lookup never reads",
+    async (_label, isError) => {
+      mocks.worktrees.mockReturnValue({ data: undefined, isError });
+      mocks.resolveArtifactByPath.mockResolvedValue(FOUND);
+      const open = mountFrame(IN_EPIC_TAB);
+
+      open(linkOn("../sibling/index.html"));
+      await vi.waitFor(() => expect(mocks.openTile).toHaveBeenCalled());
+
       expect(mocks.toast).not.toHaveBeenCalled();
     },
   );

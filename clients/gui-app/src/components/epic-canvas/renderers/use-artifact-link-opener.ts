@@ -210,7 +210,10 @@ export function useArtifactLinkOpener(args: {
 
 /** What both openers share: the tab's deps and the latest-click-wins lifecycle. */
 interface TreeLinkRuntime {
-  /** `null` until the Epic's worktrees have loaded. */
+  /**
+   * `null` until the tab's host client is ready and, for an opener that races
+   * workspace files, the Epic's worktrees have loaded.
+   */
   readonly chatDeps: ChatLinkPolicyDeps | null;
   readonly openFile: ChatLinkHandler | null;
   /** Why a click finds `chatDeps` missing. */
@@ -222,6 +225,8 @@ interface TreeLinkRuntime {
 function useTreeLinkRuntime(args: {
   readonly epicId: string;
   readonly viewTabId: string;
+  /** `false` for an opener that never races workspace files: it neither loads nor waits for the worktrees. */
+  readonly workspaceFiles: boolean;
 }): TreeLinkRuntime {
   const tabHostId = useTabHostId();
   const tabHostClient = useTabHostClient();
@@ -229,9 +234,10 @@ function useTreeLinkRuntime(args: {
   const worktrees = useWorktreeListBindingsForEpicForClient({
     client: tabHostClient,
     epicId: args.epicId,
-    enabled: tabHostClient !== null,
+    enabled: tabHostClient !== null && args.workspaceFiles,
   });
   const workspaceRoots = useMemo<ReadonlyArray<string> | null>(() => {
+    if (!args.workspaceFiles) return [];
     if (worktrees.data === undefined) return null;
     const rows = worktrees.data.rows;
     return Array.from(
@@ -239,7 +245,7 @@ function useTreeLinkRuntime(args: {
         rows.flatMap((row) => (isBrowsable(row) ? [row.runningDir] : [])),
       ),
     );
-  }, [worktrees.data]);
+  }, [args.workspaceFiles, worktrees.data]);
   const { openTile } = useEpicTileNavigation();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -317,9 +323,10 @@ function useTreeLinkRuntime(args: {
   return {
     chatDeps,
     openFile,
-    unavailableMessage: worktrees.isError
-      ? "Couldn't open link"
-      : "Folder links are still loading",
+    unavailableMessage:
+      worktrees.isError || !args.workspaceFiles
+        ? "Couldn't open link"
+        : "Folder links are still loading",
     supersedePending,
     newLifecycle,
   };
@@ -346,7 +353,7 @@ export function useArtifactTreeLinkOpener(args: {
     unavailableMessage,
     supersedePending,
     newLifecycle,
-  } = useTreeLinkRuntime(args);
+  } = useTreeLinkRuntime({ ...args, workspaceFiles: true });
   // `isPending` guards the egress the way the anchors do: each call
   // fires a fresh bridge request, so a double click would open two OS tabs.
   const { isPending: urlOpenPending, openLink: openUrl } =
@@ -418,7 +425,7 @@ export function useArtifactTreeOnlyOpener(args: {
   readonly viewTabId: string;
 }): ArtifactTreeOnlyOpener {
   const { chatDeps, unavailableMessage, supersedePending, newLifecycle } =
-    useTreeLinkRuntime(args);
+    useTreeLinkRuntime({ ...args, workspaceFiles: false });
   return useCallback(
     (path: string, folderChain: readonly string[]): void => {
       if (chatDeps === null) {
