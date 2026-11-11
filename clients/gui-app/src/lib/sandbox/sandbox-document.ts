@@ -740,10 +740,10 @@ function bootstrapMain(config: BootstrapConfig): void {
     const target = event.target;
     const anchor = target instanceof Element ? target.closest("a[href]") : null;
     if (anchor === null) return;
-    const href = anchor.getAttribute("href") ?? "";
+    const linkHref = anchor.getAttribute("href") ?? "";
     let url: URL;
     try {
-      url = new URL(href, document.baseURI);
+      url = new URL(linkHref, document.baseURI);
     } catch {
       return;
     }
@@ -774,7 +774,7 @@ function bootstrapMain(config: BootstrapConfig): void {
       if (url.pathname !== location.pathname && event.isTrusted) {
         notify("traycer/notifications/artifact-link", {
           nonce: config.nonce,
-          href,
+          href: linkHref,
           page: location.href,
         });
       }
