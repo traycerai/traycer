@@ -418,6 +418,11 @@ describe("HtmlArtifactLinks", () => {
       TRAYCER_PAGE,
     ],
     [
+      "a name whose escape does not decode, which the address never spells",
+      "/bad%ZZ/",
+      TRAYCER_PAGE,
+    ],
+    [
       "this Epic's artifact path on disk",
       "/Users/u/.traycer/epics/epic-1/artifacts/a/sibling/index.html",
       TRAYCER_PAGE,

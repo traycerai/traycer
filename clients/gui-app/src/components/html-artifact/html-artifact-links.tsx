@@ -61,23 +61,16 @@ const parseUrl = (href: string, base: string | URL | undefined): URL | null => {
  * (`traycer-artifact://artifact-a1--m1/research/index.html`, or on Android
  * `https://artifact-a1--m1.traycer-artifact.invalid/research/index.html`), so
  * cutting `protocol//host` off the href leaves the path from the tree root.
- * The cut is made only where the text begins with exactly the origin the URL
- * parser vetted, then `/`, `?`, `#` or nothing; otherwise the parser and the
- * cut could name different places, so any other spelling of this origin, and
- * any other origin, is `null`. The href holds no backslash: the caller refused
- * it.
+ * The cut is made only where the text begins with exactly the page's own
+ * `protocol//host` (or `//host`), then `/`, `?`, `#` or nothing, which ends
+ * the authority on every scheme, so the URL parser reads that same origin;
+ * any other spelling of this origin, and any other origin, is `null`. The
+ * href holds no backslash: the caller refused it.
  */
 function hrefFromTreeRoot(href: string, pageUrl: string): string | null {
   if (!NAMES_ORIGIN.test(href)) return href;
   const page = parseUrl(pageUrl, undefined);
-  const target = page === null ? null : parseUrl(href, page);
-  if (
-    page === null ||
-    target === null ||
-    target.protocol !== page.protocol ||
-    target.host !== page.host
-  )
-    return null;
+  if (page === null) return null;
   for (const origin of [`${page.protocol}//${page.host}`, `//${page.host}`]) {
     const rest = href.slice(origin.length);
     if (href.startsWith(origin) && /^(?:[/?#]|$)/u.test(rest))
@@ -86,11 +79,11 @@ function hrefFromTreeRoot(href: string, pageUrl: string): string | null {
   return null;
 }
 
-const decodeName = (segment: string): string => {
+const decodeName = (segment: string): string | null => {
   try {
     return decodeURIComponent(segment);
   } catch {
-    return segment;
+    return null;
   }
 };
 
@@ -99,7 +92,8 @@ const decodeName = (segment: string): string => {
  * reads the href against the page's address, which spells the tree path in
  * its URL path one encoded name per segment, and each segment is decoded once,
  * as the tree reads a name. `null` for another origin, and for a segment that
- * decodes to a separator, which no name in the tree holds.
+ * does not decode or that decodes to a separator: the address never spells
+ * either, and the artifact server refuses a URL that holds one.
  */
 function framePathFor(link: SandboxArtifactLink): string | null {
   const page = parseUrl(link.pageUrl, undefined);
@@ -111,8 +105,12 @@ function framePathFor(link: SandboxArtifactLink): string | null {
     target.host !== page.host
   )
     return null;
-  const names = target.pathname.split("/").map(decodeName);
-  if (names.some((name) => /[\\/]/u.test(name))) return null;
+  const names: string[] = [];
+  for (const segment of target.pathname.split("/")) {
+    const name = decodeName(segment);
+    if (name === null || /[\\/]/u.test(name)) return null;
+    names.push(name);
+  }
   return names
     .join("/")
     .replace(ENTRY_DOCUMENT, `$1${EPIC_ARTIFACT_INDEX_FILENAME}`);
