@@ -176,10 +176,12 @@ jobs:
         with:
           ref: ${{ needs.resolve.outputs.oss_ref }}
           persist-credentials: false
+      # The action and its lock come from the checked-out release ref, so no
+      # `bun-version` is passed: the action's default at that ref is the Bun
+      # its own lock pins, which is the Bun that release was built with.
       - uses: ./.github/actions/bootstrap-ci-tools
         with:
           mirror-base-url: ${{ vars.CI_TOOLS_MIRROR_BASE_URL }}
-          bun-version: "1.4.4"
           tools: bun electron
           # Always fetch the pinned Bun fresh in this publish path rather than
           # restoring a cached executable.
