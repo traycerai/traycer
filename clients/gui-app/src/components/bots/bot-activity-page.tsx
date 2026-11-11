@@ -232,23 +232,23 @@ function taskRollup(input: {
   const known = [...states.entries()].map(([id, state]) =>
     withSurfaces(state, input.inputNeeded, id),
   );
-  const aggregatePending = {
-    ...EMPTY_NOTIFICATION_INDICATOR_STATE,
-    pendingApproval:
-      input.aggregate.pendingApproval &&
-      !known.some((state) => state.pendingApproval),
-    pendingInterview:
-      input.aggregate.pendingInterview &&
-      !known.some((state) => state.pendingInterview),
-    pendingFork:
-      input.aggregate.pendingFork && !known.some((state) => state.pendingFork),
-  };
   if (
-    aggregatePending.pendingApproval ||
-    aggregatePending.pendingInterview ||
-    aggregatePending.pendingFork
+    input.aggregate.pendingApproval &&
+    !known.some((state) => state.pendingApproval)
   ) {
-    kinds.push(chatDescendantKind(aggregatePending, undefined));
+    kinds.push("approval");
+  }
+  if (
+    input.aggregate.pendingInterview &&
+    !known.some((state) => state.pendingInterview)
+  ) {
+    kinds.push("interview");
+  }
+  if (
+    input.aggregate.pendingFork &&
+    !known.some((state) => state.pendingFork)
+  ) {
+    kinds.push("fork");
   }
   if (
     input.aggregate.unreadFailure &&

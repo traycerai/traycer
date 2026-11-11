@@ -1853,8 +1853,99 @@ describe("<BotActivityPage /> an expanded agent whose host cannot vouch", () => 
 async function expandRow(taskId: string): Promise<void> {
   await userEvent
     .setup()
-    .click(within(row(taskId)).getByTestId("bot-activity-task-chevron"));
+    .click(within(row(taskId)).getByRole("button", { name: "Show agents" }));
 }
+
+const FORK_WORDS = "1 waiting for fork resolution";
+const INTERVIEW_WORDS = "1 waiting for interview";
+const APPROVAL_WORDS = "1 waiting for approval";
+
+describe("<BotActivityPage /> distinct pending kinds the task holds are each counted", () => {
+  const ASKER: ReadonlyArray<WarmAgent> = [
+    { id: "a-ask", parentId: null, title: "Asker", archivedAt: null },
+  ];
+
+  it.each([
+    {
+      name: "interview and approval",
+      flags: ["pendingInterview", "pendingApproval"],
+      words: `${INTERVIEW_WORDS} · ${APPROVAL_WORDS}`,
+    },
+    {
+      name: "fork and interview",
+      flags: ["pendingFork", "pendingInterview"],
+      words: `${FORK_WORDS} · ${INTERVIEW_WORDS}`,
+    },
+    {
+      name: "fork and approval",
+      flags: ["pendingFork", "pendingApproval"],
+      words: `${FORK_WORDS} · ${APPROVAL_WORDS}`,
+    },
+    {
+      name: "fork, interview and approval",
+      flags: ["pendingFork", "pendingInterview", "pendingApproval"],
+      words: `${FORK_WORDS} · ${INTERVIEW_WORDS} · ${APPROVAL_WORDS}`,
+    },
+  ] as const)(
+    "no known agent carries $name: one of each",
+    ({ flags, words }) => {
+      warmTask("t-warm", ASKER);
+      taskUnread(
+        "t-warm",
+        Object.fromEntries(flags.map((flag) => [flag, true])),
+      );
+      mount([task("t-warm", {})], { boundHere: true });
+
+      expect(glyphLabel("t-warm")).toBe(words);
+    },
+  );
+
+  it.each([
+    {
+      name: "approval",
+      own: "pendingApproval",
+      flags: ["pendingInterview", "pendingApproval"],
+      words: `${INTERVIEW_WORDS} · ${APPROVAL_WORDS}`,
+    },
+    {
+      name: "interview",
+      own: "pendingInterview",
+      flags: ["pendingInterview", "pendingApproval"],
+      words: `${INTERVIEW_WORDS} · ${APPROVAL_WORDS}`,
+    },
+    {
+      name: "approval",
+      own: "pendingApproval",
+      flags: ["pendingFork", "pendingInterview", "pendingApproval"],
+      words: `${FORK_WORDS} · ${INTERVIEW_WORDS} · ${APPROVAL_WORDS}`,
+    },
+    {
+      name: "interview",
+      own: "pendingInterview",
+      flags: ["pendingFork", "pendingInterview", "pendingApproval"],
+      words: `${FORK_WORDS} · ${INTERVIEW_WORDS} · ${APPROVAL_WORDS}`,
+    },
+    {
+      name: "fork",
+      own: "pendingFork",
+      flags: ["pendingFork", "pendingInterview", "pendingApproval"],
+      words: `${FORK_WORDS} · ${INTERVIEW_WORDS} · ${APPROVAL_WORDS}`,
+    },
+  ] as const)(
+    "a known agent carries its own $name beside the task's pending kinds: still one of each",
+    ({ own, flags, words }) => {
+      warmTask("t-warm", ASKER);
+      agentUnread("a-ask", { [own]: true });
+      taskUnread(
+        "t-warm",
+        Object.fromEntries(flags.map((flag) => [flag, true])),
+      );
+      mount([task("t-warm", {})], { boundHere: true });
+
+      expect(glyphLabel("t-warm")).toBe(words);
+    },
+  );
+});
 
 /** `hostId`'s activity stream is open with its state frame landed, claiming only its own agents. */
 function planeAnswers(
