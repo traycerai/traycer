@@ -62,6 +62,7 @@ const HARNESS = {
   modelsError: null,
 };
 const ROWS = buildAllHarnessModelRows([{ harness: HARNESS, models: MODELS }]);
+const NO_HIDDEN_MODEL_PROVIDERS: ReadonlySet<string> = new Set();
 
 export function FixtureEditor(props: { readonly placeholder: string }) {
   const [pickerStore] = useState(() => createComposerPickerStore());
@@ -176,6 +177,8 @@ export function ModalFixture() {
               listRef={listRef}
               listKey="fixture"
               visibleRows={ROWS}
+              hiddenModelProviders={NO_HIDDEN_MODEL_PROVIDERS}
+              hiddenModelProviderCount={0}
               selectedRowId={
                 ROWS.find((row) => row.value === selected)?.id ?? ""
               }

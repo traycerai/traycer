@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  providerCliStateSchema,
+  type ProviderCliState,
+  type ProviderId,
+} from "@traycer/protocol/host/provider-schemas";
+import {
   hiddenModelProvidersForHarness,
   modelProviderGroupId,
   providersListReportsHiddenModelProviders,
@@ -27,13 +32,19 @@ describe("hidden model provider helpers", () => {
 
   it("reads the hidden list from only the matching harness row", () => {
     const rows = [
-      { providerId: "opencode", hiddenModelProviders: ["openrouter"] },
-      { providerId: "claude-code", hiddenModelProviders: ["other"] },
-    ] as never[];
+      providerRow("opencode", ["openrouter"]),
+      providerRow("claude-code", ["other"]),
+      providerRow("codex", undefined),
+    ];
     expect([...hiddenModelProvidersForHarness(rows, "opencode")]).toEqual([
       "openrouter",
     ]);
-    expect(hiddenModelProvidersForHarness(rows, "claude-code").size).toBe(0);
+    expect([...hiddenModelProvidersForHarness(rows, "claude")]).toEqual([
+      "other",
+    ]);
+    // An older host's row carries no list, and a missing row hides nothing.
+    expect(hiddenModelProvidersForHarness(rows, "codex").size).toBe(0);
+    expect(hiddenModelProvidersForHarness(rows, "grok").size).toBe(0);
     expect(hiddenModelProvidersForHarness(undefined, "opencode").size).toBe(0);
   });
 
@@ -98,3 +109,21 @@ describe("hidden model provider helpers", () => {
     expect(hiddenModelProviderCount(rows, new Set())).toBe(0);
   });
 });
+
+function providerRow(
+  providerId: ProviderId,
+  hiddenModelProviders: readonly string[] | undefined,
+): ProviderCliState {
+  return providerCliStateSchema.parse({
+    providerId,
+    enabled: true,
+    disabledBy: null,
+    selected: { kind: "bundled" },
+    candidates: [],
+    authPending: false,
+    checkedAt: null,
+    apiKey: { supported: false, configured: false, source: null },
+    auth: { status: "unknown", badgeText: null, label: null, detail: null },
+    ...(hiddenModelProviders === undefined ? {} : { hiddenModelProviders }),
+  });
+}
