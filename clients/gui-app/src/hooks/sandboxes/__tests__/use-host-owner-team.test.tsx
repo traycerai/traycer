@@ -1,5 +1,7 @@
 import { act, cleanup, renderHook } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { ReactNode } from "react";
 import type { HostOwnerPrincipal } from "@traycer/protocol/host/host-status";
 import {
   installHostConnectionRegistrySource,
@@ -101,6 +103,17 @@ function installPublishingDirectory(directory: PublishingHostDirectory): void {
   });
 }
 
+function createQueryClientWrapper() {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false, gcTime: 0 },
+    },
+  });
+  return ({ children }: { readonly children: ReactNode }) => (
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  );
+}
+
 beforeEach(() => {
   useAuthStore.setState({ shareableTeams: [SHAREABLE_TEAM] });
 });
@@ -116,7 +129,9 @@ describe("team ownership from host directory rows", () => {
     const directory = new PublishingHostDirectory([physicalHost(TEAM_OWNER)]);
     installPublishingDirectory(directory);
 
-    const { result } = renderHook(() => useOwnerProjection(HOST_ID));
+    const { result } = renderHook(() => useOwnerProjection(HOST_ID), {
+      wrapper: createQueryClientWrapper(),
+    });
 
     expect(result.current).toEqual({
       ownerTeamId: TEAM_ID,
@@ -131,7 +146,9 @@ describe("team ownership from host directory rows", () => {
     ]);
     installPublishingDirectory(directory);
 
-    const { result } = renderHook(() => useOwnerProjection(HOST_ID));
+    const { result } = renderHook(() => useOwnerProjection(HOST_ID), {
+      wrapper: createQueryClientWrapper(),
+    });
 
     expect(result.current).toEqual({
       ownerTeamId: null,
@@ -146,7 +163,9 @@ describe("team ownership from host directory rows", () => {
     ]);
     installPublishingDirectory(directory);
 
-    const { result } = renderHook(() => useOwnerProjection(HOST_ID));
+    const { result } = renderHook(() => useOwnerProjection(HOST_ID), {
+      wrapper: createQueryClientWrapper(),
+    });
 
     expect(result.current).toEqual({
       ownerTeamId: TEAM_ID,
@@ -160,7 +179,9 @@ describe("team ownership from host directory rows", () => {
       physicalHost(PERSONAL_OWNER),
     ]);
     installPublishingDirectory(directory);
-    const { result } = renderHook(() => useOwnerProjection(HOST_ID));
+    const { result } = renderHook(() => useOwnerProjection(HOST_ID), {
+      wrapper: createQueryClientWrapper(),
+    });
     expect(result.current.ownerTeamId).toBeNull();
     expect(result.current.landingOwner).toBeNull();
 
@@ -179,9 +200,13 @@ describe("team ownership from host directory rows", () => {
     const directory = new PublishingHostDirectory([mockLocalHostEntry]);
     installPublishingDirectory(directory);
 
-    const { result: unknown } = renderHook(() => useOwnerProjection("missing"));
-    const { result: local } = renderHook(() =>
-      useOwnerProjection(mockLocalHostEntry.hostId),
+    const { result: unknown } = renderHook(
+      () => useOwnerProjection("missing"),
+      { wrapper: createQueryClientWrapper() },
+    );
+    const { result: local } = renderHook(
+      () => useOwnerProjection(mockLocalHostEntry.hostId),
+      { wrapper: createQueryClientWrapper() },
     );
 
     expect(unknown.current).toEqual({

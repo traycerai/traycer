@@ -1,3 +1,4 @@
+import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
 /**
  * A fork onto a staged sandbox refuses a Traycer model the sandbox's own list
  * leaves out, at Fork, with the sandbox's line. The stage never moves the
@@ -452,7 +453,7 @@ function renderDialog(initialHostId: string | null): void {
       onOpenChange={() => undefined}
     />
   );
-  const view = render(dialog(false));
+  const view = render(dialog(false), { wrapper: WithTestQueryClient });
   view.rerender(dialog(true));
 }
 

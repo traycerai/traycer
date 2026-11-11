@@ -23,6 +23,7 @@ import {
 import { returnedSandboxMessageLine } from "@/lib/sandboxes/sandbox-strings";
 import {
   installHostDirectoryRows,
+  plainHostEntry,
   resetHostDirectoryRows,
   sandboxHostEntry,
 } from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
@@ -1175,6 +1176,7 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
         payload: unknown,
       ): Promise<unknown> => placementRequest(method, payload),
       getActiveHostId: () => PLACEMENT_HOST_ID,
+      getActiveHost: () => plainHostEntry(PLACEMENT_HOST_ID),
       getRequestContextUserId: landingMocks.getRequestContextUserId,
     };
     if (!isStubHostClient(placementClient)) {
@@ -2161,6 +2163,8 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
         payload: unknown,
       ): Promise<unknown> => placementRequest(method, payload),
       getActiveHostId: () => PLACEMENT_HOST_ID,
+      getActiveHost: () =>
+        sandboxHostEntry(PLACEMENT_HOST_ID, { id: "team-9", name: "Acme" }),
       getRequestContextUserId: landingMocks.getRequestContextUserId,
     };
     if (!isStubHostClient(placementClient)) {

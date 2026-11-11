@@ -449,8 +449,12 @@ const stubHostClient = {
   getRequestContext: () => null,
   getRequestContextUserId: () => null,
 };
-vi.mock("@/lib/host", () => ({ useHostClient: () => stubHostClient }));
-vi.mock("@/lib/host/runtime", () => ({
+vi.mock("@/lib/host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host")>()),
+  useHostClient: () => stubHostClient,
+}));
+vi.mock("@/lib/host/runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host/runtime")>()),
   useHostClient: () => stubHostClient,
   // The create stamps `sentFromHostId` from the directory's local host at
   // submit - see `testState.getLocalHostId` for the default and the

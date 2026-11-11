@@ -1,6 +1,7 @@
 import type { QueryObserverResult } from "@tanstack/react-query";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
+import { SupersededAuthEraError } from "@/lib/auth/auth-service";
 import {
   userSubscription,
   userWith,
@@ -36,6 +37,7 @@ import type {
   LandingTerminalAgentArgs,
   TerminalAgentLaunch,
 } from "@/components/home/hooks/use-landing-composer-actions";
+import type { LandingOwnerTeam } from "@/components/home/composer/landing-owner-model";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import { LandingComposer } from "../landing-composer";
@@ -67,6 +69,11 @@ const PLACEMENT_CLIENT = vi.hoisted(() => ({ hostId: "host-test" }));
 
 const testState = vi.hoisted(() => ({
   submit: vi.fn(),
+  resolveOwnerForCreate: vi.fn<
+    (
+      owner: LandingOwnerTeam | null,
+    ) => LandingOwnerTeam | null | Promise<LandingOwnerTeam | null>
+  >((owner) => owner),
   // Dispatches, as the real action does with no refusal to give.
   selectTerminalAgent: vi.fn((args: LandingTerminalAgentArgs): null => {
     args.settled?.(true);
@@ -423,6 +430,7 @@ vi.mock(
 
 vi.mock("@/components/home/hooks/use-landing-composer-actions", () => ({
   useLandingComposerActions: () => ({
+    resolveOwnerForCreate: testState.resolveOwnerForCreate,
     submit: testState.submit,
     selectTerminalAgent: testState.selectTerminalAgent,
     startTaskOnStagedSandbox: testState.startTask,
@@ -691,6 +699,8 @@ afterEach(() => {
   testState.packGateCalls = [];
   testState.defaultHostPackGateReads = 0;
   testState.submit.mockClear();
+  testState.resolveOwnerForCreate.mockReset();
+  testState.resolveOwnerForCreate.mockImplementation((owner) => owner);
   testState.selectTerminalAgent.mockClear();
   testState.startTerminal = null;
   testState.bodySubmit = null;
@@ -736,6 +746,14 @@ const NEW_STAGE: StagedSandboxTarget = {
   shape: SHAPE,
   name: "",
   wakeString: null,
+};
+
+const TEAM_A_OWNER: LandingOwnerTeam = { teamId: "team-a", slug: "acme" };
+const TEAM_B_OWNER: LandingOwnerTeam = { teamId: "team-b", slug: "other" };
+
+const TEAM_STAGE: StagedSandboxTarget = {
+  ...NEW_STAGE,
+  configuration: { kind: "team", teamId: "team-a", teamName: "Acme" },
 };
 
 const EXISTING_RESUME: StagedSandboxTarget = {
@@ -838,6 +856,76 @@ function onlyPendingStage() {
 }
 
 describe("LandingComposer direct submit gate", () => {
+  it("keeps the staged draft when owner resolution is superseded", async () => {
+    testState.catalogue = { providers: [], offeredAgents: ["codex"] };
+    const ownerResolution = Promise.withResolvers<LandingOwnerTeam | null>();
+    testState.resolveOwnerForCreate.mockReturnValue(ownerResolution.promise);
+    useStagedSandboxStore.getState().stage("landing:window-test", NEW_STAGE);
+
+    await sendFromComposer();
+    expect(testState.resolveOwnerForCreate).toHaveBeenCalledOnce();
+    expect(testState.refetchAuthUser).not.toHaveBeenCalled();
+    expect(testState.startTask).not.toHaveBeenCalled();
+
+    await act(async () => {
+      ownerResolution.reject(new SupersededAuthEraError());
+      await ownerResolution.promise.catch(() => undefined);
+    });
+
+    expect(testState.refetchAuthUser).not.toHaveBeenCalled();
+    expect(testState.startTask).not.toHaveBeenCalled();
+    expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    expect(readStagedSandbox("landing:window-test")?.phase).toBe("staged");
+  });
+
+  it("resolves a staged owner before balance refresh and keeps that owner for Start", async () => {
+    testState.catalogue = { providers: [], offeredAgents: ["codex"] };
+    const ownerResolution = Promise.withResolvers<LandingOwnerTeam | null>();
+    const refreshed =
+      Promise.withResolvers<
+        Pick<QueryObserverResult<AuthenticatedUser | null>, "data" | "isError">
+      >();
+    const funded = userWith(
+      userSubscription({
+        totalPlanCredits: 10,
+        consumedFromPlan: 0,
+        bonusCredits: 0,
+        consumedFromBonus: 0,
+        bundleRemaining: 0,
+      }),
+      [],
+    );
+    testState.resolveOwnerForCreate
+      .mockImplementationOnce(() => ownerResolution.promise)
+      .mockImplementation(() => TEAM_B_OWNER);
+    testState.refetchAuthUser.mockReturnValue(refreshed.promise);
+    useStagedSandboxStore.getState().stage("landing:window-test", TEAM_STAGE);
+
+    await sendFromComposer();
+    expect(testState.resolveOwnerForCreate).toHaveBeenCalledOnce();
+    expect(testState.refetchAuthUser).not.toHaveBeenCalled();
+    expect(testState.startTask).not.toHaveBeenCalled();
+
+    await act(async () => {
+      ownerResolution.resolve(TEAM_A_OWNER);
+      await ownerResolution.promise;
+    });
+    await waitFor(() =>
+      expect(testState.refetchAuthUser).toHaveBeenCalledOnce(),
+    );
+    expect(testState.startTask).not.toHaveBeenCalled();
+
+    await act(async () => {
+      refreshed.resolve({ data: funded, isError: false });
+      await refreshed.promise;
+    });
+    await waitFor(() => expect(testState.startTask).toHaveBeenCalledOnce());
+
+    expect(testState.resolveOwnerForCreate).toHaveBeenCalledOnce();
+    expect(testState.startTask.mock.calls[0]?.[0].owner).toEqual(TEAM_A_OWNER);
+    expect(testState.startTask.mock.calls[0]?.[0].sandboxTeamId).toBe("team-a");
+  });
+
   it.each(["draft", "agent"] as const)(
     "keeps a changed %s after a held auth refresh, until another Send",
     async (change) => {
