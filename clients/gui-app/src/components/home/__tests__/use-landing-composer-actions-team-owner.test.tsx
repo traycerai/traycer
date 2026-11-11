@@ -226,6 +226,7 @@ interface PendingLocalOwnership {
   resolve(owner: HostOwnerPrincipal): void;
   refresh(owner: HostOwnerPrincipal): void;
   reject(error: Error): void;
+  rejectRefresh(error: Error): void;
 }
 
 function deferredValue<T>(): DeferredValue<T> {
@@ -262,6 +263,7 @@ function createPendingLocalOwnership(): PendingLocalOwnership {
     resolve: (owner) => deferred.resolve(ownerResult(owner)),
     refresh: (owner) => refreshed.resolve(ownerResult(owner)),
     reject: (error) => deferred.reject(error),
+    rejectRefresh: (error) => refreshed.reject(error),
   };
 }
 
@@ -620,6 +622,107 @@ describe("useLandingComposerActions team owner and team sandbox refusals", () =>
     expect(resolvedOwner).toBeNull();
     expect(resolvedOwner).not.toBeInstanceOf(Promise);
     expect(ownership.reads).toHaveLength(0);
+    queryClient.clear();
+  });
+
+  it("keeps team ownership after a background refresh fails for normal and staged creates", async () => {
+    recordNegotiatedHostManifest(TEST_HOST_ID, {
+      "epic.create": { major: 1, minor: 3 },
+    });
+    useAuthStore.setState({
+      shareableTeams: [{ teamId: "t1", slug: "acme", avatarUrl: null }],
+    });
+    const ownership = createPendingLocalOwnership();
+    landingMocks.getHostBinding.mockReturnValue({
+      auth: ownership.auth,
+      directory: ownership.directory,
+    });
+    installOwnerDirectoryEntry(localOwnerDirectoryEntry());
+    const queryClient = newQueryClient();
+    const { result } = renderHook(() => useActionsWithResolvedOwner(), {
+      wrapper: queryClientWrapper(queryClient),
+    });
+    const queryKey = authQueryKeys.hostOwnership(
+      ownership.auth,
+      "user-landing",
+      TEST_HOST_ID,
+    );
+
+    await waitFor(() => expect(ownership.reads).toHaveLength(1));
+    ownership.resolve({ kind: "team", id: "t1", name: "Acme" });
+    await waitFor(() => expect(result.current.owner).toEqual(ACME_OWNER));
+
+    act(() => {
+      void queryClient.invalidateQueries({ queryKey });
+    });
+    await waitFor(() => expect(ownership.reads).toHaveLength(2));
+    ownership.rejectRefresh(new Error("background ownership refresh failed"));
+    await waitFor(() =>
+      expect(queryClient.getQueryState(queryKey)?.status).toBe("error"),
+    );
+    expect(result.current.owner).toEqual(ACME_OWNER);
+
+    act(() => {
+      result.current.actions.submit({
+        draftId: null,
+        editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
+        owner: result.current.owner,
+        teamSandboxHarnessBlocked: false,
+        settled: null,
+        toolbar: defaultToolbar(),
+      });
+    });
+    await waitFor(() => expect(hasEpicCreateRequest()).toBe(true));
+    expect(ownerFromCreatePayload(epicCreatePayload())).toEqual({
+      kind: "team",
+      teamId: "t1",
+    });
+
+    const stagedOwner = await Promise.resolve(
+      result.current.actions.resolveOwnerForCreate(result.current.owner),
+    );
+    expect(stagedOwner).toEqual(ACME_OWNER);
+    let confirmed = false;
+    let refusal: { readonly message: string } | null = null;
+    act(() => {
+      refusal = result.current.actions.startTaskOnStagedSandbox({
+        draftId: null,
+        owner: stagedOwner,
+        sandboxTeamId: "t1",
+        text: SUBMITTED_PROMPT,
+        hand: () => ({
+          isCurrent: () => true,
+          confirm: () => {
+            confirmed = true;
+          },
+          giveBack: () => null,
+        }),
+      });
+    });
+    await waitFor(() =>
+      expect(
+        landingMocks.request.mock.calls.filter(
+          ([method]) => method === "epic.create",
+        ),
+      ).toHaveLength(2),
+    );
+    await waitFor(() => expect(confirmed).toBe(true));
+
+    expect(refusal).toBeNull();
+    expect(
+      landingMocks.request.mock.calls
+        .filter(([method]) => method === "epic.create")
+        .map(([, payload]) => ownerFromCreatePayload(payload)),
+    ).toEqual([
+      { kind: "team", teamId: "t1" },
+      { kind: "team", teamId: "t1" },
+    ]);
+    expect(
+      landingMocks.request.mock.calls.some(
+        ([method]) => method === "epic.attachEnvironment",
+      ),
+    ).toBe(false);
     queryClient.clear();
   });
 

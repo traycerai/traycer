@@ -398,8 +398,7 @@ export function useLandingComposerActions(
       const readOwner = (): LandingOwnerTeam | null => {
         if (query.state.error instanceof SupersededAuthEraError)
           throw query.state.error;
-        const owner =
-          query.state.status === "success" ? query.state.data?.owner : null;
+        const owner = query.state.data?.owner ?? null;
         if (owner?.kind !== "team") return null;
         return {
           teamId: owner.id,
