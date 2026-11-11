@@ -740,9 +740,10 @@ function bootstrapMain(config: BootstrapConfig): void {
     const target = event.target;
     const anchor = target instanceof Element ? target.closest("a[href]") : null;
     if (anchor === null) return;
+    const href = anchor.getAttribute("href") ?? "";
     let url: URL;
     try {
-      url = new URL(anchor.getAttribute("href") ?? "", document.baseURI);
+      url = new URL(href, document.baseURI);
     } catch {
       return;
     }
@@ -753,6 +754,32 @@ function bootstrapMain(config: BootstrapConfig): void {
       return;
     }
     event.preventDefault();
+    // Another place in the artifacts tree, or a file of this artifact that is
+    // not a page. The app opens it: it can see the tree, and the frame cannot
+    // load another artifact's page with this prelude in it. The href goes as
+    // authored, because the resolved URL has already lost any `../` that
+    // walked above the tree's root. A link to this same page (`#`, `?tab=2`)
+    // leads nowhere else and is dropped. Either way it never reaches
+    // `ui/open-link`, whose `https:` it shares on Android.
+    //
+    // Only a trusted click is reported, so a page that calls `click()` or
+    // `dispatchEvent` opens nothing; Enter on a focused link is trusted.
+    // That is no proof the reader clicked: the page's own script can read
+    // the nonce and post this report itself.
+    if (
+      config.artifactPage !== null &&
+      url.protocol === location.protocol &&
+      url.host === location.host
+    ) {
+      if (url.pathname !== location.pathname && event.isTrusted) {
+        notify("traycer/notifications/artifact-link", {
+          nonce: config.nonce,
+          href,
+          page: location.href,
+        });
+      }
+      return;
+    }
     if (url.protocol !== "http:" && url.protocol !== "https:") return;
     linkRequestId += 1;
     send({
