@@ -22,9 +22,15 @@ export interface TeamComputerUnattendedProps {
 export function TeamComputerUnattended(
   props: TeamComputerUnattendedProps,
 ): ReactNode {
+  const [hasTokenHistory, setHasTokenHistory] = useState(props.token !== null);
+  if (!hasTokenHistory && props.token !== null) setHasTokenHistory(true);
   const expired = useDeadlineReached(props.token?.expiresAt ?? null);
   const token = expired || props.pending ? null : props.token;
-  const mintLabel = expired ? "Create a new token" : "Create install token";
+  // Pending mutation data omits the token; keep the action's label stable.
+  const mintLabel =
+    hasTokenHistory || props.token !== null
+      ? "Create a new token"
+      : "Create install token";
   // A selector is an argument, never shell source. Keep the token in stdin.
   const selector = `'${props.teamSelector.replaceAll("'", "'\\''")}'`;
   const command = `traycer host install --team ${selector} < install-token.txt`;
@@ -35,29 +41,11 @@ export function TeamComputerUnattended(
         Use a one-time token on a computer nobody will sign in to.
       </p>
       {token === null ? (
-        <>
-          <p className="text-ui-xs text-muted-foreground">
-            {expired
-              ? "The install token expired. Create a new one to set up the computer."
-              : "The token works once and expires after one hour."}
-          </p>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            disabled={props.pending}
-            onClick={props.onMint}
-          >
-            {props.pending ? (
-              <AgentSpinningDots
-                className={undefined}
-                testId={undefined}
-                variant={undefined}
-              />
-            ) : null}
-            {mintLabel}
-          </Button>
-        </>
+        <p className="text-ui-xs text-muted-foreground">
+          {expired
+            ? "The install token expired. Create a new one to set up the computer."
+            : "The token works once and expires after one hour."}
+        </p>
       ) : (
         <>
           <p className="text-ui-xs">
@@ -79,6 +67,22 @@ export function TeamComputerUnattended(
           </p>
         </>
       )}
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        disabled={props.pending}
+        onClick={props.onMint}
+      >
+        {props.pending ? (
+          <AgentSpinningDots
+            className={undefined}
+            testId="team-computer-install-token-progress"
+            variant={undefined}
+          />
+        ) : null}
+        {mintLabel}
+      </Button>
       {props.failure === null ? null : (
         <p role="alert" className="text-ui-xs text-destructive">
           {props.failure}

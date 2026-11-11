@@ -56,19 +56,9 @@ function TeamComputers(props: { readonly environmentId: string }): ReactNode {
     );
   } else if (read.isError) {
     contents = (
-      <div role="alert" className="text-ui-sm">
-        <p>Could not read this team's computers.</p>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={() => {
-            void read.refetch();
-          }}
-        >
-          Refresh
-        </Button>
-      </div>
+      <p role="alert" className="text-ui-sm">
+        Could not read this team's computers.
+      </p>
     );
   } else {
     contents = (
@@ -115,18 +105,38 @@ function TeamComputers(props: { readonly environmentId: string }): ReactNode {
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-ui-base font-medium">Computers</h2>
-        {canEdit ? (
-          <AddComputerDialog
-            teamName={teamName}
-            teamSelector={props.environmentId}
-            unattended={
-              <TeamComputerUnattendedSetup
-                environmentId={props.environmentId}
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={read.isFetching}
+            onClick={() => {
+              void read.refetch();
+            }}
+          >
+            {read.isFetching ? (
+              <AgentSpinningDots
+                className={undefined}
+                testId="team-computers-refresh-progress"
+                variant={undefined}
               />
-            }
-            testId="team-computers-add"
-          />
-        ) : null}
+            ) : null}
+            Refresh
+          </Button>
+          {canEdit ? (
+            <AddComputerDialog
+              teamName={teamName}
+              teamSelector={props.environmentId}
+              unattended={
+                <TeamComputerUnattendedSetup
+                  environmentId={props.environmentId}
+                />
+              }
+              testId="team-computers-add"
+            />
+          ) : null}
+        </div>
       </div>
       {contents}
       {setBotHost.error !== null ? (

@@ -1,4 +1,11 @@
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -205,6 +212,53 @@ describe("TeamComputersSection", () => {
     expect(listTeamComputers).toHaveBeenCalledWith(ENVIRONMENT_ID);
   });
 
+  it("refreshes a successful empty list after an external enrollment and uses the new generation", async () => {
+    const hostName = "New computer";
+    const enrolled = computer({
+      hostId: "host-new-computer",
+      hostName,
+      sharingGeneration: 42,
+    });
+    const refreshed = Promise.withResolvers<TeamComputersResult>();
+    listTeamComputers
+      .mockResolvedValue({ kind: "ok", hosts: [enrolled] })
+      .mockResolvedValueOnce({ kind: "ok", hosts: [] })
+      .mockReturnValueOnce(refreshed.promise);
+    setEnvironmentBotHost.mockImplementation(() => {
+      const assigned = { ...enrolled, holdsBotSlot: true };
+      listTeamComputers.mockResolvedValue({ kind: "ok", hosts: [assigned] });
+      return Promise.resolve({ kind: "ok", host: assigned });
+    });
+    mountSection(ENVIRONMENT_ID, "editor");
+    const user = userEvent.setup();
+
+    expect(await screen.findByText("This team has no computers.")).toBeTruthy();
+    const refresh = screen.getByRole("button", { name: "Refresh" });
+    await user.click(refresh);
+    await waitFor(() => expect(refresh.hasAttribute("disabled")).toBe(true));
+    expect(
+      within(refresh).getByTestId("team-computers-refresh-progress"),
+    ).toBeTruthy();
+    await act(async () => {
+      refreshed.resolve({ kind: "ok", hosts: [enrolled] });
+      await refreshed.promise;
+    });
+
+    const row = await screen.findByRole("listitem");
+    expect(within(row).getByText(hostName)).toBeTruthy();
+    const picker = screen.getByRole("combobox", { name: "Bot host" });
+    await user.click(picker);
+    await user.click(await screen.findByRole("option", { name: hostName }));
+    await waitFor(() =>
+      expect(picker.textContent).toBe(`${hostName} · Current bot host`),
+    );
+    expect(setEnvironmentBotHost).toHaveBeenCalledWith(
+      ENVIRONMENT_ID,
+      enrolled.hostId,
+      42,
+    );
+  });
+
   it("shows the current sandbox host and sends the eligible computer's generation without changing the viewing host", async () => {
     const available = computer({
       hostId: "host-available",
@@ -302,6 +356,9 @@ describe("TeamComputersSection", () => {
       }),
     ).toBeNull();
     expect(screen.queryByRole("button", { name: "Add a computer" })).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Refresh" }).hasAttribute("disabled"),
+    ).toBe(false);
   });
 
   it("shows a fixed error when returning a computer fails", async () => {

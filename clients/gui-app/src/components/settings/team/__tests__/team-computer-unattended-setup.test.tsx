@@ -6,6 +6,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TeamComputerUnattendedSetup } from "../team-computer-unattended-setup";
@@ -70,7 +71,7 @@ function mountSetup(): void {
   );
 }
 
-function tokenResult(): MintResult {
+function tokenResult(): Extract<MintResult, { readonly kind: "ok" }> {
   return {
     kind: "ok",
     token: INSTALL_TOKEN,
@@ -116,6 +117,57 @@ describe("TeamComputerUnattendedSetup", () => {
       screen.getByRole("button", { name: "Create install token" }),
     ).not.toBeNull();
     expect(mint).not.toHaveBeenCalled();
+  });
+
+  it("creates another unexpired token after remount and keeps the new-token action stable while pending", async () => {
+    signIn(ACCOUNT_A);
+    const firstToken = {
+      ...tokenResult(),
+      expiresAt: Date.now() + 60 * 60_000,
+    };
+    const nextToken = {
+      ...firstToken,
+      token: "account-a-second-install-token",
+    };
+    const pendingMint = Promise.withResolvers<MintResult>();
+    const mint = vi
+      .fn<AuthFacade["mintTeamComputerInstallToken"]>()
+      .mockResolvedValueOnce(firstToken)
+      .mockReturnValueOnce(pendingMint.promise);
+    hostBindingMock.current = { auth: { mintTeamComputerInstallToken: mint } };
+    mountSetup();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Create install token" }),
+    );
+    expect(await screen.findByText(INSTALL_TOKEN)).not.toBeNull();
+    cleanup();
+    mountSetup();
+    expect(await screen.findByText(INSTALL_TOKEN)).not.toBeNull();
+    expect(mint).toHaveBeenCalledTimes(1);
+
+    const create = screen.getByRole("button", { name: "Create a new token" });
+    fireEvent.click(create);
+    await waitFor(() => expect(create.hasAttribute("disabled")).toBe(true));
+    expect(
+      within(create).getByTestId("team-computer-install-token-progress"),
+    ).toBeTruthy();
+    expect(screen.queryByText(INSTALL_TOKEN)).toBeNull();
+    fireEvent.click(create);
+    expect(mint).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      pendingMint.resolve(nextToken);
+      await pendingMint.promise;
+    });
+
+    expect(await screen.findByText(nextToken.token)).not.toBeNull();
+    expect(screen.queryByText(INSTALL_TOKEN)).toBeNull();
+    expect(mint.mock.calls).toEqual([[ENVIRONMENT_ID], [ENVIRONMENT_ID]]);
+    expect(
+      screen
+        .getByRole("button", { name: "Create a new token" })
+        .hasAttribute("disabled"),
+    ).toBe(false);
   });
 
   it("does not automatically retry a refused mint when global mutation retries are enabled", async () => {
