@@ -66,7 +66,7 @@ import type { BotOnboardingSetup } from "@traycer/protocol/host/bot/onboarding-s
 
 import type { BotTurnRef } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { BotChannelLanding } from "@/components/bots/bot-channel-view";
-import { botSwatchAt } from "@/lib/providers/profile-accent-color";
+import { botColorAt } from "@/lib/providers/profile-accent-color";
 import { readFocusedHostNotificationPresence } from "@/lib/notifications/notification-presence";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { makeOpenableNodeRef } from "@/stores/epics/canvas/types";
@@ -1848,7 +1848,7 @@ describe("<BotTabSurface /> channel background", () => {
 
   function chooseBackground(background: number | null): void {
     mocks.state.listAppearance = new Map([
-      [BOT_ID, { mark: null, swatch: null, background }],
+      [BOT_ID, { mark: null, color: null, background }],
     ]);
   }
 
@@ -1857,7 +1857,7 @@ describe("<BotTabSurface /> channel background", () => {
   });
 
   it.each([false, true])(
-    "tints the header with the chosen swatch at one low opacity (dark: %s)",
+    "tints the header with the chosen colour at one low opacity (dark: %s)",
     (dark) => {
       document.documentElement.classList.toggle("dark", dark);
       chooseBackground(7);
@@ -1866,7 +1866,7 @@ describe("<BotTabSurface /> channel background", () => {
       expect(header().classList.contains(TINT_CLASS)).toBe(true);
       expect(header().getAttribute("data-channel-background")).toBe("7");
       expect(header().style.getPropertyValue("--channel-tint")).toBe(
-        botSwatchAt(7).color,
+        botColorAt(7),
       );
     },
   );

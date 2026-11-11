@@ -438,14 +438,14 @@ describe("<BotChatTranscript /> a bot that answers posts in the channel", () => 
       [directPost(DIRECT_REQUEST)],
       channel(null, () => null),
     );
-    const rowSwatch = within(
+    const rowFill = within(
       scrollStub().querySelector<HTMLElement>(
         '[data-testid="bot-member-row"]',
       ) ?? document.body,
     )
       .getByTestId("person-avatar")
       .querySelector<HTMLElement>('[data-slot="avatar-fallback"]')
-      ?.style.getPropertyValue("--swatch");
+      ?.style.getPropertyValue("--avatar-fill");
     cleanup();
 
     // The thread line's stack and the thread's anchor draw the member by id.
@@ -460,9 +460,9 @@ describe("<BotChatTranscript /> a bot that answers posts in the channel", () => 
     const byId = screen
       .getByTestId("person-avatar")
       .querySelector<HTMLElement>('[data-slot="avatar-fallback"]')
-      ?.style.getPropertyValue("--swatch");
-    expect(rowSwatch).toBeTruthy();
-    expect(rowSwatch).toBe(byId);
+      ?.style.getPropertyValue("--avatar-fill");
+    expect(rowFill).toBeTruthy();
+    expect(rowFill).toBe(byId);
   });
 
   it("draws no link to a direct post's answer two rows below it, and keeps the post's thread line", () => {

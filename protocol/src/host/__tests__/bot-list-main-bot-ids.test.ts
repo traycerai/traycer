@@ -123,8 +123,8 @@ describe("bot.list rows' app conversation", () => {
 });
 
 const APPEARANCE = {
-  mark: { kind: "creature", family: "ears", seed: 7 },
-  swatch: 3,
+  mark: { kind: "mascot", shape: "ghost" },
+  color: 3,
   background: 20,
 } as const;
 
@@ -179,25 +179,29 @@ describe("bot appearance on the wire", () => {
     expect(readUpgrade.upgradeResponse(readResponse)).toEqual(readResponse);
   });
 
-  it("refuses an appearance with a swatch or seed out of range", () => {
-    for (const bad of [
-      { ...APPEARANCE, swatch: 24 },
-      { ...APPEARANCE, background: -1 },
-      { ...APPEARANCE, swatch: 1.5 },
-      {
-        ...APPEARANCE,
-        mark: { kind: "creature", family: "ears", seed: 65_536 },
-      },
-      {
-        ...APPEARANCE,
-        mark: { kind: "picture", blobRef: "a".repeat(64) },
-      },
-    ]) {
-      expect(
-        botReadV11.responseSchema.safeParse({
-          bot: { ...BOT_ROW, appearance: bad },
-        }).success,
-      ).toBe(false);
+  it("reads a choice from a newer writer as unrecognised, the rest of the row intact", () => {
+    for (const [newer, read] of [
+      [
+        { ...APPEARANCE, mark: { kind: "picture", blobRef: "a".repeat(64) } },
+        { ...APPEARANCE, mark: { kind: "unrecognised" } },
+      ],
+      [
+        { ...APPEARANCE, mark: { kind: "mascot", shape: "comet" } },
+        { ...APPEARANCE, mark: { kind: "unrecognised" } },
+      ],
+      [
+        { ...APPEARANCE, color: 24 },
+        { ...APPEARANCE, color: "unrecognised" },
+      ],
+      [
+        { ...APPEARANCE, background: 1.5 },
+        { ...APPEARANCE, background: "unrecognised" },
+      ],
+    ] as const) {
+      const row = botReadV11.responseSchema.parse({
+        bot: { ...BOT_ROW, appearance: newer },
+      }).bot;
+      expect(row).toEqual({ ...BOT_ROW, appearance: read });
     }
   });
 });
@@ -211,31 +215,31 @@ describe("bot.updateAppearance request", () => {
       request.parse({
         botId: BOT_A,
         mark: null,
-        swatch: null,
+        color: null,
         background: null,
       }),
-    ).toEqual({ botId: BOT_A, mark: null, swatch: null, background: null });
+    ).toEqual({ botId: BOT_A, mark: null, color: null, background: null });
   });
 
-  it("accepts a creature and the swatch bounds", () => {
+  it("accepts a mascot and the color bounds", () => {
     expect(
       request.parse({
         botId: BOT_A,
-        mark: { kind: "creature", family: "crest", seed: 65_535 },
-        swatch: 0,
+        mark: { kind: "mascot", shape: "doc" },
+        color: 0,
         background: 23,
       }).background,
     ).toBe(23);
   });
 
-  it("refuses an out-of-range swatch or seed, an unknown family and a picture", () => {
+  it("refuses an out-of-range color, an unknown shape or kind, and unrecognised", () => {
     for (const bad of [
-      { swatch: 24 },
+      { color: 24 },
       { background: 24 },
-      { swatch: -1 },
-      { mark: { kind: "creature", family: "none", seed: 65_536 } },
-      { mark: { kind: "creature", family: "none", seed: -1 } },
-      { mark: { kind: "creature", family: "wings", seed: 1 } },
+      { color: -1 },
+      { color: "unrecognised" },
+      { mark: { kind: "mascot", shape: "comet" } },
+      { mark: { kind: "unrecognised" } },
       { mark: { kind: "picture", blobRef: "a".repeat(64) } },
     ]) {
       expect(request.safeParse({ botId: BOT_A, ...bad }).success).toBe(false);
