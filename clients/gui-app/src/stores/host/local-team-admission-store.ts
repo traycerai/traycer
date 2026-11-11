@@ -22,6 +22,7 @@ export function noteLocalTeamAdmission(
   state: LocalTeamAdmissionState,
 ): void {
   if (useAuthStore.getState().contextMetadata?.userId !== userId) return;
+  observeAdmissionIdentity();
   useLocalTeamAdmissionStore.setState((previous) => {
     const before = previous.byHost.get(hostId);
     if (before?.userId === userId && before.state === state) return previous;
@@ -31,17 +32,24 @@ export function noteLocalTeamAdmission(
   });
 }
 
-useAuthStore.subscribe((next, previous) => {
-  if (
-    next.contextMetadata?.userId !== previous.contextMetadata?.userId ||
-    next.status === "signed-out" ||
-    next.status === "signing-in"
-  ) {
-    if (useLocalTeamAdmissionStore.getState().byHost.size > 0) {
-      useLocalTeamAdmissionStore.setState({ byHost: new Map() });
+let observingAdmissionIdentity = false;
+
+/** Imports alone own no admission state or auth-session subscription. */
+function observeAdmissionIdentity(): void {
+  if (observingAdmissionIdentity) return;
+  observingAdmissionIdentity = true;
+  useAuthStore.subscribe((next, previous) => {
+    if (
+      next.contextMetadata?.userId !== previous.contextMetadata?.userId ||
+      next.status === "signed-out" ||
+      next.status === "signing-in"
+    ) {
+      if (useLocalTeamAdmissionStore.getState().byHost.size > 0) {
+        useLocalTeamAdmissionStore.setState({ byHost: new Map() });
+      }
     }
-  }
-});
+  });
+}
 
 export function clearLocalTeamAdmission(hostId: string): void {
   useLocalTeamAdmissionStore.setState((previous) => {

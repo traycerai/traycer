@@ -470,26 +470,36 @@ vi.mock("@/hooks/host/use-surface-host-pin", () => ({
 vi.mock("@/components/settings/host-scope/use-host-options", () => ({
   useHostOptions: () => ({
     hosts: [
-      {
+      hostScopeOptionFixture({
         hostId: "default-host",
         name: "Default Mac",
+        isLocalMachine: false,
         isActive: true,
         connectable: true,
         settingUp: false,
         terminalRunNote: null,
+        registered: false,
+        platform: null,
+        version: null,
+        updateState: null,
         sandbox: null,
-        health: { state: "online" },
-      },
-      {
+        kind: null,
+      }),
+      hostScopeOptionFixture({
         hostId: "browser-host",
         name: "Browser Mac",
+        isLocalMachine: false,
         isActive: false,
         connectable: true,
         settingUp: false,
         terminalRunNote: null,
+        registered: false,
+        platform: null,
+        version: null,
+        updateState: null,
         sandbox: null,
-        health: { state: "online" },
-      },
+        kind: null,
+      }),
       ...extraHostsMock.options,
     ],
     activeHostId: "default-host",

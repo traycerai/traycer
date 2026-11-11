@@ -181,14 +181,14 @@ function provisionLocalMember(input: {
       aborted();
       return;
     }
-    session = client.subscribe("host.notifications.subscribe", {
-      filter: "unread",
-      initialLimit: 1,
-    });
+    // No resume cursor: every fresh subscription gets a bounded initial
+    // catch-up, including on team hosts that omit notification streams.
+    session = client.subscribe("worktree.changed", {});
     session.onServerFrame((frame) => {
-      if (frame.kind !== "snapshot" || handedOff === null) return;
+      if (frame.kind !== "changed" || handedOff === null) return;
       // This exact subscription crossed the host's intake wait AFTER its
       // member frame. An unrelated socket's OPEN_ACK proves none of this.
+      // The root catch-up is only a fence; none of its content is consumed.
       options.onMemberCredentialAdopted(endpoint.hostId, handedOff);
       finish({ kind: "ready" });
     });

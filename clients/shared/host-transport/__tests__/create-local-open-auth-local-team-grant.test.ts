@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MemberCredentialHandoff } from "@traycer/protocol/host-transport/mux";
+import type { ConnectionManifest } from "@traycer/protocol/framework/ws-protocol";
+import { SERVES_EVERY_INSTALLED_MAJOR } from "@traycer/protocol/framework/capability-manifest";
+import { buildStreamManifest } from "@traycer/protocol/framework/stream-compat";
 import {
   STREAM_CAPABILITY_CREDENTIAL_UPDATE,
   STREAM_CAPABILITY_HOST_CREDENTIAL_PROVISION,
@@ -19,10 +22,25 @@ import {
   createLocalGrantStreamSocketFactory,
   parseLocalGrantStreamText,
 } from "./local-team-grant-test-support";
-import { createLocalOpenAuth } from "../create-local-open-auth";
+import {
+  createLocalOpenAuth,
+  type CreateLocalOpenAuthOptions,
+} from "../create-local-open-auth";
 
 const HOST_ID = "team-local-provision-host";
 const AUTHN_BASE_URL = "https://authn.team-local-provision.invalid";
+const ALL_STREAM_METHODS = buildStreamManifest(
+  hostStreamRpcRegistry,
+  SERVES_EVERY_INSTALLED_MAJOR,
+);
+const TEAM_HOST_MANIFEST: ConnectionManifest = {
+  "worktree.changed": ALL_STREAM_METHODS["worktree.changed"],
+};
+const PERSONAL_HOST_MANIFEST: ConnectionManifest = {
+  ...TEAM_HOST_MANIFEST,
+  "host.notifications.subscribe":
+    ALL_STREAM_METHODS["host.notifications.subscribe"],
+};
 const MEMBER_HANDOFF: MemberCredentialHandoff = {
   token: "member-token",
   refreshToken: "member-refresh-token",
@@ -43,25 +61,29 @@ function deferred<T>(): {
   return { promise, resolve };
 }
 
-function controlOpenAck(socket: {
-  readonly textSent: readonly string[];
-}): object {
+function controlOpenAck(
+  socket: {
+    readonly textSent: readonly string[];
+  },
+  manifest: ConnectionManifest,
+): object {
   const open = socket.textSent
     .map(parseLocalGrantStreamText)
     .find((frame) => frame.kind === "open");
   if (open === undefined) throw new Error("Expected a control OPEN frame");
   return {
     kind: "openAck",
-    manifest: open.manifest,
+    manifest,
     capabilities: [STREAM_CAPABILITY_HOST_CREDENTIAL_PROVISION],
   };
 }
 
-function intakeSnapshot(): object {
+function worktreeCatchup(generation: number): object {
   return {
-    kind: "snapshot",
+    kind: "changed",
+    scope: { kind: "root", root: "worktrees" },
+    cursor: { epoch: "test-host-epoch", generation },
     hasBinaryPayload: false,
-    entries: [],
   };
 }
 
@@ -77,11 +99,223 @@ function grantRequired(): object {
   };
 }
 
+function membershipRequired(): object {
+  return {
+    kind: "fatalError",
+    details: {
+      code: TEAM_MEMBERSHIP_REQUIRED,
+      reason: TEAM_MEMBERSHIP_REQUIRED_MESSAGE,
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    },
+  };
+}
+
+function membershipUnavailable(): object {
+  return {
+    kind: "fatalError",
+    details: {
+      code: TEAM_MEMBERSHIP_UNAVAILABLE,
+      reason: "Team membership could not be checked",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+      retryable: true,
+    },
+  };
+}
+
+function beginFactoryProbe(
+  mintMemberCredential: CreateLocalOpenAuthOptions["mintMemberCredential"],
+) {
+  vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    new Response(
+      JSON.stringify({
+        grant: "attach-grant-control",
+        role: "client",
+        expires_in: 60,
+        session_grant: "local-session-grant-control",
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    ),
+  );
+  const { factory, sockets, nextSocket } =
+    createLocalGrantStreamSocketFactory();
+  const onMemberCredentialAdopted = vi.fn();
+  const auth = createLocalOpenAuth({
+    authnBaseUrl: AUTHN_BASE_URL,
+    cloudAuthorized: () => true,
+    webSocketFactory: factory,
+    clientIdentity: TEST_CLIENT_IDENTITY,
+    clock: null,
+    mintMemberCredential,
+    onMemberCredentialAdopted,
+  });
+  const endpoint = {
+    hostId: HOST_ID,
+    websocketUrl: "ws://127.0.0.1:4917/rpc",
+  };
+  const bearer = new MutableBearerLease("user-bearer", "team-member-test-user");
+  const abortController = new AbortController();
+  auth.noteSessionGrantRequired(HOST_ID);
+  const socketPromise = nextSocket();
+  const readiness = auth.ensureMemberReady(
+    endpoint,
+    bearer,
+    abortController.signal,
+  );
+  return {
+    abortController,
+    bearer,
+    mintMemberCredential,
+    onMemberCredentialAdopted,
+    readiness,
+    socketPromise,
+    sockets,
+  };
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
 describe("createLocalOpenAuth local grant and member readiness", () => {
+  it("keeps a control-stream team-membership refusal terminal", async () => {
+    const mintMemberCredential = vi.fn(() => Promise.resolve(MEMBER_HANDOFF));
+    const probe = beginFactoryProbe(mintMemberCredential);
+    const socket = await probe.socketPromise;
+    const openWait = socket.waitForFrame(
+      (frame) => frame.kind === "open",
+      undefined,
+    );
+    socket.fireOpen();
+    const open = await openWait;
+    expect(open.token).toBe("local-session-grant-control");
+
+    socket.fireText(membershipRequired());
+
+    await expect(probe.readiness).resolves.toMatchObject({
+      kind: "refused",
+      fatal: {
+        code: TEAM_MEMBERSHIP_REQUIRED,
+        reason: TEAM_MEMBERSHIP_REQUIRED_MESSAGE,
+      },
+    });
+    expect(mintMemberCredential).not.toHaveBeenCalled();
+    expect(probe.onMemberCredentialAdopted).not.toHaveBeenCalled();
+    expect(probe.sockets).toHaveLength(1);
+    expect(
+      socket.textSent
+        .map(parseLocalGrantStreamText)
+        .some(
+          (frame) =>
+            frame.kind === "hostCredentialProvision" ||
+            frame.kind === "subscribe",
+        ),
+    ).toBe(false);
+  });
+
+  it("keeps a retryable team-membership control error unavailable", async () => {
+    const mintMemberCredential = vi.fn(() => Promise.resolve(MEMBER_HANDOFF));
+    const probe = beginFactoryProbe(mintMemberCredential);
+    const socket = await probe.socketPromise;
+    const openWait = socket.waitForFrame(
+      (frame) => frame.kind === "open",
+      undefined,
+    );
+    socket.fireOpen();
+    const open = await openWait;
+    expect(open.token).toBe("local-session-grant-control");
+
+    socket.fireText(membershipUnavailable());
+
+    await expect(probe.readiness).resolves.toMatchObject({
+      kind: "unavailable",
+      retryCause: { code: TEAM_MEMBERSHIP_UNAVAILABLE, retryable: true },
+    });
+    expect(mintMemberCredential).not.toHaveBeenCalled();
+    expect(probe.onMemberCredentialAdopted).not.toHaveBeenCalled();
+    expect(probe.sockets).toHaveLength(1);
+    expect(
+      socket.textSent
+        .map(parseLocalGrantStreamText)
+        .some(
+          (frame) =>
+            frame.kind === "hostCredentialProvision" ||
+            frame.kind === "subscribe",
+        ),
+    ).toBe(false);
+  });
+
+  it("keeps a null member credential mint unavailable without opening a data stream", async () => {
+    const mintMemberCredential = vi.fn(() => Promise.resolve(null));
+    const probe = beginFactoryProbe(mintMemberCredential);
+    const socket = await probe.socketPromise;
+    const openWait = socket.waitForFrame(
+      (frame) => frame.kind === "open",
+      undefined,
+    );
+    socket.fireOpen();
+    const open = await openWait;
+    expect(open.token).toBe("local-session-grant-control");
+    socket.fireText(controlOpenAck(socket, TEAM_HOST_MANIFEST));
+
+    await expect(probe.readiness).resolves.toMatchObject({
+      kind: "unavailable",
+      retryCause: { code: TEAM_MEMBERSHIP_UNAVAILABLE, retryable: true },
+    });
+    expect(mintMemberCredential).toHaveBeenCalledExactlyOnceWith(
+      HOST_ID,
+      probe.bearer,
+      expect.any(AbortSignal),
+    );
+    expect(probe.onMemberCredentialAdopted).not.toHaveBeenCalled();
+    expect(probe.sockets).toHaveLength(1);
+    expect(
+      socket.textSent
+        .map(parseLocalGrantStreamText)
+        .some(
+          (frame) =>
+            frame.kind === "hostCredentialProvision" ||
+            frame.kind === "subscribe",
+        ),
+    ).toBe(false);
+  });
+
+  it("does not treat a changed frame before member handoff as readiness", async () => {
+    const memberMintStarted = deferred<void>();
+    const memberMintResult = deferred<MemberCredentialHandoff | null>();
+    const mintMemberCredential = vi.fn(() => {
+      memberMintStarted.resolve();
+      return memberMintResult.promise;
+    });
+    const probe = beginFactoryProbe(mintMemberCredential);
+    const socket = await probe.socketPromise;
+    const openWait = socket.waitForFrame(
+      (frame) => frame.kind === "open",
+      undefined,
+    );
+    socket.fireOpen();
+    const open = await openWait;
+    expect(open.token).toBe("local-session-grant-control");
+    socket.fireText(controlOpenAck(socket, TEAM_HOST_MANIFEST));
+    await memberMintStarted.promise;
+
+    socket.fireText(worktreeCatchup(1));
+    expect(probe.onMemberCredentialAdopted).not.toHaveBeenCalled();
+
+    probe.abortController.abort();
+    memberMintResult.resolve(null);
+    await expect(probe.readiness).rejects.toMatchObject({
+      name: "AbortError",
+    });
+    expect(probe.onMemberCredentialAdopted).not.toHaveBeenCalled();
+    expect(mintMemberCredential).toHaveBeenCalledExactlyOnceWith(
+      HOST_ID,
+      probe.bearer,
+      expect.any(AbortSignal),
+    );
+  });
+
   it("treats an attach-grant 404 as terminal membership refusal and a 503 as retryable", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch");
     fetchMock
@@ -144,7 +378,7 @@ describe("createLocalOpenAuth local grant and member readiness", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it("uses a fresh local-purpose grant for each member probe and sends member credentials before subscribe", async () => {
+  it("uses worktree catch-up as the member fence with fresh grants for team and personal manifests", async () => {
     let grantSequence = 0;
     const fetchCalls: Array<{ readonly body: string; readonly url: string }> =
       [];
@@ -204,7 +438,11 @@ describe("createLocalOpenAuth local grant and member readiness", () => {
     firstSocket.fireOpen();
     const firstOpen = await firstOpenWait;
     expect(firstOpen.token).toBe("local-session-grant-1");
-    firstSocket.fireText(controlOpenAck(firstSocket));
+    expect(TEAM_HOST_MANIFEST).not.toHaveProperty(
+      "host.notifications.subscribe",
+    );
+    expect(TEAM_HOST_MANIFEST["worktree.changed"]).toBeDefined();
+    firstSocket.fireText(controlOpenAck(firstSocket, TEAM_HOST_MANIFEST));
     await memberMintStarted.promise;
     expect(
       firstSocket.textSent
@@ -222,11 +460,17 @@ describe("createLocalOpenAuth local grant and member readiness", () => {
     );
     memberMintResult.resolve(MEMBER_HANDOFF);
     const firstProvision = await firstProvisionWait;
-    await firstSubscribeWait;
+    const firstSubscribe = await firstSubscribeWait;
     expect(firstProvision).toEqual({
       kind: "hostCredentialProvision",
       ...MEMBER_HANDOFF,
     });
+    expect(firstSubscribe).toMatchObject({
+      kind: "subscribe",
+      method: "worktree.changed",
+      params: {},
+    });
+    expect(firstSubscribe.params).toEqual({});
     expect(
       firstSocket.textSent.findIndex(
         (raw) =>
@@ -238,7 +482,7 @@ describe("createLocalOpenAuth local grant and member readiness", () => {
       ),
     );
     expect(onMemberCredentialAdopted).not.toHaveBeenCalled();
-    firstSocket.fireText(intakeSnapshot());
+    firstSocket.fireText(worktreeCatchup(2));
     await expect(firstReadiness).resolves.toEqual({ kind: "ready" });
     expect(onMemberCredentialAdopted).toHaveBeenCalledExactlyOnceWith(
       HOST_ID,
@@ -259,7 +503,11 @@ describe("createLocalOpenAuth local grant and member readiness", () => {
     secondSocket.fireOpen();
     const secondOpen = await secondOpenWait;
     expect(secondOpen.token).toBe("local-session-grant-2");
-    secondSocket.fireText(controlOpenAck(secondSocket));
+    expect(PERSONAL_HOST_MANIFEST).toHaveProperty(
+      "host.notifications.subscribe",
+    );
+    expect(PERSONAL_HOST_MANIFEST).toHaveProperty("worktree.changed");
+    secondSocket.fireText(controlOpenAck(secondSocket, PERSONAL_HOST_MANIFEST));
     const secondProvisionWait = secondSocket.waitForFrame(
       (frame) => frame.kind === "hostCredentialProvision",
       undefined,
@@ -269,13 +517,19 @@ describe("createLocalOpenAuth local grant and member readiness", () => {
       undefined,
     );
     const secondProvision = await secondProvisionWait;
-    await secondSubscribeWait;
+    const secondSubscribe = await secondSubscribeWait;
     expect(secondProvision).toEqual({
       kind: "hostCredentialProvision",
       ...MEMBER_HANDOFF,
     });
+    expect(secondSubscribe).toMatchObject({
+      kind: "subscribe",
+      method: "worktree.changed",
+      params: {},
+    });
+    expect(secondSubscribe.params).toEqual({});
     expect(onMemberCredentialAdopted).toHaveBeenCalledTimes(1);
-    secondSocket.fireText(intakeSnapshot());
+    secondSocket.fireText(worktreeCatchup(3));
     await expect(secondReadiness).resolves.toEqual({ kind: "ready" });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -291,7 +545,7 @@ describe("createLocalOpenAuth local grant and member readiness", () => {
     expect(onMemberCredentialAdopted).toHaveBeenCalledTimes(2);
   });
 
-  it("holds a local data stream until the member credential intake snapshot arrives", async () => {
+  it("opens a local worktree data stream with a fresh grant after member catch-up", async () => {
     let grantSequence = 0;
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
@@ -355,10 +609,7 @@ describe("createLocalOpenAuth local grant and member readiness", () => {
       maxBackoffMs: 100,
     });
     const firstSocketPromise = nextSocket();
-    const session = client.subscribe("host.notifications.feed.subscribe", {
-      initialAttentionLimit: 50,
-      initialRecentLimit: 50,
-    });
+    const session = client.subscribe("worktree.changed", {});
 
     const userSocket = await firstSocketPromise;
     const userOpenWait = userSocket.waitForFrame(
@@ -379,7 +630,9 @@ describe("createLocalOpenAuth local grant and member readiness", () => {
     controlGrantSocket.fireOpen();
     const controlOpen = await controlOpenWait;
     expect(controlOpen.token).toBe("local-session-grant-1");
-    controlGrantSocket.fireText(controlOpenAck(controlGrantSocket));
+    controlGrantSocket.fireText(
+      controlOpenAck(controlGrantSocket, TEAM_HOST_MANIFEST),
+    );
     await memberMintStarted.promise;
 
     const memberFrameWait = controlGrantSocket.waitForFrame(
@@ -392,16 +645,22 @@ describe("createLocalOpenAuth local grant and member readiness", () => {
     );
     memberMintResult.resolve(MEMBER_HANDOFF);
     const memberFrame = await memberFrameWait;
-    await controlSubscribeWait;
+    const controlSubscribe = await controlSubscribeWait;
     expect(memberFrame).toEqual({
       kind: "hostCredentialProvision",
       ...MEMBER_HANDOFF,
     });
+    expect(controlSubscribe).toMatchObject({
+      kind: "subscribe",
+      method: "worktree.changed",
+      params: {},
+    });
+    expect(controlSubscribe.params).toEqual({});
     expect(sockets).toHaveLength(2);
     expect(onMemberCredentialAdopted).not.toHaveBeenCalled();
 
     const dataSocketPromise = nextSocket();
-    controlGrantSocket.fireText(intakeSnapshot());
+    controlGrantSocket.fireText(worktreeCatchup(2));
     expect(onMemberCredentialAdopted).toHaveBeenCalledExactlyOnceWith(
       HOST_ID,
       MEMBER_HANDOFF,
@@ -420,10 +679,16 @@ describe("createLocalOpenAuth local grant and member readiness", () => {
     );
     dataSocket.fireText({
       kind: "openAck",
-      manifest: dataOpen.manifest,
+      manifest: TEAM_HOST_MANIFEST,
       capabilities: [STREAM_CAPABILITY_CREDENTIAL_UPDATE],
     });
-    await dataSubscribeWait;
+    const dataSubscribe = await dataSubscribeWait;
+    expect(dataSubscribe).toMatchObject({
+      kind: "subscribe",
+      method: "worktree.changed",
+      params: {},
+    });
+    expect(dataSubscribe.params).toEqual({});
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(mintMemberCredential).toHaveBeenCalledExactlyOnceWith(
       HOST_ID,
