@@ -24,7 +24,6 @@ import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/clie
 import { MutableBearerLease } from "@traycer-clients/shared/auth/bearer-source";
 import { mockLocalHostEntry } from "../../host-client/mock/mock-host-directory";
 import {
-  echoRegistry,
   FakeNativeWebSocket,
   GATE_SLOTS,
   holdEveryGateSlot,
@@ -32,6 +31,7 @@ import {
   QUEUED_FOR_MS,
   settle,
 } from "../../test-fixtures/dial-gate-harness";
+import { echoRegistry } from "./__fixtures__/echo-registry";
 import { createAuthenticatedUserFixture } from "../../test-fixtures/authenticated-user";
 import { HostRequestAbortedError } from "../host-messenger";
 import type { StreamConnectionStatus } from "../i-stream-session";
