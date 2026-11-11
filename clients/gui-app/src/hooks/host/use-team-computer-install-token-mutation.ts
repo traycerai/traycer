@@ -15,8 +15,14 @@ function mintFailure(
 ): string {
   if (result.kind === "unauthorized")
     return "Sign in to create an install token.";
-  if (result.kind === "refused" && result.code === "environment_not_found") {
-    return "You can't add computers to this team.";
+  if (result.kind === "refused") {
+    if (result.code === "environment_not_found")
+      return "You can't add computers to this team.";
+    if (
+      result.code === "environment_action_forbidden" ||
+      result.code === "seat_without_write"
+    )
+      return "Ask a team admin for permission to add computers.";
   }
   return "Couldn't create the install token. Try again.";
 }

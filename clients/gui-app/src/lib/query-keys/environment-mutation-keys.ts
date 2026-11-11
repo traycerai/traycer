@@ -8,6 +8,13 @@
  */
 export const environmentMutationKeys = {
   hostBind: () => ["environment.host.bind"] as const,
+  hostBindConfirmedOwner: (hostId: string, userId: string | null) =>
+    [
+      ...environmentMutationKeys.hostBind(),
+      "confirmed-owner",
+      hostId,
+      userId,
+    ] as const,
   agentDefinitionsPut: () => ["environment.agentDefinitions.put"] as const,
   agentDefinitionsDelete: () =>
     ["environment.agentDefinitions.delete"] as const,

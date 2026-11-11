@@ -12,6 +12,7 @@ import { authQueryKeys, environmentMutationKeys } from "@/lib/query-keys";
 export function useTeamComputerTransfer(
   client: HostClient<HostRpcRegistry>,
   hostId: string,
+  onTransferred: (team: EnvironmentDescriptorV11) => void,
 ) {
   const runtime = useHostBinding();
   const userId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
@@ -27,12 +28,7 @@ export function useTeamComputerTransfer(
     ],
   });
   return useMutation({
-    mutationKey: [
-      ...environmentMutationKeys.hostBind(),
-      "confirmed-owner",
-      hostId,
-      userId,
-    ],
+    mutationKey: environmentMutationKeys.hostBindConfirmedOwner(hostId, userId),
     retry: false,
     mutationFn: async (team: EnvironmentDescriptorV11) => {
       try {
@@ -70,6 +66,7 @@ export function useTeamComputerTransfer(
         );
       }
     },
+    onSuccess: (_binding, team) => onTransferred(team),
     onSettled: () => {
       void queryClient.invalidateQueries({
         queryKey: authQueryKeys.hostOwnershipAll(),

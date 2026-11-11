@@ -8,6 +8,7 @@ import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { environmentMutationKeys } from "@/lib/query-keys";
 import { Button } from "@/components/ui/button";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import {
   Dialog,
   DialogContent,
@@ -72,7 +73,7 @@ export function HostOverviewSettingsCard(props: {
 }): ReactNode {
   const openMoveSheet = useMoveSheetStore((state) => state.openSheet);
   const [stopOpen, setStopOpen] = useState(false);
-  const [transferReceipt, setTransferReceipt] = useState<string | null>(null);
+  const [ownershipReceipt, setOwnershipReceipt] = useState<string | null>(null);
   const hostIds = useMemo(() => [props.hostId], [props.hostId]);
   const statusVersion =
     useHostNegotiatedMethodVersions(hostIds, "environment.status").get(
@@ -97,16 +98,19 @@ export function HostOverviewSettingsCard(props: {
   useMatchEnvironmentRail(railPick);
   if (model.kind === "loading" || props.status === null) {
     return (
-      <SettingsRow
-        row={HOST_OVERVIEW.definitions.settingsRow}
-        control={
-          <Skeleton
-            className="h-7 w-[18ch]"
-            role="status"
-            aria-label="Reading"
-          />
-        }
-      />
+      <>
+        <SettingsRow
+          row={HOST_OVERVIEW.definitions.settingsRow}
+          control={
+            <Skeleton
+              className="h-7 w-[18ch]"
+              role="status"
+              aria-label="Reading"
+            />
+          }
+        />
+        <TransferReceipt value={ownershipReceipt} />
+      </>
     );
   }
   const lineProps = {
@@ -124,31 +128,35 @@ export function HostOverviewSettingsCard(props: {
           owner={teamOwner}
           fallback={model.kind === "team" ? model : null}
           isLocalMachine={props.isLocalMachine}
+          onReturned={setOwnershipReceipt}
         />
-        <TransferReceipt value={transferReceipt} />
+        <TransferReceipt value={ownershipReceipt} />
       </>
     );
   }
   if (model.kind === "progress") {
     return (
-      <SettingsRow
-        row={HOST_OVERVIEW.definitions.settingsRow}
-        status={
-          <div className="flex flex-wrap items-center gap-1">
-            <MoveProgressLine {...lineProps} progress={model.progress} />
-            {model.progress.kind === "move_stopped" ? (
-              <OverviewCardDetailsLine {...lineProps} />
-            ) : null}
-          </div>
-        }
-        control={
-          <FixedSettingsSource
-            value={
-              model.progress.kind === "moving" ? "Personal" : props.hostName
-            }
-          />
-        }
-      />
+      <>
+        <SettingsRow
+          row={HOST_OVERVIEW.definitions.settingsRow}
+          status={
+            <div className="flex flex-wrap items-center gap-1">
+              <MoveProgressLine {...lineProps} progress={model.progress} />
+              {model.progress.kind === "move_stopped" ? (
+                <OverviewCardDetailsLine {...lineProps} />
+              ) : null}
+            </div>
+          }
+          control={
+            <FixedSettingsSource
+              value={
+                model.progress.kind === "moving" ? "Personal" : props.hostName
+              }
+            />
+          }
+        />
+        <TransferReceipt value={ownershipReceipt} />
+      </>
     );
   }
   return (
@@ -168,7 +176,7 @@ export function HostOverviewSettingsCard(props: {
               hostId={props.hostId}
               hostName={props.hostName}
               mayTransfer={false}
-              onTransferred={setTransferReceipt}
+              onTransferred={setOwnershipReceipt}
               value={model.value}
               options={model.options}
               onChoose={(option) => {
@@ -192,7 +200,7 @@ export function HostOverviewSettingsCard(props: {
         open={stopOpen}
         onOpenChange={setStopOpen}
       />
-      <TransferReceipt value={transferReceipt} />
+      <TransferReceipt value={ownershipReceipt} />
     </>
   );
 }
@@ -208,6 +216,7 @@ function TeamOwnedHostSettingsRow(props: {
     { readonly kind: "team" }
   > | null;
   readonly isLocalMachine: boolean;
+  readonly onReturned: (receipt: string) => void;
 }): ReactNode {
   return (
     <SettingsRow
@@ -237,6 +246,7 @@ function TeamOwnedHostSettingsRow(props: {
               client={props.client}
               hostId={props.hostId}
               hostName={props.hostName}
+              onReturned={props.onReturned}
             />
           ) : null}
         </div>
@@ -249,14 +259,22 @@ function ReturnLocalTeamComputer(props: {
   readonly client: HostClient<HostRpcRegistry>;
   readonly hostId: string;
   readonly hostName: string;
+  readonly onReturned: (receipt: string) => void;
 }): ReactNode {
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
-  const [returned, setReturned] = useState(false);
   const mutation = useHostScopedMutationForClient(props.client, {
     method: "environment.move.stop",
     mutationKey: environmentMutationKeys.moveStop(),
     errorMessage: null,
+    onSuccess: (answer) => {
+      if (answer.outcome === "stopped") {
+        props.onReturned(
+          "This computer was returned. The team can no longer run work on it.",
+        );
+        setOpen(false);
+      }
+    },
     onSettled: () => {
       void queryClient.invalidateQueries({
         queryKey: authQueryKeys.hostOwnershipAll(),
@@ -315,30 +333,20 @@ function ReturnLocalTeamComputer(props: {
             <Button
               type="button"
               disabled={mutation.isPending}
-              onClick={() =>
-                mutation.mutate(
-                  { choices: [] },
-                  {
-                    onSuccess: (answer) => {
-                      if (answer.outcome === "stopped") {
-                        setReturned(true);
-                        setOpen(false);
-                      }
-                    },
-                  },
-                )
-              }
+              onClick={() => mutation.mutate({ choices: [] })}
             >
-              {mutation.isPending ? "Returning…" : "Return computer"}
+              {mutation.isPending ? (
+                <AgentSpinningDots
+                  className={undefined}
+                  testId="team-computer-return-progress"
+                  variant={undefined}
+                />
+              ) : null}
+              Return computer
             </Button>
           </div>
         </DialogContent>
       </Dialog>
-      {returned ? (
-        <p role="status" className="text-ui-sm">
-          This computer was returned. The team can no longer run work on it.
-        </p>
-      ) : null}
     </>
   );
 }
@@ -413,7 +421,16 @@ function TeamEnvironmentSourceControl(
   const [selected, setSelected] = useState<EnvironmentDescriptorV11 | null>(
     null,
   );
-  const mutation = useTeamComputerTransfer(props.client, props.hostId);
+  const mutation = useTeamComputerTransfer(
+    props.client,
+    props.hostId,
+    (team) => {
+      props.onTransferred(
+        `${props.hostName} now belongs to ${team.label}. Return it from this computer's Overview when you want it back.`,
+      );
+      setSelected(null);
+    },
+  );
   return (
     <>
       <EnvironmentSourceSelect
@@ -463,18 +480,17 @@ function TeamEnvironmentSourceControl(
               disabled={mutation.isPending || selected === null}
               onClick={() => {
                 if (selected === null) return;
-                const team = selected;
-                mutation.mutate(team, {
-                  onSuccess: () => {
-                    props.onTransferred(
-                      `${props.hostName} now belongs to ${team.label}. Return it from this computer's Overview when you want it back.`,
-                    );
-                    setSelected(null);
-                  },
-                });
+                mutation.mutate(selected);
               }}
             >
-              {mutation.isPending ? "Adding…" : "Confirm at this computer"}
+              {mutation.isPending ? (
+                <AgentSpinningDots
+                  className={undefined}
+                  testId="team-computer-transfer-progress"
+                  variant={undefined}
+                />
+              ) : null}
+              Confirm at this computer
             </Button>
           </div>
         </DialogContent>

@@ -1,10 +1,12 @@
 /** The Overview's settings source row, including the legacy team state. */
 import {
+  act,
   cleanup,
   fireEvent,
   render,
   screen,
   within,
+  waitFor,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -391,8 +393,12 @@ describe("HostEnvironmentSection", () => {
   );
 
   it("returns a local team-owned computer with no choices or team credential in the client result", async () => {
+    const personalBinding = mocks.state.binding;
     mocks.state.binding = teamBinding(true);
-    mocks.auth.readHostOwnership.mockResolvedValue(ownershipResult(TEAM_OWNER));
+    mocks.auth.readHostOwnership
+      .mockResolvedValueOnce(ownershipResult(TEAM_OWNER))
+      .mockResolvedValue(ownershipResult(PERSON_OWNER));
+    const stop = Promise.withResolvers<{ readonly outcome: "stopped" }>();
     const stopRequests: unknown[] = [];
     const serializedResponses: string[] = [];
     let stopPreviewCalls = 0;
@@ -402,9 +408,11 @@ describe("HostEnvironmentSection", () => {
       handlers: {
         "environment.move.stop": (request) => {
           stopRequests.push(request);
-          const response = { outcome: "stopped" as const };
-          serializedResponses.push(JSON.stringify(response));
-          return response;
+          return stop.promise.then((response) => {
+            mocks.state.binding = personalBinding;
+            serializedResponses.push(JSON.stringify(response));
+            return response;
+          });
         },
         "environment.move.stopPreview": () => {
           stopPreviewCalls += 1;
@@ -422,6 +430,24 @@ describe("HostEnvironmentSection", () => {
       within(dialog).getByRole("button", { name: "Return computer" }),
     );
 
+    const confirm = screen.getByRole("button", { name: "Return computer" });
+    await waitFor(() => expect(confirm.hasAttribute("disabled")).toBe(true));
+    expect(
+      within(confirm).getByTestId("team-computer-return-progress"),
+    ).toBeTruthy();
+    await act(async () => {
+      stop.resolve({ outcome: "stopped" });
+      await stop.promise;
+    });
+
+    const source = await screen.findByTestId("host-settings-source");
+    const selector = within(source).getByRole("combobox", {
+      name: "Environment",
+    });
+    expect(within(selector).getByText("Personal")).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Return this computer" }),
+    ).toBeNull();
     expect((await screen.findByRole("status")).textContent).toContain(
       "This computer was returned.",
     );

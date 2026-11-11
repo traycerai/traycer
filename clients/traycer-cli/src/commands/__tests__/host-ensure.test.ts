@@ -50,7 +50,7 @@ const mocks = vi.hoisted(() => ({
   runSignInPreflightMock: vi.fn(),
   maybeProvisionCredentialMock: vi.fn(),
   completeTeamInstallMock: vi.fn(),
-  prepareTeamTokenInstallMock: vi.fn(),
+  teamTokenPreparationMock: vi.fn(),
   waitForTeamTokenInstallMock: vi.fn(),
   pidMetadata: null as { pid: number; websocketUrl: string } | null,
 }));
@@ -60,11 +60,26 @@ vi.mock("../../host/team-install-token", async (importOriginal) => {
     await importOriginal<typeof import("../../host/team-install-token")>();
   return {
     ...actual,
-    prepareTeamTokenInstall: (
-      ...callArgs: Parameters<typeof actual.prepareTeamTokenInstall>
+    withTeamTokenInstall: async (
+      ...[environment, environmentId, piped, readToken, run]: Parameters<
+        typeof actual.withTeamTokenInstall
+      >
     ) => {
+      if (environmentId === null) return run(null);
       mocks.callOrder.push("team-token-prepare");
-      return mocks.prepareTeamTokenInstallMock(...callArgs);
+      const prepared: PreparedTeamTokenInstall | null =
+        await mocks.teamTokenPreparationMock(
+          environment,
+          environmentId,
+          piped,
+          readToken,
+        );
+      if (prepared === null) return run(null);
+      try {
+        return await run(prepared);
+      } finally {
+        mocks.callOrder.push("team-token-finished");
+      }
     },
     waitForTeamTokenInstall: (
       ...callArgs: Parameters<typeof actual.waitForTeamTokenInstall>
@@ -254,7 +269,7 @@ describe("buildHostEnsureCommand", () => {
     mocks.maybeProvisionCredentialMock.mockResolvedValue(null);
     mocks.ensureHostMock.mockResolvedValue(baseEnsureResult({}));
     mocks.completeTeamInstallMock.mockResolvedValue(teamBindingFixture);
-    mocks.prepareTeamTokenInstallMock.mockResolvedValue(null);
+    mocks.teamTokenPreparationMock.mockResolvedValue(null);
     mocks.waitForTeamTokenInstallMock.mockResolvedValue({
       hostId: "host-local",
       environmentId: "environment-acme",
@@ -307,7 +322,7 @@ describe("buildHostEnsureCommand", () => {
       hostId: "host-local",
       environmentId: "environment-acme",
     };
-    mocks.prepareTeamTokenInstallMock.mockResolvedValue(prepared);
+    mocks.teamTokenPreparationMock.mockResolvedValue(prepared);
     mocks.waitForTeamTokenInstallMock.mockResolvedValue(receipt);
     mocks.ensureHostMock.mockResolvedValue(
       baseEnsureResult({
@@ -331,6 +346,7 @@ describe("buildHostEnsureCommand", () => {
       "ensure-enter",
       "ensure-exit",
       "team-token-wait",
+      "team-token-finished",
     ]);
     expect(mocks.waitForTeamTokenInstallMock).toHaveBeenCalledWith(
       "production",
@@ -347,12 +363,31 @@ describe("buildHostEnsureCommand", () => {
     expect(JSON.stringify(result.data)).not.toContain('"token"');
   });
 
+  it("keeps a failing ensure inside the team-token operation before any receipt wait", async () => {
+    const prepared = {
+      environmentId: "environment-acme",
+      tokenHash: "e".repeat(64),
+    } satisfies PreparedTeamTokenInstall;
+    mocks.teamTokenPreparationMock.mockResolvedValue(prepared);
+    mocks.ensureHostMock.mockRejectedValue(
+      new Error("token-path ensure failed"),
+    );
+
+    await expect(
+      buildHostEnsureCommand(baseArgs({ team: "environment-acme" }))(fakeCtx()),
+    ).rejects.toThrow("token-path ensure failed");
+
+    expect(mocks.callOrder.at(-1)).toBe("team-token-finished");
+    expect(mocks.waitForTeamTokenInstallMock).not.toHaveBeenCalled();
+    expect(mocks.completeTeamInstallMock).not.toHaveBeenCalled();
+  });
+
   it("propagates a team-token receipt timeout after ensure finishes", async () => {
     const prepared = {
       environmentId: "environment-acme",
       tokenHash: "d".repeat(64),
     } satisfies PreparedTeamTokenInstall;
-    mocks.prepareTeamTokenInstallMock.mockResolvedValue(prepared);
+    mocks.teamTokenPreparationMock.mockResolvedValue(prepared);
     mocks.waitForTeamTokenInstallMock.mockRejectedValue(
       new Error("team install receipt deadline reached"),
     );
@@ -372,6 +407,7 @@ describe("buildHostEnsureCommand", () => {
       "ensure-enter",
       "ensure-exit",
       "team-token-wait",
+      "team-token-finished",
     ]);
     expect(mocks.completeTeamInstallMock).not.toHaveBeenCalled();
   });

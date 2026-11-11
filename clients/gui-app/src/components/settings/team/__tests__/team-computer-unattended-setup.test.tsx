@@ -24,7 +24,10 @@ type MintResult =
   | {
       readonly kind: "refused";
       readonly status: number;
-      readonly code: "broker_unavailable";
+      readonly code:
+        | "broker_unavailable"
+        | "environment_action_forbidden"
+        | "seat_without_write";
     };
 
 interface AuthFacade {
@@ -139,6 +142,28 @@ describe("TeamComputerUnattendedSetup", () => {
     expect(mint).toHaveBeenCalledTimes(1);
     expect(mint).toHaveBeenCalledWith(ENVIRONMENT_ID);
   });
+
+  it.each(["environment_action_forbidden", "seat_without_write"] as const)(
+    "explains the permission required after %s instead of offering a retry",
+    async (code) => {
+      signIn(ACCOUNT_A);
+      const mint = vi.fn(() =>
+        Promise.resolve<MintResult>({ kind: "refused", status: 403, code }),
+      );
+      hostBindingMock.current = {
+        auth: { mintTeamComputerInstallToken: mint },
+      };
+      mountSetup();
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "Create install token" }),
+      );
+
+      expect((await screen.findByRole("alert")).textContent).toBe(
+        "Ask a team admin for permission to add computers.",
+      );
+    },
+  );
 
   it("keeps a credential-bearing facade throw out of the alert and mutation cache", async () => {
     signIn(ACCOUNT_A);

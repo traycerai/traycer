@@ -1,4 +1,5 @@
 import { TeamComputerUnattendedSetup } from "./team-computer-unattended-setup";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { useState, type ReactNode } from "react";
 import type { TeamComputer } from "@traycer-clients/shared/host-client/team-computers";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -196,7 +197,14 @@ function TeamComputerReturnDialog(props: {
                 props.onReturn(props.computer.hostId);
             }}
           >
-            {props.pending ? "Returning…" : "Return computer"}
+            {props.pending ? (
+              <AgentSpinningDots
+                className={undefined}
+                testId="team-computer-return-progress"
+                variant={undefined}
+              />
+            ) : null}
+            Return computer
           </Button>
         </div>
       </DialogContent>

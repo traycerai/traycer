@@ -255,6 +255,8 @@ describe("TeamComputersSection", () => {
   });
 
   it("lets an editor open the return confirmation and posts only after confirmation", async () => {
+    const pending = Promise.withResolvers<TeamComputerReleaseResult>();
+    releaseTeamComputer.mockReturnValue(pending.promise);
     mountSection(ENVIRONMENT_ID, "editor");
     const user = userEvent.setup();
 
@@ -271,13 +273,23 @@ describe("TeamComputersSection", () => {
 
     await user.click(screen.getByRole("button", { name: "Return computer" }));
 
+    const confirm = screen.getByRole("button", { name: "Return computer" });
+    await waitFor(() => expect(confirm.hasAttribute("disabled")).toBe(true));
+    expect(
+      confirm.querySelector('[data-testid="team-computer-return-progress"]'),
+    ).not.toBeNull();
+    await act(async () => {
+      pending.resolve({ kind: "ok" });
+      await pending.promise;
+    });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
     await waitFor(() =>
       expect(releaseTeamComputer).toHaveBeenCalledWith(
         "host-computer-a",
         ENVIRONMENT_ID,
       ),
     );
-    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("does not offer return or add actions to an unknown role", async () => {

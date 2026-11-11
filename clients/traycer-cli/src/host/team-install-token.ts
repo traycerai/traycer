@@ -1,4 +1,7 @@
-import { acquireCredentialsLock } from "@traycer/protocol/config/credentials-lock";
+import {
+  acquireCredentialsLock,
+  type CredentialsLockHandle,
+} from "@traycer/protocol/config/credentials-lock";
 import { createHash, randomBytes } from "node:crypto";
 import {
   chmod,
@@ -19,20 +22,13 @@ export const MAX_INSTALL_TOKEN_LENGTH = 4096;
 
 const INSTALL_TOKEN_SHAPE = /^[A-Za-z0-9._~+/=-]+$/;
 
-/**
- * Stages a validated token and its target in the existing host token file.
- * A sibling temp file and rename prevent a partial credential read.
- */
-async function stageTeamInstallToken(
-  environment: Environment,
-  token: string,
-  environmentId: string,
-): Promise<void> {
-  const path = hostTeamInstallTokenPath(environment);
-  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+async function acquireInstallLock(
+  lockPath: string,
+  reason: string,
+): Promise<CredentialsLockHandle> {
   const lock = await acquireCredentialsLock({
-    lockPath: `${path}.lock`,
-    reason: "team-install-token-stage",
+    lockPath,
+    reason,
     waitMs: 30_000,
     pollIntervalMs: 50,
     signal: null,
@@ -45,6 +41,24 @@ async function stageTeamInstallToken(
       exitCode: 1,
     });
   }
+  return lock.handle;
+}
+
+/**
+ * Stages a validated token and its target in the existing host token file.
+ * A sibling temp file and rename prevent a partial credential read.
+ */
+async function stageTeamInstallToken(
+  environment: Environment,
+  token: string,
+  environmentId: string,
+): Promise<void> {
+  const path = hostTeamInstallTokenPath(environment);
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  const lock = await acquireInstallLock(
+    `${path}.lock`,
+    "team-install-token-stage",
+  );
   const temporary = `${path}.${randomBytes(8).toString("hex")}.tmp`;
   try {
     await rm(join(dirname(path), "team-install-completed.json"), {
@@ -65,7 +79,7 @@ async function stageTeamInstallToken(
     await rm(temporary, { force: true });
     throw error;
   } finally {
-    await lock.handle.release();
+    await lock.release();
   }
 }
 
@@ -74,14 +88,19 @@ export interface PreparedTeamTokenInstall {
   readonly tokenHash: string;
 }
 
-/** A pipe supplies authorization directly; this branch never reads user auth. */
-export async function prepareTeamTokenInstall(
+/**
+ * Serialize staging through the caller's terminal result. The separate lock
+ * leaves the host free to acquire the short token-file lock and write its receipt.
+ * Credentials locking reclaims a holder only when its PID/fingerprint is dead.
+ */
+export async function withTeamTokenInstall<T>(
   environment: Environment,
-  environmentId: string,
+  environmentId: string | null,
   piped: boolean,
   readToken: (canPrompt: boolean) => Promise<string>,
-): Promise<PreparedTeamTokenInstall | null> {
-  if (!piped) return null;
+  run: (prepared: PreparedTeamTokenInstall | null) => Promise<T>,
+): Promise<T> {
+  if (environmentId === null || !piped) return run(null);
   let raw: string;
   try {
     raw = await readToken(false);
@@ -94,7 +113,7 @@ export async function prepareTeamTokenInstall(
     });
   }
   const token = raw.trim();
-  if (token.length === 0) return null;
+  if (token.length === 0) return run(null);
   if (
     token.length > MAX_INSTALL_TOKEN_LENGTH ||
     !INSTALL_TOKEN_SHAPE.test(token)
@@ -106,11 +125,19 @@ export async function prepareTeamTokenInstall(
       exitCode: 1,
     });
   }
-  await stageTeamInstallToken(environment, token, environmentId);
-  return {
-    environmentId,
-    tokenHash: createHash("sha256").update(token).digest("hex"),
-  };
+  const operationLock = await acquireInstallLock(
+    `${hostTeamInstallTokenPath(environment)}.operation.lock`,
+    "team-install-operation",
+  );
+  try {
+    await stageTeamInstallToken(environment, token, environmentId);
+    return await run({
+      environmentId,
+      tokenHash: createHash("sha256").update(token).digest("hex"),
+    });
+  } finally {
+    await operationLock.release();
+  }
 }
 
 const completedInstallSchema = z.strictObject({

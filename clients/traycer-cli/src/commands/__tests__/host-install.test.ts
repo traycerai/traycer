@@ -67,7 +67,7 @@ const mocks = vi.hoisted(() => ({
   readInstalledFloorOperandsMock: vi.fn(),
   publishHostStartAdoptionMock: vi.fn(),
   completeTeamInstallMock: vi.fn(),
-  prepareTeamTokenInstallMock: vi.fn(),
+  teamTokenPreparationMock: vi.fn(),
   waitForTeamTokenInstallMock: vi.fn(),
 }));
 
@@ -247,11 +247,26 @@ vi.mock("../../host/team-install-token", async (importOriginal) => {
     await importOriginal<typeof import("../../host/team-install-token")>();
   return {
     ...actual,
-    prepareTeamTokenInstall: (
-      ...callArgs: Parameters<typeof actual.prepareTeamTokenInstall>
+    withTeamTokenInstall: async (
+      ...[environment, environmentId, piped, readToken, run]: Parameters<
+        typeof actual.withTeamTokenInstall
+      >
     ) => {
+      if (environmentId === null) return run(null);
       mocks.callOrder.push("team-token-prepare");
-      return mocks.prepareTeamTokenInstallMock(...callArgs);
+      const prepared: PreparedTeamTokenInstall | null =
+        await mocks.teamTokenPreparationMock(
+          environment,
+          environmentId,
+          piped,
+          readToken,
+        );
+      if (prepared === null) return run(null);
+      try {
+        return await run(prepared);
+      } finally {
+        mocks.callOrder.push("team-token-finished");
+      }
     },
     waitForTeamTokenInstall: (
       ...callArgs: Parameters<typeof actual.waitForTeamTokenInstall>
@@ -532,7 +547,7 @@ describe("buildHostInstallCommand", () => {
       site: "host install",
     });
     mocks.completeTeamInstallMock.mockResolvedValue(teamBindingFixture);
-    mocks.prepareTeamTokenInstallMock.mockResolvedValue(null);
+    mocks.teamTokenPreparationMock.mockResolvedValue(null);
     mocks.waitForTeamTokenInstallMock.mockResolvedValue({
       hostId: "host-local",
       environmentId: "environment-acme",
@@ -623,7 +638,7 @@ describe("buildHostInstallCommand", () => {
       hostId: "host-local",
       environmentId: "environment-acme",
     };
-    mocks.prepareTeamTokenInstallMock.mockResolvedValue(prepared);
+    mocks.teamTokenPreparationMock.mockResolvedValue(prepared);
     mocks.waitForTeamTokenInstallMock.mockResolvedValue(receipt);
     mocks.stageHostInstallSourceMock.mockResolvedValue(sampleStaged());
     mocks.createServiceInstallLifecycleMock.mockReturnValue(
@@ -655,6 +670,7 @@ describe("buildHostInstallCommand", () => {
       "commit",
       "lock-exit",
       "team-token-wait",
+      "team-token-finished",
     ]);
     expect(mocks.waitForTeamTokenInstallMock).toHaveBeenCalledWith(
       "production",
@@ -670,12 +686,36 @@ describe("buildHostInstallCommand", () => {
     expect(JSON.stringify(result.data)).not.toContain('"token"');
   });
 
+  it("keeps a failing install inside the team-token operation before any receipt wait", async () => {
+    const prepared = {
+      environmentId: "environment-acme",
+      tokenHash: "f".repeat(64),
+    } satisfies PreparedTeamTokenInstall;
+    mocks.teamTokenPreparationMock.mockResolvedValue(prepared);
+    mocks.createServiceInstallLifecycleMock.mockReturnValue(
+      sampleLifecycleHandle(),
+    );
+    mocks.stageHostInstallSourceMock.mockRejectedValue(
+      new Error("token-path staging failed"),
+    );
+
+    await expect(
+      buildHostInstallCommand(baseArgs({ team: "environment-acme" }))(
+        fakeCtx(),
+      ),
+    ).rejects.toThrow("token-path staging failed");
+
+    expect(mocks.callOrder.at(-1)).toBe("team-token-finished");
+    expect(mocks.waitForTeamTokenInstallMock).not.toHaveBeenCalled();
+    expect(mocks.completeTeamInstallMock).not.toHaveBeenCalled();
+  });
+
   it("propagates a team-token receipt timeout after the install commits", async () => {
     const prepared = {
       environmentId: "environment-acme",
       tokenHash: "b".repeat(64),
     } satisfies PreparedTeamTokenInstall;
-    mocks.prepareTeamTokenInstallMock.mockResolvedValue(prepared);
+    mocks.teamTokenPreparationMock.mockResolvedValue(prepared);
     mocks.waitForTeamTokenInstallMock.mockRejectedValue(
       cliError({
         code: CLI_ERROR_CODES.AUTH_REJECTED,
@@ -706,6 +746,7 @@ describe("buildHostInstallCommand", () => {
       "commit",
       "lock-exit",
       "team-token-wait",
+      "team-token-finished",
     ]);
     expect(mocks.completeTeamInstallMock).not.toHaveBeenCalled();
   });

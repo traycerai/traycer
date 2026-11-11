@@ -1,6 +1,11 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+import * as credentialsLock from "@traycer/protocol/config/credentials-lock";
+import * as processLiveness from "@traycer/protocol/config/process-liveness";
 import {
   mkdtemp,
+  mkdir,
   readdir,
   readFile,
   rm,
@@ -17,7 +22,7 @@ import type { Environment } from "../../runner/environment";
 import { hostTeamInstallTokenPath } from "../../store/paths";
 import {
   MAX_INSTALL_TOKEN_LENGTH,
-  prepareTeamTokenInstall,
+  withTeamTokenInstall,
   waitForTeamTokenInstall,
   type PreparedTeamTokenInstall,
 } from "../team-install-token";
@@ -51,6 +56,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   vi.useRealTimers();
   restoreEnv("HOME", savedHome);
   restoreEnv("USERPROFILE", savedUserProfile);
@@ -112,11 +118,12 @@ async function preparePipedToken(
   token: string,
 ): Promise<PreparedTeamTokenInstall> {
   const pipe = pipeReader(`${token}\n`);
-  const prepared = await prepareTeamTokenInstall(
+  const prepared = await withTeamTokenInstall(
     environment,
     environmentId,
     true,
     pipe.readToken,
+    (prepared) => Promise.resolve(prepared),
   );
   if (prepared === null) throw new Error("expected a piped install token");
   return prepared;
@@ -161,7 +168,7 @@ async function expectNoStagedToken(environment: Environment): Promise<void> {
   });
 }
 
-describe("prepareTeamTokenInstall", () => {
+describe("withTeamTokenInstall", () => {
   const environment: Environment = "production";
   const environmentId = "env_team-caseSensitive";
 
@@ -169,22 +176,16 @@ describe("prepareTeamTokenInstall", () => {
     const readToken = vi.fn(async () => TOKEN);
 
     await expect(
-      prepareTeamTokenInstall(environment, environmentId, false, readToken),
+      withTeamTokenInstall(
+        environment,
+        environmentId,
+        false,
+        readToken,
+        (prepared) => Promise.resolve(prepared),
+      ),
     ).resolves.toBeNull();
 
     expect(readToken).not.toHaveBeenCalled();
-    await expectNoStagedToken(environment);
-  });
-
-  it("treats an empty pipe as no install token and creates no file", async () => {
-    const pipe = pipeReader(" \n");
-
-    await expect(
-      prepareTeamTokenInstall(environment, environmentId, true, pipe.readToken),
-    ).resolves.toBeNull();
-
-    expect(pipe.promptFlags).toEqual([false]);
-    expect(pipe.prompt.text).toBe("");
     await expectNoStagedToken(environment);
   });
 
@@ -192,11 +193,12 @@ describe("prepareTeamTokenInstall", () => {
     const pipe = pipeReader(`  ${TOKEN}  \nignored input\n`);
     const identityDir = join(home, ".traycer", "host", "identity");
 
-    const result = await prepareTeamTokenInstall(
+    const result = await withTeamTokenInstall(
       environment,
       environmentId,
       true,
       pipe.readToken,
+      (prepared) => Promise.resolve(prepared),
     );
 
     expect(result).toEqual({
@@ -221,15 +223,16 @@ describe("prepareTeamTokenInstall", () => {
     }
   });
 
-  it("accepts a token exactly at the length cap through the prepare boundary", async () => {
+  it("accepts a token exactly at the length cap through the callback boundary", async () => {
     const longest = "a".repeat(MAX_INSTALL_TOKEN_LENGTH);
     const pipe = pipeReader(`${longest}\n`);
 
-    const result = await prepareTeamTokenInstall(
+    const result = await withTeamTokenInstall(
       environment,
       environmentId,
       true,
       pipe.readToken,
+      (prepared) => Promise.resolve(prepared),
     );
 
     expect(result).toEqual({
@@ -250,16 +253,17 @@ describe("prepareTeamTokenInstall", () => {
     ["an invalid character", "not a valid install token"],
     ["a token over the cap", "a".repeat(MAX_INSTALL_TOKEN_LENGTH + 1)],
   ])(
-    "rejects %s through prepare without staging or reflecting input",
+    "rejects %s through the callback seam without staging or reflecting input",
     async (_name, invalidToken) => {
       const pipe = pipeReader(`${invalidToken}\n`);
 
       const error = await rejectedCliErrorOf(
-        prepareTeamTokenInstall(
+        withTeamTokenInstall(
           environment,
           environmentId,
           true,
           pipe.readToken,
+          (prepared) => Promise.resolve(prepared),
         ),
       );
       const diagnostic = JSON.stringify({
@@ -280,7 +284,13 @@ describe("prepareTeamTokenInstall", () => {
     const pipe = errorPipeReader(new Error(`stream failed: ${TOKEN}`));
 
     const error = await rejectedCliErrorOf(
-      prepareTeamTokenInstall(environment, environmentId, true, pipe.readToken),
+      withTeamTokenInstall(
+        environment,
+        environmentId,
+        true,
+        pipe.readToken,
+        (prepared) => Promise.resolve(prepared),
+      ),
     );
     const diagnostic = JSON.stringify({
       code: error.code,
@@ -307,11 +317,12 @@ describe("prepareTeamTokenInstall", () => {
     const oldPipe = pipeReader("old-token\n");
     const newPipe = pipeReader(`${TOKEN}\n`);
 
-    await prepareTeamTokenInstall(
+    await withTeamTokenInstall(
       environment,
       environmentId,
       true,
       oldPipe.readToken,
+      (prepared) => Promise.resolve(prepared),
     );
     await writeFile(
       receiptPath,
@@ -323,11 +334,12 @@ describe("prepareTeamTokenInstall", () => {
     );
     await writeFile(recoveryPath, "{}");
 
-    await prepareTeamTokenInstall(
+    await withTeamTokenInstall(
       environment,
       environmentId,
       true,
       newPipe.readToken,
+      (prepared) => Promise.resolve(prepared),
     );
 
     await expect(stat(receiptPath)).rejects.toMatchObject({ code: "ENOENT" });
@@ -436,5 +448,294 @@ describe("waitForTeamTokenInstall", () => {
     expect(
       JSON.stringify({ message: error.message, details: error.details }),
     ).not.toContain(TOKEN);
+  });
+});
+
+describe("team install operation serialization", () => {
+  const environment: Environment = "production";
+  const environmentId = "env_first-team";
+  const hostId = "0b6f6a3e-6f4c-4a0e-9d6e-0d7a4c1f2a11";
+
+  function operationPath(): string {
+    return `${hostTeamInstallTokenPath(environment)}.operation.lock`;
+  }
+
+  it("does not stage a competing install until the first receipt is confirmed", async () => {
+    const firstStarted = Promise.withResolvers<PreparedTeamTokenInstall>();
+    const contended = Promise.withResolvers<void>();
+    const order: string[] = [];
+    const receiptPath = identityFile(
+      environment,
+      "team-install-completed.json",
+    );
+    const first = observeSettlement(
+      withTeamTokenInstall(
+        environment,
+        environmentId,
+        true,
+        pipeReader(`${TOKEN}\n`).readToken,
+        async (prepared) => {
+          if (prepared === null) throw new Error("expected the first token");
+          order.push("first staged");
+          firstStarted.resolve(prepared);
+          const receipt = await waitForTeamTokenInstall(
+            environment,
+            prepared,
+            10_000,
+          );
+          order.push("first confirmed");
+          return receipt;
+        },
+      ),
+    );
+    const prepared = await firstStarted.promise;
+    const realProbe = processLiveness.probeProcessLivenessAsync;
+    const probe = vi
+      .spyOn(processLiveness, "probeProcessLivenessAsync")
+      .mockImplementation(async (pid) => {
+        const verdict = await realProbe(pid);
+        if (pid === process.pid && verdict === "alive") contended.resolve();
+        return verdict;
+      });
+    const second = observeSettlement(
+      withTeamTokenInstall(
+        environment,
+        "env_second-team",
+        true,
+        pipeReader("second-install-token\n").readToken,
+        (next) => {
+          order.push("second staged");
+          return Promise.resolve(next);
+        },
+      ),
+    );
+    let receiptWritten = false;
+    try {
+      const state = await Promise.race([
+        contended.promise.then(() => "contended"),
+        second.then(() => "completed"),
+      ]);
+      expect(
+        JSON.parse(
+          await readFile(hostTeamInstallTokenPath(environment), "utf8"),
+        ),
+      ).toEqual({ token: TOKEN, environmentId });
+      expect(state).toBe("contended");
+      await writeFile(receiptPath, JSON.stringify({ ...prepared, hostId }), {
+        mode: 0o600,
+      });
+      receiptWritten = true;
+      expect(await first).toEqual({
+        status: "fulfilled",
+        value: { hostId, environmentId },
+      });
+      expect(await second).toEqual({
+        status: "fulfilled",
+        value: {
+          environmentId: "env_second-team",
+          tokenHash: createHash("sha256")
+            .update("second-install-token")
+            .digest("hex"),
+        },
+      });
+      expect(order).toEqual([
+        "first staged",
+        "first confirmed",
+        "second staged",
+      ]);
+    } finally {
+      if (!receiptWritten) {
+        await writeFile(receiptPath, JSON.stringify({ ...prepared, hostId }), {
+          mode: 0o600,
+        });
+      }
+      await first;
+      await second;
+      probe.mockRestore();
+    }
+  }, 15_000);
+
+  it("releases the operation lock when the install callback throws", async () => {
+    const failure = new Error("the install failed before receipt wait");
+    await expect(
+      withTeamTokenInstall(
+        environment,
+        environmentId,
+        true,
+        pipeReader(`${TOKEN}\n`).readToken,
+        async () => {
+          const contender = await credentialsLock.acquireCredentialsLock({
+            lockPath: operationPath(),
+            reason: "probe-held-install",
+            waitMs: 0,
+            pollIntervalMs: 50,
+            signal: null,
+          });
+          if (contender.acquired) await contender.handle.release();
+          expect(contender.acquired).toBe(false);
+          throw failure;
+        },
+      ),
+    ).rejects.toBe(failure);
+    const afterFailure = await credentialsLock.acquireCredentialsLock({
+      lockPath: operationPath(),
+      reason: "probe-released-install",
+      waitMs: 0,
+      pollIntervalMs: 50,
+      signal: null,
+    });
+    try {
+      expect(afterFailure.acquired).toBe(true);
+    } finally {
+      if (afterFailure.acquired) await afterFailure.handle.release();
+    }
+  });
+
+  it.each([
+    { label: "a null team", target: null, input: TOKEN, reads: false },
+    {
+      label: "an empty pipe",
+      target: environmentId,
+      input: " \n",
+      reads: true,
+    },
+  ])(
+    "takes neither lock for $label even while both are busy",
+    async ({ target, input, reads }) => {
+      const held = await credentialsLock.acquireCredentialsLock({
+        lockPath: operationPath(),
+        reason: "held-operation-fixture",
+        waitMs: 0,
+        pollIntervalMs: 50,
+        signal: null,
+      });
+      if (!held.acquired) throw new Error("the fixture operation lock is busy");
+      let hostLock: credentialsLock.CredentialsLockHandle | null = null;
+      try {
+        const stagePath = `${hostTeamInstallTokenPath(environment)}.lock`;
+        const stage = await credentialsLock.acquireCredentialsLock({
+          lockPath: stagePath,
+          reason: "held-host-fixture",
+          waitMs: 0,
+          pollIntervalMs: 50,
+          signal: null,
+        });
+        if (!stage.acquired) throw new Error("the fixture host lock is busy");
+        hostLock = stage.handle;
+        const operationBytes = await readFile(operationPath(), "utf8");
+        const stageBytes = await readFile(stagePath, "utf8");
+        const realAcquire = credentialsLock.acquireCredentialsLock;
+        const bounded = vi
+          .spyOn(credentialsLock, "acquireCredentialsLock")
+          .mockImplementation((options) =>
+            realAcquire({ ...options, waitMs: 0 }),
+          );
+        try {
+          const reader = vi.fn(pipeReader(input).readToken);
+          await expect(
+            withTeamTokenInstall(
+              environment,
+              target,
+              true,
+              reader,
+              (prepared) => Promise.resolve(prepared),
+            ),
+          ).resolves.toBeNull();
+          if (reads) expect(reader).toHaveBeenCalledWith(false);
+          else expect(reader).not.toHaveBeenCalled();
+          await expectNoStagedToken(environment);
+          expect(await readFile(operationPath(), "utf8")).toBe(operationBytes);
+          expect(await readFile(stagePath, "utf8")).toBe(stageBytes);
+        } finally {
+          bounded.mockRestore();
+        }
+      } finally {
+        await hostLock?.release();
+        await held.handle.release();
+      }
+    },
+  );
+
+  it("keeps the CLI operation locked while the host takes its short file lock and confirms adoption", async () => {
+    await expect(
+      withTeamTokenInstall(
+        environment,
+        environmentId,
+        true,
+        pipeReader(`${TOKEN}\n`).readToken,
+        async (prepared) => {
+          if (prepared === null) throw new Error("expected the install token");
+          const contender = await credentialsLock.acquireCredentialsLock({
+            lockPath: operationPath(),
+            reason: "probe-operation-during-adoption",
+            waitMs: 0,
+            pollIntervalMs: 50,
+            signal: null,
+          });
+          if (contender.acquired) await contender.handle.release();
+          expect(contender.acquired).toBe(false);
+          const hostLock = await credentialsLock.acquireCredentialsLock({
+            lockPath: `${hostTeamInstallTokenPath(environment)}.lock`,
+            reason: "host-receipt-fixture",
+            waitMs: 0,
+            pollIntervalMs: 50,
+            signal: null,
+          });
+          if (!hostLock.acquired)
+            throw new Error("the CLI blocked the host receipt lock");
+          try {
+            await writeFile(
+              identityFile(environment, "team-install-completed.json"),
+              JSON.stringify({ ...prepared, hostId }),
+              { mode: 0o600 },
+            );
+          } finally {
+            await hostLock.handle.release();
+          }
+          return waitForTeamTokenInstall(environment, prepared, 1_000);
+        },
+      ),
+    ).resolves.toEqual({ hostId, environmentId });
+  });
+
+  it("reclaims an operation lock whose recorded process was killed", async () => {
+    const child = spawn(process.execPath, ["-e", "process.stdin.resume()"], {
+      env: {},
+      stdio: ["pipe", "ignore", "ignore"],
+    });
+    const exited = once(child, "exit");
+    await once(child, "spawn");
+    const deadPid = child.pid;
+    child.kill("SIGKILL");
+    await exited;
+    if (deadPid === undefined)
+      throw new Error("the fixture process never started");
+    await mkdir(dirname(operationPath()), { recursive: true, mode: 0o700 });
+    await writeFile(
+      operationPath(),
+      JSON.stringify({
+        pid: deadPid,
+        pidStartTime: null,
+        acquisitionNonce: randomUUID(),
+        acquiredAt: Date.now(),
+        reason: "killed-team-install",
+      }),
+      { mode: 0o600 },
+    );
+    await expect(
+      withTeamTokenInstall(
+        environment,
+        environmentId,
+        true,
+        pipeReader(`${TOKEN}\n`).readToken,
+        (prepared) => Promise.resolve(prepared),
+      ),
+    ).resolves.toEqual({
+      environmentId,
+      tokenHash: createHash("sha256").update(TOKEN).digest("hex"),
+    });
+    await expect(stat(operationPath())).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 });
