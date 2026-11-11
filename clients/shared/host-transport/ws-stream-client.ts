@@ -77,6 +77,7 @@ import type {
   StreamWebSocketMessageEvent,
 } from "./ws-stream-factory";
 import type { WebSocketCloseEvent, WebSocketErrorEvent } from "./ws-factory";
+import { whenDialStarted } from "@traycer/protocol/host-transport/websocket";
 import type { IntervalHandle, TimerHandle } from "./timer-handle";
 import type { ReconnectAllOptions } from "./host-stream-client";
 import type { AvailabilityRecoveryKind } from "./availability-recovery-kind";
@@ -2221,13 +2222,19 @@ class StreamSession<
       this.handleSocketClose(event);
     };
 
-    this.dialTimer = setTimeout(() => {
-      this.dialTimer = null;
-      if (this.phase === "dialing") {
-        this.teardownSocket(4000, "dial-timeout");
-        this.onTransportDrop();
+    // Time queued for a dial slot says nothing about the host.
+    whenDialStarted(socket, () => {
+      if (socket !== this.activeSocket) {
+        return;
       }
-    }, this.config.dialTimeoutMs);
+      this.dialTimer = setTimeout(() => {
+        this.dialTimer = null;
+        if (this.phase === "dialing") {
+          this.teardownSocket(4000, "dial-timeout");
+          this.onTransportDrop();
+        }
+      }, this.config.dialTimeoutMs);
+    });
   }
 
   private handleOpen(): void {

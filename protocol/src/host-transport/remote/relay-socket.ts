@@ -3,7 +3,11 @@ import type {
   StreamWebSocketLike,
   StreamWebSocketMessageEvent,
 } from "../stream-websocket";
-import type { WebSocketCloseEvent, WebSocketErrorEvent } from "../websocket";
+import {
+  whenDialStarted,
+  type WebSocketCloseEvent,
+  type WebSocketErrorEvent,
+} from "../websocket";
 import type { TimerHandle, IntervalHandle } from "../timers";
 import { assertRelayAttachUrlSecure } from "@traycer/protocol/host-transport/relay-attach-url";
 import { createRelayPathEstimator } from "@traycer/protocol/host-transport/relay-liveness";
@@ -264,14 +268,21 @@ export class RelaySocket {
     // durable leg that MULTIPLEXES every unary call and every stream for a
     // remote host, so anything queued behind it is queued behind all of them.
     // It holds a dial slot only while connecting, so it cannot squat.
-    this.socket = options.webSocketFactory.create(dialUrl, "interactive");
-    this.wireSocket(this.socket);
-    this.dialTimer = setTimeout(() => {
-      this.dialTimer = null;
-      if (!this.opened) {
-        this.fail(4000, RELAY_DIAL_TIMEOUT_CLOSE_REASON);
+    const socket = options.webSocketFactory.create(dialUrl, "interactive");
+    this.socket = socket;
+    this.wireSocket(socket);
+    // Time queued for a dial slot says nothing about the relay.
+    whenDialStarted(socket, () => {
+      if (socket !== this.socket) {
+        return;
       }
-    }, RELAY_DIAL_TIMEOUT_MS);
+      this.dialTimer = setTimeout(() => {
+        this.dialTimer = null;
+        if (!this.opened) {
+          this.fail(4000, RELAY_DIAL_TIMEOUT_CLOSE_REASON);
+        }
+      }, RELAY_DIAL_TIMEOUT_MS);
+    });
   }
 
   /** Sends an opaque DATA frame (client leg: raw `[ciphertext]`, no sid). */

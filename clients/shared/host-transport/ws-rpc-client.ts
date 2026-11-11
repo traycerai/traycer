@@ -43,6 +43,7 @@ import type {
   WebSocketLike,
   WebSocketMessageEvent,
 } from "./ws-factory";
+import { whenDialStarted } from "@traycer/protocol/host-transport/websocket";
 import {
   CLIENT_CAPABILITY_EPIC_WRITE_PATH_V1,
   checkCompatibility,
@@ -1695,11 +1696,13 @@ function openSession(options: SessionOptions): Session {
       void cause;
     }
   };
-  let dialResolver: {
+  interface PendingDial {
     readonly resolve: () => void;
     readonly reject: (error: HostRpcError) => void;
-    readonly timer: TimerHandle;
-  } | null = null;
+    /** Null until the handshake starts. */
+    timer: TimerHandle | null;
+  }
+  let dialResolver: PendingDial | null = null;
   let frameResolver: {
     readonly resolve: (frame: HostFrame) => void;
     readonly reject: (error: HostRpcError) => void;
@@ -1732,7 +1735,9 @@ function openSession(options: SessionOptions): Session {
     if (dialResolver !== null) {
       const resolver = dialResolver;
       dialResolver = null;
-      clearTimeout(resolver.timer);
+      if (resolver.timer !== null) {
+        clearTimeout(resolver.timer);
+      }
       resolver.reject(settled);
     }
     if (frameResolver !== null) {
@@ -1829,7 +1834,9 @@ function openSession(options: SessionOptions): Session {
     if (dialResolver !== null) {
       const resolver = dialResolver;
       dialResolver = null;
-      clearTimeout(resolver.timer);
+      if (resolver.timer !== null) {
+        clearTimeout(resolver.timer);
+      }
       resolver.resolve();
     }
   };
@@ -2002,15 +2009,22 @@ function openSession(options: SessionOptions): Session {
         return Promise.resolve();
       }
       return new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(() => {
-          reportDialOutcome("timeout");
-          failAll(
-            transientFailure(
-              `WebSocket dial timed out after ${dialTimeoutMs}ms`,
-            ),
-          );
-        }, dialTimeoutMs);
-        dialResolver = { resolve, reject, timer };
+        const pending: PendingDial = { resolve, reject, timer: null };
+        dialResolver = pending;
+        // Time queued for a dial slot says nothing about the host.
+        whenDialStarted(socket, () => {
+          if (dialResolver !== pending) {
+            return;
+          }
+          pending.timer = setTimeout(() => {
+            reportDialOutcome("timeout");
+            failAll(
+              transientFailure(
+                `WebSocket dial timed out after ${dialTimeoutMs}ms`,
+              ),
+            );
+          }, dialTimeoutMs);
+        });
       });
     },
 
