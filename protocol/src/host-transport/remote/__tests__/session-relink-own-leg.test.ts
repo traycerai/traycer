@@ -1647,7 +1647,12 @@ describe("RemoteSession relink on an own-leg loss", () => {
     it("ignores every late event from a superseded leg", async () => {
       // A spy on the export, not `vi.mock`: files in this worker share one
       // module cache, and a mock misses a session another file loaded first.
-      const dials = vi.spyOn(relaySocketModule, "RelaySocket");
+      const OriginalRelaySocket = relaySocketModule.RelaySocket;
+      const dials = vi
+        .spyOn(relaySocketModule, "RelaySocket")
+        .mockImplementation(function (options) {
+          return new OriginalRelaySocket(options);
+        });
       const fixture = await readyFixture(LIVE);
       const { relay, session } = fixture;
       relay.dropLeg(1006, "net");
