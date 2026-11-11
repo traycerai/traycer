@@ -1248,6 +1248,8 @@ function HostProviderRailButton(props: {
       type="button"
       aria-current={props.selected ? "true" : undefined}
       onClick={() => props.onSelect(props.state.providerId)}
+      data-settings-provider-id={props.state.providerId}
+      data-settings-provider-enabled={props.state.enabled}
       className={hostRailButtonClass(props.selected)}
     >
       <span className="flex min-w-0 items-start gap-2">

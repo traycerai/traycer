@@ -1,3 +1,4 @@
+import { profileBindingsEqual } from "@traycer/protocol/host/provider-profile-inheritance";
 import {
   ARTIFACT_FILE_OBJECT_FIELD,
   artifactHeadSchema,
@@ -580,6 +581,7 @@ function chatRunSettingsEq(
     agentMode: a.agentMode === b.agentMode,
     ultracode: a.ultracode === b.ultracode,
     profileId: a.profileId === b.profileId,
+    profileBinding: profileBindingsEqual(a.profileBinding, b.profileBinding),
   } satisfies Record<keyof ChatRunSettings, boolean>;
   return Object.values(fieldsEqual).every((equal) => equal);
 }

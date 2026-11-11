@@ -121,7 +121,7 @@ These commands are mainly intended for Traycer-managed automation, but they are 
 
 With `--json`, each agent carries an `archived` field: `true`, `false`, or `null` when the host is too old to report it.
 
-Each agent also carries `profile` and `permissionMode`, the account and permission mode it runs with, in the form `traycer agent configure` takes as `--profile` and `--permission-mode`. Both are `null` when the host cannot say: an agent on the Terminal interface, another person's agent, an agent on another host, or a host too old to report them. The text output shows them as `profile:` and `mode:`.
+Each agent also carries `profile` and `permissionMode`, the account and permission mode it runs with, in the form `traycer agent configure` takes as `--profile` and `--permission-mode`. Both are `null` when the host cannot say: an agent on the Terminal interface, another person's agent, an unanswered host, or a host too old to report them. The text output shows them as `profile:` and `mode:`, with `unobservable` when it cannot say.
 
 ## Host Security
 

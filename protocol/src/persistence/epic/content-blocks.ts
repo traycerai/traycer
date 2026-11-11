@@ -3128,9 +3128,9 @@ export const contentBlockSchemaPreBrowser = lazySchema(() =>
 //
 // Those lines ship the full live block vocabulary of their day and hold back
 // exactly one thing `1.18` added: the settled `receipt` on a provider notice
-// (`textBlockSchemaPreReceipt`). Every other member binds its live schema, so
-// a field added to one of them later reaches these lines too - the checkpoint
-// digests catch it: freeze the member here before adding it.
+// (`textBlockSchemaPreReceipt`). These released unions retain their published
+// shapes. Shared members may stay shared only while unchanged: freeze a member
+// here before extending the current line; checkpoint digests guard that rule.
 export const contentBlockSchemaPreReceipt = lazySchema(() =>
   z.discriminatedUnion("type", [
     textBlockSchemaPreReceipt,
@@ -3156,8 +3156,8 @@ export const contentBlockSchemaPreReceipt = lazySchema(() =>
 // The live block vocabulary as those lines ship it, holding back exactly what
 // `1.23` added: the `mcpApp` stamp on a tool call
 // (`toolCallBlockSchemaPreMcpApp`). Every older union above takes the same leaf
-// in place of the live block. Every other member binds its live schema: freeze
-// the member here before adding a field to it.
+// in place of the current block. Other shared members retain their published
+// shapes: freeze a member here before adding a field on the current line.
 export const contentBlockSchemaPreMcpApp = lazySchema(() =>
   z.discriminatedUnion("type", [
     textBlockSchema,
@@ -3198,9 +3198,9 @@ export type PersistedContentBlock =
  * notification placement, 1.10 adds the fallback notice kinds and the error
  * block's `failure`, and 1.11 adds the shell host on a resume trigger - so
  * `text` and `error` here are the pre-fallback copies and `autonomous_resume`
- * is the 1.8 codec on the pre-shell-host trigger, not the live members. Every
- * other member still binds its live schema: a field added to one of them
- * later reaches this line too, so freeze the member here before adding it.
+ * is the 1.8 codec on the pre-shell-host trigger. The other members retain
+ * their published shapes as well: freeze a shared member here before adding
+ * a field on the separate current line.
  */
 export const contentBlockSchemaV18 = lazySchema(() =>
   z.discriminatedUnion("type", [

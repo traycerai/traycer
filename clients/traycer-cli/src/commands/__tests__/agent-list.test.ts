@@ -78,7 +78,7 @@ const LEGACY_LIST_RESPONSE = {
 
 const LEGACY_HUMAN_OUTPUT = `Agents in epic (relative to you):
 You:
-agent-parent [self] "Parent" gui/codex dir: /repo
+agent-parent [self] "Parent" gui/codex profile: unobservable mode: unobservable dir: /repo
 
 Legend:
 [self]: this agent, i.e. the caller of agent.list
@@ -88,7 +88,8 @@ S: the agent can be sent messages to
 R/S: the agent has a readable transcript and can be sent messages to
 -: no available action
 dir: <path>: the working directory the agent runs in
-worktree: <path>: the agent runs in a dedicated git worktree`;
+worktree: <path>: the agent runs in a dedicated git worktree
+profile: <id> / mode: <word>: the provider profile (ambient is the provider's own login) and permission mode the agent's future turns use, in the form traycer_configure_agent takes back. unobservable means the answering host cannot report that value`;
 
 // Key ORDER is load-bearing: the assertions below compare `JSON.stringify`
 // bytes, and zod emits in schema-declaration order - `runConfig` comes from
@@ -423,7 +424,7 @@ describe("agent list run tuple", () => {
     );
   });
 
-  it("renders no token on a null row", async () => {
+  it("renders null run-tuple fields as unobservable", async () => {
     rpcMock.mockResolvedValue(
       tupleListing([
         { id: "known", profile: "ambient", permissionMode: "supervised" },
@@ -436,22 +437,21 @@ describe("agent list run tuple", () => {
     const lines = (result.human ?? "").split("\n");
     const unknown = lines.find((line) => line.startsWith("unknown "));
     expect(unknown).toBeDefined();
-    expect(unknown).not.toMatch(/ profile: /);
-    expect(unknown).not.toMatch(/ mode: /);
+    expect(unknown).toContain("profile: unobservable mode: unobservable");
+    expect(result.human).toContain(
+      "unobservable means the answering host cannot report that value",
+    );
   });
 
-  it("prints no token and no legend line when no row carries a tuple", async () => {
+  it("prints the unobservable token and legend when every row is unanswerable", async () => {
     rpcMock.mockResolvedValue(
       tupleListing([{ id: "unknown", profile: null, permissionMode: null }]),
     );
 
     const result = await buildCommand()(makeCtx(false));
 
-    expect(result.human).not.toContain(TUPLE_LEGEND);
-    for (const line of (result.human ?? "").split("\n")) {
-      expect(line).not.toMatch(/ profile: /);
-      expect(line).not.toMatch(/ mode: /);
-    }
+    expect(result.human).toContain(TUPLE_LEGEND);
+    expect(result.human).toContain("profile: unobservable mode: unobservable");
   });
 });
 

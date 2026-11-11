@@ -50,6 +50,7 @@ export function TeamPlans(props: {
       return [
         {
           id: plan.profileId,
+          bindingVersion: plan.bindingVersion ?? null,
           linkedBy: plan.linkedBy?.name ?? null,
           status: plan.status,
           providerLabel: providerDisplayName(props.providerId),
@@ -169,7 +170,11 @@ function TeamPlanUnlink(props: {
         onConfirm={() => {
           if (source.kind !== "pool") return;
           unlink.mutate(
-            { environmentId: source.environmentId, profileId: props.plan.id },
+            {
+              environmentId: source.environmentId,
+              profileId: props.plan.id,
+              expectedBindingVersion: props.plan.bindingVersion ?? null,
+            },
             {
               onSuccess: (result) => {
                 if (result.outcome !== "forbidden") props.onClose();
