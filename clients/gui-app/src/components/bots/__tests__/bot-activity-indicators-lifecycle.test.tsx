@@ -432,7 +432,10 @@ describe("ordinary notification indicators over the same read", () => {
     return (
       <div
         data-testid="ordinary"
-        data-unread={String(indicators.epics["t-life"]?.unreadDone)}
+        data-unread={String(
+          Object.hasOwn(indicators.epics, "t-life") &&
+            indicators.epics["t-life"].unreadDone,
+        )}
       />
     );
   }
