@@ -46,7 +46,19 @@ import {
   type RemoteSessionEvidence,
   type RemoteSessionTransportKind,
 } from "@traycer/protocol/host-transport/remote/session";
+import type { AuthenticatedUser } from "@traycer/protocol/auth";
+import type { BearerSourceProvider } from "@traycer-clients/shared/auth/bearer-source";
+import { DefaultRequestContextProvider } from "@traycer-clients/shared/auth/request-context-provider";
+import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
+import { createAuthenticatedUserFixture } from "../../../test-fixtures/authenticated-user";
+import type { PoolHostDirectoryEntry } from "../../../host-client/host-directory";
+import { retireAllRemoteSessions } from "../active-remote-sessions";
+import {
+  createPoolHostTransport,
+  createRemoteHostTransport,
+} from "../create-remote-transport";
+import type { IRemoteSession } from "../remote-session";
 import { createWhatwgStreamWebSocketFactory } from "../../whatwg-stream-ws-factory";
 import { hostDialGate } from "../../ws-dial-gate";
 
@@ -210,6 +222,8 @@ class FakeRelay {
   readonly legs: Leg[] = [];
   readonly sessions: HostSession[] = [];
   readonly resumes: number[] = [];
+  /** The bearer each session OPEN frame carried, in arrival order. */
+  readonly openBearers: unknown[] = [];
   private nextSid = 1;
   /**
    * What a dial does once the gate has built its native: "hold" waits for the
@@ -306,6 +320,10 @@ class FakeRelay {
           leg.onmessage?.({ type: "text", data: "relay-pong" });
         });
       }
+      return;
+    }
+    if (leg.url.startsWith(POOL_URL)) {
+      this.handlePlainData(leg, data);
       return;
     }
     const session = leg.session;
@@ -411,22 +429,66 @@ class FakeRelay {
       message.streamId === SESSION_CONTROL_STREAM_ID &&
       message.type === MuxFrameType.OPEN
     ) {
-      await this.sendMux(session, {
-        type: MuxFrameType.OPEN_ACK,
-        streamId: SESSION_CONTROL_STREAM_ID,
-        qos: QosClass.INTERACTIVE,
-        json: {
-          manifest: {
-            rpc: {},
-            optionalRpc: {},
-            stream: buildStreamManifest(
-              emptyStreamRegistry,
-              SERVES_EVERY_INSTALLED_MAJOR,
-            ),
-          },
-          capabilities: [SESSION_CAPABILITY_RESUME],
+      const openJson = message.json ?? {};
+      this.openBearers.push(openJson.bearer);
+      await this.sendMux(session, this.openAckMessage());
+    }
+  }
+
+  private openAckMessage(): OutboundMessage {
+    return {
+      type: MuxFrameType.OPEN_ACK,
+      streamId: SESSION_CONTROL_STREAM_ID,
+      qos: QosClass.INTERACTIVE,
+      json: {
+        manifest: {
+          rpc: {},
+          optionalRpc: {},
+          stream: buildStreamManifest(
+            emptyStreamRegistry,
+            SERVES_EVERY_INSTALLED_MAJOR,
+          ),
         },
-        binary: null,
+        capabilities: [SESSION_CAPABILITY_RESUME],
+      },
+      binary: null,
+    };
+  }
+
+  private readonly plainWires = new Map<
+    Leg,
+    { readonly reassembler: ChunkReassembler; sent: number }
+  >();
+
+  /** The pool speaks the mux directly, with no Noise channel behind an attach_ack. */
+  private handlePlainData(leg: Leg, data: Uint8Array): void {
+    let wire = this.plainWires.get(leg);
+    if (wire === undefined) {
+      wire = { reassembler: new ChunkReassembler(undefined), sent: 0 };
+      this.plainWires.set(leg, wire);
+    }
+    const message = wire.reassembler.accept(decodeMuxFrame(data));
+    if (
+      message === null ||
+      message.streamId !== SESSION_CONTROL_STREAM_ID ||
+      message.type !== MuxFrameType.OPEN
+    ) {
+      return;
+    }
+    this.openBearers.push((message.json ?? {}).bearer);
+    const source = new OutboundChunkSource(
+      this.openAckMessage(),
+      () => {
+        const current = wire.sent;
+        wire.sent += 1;
+        return current;
+      },
+      false,
+    );
+    while (!source.done && !leg.closed) {
+      leg.onmessage?.({
+        type: "binary",
+        data: encodeMuxFrame(source.nextFrame()),
       });
     }
   }
@@ -607,8 +669,55 @@ function countingGrants(relay: FakeRelay): {
   };
 }
 
+const USER_A = "user-a";
+const USER_B = "user-b";
+
+function userFixture(userId: string): AuthenticatedUser {
+  const base = createAuthenticatedUserFixture(undefined);
+  return { ...base, user: { ...base.user, id: userId } };
+}
+
+function signIn(
+  provider: DefaultRequestContextProvider,
+  userId: string,
+  bearerToken: string,
+): void {
+  provider.setSignedIn({
+    user: userFixture(userId),
+    bearerToken,
+    operationId: undefined,
+    externalAbortSignal: undefined,
+  });
+}
+
+/** What a composition root wires: a live read of whichever context is current. */
+function liveBearer(
+  provider: DefaultRequestContextProvider,
+): BearerSourceProvider {
+  return () => provider.current()?.credentials ?? null;
+}
+
+type TransportView = IRemoteSession<
+  VersionedRpcRegistry,
+  VersionedStreamRpcRegistry
+>;
+
+const POOL_ENTRY: PoolHostDirectoryEntry = {
+  hostId: "pool",
+  label: "pool",
+  kind: "pool",
+  websocketUrl: POOL_URL,
+  version: null,
+  transportDialability: "dialable",
+};
+
+/** The session redial backoff after a dropped leg. */
+const REDIAL_MS = 1_000;
+
 describe("RemoteSession attach-ack budget and the dial gate", () => {
   const opened: Session[] = [];
+  const views: TransportView[] = [];
+  const mintAuthorizations: Array<string | null> = [];
   let relay: FakeRelay;
 
   async function holdEverySlot(): Promise<FakeNativeWebSocket[]> {
@@ -663,6 +772,98 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     return { session, evidence, grants: grants.calls };
   }
 
+  /**
+   * The authn attach-grant endpoint, answered with a grant the fake relay
+   * knows, and the Authorization header of every request it receives.
+   */
+  function stubGrantEndpoint(): void {
+    mintAuthorizations.length = 0;
+    let minted = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async (_input, init) => {
+        mintAuthorizations.push(
+          new Headers(init?.headers).get("Authorization"),
+        );
+        minted += 1;
+        const grant = `http-grant-${minted}`;
+        relay.recordMint(grant, Date.now(), GRANT_LIFETIME_SECONDS);
+        return new Response(
+          JSON.stringify({
+            grant,
+            role: "client",
+            expires_in: GRANT_LIFETIME_SECONDS,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }),
+    );
+  }
+
+  /** A host session built the way a composition root builds it, for user-a. */
+  function buildHostTransport(
+    hostId: string,
+    bearer: BearerSourceProvider,
+  ): TransportView {
+    let nextRequestId = 0;
+    const transport = createRemoteHostTransport({
+      clientIdentity: TEST_CLIENT_IDENTITY,
+      hostId,
+      userId: USER_A,
+      relayAttachUrl: ATTACH_URL,
+      authnBaseUrl: "https://authn.test",
+      hostPublicKey: Buffer.from(relay.publicKey).toString("hex"),
+      bearer,
+      openAuth: "user-bearer",
+      cloudAuthorized: () => true,
+      auth: null,
+      clock: null,
+      rpcRegistry: emptyRpcRegistry,
+      streamRegistry: emptyStreamRegistry,
+      webSocketFactory: createWhatwgStreamWebSocketFactory(),
+      requestId: () => `gate-client-req-${(nextRequestId += 1)}`,
+      proactiveWakeEligible: true,
+      mintMemberCredential: null,
+      evidence: NO_TRANSPORT_EVIDENCE,
+    });
+    if (transport === null) {
+      throw new Error("the host transport did not build");
+    }
+    views.push(transport.session);
+    return transport.session;
+  }
+
+  /** The server pool session, for user-a. */
+  function buildPoolTransport(bearer: BearerSourceProvider): TransportView {
+    let nextRequestId = 0;
+    const transport = createPoolHostTransport({
+      entry: POOL_ENTRY,
+      userId: USER_A,
+      bearer,
+      cloudAuthorized: () => true,
+      auth: null,
+      clock: null,
+      rpcRegistry: emptyRpcRegistry,
+      streamRegistry: emptyStreamRegistry,
+      webSocketFactory: createWhatwgStreamWebSocketFactory(),
+      requestId: () => `gate-pool-req-${(nextRequestId += 1)}`,
+      clientIdentity: TEST_CLIENT_IDENTITY,
+      proactiveWakeEligible: true,
+    });
+    if (transport === null) {
+      throw new Error("the pool transport did not build");
+    }
+    views.push(transport.session);
+    return transport.session;
+  }
+
+  /** Lets an attach reach its OPEN frame, stopping before the redial backoff. */
+  async function untilOpenFrameOrBackoff(): Promise<void> {
+    for (let turn = 0; turn < 3 && relay.openBearers.length === 0; turn += 1) {
+      await step(250);
+    }
+  }
+
   beforeEach(() => {
     vi.useFakeTimers();
     countWebCrypto();
@@ -678,6 +879,10 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     for (const session of opened.splice(0)) {
       session.close();
     }
+    for (const view of views.splice(0)) {
+      view.close();
+    }
+    retireAllRemoteSessions();
     // A real socket reports its close after close() is called; the fake does
     // not, so every slot still held is handed back here.
     for (const native of FakeNativeWebSocket.instances) {
@@ -907,5 +1112,103 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
 
     expect(grants.count).toBe(grantsBeforeDrop + 1);
     expect(evidence.refusals.length).toBeGreaterThan(reportedAtDrop);
+  });
+  it("sends no other-identity bearer in the OPEN frame when the account switched during the queued attach", async () => {
+    const provider = new DefaultRequestContextProvider({ origin: "renderer" });
+    signIn(provider, USER_A, "token-a");
+    stubGrantEndpoint();
+    const holders = await holdEverySlot();
+    const view = buildHostTransport(
+      "host-switched-attach",
+      liveBearer(provider),
+    );
+    view.start();
+    await advanceUntil(() => hostDialGate.stats().queued === 1, 5_000);
+
+    signIn(provider, USER_B, "token-b");
+    await step(QUEUED_FOR_MS);
+    holders[0].fire("close", "", 1006, "released");
+    await untilOpenFrameOrBackoff();
+
+    expect(relay.openBearers).not.toContain("token-b");
+    expect(mintAuthorizations).not.toContain("Bearer token-b");
+  });
+
+  it("opens with the new token after a same-user re-sign-in during the queued attach", async () => {
+    const provider = new DefaultRequestContextProvider({ origin: "renderer" });
+    signIn(provider, USER_A, "token-a");
+    stubGrantEndpoint();
+    const holders = await holdEverySlot();
+    const view = buildHostTransport(
+      "host-resigned-attach",
+      liveBearer(provider),
+    );
+    view.start();
+    await advanceUntil(() => hostDialGate.stats().queued === 1, 5_000);
+
+    signIn(provider, USER_A, "token-a2");
+    await step(QUEUED_FOR_MS);
+    holders[0].fire("close", "", 1006, "released");
+    await advanceUntil(() => relay.openBearers.length === 1, 5_000);
+
+    expect(relay.openBearers).toEqual(["token-a2"]);
+  });
+
+  it("mints no grant and sends no OPEN for another identity when the account switched before the next dial", async () => {
+    const provider = new DefaultRequestContextProvider({ origin: "renderer" });
+    signIn(provider, USER_A, "token-a");
+    stubGrantEndpoint();
+    const view = buildHostTransport(
+      "host-switched-redial",
+      liveBearer(provider),
+    );
+    view.start();
+    await advanceUntil(() => relay.openBearers.length === 1, 5_000);
+    expect(relay.openBearers).toEqual(["token-a"]);
+    const mintsBeforeSwitch = mintAuthorizations.length;
+
+    signIn(provider, USER_B, "token-b");
+    relay.dropLeg(1006, "cut");
+    await step(REDIAL_MS + 500);
+    await step(REDIAL_MS + 500);
+
+    expect(mintAuthorizations.slice(mintsBeforeSwitch)).not.toContain(
+      "Bearer token-b",
+    );
+    expect(relay.openBearers).not.toContain("token-b");
+  });
+
+  it("sends no other-identity bearer to the pool when the account switched during the queued attach", async () => {
+    relay.autoOpen = "plain";
+    const provider = new DefaultRequestContextProvider({ origin: "renderer" });
+    signIn(provider, USER_A, "token-a");
+    const holders = await holdEverySlot();
+    const view = buildPoolTransport(liveBearer(provider));
+    view.start();
+    await advanceUntil(() => hostDialGate.stats().queued === 1, 5_000);
+
+    signIn(provider, USER_B, "token-b");
+    await step(QUEUED_FOR_MS);
+    holders[0].fire("close", "", 1006, "released");
+    await untilOpenFrameOrBackoff();
+
+    expect(relay.openBearers).not.toContain("token-b");
+  });
+
+  it("opens the pool with the new token after a same-user re-sign-in during the queued attach", async () => {
+    relay.autoOpen = "plain";
+    const provider = new DefaultRequestContextProvider({ origin: "renderer" });
+    signIn(provider, USER_A, "token-a");
+    const holders = await holdEverySlot();
+    const view = buildPoolTransport(liveBearer(provider));
+    view.start();
+    await advanceUntil(() => hostDialGate.stats().queued === 1, 5_000);
+
+    signIn(provider, USER_A, "token-a2");
+    await step(QUEUED_FOR_MS);
+    holders[0].fire("close", "", 1006, "released");
+    await advanceUntil(() => relay.openBearers.length === 1, 5_000);
+
+    expect(relay.openBearers).toEqual(["token-a2"]);
   });
 });

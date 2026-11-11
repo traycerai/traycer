@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import {
   defineRpcContract,
@@ -7,7 +8,15 @@ import {
 } from "@traycer/protocol/framework/index";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
-import { MutableBearerLease } from "@traycer-clients/shared/auth/bearer-source";
+import { buildStreamManifest } from "@traycer/protocol/framework/stream-compat";
+import { SERVES_EVERY_INSTALLED_MAJOR } from "@traycer/protocol/framework/capability-manifest";
+import {
+  MutableBearerLease,
+  type BearerSourceProvider,
+  type OpenFrameBearerSource,
+} from "@traycer-clients/shared/auth/bearer-source";
+import { DefaultRequestContextProvider } from "@traycer-clients/shared/auth/request-context-provider";
+import { createAuthenticatedUserFixture } from "../../test-fixtures/authenticated-user";
 import { mockLocalHostEntry } from "../../host-client/mock/mock-host-directory";
 import { HostRpcError } from "../host-messenger";
 import type { StreamConnectionStatus } from "../i-stream-session";
@@ -23,6 +32,10 @@ const HOLDER_URL = "wss://holder.example.test/dial";
 // Long enough that no redial, ping, ack or frame timer fires inside a test.
 const NEVER_MS = 600_000;
 const REQUEST_ID = "req-open-frame-bearer";
+const REDIAL_BACKOFF_MS = 50;
+const REDIAL_WINDOW_MS = 500;
+const USER_A = "user-a";
+const USER_B = "user-b";
 
 interface FakeEvent {
   readonly data: string;
@@ -64,16 +77,20 @@ class FakeNativeWebSocket {
   }
 
   fireOpen(): void {
-    this.fire("open");
+    this.fire("open", "");
   }
 
   fireClose(): void {
-    this.fire("close");
+    this.fire("close", "");
   }
 
-  private fire(type: string): void {
+  fireMessage(data: string): void {
+    this.fire("message", data);
+  }
+
+  private fire(type: string, data: string): void {
     for (const listener of this.listeners.get(type) ?? []) {
-      listener({ data: "", code: 1006, reason: "test", wasClean: false });
+      listener({ data, code: 1006, reason: "test", wasClean: false });
     }
   }
 }
@@ -125,8 +142,18 @@ async function waitQueuedThenGrantAndOpen(
   rotateTo: string,
   lease: MutableBearerLease,
 ): Promise<FakeNativeWebSocket> {
+  return grantAndOpenAfterWait(holders, () => {
+    lease.rotate(rotateTo);
+  });
+}
+
+/** The same wait, with `duringWait` run once the dial is queued. */
+async function grantAndOpenAfterWait(
+  holders: readonly FakeNativeWebSocket[],
+  duringWait: () => void,
+): Promise<FakeNativeWebSocket> {
   expect(hostDialGate.stats().queued).toBe(1);
-  lease.rotate(rotateTo);
+  duringWait();
   await vi.advanceTimersByTimeAsync(QUEUED_FOR_MS);
   expect(instances()).toHaveLength(GATE_SLOTS);
   holders[0].fireOpen();
@@ -154,6 +181,13 @@ interface RpcCall {
 }
 
 function startEcho(lease: MutableBearerLease): RpcCall {
+  return startEchoFor(lease, new AbortController().signal);
+}
+
+function startEchoFor(
+  bearer: OpenFrameBearerSource,
+  abortSignal: AbortSignal,
+): RpcCall {
   let settled = false;
   const client = new WsRpcClient<typeof echoRegistry>({
     clientIdentity: TEST_CLIENT_IDENTITY,
@@ -178,8 +212,8 @@ function startEcho(lease: MutableBearerLease): RpcCall {
             hostId: mockLocalHostEntry.hostId,
             websocketUrl: mockLocalHostEntry.websocketUrl,
           },
-          bearer: lease,
-          abortSignal: new AbortController().signal,
+          bearer,
+          abortSignal,
         },
       },
     )
@@ -194,6 +228,60 @@ function startEcho(lease: MutableBearerLease): RpcCall {
       },
     );
   return { outcome, isSettled: () => settled };
+}
+
+function userFixture(userId: string): AuthenticatedUser {
+  const base = createAuthenticatedUserFixture(undefined);
+  return { ...base, user: { ...base.user, id: userId } };
+}
+
+function newProvider(): DefaultRequestContextProvider {
+  return new DefaultRequestContextProvider({ origin: "renderer" });
+}
+
+function signIn(
+  provider: DefaultRequestContextProvider,
+  userId: string,
+  bearerToken: string,
+): void {
+  provider.setSignedIn({
+    user: userFixture(userId),
+    bearerToken,
+    operationId: undefined,
+    externalAbortSignal: undefined,
+  });
+}
+
+/** What a composition root wires: a live read of whichever context is current. */
+function liveBearer(
+  provider: DefaultRequestContextProvider,
+): BearerSourceProvider {
+  return () => provider.current()?.credentials ?? null;
+}
+
+/** Every token any frame sent on any fake socket carried, in send order. */
+function sentTokens(): unknown[] {
+  const tokens: unknown[] = [];
+  for (const native of instances()) {
+    for (const raw of native.sent) {
+      const frame: unknown = JSON.parse(raw);
+      if (typeof frame === "object" && frame !== null && "token" in frame) {
+        tokens.push(frame.token);
+      }
+    }
+  }
+  return tokens;
+}
+
+function openAckAdvertisingCredentialUpdate(): string {
+  return JSON.stringify({
+    kind: "openAck",
+    manifest: buildStreamManifest(
+      hostStreamRpcRegistry,
+      SERVES_EVERY_INSTALLED_MAJOR,
+    ),
+    capabilities: ["credentialUpdate"],
+  });
 }
 
 describe("open frame bearer after a wait for a dial slot", () => {
@@ -222,12 +310,22 @@ describe("open frame bearer after a wait for a dial slot", () => {
 
   describe("stream", () => {
     function subscribe(lease: MutableBearerLease): StreamConnectionStatus[] {
+      return subscribeWith(() => lease, NEVER_MS).statuses;
+    }
+
+    function subscribeWith(
+      bearer: BearerSourceProvider,
+      backoffMs: number,
+    ): {
+      readonly statuses: StreamConnectionStatus[];
+      readonly client: WsStreamClient<typeof hostStreamRpcRegistry>;
+    } {
       const client = new WsStreamClient({
         clientIdentity: TEST_CLIENT_IDENTITY,
         registry: hostStreamRpcRegistry,
         endpoint: () => mockLocalHostEntry,
         hostId: mockLocalHostEntry.hostId,
-        bearer: () => lease,
+        bearer,
         auth: null,
         clock: null,
         hostCredentialMint: null,
@@ -238,8 +336,8 @@ describe("open frame bearer after a wait for a dial slot", () => {
         openAckTimeoutMs: NEVER_MS,
         pingIntervalMs: NEVER_MS,
         pongTimeoutMs: NEVER_MS,
-        initialBackoffMs: NEVER_MS,
-        maxBackoffMs: NEVER_MS,
+        initialBackoffMs: backoffMs,
+        maxBackoffMs: backoffMs,
       });
       const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
       cleanups.push(() => {
@@ -249,7 +347,7 @@ describe("open frame bearer after a wait for a dial slot", () => {
       session.onStatusChange((status) => {
         statuses.push(status);
       });
-      return statuses;
+      return { statuses, client };
     }
 
     it("sends the bearer current at the grant, not the one read before the wait", async () => {
@@ -282,6 +380,158 @@ describe("open frame bearer after a wait for a dial slot", () => {
       });
       expect(statuses).toContain("reconnecting");
       expect(statuses).not.toContain("closed");
+    });
+
+    describe("account switch", () => {
+      it("sends no other-identity bearer on the next dial after the account switched while the socket was down", async () => {
+        const provider = newProvider();
+        signIn(provider, USER_A, "token-a");
+        subscribeWith(liveBearer(provider), REDIAL_BACKOFF_MS);
+        await settle();
+        const first = instances()[0];
+        first.fireOpen();
+        first.fireMessage(openAckAdvertisingCredentialUpdate());
+        await settle();
+
+        first.fireClose();
+        const socketsBeforeSwitch = instances().length;
+        signIn(provider, USER_B, "token-b");
+        await vi.advanceTimersByTimeAsync(REDIAL_WINDOW_MS);
+        for (const native of instances().slice(1)) {
+          native.fireOpen();
+        }
+        await settle();
+
+        expect(instances()).toHaveLength(socketsBeforeSwitch);
+        expect(sentTokens()).not.toContain("token-b");
+      });
+
+      it("sends no other-identity bearer on an open that waited for a slot", async () => {
+        const provider = newProvider();
+        signIn(provider, USER_A, "token-a");
+        const holders = await holdEveryGateSlot();
+        subscribeWith(liveBearer(provider), NEVER_MS);
+        await settle();
+
+        await grantAndOpenAfterWait(holders, () => {
+          signIn(provider, USER_B, "token-b");
+        });
+
+        expect(sentTokens()).not.toContain("token-b");
+      });
+
+      it("sends no other-identity bearer in a rotation push after the account switched", async () => {
+        const provider = newProvider();
+        signIn(provider, USER_A, "token-a");
+        const { client } = subscribeWith(liveBearer(provider), NEVER_MS);
+        await settle();
+        const native = instances()[0];
+        native.fireOpen();
+        native.fireMessage(openAckAdvertisingCredentialUpdate());
+        await settle();
+
+        signIn(provider, USER_B, "token-b");
+        client.notifyBearerRotated();
+        await settle();
+
+        expect(sentTokens()).not.toContain("token-b");
+      });
+
+      it("sends no other-identity bearer when the account switched between the open frame and the openAck", async () => {
+        const provider = newProvider();
+        signIn(provider, USER_A, "token-a");
+        subscribeWith(liveBearer(provider), NEVER_MS);
+        await settle();
+        const native = instances()[0];
+        native.fireOpen();
+        await settle();
+
+        signIn(provider, USER_B, "token-b");
+        native.fireMessage(openAckAdvertisingCredentialUpdate());
+        await settle();
+
+        expect(sentTokens()).not.toContain("token-b");
+      });
+
+      it("opens with the new token after a same-user re-sign-in during the wait", async () => {
+        const provider = newProvider();
+        signIn(provider, USER_A, "token-a");
+        const holders = await holdEveryGateSlot();
+        subscribeWith(liveBearer(provider), NEVER_MS);
+        await settle();
+
+        const native = await grantAndOpenAfterWait(holders, () => {
+          signIn(provider, USER_A, "token-a2");
+        });
+
+        expect(native.sent).toHaveLength(1);
+        expect(tokenOfOpenFrame(native)).toBe("token-a2");
+      });
+
+      it("dials with the new token after a same-user re-sign-in while the socket was down", async () => {
+        const provider = newProvider();
+        signIn(provider, USER_A, "token-a");
+        subscribeWith(liveBearer(provider), REDIAL_BACKOFF_MS);
+        await settle();
+        const first = instances()[0];
+        first.fireOpen();
+        first.fireMessage(openAckAdvertisingCredentialUpdate());
+        await settle();
+
+        first.fireClose();
+        signIn(provider, USER_A, "token-a2");
+        await vi.advanceTimersByTimeAsync(REDIAL_WINDOW_MS);
+        for (const native of instances().slice(1)) {
+          native.fireOpen();
+        }
+        await settle();
+
+        expect(sentTokens()).toContain("token-a2");
+      });
+
+      it("sends no other-identity bearer on a new session of a client that already served another user", async () => {
+        const provider = newProvider();
+        signIn(provider, USER_A, "token-a");
+        const { client } = subscribeWith(liveBearer(provider), NEVER_MS);
+        await settle();
+        const first = instances()[0];
+        first.fireOpen();
+        first.fireMessage(openAckAdvertisingCredentialUpdate());
+        await settle();
+
+        signIn(provider, USER_B, "token-b");
+        const second = client.subscribe("epic.subscribe", { epicId: "epic-2" });
+        cleanups.push(() => {
+          second.close();
+        });
+        await settle();
+        for (const native of instances().slice(1)) {
+          native.fireOpen();
+        }
+        await settle();
+
+        expect(sentTokens()).not.toContain("token-b");
+      });
+
+      it("pushes the rotated token to an open session after a same-user rotation in place", async () => {
+        const provider = newProvider();
+        signIn(provider, USER_A, "token-a");
+        const { client } = subscribeWith(liveBearer(provider), NEVER_MS);
+        await settle();
+        const native = instances()[0];
+        native.fireOpen();
+        native.fireMessage(openAckAdvertisingCredentialUpdate());
+        await settle();
+
+        provider.rotateCurrentBearer({
+          userId: USER_A,
+          bearerToken: "token-a2",
+        });
+        client.notifyBearerRotated();
+        await settle();
+
+        expect(sentTokens()).toContain("token-a2");
+      });
     });
   });
 
@@ -318,6 +568,30 @@ describe("open frame bearer after a wait for a dial slot", () => {
       expect(result.error.code).toBe("RPC_ERROR");
       expect(result.error.message).toMatch(/bearer/i);
       expect(native.closed).not.toBeNull();
+    });
+
+    it("rejects a call queued behind the gate when the account switches, and sends no other-identity bearer", async () => {
+      const provider = newProvider();
+      const contextA = provider.setSignedIn({
+        user: userFixture(USER_A),
+        bearerToken: "token-a",
+        operationId: undefined,
+        externalAbortSignal: undefined,
+      });
+      const holders = await holdEveryGateSlot();
+      const call = startEchoFor(contextA.credentials, contextA.abortSignal);
+      await settle();
+      expect(hostDialGate.stats().queued).toBe(1);
+
+      signIn(provider, USER_B, "token-b");
+      await vi.advanceTimersByTimeAsync(QUEUED_FOR_MS);
+      holders[0].fireOpen();
+      await settle();
+
+      expect(sentTokens()).not.toContain("token-b");
+      expect(call.isSettled()).toBe(true);
+      const result = await call.outcome;
+      expect(result.ok).toBe(false);
     });
   });
 });

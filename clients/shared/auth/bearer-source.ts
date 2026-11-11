@@ -15,7 +15,8 @@ import { CredentialLeaseReleasedError } from "@traycer/protocol/auth/request-con
 /**
  * Read side of the bearer seam used by the transport open frame.
  *
- * `identity.userId` is consumed only by the same-user rotation guard; the
+ * `identity.userId` is consumed only by the same-user guards (rotation, and
+ * {@link bearerSourceForUser}, which keeps a transport on its own user); the
  * transport never reads the rest of an identity, and it never reaches an error
  * message — a sink that logs a whole error object would publish the id above
  * DEBUG. `getBearerToken()` throws when no bearer is available (e.g. a released
@@ -32,6 +33,46 @@ export interface OpenFrameBearerSource {
  * dialing rather than sending an empty `open` frame.
  */
 export type BearerSourceProvider = () => OpenFrameBearerSource | null;
+
+/**
+ * `provider`, answering only for `userId`: a source of any other identity
+ * reads as no bearer. A provider is usually a live read of the current
+ * context, which after an account switch returns the new user lease while a
+ * transport built for the old user is still held; bound, that transport never
+ * presents it, at a dial, an open or a credential push. Same-user rotation and
+ * a same-user re-sign-in (a fresh lease, the same `userId`) still pass.
+ */
+export function bearerSourceForUser(
+  provider: BearerSourceProvider,
+  userId: string,
+): BearerSourceProvider {
+  return () => {
+    const source = provider();
+    return source !== null && source.identity.userId === userId ? source : null;
+  };
+}
+
+/**
+ * `provider`, bound for its life to the user of the first source it returns:
+ * {@link bearerSourceForUser} for a consumer that is not told its user. A
+ * consumer whose first read comes after an account switch binds to the new
+ * user.
+ */
+export function bearerSourceBoundToFirstIdentity(
+  provider: BearerSourceProvider,
+): BearerSourceProvider {
+  let bound: BearerSourceProvider | null = null;
+  return () => {
+    if (bound !== null) {
+      return bound();
+    }
+    const source = provider();
+    if (source !== null) {
+      bound = bearerSourceForUser(provider, source.identity.userId);
+    }
+    return source;
+  };
+}
 
 /**
  * A bearer a composition has declared fit for CLOUD use: the account's authn

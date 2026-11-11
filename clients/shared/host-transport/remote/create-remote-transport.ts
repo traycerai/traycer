@@ -4,9 +4,10 @@ import type {
 } from "@traycer/protocol/framework/index";
 import type { VersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { MemberCredentialHandoff } from "@traycer/protocol/host-transport/mux";
-import type {
-  BearerSourceProvider,
-  OpenFrameBearerSource,
+import {
+  bearerSourceForUser,
+  type BearerSourceProvider,
+  type OpenFrameBearerSource,
 } from "@traycer-clients/shared/auth/bearer-source";
 import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-revalidator";
 import type { ServerClockSkewSignal } from "@traycer-clients/shared/clock/server-time-offset-tracker";
@@ -242,7 +243,12 @@ export function createRemoteHostTransport<
     return null;
   }
 
-  const bearerSource = options.bearer();
+  // Bound to the user this session is keyed by. `options.bearer` is a live
+  // read, so after an account switch it can return another user lease while
+  // this session is still held; every read below (this build check, the
+  // grant mint, the open frame, the credential push) sees no bearer instead.
+  const bearer = bearerSourceForUser(options.bearer, options.userId);
+  const bearerSource = bearer();
   if (bearerSource === null || !canProvideBearer(bearerSource)) {
     // No usable auth context at build time - the same "unconnectable"
     // degradation as a malformed public key, NOT a cacheable state. Two
@@ -289,7 +295,7 @@ export function createRemoteHostTransport<
       // mode. See `cloudAuthorized` for why the check lives in here and not
       // at build time.
       const getBearerToken = (): string | null =>
-        options.cloudAuthorized() ? deriveBearerToken(options.bearer) : null;
+        options.cloudAuthorized() ? deriveBearerToken(bearer) : null;
       const sandboxGrants =
         options.openAuth === "session-grant"
           ? createSandboxAttachGrantProvider({
@@ -311,7 +317,7 @@ export function createRemoteHostTransport<
         attachBaseUrl: options.relayAttachUrl,
         hostStaticPublicKey,
         grantProvider,
-        bearer: options.bearer,
+        bearer,
         sessionGrant:
           sandboxGrants === null ? null : sandboxGrants.readSessionGrant,
         // The SAME read the grant provider above uses, now also reported to the
@@ -415,7 +421,9 @@ export function createPoolHostTransport<
   if (poolUrl === null) {
     return null;
   }
-  const bearerSource = options.bearer();
+  // Bound to the session user, as in `createRemoteHostTransport`.
+  const bearer = bearerSourceForUser(options.bearer, options.userId);
+  const bearerSource = bearer();
   if (bearerSource === null || !canProvideBearer(bearerSource)) {
     return null;
   }
@@ -435,7 +443,7 @@ export function createPoolHostTransport<
       new RemoteSession<RpcRegistry, StreamRegistry>({
         hostId: options.entry.hostId,
         poolUrl,
-        bearer: options.bearer,
+        bearer,
         cloudAuthorized: options.cloudAuthorized,
         auth: options.auth,
         clock: options.clock,

@@ -19,7 +19,10 @@ import {
   MissingBearerTokenForOpenFrameError,
   type HostEndpointProvider,
 } from "./ws-rpc-client";
-import type { BearerSourceProvider } from "@traycer-clients/shared/auth/bearer-source";
+import {
+  bearerSourceBoundToFirstIdentity,
+  type BearerSourceProvider,
+} from "@traycer-clients/shared/auth/bearer-source";
 import { readAccessTokenExpiryMs } from "@traycer-clients/shared/auth/jwt-exp";
 import type {
   RevalidateOutcome,
@@ -344,6 +347,15 @@ export class WsStreamClient<
 
   private readonly options: WsStreamClientOptions<Registry>;
   /**
+   * `options.bearer`, bound to the user of the first bearer it returns. Every
+   * session this client owns reads through it at each dial, open, credential
+   * push and openAck reconcile. The provider is usually a live read of the
+   * current context, so after an account switch it can return the new user
+   * lease while this client is still held; such a bearer reads as none and
+   * takes the existing missing-bearer paths, which report no host evidence.
+   */
+  private readonly bearer: BearerSourceProvider;
+  /**
    * Serialized once here rather than per session: every member is a process
    * constant, and this client hands the same value to every session it owns
    * and to every one of their redials.
@@ -462,6 +474,7 @@ export class WsStreamClient<
 
   constructor(options: WsStreamClientOptions<Registry>) {
     this.options = options;
+    this.bearer = bearerSourceBoundToFirstIdentity(options.bearer);
     this.clientIdentity = toClientHandshakeIdentity(options.clientIdentity);
     this.instanceId = `stream-client-${nextStreamClientId}`;
     nextStreamClientId += 1;
@@ -543,7 +556,7 @@ export class WsStreamClient<
       requiredSchemaVersion,
       registry: this.options.registry,
       endpoint: this.options.endpoint,
-      bearer: this.options.bearer,
+      bearer: this.bearer,
       cloudAuthorized: this.options.cloudAuthorized,
       auth: this.options.auth,
       clock: this.options.clock,
