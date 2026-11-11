@@ -4989,10 +4989,15 @@ describe("a send whose sandbox left awake on its own after the create timed out"
     // on the strip's missing tab provider.
     expect(within(line).getByTestId("sandbox-row-retry")).toBeDefined();
     expect(within(line).getByRole("button", { name: "Details" })).toBeDefined();
-    fireEvent.keyDown(within(line).getByTestId("sandbox-row-menu"), {
-      key: "Enter",
+    fireEvent.click(
+      within(line).getByRole("button", { name: "Destroy build-box" }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Destroy build-box?",
     });
-    expect(screen.getByTestId("sandbox-row-menu-destroy")).toBeDefined();
+    expect(
+      within(dialog).getByTestId("confirm-action").hasAttribute("disabled"),
+    ).toBe(true);
   });
 
   it("binds the failed line's actions to the sandbox's host in a tile bound elsewhere, without opening a draft mirror for it", async () => {
