@@ -1652,14 +1652,11 @@ function BotTabContent(props: {
                     <BotActivityPage
                       botId={botId}
                       hostId={hostId}
-                      botTitle={snapshot.bot.title}
                       boundHere={snapshot.boundHost.isThisHost}
                       active={activeTasks}
-                      tasks={snapshot.tasks}
                       notificationSubscriptions={
                         snapshot.notificationSubscriptions
                       }
-                      onOpenTurn={openTurn}
                       trunkChatId={snapshot.bot.trunkChatId}
                       onOpenSession={openSession}
                       resolveMember={resolveMember}

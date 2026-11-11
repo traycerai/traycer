@@ -76,6 +76,24 @@ export interface UseNotificationIndicatorsArgs {
 export function useNotificationIndicators(
   args: UseNotificationIndicatorsArgs,
 ): SurfaceNotificationIndicators {
+  return useNotificationIndicatorsBase(args).indicators;
+}
+
+export function useNotificationIndicatorsWithFreshness(
+  args: UseNotificationIndicatorsArgs,
+): {
+  readonly indicators: SurfaceNotificationIndicators;
+  readonly fresh: boolean;
+  readonly hostId: string | null;
+} {
+  return useNotificationIndicatorsBase(args);
+}
+
+function useNotificationIndicatorsBase(args: UseNotificationIndicatorsArgs): {
+  readonly indicators: SurfaceNotificationIndicators;
+  readonly fresh: boolean;
+  readonly hostId: string | null;
+} {
   const feedMode = useNotificationFeedMode();
   const isMixed = feedMode === "cloud";
   // A held `cloud` whose host is re-negotiating sends no `home: "local"`
@@ -102,6 +120,9 @@ export function useNotificationIndicators(
   // second hook is what makes the two unable to disagree.
   const readHostId = hostIndicators.hostId;
   const cloudRows = useCloudNotificationsStore((state) => state.rows);
+  const cloudFresh = useCloudNotificationsStore(
+    (state) => state.hasSnapshot && state.connectionState === "connected",
+  );
   const cloudIndicators = useMemo<SurfaceNotificationIndicators>(() => {
     if (!isMixed || !args.enabled) return EMPTY_INDICATOR_STATE_RESPONSE;
     const projection = selectCloudNotificationIndicatorProjection(
@@ -114,7 +135,7 @@ export function useNotificationIndicators(
       byOriginHostId: projection.byOriginHostId,
     };
   }, [isMixed, args.enabled, cloudRows, args.epicIds, args.chatIds]);
-  return isMixed
+  const indicators = isMixed
     ? mergeLocalPartitionIntoCloudIndicators(
         cloudIndicators,
         hostIndicators.data,
@@ -122,6 +143,15 @@ export function useNotificationIndicators(
         { epicIds: args.epicIds, chatIds: args.chatIds },
       )
     : scopeIndicatorsToOrigin(hostIndicators.data, readHostId);
+  const fresh =
+    args.enabled &&
+    !feedModeSettling &&
+    feedMode !== "upgrade-required" &&
+    readHostId !== null &&
+    !hostIndicators.isPending &&
+    hostIndicators.error === null &&
+    (!isMixed || cloudFresh);
+  return { indicators, fresh, hostId: readHostId };
 }
 
 function scopeIndicatorsToOrigin(

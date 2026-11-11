@@ -1,11 +1,16 @@
 import { useMemo } from "react";
+import { useHostReachability } from "@/hooks/agent/use-host-reachability";
+import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import type { BotTaskEntry } from "@traycer/protocol/host/bot/schemas";
-import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
+import { useNotificationIndicatorsWithFreshness } from "@/hooks/notifications/use-notification-indicators-query";
 import {
   activeTasksOf,
   type BotActiveTask,
 } from "@/lib/bots/bot-activity-model";
-import { useEpicsWorkingCounts } from "@/stores/agent-activity-store";
+import {
+  useActivityFleetCoverage,
+  useEpicsWorkingCounts,
+} from "@/stores/agent-activity-store";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
 import {
   EMPTY_NOTIFICATION_INDICATOR_STATE,
@@ -31,16 +36,21 @@ export function useBotActiveTasks(
   tasks: ReadonlyArray<BotTaskEntry>,
 ): BotActiveTasks {
   const taskIds = useMemo(
-    () => tasks.filter((task) => task.spun === true).map((t) => t.taskId),
+    () =>
+      tasks
+        .filter((task) => task.endedReason !== "deleted")
+        .map((t) => t.taskId),
     [tasks],
   );
   const workingCounts = useEpicsWorkingCounts(taskIds);
-  const indicators = useNotificationIndicators({
+  const fleetCoverage = useActivityFleetCoverage();
+  const { indicators, fresh, hostId } = useNotificationIndicatorsWithFreshness({
     hostId: null,
     epicIds: taskIds,
     chatIds: NO_CHAT_IDS,
     enabled: taskIds.length > 0,
   });
+  const reachability = useHostReachability(hostId ?? UNKNOWN_HOST_PLACEHOLDER);
   const localRows = useAppLocalNotificationsStore((state) => state.byId);
   return useMemo(() => {
     const working = new Map(
@@ -62,6 +72,10 @@ export function useBotActiveTasks(
     return {
       rows: activeTasksOf({
         tasks,
+        evidenceFresh:
+          fleetCoverage === "fleet" &&
+          fresh &&
+          reachability.status === "reachable",
         workingInTask: (taskId) => working.get(taskId) ?? 0,
         unseenInTask: (taskId) => {
           const state = indicatorOf(taskId);
@@ -70,5 +84,14 @@ export function useBotActiveTasks(
       }),
       indicatorOf,
     };
-  }, [indicators, localRows, taskIds, tasks, workingCounts]);
+  }, [
+    indicators,
+    localRows,
+    taskIds,
+    tasks,
+    workingCounts,
+    fleetCoverage,
+    fresh,
+    reachability.status,
+  ]);
 }

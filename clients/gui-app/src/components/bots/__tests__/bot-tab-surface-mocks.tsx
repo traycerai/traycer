@@ -369,12 +369,18 @@ export const connectableHostIdsMock = {
 // The directory still holds host labels: if the tab ever read it to say where
 // the bot runs, a label would reach the screen and the no-machine checks below
 // would catch it.
+const DIRECTORY_HOSTS = [
+  { hostId: "host-tab", label: "Laptop" },
+  { hostId: "host-bound", label: "Studio Mac" },
+];
+
 export const hostDirectoryListMock = {
-  useHostDirectoryList: () => ({
-    data: [
-      { hostId: "host-tab", label: "Laptop" },
-      { hostId: "host-bound", label: "Studio Mac" },
-    ],
+  useHostDirectoryList: () => ({ data: DIRECTORY_HOSTS }),
+  // The mention menu's host entries read the same list, answered.
+  useHostDirectoryListQuery: () => ({
+    data: DIRECTORY_HOSTS,
+    isPending: false,
+    isError: false,
   }),
 };
 

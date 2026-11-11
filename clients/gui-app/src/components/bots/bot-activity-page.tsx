@@ -27,7 +27,6 @@ import {
 import { useChatRowOpenRef } from "@/components/epic-canvas/sidebar/use-chat-row-open-ref";
 import type { BotSessionOpen } from "@/stores/bots/bot-open-thread-store";
 import { BotActivityDetails } from "@/components/bots/bot-activity-details";
-import type { BotTurnOpen } from "@/stores/bots/bot-open-thread-store";
 import { BotTaskControls } from "@/components/bots/bot-task-actions";
 import { ChannelPost } from "@/components/bots/bot-channel-post";
 import { ChatIndicatorHostScopes } from "@/components/notifications/chat-indicator-host-scopes";
@@ -98,13 +97,10 @@ const NO_FOCUS = {
 export function BotActivityPage(props: {
   readonly botId: string;
   readonly hostId: string;
-  readonly botTitle: string;
   /** Whether the tab's host is the one running the bot. */
   readonly boundHere: boolean;
   readonly active: BotActiveTasks;
-  readonly tasks: ReadonlyArray<BotTaskEntry>;
   readonly notificationSubscriptions: ReadonlyArray<BotNotificationSubscription> | null;
-  readonly onOpenTurn: BotTurnOpen;
   readonly trunkChatId: string;
   readonly onOpenSession: BotSessionOpen;
   /** Names the members who paused or ran something. */
@@ -112,7 +108,7 @@ export function BotActivityPage(props: {
   /** The bot's threads, as listed; `null` while the list is not read. */
   readonly threads: ReadonlyArray<BotThreadSummary> | null;
 }): ReactNode {
-  const { botId, hostId, botTitle, boundHere, active, resolveMember } = props;
+  const { botId, hostId, boundHere, active, resolveMember } = props;
   const viewer = useAuthStore((s) => s.profile);
   const nameOf = useCallback(
     (memberId: string): string =>
@@ -126,65 +122,50 @@ export function BotActivityPage(props: {
   const contexts = useEpicGetTaskContexts(taskIds, viewer?.userId ?? null, {
     enabled: taskIds.length > 0,
   });
-  const heading = `Tasks ${botTitle} started`;
+  const heading = "Tasks";
   return (
     <section
       aria-label={heading}
       className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto p-4"
       data-testid="bot-activity-page"
     >
-      <button
-        type="button"
-        className="self-start text-ui-xs underline"
-        onClick={() =>
-          props.onOpenSession({
-            chatId: props.trunkChatId,
-            threadId: null,
-            messageId: null,
-            sendPostId: null,
-          })
-        }
-      >
-        Open trunk session
-      </button>
-      <h3 className="text-ui-xs tracking-[0.08em] text-muted-foreground uppercase">
-        {heading}
-      </h3>
-      {active.rows.length === 0 ? (
+      {active.rows.length === 0 &&
+      props.notificationSubscriptions?.length === 0 ? (
         <p
           className="py-1 text-ui-xs text-muted-foreground"
           data-testid="bot-activity-empty"
         >
-          A task leaves this list once nothing in it is running, nothing waits
-          on you and you have seen its result. History keeps every task.
+          No activity yet
         </p>
-      ) : (
-        <ul className="flex flex-col gap-0.5">
-          {active.rows.map((entry) => (
-            <li key={entry.task.taskId}>
-              <ActiveTaskRow
-                botId={botId}
-                hostId={hostId}
-                boundHere={boundHere}
-                nameOf={nameOf}
-                entry={entry}
-                indicator={active.indicatorOf(entry.task.taskId)}
-                title={
-                  contexts.tasksById.get(entry.task.taskId)?.epic?.light
-                    ?.title ?? null
-                }
-                threads={props.threads}
-              />
-            </li>
-          ))}
-        </ul>
-      )}
+      ) : null}
+      {active.rows.length > 0 ? (
+        <>
+          <h3 className="text-ui-xs tracking-[0.08em] text-muted-foreground uppercase">
+            {heading}
+          </h3>
+          <ul className="flex flex-col gap-0.5">
+            {active.rows.map((entry) => (
+              <li key={entry.task.taskId}>
+                <ActiveTaskRow
+                  botId={botId}
+                  hostId={hostId}
+                  boundHere={boundHere}
+                  nameOf={nameOf}
+                  entry={entry}
+                  indicator={active.indicatorOf(entry.task.taskId)}
+                  title={
+                    contexts.tasksById.get(entry.task.taskId)?.epic?.light
+                      ?.title ?? null
+                  }
+                  threads={props.threads}
+                />
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : null}
       <BotActivityDetails
-        botId={botId}
-        hostId={hostId}
-        tasks={props.tasks}
         subscriptions={props.notificationSubscriptions}
-        onOpenTurn={props.onOpenTurn}
         trunkChatId={props.trunkChatId}
         threads={props.threads}
         onOpenSession={props.onOpenSession}
@@ -484,7 +465,7 @@ function TaskRowSummary(props: {
           </span>
         )}
         <span className="min-w-0 flex-1 truncate text-ui-sm text-foreground">
-          {displayTitle(props.title ?? "", "epic")}
+          {props.title === null ? "Task" : displayTitle(props.title, "epic")}
         </span>
         {interval === null ? null : (
           <Badge variant="muted" size="xs" data-testid="bot-activity-every">
@@ -501,11 +482,6 @@ function TaskRowSummary(props: {
           </Badge>
         )}
       </span>
-      {task.label === null ? null : (
-        <span className="truncate pl-5.5 text-ui-xs text-foreground">
-          {task.label}
-        </span>
-      )}
       <span
         className="flex min-w-0 flex-wrap gap-x-1.5 pl-5.5 text-ui-xs text-muted-foreground"
         data-testid="bot-activity-task-line"
@@ -520,7 +496,9 @@ function TaskRowSummary(props: {
             next check-in {formatAbsoluteDateTime(task.nextAt)}
           </span>
         ) : null}
-        {props.agentsReadable ? null : <TaskHostOffline task={task} />}
+        {props.agentsReadable || entry.band === "unknown" ? null : (
+          <TaskHostOffline task={task} showUnknown={rollup === null} />
+        )}
         <FromThread
           botId={props.botId}
           hostId={props.hostId}
@@ -573,6 +551,7 @@ function TaskStateWords(props: {
   readonly waiting: BotInputNeeded | null;
 }): ReactNode {
   const { rollup, entry, waiting } = props;
+  if (entry.band === "unknown") return <span>Status unknown</span>;
   if (rollup === null) return null;
   const working = Math.max(
     entry.working,
@@ -621,9 +600,13 @@ function Age(props: { readonly at: number }): ReactNode {
  * read because the host that last reported it is unreachable. Nothing while
  * no host has reported the task.
  */
-function TaskHostOffline(props: { readonly task: BotTaskEntry }): ReactNode {
+function TaskHostOffline(props: {
+  readonly task: BotTaskEntry;
+  readonly showUnknown: boolean;
+}): ReactNode {
   const host = reportingHostOf(props.task);
-  if (host === null) return null;
+  if (host === null)
+    return props.showUnknown ? <span>Status unknown</span> : null;
   return <HostOfflineWords hostId={host.hostId} hostName={host.hostName} />;
 }
 
@@ -647,10 +630,6 @@ function reportingHostOf(
   const waiting = newestWaiting(task.inputNeeded ?? []);
   if (waiting !== null) {
     return { hostId: waiting.hostId, hostName: waiting.hostName };
-  }
-  const reported = task.checkins?.find((record) => record.kind === "received");
-  if (reported?.kind === "received" && reported.hostId !== null) {
-    return { hostId: reported.hostId, hostName: reported.hostName };
   }
   return null;
 }

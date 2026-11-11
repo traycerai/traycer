@@ -324,6 +324,11 @@ vi.mock("@/hooks/bots/use-bot-memory", () => ({
 }));
 vi.mock("@/hooks/notifications/use-notification-indicators-query", () => ({
   useNotificationIndicators: () => ({ epics: {}, chats: {} }),
+  useNotificationIndicatorsWithFreshness: () => ({
+    indicators: { epics: {}, chats: {} },
+    fresh: true,
+    hostId: "host-notifications",
+  }),
 }));
 vi.mock("@/hooks/bots/use-environment-set-main-bot-mutation", () => ({
   useEnvironmentSetMainBotMutation: () => ({

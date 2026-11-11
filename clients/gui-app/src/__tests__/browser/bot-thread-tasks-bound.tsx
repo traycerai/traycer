@@ -154,7 +154,6 @@ const tasks: ReadonlyArray<BotTaskEntry> = Array.from(
     label: `Watching shard ${String(index + 1)}`,
     originRequestId: null,
     createdByChatId: THREAD_ID,
-    checkins: null,
     inputNeeded: null,
     pause: null,
     stop: null,

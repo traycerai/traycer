@@ -202,7 +202,6 @@ function task(taskId: string, overrides: Partial<BotTaskEntry>): BotTaskEntry {
     label: null,
     originRequestId: null,
     createdByChatId: null,
-    checkins: null,
     pause: null,
     stop: null,
     runRequest: null,
@@ -428,7 +427,6 @@ describe("the trunk session's status surfaces", () => {
         task("task-thread-owned", {
           cadence: { kind: "none" },
           createdByChatId: THREAD_ID,
-          checkins: [],
           lastCheckinAt: 2_000,
           label: "One-off from thread",
         }),
@@ -679,7 +677,6 @@ describe("a thread session's status surfaces", () => {
         task("task-thread-owned", {
           cadence: { kind: "none" },
           createdByChatId: THREAD_ID,
-          checkins: [],
           lastCheckinAt: 2_000,
           label: "One-off from thread",
         }),

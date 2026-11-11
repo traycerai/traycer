@@ -98,7 +98,6 @@ function entry(
     label: null,
     originRequestId: null,
     createdByChatId: null,
-    checkins: null,
     inputNeeded: null,
     pause: null,
     stop: null,
@@ -450,12 +449,9 @@ export function ActivityTab(): ReactElement {
         <BotActivityPage
           botId={BOT_ID}
           hostId={HOST_ID}
-          botTitle="Tracy"
           boundHere
           active={active}
-          tasks={tasks}
           notificationSubscriptions={null}
-          onOpenTurn={() => {}}
           trunkChatId="bot-trunk"
           onOpenSession={() => {}}
           resolveMember={UNRESOLVED_BOT_MEMBERS}

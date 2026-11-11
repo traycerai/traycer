@@ -66,7 +66,10 @@ import type {
   BotSessionOpen,
   BotTurnOpen,
 } from "@/stores/bots/bot-open-thread-store";
-import { __setAgentActivityStateForTests } from "@/stores/agent-activity-store";
+import {
+  __setAgentActivityPlaneAnsweringForTests,
+  __setAgentActivityStateForTests,
+} from "@/stores/agent-activity-store";
 import {
   BOT,
   BOT_ID,
@@ -115,6 +118,11 @@ vi.mock(
   () => hostClientForHostIdMock,
 );
 vi.mock("@/hooks/host/use-host-queries", () => hostQueriesMock);
+// The Activity count needs the notification host to read as reachable before
+// a quiet task may leave the list.
+vi.mock("@/hooks/agent/use-host-reachability", () => ({
+  useHostReachability: () => ({ status: "reachable" }),
+}));
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostBinding: () => mocks.binding,
@@ -890,13 +898,20 @@ describe("<BotTabSurface /> views", () => {
         },
         { ...trackingTask("task-unseen"), cadence: { kind: "on-completion" } },
         trackingTask("task-periodic"),
-        { ...trackingTask("task-quiet"), cadence: { kind: "on-completion" } },
+        {
+          ...trackingTask("task-quiet"),
+          cadence: { kind: "none" },
+          state: "ended",
+          endedReason: "completed",
+          lastCheckinAt: 1_000,
+        },
       ],
     };
+    __setAgentActivityPlaneAnsweringForTests();
     __setAgentActivityStateForTests(
       { "task-working": { working: ["agent-1"], turn: ["agent-1"] } },
-      "local",
-      null,
+      "cloud",
+      "connected",
     );
     render(surface());
     await user.click(activityTab());
@@ -922,9 +937,18 @@ describe("<BotTabSurface /> views", () => {
     mocks.state.snapshot = {
       ...snapshot(),
       tasks: [
-        { ...trackingTask("task-quiet"), cadence: { kind: "on-completion" } },
+        {
+          ...trackingTask("task-quiet"),
+          cadence: { kind: "none" },
+          state: "ended",
+          endedReason: "completed",
+          lastCheckinAt: 1_000,
+        },
       ],
     };
+    // The whole fleet is vouched, so the quiet task may leave the list.
+    __setAgentActivityPlaneAnsweringForTests();
+    __setAgentActivityStateForTests({}, "cloud", "connected");
     render(surface());
 
     expect(screen.queryByTestId("bot-tab-activity-count")).toBeNull();

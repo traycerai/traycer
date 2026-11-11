@@ -52,8 +52,7 @@ export function BotSessionStatus(props: {
         belongs &&
         (task.cadence.kind !== "none" ||
           task.lastCheckinAt !== null ||
-          task.lastCheckin !== null ||
-          (task.checkins?.length ?? 0) > 0)
+          task.lastCheckin !== null)
       );
     });
     const taskRows = tasks.map((task) => ({

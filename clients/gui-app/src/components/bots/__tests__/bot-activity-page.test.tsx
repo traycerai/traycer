@@ -13,7 +13,6 @@ import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostNotificationsIndicatorStateResponse } from "@traycer/protocol/host/notifications/contracts";
-import type { BotTurnRef } from "@traycer/protocol/host/bot/conversation-schemas";
 import type {
   BotInputNeeded,
   BotNotificationSubscription,
@@ -29,12 +28,14 @@ import {
   warmEpic,
 } from "@/components/layout/tabs/side-strip/__tests__/warm-epic-fixture";
 import type { AgentActivityTier } from "@/lib/agent-activity";
-import { formatAbsoluteDateTime } from "@/lib/relative-time";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
+import { NotificationFeedModeContext } from "@/lib/notifications/notification-feed-mode-context";
 import {
   __resetAgentActivityStoreForTests,
+  __setAgentActivityPlaneAnsweringForTests,
   __setAgentActivityStateForTests,
 } from "@/stores/agent-activity-store";
+import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   EMPTY_NOTIFICATION_INDICATOR_STATE,
@@ -74,6 +75,8 @@ const mocks = vi.hoisted(() => {
     >,
     /** Hosts the directory reports unreachable. */
     unreachable: new Set<string>(),
+    /** How the host's indicator read stands: answered, still pending, or failed. */
+    indicatorRead: "ok" as "ok" | "pending" | "error",
   };
   const answers = new Map<string, unknown>();
   /** Each agent chat id an enabled indicator read asked a host about. */
@@ -82,10 +85,7 @@ const mocks = vi.hoisted(() => {
     state,
     client: { stub: "tab-host-client" },
     navigateToTabIntent: vi.fn<(...args: unknown[]) => void>(),
-    openTurn: vi.fn(),
     openSession: vi.fn(),
-    locateRequests: [] as Array<unknown>,
-    locatedTurns: [] as Array<BotTurnRef>,
     /** Each member action the page sent, by method. */
     actions: [] as Array<{ method: string; variables: unknown }>,
     asked,
@@ -153,19 +153,6 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
 vi.mock("@/hooks/bots/use-bot-activity", () => ({
   useBotActivity: () => null,
 }));
-vi.mock("@/hooks/host/use-host-query", () => ({
-  useHostQuery: (args: {
-    method: string;
-    params: unknown;
-    options: { enabled: boolean };
-  }) => {
-    if (args.method === "bot.turn.locate" && args.options.enabled) {
-      mocks.locateRequests.push(args.params);
-      return { data: { turns: mocks.locatedTurns }, refetch: vi.fn() };
-    }
-    return { data: undefined, refetch: vi.fn() };
-  },
-}));
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
   useHostReachability: (hostId: string) => ({
     status: mocks.state.unreachable.has(hostId) ? "unreachable" : "reachable",
@@ -219,9 +206,12 @@ vi.mock("@/hooks/host/use-host-queries", () => ({
           data: enabled
             ? mocks.answerIndicators(hostId, args.requests)
             : undefined,
-          isPending: false,
+          isPending: mocks.state.indicatorRead === "pending",
           isFetching: false,
-          error: null,
+          error:
+            mocks.state.indicatorRead === "error"
+              ? new Error("indicator read failed")
+              : null,
           refetch: () => Promise.resolve(),
         })),
       ),
@@ -236,7 +226,6 @@ import { useBotActiveTasks } from "@/hooks/bots/use-bot-active-tasks";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const HOST_ID = "host-bound";
-const BOT_TITLE = "Tracy";
 const NOW = Date.now();
 const NONE_STATE: NotificationIndicatorState =
   EMPTY_NOTIFICATION_INDICATOR_STATE;
@@ -255,7 +244,6 @@ function task(taskId: string, overrides: Partial<BotTaskEntry>): BotTaskEntry {
     label: null,
     originRequestId: null,
     createdByChatId: null,
-    checkins: null,
     inputNeeded: null,
     pause: null,
     stop: null,
@@ -318,7 +306,15 @@ function waiting(
 function working(
   byEpic: Record<string, { working: string[]; turn: string[] }>,
 ): void {
-  __setAgentActivityStateForTests(byEpic, "local", null);
+  // An open, answering plane served by the cloud-merged union: the whole fleet is vouched.
+  __setAgentActivityPlaneAnsweringForTests();
+  __setAgentActivityStateForTests(byEpic, "cloud", "connected");
+}
+
+/** The host's activity plane covers only this window's host, not the fleet. */
+function narrowActivity(): void {
+  __setAgentActivityPlaneAnsweringForTests();
+  __setAgentActivityStateForTests({}, "local", null);
 }
 
 /** Unread done or failure, as the host's indicator read holds it per task. */
@@ -348,17 +344,35 @@ function Harness(props: {
     <BotActivityPage
       botId={BOT_ID}
       hostId={HOST_ID}
-      botTitle={BOT_TITLE}
       boundHere={props.boundHere}
       active={active}
-      tasks={props.tasks}
       notificationSubscriptions={props.notificationSubscriptions}
-      onOpenTurn={mocks.openTurn}
       trunkChatId="bot-trunk"
       onOpenSession={mocks.openSession}
       resolveMember={() => null}
       threads={props.threads}
     />
+  );
+}
+
+/** A cloud-fed notification centre: its rows count as evidence only while connected with a snapshot. */
+function mountInCloudMode(
+  tasks: ReadonlyArray<BotTaskEntry>,
+  cloud: { readonly connected: boolean },
+): void {
+  useCloudNotificationsStore.setState({
+    hasSnapshot: cloud.connected,
+    connectionState: cloud.connected ? "connected" : "unavailable",
+  });
+  render(
+    <NotificationFeedModeContext.Provider value="cloud">
+      <Harness
+        threads={[]}
+        tasks={tasks}
+        boundHere
+        notificationSubscriptions={null}
+      />
+    </NotificationFeedModeContext.Provider>,
   );
 }
 
@@ -468,11 +482,12 @@ beforeEach(() => {
   mocks.state.chatFlags = {};
   mocks.state.chatFlagsByHost = {};
   mocks.state.unreachable = new Set();
+  mocks.state.indicatorRead = "ok";
   mocks.actions.length = 0;
-  mocks.locateRequests.length = 0;
-  mocks.locatedTurns.length = 0;
   mocks.forgetAnswers();
   __resetAgentActivityStoreForTests();
+  // Every case starts with the fleet vouched, so a quiet seen row can leave.
+  working({});
   useAuthStore.setState({
     status: "signed-in",
     profile: { userId: "user-ada", userName: "Ada", email: "ada@example.com" },
@@ -482,6 +497,10 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  useCloudNotificationsStore.setState({
+    hasSnapshot: false,
+    connectionState: "unavailable",
+  });
   coolAllEpics();
   __resetAgentActivityStoreForTests();
   useAuthStore.setState({
@@ -491,151 +510,8 @@ afterEach(() => {
   });
 });
 
-describe("<BotActivityPage /> check-ins and subscriptions", () => {
-  it("shows the last received check-in when an older host has no history", () => {
-    const deliveredAt = NOW - 60_000;
-    mount(
-      [
-        completed("older-host-task", {
-          label: "Legacy audit",
-          checkins: null,
-          lastCheckin: {
-            deliveredAt,
-            since: deliveredAt - 60_000,
-            through: deliveredAt,
-            sections: {
-              agentsStarted: {
-                available: true,
-                rows: [],
-                omitted: 0,
-                creatorsBeyondCap: false,
-              },
-              backgroundEvents: { rows: [], omitted: 0 },
-              tickets: { rows: [], omitted: 0, firstCheckin: false },
-              cost: { available: false, window: null, total: null },
-              stillRunning: {
-                state: "idle",
-                reason: null,
-                agents: [],
-                agentsOmitted: 0,
-                shells: [],
-                shellsOmitted: 0,
-              },
-            },
-          },
-        }),
-      ],
-      { boundHere: true },
-    );
-    const section = screen.getByRole("region", {
-      name: "Tasks with check-ins",
-    });
-    expect(within(section).getByText("Legacy audit")).toBeTruthy();
-    expect(
-      within(section).getByText(
-        `Check-in received · ${formatAbsoluteDateTime(deliveredAt)}`,
-      ),
-    ).toBeTruthy();
-    expect(
-      within(section).queryByText("Check-in history unavailable"),
-    ).toBeNull();
-  });
-
-  it("keeps ended tasks with unavailable history visible without implying it is empty", () => {
-    mount(
-      [completed("dated", { label: "Dated legacy task", lastCheckinAt: NOW })],
-      { boundHere: true },
-    );
-    const section = screen.getByRole("region", {
-      name: "Tasks with check-ins",
-    });
-    expect(within(section).getByText("Dated legacy task")).toBeTruthy();
-    expect(
-      within(section).getAllByText("Check-in history unavailable").length,
-    ).toBeGreaterThan(0);
-    expect(within(section).queryByText("No tasks with check-ins")).toBeNull();
-  });
-
-  it("reports unknown history without claiming the task had a check-in", () => {
-    mount([completed("undated", { label: "Undated legacy task" })], {
-      boundHere: true,
-    });
-    const section = screen.getByRole("region", {
-      name: "Tasks with check-ins",
-    });
-    expect(
-      within(section).getByText("Check-in history unavailable"),
-    ).toBeTruthy();
-    expect(within(section).queryByText("No tasks with check-ins")).toBeNull();
-  });
-
-  it("shows received and missed history and opens the located reading turn", async () => {
-    const user = userEvent.setup();
-    mocks.state.supported.add("bot.turn.locate");
-    const turn: BotTurnRef = {
-      chatId: "bot-chat",
-      turnIds: ["turn-1"],
-      userMessageId: "checkin-message",
-      threadId: null,
-      startedAt: NOW - 1000,
-      endedAt: NOW,
-      summary: null,
-      messageIds: [],
-      requestIds: [],
-    };
-    mocks.locatedTurns.push(turn);
-    const received = {
-      kind: "received" as const,
-      receivedAt: NOW,
-      hostId: "host-agents",
-      hostName: "Studio Mac",
-      outcome: "idle" as const,
-      agentsStarted: 1,
-      ticketsOpened: 0,
-      ticketsClosed: 1,
-      backgroundEvents: 0,
-      turn: { chatId: "bot-chat", turnId: "turn-1" },
-      requestedByUserId: null,
-    };
-    const missed = {
-      kind: "missed" as const,
-      dueAt: NOW - 7_200_000,
-      missedThrough: NOW - 3_600_000,
-      reason: "no-host-reported" as const,
-      caughtUpAt: null,
-    };
-    mount(
-      [
-        periodic("tracked-checkin", {
-          label: "Tracked audit",
-          checkins: [received],
-        }),
-        completed("ended-checkin", {
-          label: "Finished audit",
-          checkins: [missed],
-        }),
-      ],
-      { boundHere: true },
-    );
-
-    expect(
-      screen.getByRole("heading", { name: "Tasks with check-ins" }),
-    ).toBeTruthy();
-    expect(screen.getAllByText("Tracked audit").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Finished audit").length).toBeGreaterThan(0);
-    expect(screen.getByText(/Check-in received/)).toBeTruthy();
-    expect(screen.getByText(/Check-in missed/)).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: /Open check-in/ }));
-    expect(mocks.locateRequests).toContainEqual({
-      botId: BOT_ID,
-      messageIds: [],
-      requestIds: [],
-      turns: [{ chatId: "bot-chat", turnId: "turn-1" }],
-    });
-    expect(mocks.openTurn).toHaveBeenCalledWith(turn, null);
-  });
-
-  it("distinguishes unavailable subscriptions from a known empty list", () => {
+describe("<BotActivityPage /> subscriptions", () => {
+  it("says subscriptions are unavailable when unread, and draws no section at all when known empty", () => {
     const view = render(
       <Harness
         threads={[]}
@@ -645,7 +521,6 @@ describe("<BotActivityPage /> check-ins and subscriptions", () => {
       />,
     );
     expect(screen.getByText("Subscriptions unavailable")).toBeTruthy();
-    expect(screen.queryByText("No notification subscriptions")).toBeNull();
 
     view.rerender(
       <Harness
@@ -655,8 +530,44 @@ describe("<BotActivityPage /> check-ins and subscriptions", () => {
         notificationSubscriptions={[]}
       />,
     );
-    expect(screen.getByText("No notification subscriptions")).toBeTruthy();
     expect(screen.queryByText("Subscriptions unavailable")).toBeNull();
+    expect(
+      screen.queryByRole("heading", { name: "Notification subscriptions" }),
+    ).toBeNull();
+    expect(screen.queryByText("No notification subscriptions")).toBeNull();
+    // Nothing in either list: the page says so once.
+    expect(screen.getByTestId("bot-activity-empty").textContent).toBe(
+      "No activity yet",
+    );
+  });
+
+  it("opens the session a subscription names", async () => {
+    const user = userEvent.setup();
+    render(
+      <Harness
+        threads={[]}
+        tasks={[]}
+        boundHere
+        notificationSubscriptions={[
+          {
+            target: { kind: "trunk" },
+            attentionOnly: false,
+            everySeconds: null,
+            since: null,
+            digests: null,
+          },
+        ]}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Open session" }));
+
+    expect(mocks.openSession).toHaveBeenCalledWith({
+      chatId: "bot-trunk",
+      threadId: null,
+      messageId: null,
+      sendPostId: null,
+    });
   });
 
   it("describes each subscription's target, filter, and digest cadence", () => {
@@ -759,7 +670,7 @@ describe("<BotActivityPage /> what is listed", () => {
         }),
         task("t-unseen", {}),
         periodic("t-every", {}),
-        task("t-quiet", {}),
+        completed("t-quiet", { lastCheckinAt: NOW }),
       ],
       { boundHere: true },
     );
@@ -779,31 +690,73 @@ describe("<BotActivityPage /> what is listed", () => {
     expect(rowIds()).toEqual(["t-ended"]);
   });
 
-  it("rule 1: a task the bot adopted is not listed, even working and periodic", () => {
-    working({
-      "t-ended": { working: ["a-1"], turn: ["a-1"] },
-      "t-adopted": { working: ["a-2"], turn: ["a-2"] },
-    });
+  it("lists a task the bot adopted by the same rule as one it started, once, and drops it when seen and quiet", () => {
+    working({ "t-adopted-working": { working: ["a-1"], turn: ["a-1"] } });
+    taskUnread("t-adopted-unseen", { unreadFailure: true });
     mount(
       [
-        completed("t-ended", { lastCheckinAt: NOW }),
-        periodic("t-adopted", { spun: false }),
+        periodic("t-adopted-every", { spun: false }),
+        completed("t-adopted-working", { spun: false, lastCheckinAt: NOW }),
+        completed("t-adopted-unseen", { spun: false, lastCheckinAt: NOW }),
+        completed("t-adopted-seen", { spun: false, lastCheckinAt: NOW }),
       ],
       { boundHere: true },
     );
 
-    expect(rowIds()).toEqual(["t-ended"]);
+    expect([...rowIds()].sort()).toEqual([
+      "t-adopted-every",
+      "t-adopted-unseen",
+      "t-adopted-working",
+    ]);
   });
 
-  it("rule 1: draws one list under the bot's heading and none of the old sections", () => {
+  it("names a row by the task's own title, never by the bot's label or the id", () => {
+    mocks.state.taskTitles = {
+      "t-titled": "Release notes for 1.9",
+      "t-labelled": "Nightly flake roster",
+    };
+    mount(
+      [
+        periodic("t-titled", { label: null }),
+        periodic("t-labelled", { label: "bot-supplied-label" }),
+      ],
+      { boundHere: true },
+    );
+
+    expect(
+      within(row("t-titled")).getByText("Release notes for 1.9"),
+    ).toBeTruthy();
+    expect(
+      within(row("t-labelled")).getByText("Nightly flake roster"),
+    ).toBeTruthy();
+    const text = screen.getByTestId("bot-activity-page").textContent;
+    expect(text).not.toContain("bot-supplied-label");
+    expect(text).not.toContain("t-titled");
+    expect(text).not.toContain("t-labelled");
+  });
+
+  it("labels a row whose title is not known as Task, still opens it, and shows no id", async () => {
+    const user = userEvent.setup();
+    mount([periodic("t-untitled-8f3a", { label: "bot-supplied-label" })], {
+      boundHere: true,
+    });
+
+    const summary = row("t-untitled-8f3a");
+    expect(within(summary).getByText("Task")).toBeTruthy();
+    expect(summary.textContent).not.toContain("t-untitled-8f3a");
+    expect(summary.textContent).not.toContain("bot-supplied-label");
+
+    await user.click(within(summary).getByText("Task"));
+    expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
+  });
+
+  it("draws one list under the Tasks heading and none of the old sections", () => {
     working({ "t-working": { working: ["a-1"], turn: ["a-1"] } });
     mount([task("t-working", {}), periodic("t-every", {})], {
       boundHere: true,
     });
 
-    expect(
-      screen.getByRole("heading", { name: `Tasks ${BOT_TITLE} started` }),
-    ).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Tasks" })).toBeTruthy();
     const text = screen.getByTestId("bot-activity-page").textContent;
     for (const gone of [
       "Running now",
@@ -816,14 +769,160 @@ describe("<BotActivityPage /> what is listed", () => {
     }
   });
 
-  it("rule 1: with nothing active it says so under the same heading", () => {
-    mount([task("t-quiet", {})], { boundHere: true });
-
+  it("with nothing active, draws no Tasks heading, and says so only when subscriptions are known empty too", () => {
+    const view = render(
+      <Harness
+        threads={[]}
+        tasks={[completed("t-quiet", { lastCheckinAt: NOW })]}
+        boundHere
+        notificationSubscriptions={[]}
+      />,
+    );
     expect(rows()).toHaveLength(0);
-    expect(screen.getByTestId("bot-activity-empty")).toBeTruthy();
-    expect(
-      screen.getByRole("heading", { name: `Tasks ${BOT_TITLE} started` }),
-    ).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Tasks" })).toBeNull();
+    expect(screen.getByTestId("bot-activity-empty").textContent).toBe(
+      "No activity yet",
+    );
+
+    // Subscriptions unread or present: no empty message, and still no heading.
+    for (const subscriptions of [
+      null,
+      [
+        {
+          target: { kind: "trunk" as const },
+          attentionOnly: false,
+          everySeconds: null,
+          since: null,
+          digests: null,
+        },
+      ],
+    ]) {
+      view.rerender(
+        <Harness
+          threads={[]}
+          tasks={[completed("t-quiet", { lastCheckinAt: NOW })]}
+          boundHere
+          notificationSubscriptions={subscriptions}
+        />,
+      );
+      expect(screen.queryByTestId("bot-activity-empty")).toBeNull();
+      expect(screen.queryByRole("heading", { name: "Tasks" })).toBeNull();
+    }
+  });
+});
+
+describe("<BotActivityPage /> when the evidence is incomplete", () => {
+  /** A task that ended with its result seen and nothing running: it leaves only on proof. */
+  const QUIET = (): BotTaskEntry =>
+    completed("t-quiet", { lastCheckinAt: NOW });
+
+  it("drops a quiet, seen task once every source vouches", () => {
+    mount([QUIET()], { boundHere: true });
+
+    expect(rowIds()).toEqual([]);
+  });
+
+  it("keeps an on-completion task still tracking as status unknown, though nothing works or is unseen yet, and drops its ended and seen counterpart", () => {
+    // Tracking can precede the completion report: no activity and nothing
+    // unread is not proof that the task has finished.
+    mount(
+      [
+        task("t-tracking", { cadence: { kind: "on-completion" } }),
+        completed("t-ended", { lastCheckinAt: NOW }),
+      ],
+      { boundHere: true },
+    );
+
+    expect(rowIds()).toEqual(["t-tracking"]);
+    expect(row("t-tracking").textContent.split("Status unknown")).toHaveLength(
+      2,
+    );
+  });
+
+  it("keeps it, as status unknown, while the activity plane covers only part of the fleet", () => {
+    narrowActivity();
+    mount([QUIET()], { boundHere: true });
+
+    expect(rowIds()).toEqual(["t-quiet"]);
+    // Said once, not again by the cold-host label.
+    expect(row("t-quiet").textContent.split("Status unknown")).toHaveLength(2);
+  });
+
+  it("keeps it while the host's indicator read is pending, and drops it when the read lands", () => {
+    mocks.state.indicatorRead = "pending";
+    const view = render(
+      <Harness
+        threads={[]}
+        tasks={[QUIET()]}
+        boundHere
+        notificationSubscriptions={null}
+      />,
+    );
+    expect(rowIds()).toEqual(["t-quiet"]);
+
+    mocks.state.indicatorRead = "ok";
+    mocks.forgetAnswers();
+    view.rerender(
+      <Harness
+        threads={[]}
+        tasks={[QUIET()]}
+        boundHere
+        notificationSubscriptions={null}
+      />,
+    );
+    expect(rowIds()).toEqual([]);
+  });
+
+  it("keeps it when the host's indicator read failed", () => {
+    mocks.state.indicatorRead = "error";
+    mount([QUIET()], { boundHere: true });
+
+    expect(rowIds()).toEqual(["t-quiet"]);
+  });
+
+  it("keeps it while the host that answers indicators is unreachable", () => {
+    mocks.state.unreachable.add("host-notifications");
+    mount([QUIET()], { boundHere: true });
+
+    expect(rowIds()).toEqual(["t-quiet"]);
+  });
+
+  it("keeps it while a cloud-fed centre is disconnected or has no snapshot, and drops it once connected", () => {
+    mountInCloudMode([QUIET()], { connected: false });
+    expect(rowIds()).toEqual(["t-quiet"]);
+    cleanup();
+
+    mountInCloudMode([QUIET()], { connected: true });
+    expect(rowIds()).toEqual([]);
+  });
+
+  it("never lets missing evidence hide a positive signal: waiting, unseen and scheduled rows keep their own band", () => {
+    narrowActivity();
+    taskUnread("t-unseen", { unreadDone: true });
+    mount(
+      [
+        completed("t-unseen", { lastCheckinAt: NOW }),
+        task("t-waiting", {
+          inputNeeded: [waiting("a-2", NOW, "Merge the release PR")],
+        }),
+        periodic("t-every", {}),
+      ],
+      { boundHere: true },
+    );
+
+    // Each keeps the band its own signal earns, ahead of any unproven row.
+    expect(rowIds()).toEqual(["t-waiting", "t-unseen", "t-every"]);
+    // A state that is known is never also called unknown.
+    for (const id of ["t-waiting", "t-unseen"]) {
+      expect(row(id).textContent).not.toContain("Status unknown");
+    }
+  });
+
+  it("lists an unproven row last, below every row with a known state", () => {
+    narrowActivity();
+    mount([QUIET(), periodic("t-every", {})], { boundHere: true });
+
+    expect(rowIds()).toEqual(["t-every", "t-quiet"]);
   });
 });
 
@@ -1119,6 +1218,19 @@ describe("<BotActivityPage /> badges and words", () => {
         .textContent,
     ).toBe("agents on Studio Mac, offline");
   });
+
+  it("a cold scheduled task no surface waits on says its status is unknown, without naming a host", () => {
+    mocks.state.unreachable.add("host-agents");
+    mount([periodic("t-every", {})], { boundHere: true });
+
+    const text = row("t-every").textContent;
+    expect(text).toContain("Status unknown");
+    expect(text).not.toContain("offline");
+    expect(text).not.toContain("Studio Mac");
+    expect(
+      within(row("t-every")).queryByTestId("bot-activity-task-offline"),
+    ).toBeNull();
+  });
 });
 
 describe("<BotActivityPage /> actions", () => {
@@ -1223,36 +1335,6 @@ describe("<BotActivityPage /> actions", () => {
     ]) {
       await user.click(every.getByTestId(testId));
     }
-    expect(mocks.navigateToTabIntent).not.toHaveBeenCalled();
-  });
-});
-
-describe("<BotActivityPage /> trunk door", () => {
-  it("opens the trunk's own session, not a task or a thread, regardless of what else is on the page", async () => {
-    const user = userEvent.setup();
-    mount([periodic("t-every", {})], { boundHere: true });
-
-    await user.click(
-      screen.getByRole("button", { name: "Open trunk session" }),
-    );
-
-    expect(mocks.openSession).toHaveBeenCalledWith({
-      chatId: "bot-trunk",
-      threadId: null,
-      messageId: null,
-      sendPostId: null,
-    });
-  });
-
-  it("is a plain door, not a task row: it carries no task id and takes no row actions with it", async () => {
-    const user = userEvent.setup();
-    mount([periodic("t-every", {})], { boundHere: true });
-
-    await user.click(
-      screen.getByRole("button", { name: "Open trunk session" }),
-    );
-
-    expect(mocks.openSession).toHaveBeenCalledTimes(1);
     expect(mocks.navigateToTabIntent).not.toHaveBeenCalled();
   });
 });
