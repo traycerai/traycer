@@ -36,17 +36,17 @@ export function TeamComputersSection(props: {
 }
 
 function TeamComputers(props: { readonly environmentId: string }): ReactNode {
-  const { read, setBotHost, release } = useTeamComputers(props.environmentId);
+  const { read, setBotHost, claim } = useTeamComputers(props.environmentId);
   const canEdit = useCanEditConfiguration();
   const teamName = usePickedTeamLabel(props.environmentId) ?? "this team";
-  const [returning, setReturning] = useState<TeamComputer | null>(null);
+  const [claiming, setClaiming] = useState<TeamComputer | null>(null);
   const computers = (read.data ?? []).filter(
     (host) => host.hostKind === "personal",
   );
   const botHost = (read.data ?? []).find(
     (host) => host.holdsBotSlot && !host.purgePending,
   );
-  const busy = setBotHost.isPending || release.isPending;
+  const busy = setBotHost.isPending || claim.isPending;
   let contents: ReactNode;
   if (read.isPending) {
     contents = (
@@ -85,11 +85,10 @@ function TeamComputers(props: { readonly environmentId: string }): ReactNode {
               <TeamComputerRow
                 key={host.hostId}
                 host={host}
-                canEdit={canEdit}
                 busy={busy}
-                onReturn={() => {
-                  release.reset();
-                  setReturning(host);
+                onClaim={() => {
+                  claim.reset();
+                  setClaiming(host);
                 }}
               />
             ))}
@@ -144,15 +143,14 @@ function TeamComputers(props: { readonly environmentId: string }): ReactNode {
           {setBotHost.error.message}
         </p>
       ) : null}
-      <TeamComputerReturnDialog
-        computer={returning}
-        pending={release.isPending}
-        failure={release.error?.message ?? null}
-        canEdit={canEdit}
-        onClose={() => setReturning(null)}
-        onReturn={(hostId) =>
-          release.mutate(hostId, {
-            onSuccess: () => setReturning(null),
+      <TeamComputerClaimDialog
+        computer={claiming}
+        pending={claim.isPending}
+        failure={claim.error?.message ?? null}
+        onClose={() => setClaiming(null)}
+        onClaim={(hostId) =>
+          claim.mutate(hostId, {
+            onSuccess: () => setClaiming(null),
           })
         }
       />
@@ -160,13 +158,12 @@ function TeamComputers(props: { readonly environmentId: string }): ReactNode {
   );
 }
 
-function TeamComputerReturnDialog(props: {
+function TeamComputerClaimDialog(props: {
   readonly computer: TeamComputer | null;
   readonly pending: boolean;
   readonly failure: string | null;
-  readonly canEdit: boolean;
   readonly onClose: () => void;
-  readonly onReturn: (hostId: string) => void;
+  readonly onClaim: (hostId: string) => void;
 }): ReactNode {
   return (
     <Dialog
@@ -178,11 +175,10 @@ function TeamComputerReturnDialog(props: {
       <DialogContent className="w-full sm:max-w-prose">
         <DialogHeader>
           <DialogTitle>
-            Return {props.computer?.hostName ?? "the computer"} to its owner?
+            Claim {props.computer?.hostName ?? "the computer"}?
           </DialogTitle>
           <DialogDescription>
-            The team will lose access to this computer. Its owner will be
-            notified.
+            This computer will become yours. The team will lose access to it.
           </DialogDescription>
         </DialogHeader>
         {props.failure !== null ? (
@@ -201,20 +197,19 @@ function TeamComputerReturnDialog(props: {
           </Button>
           <Button
             type="button"
-            disabled={props.pending || !props.canEdit}
+            disabled={props.pending}
             onClick={() => {
-              if (props.computer !== null && props.canEdit)
-                props.onReturn(props.computer.hostId);
+              if (props.computer !== null) props.onClaim(props.computer.hostId);
             }}
           >
             {props.pending ? (
               <AgentSpinningDots
                 className={undefined}
-                testId="team-computer-return-progress"
+                testId="team-computer-claim-progress"
                 variant={undefined}
               />
             ) : null}
-            Return computer
+            Claim this computer
           </Button>
         </div>
       </DialogContent>
@@ -279,30 +274,27 @@ function TeamBotHostPicker(props: {
 
 function TeamComputerRow(props: {
   readonly host: TeamComputer;
-  readonly canEdit: boolean;
   readonly busy: boolean;
-  readonly onReturn: () => void;
+  readonly onClaim: () => void;
 }): ReactNode {
   return (
     <li className="flex flex-wrap items-center justify-between gap-2">
       <span className="min-w-0 break-words text-ui-sm">
         {props.host.hostName ?? "Unnamed computer"}
-        {props.host.purgePending ? " · Return pending" : null}
+        {props.host.purgePending ? " · Unavailable" : null}
         {!props.host.purgePending && props.host.holdsBotSlot
           ? " · Runs the team's bots"
           : null}
       </span>
-      {props.canEdit ? (
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          disabled={props.busy || props.host.purgePending}
-          onClick={props.onReturn}
-        >
-          Return this computer to its owner
-        </Button>
-      ) : null}
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={props.busy || props.host.purgePending}
+        onClick={props.onClaim}
+      >
+        Claim this computer
+      </Button>
     </li>
   );
 }

@@ -630,7 +630,7 @@ describe("callHostRpc", () => {
       wire: "E_HOST_IN_ANOTHER_TEAM" as const,
       cli: CLI_ERROR_CODES.HOST_IN_ANOTHER_TEAM,
       message:
-        "Return this computer from its current team before adding it to another.",
+        "Claim this computer from its current team before adding it to another.",
     },
   ])(
     "maps the host's $wire refusal to an expected CLI code with a fixed message that omits the host's text",

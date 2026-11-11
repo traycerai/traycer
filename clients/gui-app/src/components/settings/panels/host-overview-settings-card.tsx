@@ -1,12 +1,9 @@
+import { useTeamComputerClaim } from "@/hooks/auth/use-team-computers";
 import { useTeamComputerTransfer } from "@/hooks/environment/use-team-computer-transfer";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useQueryClient } from "@tanstack/react-query";
-import { authQueryKeys } from "@/lib/query-keys";
 import type { HostOwnerPrincipal } from "@traycer/protocol/host/host-status";
 import { TEAM_TRANSFER_DISCLOSURE } from "@traycer/protocol/host/environment/team-transfer-disclosure";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
-import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
-import { environmentMutationKeys } from "@/lib/query-keys";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import {
@@ -129,9 +126,10 @@ export function HostOverviewSettingsCard(props: {
         <TeamOwnedHostSettingsRow
           {...lineProps}
           owner={teamOwner}
+          binding={props.binding}
           fallback={model.kind === "team" ? model : null}
           isLocalMachine={props.isLocalMachine}
-          onReturned={setOwnershipReceipt}
+          onClaimed={setOwnershipReceipt}
         />
         <TransferReceipt value={ownershipReceipt} />
       </>
@@ -215,12 +213,13 @@ function TeamOwnedHostSettingsRow(props: {
   readonly hostName: string;
   readonly status: EnvironmentStatusResponseV11;
   readonly owner: Extract<HostOwnerPrincipal, { readonly kind: "team" }> | null;
+  readonly binding: EnvironmentHostBinding | null;
   readonly fallback: Extract<
     HostSettingsRowModel,
     { readonly kind: "team" }
   > | null;
   readonly isLocalMachine: boolean;
-  readonly onReturned: (receipt: string) => void;
+  readonly onClaimed: (receipt: string) => void;
 }): ReactNode {
   return (
     <SettingsRow
@@ -245,12 +244,14 @@ function TeamOwnedHostSettingsRow(props: {
           <FixedSettingsSource
             value={props.owner?.name ?? props.fallback?.label ?? "Team"}
           />
-          {props.isLocalMachine && props.owner !== null ? (
-            <ReturnLocalTeamComputer
-              client={props.client}
+          {props.isLocalMachine &&
+          props.owner !== null &&
+          props.binding !== null ? (
+            <ClaimLocalTeamComputer
+              environmentId={props.binding.environment.environmentId}
               hostId={props.hostId}
               hostName={props.hostName}
-              onReturned={props.onReturned}
+              onClaimed={props.onClaimed}
             />
           ) : null}
         </div>
@@ -259,37 +260,14 @@ function TeamOwnedHostSettingsRow(props: {
   );
 }
 
-function ReturnLocalTeamComputer(props: {
-  readonly client: HostClient<HostRpcRegistry>;
+function ClaimLocalTeamComputer(props: {
+  readonly environmentId: string;
   readonly hostId: string;
   readonly hostName: string;
-  readonly onReturned: (receipt: string) => void;
+  readonly onClaimed: (receipt: string) => void;
 }): ReactNode {
-  const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
-  const mutation = useHostScopedMutationForClient(props.client, {
-    method: "environment.move.stop",
-    mutationKey: environmentMutationKeys.moveStop(),
-    errorMessage: null,
-    onSuccess: (answer) => {
-      if (answer.outcome === "stopped") {
-        props.onReturned(
-          "This computer was returned. The team can no longer run work on it.",
-        );
-        setOpen(false);
-      }
-    },
-    onSettled: () => {
-      void queryClient.invalidateQueries({
-        queryKey: authQueryKeys.hostOwnershipAll(),
-      });
-    },
-    invalidateMethods: [
-      "environment.host.read",
-      "environment.status",
-      "environment.host.list",
-    ],
-  });
+  const mutation = useTeamComputerClaim(props.environmentId);
   return (
     <>
       <Button
@@ -301,7 +279,7 @@ function ReturnLocalTeamComputer(props: {
           setOpen(true);
         }}
       >
-        Return this computer
+        Claim this computer
       </Button>
       <Dialog
         open={open}
@@ -311,18 +289,14 @@ function ReturnLocalTeamComputer(props: {
       >
         <DialogContent className="w-full sm:max-w-prose">
           <DialogHeader>
-            <DialogTitle>Return {props.hostName}?</DialogTitle>
+            <DialogTitle>Claim {props.hostName}?</DialogTitle>
             <DialogDescription>
-              The team will lose access to this computer. It will return to the
-              person who brought it.
+              This computer will become yours. The team will lose access to it.
             </DialogDescription>
           </DialogHeader>
-          {mutation.isError ||
-          (mutation.data !== undefined &&
-            mutation.data.outcome !== "stopped") ? (
+          {mutation.isError ? (
             <p role="alert" className="text-ui-sm text-destructive">
-              Could not confirm that this computer was returned. Refresh its
-              Overview before trying again.
+              {mutation.error.message}
             </p>
           ) : null}
           <div className="flex flex-wrap justify-end gap-2">
@@ -337,16 +311,25 @@ function ReturnLocalTeamComputer(props: {
             <Button
               type="button"
               disabled={mutation.isPending}
-              onClick={() => mutation.mutate({ choices: [] })}
+              onClick={() =>
+                mutation.mutate(props.hostId, {
+                  onSuccess: () => {
+                    props.onClaimed(
+                      "This computer is now yours. The team can no longer run work on it.",
+                    );
+                    setOpen(false);
+                  },
+                })
+              }
             >
               {mutation.isPending ? (
                 <AgentSpinningDots
                   className={undefined}
-                  testId="team-computer-return-progress"
+                  testId="team-computer-claim-progress"
                   variant={undefined}
                 />
               ) : null}
-              Return computer
+              Claim this computer
             </Button>
           </div>
         </DialogContent>
@@ -440,7 +423,7 @@ function TeamEnvironmentSourceControl(
     props.hostId,
     (team) => {
       props.onTransferred(
-        `${props.hostName} now belongs to ${team.label}. Return it from this computer's Overview when you want it back.`,
+        `${props.hostName} now belongs to ${team.label}. Any member of the team can claim it as their own.`,
       );
       setSelected(null);
     },
@@ -467,7 +450,8 @@ function TeamEnvironmentSourceControl(
               Use {props.hostName} for {selected?.label}?
             </DialogTitle>
             <DialogDescription>
-              The team will own this computer until it is returned.
+              The team will own this computer. Any member of the team can claim
+              it as their own.
             </DialogDescription>
           </DialogHeader>
           <ul className="list-disc space-y-2 pl-5 text-ui-sm">

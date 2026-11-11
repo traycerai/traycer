@@ -3178,7 +3178,7 @@ export class AuthService {
     environmentId: string,
   ): Promise<TeamComputerReleaseResult> {
     const bearer = this.cloudBearer();
-    if (bearer === null) throw new Error("Sign in to return this computer.");
+    if (bearer === null) throw new Error("Sign in to claim this computer.");
     return this.runnerHost.releaseTeamComputer(bearer, hostId, environmentId);
   }
 

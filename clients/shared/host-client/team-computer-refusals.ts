@@ -19,6 +19,6 @@ export const TEAM_TRANSFER_REFUSALS = [
   {
     code: "E_HOST_IN_ANOTHER_TEAM",
     message:
-      "Return this computer from its current team before adding it to another.",
+      "Claim this computer from its current team before adding it to another.",
   },
 ] as const;

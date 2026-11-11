@@ -447,7 +447,11 @@ describe("install auth helpers", () => {
         preflight: { state: "signed-in", reason: null },
         inlineSignInToken: null,
       }),
-    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.HOST_IN_ANOTHER_TEAM });
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_IN_ANOTHER_TEAM,
+      message:
+        "Claim this computer from its current team before adding it to another.",
+    });
   });
 
   it("retains a pre-existing sign-in after the team bind", async () => {

@@ -525,6 +525,7 @@ export interface DesktopFileDropsBridge {
  * `buildHostManagementBridge()`.
  */
 export interface DesktopHostManagementBridge {
+  readonly invalidateLocalTeamAdmission?: (hostId: string) => Promise<void>;
   getHostControllerStatus(): Promise<HostControllerStatus>;
   convergeReady(force: boolean): Promise<MutationOutcome<ConvergeReadyOk>>;
   applyStaged(
@@ -1705,6 +1706,9 @@ function buildDesktopHostManagement(
     getRemovalState: () => managementBridge.getRemovalState(),
     clearRemoval: () => managementBridge.clearRemoval(),
     restartHost: () => managementBridge.restartHost(),
+    invalidateLocalTeamAdmission: (hostId) =>
+      managementBridge.invalidateLocalTeamAdmission?.(hostId) ??
+      Promise.resolve(),
     getHostLogs: (input) => managementBridge.getHostLogs(input),
     runDoctor: (input) => managementBridge.runDoctor(input),
     availableVersions: (input) => managementBridge.availableVersions(input),

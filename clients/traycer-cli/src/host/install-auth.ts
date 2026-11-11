@@ -546,7 +546,7 @@ export async function useInstalledHostTeam(
     throw cliError({
       code: CLI_ERROR_CODES.HOST_IN_ANOTHER_TEAM,
       message:
-        "Return this computer from its current team before adding it to another.",
+        "Claim this computer from its current team before adding it to another.",
       details: null,
       exitCode: 1,
     });

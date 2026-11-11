@@ -15,6 +15,7 @@ import type {
   TeamComputersResult,
   SetEnvironmentBotHostResult,
 } from "@traycer-clients/shared/host-client/team-computers";
+import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import type { TeamComputerReleaseResult } from "@traycer-clients/shared/host-client/team-computer-release";
 import type { AuthService } from "@/lib/auth/auth-service";
 import {
@@ -39,6 +40,13 @@ const VIEWER_HOST_ID = "host-viewer";
 const CURRENT_USER = "user-a";
 const OTHER_USER = "user-b";
 const hostBinding = vi.hoisted((): { value: unknown } => ({ value: null }));
+const invalidateLocalTeamAdmissionAfterClaim = vi.hoisted(() =>
+  vi.fn<(hostId: string, runnerHost: IRunnerHost) => Promise<void>>(),
+);
+
+vi.mock("@/lib/host/app-local-open-auth", () => ({
+  invalidateLocalTeamAdmissionAfterClaim,
+}));
 
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
@@ -118,10 +126,11 @@ function sectionTree(
   harness: TeamPageHarness,
   environmentId: string,
   effectiveRole: "owner" | "admin" | "editor" | null,
+  runnerHost: IRunnerHost,
 ): ReactNode {
   return (
     <harness.Wrapper>
-      <RunnerHostContext.Provider value={dashboardRunnerHost()}>
+      <RunnerHostContext.Provider value={runnerHost}>
         <ConfigurationSourceContext.Provider
           value={sourceFor(environmentId, effectiveRole)}
         >
@@ -144,8 +153,11 @@ function mountSection(
       ],
     }),
   });
-  const view = render(sectionTree(harness, environmentId, effectiveRole));
-  return { harness, view };
+  const runnerHost = dashboardRunnerHost();
+  const view = render(
+    sectionTree(harness, environmentId, effectiveRole, runnerHost),
+  );
+  return { harness, view, runnerHost };
 }
 
 function setSignedInUser(userId: string): void {
@@ -156,10 +168,8 @@ function setSignedInUser(userId: string): void {
   });
 }
 
-async function openReturnDialog(user: UserEvent) {
-  await user.click(
-    screen.getByRole("button", { name: "Return this computer to its owner" }),
-  );
+async function openClaimDialog(user: UserEvent) {
+  await user.click(screen.getByRole("button", { name: "Claim this computer" }));
   return screen.findByRole("dialog");
 }
 
@@ -168,6 +178,8 @@ beforeEach(() => {
   listTeamComputers.mockReset();
   setEnvironmentBotHost.mockReset();
   releaseTeamComputer.mockReset();
+  invalidateLocalTeamAdmissionAfterClaim.mockReset();
+  invalidateLocalTeamAdmissionAfterClaim.mockResolvedValue(undefined);
   directory.refresh.mockClear();
   listTeamComputers.mockImplementation((environmentId) =>
     Promise.resolve({
@@ -308,33 +320,53 @@ describe("TeamComputersSection", () => {
     });
   });
 
-  it("lets an editor open the return confirmation and posts only after confirmation", async () => {
+  it("lets a team member claim a computer after confirming", async () => {
     const pending = Promise.withResolvers<TeamComputerReleaseResult>();
+    const admissionInvalidation = Promise.withResolvers<void>();
     releaseTeamComputer.mockReturnValue(pending.promise);
-    mountSection(ENVIRONMENT_ID, "editor");
+    invalidateLocalTeamAdmissionAfterClaim.mockReturnValue(
+      admissionInvalidation.promise,
+    );
+    const { runnerHost } = mountSection(ENVIRONMENT_ID, "editor");
     const user = userEvent.setup();
 
     expect(
       await screen.findByRole("button", {
-        name: "Return this computer to its owner",
+        name: "Claim this computer",
       }),
     ).toBeTruthy();
-    await openReturnDialog(user);
+    const dialog = await openClaimDialog(user);
+    expect(screen.getByRole("heading", { name: "Claim Studio?" })).toBeTruthy();
     expect(
-      screen.getByRole("heading", { name: "Return Studio to its owner?" }),
+      screen.getByText(
+        "This computer will become yours. The team will lose access to it.",
+      ),
     ).toBeTruthy();
     expect(releaseTeamComputer).not.toHaveBeenCalled();
 
-    await user.click(screen.getByRole("button", { name: "Return computer" }));
+    await user.click(
+      within(dialog).getByRole("button", { name: "Claim this computer" }),
+    );
 
-    const confirm = screen.getByRole("button", { name: "Return computer" });
+    const confirm = screen.getByRole("button", { name: "Claim this computer" });
     await waitFor(() => expect(confirm.hasAttribute("disabled")).toBe(true));
     expect(
-      confirm.querySelector('[data-testid="team-computer-return-progress"]'),
+      confirm.querySelector('[data-testid="team-computer-claim-progress"]'),
     ).not.toBeNull();
     await act(async () => {
       pending.resolve({ kind: "ok" });
       await pending.promise;
+    });
+    await waitFor(() =>
+      expect(invalidateLocalTeamAdmissionAfterClaim).toHaveBeenCalledWith(
+        "host-computer-a",
+        runnerHost,
+      ),
+    );
+    expect(confirm.hasAttribute("disabled")).toBe(true);
+    await act(async () => {
+      admissionInvalidation.resolve();
+      await admissionInvalidation.promise;
     });
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 
@@ -344,66 +376,83 @@ describe("TeamComputersSection", () => {
         ENVIRONMENT_ID,
       ),
     );
+    expect(invalidateLocalTeamAdmissionAfterClaim).toHaveBeenCalledTimes(1);
   });
 
-  it("does not offer return or add actions to an unknown role", async () => {
+  it("keeps claiming available when team configuration editing is not authorized", async () => {
     mountSection(ENVIRONMENT_ID, null);
+    const user = userEvent.setup();
 
     await screen.findByText("Studio");
-    expect(
-      screen.queryByRole("button", {
-        name: "Return this computer to its owner",
-      }),
-    ).toBeNull();
+    await user.click(
+      screen.getByRole("button", { name: "Claim this computer" }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    await user.click(
+      within(dialog).getByRole("button", { name: "Claim this computer" }),
+    );
+    await waitFor(() =>
+      expect(releaseTeamComputer).toHaveBeenCalledWith(
+        "host-computer-a",
+        ENVIRONMENT_ID,
+      ),
+    );
     expect(screen.queryByRole("button", { name: "Add a computer" })).toBeNull();
+    expect(
+      screen
+        .getByRole("combobox", { name: "Bot host" })
+        .hasAttribute("disabled"),
+    ).toBe(true);
     expect(
       screen.getByRole("button", { name: "Refresh" }).hasAttribute("disabled"),
     ).toBe(false);
   });
 
-  it("shows a fixed error when returning a computer fails", async () => {
+  it("shows a fixed error when claiming a computer fails", async () => {
     releaseTeamComputer.mockResolvedValue({ kind: "network-error" });
     mountSection(ENVIRONMENT_ID, "editor");
     const user = userEvent.setup();
 
-    await screen.findByRole("button", {
-      name: "Return this computer to its owner",
-    });
-    await openReturnDialog(user);
-    await user.click(screen.getByRole("button", { name: "Return computer" }));
+    await screen.findByRole("button", { name: "Claim this computer" });
+    const dialog = await openClaimDialog(user);
+    await user.click(
+      within(dialog).getByRole("button", { name: "Claim this computer" }),
+    );
 
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toBe(
-      "Could not return this computer. Refresh the list to check what changed.",
+      "Could not claim this computer. Refresh the list to check what changed.",
     );
     expect(releaseTeamComputer).toHaveBeenCalledWith(
       "host-computer-a",
       ENVIRONMENT_ID,
     );
+    expect(invalidateLocalTeamAdmissionAfterClaim).not.toHaveBeenCalled();
   });
 
-  it("clears return confirmation when the signed-in account changes", async () => {
+  it("clears claim confirmation when the signed-in account changes", async () => {
     mountSection(ENVIRONMENT_ID, "editor");
     const user = userEvent.setup();
-    await screen.findByRole("button", {
-      name: "Return this computer to its owner",
-    });
-    await openReturnDialog(user);
+    await screen.findByRole("button", { name: "Claim this computer" });
+    await openClaimDialog(user);
 
     act(() => setSignedInUser(OTHER_USER));
 
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
 
-  it("clears return confirmation when the selected environment changes", async () => {
-    const { harness, view } = mountSection(ENVIRONMENT_ID, "editor");
+  it("clears claim confirmation when the selected environment changes", async () => {
+    const { harness, view, runnerHost } = mountSection(
+      ENVIRONMENT_ID,
+      "editor",
+    );
     const user = userEvent.setup();
-    await screen.findByRole("button", {
-      name: "Return this computer to its owner",
-    });
-    await openReturnDialog(user);
+    await screen.findByRole("button", { name: "Claim this computer" });
+    await openClaimDialog(user);
 
-    view.rerender(sectionTree(harness, OTHER_ENVIRONMENT_ID, "editor"));
+    view.rerender(
+      sectionTree(harness, OTHER_ENVIRONMENT_ID, "editor", runnerHost),
+    );
 
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     await waitFor(() =>

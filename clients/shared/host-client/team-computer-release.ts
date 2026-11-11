@@ -7,7 +7,10 @@ export type TeamComputerReleaseResult =
   | { readonly kind: "unauthorized" }
   | { readonly kind: "network-error" };
 
-/** Runs in Electron main on desktop, like host-deregister-fetcher, for CORS. */
+/**
+ * Claims the computer for the signed-in team member. The existing team-release
+ * route runs in Electron main on desktop, like host-deregister-fetcher, for CORS.
+ */
 export async function releaseTeamComputerViaHttp(
   authnBaseUrl: string,
   bearer: string,

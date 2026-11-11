@@ -15,13 +15,17 @@ import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/moc
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
+import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { useEnvironmentHostReadQuery } from "@/hooks/bots/use-environment-host-read-query";
+import { useTeamComputerClaim } from "@/hooks/auth/use-team-computers";
 import {
   hostEnvironmentBindingQueryKey,
   useHostEnvironmentBindings,
 } from "@/hooks/bots/use-host-environment-bindings-query";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { RunnerHostContext } from "@/providers/runner-host-context";
+import { dashboardRunnerHost } from "@/components/settings/host-scope/__tests__/host-access-test-support";
 
 const VIEWER = "user-1";
 const TARGET_HOST = "host-9";
@@ -31,7 +35,21 @@ const bindingRef = vi.hoisted(() => ({
   current: null as {
     hostClient: HostClient<HostRpcRegistry>;
     hostId: undefined;
+    auth: {
+      releaseTeamComputer: (
+        hostId: string,
+        environmentId: string,
+      ) => Promise<{ readonly kind: "ok" }>;
+    };
+    directory: { refresh: () => Promise<void> };
   } | null,
+}));
+const invalidateLocalTeamAdmissionAfterClaim = vi.hoisted(() =>
+  vi.fn<(hostId: string, runnerHost: IRunnerHost) => Promise<void>>(),
+);
+
+vi.mock("@/lib/host/app-local-open-auth", () => ({
+  invalidateLocalTeamAdmissionAfterClaim,
 }));
 
 vi.mock("@/lib/host", async (importOriginal) => ({
@@ -64,6 +82,19 @@ const BINDING: EnvironmentHostBinding = {
   enrolledByUserId: null,
   canUnbind: false,
 };
+const TEAM_BINDING: EnvironmentHostBinding = {
+  ...BINDING,
+  environment: {
+    environmentId: "env-team",
+    ownerKind: "organization",
+    ownerId: "team-1",
+    roomId: "team-room",
+    label: "Acme",
+  },
+  explicit: true,
+  enrolledByUserId: VIEWER,
+  canUnbind: true,
+};
 
 function signInAs(status: "signed-in" | "unverified"): void {
   useAuthStore.setState({
@@ -72,11 +103,18 @@ function signInAs(status: "signed-in" | "unverified"): void {
   });
 }
 
-function mount() {
+function mount(initialBinding: EnvironmentHostBinding) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
   const reads: string[] = [];
+  let poolBinding = initialBinding;
+  const releaseTeamComputer = vi.fn(() => {
+    poolBinding = BINDING;
+    return Promise.resolve({ kind: "ok" as const });
+  });
+  const directory = { refresh: vi.fn(() => Promise.resolve()) };
+  const runnerHost = dashboardRunnerHost();
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: { invalidateHostScope: () => undefined },
@@ -90,7 +128,7 @@ function mount() {
       handlers: {
         "environment.binding.read": (params) => {
           reads.push(params.hostId);
-          return BINDING;
+          return poolBinding;
         },
       },
     }),
@@ -101,15 +139,24 @@ function mount() {
       origin: "renderer",
     }),
   );
-  bindingRef.current = { hostClient: spine, hostId: undefined };
+  bindingRef.current = {
+    hostClient: spine,
+    hostId: undefined,
+    auth: { releaseTeamComputer },
+    directory,
+  };
   const wrapper = (props: { readonly children: ReactNode }): ReactNode => (
     <QueryClientProvider client={queryClient}>
-      {props.children}
+      <RunnerHostContext.Provider value={runnerHost}>
+        {props.children}
+      </RunnerHostContext.Provider>
     </QueryClientProvider>
   );
   return {
     queryClient,
     reads,
+    releaseTeamComputer,
+    runnerHost,
     wrapper,
     client: spine.createRequester(mockLocalHostEntry),
   };
@@ -118,6 +165,8 @@ function mount() {
 describe("environment.binding.read in a pool build", () => {
   beforeEach(() => {
     settleProcessHostRpcTierPlan(POOL_ENTRY);
+    invalidateLocalTeamAdmissionAfterClaim.mockReset();
+    invalidateLocalTeamAdmissionAfterClaim.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -128,7 +177,7 @@ describe("environment.binding.read in a pool build", () => {
 
   it("is never dispatched by useHostEnvironmentBindings while the session lacks a verdict, and is once authorized", async () => {
     signInAs("unverified");
-    const fixture = mount();
+    const fixture = mount(BINDING);
     const rendered = renderHook(
       () => useHostEnvironmentBindings([TARGET_HOST], true),
       { wrapper: fixture.wrapper },
@@ -149,7 +198,7 @@ describe("environment.binding.read in a pool build", () => {
 
   it("refuses a refetch of that read once the verdict is gone, without dispatching", async () => {
     signInAs("signed-in");
-    const fixture = mount();
+    const fixture = mount(BINDING);
     renderHook(() => useHostEnvironmentBindings([TARGET_HOST], true), {
       wrapper: fixture.wrapper,
     });
@@ -176,7 +225,7 @@ describe("environment.binding.read in a pool build", () => {
 
   it("is never dispatched by useEnvironmentHostReadQuery while the session lacks a verdict, and is once authorized", async () => {
     signInAs("unverified");
-    const fixture = mount();
+    const fixture = mount(BINDING);
     const rendered = renderHook(
       () => useEnvironmentHostReadQuery(fixture.client, TARGET_HOST, true),
       { wrapper: fixture.wrapper },
@@ -195,7 +244,7 @@ describe("environment.binding.read in a pool build", () => {
 
   it("refuses a refetch of useEnvironmentHostReadQuery once the verdict is gone, without dispatching", async () => {
     signInAs("signed-in");
-    const fixture = mount();
+    const fixture = mount(BINDING);
     const rendered = renderHook(
       () => useEnvironmentHostReadQuery(fixture.client, TARGET_HOST, true),
       { wrapper: fixture.wrapper },
@@ -213,5 +262,38 @@ describe("environment.binding.read in a pool build", () => {
       "no longer holds a cloud verdict",
     );
     expect(fixture.reads).toEqual([TARGET_HOST]);
+  });
+
+  it("updates the Overview binding after a team computer is claimed", async () => {
+    signInAs("signed-in");
+    const fixture = mount(TEAM_BINDING);
+    const binding = renderHook(
+      () => useEnvironmentHostReadQuery(fixture.client, TARGET_HOST, true),
+      { wrapper: fixture.wrapper },
+    );
+    const claim = renderHook(() => useTeamComputerClaim("env-team"), {
+      wrapper: fixture.wrapper,
+    });
+
+    await waitFor(() => {
+      expect(binding.result.current.data).toEqual(TEAM_BINDING);
+    });
+
+    await act(async () => {
+      await claim.result.current.mutateAsync(TARGET_HOST);
+    });
+
+    await waitFor(() => {
+      expect(binding.result.current.data).toEqual(BINDING);
+    });
+    expect(fixture.releaseTeamComputer).toHaveBeenCalledWith(
+      TARGET_HOST,
+      "env-team",
+    );
+    expect(invalidateLocalTeamAdmissionAfterClaim).toHaveBeenCalledWith(
+      TARGET_HOST,
+      fixture.runnerHost,
+    );
+    expect(fixture.reads).toEqual([TARGET_HOST, TARGET_HOST]);
   });
 });

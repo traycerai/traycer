@@ -363,6 +363,7 @@ export const RunnerHostInvoke = {
   // post-commit activation, or clearing activation debt). Resolves a
   // `MutationOutcome`.
   traycerHostActivateInstalled: "runnerHost:traycer:host:activateInstalled",
+  invalidateLocalTeamAdmission: "runnerHost:localAdmission:invalidate",
   // Pins an explicit version (incl. downgrades). Resolves a
   // `MutationOutcome`.
   traycerHostInstallVersion: "runnerHost:traycer:host:installVersion",

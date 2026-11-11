@@ -3103,6 +3103,8 @@ export type MaintenanceDoctorProjection =
  * for every NDJSON `progress` event the CLI emits along the way.
  */
 export interface IHostManagement {
+  /** Clear cached local admission after the same host is claimed. */
+  readonly invalidateLocalTeamAdmission?: (hostId: string) => Promise<void>;
   // Two-lane canonical status (Host Update Layer Redesign Tech Plan). Read
   // once on mount to prime the shared query cache; live updates arrive via
   // the desktop-only `hostControllerStatus` push bridge (see
