@@ -7,14 +7,9 @@ import {
   vi,
   type Mock,
 } from "vitest";
-import { z } from "zod";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { buildStreamManifest } from "@traycer/protocol/framework/stream-compat";
 import { SERVES_EVERY_INSTALLED_MAJOR } from "@traycer/protocol/framework/capability-manifest";
-import {
-  defineRpcContract,
-  defineVersionedRpcRegistry,
-} from "@traycer/protocol/framework/index";
 import {
   createRequestContext,
   identityFromAuthenticatedUser,
@@ -28,6 +23,15 @@ import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/tr
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 import { MutableBearerLease } from "@traycer-clients/shared/auth/bearer-source";
 import { mockLocalHostEntry } from "../../host-client/mock/mock-host-directory";
+import {
+  echoRegistry,
+  FakeNativeWebSocket,
+  GATE_SLOTS,
+  holdEveryGateSlot,
+  NEVER_MS,
+  QUEUED_FOR_MS,
+  settle,
+} from "../../test-fixtures/dial-gate-harness";
 import { createAuthenticatedUserFixture } from "../../test-fixtures/authenticated-user";
 import { HostRequestAbortedError } from "../host-messenger";
 import type { StreamConnectionStatus } from "../i-stream-session";
@@ -38,124 +42,20 @@ import { WsRpcClient } from "../ws-rpc-client";
 import { WsStreamClient } from "../ws-stream-client";
 
 const DIAL_TIMEOUT_MS = 10_000;
-const QUEUED_FOR_MS = 15_000;
-const GATE_SLOTS = 6;
-const HOLDER_URL = "wss://holder.example.test/dial";
 const RELAY_URL = "wss://peer.example.test/attach";
-// Long enough that no liveness, backoff or ack timer fires inside a test.
-const NEVER_MS = 600_000;
-
-interface FakeEvent {
-  readonly data: string;
-  readonly code: number;
-  readonly reason: string;
-  readonly wasClean: boolean;
-}
-
-class FakeNativeWebSocket {
-  static readonly instances: FakeNativeWebSocket[] = [];
-
-  binaryType = "blob";
-  readonly sent: string[] = [];
-  closed: { readonly code: number; readonly reason: string } | null = null;
-  private readonly listeners = new Map<
-    string,
-    Array<(event: FakeEvent) => void>
-  >();
-
-  constructor(readonly url: string) {
-    FakeNativeWebSocket.instances.push(this);
-  }
-
-  addEventListener(type: string, listener: (event: FakeEvent) => void): void {
-    const existing = this.listeners.get(type);
-    if (existing === undefined) {
-      this.listeners.set(type, [listener]);
-    } else {
-      existing.push(listener);
-    }
-  }
-
-  send(data: string): void {
-    this.sent.push(data);
-  }
-
-  close(code: number, reason: string): void {
-    this.closed = { code, reason };
-  }
-
-  fireOpen(): void {
-    this.fire("open", { data: "", code: 0, reason: "", wasClean: true });
-  }
-
-  fireMessage(data: string): void {
-    this.fire("message", { data, code: 0, reason: "", wasClean: true });
-  }
-
-  fireClose(code: number, reason: string): void {
-    this.fire("close", { data: "", code, reason, wasClean: false });
-  }
-
-  private fire(type: string, event: FakeEvent): void {
-    for (const listener of this.listeners.get(type) ?? []) {
-      listener(event);
-    }
-  }
-}
-
-const echoV10 = defineRpcContract({
-  method: "host.echo",
-  schemaVersion: { major: 1, minor: 0 } as const,
-  requestSchema: z.object({ message: z.string() }),
-  responseSchema: z.object({ echoed: z.string() }),
-});
-
-const echoRegistry = defineVersionedRpcRegistry({
-  "host.echo": {
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: { contract: echoV10, upgradeFromPreviousVersion: null },
-      },
-      downgradePathsFromLatest: {},
-    },
-  },
-});
 
 const REQUEST_ID = "req-dial-gate";
-
-function instances(): FakeNativeWebSocket[] {
-  return FakeNativeWebSocket.instances;
-}
-
-async function settle(): Promise<void> {
-  await vi.advanceTimersByTimeAsync(0);
-}
-
-/**
- * Six dials through the real factory with no client attached, so nothing
- * times a holder out and every slot stays taken until a test opens one.
- */
-async function holdEveryGateSlot(): Promise<FakeNativeWebSocket[]> {
-  const factory = createWhatwgWebSocketFactory();
-  for (let slot = 0; slot < GATE_SLOTS; slot += 1) {
-    factory.create(HOLDER_URL, "interactive");
-  }
-  await settle();
-  expect(hostDialGate.stats().connecting).toBe(GATE_SLOTS);
-  return instances().slice(0, GATE_SLOTS);
-}
 
 async function queueFor15sThenFreeASlot(
   holders: readonly FakeNativeWebSocket[],
 ): Promise<FakeNativeWebSocket> {
-  const before = instances().length;
+  const before = FakeNativeWebSocket.instances.length;
   await vi.advanceTimersByTimeAsync(QUEUED_FOR_MS);
-  expect(instances()).toHaveLength(before);
+  expect(FakeNativeWebSocket.instances).toHaveLength(before);
   holders[0].fireOpen();
   await settle();
-  expect(instances()).toHaveLength(before + 1);
-  return instances()[before];
+  expect(FakeNativeWebSocket.instances).toHaveLength(before + 1);
+  return FakeNativeWebSocket.instances[before];
 }
 
 function newRpcClient(): WsRpcClient<typeof echoRegistry> {
@@ -286,7 +186,7 @@ describe("dial timers start when the dial gate grants a slot", () => {
     }
     // A real socket reports its close after close() is called; the fake does
     // not, so every slot still held is handed back here.
-    for (const native of instances()) {
+    for (const native of FakeNativeWebSocket.instances) {
       native.fireClose(1006, "test-cleanup");
     }
     await settle();
@@ -389,7 +289,7 @@ describe("dial timers start when the dial gate grants a slot", () => {
 
       holders[0].fireOpen();
       await settle();
-      expect(instances()).toHaveLength(GATE_SLOTS);
+      expect(FakeNativeWebSocket.instances).toHaveLength(GATE_SLOTS);
       expect(vi.getTimerCount()).toBe(0);
     });
   });

@@ -46,12 +46,20 @@ import {
   type RemoteSessionEvidence,
   type RemoteSessionTransportKind,
 } from "@traycer/protocol/host-transport/remote/session";
-import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import type { BearerSourceProvider } from "@traycer-clients/shared/auth/bearer-source";
-import { DefaultRequestContextProvider } from "@traycer-clients/shared/auth/request-context-provider";
+import {
+  FakeNativeWebSocket,
+  HOLDER_URL,
+  holdEveryGateSlot,
+  liveBearer,
+  newProvider,
+  QUEUED_FOR_MS,
+  signIn,
+  USER_A,
+  USER_B,
+} from "../../../test-fixtures/dial-gate-harness";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
-import { createAuthenticatedUserFixture } from "../../../test-fixtures/authenticated-user";
 import type { PoolHostDirectoryEntry } from "../../../host-client/host-directory";
 import { retireAllRemoteSessions } from "../active-remote-sessions";
 import {
@@ -62,11 +70,8 @@ import type { IRemoteSession } from "../remote-session";
 import { createWhatwgStreamWebSocketFactory } from "../../whatwg-stream-ws-factory";
 import { hostDialGate } from "../../ws-dial-gate";
 
-const SLOTS = 6;
-const QUEUED_FOR_MS = 15_000;
 const ATTACH_URL = "wss://relay.test/attach";
 const POOL_URL = "wss://pool.test/stream";
-const HOLDER_URL = "wss://holder.test/dial";
 const EMPTY_AD = new Uint8Array(0);
 /** The authn default and cap for an attach grant. */
 const GRANT_LIFETIME_SECONDS = 300;
@@ -529,48 +534,28 @@ class FakeRelay {
   }
 }
 
-interface NativeEvent {
-  readonly data: string | ArrayBuffer;
-  readonly code: number;
-  readonly reason: string;
-  readonly wasClean: boolean;
-}
-
 let currentRelay: FakeRelay | null = null;
 
 /** The global WebSocket the real stream factory builds once the gate grants. */
-class FakeNativeWebSocket implements NativeSurface {
-  static readonly instances: FakeNativeWebSocket[] = [];
-
-  binaryType = "blob";
+class RelayNativeWebSocket
+  extends FakeNativeWebSocket
+  implements NativeSurface
+{
   readonly leg: Leg | null;
-  private readonly listeners = new Map<
-    string,
-    Array<(event: NativeEvent) => void>
-  >();
 
-  constructor(readonly url: string) {
-    FakeNativeWebSocket.instances.push(this);
+  constructor(url: string) {
+    super(url);
     this.leg =
       url === HOLDER_URL || currentRelay === null
         ? null
         : currentRelay.attach(this, url);
   }
 
-  addEventListener(type: string, listener: (event: NativeEvent) => void): void {
-    const existing = this.listeners.get(type);
-    if (existing === undefined) {
-      this.listeners.set(type, [listener]);
-    } else {
-      existing.push(listener);
-    }
-  }
-
-  send(data: string | Uint8Array): void {
+  override send(data: string | Uint8Array): void {
     this.leg?.send(data);
   }
 
-  close(): void {
+  override close(): void {
     this.leg?.close();
   }
 
@@ -580,9 +565,7 @@ class FakeNativeWebSocket implements NativeSurface {
     code: number,
     reason: string,
   ): void {
-    for (const listener of this.listeners.get(type) ?? []) {
-      listener({ data, code, reason, wasClean: false });
-    }
+    this.dispatch(type, { data, code, reason, wasClean: false });
   }
 }
 
@@ -687,34 +670,6 @@ function countingGrants(
   };
 }
 
-const USER_A = "user-a";
-const USER_B = "user-b";
-
-function userFixture(userId: string): AuthenticatedUser {
-  const base = createAuthenticatedUserFixture(undefined);
-  return { ...base, user: { ...base.user, id: userId } };
-}
-
-function signIn(
-  provider: DefaultRequestContextProvider,
-  userId: string,
-  bearerToken: string,
-): void {
-  provider.setSignedIn({
-    user: userFixture(userId),
-    bearerToken,
-    operationId: undefined,
-    externalAbortSignal: undefined,
-  });
-}
-
-/** What a composition root wires: a live read of whichever context is current. */
-function liveBearer(
-  provider: DefaultRequestContextProvider,
-): BearerSourceProvider {
-  return () => provider.current()?.credentials ?? null;
-}
-
 type TransportView = IRemoteSession<
   VersionedRpcRegistry,
   VersionedStreamRpcRegistry
@@ -744,18 +699,6 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
   const views: TransportView[] = [];
   const mintAuthorizations: Array<string | null> = [];
   let relay: FakeRelay;
-
-  async function holdEverySlot(): Promise<FakeNativeWebSocket[]> {
-    const factory = createWhatwgStreamWebSocketFactory();
-    for (let slot = 0; slot < SLOTS; slot += 1) {
-      factory.create(HOLDER_URL, "interactive");
-    }
-    await step(0);
-    expect(hostDialGate.stats().connecting).toBe(SLOTS);
-    return FakeNativeWebSocket.instances.filter(
-      (native) => native.url === HOLDER_URL,
-    );
-  }
 
   /**
    * Milliseconds after `origin` at which each refusal was reported, leaving
@@ -897,7 +840,7 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     countWebCrypto();
     vi.spyOn(console, "info").mockImplementation(() => undefined);
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    vi.stubGlobal("WebSocket", FakeNativeWebSocket);
+    vi.stubGlobal("WebSocket", RelayNativeWebSocket);
     FakeNativeWebSocket.instances.length = 0;
     relay = new FakeRelay();
     currentRelay = relay;
@@ -914,7 +857,7 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     // A real socket reports its close after close() is called; the fake does
     // not, so every slot still held is handed back here.
     for (const native of FakeNativeWebSocket.instances) {
-      native.fire("close", "", 1006, "test-cleanup");
+      native.fireClose(1006, "test-cleanup");
     }
     await step(0);
     expect(hostDialGate.stats()).toMatchObject({ connecting: 0, queued: 0 });
@@ -925,7 +868,7 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
   });
 
   it("does not count time queued for a dial slot against an initial relay attach", async () => {
-    const holders = await holdEverySlot();
+    const holders = await holdEveryGateSlot();
     const { session, evidence, grants } = buildRelayFixture(
       "host-queued-attach",
       0,
@@ -940,7 +883,7 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     expect(grants.count).toBe(1);
     expect(relay.legs).toHaveLength(0);
 
-    holders[0].fire("close", "", 1006, "released");
+    holders[0].fireClose(1006, "released");
     await advanceUntil(() => session.isReady(), 5_000);
 
     expect(refusalOffsets(evidence, queuedAt, 0)).toEqual([]);
@@ -967,7 +910,7 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
   });
 
   it("does not count time queued for a dial slot against a direct pool attach", async () => {
-    const holders = await holdEverySlot();
+    const holders = await holdEveryGateSlot();
     const evidence = new RecordingEvidence<"pool-direct">();
     let nextRequestId = 0;
     const session: Session = new RemoteSession({
@@ -996,7 +939,7 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     expect(refusalOffsets(evidence, queuedAt, 0)).toEqual([]);
     expect(relay.legs).toHaveLength(0);
 
-    holders[0].fire("close", "", 1006, "released");
+    holders[0].fireClose(1006, "released");
     await advanceUntil(() => relay.legs.length === 1, 5_000);
     await step(0);
 
@@ -1015,7 +958,7 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     expect(grants.count).toBe(1);
 
     expect(evidence.refusals).toEqual([]);
-    const holders = await holdEverySlot();
+    const holders = await holdEveryGateSlot();
     relay.dropLeg(1006, "net");
     await advanceUntil(() => hostDialGate.stats().queued === 1, 5_000);
     const queuedAt = Date.now();
@@ -1026,7 +969,7 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     expect(grants.count).toBe(2);
     expect(relay.legs).toHaveLength(1);
 
-    holders[0].fire("close", "", 1006, "released");
+    holders[0].fireClose(1006, "released");
     await advanceUntil(() => relay.resumes.length === 1, 5_000);
     await advanceUntil(() => session.isReady(), 5_000);
 
@@ -1037,7 +980,7 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
   });
 
   it("retires a dial whose grant expired in the queue as indeterminate, then attaches on a fresh grant", async () => {
-    const holders = await holdEverySlot();
+    const holders = await holdEveryGateSlot();
     const { session, evidence, grants } = buildRelayFixture(
       "host-expired-attach",
       0,
@@ -1049,7 +992,7 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     expect(refusalOffsets(evidence, queuedAt, 0)).toEqual([]);
     expect(grants.count).toBe(1);
 
-    holders[0].fire("close", "", 1006, "released");
+    holders[0].fireClose(1006, "released");
     await advanceUntil(() => relay.legs.length === 1, 5_000);
     await step(0);
 
@@ -1073,7 +1016,7 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     const hostSession = relay.host();
     expect(grants.count).toBe(1);
 
-    const holders = await holdEverySlot();
+    const holders = await holdEveryGateSlot();
     relay.dropLeg(1006, "net");
     await advanceUntil(() => hostDialGate.stats().queued === 1, 5_000);
     const queuedAt = Date.now();
@@ -1083,7 +1026,7 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     expect(refusalOffsets(evidence, queuedAt, reportedAtDrop)).toEqual([]);
     expect(grants.count).toBe(2);
 
-    holders[0].fire("close", "", 1006, "released");
+    holders[0].fireClose(1006, "released");
     await advanceUntil(() => relay.legs.length === 2, 5_000);
     await step(0);
 
@@ -1150,7 +1093,7 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     expect(evidence.refusals.length).toBeGreaterThan(reportedAtDrop);
   });
   it("retires a dial the relay rejected for an expired grant as indeterminate when the grant took a while to arrive", async () => {
-    const holders = await holdEverySlot();
+    const holders = await holdEveryGateSlot();
     const { session, evidence, grants } = buildRelayFixture(
       "host-slow-grant-attach",
       SLOW_GRANT_MS,
@@ -1159,7 +1102,7 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     await advanceUntil(() => hostDialGate.stats().queued === 1, 20_000);
     await step(grants.mintedAt[0] + SLOW_RELEASE_MS - Date.now());
 
-    holders[0].fire("close", "", 1006, "released");
+    holders[0].fireClose(1006, "released");
     await advanceUntil(() => relay.legs.length === 1, 5_000);
     await step(0);
 
@@ -1180,14 +1123,14 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     session.start();
     await advanceUntil(() => session.isReady(), 20_000);
 
-    const holders = await holdEverySlot();
+    const holders = await holdEveryGateSlot();
     relay.dropLeg(1006, "net");
     await advanceUntil(() => hostDialGate.stats().queued === 1, 20_000);
     const reportedAtDrop = evidence.refusals.length;
     const indeterminateAtDrop = evidence.indeterminates.length;
     await step(grants.mintedAt[1] + SLOW_RELEASE_MS - Date.now());
 
-    holders[0].fire("close", "", 1006, "released");
+    holders[0].fireClose(1006, "released");
     await advanceUntil(() => relay.legs.length === 2, 5_000);
     await step(0);
 
@@ -1202,7 +1145,7 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
 
   it("still reports one refusal when a dial on a live grant that took a while to arrive fails before it opens", async () => {
     relay.autoOpen = "fail";
-    const holders = await holdEverySlot();
+    const holders = await holdEveryGateSlot();
     const { session, evidence, grants } = buildRelayFixture(
       "host-slow-grant-live",
       SLOW_GRANT_MS,
@@ -1211,7 +1154,7 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     await advanceUntil(() => hostDialGate.stats().queued === 1, 20_000);
     await step(grants.mintedAt[0] + SLOW_LIVE_RELEASE_MS - Date.now());
 
-    holders[0].fire("close", "", 1006, "released");
+    holders[0].fireClose(1006, "released");
     await advanceUntil(() => relay.legs.length === 1, 5_000);
     await step(0);
 
@@ -1220,10 +1163,10 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
   });
 
   it("sends no other-identity bearer in the OPEN frame when the account switched during the queued attach", async () => {
-    const provider = new DefaultRequestContextProvider({ origin: "renderer" });
+    const provider = newProvider();
     signIn(provider, USER_A, "token-a");
     stubGrantEndpoint();
-    const holders = await holdEverySlot();
+    const holders = await holdEveryGateSlot();
     const view = buildHostTransport(
       "host-switched-attach",
       liveBearer(provider),
@@ -1233,7 +1176,7 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
 
     signIn(provider, USER_B, "token-b");
     await step(QUEUED_FOR_MS);
-    holders[0].fire("close", "", 1006, "released");
+    holders[0].fireClose(1006, "released");
     await untilOpenFrameOrBackoff();
 
     expect(relay.openBearers).not.toContain("token-b");
@@ -1241,10 +1184,10 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
   });
 
   it("opens with the new token after a same-user re-sign-in during the queued attach", async () => {
-    const provider = new DefaultRequestContextProvider({ origin: "renderer" });
+    const provider = newProvider();
     signIn(provider, USER_A, "token-a");
     stubGrantEndpoint();
-    const holders = await holdEverySlot();
+    const holders = await holdEveryGateSlot();
     const view = buildHostTransport(
       "host-resigned-attach",
       liveBearer(provider),
@@ -1254,14 +1197,14 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
 
     signIn(provider, USER_A, "token-a2");
     await step(QUEUED_FOR_MS);
-    holders[0].fire("close", "", 1006, "released");
+    holders[0].fireClose(1006, "released");
     await advanceUntil(() => relay.openBearers.length === 1, 5_000);
 
     expect(relay.openBearers).toEqual(["token-a2"]);
   });
 
   it("mints no grant and sends no OPEN for another identity when the account switched before the next dial", async () => {
-    const provider = new DefaultRequestContextProvider({ origin: "renderer" });
+    const provider = newProvider();
     signIn(provider, USER_A, "token-a");
     stubGrantEndpoint();
     const view = buildHostTransport(
@@ -1286,16 +1229,16 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
 
   it("sends no other-identity bearer to the pool when the account switched during the queued attach", async () => {
     relay.autoOpen = "plain";
-    const provider = new DefaultRequestContextProvider({ origin: "renderer" });
+    const provider = newProvider();
     signIn(provider, USER_A, "token-a");
-    const holders = await holdEverySlot();
+    const holders = await holdEveryGateSlot();
     const view = buildPoolTransport(liveBearer(provider));
     view.start();
     await advanceUntil(() => hostDialGate.stats().queued === 1, 5_000);
 
     signIn(provider, USER_B, "token-b");
     await step(QUEUED_FOR_MS);
-    holders[0].fire("close", "", 1006, "released");
+    holders[0].fireClose(1006, "released");
     await untilOpenFrameOrBackoff();
 
     expect(relay.openBearers).not.toContain("token-b");
@@ -1303,16 +1246,16 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
 
   it("opens the pool with the new token after a same-user re-sign-in during the queued attach", async () => {
     relay.autoOpen = "plain";
-    const provider = new DefaultRequestContextProvider({ origin: "renderer" });
+    const provider = newProvider();
     signIn(provider, USER_A, "token-a");
-    const holders = await holdEverySlot();
+    const holders = await holdEveryGateSlot();
     const view = buildPoolTransport(liveBearer(provider));
     view.start();
     await advanceUntil(() => hostDialGate.stats().queued === 1, 5_000);
 
     signIn(provider, USER_A, "token-a2");
     await step(QUEUED_FOR_MS);
-    holders[0].fire("close", "", 1006, "released");
+    holders[0].fireClose(1006, "released");
     await advanceUntil(() => relay.openBearers.length === 1, 5_000);
 
     expect(relay.openBearers).toEqual(["token-a2"]);

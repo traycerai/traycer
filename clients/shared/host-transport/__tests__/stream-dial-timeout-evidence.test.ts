@@ -17,6 +17,11 @@ import {
   type RecordingAuthorityLog,
 } from "../../host-selection/__tests__/selection-authority-harness";
 import { mockLocalHostEntry } from "../../host-client/mock/mock-host-directory";
+import {
+  FakeNativeWebSocket,
+  NEVER_MS,
+  settle,
+} from "../../test-fixtures/dial-gate-harness";
 import { createAuthenticatedUserFixture } from "../../test-fixtures/authenticated-user";
 import { createWhatwgStreamWebSocketFactory } from "../whatwg-stream-ws-factory";
 import { hostDialGate } from "../ws-dial-gate";
@@ -25,56 +30,7 @@ import { WsStreamClient } from "../ws-stream-client";
 const DIAL_TIMEOUT_MS = 10_000;
 const SESSIONS_PER_STALL = 6;
 const REDIAL_BACKOFF_MS = 50;
-// Long enough that no redial, ping or ack timer fires inside a test.
-const NEVER_MS = 600_000;
 const DIAL_EVIDENCE_MESSAGE = "[selection-authority] dial evidence";
-
-interface FakeEvent {
-  readonly data: string;
-  readonly code: number;
-  readonly reason: string;
-  readonly wasClean: boolean;
-}
-
-class FakeNativeWebSocket {
-  static readonly instances: FakeNativeWebSocket[] = [];
-
-  binaryType = "blob";
-  closed: { readonly code: number; readonly reason: string } | null = null;
-  private readonly listeners = new Map<
-    string,
-    Array<(event: FakeEvent) => void>
-  >();
-
-  constructor(readonly url: string) {
-    FakeNativeWebSocket.instances.push(this);
-  }
-
-  addEventListener(type: string, listener: (event: FakeEvent) => void): void {
-    const existing = this.listeners.get(type);
-    if (existing === undefined) {
-      this.listeners.set(type, [listener]);
-    } else {
-      existing.push(listener);
-    }
-  }
-
-  send(): void {}
-
-  close(code: number, reason: string): void {
-    this.closed = { code, reason };
-  }
-
-  fireClose(code: number, reason: string): void {
-    for (const listener of this.listeners.get("close") ?? []) {
-      listener({ data: "", code, reason, wasClean: false });
-    }
-  }
-}
-
-async function settle(): Promise<void> {
-  await vi.advanceTimersByTimeAsync(0);
-}
 
 interface Rig {
   readonly log: RecordingAuthorityLog;

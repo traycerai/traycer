@@ -1,11 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { z } from "zod";
-import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
-import {
-  defineRpcContract,
-  defineVersionedRpcRegistry,
-} from "@traycer/protocol/framework/index";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 import { buildStreamManifest } from "@traycer/protocol/framework/stream-compat";
@@ -15,9 +9,22 @@ import {
   type BearerSourceProvider,
   type OpenFrameBearerSource,
 } from "@traycer-clients/shared/auth/bearer-source";
-import { DefaultRequestContextProvider } from "@traycer-clients/shared/auth/request-context-provider";
-import { createAuthenticatedUserFixture } from "../../test-fixtures/authenticated-user";
 import { mockLocalHostEntry } from "../../host-client/mock/mock-host-directory";
+import {
+  echoRegistry,
+  FakeNativeWebSocket,
+  GATE_SLOTS,
+  holdEveryGateSlot,
+  liveBearer,
+  NEVER_MS,
+  newProvider,
+  QUEUED_FOR_MS,
+  settle,
+  signIn,
+  USER_A,
+  USER_B,
+  userFixture,
+} from "../../test-fixtures/dial-gate-harness";
 import { HostRpcError } from "../host-messenger";
 import type { StreamConnectionStatus } from "../i-stream-session";
 import { createWhatwgStreamWebSocketFactory } from "../whatwg-stream-ws-factory";
@@ -26,112 +33,9 @@ import { hostDialGate } from "../ws-dial-gate";
 import { WsRpcClient } from "../ws-rpc-client";
 import { WsStreamClient } from "../ws-stream-client";
 
-const QUEUED_FOR_MS = 15_000;
-const GATE_SLOTS = 6;
-const HOLDER_URL = "wss://holder.example.test/dial";
-// Long enough that no redial, ping, ack or frame timer fires inside a test.
-const NEVER_MS = 600_000;
 const REQUEST_ID = "req-open-frame-bearer";
 const REDIAL_BACKOFF_MS = 50;
 const REDIAL_WINDOW_MS = 500;
-const USER_A = "user-a";
-const USER_B = "user-b";
-
-interface FakeEvent {
-  readonly data: string;
-  readonly code: number;
-  readonly reason: string;
-  readonly wasClean: boolean;
-}
-
-class FakeNativeWebSocket {
-  static readonly instances: FakeNativeWebSocket[] = [];
-
-  binaryType = "blob";
-  readonly sent: string[] = [];
-  closed: { readonly code: number; readonly reason: string } | null = null;
-  private readonly listeners = new Map<
-    string,
-    Array<(event: FakeEvent) => void>
-  >();
-
-  constructor(readonly url: string) {
-    FakeNativeWebSocket.instances.push(this);
-  }
-
-  addEventListener(type: string, listener: (event: FakeEvent) => void): void {
-    const existing = this.listeners.get(type);
-    if (existing === undefined) {
-      this.listeners.set(type, [listener]);
-    } else {
-      existing.push(listener);
-    }
-  }
-
-  send(data: string): void {
-    this.sent.push(data);
-  }
-
-  close(code: number, reason: string): void {
-    this.closed = { code, reason };
-  }
-
-  fireOpen(): void {
-    this.fire("open", "");
-  }
-
-  fireClose(): void {
-    this.fire("close", "");
-  }
-
-  fireMessage(data: string): void {
-    this.fire("message", data);
-  }
-
-  private fire(type: string, data: string): void {
-    for (const listener of this.listeners.get(type) ?? []) {
-      listener({ data, code: 1006, reason: "test", wasClean: false });
-    }
-  }
-}
-
-const echoV10 = defineRpcContract({
-  method: "host.echo",
-  schemaVersion: { major: 1, minor: 0 } as const,
-  requestSchema: z.object({ message: z.string() }),
-  responseSchema: z.object({ echoed: z.string() }),
-});
-
-const echoRegistry = defineVersionedRpcRegistry({
-  "host.echo": {
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: { contract: echoV10, upgradeFromPreviousVersion: null },
-      },
-      downgradePathsFromLatest: {},
-    },
-  },
-});
-
-function instances(): FakeNativeWebSocket[] {
-  return FakeNativeWebSocket.instances;
-}
-
-async function settle(): Promise<void> {
-  await vi.advanceTimersByTimeAsync(0);
-}
-
-/** Six real dials with no client attached: every slot stays taken. */
-async function holdEveryGateSlot(): Promise<FakeNativeWebSocket[]> {
-  const factory = createWhatwgWebSocketFactory();
-  for (let slot = 0; slot < GATE_SLOTS; slot += 1) {
-    factory.create(HOLDER_URL, "interactive");
-  }
-  await settle();
-  expect(hostDialGate.stats().connecting).toBe(GATE_SLOTS);
-  return instances().slice(0, GATE_SLOTS);
-}
 
 /**
  * Waits behind the held slots for 15 s, then frees one: the native of the
@@ -155,11 +59,11 @@ async function grantAndOpenAfterWait(
   expect(hostDialGate.stats().queued).toBe(1);
   duringWait();
   await vi.advanceTimersByTimeAsync(QUEUED_FOR_MS);
-  expect(instances()).toHaveLength(GATE_SLOTS);
+  expect(FakeNativeWebSocket.instances).toHaveLength(GATE_SLOTS);
   holders[0].fireOpen();
   await settle();
-  expect(instances()).toHaveLength(GATE_SLOTS + 1);
-  const native = instances()[GATE_SLOTS];
+  expect(FakeNativeWebSocket.instances).toHaveLength(GATE_SLOTS + 1);
+  const native = FakeNativeWebSocket.instances[GATE_SLOTS];
   native.fireOpen();
   await settle();
   return native;
@@ -230,39 +134,10 @@ function startEchoFor(
   return { outcome, isSettled: () => settled };
 }
 
-function userFixture(userId: string): AuthenticatedUser {
-  const base = createAuthenticatedUserFixture(undefined);
-  return { ...base, user: { ...base.user, id: userId } };
-}
-
-function newProvider(): DefaultRequestContextProvider {
-  return new DefaultRequestContextProvider({ origin: "renderer" });
-}
-
-function signIn(
-  provider: DefaultRequestContextProvider,
-  userId: string,
-  bearerToken: string,
-): void {
-  provider.setSignedIn({
-    user: userFixture(userId),
-    bearerToken,
-    operationId: undefined,
-    externalAbortSignal: undefined,
-  });
-}
-
-/** What a composition root wires: a live read of whichever context is current. */
-function liveBearer(
-  provider: DefaultRequestContextProvider,
-): BearerSourceProvider {
-  return () => provider.current()?.credentials ?? null;
-}
-
 /** Every token any frame sent on any fake socket carried, in send order. */
 function sentTokens(): unknown[] {
   const tokens: unknown[] = [];
-  for (const native of instances()) {
+  for (const native of FakeNativeWebSocket.instances) {
     for (const raw of native.sent) {
       const frame: unknown = JSON.parse(raw);
       if (typeof frame === "object" && frame !== null && "token" in frame) {
@@ -299,8 +174,8 @@ describe("open frame bearer after a wait for a dial slot", () => {
     }
     // A real socket reports its close after close() is called; the fake does
     // not, so every slot still held is handed back here.
-    for (const native of instances()) {
-      native.fireClose();
+    for (const native of FakeNativeWebSocket.instances) {
+      native.fireClose(1006, "test");
     }
     await settle();
     expect(hostDialGate.stats()).toMatchObject({ connecting: 0, queued: 0 });
@@ -388,21 +263,21 @@ describe("open frame bearer after a wait for a dial slot", () => {
         signIn(provider, USER_A, "token-a");
         subscribeWith(liveBearer(provider), REDIAL_BACKOFF_MS);
         await settle();
-        const first = instances()[0];
+        const first = FakeNativeWebSocket.instances[0];
         first.fireOpen();
         first.fireMessage(openAckAdvertisingCredentialUpdate());
         await settle();
 
-        first.fireClose();
-        const socketsBeforeSwitch = instances().length;
+        first.fireClose(1006, "test");
+        const socketsBeforeSwitch = FakeNativeWebSocket.instances.length;
         signIn(provider, USER_B, "token-b");
         await vi.advanceTimersByTimeAsync(REDIAL_WINDOW_MS);
-        for (const native of instances().slice(1)) {
+        for (const native of FakeNativeWebSocket.instances.slice(1)) {
           native.fireOpen();
         }
         await settle();
 
-        expect(instances()).toHaveLength(socketsBeforeSwitch);
+        expect(FakeNativeWebSocket.instances).toHaveLength(socketsBeforeSwitch);
         expect(sentTokens()).not.toContain("token-b");
       });
 
@@ -425,7 +300,7 @@ describe("open frame bearer after a wait for a dial slot", () => {
         signIn(provider, USER_A, "token-a");
         const { client } = subscribeWith(liveBearer(provider), NEVER_MS);
         await settle();
-        const native = instances()[0];
+        const native = FakeNativeWebSocket.instances[0];
         native.fireOpen();
         native.fireMessage(openAckAdvertisingCredentialUpdate());
         await settle();
@@ -442,7 +317,7 @@ describe("open frame bearer after a wait for a dial slot", () => {
         signIn(provider, USER_A, "token-a");
         subscribeWith(liveBearer(provider), NEVER_MS);
         await settle();
-        const native = instances()[0];
+        const native = FakeNativeWebSocket.instances[0];
         native.fireOpen();
         await settle();
 
@@ -473,15 +348,15 @@ describe("open frame bearer after a wait for a dial slot", () => {
         signIn(provider, USER_A, "token-a");
         subscribeWith(liveBearer(provider), REDIAL_BACKOFF_MS);
         await settle();
-        const first = instances()[0];
+        const first = FakeNativeWebSocket.instances[0];
         first.fireOpen();
         first.fireMessage(openAckAdvertisingCredentialUpdate());
         await settle();
 
-        first.fireClose();
+        first.fireClose(1006, "test");
         signIn(provider, USER_A, "token-a2");
         await vi.advanceTimersByTimeAsync(REDIAL_WINDOW_MS);
-        for (const native of instances().slice(1)) {
+        for (const native of FakeNativeWebSocket.instances.slice(1)) {
           native.fireOpen();
         }
         await settle();
@@ -494,7 +369,7 @@ describe("open frame bearer after a wait for a dial slot", () => {
         signIn(provider, USER_A, "token-a");
         const { client } = subscribeWith(liveBearer(provider), NEVER_MS);
         await settle();
-        const first = instances()[0];
+        const first = FakeNativeWebSocket.instances[0];
         first.fireOpen();
         first.fireMessage(openAckAdvertisingCredentialUpdate());
         await settle();
@@ -505,7 +380,7 @@ describe("open frame bearer after a wait for a dial slot", () => {
           second.close();
         });
         await settle();
-        for (const native of instances().slice(1)) {
+        for (const native of FakeNativeWebSocket.instances.slice(1)) {
           native.fireOpen();
         }
         await settle();
@@ -518,7 +393,7 @@ describe("open frame bearer after a wait for a dial slot", () => {
         signIn(provider, USER_A, "token-a");
         const { client } = subscribeWith(liveBearer(provider), NEVER_MS);
         await settle();
-        const native = instances()[0];
+        const native = FakeNativeWebSocket.instances[0];
         native.fireOpen();
         native.fireMessage(openAckAdvertisingCredentialUpdate());
         await settle();
