@@ -470,6 +470,8 @@ import { BotTabSurface } from "@/components/bots/bot-tab-surface";
 import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
 
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { NotificationFeedModeContext } from "@/lib/notifications/notification-feed-mode-context";
+import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
 import {
   boxInput,
   typeInto,
@@ -512,7 +514,21 @@ beforeEach(() => {
   resetBotTabSurfaceMocks();
 });
 
+/** The Activity count over a cloud feed that is connected with its snapshot, so a quiet seen task has been proved quiet by every source. */
+function renderOverCloudFeed(): void {
+  useCloudNotificationsStore.setState({
+    hasSnapshot: true,
+    connectionState: "connected",
+  });
+  render(
+    <NotificationFeedModeContext.Provider value="cloud">
+      {surface()}
+    </NotificationFeedModeContext.Provider>,
+  );
+}
+
 afterEach(() => {
+  useCloudNotificationsStore.getState().reset();
   endBotTabSurfaceCase(queryClient);
 });
 
@@ -904,6 +920,8 @@ describe("<BotTabSurface /> views", () => {
           state: "ended",
           endedReason: "completed",
           lastCheckinAt: 1_000,
+          // Known to wait on no one: `null` would say the host cannot tell.
+          inputNeeded: [],
         },
       ],
     };
@@ -913,7 +931,7 @@ describe("<BotTabSurface /> views", () => {
       "cloud",
       "connected",
     );
-    render(surface());
+    renderOverCloudFeed();
     await user.click(activityTab());
 
     const shown = screen
@@ -934,6 +952,16 @@ describe("<BotTabSurface /> views", () => {
   });
 
   it("rule 6: shows no count when no task is active", () => {
+    // The indicator read is made for a signed-in member.
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: {
+        userId: "user-ada",
+        userName: "Ada",
+        email: "ada@example.com",
+      },
+      contextMetadata: { userId: "user-ada", username: "ada" },
+    });
     mocks.state.snapshot = {
       ...snapshot(),
       tasks: [
@@ -943,13 +971,15 @@ describe("<BotTabSurface /> views", () => {
           state: "ended",
           endedReason: "completed",
           lastCheckinAt: 1_000,
+          // Known to wait on no one: `null` would say the host cannot tell.
+          inputNeeded: [],
         },
       ],
     };
     // The whole fleet is vouched, so the quiet task may leave the list.
     __setAgentActivityPlaneAnsweringForTests();
     __setAgentActivityStateForTests({}, "cloud", "connected");
-    render(surface());
+    renderOverCloudFeed();
 
     expect(screen.queryByTestId("bot-tab-activity-count")).toBeNull();
     expect(visibleTabText()).toBe("Activity");

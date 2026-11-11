@@ -354,6 +354,8 @@ export const botSubscriptionMock = {
     mocks.subscribed.push(input.botId);
     return {
       snapshot: mocks.state.snapshot,
+      // A held snapshot is one the live stream delivered.
+      snapshotFresh: mocks.state.snapshot !== null,
       deleted: mocks.state.deleted,
       error: mocks.state.error,
       isPending: mocks.state.snapshot === null,
