@@ -9,6 +9,8 @@ import {
   fetchEnvironmentInvitations,
   acceptEnvironmentInvitation,
 } from "@traycer-clients/shared/auth/environment-invitations";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import { DefaultRequestContextProvider } from "@traycer-clients/shared/auth/request-context-provider";
 import { InviteAcceptDialog } from "@/components/settings/members/invite-accept-dialog";
 import { TeamRows } from "@/components/settings/environment/team-rows";
 import {
@@ -21,6 +23,7 @@ import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
 import type { HostRpcRegistry } from "@/lib/host";
 import { HostRuntimeContext } from "@/lib/host/runtime";
 import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
+import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { negotiateMethods } from "./mcp-skills-test-support";
@@ -75,7 +78,9 @@ const TEST_BEARER = "invitation-test-bearer";
 
 type InvitationAuth = Pick<
   AuthService,
-  "listEnvironmentInvitations" | "acceptEnvironmentInvitation"
+  | "listEnvironmentInvitations"
+  | "acceptEnvironmentInvitation"
+  | "getRequestContextProvider"
 >;
 
 interface InvitationHttpCall {
@@ -86,11 +91,15 @@ interface InvitationHttpCall {
 }
 
 function invitationAuth(): InvitationAuth {
+  const requestContextProvider = new DefaultRequestContextProvider({
+    origin: "renderer",
+  });
   return {
     listEnvironmentInvitations: (signal) =>
       fetchEnvironmentInvitations(AUTHN_BASE_URL, TEST_BEARER, signal),
     acceptEnvironmentInvitation: (environmentId) =>
       acceptEnvironmentInvitation(AUTHN_BASE_URL, TEST_BEARER, environmentId),
+    getRequestContextProvider: () => requestContextProvider,
   };
 }
 
@@ -101,11 +110,33 @@ function wrapperWithInvitationAuth(
   const binding = Object.create(null) as HostRuntimeBinding<HostRpcRegistry>;
   Object.defineProperty(binding, "auth", { value: auth });
   const PageWrapper = wrapper;
-  return ({ children }) => (
+  return wrapperWithRunnerHost(({ children }) => (
     <PageWrapper>
       <HostRuntimeContext.Provider value={binding}>
         {children}
       </HostRuntimeContext.Provider>
+    </PageWrapper>
+  ));
+}
+
+function wrapperWithRunnerHost(
+  wrapper: TeamPageHarness["Wrapper"],
+): TeamPageHarness["Wrapper"] {
+  const PageWrapper = wrapper;
+  const runnerHost = new MockRunnerHost({
+    signInUrl: "https://auth.traycer.invalid/sign-in",
+    authnBaseUrl: "https://authn.traycer.invalid",
+    localHost: null,
+    hosts: [],
+    workspaceFolderPickerPaths: undefined,
+    hasLocalHost: undefined,
+    traycerCli: undefined,
+  });
+  return ({ children }) => (
+    <PageWrapper>
+      <RunnerHostProvider runnerHost={runnerHost}>
+        {children}
+      </RunnerHostProvider>
     </PageWrapper>
   );
 }
@@ -446,7 +477,7 @@ describe("the invited rows of the Environment dropdown", () => {
     });
     const onAccepted = vi.fn();
     render(<InvitationFlow onAccepted={onAccepted} />, {
-      wrapper: harness.Wrapper,
+      wrapper: wrapperWithRunnerHost(harness.Wrapper),
     });
 
     const row = await screen.findByTestId("environment-invitation-env-beta");
@@ -628,7 +659,7 @@ describe("InviteAcceptDialog", () => {
         onClose={() => undefined}
         onAccepted={onAccepted}
       />,
-      { wrapper: harness.Wrapper },
+      { wrapper: wrapperWithRunnerHost(harness.Wrapper) },
     );
     return harness;
   }
@@ -681,7 +712,7 @@ describe("InviteAcceptDialog", () => {
         onClose={() => undefined}
         onAccepted={onAccepted}
       />,
-      { wrapper: harness.Wrapper },
+      { wrapper: wrapperWithRunnerHost(harness.Wrapper) },
     );
 
     expect((await screen.findByTestId("invite-accept-gone")).textContent).toBe(

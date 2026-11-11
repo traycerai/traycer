@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, renderHook } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState } from "react";
+import type { ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
@@ -76,6 +78,20 @@ import {
 import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 
+function renderHookWithQueryClient<Result>(callback: () => Result) {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false, gcTime: 0 },
+      mutations: { retry: false },
+    },
+  });
+  return renderHook(callback, {
+    wrapper: ({ children }: { readonly children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    ),
+  });
+}
+
 function makeClient(hostId: string): HostClient<HostRpcRegistry> {
   const entry: HostDirectoryEntry = {
     hostId,
@@ -124,7 +140,7 @@ function installTwoHosts(): void {
 }
 
 function renderBothScopes(initialHostId: string | null) {
-  return renderHook(() => {
+  return renderHookWithQueryClient(() => {
     const [scopedHostId, setScopedHostId] = useState(initialHostId);
     return {
       hostGroup: useHostScopeFor({ scopedHostId, setScopedHostId }),
@@ -213,7 +229,7 @@ describe("usePersonalHostScope under the Environment dropdown's pick", () => {
     installTwoHosts();
     useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK });
 
-    const { result } = renderHook(() => ({
+    const { result } = renderHookWithQueryClient(() => ({
       personal: usePersonalHostScope(),
       account: useAccountHostScope(),
     }));
@@ -232,7 +248,7 @@ describe("usePersonalHostScope under the Environment dropdown's pick", () => {
       defaultPick: LOCAL_PICK,
     });
 
-    const { result } = renderHook(() => usePersonalHostScope());
+    const { result } = renderHookWithQueryClient(() => usePersonalHostScope());
 
     expect(result.current.hostId).toBe(PICKED_HOST_ID);
   });
@@ -240,7 +256,7 @@ describe("usePersonalHostScope under the Environment dropdown's pick", () => {
   it("returns to the window's host when the pick goes back to Personal, and stays there for a team", () => {
     installTwoHosts();
     useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK });
-    const { result } = renderHook(() => usePersonalHostScope());
+    const { result } = renderHookWithQueryClient(() => usePersonalHostScope());
     expect(result.current.hostId).toBe(PICKED_HOST_ID);
 
     act(() => {

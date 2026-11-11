@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, renderHook } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
@@ -76,6 +78,20 @@ import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 
+function renderHookWithQueryClient<Result>(callback: () => Result) {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false, gcTime: 0 },
+      mutations: { retry: false },
+    },
+  });
+  return renderHook(callback, {
+    wrapper: ({ children }: { readonly children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    ),
+  });
+}
+
 function makeClient(): HostClient<HostRpcRegistry> {
   const entry: HostDirectoryEntry = {
     hostId: "ambient",
@@ -145,7 +161,9 @@ afterEach(() => {
 describe("Settings host scope membership", () => {
   it("chooses the first filtered option and remembers explicit hosts by environment", () => {
     installHosts();
-    const { result, rerender } = renderHook(() => useHostScope());
+    const { result, rerender } = renderHookWithQueryClient(() =>
+      useHostScope(),
+    );
 
     expect(result.current.hostId).toBe("host-b");
 
@@ -183,7 +201,7 @@ describe("Settings host scope membership", () => {
       hostId: "host-gone",
       name: "Old workstation",
     });
-    const { result } = renderHook(() => useHostScope());
+    const { result } = renderHookWithQueryClient(() => useHostScope());
 
     expect(result.current.hostId).toBeNull();
     expect(result.current.vanishedHostId).toBe("host-gone");
@@ -199,7 +217,7 @@ describe("Settings host scope membership", () => {
     (membershipState) => {
       installHosts();
       harness.membershipState = membershipState;
-      const { result } = renderHook(() => useHostScope());
+      const { result } = renderHookWithQueryClient(() => useHostScope());
 
       expect(result.current.hostId).toBeNull();
       expect(result.current.client).toBeNull();
