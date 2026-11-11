@@ -242,9 +242,9 @@ export function sandboxRowMatches(
   }
   const term = filter.search.trim().toLowerCase();
   if (term.length === 0) return true;
-  // The task is matched by id: the summary carries no task title.
   return (
     summary.displayName.toLowerCase().includes(term) ||
+    (summary.createdByTaskTitle?.toLowerCase().includes(term) ?? false) ||
     (summary.createdByTaskId?.toLowerCase().includes(term) ?? false)
   );
 }

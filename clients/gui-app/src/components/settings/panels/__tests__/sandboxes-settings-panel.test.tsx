@@ -1169,7 +1169,7 @@ describe("<SandboxesSettingsPanel />", () => {
     }
   });
 
-  it("renders the failed-create sentence and keeps Retry, Destroy and Details", async () => {
+  it("renders the failed-create sentence and keeps Retry, Destroy and Details", () => {
     mocks.realActions = true;
     renderPanel([
       row("build-box", {
@@ -1186,12 +1186,14 @@ describe("<SandboxesSettingsPanel />", () => {
     expect(
       failed.getByRole("button", { name: "Retry" }).hasAttribute("disabled"),
     ).toBe(false);
-    await userEvent.click(
-      failed.getByRole("button", { name: "More actions for build-box" }),
-    );
+    const destroy = failed.getByRole("button", {
+      name: "Destroy build-box",
+    });
+    expect(destroy.textContent).toBe("Destroy");
+    expect(failed.getByRole("button", { name: "Details" })).toBeTruthy();
     expect(
-      screen.getAllByRole("menuitem").map((item) => item.textContent),
-    ).toEqual(["Destroy"]);
+      failed.queryByRole("button", { name: "More actions for build-box" }),
+    ).toBeNull();
   });
 
   it("offers an awake agent sandbox Keep instead of Suspend", () => {
