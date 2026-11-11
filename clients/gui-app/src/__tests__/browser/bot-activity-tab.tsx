@@ -447,7 +447,7 @@ export function ActivityTab(): ReactElement {
       </header>
       <TabsContent value="activity" className="flex min-h-0 flex-1 flex-col">
         <BotActivityPage
-          snapshotFresh
+          roomFresh
           botId={BOT_ID}
           hostId={HOST_ID}
           boundHere

@@ -106,7 +106,7 @@ export function BotActivityPage(props: {
   /** Whether the tab's host is the one running the bot. */
   readonly boundHere: boolean;
   readonly active: BotActiveTasks;
-  readonly snapshotFresh: boolean;
+  readonly roomFresh: boolean;
   readonly notificationSubscriptions: ReadonlyArray<BotNotificationSubscription> | null;
   readonly trunkChatId: string;
   readonly onOpenSession: BotSessionOpen;
@@ -136,11 +136,11 @@ export function BotActivityPage(props: {
       className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto p-4"
       data-testid="bot-activity-page"
     >
-      {active.rows.length === 0 && !props.snapshotFresh ? (
+      {active.rows.length === 0 && !props.roomFresh ? (
         <p className="py-1 text-ui-xs text-muted-foreground">Status unknown</p>
       ) : null}
       {active.rows.length === 0 &&
-      props.snapshotFresh &&
+      props.roomFresh &&
       props.notificationSubscriptions?.length === 0 ? (
         <p
           className="py-1 text-ui-xs text-muted-foreground"
@@ -177,7 +177,7 @@ export function BotActivityPage(props: {
       ) : null}
       <BotActivityDetails
         subscriptions={
-          !props.snapshotFresh && props.notificationSubscriptions?.length === 0
+          !props.roomFresh && props.notificationSubscriptions?.length === 0
             ? null
             : props.notificationSubscriptions
         }

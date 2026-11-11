@@ -1653,7 +1653,7 @@ function BotTabContent(props: {
                     className="flex min-h-0 flex-1 flex-col"
                   >
                     <BotActivityPage
-                      snapshotFresh={activeTasks.roomFresh}
+                      roomFresh={activeTasks.roomFresh}
                       botId={botId}
                       hostId={hostId}
                       boundHere={snapshot.boundHost.isThisHost}

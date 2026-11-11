@@ -173,7 +173,7 @@ function Body(): ReactNode {
   const active = useBotActiveTasks(listed.tasks, "host-bound", true);
   return (
     <BotActivityPage
-      snapshotFresh
+      roomFresh
       botId={BOT_ID}
       hostId="host-bound"
       boundHere
