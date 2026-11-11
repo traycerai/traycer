@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import {
   environmentPickerModel,
+  hostRunsPersonal,
   isStaleLocalPick,
   localPickerRow,
   personalSubtitle,
@@ -41,10 +42,16 @@ const partlyMoved = environmentStatusFixture({
   // has finished (`traycer-host/.../migration/migrator.ts`, step 5). A
   // fixture that sets it here invites a reader to key on it.
 });
+const applyingStalled = environmentStatusFixture({
+  principal: null,
+  planes: { records: "moved", broker: "moved", room: "moved" },
+  setup: { stage: "applying", state: "stalled" },
+});
 
 describe("localPickerRow", () => {
   it("gives an awaiting_consent host the not-moved row with Move to Personal", () => {
     expect(localPickerRow(OLD_LAPTOP, awaiting, V11)).toEqual({
+      kind: "local",
       hostId: "old",
       name: "Old laptop",
       subtitle: "its own settings, not in Personal yet",
@@ -52,6 +59,19 @@ describe("localPickerRow", () => {
       needsUpdate: false,
       defaultsToLocal: true,
     });
+  });
+
+  it("keeps an unresolved setup computer selectable after its settings moved", () => {
+    expect(localPickerRow(OLD_LAPTOP, applyingStalled, V11)).toEqual({
+      kind: "setup",
+      hostId: "old",
+      name: "Old laptop",
+      subtitle: "Setup stopped while applying your settings.",
+      verb: null,
+      needsUpdate: false,
+      defaultsToLocal: true,
+    });
+    expect(hostRunsPersonal(OLD_LAPTOP, applyingStalled, V11)).toBe(false);
   });
 
   it("gives a host with a plane still local the partly-moved row", () => {
@@ -82,6 +102,7 @@ describe("localPickerRow", () => {
         setup: { stage: "moving_settings", state: "running" },
       });
       expect(localPickerRow(OLD_LAPTOP, status, version)).toEqual({
+        kind: "local",
         hostId: "old",
         name: "Old laptop",
         subtitle: "Update to view these settings.",
@@ -195,6 +216,25 @@ describe("environmentPickerModel", () => {
     expect(
       environmentPickerModel({ ...input, windowHostId: null }).defaultPick,
     ).toEqual(PERSONAL_PICK);
+  });
+
+  it("defaults this window to its unresolved setup computer", () => {
+    const model = environmentPickerModel({
+      hosts: [OLD_LAPTOP],
+      statuses: statusMap([["old", applyingStalled]]),
+      versions: new Map([["old", V11]]),
+      windowHostId: "old",
+    });
+
+    expect(model.localRows.map((row) => row.kind)).toEqual(["setup"]);
+    expect(model.localRows[0]?.subtitle).toBe(
+      "Setup stopped while applying your settings.",
+    );
+    expect(model.defaultPick).toEqual({
+      kind: "local",
+      hostId: "old",
+      hostName: "Old laptop",
+    });
   });
 
   it("does not default to a partly-moved or greyed window host", () => {

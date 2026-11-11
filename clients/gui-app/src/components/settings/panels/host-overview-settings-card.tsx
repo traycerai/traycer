@@ -189,7 +189,7 @@ export function HostOverviewSettingsCard(props: {
                     hostId: props.hostId,
                     hostName: props.hostName,
                   });
-                } else {
+                } else if (option.action === "stop_sharing") {
                   setStopOpen(true);
                 }
               }}

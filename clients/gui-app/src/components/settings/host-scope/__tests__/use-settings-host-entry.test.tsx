@@ -251,6 +251,7 @@ describe("Settings entry host resolution", () => {
 
     harness.localRows = [
       {
+        kind: "local",
         hostId: target.hostId,
         name: "Local target",
         subtitle: "Settings on this computer only",
