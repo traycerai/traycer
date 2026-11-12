@@ -1085,7 +1085,9 @@ describe("a refused start", () => {
     pasteAndLink("abc#def");
 
     const line = await screen.findByTestId("provider-link-failed");
-    expect(line.textContent).toBe("Sign-in did not finish. Try again.");
+    expect(line.textContent).toBe(
+      "Sign in on the selected computer first, then try again.",
+    );
   });
 });
 

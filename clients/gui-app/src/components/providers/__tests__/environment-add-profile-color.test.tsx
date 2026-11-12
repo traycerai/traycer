@@ -73,6 +73,20 @@ type RecolorResponse = ResponseOfMethod<
   HostRpcRegistry,
   "providers.setEnabled"
 >;
+type ProvidersListResponse = ResponseOfMethod<
+  HostRpcRegistry,
+  "providers.list"
+>;
+
+type LinkCompleteHandler = (
+  request: LinkCompleteRequest,
+  callNumber: number,
+) =>
+  | ProvidersLinkCompleteResponseV12
+  | Promise<ProvidersLinkCompleteResponseV12>;
+type ProvidersListHandler = (
+  callNumber: number,
+) => ProvidersListResponse | Promise<ProvidersListResponse>;
 
 function providerState(profiles: readonly ProviderProfile[]): ProviderCliState {
   return {
@@ -137,12 +151,14 @@ function existingProfile(): ProviderProfile {
 
 interface ColorHost extends EnvironmentClientFixture {
   readonly linkRequests: ProvidersLinkRequestV12[];
+  readonly linkCompleteRequests: LinkCompleteRequest[];
   readonly setEnabledRequests: RequestOfMethod<
     HostRpcRegistry,
     "providers.setEnabled"
   >[];
   readonly providersListCalls: number[];
   readonly linkEvents: CallEvents;
+  readonly linkCompleteEvents: CallEvents;
   readonly setEnabledEvents: CallEvents;
   readonly providersListEvents: CallEvents;
 }
@@ -156,16 +172,24 @@ type RecolorHandler = (
   callNumber: number,
 ) => RecolorResponse | Promise<RecolorResponse>;
 
+interface ColorHostOverrides {
+  readonly startLinkHandler: StartLinkHandler | undefined;
+  readonly recolorHandler: RecolorHandler | undefined;
+  readonly linkCompleteHandler: LinkCompleteHandler | undefined;
+  readonly providersListHandler: ProvidersListHandler | undefined;
+}
+
 function makeHost(
   onInventoryProfileAdded: () => void,
   events: string[],
-  startLinkHandler: StartLinkHandler | undefined,
-  recolorHandler: RecolorHandler | undefined,
+  overrides: ColorHostOverrides,
 ): ColorHost {
   const linkRequests: ColorHost["linkRequests"] = [];
+  const linkCompleteRequests: ColorHost["linkCompleteRequests"] = [];
   const setEnabledRequests: ColorHost["setEnabledRequests"] = [];
   const providersListCalls: number[] = [];
   const linkEvents = createCallEvents();
+  const linkCompleteEvents = createCallEvents();
   const setEnabledEvents = createCallEvents();
   const providersListEvents = createCallEvents();
   const linkResponse: ProvidersLinkResponseV12 = {
@@ -191,33 +215,40 @@ function makeHost(
       "providers.link": (request) => {
         linkRequests.push(request);
         linkEvents.emit();
-        return startLinkHandler === undefined
+        return overrides.startLinkHandler === undefined
           ? linkResponse
-          : startLinkHandler(request, linkRequests.length);
+          : overrides.startLinkHandler(request, linkRequests.length);
       },
-      "providers.linkComplete": (_request: LinkCompleteRequest) =>
-        linkCompleteResponse,
+      "providers.linkComplete": (request: LinkCompleteRequest) => {
+        linkCompleteRequests.push(request);
+        linkCompleteEvents.emit();
+        if (overrides.linkCompleteHandler !== undefined)
+          return overrides.linkCompleteHandler(
+            request,
+            linkCompleteRequests.length,
+          );
+        return linkCompleteResponse;
+      },
       "providers.linkCancel": () => ({}),
       "providers.list": () => {
         const callNumber = providersListCalls.length + 1;
         providersListCalls.push(callNumber);
         providersListEvents.emit();
         if (callNumber === 2) onInventoryProfileAdded();
+        if (overrides.providersListHandler !== undefined)
+          return overrides.providersListHandler(callNumber);
         const profiles =
           callNumber === 1
             ? [existingProfile()]
             : [existingProfile(), createdProfile()];
-        return {
-          providers: [providerState(profiles)],
-          native: null,
-        };
+        return { providers: [providerState(profiles)], native: null };
       },
       "providers.setEnabled": (request: RecolorRequest) => {
         events.push("recolor");
         setEnabledRequests.push(request);
         setEnabledEvents.emit();
-        if (recolorHandler !== undefined)
-          return recolorHandler(request, setEnabledRequests.length);
+        if (overrides.recolorHandler !== undefined)
+          return overrides.recolorHandler(request, setEnabledRequests.length);
         return { state: providerState([createdProfile()]) };
       },
     },
@@ -226,9 +257,11 @@ function makeHost(
   return {
     ...fixture,
     linkRequests,
+    linkCompleteRequests,
     setEnabledRequests,
     providersListCalls,
     linkEvents,
+    linkCompleteEvents,
     setEnabledEvents,
     providersListEvents,
   };
@@ -273,6 +306,7 @@ function AddProfileFromProviderInventory(props: {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   resetNegotiatedManifests();
 });
 
@@ -296,8 +330,12 @@ describe("EnvironmentAddProfileDialog profile color", () => {
         });
       },
       events,
-      undefined,
-      undefined,
+      {
+        startLinkHandler: undefined,
+        recolorHandler: undefined,
+        linkCompleteHandler: undefined,
+        providersListHandler: undefined,
+      },
     );
     const opened = Promise.withResolvers<boolean>();
     const created = Promise.withResolvers<string>();
@@ -379,9 +417,13 @@ describe("EnvironmentAddProfileDialog profile color", () => {
         });
       },
       events,
-      (_request, callNumber) =>
-        callNumber === 1 ? firstStart.promise : secondStart.promise,
-      undefined,
+      {
+        startLinkHandler: (_request, callNumber) =>
+          callNumber === 1 ? firstStart.promise : secondStart.promise,
+        recolorHandler: undefined,
+        linkCompleteHandler: undefined,
+        providersListHandler: undefined,
+      },
     );
     const opened = Promise.withResolvers<boolean>();
     const created = Promise.withResolvers<string>();
@@ -527,105 +569,240 @@ describe("EnvironmentAddProfileDialog profile color", () => {
     );
   });
 
-  it("blocks every close path while recoloring, then retries a failed recolor", async () => {
-    const events: string[] = [];
-    const parentStateWriter: {
-      current: Dispatch<SetStateAction<ProviderCliState>> | null;
-    } = { current: null };
-    const onParentStateWriter = (
-      writer: Dispatch<SetStateAction<ProviderCliState>> | null,
-    ): void => {
-      parentStateWriter.current = writer;
-    };
-    const firstRecolor = Promise.withResolvers<RecolorResponse>();
-    const host = makeHost(
-      () => {
-        act(() => {
-          parentStateWriter.current?.(
-            providerState([existingProfile(), createdProfile()]),
-          );
+  it.each(["authenticated profile", "certified linked profile"] as const)(
+    "blocks every close path while recoloring a %s, then retries a failed recolor",
+    async (completionPath) => {
+      const certifiedInventory = Promise.withResolvers<ProvidersListResponse>();
+      const isCertifiedLink = completionPath === "certified linked profile";
+      const events: string[] = [];
+      const parentStateWriter: {
+        current: Dispatch<SetStateAction<ProviderCliState>> | null;
+      } = { current: null };
+      const onParentStateWriter = (
+        writer: Dispatch<SetStateAction<ProviderCliState>> | null,
+      ): void => {
+        parentStateWriter.current = writer;
+      };
+      const firstRecolor = Promise.withResolvers<RecolorResponse>();
+      const host = makeHost(
+        () => {
+          act(() => {
+            parentStateWriter.current?.(
+              providerState([existingProfile(), createdProfile()]),
+            );
+          });
+        },
+        events,
+        {
+          startLinkHandler: undefined,
+          recolorHandler: (_request, callNumber) =>
+            callNumber === 1
+              ? firstRecolor.promise
+              : { state: providerState([createdProfile()]) },
+          linkCompleteHandler: isCertifiedLink
+            ? () => ({
+                state: "linked",
+                code: null,
+                account: null,
+                expectedAccount: null,
+                environmentProfileId: ENVIRONMENT_PROFILE_ID,
+                profileId: PROFILE_ID,
+              })
+            : undefined,
+          providersListHandler: isCertifiedLink
+            ? (callNumber) =>
+                callNumber === 2
+                  ? certifiedInventory.promise
+                  : {
+                      providers: [
+                        providerState(
+                          callNumber === 1
+                            ? [existingProfile()]
+                            : [existingProfile(), createdProfile()],
+                        ),
+                      ],
+                      native: null,
+                    }
+            : undefined,
+        },
+      );
+      const opened = Promise.withResolvers<boolean>();
+      const created = Promise.withResolvers<string>();
+      const onOpenChange = vi.fn((open: boolean) => opened.resolve(open));
+      const onProfileCreated = vi.fn((profileId: string) =>
+        created.resolve(profileId),
+      );
+      const queryClient = new QueryClient({
+        defaultOptions: {
+          queries: { retry: false, gcTime: 0 },
+          mutations: { retry: false },
+        },
+      });
+      const user = userEvent.setup();
+
+      render(
+        <QueryClientProvider client={queryClient}>
+          <AddProfileFromProviderInventory
+            client={host.client}
+            onOpenChange={onOpenChange}
+            onProfileCreated={onProfileCreated}
+            onParentStateWriter={onParentStateWriter}
+            events={events}
+          />
+        </QueryClientProvider>,
+      );
+
+      await host.providersListEvents.waitFor(1);
+      await user.click(
+        screen.getByRole("button", { name: `Use color ${CHOSEN_COLOR}` }),
+      );
+      await user.click(screen.getByRole("button", { name: "Sign in" }));
+      await screen.findByLabelText("One-time code");
+      fireEvent.change(screen.getByLabelText("One-time code"), {
+        target: { value: SIGN_IN_CODE },
+      });
+      await user.click(screen.getByRole("button", { name: "Sign in" }));
+      if (isCertifiedLink) {
+        await host.linkCompleteEvents.waitFor(1);
+        await host.providersListEvents.waitFor(2);
+        expect(host.linkCompleteRequests).toEqual([
+          {
+            linkId: "link-created-profile",
+            code: SIGN_IN_CODE,
+            environmentId: ENVIRONMENT_ID,
+          },
+        ]);
+        expect(host.providersListCalls).toEqual([1, 2]);
+        expect(events).toContain("parent-inventory-rerender");
+        expect(host.setEnabledRequests).toEqual([]);
+        expect(onProfileCreated).not.toHaveBeenCalled();
+        await act(async () => {
+          certifiedInventory.resolve({ providers: [], native: null });
+          await certifiedInventory.promise;
         });
-      },
-      events,
-      undefined,
-      (_request, callNumber) =>
-        callNumber === 1
-          ? firstRecolor.promise
-          : { state: providerState([createdProfile()]) },
-    );
+      } else {
+        await host.providersListEvents.waitFor(2);
+      }
+      await host.setEnabledEvents.waitFor(1);
+      await screen.findByRole("button", { name: "Done" });
+      expect(host.providersListCalls).toEqual([1, 2]);
+      expect(onProfileCreated).not.toHaveBeenCalled();
+
+      expect(screen.queryByRole("button", { name: "Close" })).toBeNull();
+      fireEvent.keyDown(document, { key: "Escape" });
+      const overlay = document.querySelector('[data-slot="dialog-overlay"]');
+      expect(overlay).not.toBeNull();
+      if (overlay === null) throw new Error("Dialog overlay was not rendered.");
+      fireEvent.pointerDown(overlay, { button: 0, pointerType: "mouse" });
+      await user.click(screen.getByRole("button", { name: "Done" }));
+      expect(onOpenChange).not.toHaveBeenCalled();
+      expect(screen.getByRole("dialog")).toBeTruthy();
+
+      await act(async () => {
+        firstRecolor.reject(new Error("Color could not be saved."));
+        await firstRecolor.promise.catch(() => undefined);
+      });
+      expect(await screen.findByRole("alert")).toBeTruthy();
+      await user.click(screen.getByRole("button", { name: "Retry" }));
+      await host.setEnabledEvents.waitFor(2);
+      await expect(created.promise).resolves.toBe(PROFILE_ID);
+      await expect(opened.promise).resolves.toBe(false);
+      await host.providersListEvents.waitFor(3);
+      expect(onOpenChange).toHaveBeenCalledExactlyOnceWith(false);
+      expect(onProfileCreated).toHaveBeenCalledExactlyOnceWith(PROFILE_ID);
+      expect(host.providersListCalls).toEqual([1, 2, 3]);
+      expect(host.setEnabledRequests).toHaveLength(2);
+      expect(host.setEnabledRequests).toMatchObject([
+        {
+          providerId: "claude-code",
+          enabled: true,
+          profileAction: {
+            type: "recolor",
+            profileId: PROFILE_ID,
+            accentColor: CHOSEN_COLOR,
+          },
+        },
+        {
+          providerId: "claude-code",
+          enabled: true,
+          profileAction: {
+            type: "recolor",
+            profileId: PROFILE_ID,
+            accentColor: CHOSEN_COLOR,
+          },
+        },
+      ]);
+      if (isCertifiedLink) expect(host.linkCompleteRequests).toHaveLength(1);
+    },
+  );
+
+  it("closes uncertified delivery pending without recoloring or selecting an id", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const missingInventory = Promise.withResolvers<ProvidersListResponse>();
+    const events: string[] = [];
+    const host = makeHost(() => undefined, events, {
+      startLinkHandler: undefined,
+      recolorHandler: undefined,
+      linkCompleteHandler: undefined,
+      providersListHandler: (callNumber) =>
+        callNumber === 2
+          ? missingInventory.promise
+          : { providers: [providerState([existingProfile()])], native: null },
+    });
     const opened = Promise.withResolvers<boolean>();
-    const created = Promise.withResolvers<string>();
-    const onOpenChange = vi.fn((open: boolean) => opened.resolve(open));
+    const profileCreated = Promise.withResolvers<string>();
     const onProfileCreated = vi.fn((profileId: string) =>
-      created.resolve(profileId),
+      profileCreated.resolve(profileId),
     );
+    const onOpenChange = vi.fn((open: boolean) => opened.resolve(open));
     const queryClient = new QueryClient({
       defaultOptions: {
         queries: { retry: false, gcTime: 0 },
         mutations: { retry: false },
       },
     });
-    const user = userEvent.setup();
-
     render(
       <QueryClientProvider client={queryClient}>
         <AddProfileFromProviderInventory
           client={host.client}
           onOpenChange={onOpenChange}
           onProfileCreated={onProfileCreated}
-          onParentStateWriter={onParentStateWriter}
+          onParentStateWriter={() => undefined}
           events={events}
         />
       </QueryClientProvider>,
     );
 
     await host.providersListEvents.waitFor(1);
-    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
     await screen.findByLabelText("One-time code");
     fireEvent.change(screen.getByLabelText("One-time code"), {
       target: { value: SIGN_IN_CODE },
     });
-    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    await host.linkCompleteEvents.waitFor(1);
     await host.providersListEvents.waitFor(2);
-    await host.setEnabledEvents.waitFor(1);
-    await screen.findByRole("button", { name: "Done" });
-
-    expect(screen.queryByRole("button", { name: "Close" })).toBeNull();
-    fireEvent.keyDown(document, { key: "Escape" });
-    const overlay = document.querySelector('[data-slot="dialog-overlay"]');
-    expect(overlay).not.toBeNull();
-    if (overlay === null) throw new Error("Dialog overlay was not rendered.");
-    fireEvent.pointerDown(overlay, { button: 0, pointerType: "mouse" });
-    await user.click(screen.getByRole("button", { name: "Done" }));
-    expect(onOpenChange).not.toHaveBeenCalled();
-    expect(screen.getByRole("dialog")).toBeTruthy();
-
-    await act(async () => {
-      firstRecolor.reject(new Error("Color could not be saved."));
-      await firstRecolor.promise.catch(() => undefined);
-    });
-    expect(await screen.findByRole("alert")).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "Retry" }));
-    await host.setEnabledEvents.waitFor(2);
-    await expect(created.promise).resolves.toBe(PROFILE_ID);
-    await expect(opened.promise).resolves.toBe(false);
-    expect(onOpenChange).toHaveBeenCalledExactlyOnceWith(false);
-    expect(host.setEnabledRequests).toHaveLength(2);
-    expect(host.setEnabledRequests).toMatchObject([
+    expect(host.linkCompleteRequests).toEqual([
       {
-        profileAction: {
-          type: "recolor",
-          profileId: PROFILE_ID,
-          accentColor: INITIAL_COLOR,
-        },
-      },
-      {
-        profileAction: {
-          type: "recolor",
-          profileId: PROFILE_ID,
-          accentColor: INITIAL_COLOR,
-        },
+        linkId: "link-created-profile",
+        code: SIGN_IN_CODE,
+        environmentId: ENVIRONMENT_ID,
       },
     ]);
+    await act(async () => {
+      missingInventory.resolve({ providers: [], native: null });
+      await missingInventory.promise;
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Done" }));
+    await expect(opened.promise).resolves.toBe(false);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20_000);
+    });
+    expect(onOpenChange).toHaveBeenCalledExactlyOnceWith(false);
+    expect(onProfileCreated).not.toHaveBeenCalled();
+    expect(host.setEnabledRequests).toEqual([]);
+    expect(host.linkCompleteRequests).toHaveLength(1);
+    expect(host.providersListCalls).toEqual([1, 2]);
   });
 });

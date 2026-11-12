@@ -28,6 +28,7 @@ import {
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
 import { CredentialRefusalNote } from "@/components/providers/credential-refusal-note";
+import { LINK_NO_SIGN_IN } from "@/lib/providers/provider-link-copy";
 import { getNegotiatedHostMethods } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { startVisibleInterval } from "@/lib/dom/visible-interval";
@@ -89,7 +90,8 @@ interface EnvironmentProfileSignInProps {
   readonly waitForLocalProfile: boolean;
   readonly disabled: boolean;
   readonly onComplete: (completion: EnvironmentSignInCompletion) => void;
-  readonly onDeliveryPending?: () => void;
+  /** A certified local id can finalize presentation without asserting usable auth. */
+  readonly onDeliveryPending?: (certifiedProfileId: string | null) => void;
   readonly onCancel: () => void;
 }
 
@@ -147,9 +149,13 @@ function EnvironmentProfileSignInForScope(
   const delivered = useRef(false);
   const onComplete = useRef(props.onComplete);
   const onActiveChange = useRef(props.onActiveChange);
+  const onDeliveryPending = useRef(props.onDeliveryPending);
+  const onCancel = useRef(props.onCancel);
   useEffect(() => {
     onComplete.current = props.onComplete;
     onActiveChange.current = props.onActiveChange;
+    onDeliveryPending.current = props.onDeliveryPending;
+    onCancel.current = props.onCancel;
   });
   const inventory = useProvidersListForClient(props.client, {
     enabled: state.kind === "installing" && props.waitForLocalProfile,
@@ -192,15 +198,18 @@ function EnvironmentProfileSignInForScope(
     [release],
   );
 
-  const { onDeliveryPending, onCancel } = props;
-  const finishReceiving = useCallback((): void => {
-    if (delivered.current) return;
-    delivered.current = true;
-    setState({ kind: "complete" });
-    toast.info(SIGNED_IN_RECEIVING_LINE);
-    if (onDeliveryPending !== undefined) onDeliveryPending();
-    else onCancel();
-  }, [onDeliveryPending, onCancel]);
+  const finishReceiving = useCallback(
+    (certifiedProfileId: string | null): void => {
+      if (delivered.current) return;
+      delivered.current = true;
+      setState({ kind: "complete" });
+      toast.info(SIGNED_IN_RECEIVING_LINE);
+      if (onDeliveryPending.current !== undefined)
+        onDeliveryPending.current(certifiedProfileId);
+      else onCancel.current();
+    },
+    [],
+  );
 
   const accept = (
     current: SignInAttempt,
@@ -209,7 +218,7 @@ function EnvironmentProfileSignInForScope(
     if (!isLiveSignInAttempt(current, attempt.current) || delivered.current)
       return;
     if (response.state === "expired" && current.connected) {
-      finishReceiving();
+      finishReceiving(null);
       return;
     }
     if (response.state === "linked" || response.state === "installing") {
@@ -400,7 +409,7 @@ function EnvironmentProfileSignInForScope(
         )
           return;
         if (result.data === undefined || result.isError) {
-          if (certified) finishReceiving();
+          if (certified) finishReceiving(installingProfileId);
           return;
         }
         if (props.request.profileId !== null && !certified) return;
@@ -410,8 +419,8 @@ function EnvironmentProfileSignInForScope(
           installingEnvironmentId,
           installingProfileId,
         );
-        if (profile === null) {
-          if (certified) finishReceiving();
+        if (profile === null || profile.auth.status !== "authenticated") {
+          if (certified) finishReceiving(installingProfileId);
           return;
         }
         delivered.current = true;
@@ -464,7 +473,7 @@ function EnvironmentProfileSignInForScope(
   };
   const cancel = (): void => {
     if (state.kind === "installing") {
-      finishReceiving();
+      finishReceiving(state.certified ? state.profileId : null);
       return;
     }
     if (attempt.current !== null) release(attempt.current);
@@ -689,11 +698,9 @@ function incompleteSignInState(
       ? previous
       : { kind: "waiting" };
   }
-  return {
-    kind: "failed",
-    line:
-      response.state === "expired"
-        ? "This sign-in expired."
-        : "Sign-in did not finish. Try again.",
-  };
+  if (response.state === "expired")
+    return { kind: "failed", line: "This sign-in expired." };
+  if (response.code === "no_sign_in")
+    return { kind: "failed", line: LINK_NO_SIGN_IN };
+  return { kind: "failed", line: "Sign-in did not finish. Try again." };
 }

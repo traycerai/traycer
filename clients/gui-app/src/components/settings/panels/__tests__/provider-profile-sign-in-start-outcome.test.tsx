@@ -20,6 +20,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -120,6 +121,7 @@ const PROFILE_ID = "profile-surya-2";
 const ADD_HOST_ID = "host-profile-add-route";
 const PERSONAL_ENVIRONMENT_ID = "environment-personal-profile-add";
 const SIGN_IN_V12 = { major: 1, minor: 2 } as const;
+const personalEnvironmentListReads: string[] = [];
 
 function setSignedInViewer(): void {
   useAuthStore.setState({
@@ -422,6 +424,7 @@ function startLoginCalls(): number {
 }
 
 beforeEach(() => {
+  personalEnvironmentListReads.length = 0;
   host.request.mockImplementation((method) =>
     method === "providers.startLogin"
       ? Promise.reject(refusal())
@@ -505,21 +508,24 @@ function buildPersonalAddClient(
   const { client } = buildEnvironmentClient({
     hostId: ADD_HOST_ID,
     handlers: {
-      "environment.list": () => ({
-        environments: [
-          {
-            environmentId: PERSONAL_ENVIRONMENT_ID,
-            ownerKind: "user",
-            ownerId: "owner-test",
-            roomId: "room-test",
-            label: "Personal",
-            effectiveRole: "owner",
-            kind: "personal",
-            hostCount: 0,
-            providerHandle: null,
-          },
-        ],
-      }),
+      "environment.list": () => {
+        personalEnvironmentListReads.push("environment.list");
+        return {
+          environments: [
+            {
+              environmentId: PERSONAL_ENVIRONMENT_ID,
+              ownerKind: "user",
+              ownerId: "owner-test",
+              roomId: "room-test",
+              label: "Personal",
+              effectiveRole: "owner",
+              kind: "personal",
+              hostCount: 0,
+              providerHandle: null,
+            },
+          ],
+        };
+      },
       "providers.link": (request) => {
         linkRequests.push(request);
         const response: ProvidersLinkResponseV12 = {
@@ -600,6 +606,31 @@ describe("managed profile add entry-point routing", () => {
     );
     expect(startRequests).toHaveLength(1);
     expect(linkRequests).toEqual([]);
+  });
+
+  it("keeps Personal Add local when its known manifest lacks environment.list", async () => {
+    setSignedInViewer();
+    const linkRequests: ProvidersLinkRequestV12[] = [];
+    const startRequests: unknown[] = [];
+    const client = buildPersonalAddClient(linkRequests, startRequests);
+    recordNegotiatedHostManifest(ADD_HOST_ID, {
+      "providers.link": SIGN_IN_V12,
+      "providers.linkComplete": SIGN_IN_V12,
+      "providers.linkCancel": { major: 1, minor: 0 },
+      "providers.list": { major: 10, minor: 9 },
+    });
+
+    renderClaudeAddDialog(client);
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Sign in" }),
+    );
+    await screen.findByText(
+      "Sign-in did not start. You can retry when the provider is available.",
+    );
+
+    expect(startRequests).toHaveLength(1);
+    expect(linkRequests).toEqual([]);
+    expect(personalEnvironmentListReads).toEqual([]);
   });
 });
 
@@ -784,9 +815,21 @@ describe("the Switch account panel through a providers refresh", () => {
 });
 
 describe("environment delivery pending from ProfileEditDialog", () => {
-  it("returns Switch account to the edit form with its unsaved label and color", async () => {
-    const { requests, onOpenChange } =
-      renderEnvironmentProfileEditDialog(false);
+  it("returns a cancelled reauth to editing before an explicit account switch", async () => {
+    const { requests, onOpenChange } = renderEnvironmentProfileEditDialog(true);
+    await screen.findByLabelText("One-time code");
+    expect(requests.links).toHaveLength(1);
+    expect(requests.links[0]?.replaceAccount).toBe(false);
+
+    const signInBody = screen
+      .getByLabelText("One-time code")
+      .closest<HTMLElement>('[aria-live="polite"]');
+    if (signInBody === null) {
+      throw new Error("Expected the one-time-code sign-in body.");
+    }
+    fireEvent.click(within(signInBody).getByRole("button", { name: "Cancel" }));
+    await screen.findByRole("heading", { name: "Edit profile" });
+
     const nextColor = PROVIDER_PROFILE_ACCENT_COLORS[0];
     const nameInput = screen.getByLabelText("Profile name");
     await userEvent.clear(nameInput);
@@ -797,6 +840,7 @@ describe("environment delivery pending from ProfileEditDialog", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
     await screen.findByText(REPLACE_PROFILE_ACCOUNT_LINE);
+    expect(requests.links).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
     await screen.findByLabelText("One-time code");
     fireEvent.change(screen.getByLabelText("One-time code"), {
@@ -815,8 +859,11 @@ describe("environment delivery pending from ProfileEditDialog", () => {
         .getByRole("button", { name: `Use color ${nextColor}` })
         .getAttribute("aria-pressed"),
     ).toBe("true");
-    expect(requests.links).toHaveLength(1);
-    expect(requests.links[0]?.replaceAccount).toBe(true);
+    expect(requests.links).toHaveLength(2);
+    expect(requests.links.map((request) => request.replaceAccount)).toEqual([
+      false,
+      true,
+    ]);
     expect(requests.completes).toHaveLength(1);
     expect(onOpenChange).not.toHaveBeenCalled();
   });

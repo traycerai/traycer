@@ -31,6 +31,7 @@ import {
   type EnvironmentClientFixture,
 } from "@/lib/environment/__tests__/environment-test-support";
 import { hostRpcRegistry } from "@/lib/host";
+import { LINK_NO_SIGN_IN } from "@/lib/providers/provider-link-copy";
 import type {
   RequestOfMethod,
   ResponseOfMethod,
@@ -302,7 +303,7 @@ function renderSignIn(input: {
   }) => void;
   readonly onCancel: () => void;
   readonly onActiveChange?: (active: boolean) => void;
-  readonly onDeliveryPending?: () => void;
+  readonly onDeliveryPending?: (certifiedProfileId: string | null) => void;
 }) {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -344,13 +345,19 @@ beforeEach(() => {
 });
 
 describe("<EnvironmentProfileSignIn />", () => {
-  it("starts Claude with its profile choices, then maps the environment alias to the admitted local profile", async () => {
+  it("waits for the admitted local profile to authenticate before completing", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const profile = managedProfile(
       MANAGED_PROFILE_ID,
       "Claude on this computer",
       ENVIRONMENT_PROFILE_ID,
       { kind: "admitted", bindingVersion: 1 },
     );
+    const unauthenticatedProfile: ProviderProfile = {
+      ...profile,
+      auth: { ...profile.auth, status: "unauthenticated" },
+    };
+    let inventoryAuthenticated = false;
     const host = makeHost({
       complete: () => ({
         state: "installing",
@@ -361,7 +368,11 @@ describe("<EnvironmentProfileSignIn />", () => {
         profileId: null,
       }),
       providersList: () => ({
-        providers: [providerState("claude-code", [profile])],
+        providers: [
+          providerState("claude-code", [
+            inventoryAuthenticated ? profile : unauthenticatedProfile,
+          ]),
+        ],
         native: null,
       }),
     });
@@ -389,6 +400,23 @@ describe("<EnvironmentProfileSignIn />", () => {
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     await screen.findByText(SIGNED_IN_RECEIVING_LINE);
+    await host.providersListEvents.waitFor(1);
+    expect(onComplete).not.toHaveBeenCalled();
+    const readsBeforeUnauthenticatedRefresh = host.providersListCalls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    await host.providersListEvents.waitFor(
+      readsBeforeUnauthenticatedRefresh + 1,
+    );
+    expect(onComplete).not.toHaveBeenCalled();
+
+    inventoryAuthenticated = true;
+    const readsBeforeAuthenticatedRefresh = host.providersListCalls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    await host.providersListEvents.waitFor(readsBeforeAuthenticatedRefresh + 1);
     await expect(completed).resolves.toEqual({
       environmentProfileId: ENVIRONMENT_PROFILE_ID,
       profile,
@@ -397,14 +425,14 @@ describe("<EnvironmentProfileSignIn />", () => {
       environmentProfileId: ENVIRONMENT_PROFILE_ID,
       profile,
     });
-    expect(host.completeRequests).toEqual([
-      {
-        linkId: "link-attempt",
-        code: CODE,
-        environmentId: ENVIRONMENT_ID,
-      },
-    ]);
-    expect(host.providersListCalls).toEqual([1]);
+    expect(host.completeRequests[0]).toEqual({
+      linkId: "link-attempt",
+      code: CODE,
+      environmentId: ENVIRONMENT_ID,
+    });
+    expect(
+      host.completeRequests.slice(1).every(({ code }) => code === null),
+    ).toBe(true);
     expect(onCancel).not.toHaveBeenCalled();
   });
 
@@ -718,6 +746,72 @@ describe("<EnvironmentProfileSignIn />", () => {
   });
 
   it.each([
+    ["no_sign_in", "no_sign_in", LINK_NO_SIGN_IN],
+    ["generic failure", null, "Sign-in did not finish. Try again."],
+  ] as const)(
+    "shows recovery copy for a failed %s completion",
+    async (_description, code, expectedLine) => {
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      const pollIntervalRegistered = Promise.withResolvers<void>();
+      const intervalWindow: Pick<Window, "setInterval"> = window;
+      const realSetInterval = intervalWindow.setInterval.bind(intervalWindow);
+      const intervalSpy = vi
+        .spyOn(intervalWindow, "setInterval")
+        .mockImplementation((handler, timeout) => {
+          const intervalId = realSetInterval(handler, timeout);
+          if (timeout === 2_000) pollIntervalRegistered.resolve();
+          return intervalId;
+        });
+      const host = makeHost({
+        link: () => ({
+          linkId: "link-local-handoff",
+          environmentProfileId: ENVIRONMENT_PROFILE_ID,
+          prompt: { kind: "local_handoff" },
+        }),
+        complete: () => ({
+          state: "failed",
+          code,
+          account: null,
+          expectedAccount: null,
+          environmentProfileId: ENVIRONMENT_PROFILE_ID,
+          profileId: null,
+        }),
+      });
+      try {
+        renderSignIn({
+          host,
+          request: CREATE_PROFILE_REQUEST,
+          autoStart: true,
+          waitForLocalProfile: true,
+          onComplete: vi.fn(),
+          onCancel: vi.fn(),
+        });
+
+        expect(await screen.findByText("Waiting for sign-in…")).toBeTruthy();
+        await pollIntervalRegistered.promise;
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(2_000);
+        });
+        await host.completeEvents.waitFor(1);
+        expect((await screen.findByRole("alert")).textContent).toBe(
+          expectedLine,
+        );
+        expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+        expect(host.linkRequests).toHaveLength(1);
+        expect(host.completeRequests).toEqual([
+          {
+            linkId: "link-local-handoff",
+            code: null,
+            environmentId: ENVIRONMENT_ID,
+          },
+        ]);
+      } finally {
+        intervalSpy.mockRestore();
+      }
+    },
+  );
+
+  it.each([
     ["a new profile", CREATE_PROFILE_REQUEST],
     ["an existing profile", EXISTING_PROFILE_REQUEST],
   ] as const)(
@@ -786,48 +880,81 @@ describe("<EnvironmentProfileSignIn />", () => {
     },
   );
 
-  it("ends a certified link when its fresh local inventory is unavailable", async () => {
-    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
-    const host = makeHost({
-      complete: () => ({
-        state: "linked",
-        code: null,
-        account: null,
-        expectedAccount: null,
-        environmentProfileId: ENVIRONMENT_PROFILE_ID,
-        profileId: MANAGED_PROFILE_ID,
-      }),
-      providersList: () => Promise.reject(new Error("Inventory unavailable.")),
-    });
-    const onComplete = vi.fn();
-    const deliveryFinished = Promise.withResolvers<void>();
-    const onCancel = vi.fn(() => deliveryFinished.resolve());
-    renderSignIn({
-      host,
-      request: EXISTING_PROFILE_REQUEST,
-      autoStart: true,
-      waitForLocalProfile: true,
-      onComplete,
-      onCancel,
-    });
+  it.each(["unavailable", "unauthenticated"] as const)(
+    "ends a certified link with delivery pending when fresh local inventory is %s",
+    async (inventoryState) => {
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      const unauthenticatedProfile: ProviderProfile = {
+        ...managedProfile(
+          MANAGED_PROFILE_ID,
+          "Claude on this computer",
+          ENVIRONMENT_PROFILE_ID,
+          { kind: "admitted", bindingVersion: 1 },
+        ),
+        auth: {
+          status: "unauthenticated",
+          badgeText: null,
+          label: null,
+          detail: null,
+        },
+      };
+      const host = makeHost({
+        complete: () => ({
+          state: "linked",
+          code: null,
+          account: null,
+          expectedAccount: null,
+          environmentProfileId: ENVIRONMENT_PROFILE_ID,
+          profileId: MANAGED_PROFILE_ID,
+        }),
+        providersList: () =>
+          inventoryState === "unavailable"
+            ? Promise.reject(new Error("Inventory unavailable."))
+            : {
+                providers: [
+                  providerState("claude-code", [unauthenticatedProfile]),
+                ],
+                native: null,
+              },
+      });
+      const onComplete = vi.fn();
+      const deliveryPending = Promise.withResolvers<string | null>();
+      const onDeliveryPending = vi.fn((certifiedProfileId: string | null) =>
+        deliveryPending.resolve(certifiedProfileId),
+      );
+      const onCancel = vi.fn();
+      renderSignIn({
+        host,
+        request: EXISTING_PROFILE_REQUEST,
+        autoStart: true,
+        waitForLocalProfile: true,
+        onComplete,
+        onDeliveryPending,
+        onCancel,
+      });
 
-    await screen.findByLabelText("One-time code");
-    fireEvent.change(screen.getByLabelText("One-time code"), {
-      target: { value: CODE },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
-    expect(await screen.findByRole("button", { name: "Done" })).toBeTruthy();
-    await deliveryFinished.promise;
-    expect(host.providersListCalls).toEqual([1]);
-    expect(sonnerToast.info).toHaveBeenCalledWith(SIGNED_IN_RECEIVING_LINE);
-    expect(onComplete).not.toHaveBeenCalled();
-    expect(onCancel).toHaveBeenCalledOnce();
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(20_000);
-    });
-    expect(host.completeRequests).toHaveLength(1);
-    expect(host.providersListCalls).toEqual([1]);
-  });
+      await screen.findByLabelText("One-time code");
+      fireEvent.change(screen.getByLabelText("One-time code"), {
+        target: { value: CODE },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+      expect(await screen.findByRole("button", { name: "Done" })).toBeTruthy();
+      await expect(deliveryPending.promise).resolves.toBe(MANAGED_PROFILE_ID);
+      expect(host.providersListCalls).toEqual([1]);
+      expect(sonnerToast.info).toHaveBeenCalledWith(SIGNED_IN_RECEIVING_LINE);
+      expect(onComplete).not.toHaveBeenCalled();
+      expect(onDeliveryPending).toHaveBeenCalledExactlyOnceWith(
+        MANAGED_PROFILE_ID,
+      );
+      expect(onCancel).not.toHaveBeenCalled();
+      expect(host.cancelRequests).toEqual([]);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(20_000);
+      });
+      expect(host.completeRequests).toHaveLength(1);
+      expect(host.providersListCalls).toEqual([1]);
+    },
+  );
 
   it.each([
     ["harness_account_mismatch", ACCOUNT_MISMATCH_SIGN_IN_LINE],
@@ -1127,8 +1254,10 @@ describe("<EnvironmentProfileSignIn />", () => {
       providersList: () => ({ providers: [], native: null }),
     });
     const onComplete = vi.fn();
-    const deliveryPending = Promise.withResolvers<void>();
-    const onDeliveryPending = vi.fn(() => deliveryPending.resolve());
+    const deliveryPending = Promise.withResolvers<string | null>();
+    const onDeliveryPending = vi.fn((certifiedProfileId: string | null) =>
+      deliveryPending.resolve(certifiedProfileId),
+    );
     const onCancel = vi.fn();
     renderSignIn({
       host,
@@ -1147,10 +1276,10 @@ describe("<EnvironmentProfileSignIn />", () => {
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
     expect(await screen.findByText(SIGNED_IN_RECEIVING_LINE)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Done" }));
-    await deliveryPending.promise;
+    await expect(deliveryPending.promise).resolves.toBe(null);
 
     expect(host.cancelRequests).toEqual([]);
-    expect(onDeliveryPending).toHaveBeenCalledOnce();
+    expect(onDeliveryPending).toHaveBeenCalledExactlyOnceWith(null);
     expect(onCancel).not.toHaveBeenCalled();
     expect(onComplete).not.toHaveBeenCalled();
   });

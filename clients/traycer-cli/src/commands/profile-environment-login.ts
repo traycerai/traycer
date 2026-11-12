@@ -17,6 +17,7 @@ import {
   type HostRpcDispatch,
 } from "../internal/host-rpc";
 import { printable, readProviderStates } from "../internal/profile-target";
+import { httpUrlOf } from "../internal/profile-login-url";
 import type { CommandContext } from "../runner/runner";
 import type {
   ProfileLoginIo,
@@ -109,16 +110,16 @@ export async function runEnvironmentProfileLogin(
       if (prompt.kind !== "local_handoff") {
         const rawUrl =
           prompt.kind === "device_code" ? prompt.verificationUrl : prompt.url;
-        const url = new URL(rawUrl);
-        if (url.protocol !== "https:" && url.protocol !== "http:")
+        const url = httpUrlOf(rawUrl);
+        if (url === null)
           return {
             status: "not-started",
             message: "The sign-in page could not be opened.",
           };
         ctx.output.humanRequired(
-          `To sign in, open this URL in a browser:\n  ${printable(url.href)}`,
+          `To sign in, open this URL in a browser:\n  ${printable(url)}`,
         );
-        io.openUrl(url.href);
+        io.openUrl(url);
         if (prompt.kind === "device_code")
           ctx.output.humanRequired(
             `Enter this code:\n  ${printable(prompt.userCode)}`,
@@ -183,7 +184,7 @@ export async function runEnvironmentProfileLogin(
           } catch {
             /* The connection is established; its inventory may arrive later. */
           }
-          if (installed !== null)
+          if (installed !== null && installed.auth.status === "authenticated")
             return {
               status: "signed-in",
               profile: summarizeProfile(installed),
@@ -220,6 +221,11 @@ export async function runEnvironmentProfileLogin(
           replaceAccount = true;
           break;
         }
+        if (response.code === "no_sign_in")
+          return {
+            status: "not-started",
+            message: "Sign in on this computer first, then try again.",
+          };
         if (response.state !== "pending") return { status: "not-completed" };
         if (
           response.code === "harness_token_shape" &&

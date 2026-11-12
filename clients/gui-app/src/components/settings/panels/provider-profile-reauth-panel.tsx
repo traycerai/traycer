@@ -55,7 +55,7 @@ interface ProviderProfileReauthPanelProps {
   readonly profile: ProviderProfile;
   readonly isLocalHost: boolean;
   readonly replaceAccount: boolean;
-  readonly onDeliveryPending?: () => void;
+  readonly onDeliveryPending?: (certifiedProfileId: string | null) => void;
   /** Settles a reconnect of the SAME account without the acknowledgment card.
    *  The profile is already authenticated and persisted by the time the flow
    *  reaches `identity` - the card only asks the user to confirm something

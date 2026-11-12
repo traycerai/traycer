@@ -403,7 +403,7 @@ function ProfileEditAccountSection(props: {
   readonly state: ProviderCliState;
   readonly profile: ProviderProfile;
   readonly switchingAccount: boolean;
-  readonly startInReauth: boolean;
+  readonly reauthenticating: boolean;
   readonly isLocalHost: boolean;
   readonly canOauth: boolean;
   /** Why `canOauth` is false, from the same helper that decided it. */
@@ -418,9 +418,9 @@ function ProfileEditAccountSection(props: {
   if (props.switchingAccount) {
     return (
       <ProviderProfileReauthPanel
-        replaceAccount={!props.startInReauth}
+        replaceAccount={!props.reauthenticating}
         onDeliveryPending={
-          props.startInReauth
+          props.reauthenticating
             ? props.onCloseAfterSignIn
             : props.onCancelSwitchingAccount
         }
@@ -428,11 +428,11 @@ function ProfileEditAccountSection(props: {
         profile={props.profile}
         isLocalHost={props.isLocalHost}
         onSameAccountReconnected={
-          props.startInReauth ? props.onFinishSignIn : null
+          props.reauthenticating ? props.onFinishSignIn : null
         }
         onCancel={props.onCancelSwitchingAccount}
         onDone={
-          props.startInReauth
+          props.reauthenticating
             ? props.onCloseAfterSignIn
             : props.onCancelSwitchingAccount
         }
@@ -578,6 +578,8 @@ export function ProfileEditDialog(props: {
     boolean | null
   >(null);
   const switchingAccount = switchingAccountOverride ?? props.startInReauth;
+  const reauthenticating =
+    switchingAccountOverride === null && props.startInReauth;
   const [confirmRemoveOpen, setConfirmRemoveOpen] = useState(false);
   // Held here, not inside `ProfileApiKeyForm` - see that component's note.
   const [apiKeyDraft, setApiKeyDraft] = useState("");
@@ -608,7 +610,7 @@ export function ProfileEditDialog(props: {
   const invalid = trimmedLabel.length === 0;
   const removePresentation = PROFILE_REMOVE_PRESENTATION[props.profile.kind];
   const removeDisabledReason = removePresentation.disabledReason;
-  const dialogCopy = profileEditDialogCopy(props.profile, props.startInReauth);
+  const dialogCopy = profileEditDialogCopy(props.profile, reauthenticating);
   const eligibilityDisabledReason = profileEligibilityToggleDisabledReason(
     props.state.enabled,
     PROVIDER_DISPLAY_NAMES[providerId],
@@ -746,7 +748,7 @@ export function ProfileEditDialog(props: {
         state={props.state}
         profile={props.profile}
         switchingAccount={switchingAccount}
-        startInReauth={props.startInReauth}
+        reauthenticating={reauthenticating}
         isLocalHost={props.isLocalHost}
         canOauth={props.canOauth}
         oauthUnavailableHint={props.oauthUnavailableHint}

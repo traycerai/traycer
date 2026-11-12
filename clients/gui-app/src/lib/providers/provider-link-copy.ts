@@ -25,7 +25,8 @@ export const LINK_UNAVAILABLE = "Connect to Traycer to sign in.";
 export const LINK_EXPIRED = "This sign-in expired.";
 export const LINK_FAILED = "Sign-in did not finish.";
 export const LINK_PASTE_WHOLE_CODE = "Paste the whole code claude.ai shows.";
-export const LINK_NO_SIGN_IN = "Sign-in did not finish. Try again.";
+export const LINK_NO_SIGN_IN =
+  "Sign in on the selected computer first, then try again.";
 
 export function onHostOnlyLine(hostName: string): string {
   return `On ${hostName} only.`;

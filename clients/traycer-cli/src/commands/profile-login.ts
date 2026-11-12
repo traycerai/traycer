@@ -32,6 +32,7 @@ import {
   printable,
   readProviderStates,
 } from "../internal/profile-target";
+import { httpUrlOf } from "../internal/profile-login-url";
 import { providerPackReasonRetryable } from "../../../shared/providers/provider-pack-retry";
 import {
   AMBIENT_AUTH_PENDING_REPOLL_CAP,
@@ -259,7 +260,9 @@ export function buildProfileLoginCommand(
       usesEnvironmentSignIn(
         providerId,
         await readLocalHostMethodVersion("providers.linkComplete"),
-      );
+      ) &&
+      (await readLocalHostMethodVersion("environment.status")) !== null &&
+      (await readLocalHostMethodVersion("environment.host.read")) !== null;
     const environmentSignIn =
       supportsEnvironmentSignIn &&
       (await callHostRpcWithDispatch("environment.status", {}, PLAIN_DISPATCH))
@@ -597,22 +600,6 @@ function notStartedMessage(
 /** A login capability marker is an object when declared, null or absent when not. */
 function declares(marker: object | null | undefined): boolean {
   return marker !== null && marker !== undefined;
-}
-
-/**
- * The http(s) URL `value` parses to, or null. The parsed form is what gets
- * both printed and opened: the parser drops tabs and line breaks, so the raw
- * string could print as one link and open as another.
- */
-function httpUrlOf(value: string): string | null {
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:" || url.protocol === "http:"
-      ? url.href
-      : null;
-  } catch {
-    return null;
-  }
 }
 
 function announce(

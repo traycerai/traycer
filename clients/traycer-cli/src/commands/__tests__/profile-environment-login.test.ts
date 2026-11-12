@@ -249,6 +249,9 @@ interface HarnessOptions {
   ) =>
     | ResponseOfMethod<HostRpcRegistry, "environment.status">
     | Promise<ResponseOfMethod<HostRpcRegistry, "environment.status">>;
+  readonly environmentHostRead?: () =>
+    | ResponseOfMethod<HostRpcRegistry, "environment.host.read">
+    | Promise<ResponseOfMethod<HostRpcRegistry, "environment.host.read">>;
   readonly failingProviderListCalls?: readonly number[];
 }
 
@@ -290,7 +293,9 @@ function makeHost(options: HarnessOptions): void {
         }));
       }
       case "environment.host.read":
-        return Promise.resolve(ENVIRONMENT_BINDING);
+        return Promise.resolve(
+          options.environmentHostRead?.() ?? ENVIRONMENT_BINDING,
+        );
       case "environment.status": {
         statusCalls += 1;
         return Promise.resolve(
@@ -325,6 +330,7 @@ interface FakeIo {
   readonly io: ProfileLoginIo;
   readonly interrupt: () => void;
   readonly isInterruptListening: () => boolean;
+  readonly openedUrls: string[];
 }
 
 function makeIo(options: {
@@ -339,10 +345,11 @@ function makeIo(options: {
   const lines = [...(options.lines ?? [])];
   let interruptedDuringWait = false;
   let waitCalls = 0;
+  const openedUrls: string[] = [];
   const io: ProfileLoginIo = {
     newHolderId: () => "holder-environment-login",
     stdinIsTerminal: () => options.terminal,
-    openUrl: () => undefined,
+    openUrl: (url) => openedUrls.push(url),
     wait: (_ms, _signal) => {
       waitCalls += 1;
       if (waitCalls > MAX_FAKE_WAITS) {
@@ -375,6 +382,7 @@ function makeIo(options: {
   };
   return {
     io,
+    openedUrls,
     interrupt: () => {
       if (interruptListening) interruptHandler?.();
     },
@@ -479,6 +487,10 @@ describe("environment profile sign-in through the CLI", () => {
       laterProfiles: () => [admitted],
       link: linkAnswer(SIGN_IN_URL_PROMPT),
       complete: () => completeAnswer("linked", null, null),
+      methodVersion: (method) =>
+        method === "providers.link" || method === "providers.linkComplete"
+          ? V12
+          : { major: 1, minor: 0 },
     });
     const fake = makeIo({ terminal: true, lines: [CODE] });
 
@@ -515,6 +527,138 @@ describe("environment profile sign-in through the CLI", () => {
       created: true,
       profile: { profileId: MANAGED_PROFILE_ID },
     });
+  });
+
+  it.each([
+    [
+      "sign-in URL prompt",
+      {
+        kind: "sign_in_url",
+        url: "https://[private-invalid-url",
+        codePrompt: "One-time code",
+      },
+      "PRIVATE-PASTE-CODE",
+    ],
+    [
+      "device-code prompt",
+      {
+        kind: "device_code",
+        verificationUrl: "file:///private-auth-secret",
+        userCode: "PRIVATE-DEVICE-CODE",
+        expiresAt: 1,
+      },
+      "PRIVATE-DEVICE-CODE",
+    ],
+  ] as const)(
+    "does not expose or open an invalid URL from a %s",
+    async (_kind, prompt, secret) => {
+      const secretUrl =
+        prompt.kind === "sign_in_url" ? prompt.url : prompt.verificationUrl;
+      makeHost({
+        providerId: "codex",
+        profiles: [],
+        link: linkAnswer(prompt),
+      });
+      const fake = makeIo({ terminal: true });
+
+      const { context, result } = await runLogin(
+        "codex",
+        { kind: "create", label: "Work profile" },
+        fake.io,
+      );
+
+      expect(result.data).toEqual({
+        providerId: "codex",
+        status: "not-started",
+        message: "The sign-in page could not be opened.",
+      });
+      expect(result.human).toBe("The sign-in page could not be opened.");
+      expect(fake.openedUrls).toEqual([]);
+      expect(context.output.humanRequired).not.toHaveBeenCalledWith(
+        expect.stringContaining(secret),
+      );
+      expect(context.output.humanRequired).not.toHaveBeenCalledWith(
+        expect.stringContaining(secretUrl),
+      );
+      expect(result.human).not.toContain(secret);
+      expect(result.human).not.toContain(secretUrl);
+      expect(context.output.emitError).not.toHaveBeenCalled();
+      expect(callsTo("providers.linkComplete")).toEqual([]);
+      expect(callsTo("providers.linkCancel")).toHaveLength(1);
+    },
+  );
+
+  it("keeps an installing profile pending until its admitted profile is authenticated", async () => {
+    const admitted = profile(
+      MANAGED_PROFILE_ID,
+      "managed",
+      "Claude local profile",
+      ENVIRONMENT_PROFILE_ID,
+    );
+    const unauthenticated: ProviderProfile = {
+      ...admitted,
+      auth: { ...admitted.auth, status: "unauthenticated" },
+    };
+    makeHost({
+      providerId: "codex",
+      profiles: [],
+      laterProfiles: () => [unauthenticated],
+      link: linkAnswer({ kind: "local_handoff" }),
+      complete: (callNumber) =>
+        callNumber === 1
+          ? completeAnswer("installing", null, null)
+          : completeAnswer("expired", null, null),
+    });
+
+    const { result } = await runLogin(
+      "codex",
+      { kind: "create", label: "Work profile" },
+      makeIo({ terminal: false }).io,
+    );
+
+    expect(result.data).toEqual({
+      providerId: "codex",
+      status: "signed-in-pending",
+    });
+    expect(result.human).toBe(SIGNED_IN_RECEIVING_LINE);
+    expect(result.exitCode).toBe(0);
+    expect(callsTo("providers.linkCancel")).toEqual([]);
+  });
+
+  it("keeps an existing linked profile pending when its admitted row is unauthenticated", async () => {
+    const selected = profile(
+      MANAGED_PROFILE_ID,
+      "managed",
+      "Selected profile",
+      ENVIRONMENT_PROFILE_ID,
+    );
+    const unauthenticated: ProviderProfile = {
+      ...selected,
+      auth: { ...selected.auth, status: "unauthenticated" },
+    };
+    makeHost({
+      providerId: "claude-code",
+      profiles: [selected],
+      laterProfiles: () => [unauthenticated],
+      link: linkAnswer({ kind: "local_handoff" }),
+      complete: () => completeAnswer("linked", MANAGED_PROFILE_ID, null),
+    });
+
+    const { result } = await runLogin(
+      "claude",
+      { kind: "existing", profile: MANAGED_PROFILE_ID },
+      makeIo({ terminal: true }).io,
+    );
+
+    expect(result.data).toEqual({
+      providerId: "claude-code",
+      status: "signed-in-pending",
+    });
+    expect(result.human).toBe(SIGNED_IN_RECEIVING_LINE);
+    expect(result.exitCode).toBe(0);
+    expect(callsTo("providers.list")).toHaveLength(2);
+    expect(callsTo("providers.linkComplete")).toHaveLength(1);
+    expect(callsTo("providers.linkCancel")).toEqual([]);
   });
 
   it("waits through Codex device sign-in and resolves the admitted alias to its local id", async () => {
@@ -720,6 +864,32 @@ describe("environment profile sign-in through the CLI", () => {
     });
   });
 
+  it("reports the targeted no-sign-in response before generic incomplete failure", async () => {
+    makeHost({
+      providerId: "codex",
+      profiles: [],
+      link: linkAnswer({ kind: "local_handoff" }),
+      complete: () => completeAnswer("failed", null, "no_sign_in"),
+    });
+
+    const { result } = await runLogin(
+      "codex",
+      { kind: "create", label: "Work profile" },
+      makeIo({ terminal: false }).io,
+    );
+
+    expect(result.data).toEqual({
+      providerId: "codex",
+      status: "not-started",
+      message: "Sign in on this computer first, then try again.",
+    });
+    expect(result.human).toBe(
+      "Sign in on this computer first, then try again.",
+    );
+    expect(result.exitCode).toBe(1);
+    expect(callsTo("providers.linkCancel")).toHaveLength(1);
+  });
+
   it("refuses a typed existing-profile mismatch without replacing the account", async () => {
     const selected = profile(
       MANAGED_PROFILE_ID,
@@ -813,6 +983,14 @@ describe("environment profile sign-in through the CLI", () => {
       "missing completion",
       (method: string) => (method === "providers.linkComplete" ? null : V12),
     ],
+    [
+      "missing environment status",
+      (method: string) => (method === "environment.status" ? null : V12),
+    ],
+    [
+      "missing environment host read",
+      (method: string) => (method === "environment.host.read" ? null : V12),
+    ],
   ] as const)(
     "uses the existing local flow for an existing profile with %s",
     async (_case, methodVersion) => {
@@ -842,6 +1020,8 @@ describe("environment profile sign-in through the CLI", () => {
         createProfile: null,
       });
       expect(callsTo("providers.link")).toHaveLength(0);
+      expect(callsTo("environment.status")).toEqual([]);
+      expect(callsTo("environment.host.read")).toEqual([]);
       expect(result.data).toMatchObject({
         status: "signed-in",
         created: false,
@@ -849,6 +1029,51 @@ describe("environment profile sign-in through the CLI", () => {
       });
     },
   );
+
+  it("propagates an environment status read failure without falling back locally", async () => {
+    makeHost({
+      providerId: "claude-code",
+      profiles: [],
+      environmentStatus: () => Promise.reject(new Error("Status read failed.")),
+    });
+    const context = makeContext();
+
+    await expect(
+      buildProfileLoginCommand(
+        {
+          provider: "claude",
+          target: { kind: "create", label: "Work profile" },
+        },
+        makeIo({ terminal: true }).io,
+      )(context),
+    ).rejects.toThrow("Status read failed.");
+
+    expect(callsTo("environment.status")).toHaveLength(1);
+    expect(callsTo("environment.host.read")).toEqual([]);
+    expect(callsTo("providers.startLogin")).toEqual([]);
+    expect(callsTo("providers.link")).toEqual([]);
+  });
+
+  it("propagates an environment host read failure without falling back locally", async () => {
+    makeHost({
+      providerId: "claude-code",
+      profiles: [],
+      environmentHostRead: () => Promise.reject(new Error("Host read failed.")),
+    });
+
+    await expect(
+      runLogin(
+        "claude",
+        { kind: "create", label: "Work profile" },
+        makeIo({ terminal: true }).io,
+      ),
+    ).rejects.toThrow("Host read failed.");
+
+    expect(callsTo("environment.status")).toHaveLength(1);
+    expect(callsTo("environment.host.read")).toHaveLength(1);
+    expect(callsTo("providers.startLogin")).toEqual([]);
+    expect(callsTo("providers.link")).toEqual([]);
+  });
 
   it("releases a link once when Ctrl+C interrupts pending completion", async () => {
     makeHost({

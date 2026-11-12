@@ -1,4 +1,10 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AMBIENT_PROFILE_ID_SENTINEL } from "@traycer/protocol/host/agent/shared";
@@ -12,16 +18,31 @@ import type {
   ProvidersLinkRequestV12,
   ProvidersLinkResponseV12,
 } from "@traycer/protocol/host/environment-schemas";
-import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import { poolEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import {
+  createHostRpcTierPlan,
+  NO_POOL_HOST_RPC_TIER_PLAN,
+  type HostRpcTierPlan,
+} from "@traycer-clients/shared/host-client/host-rpc-routing";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  getNegotiatedHostMethodVersion,
+  getNegotiatedHostMethods,
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import type { HostRpcRegistry } from "@/lib/host";
+import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import {
   buildEnvironmentClient,
   environmentStatusFixture,
+  hostEntryFixture,
 } from "@/lib/environment/__tests__/environment-test-support";
+import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
+import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
 import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-native-schemas";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -42,11 +63,28 @@ const mocks = vi.hoisted(() => ({
 const clientRef = vi.hoisted(() => ({
   current: null as HostClient<HostRpcRegistry> | null,
 }));
+const routingPlan = vi.hoisted((): { current: HostRpcTierPlan | null } => ({
+  current: null,
+}));
 
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   return { ...actual, useOptionalHostClient: () => clientRef.current };
 });
+vi.mock(
+  "@traycer-clients/shared/host-client/host-rpc-routing",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/host-rpc-routing")
+      >();
+    return {
+      ...actual,
+      readProcessHostRpcTierPlan: (): HostRpcTierPlan =>
+        routingPlan.current ?? actual.NO_POOL_HOST_RPC_TIER_PLAN,
+    };
+  },
+);
 
 vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
   useHostCredentialRefusal: () => mocks.credentialRefusal,
@@ -121,11 +159,26 @@ const ROUTE_MANIFEST: ConnectionManifest = {
   "environment.status": { major: 1, minor: 2 },
   "environment.list": { major: 1, minor: 1 },
 };
+const POOL_BINDING_READ_MANIFEST: ConnectionManifest = {
+  "environment.binding.read": { major: 1, minor: 0 },
+  "environment.list": { major: 1, minor: 1 },
+};
+const POOL_LIST_ONLY_MANIFEST: ConnectionManifest = {
+  "environment.list": { major: 1, minor: 1 },
+};
+const routeReadMethods: string[] = [];
 
 interface RouteFixture {
   readonly status: EnvironmentStatusResponseV12;
   readonly bindingOwnerKind: "user" | "organization";
   readonly effectiveRole: "owner" | "admin" | "editor" | "viewer";
+}
+
+interface PoolRouteFixture {
+  readonly client: HostClient<HostRpcRegistry>;
+  readonly messenger: MockHostMessenger<HostRpcRegistry>;
+  readonly readMethods: string[];
+  readonly statusRead: Promise<void>;
 }
 
 function managedProfile(): ProviderProfile {
@@ -203,39 +256,48 @@ function buildRouteClient(
   const { client } = buildEnvironmentClient({
     hostId: HOST_ID,
     handlers: {
-      "environment.host.read": () => ({
-        hostId: HOST_ID,
-        environment: {
-          environmentId: ENVIRONMENT_ID,
-          ownerKind: route.bindingOwnerKind,
-          ownerId:
-            route.bindingOwnerKind === "user" ? "owner-test" : "team-test",
-          roomId: "room-test",
-          label: route.bindingOwnerKind === "user" ? "Personal" : "Acme",
-        },
-        explicit: true,
-        enrolledByUserId: null,
-        canUnbind: false,
-        sharingGeneration: null,
-      }),
-      "environment.status": () => route.status,
-      "environment.list": () => ({
-        environments: [
-          {
+      "environment.host.read": () => {
+        routeReadMethods.push("environment.host.read");
+        return {
+          hostId: HOST_ID,
+          environment: {
             environmentId: ENVIRONMENT_ID,
             ownerKind: route.bindingOwnerKind,
             ownerId:
               route.bindingOwnerKind === "user" ? "owner-test" : "team-test",
             roomId: "room-test",
             label: route.bindingOwnerKind === "user" ? "Personal" : "Acme",
-            effectiveRole: route.effectiveRole,
-            kind: route.bindingOwnerKind === "user" ? "personal" : "team",
-            hostCount: 1,
-            providerHandle:
-              route.bindingOwnerKind === "user" ? null : "handle-acme",
           },
-        ],
-      }),
+          explicit: true,
+          enrolledByUserId: null,
+          canUnbind: false,
+          sharingGeneration: null,
+        };
+      },
+      "environment.status": () => {
+        routeReadMethods.push("environment.status");
+        return route.status;
+      },
+      "environment.list": () => {
+        routeReadMethods.push("environment.list");
+        return {
+          environments: [
+            {
+              environmentId: ENVIRONMENT_ID,
+              ownerKind: route.bindingOwnerKind,
+              ownerId:
+                route.bindingOwnerKind === "user" ? "owner-test" : "team-test",
+              roomId: "room-test",
+              label: route.bindingOwnerKind === "user" ? "Personal" : "Acme",
+              effectiveRole: route.effectiveRole,
+              kind: route.bindingOwnerKind === "user" ? "personal" : "team",
+              hostCount: 1,
+              providerHandle:
+                route.bindingOwnerKind === "user" ? null : "handle-acme",
+            },
+          ],
+        };
+      },
       "providers.link": (request) => {
         linkRequests.push(request);
         const response: ProvidersLinkResponseV12 = {
@@ -265,17 +327,108 @@ function buildRouteClient(
   return client;
 }
 
+function buildPoolRouteClient(
+  linkRequests: ProvidersLinkRequestV12[],
+  route: RouteFixture,
+  poolManifest: ConnectionManifest | null,
+  bindingRead: () => EnvironmentHostBinding,
+): PoolRouteFixture {
+  const targetEntry = hostEntryFixture(HOST_ID);
+  const readMethods: string[] = [];
+  const statusRead = Promise.withResolvers<void>();
+  let requestSequence = 0;
+  const messenger = new MockHostMessenger<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    requestId: () => {
+      requestSequence += 1;
+      return `req-profile-route-${String(requestSequence)}`;
+    },
+    handlers: {
+      "environment.status": () => {
+        readMethods.push("environment.status");
+        statusRead.resolve();
+        return route.status;
+      },
+      "environment.binding.read": () => {
+        readMethods.push("environment.binding.read");
+        return bindingRead();
+      },
+      "environment.list": () => {
+        readMethods.push("environment.list");
+        return {
+          environments: [
+            {
+              environmentId: ENVIRONMENT_ID,
+              ownerKind: route.bindingOwnerKind,
+              ownerId:
+                route.bindingOwnerKind === "user" ? "owner-test" : "team-test",
+              roomId: "room-test",
+              label: route.bindingOwnerKind === "user" ? "Personal" : "Acme",
+              effectiveRole: route.effectiveRole,
+              kind: route.bindingOwnerKind === "user" ? "personal" : "team",
+              hostCount: 1,
+              providerHandle:
+                route.bindingOwnerKind === "user" ? null : "handle-acme",
+            },
+          ],
+        };
+      },
+      "providers.link": (request) => {
+        linkRequests.push(request);
+        return {
+          linkId: "link-profile-pool-route",
+          environmentProfileId: "environment-profile-pool-route",
+          prompt: {
+            kind: "sign_in_url",
+            url: "https://auth.example.test/sign-in",
+            codePrompt: "One-time code",
+          },
+        };
+      },
+    },
+  });
+  const plan = createHostRpcTierPlan(poolEntry);
+  routingPlan.current = plan;
+  if (plan.pool?.hostId !== POOL_HOST_ID) {
+    throw new Error("Expected the server-pool routing plan in this fixture.");
+  }
+  const spine = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: { invalidateHostScope: () => undefined },
+    schedulingPolicy: hostRpcSchedulingPolicy,
+    findHostById: (hostId) => {
+      if (hostId === HOST_ID) return targetEntry;
+      return hostId === POOL_HOST_ID ? poolEntry : null;
+    },
+    messenger,
+    routing: { plan, selectedHostId: () => null },
+  });
+  spine.setRequestContext(
+    createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+  );
+  recordNegotiatedHostManifest(HOST_ID, ROUTE_MANIFEST);
+  if (poolManifest !== null) {
+    recordNegotiatedHostManifest(POOL_HOST_ID, poolManifest);
+  }
+  return {
+    client: spine.createRequester(targetEntry),
+    messenger,
+    readMethods,
+    statusRead: statusRead.promise,
+  };
+}
+
 function renderRoutedPanel(
   profile: ProviderProfile,
   replaceAccount: boolean,
   client: HostClient<HostRpcRegistry>,
   onCancel: () => void,
-): void {
+) {
   clientRef.current = client;
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
-  render(
+  return render(
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <ProviderProfileReauthPanel
@@ -303,6 +456,8 @@ function ambientProfile(): ProviderProfile {
 }
 
 beforeEach(() => {
+  routeReadMethods.length = 0;
+  routingPlan.current = NO_POOL_HOST_RPC_TIER_PLAN;
   useAuthStore.setState({
     status: "signed-in",
     profile: {
@@ -322,6 +477,7 @@ afterEach(() => {
   vi.clearAllMocks();
   mocks.credentialRefusal = null;
   clientRef.current = null;
+  routingPlan.current = null;
   resetNegotiatedManifests();
   useAuthStore.setState({
     status: "signed-out",
@@ -350,6 +506,10 @@ describe("managed profile reauth routing", () => {
     renderRoutedPanel(profile, false, client, () => undefined);
 
     await screen.findByLabelText("One-time code");
+    expect(routeReadMethods).toEqual([
+      "environment.status",
+      "environment.host.read",
+    ]);
     expect(linkRequests).toEqual([
       {
         providerId: "codex",
@@ -585,5 +745,195 @@ describe("<ProviderProfileReauthPanel /> on a host that takes no credentials", (
     expect(mocks.startLoginAsync).toHaveBeenCalledTimes(1);
     expect(screen.queryByTestId("credential-refusal")).toBeNull();
     expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
+  });
+});
+
+const POOL_ROUTE: RouteFixture = {
+  status: environmentStatusFixture({}),
+  bindingOwnerKind: "user",
+  effectiveRole: "owner",
+};
+
+const POOL_BINDING: EnvironmentHostBinding = {
+  hostId: HOST_ID,
+  environment: {
+    environmentId: ENVIRONMENT_ID,
+    ownerKind: "user",
+    ownerId: "owner-test",
+    roomId: "room-test",
+    label: "Personal",
+  },
+  explicit: true,
+  enrolledByUserId: null,
+  canUnbind: false,
+};
+
+describe("managed profile routing reads in a pool build", () => {
+  it("keeps an unknown pool binding-read capability in the reading state", async () => {
+    const linkRequests: ProvidersLinkRequestV12[] = [];
+    const fixture = buildPoolRouteClient(
+      linkRequests,
+      POOL_ROUTE,
+      null,
+      () => POOL_BINDING,
+    );
+    const rendered = renderRoutedPanel(
+      managedProfile(),
+      false,
+      fixture.client,
+      vi.fn(),
+    );
+
+    await act(async () => {
+      await fixture.statusRead;
+    });
+
+    expect(getNegotiatedHostMethods(POOL_HOST_ID)).toBeNull();
+    const spinnerElements = rendered.container.querySelectorAll(
+      'span[aria-hidden="true"]',
+    );
+    expect(spinnerElements).toHaveLength(1);
+    const spinner = spinnerElements.item(0);
+    if (!(spinner instanceof HTMLSpanElement)) {
+      throw new Error("Expected the routed waiting spinner to be a span.");
+    }
+    expect(spinner.getAttribute("aria-hidden")).toBe("true");
+    expect(spinner.textContent.trim()).toBeTruthy();
+    expect(fixture.readMethods).toEqual(["environment.status"]);
+    expect(
+      fixture.messenger.calls.map((call) => [
+        call.method,
+        call.authority.endpoint.hostId,
+      ]),
+    ).toEqual([["environment.status", HOST_ID]]);
+    expect(linkRequests).toEqual([]);
+    expect(mocks.startLoginAsync).not.toHaveBeenCalled();
+  });
+
+  it("routes a supported pool binding read at v1.0 and skips the user inventory read", async () => {
+    const linkRequests: ProvidersLinkRequestV12[] = [];
+    const profile = managedProfile();
+    const fixture = buildPoolRouteClient(
+      linkRequests,
+      POOL_ROUTE,
+      POOL_BINDING_READ_MANIFEST,
+      () => POOL_BINDING,
+    );
+    renderRoutedPanel(profile, false, fixture.client, vi.fn());
+
+    await screen.findByLabelText("One-time code");
+
+    expect(
+      getNegotiatedHostMethodVersion(POOL_HOST_ID, "environment.binding.read"),
+    ).toEqual({ major: 1, minor: 0 });
+    expect(fixture.readMethods).toEqual([
+      "environment.status",
+      "environment.binding.read",
+    ]);
+    const statusCall = fixture.messenger.calls.find(
+      (call) => call.method === "environment.status",
+    );
+    const bindingCall = fixture.messenger.calls.find(
+      (call) => call.method === "environment.binding.read",
+    );
+    expect(statusCall?.authority.endpoint.hostId).toBe(HOST_ID);
+    expect(bindingCall?.authority.endpoint.hostId).toBe(POOL_HOST_ID);
+    expect(bindingCall?.params).toEqual({ hostId: HOST_ID });
+    expect(
+      fixture.messenger.calls.filter(
+        (call) => call.method === "environment.list",
+      ),
+    ).toHaveLength(0);
+    expect(linkRequests).toEqual([
+      {
+        providerId: "codex",
+        profileId: profile.profileId,
+        environmentId: ENVIRONMENT_ID,
+        createProfile: null,
+        replaceAccount: false,
+      },
+    ]);
+  });
+
+  it("uses local sign-in when the pool has no binding-read method", async () => {
+    const linkRequests: ProvidersLinkRequestV12[] = [];
+    const fixture = buildPoolRouteClient(
+      linkRequests,
+      POOL_ROUTE,
+      POOL_LIST_ONLY_MANIFEST,
+      () => POOL_BINDING,
+    );
+    renderRoutedPanel(managedProfile(), false, fixture.client, vi.fn());
+
+    await screen.findByText("Opening the sign-in page…");
+
+    expect(fixture.readMethods).toEqual(["environment.status"]);
+    expect(fixture.messenger.calls.map((call) => call.method)).toEqual([
+      "environment.status",
+    ]);
+    expect(mocks.startLoginAsync).toHaveBeenCalledTimes(1);
+    expect(linkRequests).toEqual([]);
+  });
+
+  it("shows retry for a refused pool binding read and resumes on the next read", async () => {
+    const linkRequests: ProvidersLinkRequestV12[] = [];
+    const profile = managedProfile();
+    const bindingResponses: Array<EnvironmentHostBinding | HostRpcError> = [
+      new HostRpcError({
+        code: "FORBIDDEN",
+        message: "The binding read was refused.",
+        requestId: "req-binding-refusal",
+        method: "environment.binding.read",
+        fatalDetails: null,
+      }),
+      POOL_BINDING,
+    ];
+    const fixture = buildPoolRouteClient(
+      linkRequests,
+      POOL_ROUTE,
+      POOL_BINDING_READ_MANIFEST,
+      () => {
+        const response = bindingResponses.shift();
+        if (response instanceof HostRpcError) throw response;
+        if (response === undefined) {
+          throw new Error("No binding response remains in the fixture.");
+        }
+        return response;
+      },
+    );
+    renderRoutedPanel(profile, false, fixture.client, vi.fn());
+
+    await screen.findByText(
+      "Couldn't read where this profile will be available.",
+    );
+    const firstBindingCall = fixture.messenger.calls.find(
+      (call) => call.method === "environment.binding.read",
+    );
+    expect(firstBindingCall?.authority.endpoint.hostId).toBe(POOL_HOST_ID);
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await screen.findByLabelText("One-time code");
+
+    expect(fixture.readMethods).toEqual([
+      "environment.status",
+      "environment.binding.read",
+      "environment.binding.read",
+    ]);
+    const bindingCalls = fixture.messenger.calls.filter(
+      (call) => call.method === "environment.binding.read",
+    );
+    expect(bindingCalls).toHaveLength(2);
+    expect(bindingCalls.map((call) => call.authority.endpoint.hostId)).toEqual([
+      POOL_HOST_ID,
+      POOL_HOST_ID,
+    ]);
+    expect(linkRequests).toEqual([
+      {
+        providerId: "codex",
+        profileId: profile.profileId,
+        environmentId: ENVIRONMENT_ID,
+        createProfile: null,
+        replaceAccount: false,
+      },
+    ]);
   });
 });

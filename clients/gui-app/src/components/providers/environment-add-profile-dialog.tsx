@@ -7,10 +7,7 @@ import {
 import type { HostRpcRegistry } from "@/lib/host";
 import type { AddProviderProfileDialogProps } from "@/components/settings/panels/add-provider-profile-dialog";
 import { ProviderProfileCard } from "@/components/providers/provider-profile-card";
-import {
-  EnvironmentProfileSignIn,
-  type EnvironmentSignInCompletion,
-} from "./environment-profile-sign-in";
+import { EnvironmentProfileSignIn } from "./environment-profile-sign-in";
 import { useRecolorProviderProfileForClient } from "@/hooks/providers/use-recolor-provider-profile-mutation";
 import {
   Dialog,
@@ -36,8 +33,9 @@ export function EnvironmentAddProfileDialog(
   const [color, setColor] = useState(props.initialAccentColor);
   const [shareTerminalTools, setShareTerminalTools] = useState(true);
   const share = props.sharesSkillsAndPlugins && shareTerminalTools;
-  const [completion, setCompletion] =
-    useState<EnvironmentSignInCompletion | null>(null);
+  const [completionProfileId, setCompletionProfileId] = useState<string | null>(
+    null,
+  );
   const recolor = useRecolorProviderProfileForClient(props.client);
   const profileIdsBeforeSignIn = useRef<ReadonlySet<string>>(new Set());
   const signInColor = useRef(color);
@@ -45,28 +43,24 @@ export function EnvironmentAddProfileDialog(
     if (!open && recolor.isPending) return;
     props.onOpenChange(open);
   };
-  const finish = (result: EnvironmentSignInCompletion): void => {
-    const profile = result.profile;
-    if (profile === null) return;
+  const finish = (profileId: string, alreadyChosenColor: boolean): void => {
     props.onFailedAttempt(null);
-    const alreadyExisted = profileIdsBeforeSignIn.current.has(
-      profile.profileId,
-    );
-    if (alreadyExisted || profile.accentColor === signInColor.current) {
-      props.onProfileCreated(profile.profileId);
+    const alreadyExisted = profileIdsBeforeSignIn.current.has(profileId);
+    if (alreadyExisted || alreadyChosenColor) {
+      props.onProfileCreated(profileId);
       props.onOpenChange(false);
       return;
     }
-    setCompletion(result);
+    setCompletionProfileId(profileId);
     recolor.mutate(
       {
         providerId: props.state.providerId,
-        profileId: profile.profileId,
+        profileId,
         accentColor: signInColor.current,
       },
       {
         onSuccess: () => {
-          props.onProfileCreated(profile.profileId);
+          props.onProfileCreated(profileId);
           props.onOpenChange(false);
         },
       },
@@ -138,15 +132,28 @@ export function EnvironmentAddProfileDialog(
             }}
             waitForLocalProfile
             disabled={label.trim().length === 0 || recolor.isPending}
-            onComplete={finish}
+            onComplete={({ profile }) => {
+              if (profile !== null)
+                finish(
+                  profile.profileId,
+                  profile.accentColor === signInColor.current,
+                );
+            }}
+            onDeliveryPending={(profileId) => {
+              if (profileId === null) changeOpen(false);
+              else finish(profileId, false);
+            }}
             onCancel={() => changeOpen(false)}
           />
-          {recolor.error !== null && completion !== null ? (
+          {recolor.error !== null && completionProfileId !== null ? (
             <>
               <p role="alert" className="text-ui-sm">
                 The profile is signed in, but its color could not be saved.
               </p>
-              <Button type="button" onClick={() => finish(completion)}>
+              <Button
+                type="button"
+                onClick={() => finish(completionProfileId, false)}
+              >
                 Retry
               </Button>
             </>
