@@ -366,7 +366,7 @@ describe("HostEnvironmentSection", () => {
     ).toBeTruthy();
     expect(
       within(dialog).getByText(
-        "The team will own this computer. Any member of the team can claim it as their own.",
+        "The team will own this computer. Any member of the team can claim it as their own. Traycer restarts once on this computer.",
       ),
     ).toBeTruthy();
     expect(within(dialog).queryByText("Personal")).toBeNull();
