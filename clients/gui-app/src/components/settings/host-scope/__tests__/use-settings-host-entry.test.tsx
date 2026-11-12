@@ -193,7 +193,13 @@ function targetOption(
     registered: kind !== "local",
     sandbox:
       kind === "sandbox"
-        ? { state: "awake", frozen: false, summary: null, teamOwned: false }
+        ? {
+            state: "awake",
+            frozen: false,
+            summary: null,
+            ownerKind: "unknown",
+            teamOwned: false,
+          }
         : null,
     isActive: hostId === "ambient",
   });

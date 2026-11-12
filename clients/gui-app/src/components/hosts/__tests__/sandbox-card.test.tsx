@@ -187,6 +187,7 @@ import {
 } from "@/components/settings/host-scope/host-scope-model";
 
 const NAME = "build-box";
+const TEAM_AUTOMATION_PRICE = { awakeMc: 120, suspendedMc: 40, stoppedMc: 20 };
 
 function renderCard(sandbox: HostScopeSandbox): void {
   renderCardOnHost(sandbox, null, "online");
@@ -215,7 +216,9 @@ function renderCardOnHost(
         onDestroyed={onDestroyed}
         renderActions={renderSandboxHeaderActions}
       />
-      <SandboxHeaderCost sandbox={sandbox} />
+      <div data-testid="sandbox-header-cost">
+        <SandboxHeaderCost sandbox={sandbox} />
+      </div>
       <SandboxHeaderNotices sandbox={sandbox} teamName={null} />
       <SandboxInstallationGroup sandbox={sandbox} />
       {sandbox.summary === null ? null : (
@@ -258,6 +261,7 @@ function sandboxOf(
       frozen,
       ...overrides,
     }),
+    ownerKind: "user",
     teamOwned: false,
   };
 }
@@ -719,19 +723,41 @@ describe("rates", () => {
     },
   );
 
-  it("uses the personal ledger rate when it differs from the nominal rate", () => {
+  it("does not mistake an unpriced ledger zero for no billing", () => {
     mocks.costs = {
-      sandboxes: [{ ...COST, currentRateMillicreditsPerHour: 250 }],
+      sandboxes: [{ ...costToday(100), currentRateMillicreditsPerHour: 0 }],
+      awakeBurnMillicreditsPerHour: 0,
+      todayYoursMillicredits: 0,
+      todayByEnvironment: [],
+    };
+    renderCard(sandboxOf("awake", false, { priceMcPerHour: null }));
+    expect(screen.getByTestId("sandbox-header-cost").textContent).toBe(
+      "·$0.10 today",
+    );
+    expect(screen.getByTestId("sandbox-card-cost-today").textContent).toBe(
+      "$0.10 today",
+    );
+  });
+
+  it("keeps the authoritative personal ledger rate during a transition", () => {
+    mocks.costs = {
+      sandboxes: [
+        {
+          ...COST,
+          state: "resuming",
+          currentRateMillicreditsPerHour: 250,
+        },
+      ],
       awakeBurnMillicreditsPerHour: 250,
       todayYoursMillicredits: 0,
       todayByEnvironment: [],
     };
 
-    renderCard(sandboxOf("awake", false, {}));
+    renderCard(sandboxOf("resuming", false, {}));
 
     expect(screen.getAllByText("$0.25 an hour")).toHaveLength(1);
     expect(screen.queryByText("$0.12 an hour")).toBeNull();
-    expect(screen.getByText("Storage rate")).toBeTruthy();
+    expect(screen.queryByTestId("sandbox-card-other-rate")).toBeNull();
   });
 
   it("says Not billing for a frozen personal sandbox and shows its awake rate once", () => {
@@ -1034,7 +1060,13 @@ describe("without a summary", () => {
   });
 
   function renderWithoutSummary(state: HostScopeSandbox["state"]): void {
-    renderCard({ state, frozen: false, summary: null, teamOwned: false });
+    renderCard({
+      state,
+      frozen: false,
+      summary: null,
+      ownerKind: "unknown",
+      teamOwned: false,
+    });
   }
 
   it("says it is loading while the list has not answered", async () => {
@@ -1230,7 +1262,7 @@ describe("verbs", () => {
 });
 
 describe("Automations row", () => {
-  it("offers an awake row no action, and says it is free", () => {
+  it("keeps a personal awake row free", () => {
     mocks.costs = {
       sandboxes: [costToday(3)],
       awakeBurnMillicreditsPerHour: 120,
@@ -1249,6 +1281,57 @@ describe("Automations row", () => {
     expect(screen.getByTestId("sandbox-card-idle").textContent).toBe(
       "Stops after 30 min idle · files kept · the next shell starts it",
     );
+    expect(screen.queryByTestId("sandbox-card-other-rate")).toBeNull();
+  });
+
+  it("shows the listed rate for a team-owned awake Automations row", () => {
+    mocks.costs = {
+      sandboxes: [costToday(3)],
+      awakeBurnMillicreditsPerHour: 120,
+      todayYoursMillicredits: 0,
+      todayByEnvironment: [],
+    };
+    const sandbox = {
+      ...sandboxOf("awake", false, {
+        kind: "automation",
+        priceMcPerHour: TEAM_AUTOMATION_PRICE,
+      }),
+      teamOwned: true,
+    };
+
+    renderCard(sandbox);
+
+    expect(screen.queryAllByText("Free", { exact: true })).toHaveLength(0);
+    expect(screen.queryByText("Free today", { exact: true })).toBeNull();
+    expect(screen.getByText("$0.12 an hour", { exact: true })).toBeTruthy();
+    expect(screen.getByText("Storage rate", { exact: true })).toBeTruthy();
+    expect(screen.getByTestId("sandbox-card-other-rate").textContent).toBe(
+      "$0.04 an hour",
+    );
+  });
+
+  it("does not call an unpriced team Automations row free", () => {
+    const sandbox = {
+      ...sandboxOf("awake", false, {
+        kind: "automation",
+        priceMcPerHour: null,
+      }),
+      teamOwned: true,
+    };
+
+    renderCard(sandbox);
+
+    expect(screen.queryAllByText("Free", { exact: true })).toHaveLength(0);
+    expect(screen.queryByText("Free today", { exact: true })).toBeNull();
+    expect(screen.getByTestId("sandbox-header-cost").textContent).toBe("");
+    expect(screen.queryByTestId("sandbox-card-cost-today")).toBeNull();
+    expect(screen.queryByTestId("sandbox-card-other-rate")).toBeNull();
+  });
+
+  it("guard: keeps a personal Automations row free during a transition", () => {
+    renderCard(sandboxOf("resuming", false, { kind: "automation" }));
+
+    expect(screen.getByText("Free", { exact: true })).toBeTruthy();
   });
 
   it("offers a released row no action", () => {
@@ -2067,6 +2150,44 @@ describe("Overview Costs and Secrets tabs", () => {
     );
   }
 
+  it("does not call a summary-only Automations pod free before ownership arrives", () => {
+    const summary = sandboxSummaryFixture({
+      kind: "automation",
+      state: "awake",
+      createdBy: null,
+      priceMcPerHour: TEAM_AUTOMATION_PRICE,
+    });
+    const options = buildHostScopeOptions({
+      directory: [],
+      registry: [],
+      sandboxes: [summary],
+      leases: [],
+      authorityAttached: false,
+      localHostId: null,
+      activeHostId: null,
+      localService: undefined,
+      localPlatform: null,
+      hasLiveSession: () => false,
+      localHostSettingUp: false,
+      localHostTerminalRunNote: null,
+      nowMs: 0,
+    });
+    const sandbox = options[0]?.sandbox;
+    if (sandbox === null) throw new Error("Missing sandbox");
+    mocks.costs = {
+      sandboxes: [COST],
+      awakeBurnMillicreditsPerHour: 120,
+      todayYoursMillicredits: 0,
+      todayByEnvironment: [],
+    };
+    renderCard(sandbox);
+    renderCosts(sandbox);
+    expect(screen.queryAllByText("Free", { exact: true })).toHaveLength(0);
+    expect(screen.queryByText("Free today", { exact: true })).toBeNull();
+    expect(screen.getByText("$0.12 an hour", { exact: true })).toBeTruthy();
+    expect(screen.getByText("$0.12 an hour while awake")).toBeTruthy();
+  });
+
   it("splits the personal ledger into rate, today, charged, compute, storage, pending, and balance", () => {
     mocks.costs = {
       sandboxes: [{ ...COST, pendingMillicredits: 0 }],
@@ -2098,11 +2219,45 @@ describe("Overview Costs and Secrets tabs", () => {
     );
   });
 
-  it("says an automation is free and draws no storage rate", () => {
+  it("guard: keeps a personal Automations row free with no storage rate", () => {
     renderCosts(sandboxOf("awake", false, { kind: "automation" }));
     expect(screen.getByText("Free")).toBeTruthy();
     expect(screen.queryByText("Storage rate")).toBeNull();
     expect(screen.queryByText(/while suspended or stopped/)).toBeNull();
+  });
+
+  it("shows a team Automations row's awake and storage rates", () => {
+    const sandbox = {
+      ...sandboxOf("awake", false, {
+        kind: "automation",
+        priceMcPerHour: TEAM_AUTOMATION_PRICE,
+      }),
+      teamOwned: true,
+    };
+
+    renderCosts(sandbox);
+
+    const cost = screen.getByTestId("sandbox-card-cost").textContent;
+    expect(cost).not.toContain("Free");
+    expect(cost).toContain("$0.12 an hour while awake");
+    expect(cost).toContain("$0.04 an hour while suspended or stopped");
+  });
+
+  it("guard: leaves unpriced team Automations rates unknown", () => {
+    const sandbox = {
+      ...sandboxOf("awake", false, {
+        kind: "automation",
+        priceMcPerHour: null,
+      }),
+      teamOwned: true,
+    };
+
+    renderCosts(sandbox);
+
+    const cost = screen.getByTestId("sandbox-card-cost");
+    expect(cost.textContent).not.toContain("Free");
+    expect(within(cost).queryByText("Rate")).toBeNull();
+    expect(within(cost).queryByText("Storage rate")).toBeNull();
   });
 
   it("draws no rate rows when the price is unknown", () => {

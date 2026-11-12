@@ -222,6 +222,7 @@ function renderSection(
                       state: "awake",
                       frozen: false,
                       summary: sandboxSummaryFixture({ hostId: "host-a" }),
+                      ownerKind: "unknown",
                       teamOwned: false,
                     }
                   : null,

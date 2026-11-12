@@ -114,6 +114,7 @@ describe("buildHostScopeOptions a listed sandbox with no host row", () => {
       state: "failed",
       frozen: false,
       summary,
+      ownerKind: "unknown",
       teamOwned: false,
     });
   });
@@ -147,6 +148,7 @@ describe("buildHostScopeOptions a listed sandbox with no host row", () => {
       state: "creating",
       frozen: false,
       summary,
+      ownerKind: "unknown",
       teamOwned: false,
     });
   });
