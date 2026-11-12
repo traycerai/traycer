@@ -11,6 +11,20 @@ import { withCredentialsLock } from "./credentials-lock";
 const PIECE_COUNT = 16;
 const PIECE_BYTES = 64 * 1024;
 
+export async function isCredentialsReserveComplete(
+  credentialsPath: string,
+): Promise<boolean> {
+  for (let index = 0; index < PIECE_COUNT; index += 1) {
+    try {
+      const piece = await stat(`${credentialsPath}.reserve.${index}`);
+      if (!piece.isFile() || piece.size !== PIECE_BYTES) return false;
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+
 export class CredentialsReserve {
   private active = 0;
   private generation = 0;
