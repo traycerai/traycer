@@ -44,7 +44,10 @@ function signedOut(): void {
 
 /** The gate's header, the dialog's real seat where no shell is up. */
 function mountSeat(): void {
-  const queryClient = new QueryClient();
+  mountSeatWithQueryClient(new QueryClient());
+}
+
+function mountSeatWithQueryClient(queryClient: QueryClient): void {
   render(
     <QueryClientProvider client={queryClient}>
       <HeaderIdentity showAppSettings={false} hostsSignOutConfirm />
@@ -149,5 +152,44 @@ describe("the pending sign-out question", () => {
       expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull(),
     );
     expect(authHarness.signOut).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps pending and failed sign-out state across header-seat remounts", async () => {
+    signedInAs("test-session");
+    const pendingSignOut = deferred<boolean>();
+    const queryClient = new QueryClient();
+    authHarness.signOut.mockReturnValueOnce(pendingSignOut.promise);
+    mountSeatWithQueryClient(queryClient);
+    askToSignOut();
+
+    fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+    await waitFor(() => {
+      expect(authHarness.signOut).toHaveBeenCalledTimes(1);
+    });
+
+    cleanup();
+    mountSeatWithQueryClient(queryClient);
+    const remountedAction = screen.getByRole("button", { name: "Sign out" });
+    expect.soft(remountedAction.hasAttribute("disabled")).toBe(true);
+
+    await act(async () => {
+      pendingSignOut.resolve(false);
+      await pendingSignOut.promise;
+    });
+
+    expect
+      .soft(screen.queryByRole("alert")?.textContent)
+      .toBe("Couldn't sign out. Please try again.");
+    expect.soft(remountedAction.hasAttribute("disabled")).toBe(false);
+    expect(useAuthStore.getState().status).toBe("signed-in");
+
+    cleanup();
+    mountSeatWithQueryClient(queryClient);
+    expect
+      .soft(screen.queryByRole("alert")?.textContent)
+      .toBe("Couldn't sign out. Please try again.");
+    expect(
+      screen.getByRole("button", { name: "Sign out" }).hasAttribute("disabled"),
+    ).toBe(false);
   });
 });

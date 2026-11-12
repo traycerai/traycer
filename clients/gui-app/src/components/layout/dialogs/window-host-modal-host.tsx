@@ -1,3 +1,5 @@
+import { useQueryClient } from "@tanstack/react-query";
+import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
 import { useHostBinding } from "@/lib/host/runtime";
 import { useEffect, type ReactNode } from "react";
 import {
@@ -149,6 +151,7 @@ function NarratingWindowHostModal(props: {
 }): ReactNode {
   const { narration } = props;
   const hostBinding = useHostBinding();
+  const queryClient = useQueryClient();
   const progress = useHostProvisioningProgress();
   const controller = useHostReadinessController();
   const shellAdmission = useShellLocalPlaneAdmission();
@@ -244,7 +247,9 @@ function NarratingWindowHostModal(props: {
       hostBinding === null
         ? undefined
         : () => {
-            void hostBinding.auth.signOut();
+            void useSignOutConfirmStore
+              .getState()
+              .signOut(queryClient, hostBinding.auth);
           },
     cause: narration.cause,
     variant: narration.variant,

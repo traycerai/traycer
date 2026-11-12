@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   MockRunnerHost,
@@ -11,6 +18,7 @@ import type { SelectionKernelSnapshot } from "@traycer-clients/shared/host-selec
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { HOST_BOOT_CARD_SURFACE } from "@/components/centered-card";
 import { WindowHostModalHost } from "@/components/layout/dialogs/window-host-modal-host";
+import { SignOutConfirmDialog } from "@/components/auth/sign-out-confirm-dialog";
 import {
   HostReadinessControllerContext,
   type DefaultHostReadinessPresentation,
@@ -20,7 +28,42 @@ import {
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
 import { setMobileApp } from "@/lib/mobile-app";
+
+const signOutRound2Harness = vi.hoisted(() => ({
+  signOut: vi.fn<() => Promise<boolean>>(() => Promise.resolve(false)),
+}));
+const narrationRound2Harness = vi.hoisted(() => ({
+  teamMembershipRequired: false,
+}));
+
+vi.mock("@/lib/host/runtime", async (load) => {
+  const actual = await load<typeof import("@/lib/host/runtime")>();
+  return {
+    ...actual,
+    useHostBinding: () => ({ auth: { signOut: signOutRound2Harness.signOut } }),
+    useAuthService: () => ({ signOut: signOutRound2Harness.signOut }),
+  };
+});
+
+vi.mock("@/hooks/host/use-window-narration", async (load) => {
+  const actual =
+    await load<typeof import("@/hooks/host/use-window-narration")>();
+  return {
+    ...actual,
+    useWindowNarration: () => {
+      const narration = actual.useWindowNarration();
+      return narrationRound2Harness.teamMembershipRequired
+        ? {
+            kind: "narrating" as const,
+            cause: "no-usable-host" as const,
+            variant: { kind: "team-membership-required" as const },
+          }
+        : narration;
+    },
+  };
+});
 
 const hostStatus = vi.hoisted(() => ({
   data: undefined as
@@ -261,6 +304,10 @@ beforeEach(() => {
   // meaningful either way, since they are asserting the more restrictive of
   // two independently-sufficient gates.
   useDesktopDialogStore.getState().setReportIssueAvailable(true);
+  signOutRound2Harness.signOut.mockReset();
+  signOutRound2Harness.signOut.mockResolvedValue(false);
+  narrationRound2Harness.teamMembershipRequired = false;
+  useSignOutConfirmStore.getState().setOpen(false);
   // SIGNED IN, because production is: this component is mounted only for a
   // signed-in user (`useWindowNarration`'s latch doc leans on exactly that -
   // signing out unmounts it). It matters now that the narrator picks its
@@ -279,10 +326,51 @@ afterEach(() => {
   useSelectionAuthorityStore.getState().reset();
   useDesktopDialogStore.getState().setReportIssueAvailable(false);
   useAuthStore.setState({ status: "signed-out" });
+  useSignOutConfirmStore.getState().setOpen(false);
   setMobileApp(false);
 });
 
 describe("<WindowHostModalHost />", () => {
+  it("opens the shared sign-out question when Switch account cannot delete credentials", async () => {
+    narrationRound2Harness.teamMembershipRequired = true;
+    const runnerHost = new MockRunnerHost({
+      signInUrl: "https://auth.traycer.invalid/sign-in",
+      authnBaseUrl: "http://localhost:5005",
+      localHost: null,
+      hosts: [],
+      workspaceFolderPickerPaths: undefined,
+      hasLocalHost: undefined,
+      traycerCli: undefined,
+    });
+    const client = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    render(
+      <QueryClientProvider client={client}>
+        <RunnerHostProvider runnerHost={runnerHost}>
+          <HostReadinessControllerContext.Provider
+            value={controllerFor(EMPTY_PRESENTATION, GATE_OPEN)}
+          >
+            <>
+              <WindowHostModalHost bypassed={false} />
+              <SignOutConfirmDialog />
+            </>
+          </HostReadinessControllerContext.Provider>
+        </RunnerHostProvider>
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(signOutRound2Harness.signOut).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("confirm-destructive-dialog")).toBeTruthy();
+    expect(alert.textContent).toBe("Couldn't sign out. Please try again.");
+  });
+
   it("∅ (no-usable-host): settled failure — Retry, Report issue and Open settings(button) present; progress heading absent; attempt panel + log toggle present", async () => {
     // The reported defect on this arm (B4) was a live "starting" narration
     // drawn over a state where nothing is starting, with Retry and Report

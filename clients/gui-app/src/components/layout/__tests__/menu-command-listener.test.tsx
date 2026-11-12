@@ -28,6 +28,7 @@ import {
   SERVICE_TASK_NOT_OWNED_MESSAGE,
 } from "@traycer-clients/shared/platform/host-service-notices";
 import { MenuCommandListener } from "@/components/layout/bridges/menu-command-listener";
+import { SignOutConfirmDialog } from "@/components/auth/sign-out-confirm-dialog";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import {
@@ -56,6 +57,7 @@ import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
 
 interface CapturedNavigate {
   readonly to: string;
@@ -71,7 +73,7 @@ const navigateMock = vi.hoisted(() =>
 const routerState = vi.hoisted(() => ({ pathname: "/" }));
 const authMock = vi.hoisted(() => ({
   signIn: vi.fn(() => Promise.resolve()),
-  signOut: vi.fn(() => Promise.resolve()),
+  signOut: vi.fn<() => Promise<boolean>>(() => Promise.resolve(true)),
 }));
 // `false` by default, so the whole file's existing native-close-tab coverage
 // keeps exercising `closeTabFlow.closeActiveTab` unchanged; only the chord
@@ -376,6 +378,7 @@ describe("<MenuCommandListener />", () => {
     navigateMock.mockClear();
     authMock.signIn.mockClear();
     authMock.signOut.mockClear();
+    authMock.signOut.mockResolvedValue(true);
     routerState.pathname = "/";
     toastMocks.error.mockClear();
     toastMocks.warning.mockClear();
@@ -385,6 +388,7 @@ describe("<MenuCommandListener />", () => {
     useDesktopDialogStore.setState({ reportIssueAvailable: false });
     closeLayoutEditorForCloseTabChordMock.mockReset();
     closeLayoutEditorForCloseTabChordMock.mockReturnValue(false);
+    useSignOutConfirmStore.getState().setOpen(false);
   });
 
   afterEach(() => {
@@ -392,6 +396,7 @@ describe("<MenuCommandListener />", () => {
     resetStores();
     useDesktopDialogStore.getState().close();
     useDesktopDialogStore.setState({ reportIssueAvailable: false });
+    useSignOutConfirmStore.getState().setOpen(false);
   });
 
   it("dispatches native menu commands to renderer-owned actions", () => {
@@ -438,6 +443,31 @@ describe("<MenuCommandListener />", () => {
     // before the port itself, so the property is now
     // structural - there is no picker for a command to open, and a revival
     // would have to re-add the capability to `IRunnerHost` first.
+  });
+
+  it("opens the shared sign-out question when native sign-out fails", async () => {
+    authMock.signOut.mockResolvedValue(false);
+    const menu = createMenu();
+    render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <RunnerHostProvider runnerHost={createRunnerHost(menu)}>
+          <>
+            <MenuCommandListener />
+            <SignOutConfirmDialog />
+          </>
+        </RunnerHostProvider>
+      </QueryClientProvider>,
+    );
+
+    act(() => menu.emit("app.signOut"));
+
+    await waitFor(() => {
+      expect(authMock.signOut).toHaveBeenCalledTimes(1);
+    });
+    expect(screen.getByTestId("confirm-destructive-dialog")).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toBe(
+      "Couldn't sign out. Please try again.",
+    );
   });
 
   describe("the Settings command when the shell may refuse admission", () => {
