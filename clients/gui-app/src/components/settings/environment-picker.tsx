@@ -329,7 +329,7 @@ function EnvironmentPickerTrigger(props: {
         variant="outline"
         size="sm"
         className="w-full justify-between"
-        aria-label={pick.kind === "unresolved" ? "Loading" : undefined}
+        aria-label={pick.kind === "unresolved" ? "Choose settings" : undefined}
         data-testid="environment-picker-trigger"
       >
         <span className="flex min-w-0 items-center gap-1.5">
