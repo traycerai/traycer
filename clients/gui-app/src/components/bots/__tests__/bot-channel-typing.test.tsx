@@ -890,6 +890,7 @@ describe("<BotChannelView tiles={null} /> a post whose answer lands in a thread"
     expect(screen.queryByTestId("bot-thread-replying")).toBeNull();
 
     const reply = textbox("Reply in the thread");
+    await user.click(reply);
     typeInto(reply, "And the nightly?");
     expect(document.activeElement).toBe(reply);
 
