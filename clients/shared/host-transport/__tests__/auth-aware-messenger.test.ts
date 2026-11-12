@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { createAuthAwareMessenger } from "../auth-aware-messenger";
+import {
+  createAuthAwareMessenger,
+  type AuthRecoveryScope,
+} from "../auth-aware-messenger";
 import {
   createRetryingMessenger,
   RetryEpisodeOutcomeUnknownError,
@@ -238,7 +241,8 @@ describe("createAuthAwareMessenger", () => {
       });
     const auth = authRevalidator(revalidate);
 
-    const wrapped = createAuthAwareMessenger(inner, auth, "always");
+    const selectScope = vi.fn(recoveryScopeForMethod);
+    const wrapped = createAuthAwareMessenger(inner, auth, selectScope);
     await wrapped.request(METHOD, PARAMS, {
       replayMustBeKeyed: false,
       requiredHostMethodVersion: null,
@@ -247,6 +251,115 @@ describe("createAuthAwareMessenger", () => {
     });
     expect(revalidate).toHaveBeenCalledTimes(1);
     expect(inner.request).toHaveBeenCalledTimes(2);
+    expect(selectScope).toHaveBeenCalledTimes(1);
+    expect(selectScope).toHaveBeenCalledWith(METHOD);
+  });
+
+  it("recovers a create after a pre-request host refusal", async () => {
+    const lease = new MutableBearerLease("stale", "u1");
+    const request = vi.fn();
+    request.mockRejectedValueOnce(sessionFatalError(false));
+    request.mockResolvedValueOnce(undefined);
+    const inner: IHostMessenger<Registry> = {
+      request,
+      requestWithResponseTimeout: uncalledLongPoll(),
+    };
+    const revalidate = vi.fn(rotateTo(lease));
+    const selectScope = vi.fn(recoveryScopeForMethod);
+    const wrapped = createAuthAwareMessenger(
+      inner,
+      authRevalidator(revalidate),
+      selectScope,
+    );
+
+    await wrapped.request(
+      "providers.link",
+      {
+        providerId: "claude-code",
+        profileId: null,
+        environmentId: "environment-1",
+        createProfile: {
+          label: "Work",
+          shareSkillsAndPlugins: false,
+        },
+        replaceAccount: false,
+      },
+      requestOptions(authorityFor(lease)),
+    );
+
+    expect(selectScope).toHaveBeenCalledTimes(1);
+    expect(selectScope).toHaveBeenCalledWith("providers.link");
+    expect(revalidate).toHaveBeenCalledTimes(1);
+    expect(inner.request).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not replay post-send creates when scope changes after either request starts", async () => {
+    const lease = new MutableBearerLease("stale", "u1");
+    const postSendFailure = sessionFatalError(true);
+    const scopes = new Map<string, AuthRecoveryScope>([
+      ["providers.link", "before-request"],
+      ["providers.startLogin", "before-request"],
+    ]);
+    const request = vi.fn((method: string) => {
+      scopes.set(method, "always");
+      return Promise.reject(postSendFailure);
+    });
+    const requestWithResponseTimeout = vi.fn((method: string) => {
+      scopes.set(method, "always");
+      return Promise.reject(postSendFailure);
+    });
+    const inner: IHostMessenger<Registry> = {
+      request,
+      requestWithResponseTimeout,
+    };
+    const revalidate = vi.fn(rotateTo(lease));
+    const selectScope = vi.fn(
+      (method: string): AuthRecoveryScope => scopes.get(method) ?? "always",
+    );
+    const wrapped = createAuthAwareMessenger(
+      inner,
+      authRevalidator(revalidate),
+      selectScope,
+    );
+    const options = requestOptions(authorityFor(lease));
+
+    await expect(
+      wrapped.request(
+        "providers.link",
+        {
+          providerId: "claude-code",
+          profileId: null,
+          environmentId: "environment-1",
+          createProfile: {
+            label: "Work",
+            shareSkillsAndPlugins: false,
+          },
+          replaceAccount: false,
+        },
+        options,
+      ),
+    ).rejects.toBe(postSendFailure);
+    await expect(
+      wrapped.requestWithResponseTimeout(
+        "providers.startLogin",
+        {
+          providerId: "claude-code",
+          holderId: "holder-1",
+          profileId: null,
+          createProfile: { label: "Work", shareSkillsAndPlugins: false },
+        },
+        30_000,
+        options,
+      ),
+    ).rejects.toBe(postSendFailure);
+
+    expect(selectScope.mock.calls).toEqual([
+      ["providers.link"],
+      ["providers.startLogin"],
+    ]);
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(requestWithResponseTimeout).toHaveBeenCalledTimes(1);
+    expect(revalidate).not.toHaveBeenCalled();
   });
 
   it("CLI mode: does not retry when the bearer did not rotate", async () => {
@@ -351,6 +464,12 @@ function requestOptions(authority: HostRequestAuthority): HostRequestOptions {
     idempotencyKey: null,
     authority,
   };
+}
+
+function recoveryScopeForMethod(method: string): AuthRecoveryScope {
+  return method === "providers.link" || method === "providers.startLogin"
+    ? "before-request"
+    : "always";
 }
 
 function innerFailing(

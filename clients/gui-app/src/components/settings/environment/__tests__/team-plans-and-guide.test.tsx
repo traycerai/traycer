@@ -142,7 +142,7 @@ describe("TeamPlans", () => {
       "environment.plans.list": () => plans,
       "environment.list": () => environmentList,
     });
-    render(<TeamPlans providerId="claude-code" adminNames={["Ada"]} />, {
+    render(<TeamPlans providerId="claude-code" />, {
       wrapper: harness.Wrapper,
     });
 
@@ -162,21 +162,37 @@ describe("TeamPlans", () => {
     expect(screen.getAllByText(/ plan$/i).length).toBeGreaterThanOrEqual(1);
   });
 
-  it("gives a viewer no Link, Unlink or Add a profile verbs, and names the admins", async () => {
-    const harness = mountTeamPage(poolSource("editor"), {
+  it("gives an editor Sign in while a viewer cannot", async () => {
+    const editor = mountTeamPage(poolSource("editor"), {
       "environment.plans.list": () => plans,
       "environment.list": () => environmentList,
     });
-    render(<TeamPlans providerId="claude-code" adminNames={["Ada"]} />, {
-      wrapper: harness.Wrapper,
+    render(<TeamPlans providerId="claude-code" />, {
+      wrapper: editor.Wrapper,
     });
 
+    const signIn = await screen.findByRole("button", { name: /sign in/i });
+    await userEvent.click(signIn);
+    expect(useProviderLinkDialogStore.getState().target).toMatchObject({
+      providerId: "claude-code",
+      profileId: null,
+      environmentId: "env-a",
+    });
+
+    cleanup();
+    useProviderLinkDialogStore.setState({ target: null });
+    const viewer = mountTeamPage(poolSource("viewer"), {
+      "environment.plans.list": () => plans,
+      "environment.list": () => environmentList,
+    });
+    render(<TeamPlans providerId="claude-code" />, {
+      wrapper: viewer.Wrapper,
+    });
     await screen.findByText(/Ada.s .* plan/);
-    expect(screen.queryByRole("button", { name: /link a plan/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /sign in/i })).toBeNull();
     expect(screen.queryByRole("button", { name: "Unlink" })).toBeNull();
-    expect(screen.queryByText(/add a profile/i)).toBeNull();
     expect(
-      screen.getByText("Only an admin can link a plan: ask Ada."),
+      screen.getByText("Ask a teammate to sign in on Providers."),
     ).toBeTruthy();
   });
 
@@ -186,7 +202,7 @@ describe("TeamPlans", () => {
       localHostId: string | null;
       keepsWorking: string[];
     }) => void = () => undefined;
-    const harness = mountTeamPage(poolSource("admin"), {
+    const harness = mountTeamPage(poolSource("editor"), {
       "environment.plans.list": () => plans,
       "environment.list": () => environmentList,
       "environment.plans.unlinkPreview": () =>
@@ -195,7 +211,7 @@ describe("TeamPlans", () => {
         }),
       "environment.plans.unlink": () => ({ outcome: "unlinked" }),
     });
-    render(<TeamPlans providerId="claude-code" adminNames={["Ada"]} />, {
+    render(<TeamPlans providerId="claude-code" />, {
       wrapper: harness.Wrapper,
     });
 
@@ -236,6 +252,42 @@ describe("TeamPlans", () => {
         },
       ]);
     });
+  });
+
+  it("keeps the plan and asks a teammate to unlink when the host refuses an editor's unlink", async () => {
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.plans.list": () => plans,
+      "environment.list": () => environmentList,
+      "environment.plans.unlinkPreview": () => ({
+        activeTurns: 0,
+        localHostId: null,
+        keepsWorking: [],
+      }),
+      "environment.plans.unlink": () => ({ outcome: "forbidden" }),
+    });
+    render(<TeamPlans providerId="claude-code" />, {
+      wrapper: harness.Wrapper,
+    });
+
+    const card = await screen.findByRole("region", { name: "Plans" });
+    await userEvent.click(
+      within(card).getAllByRole("button", { name: "Unlink" })[0],
+    );
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Unlink" }),
+    );
+
+    expect(
+      await screen.findByText("Ask a teammate to unlink this plan."),
+    ).toBeTruthy();
+    expect(harness.paramsOf("environment.plans.unlink")).toEqual([
+      {
+        environmentId: "env-a",
+        profileId: "prof-1",
+        expectedBindingVersion: 7,
+      },
+    ]);
   });
 
   it.each([
@@ -282,7 +334,7 @@ describe("TeamPlans", () => {
       },
       { "environment.plans.unlink": { major: 1, minor: negotiatedMinor } },
     );
-    render(<TeamPlans providerId="claude-code" adminNames={["Ada"]} />, {
+    render(<TeamPlans providerId="claude-code" />, {
       wrapper: harness.Wrapper,
     });
 
@@ -320,7 +372,7 @@ describe("TeamPlans", () => {
         },
         "environment.list": () => environmentList,
       });
-      render(<TeamPlans providerId="claude-code" adminNames={[]} />, {
+      render(<TeamPlans providerId="claude-code" />, {
         wrapper: harness.Wrapper,
       });
 
@@ -345,12 +397,12 @@ describe("TeamPlans", () => {
       "environment.plans.list": () => plans,
       "environment.list": () => environmentList,
     });
-    render(<TeamPlans providerId="claude-code" adminNames={[]} />, {
+    render(<TeamPlans providerId="claude-code" />, {
       wrapper: harness.Wrapper,
     });
 
     await userEvent.click(
-      await screen.findByRole("button", { name: /link a plan/i }),
+      await screen.findByRole("button", { name: /sign in/i }),
     );
     expect(useProviderLinkDialogStore.getState().target).toMatchObject({
       providerId: "claude-code",

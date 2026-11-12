@@ -5896,7 +5896,7 @@ describe("<ProvidersSettingsPanel />", () => {
     openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add a profile" }));
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     const [startVariables, startOptions] = firstStartLoginCall();
     expect(startVariables).toEqual({
@@ -5926,7 +5926,7 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(typeof awaitOptions.onSuccess).toBe("function");
   });
 
-  it("disables Link account and shows the refusal in the Add profile dialog when the host takes no credentials, and starts no login", () => {
+  it("disables Sign in and shows the refusal in the Add profile dialog when the host takes no credentials, and starts no login", () => {
     providerMocks.listResult.data = {
       providers: [
         {
@@ -5981,9 +5981,7 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(screen.getByRole("button", { name: "Add a profile" }));
     expect(screen.queryByTestId("credential-refusal")).toBeNull();
     expect(
-      screen
-        .getByRole("button", { name: "Link account" })
-        .hasAttribute("disabled"),
+      screen.getByRole("button", { name: "Sign in" }).hasAttribute("disabled"),
     ).toBe(false);
 
     providerMocks.credentialRefusal = "Sandboxes don't take sign-ins";
@@ -5991,7 +5989,7 @@ describe("<ProvidersSettingsPanel />", () => {
       target: { value: "Work" },
     });
 
-    const link = screen.getByRole("button", { name: "Link account" });
+    const link = screen.getByRole("button", { name: "Sign in" });
     expect(link.hasAttribute("disabled")).toBe(true);
     expect(screen.getByTestId("credential-refusal").textContent).toBe(
       "Sandboxes don't take sign-ins",
@@ -6052,7 +6050,7 @@ describe("<ProvidersSettingsPanel />", () => {
     openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add a profile" }));
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     // Still `starting` - `startLogin` hasn't resolved yet, so there is no
     // profileId/child for a paste to reach. The field must not render (a
@@ -6124,7 +6122,7 @@ describe("<ProvidersSettingsPanel />", () => {
     openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add a profile" }));
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
     const [, startOptions] = firstStartLoginCall();
     await act(() => {
       startOptions.onSuccess({
@@ -6214,7 +6212,7 @@ describe("<ProvidersSettingsPanel />", () => {
     openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add a profile" }));
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
     const [, startOptions] = firstStartLoginCall();
     await act(() => {
       startOptions.onSuccess({
@@ -6294,7 +6292,7 @@ describe("<ProvidersSettingsPanel />", () => {
     openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add a profile" }));
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
     const [, startOptions] = firstStartLoginCall();
     await act(() => {
       startOptions.onSuccess({
@@ -6365,7 +6363,7 @@ describe("<ProvidersSettingsPanel />", () => {
     openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add a profile" }));
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
     const [, startOptions] = firstStartLoginCall();
     await act(() => {
       startOptions.onSuccess({
@@ -7057,7 +7055,7 @@ describe("<ProvidersSettingsPanel />", () => {
     openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add a profile" }));
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     const [, startOptions] = firstStartLoginCall();
     await act(() => {
@@ -7137,7 +7135,7 @@ describe("<ProvidersSettingsPanel />", () => {
 
     // First attempt fails after the await phase - the section banner appears.
     fireEvent.click(screen.getByRole("button", { name: "Add a profile" }));
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
     const [, startOptions] = firstStartLoginCall();
     await act(() => {
       startOptions.onSuccess({
@@ -7163,7 +7161,7 @@ describe("<ProvidersSettingsPanel />", () => {
     // clear the banner instead of letting it sit next to a sign-in that
     // then succeeds.
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
     expect(screen.queryByText(/Sign-in did not finish for/)).toBeNull();
 
     const retryStart = providerMocks.startLoginMutate.mock.calls.at(1);
@@ -7295,7 +7293,7 @@ describe("<ProvidersSettingsPanel />", () => {
     openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add a profile" }));
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
     const [, startOptions] = firstStartLoginCall();
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel sign-in" }));
@@ -8472,7 +8470,7 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(checkbox);
     expect(checkbox.getAttribute("aria-checked")).toBe("false");
 
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     const [startVariables] = firstStartLoginCall();
     expect(startVariables).toEqual({
@@ -8536,7 +8534,7 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Create new profile" }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     const [startVariables] = firstStartLoginCall();
     expect(startVariables).toEqual({
@@ -8600,7 +8598,7 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Create new profile" }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     const [, startOptions] = firstStartLoginCall();
     await act(() => {
@@ -8632,7 +8630,7 @@ describe("<ProvidersSettingsPanel />", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText("Account already linked")).toBeDefined();
+      expect(screen.getByText("Account already signed in")).toBeDefined();
     });
     expect(
       screen.getByText(
@@ -8722,7 +8720,7 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Create new profile" }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     const [, startOptions] = firstStartLoginCall();
     await act(() => {
@@ -8829,7 +8827,7 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Create new profile" }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     const [, startOptions] = firstStartLoginCall();
     await act(() => {
@@ -8927,7 +8925,7 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Create new profile" }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
     const [, startOptions] = firstStartLoginCall();
     await act(() => {
       startOptions.onSuccess({
@@ -9249,7 +9247,7 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(
       screen.getByRole("button", { name: `Use color ${selectedColor}` }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     expect(firstStartLoginCall()[0]).toEqual({
       providerId: "codex",
@@ -9363,7 +9361,7 @@ describe("<ProvidersSettingsPanel />", () => {
     openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add a profile" }));
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     const [, startOptions] = firstStartLoginCall();
     await act(() => {
