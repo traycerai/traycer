@@ -14,7 +14,7 @@ const NOW_MS = Date.UTC(2026, 6, 30, 12, 0, 0);
 
 const testState: {
   items: ReadonlyArray<HistoryItem>;
-  signOut: () => Promise<void>;
+  signOut: () => Promise<boolean>;
   openSettings: () => void;
   isPending: boolean;
   historyQueryMounts: number;
@@ -37,7 +37,7 @@ const testState: {
   backfillIdCalls: ReadonlyArray<string>[];
 } = {
   items: [],
-  signOut: () => Promise.resolve(),
+  signOut: () => Promise.resolve(true),
   openSettings: () => undefined,
   isPending: false,
   historyQueryMounts: 0,
@@ -397,7 +397,7 @@ describe("MobileNavDrawer", () => {
     testState.backfillTasks = new Map<string, ListTaskLight>();
     testState.backfillIdCalls = [];
     useHistorySearchStore.setState({ search: DEFAULT_HISTORY_SEARCH });
-    testState.signOut = () => Promise.resolve();
+    testState.signOut = () => Promise.resolve(true);
     testState.openSettings = () => undefined;
     testState.isPending = false;
     testState.historyQueryMounts = 0;
@@ -1155,7 +1155,7 @@ describe("MobileNavDrawer", () => {
       let signedOut = 0;
       testState.signOut = () => {
         signedOut += 1;
-        return Promise.resolve();
+        return Promise.resolve(true);
       };
       renderDrawer();
       fireEvent.click(await screen.findByTestId("mobile-nav-sign-out"));
@@ -1166,9 +1166,11 @@ describe("MobileNavDrawer", () => {
       expect(useMobileNavStore.getState().open).toBe(true);
 
       fireEvent.click(await screen.findByTestId("confirm-action"));
-
-      expect(signedOut).toBe(1);
+      await waitFor(() =>
+        expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull(),
+      );
       expect(useMobileNavStore.getState().open).toBe(false);
+      expect(signedOut).toBe(1);
     });
 
     it("clears its open flag when a form change unmounts it", async () => {
@@ -1194,7 +1196,7 @@ describe("MobileNavDrawer", () => {
       let signedOut = 0;
       testState.signOut = () => {
         signedOut += 1;
-        return Promise.resolve();
+        return Promise.resolve(true);
       };
       renderDrawer();
       fireEvent.click(await screen.findByTestId("mobile-nav-sign-out"));

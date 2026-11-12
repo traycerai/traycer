@@ -1,3 +1,5 @@
+import { useQueryClient } from "@tanstack/react-query";
+import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
 import type { ReactNode } from "react";
 import { useCallback, useMemo, useRef, useState } from "react";
 import type { UserSessionListItem } from "@traycer/protocol/auth/devices-sessions";
@@ -160,6 +162,7 @@ function sessionIcon(session: UserSessionListItem): ReactNode {
 }
 
 export function DevicesSessionsPanel() {
+  const queryClient = useQueryClient();
   const signedIn = useAuthStore((s) => s.status === "signed-in");
   const binding = useHostBinding();
   const query = useAuthFetchUserSessions();
@@ -238,7 +241,9 @@ export function DevicesSessionsPanel() {
           nowMs: () => Date.now(),
         });
         if (session.current && binding !== null) {
-          await binding.auth.signOut();
+          await useSignOutConfirmStore
+            .getState()
+            .signOut(queryClient, binding.auth);
         }
       } catch (error) {
         setActionError(actionErrorFromStepUpError(error));
@@ -246,7 +251,7 @@ export function DevicesSessionsPanel() {
         setActiveSessionFamilyId(null);
       }
     },
-    [activeSessionFamilyId, binding, requestStepUpCredential],
+    [activeSessionFamilyId, binding, queryClient, requestStepUpCredential],
   );
 
   const handleRevokeAll = useCallback(async (): Promise<void> => {
@@ -265,11 +270,13 @@ export function DevicesSessionsPanel() {
         await requestStepUpCredential("global-revoke");
         await revokeAllSessions.mutateAsync(undefined);
       }
-      await binding.auth.signOut();
+      await useSignOutConfirmStore
+        .getState()
+        .signOut(queryClient, binding.auth);
     } catch (error) {
       setActionError(actionErrorFromStepUpError(error));
     }
-  }, [binding, requestStepUpCredential, revokeAllSessions]);
+  }, [binding, queryClient, requestStepUpCredential, revokeAllSessions]);
 
   return (
     <>

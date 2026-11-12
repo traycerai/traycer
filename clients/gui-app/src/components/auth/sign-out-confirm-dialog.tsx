@@ -1,9 +1,9 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { type ReactNode } from "react";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { useAuthService } from "@/lib/host";
 import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
-import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
 
 /**
  * Confirmation step in front of `auth.signOut()`. Both entry points are a
@@ -12,18 +12,18 @@ import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
  * the UI, so the effect lives here rather than at either call site: the copy
  * and the `SignOutRequested` telemetry then can't drift between surfaces.
  *
- * `isPending` is fixed `false`: `signOut` is fire-and-forget at every existing
- * call site (the auth store transition tears this tree down), so there is no
- * promise to gate the button on.
- *
  * Mounted once by each frame the entry points live in, the app shell and the
  * host gate's header, and only one of those is ever up. So it outlives both
- * entry points when a rotation swaps the drawer and the strip.
+ * entry points when a rotation swaps the drawer and the strip. The shared
+ * store retains pending and failure state when the host gate and shell swap.
  */
 export function SignOutConfirmDialog(): ReactNode {
   const auth = useAuthService();
   const open = useSignOutConfirmStore((state) => state.open);
   const setOpen = useSignOutConfirmStore((state) => state.setOpen);
+  const queryClient = useQueryClient();
+  const status = useSignOutConfirmStore((state) => state.status);
+  const signOut = useSignOutConfirmStore((state) => state.signOut);
 
   return (
     <ConfirmDestructiveDialog
@@ -31,19 +31,22 @@ export function SignOutConfirmDialog(): ReactNode {
       open={open}
       onOpenChange={setOpen}
       title="Sign out?"
-      description="You'll need to sign in again to use Traycer on this device."
+      description="You'll need to sign in again to use Traycer in this app."
       cascadeSummary={null}
       actionLabel="Sign out"
-      isPending={false}
+      isPending={status === "pending"}
       onConfirm={() => {
-        setOpen(false);
-        // So the drawer isn't left open behind the sign-out.
-        useMobileNavStore.getState().setOpen(false);
         Analytics.getInstance().track(AnalyticsEvent.SignOutRequested, {
           source: "direct_ui",
         });
-        void auth.signOut();
+        void signOut(queryClient, auth);
       }}
-    />
+    >
+      {status === "failed" ? (
+        <p role="alert" className="text-ui-sm text-destructive">
+          Couldn't sign out. Please try again.
+        </p>
+      ) : null}
+    </ConfirmDestructiveDialog>
   );
 }

@@ -114,8 +114,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if ! gh release view "$TAG" --repo "$RELEASE_REPO" >/dev/null 2>&1; then
+          if ! is_draft="$(gh release view "$TAG" --repo "$RELEASE_REPO" --json isDraft --jq '.isDraft' 2>/dev/null)"; then
             echo "::error::Release '$TAG' does not exist on ${RELEASE_REPO}."
+            exit 1
+          fi
+          if [ "$is_draft" = "true" ]; then
+            echo "::error::Release '$TAG' is still draft; publish the release before publishing to package managers."
             exit 1
           fi
           tmp="$(mktemp -d)"

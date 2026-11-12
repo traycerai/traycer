@@ -3265,8 +3265,9 @@ describe("AuthService", () => {
       await deviceSignIn(service, host, "live-token");
       expect(await host.tokenStore.get()).not.toBeNull();
 
-      await service.signOut();
+      const signOutCompleted = await service.signOut();
 
+      expect(signOutCompleted).toBe(true);
       expect(useAuthStore.getState().status).toBe("signed-out");
       expect(await host.tokenStore.get()).toBeNull();
     });
@@ -3324,8 +3325,9 @@ describe("AuthService", () => {
       host.tokenStore.delete = (): Promise<void> =>
         Promise.reject(new Error("EACCES: credentials locked"));
 
-      await service.signOut();
+      const signOutCompleted = await service.signOut();
 
+      expect(signOutCompleted).toBe(false);
       // Failed sign-out must never claim signed-out without the delete landing.
       expect(useAuthStore.getState().status).toBe("signed-in");
       expect(service.getCurrentSessionSnapshot().token).toBe("sticky-token");
