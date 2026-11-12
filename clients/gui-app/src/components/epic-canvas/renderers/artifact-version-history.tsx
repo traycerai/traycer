@@ -164,7 +164,7 @@ function multipleAgentsDetail(
 ): string {
   if (provenance.agents.length === 0) return "Several agents";
   return provenance.agents
-    .map((agent) => agent.chatTitle ?? agent.chatId)
+    .map((agent) => agent.chatTitle?.trim() || "Untitled chat")
     .join(", ");
 }
 
@@ -177,34 +177,11 @@ function externalDetail(
   return `${count} attempted agent ${noun}`;
 }
 
-function restoreDetail(
-  provenance: Extract<Provenance, { readonly kind: "restore" }>,
-): string {
-  return provenance.restoredFromObservationId === null
-    ? "Restored from an earlier version."
-    : `Restored from version ${provenance.restoredFromObservationId}.`;
-}
-
-function reviveDetail(
-  provenance: Extract<Provenance, { readonly kind: "revive" }>,
-): string {
-  return provenance.deletionEventId === null
-    ? "Restored after deletion."
-    : `Restored after deletion event ${provenance.deletionEventId}.`;
-}
-
 function deleteDetail(
   provenance: Extract<Provenance, { readonly kind: "delete" }>,
-): string | null {
+): string {
   const actor = provenance.actorKind?.replaceAll("_", " ") ?? null;
-  if (actor === null) {
-    return provenance.deleteOpId === null
-      ? null
-      : `Deleted · operation ${provenance.deleteOpId}`;
-  }
-  return provenance.deleteOpId === null
-    ? `Deleted by ${actor}`
-    : `Deleted by ${actor} · operation ${provenance.deleteOpId}`;
+  return actor === null ? "Deleted" : `Deleted by ${actor}`;
 }
 
 function provenanceDetailText(provenance: Provenance): string | null {
@@ -222,9 +199,9 @@ function provenanceDetailText(provenance: Provenance): string | null {
     case "remote_merge":
       return null;
     case "restore":
-      return restoreDetail(provenance);
+      return "Restored from an earlier version.";
     case "revive":
-      return reviveDetail(provenance);
+      return "Restored after deletion.";
     case "delete":
       return deleteDetail(provenance);
     case "clobber":
@@ -241,22 +218,18 @@ function AgentProvenanceDetail(props: {
   readonly provenance: AgentProvenance;
   readonly onOpenChat: (chatId: string) => void;
 }): ReactNode {
+  const title = props.provenance.chatTitle?.trim() || "Untitled chat";
   return (
     <p className="px-3 pb-3 text-ui-xs text-muted-foreground">
       Agent ·{" "}
-      {props.provenance.chatTitle === null ? (
-        <span className="font-mono">{props.provenance.chatId}</span>
-      ) : (
-        <button
-          type="button"
-          className="font-medium underline underline-offset-2 hover:text-foreground"
-          aria-label={`Open chat ${props.provenance.chatTitle}`}
-          onClick={() => props.onOpenChat(props.provenance.chatId)}
-        >
-          {props.provenance.chatTitle}
-        </button>
-      )}{" "}
-      · turn {props.provenance.turnId}
+      <button
+        type="button"
+        className="font-medium underline underline-offset-2 hover:text-foreground"
+        aria-label={`Open chat ${title}`}
+        onClick={() => props.onOpenChat(props.provenance.chatId)}
+      >
+        {title}
+      </button>
     </p>
   );
 }
@@ -977,7 +950,7 @@ function VersionObservationList(props: {
         >
           <button
             type="button"
-            aria-label={`Select version ${entry.observationId}`}
+            aria-label={`Select version from ${formatCapturedAt(entry.capturedAt)}`}
             data-testid={`artifact-version-observation-${entry.observationId}`}
             onClick={() => props.onSelect(entry.observationId)}
             className="w-full px-3 py-2.5 text-left"

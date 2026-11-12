@@ -603,26 +603,9 @@ describe("<ArtifactVersionHistoryEntryPoint />", () => {
     ).toBe(true);
   });
 
-  it("links titled agent provenance to its originating chat and leaves missing chats inert", () => {
+  it("links titled agent provenance without showing its turn id", () => {
     state.historyEntries = [
       observation("observation-linked", "Auth hardening"),
-      observation("observation-gone", null),
-      {
-        ...observation("observation-legacy-restore", null),
-        provenance: {
-          kind: "restore",
-          restoredFromObservationId: null,
-          targetHash: HASH_A,
-        },
-      },
-      {
-        ...observation("observation-legacy-revive", null),
-        provenance: {
-          kind: "revive",
-          deletionEventId: null,
-          targetHash: HASH_A,
-        },
-      },
     ];
 
     openHistory();
@@ -630,18 +613,7 @@ describe("<ArtifactVersionHistoryEntryPoint />", () => {
     const chatLink = screen.getByRole("button", {
       name: "Open chat Auth hardening",
     });
-    expect(chatLink.parentElement?.textContent).toBe(
-      "Agent · Auth hardening · turn 7",
-    );
-    expect(
-      screen.getByText(
-        (_content, element) =>
-          element?.tagName === "P" &&
-          element.textContent === "Agent · chat-observation-gone · turn 7",
-      ),
-    ).toBeTruthy();
-    expect(screen.getByText("Restored from an earlier version.")).toBeTruthy();
-    expect(screen.getByText("Restored after deletion.")).toBeTruthy();
+    expect(chatLink.parentElement?.textContent).toBe("Agent · Auth hardening");
 
     fireEvent.click(chatLink);
 
@@ -662,6 +634,147 @@ describe("<ArtifactVersionHistoryEntryPoint />", () => {
         },
       },
     ]);
+  });
+
+  it("uses Untitled chat for an agent observation with no chat title", () => {
+    state.historyEntries = [observation("observation-gone", null)];
+
+    openHistory();
+
+    expect(
+      screen.getByText(
+        (_content, element) =>
+          element?.tagName === "P" &&
+          element.textContent === "Agent · Untitled chat",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("uses Untitled chat for multiple-agent references with no title", () => {
+    state.historyEntries = [
+      {
+        ...observation("observation-multiple-agents", null),
+        provenance: {
+          kind: "multiple_agents",
+          agents: [
+            {
+              chatId: "chat-planning",
+              turnId: "turn-planning",
+              harnessId: "claude",
+              chatTitle: "Planning",
+            },
+            {
+              chatId: "chat-untitled",
+              turnId: "turn-untitled",
+              harnessId: "claude",
+              chatTitle: null,
+            },
+          ],
+        },
+      },
+    ];
+
+    openHistory();
+
+    expect(
+      screen.getByText("Planning, Untitled chat", { selector: "p" }),
+    ).toBeTruthy();
+  });
+
+  it("uses generic detail for a restore with an operation reference", () => {
+    state.historyEntries = [
+      {
+        ...observation("observation-restored", null),
+        provenance: {
+          kind: "restore",
+          restoredFromObservationId: "restore-operation-reference",
+          targetHash: HASH_A,
+        },
+      },
+    ];
+
+    openHistory();
+
+    expect(
+      screen.getByText("Restored from an earlier version.", { selector: "p" }),
+    ).toBeTruthy();
+  });
+
+  it("uses generic detail for a revive with an operation reference", () => {
+    state.historyEntries = [
+      {
+        ...observation("observation-revived", null),
+        provenance: {
+          kind: "revive",
+          deletionEventId: "deletion-event-reference",
+          targetHash: HASH_A,
+        },
+      },
+    ];
+
+    openHistory();
+
+    expect(
+      screen.getByText("Restored after deletion.", { selector: "p" }),
+    ).toBeTruthy();
+  });
+
+  it("shows Deleted when delete actor is absent despite an operation reference", () => {
+    state.historyEntries = [
+      {
+        ...observation("observation-deleted-unknown-actor", null),
+        provenance: {
+          kind: "delete",
+          deleteOpId: "delete-operation-reference",
+          actorKind: null,
+        },
+      },
+    ];
+
+    openHistory();
+
+    expect(screen.getByText("Deleted", { selector: "p" })).toBeTruthy();
+  });
+
+  it("names the delete actor without showing its operation reference", () => {
+    state.historyEntries = [
+      {
+        ...observation("observation-deleted-by-agent", null),
+        provenance: {
+          kind: "delete",
+          deleteOpId: "delete-operation-reference-with-actor",
+          actorKind: "agent",
+        },
+      },
+    ];
+
+    openHistory();
+
+    expect(
+      screen.getByText("Deleted by agent", { selector: "p" }),
+    ).toBeTruthy();
+  });
+
+  it("names each version with its captured date and time", () => {
+    const observationId = "observation-readable-version";
+    const capturedAt = 1_700_000_000_000;
+    const formattedCapturedAt = new Intl.DateTimeFormat(undefined, {
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(capturedAt);
+    state.historyEntries = [
+      { ...observation(observationId, "Readable snapshot"), capturedAt },
+    ];
+
+    openHistory();
+
+    expect(
+      screen.getByRole("button", {
+        name: `Select version from ${formattedCapturedAt}`,
+      }),
+    ).toBeTruthy();
   });
 
   it("labels user edits without showing user or host ids", () => {
@@ -850,9 +963,7 @@ describe("<ArtifactVersionHistoryEntryPoint />", () => {
     expect(screen.getByText("Restored as a new version.")).toBeTruthy();
 
     fireEvent.click(
-      screen.getByRole("button", {
-        name: "Select version observation-original",
-      }),
+      screen.getByTestId("artifact-version-observation-observation-original"),
     );
 
     expect(screen.queryByText("Restored as a new version.")).toBeNull();

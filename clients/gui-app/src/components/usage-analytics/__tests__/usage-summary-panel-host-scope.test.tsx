@@ -302,25 +302,31 @@ describe("<UsageSummaryPanel /> host scope", () => {
     expect(screen.queryByTestId("usage-host-filter-pinned")).toBeNull();
   });
 
-  it("names known hosts and falls back to a truncated id for the rest, never a blank", async () => {
+  it("names known hosts and uses a generic name for unnamed hosts", async () => {
+    const unnamedHostId = "host-without-a-name";
+    const idNamedHostId = "host-used-as-its-own-name";
     renderPanel({
       response: response({
         servedBy: "cloud",
         hostBuckets: [
           hostBucket("host-a", 3),
-          hostBucket("01JX7Q2M9K4B8Z6T5N3P1V0WYD", 1),
+          hostBucket(unnamedHostId, 1),
+          hostBucket(idNamedHostId, 1),
         ],
       }),
-      hostNames: new Map([["host-a", "Studio Mac"]]),
+      hostNames: new Map([
+        ["host-a", "Studio Mac"],
+        [idNamedHostId, idNamedHostId],
+      ]),
     });
 
     const split = await screen.findByTestId("usage-host-split");
     expect(within(split).getByText("Studio Mac")).toBeTruthy();
-    expect(within(split).getByText("01JX7Q2M…")).toBeTruthy();
-    const fallbackRow = screen.getByTestId(
-      "usage-host-split-row-01JX7Q2M9K4B8Z6T5N3P1V0WYD",
-    );
-    expect(fallbackRow.textContent).toContain("01JX7Q2M…");
+    expect(
+      within(split).getAllByText("Unnamed computer", { exact: true }),
+    ).toHaveLength(2);
+    expect(split.textContent).not.toContain(unnamedHostId);
+    expect(split.textContent).not.toContain(idNamedHostId);
   });
 
   it("omits the by-host section when there is only one host to show", async () => {
