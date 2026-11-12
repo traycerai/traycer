@@ -1,3 +1,4 @@
+import { unresolvedSetupText } from "@/components/settings/environment/environment-picker-model";
 import type { ReactNode } from "react";
 import { MoveProgressLine } from "@/components/settings/move/move-progress-line";
 import { hostSettingsCardState } from "@/components/settings/panels/host-overview-settings-card-model";
@@ -8,8 +9,8 @@ import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-
 import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
 
 /**
- * The note above a provider's tabs while a Local row is picked: these
- * settings are that computer's own, and the verb that moves them. While the
+ * The note above a provider's tabs for a per-computer pick: unfinished setup,
+ * or that computer's own settings and the verb that moves them. While the
  * move runs, or once it stopped, it reads as the Overview's settings card
  * does (`MoveProgressLine`), from that computer's own `environment.status`.
  */
@@ -22,6 +23,18 @@ export function LocalRowNote(): ReactNode {
   if (pick.kind !== "local") return null;
   const state =
     status.data === null ? null : hostSettingsCardState(status.data);
+  const setup = status.data === null ? null : unresolvedSetupText(status.data);
+  if (setup !== null) {
+    return (
+      <p
+        role="note"
+        className="mb-3 text-ui-sm text-muted-foreground"
+        data-testid="local-row-note"
+      >
+        {setup}
+      </p>
+    );
+  }
   return (
     <div
       role="note"

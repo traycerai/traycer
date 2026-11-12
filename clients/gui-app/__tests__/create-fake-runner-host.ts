@@ -94,6 +94,14 @@ export function createFakeRunnerHost(
     deviceDescriber: null,
     updateHostVersionPolicy: () =>
       Promise.resolve({ kind: "network-error" as const }),
+    readHostOwnership: () => Promise.resolve({ kind: "unauthorized" as const }),
+    listTeamComputers: () => Promise.resolve({ kind: "unauthorized" as const }),
+    setEnvironmentBotHost: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
+    mintTeamComputerInstallToken: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
+    releaseTeamComputer: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
     deregisterHostFromAccount: () =>
       Promise.resolve({ kind: "network-error" as const }),
     listSandboxes: () =>
@@ -133,8 +141,6 @@ export function createFakeRunnerHost(
     disconnectSlackApp: () =>
       Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
     setSlackAppDms: () =>
-      Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
-    mintTeamHostInstallToken: () =>
       Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
     getSandboxGrants: () =>
       Promise.resolve({ kind: "network-error" as const, detail: "fake" }),

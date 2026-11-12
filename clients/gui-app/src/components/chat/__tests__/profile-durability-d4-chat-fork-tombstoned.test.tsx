@@ -1,3 +1,4 @@
+import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
 import {
   cleanup,
   fireEvent,
@@ -394,6 +395,7 @@ function renderDialog(target: ChatForkDialogTarget): void {
       tabId="tab-test"
       onOpenChange={() => undefined}
     />,
+    { wrapper: WithTestQueryClient },
   );
 }
 
@@ -561,6 +563,7 @@ describe("D4: ChatForkDialog seeded from a tombstoned profile", () => {
         tabId="tab-test"
         onOpenChange={() => undefined}
       />,
+      { wrapper: WithTestQueryClient },
     );
     seedLiveForkWorkspace();
 
@@ -600,6 +603,7 @@ describe("D4: ChatForkDialog seeded from a tombstoned profile", () => {
         tabId="tab-test"
         onOpenChange={() => undefined}
       />,
+      { wrapper: WithTestQueryClient },
     );
     seedLiveForkWorkspace();
 
@@ -625,6 +629,7 @@ describe("D4: ChatForkDialog seeded from a tombstoned profile", () => {
         tabId="inactive-tab"
         onOpenChange={() => undefined}
       />,
+      { wrapper: WithTestQueryClient },
     );
     const active = render(
       <ChatForkDialog
@@ -634,6 +639,7 @@ describe("D4: ChatForkDialog seeded from a tombstoned profile", () => {
         tabId="active-tab"
         onOpenChange={() => undefined}
       />,
+      { wrapper: WithTestQueryClient },
     );
     seedLiveForkWorkspace();
 

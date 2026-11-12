@@ -9,7 +9,10 @@ import {
   type RequestContext,
 } from "@traycer/protocol/auth/request-context";
 import { mockLocalHostEntry } from "../../host-client/mock/mock-host-directory";
-import { createAuthenticatedUserFixture } from "../../test-fixtures/authenticated-user";
+import {
+  AUTHENTICATED_USER_FIXTURE_ID,
+  createAuthenticatedUserFixture,
+} from "../../test-fixtures/authenticated-user";
 import type {
   WebSocketCloseEvent,
   WebSocketErrorEvent,
@@ -105,6 +108,7 @@ function makeWsStreamClient(
     endpoint: () => mockLocalHostEntry,
     hostId: mockLocalHostEntry.hostId,
     bearer: () => ctx?.credentials ?? null,
+    userId: AUTHENTICATED_USER_FIXTURE_ID,
     auth: null,
     clock: null,
     hostCredentialMint: null,

@@ -165,11 +165,11 @@ describe("publishedChatLockReason", () => {
     );
   });
 
-  it("says the team sandbox is out - not a collaborator, not a machine - for an environment-owned chat", () => {
-    // A team sandbox's chat is owned by the environment, so the viewer's
+  it("uses kind-neutral host copy for an environment-owned chat", () => {
+    // A team host's chat is owned by the environment, so the viewer's
     // user id never matches it and `ownedByViewer` reads false. The
-    // environment arm outranks that foreign arm and both reachability arms,
-    // for either reachability answer and a refusing owner alike.
+    // team ownership outranks the foreign arm, without erasing what the host
+    // answered or whether it is reachable.
     for (const ownerIsReachable of [false, true]) {
       const reason = publishedChatLockReason({
         ownerIsReachable,
@@ -178,17 +178,59 @@ describe("publishedChatLockReason", () => {
         ownedByViewer: false,
         ownerName: null,
         environmentOwned: true,
-        ownerLabel: "085b919a-f0a6-42e5-b05e-241738d3dd6a",
+        ownerLabel: "Team computer",
         unreadableCount: 0,
         fidelityNotice: null,
         publishedAt: null,
         refresh: { kind: "idle" },
       });
       expect(reason).toBe(
-        "This chat's sandbox isn't available — showing the last published copy.",
+        ownerIsReachable
+          ? "Showing the last published copy of this agent, which lives on Team computer. That host needs an update to read its live history."
+          : "This chat's host isn't available — showing the last published copy.",
       );
     }
   });
+
+  it.each([
+    {
+      ownerIsThisHost: true,
+      ownerRefusesStore: true,
+      expected:
+        "Showing the last published copy of this agent. This host needs an update to read its live history.",
+    },
+    {
+      ownerIsThisHost: true,
+      ownerRefusesStore: false,
+      expected:
+        "Showing the last published copy of this agent. Its live history is no longer on this host.",
+    },
+    {
+      ownerIsThisHost: false,
+      ownerRefusesStore: false,
+      expected:
+        "Showing the last published copy of this agent, which lives on Team computer.",
+    },
+  ])(
+    "keeps the reachable team host fact: $expected",
+    ({ ownerIsThisHost, ownerRefusesStore, expected }) => {
+      expect(
+        publishedChatLockReason({
+          ownerIsReachable: true,
+          ownerRefusesStore,
+          ownerIsThisHost,
+          ownedByViewer: false,
+          ownerName: null,
+          environmentOwned: true,
+          ownerLabel: "Team computer",
+          unreadableCount: 0,
+          fidelityNotice: null,
+          publishedAt: null,
+          refresh: { kind: "idle" },
+        }),
+      ).toBe(expected);
+    },
+  );
 
   it("keeps the published-at and unreadable tails on the collaborator sentence", () => {
     const publishedAt = Date.parse("2026-08-14T12:00:00Z");
@@ -644,7 +686,7 @@ describe("replicaChatLockReason", () => {
     }
   });
 
-  it("says the team sandbox is out for an environment-owned chat, ahead of the collaborator arm", () => {
+  it("uses kind-neutral host copy for an environment-owned chat, ahead of the collaborator arm", () => {
     for (const ownerIsReachable of [false, true]) {
       const reason = replicaChatLockReason({
         ownerIsReachable,
@@ -653,14 +695,53 @@ describe("replicaChatLockReason", () => {
         ownedByViewer: false,
         ownerName: null,
         environmentOwned: true,
-        ownerLabel: "085b919a-f0a6-42e5-b05e-241738d3dd6a",
+        ownerLabel: "Team computer",
         unreadableCount: 0,
       });
       expect(reason).toBe(
-        "This chat's sandbox isn't available — showing this device's synced copy.",
+        ownerIsReachable
+          ? "Showing this device's synced copy of this agent, which lives on Team computer."
+          : "This chat's host isn't available — showing this device's synced copy.",
       );
     }
   });
+
+  it.each([
+    {
+      ownerIsThisHost: true,
+      ownerRefusesStore: true,
+      expected:
+        "Showing this device's synced copy of this agent. This host needs an update to read its live history.",
+    },
+    {
+      ownerIsThisHost: false,
+      ownerRefusesStore: true,
+      expected:
+        "Showing this device's synced copy of this agent, which lives on Team computer. That host needs an update to read its live history.",
+    },
+    {
+      ownerIsThisHost: true,
+      ownerRefusesStore: false,
+      expected:
+        "Showing this device's synced copy of this agent. Its live history is no longer on this host.",
+    },
+  ])(
+    "keeps the reachable team host fact: $expected",
+    ({ ownerIsThisHost, ownerRefusesStore, expected }) => {
+      expect(
+        replicaChatLockReason({
+          ownerIsReachable: true,
+          ownerRefusesStore,
+          ownerIsThisHost,
+          ownedByViewer: false,
+          ownerName: null,
+          environmentOwned: true,
+          ownerLabel: "Team computer",
+          unreadableCount: 0,
+        }),
+      ).toBe(expected);
+    },
+  );
 
   describe("owner-refuses-store arm", () => {
     it("names this host's own update need when the refusing owner IS this host", () => {

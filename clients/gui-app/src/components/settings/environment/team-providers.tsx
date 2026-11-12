@@ -53,18 +53,7 @@ import {
   type CloudProviderStanding,
 } from "./team-provider-state-word";
 import { ConfigurationReadFailed } from "./team-read-failed";
-import { usePickedTeamLabel } from "./team-pick-label";
 import { PROVIDER_ENV_TAB_SUBTITLE } from "@/components/settings/panels/provider-env-subtitle";
-import {
-  useConfigurationIsPersonal,
-  useConfigurationSource,
-} from "./configuration-source";
-
-function providersPageDescription(personal: boolean, teamName: string): string {
-  return personal
-    ? "Sign-ins, keys and tools for each coding agent, on every computer and sandbox running Personal."
-    : `Sign-ins, keys and tools for each coding agent, on every host running ${teamName}.`;
-}
 
 type RailClass = "configured" | "unconfigured" | "unknown";
 
@@ -76,11 +65,6 @@ interface ProviderRailRow {
 }
 
 export function TeamProviders(): ReactNode {
-  const personal = useConfigurationIsPersonal();
-  const source = useConfigurationSource();
-  const teamName =
-    usePickedTeamLabel(source.kind === "pool" ? source.environmentId : "") ??
-    "this team";
   const query = useConfigurationProviderItemsQuery();
   const read = useBoundedRead(query);
   const members = useConfigurationAdminNames();
@@ -151,8 +135,6 @@ export function TeamProviders(): ReactNode {
   ];
   return (
     <TeamProvidersView
-      personal={personal}
-      teamName={teamName}
       providerId={providerId}
       os={os}
       onOsChange={setOs}
@@ -176,8 +158,6 @@ export function TeamProviders(): ReactNode {
 }
 
 function TeamProvidersView(props: {
-  readonly personal: boolean;
-  readonly teamName: string;
   readonly providerId: ProviderId;
   readonly os: EnvironmentOs;
   readonly onOsChange: (os: EnvironmentOs) => void;
@@ -200,8 +180,6 @@ function TeamProvidersView(props: {
   ) => void;
 }): ReactNode {
   const {
-    personal,
-    teamName,
     providerId,
     os,
     onOsChange,
@@ -224,7 +202,7 @@ function TeamProvidersView(props: {
   return (
     <SettingsPanelShell
       title="Providers"
-      description={providersPageDescription(personal, teamName)}
+      description="Sign-ins, keys and tools for each coding agent."
       bodyClassName="flex flex-col gap-4 overflow-visible rounded-none border-none bg-transparent"
     >
       <ConfigurationWriteFeedback issue={issue} />

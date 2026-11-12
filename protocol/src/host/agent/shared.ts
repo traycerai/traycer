@@ -1220,8 +1220,9 @@ export const agentSummarySchema = lazySchema(() =>
      * else the managed profile id.
      *
      * `null` when this answer cannot say, never "ambient": a terminal agent
-     * (its record names no profile), a chat with no run settings, a chat on
-     * another host, a row owned by another user, or an answering host that
+     * (its record names no profile), a chat with no run settings, a remote
+     * row without an authorized owning-host answer, a row owned by another
+     * user, or an answering host that
      * predates the field.
      */
     profile: z.string().nullable(),

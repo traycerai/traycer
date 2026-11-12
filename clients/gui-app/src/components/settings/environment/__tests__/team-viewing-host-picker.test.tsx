@@ -1,5 +1,6 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { TeamViewingHostPicker } from "@/components/settings/environment/team-viewing-host-picker";
 
 // The viewing-host hook is the boundary: what it answers is what the picker
@@ -10,7 +11,14 @@ const scope = vi.hoisted(
     viewing: { hostId: string; hostLabel: string | null } | null;
     selectable: Set<string>;
     pending: boolean;
-  } => ({ hosts: [], viewing: null, selectable: new Set(), pending: false }),
+    error: HostRpcError | null;
+  } => ({
+    hosts: [],
+    viewing: null,
+    selectable: new Set(),
+    pending: false,
+    error: null,
+  }),
 );
 // Only the hook is faked: `canSwitchViewingHost` stays real, since the
 // answer these cases are about is the one it gives for a scope.
@@ -20,9 +28,10 @@ vi.mock("@/hooks/environment/team/use-team-viewing-host", async (original) => ({
   >()),
   useTeamViewingHost: () => ({
     hosts: {
-      isError: false,
+      isError: scope.error !== null,
       isPending: scope.pending,
       data: scope.pending ? undefined : { hosts: scope.hosts },
+      error: scope.error,
       refetch: vi.fn(),
     },
     viewingHost: scope.viewing,
@@ -44,6 +53,7 @@ beforeEach(() => {
   scope.viewing = null;
   scope.selectable = new Set();
   scope.pending = false;
+  scope.error = null;
 });
 
 afterEach(cleanup);

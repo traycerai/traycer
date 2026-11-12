@@ -1,3 +1,9 @@
+import { onMainLocalAdmissionInvalidated } from "../selection/local-admission-invalidation";
+import { MutableBearerLease } from "@traycer-clients/shared/auth/bearer-source";
+import { createLocalOpenAuth } from "@traycer-clients/shared/host-transport/create-local-open-auth";
+import { createWhatwgStreamWebSocketFactory } from "@traycer-clients/shared/host-transport/whatwg-stream-ws-factory";
+import { mintHostCredentialViaHttp } from "@traycer-clients/shared/auth/devices-sessions-fetcher";
+import { CURRENT_CLIENT_COMPATIBILITY_EPOCH } from "@traycer/protocol/framework/index";
 /**
  * Desktop IPC binding for the selection authority (P1.1), following the
  * ownership-claim pattern (`ownership-ipc.ts` + `electron-preload/
@@ -143,6 +149,39 @@ export function registerSelectionAuthorityIpc(bridge: RunnerIpcBridge): void {
     if (snapshot === null || snapshot.websocketUrl === null) return null;
     return { hostId: snapshot.hostId, websocketUrl: snapshot.websocketUrl };
   };
+  const localOpenAuth = createLocalOpenAuth({
+    authnBaseUrl: bridge.options.authnBaseUrl,
+    cloudAuthorized: () => bridge.authSession.get().verified,
+    webSocketFactory: createWhatwgStreamWebSocketFactory(),
+    clientIdentity: {
+      kind: "desktop",
+      compatibilityEpoch: CURRENT_CLIENT_COMPATIBILITY_EPOCH,
+      appVersion: app.getVersion(),
+    },
+    clock: null,
+    mintMemberCredential: async (hostId, bearer, signal) => {
+      const result = await mintHostCredentialViaHttp(
+        bridge.options.authnBaseUrl,
+        bearer.getBearerToken(),
+        { hostId, hostLabel: null, platform: null },
+        signal,
+      );
+      if (result.kind !== "ok") return null;
+      return {
+        token: result.response.token,
+        refreshToken: result.response.refreshToken,
+        familyId: result.response.familyId,
+        provisionedAt: result.response.provisionedAt,
+      };
+    },
+    onMemberCredentialAdopted: () => undefined,
+  });
+  const detachAdmissionInvalidation = onMainLocalAdmissionInvalidated(
+    (hostId) => {
+      localOpenAuth.invalidateHost(hostId, null);
+    },
+  );
+  let inventoryBearer: MutableBearerLease | null = null;
   const localInventory = startLocalHostInventorySubscription({
     localHost: localHostEndpoint,
     // The SAME identity source the authority and the fleet port read, so the
@@ -170,23 +209,28 @@ export function registerSelectionAuthorityIpc(bridge: RunnerIpcBridge): void {
       };
     },
     openStreamClient: createLocalHostInventoryStreamClient({
+      localOpenAuth,
       localHost: localHostEndpoint,
       appVersion: app.getVersion(),
       bearer: () => {
-        // ONE read, and the token bound into the closure from it: `token` and
-        // the profile are committed together, and reading the session again
-        // inside `getBearerToken` could hand the dial a credential from a
-        // different snapshot than the identity it is dialing under. The
-        // provider itself is re-invoked per dial, so a rotation is picked up
-        // at the only moment it matters.
+        // Preserve one lease across same-user rotations. The admission barrier
+        // keys on that lease and fences a different account during its mint.
         const snapshot = bridge.authSession.get();
         const token = snapshot.token;
         const userId = snapshot.profile?.userId ?? null;
-        if (token === null || userId === null) return null;
-        return {
-          getBearerToken: () => token,
-          identity: { userId },
-        };
+        if (token === null || userId === null) {
+          inventoryBearer = null;
+          return null;
+        }
+        if (
+          inventoryBearer === null ||
+          inventoryBearer.identity.userId !== userId
+        ) {
+          inventoryBearer = new MutableBearerLease(token, userId);
+        } else {
+          inventoryBearer.rotate(token);
+        }
+        return inventoryBearer;
       },
     }),
     onRows: (read) => {
@@ -207,6 +251,7 @@ export function registerSelectionAuthorityIpc(bridge: RunnerIpcBridge): void {
   void fleet.refresh();
 
   bridge.disposeFns.push(() => {
+    detachAdmissionInvalidation();
     localInventory.dispose();
     engine.dispose();
     fleet.dispose();

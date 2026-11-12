@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { readInstallToken } from "../../host-join-token";
 
 // The child of host-join-token.pty.test.ts: reads an install token the way
-// `traycer host join` does, on a terminal, and reports only its length and a
+// `traycer host install --team` does, on a terminal, and reports only its length and a
 // digest. It then holds still until the driver has looked at the terminal and
 // sends SIGUSR2.
 

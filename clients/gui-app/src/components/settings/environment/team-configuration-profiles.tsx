@@ -231,6 +231,7 @@ function ConfigurationProfileEditor(props: {
       changed={changed}
       invalid={invalid}
       onSave={save}
+      footerAction={null}
       removePending={remove.isPending}
       removeDisabledReason={null}
       removeAriaLabel="Remove profile"

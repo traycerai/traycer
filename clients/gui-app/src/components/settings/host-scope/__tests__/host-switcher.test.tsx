@@ -5,6 +5,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
 } from "@testing-library/react";
 import { HostSwitcher } from "@/components/settings/host-scope/host-switcher";
 import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
@@ -146,6 +147,135 @@ function renderEmpty(props: {
     />,
   );
 }
+
+function offlineComputer(
+  hostId: string,
+  name: string,
+  teamOwned: boolean,
+): HostScopeOption {
+  return hostScopeOptionFixture({
+    hostId,
+    name,
+    isLocalMachine: false,
+    isActive: false,
+    health: {
+      state: "offline",
+      label: "Offline",
+      detail: null,
+      tone: "idle",
+      live: false,
+    },
+    item: teamOwned
+      ? {
+          hostId,
+          displayName: name,
+          platform: "linux-x64",
+          kind: "machine",
+          publicKey: "pk",
+          createdAt: new Date(0).toISOString(),
+          updatePolicy: "manual",
+          status: {
+            connectivity: "offline",
+            viewerReachability: "unknown",
+            clientCloud: "ok",
+            updateState: "current",
+            appVersion: "1.4.2",
+            lastSeenAt: null,
+          },
+          owner: { kind: "team", id: "team-a", name: "Alpha" },
+        }
+      : null,
+  });
+}
+
+describe("<HostSwitcher /> offline computer folds", () => {
+  it("folds offline computers in personal and team groups, then unfolds both while searching", () => {
+    const selectedOffline = offlineComputer(
+      "selected-offline",
+      "Offline personal selected",
+      false,
+    );
+    const personalOffline = [
+      offlineComputer("personal-offline-a", "Offline personal A", false),
+      offlineComputer("personal-offline-b", "Offline personal B", false),
+      selectedOffline,
+    ];
+    const teamOffline = [
+      offlineComputer("team-offline-a", "Offline team A", true),
+      offlineComputer("team-offline-b", "Offline team B", true),
+    ];
+    const online = hostScopeOptionFixture({
+      hostId: "online-workstation",
+      name: "Online workstation",
+      isLocalMachine: false,
+      isActive: false,
+    });
+    render(
+      <HostSwitcher
+        hosts={[...personalOffline, ...teamOffline, online]}
+        selected={selectedOffline}
+        activeHostId={online.hostId}
+        onSelect={() => undefined}
+        action={{ kind: "add-host", onSelect: () => undefined }}
+        surface="rail"
+        intent="view"
+        consequence={null}
+        refusalByHostId={NO_HOST_OPTION_REFUSALS}
+        inertExceptHostId={null}
+        disabled={false}
+        isLoading={false}
+        listsFailed={false}
+        onRetryLists={() => undefined}
+        updateViewForHost={null}
+        composer={null}
+        environmentLabelForHost={null}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("settings-host-switcher"));
+
+    const personalFold = screen.getByTestId(
+      "settings-host-switcher-personal-offline",
+    );
+    const teamFold = screen.getByTestId(
+      "settings-host-switcher-team-team-a-offline",
+    );
+    expect(
+      within(personalFold).getByRole("option", {
+        name: "Show 2 offline computers",
+      }),
+    ).not.toBeNull();
+    expect(
+      within(teamFold).getByRole("option", {
+        name: "Show 2 offline computers",
+      }),
+    ).not.toBeNull();
+    expect(
+      screen.getByTestId("settings-host-switcher-option-selected-offline"),
+    ).not.toBeNull();
+    expect(
+      screen.getByTestId("settings-host-switcher-option-online-workstation"),
+    ).not.toBeNull();
+    expect(
+      screen.queryByTestId("settings-host-switcher-option-personal-offline-a"),
+    ).toBeNull();
+
+    fireEvent.change(screen.getByPlaceholderText("Search hosts"), {
+      target: { value: "offline" },
+    });
+
+    expect(
+      screen.queryByTestId("settings-host-switcher-personal-offline-toggle"),
+    ).toBeNull();
+    expect(
+      screen.queryByTestId("settings-host-switcher-team-team-a-offline-toggle"),
+    ).toBeNull();
+    for (const host of [...personalOffline, ...teamOffline]) {
+      expect(
+        screen.getByTestId(`settings-host-switcher-option-${host.hostId}`),
+      ).not.toBeNull();
+    }
+  });
+});
 
 describe("<HostSwitcher /> empty vs failed", () => {
   it("reports a failed load with a retry instead of claiming an empty account", () => {

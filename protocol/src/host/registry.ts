@@ -8,20 +8,27 @@ import {
   epicCreateChatV15,
   epicCreateChatUpgradeV14ToV15,
   epicUpdateChatRunSettingsV12,
+  epicUpdateChatRunSettingsV13,
   epicUpdateChatRunSettingsUpgradeV11ToV12,
+  epicUpdateChatRunSettingsUpgradeV12ToV13,
   epicGetChatRunSettingsV41,
+  epicGetChatRunSettingsV42,
   epicGetChatRunSettingsUpgradeV40ToV41,
-  epicGetChatRunSettingsDowngradeV41ToV10,
-  epicGetChatRunSettingsDowngradeV41ToV20,
-  epicGetChatRunSettingsDowngradeV41ToV30,
+  epicGetChatRunSettingsUpgradeV41ToV42,
+  epicGetChatRunSettingsDowngradeV42ToV10,
+  epicGetChatRunSettingsDowngradeV42ToV20,
+  epicGetChatRunSettingsDowngradeV42ToV30,
   epicGetChatRunSettingsBatchV21,
+  epicGetChatRunSettingsBatchV22,
   epicGetChatRunSettingsBatchUpgradeV20ToV21,
-  epicGetChatRunSettingsBatchDowngradeV21ToV10,
+  epicGetChatRunSettingsBatchUpgradeV21ToV22,
+  epicGetChatRunSettingsBatchDowngradeV22ToV10,
 } from "./epic/contracts";
 import {
   chatSubscribeV141,
   chatSubscribeV142,
   chatSubscribeV143,
+  chatSubscribeV144,
 } from "./agent/gui/subscribe";
 import type { RequiredHostMethodVersion } from "../host-transport/remote/rpc-types";
 import { chatPrestartRuntimeV10 } from "./agent/gui/prestart-runtime";
@@ -50,6 +57,7 @@ import {
 import {
   defineDowngradePath,
   defineFloorAwareVersionedRpcRegistry,
+  defineRpcContract,
   defineUpgradePath,
   type DowngradeResult,
   type VersionedRpcRegistry,
@@ -1370,6 +1378,8 @@ import {
 import {
   environmentBindingReadV10,
   environmentHostBindV10,
+  environmentHostBindV11,
+  environmentHostBindUpgradeV10ToV11,
   environmentHostListUpgradeV10ToV11,
   environmentHostListUpgradeV11ToV12,
   environmentHostListV10,
@@ -1470,7 +1480,6 @@ import {
   mentionGithubCatalogV10,
   mentionGithubSearchV10,
 } from "@traycer/protocol/host/mention-contracts";
-import { defineRpcContract } from "@traycer/protocol/framework/index";
 import {
   worktreeCreateRequestSchema,
   worktreeCreateRequestSchemaV10,
@@ -1560,9 +1569,11 @@ import {
   providersAddCustomPathResponseSchemaV10,
   providersAddCustomPathResponseSchemaV20,
   providersAwaitLoginRequestSchema,
+  providersAwaitLoginRequestSchemaV22,
   providersAwaitLoginRequestSchemaV10,
   providersAwaitLoginRequestSchemaV20,
   providersAwaitLoginResponseSchema,
+  providersAwaitLoginResponseSchemaV22,
   providersAwaitLoginResponseSchemaV10,
   providersAwaitLoginResponseSchemaV20,
   providersAwaitLoginResponseSchemaV21,
@@ -1625,6 +1636,8 @@ import {
   providersListResponseSchemaV105Preimage,
   providersListResponseSchemaV106Preimage,
   providersListResponseSchemaV107Preimage,
+  providersListResponseSchemaV108Preimage,
+  providersListResponseSchemaV109Preimage,
   providersListResponseSchemaV80,
   providersListResponseSchemaV90,
   providersListResponseSchemaV91,
@@ -1668,6 +1681,8 @@ import {
   providersSetPackPolicyResponseSchema,
   providersSetNativeMemoryRequestSchema,
   providersSetNativeMemoryResponseSchema,
+  providersSetModelProviderHiddenRequestSchema,
+  providersSetModelProviderHiddenResponseSchema,
   providersSetNativeSubagentsRequestSchema,
   providersSetNativeSubagentsResponseSchema,
   providersRefreshPackDiscoveryRequestSchema,
@@ -1696,6 +1711,8 @@ import {
   providersSetProfileApiKeyRequestSchema,
   providersSetProfileApiKeyResponseSchema,
   providersSetProfileEnabledRequestSchema,
+  providersSignOutProfileRequestSchema,
+  providersSignOutProfileResponseSchema,
   providersSetProfileEnabledResponseSchema,
   providersSetEnvOverrideRequestSchema,
   providersSetEnvOverrideRequestSchemaV10,
@@ -3193,7 +3210,50 @@ export const providersListV108 = defineRpcContract({
   method: "providers.list",
   schemaVersion: { major: 10, minor: 8 } as const,
   requestSchema: providersListRequestSchema,
+  responseSchema: providersListResponseSchemaV108Preimage,
+});
+
+/** Additive credential bindings, home facts and per-row unreadable projections. */
+export const providersListV109 = defineRpcContract({
+  method: "providers.list",
+  schemaVersion: { major: 10, minor: 9 } as const,
+  requestSchema: providersListRequestSchema,
+  responseSchema: providersListResponseSchemaV109Preimage,
+});
+export const providersListUpgradeV108ToV109 = defineUpgradePath<
+  typeof providersListV108,
+  typeof providersListV109
+>({
+  from: { major: 10, minor: 8 },
+  to: { major: 10, minor: 9 },
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+/**
+ * `providers.list@10.10` - the row's `hiddenModelProviders`: the upstream
+ * model providers whose models Traycer's pickers leave out, on the row of a
+ * provider with a Model Providers tab.
+ *
+ * A MINOR with no `responseGrowthProjectionGated`: a new KEY, stripped for an
+ * older peer by the within-major re-parse.
+ */
+export const providersListV1010 = defineRpcContract({
+  method: "providers.list",
+  schemaVersion: { major: 10, minor: 10 } as const,
+  requestSchema: providersListRequestSchema,
   responseSchema: providersListResponseSchema,
+});
+export const providersListUpgradeV109ToV1010 = defineUpgradePath<
+  typeof providersListV109,
+  typeof providersListV1010
+>({
+  from: { major: 10, minor: 9 },
+  to: { major: 10, minor: 10 },
+  upgradeRequest: (request) => request,
+  // Nothing to fill: a host below 10.10 stores no hidden list, so the key
+  // stays absent and the client hides nothing and offers no switch.
+  upgradeResponse: (response) => response,
 });
 
 export const providersListUpgradeV102ToV103 = defineUpgradePath<
@@ -3903,10 +3963,10 @@ export function downgradeNativeListErrorForPublishedLines(
 }
 
 export const providersListDowngradeV10ToV9 = defineDowngradePath<
-  typeof providersListV108,
+  typeof providersListV1010,
   typeof providersListV92
 >({
-  from: { major: 10, minor: 8 },
+  from: { major: 10, minor: 10 },
   // Lands on 9.2, major 9's latest installed minor; a 9.0 or 9.1 caller's own
   // contract parse then strips the keys its minor predates.
   to: { major: 9, minor: 2 },
@@ -3929,10 +3989,10 @@ export const providersListDowngradeV10ToV9 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV8 = defineDowngradePath<
-  typeof providersListV108,
+  typeof providersListV1010,
   typeof providersListV80
 >({
-  from: { major: 10, minor: 8 },
+  from: { major: 10, minor: 10 },
   to: { major: 8, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -3952,10 +4012,10 @@ export const providersListDowngradeV10ToV8 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV7 = defineDowngradePath<
-  typeof providersListV108,
+  typeof providersListV1010,
   typeof providersListV70
 >({
-  from: { major: 10, minor: 8 },
+  from: { major: 10, minor: 10 },
   to: { major: 7, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -3975,10 +4035,10 @@ export const providersListDowngradeV10ToV7 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV6 = defineDowngradePath<
-  typeof providersListV108,
+  typeof providersListV1010,
   typeof providersListV60
 >({
-  from: { major: 10, minor: 8 },
+  from: { major: 10, minor: 10 },
   to: { major: 6, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -3995,10 +4055,10 @@ export const providersListDowngradeV10ToV6 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV5 = defineDowngradePath<
-  typeof providersListV108,
+  typeof providersListV1010,
   typeof providersListV50
 >({
-  from: { major: 10, minor: 8 },
+  from: { major: 10, minor: 10 },
   to: { major: 5, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -4015,10 +4075,10 @@ export const providersListDowngradeV10ToV5 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV4 = defineDowngradePath<
-  typeof providersListV108,
+  typeof providersListV1010,
   typeof providersListV40
 >({
-  from: { major: 10, minor: 8 },
+  from: { major: 10, minor: 10 },
   to: { major: 4, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -4035,10 +4095,10 @@ export const providersListDowngradeV10ToV4 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV3 = defineDowngradePath<
-  typeof providersListV108,
+  typeof providersListV1010,
   typeof providersListV30
 >({
-  from: { major: 10, minor: 8 },
+  from: { major: 10, minor: 10 },
   to: { major: 3, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -4055,10 +4115,10 @@ export const providersListDowngradeV10ToV3 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV2 = defineDowngradePath<
-  typeof providersListV108,
+  typeof providersListV1010,
   typeof providersListV20
 >({
-  from: { major: 10, minor: 8 },
+  from: { major: 10, minor: 10 },
   to: { major: 2, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -4075,10 +4135,10 @@ export const providersListDowngradeV10ToV2 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV1 = defineDowngradePath<
-  typeof providersListV108,
+  typeof providersListV1010,
   typeof providersListV10
 >({
-  from: { major: 10, minor: 8 },
+  from: { major: 10, minor: 10 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -4815,7 +4875,7 @@ export const providersAwaitLoginUpgradeV1ToV2 = defineUpgradePath<
 export const providersAwaitLoginV21 = defineRpcContract({
   method: "providers.awaitLogin",
   schemaVersion: { major: 2, minor: 1 } as const,
-  requestSchema: providersAwaitLoginRequestSchema,
+  requestSchema: providersAwaitLoginRequestSchemaV22,
   responseSchema: providersAwaitLoginResponseSchemaV21,
 });
 
@@ -4853,8 +4913,8 @@ export const providersAwaitLoginUpgradeV20ToV21 = defineUpgradePath<
 export const providersAwaitLoginV22 = defineRpcContract({
   method: "providers.awaitLogin",
   schemaVersion: { major: 2, minor: 2 } as const,
-  requestSchema: providersAwaitLoginRequestSchema,
-  responseSchema: providersAwaitLoginResponseSchema,
+  requestSchema: providersAwaitLoginRequestSchemaV22,
+  responseSchema: providersAwaitLoginResponseSchemaV22,
 });
 
 export const providersAwaitLoginUpgradeV21ToV22 = defineUpgradePath<
@@ -4866,6 +4926,23 @@ export const providersAwaitLoginUpgradeV21ToV22 = defineUpgradePath<
   upgradeRequest: (request) => request,
   // A v2.1 host never read the provider's refusal, so it has none to report.
   upgradeResponse: (response) => ({ ...response, refusal: null }),
+});
+
+export const providersAwaitLoginV23 = defineRpcContract({
+  method: "providers.awaitLogin",
+  schemaVersion: { major: 2, minor: 3 } as const,
+  requestSchema: providersAwaitLoginRequestSchema,
+  responseSchema: providersAwaitLoginResponseSchema,
+});
+
+export const providersAwaitLoginUpgradeV22ToV23 = defineUpgradePath<
+  typeof providersAwaitLoginV22,
+  typeof providersAwaitLoginV23
+>({
+  from: { major: 2, minor: 2 },
+  to: { major: 2, minor: 3 },
+  upgradeRequest: (request) => ({ ...request, lastSeenReaderCount: null }),
+  upgradeResponse: (response) => ({ ...response, installation: null }),
 });
 
 export const providersAwaitLoginDowngradeV21ToV20 = defineDowngradePath<
@@ -4927,6 +5004,21 @@ export const providersAwaitLoginDowngradeV22ToV10 = defineDowngradePath<
       }),
     };
   },
+});
+
+export const providersAwaitLoginDowngradeV23ToV10 = defineDowngradePath<
+  typeof providersAwaitLoginV23,
+  typeof providersAwaitLoginV10
+>({
+  from: { major: 2, minor: 3 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) =>
+    providersAwaitLoginDowngradeV22ToV10.downgradeRequest({
+      providerId: request.providerId,
+      profileId: request.profileId,
+    }),
+  downgradeResponse: (response) =>
+    providersAwaitLoginDowngradeV22ToV10.downgradeResponse(response),
 });
 
 export const providersCancelLoginV10 = defineRpcContract({
@@ -5263,6 +5355,20 @@ export const providersSetNativeMemoryV10 = defineRpcContract({
 });
 
 /**
+ * Show or hide one upstream model provider in Traycer's model pickers
+ * (`providers.list@10.10` reads the list back as the row's
+ * `hiddenModelProviders`). A new name at `@1.0` on the same
+ * optional-capability channel as the mutations above, so a host that predates
+ * it refuses per call and the client offers no switch.
+ */
+export const providersSetModelProviderHiddenV10 = defineRpcContract({
+  method: "providers.setModelProviderHidden",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersSetModelProviderHiddenRequestSchema,
+  responseSchema: providersSetModelProviderHiddenResponseSchema,
+});
+
+/**
  * Run the pack-discovery poll for one pack now, instead of waiting out the
  * jittered ticker period. Another new name at `@1.0` on the same
  * optional-capability channel as the four above, and registered below the same
@@ -5507,6 +5613,13 @@ export const providersSetEnabledV21 = defineRpcContract({
   schemaVersion: { major: 2, minor: 1 } as const,
   requestSchema: providersSetEnabledRequestSchemaV21,
   responseSchema: providersSetEnabledResponseSchema,
+});
+
+export const providersSignOutProfileV10 = defineRpcContract({
+  method: "providers.signOutProfile",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersSignOutProfileRequestSchema,
+  responseSchema: providersSignOutProfileResponseSchema,
 });
 
 export const providersSetProfileEnabledV10 = defineRpcContract({
@@ -9296,7 +9409,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   // persist-on-next-send behavior.
   "epic.updateChatRunSettings": {
     1: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: epicUpdateChatRunSettingsV10,
@@ -9313,6 +9426,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         2: {
           contract: epicUpdateChatRunSettingsV12,
           upgradeFromPreviousVersion: epicUpdateChatRunSettingsUpgradeV11ToV12,
+        },
+        3: {
+          contract: epicUpdateChatRunSettingsV13,
+          upgradeFromPreviousVersion: epicUpdateChatRunSettingsUpgradeV12ToV13,
         },
       },
       downgradePathsFromLatest: {},
@@ -9389,11 +9506,15 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   "environment.host.bind": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: environmentHostBindV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: environmentHostBindV11,
+          upgradeFromPreviousVersion: environmentHostBindUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -11093,7 +11214,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       },
     },
     4: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: epicGetChatRunSettingsV40,
@@ -11103,11 +11224,15 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
           contract: epicGetChatRunSettingsV41,
           upgradeFromPreviousVersion: epicGetChatRunSettingsUpgradeV40ToV41,
         },
+        2: {
+          contract: epicGetChatRunSettingsV42,
+          upgradeFromPreviousVersion: epicGetChatRunSettingsUpgradeV41ToV42,
+        },
       },
       downgradePathsFromLatest: {
-        1: epicGetChatRunSettingsDowngradeV41ToV10,
-        2: epicGetChatRunSettingsDowngradeV41ToV20,
-        3: epicGetChatRunSettingsDowngradeV41ToV30,
+        1: epicGetChatRunSettingsDowngradeV42ToV10,
+        2: epicGetChatRunSettingsDowngradeV42ToV20,
+        3: epicGetChatRunSettingsDowngradeV42ToV30,
       },
     },
     degrade: { kind: "unsupported" },
@@ -11128,7 +11253,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       downgradePathsFromLatest: {},
     },
     2: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: epicGetChatRunSettingsBatchV20,
@@ -11140,9 +11265,14 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
           upgradeFromPreviousVersion:
             epicGetChatRunSettingsBatchUpgradeV20ToV21,
         },
+        2: {
+          contract: epicGetChatRunSettingsBatchV22,
+          upgradeFromPreviousVersion:
+            epicGetChatRunSettingsBatchUpgradeV21ToV22,
+        },
       },
       downgradePathsFromLatest: {
-        1: epicGetChatRunSettingsBatchDowngradeV21ToV10,
+        1: epicGetChatRunSettingsBatchDowngradeV22ToV10,
       },
     },
     degrade: { kind: "unsupported" },
@@ -13011,7 +13141,7 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
     2: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: providersAwaitLoginV20,
@@ -13025,9 +13155,13 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
           contract: providersAwaitLoginV22,
           upgradeFromPreviousVersion: providersAwaitLoginUpgradeV21ToV22,
         },
+        3: {
+          contract: providersAwaitLoginV23,
+          upgradeFromPreviousVersion: providersAwaitLoginUpgradeV22ToV23,
+        },
       },
       downgradePathsFromLatest: {
-        1: providersAwaitLoginDowngradeV22ToV10,
+        1: providersAwaitLoginDowngradeV23ToV10,
       },
     },
   },
@@ -13046,6 +13180,19 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
         2: {
           contract: providersCancelLoginV12,
           upgradeFromPreviousVersion: providersCancelLoginUpgradeV11ToV12,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "providers.signOutProfile": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersSignOutProfileV10,
+          upgradeFromPreviousVersion: null,
         },
       },
       downgradePathsFromLatest: {},
@@ -13446,6 +13593,19 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
       versions: {
         0: {
           contract: providersSetNativeMemoryV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "providers.setModelProviderHidden": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersSetModelProviderHiddenV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -14381,14 +14541,14 @@ const HOST_RPC_ID_CARRYING_REGISTRY_DEFINITION = {
 } as const;
 
 /**
- * `providers.list` major 10, named. Its nine minors and nine bridges inline
+ * `providers.list` major 10, named. Its eleven minors and nine bridges inline
  * push `HOST_RPC_PROVIDERS_LIST_REGISTRY_DEFINITION` over TS7056's
  * declaration-serialization ceiling; a named slot type is emitted by name,
  * as `HostRpcNotificationMethodMap` is. The literal below is checked against
  * it, so the slot keeps every exact contract and bridge.
  */
 type ProvidersListMajor10 = {
-  readonly latestMinor: 8;
+  readonly latestMinor: 10;
   readonly versions: {
     readonly 0: {
       readonly contract: typeof providersListV100;
@@ -14428,6 +14588,14 @@ type ProvidersListMajor10 = {
       readonly contract: typeof providersListV108;
       readonly upgradeFromPreviousVersion: typeof providersListUpgradeV107ToV108;
     };
+    readonly 9: {
+      readonly contract: typeof providersListV109;
+      readonly upgradeFromPreviousVersion: typeof providersListUpgradeV108ToV109;
+    };
+    readonly 10: {
+      readonly contract: typeof providersListV1010;
+      readonly upgradeFromPreviousVersion: typeof providersListUpgradeV109ToV1010;
+    };
   };
   readonly downgradePathsFromLatest: {
     readonly 1: typeof providersListDowngradeV10ToV1;
@@ -14443,7 +14611,7 @@ type ProvidersListMajor10 = {
 };
 
 const PROVIDERS_LIST_MAJOR_10: ProvidersListMajor10 = {
-  latestMinor: 8,
+  latestMinor: 10,
   versions: {
     0: {
       contract: providersListV100,
@@ -14489,6 +14657,16 @@ const PROVIDERS_LIST_MAJOR_10: ProvidersListMajor10 = {
     8: {
       contract: providersListV108,
       upgradeFromPreviousVersion: providersListUpgradeV107ToV108,
+    },
+    // Credential bindings, home facts and unreadable projections: new keys.
+    9: {
+      contract: providersListV109,
+      upgradeFromPreviousVersion: providersListUpgradeV108ToV109,
+    },
+    // `hiddenModelProviders` on the row: a new KEY again.
+    10: {
+      contract: providersListV1010,
+      upgradeFromPreviousVersion: providersListUpgradeV109ToV1010,
     },
   },
   downgradePathsFromLatest: {
@@ -16350,9 +16528,8 @@ const HOST_STREAM_RPC_REGISTRY_FEATURE_DEFINITION = {
       // @1.3 says where each task came from (`spun`, `label`,
       // `originRequestId`, `createdByChatId`, T82); @1.2 and earlier bind
       // the task entry frozen without them.
-      // @1.4 carries each task's check-in history (`checkins`) and when each
-      // notification subscription started (`since`, T86); @1.3 is frozen
-      // without them.
+      // @1.4 carries when each notification subscription started (`since`);
+      // @1.3 is frozen without it.
       // @1.5 carries what each task's agents wait on a person for
       // (`inputNeeded`) and the subscriber's own card actions in flight
       // (`surfaceActions`, T89); @1.4 is frozen without them.
@@ -16438,7 +16615,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 43,
+      latestMinor: 44,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -16659,6 +16836,8 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         // @1.43: the `slack` user message, a plain user row below (see
         // `chat-frame-compat.ts`). A user row may say `spoken`.
         43: { contract: chatSubscribeV143 },
+        // @1.44 adds dispatch provenance; older subscribers receive the frozen event.
+        44: { contract: chatSubscribeV144 },
       },
     },
   },

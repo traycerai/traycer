@@ -92,11 +92,8 @@ export function formatAgentListPage(
   const showRunConfig = full && rendered.some(hasRunConfigEnrichment);
   const showOwnerHostConnectivity =
     full && rendered.some(hasConnectivityEnrichment);
-  // Gated on a row actually rendering one of the two tokens, like the session
-  // gate below: the host sends the keys as `null` on every row it cannot
-  // answer for, and a legend line for a token that appears nowhere is noise.
-  // A compact row prints neither, so its legend explains neither.
-  const showRunTuple = full && rendered.some(hasRunTupleEnrichment);
+  // Every full row states whether its run tuple is observable.
+  const showRunTuple = full && rendered.length > 0;
   // Gated on a row actually RENDERING the token rather than on the key being
   // present: `sessionState` is a schema field since `@9.1`, so it is present
   // and `null` on every row a host with nothing to report serves - and a
@@ -774,7 +771,7 @@ function formatAgentListLegend(
     ? "\nmodel: <slug>: the configured model (provider default means the TUI provider resolves it)\neffort: <level>: the configured reasoning effort; omitted when absent\nserviceTier: <id>: the configured service tier; omitted when none is reported\nfast: fast mode is enabled"
     : "";
   const runTuple = showRunTuple
-    ? "\nprofile: <id> / mode: <word>: the provider profile (ambient is the provider's own login) and permission mode the agent's future turns use, in the form traycer_configure_agent takes back. Shown only for your own GUI agents on the host that answered; a row without them is one that host cannot answer for"
+    ? "\nprofile: <id> / mode: <word>: the provider profile (ambient is the provider's own login) and permission mode the agent's future turns use, in the form traycer_configure_agent takes back. unobservable means the answering host cannot report that value"
     : "";
   // The caveat is not optional politeness: without it `unknown` reads as
   // "probably down", and it is the value EVERY row belonging to another user
@@ -889,11 +886,10 @@ const RUN_TUPLE_PROFILE_PATTERN = /^[A-Za-z0-9_.-]+$/;
 /**
  * `profile` off a row, or `null` when the row does not carry a usable one.
  *
- * A wire field since `agent.list@10.1`: a host at or past it sends it for the
- * caller's own GUI agents on that host and `null` for every row it cannot
- * answer for, and a host that predates it is upgraded to `null`. Still
- * narrowed at runtime, so a hand-built row that skipped the schema reads as
- * absent and nothing but an id can reach the line.
+ * A wire field since `agent.list@10.1`: the owning host supplies it for the
+ * caller's own GUI agents. `null` means this answer cannot say, including an
+ * answer upgraded from an older host. Runtime narrowing keeps malformed
+ * content from a hand-built row out of the rendered value.
  */
 function readRunTupleProfile(agent: AgentSummary): string | null {
   const value: unknown = agent.profile;
@@ -904,8 +900,8 @@ function readRunTupleProfile(agent: AgentSummary): string | null {
 
 /**
  * `permissionMode` off a row, narrowed to a mode this build knows. A word
- * outside the list reads as absent rather than being printed: it would be a
- * value the caller cannot hand back to `traycer_configure_agent` from here.
+ * outside the list is unobservable: the caller cannot hand it back to
+ * `traycer_configure_agent` from here.
  */
 function readRunTuplePermissionMode(
   agent: AgentSummary,
@@ -914,34 +910,20 @@ function readRunTuplePermissionMode(
   return ALL_PERMISSION_MODES.find((mode) => mode === value) ?? null;
 }
 
-function hasRunTupleEnrichment(agent: AgentSummary): boolean {
-  return (
-    readRunTupleProfile(agent) !== null ||
-    readRunTuplePermissionMode(agent) !== null
-  );
-}
-
 /**
  * The two halves of the run tuple the run-config token does not carry. They
  * exist on the row so an agent can restate them: `traycer_configure_agent`
  * takes a complete tuple, and changing one part means naming the rest.
  */
 function formatRunTupleToken(agent: AgentSummary): string {
-  const parts: string[] = [];
-  const profile = readRunTupleProfile(agent);
-  if (profile !== null) parts.push(`profile: ${profile}`);
-  const permissionMode = readRunTuplePermissionMode(agent);
-  if (permissionMode !== null) parts.push(`mode: ${permissionMode}`);
-  return parts.join(" ");
+  return `profile: ${readRunTupleProfile(agent) ?? "unobservable"} mode: ${readRunTuplePermissionMode(agent) ?? "unobservable"}`;
 }
 
 function formatRunTupleSelfLines(agent: AgentSummary): string[] {
-  const lines: string[] = [];
-  const profile = readRunTupleProfile(agent);
-  if (profile !== null) lines.push(`profile: ${profile}`);
-  const permissionMode = readRunTuplePermissionMode(agent);
-  if (permissionMode !== null) lines.push(`permission mode: ${permissionMode}`);
-  return lines;
+  return [
+    `profile: ${readRunTupleProfile(agent) ?? "unobservable"}`,
+    `permission mode: ${readRunTuplePermissionMode(agent) ?? "unobservable"}`,
+  ];
 }
 
 /**

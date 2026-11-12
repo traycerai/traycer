@@ -1,14 +1,14 @@
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
+import { MAX_INSTALL_TOKEN_LENGTH } from "../host/team-install-token";
 
-// Where `traycer host join` takes its one-time install token from. Never the
+export { MAX_INSTALL_TOKEN_LENGTH } from "../host/team-install-token";
+
+// The one-time token for `traycer host install --team <team>`. Never on the
 // command line: `ps` shows a process's arguments to every local user, and the
 // shell keeps them in its history, so a token there can be redeemed first by
 // someone else. A terminal gets a prompt that echoes nothing; anything else
-// (`traycer host join < token-file`) gives the token as the first line on
-// stdin.
-
-/** Far larger than any install token authn mints; the host's own cap. */
-export const MAX_INSTALL_TOKEN_LENGTH = 4096;
+// (`traycer host install --team <team> < token-file`) gives the token as the
+// first line on stdin.
 
 const END_OF_TEXT = "\u0003";
 const END_OF_TRANSMISSION = "\u0004";
@@ -23,7 +23,7 @@ interface InstallTokenInput extends NodeJS.ReadableStream {
 function cancelled(): Error {
   return cliError({
     code: CLI_ERROR_CODES.INVALID_ARGUMENT,
-    message: "host join: cancelled.",
+    message: "host install: cancelled.",
     details: null,
     exitCode: 1,
   });
@@ -102,7 +102,7 @@ export async function readInstallToken(
   if (!canPrompt) {
     throw cliError({
       code: CLI_ERROR_CODES.INVALID_ARGUMENT,
-      message: "host join: give the install token on stdin.",
+      message: "host install: give the install token on stdin.",
       details: null,
       exitCode: 1,
     });

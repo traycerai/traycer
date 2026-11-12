@@ -140,4 +140,22 @@ describe("<LocalRowNote />", () => {
     );
     expect(screen.queryByTestId("local-row-note-move")).toBeNull();
   });
+
+  it("shows the unfinished setup status after all settings have moved", async () => {
+    renderNote(
+      environmentStatusFixture({
+        principal: null,
+        planes: { records: "moved", broker: "moved", room: "moved" },
+        setup: { stage: "applying", state: "stalled" },
+      }),
+    );
+
+    await screen.findByText("Setup stopped while applying your settings.");
+    const note = screen.getByTestId("local-row-note");
+    expect(note.textContent).toBe(
+      "Setup stopped while applying your settings.",
+    );
+    expect(screen.queryByTestId("local-row-note-move")).toBeNull();
+    expect(screen.queryByTestId("host-settings-card-move-stopped")).toBeNull();
+  });
 });

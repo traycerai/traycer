@@ -146,6 +146,8 @@ import type {
 } from "../../i-stream-session";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import type { BrowserSessionsClientFrame } from "@traycer/protocol/host/browser/contracts";
+import { BrowserSessionsStreamClient } from "../../browser-sessions-stream-client";
 import { WorktreeDeleteBatchStreamClient } from "../../worktree-delete-batch-stream-client";
 
 // Integration-style tests for the session lifecycle edges a cold audit found
@@ -11062,6 +11064,92 @@ describe("RemoteSession sandbox session grant", () => {
   );
 });
 
+describe("RemoteSession refused OPEN and browser jar payload", () => {
+  it(
+    "does not put a cookie-bearing browser frame on the wire before a refused OPEN is admitted",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.stallOpens = true;
+      relay.decideOpen = () => ({
+        kind: "fatal",
+        details: unauthorizedDetails(),
+      });
+      const lease = new MutableBearerLease("user-bearer", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: hostStreamRpcRegistry,
+      });
+      const browserSessions = new BrowserSessionsStreamClient({
+        wsStreamClient: new RemoteStreamClient(session),
+        scope: { kind: "epic", epicId: "epic-1" },
+        callbacks: {
+          onServerFrame: () => undefined,
+          onConnectionStatus: () => undefined,
+        },
+      });
+      const cookieValue = "cookie-value-must-not-leave-before-admission";
+      const cookieDelta: BrowserSessionsClientFrame = {
+        kind: "primaryProfileDelta",
+        hasBinaryPayload: false,
+        domain: "example.test",
+        cookies: [
+          {
+            name: "session",
+            value: cookieValue,
+            domain: ".example.test",
+            path: "/",
+            expires: -1,
+            httpOnly: true,
+            secure: true,
+            sameSite: "Lax",
+            partitionKey: null,
+          },
+        ],
+        removedKeys: [],
+        issuedAt: 1,
+      };
+
+      try {
+        session.start();
+        browserSessions.sendClientFrame(cookieDelta);
+        await vi.waitFor(
+          () => expect(relay.openBearers).toEqual(["user-bearer"]),
+          WAIT,
+        );
+
+        expect(
+          relay.clientFrames.some(
+            (frame) => frame.type === MuxFrameType.STREAM_FRAME,
+          ),
+        ).toBe(false);
+        expect(
+          JSON.stringify(relay.clientFrames.map((frame) => frame.json)),
+        ).not.toContain(cookieValue);
+
+        await relay.releaseStalledOpens();
+        await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
+
+        expect(
+          relay.clientFrames.some((frame) => frame.type === MuxFrameType.OPEN),
+        ).toBe(true);
+        expect(
+          relay.clientFrames.some(
+            (frame) => frame.type === MuxFrameType.STREAM_FRAME,
+          ),
+        ).toBe(false);
+        expect(
+          JSON.stringify(relay.clientFrames.map((frame) => frame.json)),
+        ).not.toContain(cookieValue);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        browserSessions.close();
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});
+
 /**
  * The no-progress bound counts an UNAUTHORIZED rejection whose revalidation
  * answered "rotated" as no progress when the credential the next attach will
@@ -11193,6 +11281,84 @@ describe("RemoteSession refused attach grant", () => {
         "authn refused the mint: the sandbox is frozen (HTTP 402 sandbox_frozen)",
       context: "",
     });
+
+  it(
+    "passes the membership retry cause to browser streams while membership grant provisioning is unavailable",
+    async () => {
+      const relay = new FakeRelayHost();
+      const counts = { provider: 0, dials: 0 };
+      const retryCause: FatalErrorDetails = {
+        code: "TEAM_MEMBERSHIP_UNAVAILABLE",
+        reason:
+          "Membership could not be checked. Check your connection and try again.",
+        retryable: true,
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      };
+      const lease = new MutableBearerLease("user-bearer", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: hostStreamRpcRegistry,
+        grantProvider: () => {
+          counts.provider += 1;
+          return Promise.resolve({
+            kind: "unavailable" as const,
+            retryCause,
+            detail: "team membership could not be checked",
+            context: "",
+          });
+        },
+        webSocketFactory: {
+          create: (url, priority) => {
+            counts.dials += 1;
+            return relay.factory.create(url, priority);
+          },
+        },
+      });
+      const transitions: Array<{
+        status: string;
+        retryCause: FatalErrorDetails | null;
+      }> = [];
+      const browserSessions = new BrowserSessionsStreamClient({
+        wsStreamClient: new RemoteStreamClient(session),
+        scope: { kind: "epic", epicId: "epic-1" },
+        callbacks: {
+          onServerFrame: () => undefined,
+          onConnectionStatus: (_status, _reason, _retryCause) => {
+            transitions.push({
+              status: _status,
+              retryCause: _retryCause,
+            });
+          },
+        },
+      });
+
+      try {
+        session.start();
+        await vi.waitFor(
+          () =>
+            expect(transitions).toContainEqual({
+              status: "reconnecting",
+              retryCause,
+            }),
+          WAIT,
+        );
+        await vi.waitFor(
+          () => expect(counts.provider).toBeGreaterThanOrEqual(2),
+          WAIT,
+        );
+
+        expect(session.isClosed()).toBe(false);
+        expect(session.terminalFatal()).toBeNull();
+        expect(counts.dials).toBe(0);
+        expect(relay.openBearers).toEqual([]);
+      } finally {
+        browserSessions.close();
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
 
   it(
     "goes terminal at once on a refused grant, with the SANDBOX_FROZEN fatal, and reports the close once",

@@ -191,6 +191,7 @@ describe("useHostNotificationIndicators recovery", () => {
     renderHook(
       () =>
         useHostNotificationIndicators({
+          freshnessMode: "base",
           hostId: mockLocalHostEntry.hostId,
           epicIds: ["epic-a"],
           chatIds: [],
@@ -231,6 +232,7 @@ describe("useHostNotificationIndicators recovery", () => {
     renderHook(
       () =>
         useHostNotificationIndicators({
+          freshnessMode: "base",
           hostId: mockLocalHostEntry.hostId,
           epicIds: ["epic-b"],
           chatIds: [],
@@ -328,6 +330,7 @@ describe("useHostNotificationIndicators recovery", () => {
 
     const useObservedIndicators = () => {
       const projection = useHostNotificationIndicators({
+        freshnessMode: "base",
         hostId: mockLocalHostEntry.hostId,
         epicIds: ["epic-a"],
         chatIds: [],
@@ -468,6 +471,7 @@ describe("useHostNotificationIndicators across crossed chunks", () => {
     const { result } = renderHook(
       () =>
         useHostNotificationIndicators({
+          freshnessMode: "base",
           hostId: mockLocalHostEntry.hostId,
           epicIds: ["epic-a"],
           chatIds,
@@ -554,6 +558,7 @@ describe("useHostNotificationIndicators across crossed chunks", () => {
     const { result } = renderHook(
       () =>
         useHostNotificationIndicators({
+          freshnessMode: "base",
           hostId: mockLocalHostEntry.hostId,
           epicIds: [],
           chatIds,
@@ -571,5 +576,75 @@ describe("useHostNotificationIndicators across crossed chunks", () => {
     // ids in the silent chunk must not read as known zeros of a whole origin.
     expect(result.current.isPending).toBe(true);
     expect(result.current.data.complete).toBeNull();
+  });
+});
+
+describe("useHostNotificationIndicators freshness modes over one key", () => {
+  it("keeps an answered, un-invalidated read fresh for the Activity observer after 61 s while the ordinary observer of the same key goes stale, with no new read", async () => {
+    vi.useFakeTimers();
+    const queryClient = createAppQueryClient();
+    queryClient.setDefaultOptions({
+      queries: { ...queryClient.getDefaultOptions().queries, retry: false },
+    });
+    const requestCount = { value: 0 };
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+      messenger: new MockHostMessenger<HostRpcRegistry>({
+        registry: hostRpcRegistry,
+        requestId: () => "request-modes",
+        handlers: {
+          "host.notifications.indicatorState": () => {
+            requestCount.value += 1;
+            return { epics: {}, chats: {}, complete: true };
+          },
+        },
+      }),
+    });
+    spine.setRequestContext(
+      createRequestContextFixture({ origin: "renderer", bearerToken: "token" }),
+    );
+    hostClient = spine.createRequester(mockLocalHostEntry);
+    useAuthStore.setState({
+      contextMetadata: { userId: "user-a", username: "user-a" },
+    });
+    const wrapper = (props: { readonly children: ReactNode }): ReactNode =>
+      createElement(
+        QueryClientProvider,
+        { client: queryClient },
+        props.children,
+      );
+    const observe = (freshnessMode: "base" | "activity") =>
+      renderHook(
+        () =>
+          useHostNotificationIndicators({
+            freshnessMode,
+            hostId: mockLocalHostEntry.hostId,
+            epicIds: ["epic-a"],
+            chatIds: [],
+            enabled: true,
+          }),
+        { wrapper },
+      );
+
+    const activity = observe("activity");
+    await vi.waitFor(() => {
+      expect(activity.result.current.hasAnswer).toBe(true);
+    });
+    const base = observe("base");
+    await vi.waitFor(() => {
+      expect(base.result.current.hasAnswer).toBe(true);
+    });
+    expect(requestCount.value).toBe(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(61_000);
+    });
+
+    expect(activity.result.current.hasAnswer).toBe(true);
+    expect(base.result.current.hasAnswer).toBe(false);
+    expect(requestCount.value).toBe(1);
   });
 });

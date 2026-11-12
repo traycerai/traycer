@@ -338,6 +338,14 @@ function createBaseRunnerHost(): IRunnerHost {
     linkLoginDeepLinks: null,
     updateHostVersionPolicy: () =>
       Promise.resolve({ kind: "network-error" as const }),
+    readHostOwnership: () => Promise.resolve({ kind: "unauthorized" as const }),
+    listTeamComputers: () => Promise.resolve({ kind: "unauthorized" as const }),
+    setEnvironmentBotHost: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
+    mintTeamComputerInstallToken: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
+    releaseTeamComputer: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
     deregisterHostFromAccount: () =>
       Promise.resolve({ kind: "network-error" as const }),
     listSandboxes: () => Promise.resolve({ kind: "unauthorized" as const }),
@@ -363,8 +371,6 @@ function createBaseRunnerHost(): IRunnerHost {
     disconnectSlackApp: () =>
       Promise.resolve({ kind: "unauthorized" as const }),
     setSlackAppDms: () => Promise.resolve({ kind: "unauthorized" as const }),
-    mintTeamHostInstallToken: () =>
-      Promise.resolve({ kind: "unauthorized" as const }),
     getSandboxGrants: () => Promise.resolve({ kind: "unauthorized" as const }),
     getTeamEnvironment: () =>
       Promise.resolve({ kind: "unauthorized" as const }),

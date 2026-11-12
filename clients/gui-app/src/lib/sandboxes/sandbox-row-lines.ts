@@ -242,9 +242,9 @@ export function sandboxRowMatches(
   }
   const term = filter.search.trim().toLowerCase();
   if (term.length === 0) return true;
-  // The task is matched by id: the summary carries no task title.
   return (
     summary.displayName.toLowerCase().includes(term) ||
+    (summary.createdByTaskTitle?.toLowerCase().includes(term) ?? false) ||
     (summary.createdByTaskId?.toLowerCase().includes(term) ?? false)
   );
 }
@@ -1207,8 +1207,8 @@ const SANDBOX_ROW_ACTION_LABEL = {
   stop: "Stop",
   keep: "Keep this sandbox",
   retry: "Retry",
-  "retry-applying": "Retry setup",
-  "repair-setup": "Retry setup",
+  "retry-applying": "Retry applying",
+  "repair-setup": "Repair setup",
   "add-credits": "Add credits ↗",
   "open-tab": "Open a tab",
   "open-terminal": "Open terminal",

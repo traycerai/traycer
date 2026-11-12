@@ -123,6 +123,7 @@ function remoteEntry(
     publicKey: `pubkey-${hostId}`,
     relayFuseGrace: false,
     sandbox: null,
+    owner: null,
     remoteStatus: {
       connectivity: "offline",
       viewerReachability: "unknown",
@@ -287,6 +288,31 @@ describe("subscribeHostRowChanged — per-host precision", () => {
     expect(perHostListener).not.toHaveBeenCalled();
 
     directory.removeEntry(hostId);
+    directory.emitChanged();
+
+    expect(perHostListener).toHaveBeenCalledTimes(1);
+  });
+
+  it("notifies a per-host subscriber when only a physical remote host's owner changes", () => {
+    const directory = stubDirectory();
+    const hostId = freshHostId();
+    const personal = Object.assign(remoteEntry(hostId, {}), {
+      owner: { kind: "user" as const, id: "user-a" },
+    });
+    directory.setEntry(hostId, personal);
+    installHostConnectionRegistrySource({
+      directory: directory.source,
+      leases: null,
+    });
+
+    const perHostListener = vi.fn();
+    subscribeHostRowChanged(hostId, perHostListener);
+    directory.setEntry(
+      hostId,
+      Object.assign(remoteEntry(hostId, {}), {
+        owner: { kind: "team" as const, id: "team-a", name: "Alpha" },
+      }),
+    );
     directory.emitChanged();
 
     expect(perHostListener).toHaveBeenCalledTimes(1);

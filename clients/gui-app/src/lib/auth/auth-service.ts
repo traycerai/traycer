@@ -1,3 +1,10 @@
+import type { HostOwnershipResult } from "@traycer-clients/shared/host-client/host-ownership";
+import type {
+  TeamComputersResult,
+  SetEnvironmentBotHostResult,
+} from "@traycer-clients/shared/host-client/team-computers";
+import type { TeamComputerInstallTokenResult } from "@traycer-clients/shared/host-client/team-computer-install";
+import type { TeamComputerReleaseResult } from "@traycer-clients/shared/host-client/team-computer-release";
 import type { SandboxCatalogueReadinessRequest } from "@traycer/protocol/host/sandbox-control";
 import type {
   CredentialsMigrationOutcome,
@@ -63,10 +70,6 @@ import type {
   SlackAppDmsRequest,
   SlackAppRegisterRequest,
 } from "@traycer/protocol/host/slack-app";
-import {
-  TEAM_HOST_UNAVAILABLE_IN_STAGING,
-  type TeamHostInstallTokenResult,
-} from "@traycer-clients/shared/host-client/team-host";
 import type {
   VoiceAvailabilityFetchResult,
   VoiceSessionEndFetchResult,
@@ -3121,6 +3124,64 @@ export class AuthService {
     return this.runnerHost.updateHostVersionPolicy(bearer, hostId, input);
   }
 
+  async readHostOwnership(
+    hostId: string,
+    era: AuthEra,
+  ): Promise<HostOwnershipResult> {
+    const before = this.currentAuthEra();
+    if (
+      before.identity !== era.identity ||
+      before.credentialGeneration !== era.credentialGeneration
+    )
+      throw new SupersededAuthEraError();
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    const result = await this.runnerHost.readHostOwnership(bearer, hostId);
+    const after = this.currentAuthEra();
+    if (
+      after.identity !== era.identity ||
+      after.credentialGeneration !== era.credentialGeneration
+    )
+      throw new SupersededAuthEraError();
+    return result;
+  }
+
+  async listTeamComputers(environmentId: string): Promise<TeamComputersResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return this.runnerHost.listTeamComputers(bearer, environmentId);
+  }
+  async setEnvironmentBotHost(
+    environmentId: string,
+    hostId: string,
+    sharingGeneration: number,
+  ): Promise<SetEnvironmentBotHostResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return this.runnerHost.setEnvironmentBotHost(
+      bearer,
+      environmentId,
+      hostId,
+      sharingGeneration,
+    );
+  }
+  async mintTeamComputerInstallToken(
+    environmentId: string,
+  ): Promise<TeamComputerInstallTokenResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return this.runnerHost.mintTeamComputerInstallToken(bearer, environmentId);
+  }
+
+  async releaseTeamComputer(
+    hostId: string,
+    environmentId: string,
+  ): Promise<TeamComputerReleaseResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) throw new Error("Sign in to claim this computer.");
+    return this.runnerHost.releaseTeamComputer(bearer, hostId, environmentId);
+  }
+
   /**
    * "Remove from account": `POST /api/v3/hosts/:hostId/deregister` via the
    * runner host (run in Electron main for CORS, mirroring
@@ -3420,26 +3481,6 @@ export class AuthService {
     const bearer = this.cloudBearer();
     if (bearer === null) return { kind: "unauthorized" };
     return this.runnerHost.setSlackAppDms(bearer, request);
-  }
-
-  /**
-   * The one-time install token for a team environment's bot host, on
-   * traycer-server with the person's bearer. A build that cannot reach
-   * traycer-server at all (the Slack floor's signal) answers `unavailable`
-   * without a request; signed out, `unauthorized`.
-   */
-  async mintTeamHostInstallToken(
-    environmentId: string,
-  ): Promise<TeamHostInstallTokenResult> {
-    if (this.runnerHost.sandboxControlUnavailableReason !== null) {
-      return {
-        kind: "unavailable",
-        reason: TEAM_HOST_UNAVAILABLE_IN_STAGING,
-      };
-    }
-    const bearer = this.cloudBearer();
-    if (bearer === null) return { kind: "unauthorized" };
-    return this.runnerHost.mintTeamHostInstallToken(bearer, environmentId);
   }
 
   /** Explicit invitation access when the serving tier predates the host methods. */

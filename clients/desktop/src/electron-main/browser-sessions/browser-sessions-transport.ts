@@ -16,12 +16,14 @@ import {
   fetchRegisteredHostsViaHttp,
   hostListItemToDirectoryEntry,
   isRemoteHostDirectoryEntry,
-  isSandboxHostDirectoryEntry,
   type RemoteHostDirectoryEntry,
 } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
-import { createRemoteHostTransport } from "@traycer-clients/shared/host-transport/remote/index";
+import {
+  createRemoteHostTransport,
+  remoteOpenAuthFor,
+} from "@traycer-clients/shared/host-transport/remote/index";
 import {
   DEFAULT_DIAL_TIMEOUT_MS,
   DEFAULT_INITIAL_BACKOFF_MS,
@@ -51,6 +53,10 @@ export interface BrowserSessionsHostTransport {
  */
 export interface BrowserSessionsHostDirectory {
   resolve(hostId: string): Promise<HostDirectoryEntry | null>;
+  /** The last trusted registry answer, without starting a read. */
+  peek(hostId: string): HostDirectoryEntry | null;
+  /** A completed registry refresh may change a live stream's owner. */
+  subscribe(listener: () => void): () => void;
   /**
    * The address to dial RIGHT NOW, re-read on every (re)dial.
    *
@@ -132,6 +138,7 @@ export function createBrowserSessionsHostDirectory(
   let inFlight: Promise<void> | null = null;
   let lastRefreshAt: number | null = null;
   let forced = false;
+  const listeners = new Set<() => void>();
 
   const refresh = async (): Promise<void> => {
     const bearerToken = deps.bearerToken();
@@ -149,6 +156,7 @@ export function createBrowserSessionsHostDirectory(
       );
     }
     cachedRemote = next;
+    for (const listener of Array.from(listeners)) listener();
   };
 
   const refreshOnce = (): Promise<void> => {
@@ -205,6 +213,13 @@ export function createBrowserSessionsHostDirectory(
   };
 
   return {
+    peek: (hostId) => localEntryFor(hostId) ?? cachedRemote.get(hostId) ?? null,
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
     invalidate: (hostId) => {
       cachedRemote.delete(hostId);
       forced = true;
@@ -228,6 +243,20 @@ export function createBrowserSessionsHostDirectory(
       return cachedRemote.get(hostId) ?? null;
     },
   };
+}
+
+/** Names the ownership snapshot, independently of display names and addresses. */
+export function browserSessionsOwnerKey(
+  entry: HostDirectoryEntry | null,
+): string | null {
+  if (entry === null) return null;
+  if (!isRemoteHostDirectoryEntry(entry))
+    return JSON.stringify([entry.kind, entry.hostId]);
+  return JSON.stringify([
+    entry.kind,
+    entry.owner?.kind ?? null,
+    entry.owner?.id ?? null,
+  ]);
 }
 
 export interface BrowserSessionsTransportDeps {
@@ -325,6 +354,7 @@ export function openBrowserSessionsTransport(
     hostId: target.hostId,
     endpoint: deps.endpoint,
     bearer: deps.bearer,
+    userId,
     auth: null,
     clock: null,
     hostCredentialMint: null,
@@ -350,7 +380,7 @@ export function openBrowserSessionsTransport(
 /**
  * Which jar transport `target` may have, or `null` for none. The two lanes
  * are the whole allowlist: this machine's own host, and a registry host that
- * is a well-formed personal (non-sandbox) remote.
+ * is a well-formed personal remote. Team-owned computers never receive the jar.
  */
 function jarTransportLane(target: HostDirectoryEntry):
   | { readonly kind: "local" }
@@ -365,7 +395,7 @@ function jarTransportLane(target: HostDirectoryEntry):
   if (
     target.kind === "remote" &&
     isRemoteHostDirectoryEntry(target) &&
-    !isSandboxHostDirectoryEntry(target)
+    remoteOpenAuthFor(target) === "user-bearer"
   ) {
     return { kind: "personal-remote", entry: target };
   }

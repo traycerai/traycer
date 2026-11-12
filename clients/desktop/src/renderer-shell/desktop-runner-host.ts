@@ -1,3 +1,10 @@
+import type { HostOwnershipResult } from "@traycer-clients/shared/host-client/host-ownership";
+import type {
+  TeamComputersResult,
+  SetEnvironmentBotHostResult,
+} from "@traycer-clients/shared/host-client/team-computers";
+import type { TeamComputerInstallTokenResult } from "@traycer-clients/shared/host-client/team-computer-install";
+import type { TeamComputerReleaseResult } from "@traycer-clients/shared/host-client/team-computer-release";
 import type { SandboxCatalogueReadinessRequest } from "@traycer/protocol/host/sandbox-control";
 import type { WindowCaptureRect } from "../ipc-contracts/window-capture-types";
 import type { SandboxArtifactBridge } from "@traycer-clients/shared/platform/sandbox-artifacts";
@@ -181,7 +188,6 @@ import type {
   SlackAppDmsRequest,
   SlackAppRegisterRequest,
 } from "@traycer/protocol/host/slack-app";
-import type { TeamHostInstallTokenResult } from "@traycer-clients/shared/host-client/team-host";
 import type { ExecutableWriteGrantFetchResult } from "@traycer-clients/shared/host-client/executable-write-grant";
 import type {
   SandboxAutomationOpenTarget,
@@ -250,6 +256,31 @@ export interface DesktopPreloadBridge {
     hostId: string,
     input: UpdateHostVersionPolicyInput,
   ): Promise<UpdateHostVersionPolicyFetchResult>;
+  readHostOwnership(
+    bearer: string,
+    hostId: string,
+  ): Promise<HostOwnershipResult>;
+  listTeamComputers(
+    bearer: string,
+    environmentId: string,
+  ): Promise<TeamComputersResult>;
+  setEnvironmentBotHost(
+    bearer: string,
+    environmentId: string,
+    hostId: string,
+    sharingGeneration: number,
+  ): Promise<SetEnvironmentBotHostResult>;
+  mintTeamComputerInstallToken(
+    bearerToken: string,
+    environmentId: string,
+  ): Promise<TeamComputerInstallTokenResult>;
+
+  releaseTeamComputer(
+    bearer: string,
+    hostId: string,
+    environmentId: string,
+  ): Promise<TeamComputerReleaseResult>;
+
   deregisterHostFromAccount(
     bearerToken: string,
     hostId: string,
@@ -328,10 +359,6 @@ export interface DesktopPreloadBridge {
     bearerToken: string,
     request: SlackAppDmsRequest,
   ): Promise<SlackAppWriteResult>;
-  mintTeamHostInstallToken(
-    bearerToken: string,
-    environmentId: string,
-  ): Promise<TeamHostInstallTokenResult>;
   getSandboxGrants(
     bearerToken: string,
     environmentId: string | null,
@@ -498,6 +525,7 @@ export interface DesktopFileDropsBridge {
  * `buildHostManagementBridge()`.
  */
 export interface DesktopHostManagementBridge {
+  readonly invalidateLocalTeamAdmission?: (hostId: string) => Promise<void>;
   getHostControllerStatus(): Promise<HostControllerStatus>;
   convergeReady(force: boolean): Promise<MutationOutcome<ConvergeReadyOk>>;
   applyStaged(
@@ -1284,6 +1312,47 @@ export class DesktopRunnerHost implements IRunnerHost {
     return this.bridge.updateHostVersionPolicy(bearerToken, hostId, input);
   }
 
+  readHostOwnership(
+    bearer: string,
+    hostId: string,
+  ): Promise<HostOwnershipResult> {
+    return this.bridge.readHostOwnership(bearer, hostId);
+  }
+
+  listTeamComputers(
+    bearer: string,
+    environmentId: string,
+  ): Promise<TeamComputersResult> {
+    return this.bridge.listTeamComputers(bearer, environmentId);
+  }
+  setEnvironmentBotHost(
+    bearer: string,
+    environmentId: string,
+    hostId: string,
+    sharingGeneration: number,
+  ): Promise<SetEnvironmentBotHostResult> {
+    return this.bridge.setEnvironmentBotHost(
+      bearer,
+      environmentId,
+      hostId,
+      sharingGeneration,
+    );
+  }
+  mintTeamComputerInstallToken(
+    bearerToken: string,
+    environmentId: string,
+  ): Promise<TeamComputerInstallTokenResult> {
+    return this.bridge.mintTeamComputerInstallToken(bearerToken, environmentId);
+  }
+
+  releaseTeamComputer(
+    bearer: string,
+    hostId: string,
+    environmentId: string,
+  ): Promise<TeamComputerReleaseResult> {
+    return this.bridge.releaseTeamComputer(bearer, hostId, environmentId);
+  }
+
   deregisterHostFromAccount(
     bearerToken: string,
     hostId: string,
@@ -1438,13 +1507,6 @@ export class DesktopRunnerHost implements IRunnerHost {
     request: SlackAppDmsRequest,
   ): Promise<SlackAppWriteResult> {
     return this.bridge.setSlackAppDms(bearerToken, request);
-  }
-
-  mintTeamHostInstallToken(
-    bearerToken: string,
-    environmentId: string,
-  ): Promise<TeamHostInstallTokenResult> {
-    return this.bridge.mintTeamHostInstallToken(bearerToken, environmentId);
   }
 
   getSandboxGrants(
@@ -1644,6 +1706,9 @@ function buildDesktopHostManagement(
     getRemovalState: () => managementBridge.getRemovalState(),
     clearRemoval: () => managementBridge.clearRemoval(),
     restartHost: () => managementBridge.restartHost(),
+    invalidateLocalTeamAdmission: (hostId) =>
+      managementBridge.invalidateLocalTeamAdmission?.(hostId) ??
+      Promise.resolve(),
     getHostLogs: (input) => managementBridge.getHostLogs(input),
     runDoctor: (input) => managementBridge.runDoctor(input),
     availableVersions: (input) => managementBridge.availableVersions(input),

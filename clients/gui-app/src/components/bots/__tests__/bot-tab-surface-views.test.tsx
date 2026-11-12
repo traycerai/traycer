@@ -66,7 +66,10 @@ import type {
   BotSessionOpen,
   BotTurnOpen,
 } from "@/stores/bots/bot-open-thread-store";
-import { __setAgentActivityStateForTests } from "@/stores/agent-activity-store";
+import {
+  __setAgentActivityPlaneAnsweringForTests,
+  __setAgentActivityStateForTests,
+} from "@/stores/agent-activity-store";
 import {
   BOT,
   BOT_ID,
@@ -115,6 +118,11 @@ vi.mock(
   () => hostClientForHostIdMock,
 );
 vi.mock("@/hooks/host/use-host-queries", () => hostQueriesMock);
+// The Activity count needs the notification host to read as reachable before
+// a quiet task may leave the list.
+vi.mock("@/hooks/agent/use-host-reachability", () => ({
+  useHostReachability: () => ({ status: "reachable" }),
+}));
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostBinding: () => mocks.binding,
@@ -462,6 +470,8 @@ import { BotTabSurface } from "@/components/bots/bot-tab-surface";
 import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
 
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { NotificationFeedModeContext } from "@/lib/notifications/notification-feed-mode-context";
+import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
 import {
   boxInput,
   typeInto,
@@ -504,7 +514,21 @@ beforeEach(() => {
   resetBotTabSurfaceMocks();
 });
 
+/** The Activity count over a cloud feed that is connected with its snapshot, so a quiet seen task has been proved quiet by every source. */
+function renderOverCloudFeed(): void {
+  useCloudNotificationsStore.setState({
+    hasSnapshot: true,
+    connectionState: "connected",
+  });
+  render(
+    <NotificationFeedModeContext.Provider value="cloud">
+      {surface()}
+    </NotificationFeedModeContext.Provider>,
+  );
+}
+
 afterEach(() => {
+  useCloudNotificationsStore.getState().reset();
   endBotTabSurfaceCase(queryClient);
 });
 
@@ -890,15 +914,24 @@ describe("<BotTabSurface /> views", () => {
         },
         { ...trackingTask("task-unseen"), cadence: { kind: "on-completion" } },
         trackingTask("task-periodic"),
-        { ...trackingTask("task-quiet"), cadence: { kind: "on-completion" } },
+        {
+          ...trackingTask("task-quiet"),
+          cadence: { kind: "none" },
+          state: "ended",
+          endedReason: "completed",
+          lastCheckinAt: 1_000,
+          // Known to wait on no one: `null` would say the host cannot tell.
+          inputNeeded: [],
+        },
       ],
     };
+    __setAgentActivityPlaneAnsweringForTests();
     __setAgentActivityStateForTests(
       { "task-working": { working: ["agent-1"], turn: ["agent-1"] } },
-      "local",
-      null,
+      "cloud",
+      "connected",
     );
-    render(surface());
+    renderOverCloudFeed();
     await user.click(activityTab());
 
     const shown = screen
@@ -919,13 +952,34 @@ describe("<BotTabSurface /> views", () => {
   });
 
   it("rule 6: shows no count when no task is active", () => {
+    // The indicator read is made for a signed-in member.
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: {
+        userId: "user-ada",
+        userName: "Ada",
+        email: "ada@example.com",
+      },
+      contextMetadata: { userId: "user-ada", username: "ada" },
+    });
     mocks.state.snapshot = {
       ...snapshot(),
       tasks: [
-        { ...trackingTask("task-quiet"), cadence: { kind: "on-completion" } },
+        {
+          ...trackingTask("task-quiet"),
+          cadence: { kind: "none" },
+          state: "ended",
+          endedReason: "completed",
+          lastCheckinAt: 1_000,
+          // Known to wait on no one: `null` would say the host cannot tell.
+          inputNeeded: [],
+        },
       ],
     };
-    render(surface());
+    // The whole fleet is vouched, so the quiet task may leave the list.
+    __setAgentActivityPlaneAnsweringForTests();
+    __setAgentActivityStateForTests({}, "cloud", "connected");
+    renderOverCloudFeed();
 
     expect(screen.queryByTestId("bot-tab-activity-count")).toBeNull();
     expect(visibleTabText()).toBe("Activity");

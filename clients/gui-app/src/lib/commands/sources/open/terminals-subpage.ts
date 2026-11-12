@@ -383,7 +383,7 @@ function useNewTerminalWorkspaceItems(
   useRefreshHostDirectoryOnOpen(true, binding?.directory ?? null);
   const directory = useHostDirectoryList();
   // Every picker's host rule (`hostOptionPickerGroup`): personal hosts, the
-  // user's sandboxes and each team's sandboxes; never Automations, an agent's
+  // user's sandboxes and each team's computers and sandboxes; never Automations, an agent's
   // burst sandbox or a sandbox whose control-plane row has not answered.
   const hostOptions = useHostOptions().hosts;
   const offeredHosts = useMemo(() => {
@@ -392,7 +392,10 @@ function useNewTerminalWorkspaceItems(
       [
         ...groups.personal,
         ...groups.sandboxes,
-        ...groups.teams.flatMap((team) => team.sandboxes),
+        ...groups.teams.flatMap((team) => [
+          ...team.computers,
+          ...team.sandboxes,
+        ]),
       ].map((host) => [host.hostId, host]),
     );
   }, [hostOptions]);

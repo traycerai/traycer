@@ -54,6 +54,7 @@ import {
 } from "@/components/settings/host-scope/host-scope-model";
 import { useRefreshHostDirectoryOnOpen } from "@/hooks/host/use-refresh-host-directory-on-open";
 import { useCoarsePointerOpenAutoFocus } from "@/hooks/ui/use-coarse-pointer-open-autofocus";
+import { preserveWhenNestedOverlay } from "@/components/home/host-workspace-selector/preserve-when-nested-overlay";
 import { useHostBinding } from "@/lib/host";
 import type { FleetUpdateView } from "@/lib/host/fleet-update/fleet-update-view";
 import { cn } from "@/lib/utils";
@@ -161,7 +162,8 @@ export interface HostSwitcherComposerMode {
   readonly stagedBusy: boolean;
   /** Called with a host row's pick, before `onSelect`. */
   readonly onPickHost: (host: HostScopeOption) => void;
-  readonly onPickNew: (configurationKey: string) => void;
+  /** `false` keeps the chooser open when the pick could not be staged. */
+  readonly onPickNew: (configurationKey: string) => void | boolean;
   /** A New row's gear, or the staged chip's gear: the shape sheet. */
   readonly onOpenShape: (configurationKey: string) => void;
   readonly onManage: () => void;
@@ -443,6 +445,9 @@ export function HostSwitcher(props: {
             // there is no input and Radix's default lands on a host row, which
             // summons nothing.
             onOpenAutoFocus={showSearch ? coarseOpenAutoFocus : undefined}
+            onInteractOutside={(event) =>
+              preserveWhenNestedOverlay(event, contentRef.current)
+            }
             // The list is portalled, but React still bubbles its keys up the
             // tree it was mounted from: a composer above this picker would
             // take the search's keystrokes (an Enter that picks a row would
@@ -482,8 +487,23 @@ export function HostSwitcher(props: {
                   action={props.action}
                   composer={props.composer}
                   onPickNew={(configurationKey) => {
-                    props.composer?.onPickNew(configurationKey);
-                    setOpen(false);
+                    // Keep the return target inside the keyboard menu without
+                    // focusing its search field on a touch-only pick.
+                    const command =
+                      contentRef.current?.querySelector<HTMLElement>(
+                        '[data-slot="command"]',
+                      ) ?? null;
+                    if (
+                      command !== null &&
+                      !command.contains(document.activeElement)
+                    ) {
+                      command
+                        .querySelector<HTMLElement>("[cmdk-list]")
+                        ?.focus();
+                    }
+                    if (props.composer?.onPickNew(configurationKey) !== false) {
+                      setOpen(false);
+                    }
                   }}
                   onOpenShape={(configurationKey) => {
                     setOpen(false);
@@ -857,7 +877,13 @@ function HostSwitcherGroups(props: {
     <>
       {groups.personal.length === 0 ? null : (
         <CommandGroup heading="Host">
-          {groups.personal.map(props.renderRow)}
+          {renderComputerRows({
+            hosts: groups.personal,
+            selectedHostId: props.selected?.hostId ?? null,
+            searching: props.searching,
+            testId: "settings-host-switcher-personal",
+            renderRow: props.renderRow,
+          })}
         </CommandGroup>
       )}
       {groups.sandboxes.length === 0 ? null : (
@@ -887,15 +913,25 @@ function HostSwitcherGroups(props: {
           key={team.teamId}
           title={team.teamName}
           countLabel={String(
-            team.sandboxes.length + team.agentSandboxes.length,
+            team.computers.length +
+              team.sandboxes.length +
+              team.agentSandboxes.length,
           )}
           defaultOpen
           forceOpen={props.searching}
           testId={`settings-host-switcher-team-${team.teamId}`}
         >
+          {renderComputerRows({
+            hosts: team.computers,
+            selectedHostId: props.selected?.hostId ?? null,
+            searching: props.searching,
+            testId: `settings-host-switcher-team-${team.teamId}`,
+            renderRow: props.renderRow,
+          })}
           {team.sandboxes.map(props.renderRow)}
           {team.agentSandboxes.length === 0 ? null : (
             <HostSwitcherCollapsible
+              commandValue={null}
               title="Agent sandboxes"
               countLabel={String(team.agentSandboxes.length)}
               defaultOpen={false}
@@ -913,7 +949,8 @@ function HostSwitcherGroups(props: {
 
 /**
  * The composer mode's groups: `In this task` (in-task pickers), `Yours`,
- * `Sandboxes you started` collapsed behind its count, then the New sandbox
+ * team computers under their team names, `Sandboxes you started` collapsed
+ * behind its count, then the New sandbox
  * group headed by the defining line.
  */
 function HostSwitcherComposerGroups(props: {
@@ -937,11 +974,20 @@ function HostSwitcherComposerGroups(props: {
   // A host the task already uses is listed once, under In this task.
   const yours = groups.yours.filter((host) => !inTaskIds.has(host.hostId));
   const started = groups.started.filter((host) => !inTaskIds.has(host.hostId));
+  const teams = groups.teams
+    .map((team) => ({
+      ...team,
+      computers: team.computers.filter((host) => !inTaskIds.has(host.hostId)),
+    }))
+    .filter((team) => team.computers.length > 0);
   const noHostMatches =
     props.search.trim().length > 0 &&
-    ![...inTask, ...yours, ...started].some((host) =>
-      composerHostMatches(host, props.search),
-    );
+    ![
+      ...inTask,
+      ...yours,
+      ...started,
+      ...teams.flatMap((team) => team.computers),
+    ].some((host) => composerHostMatches(host, props.search));
   return (
     <>
       {noHostMatches ? <HostSwitcherNoMatch search={props.search} /> : null}
@@ -950,7 +996,13 @@ function HostSwitcherComposerGroups(props: {
           heading={IN_THIS_TASK_LABEL}
           data-testid="host-switcher-in-this-task"
         >
-          {inTask.map(props.renderRow)}
+          {renderComputerRows({
+            hosts: inTask,
+            selectedHostId: props.selected?.hostId ?? null,
+            searching: props.searching,
+            testId: "host-switcher-in-this-task",
+            renderRow: props.renderRow,
+          })}
         </CommandGroup>
       )}
       {yours.length === 0 ? null : (
@@ -958,9 +1010,30 @@ function HostSwitcherComposerGroups(props: {
           heading={YOURS_GROUP_LABEL}
           data-testid="host-switcher-yours"
         >
-          {yours.map(props.renderRow)}
+          {renderComputerRows({
+            hosts: yours,
+            selectedHostId: props.selected?.hostId ?? null,
+            searching: props.searching,
+            testId: "host-switcher-yours",
+            renderRow: props.renderRow,
+          })}
         </CommandGroup>
       )}
+      {teams.map((team) => (
+        <CommandGroup
+          key={team.teamId}
+          heading={team.teamName}
+          data-testid={`settings-host-switcher-team-${team.teamId}`}
+        >
+          {renderComputerRows({
+            hosts: team.computers,
+            selectedHostId: props.selected?.hostId ?? null,
+            searching: props.searching,
+            testId: `settings-host-switcher-team-${team.teamId}`,
+            renderRow: props.renderRow,
+          })}
+        </CommandGroup>
+      ))}
       {started.length === 0 ? null : (
         <HostSwitcherSandboxGroup
           title={SANDBOXES_YOU_STARTED_LABEL}
@@ -1023,6 +1096,7 @@ function HostSwitcherNewGroup(props: {
       {head.map(renderNewRow)}
       {rest.length === 0 ? null : (
         <HostSwitcherCollapsible
+          commandValue={null}
           title={collapsedConfigurationsLabel(
             rest.map((row) => row.configuration),
           )}
@@ -1096,6 +1170,7 @@ function HostSwitcherSandboxGroup(props: {
   return (
     <CommandGroup>
       <HostSwitcherCollapsible
+        commandValue={null}
         title={props.title}
         countLabel={props.countLabel}
         defaultOpen={props.defaultOpen}
@@ -1108,12 +1183,52 @@ function HostSwitcherSandboxGroup(props: {
   );
 }
 
+/** Fold only unselected offline computers; sandbox lifecycle rows stay visible. */
+function renderComputerRows(props: {
+  readonly hosts: readonly HostScopeOption[];
+  readonly selectedHostId: string | null;
+  readonly searching: boolean;
+  readonly testId: string;
+  readonly renderRow: (host: HostScopeOption) => ReactNode;
+}): ReactNode {
+  const offline = props.hosts.filter(
+    (host) =>
+      host.sandbox === null &&
+      host.health.state === "offline" &&
+      !host.settingUp &&
+      host.hostId !== props.selectedHostId,
+  );
+  if (props.searching || offline.length < 2) {
+    return props.hosts.map(props.renderRow);
+  }
+  const offlineIds = new Set(offline.map((host) => host.hostId));
+  return (
+    <>
+      {props.hosts
+        .filter((host) => !offlineIds.has(host.hostId))
+        .map(props.renderRow)}
+      <HostSwitcherCollapsible
+        commandValue={`offline:${props.testId}`}
+        title={`${offline.length} offline`}
+        countLabel={null}
+        defaultOpen={false}
+        forceOpen={false}
+        testId={`${props.testId}-offline`}
+      >
+        {offline.map(props.renderRow)}
+      </HostSwitcherCollapsible>
+    </>
+  );
+}
+
 /**
  * A collapsible titled run of rows. Not a `CommandGroup` itself, so a team's
  * agent sub-group can sit inside the team's group.
  */
 function HostSwitcherCollapsible(props: {
   readonly title: string;
+  /** Registers a disclosure among the arrow-key choices, or null for group headers. */
+  readonly commandValue: string | null;
   /** `null` where the title counts for itself. */
   readonly countLabel: string | null;
   readonly defaultOpen: boolean;
@@ -1123,6 +1238,21 @@ function HostSwitcherCollapsible(props: {
 }): ReactNode {
   const [open, setOpen] = useState(props.defaultOpen);
   const expanded = open || props.forceOpen;
+  const label = (
+    <>
+      {expanded ? (
+        <ChevronDown className="size-3.5 shrink-0" aria-hidden />
+      ) : (
+        <ChevronRight className="size-3.5 shrink-0" aria-hidden />
+      )}
+      <span className="min-w-0 flex-1 text-start wrap-break-word">
+        {props.title}
+      </span>
+      {props.countLabel === null ? null : (
+        <span className="shrink-0 tabular-nums">{props.countLabel}</span>
+      )}
+    </>
+  );
   return (
     <Collapsible
       open={expanded}
@@ -1130,25 +1260,28 @@ function HostSwitcherCollapsible(props: {
       className="flex flex-col"
       data-testid={props.testId}
     >
-      <CollapsibleTrigger
-        variant="quiet"
-        className="flex w-full items-center text-ui-xs font-medium"
-        data-testid={`${props.testId}-toggle`}
-      >
-        {expanded ? (
-          <ChevronDown className="size-3.5 shrink-0" aria-hidden />
-        ) : (
-          <ChevronRight className="size-3.5 shrink-0" aria-hidden />
-        )}
-        {/* Wraps rather than truncates: a cut list of names reads as more
-            of them than there are. */}
-        <span className="min-w-0 flex-1 text-start wrap-break-word">
-          {props.title}
-        </span>
-        {props.countLabel === null ? null : (
-          <span className="shrink-0 tabular-nums">{props.countLabel}</span>
-        )}
-      </CollapsibleTrigger>
+      {props.commandValue === null ? (
+        <CollapsibleTrigger
+          variant="quiet"
+          className="flex w-full items-center text-ui-xs font-medium"
+          data-testid={`${props.testId}-toggle`}
+        >
+          {label}
+        </CollapsibleTrigger>
+      ) : (
+        <CommandItem
+          value={props.commandValue}
+          onSelect={() => setOpen(!expanded)}
+          aria-label={
+            expanded
+              ? "Hide offline computers"
+              : `Show ${props.title} computers`
+          }
+          data-testid={`${props.testId}-toggle`}
+        >
+          {label}
+        </CommandItem>
+      )}
       <CollapsibleContent>{props.children}</CollapsibleContent>
     </Collapsible>
   );
@@ -1408,6 +1541,7 @@ function HostSwitcherRow(props: {
       surfaceState={surfaceState}
       updateView={props.updateView}
       environmentLabel={props.environmentLabel ?? props.tag}
+      offlineInSubLine={props.composer ? host.sandbox === null : false}
       nameRef={null}
     />
   );

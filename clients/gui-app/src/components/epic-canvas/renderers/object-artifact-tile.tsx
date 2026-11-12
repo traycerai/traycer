@@ -11,6 +11,7 @@ import { HtmlArtifactVersionPicker } from "@/components/html-artifact/html-artif
 import { useEpicHtmlArtifactVersion } from "@/hooks/epic/use-epic-html-artifact-version";
 import { HtmlArtifactFrame } from "@/components/html-artifact/html-artifact-frame";
 import { HtmlArtifactCommentSurface } from "@/components/html-artifact/html-artifact-comment-surface";
+import { HtmlArtifactLinks } from "@/components/html-artifact/html-artifact-links";
 import { isMobileApp } from "@/lib/mobile-app";
 import { resolveDesktopPlatform } from "@/lib/windows/desktop-capabilities";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
@@ -132,33 +133,38 @@ export function ObjectArtifactTile(props: {
       />
     );
     // Comments anchor to the live page: an older version is read-only here.
+    // Its links still open what they name in the tree as it is now.
     if (viewTabId === null || !latest)
       return (
-        <HtmlArtifactFrame
-          key={artifact.id}
-          source={source}
-          title={artifact.title}
-          toolbarControls={
-            <>
-              {toolbarControls}
-              <OlderVersionComments viewTabId={viewTabId} />
-            </>
-          }
-          menuItems={menuItems}
-        />
+        <HtmlArtifactLinks epicId={props.epicId} viewTabId={viewTabId}>
+          <HtmlArtifactFrame
+            key={artifact.id}
+            source={source}
+            title={artifact.title}
+            toolbarControls={
+              <>
+                {toolbarControls}
+                <OlderVersionComments viewTabId={viewTabId} />
+              </>
+            }
+            menuItems={menuItems}
+          />
+        </HtmlArtifactLinks>
       );
     return (
-      <HtmlArtifactCommentSurface
-        key={artifact.id}
-        epicId={props.epicId}
-        artifactId={artifact.id}
-        artifactTitle={artifact.title}
-        hostId={hostId}
-        viewTabId={viewTabId}
-        source={source}
-        toolbarControls={toolbarControls}
-        menuItems={menuItems}
-      />
+      <HtmlArtifactLinks epicId={props.epicId} viewTabId={viewTabId}>
+        <HtmlArtifactCommentSurface
+          key={artifact.id}
+          epicId={props.epicId}
+          artifactId={artifact.id}
+          artifactTitle={artifact.title}
+          hostId={hostId}
+          viewTabId={viewTabId}
+          source={source}
+          toolbarControls={toolbarControls}
+          menuItems={menuItems}
+        />
+      </HtmlArtifactLinks>
     );
   }
   return <ArtifactMetadata artifact={artifact} />;

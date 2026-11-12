@@ -4,7 +4,7 @@ import type {
   BotDirectoryRecord,
 } from "@traycer/protocol/host/bot/schemas";
 import type { HomeBotsModel } from "@/lib/home-bots/bots-model";
-import { botSwatchAt } from "@/lib/providers/profile-accent-color";
+import { botColorAt } from "@/lib/providers/profile-accent-color";
 import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
 
 /** Bots' looks by id, as a surface's own `bot.list` read names them. */
@@ -53,35 +53,38 @@ export function useBotLook(botId: string): BotAppearance | null {
 }
 
 /**
- * The tint a channel's chosen background lays over the page: its swatch at
+ * The tint a channel's chosen background lays over the page: its colour at
  * one low opacity, in either theme.
  */
 const CHANNEL_TINT_CLASS = "bg-(--channel-tint)/10";
 
 /**
- * What a channel's tinted regions carry: the chosen background's swatch (by
+ * What a channel's tinted regions carry: the chosen background's colour (by
  * index), its class and its colour (as `--channel-tint`), each `undefined`
  * while the channel keeps the page's own.
  */
 export interface ChannelBackground {
-  readonly swatch: number | undefined;
+  readonly index: number | undefined;
   readonly className: string | undefined;
   readonly color: string | undefined;
 }
 
 const NO_CHANNEL_BACKGROUND: ChannelBackground = {
-  swatch: undefined,
+  index: undefined,
   className: undefined,
   color: undefined,
 };
 
-/** The background chosen for a bot's channel, which its header and message area carry. */
+/**
+ * The background chosen for a bot's channel, which its header and message
+ * area carry; one this client cannot read keeps the page's own.
+ */
 export function useChannelBackground(botId: string): ChannelBackground {
-  const swatch = useBotLook(botId)?.background ?? null;
-  if (swatch === null) return NO_CHANNEL_BACKGROUND;
+  const index = useBotLook(botId)?.background ?? null;
+  if (typeof index !== "number") return NO_CHANNEL_BACKGROUND;
   return {
-    swatch,
+    index,
     className: CHANNEL_TINT_CLASS,
-    color: botSwatchAt(swatch).color,
+    color: botColorAt(index),
   };
 }

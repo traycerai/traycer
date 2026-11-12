@@ -1351,9 +1351,8 @@ export const messageSchemaPreSettlement = lazySchema(() =>
 // `contentBlockSchemaPreFallback`, so that line can observe neither a
 // `providerNotice.noticeKind` nor an error `failure` that `1.10` added. `1.7`
 // and `1.8` bind `messageSchemaV18` below instead, which also holds back
-// delivery placement. The user branch needs no freeze - user messages carry
-// no provider notice - so the union binds the LIVE `userMessageSchema`, which
-// is what `1.9` actually ships (browser annotations included).
+// delivery placement. The user branch binds `userMessageSchemaV18`, retaining
+// the published shape independently of additions to the current user row.
 //
 // Field-for-field hand copy, NOT `.extend()`: see
 // `assistantMessageSchemaPreImage` for why a released line must not follow the
@@ -1387,8 +1386,8 @@ export const messageSchemaPreFallback = lazySchema(() =>
 // Hand-frozen copy of `assistantMessageSchema` as the frozen `1.10` line ships
 // it: the complete live shape - `turnProfile` included - with `blocks` swapped
 // for `contentBlockSchemaPreShellHost`, so that line never observes the host a
-// resume trigger's shell runs on, which `1.11` added. The user branch needs no
-// freeze for the same reason `1.9`'s does not.
+// resume trigger's shell runs on, which `1.11` added. The user branch retains
+// `userMessageSchemaV18`, as the frozen `1.9` union does.
 //
 // Field-for-field hand copy, NOT `.extend()`: see
 // `assistantMessageSchemaPreImage` for why a released line must not follow the

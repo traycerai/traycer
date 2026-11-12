@@ -7,6 +7,11 @@ import {
   screen,
   within,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import type {
+  HostListItem,
+  HostOwnerPrincipal,
+} from "@traycer/protocol/host/host-status";
 import { HostSwitcher } from "@/components/settings/host-scope/host-switcher";
 import type { HostSwitcherComposerMode } from "@/components/settings/host-scope/host-switcher";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -31,6 +36,11 @@ vi.mock("@/lib/sandboxes/sandbox-wake", () => ({
 import { wakeSandboxOnPick } from "@/lib/sandboxes/sandbox-wake";
 
 const VIEWER = "user-me";
+const TEAM_A: HostOwnerPrincipal = {
+  kind: "team",
+  id: "team-a",
+  name: "Alpha",
+};
 
 /** Calls in the order they happened, across the composer and the surface. */
 const calls: string[] = [];
@@ -40,7 +50,7 @@ const onSelect = vi.fn<(hostId: string) => void>((hostId) => {
 const onPickHost = vi.fn<(host: HostScopeOption) => void>((host) => {
   calls.push(`pick:${host.hostId}`);
 });
-const onPickNew = vi.fn<(configurationKey: string) => void>();
+const onPickNew = vi.fn<(configurationKey: string) => boolean | void>();
 const onOpenShape = vi.fn<(configurationKey: string) => void>();
 const onManage = vi.fn<() => void>();
 
@@ -74,6 +84,37 @@ function sandboxHost(
       teamOwned: true,
       ...overrides,
     },
+  });
+}
+
+function physicalTeamHost(hostId: string): HostScopeOption {
+  const item: HostListItem = {
+    hostId,
+    displayName: hostId,
+    platform: "linux-x64",
+    kind: "machine",
+    publicKey: "pk",
+    createdAt: new Date(0).toISOString(),
+    updatePolicy: "manual",
+    status: {
+      connectivity: "connectable",
+      viewerReachability: "unknown",
+      clientCloud: "ok",
+      updateState: "current",
+      appVersion: "1.4.2",
+      lastSeenAt: null,
+    },
+    owner: TEAM_A,
+  };
+  return hostScopeOptionFixture({
+    hostId,
+    name: hostId,
+    isLocalMachine: false,
+    isActive: false,
+    connectable: true,
+    kind: "machine",
+    item,
+    sandbox: null,
   });
 }
 
@@ -260,6 +301,29 @@ describe("<HostSwitcher /> composer mode picks", () => {
 });
 
 describe("<HostSwitcher /> composer mode groups", () => {
+  it("keeps a physical team computer in its team group and lets the composer pick it", () => {
+    const teamMachine = physicalTeamHost("team-machine");
+    renderSwitcher({
+      hosts: [LAPTOP, AWAKE, teamMachine],
+      composer: composerMode({}),
+      intent: "pin",
+    });
+
+    const team = screen.getByTestId("settings-host-switcher-team-team-a");
+    expect(team.contains(row("team-machine"))).toBe(true);
+    expect(
+      screen.getByTestId("host-switcher-yours").contains(row("team-machine")),
+    ).toBe(false);
+    expect(
+      screen
+        .getByTestId("host-switcher-sandboxes-you-started")
+        .contains(row("team-machine")),
+    ).toBe(false);
+
+    fireEvent.click(row("team-machine"));
+    expect(calls).toEqual(["pick:team-machine", "select:team-machine"]);
+  });
+
   it("lists Yours, then Sandboxes you started collapsed behind `N · M awake`", () => {
     renderSwitcher({
       hosts: [LAPTOP, AWAKE, SUSPENDED],
@@ -506,6 +570,26 @@ describe("<HostSwitcher /> composer mode New rows", () => {
     fireEvent.click(screen.getByTestId("host-switcher-new-sandbox-team-acme"));
 
     expect(onPickNew).toHaveBeenCalledWith("team-acme");
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(
+      screen.queryByTestId("host-switcher-new-sandbox-team-acme"),
+    ).toBeNull();
+  });
+
+  it("keeps the chooser open when New could not be staged", () => {
+    renderSwitcher({
+      hosts: [LAPTOP],
+      composer: composerMode({}),
+      intent: "pin",
+    });
+    onPickNew.mockImplementationOnce(() => false);
+
+    fireEvent.click(screen.getByTestId("host-switcher-new-sandbox-team-acme"));
+
+    expect(onPickNew).toHaveBeenCalledWith("team-acme");
+    expect(
+      screen.getByTestId("host-switcher-new-sandbox-team-acme"),
+    ).toBeDefined();
     expect(onSelect).not.toHaveBeenCalled();
   });
 
@@ -846,6 +930,43 @@ describe("<HostSwitcher /> composer mode computers", () => {
     });
   }
 
+  function offlineComputer(
+    hostId: string,
+    name: string,
+    owner: HostOwnerPrincipal | undefined,
+  ): HostScopeOption {
+    return remoteComputer({
+      hostId,
+      name,
+      connectable: true,
+      health: {
+        state: "offline",
+        label: "Offline",
+        detail: null,
+        tone: "idle",
+        live: false,
+      },
+      item: {
+        hostId,
+        displayName: name,
+        platform: "linux-x64",
+        kind: "machine",
+        publicKey: "pk",
+        createdAt: new Date(0).toISOString(),
+        updatePolicy: "manual",
+        status: {
+          connectivity: "offline",
+          viewerReachability: "unknown",
+          clientCloud: "ok",
+          updateState: "current",
+          appVersion: "1.4.2",
+          lastSeenAt: null,
+        },
+        ...(owner === undefined ? {} : { owner }),
+      },
+    });
+  }
+
   it("uses the local machine's name on the chip and row, with platform and status under the name", () => {
     renderPicker({
       hosts: [WINDOWS_LOCAL],
@@ -905,6 +1026,235 @@ describe("<HostSwitcher /> composer mode computers", () => {
     expect(box.querySelector("svg.lucide-cloud")).toBeNull();
   });
 
+  it("folds multiple offline computers per composer group and keeps the chosen row visible", () => {
+    const online = remoteComputer({
+      hostId: "online-workstation",
+      name: "Online workstation",
+      platform: "linux-x64",
+    });
+    const selectedOffline = offlineComputer(
+      "selected-offline",
+      "Work laptop",
+      undefined,
+    );
+    const yourOffline = [
+      offlineComputer("your-offline-a", "Work laptop A", undefined),
+      offlineComputer("your-offline-b", "Work laptop B", undefined),
+      {
+        ...offlineComputer(
+          "setting-up-offline",
+          "Setting up laptop",
+          undefined,
+        ),
+        settingUp: true,
+      },
+      selectedOffline,
+    ];
+    const teamOffline = [
+      offlineComputer("team-offline-a", "Team laptop A", TEAM_A),
+      offlineComputer("team-offline-b", "Team laptop B", TEAM_A),
+    ];
+    const inTaskOffline = [
+      offlineComputer("task-offline-a", "Task laptop A", undefined),
+      offlineComputer("task-offline-b", "Task laptop B", undefined),
+    ];
+    renderPicker({
+      hosts: [online, ...yourOffline, ...teamOffline, ...inTaskOffline],
+      selected: selectedOffline,
+      composer: composerMode({ inThisTask: [online, ...inTaskOffline] }),
+      intent: "pin",
+      onAncestorKeyDown: null,
+    });
+
+    const inTask = screen.getByTestId("host-switcher-in-this-task");
+    const yours = screen.getByTestId("host-switcher-yours");
+    const team = screen.getByTestId("settings-host-switcher-team-team-a");
+    expect(
+      within(inTask).getByRole("option", {
+        name: "Show 2 offline computers",
+      }),
+    ).toBeTruthy();
+    expect(
+      within(yours).getByRole("option", {
+        name: "Show 2 offline computers",
+      }),
+    ).toBeTruthy();
+    expect(
+      within(team).getByRole("option", {
+        name: "Show 2 offline computers",
+      }),
+    ).toBeTruthy();
+    expect(inTask.contains(row("online-workstation"))).toBe(true);
+    expect(yours.contains(row("selected-offline"))).toBe(true);
+    expect(yours.contains(row("setting-up-offline"))).toBe(true);
+    expect(
+      screen.queryByTestId("settings-host-switcher-option-your-offline-a"),
+    ).toBeNull();
+    expect(
+      screen.queryByTestId("settings-host-switcher-option-team-offline-a"),
+    ).toBeNull();
+    expect(onPickHost).not.toHaveBeenCalled();
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("leaves one offline computer inline and never folds offline sandbox rows", () => {
+    const onlyOffline = offlineComputer(
+      "only-offline",
+      "Offline laptop",
+      undefined,
+    );
+    const offlineSandboxes = ["a", "b"].map((suffix) => ({
+      ...sandboxHost(`sbx-offline-${suffix}`, "suspended", {}),
+      health: {
+        state: "offline" as const,
+        label: "Offline",
+        detail: null,
+        tone: "idle" as const,
+        live: false,
+      },
+    }));
+    renderSwitcher({
+      hosts: [onlyOffline, ...offlineSandboxes],
+      composer: composerMode({}),
+      intent: "pin",
+    });
+
+    const yours = screen.getByTestId("host-switcher-yours");
+    expect(yours.contains(row("only-offline"))).toBe(true);
+    expect(
+      screen.queryByTestId("host-switcher-yours-offline-toggle"),
+    ).toBeNull();
+    expect(
+      screen.queryByTestId(
+        "host-switcher-sandboxes-you-started-offline-toggle",
+      ),
+    ).toBeNull();
+    fireEvent.click(
+      screen.getByTestId("host-switcher-sandboxes-you-started-toggle"),
+    );
+    expect(row("sbx-offline-a")).toBeDefined();
+    expect(row("sbx-offline-b")).toBeDefined();
+  });
+
+  it("unfolds offline rows during search", () => {
+    const offlineA = offlineComputer(
+      "studio-offline-a",
+      "Studio laptop A",
+      undefined,
+    );
+    const offlineB = offlineComputer(
+      "studio-offline-b",
+      "Studio laptop B",
+      undefined,
+    );
+    renderSwitcher({
+      hosts: [offlineA, offlineB],
+      composer: composerMode({}),
+      intent: "pin",
+    });
+
+    expect(
+      screen.getByRole("option", { name: "Show 2 offline computers" }),
+    ).toBeTruthy();
+    fireEvent.change(screen.getByPlaceholderText("Search hosts"), {
+      target: { value: "studio" },
+    });
+
+    expect(
+      screen.queryByTestId("host-switcher-yours-offline-toggle"),
+    ).toBeNull();
+    expect(row("studio-offline-a")).toBeDefined();
+    expect(row("studio-offline-b")).toBeDefined();
+  });
+
+  it("lets cmdk arrow navigation expand the offline option without picking a host", async () => {
+    const user = userEvent.setup();
+    const online = remoteComputer({
+      hostId: "online-workstation",
+      name: "Online workstation",
+      platform: "linux-x64",
+    });
+    const offlineA = offlineComputer(
+      "studio-offline-a",
+      "Studio laptop A",
+      undefined,
+    );
+    const offlineB = offlineComputer(
+      "studio-offline-b",
+      "Studio laptop B",
+      undefined,
+    );
+    renderSwitcher({
+      hosts: [online, offlineA, offlineB],
+      composer: composerMode({}),
+      intent: "pin",
+    });
+
+    const search = screen.getByPlaceholderText("Search hosts");
+    await user.click(search);
+    await user.keyboard("{Home}");
+    expect(row("online-workstation").getAttribute("aria-selected")).toBe(
+      "true",
+    );
+    await user.keyboard("{ArrowDown}");
+    const toggle = screen.getByRole("option", {
+      name: "Show 2 offline computers",
+    });
+    expect(toggle.getAttribute("aria-selected")).toBe("true");
+    await user.keyboard("{Enter}");
+
+    expect(
+      screen.getByRole("option", { name: "Hide offline computers" }),
+    ).toBeTruthy();
+    expect(row("studio-offline-a")).toBeDefined();
+    expect(row("studio-offline-b")).toBeDefined();
+    expect(screen.getByPlaceholderText("Search hosts")).toBeDefined();
+    expect(onPickHost).not.toHaveBeenCalled();
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("resets the offline option closed after the picker is reopened", async () => {
+    const user = userEvent.setup();
+    const offlineA = offlineComputer(
+      "studio-offline-a",
+      "Studio laptop A",
+      undefined,
+    );
+    const offlineB = offlineComputer(
+      "studio-offline-b",
+      "Studio laptop B",
+      undefined,
+    );
+    renderSwitcher({
+      hosts: [offlineA, offlineB],
+      composer: composerMode({}),
+      intent: "pin",
+    });
+
+    const search = screen.getByPlaceholderText("Search hosts");
+    await user.click(
+      screen.getByRole("option", { name: "Show 2 offline computers" }),
+    );
+    expect(
+      screen.getByRole("option", { name: "Hide offline computers" }),
+    ).toBeTruthy();
+    expect(row("studio-offline-a")).toBeDefined();
+    expect(row("studio-offline-b")).toBeDefined();
+    expect(screen.getByPlaceholderText("Search hosts")).toBe(search);
+    expect(onPickHost).not.toHaveBeenCalled();
+    expect(onSelect).not.toHaveBeenCalled();
+
+    await user.keyboard("{Escape}");
+    await user.click(screen.getByTestId("settings-host-switcher"));
+
+    expect(
+      screen.getByRole("option", { name: "Show 2 offline computers" }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByTestId("settings-host-switcher-option-studio-offline-a"),
+    ).toBeNull();
+  });
+
   it("says since when an offline computer was last seen, and that picking it waits", () => {
     const lastSeenAt = new Date(2026, 9, 20, 9, 12).toISOString();
     const sleeper = remoteComputer({
@@ -944,13 +1294,51 @@ describe("<HostSwitcher /> composer mode computers", () => {
     });
 
     const mac = row("remote-mac");
-    expect(mac.textContent).toMatch(/offline/i);
+    expect(within(mac).queryByText("offline", { exact: true })).toBeNull();
     expect(
       within(mac).getByText(
         "macOS · Offline since Tue 09:12 · picking it waits for it",
       ),
     ).toBeDefined();
     expect(mac.querySelector("details")).toBeNull();
+  });
+
+  it("keeps the Offline mark on an offline computer row without a sub-line", () => {
+    const sleeper = remoteComputer({
+      hostId: "remote-mac",
+      name: "studio-mac",
+      platform: "darwin-arm64",
+      connectable: true,
+      health: {
+        state: "offline",
+        label: "Offline",
+        detail: null,
+        tone: "idle",
+        live: false,
+      },
+      item: {
+        hostId: "remote-mac",
+        displayName: "studio-mac",
+        platform: "darwin-arm64",
+        kind: "personal",
+        publicKey: "pk",
+        createdAt: new Date(0).toISOString(),
+        updatePolicy: "manual",
+        status: {
+          connectivity: "offline",
+          viewerReachability: "unknown",
+          clientCloud: "ok",
+          updateState: "current",
+          appVersion: "1.4.2",
+          lastSeenAt: null,
+        },
+      },
+    });
+    renderSwitcher({ hosts: [sleeper], composer: null, intent: "pin" });
+
+    expect(
+      within(row("remote-mac")).getByText("offline", { exact: true }),
+    ).toBeDefined();
   });
 
   it("shows an unavailable sandbox's resources, rate and refusal under the name without picking or waking", () => {

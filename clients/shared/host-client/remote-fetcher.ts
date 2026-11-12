@@ -2,6 +2,7 @@ import {
   hostListResponseSchema,
   type HostListItem,
   type HostListResponse,
+  type HostOwnerPrincipal,
   type HostProfile,
   type HostSandboxState,
   type HostStatusDTO,
@@ -158,6 +159,8 @@ async function fetchRegisteredHostsWithSignal(
  * even though the host is not connectable until the relay lands.
  */
 export type RemoteHostDirectoryEntry = HostDirectoryEntry & {
+  /** Registry ownership is independent of physical/sandbox lifecycle. */
+  readonly owner: HostOwnerPrincipal | null;
   readonly remoteStatus: HostStatusDTO;
   readonly publicKey: string;
   /**
@@ -178,9 +181,8 @@ export type RemoteHostDirectoryEntry = HostDirectoryEntry & {
   readonly relayFuseGrace: boolean;
   /**
    * The registry's sandbox facts for a `kind: sandbox` host, `null` for a
-   * personal one. Decides what the session's `OPEN` presents (a session
-   * grant, never the user bearer: `remoteOpenAuthFor`) and whether a tab open
-   * must wake the sandbox before it can be dialed.
+   * physical computer. Alongside ownership it decides what `OPEN` presents;
+   * only an actual sandbox may need waking before a tab can dial it.
    */
   readonly sandbox: RemoteHostSandboxFacts | null;
 };
@@ -224,14 +226,7 @@ export function isRemoteHostDirectoryEntry(
   );
 }
 
-/**
- * Whether a directory entry names a sandbox host. A sandbox runs code the
- * user did not write on a machine they do not hold, so nothing that speaks
- * for the user is ever sent to it: not the desktop's cookie jar, not a
- * provider key, not a sign-in. Every such send checks this first and is
- * never built for a sandbox, rather than relying on the sandbox to refuse
- * a secret it has already received.
- */
+/** Whether a directory entry carries actual sandbox lifecycle facts. */
 export function isSandboxHostDirectoryEntry(
   entry: HostDirectoryEntry,
 ): boolean {
@@ -531,6 +526,7 @@ export function hostListItemToDirectoryEntry(
     transportDialability:
       item.status.connectivity === "connectable" ? "dialable" : "not-dialable",
     remoteStatus: item.status,
+    owner: item.owner ?? null,
     publicKey: item.publicKey,
     // Reconciled once here (fetch time, not render) so the render-time
     // dialability/death gates stay pure - see isWithinRelayFuseGrace.

@@ -605,6 +605,76 @@ describe("createSandboxAttachGrantProvider", () => {
     authnBaseUrl: AUTHN,
     hostId: HOST_ID,
     getBearerToken: () => token,
+    purpose: "remote" as const,
+  });
+
+  it("keeps the remote purpose body compatible and adds local purpose only for local grants", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      jsonResponse(
+        {
+          grant: "jws-remote",
+          role: "client",
+          expires_in: 120,
+          session_grant: "session-remote",
+        },
+        200,
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const remote = createSandboxAttachGrantProvider(deps(BEARER));
+    await remote.provider();
+    const [, remoteInit] = fetchMock.mock.calls[0];
+    expect(JSON.parse(String(remoteInit?.body))).toEqual({ role: "client" });
+
+    fetchMock.mockImplementation(async () =>
+      jsonResponse(
+        {
+          grant: "jws-local",
+          role: "client",
+          expires_in: 120,
+          session_grant: "session-local",
+        },
+        200,
+      ),
+    );
+    const local = createSandboxAttachGrantProvider({
+      ...deps(BEARER),
+      purpose: "local",
+    });
+    await local.provider();
+    const [, localInit] = fetchMock.mock.calls[1];
+    expect(JSON.parse(String(localInit?.body))).toEqual({
+      role: "client",
+      purpose: "local",
+    });
+    expect(remote.readSessionGrant()).toBe("session-remote");
+    expect(local.readSessionGrant()).toBe("session-local");
+  });
+
+  it("aborts a held HTTP mint when the caller signal aborts and clears the request timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const controller = new AbortController();
+      const fetchMock = vi.fn<typeof fetch>(
+        () => new Promise<Response>(() => undefined),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const source = createSandboxAttachGrantProvider({
+        ...deps(BEARER),
+        signal: controller.signal,
+      });
+
+      const pending = source.provider();
+      const requestSignal = signalOfLastFetch(fetchMock);
+      controller.abort();
+
+      expect(requestSignal.aborted).toBe(true);
+      expect(await pending).toMatchObject({ kind: "unavailable" });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("returns the attach grant and exposes the session grant minted for the same attach", async () => {
@@ -687,6 +757,101 @@ describe("createSandboxAttachGrantProvider", () => {
       context: "",
     });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("createSandboxAttachGrantProvider membership outcomes", () => {
+  const deps = {
+    authnBaseUrl: AUTHN,
+    hostId: HOST_ID,
+    getBearerToken: () => BEARER,
+    purpose: "remote" as const,
+  };
+  const requiredFatal = {
+    code: "TEAM_MEMBERSHIP_REQUIRED",
+    reason:
+      "This account cannot access this computer. Switch accounts to use it.",
+    retryable: false,
+    incompatibleMethods: null,
+    upgradeGuidance: null,
+  };
+  const unavailableRetryCause = {
+    code: "TEAM_MEMBERSHIP_UNAVAILABLE",
+    reason:
+      "Membership could not be checked. Check your connection and try again.",
+    retryable: true,
+    incompatibleMethods: null,
+    upgradeGuidance: null,
+  };
+
+  it("turns a typed team membership requirement and any 404 into a fixed terminal refusal", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      jsonResponse(
+        { code: "team_membership_required", request_id: "fake-1" },
+        403,
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const typed = createSandboxAttachGrantProvider(deps);
+    const typedResult = await typed.provider();
+    expect(typedResult).toMatchObject({
+      kind: "refused",
+      fatal: requiredFatal,
+      context: "",
+    });
+    expect(typed.readSessionGrant()).toBeNull();
+
+    fetchMock.mockImplementation(async () =>
+      jsonResponse({ message: "not found", request_id: "fake-2" }, 404),
+    );
+    const missing = createSandboxAttachGrantProvider(deps);
+    const missingResult = await missing.provider();
+    expect(missingResult).toMatchObject({
+      kind: "refused",
+      fatal: requiredFatal,
+      context: "",
+    });
+    expect(missing.readSessionGrant()).toBeNull();
+    if (typedResult.kind !== "refused" || missingResult.kind !== "refused") {
+      throw new Error("expected terminal membership refusals");
+    }
+    expect(typedResult.detail).toBe(missingResult.detail);
+    expect(typedResult.fatal.reason).not.toContain("fake-1");
+    expect(missingResult.fatal.reason).not.toContain("fake-2");
+  });
+
+  it("keeps an unavailable typed membership check retryable and does the same for network and 5xx failures", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      jsonResponse(
+        { code: "team_membership_unavailable", request_id: "fake-3" },
+        403,
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const typed = await createSandboxAttachGrantProvider(deps).provider();
+    expect(typed).toMatchObject({
+      kind: "unavailable",
+      retryCause: unavailableRetryCause,
+    });
+
+    fetchMock.mockImplementation(async () => jsonResponse({}, 503));
+    const serverError = await createSandboxAttachGrantProvider(deps).provider();
+    expect(serverError).toMatchObject({
+      kind: "unavailable",
+      retryCause: unavailableRetryCause,
+    });
+
+    fetchMock.mockImplementation(async () => {
+      throw new Error("fake network failure");
+    });
+    const networkError =
+      await createSandboxAttachGrantProvider(deps).provider();
+    expect(networkError).toMatchObject({
+      kind: "unavailable",
+      retryCause: unavailableRetryCause,
+    });
   });
 });
 
@@ -785,6 +950,7 @@ describe("attach grant providers on a frozen sandbox", () => {
     authnBaseUrl: AUTHN,
     hostId: HOST_ID,
     getBearerToken: () => BEARER,
+    purpose: "remote" as const,
   };
 
   function stub402(body: unknown): void {

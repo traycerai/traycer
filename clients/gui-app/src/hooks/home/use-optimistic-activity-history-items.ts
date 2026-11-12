@@ -23,6 +23,12 @@ const MAX_SETTLED_REFRESH_SCOPES = 64;
 const STAMP_TTL_MS = 10 * 60_000;
 const REFRESH_DEBOUNCE_MS = 750;
 const REFRESH_RETRY_DELAYS_MS = [2_000, 5_000, 15_000, 30_000, 60_000];
+/**
+ * List reads one removal buys: the debounced read and the first two retries.
+ * A removal names no owner and no time, so no read can prove it reached the
+ * cloud; the count bounds it instead.
+ */
+const REMOVAL_REFRESH_READS = 3;
 const EMPTY_ITEMS: readonly HistoryItem[] = [];
 const listeners = new Set<() => void>();
 const activeSeen = new Set<string>();
@@ -49,7 +55,8 @@ interface ActivitySnapshot {
 const EMPTY_SNAPSHOT: ActivitySnapshot = { revision: 0, stamps: new Map() };
 let currentSnapshot: ActivitySnapshot = EMPTY_SNAPSHOT;
 const generations = new Map<string, number>();
-const ownerlessRefreshDeadlines = new Map<string, number>();
+/** The generation of each viewer's latest ownerless removal. */
+const removalGenerations = new Map<string, number>();
 const scheduledGenerations = new Map<string, number>();
 const settledGenerations = new Map<string, number>();
 interface ScopeSubscriber {
@@ -64,7 +71,20 @@ interface RefreshState {
   inFlight: boolean;
   attempts: number;
   deadline: number;
-  ownerlessUntil: number;
+  /** Reads still owed to an ownerless removal. */
+  removalReadsOwed: number;
+  /**
+   * This scope's page is known to hold every settled key: its own rows
+   * settled the last pending stamp, or its last read began with none pending.
+   * A filtered scope settles nothing itself, so a stamp another scope settled
+   * leaves its earlier read unproven and it reads once more.
+   */
+  readAfterSettle: boolean;
+  /**
+   * Another scope settled a stamp since this scope's last read began, so this
+   * scope's own rows settling the rest proves nothing about that one.
+   */
+  settledElsewhere: boolean;
   newEdgeInFlight: boolean;
 }
 const refreshes = new Map<string, RefreshState>();
@@ -253,17 +273,16 @@ export function observeOwnHistoryRecordChange(
   changed(userId);
 }
 
-/** Removes have no owner on the old stream wire, so only reconcile the page. */
+/**
+ * Removes have no owner on the old stream wire, so only reconcile the page,
+ * through {@link REMOVAL_REFRESH_READS} reads.
+ */
 export function requestHistoryActivityRefresh(userId: string): void {
-  const now = Date.now();
-  for (const [key, deadline] of ownerlessRefreshDeadlines) {
-    if (deadline <= now) ownerlessRefreshDeadlines.delete(key);
-  }
-  ownerlessRefreshDeadlines.delete(userId);
-  ownerlessRefreshDeadlines.set(userId, now + STAMP_TTL_MS);
-  if (ownerlessRefreshDeadlines.size > MAX_ACTIVE_ROWS) {
-    const oldest = ownerlessRefreshDeadlines.keys().next().value;
-    if (oldest !== undefined) ownerlessRefreshDeadlines.delete(oldest);
+  removalGenerations.delete(userId);
+  removalGenerations.set(userId, (generations.get(userId) ?? 0) + 1);
+  if (removalGenerations.size > MAX_ACTIVE_ROWS) {
+    const oldest = removalGenerations.keys().next().value;
+    if (oldest !== undefined) removalGenerations.delete(oldest);
   }
   changed(userId);
 }
@@ -292,7 +311,7 @@ function reconcileDurableHistoryActivity(
   userId: string,
   items: readonly HistoryItem[],
   source: "list" | "context",
-): void {
+): boolean {
   let removed = false;
   let acknowledged = false;
   for (const item of items) {
@@ -343,14 +362,18 @@ function reconcileDurableHistoryActivity(
   }
   if (removed) changed(null);
   else if (acknowledged) changed(userId);
+  return removed;
 }
 
-/** A list key proves both timestamp and page membership. */
+/**
+ * A list key proves both timestamp and page membership. Answers whether a
+ * stamp settled.
+ */
 export function settleHistoryActivity(
   userId: string,
   items: readonly HistoryItem[],
-): void {
-  reconcileDurableHistoryActivity(userId, items, "list");
+): boolean {
+  return reconcileDurableHistoryActivity(userId, items, "list");
 }
 
 /** A context key settles the timestamp but cannot prove page membership. */
@@ -452,10 +475,14 @@ function hasUnsettledStamps(userId: string, now: number): boolean {
   return false;
 }
 
-/** One list read per scope plus each distinct, mounted context obligation. */
-async function refetchActivityScope(scope: string): Promise<void> {
+/**
+ * One list read per scope plus each distinct, mounted context obligation.
+ * Answers whether the list read delivered a page: a refused dispatch resolves
+ * with nothing and a failed one with its error.
+ */
+async function refetchActivityScope(scope: string): Promise<boolean> {
   const subscribers = scopeSubscribers.get(scope);
-  if (subscribers === undefined || subscribers.size === 0) return;
+  if (subscribers === undefined || subscribers.size === 0) return false;
   const eligible = [...subscribers.values()];
   const listRefetch = eligible[0].listRefetch;
   // Query caches are keyed by the exact request ids. Only identical batches
@@ -468,41 +495,60 @@ async function refetchActivityScope(scope: string): Promise<void> {
       if (!contextRefetches.has(key)) contextRefetches.set(key, batch.refetch);
     }
   }
-  await Promise.all([
+  const [listRead] = await Promise.all([
     Promise.resolve().then(listRefetch),
     ...[...contextRefetches.values()].map((refetch) =>
       Promise.resolve().then(refetch),
     ),
   ]);
+  return (
+    typeof listRead === "object" &&
+    listRead !== null &&
+    "status" in listRead &&
+    listRead.status === "success"
+  );
+}
+
+/** Whether another list read could still change what this scope shows. */
+function refreshOwed(state: RefreshState, now: number): boolean {
+  return (
+    hasUnsettledStamps(state.userId, now) ||
+    state.removalReadsOwed > 0 ||
+    !state.readAfterSettle
+  );
 }
 
 function scheduleActivityRefresh(state: RefreshState, delay: number): void {
   if (state.timer !== null || state.inFlight) return;
   state.timer = window.setTimeout(() => {
     state.timer = null;
-    if (Date.now() >= state.deadline) {
+    const startedAt = Date.now();
+    // The rows a read delivered settle their stamps after its promise does,
+    // so the retry it armed asks again here before it spends a request.
+    if (startedAt >= state.deadline || !refreshOwed(state, startedAt)) {
       refreshes.delete(state.scope);
       return;
     }
     state.inFlight = true;
     state.attempts += 1;
+    state.readAfterSettle = !hasUnsettledStamps(state.userId, startedAt);
+    state.settledElsewhere = false;
     void refetchActivityScope(state.scope)
-      .catch(() => undefined)
-      .finally(() => {
+      .catch(() => false)
+      .then((delivered) => {
         state.inFlight = false;
         if (refreshes.get(state.scope) !== state) return;
         const now = Date.now();
-        const pending = hasUnsettledStamps(state.userId, now);
-        // An ownerless removal has no durable watermark on the frozen stream
-        // wire. Reconcile through its bounded window, including cloud retry.
+        // A read that delivered no page pays for nothing and proves nothing.
+        if (!delivered) state.readAfterSettle = false;
         if (state.newEdgeInFlight) {
+          // This read began before the new edge, so it pays for none of it.
           state.newEdgeInFlight = false;
           state.attempts = 1;
+        } else if (delivered && state.removalReadsOwed > 0) {
+          state.removalReadsOwed -= 1;
         }
-        if (
-          now >= state.deadline ||
-          (!pending && now >= state.ownerlessUntil && state.attempts >= 3)
-        ) {
+        if (now >= state.deadline || !refreshOwed(state, now)) {
           refreshes.delete(state.scope);
           return;
         }
@@ -519,15 +565,21 @@ function queueActivityRefresh(
   scope: string,
   userId: string,
   generation: number,
+  consumedGeneration: number,
 ): void {
+  const removalReadsOwed =
+    (removalGenerations.get(userId) ?? 0) > consumedGeneration
+      ? REMOVAL_REFRESH_READS
+      : 0;
   const existing = refreshes.get(scope);
   if (existing !== undefined) {
     if (generation > (scheduledGenerations.get(scope) ?? 0)) {
       existing.deadline = Date.now() + STAMP_TTL_MS;
-      existing.ownerlessUntil = Math.max(
-        existing.ownerlessUntil,
-        ownerlessRefreshDeadlines.get(userId) ?? 0,
+      existing.removalReadsOwed = Math.max(
+        existing.removalReadsOwed,
+        removalReadsOwed,
       );
+      existing.readAfterSettle = false;
       if (existing.inFlight) {
         existing.newEdgeInFlight = true;
       } else {
@@ -547,7 +599,9 @@ function queueActivityRefresh(
     inFlight: false,
     attempts: 0,
     deadline: Date.now() + STAMP_TTL_MS,
-    ownerlessUntil: ownerlessRefreshDeadlines.get(userId) ?? 0,
+    removalReadsOwed,
+    readAfterSettle: false,
+    settledElsewhere: false,
     newEdgeInFlight: false,
   };
   refreshes.set(scope, state);
@@ -707,16 +761,30 @@ export function useOptimisticActivityHistoryItems(
     );
     if (generation > consumedGeneration) {
       settledGenerations.delete(scope);
-      queueActivityRefresh(scope, input.userId, generation);
+      queueActivityRefresh(scope, input.userId, generation, consumedGeneration);
     }
   }, [activitySnapshot, refreshEnabled, scope, input.userId, workingEpicIds]);
   useEffect(() => {
     // A filtered page may contain the task while the unfiltered Recent page
     // still omits it; only the latter can retire an off-page context row.
     if (input.userId === null || !input.enabled) return;
-    settleHistoryActivity(input.userId, input.items);
+    const settled = settleHistoryActivity(input.userId, input.items);
     settleBackfilledHistoryActivity(input.userId, backfilled);
-  }, [backfilled, input.enabled, input.items, input.userId]);
+    if (!settled) return;
+    for (const other of refreshes.values()) {
+      if (other.userId === input.userId && other.scope !== scope) {
+        other.settledElsewhere = true;
+      }
+    }
+    const state = refreshes.get(scope);
+    if (
+      state !== undefined &&
+      !state.settledElsewhere &&
+      !hasUnsettledStamps(input.userId, Date.now())
+    ) {
+      state.readAfterSettle = true;
+    }
+  }, [backfilled, input.enabled, input.items, input.userId, scope]);
   useEffect(() => {
     if (!refreshEnabled || input.userId === null || stamps.size === 0) return;
     const earliestExpiry = Math.min(

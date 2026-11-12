@@ -6,6 +6,7 @@ import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/moc
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-revalidator";
+import type { HostOwnerPrincipal } from "@traycer/protocol/host/host-status";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
   hostRpcRegistry,
@@ -14,6 +15,7 @@ import {
 import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import {
   RemoteStreamClient,
+  type CreateRemoteTransportOptions,
   type IRemoteSession,
 } from "@traycer-clients/shared/host-transport/remote/index";
 import type {
@@ -22,6 +24,11 @@ import type {
 } from "@traycer/protocol/framework/index";
 import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+
+type HostRemoteTransportOptions = CreateRemoteTransportOptions<
+  HostRpcRegistry,
+  HostStreamRpcRegistry
+>;
 
 // One global client shared between the mocked `useHostClient` and the tests.
 const globalClientRef = vi.hoisted(() => ({
@@ -264,6 +271,7 @@ const FROZEN_SANDBOX_TARGET: RemoteHostDirectoryEntry = {
   },
   publicKey: "pubkey-frozen-sandbox",
   relayFuseGrace: false,
+  owner: null,
   sandbox: {
     state: "suspended",
     frozen: true,
@@ -453,6 +461,68 @@ describe("useHostStreamClientFor", () => {
     await Promise.resolve();
     expect(closeSpy).toHaveBeenCalledTimes(2);
     expect(closeSpy.mock.contexts[1]).toBe(second);
+  });
+
+  it("rebuilds a physical remote stream when ownership changes to a team", () => {
+    const transportSessions: ControllableSession[] = [];
+    const openAuthModes: HostRemoteTransportOptions["openAuth"][] = [];
+    mocks.createRemoteHostTransport.mockImplementation(
+      (options: HostRemoteTransportOptions) => {
+        openAuthModes.push(options.openAuth);
+        const session = controllableSession();
+        transportSessions.push(session);
+        return { session, streamClient: new RemoteStreamClient(session) };
+      },
+    );
+    globalClientRef.value = buildGlobalClient(true);
+    const personalEntry: RemoteHostDirectoryEntry & {
+      readonly owner: HostOwnerPrincipal;
+    } = Object.assign(
+      {
+        ...FROZEN_SANDBOX_TARGET,
+        hostId: "physical-team-host",
+        label: "Physical host",
+        sandbox: null,
+      },
+      { owner: { kind: "user", id: "user-a" } as const },
+    );
+    const teamEntry: RemoteHostDirectoryEntry & {
+      readonly owner: HostOwnerPrincipal;
+    } = Object.assign(
+      { ...personalEntry },
+      {
+        owner: {
+          kind: "team",
+          id: "team-a",
+          name: "Alpha",
+        } as const,
+      },
+    );
+    const personalSurface = renderHook(
+      ({ target }) => useHostStreamClientFor(target, null),
+      { initialProps: { target: personalEntry } },
+    );
+    const first = personalSurface.result.current;
+    const siblingPersonalSurface = renderHook(
+      ({ target }) => useHostStreamClientFor(target, null),
+      { initialProps: { target: personalEntry } },
+    );
+    expect(siblingPersonalSurface.result.current).toBe(first);
+    expect(transportSessions).toHaveLength(1);
+
+    personalSurface.rerender({ target: teamEntry });
+
+    expect(personalSurface.result.current).not.toBe(first);
+    expect(siblingPersonalSurface.result.current).toBe(first);
+    expect(transportSessions).toHaveLength(2);
+    expect(transportSessions[0].closeCalls).toBe(0);
+    expect(openAuthModes).toEqual(["user-bearer", "session-grant"]);
+
+    personalSurface.unmount();
+    expect(transportSessions[0].closeCalls).toBe(0);
+    siblingPersonalSurface.unmount();
+    expect(transportSessions[0].closeCalls).toBe(1);
+    expect(transportSessions[1].closeCalls).toBe(1);
   });
 
   it("keeps a healthy LOCAL client across a cloud-capability restoration", async () => {

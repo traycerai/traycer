@@ -5,6 +5,7 @@ import {
   useState,
   type ReactElement,
 } from "react";
+import { flushSync } from "react-dom";
 import { useStore } from "zustand";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
@@ -1208,7 +1209,9 @@ export function WindowedFixture(): ReactElement {
       insertAboveInRow: () => {
         throw new Error("legacy line only");
       },
-      hide: (kind) => setHideKind(kind),
+      // Commit in the oracle's live-read task: a later commit lets a pending
+      // wheel move the transcript between that reading and the actual hide.
+      hide: (kind) => flushSync(() => setHideKind(kind)),
       show: () => setHideKind("none"),
       remount: (sameInstance) => {
         setInstance((current) => {

@@ -1,4 +1,11 @@
-import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { Plus } from "lucide-react";
 import type {
   ModelProviderAuthResult,
@@ -9,10 +16,14 @@ import type {
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { ModelProviderMark } from "@/components/home/pickers/model-provider-icons";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
+import { Switch } from "@/components/ui/switch";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import {
+  useModelProviderVisibility,
+  type ModelProviderVisibility,
+} from "@/hooks/providers/use-model-provider-visibility";
 import { useProvidersModelProvidersList } from "@/hooks/providers/use-providers-model-providers-list-query";
 import { useProvidersModelProviderAuth } from "@/hooks/providers/use-providers-model-provider-auth-mutation";
 import { useHostBinding } from "@/lib/host/runtime";
@@ -496,6 +507,12 @@ export function ProviderModelProvidersTab(props: {
    * and the row it would need is the one its caller is already rendering.
    */
   readonly packPreparing: ProviderPackPreparing | null;
+  /**
+   * The provider row's `hiddenModelProviders`: the model providers Traycer's
+   * pickers leave out. `undefined` from a host that does not carry the list,
+   * which draws no switch. Passed in for the same reason `packPreparing` is.
+   */
+  readonly hiddenModelProviders: readonly string[] | undefined;
 }): ReactNode {
   const { providerId, providerLabel, capabilities, packPreparing } = props;
   // Subscribed for the re-render; the id itself comes off the BOUND client,
@@ -510,6 +527,11 @@ export function ProviderModelProvidersTab(props: {
   // A sandbox never takes a model provider's key or sign-in: Connect, the
   // custom provider form and Re-enable are disabled, Disconnect stays.
   const credentialRefusal = useHostCredentialRefusal(hostId);
+  const visibility = useModelProviderVisibility({
+    hostId,
+    providerId,
+    stored: props.hiddenModelProviders,
+  });
 
   const [searchQuery, setSearchQuery] = useState("");
   const [methodFilter, setMethodFilter] = useState<ModelProviderMethodFilter>(
@@ -637,11 +659,15 @@ export function ProviderModelProvidersTab(props: {
         Credentials for the upstream model providers {providerLabel} can call.
         They are stored by {providerLabel} itself, so its CLI and Traycer see
         the same sign-ins.
+        <PickerVisibilitySentence
+          supported={visibility.supported}
+          providerLabel={providerLabel}
+        />
       </p>
 
       <CredentialRefusalNote refusal={credentialRefusal} />
 
-      {entries.length > 0 ? (
+      <ModelProvidersBody
         // An ORDINARY control in the header area, scrolling with the tab - the
         // Skills tab's shape, where `ProviderListSearch` is a plain sibling
         // above its list.
@@ -654,16 +680,18 @@ export function ProviderModelProvidersTab(props: {
         // input. The trade accepted instead is scrolling back up to search a
         // long catalog, which costs a gesture rather than showing an artifact
         // on every frame.
-        <ModelProviderListControls
-          query={searchQuery}
-          onQueryChange={setSearchQuery}
-          filter={methodFilter}
-          onFilterChange={setMethodFilter}
-          resultCount={filtered.length}
-        />
-      ) : null}
-
-      <ModelProvidersBody
+        controls={
+          entries.length > 0 ? (
+            <ModelProviderListControls
+              query={searchQuery}
+              onQueryChange={setSearchQuery}
+              filter={methodFilter}
+              onFilterChange={setMethodFilter}
+              resultCount={filtered.length}
+            />
+          ) : null
+        }
+        visibility={visibility}
         listPending={listQuery.isPending}
         // A refetch AFTER a mutation is not instant and cannot be made so: the
         // host rotates its managed server on every write, so the next list pays
@@ -778,7 +806,10 @@ export function ProviderModelProvidersTab(props: {
   );
 }
 
-function ModelProvidersBody(props: {
+type ModelProvidersBodyProps = {
+  /** The search and filter row, or null while there is nothing to search. */
+  readonly controls: ReactNode;
+  readonly visibility: ModelProviderVisibility;
   readonly listPending: boolean;
   /** A refetch is in flight over data already on screen. */
   readonly refreshing: boolean;
@@ -811,7 +842,9 @@ function ModelProvidersBody(props: {
   readonly busyModelProviderIds: readonly string[];
   readonly onConnect: (entry: ModelProviderEntry) => void;
   readonly onDisconnect: (entry: ModelProviderEntry) => void;
-}): ReactNode {
+};
+
+function ModelProvidersBody(props: ModelProvidersBodyProps): ReactNode {
   if (props.listPending) {
     return (
       <div className="flex items-center gap-2 py-6 text-ui-sm text-muted-foreground">
@@ -872,20 +905,19 @@ function ModelProvidersBody(props: {
     // replace. Declaring a provider is precisely what an empty list is for.
     return (
       <ModelProviderListShell
+        controls={props.controls}
         canCreateCustom={props.canCreateCustom}
         configWriteInFlight={props.configWriteInFlight}
         credentialRefused={props.credentialRefused}
         onAddCustom={props.onAddCustom}
         refreshing={props.refreshing}
       >
-        <li className="w-full py-2">
-          <EmptyState
-            title="No model providers"
-            description={`${props.providerLabel} reported no upstream providers on this host.`}
-            actionLabel={null}
-            onAction={null}
-          />
-        </li>
+        <EmptyState
+          title="No model providers"
+          description={`${props.providerLabel} reported no upstream providers on this host.`}
+          actionLabel={null}
+          onAction={null}
+        />
       </ModelProviderListShell>
     );
   }
@@ -895,18 +927,17 @@ function ModelProvidersBody(props: {
     // hidden it is the one where it matters most.
     return (
       <ModelProviderListShell
+        controls={props.controls}
         canCreateCustom={props.canCreateCustom}
         configWriteInFlight={props.configWriteInFlight}
         credentialRefused={props.credentialRefused}
         onAddCustom={props.onAddCustom}
         refreshing={props.refreshing}
       >
-        <li className="w-full py-2">
-          <ProviderListSearchEmptyState
-            query={props.searchQuery}
-            resourceLabel="providers"
-          />
-        </li>
+        <ProviderListSearchEmptyState
+          query={props.searchQuery}
+          resourceLabel="providers"
+        />
       </ModelProviderListShell>
     );
   }
@@ -915,65 +946,180 @@ function ModelProvidersBody(props: {
   if (props.entries.length === 0 && props.filterEmptyDescription !== null) {
     return (
       <ModelProviderListShell
+        controls={props.controls}
         canCreateCustom={props.canCreateCustom}
         configWriteInFlight={props.configWriteInFlight}
         credentialRefused={props.credentialRefused}
         onAddCustom={props.onAddCustom}
         refreshing={props.refreshing}
       >
-        <li className="w-full py-2">
-          <EmptyState
-            title="No matching providers"
-            description={props.filterEmptyDescription}
-            actionLabel={null}
-            onAction={null}
-          />
-        </li>
+        <EmptyState
+          title="No matching providers"
+          description={props.filterEmptyDescription}
+          actionLabel={null}
+          onAction={null}
+        />
       </ModelProviderListShell>
     );
   }
   return (
     <ModelProviderListShell
+      controls={props.controls}
       canCreateCustom={props.canCreateCustom}
       configWriteInFlight={props.configWriteInFlight}
       credentialRefused={props.credentialRefused}
       onAddCustom={props.onAddCustom}
       refreshing={props.refreshing}
     >
-      {props.entries.map((entry) => (
-        <ModelProviderRow
-          key={entry.id}
-          entry={entry}
-          providerLabel={props.providerLabel}
-          canDisconnect={props.canDisconnect}
-          connectable={props.connectable}
-          canUpdateCustom={props.canUpdateCustom}
-          configWriteInFlight={props.configWriteInFlight}
-          credentialRefused={props.credentialRefused}
-          busy={props.busyModelProviderIds.includes(entry.id)}
-          rowError={
-            props.rowError !== null &&
-            props.rowError.modelProviderId === entry.id
-              ? props.rowError.message
-              : null
-          }
-          onConnect={() => {
-            props.onConnect(entry);
-          }}
-          onEditCustom={props.onEditCustom}
-          onReenableCustom={props.onReenableCustom}
-          onDisconnect={() => {
-            props.onDisconnect(entry);
-          }}
-        />
-      ))}
+      <ModelProviderCards {...props} />
     </ModelProviderListShell>
   );
 }
 
 /**
- * The list itself: the refreshing line, "Add custom provider" as the first
- * item, then whatever rows or empty state the body handed over.
+ * The Connected card, then the All providers card. One search and one filter
+ * over both, so a connected provider is found the same way as any other. The
+ * split says which rows the pickers can list, which is also which rows get the
+ * switch: a provider that is not connected never reaches a picker.
+ */
+function ModelProviderCards(props: ModelProvidersBodyProps): ReactNode {
+  const connected = props.entries.filter((entry) => entry.connected);
+  const available = props.entries.filter((entry) => !entry.connected);
+  const withSwitch = props.visibility.supported;
+  const renderRow = (
+    entry: ModelProviderEntry,
+    visibility: ModelProviderRowVisibility | null,
+  ): ReactNode => (
+    <ModelProviderRow
+      key={entry.id}
+      entry={entry}
+      visibility={visibility}
+      providerLabel={props.providerLabel}
+      canDisconnect={props.canDisconnect}
+      connectable={props.connectable}
+      canUpdateCustom={props.canUpdateCustom}
+      configWriteInFlight={props.configWriteInFlight}
+      credentialRefused={props.credentialRefused}
+      busy={props.busyModelProviderIds.includes(entry.id)}
+      rowError={
+        props.rowError?.modelProviderId === entry.id
+          ? props.rowError.message
+          : null
+      }
+      onConnect={() => {
+        props.onConnect(entry);
+      }}
+      onEditCustom={props.onEditCustom}
+      onReenableCustom={props.onReenableCustom}
+      onDisconnect={() => {
+        props.onDisconnect(entry);
+      }}
+    />
+  );
+  return (
+    <>
+      {connected.length > 0 ? (
+        <ModelProviderSection
+          title="Connected"
+          count={connected.length}
+          withSwitch={withSwitch}
+        >
+          {connected.map((entry) =>
+            renderRow(
+              entry,
+              withSwitch ? rowVisibility(props.visibility, entry.id) : null,
+            ),
+          )}
+        </ModelProviderSection>
+      ) : null}
+      {available.length > 0 ? (
+        <ModelProviderSection
+          title="All providers"
+          count={null}
+          withSwitch={false}
+        >
+          {available.map((entry) => renderRow(entry, null))}
+        </ModelProviderSection>
+      ) : null}
+    </>
+  );
+}
+
+function rowVisibility(
+  visibility: ModelProviderVisibility,
+  modelProviderId: string,
+): ModelProviderRowVisibility {
+  return {
+    shown: visibility.isShown(modelProviderId),
+    settling: visibility.isSettling(modelProviderId),
+    onShownChange: (shown) => {
+      visibility.setShown(modelProviderId, shown);
+    },
+  };
+}
+
+/**
+ * The tab description's last sentence, only where the switch is drawn. It
+ * carries the switch's meaning on touch, where there is no tooltip.
+ */
+function PickerVisibilitySentence(props: {
+  readonly supported: boolean;
+  readonly providerLabel: string;
+}): ReactNode {
+  if (!props.supported) return null;
+  return ` Turn a provider off to hide its models in Traycer; it stays connected in ${props.providerLabel}.`;
+}
+
+/** A row's picker switch: whether Traycer's model pickers list it. */
+type ModelProviderRowVisibility = {
+  readonly shown: boolean;
+  readonly settling: boolean;
+  readonly onShownChange: (shown: boolean) => void;
+};
+
+/**
+ * One card of the list. A grid whose rows are subgrids, so the switch and the
+ * actions line up in every row whatever the name or source length, with no
+ * fixed column width.
+ */
+function ModelProviderSection(props: {
+  readonly title: string;
+  readonly count: number | null;
+  readonly withSwitch: boolean;
+  readonly children: ReactNode;
+}): ReactNode {
+  const titleId = useId();
+  return (
+    <section aria-labelledby={titleId} className="flex w-full flex-col gap-1.5">
+      <h3
+        id={titleId}
+        className="flex items-center gap-1.5 px-1 text-ui-xs font-semibold text-muted-foreground"
+      >
+        {props.title}
+        {props.count === null ? null : (
+          <span className="font-normal tabular-nums text-muted-foreground/70">
+            {props.count}
+          </span>
+        )}
+      </h3>
+      <ul
+        aria-labelledby={titleId}
+        className={cn(
+          "grid w-full gap-x-4 divide-y divide-border/40 overflow-clip rounded-lg border border-border/60",
+          props.withSwitch
+            ? "grid-cols-[minmax(0,1fr)_auto_auto]"
+            : "grid-cols-[minmax(0,1fr)_auto]",
+        )}
+      >
+        {props.children}
+      </ul>
+    </section>
+  );
+}
+
+/**
+ * The list itself: the search row with "Add custom provider" beside it, the
+ * refreshing line, then whatever cards or empty state the body handed over.
  *
  * ONE scroll context. This used to cap itself against the viewport and scroll
  * internally, which nested a second scrollbar inside the panel's own - two
@@ -999,6 +1145,7 @@ function ModelProvidersBody(props: {
  * untestable under jsdom, which reports every element as zero-height.
  */
 function ModelProviderListShell(props: {
+  readonly controls: ReactNode;
   readonly canCreateCustom: boolean;
   readonly configWriteInFlight: boolean;
   /** The host is a sandbox: nothing that carries a key or a sign-in is sent. */
@@ -1009,10 +1156,37 @@ function ModelProviderListShell(props: {
 }): ReactNode {
   return (
     <>
+      {props.controls !== null || props.canCreateCustom ? (
+        <div className="flex w-full items-start gap-1">
+          <div className="min-w-0 flex-1">{props.controls}</div>
+          {props.canCreateCustom ? (
+            // Beside the search, scrolling with the content. It stays rendered
+            // whatever the search says, because it is an affordance rather than
+            // a result - a query that hid it would remove the one control whose
+            // purpose is "what you want isn't in this list", exactly when
+            // someone is typing.
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="h-8 shrink-0"
+              aria-label="Add custom provider"
+              // Closed while a config write is in flight: declaring through
+              // this would open a form whose Save the guard drops, and an older
+              // completion would land on the newer dialog's state.
+              disabled={props.configWriteInFlight || props.credentialRefused}
+              onClick={props.onAddCustom}
+            >
+              <Plus className="size-3.5" />
+              Custom provider
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
       <RefreshingNotice refreshing={props.refreshing} />
-      <ul
+      <div
         className={cn(
-          "flex w-full flex-col divide-y divide-border/40",
+          "flex w-full flex-col gap-4",
           // Dimmed, not replaced. A skeleton would throw away rows that are
           // still mostly right; this says "being re-checked" while keeping them
           // readable, and the banner above names what is happening.
@@ -1021,31 +1195,8 @@ function ModelProviderListShell(props: {
         aria-busy={props.refreshing}
         data-testid="model-provider-list"
       >
-        {props.canCreateCustom ? (
-          // The list's FIRST item, scrolling with the content. It stays
-          // rendered whatever the search says, because it is an affordance
-          // rather than a result - a query that hid it would remove the one row
-          // whose purpose is "what you want isn't in this list", exactly when
-          // someone is typing.
-          <li className="w-full">
-            <Button
-              type="button"
-              size="inline"
-              variant="muted"
-              className="h-7 w-full justify-start"
-              // Closed while a config write is in flight: declaring through
-              // this would open a form whose Save the guard drops, and an older
-              // completion would land on the newer dialog's state.
-              disabled={props.configWriteInFlight || props.credentialRefused}
-              onClick={props.onAddCustom}
-            >
-              <Plus className="size-3.5" />
-              Add custom provider
-            </Button>
-          </li>
-        ) : null}
         {props.children}
-      </ul>
+      </div>
     </>
   );
 }
@@ -1124,6 +1275,8 @@ function modelProviderRowHolds(props: {
 
 function ModelProviderRow(props: {
   readonly entry: ModelProviderEntry;
+  /** The picker switch, or null for a row that does not draw one. */
+  readonly visibility: ModelProviderRowVisibility | null;
   readonly providerLabel: string;
   readonly canDisconnect: boolean;
   readonly connectable: boolean;
@@ -1159,120 +1312,187 @@ function ModelProviderRow(props: {
   const showConnect =
     props.connectable && !showDisconnect && custom?.reenable !== true;
   return (
-    <li className="w-full">
-      <div className="flex w-full flex-wrap items-center gap-x-2 gap-y-1 py-1.5">
-        <div className="flex min-w-0 flex-1 items-center gap-2">
-          {/* A user-declared provider has no brand, so it takes the generic
-           * mark the same way an id we have no logo for does. */}
-          <ModelProviderMark
-            id={entry.id}
-            configDeclaredCustom={entry.configDeclaredCustom}
-            aria-hidden
-            className="size-4 shrink-0 text-muted-foreground"
-          />
-          {entry.connected ? (
-            <span
-              aria-hidden
-              className="size-1.5 shrink-0 rounded-full bg-success"
-            />
-          ) : null}
-          <span className="truncate text-ui-sm text-foreground">
-            {entry.name}
-          </span>
-          <span className="truncate text-ui-xs text-muted-foreground">
-            {entry.id}
-          </span>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          {entry.source !== null ? (
-            <TooltipWrapper
-              label={sourceBadgeHint(
-                entry.source,
-                props.providerLabel,
-                entry.configDeclaredCustom,
-              )}
-              side="top"
-              sideOffset={undefined}
-              align={undefined}
-            >
-              <Badge variant="muted" className="h-4" size="xs">
-                {sourceBadgeLabel(entry.source, entry.configDeclaredCustom)}
-              </Badge>
-            </TooltipWrapper>
-          ) : null}
-          {props.busy ? <MutedAgentSpinner /> : null}
-          {custom !== null ? (
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              disabled={customDisabled}
-              onClick={() => {
-                props.onEditCustom(custom.values);
-              }}
-              aria-label={`Edit ${entry.name}`}
-            >
-              Edit
-            </Button>
-          ) : null}
-          {custom?.reenable === true ? (
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              disabled={customDisabled}
-              onClick={() => {
-                props.onReenableCustom(custom.values);
-              }}
-              aria-label={`Re-enable ${entry.name}`}
-            >
-              Re-enable
-            </Button>
-          ) : null}
-          {showConnect ? (
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              disabled={connectDisabled}
-              onClick={props.onConnect}
-              // Row-specific, like its three siblings: "Connect" alone repeats
-              // ~180 times in the accessibility tree with nothing saying which
-              // provider each one belongs to.
-              aria-label={`Connect ${entry.name}`}
-            >
-              Connect
-            </Button>
-          ) : null}
-          {showDisconnect ? (
-            // Text, not an icon, and upstream's word for it. The icon-only
-            // version was the single thing the user could not read off this
-            // list - an unplug glyph in a row of quiet text says neither what
-            // it removes nor that it is the destructive one. Destructive INTENT
-            // still arrives on hover rather than as permanent red, matching the
-            // rest of Settings.
-            <Button
-              type="button"
-              size="sm"
-              variant="muted-destructive"
-              // A CONFIG-sourced row's Disconnect is a config write (it appends
-              // to `disabled_providers`), so it closes with the rest while one
-              // is in flight - declared custom or not, since both reach the file
-              // the same way. An auth-store row's Disconnect contends with
-              // nothing and stays live.
-              disabled={disconnectWritesConfig(entry) ? configBusy : props.busy}
-              onClick={props.onDisconnect}
-              aria-label={`Disconnect ${entry.name}`}
-            >
-              Disconnect
-            </Button>
-          ) : null}
-        </div>
+    <li className="col-span-full grid grid-cols-subgrid items-center gap-y-1 px-3 py-2">
+      <ModelProviderIdentity
+        entry={entry}
+        providerLabel={props.providerLabel}
+      />
+      {props.visibility === null ? null : (
+        <ModelProviderVisibilitySwitch
+          name={entry.name}
+          providerLabel={props.providerLabel}
+          visibility={props.visibility}
+        />
+      )}
+      <div className="flex items-center justify-end gap-2">
+        {props.busy ? <MutedAgentSpinner /> : null}
+        {custom !== null ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            disabled={customDisabled}
+            onClick={() => {
+              props.onEditCustom(custom.values);
+            }}
+            aria-label={`Edit ${entry.name}`}
+          >
+            Edit
+          </Button>
+        ) : null}
+        {custom?.reenable === true ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            disabled={customDisabled}
+            onClick={() => {
+              props.onReenableCustom(custom.values);
+            }}
+            aria-label={`Re-enable ${entry.name}`}
+          >
+            Re-enable
+          </Button>
+        ) : null}
+        {showConnect ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            disabled={connectDisabled}
+            onClick={props.onConnect}
+            // Row-specific, like its three siblings: "Connect" alone repeats
+            // ~180 times in the accessibility tree with nothing saying which
+            // provider each one belongs to.
+            aria-label={`Connect ${entry.name}`}
+          >
+            Connect
+          </Button>
+        ) : null}
+        {showDisconnect ? (
+          // Text, not an icon, and upstream's word for it. The icon-only
+          // version was the single thing the user could not read off this
+          // list - an unplug glyph in a row of quiet text says neither what
+          // it removes nor that it is the destructive one. Destructive INTENT
+          // still arrives on hover rather than as permanent red, matching the
+          // rest of Settings.
+          <Button
+            type="button"
+            size="sm"
+            variant="muted-destructive"
+            // A CONFIG-sourced row's Disconnect is a config write (it appends
+            // to `disabled_providers`), so it closes with the rest while one
+            // is in flight - declared custom or not, since both reach the file
+            // the same way. An auth-store row's Disconnect contends with
+            // nothing and stays live.
+            disabled={disconnectWritesConfig(entry) ? configBusy : props.busy}
+            onClick={props.onDisconnect}
+            aria-label={`Disconnect ${entry.name}`}
+          >
+            Disconnect
+          </Button>
+        ) : null}
       </div>
       {props.rowError !== null ? (
-        <p className="pb-2 text-ui-xs text-destructive">{props.rowError}</p>
+        <p className="col-span-full text-ui-xs text-destructive">
+          {props.rowError}
+        </p>
       ) : null}
     </li>
+  );
+}
+
+/**
+ * The mark, the name, and one muted line under it: the id, then the sign-in
+ * source for a row that has one. Text rather than a badge, so a row reads as
+ * one quiet block and the switch and buttons carry the only chrome.
+ */
+function ModelProviderIdentity(props: {
+  readonly entry: ModelProviderEntry;
+  readonly providerLabel: string;
+}): ReactNode {
+  const { entry } = props;
+  return (
+    <div className="flex min-w-0 items-center gap-2.5">
+      <span className="grid size-6 shrink-0 place-items-center rounded-md bg-foreground/8">
+        {/* A user-declared provider has no brand, so it takes the generic
+         * mark the same way an id we have no logo for does. */}
+        <ModelProviderMark
+          id={entry.id}
+          configDeclaredCustom={entry.configDeclaredCustom}
+          aria-hidden
+          className="size-3.5 text-muted-foreground"
+        />
+      </span>
+      <div className="flex min-w-0 flex-col">
+        <span className="truncate text-ui-sm text-foreground">
+          {entry.name}
+        </span>
+        <span className="flex min-w-0 items-center gap-1 text-ui-xs text-muted-foreground">
+          <span className="truncate">{entry.id}</span>
+          {entry.source === null ? null : (
+            <>
+              <span aria-hidden className="text-muted-foreground/60">
+                ·
+              </span>
+              <TooltipWrapper
+                label={sourceBadgeHint(
+                  entry.source,
+                  props.providerLabel,
+                  entry.configDeclaredCustom,
+                )}
+                side="top"
+                sideOffset={undefined}
+                align={undefined}
+              >
+                <span className="shrink-0">
+                  {sourceBadgeLabel(entry.source, entry.configDeclaredCustom)}
+                </span>
+              </TooltipWrapper>
+            </>
+          )}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Whether Traycer's model pickers list this provider. Visibility only: the
+ * provider stays connected in the harness, and a chat already on one of its
+ * models keeps running. The same switch as a profile's "Allow agents to use".
+ */
+function ModelProviderVisibilitySwitch(props: {
+  readonly name: string;
+  readonly providerLabel: string;
+  readonly visibility: ModelProviderRowVisibility;
+}): ReactNode {
+  const { shown, settling, onShownChange } = props.visibility;
+  return (
+    <TooltipWrapper
+      label={
+        shown
+          ? "Shown in Traycer"
+          : `Hidden in Traycer. Still connected in ${props.providerLabel}.`
+      }
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
+    >
+      {/* Keep Tooltip's `data-state` on this neutral wrapper. Putting its
+          trigger directly on Switch overwrites Switch's own checked state,
+          which removes the checked track fill. */}
+      <span className="inline-flex shrink-0">
+        <Switch
+          aria-label={`Show ${props.name} in Traycer`}
+          checked={shown}
+          disabled={settling}
+          onCheckedChange={(next) => {
+            if (next !== shown) onShownChange(next);
+          }}
+        />
+      </span>
+    </TooltipWrapper>
   );
 }
 

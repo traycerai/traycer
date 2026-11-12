@@ -5,7 +5,10 @@ import {
 } from "@traycer/protocol/host/host-status";
 import { isSandboxAsleep } from "@traycer-clients/shared/host-client/sandbox-control";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
-import { isSandboxHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+import {
+  isRemoteHostDirectoryEntry,
+  isSandboxHostDirectoryEntry,
+} from "@traycer-clients/shared/host-client/remote-fetcher";
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import {
   formatPlatform,
@@ -45,15 +48,6 @@ import type {
  * clicking differs.
  */
 export type HostPickIntent = "view" | "bind" | "pin";
-
-/**
- * What an Activate does, said once under the account menu's Host heading.
- * Not on each row, and not "tabs stay on the host they started on" — the
- * active-host switch still reloads open tabs today, so that promise would
- * be false. This only says what is true.
- */
-export const ACTIVATE_HOST_HINT =
-  "Every window follows, and the choice outlives this one.";
 
 /**
  * A refusal the SURFACE holds against a host, keyed by `hostId` and carrying
@@ -491,6 +485,7 @@ export function sandboxStateWord(sandbox: HostScopeSandbox): string {
  * Where a row sits in a host list:
  *
  * - `personal`: the user's own machines, the list's first group.
+ * - `team-computer`: a physical computer under its owning team.
  * - `sandbox`: a sandbox the user created, in a collapsible group below them.
  * - `agent-sandbox`: a burst sandbox an agent created for one task. Shown ONLY
  *   by the host list, in a collapsed sub-group; never offered by a picker,
@@ -513,6 +508,7 @@ export function sandboxStateWord(sandbox: HostScopeSandbox): string {
  */
 export type HostPickerGroup =
   | "personal"
+  | "team-computer"
   | "sandbox"
   | "agent-sandbox"
   | "hidden";
@@ -528,7 +524,9 @@ export function hostOptionPickerGroup(
   composerViewer: ComposerPickerViewer | null,
 ): HostPickerGroup {
   if (host.entry?.kind === "pool") return "hidden";
-  if (host.sandbox === null) return "personal";
+  if (host.sandbox === null) {
+    return hostOptionTeamOwner(host) === null ? "personal" : "team-computer";
+  }
   // A sandbox no host row stands for yet: never offered as a
   // host. The host list groups it by the rules below, like any sandbox.
   if (!listsAgentSandboxes && isUnenrolledSandboxOption(host)) return "hidden";
@@ -590,12 +588,13 @@ export const TEAM_HOST_ACTIVATE_REASON =
   "A team's machine can't be the app's default.";
 
 /**
- * One team's hosts in a list: its sandboxes and pods, and the
- * burst ones an agent made, under the team's name.
+ * One team's computers and sandboxes, with agent-created burst sandboxes
+ * kept separately, under the team's name.
  */
 export interface HostTeamGroup {
   readonly teamId: string;
   readonly teamName: string;
+  readonly computers: readonly HostScopeOption[];
   readonly sandboxes: readonly HostScopeOption[];
   readonly agentSandboxes: readonly HostScopeOption[];
 }
@@ -609,15 +608,17 @@ export interface HostPickerGroups {
 }
 
 /**
- * The team that owns a sandbox row, from its registry `owner`, or `null`: a
- * personal host, a sandbox the person owns, and a row whose registry carries
- * no `owner` (an authn from before it) all stay in the person's own groups.
+ * The known team owner of a computer or sandbox. Prefer the registry row,
+ * then the directory owner; absent metadata never invents a team name.
  */
 export function hostOptionTeamOwner(
   host: HostScopeOption,
 ): { readonly teamId: string; readonly teamName: string } | null {
-  if (host.sandbox === null) return null;
-  const owner = host.item?.owner ?? null;
+  const owner =
+    host.item?.owner ??
+    (host.entry !== null && isRemoteHostDirectoryEntry(host.entry)
+      ? (host.entry.owner ?? null)
+      : null);
   if (owner === null || owner.kind !== "team") return null;
   return { teamId: owner.id, teamName: owner.name };
 }
@@ -625,6 +626,7 @@ export function hostOptionTeamOwner(
 interface MutableTeamGroup {
   readonly teamId: string;
   readonly teamName: string;
+  readonly computers: HostScopeOption[];
   readonly sandboxes: HostScopeOption[];
   readonly agentSandboxes: HostScopeOption[];
 }
@@ -652,18 +654,20 @@ export function groupHostOptions(
       composerViewer,
     );
     const owner = hostOptionTeamOwner(host);
-    let target = { sandboxes, agentSandboxes };
+    let target = { computers: personal, sandboxes, agentSandboxes };
     if (owner !== null) {
       const team = teams.get(owner.teamId) ?? {
         teamId: owner.teamId,
         teamName: owner.teamName,
+        computers: [],
         sandboxes: [],
         agentSandboxes: [],
       };
       teams.set(owner.teamId, team);
       target = team;
     }
-    if (group === "personal") personal.push(host);
+    if (group === "personal" || group === "team-computer")
+      target.computers.push(host);
     else if (group === "sandbox") target.sandboxes.push(host);
     else if (group === "agent-sandbox") target.agentSandboxes.push(host);
     else if (host.hostId === keepHostId) target.sandboxes.push(host);
@@ -674,7 +678,10 @@ export function groupHostOptions(
     agentSandboxes,
     teams: [...teams.values()]
       .filter(
-        (team) => team.sandboxes.length > 0 || team.agentSandboxes.length > 0,
+        (team) =>
+          team.computers.length > 0 ||
+          team.sandboxes.length > 0 ||
+          team.agentSandboxes.length > 0,
       )
       .sort(
         (a, b) =>
@@ -685,8 +692,8 @@ export function groupHostOptions(
 }
 
 /**
- * A composer picker's host groups: `Yours` (the person's computers) and
- * `Sandboxes you started` (every configuration together, the viewer's own
+ * A composer picker's host groups: `Yours` (the person's computers), team
+ * computers under their team names, and `Sandboxes you started` (the viewer's own
  * and the team sandboxes they started or kept, never an agent's), in the
  * list's order. `keepHostId` is the row the composer is pointed at, which is
  * never dropped (see {@link groupHostOptions}).
@@ -694,6 +701,7 @@ export function groupHostOptions(
 export interface ComposerHostGroups {
   readonly yours: readonly HostScopeOption[];
   readonly started: readonly HostScopeOption[];
+  readonly teams: readonly HostTeamGroup[];
 }
 
 export function groupComposerHostOptions(
@@ -708,6 +716,7 @@ export function groupComposerHostOptions(
       ...groups.sandboxes,
       ...groups.teams.flatMap((team) => team.sandboxes),
     ],
+    teams: groups.teams.filter((team) => team.computers.length > 0),
   };
 }
 
@@ -779,7 +788,7 @@ export function pickableHostOptions(
   return [
     ...groups.personal,
     ...groups.sandboxes,
-    ...groups.teams.flatMap((team) => team.sandboxes),
+    ...groups.teams.flatMap((team) => [...team.computers, ...team.sandboxes]),
   ];
 }
 
@@ -798,6 +807,7 @@ export function appWideHostOptions(
   const groups = groupHostOptions(hosts, false, null, keepHostId);
   return [
     ...groups.personal,
+    ...groups.teams.flatMap((team) => team.computers),
     ...groups.sandboxes.filter(
       (host) => host.sandbox === null || !host.sandbox.teamOwned,
     ),

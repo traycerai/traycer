@@ -34,6 +34,13 @@ import {
   type AccessHost,
 } from "@/components/settings/host-scope/__tests__/host-access-test-support";
 import { REMOTE_ACCESS_TEXT } from "@/components/settings/host-scope/host-access-model";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  environmentListUpgradeV10ToV11,
+  type EnvironmentDescriptorV11,
+  type EnvironmentListResponseV11,
+} from "@traycer/protocol/host/environment/contracts";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { HostOverviewAccessTab } from "@/components/settings/panels/host-overview-access-tab";
 import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
 import { useHostAccessPromptsStore } from "@/stores/hosts/host-access-prompts-store";
@@ -42,6 +49,7 @@ afterEach(() => {
   cleanup();
   resetNegotiatedManifests();
   hostMock.binding = null;
+  useAuthStore.getState().setSignedOut();
   window.localStorage.clear();
   useHostAccessPromptsStore.setState({
     remoteAccessAnswered: {},
@@ -52,6 +60,35 @@ afterEach(() => {
 const WITHOUT_REMOTE_ACCESS_SET = ACCESS_METHODS.filter(
   (method) => method !== "host.remoteAccess.set",
 );
+
+const TEAM_ENVIRONMENT: EnvironmentDescriptorV11 = {
+  environmentId: "environment-team",
+  ownerKind: "organization",
+  ownerId: "team-owner",
+  roomId: "team-room",
+  label: "Studio",
+  effectiveRole: "editor",
+  kind: "team",
+  hostCount: 1,
+  providerHandle: "studio",
+};
+
+function teamHost(remoteAccess: RemoteAccessState): AccessHost {
+  return buildAccessHost({
+    status: environmentStatusFixture({
+      principal: { kind: "team", teamName: TEAM_ENVIRONMENT.label },
+      remoteAccess,
+    }),
+    binding: {
+      hostId: ACCESS_HOST_ID,
+      environment: TEAM_ENVIRONMENT,
+      explicit: true,
+      enrolledByUserId: null,
+      canUnbind: false,
+    },
+    environments: [TEAM_ENVIRONMENT],
+  });
+}
 
 function hostWithRemoteAccess(
   remoteAccess: RemoteAccessState,
@@ -116,6 +153,111 @@ function noSwitch(): void {
 }
 
 describe("<RemoteAccessSection /> in Access and setup", () => {
+  it("describes a team's remote access and keeps the computer's answered memory on return", async () => {
+    const host = teamHost("on");
+    const queryClient = renderTab(host, ACCESS_METHODS, true);
+    expect(await shownState()).toBe(
+      "On. Team members and agents can reach this computer.",
+    );
+    expect(screen.queryByTestId("remote-access-question")).toBeNull();
+
+    host.state.status = { ...host.state.status, remoteAccess: "off" };
+    await rereadStatus(queryClient, host);
+    expect(await shownState()).toBe(
+      "Off. Team members and agents can't reach this computer.",
+    );
+    host.state.status = environmentStatusFixture({ remoteAccess: "off" });
+    await rereadStatus(queryClient, host);
+    expect(await shownState()).toBe(REMOTE_ACCESS_TEXT.off);
+    expect(screen.queryByTestId("remote-access-question")).toBeNull();
+    expect(useHostAccessPromptsStore.getState().remoteAccessAnswered).toEqual({
+      [ACCESS_HOST_ID]: true,
+    });
+  });
+
+  it("offers the team's switch only to its admin or editor, fails closed on unknown roles, and shows a refused change", async () => {
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "viewer-test", username: "viewer" },
+    });
+    const host = teamHost("off");
+    const otherTeam = {
+      ...TEAM_ENVIRONMENT,
+      environmentId: "another-team",
+      effectiveRole: "admin" as const,
+    };
+    host.state.environments = [otherTeam];
+    const roleRead = Promise.withResolvers<EnvironmentListResponseV11>();
+    host.state.environmentListRead = roleRead.promise;
+    const queryClient = renderTab(host, ACCESS_METHODS, false);
+    await shownState();
+    await waitFor(() => expect(host.reads.environments).toBeGreaterThan(0));
+    // The role read has started but is held, so it cannot authorize a switch.
+    noSwitch();
+    await act(async () => {
+      host.state.environmentListRead = null;
+      roleRead.resolve({ environments: host.state.environments });
+      await roleRead.promise;
+    });
+    await rereadStatus(queryClient, host);
+    noSwitch();
+
+    for (const effectiveRole of ["admin", "editor"] as const) {
+      host.state.environments = [
+        otherTeam,
+        { ...TEAM_ENVIRONMENT, effectiveRole },
+      ];
+      await rereadStatus(queryClient, host);
+      const control = await screen.findByRole("button", { name: "Turn on" });
+      expect(control.closest("[inert]")).toBeNull();
+    }
+    const refreshedRole = Promise.withResolvers<EnvironmentListResponseV11>();
+    host.state.environmentListRead = refreshedRole.promise;
+    const beforeRefresh = host.reads.environments;
+    const refreshing = queryClient.invalidateQueries();
+    await waitFor(() => {
+      expect(host.reads.environments).toBeGreaterThan(beforeRefresh);
+      noSwitch();
+    });
+    await act(async () => {
+      host.state.environmentListRead = null;
+      refreshedRole.resolve({ environments: host.state.environments });
+      await refreshing;
+    });
+    await screen.findByRole("button", { name: "Turn on" });
+    host.state.remoteAccessError = new HostRpcError({
+      code: "FORBIDDEN",
+      message: "private refusal detail",
+      requestId: "refused-access",
+      method: "host.remoteAccess.set",
+      fatalDetails: null,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Turn on" }));
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "You don't have permission to change remote access on this computer.",
+    );
+    expect(host.paramsOf("host.remoteAccess.set")).toEqual([{ enabled: true }]);
+    expect(await shownState()).toBe(
+      "Off. Team members and agents can't reach this computer.",
+    );
+    expect(useHostAccessPromptsStore.getState().remoteAccessAnswered).toEqual(
+      {},
+    );
+
+    host.state.environments = environmentListUpgradeV10ToV11.upgradeResponse({
+      environments: [TEAM_ENVIRONMENT],
+    }).environments;
+    await rereadStatus(queryClient, host);
+    noSwitch();
+
+    host.state.environments = [TEAM_ENVIRONMENT];
+    await rereadStatus(queryClient, host);
+    await screen.findByRole("button", { name: "Turn on" });
+    host.state.failEnvironmentList = true;
+    await rereadStatus(queryClient, host);
+    noSwitch();
+  });
+
   it("shows the unanswered prompt inside the Remote access group without a second row label", async () => {
     const host = hostWithRemoteAccess("off", "off");
     renderTab(host, ACCESS_METHODS, false);

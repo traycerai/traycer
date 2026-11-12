@@ -268,6 +268,7 @@ describe("sandbox row filters", () => {
     burst: true,
     state: "suspended",
     createdByTaskId: "task-77",
+    createdByTaskTitle: "Release Notes",
   });
   const mine = sandboxSummaryFixture({ id: "m", state: "awake" });
 
@@ -283,7 +284,7 @@ describe("sandbox row filters", () => {
     ).toBe(2);
   });
 
-  it("matches on kind, state, starter and the name or task search", () => {
+  it("matches name, task id, and task title searches without case sensitivity", () => {
     const only = (patch: Partial<typeof SANDBOX_ROW_FILTER_NONE>) =>
       [agent, mine]
         .filter((row) =>
@@ -300,6 +301,8 @@ describe("sandbox row filters", () => {
     expect(only({ startedBy: "agent" })).toEqual(["a"]);
     expect(only({ search: " agent box " })).toEqual(["a"]);
     expect(only({ search: "TASK-77" })).toEqual(["a"]);
+    expect(only({ search: "rElEaSe nOtEs" })).toEqual(["a"]);
+    expect(only({ search: "no-such-match" })).toEqual([]);
   });
 
   it("offers Destroy all idle for both idle states regardless of Kind", () => {

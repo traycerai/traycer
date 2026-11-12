@@ -158,8 +158,8 @@ afterEach(() => {
 });
 
 describe("--profile parsing", () => {
-  it("keeps omission, explicit ambient, and a managed id distinguishable", () => {
-    expect(parseCreateProfileSelection(null)).toEqual({ kind: "last_used" });
+  it("maps omission to ambient and keeps an explicit managed id distinguishable", () => {
+    expect(parseCreateProfileSelection(null)).toEqual({ kind: "ambient" });
     expect(parseCreateProfileSelection("ambient")).toEqual({ kind: "ambient" });
     expect(parseCreateProfileSelection("prof_work")).toEqual({
       kind: "profile",
@@ -199,14 +199,14 @@ describe("agent create profile selection", () => {
     );
   });
 
-  it("sends last_used when --profile is omitted", async () => {
+  it("sends ambient when --profile is omitted", async () => {
     rpcMock.mockResolvedValue({ agentId: "agent_child", warnings: [] });
 
     await buildAgentCreateCommand(createOpts(null))(makeCtx());
 
     expect(rpcMock).toHaveBeenCalledWith(
       "agent.create",
-      expect.objectContaining({ profileSelection: { kind: "last_used" } }),
+      expect.objectContaining({ profileSelection: { kind: "ambient" } }),
     );
   });
 
@@ -711,10 +711,12 @@ describe("command registration", () => {
     );
   });
 
-  it("does not make --profile required on create, where omission means last-used", () => {
-    expect(requiredOptionFlags(expectAgentCommand("create"))).not.toContain(
-      "--profile",
-    );
+  it("does not make --profile required on create, where omission defaults to ambient", () => {
+    const create = expectAgentCommand("create");
+    expect(requiredOptionFlags(create)).not.toContain("--profile");
+    const description = optionDescription(create, "--profile");
+    expect(description).toContain("Omit to use 'ambient'");
+    expect(description).not.toContain("last-used");
   });
 
   it("requires full access in create and configure help unless the guide explicitly overrides it", () => {

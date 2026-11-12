@@ -42,8 +42,9 @@ function agent(
     // entry, which keeps every expectation below that predates the flag intact.
     archived: null,
     // The `@10.1` run tuple. `null` is "this answer cannot say", which is what
-    // a host that predates the tuple is upgraded to, so a row built without an
-    // opinion renders no token and no legend line.
+    // a host that predates the tuple is upgraded to, so a full row built
+    // without an opinion prints both values as unobservable and shows the
+    // tuple legend.
     profile: null,
     permissionMode: null,
     // The `@10.2` reach fields. `null` / `unknown` are the row's own "this
@@ -1350,7 +1351,7 @@ describe("formatAgentListPage", () => {
     }
     expect(collected).toEqual(expected);
   });
-  it("keeps the bytes a listing with unreachable rows has always had when nothing is cut", () => {
+  it("keeps a matching full listing with unreachable rows uncut", () => {
     // `a` and `b` name each other as parent, so no root reaches either and
     // neither is printed. Before pages existed the formatter still printed
     // their section heading and lit the legend from every agent in the
@@ -1373,7 +1374,7 @@ describe("formatAgentListPage", () => {
     const expected = [
       "Agents in epic (relative to you):",
       "You:",
-      "me [self] gui/claude",
+      "me [self] gui/claude profile: unobservable mode: unobservable",
       "",
       "Other agents (user-triggered):",
       "",
@@ -1388,6 +1389,7 @@ describe("formatAgentListPage", () => {
       "-: no available action",
       "dir: <path>: the working directory the agent runs in",
       "worktree: <path>: the agent runs in a dedicated git worktree",
+      "profile: <id> / mode: <word>: the provider profile (ambient is the provider's own login) and permission mode the agent's future turns use, in the form traycer_configure_agent takes back. unobservable means the answering host cannot report that value",
     ].join("\n");
 
     const unpaged = formatAgentListResponse(listing);
@@ -1627,17 +1629,11 @@ describe("profile and permission mode tokens", () => {
     expect(output).toContain("permission mode: auto_accept_edits");
   });
 
-  it("reads an absent key, null, and malformed values as absent: no token, no legend line", () => {
+  it("uses unobservable for absent and malformed values", () => {
     const caller = agent({ id: "caller", isSelf: true });
     const rows = [
       caller,
       agent({ id: "absent", parentId: "caller" }),
-      agent({
-        id: "nulls",
-        parentId: "caller",
-        profile: null,
-        permissionMode: null,
-      }),
       withWireValue(
         agent({ id: "oddmode", parentId: "caller" }),
         "permissionMode",
@@ -1659,22 +1655,61 @@ describe("profile and permission mode tokens", () => {
 
     expect(output).not.toContain("yolo");
     expect(output).not.toContain("bad profile");
-    expect(output).not.toContain(LEGEND_LINE);
-    for (const line of output.split("\n")) {
-      expect(line).not.toMatch(/ profile: /);
-      expect(line).not.toMatch(/ mode: /);
-    }
+    expect(output).toContain(LEGEND_LINE);
+    expect(lineWith(output, "oddmode gui/")).toContain(
+      "profile: unobservable mode: unobservable",
+    );
+    expect(lineWith(output, "oddprofile gui/")).toContain(
+      "profile: unobservable mode: unobservable",
+    );
+    expect(lineWith(output, "emptyprofile gui/")).toContain(
+      "profile: unobservable mode: unobservable",
+    );
     const malformedSelf = withWireValue(
       agent({ id: "self", isSelf: true }),
       "permissionMode",
       "yolo",
     );
     const self = formatAgentSelf(malformedSelf);
-    expect(self).not.toContain("profile:");
-    expect(self).not.toContain("permission mode:");
+    expect(self).not.toContain("yolo");
+    expect(self).toContain("profile: unobservable");
+    expect(self).toContain("permission mode: unobservable");
   });
 
-  it("renders only the valid half when the other is malformed", () => {
+  it("renders null run-tuple fields as unobservable on full rows and get-self", () => {
+    const caller = agent({ id: "caller", isSelf: true });
+    const row = agent({
+      id: "unobservable",
+      parentId: "caller",
+      profile: null,
+      permissionMode: null,
+    });
+    const halfKnown = agent({
+      id: "half-known",
+      parentId: "caller",
+      profile: "work",
+      permissionMode: null,
+    });
+
+    const output = formatAgentListResponse(
+      response([caller, row, halfKnown], "caller"),
+    );
+
+    expect(lineWith(output, "unobservable gui/")).toContain(
+      "profile: unobservable mode: unobservable",
+    );
+    expect(lineWith(output, "half-known gui/")).toContain(
+      "profile: work mode: unobservable",
+    );
+    expect(output).toContain(LEGEND_LINE);
+    expect(output).toContain(
+      "unobservable means the answering host cannot report that value",
+    );
+    expect(formatAgentSelf(row)).toContain("profile: unobservable");
+    expect(formatAgentSelf(row)).toContain("permission mode: unobservable");
+  });
+
+  it("renders the valid profile with an unobservable malformed mode", () => {
     const caller = agent({ id: "caller", isSelf: true });
     const row = withWireValue(
       agent({ id: "half", parentId: "caller", profile: "work" }),
@@ -1685,7 +1720,7 @@ describe("profile and permission mode tokens", () => {
     const output = formatAgentListResponse(response([caller, row], "caller"));
 
     expect(lineWith(output, "half gui/")).toBe(
-      "half gui/claude profile: work R/S activity: idle",
+      "half gui/claude profile: work mode: unobservable R/S activity: idle",
     );
     expect(output).not.toContain("yolo");
   });
