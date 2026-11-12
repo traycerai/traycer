@@ -38,6 +38,7 @@ import type { StreamAuthRevalidator } from "../../../../shared/auth/bearer-reval
 // write.
 
 interface CapturedStreamClientOptions {
+  readonly onClientClosed: (message: string) => void;
   readonly onHostCredentialState: (
     hostId: string,
     state: HostCredentialState,
@@ -395,6 +396,8 @@ describe("provisionInstalledHostCredential", () => {
 
   it("the headline path: mints on a missing ack and verifies active on the reconnect lap", async () => {
     const hostId = "host-1";
+    const debug = vi.fn();
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
     mocks.mintFlowMock.mockResolvedValueOnce(provisionedOutcome());
     mocks.onSessionCreated = (_session, lapIndex): void => {
       setTimeout(() => {
@@ -409,7 +412,11 @@ describe("provisionInstalledHostCredential", () => {
     };
 
     const outcome = await provisionInstalledHostCredential(
-      makeOptions({ deadlineMs: 5_000, progress: vi.fn() }),
+      makeOptions({
+        deadlineMs: 5_000,
+        progress: vi.fn(),
+        logger: { ...noopLogger, debug },
+      }),
     );
 
     expect(outcome).toEqual<HostCredentialProvisionOutcome>({
@@ -427,6 +434,12 @@ describe("provisionInstalledHostCredential", () => {
       "host.notifications.subscribe",
       { filter: "unread", initialLimit: 1 },
     );
+    const closeMessage = "[stream] WsStreamClient closed (client=probe)";
+    capturedClientOptions().onClientClosed(closeMessage);
+    expect(
+      debug.mock.calls.filter(([message]) => message === closeMessage),
+    ).toEqual([[closeMessage, {}]]);
+    expect(info).not.toHaveBeenCalled();
     expect(mocks.subscribeMock).toHaveBeenNthCalledWith(
       2,
       "host.notifications.subscribe",

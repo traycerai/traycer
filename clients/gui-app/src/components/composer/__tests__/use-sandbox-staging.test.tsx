@@ -314,6 +314,7 @@ function sandboxHost(
     sandbox: {
       frozen: false,
       summary: sandboxSummaryFixture({ id: `sbx-${hostId}`, hostId }),
+      ownerKind: "unknown",
       teamOwned: item !== null,
       ...sandbox,
     },

@@ -294,6 +294,9 @@ function cloudPersonalPage(children: ReactNode): ReactNode {
 }
 
 beforeEach(() => {
+  useSettingsEnvironmentPickStore.setState({
+    defaultPick: { kind: "personal" },
+  });
   resetNegotiatedManifests();
   recordNegotiatedHostManifest(HOST_ID, LEGACY_SIGN_IN_MANIFEST);
   useHostClientMock.mockReset();

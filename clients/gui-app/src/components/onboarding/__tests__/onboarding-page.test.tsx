@@ -239,6 +239,7 @@ function tourScope(selection: HostScopeSelection): HostScope {
             state: "awake",
             frozen: false,
             summary: null,
+            ownerKind: "unknown",
             teamOwned: false,
           },
         })

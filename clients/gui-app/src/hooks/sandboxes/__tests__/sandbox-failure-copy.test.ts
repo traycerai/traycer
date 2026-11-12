@@ -55,6 +55,12 @@ describe("sandboxFailureMessage", () => {
     ).toBe("Couldn't rename the sandbox. Try again in a moment.");
   });
 
+  it("reports a failed sandbox action without promising recovery", () => {
+    expect(sandboxFailureMessage(refused("provider_failed", NO_DETAIL))).toBe(
+      "Couldn't complete the sandbox action.",
+    );
+  });
+
   it("words the frozen and busy refusals the card and the tile surface", () => {
     expect(sandboxFailureMessage(refused("sandbox_frozen", NO_DETAIL))).toBe(
       "This sandbox is out of credits. Add credits to wake it.",

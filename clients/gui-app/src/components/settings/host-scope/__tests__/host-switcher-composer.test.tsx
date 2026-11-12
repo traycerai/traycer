@@ -81,6 +81,7 @@ function sandboxHost(
         state,
         createdBy: { userId: VIEWER, displayName: "Me" },
       }),
+      ownerKind: "team",
       teamOwned: true,
       ...overrides,
     },

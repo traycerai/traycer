@@ -196,6 +196,7 @@ describe("sandboxSummariesUnread", () => {
         summary: hasSummary
           ? sandboxSummaryFixture({ hostId: "sbx-host" })
           : null,
+        ownerKind: "unknown",
         teamOwned: false,
       },
     });
@@ -258,6 +259,7 @@ describe("sandboxSummariesPending", () => {
         summary: hasSummary
           ? sandboxSummaryFixture({ hostId: "sbx-host" })
           : null,
+        ownerKind: "unknown",
         teamOwned: false,
       },
     });

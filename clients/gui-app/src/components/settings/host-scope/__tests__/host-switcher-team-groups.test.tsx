@@ -105,6 +105,7 @@ function sandboxRow(
         hostId,
         ...summary,
       }),
+      ownerKind: "unknown",
       teamOwned: owner?.kind === "team",
     },
   });
