@@ -750,7 +750,12 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
    */
   it("shows the channel could not be loaded, never opening or closing the tab, when the environment list's refresh failed over a list from before the team; Retry reads it again and the setup then shows", async () => {
     mocks.state.environments = [
-      { environmentId: "env-team", label: "Acme", ownerKind: "organization" },
+      {
+        environmentId: "env-team",
+        label: "Acme",
+        ownerKind: "organization",
+        providerHandle: null,
+      },
     ];
     mocks.state.environmentsStatus = "error";
     mocks.state.environmentsKept = true;
@@ -1501,7 +1506,12 @@ describe("<BotTabSurface /> paused", () => {
     async (_name, ownerKind, expected) => {
       const user = userEvent.setup();
       mocks.state.environments = [
-        { environmentId: "env-team", label: "Acme", ownerKind },
+        {
+          environmentId: "env-team",
+          label: "Acme",
+          ownerKind,
+          providerHandle: null,
+        },
       ];
       render(surface());
 
@@ -1555,7 +1565,12 @@ describe("<BotTabSurface /> paused", () => {
         },
       });
       mocks.state.environments = [
-        { environmentId: "env-team", label: "Acme", ownerKind },
+        {
+          environmentId: "env-team",
+          label: "Acme",
+          ownerKind,
+          providerHandle: null,
+        },
       ];
       render(surface());
 
@@ -1571,7 +1586,12 @@ describe("<BotTabSurface /> paused", () => {
   it("treats the environment as not personal until the environment list names it", async () => {
     const user = userEvent.setup();
     mocks.state.environments = [
-      { environmentId: "env-other", label: "Mine", ownerKind: "user" },
+      {
+        environmentId: "env-other",
+        label: "Mine",
+        ownerKind: "user",
+        providerHandle: null,
+      },
     ];
     render(surface());
 

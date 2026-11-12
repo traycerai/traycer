@@ -1,10 +1,20 @@
 import { readHostOwnershipViaHttp } from "@traycer-clients/shared/host-client/host-ownership";
-import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
+import type {
+  EnvironmentDescriptor,
+  EnvironmentHostBinding,
+} from "@traycer/protocol/host/environment/contracts";
 import {
-  callHostRpc,
+  HostTransportFailureError,
+  type HostTransportEndpoint,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  callHostRpcAtResolvedEndpoint,
   callHostRpcWithDispatch,
   PLAIN_DISPATCH,
+  resolveEndpoint,
+  hostRpcToCliError,
   toAgentCliError,
+  type HostRpcDispatch,
 } from "../internal/host-rpc";
 import {
   readCredentialsFile,
@@ -24,8 +34,15 @@ import {
 } from "./pid-metadata";
 import { resolveHostAuth, type HostAuth } from "../internal/host-auth";
 import { errorFromUnknown } from "../logger";
-import { CLI_ERROR_CODES, cliError, toCliError } from "../runner/errors";
+import {
+  CLI_ERROR_CODES,
+  CliError,
+  cliError,
+  toCliError,
+} from "../runner/errors";
 import type { CommandContext } from "../runner/runner";
+import { config } from "../config";
+import { probeHostHealth } from "../service/health-probe";
 
 // The sign-in pre-flight and post-start credential provisioning shared by
 // every command that STARTS a host (client/host token split): the started
@@ -478,9 +495,16 @@ export async function warnIfTeamInstallSignInRemains(
 export async function useInstalledHostTeam(
   team: string,
 ): Promise<EnvironmentHostBinding> {
+  const dispatch = {
+    ...PLAIN_DISPATCH,
+    requiredHostMethodVersion: {
+      method: "environment.host.bind",
+      version: { major: 1, minor: 1 },
+    },
+  };
   const selector = team.startsWith("team/") ? team.slice(5) : team;
   const { environments } = await toAgentCliError(
-    callHostRpc("environment.list", {}),
+    callHostRpcWithDispatch("environment.list", {}, dispatch),
   );
   const teams = environments.filter(
     (environment) => environment.ownerKind === "organization",
@@ -504,19 +528,7 @@ export async function useInstalledHostTeam(
     });
   }
   const target = matches[0];
-  const current = await toAgentCliError(
-    callHostRpcWithDispatch(
-      "environment.host.read",
-      {},
-      {
-        ...PLAIN_DISPATCH,
-        requiredHostMethodVersion: {
-          method: "environment.host.bind",
-          version: { major: 1, minor: 1 },
-        },
-      },
-    ),
-  );
+  const endpoint = await resolveEndpoint();
   const auth = await resolveHostAuth();
   if (auth === null) {
     throw cliError({
@@ -529,7 +541,7 @@ export async function useInstalledHostTeam(
   const directory = await readHostOwnershipViaHttp(
     auth.authnBaseUrl,
     auth.token,
-    current.hostId,
+    endpoint.hostId,
   );
   const host = directory.kind === "ok" ? directory.host : undefined;
   if (host === undefined) {
@@ -550,6 +562,15 @@ export async function useInstalledHostTeam(
     });
   }
   if (host.owner.kind === "team") {
+    const current = await toAgentCliError(
+      callHostRpcAtResolvedEndpoint(
+        "environment.host.read",
+        {},
+        endpoint,
+        auth,
+        dispatch,
+      ),
+    );
     if (
       host.owner.id === target.ownerId &&
       current.environment.environmentId === target.environmentId &&
@@ -565,23 +586,152 @@ export async function useInstalledHostTeam(
       exitCode: 1,
     });
   }
-  const binding = await toAgentCliError(
-    callHostRpcWithDispatch(
+  // A Local computer has no environment binding to read before its transfer.
+  return transferInstalledHostTeam(endpoint, auth, target, dispatch, true);
+}
+
+async function transferInstalledHostTeam(
+  endpoint: HostTransportEndpoint,
+  auth: HostAuth,
+  target: EnvironmentDescriptor,
+  dispatch: HostRpcDispatch,
+  mayRetry: boolean,
+): Promise<EnvironmentHostBinding> {
+  const previous = await readHostPidMetadata(config.environment);
+  let binding: EnvironmentHostBinding;
+  try {
+    binding = await callHostRpcAtResolvedEndpoint(
       "environment.host.bind",
       { environmentId: target.environmentId },
-      {
-        ...PLAIN_DISPATCH,
-        requiredHostMethodVersion: {
-          method: "environment.host.bind",
-          version: { major: 1, minor: 1 },
-        },
+      endpoint,
+      auth,
+      dispatch,
+    );
+  } catch (error) {
+    const mapped = hostRpcToCliError(error);
+    if (
+      !(error instanceof HostTransportFailureError) ||
+      !(mapped instanceof CliError) ||
+      mapped.code !== CLI_ERROR_CODES.HOST_REQUEST_OUTCOME_UNKNOWN
+    )
+      throw mapped;
+    if (
+      previous === null ||
+      previous.hostId !== endpoint.hostId ||
+      previous.websocketUrl !== endpoint.websocketUrl
+    )
+      throw mapped;
+
+    // The transfer can commit and restart this host before its reply is sent.
+    const ownership = await readHostOwnershipViaHttp(
+      auth.authnBaseUrl,
+      auth.token,
+      endpoint.hostId,
+    );
+    if (
+      ownership.kind !== "ok" ||
+      (ownership.host.owner.kind === "team" &&
+        ownership.host.owner.id !== target.ownerId)
+    )
+      throw mapped;
+
+    const recovery: {
+      ready: {
+        readonly endpoint: HostTransportEndpoint;
+        readonly binding: EnvironmentHostBinding | null;
+      } | null;
+    } = { ready: null };
+    const health = await probeHostHealth({
+      environment: config.environment,
+      checkProcessAlive: null,
+      checkTcpReachable: null,
+      checkReadiness: async (metadata, remainingMs) => {
+        if (
+          metadata.hostId !== endpoint.hostId ||
+          metadata.pid === previous.pid ||
+          remainingMs <= 0
+        )
+          return false;
+        const replacement = {
+          hostId: endpoint.hostId,
+          websocketUrl: metadata.websocketUrl,
+        };
+        try {
+          const bounded = {
+            ...dispatch,
+            signal: AbortSignal.timeout(remainingMs),
+            responseTimeoutMs: Math.min(2_000, remainingMs),
+          };
+          if (ownership.host.owner.kind === "user") {
+            const status = await callHostRpcAtResolvedEndpoint(
+              "host.status",
+              {},
+              replacement,
+              auth,
+              bounded,
+            );
+            if (!status.ready) return false;
+            recovery.ready = { endpoint: replacement, binding: null };
+            return true;
+          }
+          const current = await callHostRpcAtResolvedEndpoint(
+            "environment.host.read",
+            {},
+            replacement,
+            auth,
+            bounded,
+          );
+          if (
+            !current.explicit ||
+            current.environment.environmentId !== target.environmentId
+          )
+            return false;
+          recovery.ready = { endpoint: replacement, binding: current };
+          return true;
+        } catch {
+          return false;
+        }
       },
-    ),
-  );
+      totalBudgetMs: null,
+      retryDelayMs: null,
+    });
+    const ready = recovery.ready;
+    if (!health.healthy || ready === null) throw mapped;
+    const confirmed = await readHostOwnershipViaHttp(
+      auth.authnBaseUrl,
+      auth.token,
+      endpoint.hostId,
+    );
+    if (confirmed.kind !== "ok") throw mapped;
+    if (
+      ownership.host.owner.kind === "user" &&
+      confirmed.host.owner.kind === "user" &&
+      mayRetry
+    ) {
+      const refreshed = await resolveHostAuth();
+      if (refreshed === null) throw mapped;
+      return transferInstalledHostTeam(
+        ready.endpoint,
+        refreshed,
+        target,
+        dispatch,
+        false,
+      );
+    }
+    if (
+      confirmed.host.owner.kind !== "team" ||
+      confirmed.host.owner.id !== target.ownerId ||
+      ready.binding === null ||
+      !ready.binding.explicit ||
+      ready.binding.environment.environmentId !== target.environmentId
+    )
+      throw mapped;
+    return ready.binding;
+  }
   const confirmed = await readHostOwnershipViaHttp(
     auth.authnBaseUrl,
     auth.token,
-    current.hostId,
+    endpoint.hostId,
   );
   const owner = confirmed.kind === "ok" ? confirmed.host.owner : undefined;
   if (
