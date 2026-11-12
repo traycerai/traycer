@@ -36,6 +36,13 @@ vi.mock("@/components/settings/personal/personal-page-frame", async () => {
   };
 });
 
+// Every section mounts the pick's upkeep, which reads the window's host scope
+// and the account's queries; it has its own cases (`local-move-page.test.tsx`)
+// and this file holds the pick fixed.
+vi.mock("@/components/settings/environment-picker", () => ({
+  EnvironmentPickUpkeep: () => null,
+}));
+
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   const { hostScopeFixture, hostScopeOptionFixture } =
     await import("@/components/settings/host-scope/host-scope-fixture");
