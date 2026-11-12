@@ -22,7 +22,7 @@ import {
   SETUP_STEPS,
   setupView,
   terminalAccountSentence,
-  TEAM_TERMINAL_ACCOUNT_SENTENCE,
+  teamTerminalAccountSentence,
   type SetupView,
 } from "@/components/settings/host-scope/host-access-model";
 import { HostScopeConnecting } from "@/components/settings/host-scope/host-scope-gate";
@@ -185,7 +185,7 @@ function AccessSections(props: {
         client={props.client}
         sentence={
           props.status.principal?.kind === "team"
-            ? TEAM_TERMINAL_ACCOUNT_SENTENCE
+            ? teamTerminalAccountSentence(props.status.principal.teamName)
             : terminalAccountSentence(
                 props.hostId !== null && props.hostId === localHostId
                   ? null

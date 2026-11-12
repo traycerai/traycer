@@ -270,32 +270,6 @@ describe("<ProfileDropdown />", () => {
     ).toBeNull();
   });
 
-  it("marks the trigger's visible fallback profile when the pinned id is hidden", () => {
-    const onSelectProfile = vi.fn();
-    renderDropdown(
-      baseDropdownInput({
-        activeProfileId: "removed-profile",
-        onSelectProfile,
-      }),
-      true,
-    );
-
-    expect(
-      screen.getByRole("button", {
-        name: "Codex profile: Terminal account, Terminal",
-      }),
-    ).not.toBeNull();
-    const fallbackRow = screen.getByRole("menuitem", {
-      name: "Terminal account, Terminal",
-    });
-    const workRow = screen.getByRole("menuitem", { name: "Work" });
-    expect(fallbackRow.getAttribute("aria-current")).toBe("true");
-    expect(fallbackRow.querySelector("svg.lucide-check")).not.toBeNull();
-    expect(workRow.getAttribute("aria-current")).toBeNull();
-    expect(workRow.querySelector("svg.lucide-check")).toBeNull();
-    expect(onSelectProfile).not.toHaveBeenCalled();
-  });
-
   it("shows the active profile switch before the chevron without nesting it in the menu trigger", () => {
     const onSetProfileEnabled = vi.fn();
     renderDropdown(baseDropdownInput({ onSetProfileEnabled }), true);

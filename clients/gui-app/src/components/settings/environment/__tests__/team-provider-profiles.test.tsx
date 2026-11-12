@@ -1,6 +1,5 @@
 import "../../../../../__tests__/test-browser-apis";
 import {
-  act,
   cleanup,
   fireEvent,
   render,
@@ -9,7 +8,6 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { EnvironmentConfigurationItemWriteResponse } from "@traycer/protocol/host/environment/configuration-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TeamProviders } from "@/components/settings/environment/team-providers";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
@@ -177,10 +175,6 @@ describe("TeamProviders profiles", () => {
     const trigger = await screen.findByRole("button", {
       name: profileTriggerName("Work", false),
     });
-    const profileSection = trigger.closest("section");
-    if (!(profileSection instanceof HTMLElement)) {
-      throw new Error("The configuration profile picker must have a section.");
-    }
     const account = screen.getByText("Work label");
     expect(
       trigger.compareDocumentPosition(account) &
@@ -197,18 +191,10 @@ describe("TeamProviders profiles", () => {
     expect(
       screen.queryByRole("menuitem", { name: "Create new profile" }),
     ).toBeNull();
-    const plansSignIn = screen.getByRole("button", { name: "Sign in" });
-    expect(profileSection.contains(plansSignIn)).toBe(false);
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add a profile" })).toBeNull();
     expect(
-      within(profileSection).queryByRole("button", { name: "Sign in" }),
-    ).toBeNull();
-    expect(
-      within(profileSection).queryByRole("button", { name: "Add a profile" }),
-    ).toBeNull();
-    expect(
-      within(profileSection).queryByRole("button", {
-        name: "Create new profile",
-      }),
+      screen.queryByRole("button", { name: "Create new profile" }),
     ).toBeNull();
 
     fireEvent.click(profileRowSwitch("Home"));
@@ -574,9 +560,6 @@ describe("TeamProviders profiles", () => {
   });
 
   it("leaves the edit dialog open when a rename conflicts", async () => {
-    const putDispatched = Promise.withResolvers<void>();
-    const putResponse =
-      Promise.withResolvers<EnvironmentConfigurationItemWriteResponse>();
     const work = teamProfile({
       key: "claude:work",
       name: "Work",
@@ -587,10 +570,10 @@ describe("TeamProviders profiles", () => {
     });
     const harness = mountTeamPage(poolSource("editor"), {
       ...handlers(() => [work]),
-      "environment.configuration.items.put": () => {
-        putDispatched.resolve();
-        return putResponse.promise;
-      },
+      "environment.configuration.items.put": () => ({
+        outcome: "conflict",
+        current: { revision: 5, changedBy: "Nora", changedAt: 2 },
+      }),
     });
     render(<TeamProviders />, { wrapper: harness.Wrapper });
 
@@ -604,53 +587,11 @@ describe("TeamProviders profiles", () => {
     await userEvent.click(
       within(dialog).getByRole("button", { name: "Save changes" }),
     );
-    await putDispatched.promise;
-
-    const spinner = await within(dialog).findByText(
-      (_, element) =>
-        element instanceof HTMLSpanElement &&
-        element.getAttribute("aria-hidden") === "true" &&
-        element.classList.contains("font-mono") &&
-        element.classList.contains("text-code") &&
-        element.textContent.trim() !== "",
-    );
-    expect(spinner).toBeTruthy();
-    expect(
-      within(dialog).getByRole("button", { name: "Save changes" }),
-    ).toHaveProperty("disabled", true);
-    expect(within(dialog).queryByRole("button", { name: "Close" })).toBeNull();
-
-    await userEvent.keyboard("{Escape}");
-    expect(screen.getByRole("dialog", { name: "Edit profile" })).toBeTruthy();
-
-    const backdrop = document.querySelector("[data-slot='dialog-overlay']");
-    if (backdrop === null)
-      throw new Error("Edit dialog backdrop was not rendered");
-    await userEvent.click(backdrop);
-    expect(screen.getByRole("dialog", { name: "Edit profile" })).toBeTruthy();
-
-    const cancelButton = within(dialog).getByRole("button", { name: "Cancel" });
-    expect(cancelButton).toHaveProperty("disabled", true);
-    await userEvent.click(cancelButton);
-    expect(screen.getByRole("dialog", { name: "Edit profile" })).toBeTruthy();
-
-    await act(async () => {
-      putResponse.resolve({
-        outcome: "conflict",
-        current: { revision: 5, changedBy: "Nora", changedAt: 2 },
-      });
-      await putResponse.promise;
-    });
 
     expect(
       await screen.findByText("Changed by Nora a moment ago"),
     ).toBeTruthy();
-    const completedDialog = screen.getByRole("dialog", {
-      name: "Edit profile",
-    });
-    expect(
-      within(completedDialog).getByRole("button", { name: "Close" }),
-    ).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "Edit profile" })).toBeTruthy();
     expect(screen.getByLabelText("Profile name")).toHaveProperty(
       "value",
       "Desk",

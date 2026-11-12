@@ -20,9 +20,7 @@ import {
   providerSignInUnavailableReason,
 } from "@/components/providers/provider-signin-availability";
 import { cn } from "@/lib/utils";
-import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
-import { useHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
-import { useProviderLinkDialogStore } from "@/stores/providers/provider-link-dialog-store";
+import { ProviderOnHostOnlyLine } from "./provider-on-host-only-line";
 import { EmbeddedProviderRateLimitForProvider } from "./provider-rate-limit-section";
 import { ProfileSummaryActions } from "./profile-summary-actions";
 import { ProfileEditDialog } from "./provider-profile-edit-dialog";
@@ -48,77 +46,6 @@ import {
 // has no picker leader scope, so every row opts out of the shortcut hint.
 function noProfileShortcutHint(): ProfileDropdownShortcutHint | null {
   return null;
-}
-
-function selectedEditorProfile(
-  profiles: readonly ProviderProfile[],
-  liveSelectedProfile: ProviderProfile | undefined,
-  entryProfile: ProviderProfile | null,
-): ProviderProfile | null {
-  return (
-    liveSelectedProfile ??
-    profiles.find(
-      (candidate) => candidate.profileId === entryProfile?.profileId,
-    ) ??
-    profiles.at(0) ??
-    entryProfile
-  );
-}
-
-function LocalProfileLocation(props: {
-  readonly hostId: string | null;
-  readonly providerId: string;
-  readonly profileId: string;
-  readonly authStatus: ProviderProfile["auth"]["status"];
-  readonly hostName: string | null;
-}): ReactNode {
-  const inventory = useProvidersList({ enabled: true, subscribed: true });
-  const linkVersion = useHostMethodSchemaVersion(
-    props.hostId,
-    "providers.link",
-  );
-  const completeVersion = useHostMethodSchemaVersion(
-    props.hostId,
-    "providers.linkComplete",
-  );
-  const openLink = useProviderLinkDialogStore((state) => state.open);
-  const onlyHere = inventory.data?.onHostOnly?.some(
-    (entry) =>
-      entry.providerId === props.providerId &&
-      entry.profileId === props.profileId,
-  );
-  const automaticLink = linkVersion?.major === 1 && linkVersion.minor >= 2;
-  if (
-    onlyHere !== true ||
-    (automaticLink && props.authStatus !== "authenticated")
-  )
-    return null;
-  return (
-    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-ui-xs text-muted-foreground">
-      <p>
-        {automaticLink
-          ? "Not on your other computers yet."
-          : `On ${props.hostName ?? "this host"} only.`}
-      </p>
-      {linkVersion?.major === 1 &&
-      linkVersion.minor < 2 &&
-      completeVersion?.major === 1 ? (
-        <Button
-          type="button"
-          variant="link"
-          size="inline-xs"
-          onClick={() =>
-            openLink({
-              providerId: props.providerId,
-              profileId: props.profileId,
-            })
-          }
-        >
-          Link
-        </Button>
-      ) : null}
-    </div>
-  );
 }
 
 function profileRateLimitFetchEligible(
@@ -343,9 +270,6 @@ export function ProviderProfileScopedSection(
     onSetProfileEnabled,
   } = props;
   const profiles = state.profiles;
-  const liveSelectedProfile = profiles.find(
-    (candidate) => profileCommitId(candidate) === selectedProfileId,
-  );
   const pick = useEnvironmentPick();
   const personalHostName = usePersonalHostName();
   // A Local row reads its own computer; Personal names the window's host.
@@ -355,21 +279,13 @@ export function ProviderProfileScopedSection(
   const [editIntent, setEditIntent] = useState<"manage" | "sign-in">(() =>
     startInReauth ? "sign-in" : "manage",
   );
-  // An editor entry outlives inventory replacement of its local row.
-  // Only an explicit entry or its completed sign-in adopts another target.
-  const [entryProfile, setEntryProfile] = useState<ProviderProfile | null>(
-    liveSelectedProfile ?? profiles.at(0) ?? null,
-  );
 
-  if (profiles.length === 0 && !editProfileOpen) return null;
+  if (profiles.length === 0) return null;
 
-  const selectedProfile = selectedEditorProfile(
-    profiles,
-    liveSelectedProfile,
-    entryProfile,
-  );
-  if (selectedProfile === null) return null;
-  const editorProfile = entryProfile ?? selectedProfile;
+  const selectedProfile =
+    profiles.find(
+      (candidate) => profileCommitId(candidate) === selectedProfileId,
+    ) ?? profiles[0];
   const providerLabel = PROVIDER_DISPLAY_NAMES[state.providerId];
   const addProfileDisabled = !canAddProfile;
   const { signInUnavailableHint, cliSetupNeeded, managementHeldReason } =
@@ -387,14 +303,12 @@ export function ProviderProfileScopedSection(
   );
 
   const openProfileEditor = (): void => {
-    setEntryProfile(selectedProfile);
     setEditIntent("manage");
     setEditSessionId((current) => current + 1);
     setEditProfileOpen(true);
   };
 
   const openProfileSignIn = (): void => {
-    setEntryProfile(selectedProfile);
     setEditIntent("sign-in");
     setEditSessionId((current) => current + 1);
     setEditProfileOpen(true);
@@ -437,7 +351,7 @@ export function ProviderProfileScopedSection(
         <ProfileDropdown
           providerLabel={providerLabel}
           profiles={labelledProfiles}
-          activeProfileId={profileCommitId(selectedProfile)}
+          activeProfileId={selectedProfileId}
           onSelectProfile={onSelectedProfileIdChange}
           onCreateProfile={onAddProfile}
           createProfileDisabled={addProfileDisabled}
@@ -466,15 +380,11 @@ export function ProviderProfileScopedSection(
           admissionByProfileId={null}
           showTerminalBadge={false}
         />
-        {selectedProfile.kind === "managed" ? (
-          <LocalProfileLocation
-            hostId={hostId}
-            providerId={state.providerId}
-            profileId={selectedProfile.profileId}
-            authStatus={selectedProfile.auth.status}
-            hostName={hostName}
-          />
-        ) : null}
+        <ProviderOnHostOnlyLine
+          hostId={hostId}
+          providerId={state.providerId}
+          profileId={selectedProfile.profileId}
+        />
         <SelectedProfileRow
           state={state}
           profile={selectedProfile}
@@ -516,9 +426,9 @@ export function ProviderProfileScopedSection(
       </div>
 
       <ProfileEditDialog
-        key={`${hostId}:${state.providerId}:${editSessionId}`}
+        key={`${hostId}:${state.providerId}:${selectedProfile.profileId}:${editSessionId}`}
         state={state}
-        profile={editorProfile}
+        profile={selectedProfile}
         profiles={profiles}
         canOauth={canAddProfile}
         oauthUnavailableHint={signInUnavailableHint}
@@ -526,15 +436,8 @@ export function ProviderProfileScopedSection(
         isLocalHost={isSelectedHostLocal}
         open={editProfileOpen}
         onOpenChange={setEditProfileOpen}
-        onProfileSignedIn={setEntryProfile}
-        onStartSignIn={() => {
-          const current = profiles.find(
-            (candidate) => candidate.profileId === editorProfile.profileId,
-          );
-          if (current !== undefined) setEntryProfile(current);
-        }}
         remainingProfilesAfterRemoval={profiles.filter(
-          (candidate) => candidate.profileId !== editorProfile.profileId,
+          (candidate) => candidate.profileId !== selectedProfile.profileId,
         )}
         onSelectedProfileIdChange={onSelectedProfileIdChange}
         profileEnablementAvailable={profileEnablementAvailable}

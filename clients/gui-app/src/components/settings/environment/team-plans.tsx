@@ -14,7 +14,7 @@ import { ProviderLinkDialog } from "@/components/settings/panels/provider-link-d
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import {
   useConfigurationSource,
-  useCanEditConfiguration,
+  useCanAdministerConfiguration,
   useConfigurationIsPersonal,
 } from "./configuration-source";
 import { usePickedTeamLabel } from "./team-pick-label";
@@ -26,12 +26,13 @@ import { TeamReadFailed } from "./team-read-failed";
 
 export function TeamPlans(props: {
   readonly providerId: ProviderId;
+  readonly adminNames: readonly string[];
 }): ReactNode {
   const source = useConfigurationSource();
   const name =
     usePickedTeamLabel(source.kind === "pool" ? source.environmentId : "") ??
     "this team";
-  const canEdit = useCanEditConfiguration();
+  const canAdminister = useCanAdministerConfiguration();
   const personal = useConfigurationIsPersonal();
   const query = useConfigurationPlansQuery();
   const [target, setTarget] = useState<{
@@ -73,7 +74,8 @@ export function TeamPlans(props: {
       <PlansCard
         teamName={name}
         plans={plans}
-        canEdit={canEdit}
+        canAdminister={canAdminister}
+        adminNames={props.adminNames}
         isPending={target !== null}
         onLink={() => {
           if (source.kind === "pool")
@@ -87,7 +89,7 @@ export function TeamPlans(props: {
           setTarget({ plan, previewId: crypto.randomUUID() })
         }
       />
-      {target !== null && canEdit ? (
+      {target !== null && canAdminister ? (
         <TeamPlanUnlink
           key={target.previewId}
           plan={target.plan}
@@ -183,7 +185,7 @@ function TeamPlanUnlink(props: {
       />
       {unlink.data?.outcome === "forbidden" ? (
         <p role="status" className="text-ui-sm text-muted-foreground">
-          Ask a teammate to unlink this plan.
+          Admins unlink plans.
         </p>
       ) : null}
     </>

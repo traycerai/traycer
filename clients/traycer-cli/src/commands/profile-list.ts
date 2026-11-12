@@ -9,7 +9,7 @@ import {
   describeProvider,
   parseProviderArgument,
   printable,
-  readProviderInventory,
+  readProviderStates,
 } from "../internal/profile-target";
 import type { CommandFn } from "../runner/runner";
 
@@ -45,7 +45,7 @@ export function buildProfileListCommand(opts: {
   return async () => {
     const only =
       opts.provider === null ? null : parseProviderArgument(opts.provider);
-    const providers = (await readProviderInventory()).providers
+    const providers = (await readProviderStates())
       .filter((state) =>
         only === null ? state.profiles.length > 0 : state.providerId === only,
       )

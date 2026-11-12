@@ -60,7 +60,7 @@ export function ProfileEditDialogPresentation(props: {
         <DialogContent
           layout="banded"
           className="flex max-h-[min(85dvh,40rem)] w-[min(92vw,30rem)] flex-col overflow-hidden sm:max-w-none"
-          showCloseButton={!props.savePending && !props.switchingAccount}
+          showCloseButton={!props.switchingAccount}
         >
           <DialogHeader className="gap-1.5">
             <DialogTitle>{props.title}</DialogTitle>
