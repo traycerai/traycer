@@ -66,9 +66,6 @@ const terminalSessions = vi.hoisted<{
   >;
 }>(() => ({ value: [] }));
 
-// The sidebar is outside every tile `TabHostProvider`, so its client and its
-// ref host both come from the Epic SESSION - not from the app-wide effective
-// host, which this panel deliberately no longer reads.
 vi.mock("@/lib/host", () => ({
   useHostDirectory: () => ({ findById: () => null }),
 }));
@@ -78,6 +75,9 @@ vi.mock("@/hooks/terminal/use-task-home-directory", () => ({
   useTaskHomeDirectory: () => null,
   useTaskHomeDirectoryFor: () => () => null,
 }));
+// The sidebar is outside every tile `TabHostProvider`, so its client and its
+// ref host both come from the Epic SESSION - not from the app-wide effective
+// host, which this panel deliberately no longer reads.
 vi.mock("@/hooks/epic/use-epic-session-host-client", () => ({
   useEpicSessionHostClient: () => null,
 }));
