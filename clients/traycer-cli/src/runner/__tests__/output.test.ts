@@ -4,6 +4,7 @@ import {
   type Output,
   type ProgressEvent,
   type ProgressInfo,
+  type RunnerEvent,
 } from "../output";
 import type { RuntimeContext } from "../runtime";
 import { noopLogger } from "../../logger";
@@ -487,5 +488,62 @@ describe("createOutput JSON-mode progress", () => {
     // counts nothing keeps saying so, or the advance key would go moving for
     // every stage and stop meaning "this one is advancing".
     expect(events[0].workUnits).toBeNull();
+  });
+});
+
+describe("createOutput error rendering", () => {
+  const errorMessage =
+    "host update: Traycer's data folder was moved to /old/data, so host 2.0.0 cannot be installed there; this Traycer needs host 3.0.0 or newer. Nothing was transferred.";
+  const nextStep = "Run `traycer data migrate` before updating this host.";
+  const details = { installedVersion: "1.0.0", targetVersion: "2.0.0" };
+
+  it("prints the message and next-step text verbatim on a TTY without the code suffix", () => {
+    capture = captureStderr(true);
+    createOutput(makeRuntime()).emitError(
+      "E_HOST_UPDATE_NOT_NEWER",
+      `${errorMessage}\n${nextStep}`,
+      details,
+    );
+
+    expect(capture.writes()).toEqual([`error: ${errorMessage}\n${nextStep}\n`]);
+  });
+
+  it("keeps the data-moved error line and code suffix on non-TTY stderr", () => {
+    capture = captureStderr(false);
+    createOutput(makeRuntime()).emitError(
+      "E_HOST_UPDATE_NOT_NEWER",
+      errorMessage,
+      details,
+    );
+
+    expect(capture.writes()).toEqual([
+      `error: ${errorMessage} [code=E_HOST_UPDATE_NOT_NEWER]\n`,
+    ]);
+  });
+
+  it("keeps the structured JSON error code, message, and details", () => {
+    const stdout = captureJsonStdout();
+    try {
+      createOutput({ ...makeRuntime(), json: true }).emitError(
+        "E_HOST_UPDATE_NOT_NEWER",
+        `${errorMessage}\n${nextStep}`,
+        details,
+      );
+
+      const event = JSON.parse(stdout.lines()[0] ?? "{}") as RunnerEvent;
+      const { timestamp, ...normalizedEvent } = event;
+      expect(timestamp).toEqual(expect.any(String));
+      expect(normalizedEvent).toEqual({
+        type: "result",
+        status: "error",
+        error: {
+          code: "E_HOST_UPDATE_NOT_NEWER",
+          message: `${errorMessage}\n${nextStep}`,
+          details,
+        },
+      });
+    } finally {
+      stdout.restore();
+    }
   });
 });
