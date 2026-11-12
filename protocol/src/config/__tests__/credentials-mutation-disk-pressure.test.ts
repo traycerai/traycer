@@ -30,6 +30,11 @@ import { writeJsonFileAtomic } from "../credentials-fs";
 import { isCredentialsReserveComplete } from "../credentials-reserve";
 import { digestCredentials, writeSidecarState } from "../credentials-wal";
 
+// Reload shared-worker modules so credential writes use this file’s filesystem mock.
+vi.hoisted(() => {
+  vi.resetModules();
+});
+
 const CREDS: StoredCredentials = {
   token: "disk-pressure-token",
   refreshToken: "disk-pressure-refresh",
