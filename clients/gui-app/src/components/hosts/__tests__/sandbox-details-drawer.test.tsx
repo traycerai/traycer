@@ -184,7 +184,7 @@ describe("<SandboxDetailsDrawerHost />", () => {
     (stage, explanation) => {
       const summary = sandboxSummaryFixture({
         state: "failed",
-        failureCode: `${stage}:failure-detail`,
+        failureCode: stage,
       });
       list.data = { sandboxes: [summary] };
       render(<SandboxDetailsDrawerHost />);

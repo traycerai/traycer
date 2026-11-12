@@ -944,6 +944,12 @@ const CREATE_FAILURE_REASONS: ReadonlyMap<string, string> = new Map([
   ["wake-timeout", "The sandbox took too long to start."],
   ["wake-window-spent", "The sandbox took too long to start."],
   ["wake-prepare", "The sandbox couldn't finish setting up."],
+  ["wake-complete", "The sandbox couldn't finish starting."],
+  [
+    "wake-complete:wake_cancelled",
+    "The start was cancelled before it finished. Try creating the sandbox again.",
+  ],
+  ["wake-complete:generation_superseded", "A newer start replaced this one."],
   ["envelope-delivery", "The sandbox couldn't receive its settings."],
   ["chat-store-newer", "The sandbox needs an update to open its saved chats."],
   ["boot-token-mint", "The sandbox couldn't sign in to Traycer."],
@@ -962,7 +968,11 @@ const CREATE_FAILURE_REASONS: ReadonlyMap<string, string> = new Map([
 function sandboxCreateFailureReason(failureCode: string | null): string | null {
   if (failureCode === null) return null;
   const stage = failureCode.split(":", 1)[0];
-  return CREATE_FAILURE_REASONS.get(stage) ?? null;
+  return (
+    CREATE_FAILURE_REASONS.get(failureCode) ??
+    CREATE_FAILURE_REASONS.get(stage) ??
+    null
+  );
 }
 
 /**

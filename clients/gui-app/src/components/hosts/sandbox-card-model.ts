@@ -448,19 +448,27 @@ export function sandboxSuspendKeepsLine(
   }
 }
 
-/**
- * The guest configuration failure the heartbeat reported, or `null` when the
- * guest is configured or has not reported. The reason is guest-authored
- * text: the card renders it as plain text only.
- */
+/** The translated setup failure, absent once settings apply or before a report. */
 export function sandboxGuestConfigFailure(
   summary: SandboxSummary,
 ): string | null {
-  if (summary.guestConfigured !== false) return null;
-  const reason = summary.guestConfigFailureReason;
-  return reason === null || reason.trim().length === 0
-    ? "Settings did not apply. Agents can't start here until they do."
-    : `Settings did not apply: ${reason}`;
+  return summary.guestConfigured === false
+    ? sandboxGuestConfigFailureReason(summary.guestConfigFailureReason)
+    : null;
+}
+
+/** Setup reasons are diagnostic tokens; the banner and repair result share copy. */
+export function sandboxGuestConfigFailureReason(reason: string | null): string {
+  switch (reason) {
+    case "guest-config":
+      return "Sandbox settings couldn't be applied.";
+    case "canary":
+      return "The sandbox couldn't connect to Traycer.";
+    case "guest-runtime-unavailable":
+      return "Sandbox setup isn't available right now.";
+    default:
+      return "Settings did not apply. Agents can't start here until they do.";
+  }
 }
 
 /**
@@ -486,9 +494,6 @@ export interface SandboxSecretsReadiness {
 export function sandboxHostVouches(hostState: HostHealthState): boolean {
   return hostState === "online" || hostState === "reported-reachable";
 }
-
-/** The longest hop name shown; the phase is the guest's own text. */
-const DEGRADED_HOP_MAX_LENGTH = 80;
 
 /**
  * `null` when there is nothing to say: the sandbox is not awake (its grants
@@ -520,16 +525,11 @@ export function sandboxSecretsReadiness(
         tone: "pending",
         text: "Connecting to Traycer's gateway. Secrets work once it is ready.",
       };
-    case "degraded": {
-      const hop = phase.hop.trim().slice(0, DEGRADED_HOP_MAX_LENGTH);
+    case "degraded":
       return {
         tone: "degraded",
-        text:
-          hop.length === 0
-            ? "Degraded: requests to granted destinations are refused until it recovers."
-            : `Degraded at ${hop}: requests to granted destinations are refused until it recovers.`,
+        text: "Degraded: requests to granted destinations are refused until it recovers.",
       };
-    }
     case "unknown":
       return null;
   }

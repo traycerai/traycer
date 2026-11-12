@@ -4,6 +4,12 @@ export const SANDBOX_FIRST_BOOT_FAILURE_COPIES = [
   ["wake-timeout", "The sandbox took too long to start."],
   ["wake-window-spent", "The sandbox took too long to start."],
   ["wake-prepare", "The sandbox couldn't finish setting up."],
+  [
+    "wake-complete:wake_cancelled",
+    "The start was cancelled before it finished. Try creating the sandbox again.",
+  ],
+  ["wake-complete:generation_superseded", "A newer start replaced this one."],
+  ["wake-complete:unknown", "The sandbox couldn't finish starting."],
   ["envelope-delivery", "The sandbox couldn't receive its settings."],
   ["chat-store-newer", "The sandbox needs an update to open its saved chats."],
   ["boot-token-mint", "The sandbox couldn't sign in to Traycer."],

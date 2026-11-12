@@ -498,7 +498,7 @@ describe("sandboxGuestConfigFailure", () => {
     ).toBe(generic);
   });
 
-  it("appends the guest's reason when it gave one", () => {
+  it("uses the generic sentence for an unrecognized guest reason", () => {
     expect(
       sandboxGuestConfigFailure(
         summaryOf({
@@ -506,7 +506,7 @@ describe("sandboxGuestConfigFailure", () => {
           guestConfigFailureReason: "broker unreachable",
         }),
       ),
-    ).toBe("Settings did not apply: broker unreachable");
+    ).toBe("Settings did not apply. Agents can't start here until they do.");
   });
 });
 
@@ -659,7 +659,7 @@ describe("sandboxSecretsReadiness", () => {
     },
   );
 
-  it("reads degraded(hop) as degraded and names the hop", () => {
+  it("reads degraded(hop) as degraded without exposing the hop token", () => {
     const readiness = sandboxSecretsReadiness(
       "awake",
       false,
@@ -667,7 +667,10 @@ describe("sandboxSecretsReadiness", () => {
       "online",
     );
     expect(readiness?.tone).toBe("degraded");
-    expect(readiness?.text).toContain("gateway");
+    expect(readiness?.text).toBe(
+      "Degraded: requests to granted destinations are refused until it recovers.",
+    );
+    expect(readiness?.text).not.toContain("gateway");
   });
 
   it("reads degraded() as degraded without an empty hop", () => {

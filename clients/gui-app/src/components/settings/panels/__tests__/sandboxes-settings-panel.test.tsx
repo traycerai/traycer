@@ -1221,7 +1221,7 @@ describe("<SandboxesSettingsPanel />", () => {
     (stage, explanation) => {
       const failed = row("first-boot", {
         state: "failed",
-        failureCode: `${stage}:failure-detail`,
+        failureCode: stage,
         lastTransitionAt: new Date(2026, 9, 25, 11, 1).getTime(),
       });
       renderPanel([failed]);
