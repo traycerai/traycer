@@ -728,7 +728,7 @@ describe("AgentHoverTooltip host section", () => {
     expect(text).toMatch(/\d+ min awake/);
     expect(text).toContain(hoverTodayCost(2000));
     expect(text).toContain("Suspends after 30 idle min");
-    expect(text).toContain("destroyed after 7 idle days");
+    expect(text).toContain("destroyed after 7 days suspended or stopped");
     const section = screen.getByTestId("worktree-host-section");
     expect(section.querySelector("details")).toBeNull();
     expect(within(section).getByText("Creator, build")).toBeDefined();
