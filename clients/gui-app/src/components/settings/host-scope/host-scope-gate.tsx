@@ -128,21 +128,7 @@ export function HostScopeGate(props: {
     );
   }
 
-  if (scope.host === null) {
-    return (
-      <HostScopeNotice
-        tone="idle"
-        title={scope.isLoading ? "Finding your hosts…" : "No hosts yet"}
-        detail={
-          scope.isLoading
-            ? null
-            : "Install the Traycer host on a computer and sign in — it appears here on its own."
-        }
-        action={null}
-        testId="host-scope-empty"
-      />
-    );
-  }
+  if (scope.host === null) return <EmptyHostNotice scope={scope} />;
 
   const usable = isHostScopeUsable(scope.status);
   let notice: ReactNode = null;
@@ -167,6 +153,34 @@ export function HostScopeGate(props: {
         </PortalConcealmentProvider>
       </Activity>
     </>
+  );
+}
+
+function EmptyHostNotice(props: { readonly scope: HostScope }): ReactNode {
+  const { scope } = props;
+  return (
+    <HostScopeNotice
+      tone="idle"
+      title={scope.isLoading ? "Finding your hosts…" : "No hosts yet"}
+      detail={
+        scope.isLoading
+          ? null
+          : "Install the Traycer host on a computer and sign in — it appears here on its own."
+      }
+      action={
+        scope.retryEntryStatus === null ? null : (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={scope.retryEntryStatus}
+          >
+            Try again
+          </Button>
+        )
+      }
+      testId="host-scope-empty"
+    />
   );
 }
 

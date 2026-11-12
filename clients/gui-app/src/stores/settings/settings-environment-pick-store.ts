@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import {
-  PERSONAL_PICK,
+  UNRESOLVED_PICK,
   type EnvironmentPick,
 } from "@/lib/settings-environment-pages";
 
@@ -14,8 +14,9 @@ import {
  *
  * `pick` is the person's own choice in this window, `null` until they make
  * one. `defaultPick` is what the dropdown resolves without one (the Local row
- * when this window's host has one, else Personal), written by the dropdown
- * as the hosts' statuses arrive. Pages read `useEnvironmentPick()`.
+ * when this window's host has one, else Personal once it answers), written by
+ * the dropdown as statuses arrive. Until then the default is unresolved.
+ * Pages read `useEnvironmentPick()`.
  */
 interface SettingsEnvironmentPickState {
   readonly pick: EnvironmentPick | null;
@@ -27,7 +28,7 @@ interface SettingsEnvironmentPickState {
 export const useSettingsEnvironmentPickStore =
   create<SettingsEnvironmentPickState>((set) => ({
     pick: null,
-    defaultPick: PERSONAL_PICK,
+    defaultPick: UNRESOLVED_PICK,
     setPick: (pick) => set({ pick }),
     setDefaultPick: (defaultPick) => set({ defaultPick }),
   }));

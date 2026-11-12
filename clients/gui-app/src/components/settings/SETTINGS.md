@@ -840,6 +840,17 @@ name, endpoint route and active byte counters inline with wrapping rows.
 
 ## Team configuration sources
 
+The Environment default stays unresolved until the window's own computer is
+listed and its status has answered. The picker shows a spinner, and every
+Environment page waits without mounting its editors. Failed host lists reuse
+`HostScopeGate`; failed status reads show the existing settings read error and
+Retry. An answered host keeps its Local or Personal default, and a window with
+no host keeps Personal. An explicit choice still takes precedence.
+A pending Settings host entry also waits for a failed status read before
+asking for bindings. It keeps “Finding your hosts…” with “Try again” after a
+failed attempt; that action retries the target status. Only a real host-list
+failure gets the host-list error.
+
 The Environment dropdown uses `useEnvironmentPick()`, and `PersonalPageFrame`
 decides each Environment page's source, one rule per pick. A team reads the
 cloud. A Local row reads that computer's own host pages. Personal reads the

@@ -1791,6 +1791,9 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
 }));
 beforeEach(() => {
   useSettingsEnvironmentPickStore.setState({
+    defaultPick: { kind: "personal" },
+  });
+  useSettingsEnvironmentPickStore.setState({
     pick: { kind: "local", hostId: hostScopeMocks.hostId, hostName: "dev-box" },
   });
 });

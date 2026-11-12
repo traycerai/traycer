@@ -1,6 +1,18 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  act,
+  cleanup,
+  renderHook,
+  waitFor,
+  render,
+  screen,
+  fireEvent,
+} from "@testing-library/react";
+import {
+  queryOptions,
+  QueryClient,
+  QueryClientProvider,
+} from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
@@ -25,6 +37,7 @@ const harness = vi.hoisted(() => ({
   listsFailed: false,
   personalMembershipHostIds: [] as string[],
   teamMembershipHostIds: [] as string[],
+  bindingRequests: [] as string[],
   membershipState: "ready" as "ready" | "loading" | "failed",
 }));
 
@@ -87,53 +100,56 @@ vi.mock(
   }),
 );
 vi.mock("@/hooks/bots/use-host-environment-bindings-query", () => ({
-  useHostEnvironmentBindings: () => ({
-    byHostId: new Map<string, EnvironmentHostBinding>([
-      ...(harness.bindingHostId === null
-        ? []
-        : [
-            [
-              harness.bindingHostId,
-              {
-                hostId: harness.bindingHostId,
-                explicit: true,
-                environment: {
-                  environmentId: "team-sandbox",
-                  ownerKind: "organization",
-                  ownerId: "fixture-team",
-                  roomId: "team-room",
-                  label: "Team",
+  useHostEnvironmentBindings: (hostIds: readonly string[]) => {
+    harness.bindingRequests.push(...hostIds);
+    return {
+      byHostId: new Map<string, EnvironmentHostBinding>([
+        ...(harness.bindingHostId === null
+          ? []
+          : [
+              [
+                harness.bindingHostId,
+                {
+                  hostId: harness.bindingHostId,
+                  explicit: true,
+                  environment: {
+                    environmentId: "team-sandbox",
+                    ownerKind: "organization",
+                    ownerId: "fixture-team",
+                    roomId: "team-room",
+                    label: "Team",
+                  },
+                  enrolledByUserId: null,
+                  canUnbind: false,
                 },
-                enrolledByUserId: null,
-                canUnbind: false,
-              },
-            ] as const,
-          ]),
-      ...harness.resolvedBindingHostIds
-        .filter((hostId) => hostId !== harness.bindingHostId)
-        .map(
-          (hostId) =>
-            [
-              hostId,
-              {
+              ] as const,
+            ]),
+        ...harness.resolvedBindingHostIds
+          .filter((hostId) => hostId !== harness.bindingHostId)
+          .map(
+            (hostId) =>
+              [
                 hostId,
-                explicit: false,
-                environment: {
-                  environmentId: "personal",
-                  ownerKind: "user",
-                  ownerId: "fixture-owner",
-                  roomId: "personal-room",
-                  label: "Personal",
+                {
+                  hostId,
+                  explicit: false,
+                  environment: {
+                    environmentId: "personal",
+                    ownerKind: "user",
+                    ownerId: "fixture-owner",
+                    roomId: "personal-room",
+                    label: "Personal",
+                  },
+                  enrolledByUserId: null,
+                  canUnbind: false,
                 },
-                enrolledByUserId: null,
-                canUnbind: false,
-              },
-            ] as const,
-        ),
-    ]),
-    failedHostIds: [],
-    retryFailed: () => undefined,
-  }),
+              ] as const,
+          ),
+      ]),
+      failedHostIds: [],
+      retryFailed: () => undefined,
+    };
+  },
 }));
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
@@ -152,6 +168,8 @@ let entryClient: HostClient<HostRpcRegistry>;
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
 import { carryViewedHostIntoSettingsScope } from "@/components/settings/host-scope/carry-viewed-host-into-settings";
+import { HostScopeGate } from "@/components/settings/host-scope/host-scope-gate";
+import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
 import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
@@ -237,6 +255,7 @@ afterEach(() => {
   harness.personalMembershipHostIds = [];
   harness.teamMembershipHostIds = [];
   harness.membershipState = "ready";
+  harness.bindingRequests = [];
 });
 
 describe("Settings entry host resolution", () => {
@@ -377,39 +396,69 @@ describe("Settings entry host resolution", () => {
     });
   });
 
-  it("places a computer under Personal when its status query errors after mount", async () => {
+  it("holds a failed status entry in loading, retries its status, then completes Local", async () => {
     entryClient = makeClient();
-    const target = {
-      ...targetOption("status-error-computer", "remote"),
-      isLocalMachine: false,
-    };
-    harness.resolvedBindingHostIds = [target.hostId];
-    harness.personalMembershipHostIds = [target.hostId];
+    const target = targetOption("status-error-computer", "local");
     const { rendered, queryClient } = requestEntry(target);
-
-    expect(useSettingsHostScopeStore.getState().pendingHostId).toBe(
-      target.hostId,
-    );
-    await act(async () => {
-      await queryClient
-        .fetchQuery({
-          queryKey: queryKeys.hostMethod<HostRpcRegistry, "environment.status">(
-            target.hostId,
-            "environment.status",
-            {},
-          ),
-          queryFn: () => Promise.reject(new Error("status unavailable")),
-        })
-        .catch(() => undefined);
+    let statusReads = 0;
+    const options = queryOptions({
+      queryKey: queryKeys.hostMethod<HostRpcRegistry, "environment.status">(
+        target.hostId,
+        "environment.status",
+        {},
+      ),
+      queryFn: () => {
+        statusReads += 1;
+        if (statusReads === 1)
+          return Promise.reject(new Error("status unavailable"));
+        harness.answeredStatusHostIds = [target.hostId];
+        harness.localRows = [
+          {
+            kind: "local",
+            hostId: target.hostId,
+            name: target.name,
+            subtitle: "",
+            verb: null,
+            needsUpdate: false,
+            defaultsToLocal: true,
+          },
+        ];
+        return Promise.resolve(
+          environmentStatusFixture({
+            principal: null,
+            planes: { records: "local", broker: "local", room: "local" },
+          }),
+        );
+      },
     });
-
+    const view = render(
+      <HostScopeGate scope={rendered.result.current} skeleton={null}>
+        {null}
+      </HostScopeGate>,
+    );
+    expect(screen.getByText("Finding your hosts…")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
+    await act(async () => {
+      await queryClient.fetchQuery(options).catch(() => undefined);
+    });
+    view.rerender(
+      <HostScopeGate scope={rendered.result.current} skeleton={null}>
+        {null}
+      </HostScopeGate>,
+    );
+    expect(screen.getByText("Finding your hosts…")).toBeTruthy();
+    expect(screen.queryByText("Couldn't load your hosts")).toBeNull();
+    expect(harness.bindingRequests).toEqual([]);
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     await waitFor(() => {
       expect(useSettingsHostScopeStore.getState().pendingHostId).toBeNull();
     });
-    expect(rendered.result.current.hostId).toBe(target.hostId);
-    expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(
-      PERSONAL_PICK,
-    );
+    expect(statusReads).toBe(2);
+    expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
+      kind: "local",
+      hostId: target.hostId,
+      hostName: target.name,
+    });
   });
 
   it("abandons a resolved entry with no target in the ready host lists", async () => {

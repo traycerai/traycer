@@ -683,6 +683,7 @@ describe("<BotTabSurface /> views", () => {
             environmentId: "env-team",
             label: "Olive Owner",
             ownerKind: "user",
+            providerHandle: null,
           },
         ];
 
@@ -699,6 +700,7 @@ describe("<BotTabSurface /> views", () => {
             environmentId: "env-team",
             label: "Acme",
             ownerKind: "organization",
+            providerHandle: null,
           },
         ];
 
@@ -732,6 +734,7 @@ describe("<BotTabSurface /> views", () => {
             environmentId: "env-team",
             label: "Olive Owner",
             ownerKind: "user",
+            providerHandle: null,
           },
         ];
         useStandaloneBotsStore.setState({

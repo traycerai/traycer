@@ -22,6 +22,7 @@ import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope
 /** Resolves a named entry before letting any Settings host panel read. */
 export function useSettingsHostEntry(): {
   readonly failed: boolean;
+  readonly retryStatus: (() => void) | null;
   readonly retry: () => void;
 } {
   const targetHostId = useSettingsHostScopeStore((s) => s.pendingHostId);
@@ -49,7 +50,7 @@ export function useSettingsHostEntry(): {
     return state?.status === "error" && state.fetchStatus === "idle";
   }, [queryClient, targetHostId]);
   // The status map exposes only data: an error can leave its null unchanged.
-  // Observe the query state too, so that error releases the entry's wait.
+  // Keep a failed status pending and retryable before asking for bindings.
   const statusFailed = useSyncExternalStore(subscribe, readStatusFailed);
   const unread = settingsHostEntryUnread(target, status.statuses, statusFailed);
   const bindings = useHostEnvironmentBindings(
@@ -95,7 +96,18 @@ export function useSettingsHostEntry(): {
     useSettingsEnvironmentPickStore.getState().setPick(resolved.pick);
     store.completeHostEntry(resolved.host, resolved.pick);
   }, [resolved]);
+  const retryStatus = (): void => {
+    if (targetHostId === null) return;
+    void queryClient.refetchQueries({
+      queryKey: queryKeys.hostMethod<HostRpcRegistry, "environment.status">(
+        targetHostId,
+        "environment.status",
+        {},
+      ),
+    });
+  };
   return {
+    retryStatus: statusFailed ? retryStatus : null,
     failed:
       targetHostId !== null &&
       (bindings.failedHostIds.includes(targetHostId) ||
@@ -117,8 +129,7 @@ function settingsHostEntryUnread(
     target === undefined ||
     (isEnvironmentComputer(target) &&
       target.connectable &&
-      !statusFailed &&
-      (statuses.get(target.hostId) ?? null) === null)
+      (statusFailed || (statuses.get(target.hostId) ?? null) === null))
   );
 }
 

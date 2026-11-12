@@ -306,7 +306,10 @@ function EnvironmentPickerTrigger(props: {
   let label: ReactNode = "Personal";
   let title = "Personal";
   let local = false;
-  if (pick.kind === "local") {
+  if (pick.kind === "unresolved") {
+    label = <AgentSpinningDotsLabel />;
+    title = "";
+  } else if (pick.kind === "local") {
     label = pick.hostName;
     title = pick.hostName;
     local = true;
@@ -326,6 +329,7 @@ function EnvironmentPickerTrigger(props: {
         variant="outline"
         size="sm"
         className="w-full justify-between"
+        aria-label={pick.kind === "unresolved" ? "Environment" : undefined}
         data-testid="environment-picker-trigger"
       >
         <span className="flex min-w-0 items-center gap-1.5">
