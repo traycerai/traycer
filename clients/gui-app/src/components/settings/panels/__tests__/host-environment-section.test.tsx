@@ -113,8 +113,8 @@ vi.mock("@/lib/host", async (importOriginal) => {
 
 vi.mock("@/hooks/bots/use-environment-host-read-query", () => ({
   useEnvironmentHostReadQuery: () => ({
-    isError: false,
-    data: mocks.state.binding ?? undefined,
+    kind: "binding",
+    query: { isError: false, data: mocks.state.binding ?? undefined },
   }),
 }));
 vi.mock("@/hooks/environment/use-environment-reads", () => ({

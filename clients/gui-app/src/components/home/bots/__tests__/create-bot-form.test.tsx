@@ -229,6 +229,7 @@ interface Mount {
   /** hostId -> environment id; absent = still being asked. */
   readonly bound: Readonly<Record<string, string>>;
   readonly failedHostIds: ReadonlyArray<string>;
+  readonly ownSettingsHostIds?: ReadonlyArray<string>;
 }
 
 function botCreateResponse(): BotCreateResponse {
@@ -265,6 +266,7 @@ function mountForm(input: Mount): void {
   }
   const environmentBindings: HostEnvironmentBindings = {
     byHostId,
+    ownSettingsHostIds: input.ownSettingsHostIds ?? [],
     failedHostIds: input.failedHostIds,
     retryFailed,
   };
@@ -500,6 +502,63 @@ describe("<CreateBotForm /> when no host qualifies", () => {
     );
     expect(unchecked.textContent).not.toMatch(/host-/);
     expect(retryFailed).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(retryFailed).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips a Local own-settings host and picks the active host without an unchecked notice", () => {
+    mountForm({
+      ...TEAM_WITH_LOCAL,
+      bound: { [EFFECTIVE]: TEAM_ENV },
+      ownSettingsHostIds: [LOCAL],
+    });
+
+    expect(mocks.createClients.at(-1)).toEqual({
+      stub: `client-for-${EFFECTIVE}`,
+    });
+    expect(
+      screen.queryByText("Finding a host that runs Acme's bots…"),
+    ).toBeNull();
+    expect(screen.queryByTestId("create-bot-unchecked")).toBeNull();
+  });
+
+  it("names no unchecked host when the only connectable computer runs its own settings", () => {
+    mountForm({
+      ...TEAM_WITH_LOCAL,
+      connectableHostIds: [LOCAL],
+      bound: {},
+      failedHostIds: [],
+      ownSettingsHostIds: [LOCAL],
+    });
+
+    expect(screen.queryByTestId("create-bot-unchecked")).toBeNull();
+    expect(
+      screen.queryByText("Finding a host that runs Acme's bots…"),
+    ).toBeNull();
+    expect(screen.getByTestId("create-bot-no-host")).toBeTruthy();
+    expect(mocks.createClients.at(-1)).toBeNull();
+  });
+
+  it("shows one unchecked line for a failed host beside one that runs its own settings, and attributes nothing to it", async () => {
+    const user = userEvent.setup();
+    mountForm({
+      ...TEAM_WITH_LOCAL,
+      connectableHostIds: [LOCAL, OTHER],
+      bound: {},
+      failedHostIds: [OTHER],
+      ownSettingsHostIds: [LOCAL],
+    });
+
+    const uncheckedLines = screen.getAllByTestId("create-bot-unchecked");
+    expect(uncheckedLines).toHaveLength(1);
+    expect(uncheckedLines[0]?.textContent).toContain(
+      "Some of your hosts couldn't be checked.",
+    );
+    expect(uncheckedLines[0]?.textContent).not.toMatch(/host-/);
+    expect(mocks.createClients.at(-1)).not.toEqual({
+      stub: `client-for-${LOCAL}`,
+    });
+
     await user.click(screen.getByRole("button", { name: "Retry" }));
     expect(retryFailed).toHaveBeenCalledTimes(1);
   });

@@ -1,8 +1,5 @@
 import type { UseQueryResult } from "@tanstack/react-query";
-import type {
-  EnvironmentHostBinding,
-  EnvironmentListResponseV11,
-} from "@traycer/protocol/host/environment/contracts";
+import type { EnvironmentListResponseV11 } from "@traycer/protocol/host/environment/contracts";
 import type { EnvironmentStatusResponseV12 } from "@traycer/protocol/host/environment-schemas";
 import { providersLinkV12 } from "@traycer/protocol/host/environment-contracts";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -16,7 +13,10 @@ import {
 } from "@/hooks/host/use-host-supports-method";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
-import { useEnvironmentHostReadQuery } from "@/hooks/bots/use-environment-host-read-query";
+import {
+  useEnvironmentHostReadQuery,
+  type EnvironmentHostRead,
+} from "@/hooks/bots/use-environment-host-read-query";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { readsHostBindingsFromPool } from "@/hooks/bots/use-host-environment-bindings-query";
 import { configurationRoleOf } from "@/components/settings/environment/configuration-source";
@@ -113,8 +113,7 @@ export function useProfileSignInEnvironment(
     bindingSupported,
   );
   const organization =
-    boundEnvironment.kind === "environment" &&
-    binding.data?.environment.ownerKind === "organization";
+    boundEnvironment.kind === "environment" && namesTeam(binding);
   const environments = useEnvironmentListQuery(
     client,
     listSupported === true && (personal || organization),
@@ -131,9 +130,16 @@ export function useProfileSignInEnvironment(
   return boundEnvironment;
 }
 
+function namesTeam(read: EnvironmentHostRead): boolean {
+  return (
+    read.kind === "binding" &&
+    read.query.data?.environment.ownerKind === "organization"
+  );
+}
+
 function boundSignInEnvironment(
   status: UseQueryResult<EnvironmentStatusResponseV12, HostRpcError>,
-  binding: UseQueryResult<EnvironmentHostBinding, HostRpcError>,
+  binding: EnvironmentHostRead,
   statusSupported: boolean | null,
   bindingSupported: boolean | null,
 ): ProfileSignInEnvironment {
@@ -145,11 +151,23 @@ function boundSignInEnvironment(
   if (status.data.principal === null) return { kind: "local" };
   if (bindingSupported === false) return { kind: "local" };
   if (bindingSupported === null) return { kind: "reading" };
-  if (binding.isError) {
-    return { kind: "failed", retry: () => void binding.refetch() };
+  // A computer that runs its own settings has a principal but no
+  // environment: the pool would name it Personal, and the host refuses.
+  if (binding.kind === "own_settings") return { kind: "local" };
+  if (binding.kind === "pending") return { kind: "reading" };
+  if (binding.kind === "failed")
+    return { kind: "failed", retry: binding.retry };
+  const query = binding.query;
+  if (query.isError) {
+    // Re-read the status first: a host moved to its own settings signs in
+    // locally, and no binding answers before the fresh status does.
+    const retry = (): void => {
+      void status.refetch().then(() => query.refetch());
+    };
+    return { kind: "failed", retry };
   }
-  if (binding.data === undefined) return { kind: "reading" };
-  const environmentId = binding.data.environment.environmentId;
+  if (query.data === undefined) return { kind: "reading" };
+  const environmentId = query.data.environment.environmentId;
   return { kind: "environment", environmentId, canSignIn: true };
 }
 

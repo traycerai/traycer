@@ -86,13 +86,12 @@ export function HostOverviewSettingsCard(props: {
     props.hostName,
   );
   const railPick =
-    model.kind === "loading" || props.binding === null || props.status === null
+    model.kind === "loading" || props.status === null
       ? null
       : settingsRailPick({
           model,
           hostId: props.hostId,
           hostName: props.hostName,
-          binding: props.binding,
           status: props.status,
           version: statusVersion,
         });
@@ -642,16 +641,12 @@ function settingsRailPick(input: {
   readonly model: Exclude<HostSettingsRowModel, { kind: "loading" }>;
   readonly hostId: string;
   readonly hostName: string;
-  readonly binding: EnvironmentHostBinding;
   readonly status: EnvironmentStatusResponseV11;
   readonly version: NegotiatedMethodVersion;
 }): EnvironmentPick | null {
   const { model, hostId, hostName, status, version } = input;
   if (model.kind === "team") {
-    return {
-      kind: "team",
-      environmentId: input.binding.environment.environmentId,
-    };
+    return { kind: "team", environmentId: model.environmentId };
   }
   if (model.kind === "progress") {
     return model.progress.kind === "moving"
@@ -695,8 +690,9 @@ export function HostOverviewSettingsCardSlot(props: {
     props.hostId === null ||
     status.supported === false ||
     status.isError ||
-    bindingSupport === false ||
-    binding.isError
+    (bindingSupport === false && binding.kind !== "own_settings") ||
+    binding.kind === "failed" ||
+    (binding.kind === "binding" && binding.query.isError)
   ) {
     return null;
   }
@@ -707,7 +703,7 @@ export function HostOverviewSettingsCardSlot(props: {
       hostId={props.hostId}
       hostName={props.hostName}
       status={status.data}
-      binding={binding.data ?? null}
+      binding={binding.kind === "binding" ? (binding.query.data ?? null) : null}
       owner={props.owner}
       isLocalMachine={props.isLocalMachine}
     />

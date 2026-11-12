@@ -306,6 +306,7 @@ export const hostQueriesMock = {
 export const hostEnvironmentBindingsMock = {
   useHostEnvironmentBindings: () => ({
     byHostId: {},
+    ownSettingsHostIds: [],
     failedHostIds: [],
     retryFailed: () => undefined,
   }),
