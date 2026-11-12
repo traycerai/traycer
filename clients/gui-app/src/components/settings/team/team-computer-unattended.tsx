@@ -34,6 +34,8 @@ export function TeamComputerUnattended(
   // A selector is an argument, never shell source. Keep the token in stdin.
   const selector = `'${props.teamSelector.replaceAll("'", "'\\''")}'`;
   const command = `traycer host install --team ${selector} < install-token.txt`;
+  const windowsSelector = `'${props.teamSelector.replaceAll("'", "''")}'`;
+  const windowsCommand = `Get-Content install-token.txt | traycer host install --team ${windowsSelector}`;
   return (
     <section className="flex w-full min-w-0 flex-col items-start gap-3">
       <h3 className="text-ui-sm font-medium">Set up without signing in</h3>
@@ -50,7 +52,7 @@ export function TeamComputerUnattended(
         <>
           <p className="text-ui-xs">
             Save the token in a private file on the computer, then run the
-            command below. No sign-in is needed there.
+            command for its terminal below. No sign-in is needed there.
           </p>
           <CopyValue
             key={`token:${token.expiresAt}`}
@@ -59,8 +61,13 @@ export function TeamComputerUnattended(
           />
           <CopyValue
             key={`command:${token.expiresAt}`}
-            label="Command"
+            label="macOS and Linux command"
             value={command}
+          />
+          <CopyValue
+            key={`windows-command:${token.expiresAt}`}
+            label="Windows (PowerShell) command"
+            value={windowsCommand}
           />
           <p className="text-ui-xs text-muted-foreground">
             Works once. Expires at {formatClockTime(token.expiresAt)}.

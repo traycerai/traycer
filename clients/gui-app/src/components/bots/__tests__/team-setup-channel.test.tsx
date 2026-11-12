@@ -240,11 +240,25 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
 
       await user.click(screen.getByRole("button", { name: "Add a computer" }));
 
+      expect(screen.getByText(/^macOS and Linux(?: command)?$/)).not.toBeNull();
       expect(
-        screen.getByTestId("shell-safe-add-computer-command").textContent,
-      ).toBe("traycer host install --team 'team one'\\''s; echo unsafe'");
+        screen.getByText(/^Windows \(PowerShell\)(?: command)?$/),
+      ).not.toBeNull();
+      expect(
+        screen.getByText(
+          "traycer host install --team 'team one'\\''s; echo unsafe'",
+        ),
+      ).not.toBeNull();
+      expect(
+        screen.getByText(
+          "traycer host install --team 'team one''s; echo unsafe'",
+        ),
+      ).not.toBeNull();
       expect(screen.getByText(/Already installed\? Run/).textContent).toContain(
         "traycer host use 'team one'\\''s; echo unsafe'",
+      );
+      expect(screen.getByText(/Already installed\? Run/).textContent).toContain(
+        "traycer host use 'team one''s; echo unsafe'",
       );
     });
   });

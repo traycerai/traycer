@@ -640,9 +640,10 @@ describe("buildHostInstallCommand", () => {
       installGeneration: "id:install-2.0.0",
     });
 
+    const ctx = fakeCtx();
     const result = await buildHostInstallCommand(
       baseArgs({ team: "team/acme" }),
-    )(fakeCtx());
+    )(ctx);
 
     expect(result.data).toMatchObject({ teamBinding: teamBindingFixture });
 
@@ -652,6 +653,7 @@ describe("buildHostInstallCommand", () => {
         preflight: { state: "signed-in", reason: null },
         inlineSignInToken: null,
       }),
+      ctx.progress,
     );
   });
 
@@ -885,11 +887,13 @@ describe("buildHostInstallCommand", () => {
     });
     setStdoutIsTTY(true);
 
-    await buildHostInstallCommand(baseArgs({ team: "acme" }))(fakeCtx());
+    const ctx = fakeCtx();
+    await buildHostInstallCommand(baseArgs({ team: "acme" }))(ctx);
 
     expect(mocks.completeTeamInstallMock).toHaveBeenCalledWith(
       "acme",
       expect.objectContaining({ inlineSignInToken: "inline-team-token" }),
+      ctx.progress,
     );
   });
 
