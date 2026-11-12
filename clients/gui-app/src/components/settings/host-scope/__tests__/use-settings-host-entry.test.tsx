@@ -19,6 +19,7 @@ import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/hos
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
+import type { EnvironmentStatusResponseV12 } from "@traycer/protocol/host/environment-schemas";
 import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
@@ -459,6 +460,99 @@ describe("Settings entry host resolution", () => {
       hostId: target.hostId,
       hostName: target.name,
     });
+  });
+
+  it.each(["local", "personal"])(
+    "holds retained %s data throughout a deferred failed-status retry",
+    async (kind) => {
+      entryClient = makeClient();
+      const target = targetOption("retained-status", "local");
+      const { rendered, queryClient } = requestEntry(target);
+      const retry = Promise.withResolvers<EnvironmentStatusResponseV12>();
+      const oldStatus = environmentStatusFixture({});
+      const queryKey = queryKeys.hostMethod<
+        HostRpcRegistry,
+        "environment.status"
+      >(target.hostId, "environment.status", {});
+      let reads = 0;
+      await act(async () => {
+        queryClient.setQueryData(queryKey, oldStatus);
+        await queryClient
+          .fetchQuery(
+            queryOptions({
+              queryKey,
+              staleTime: 0,
+              queryFn: () => {
+                reads += 1;
+                return reads === 1
+                  ? Promise.reject(new Error("status unavailable"))
+                  : retry.promise;
+              },
+            }),
+          )
+          .catch(() => undefined);
+        harness.answeredStatusHostIds = [target.hostId];
+        harness.localRows =
+          kind === "local"
+            ? [
+                {
+                  kind: "local",
+                  hostId: target.hostId,
+                  name: target.name,
+                  subtitle: "",
+                  verb: null,
+                  needsUpdate: false,
+                  defaultsToLocal: true,
+                },
+              ]
+            : [];
+      });
+      expect(rendered.result.current.retryEntryStatus).not.toBeNull();
+      act(() => rendered.result.current.retryEntryStatus?.());
+      expect(queryClient.getQueryState(queryKey)?.fetchStatus).toBe("fetching");
+      expect(useSettingsHostScopeStore.getState().pendingHostId).toBe(
+        target.hostId,
+      );
+      expect(harness.bindingRequests).toEqual([]);
+      expect(rendered.result.current.retryEntryStatus).toBeNull();
+      await act(async () => {
+        retry.resolve(oldStatus);
+        await retry.promise;
+      });
+      await waitFor(() => {
+        if (kind === "local")
+          expect(useSettingsHostScopeStore.getState().pendingHostId).toBeNull();
+        else expect(harness.bindingRequests).toContain(target.hostId);
+      });
+      expect(reads).toBe(2);
+    },
+  );
+
+  it("keeps a failed status pending when the target loses its route", async () => {
+    entryClient = makeClient();
+    const target = targetOption("route-lost", "local");
+    const { rendered, queryClient } = requestEntry(target);
+    await act(async () => {
+      await queryClient
+        .fetchQuery(
+          queryOptions({
+            queryKey: queryKeys.hostMethod<
+              HostRpcRegistry,
+              "environment.status"
+            >(target.hostId, "environment.status", {}),
+            queryFn: () => Promise.reject(new Error("status unavailable")),
+          }),
+        )
+        .catch(() => undefined);
+    });
+    harness.hosts = [{ ...target, connectable: false }];
+    act(() => rendered.rerender());
+    expect(useSettingsHostScopeStore.getState().pendingHostId).toBe(
+      target.hostId,
+    );
+    expect(harness.bindingRequests).toEqual([]);
+    expect(rendered.result.current.listsFailed).toBe(false);
+    expect(rendered.result.current.isLoading).toBe(true);
   });
 
   it("abandons a resolved entry with no target in the ready host lists", async () => {

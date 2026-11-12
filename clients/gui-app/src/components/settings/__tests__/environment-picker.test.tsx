@@ -265,6 +265,34 @@ afterEach(() => {
 });
 
 describe("<EnvironmentPicker />", () => {
+  it("defaults a listed active sandbox to Personal without reading a Local status", () => {
+    const host = hostScopeOptionFixture({
+      hostId: "sandbox",
+      sandbox: {
+        state: "awake",
+        frozen: false,
+        summary: null,
+        teamOwned: false,
+      },
+    });
+    render(
+      <EnvironmentPicker
+        scope={hostScopeFixture({
+          hosts: [host],
+          host,
+          activeHostId: host.hostId,
+        })}
+        activeSection="skills"
+      />,
+    );
+    expect(screen.getByTestId("environment-picker-trigger").textContent).toBe(
+      "Personal",
+    );
+    expect(useSettingsEnvironmentPickStore.getState().defaultPick).toEqual(
+      PERSONAL_PICK,
+    );
+  });
+
   it("shows loading without claiming Personal until the window host answers", () => {
     answer("mac", null, V11);
     const view = renderPicker("mac");

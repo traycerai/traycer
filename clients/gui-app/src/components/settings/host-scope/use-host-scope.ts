@@ -39,7 +39,10 @@ import {
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import { useHostsRunningConfiguration } from "@/components/settings/environment/use-hosts-running-configuration";
 import { useSettingsHostEntry } from "@/components/settings/host-scope/use-settings-host-entry";
-import { environmentPickValue } from "@/lib/settings-environment-pages";
+import {
+  environmentPickValue,
+  type EnvironmentPick,
+} from "@/lib/settings-environment-pages";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import {
   findHostOption,
@@ -154,7 +157,7 @@ export function useHostScope(): HostScope {
     configurationPicked ? pick : { kind: "personal" },
     configurationPicked,
   );
-  const membershipState = pick.kind === "local" ? "ready" : membership.state;
+  const membershipState = settingsMembershipState(pick, membership.state);
   const ready = membershipState === "ready";
   const hosts = useMemo(() => {
     if (!ready || pendingHostId !== null) return [];
@@ -635,4 +638,14 @@ function activateRefusalMessage(
   label: string,
 ): string {
   return ACTIVATE_REFUSAL_COPY[reason](label);
+}
+
+/** A Local pick needs no membership; an unresolved pick cannot claim its result. */
+function settingsMembershipState(
+  pick: EnvironmentPick,
+  state: "ready" | "loading" | "failed",
+): "ready" | "loading" | "failed" {
+  if (pick.kind === "local") return "ready";
+  if (pick.kind === "unresolved") return "loading";
+  return state;
 }

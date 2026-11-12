@@ -77,8 +77,8 @@ function useEnvironmentPickerModel(scope: HostScope): EnvironmentPickerModel {
   // Syncs host-reported state into the window's pick: the store is read by
   // pages that do not mount this hook.
   useEffect(() => {
-    setDefaultPick(defaultPick);
-  }, [defaultPick, setDefaultPick]);
+    setDefaultPick(defaultPick, scope.activeHostId);
+  }, [defaultPick, setDefaultPick, scope.activeHostId]);
   useEffect(() => {
     if (stale) setPick(null);
   }, [stale, setPick]);
@@ -113,7 +113,7 @@ export function EnvironmentPicker(props: {
   const running = useHostsRunningPersonal(true);
   const openAddHost = useAddHostDialogStore((state) => state.openDialog);
   const pick = useSettingsEnvironmentPickStore(
-    (state) => state.pick ?? state.defaultPick,
+    (state) => state.pick ?? model.defaultPick,
   );
   const setPick = useSettingsEnvironmentPickStore((state) => state.setPick);
   const openMoveSheet = useMoveSheetStore((state) => state.openSheet);

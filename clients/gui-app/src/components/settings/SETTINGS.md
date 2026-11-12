@@ -845,10 +845,15 @@ listed and its status has answered. The picker shows a spinner, and every
 Environment page waits without mounting its editors. Failed host lists reuse
 `HostScopeGate`; failed status reads show the existing settings read error and
 Retry. An answered host keeps its Local or Personal default, and a window with
-no host keeps Personal. An explicit choice still takes precedence.
+no host keeps Personal. A listed sandbox defaults to Personal without a Local
+status read. The stored default belongs to the window host it was derived for;
+a host change makes readers unresolved immediately, before upkeep runs.
+An explicit choice still takes precedence.
 A pending Settings host entry also waits for a failed status read before
 asking for bindings. It keeps “Finding your hosts…” with “Try again” after a
-failed attempt; that action retries the target status. Only a real host-list
+failed attempt; that action retries the target status. An error holds the entry
+even through a retry with cached data or a lost route. Unresolved picks ignore
+Personal membership results, including cached hosts. Only a real host-list
 failure gets the host-list error.
 
 The Environment dropdown uses `useEnvironmentPick()`, and `PersonalPageFrame`

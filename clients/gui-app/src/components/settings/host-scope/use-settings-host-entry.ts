@@ -38,8 +38,8 @@ export function useSettingsHostEntry(): {
     (onChange: () => void) => queryClient.getQueryCache().subscribe(onChange),
     [queryClient],
   );
-  const readStatusFailed = useCallback((): boolean => {
-    if (targetHostId === null) return false;
+  const readStatusState = useCallback((): "ready" | "failed" | "retrying" => {
+    if (targetHostId === null) return "ready";
     const state = queryClient.getQueryState(
       queryKeys.hostMethod<HostRpcRegistry, "environment.status">(
         targetHostId,
@@ -47,11 +47,13 @@ export function useSettingsHostEntry(): {
         {},
       ),
     );
-    return state?.status === "error" && state.fetchStatus === "idle";
+    if (state?.status !== "error") return "ready";
+    return state.fetchStatus === "idle" ? "failed" : "retrying";
   }, [queryClient, targetHostId]);
   // The status map exposes only data: an error can leave its null unchanged.
   // Keep a failed status pending and retryable before asking for bindings.
-  const statusFailed = useSyncExternalStore(subscribe, readStatusFailed);
+  const statusState = useSyncExternalStore(subscribe, readStatusState);
+  const statusFailed = statusState !== "ready";
   const unread = settingsHostEntryUnread(target, status.statuses, statusFailed);
   const bindings = useHostEnvironmentBindings(
     targetHostId === null || local !== undefined || unread
@@ -107,7 +109,7 @@ export function useSettingsHostEntry(): {
     });
   };
   return {
-    retryStatus: statusFailed ? retryStatus : null,
+    retryStatus: statusState === "failed" ? retryStatus : null,
     failed:
       targetHostId !== null &&
       (bindings.failedHostIds.includes(targetHostId) ||
@@ -126,10 +128,11 @@ function settingsHostEntryUnread(
   statusFailed: boolean,
 ): boolean {
   return (
+    statusFailed ||
     target === undefined ||
     (isEnvironmentComputer(target) &&
       target.connectable &&
-      (statusFailed || (statuses.get(target.hostId) ?? null) === null))
+      (statuses.get(target.hostId) ?? null) === null)
   );
 }
 
