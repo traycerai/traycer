@@ -9,11 +9,16 @@ import {
 import {
   POOL_HOST_ID,
   poolHostDirectoryEntry,
+  type HostDirectoryEntry,
 } from "@traycer-clients/shared/host-client/host-directory";
 import { settleProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
 import type { EnvironmentHostRead } from "@/hooks/bots/use-environment-host-read-query";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
@@ -31,7 +36,18 @@ import { environmentStatusFixture } from "@/lib/environment/__tests__/environmen
 
 const VIEWER = "user-1";
 const TARGET_HOST = "host-9";
+const OTHER_HOST = "host-10";
 const POOL_ENTRY = poolHostDirectoryEntry("wss://pool.test/rpc");
+let statusAnswer = environmentStatusFixture({});
+let statusAnswers: ReadonlyArray<typeof statusAnswer> = [];
+const connectable = vi.hoisted(() => ({
+  hostIds: [] as string[],
+  resolved: true,
+}));
+
+vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
+  useConnectableHostIds: () => connectable,
+}));
 
 const bindingRef = vi.hoisted(() => ({
   current: null as {
@@ -43,7 +59,11 @@ const bindingRef = vi.hoisted(() => ({
         environmentId: string,
       ) => Promise<{ readonly kind: "ok" }>;
     };
-    directory: { refresh: () => Promise<void> };
+    directory: {
+      refresh: () => Promise<void>;
+      list: () => Promise<ReadonlyArray<HostDirectoryEntry>>;
+      onChange: () => { dispose: () => void };
+    };
   } | null,
 }));
 const invalidateLocalTeamAdmissionAfterClaim = vi.hoisted(() =>
@@ -97,6 +117,10 @@ const TEAM_BINDING: EnvironmentHostBinding = {
   enrolledByUserId: VIEWER,
   canUnbind: true,
 };
+const OTHER_BINDING: EnvironmentHostBinding = {
+  ...BINDING,
+  hostId: OTHER_HOST,
+};
 
 function signInAs(status: "signed-in" | "unverified"): void {
   useAuthStore.setState({
@@ -115,18 +139,28 @@ function mount(initialBinding: EnvironmentHostBinding) {
     defaultOptions: { queries: { retry: false } },
   });
   const reads: string[] = [];
+  const hostReads: string[] = [];
+  const statusReads: Array<typeof statusAnswer> = [];
   let poolBinding = initialBinding;
+  const targetEntry = { ...mockLocalHostEntry, hostId: TARGET_HOST };
+  const otherEntry = { ...mockLocalHostEntry, hostId: OTHER_HOST };
   const releaseTeamComputer = vi.fn(() => {
     poolBinding = BINDING;
     return Promise.resolve({ kind: "ok" as const });
   });
-  const directory = { refresh: vi.fn(() => Promise.resolve()) };
+  const directory = {
+    refresh: vi.fn(() => Promise.resolve()),
+    list: () => Promise.resolve([targetEntry, otherEntry]),
+    onChange: () => ({ dispose: () => undefined }),
+  };
   const runnerHost = dashboardRunnerHost();
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: { invalidateHostScope: () => undefined },
     findHostById: (hostId) => {
       if (hostId === mockLocalHostEntry.hostId) return mockLocalHostEntry;
+      if (hostId === TARGET_HOST) return targetEntry;
+      if (hostId === OTHER_HOST) return otherEntry;
       return hostId === POOL_HOST_ID ? POOL_ENTRY : null;
     },
     messenger: new MockHostMessenger<HostRpcRegistry>({
@@ -135,9 +169,17 @@ function mount(initialBinding: EnvironmentHostBinding) {
       handlers: {
         "environment.binding.read": (params) => {
           reads.push(params.hostId);
-          return poolBinding;
+          return params.hostId === OTHER_HOST ? OTHER_BINDING : poolBinding;
         },
-        "environment.status": () => environmentStatusFixture({}),
+        "environment.status": () => {
+          const answer = statusAnswers[statusReads.length] ?? statusAnswer;
+          statusReads.push(answer);
+          return answer;
+        },
+        "environment.host.read": () => {
+          hostReads.push(TARGET_HOST);
+          return { ...BINDING, sharingGeneration: null };
+        },
       },
     }),
   });
@@ -147,6 +189,12 @@ function mount(initialBinding: EnvironmentHostBinding) {
       origin: "renderer",
     }),
   );
+  recordNegotiatedHostManifest(TARGET_HOST, {
+    "environment.status": { major: 1, minor: 1 },
+  });
+  recordNegotiatedHostManifest(OTHER_HOST, {
+    "environment.status": { major: 1, minor: 1 },
+  });
   bindingRef.current = {
     hostClient: spine,
     hostId: undefined,
@@ -163,6 +211,8 @@ function mount(initialBinding: EnvironmentHostBinding) {
   return {
     queryClient,
     reads,
+    hostReads,
+    statusReads,
     releaseTeamComputer,
     runnerHost,
     wrapper,
@@ -173,12 +223,16 @@ function mount(initialBinding: EnvironmentHostBinding) {
 describe("environment.binding.read in a pool build", () => {
   beforeEach(() => {
     settleProcessHostRpcTierPlan(POOL_ENTRY);
+    statusAnswer = environmentStatusFixture({});
+    statusAnswers = [];
+    connectable.hostIds = [];
     invalidateLocalTeamAdmissionAfterClaim.mockReset();
     invalidateLocalTeamAdmissionAfterClaim.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
     cleanup();
+    resetNegotiatedManifests();
     bindingRef.current = null;
     useAuthStore.setState(useAuthStore.getInitialState(), true);
   });
@@ -248,6 +302,51 @@ describe("environment.binding.read in a pool build", () => {
       expect(bindingRead(rendered.result.current).data).toEqual(BINDING);
     });
     expect(fixture.reads).toEqual([TARGET_HOST]);
+  });
+
+  it("returns own_settings for a pooled Local host instead of the pool's Personal binding", async () => {
+    signInAs("signed-in");
+    statusAnswer = environmentStatusFixture({
+      principal: null,
+      planes: { records: "local", broker: "local", room: "local" },
+    });
+    const fixture = mount(BINDING);
+    const rendered = renderHook(
+      () => useEnvironmentHostReadQuery(fixture.client, TARGET_HOST, true),
+      { wrapper: fixture.wrapper },
+    );
+
+    await waitFor(() => {
+      expect(rendered.result.current.kind).toBe("own_settings");
+    });
+    expect(fixture.reads).toEqual([TARGET_HOST]);
+    expect(fixture.hostReads).toEqual([]);
+  });
+
+  it("separates Local and environment-bound hosts in the pooled fleet", async () => {
+    signInAs("signed-in");
+    connectable.hostIds = [TARGET_HOST, OTHER_HOST];
+    statusAnswers = [
+      environmentStatusFixture({
+        principal: null,
+        planes: { records: "local", broker: "local", room: "local" },
+      }),
+      environmentStatusFixture({ principal: { kind: "personal" } }),
+    ];
+    const fixture = mount(BINDING);
+    const rendered = renderHook(
+      () => useHostEnvironmentBindings([TARGET_HOST, OTHER_HOST], true),
+      { wrapper: fixture.wrapper },
+    );
+
+    await waitFor(() => {
+      expect(rendered.result.current.ownSettingsHostIds).toEqual([TARGET_HOST]);
+      expect(rendered.result.current.byHostId.get(OTHER_HOST)).toEqual(
+        OTHER_BINDING,
+      );
+    });
+    expect(rendered.result.current.byHostId.has(TARGET_HOST)).toBe(false);
+    expect(rendered.result.current.failedHostIds).toEqual([]);
   });
 
   it("refuses a refetch of useEnvironmentHostReadQuery once the verdict is gone, without dispatching", async () => {

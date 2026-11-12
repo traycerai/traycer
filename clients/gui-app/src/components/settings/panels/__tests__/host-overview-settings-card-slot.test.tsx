@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
@@ -36,6 +36,7 @@ vi.mock("@/hooks/bots/use-host-environment-bindings-query", () => ({
 }));
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostMethodSupport: () => reads.bindingSupport,
+  useHostMethodSchemaVersion: () => null,
 }));
 
 const BINDING: EnvironmentHostBinding = {
@@ -144,6 +145,21 @@ describe("<HostOverviewSettingsCardSlot />", () => {
     reads.status.data = null;
     mount(true, "host-a");
     expect(screen.getByRole("status", { name: "Reading" })).toBeTruthy();
+  });
+
+  it("renders a Local computer's settings row without a binding read", () => {
+    reads.status.data = environmentStatusFixture({
+      principal: null,
+      planes: { records: "local", broker: "local", room: "local" },
+    });
+
+    mount(true, "host-a");
+
+    expect(
+      screen.getByText("Runs its own settings, not in Personal yet"),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("combobox", { name: "Environment" }));
+    expect(screen.getByText("Personal")).toBeTruthy();
   });
 
   it("keeps the row's skeleton while binding support is unknown", () => {

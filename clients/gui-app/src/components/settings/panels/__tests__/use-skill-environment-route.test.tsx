@@ -6,6 +6,7 @@ const route = vi.hoisted(() => ({
   statusVersion: false as false | null | { major: number; minor: number },
   bindingSupport: true as boolean | null,
   bindingEnabled: [] as boolean[],
+  ownSettings: false,
   binding: undefined as
     | {
         environment: {
@@ -49,6 +50,9 @@ vi.mock("@/hooks/bots/use-environment-host-read-query", () => ({
   ) => {
     route.bindingEnabled.push(enabled);
     // A disabled read still answers from a primed cache.
+    if (route.ownSettings) {
+      return { kind: "own_settings", data: route.binding };
+    }
     return { kind: "binding", query: { data: route.binding } };
   },
 }));
@@ -102,6 +106,7 @@ beforeEach(() => {
   route.statusVersion = { major: 1, minor: 1 };
   route.bindingSupport = true;
   route.bindingEnabled = [];
+  route.ownSettings = false;
   route.binding = PERSONAL_BINDING;
   route.uploads = [];
   route.listAsked = [];
@@ -110,6 +115,14 @@ beforeEach(() => {
 });
 
 describe("useSkillEnvironmentRoute", () => {
+  it("offers no environment audience for a Local computer", () => {
+    route.ownSettings = true;
+
+    const { result } = renderHook(() => useSkillEnvironmentRoute());
+
+    expect(result.current.served).toBeNull();
+  });
+
   it("reads a host that never answers environment.status as one that still writes the shared folder, and does not ask it what it serves", () => {
     route.statusVersion = false;
 

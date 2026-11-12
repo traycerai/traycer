@@ -229,6 +229,7 @@ interface Mount {
   /** hostId -> environment id; absent = still being asked. */
   readonly bound: Readonly<Record<string, string>>;
   readonly failedHostIds: ReadonlyArray<string>;
+  readonly ownSettingsHostIds?: ReadonlyArray<string>;
 }
 
 function botCreateResponse(): BotCreateResponse {
@@ -265,7 +266,7 @@ function mountForm(input: Mount): void {
   }
   const environmentBindings: HostEnvironmentBindings = {
     byHostId,
-    ownSettingsHostIds: [],
+    ownSettingsHostIds: input.ownSettingsHostIds ?? [],
     failedHostIds: input.failedHostIds,
     retryFailed,
   };
@@ -503,6 +504,22 @@ describe("<CreateBotForm /> when no host qualifies", () => {
     expect(retryFailed).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "Retry" }));
     expect(retryFailed).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips a Local own-settings host and picks the active host without an unchecked notice", () => {
+    mountForm({
+      ...TEAM_WITH_LOCAL,
+      bound: { [EFFECTIVE]: TEAM_ENV },
+      ownSettingsHostIds: [LOCAL],
+    });
+
+    expect(mocks.createClients.at(-1)).toEqual({
+      stub: `client-for-${EFFECTIVE}`,
+    });
+    expect(
+      screen.queryByText("Finding a host that runs Acme's bots…"),
+    ).toBeNull();
+    expect(screen.queryByTestId("create-bot-unchecked")).toBeNull();
   });
 
   it("says it is still looking, not that none was found, while an earlier host is being asked", () => {

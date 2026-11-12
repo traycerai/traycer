@@ -2,6 +2,7 @@ import { useCallback, useMemo } from "react";
 import {
   queryOptions,
   useQueries,
+  useQueryClient,
   type QueryKey,
   type UseQueryResult,
 } from "@tanstack/react-query";
@@ -86,7 +87,11 @@ export interface HostEnvironmentBindings {
    * asked is not a host that runs some other environment.
    */
   readonly failedHostIds: ReadonlyArray<string>;
-  /** Asks the failed hosts again. A no-op when none failed. */
+  /**
+   * Asks the failed hosts again: a failed status first, and the binding only
+   * if that status does not say the host runs its own settings. A no-op when
+   * none failed.
+   */
   readonly retryFailed: () => void;
 }
 
@@ -168,6 +173,27 @@ export function useHostEnvironmentBindings(
     () => statusKey.split("\n").map(parseHostStatusAnswer),
     [statusKey],
   );
+  const queryClient = useQueryClient();
+  // A failed status reads as "other", so its host's binding was asked, and a
+  // host that runs its own settings refuses that. Re-reading the binding
+  // alone would keep such a host failed after it recovers.
+  const retryHost = useCallback(
+    async (
+      hostId: string,
+      refetchBinding: () => Promise<unknown>,
+    ): Promise<void> => {
+      const { queryKey } = environmentStatusQueryOptions(binding, hostId, true);
+      if (queryClient.getQueryState(queryKey)?.status === "error") {
+        await queryClient.refetchQueries({ queryKey, exact: true });
+        const status = queryClient.getQueryData(queryKey);
+        if (status !== undefined && localRowCohort(status).kind === "local") {
+          return;
+        }
+      }
+      await refetchBinding();
+    },
+    [binding, queryClient],
+  );
   const combine = useCallback(
     (
       results: Array<UseQueryResult<EnvironmentHostBinding>>,
@@ -175,7 +201,7 @@ export function useHostEnvironmentBindings(
       const byHostId = new Map<string, EnvironmentHostBinding>();
       const ownSettingsHostIds: string[] = [];
       const failedHostIds: string[] = [];
-      const failedRefetches: Array<() => Promise<unknown>> = [];
+      const failedRetries: Array<() => Promise<void>> = [];
       // Positional, and safe by construction: `useQueries` returns results in
       // the order the queries were given, so index `n` is `hostIdList[n]`.
       results.forEach((result, index) => {
@@ -190,7 +216,7 @@ export function useHostEnvironmentBindings(
           byHostId.set(hostId, result.data);
         } else if (result.status === "error") {
           failedHostIds.push(hostId);
-          failedRefetches.push(result.refetch);
+          failedRetries.push(() => retryHost(hostId, result.refetch));
         }
       });
       return {
@@ -198,11 +224,11 @@ export function useHostEnvironmentBindings(
         ownSettingsHostIds,
         failedHostIds,
         retryFailed: () => {
-          for (const refetch of failedRefetches) void refetch();
+          for (const retry of failedRetries) void retry();
         },
       };
     },
-    [hostIdList, statusAnswers],
+    [hostIdList, retryHost, statusAnswers],
   );
   return useQueries({
     queries: hostIdList.map((hostId, index) =>
