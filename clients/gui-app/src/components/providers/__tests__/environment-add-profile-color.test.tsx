@@ -6,7 +6,6 @@ import {
   fireEvent,
   render,
   screen,
-  waitFor,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -28,7 +27,14 @@ import {
   type ProviderCliState,
   type ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
-import type { RequestOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
+import type {
+  RequestOfMethod,
+  ResponseOfMethod,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  createCallEvents,
+  type CallEvents,
+} from "./environment-sign-in-call-events";
 import { EnvironmentAddProfileDialog } from "@/components/providers/environment-add-profile-dialog";
 import {
   buildEnvironmentClient,
@@ -61,6 +67,11 @@ const MANIFEST: ConnectionManifest = {
 type LinkCompleteRequest = RequestOfMethod<
   HostRpcRegistry,
   "providers.linkComplete"
+>;
+type RecolorRequest = RequestOfMethod<HostRpcRegistry, "providers.setEnabled">;
+type RecolorResponse = ResponseOfMethod<
+  HostRpcRegistry,
+  "providers.setEnabled"
 >;
 
 function providerState(profiles: readonly ProviderProfile[]): ProviderCliState {
@@ -131,21 +142,32 @@ interface ColorHost extends EnvironmentClientFixture {
     "providers.setEnabled"
   >[];
   readonly providersListCalls: number[];
+  readonly linkEvents: CallEvents;
+  readonly setEnabledEvents: CallEvents;
+  readonly providersListEvents: CallEvents;
 }
 
 type StartLinkHandler = (
   request: ProvidersLinkRequestV12,
   callNumber: number,
 ) => ProvidersLinkResponseV12 | Promise<ProvidersLinkResponseV12>;
+type RecolorHandler = (
+  request: RecolorRequest,
+  callNumber: number,
+) => RecolorResponse | Promise<RecolorResponse>;
 
 function makeHost(
   onInventoryProfileAdded: () => void,
   events: string[],
   startLinkHandler: StartLinkHandler | undefined,
+  recolorHandler: RecolorHandler | undefined,
 ): ColorHost {
   const linkRequests: ColorHost["linkRequests"] = [];
   const setEnabledRequests: ColorHost["setEnabledRequests"] = [];
   const providersListCalls: number[] = [];
+  const linkEvents = createCallEvents();
+  const setEnabledEvents = createCallEvents();
+  const providersListEvents = createCallEvents();
   const linkResponse: ProvidersLinkResponseV12 = {
     linkId: "link-created-profile",
     environmentProfileId: ENVIRONMENT_PROFILE_ID,
@@ -168,6 +190,7 @@ function makeHost(
     handlers: {
       "providers.link": (request) => {
         linkRequests.push(request);
+        linkEvents.emit();
         return startLinkHandler === undefined
           ? linkResponse
           : startLinkHandler(request, linkRequests.length);
@@ -178,6 +201,7 @@ function makeHost(
       "providers.list": () => {
         const callNumber = providersListCalls.length + 1;
         providersListCalls.push(callNumber);
+        providersListEvents.emit();
         if (callNumber === 2) onInventoryProfileAdded();
         const profiles =
           callNumber === 1
@@ -188,9 +212,12 @@ function makeHost(
           native: null,
         };
       },
-      "providers.setEnabled": (request) => {
+      "providers.setEnabled": (request: RecolorRequest) => {
         events.push("recolor");
         setEnabledRequests.push(request);
+        setEnabledEvents.emit();
+        if (recolorHandler !== undefined)
+          return recolorHandler(request, setEnabledRequests.length);
         return { state: providerState([createdProfile()]) };
       },
     },
@@ -201,6 +228,9 @@ function makeHost(
     linkRequests,
     setEnabledRequests,
     providersListCalls,
+    linkEvents,
+    setEnabledEvents,
+    providersListEvents,
   };
 }
 
@@ -267,9 +297,14 @@ describe("EnvironmentAddProfileDialog profile color", () => {
       },
       events,
       undefined,
+      undefined,
     );
-    const onOpenChange = vi.fn();
-    const onProfileCreated = vi.fn();
+    const opened = Promise.withResolvers<boolean>();
+    const created = Promise.withResolvers<string>();
+    const onOpenChange = vi.fn((open: boolean) => opened.resolve(open));
+    const onProfileCreated = vi.fn((profileId: string) =>
+      created.resolve(profileId),
+    );
     const queryClient = new QueryClient({
       defaultOptions: {
         queries: { retry: false, gcTime: 0 },
@@ -290,9 +325,7 @@ describe("EnvironmentAddProfileDialog profile color", () => {
       </QueryClientProvider>,
     );
 
-    await waitFor(() =>
-      expect(host.providersListCalls.length).toBeGreaterThan(0),
-    );
+    await host.providersListEvents.waitFor(1);
     await user.click(
       screen.getByRole("button", { name: `Use color ${CHOSEN_COLOR}` }),
     );
@@ -303,14 +336,11 @@ describe("EnvironmentAddProfileDialog profile color", () => {
     });
     await user.click(screen.getByRole("button", { name: "Sign in" }));
 
-    await waitFor(() =>
-      expect(host.providersListCalls.length).toBeGreaterThan(1),
-    );
-    await waitFor(() => expect(host.setEnabledRequests).toHaveLength(1));
-    await waitFor(() =>
-      expect(onProfileCreated).toHaveBeenCalledWith(PROFILE_ID),
-    );
-    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    await host.providersListEvents.waitFor(2);
+    await host.setEnabledEvents.waitFor(1);
+    await screen.findByRole("button", { name: "Done" });
+    await expect(created.promise).resolves.toBe(PROFILE_ID);
+    await expect(opened.promise).resolves.toBe(false);
     expect(host.setEnabledRequests[0]).toMatchObject({
       providerId: "claude-code",
       enabled: true,
@@ -338,14 +368,8 @@ describe("EnvironmentAddProfileDialog profile color", () => {
     ): void => {
       parentStateWriter.current = writer;
     };
-    let rejectFirstStart: (error: Error) => void = () => {
-      throw new Error("First sign-in did not start.");
-    };
-    let resolveSecondStart: (
-      response: ProvidersLinkResponseV12,
-    ) => void = () => {
-      throw new Error("Retry sign-in did not start.");
-    };
+    const firstStart = Promise.withResolvers<ProvidersLinkResponseV12>();
+    const secondStart = Promise.withResolvers<ProvidersLinkResponseV12>();
     const host = makeHost(
       () => {
         act(() => {
@@ -355,19 +379,16 @@ describe("EnvironmentAddProfileDialog profile color", () => {
         });
       },
       events,
-      (_request, callNumber) => {
-        if (callNumber === 1) {
-          return new Promise<ProvidersLinkResponseV12>((_resolve, reject) => {
-            rejectFirstStart = reject;
-          });
-        }
-        return new Promise<ProvidersLinkResponseV12>((resolve) => {
-          resolveSecondStart = resolve;
-        });
-      },
+      (_request, callNumber) =>
+        callNumber === 1 ? firstStart.promise : secondStart.promise,
+      undefined,
     );
-    const onOpenChange = vi.fn();
-    const onProfileCreated = vi.fn();
+    const opened = Promise.withResolvers<boolean>();
+    const created = Promise.withResolvers<string>();
+    const onOpenChange = vi.fn((open: boolean) => opened.resolve(open));
+    const onProfileCreated = vi.fn((profileId: string) =>
+      created.resolve(profileId),
+    );
     const queryClient = new QueryClient({
       defaultOptions: {
         queries: { retry: false, gcTime: 0 },
@@ -388,11 +409,9 @@ describe("EnvironmentAddProfileDialog profile color", () => {
       </QueryClientProvider>,
     );
 
-    await waitFor(() =>
-      expect(host.providersListCalls.length).toBeGreaterThan(0),
-    );
+    await host.providersListEvents.waitFor(1);
     await user.click(screen.getByRole("button", { name: "Sign in" }));
-    await waitFor(() => expect(host.linkRequests).toHaveLength(1));
+    await host.linkEvents.waitFor(1);
     expect(screen.getByLabelText("Profile name").hasAttribute("disabled")).toBe(
       true,
     );
@@ -407,8 +426,8 @@ describe("EnvironmentAddProfileDialog profile color", () => {
     expect(shareTools.hasAttribute("disabled")).toBe(true);
 
     await act(async () => {
-      rejectFirstStart(new Error("Simulated startup failure."));
-      await Promise.resolve();
+      firstStart.reject(new Error("Simulated startup failure."));
+      await firstStart.promise.catch(() => undefined);
     });
     const failedAlert = await screen.findByRole("alert");
     expect(failedAlert.textContent).toBe("Sign-in did not start. Try again.");
@@ -443,7 +462,7 @@ describe("EnvironmentAddProfileDialog profile color", () => {
     );
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Retry" }));
-    await waitFor(() => expect(host.linkRequests).toHaveLength(2));
+    await host.linkEvents.waitFor(2);
     expect(host.linkRequests[0]).toEqual({
       providerId: "claude-code",
       profileId: null,
@@ -470,7 +489,7 @@ describe("EnvironmentAddProfileDialog profile color", () => {
     expect(shareTools.hasAttribute("disabled")).toBe(true);
 
     await act(async () => {
-      resolveSecondStart({
+      secondStart.resolve({
         linkId: "link-created-profile",
         environmentProfileId: ENVIRONMENT_PROFILE_ID,
         prompt: {
@@ -479,7 +498,7 @@ describe("EnvironmentAddProfileDialog profile color", () => {
           codePrompt: "One-time code",
         },
       });
-      await Promise.resolve();
+      await secondStart.promise;
     });
     await screen.findByLabelText("One-time code");
     expect(screen.getByLabelText("Profile name").hasAttribute("disabled")).toBe(
@@ -490,11 +509,10 @@ describe("EnvironmentAddProfileDialog profile color", () => {
     });
     await user.click(screen.getByRole("button", { name: "Sign in" }));
 
-    await waitFor(() => expect(host.setEnabledRequests).toHaveLength(1));
-    await waitFor(() =>
-      expect(onProfileCreated).toHaveBeenCalledWith(PROFILE_ID),
-    );
-    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    await host.setEnabledEvents.waitFor(1);
+    await screen.findByRole("button", { name: "Done" });
+    await expect(created.promise).resolves.toBe(PROFILE_ID);
+    await expect(opened.promise).resolves.toBe(false);
     expect(host.setEnabledRequests[0]).toMatchObject({
       providerId: "claude-code",
       enabled: true,
@@ -507,5 +525,107 @@ describe("EnvironmentAddProfileDialog profile color", () => {
     expect(events.indexOf("parent-inventory-rerender")).toBeLessThan(
       events.indexOf("recolor"),
     );
+  });
+
+  it("blocks every close path while recoloring, then retries a failed recolor", async () => {
+    const events: string[] = [];
+    const parentStateWriter: {
+      current: Dispatch<SetStateAction<ProviderCliState>> | null;
+    } = { current: null };
+    const onParentStateWriter = (
+      writer: Dispatch<SetStateAction<ProviderCliState>> | null,
+    ): void => {
+      parentStateWriter.current = writer;
+    };
+    const firstRecolor = Promise.withResolvers<RecolorResponse>();
+    const host = makeHost(
+      () => {
+        act(() => {
+          parentStateWriter.current?.(
+            providerState([existingProfile(), createdProfile()]),
+          );
+        });
+      },
+      events,
+      undefined,
+      (_request, callNumber) =>
+        callNumber === 1
+          ? firstRecolor.promise
+          : { state: providerState([createdProfile()]) },
+    );
+    const opened = Promise.withResolvers<boolean>();
+    const created = Promise.withResolvers<string>();
+    const onOpenChange = vi.fn((open: boolean) => opened.resolve(open));
+    const onProfileCreated = vi.fn((profileId: string) =>
+      created.resolve(profileId),
+    );
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, gcTime: 0 },
+        mutations: { retry: false },
+      },
+    });
+    const user = userEvent.setup();
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <AddProfileFromProviderInventory
+          client={host.client}
+          onOpenChange={onOpenChange}
+          onProfileCreated={onProfileCreated}
+          onParentStateWriter={onParentStateWriter}
+          events={events}
+        />
+      </QueryClientProvider>,
+    );
+
+    await host.providersListEvents.waitFor(1);
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    await screen.findByLabelText("One-time code");
+    fireEvent.change(screen.getByLabelText("One-time code"), {
+      target: { value: SIGN_IN_CODE },
+    });
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    await host.providersListEvents.waitFor(2);
+    await host.setEnabledEvents.waitFor(1);
+    await screen.findByRole("button", { name: "Done" });
+
+    expect(screen.queryByRole("button", { name: "Close" })).toBeNull();
+    fireEvent.keyDown(document, { key: "Escape" });
+    const overlay = document.querySelector('[data-slot="dialog-overlay"]');
+    expect(overlay).not.toBeNull();
+    if (overlay === null) throw new Error("Dialog overlay was not rendered.");
+    fireEvent.pointerDown(overlay, { button: 0, pointerType: "mouse" });
+    await user.click(screen.getByRole("button", { name: "Done" }));
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog")).toBeTruthy();
+
+    await act(async () => {
+      firstRecolor.reject(new Error("Color could not be saved."));
+      await firstRecolor.promise.catch(() => undefined);
+    });
+    expect(await screen.findByRole("alert")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await host.setEnabledEvents.waitFor(2);
+    await expect(created.promise).resolves.toBe(PROFILE_ID);
+    await expect(opened.promise).resolves.toBe(false);
+    expect(onOpenChange).toHaveBeenCalledExactlyOnceWith(false);
+    expect(host.setEnabledRequests).toHaveLength(2);
+    expect(host.setEnabledRequests).toMatchObject([
+      {
+        profileAction: {
+          type: "recolor",
+          profileId: PROFILE_ID,
+          accentColor: INITIAL_COLOR,
+        },
+      },
+      {
+        profileAction: {
+          type: "recolor",
+          profileId: PROFILE_ID,
+          accentColor: INITIAL_COLOR,
+        },
+      },
+    ]);
   });
 });

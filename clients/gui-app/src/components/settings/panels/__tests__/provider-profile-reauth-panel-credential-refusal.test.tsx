@@ -1,10 +1,4 @@
-import {
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AMBIENT_PROFILE_ID_SENTINEL } from "@traycer/protocol/host/agent/shared";
@@ -204,6 +198,7 @@ function renderPanel(onCancel: () => void) {
 function buildRouteClient(
   linkRequests: ProvidersLinkRequestV12[],
   route: RouteFixture,
+  manifest: ConnectionManifest,
 ): HostClient<HostRpcRegistry> {
   const { client } = buildEnvironmentClient({
     hostId: HOST_ID,
@@ -266,7 +261,7 @@ function buildRouteClient(
       "providers.list": () => ({ providers: [], native: null }),
     },
   });
-  recordNegotiatedHostManifest(HOST_ID, ROUTE_MANIFEST);
+  recordNegotiatedHostManifest(HOST_ID, manifest);
   return client;
 }
 
@@ -342,11 +337,16 @@ describe("managed profile reauth routing", () => {
   it("routes ordinary sign-in through @1.2 without replacing the account", async () => {
     const profile = managedProfile();
     const linkRequests: ProvidersLinkRequestV12[] = [];
-    const client = buildRouteClient(linkRequests, {
-      status: environmentStatusFixture({}),
-      bindingOwnerKind: "user",
-      effectiveRole: "owner",
-    });
+    const client = buildRouteClient(
+      linkRequests,
+      {
+        status: environmentStatusFixture({}),
+        bindingOwnerKind: "user",
+        effectiveRole: "owner",
+      },
+      ROUTE_MANIFEST,
+    );
+    const signedInAuth = useAuthStore.getState().profile;
     renderRoutedPanel(profile, false, client, () => undefined);
 
     await screen.findByLabelText("One-time code");
@@ -359,16 +359,21 @@ describe("managed profile reauth routing", () => {
         replaceAccount: false,
       },
     ]);
+    expect(useAuthStore.getState().profile).toBe(signedInAuth);
   });
 
   it("shows the account-change warning before a Switch account request", async () => {
     const profile = managedProfile();
     const linkRequests: ProvidersLinkRequestV12[] = [];
-    const client = buildRouteClient(linkRequests, {
-      status: environmentStatusFixture({}),
-      bindingOwnerKind: "user",
-      effectiveRole: "owner",
-    });
+    const client = buildRouteClient(
+      linkRequests,
+      {
+        status: environmentStatusFixture({}),
+        bindingOwnerKind: "user",
+        effectiveRole: "owner",
+      },
+      ROUTE_MANIFEST,
+    );
     renderRoutedPanel(profile, true, client, () => undefined);
 
     expect(
@@ -391,39 +396,85 @@ describe("managed profile reauth routing", () => {
     ]);
   });
 
-  it("keeps a managed profile on the legacy sign-in flow at @1.1", () => {
-    const profile = managedProfile();
-    const linkRequests: ProvidersLinkRequestV12[] = [];
-    const client = buildRouteClient(linkRequests, {
-      status: environmentStatusFixture({}),
-      bindingOwnerKind: "user",
-      effectiveRole: "owner",
-    });
-    recordNegotiatedHostManifest(HOST_ID, {
-      ...ROUTE_MANIFEST,
-      "providers.link": { major: 1, minor: 1 },
-    });
-    clientRef.current = client;
-    renderRoutedPanel(profile, false, client, vi.fn());
+  it.each([
+    {
+      olderMethod: "providers.link",
+      manifest: {
+        ...ROUTE_MANIFEST,
+        "providers.link": { major: 1, minor: 1 },
+      },
+    },
+    {
+      olderMethod: "providers.linkComplete",
+      manifest: {
+        ...ROUTE_MANIFEST,
+        "providers.linkComplete": { major: 1, minor: 1 },
+      },
+    },
+  ])(
+    "keeps the signed-in account and uses legacy sign-in when $olderMethod is old",
+    ({ manifest }) => {
+      const profile = managedProfile();
+      const linkRequests: ProvidersLinkRequestV12[] = [];
+      const client = buildRouteClient(
+        linkRequests,
+        {
+          status: environmentStatusFixture({}),
+          bindingOwnerKind: "user",
+          effectiveRole: "owner",
+        },
+        manifest,
+      );
+      const signedInAuth = useAuthStore.getState().profile;
+      renderRoutedPanel(profile, false, client, vi.fn());
 
-    expect(mocks.startLoginAsync).toHaveBeenCalledTimes(1);
-    expect(mocks.startLoginAsync).toHaveBeenCalledWith(
-      expect.objectContaining({
-        providerId: "codex",
-        profileId: profile.profileId,
-      }),
+      expect(mocks.startLoginAsync).toHaveBeenCalledTimes(1);
+      expect(mocks.startLoginAsync).toHaveBeenCalledWith(
+        expect.objectContaining({
+          providerId: "codex",
+          profileId: profile.profileId,
+        }),
+      );
+      expect(linkRequests).toEqual([]);
+      expect(useAuthStore.getState().profile).toBe(signedInAuth);
+    },
+  );
+
+  it("shows Back for an environment-routed credential refusal and returns to the edit form", async () => {
+    mocks.credentialRefusal = REFUSAL;
+    const onCancel = vi.fn();
+    const linkRequests: ProvidersLinkRequestV12[] = [];
+    const client = buildRouteClient(
+      linkRequests,
+      {
+        status: environmentStatusFixture({}),
+        bindingOwnerKind: "user",
+        effectiveRole: "owner",
+      },
+      ROUTE_MANIFEST,
     );
+    renderRoutedPanel(managedProfile(), false, client, onCancel);
+
+    expect(await screen.findByTestId("credential-refusal")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+
+    expect(onCancel).toHaveBeenCalledTimes(1);
     expect(linkRequests).toEqual([]);
+    expect(mocks.startLoginAsync).not.toHaveBeenCalled();
   });
 
   it("keeps an ambient profile on the local flow even when @1.2 is available", () => {
     const linkRequests: ProvidersLinkRequestV12[] = [];
     const profile = ambientProfile();
-    const client = buildRouteClient(linkRequests, {
-      status: environmentStatusFixture({}),
-      bindingOwnerKind: "user",
-      effectiveRole: "owner",
-    });
+    const client = buildRouteClient(
+      linkRequests,
+      {
+        status: environmentStatusFixture({}),
+        bindingOwnerKind: "user",
+        effectiveRole: "owner",
+      },
+      ROUTE_MANIFEST,
+    );
     renderRoutedPanel(profile, false, client, vi.fn());
 
     expect(mocks.startLoginAsync).toHaveBeenCalledTimes(1);
@@ -439,14 +490,19 @@ describe("managed profile reauth routing", () => {
   it("uses the local flow when environment.status has no principal despite a Personal binding", async () => {
     const profile = managedProfile();
     const linkRequests: ProvidersLinkRequestV12[] = [];
-    const client = buildRouteClient(linkRequests, {
-      status: environmentStatusFixture({ principal: null }),
-      bindingOwnerKind: "user",
-      effectiveRole: "owner",
-    });
+    const client = buildRouteClient(
+      linkRequests,
+      {
+        status: environmentStatusFixture({ principal: null }),
+        bindingOwnerKind: "user",
+        effectiveRole: "owner",
+      },
+      ROUTE_MANIFEST,
+    );
     renderRoutedPanel(profile, false, client, vi.fn());
 
-    await waitFor(() => expect(mocks.startLoginAsync).toHaveBeenCalledTimes(1));
+    await screen.findByText("Opening the sign-in page…");
+    expect(mocks.startLoginAsync).toHaveBeenCalledTimes(1);
     expect(mocks.startLoginAsync).toHaveBeenCalledWith(
       expect.objectContaining({
         providerId: "codex",
@@ -459,13 +515,17 @@ describe("managed profile reauth routing", () => {
   it("shows the teammate guidance without sign-in for a viewer and starts the named team for an editor", async () => {
     const profile = managedProfile();
     const viewerRequests: ProvidersLinkRequestV12[] = [];
-    const viewerClient = buildRouteClient(viewerRequests, {
-      status: environmentStatusFixture({
-        principal: { kind: "team", teamName: "Acme" },
-      }),
-      bindingOwnerKind: "organization",
-      effectiveRole: "viewer",
-    });
+    const viewerClient = buildRouteClient(
+      viewerRequests,
+      {
+        status: environmentStatusFixture({
+          principal: { kind: "team", teamName: "Acme" },
+        }),
+        bindingOwnerKind: "organization",
+        effectiveRole: "viewer",
+      },
+      ROUTE_MANIFEST,
+    );
     renderRoutedPanel(profile, false, viewerClient, vi.fn());
 
     expect(
@@ -478,13 +538,17 @@ describe("managed profile reauth routing", () => {
 
     cleanup();
     const editorRequests: ProvidersLinkRequestV12[] = [];
-    const editorClient = buildRouteClient(editorRequests, {
-      status: environmentStatusFixture({
-        principal: { kind: "team", teamName: "Acme" },
-      }),
-      bindingOwnerKind: "organization",
-      effectiveRole: "editor",
-    });
+    const editorClient = buildRouteClient(
+      editorRequests,
+      {
+        status: environmentStatusFixture({
+          principal: { kind: "team", teamName: "Acme" },
+        }),
+        bindingOwnerKind: "organization",
+        effectiveRole: "editor",
+      },
+      ROUTE_MANIFEST,
+    );
     renderRoutedPanel(profile, false, editorClient, vi.fn());
 
     await screen.findByLabelText("One-time code");

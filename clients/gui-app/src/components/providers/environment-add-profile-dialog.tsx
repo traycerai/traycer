@@ -12,8 +12,6 @@ import {
   type EnvironmentSignInCompletion,
 } from "./environment-profile-sign-in";
 import { useRecolorProviderProfileForClient } from "@/hooks/providers/use-recolor-provider-profile-mutation";
-import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
-import { CredentialRefusalNote } from "@/components/providers/credential-refusal-note";
 import {
   Dialog,
   DialogContent,
@@ -41,9 +39,12 @@ export function EnvironmentAddProfileDialog(
   const [completion, setCompletion] =
     useState<EnvironmentSignInCompletion | null>(null);
   const recolor = useRecolorProviderProfileForClient(props.client);
-  const refusal = useHostCredentialRefusal(props.client.getActiveHostId());
   const profileIdsBeforeSignIn = useRef<ReadonlySet<string>>(new Set());
   const signInColor = useRef(color);
+  const changeOpen = (open: boolean): void => {
+    if (!open && recolor.isPending) return;
+    props.onOpenChange(open);
+  };
   const finish = (result: EnvironmentSignInCompletion): void => {
     const profile = result.profile;
     if (profile === null) return;
@@ -72,10 +73,11 @@ export function EnvironmentAddProfileDialog(
     );
   };
   return (
-    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
+    <Dialog open={props.open} onOpenChange={changeOpen}>
       <DialogContent
         layout="banded"
         className="flex max-h-[min(85dvh,calc(var(--spacing-safe-dvh)-var(--spacing-safe-bottom)))] w-full flex-col overflow-y-auto sm:max-w-lg"
+        showCloseButton={!recolor.isPending}
       >
         <DialogHeader>
           <DialogTitle>
@@ -112,7 +114,6 @@ export function EnvironmentAddProfileDialog(
               Use terminal skills and plugins on this computer
             </label>
           ) : null}
-          <CredentialRefusalNote refusal={refusal} />
           <EnvironmentProfileSignIn
             client={props.client}
             request={{
@@ -136,9 +137,9 @@ export function EnvironmentAddProfileDialog(
               setStarted(active);
             }}
             waitForLocalProfile
-            disabled={refusal !== null || label.trim().length === 0}
+            disabled={label.trim().length === 0 || recolor.isPending}
             onComplete={finish}
-            onCancel={() => props.onOpenChange(false)}
+            onCancel={() => changeOpen(false)}
           />
           {recolor.error !== null && completion !== null ? (
             <>

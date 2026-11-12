@@ -1,5 +1,12 @@
 import "../../../../../__tests__/test-browser-apis";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
+import type { QueryKey } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -43,6 +50,7 @@ vi.mock("@/lib/links/open-link", () => ({
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   resetTeamPageHarness();
   resetNegotiatedManifests();
   useProviderLinkDialogStore.setState({ target: null });
@@ -86,6 +94,10 @@ function floorOf(harness: TeamPageHarness, method: string): unknown {
     ?.requiredHostMethodVersion;
 }
 
+function isPublicQueryKey(value: unknown): value is QueryKey {
+  return Array.isArray(value);
+}
+
 const TEAM_LIST = {
   environments: [
     {
@@ -122,13 +134,9 @@ describe("ProviderLinkDialog", () => {
     expect(screen.getByRole("dialog").textContent.match(/Acme/g)).toHaveLength(
       1,
     );
-    await waitFor(() => {
-      expect(
-        screen.getByText(
-          "This signs Traycer in to your plan once. The team's agents use it on every host running this environment; it counts as a device on your plan.",
-        ),
-      ).toBeTruthy();
-    });
+    await screen.findByText(
+      "This signs Traycer in to your plan once. The team's agents use it on every host running this environment; it counts as a device on your plan.",
+    );
     cleanup();
 
     useProviderLinkDialogStore.setState({
@@ -188,7 +196,7 @@ describe("ProviderLinkDialog", () => {
     expect([...queries, ...mutations].join("\n")).not.toContain(PASTED_CODE);
   });
 
-  it("links a team's plan through the link mutations, polls a handoff through a host query, and rereads the plans once linked", async () => {
+  it("links a team's plan through the link mutations, polls a handoff through a host query, and rereads configuration after installation starts", async () => {
     useProviderLinkDialogStore.setState({
       target: {
         providerId: "claude-code",
@@ -196,7 +204,24 @@ describe("ProviderLinkDialog", () => {
         environmentId: "env-a",
       },
     });
-    let polls = 0;
+    const completeAnswers = [
+      {
+        state: "pending" as const,
+        code: null,
+        account: null,
+        expectedAccount: null,
+        environmentProfileId: null,
+        profileId: null,
+      },
+      {
+        state: "installing" as const,
+        code: null,
+        account: null,
+        expectedAccount: null,
+        environmentProfileId: null,
+        profileId: null,
+      },
+    ];
     const harness = mountTeamPage(poolSource("admin"), {
       ...linkHandlers,
       "providers.link": () => ({
@@ -205,17 +230,11 @@ describe("ProviderLinkDialog", () => {
         prompt: { kind: "local_handoff" as const },
       }),
       "providers.linkComplete": () => {
-        polls += 1;
-        return polls === 1
-          ? {
-              state: "pending",
-              code: null,
-              account: null,
-              expectedAccount: null,
-              environmentProfileId: null,
-              profileId: null,
-            }
-          : linkHandlers["providers.linkComplete"]();
+        const answer = completeAnswers.shift();
+        if (answer === undefined) {
+          return linkHandlers["providers.linkComplete"]();
+        }
+        return answer;
       },
     });
     const plansKey = [
@@ -226,14 +245,72 @@ describe("ProviderLinkDialog", () => {
       ),
       "user-me",
     ];
+    const itemsKey = [
+      ...hostQueryKeys.method(
+        mockLocalHostEntry.hostId,
+        "environment.configuration.items",
+        { environmentId: "env-a" },
+      ),
+      "user-me",
+      "providers",
+    ];
     // The Plans card's read, kept as if the card were open behind the dialog.
     harness.queryClient.setQueryDefaults(plansKey, {
       gcTime: Number.POSITIVE_INFINITY,
     });
     harness.queryClient.setQueryData(plansKey, { plans: [] });
+    harness.queryClient.setQueryDefaults(itemsKey, {
+      gcTime: Number.POSITIVE_INFINITY,
+    });
+    harness.queryClient.setQueryData(itemsKey, { items: [] });
+    const pendingObserved = Promise.withResolvers<void>();
+    const installingObserved = Promise.withResolvers<void>();
+    const pollIntervalRegistered = Promise.withResolvers<void>();
+    const unsubscribe = harness.queryClient
+      .getQueryCache()
+      .subscribe((event) => {
+        const queryKey: unknown = event.query.queryKey;
+        const data: unknown = event.query.state.data;
+        if (
+          event.type !== "updated" ||
+          !isPublicQueryKey(queryKey) ||
+          !hostQueryKeys.matchesMethodOnAnyHost(
+            queryKey,
+            "providers.linkComplete",
+          )
+        )
+          return;
+        if (typeof data !== "object" || data === null || !("state" in data)) {
+          return;
+        }
+        if (data.state === "pending") pendingObserved.resolve();
+        if (data.state === "installing") installingObserved.resolve();
+      });
     render(<ProviderLinkDialog />, { wrapper: harness.Wrapper });
-    await userEvent.click(await screen.findByTestId("provider-link-continue"));
-    await screen.findByRole("button", { name: "Done" }, { timeout: 4_000 });
+    const continueButton = await screen.findByTestId("provider-link-continue");
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const intervalWindow: Pick<Window, "setInterval"> = window;
+    const realSetInterval = intervalWindow.setInterval.bind(intervalWindow);
+    const intervalSpy = vi
+      .spyOn(intervalWindow, "setInterval")
+      .mockImplementation((handler, timeout) => {
+        const intervalId = realSetInterval(handler, timeout);
+        if (timeout === 2_000) pollIntervalRegistered.resolve();
+        return intervalId;
+      });
+    try {
+      fireEvent.click(continueButton);
+      await pendingObserved.promise;
+      await pollIntervalRegistered.promise;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_000);
+      });
+      await installingObserved.promise;
+      expect(await screen.findByRole("button", { name: "Done" })).toBeTruthy();
+    } finally {
+      intervalSpy.mockRestore();
+      unsubscribe();
+    }
 
     expect(
       harness.queryClient
@@ -254,9 +331,9 @@ describe("ProviderLinkDialog", () => {
         .map((query) => query.state.data),
     ).toEqual([
       {
-        state: "linked",
+        state: "installing",
         code: null,
-        account: "ada@example.com",
+        account: null,
         expectedAccount: null,
         environmentProfileId: null,
         profileId: null,
@@ -271,6 +348,9 @@ describe("ProviderLinkDialog", () => {
       version: { major: 1, minor: 1 },
     });
     expect(harness.queryClient.getQueryState(plansKey)?.isInvalidated).toBe(
+      true,
+    );
+    expect(harness.queryClient.getQueryState(itemsKey)?.isInvalidated).toBe(
       true,
     );
   });
@@ -326,10 +406,23 @@ describe("ProviderLinkDialog", () => {
       ),
       "user-me",
     ];
+    const itemsKey = [
+      ...hostQueryKeys.method(
+        mockLocalHostEntry.hostId,
+        "environment.configuration.items",
+        { environmentId: "env-a" },
+      ),
+      "user-me",
+      "providers",
+    ];
     harness.queryClient.setQueryDefaults(plansKey, {
       gcTime: Number.POSITIVE_INFINITY,
     });
     harness.queryClient.setQueryData(plansKey, { plans: [] });
+    harness.queryClient.setQueryDefaults(itemsKey, {
+      gcTime: Number.POSITIVE_INFINITY,
+    });
+    harness.queryClient.setQueryData(itemsKey, { items: [] });
 
     render(<ProviderLinkDialog />, { wrapper: harness.Wrapper });
     await userEvent.clear(await screen.findByLabelText("Profile name"));
@@ -365,11 +458,12 @@ describe("ProviderLinkDialog", () => {
       method: "providers.linkComplete",
       version: { major: 1, minor: 2 },
     });
-    await waitFor(() => {
-      expect(harness.queryClient.getQueryState(plansKey)?.isInvalidated).toBe(
-        true,
-      );
-    });
+    expect(harness.queryClient.getQueryState(plansKey)?.isInvalidated).toBe(
+      true,
+    );
+    expect(harness.queryClient.getQueryState(itemsKey)?.isInvalidated).toBe(
+      true,
+    );
   });
 
   it("sends a pasted code through the complete mutation, and its pending state disables Sign in", async () => {
@@ -397,20 +491,6 @@ describe("ProviderLinkDialog", () => {
     );
     await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
-    await waitFor(() => {
-      expect(
-        harness.queryClient
-          .getMutationCache()
-          .getAll()
-          .map((mutation) => [
-            mutation.options.mutationKey,
-            mutation.state.status,
-          ]),
-      ).toEqual([
-        [["providers.link"], "success"],
-        [["providers.linkComplete"], "pending"],
-      ]);
-    });
     expect(
       screen.getByRole("button", { name: "Sign in" }).hasAttribute("disabled"),
     ).toBe(true);

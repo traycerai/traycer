@@ -15,7 +15,10 @@ import {
 } from "@/lib/rate-limit-providers";
 import { TeamViewingHostBinding } from "./team-viewing-host-binding";
 import { TeamViewingHostPicker } from "./team-viewing-host-picker";
-import { useConfigurationSource } from "./configuration-source";
+import {
+  useCanEditConfiguration,
+  useConfigurationSource,
+} from "./configuration-source";
 import { usePickedTeamLabel } from "./team-pick-label";
 import { TeamReadFailed } from "./team-read-failed";
 import { TeamContentNeedsHost } from "./team-content-needs-host";
@@ -124,6 +127,7 @@ function TeamPlanLimits(props: {
   readonly linkedProfileIds: readonly string[];
   readonly teamName: string;
 }): ReactNode {
+  const canEdit = useCanEditConfiguration();
   const eligibility = resolveRateLimitFetchEligibility(props.state);
   const profiles = props.state.profiles.filter(
     (profile) =>
@@ -133,7 +137,9 @@ function TeamPlanLimits(props: {
   if (props.linkedProfileIds.length === 0)
     return (
       <p role="status" className="text-ui-sm text-muted-foreground">
-        Sign in to {props.teamName} to see its rate limits.
+        {canEdit
+          ? `Sign in to ${props.teamName} to see its rate limits.`
+          : "Ask a teammate to sign in on Providers."}
       </p>
     );
   return profiles.map((profile) => (

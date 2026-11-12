@@ -1,8 +1,9 @@
-import { Fragment, StrictMode, type ReactNode } from "react";
-import type {
-  ProviderCliState,
-  ProviderLoginRefusal,
-  ProviderProfile,
+import { Fragment, StrictMode, useState, type ReactNode } from "react";
+import {
+  PROVIDER_PROFILE_ACCENT_COLORS,
+  type ProviderCliState,
+  type ProviderLoginRefusal,
+  type ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
 import type {
   ConnectionManifest,
@@ -14,11 +15,11 @@ import type {
 } from "@traycer/protocol/host/environment-schemas";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
   screen,
-  waitFor,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -27,6 +28,11 @@ import type {
   HostRequestDispatchOptions,
 } from "@traycer-clients/shared/host-client/host-client";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { REPLACE_PROFILE_ACCOUNT_LINE } from "@traycer-clients/shared/providers/environment-profile-sign-in";
+import {
+  createCallEvents,
+  type CallEvents,
+} from "../../../providers/__tests__/environment-sign-in-call-events";
 import type { HostRpcRegistry } from "@/lib/host";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { PersonalPageContext } from "@/components/settings/personal/personal-page-context";
@@ -62,6 +68,13 @@ const host = vi.hoisted(() => ({
       ) => Promise<unknown>
     >(),
 }));
+const optionalClient = vi.hoisted(
+  (): {
+    current: HostClient<HostRpcRegistry> | null;
+  } => ({
+    current: null,
+  }),
+);
 
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
@@ -71,7 +84,12 @@ vi.mock("@/lib/host", async (importOriginal) => {
     requestWithSignal: host.request,
     requestWithOptions: host.requestWithOptions,
   });
-  return { ...actual, useHostClient: () => client };
+  const currentClient = () => optionalClient.current ?? client;
+  return {
+    ...actual,
+    useHostClient: currentClient,
+    useOptionalHostClient: currentClient,
+  };
 });
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
@@ -102,6 +120,21 @@ const PROFILE_ID = "profile-surya-2";
 const ADD_HOST_ID = "host-profile-add-route";
 const PERSONAL_ENVIRONMENT_ID = "environment-personal-profile-add";
 const SIGN_IN_V12 = { major: 1, minor: 2 } as const;
+
+function setSignedInViewer(): void {
+  useAuthStore.setState({
+    status: "signed-in",
+    profile: {
+      userId: "test-viewer",
+      userName: "Test Viewer",
+      email: "viewer@example.test",
+    },
+    contextMetadata: { userId: "test-viewer", username: "test-viewer" },
+    signingInAttempt: null,
+    signedOutCause: null,
+    hostRefusedHeldBearer: false,
+  });
+}
 
 function signedOutProfile(): ProviderProfile {
   return {
@@ -258,6 +291,130 @@ function renderSwitchAccountDialog(profile: ProviderProfile) {
   };
 }
 
+function EnvironmentProfileEditDialogHarness(props: {
+  readonly client: HostClient<HostRpcRegistry>;
+  readonly profile: ProviderProfile;
+  readonly startInReauth: boolean;
+  readonly queryClient: QueryClient;
+  readonly onOpenChange: (open: boolean) => void;
+}): ReactNode {
+  const [open, setOpen] = useState(true);
+  return (
+    <PersonalPageContext.Provider
+      value={{
+        section: "providers",
+        pick: { kind: "personal" },
+        state: { kind: "ready", status: environmentStatusFixture({}) },
+        line: null,
+        hostName: "Studio",
+        localOverrides: [],
+        hostId: ADD_HOST_ID,
+        client: props.client,
+        notices: [],
+        review: [],
+      }}
+    >
+      <QueryClientProvider client={props.queryClient}>
+        <TooltipProvider>
+          <ProfileEditDialog
+            state={claudeState(props.profile)}
+            profile={props.profile}
+            profiles={[props.profile]}
+            canOauth
+            oauthUnavailableHint={null}
+            startInReauth={props.startInReauth}
+            isLocalHost
+            open={open}
+            onOpenChange={(nextOpen) => {
+              props.onOpenChange(nextOpen);
+              setOpen(nextOpen);
+            }}
+            remainingProfilesAfterRemoval={[]}
+            onSelectedProfileIdChange={() => undefined}
+            profileEnablementAvailable
+            profileEnablementPending={() => false}
+            onSetProfileEnabled={() => undefined}
+          />
+        </TooltipProvider>
+      </QueryClientProvider>
+    </PersonalPageContext.Provider>
+  );
+}
+
+function renderEnvironmentProfileEditDialog(startInReauth: boolean) {
+  setSignedInViewer();
+  const requests: {
+    readonly links: ProvidersLinkRequestV12[];
+    readonly completes: unknown[];
+  } = { links: [], completes: [] };
+  const { client } = buildEnvironmentClient({
+    hostId: ADD_HOST_ID,
+    handlers: {
+      "environment.list": () => ({
+        environments: [
+          {
+            environmentId: PERSONAL_ENVIRONMENT_ID,
+            ownerKind: "user",
+            ownerId: "owner-test",
+            roomId: "room-test",
+            label: "Personal",
+            effectiveRole: "owner",
+            kind: "personal",
+            hostCount: 0,
+            providerHandle: null,
+          },
+        ],
+      }),
+      "providers.link": (request) => {
+        requests.links.push(request);
+        return {
+          linkId: "edit-dialog-delivery-link",
+          environmentProfileId: "edit-dialog-environment-profile",
+          prompt: {
+            kind: "sign_in_url",
+            url: "https://auth.example.test/sign-in",
+            codePrompt: "One-time code",
+          },
+        };
+      },
+      "providers.linkComplete": (request) => {
+        requests.completes.push(request);
+        return {
+          state: "installing",
+          code: null,
+          account: null,
+          expectedAccount: null,
+          environmentProfileId: "edit-dialog-environment-profile",
+          profileId: null,
+        };
+      },
+      "providers.linkCancel": () => ({}),
+      "providers.list": () => ({ providers: [], native: null }),
+    },
+  });
+  optionalClient.current = client;
+  recordNegotiatedHostManifest(
+    ADD_HOST_ID,
+    addRouteManifest(SIGN_IN_V12, SIGN_IN_V12),
+  );
+
+  const profile = signedOutProfile();
+  const onOpenChange = vi.fn<(open: boolean) => void>();
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  render(
+    <EnvironmentProfileEditDialogHarness
+      client={client}
+      profile={profile}
+      startInReauth={startInReauth}
+      queryClient={queryClient}
+      onOpenChange={onOpenChange}
+    />,
+  );
+  return { requests, onOpenChange };
+}
+
 function startLoginCalls(): number {
   return host.request.mock.calls.filter(
     ([method]) => method === "providers.startLogin",
@@ -280,6 +437,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  optionalClient.current = null;
   resetNegotiatedManifests();
   useAuthStore.setState({
     status: "signed-out",
@@ -327,10 +485,13 @@ function renderClaudeAddDialog(client: HostClient<HostRpcRegistry>): void {
   );
 }
 
-function addRouteManifest(linkVersion: SchemaVersion): ConnectionManifest {
+function addRouteManifest(
+  linkVersion: SchemaVersion,
+  completeVersion: SchemaVersion,
+): ConnectionManifest {
   return {
     "providers.link": linkVersion,
-    "providers.linkComplete": SIGN_IN_V12,
+    "providers.linkComplete": completeVersion,
     "providers.linkCancel": { major: 1, minor: 0 },
     "providers.list": { major: 10, minor: 9 },
     "environment.list": { major: 1, minor: 0 },
@@ -393,29 +554,22 @@ function buildPersonalAddClient(
 
 describe("managed profile add entry-point routing", () => {
   it("uses the Personal environment on @1.2 and creates a Claude profile there", async () => {
-    useAuthStore.setState({
-      status: "signed-in",
-      profile: {
-        userId: "test-viewer",
-        userName: "Test Viewer",
-        email: "viewer@example.test",
-      },
-      contextMetadata: { userId: "test-viewer", username: "test-viewer" },
-      signingInAttempt: null,
-      signedOutCause: null,
-      hostRefusedHeldBearer: false,
-    });
+    setSignedInViewer();
     const linkRequests: ProvidersLinkRequestV12[] = [];
     const startRequests: unknown[] = [];
     const client = buildPersonalAddClient(linkRequests, startRequests);
-    recordNegotiatedHostManifest(ADD_HOST_ID, addRouteManifest(SIGN_IN_V12));
+    recordNegotiatedHostManifest(
+      ADD_HOST_ID,
+      addRouteManifest(SIGN_IN_V12, SIGN_IN_V12),
+    );
 
     renderClaudeAddDialog(client);
     await userEvent.click(
       await screen.findByRole("button", { name: "Sign in" }),
     );
 
-    await waitFor(() => expect(linkRequests).toHaveLength(1));
+    await screen.findByLabelText("One-time code");
+    expect(linkRequests).toHaveLength(1);
     expect(linkRequests[0]).toEqual({
       providerId: "claude-code",
       profileId: null,
@@ -426,13 +580,14 @@ describe("managed profile add entry-point routing", () => {
     expect(startRequests).toEqual([]);
   });
 
-  it("keeps the local add flow on a host that negotiates @1.1", async () => {
+  it("keeps the local add flow when providers.linkComplete negotiates @1.1", async () => {
+    setSignedInViewer();
     const linkRequests: ProvidersLinkRequestV12[] = [];
     const startRequests: unknown[] = [];
     const client = buildPersonalAddClient(linkRequests, startRequests);
     recordNegotiatedHostManifest(
       ADD_HOST_ID,
-      addRouteManifest({ major: 1, minor: 1 }),
+      addRouteManifest(SIGN_IN_V12, { major: 1, minor: 1 }),
     );
 
     renderClaudeAddDialog(client);
@@ -440,7 +595,10 @@ describe("managed profile add entry-point routing", () => {
       await screen.findByRole("button", { name: "Sign in" }),
     );
 
-    await waitFor(() => expect(startRequests).toHaveLength(1));
+    await screen.findByText(
+      "Sign-in did not start. You can retry when the provider is available.",
+    );
+    expect(startRequests).toHaveLength(1);
     expect(linkRequests).toEqual([]);
   });
 });
@@ -458,17 +616,16 @@ describe.each(MOUNT_MODES)(
 
       // The hook's own toast, once. This is the half that always worked: it
       // runs from the mutation's own options, not the observer's.
-      await waitFor(() => expect(toastFromHostError).toHaveBeenCalledTimes(1));
-      expect(toastFromHostError).toHaveBeenCalledWith(
-        expect.objectContaining({ code: "RPC_ERROR" }),
-        "Couldn't start the sign-in flow.",
-      );
-
       // The dialog follows it: the refusal is said inline, the pending step
       // is gone, and the retry is live - not a spinner outliving the toast.
       expect(
         await screen.findByText("Sign-in did not start. Try again when ready."),
       ).toBeTruthy();
+      expect(toastFromHostError).toHaveBeenCalledTimes(1);
+      expect(toastFromHostError).toHaveBeenCalledWith(
+        expect.objectContaining({ code: "RPC_ERROR" }),
+        "Couldn't start the sign-in flow.",
+      );
       expect(screen.queryByText("Opening the sign-in page…")).toBeNull();
       const retry = screen.getByRole("button", { name: "Retry" });
       expect(retry.hasAttribute("disabled")).toBe(false);
@@ -481,12 +638,13 @@ describe.each(MOUNT_MODES)(
 
       fireEvent.click(screen.getByRole("button", { name: "Retry" }));
 
-      await waitFor(() => expect(startLoginCalls()).toBe(2));
+      expect(await screen.findByText("Opening the sign-in page…")).toBeTruthy();
       // Refused again: the dialog settles again rather than sticking.
-      await waitFor(() => expect(toastFromHostError).toHaveBeenCalledTimes(2));
       expect(
         await screen.findByText("Sign-in did not start. Try again when ready."),
       ).toBeTruthy();
+      expect(startLoginCalls()).toBe(2);
+      expect(toastFromHostError).toHaveBeenCalledTimes(2);
       expect(screen.queryByText("Opening the sign-in page…")).toBeNull();
     });
 
@@ -526,33 +684,35 @@ describe.each(MOUNT_MODES)(
     });
 
     it("consumes a refusal that lands after the dialog unmounted", async () => {
-      let refuse: (error: HostRpcError) => void = () => undefined;
-      host.request.mockImplementation((method) =>
-        method === "providers.startLogin"
-          ? new Promise<unknown>((_resolve, reject) => {
-              refuse = reject;
-            })
-          : Promise.resolve({}),
+      const startLoginResult = Promise.withResolvers<unknown>();
+      const startDispatched = Promise.withResolvers<void>();
+      const refusalHandled = Promise.withResolvers<void>();
+      host.request.mockImplementation((method) => {
+        if (method !== "providers.startLogin") return Promise.resolve({});
+        startDispatched.resolve();
+        return startLoginResult.promise;
+      });
+      vi.mocked(toastFromHostError).mockImplementationOnce(() => {
+        refusalHandled.resolve();
+      });
+      const { unmount } = renderSignInDialog(Wrapper);
+      await startDispatched.promise;
+      unmount();
+
+      await act(async () => {
+        startLoginResult.reject(refusal());
+        await startLoginResult.promise.catch(() => undefined);
+      });
+      await refusalHandled.promise;
+
+      // The mounted-independent mutation handler consumes and reports the
+      // refusal even after the observer has been removed.
+      expect(startLoginCalls()).toBe(1);
+      expect(toastFromHostError).toHaveBeenCalledTimes(1);
+      expect(toastFromHostError).toHaveBeenCalledWith(
+        expect.objectContaining({ code: "RPC_ERROR" }),
+        "Couldn't start the sign-in flow.",
       );
-      const unhandled = vi.fn();
-      process.on("unhandledRejection", unhandled);
-      try {
-        const { unmount } = renderSignInDialog(Wrapper);
-        await waitFor(() => expect(startLoginCalls()).toBe(1));
-        unmount();
-
-        refuse(refusal());
-        // Node reports an unhandled rejection only once the microtasks that
-        // produced it have drained, so give it two macrotask turns.
-        await new Promise((resolve) => setTimeout(resolve, 0));
-        await new Promise((resolve) => setTimeout(resolve, 0));
-
-        expect(unhandled).not.toHaveBeenCalled();
-        // The refusal is still reported, by the hook, exactly once.
-        expect(toastFromHostError).toHaveBeenCalledTimes(1);
-      } finally {
-        process.off("unhandledRejection", unhandled);
-      }
     });
   },
 );
@@ -623,6 +783,61 @@ describe("the Switch account panel through a providers refresh", () => {
   });
 });
 
+describe("environment delivery pending from ProfileEditDialog", () => {
+  it("returns Switch account to the edit form with its unsaved label and color", async () => {
+    const { requests, onOpenChange } =
+      renderEnvironmentProfileEditDialog(false);
+    const nextColor = PROVIDER_PROFILE_ACCENT_COLORS[0];
+    const nameInput = screen.getByLabelText("Profile name");
+    await userEvent.clear(nameInput);
+    await userEvent.type(nameInput, "Uncommitted label");
+    await userEvent.click(
+      screen.getByRole("button", { name: `Use color ${nextColor}` }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
+    await screen.findByText(REPLACE_PROFILE_ACCOUNT_LINE);
+    fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
+    await screen.findByLabelText("One-time code");
+    fireEvent.change(screen.getByLabelText("One-time code"), {
+      target: { value: "delivery-code" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Done" }));
+
+    const returnedName = screen.getByLabelText("Profile name");
+    if (!(returnedName instanceof HTMLInputElement)) {
+      throw new Error("Expected the profile name input after delivery.");
+    }
+    expect(returnedName.value).toBe("Uncommitted label");
+    expect(
+      screen
+        .getByRole("button", { name: `Use color ${nextColor}` })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(requests.links).toHaveLength(1);
+    expect(requests.links[0]?.replaceAccount).toBe(true);
+    expect(requests.completes).toHaveLength(1);
+    expect(onOpenChange).not.toHaveBeenCalled();
+  });
+
+  it("closes a reauth edit when delivery is pending", async () => {
+    const { requests, onOpenChange } = renderEnvironmentProfileEditDialog(true);
+    await screen.findByLabelText("One-time code");
+    fireEvent.change(screen.getByLabelText("One-time code"), {
+      target: { value: "delivery-code" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Done" }));
+
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(requests.links).toHaveLength(1);
+    expect(requests.links[0]?.replaceAccount).toBe(false);
+    expect(requests.completes).toHaveLength(1);
+  });
+});
+
 // A provider can accept the browser consent and still turn the account away
 // (`providers.awaitLogin@2.2` `refusal`): Antigravity does it for an account
 // Google wants verified first. Both surfaces that run the sign-in flow have to
@@ -647,22 +862,24 @@ function answerSignInWith(awaitAnswer: {
   readonly existingProfileId: string | null;
   readonly codeRejected: boolean;
   readonly refusal: ProviderLoginRefusal | null;
-}): void {
-  host.request.mockImplementation((method) =>
-    method === "providers.startLogin"
-      ? Promise.resolve({
-          url: "https://accounts.google.com/o/oauth2/v2/auth?client_id=agy",
-          started: true,
-          profileId: PROFILE_ID,
-          userCode: null,
-        })
-      : Promise.resolve({}),
-  );
+}): CallEvents {
+  const startLoginEvents = createCallEvents();
+  host.request.mockImplementation((method) => {
+    if (method !== "providers.startLogin") return Promise.resolve({});
+    startLoginEvents.emit();
+    return Promise.resolve({
+      url: "https://accounts.google.com/o/oauth2/v2/auth?client_id=agy",
+      started: true,
+      profileId: PROFILE_ID,
+      userCode: null,
+    });
+  });
   host.requestWithOptions.mockImplementation((method) =>
     method === "providers.awaitLogin"
       ? Promise.resolve(awaitAnswer)
       : new Promise<unknown>(() => undefined),
   );
+  return startLoginEvents;
 }
 
 function renderAntigravityReauth() {
@@ -766,7 +983,7 @@ describe("the reauth panel when the provider refuses the sign-in", () => {
   });
 
   it("starts a fresh sign-in from 'Try another account'", async () => {
-    answerSignInWith({
+    const startLoginEvents = answerSignInWith({
       state: null,
       existingProfileId: null,
       codeRejected: false,
@@ -780,7 +997,9 @@ describe("the reauth panel when the provider refuses the sign-in", () => {
       screen.getByRole("button", { name: "Try another account" }),
     );
 
-    await waitFor(() => expect(startLoginCalls()).toBe(2));
+    await startLoginEvents.waitFor(2);
+    expect(await screen.findByText(REFUSAL_HEADLINE)).toBeTruthy();
+    expect(startLoginCalls()).toBe(2);
   });
 
   it("offers no Verify account button when the provider offered no link, but still retries as 'Try another account'", async () => {
@@ -846,7 +1065,7 @@ describe("the add-profile dialog when the provider refuses the sign-in", () => {
   });
 
   it("opens the verification link and starts a fresh sign-in from 'Try another account'", async () => {
-    answerSignInWith({
+    const startLoginEvents = answerSignInWith({
       state: null,
       existingProfileId: null,
       codeRejected: false,
@@ -868,7 +1087,9 @@ describe("the add-profile dialog when the provider refuses the sign-in", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Try another account" }),
     );
-    await waitFor(() => expect(startLoginCalls()).toBe(2));
+    await startLoginEvents.waitFor(2);
+    expect(await screen.findByText(REFUSAL_HEADLINE)).toBeTruthy();
+    expect(startLoginCalls()).toBe(2);
   });
 
   it("offers no Verify account button when the provider offered no link", async () => {

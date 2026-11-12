@@ -26,6 +26,8 @@ import {
   useProvidersLinkCancel,
 } from "@/hooks/providers/use-providers-link-mutations";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
+import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
+import { CredentialRefusalNote } from "@/components/providers/credential-refusal-note";
 import { getNegotiatedHostMethods } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { startVisibleInterval } from "@/lib/dom/visible-interval";
@@ -126,6 +128,10 @@ export function EnvironmentProfileSignIn(
 function EnvironmentProfileSignInForScope(
   props: EnvironmentProfileSignInProps,
 ): ReactNode {
+  const credentialRefusal = useHostCredentialRefusal(
+    props.client.getActiveHostId(),
+  );
+  const disabled = props.disabled || credentialRefusal !== null;
   const [state, setState] = useState<SignInState>({ kind: "idle" });
   const [code, setCode] = useState("");
   const { mutateAsync: startLink, isPending: starting } = useProvidersLink();
@@ -234,7 +240,7 @@ function EnvironmentProfileSignInForScope(
   });
 
   const start = async (replaceAccount: boolean): Promise<void> => {
-    if (props.disabled || starting) return;
+    if (disabled || starting) return;
     if (attempt.current !== null) release(attempt.current);
     const current: SignInAttempt = {
       client: props.client,
@@ -290,7 +296,7 @@ function EnvironmentProfileSignInForScope(
     if (
       !props.autoStart ||
       props.request.replaceAccount ||
-      props.disabled ||
+      disabled ||
       autoStarted.current
     )
       return;
@@ -303,7 +309,7 @@ function EnvironmentProfileSignInForScope(
     return () => {
       disposed = true;
     };
-  }, [props.autoStart, props.disabled, props.request.replaceAccount]);
+  }, [props.autoStart, disabled, props.request.replaceAccount]);
 
   const complete = async (
     current: SignInAttempt,
@@ -311,6 +317,7 @@ function EnvironmentProfileSignInForScope(
   ): Promise<void> => {
     if (
       !isLiveSignInAttempt(current, attempt.current) ||
+      credentialRefusal !== null ||
       current.completing ||
       current.linkId === null
     )
@@ -446,6 +453,7 @@ function EnvironmentProfileSignInForScope(
     if (
       current === null ||
       current.linkId === null ||
+      disabled ||
       code.trim().length === 0 ||
       submitting
     )
@@ -455,27 +463,34 @@ function EnvironmentProfileSignInForScope(
     void complete(current, pasted);
   };
   const cancel = (): void => {
+    if (state.kind === "installing") {
+      finishReceiving();
+      return;
+    }
     if (attempt.current !== null) release(attempt.current);
     props.onCancel();
   };
   return (
-    <EnvironmentSignInBody
-      state={state}
-      code={code}
-      submitting={submitting}
-      disabled={props.disabled}
-      replaceAccount={props.request.replaceAccount || replaceConfirmed}
-      onStart={() =>
-        void start(props.request.replaceAccount || replaceConfirmed)
-      }
-      onCodeChange={setCode}
-      onSubmit={() => void submit()}
-      onSwitch={() => {
-        setReplaceConfirmed(true);
-        setState({ kind: "idle" });
-      }}
-      onCancel={cancel}
-    />
+    <>
+      <CredentialRefusalNote refusal={credentialRefusal} />
+      <EnvironmentSignInBody
+        state={state}
+        code={code}
+        submitting={submitting}
+        disabled={disabled}
+        replaceAccount={props.request.replaceAccount || replaceConfirmed}
+        onStart={() =>
+          void start(props.request.replaceAccount || replaceConfirmed)
+        }
+        onCodeChange={setCode}
+        onSubmit={() => void submit()}
+        onSwitch={() => {
+          setReplaceConfirmed(true);
+          setState({ kind: "idle" });
+        }}
+        onCancel={cancel}
+      />
+    </>
   );
 }
 
@@ -520,7 +535,7 @@ function EnvironmentSignInBody(props: {
         <div className="flex items-center gap-2 text-ui-sm">
           <MutedAgentSpinner />
           {state.kind === "installing"
-            ? "Waiting for this profile on this computer…"
+            ? SIGNED_IN_RECEIVING_LINE
             : "Waiting for sign-in…"}
         </div>
       );
@@ -532,6 +547,7 @@ function EnvironmentSignInBody(props: {
           note={state.note}
           code={props.code}
           submitting={props.submitting}
+          disabled={props.disabled}
           onCodeChange={props.onCodeChange}
           onSubmit={props.onSubmit}
           onOpen={(url) => void openLink(url, "auth", null)}
@@ -574,7 +590,9 @@ function EnvironmentSignInBody(props: {
     <div className="flex flex-col gap-3" aria-live="polite">
       {body}
       <Button type="button" variant="ghost" onClick={props.onCancel}>
-        {state.kind === "complete" ? "Done" : "Cancel"}
+        {state.kind === "complete" || state.kind === "installing"
+          ? "Done"
+          : "Cancel"}
       </Button>
     </div>
   );
@@ -585,6 +603,7 @@ function EnvironmentSignInPrompt(props: {
   readonly note: string | null;
   readonly code: string;
   readonly submitting: boolean;
+  readonly disabled: boolean;
   readonly onCodeChange: (value: string) => void;
   readonly onSubmit: () => void;
   readonly onOpen: (url: string) => void;
@@ -606,6 +625,7 @@ function EnvironmentSignInPrompt(props: {
         <Input
           aria-label={prompt.codePrompt ?? "Code"}
           value={props.code}
+          disabled={props.disabled}
           onChange={(event) => props.onCodeChange(event.target.value)}
           autoComplete="off"
         />
@@ -614,7 +634,9 @@ function EnvironmentSignInPrompt(props: {
         )}
         <Button
           type="button"
-          disabled={props.submitting || props.code.trim().length === 0}
+          disabled={
+            props.disabled || props.submitting || props.code.trim().length === 0
+          }
           onClick={props.onSubmit}
         >
           {props.submitting ? <MutedAgentSpinner /> : null}

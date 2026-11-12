@@ -31,8 +31,16 @@ export function useEnvironmentProfileSignInSupported(
   managed: boolean,
 ): boolean {
   const hostId = useRequesterHostId(client);
-  const version = useHostMethodSchemaVersion(hostId, "providers.link");
-  return managed && usesEnvironmentSignIn(providerId, version);
+  const startVersion = useHostMethodSchemaVersion(hostId, "providers.link");
+  const completeVersion = useHostMethodSchemaVersion(
+    hostId,
+    "providers.linkComplete",
+  );
+  return (
+    managed &&
+    usesEnvironmentSignIn(providerId, startVersion) &&
+    usesEnvironmentSignIn(providerId, completeVersion)
+  );
 }
 
 export function useProfileSignInEnvironment(

@@ -1,10 +1,15 @@
 // The Link dialog calls `useHostClient()` with no client prop. Mocked at that
 // boundary (the way `providers-settings-panel.test.tsx` does), with ONE stable
 // scripted client: the poll effect depends on `client`.
-const clientMock = vi.hoisted((): { current: unknown } => ({ current: null }));
+const clientMock = vi.hoisted(
+  (): { current: HostClient<HostRpcRegistry> | null } => ({ current: null }),
+);
+const useHostClientMock = vi.hoisted(() =>
+  vi.fn<() => HostClient<HostRpcRegistry>>(),
+);
 vi.mock("@/lib/host/runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host/runtime")>();
-  return { ...actual, useHostClient: () => clientMock.current };
+  return { ...actual, useHostClient: useHostClientMock };
 });
 
 // Personal's id is read from `environment.list` under the signed-in viewer.
@@ -30,7 +35,9 @@ import {
   render,
   screen,
   waitFor,
+  waitForElementToBeRemoved,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -39,17 +46,31 @@ import type {
   ProvidersLinkRequestV12,
   ProvidersLinkResponseV12,
 } from "@traycer/protocol/host/environment-schemas";
+import type { ConnectionManifest } from "@traycer/protocol/framework/index";
+import { hostRpcRegistry } from "@traycer/protocol/host";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import {
+  MockHostMessenger,
+  type MockHandlerMap,
+} from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import { HostRuntimeProvider, useHostBinding } from "@/lib/host/runtime";
+import { sandboxHostEntry } from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
+import type { HostRpcRegistry } from "@/lib/host";
 import { ProviderLinkDialog } from "@/components/settings/panels/provider-link-dialog";
 import { PersonalPageContext } from "@/components/settings/personal/personal-page-context";
 import { ConfigurationSourceContext } from "@/components/settings/environment/configuration-source";
+import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
 import {
   buildEnvironmentClient,
   environmentStatusFixture,
 } from "@/lib/environment/__tests__/environment-test-support";
 import type { OpenLink } from "@/lib/links/open-link";
-import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { useProviderLinkDialogStore } from "@/stores/providers/provider-link-dialog-store";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
@@ -68,6 +89,82 @@ const HOST_NAME = "Studio";
 const PROFILE_ID = "5f0c9b3e-7a41-4d0e-9c53-0b1f6e2a8d44";
 const LINK_ID = "link-1";
 const SIGN_IN_URL = "https://claude.ai/oauth/authorize?state=abc";
+const SANDBOX_HOST_ID = "sandbox-link-host";
+const SIGNED_IN_AUTH_FIXTURE = {
+  status: "signed-in" as const,
+  profile: {
+    userId: "test-viewer",
+    userName: "Test Viewer",
+    email: "viewer@example.test",
+  },
+  contextMetadata: { userId: "test-viewer", username: "test-viewer" },
+  shareableTeams: [],
+  subscriptionStatus: null,
+  signingInAttempt: null,
+  signedOutCause: null,
+  cloudVerdictLoss: "unreachable" as const,
+  hostRefusedHeldBearer: false,
+};
+const SIGNED_OUT_AUTH_FIXTURE = {
+  status: "signed-out" as const,
+  profile: null,
+  contextMetadata: null,
+  shareableTeams: [],
+  subscriptionStatus: null,
+  signingInAttempt: null,
+  signedOutCause: "retired" as const,
+  cloudVerdictLoss: "unreachable" as const,
+  hostRefusedHeldBearer: false,
+};
+
+function useFixtureHostClient(): HostClient<HostRpcRegistry> {
+  const client = clientMock.current;
+  if (client === null) {
+    throw new Error("The host client fixture was not initialized.");
+  }
+  return client;
+}
+
+function useSandboxNamedHostClient(): HostClient<HostRpcRegistry> {
+  const binding = useHostBinding();
+  const client = resolveNamedHostClient(binding, SANDBOX_HOST_ID);
+  if (client === null) {
+    throw new Error("The sandbox runtime binding was not available.");
+  }
+  return client;
+}
+
+function SandboxRuntimeHarness(props: {
+  readonly runnerHost: MockRunnerHost;
+  readonly handlers: MockHandlerMap<HostRpcRegistry>;
+  readonly children: ReactNode;
+}): ReactNode {
+  return (
+    <RunnerHostProvider runnerHost={props.runnerHost}>
+      <HostRuntimeProvider
+        registry={hostRpcRegistry}
+        messengerFactory={({ registry }) =>
+          new MockHostMessenger({
+            registry,
+            requestId: () => "req-sandbox-link",
+            handlers: props.handlers,
+          })
+        }
+        invalidator={null}
+        requestId={null}
+        remoteFetcher={() =>
+          Promise.resolve({
+            kind: "hosts",
+            entries: [sandboxHostEntry(SANDBOX_HOST_ID, null)],
+          })
+        }
+        fallback={null}
+      >
+        {props.children}
+      </HostRuntimeProvider>
+    </RunnerHostProvider>
+  );
+}
 
 type LinkHandler = (
   request: ProvidersLinkRequestV12,
@@ -168,6 +265,8 @@ function cloudPersonalPage(children: ReactNode): ReactNode {
 }
 
 beforeEach(() => {
+  useHostClientMock.mockReset();
+  useAuthStore.setState(SIGNED_OUT_AUTH_FIXTURE);
   linkMock.link.mockReset();
   listMock.mockReset();
   providersListMock.mockReset();
@@ -206,15 +305,19 @@ beforeEach(() => {
     },
   });
   clientMock.current = client;
+  useHostClientMock.mockImplementation(useFixtureHostClient);
 });
 
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
+  useHostClientMock.mockReset();
+  useHostClientMock.mockImplementation(useFixtureHostClient);
   resetNegotiatedManifests();
   clientMock.current = null;
   useProviderLinkDialogStore.setState({ target: null });
   useSettingsEnvironmentPickStore.setState({ pick: null });
+  useAuthStore.setState(SIGNED_OUT_AUTH_FIXTURE);
 });
 
 /**
@@ -338,6 +441,128 @@ describe("the intro", () => {
   });
 });
 
+describe("the paired environment sign-in versions", () => {
+  const mixedManifests: Array<{
+    readonly olderMethod: string;
+    readonly manifest: ConnectionManifest;
+  }> = [
+    {
+      olderMethod: "providers.link",
+      manifest: {
+        "providers.link": { major: 1, minor: 1 },
+        "providers.linkComplete": { major: 1, minor: 2 },
+      },
+    },
+    {
+      olderMethod: "providers.linkComplete",
+      manifest: {
+        "providers.link": { major: 1, minor: 2 },
+        "providers.linkComplete": { major: 1, minor: 1 },
+      },
+    },
+  ];
+
+  it.each(mixedManifests)(
+    "uses the legacy flow when $olderMethod is below 1.2",
+    async ({ manifest }) => {
+      useAuthStore.setState(SIGNED_IN_AUTH_FIXTURE);
+      recordNegotiatedHostManifest(HOST_ID, manifest);
+      linkMock.link.mockResolvedValueOnce(SIGN_IN_RESPONSE);
+      useProviderLinkDialogStore.getState().open({
+        providerId: "claude-code",
+        profileId: null,
+        environmentId: PERSONAL_ENV_ID,
+      });
+      render(
+        <QueryClientProvider client={new QueryClient()}>
+          {cloudPersonalPage(<ProviderLinkDialog />)}
+        </QueryClientProvider>,
+      );
+      await screen.findByRole("button", { name: "Continue" });
+
+      expect(screen.queryByLabelText("Profile name")).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+      await screen.findByTestId("provider-link-code");
+
+      expect(linkMock.link).toHaveBeenCalledWith({
+        providerId: "claude-code",
+        profileId: null,
+        environmentId: PERSONAL_ENV_ID,
+        createProfile: null,
+        replaceAccount: false,
+      });
+    },
+  );
+});
+
+it("shows the real sandbox refusal before either link request can be sent", async () => {
+  const runnerHost = new MockRunnerHost({
+    signInUrl: "https://auth.traycer.invalid/sign-in",
+    authnBaseUrl: "https://authn.traycer.invalid",
+    localHost: null,
+    hosts: [],
+    workspaceFolderPickerPaths: undefined,
+    hasLocalHost: undefined,
+    traycerCli: undefined,
+  });
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  const sandboxAttempts = { link: vi.fn(), complete: vi.fn() };
+  const handlers: MockHandlerMap<HostRpcRegistry> = {
+    "environment.list": () => ({
+      environments: [
+        {
+          environmentId: PERSONAL_ENV_ID,
+          ownerKind: "user",
+          ownerId: "owner-sandbox-fixture",
+          roomId: "room-personal",
+          label: "Personal",
+          effectiveRole: "owner",
+          kind: "personal",
+          hostCount: 0,
+          providerHandle: null,
+        },
+      ],
+    }),
+    "providers.link": (request) => {
+      sandboxAttempts.link(request);
+      return Promise.resolve(SIGN_IN_RESPONSE);
+    },
+    "providers.linkComplete": (request) => {
+      sandboxAttempts.complete(request);
+      return Promise.resolve(answer({ state: "linked" }));
+    },
+  };
+  recordNegotiatedHostManifest(SANDBOX_HOST_ID, {
+    "providers.link": { major: 1, minor: 2 },
+    "providers.linkComplete": { major: 1, minor: 2 },
+    "environment.list": { major: 1, minor: 1 },
+  });
+  useProviderLinkDialogStore.setState({
+    target: {
+      providerId: "claude-code",
+      profileId: null,
+      environmentId: PERSONAL_ENV_ID,
+    },
+  });
+  useHostClientMock.mockImplementation(useSandboxNamedHostClient);
+
+  render(
+    <QueryClientProvider client={queryClient}>
+      <SandboxRuntimeHarness runnerHost={runnerHost} handlers={handlers}>
+        {cloudPersonalPage(<ProviderLinkDialog />)}
+      </SandboxRuntimeHarness>
+    </QueryClientProvider>,
+  );
+
+  expect(await screen.findByText("Sandboxes don't take sign-ins")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Back" })).toBeTruthy();
+  expect(screen.queryByLabelText("Code")).toBeNull();
+  expect(sandboxAttempts.link).not.toHaveBeenCalled();
+  expect(sandboxAttempts.complete).not.toHaveBeenCalled();
+});
+
 describe("a sign-in URL with a pasted code", () => {
   it("unlocks a cloud profile after start fails and retries with the edited label", async () => {
     recordNegotiatedHostManifest(HOST_ID, {
@@ -423,9 +648,14 @@ describe("a sign-in URL with a pasted code", () => {
       "providers.linkCancel": { major: 1, minor: 0 },
     });
     await openCloudDialog("claude-code", null);
-    fireEvent.change(screen.getByLabelText("Profile name"), {
-      target: { value: "Cloud profile" },
-    });
+    const profileName = screen.getByLabelText("Profile name");
+    if (!(profileName instanceof HTMLInputElement)) {
+      throw new Error("Expected a native profile label input.");
+    }
+    const maximumLabel = "C".repeat(64);
+    await userEvent.clear(profileName);
+    await userEvent.type(profileName, `${maximumLabel}X`);
+    expect(profileName.value).toBe(maximumLabel);
     linkMock.link.mockResolvedValueOnce(SIGN_IN_RESPONSE);
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
     await screen.findByLabelText("Code");
@@ -435,7 +665,7 @@ describe("a sign-in URL with a pasted code", () => {
       profileId: null,
       environmentId: PERSONAL_ENV_ID,
       createProfile: {
-        label: "Cloud profile",
+        label: maximumLabel,
         shareSkillsAndPlugins: false,
       },
       replaceAccount: false,
@@ -515,10 +745,8 @@ describe("a sign-in URL with a pasted code", () => {
     // The next paste is judged afresh: the note goes when the code is fine.
     linkMock.complete.mockResolvedValueOnce(answer({ state: "pending" }));
     pasteAndLink("abc#def");
-    await waitFor(() => {
-      expect(linkMock.complete).toHaveBeenCalledTimes(2);
-      expect(screen.queryByTestId("provider-link-code-note")).toBeNull();
-    });
+    await waitForElementToBeRemoved(note);
+    expect(linkMock.complete).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -945,14 +1173,14 @@ describe("the environment a link names", () => {
     useProviderLinkDialogStore
       .getState()
       .open({ providerId: "claude-code", profileId: PROFILE_ID });
+    const listRequested = Promise.withResolvers<void>();
+    listMock.mockImplementationOnce(() => listRequested.resolve());
     render(
       <QueryClientProvider client={new QueryClient()}>
         {personalPage(<ProviderLinkDialog />)}
       </QueryClientProvider>,
     );
-    await waitFor(() => {
-      expect(listMock).toHaveBeenCalled();
-    });
+    await listRequested.promise;
 
     const continueButton = screen.getByTestId("provider-link-continue");
     expect(continueButton.hasAttribute("disabled")).toBe(true);

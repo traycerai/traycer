@@ -84,6 +84,7 @@ export async function runEnvironmentProfileLogin(
   try {
     let replaceAccount = false;
     for (;;) {
+      if (abort.signal.aborted) return { status: "cancelled" };
       const start = await callHostRpcWithDispatch(
         "providers.link",
         {
@@ -131,7 +132,8 @@ export async function runEnvironmentProfileLogin(
         }
       }
       for (;;) {
-        if (abort.signal.aborted) return { status: "cancelled" };
+        if (abort.signal.aborted)
+          return { status: connected ? "signed-in-pending" : "cancelled" };
         let response: ProvidersLinkCompleteResponseV12;
         try {
           response = await callHostRpcWithDispatch(
@@ -147,7 +149,8 @@ export async function runEnvironmentProfileLogin(
         code = null;
         if (response.state === "linked" || response.state === "installing")
           connected = true;
-        if (abort.signal.aborted) return { status: "cancelled" };
+        if (abort.signal.aborted)
+          return { status: connected ? "signed-in-pending" : "cancelled" };
         if (
           connected &&
           response.state !== "linked" &&
@@ -186,7 +189,7 @@ export async function runEnvironmentProfileLogin(
               profile: summarizeProfile(installed),
               created: target.create !== null,
             };
-          if (abort.signal.aborted) return { status: "cancelled" };
+          if (abort.signal.aborted) return { status: "signed-in-pending" };
           if (response.state === "linked" && response.profileId !== null)
             return { status: "signed-in-pending" };
           await io.wait(2_000, abort.signal);

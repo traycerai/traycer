@@ -50,6 +50,16 @@ const SIGN_IN: LinkDialogState = {
   codePrompt: "Code",
   note: null,
 };
+const INSTALLING_PROMPTS: LinkDialogState[] = [
+  SIGN_IN,
+  {
+    kind: "device",
+    linkId: "link-2",
+    verificationUrl: "https://auth.example.test/device",
+    userCode: "ABCD-1234",
+  },
+  { kind: "linking", linkId: "link-3" },
+];
 
 describe("the exact copy", () => {
   it("states the intro, the unavailable line and the per-host lines word for word", () => {
@@ -215,6 +225,27 @@ describe("stateOfLinkComplete", () => {
     expect(
       stateOfLinkComplete(SIGN_IN, completeResponse({ state: "unavailable" })),
     ).toStrictEqual({ kind: "unavailable" });
+  });
+
+  it.each(INSTALLING_PROMPTS)(
+    "treats installation as linked from a $kind prompt",
+    (current) => {
+      expect(
+        stateOfLinkComplete(current, completeResponse({ state: "installing" })),
+      ).toStrictEqual({ kind: "linked", account: null });
+    },
+  );
+
+  it("keeps pending prompts and an already linked result unchanged", () => {
+    const linking: LinkDialogState = { kind: "linking", linkId: "link-3" };
+    const linked: LinkDialogState = { kind: "linked", account: null };
+
+    expect(
+      stateOfLinkComplete(linking, completeResponse({ state: "pending" })),
+    ).toBe(linking);
+    expect(
+      stateOfLinkComplete(linked, completeResponse({ state: "installing" })),
+    ).toBe(linked);
   });
 
   it("explains no_sign_in on a failed link", () => {

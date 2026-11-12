@@ -255,6 +255,10 @@ export function buildProfileLoginCommand(
       usesEnvironmentSignIn(
         providerId,
         await readLocalHostMethodVersion("providers.link"),
+      ) &&
+      usesEnvironmentSignIn(
+        providerId,
+        await readLocalHostMethodVersion("providers.linkComplete"),
       );
     const environmentSignIn =
       supportsEnvironmentSignIn &&

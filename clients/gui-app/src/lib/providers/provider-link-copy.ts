@@ -124,8 +124,10 @@ export function stateOfLinkComplete(
   current: LinkDialogState,
   response: ProvidersLinkCompleteResponse,
 ): LinkDialogState {
+  if (current.kind === "linked") return current;
   switch (response.state) {
     case "linked":
+    case "installing":
       return { kind: "linked", account: response.account };
     case "mismatch":
       return {

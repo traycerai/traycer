@@ -22,6 +22,7 @@ import type { ResponseOfMethod } from "../../../../shared/host-transport/host-me
 import {
   ACCOUNT_MISMATCH_SIGN_IN_LINE,
   REPLACE_PROFILE_ACCOUNT_LINE,
+  SIGNED_IN_RECEIVING_LINE,
 } from "../../../../shared/providers/environment-profile-sign-in";
 import {
   callHostRpcWithDispatch,
@@ -52,6 +53,10 @@ vi.mock("../../internal/host-rpc", async (importOriginal) => {
 
 const dispatchMock = vi.mocked(callHostRpcWithDispatch);
 const methodVersionMock = vi.mocked(readLocalHostMethodVersion);
+type LinkCancelResponse = ResponseOfMethod<
+  HostRpcRegistry,
+  "providers.linkCancel"
+>;
 
 const HOST_ID = "host-profile-environment-login";
 const ENVIRONMENT_ID = "environment-profile-login";
@@ -224,10 +229,14 @@ function awaitAnswer(state: ProviderCliState): ProvidersAwaitLoginResponse {
 interface HarnessOptions {
   readonly providerId: ProviderCliState["providerId"];
   readonly profiles: readonly ProviderProfile[];
-  readonly laterProfiles?: (listCall: number) => readonly ProviderProfile[];
+  readonly laterProfiles?: (
+    listCall: number,
+  ) => readonly ProviderProfile[] | Promise<readonly ProviderProfile[]>;
   readonly methodVersion?: (method: string) => SchemaVersion | null;
   readonly onLinkRequest?: () => void;
+  readonly onLinkCancel?: () => void;
   readonly link?: ProvidersLinkResponseV12 | Promise<ProvidersLinkResponseV12>;
+  readonly linkCancel?: Promise<LinkCancelResponse>;
   readonly complete?: (
     callNumber: number,
   ) =>
@@ -275,10 +284,10 @@ function makeHost(options: HarnessOptions): void {
           listCalls === 1
             ? options.profiles
             : (options.laterProfiles?.(listCalls) ?? options.profiles);
-        return Promise.resolve({
-          providers: [providerState(options.providerId, profiles)],
+        return Promise.resolve(profiles).then((resolvedProfiles) => ({
+          providers: [providerState(options.providerId, resolvedProfiles)],
           native: null,
-        });
+        }));
       }
       case "environment.host.read":
         return Promise.resolve(ENVIRONMENT_BINDING);
@@ -298,7 +307,8 @@ function makeHost(options: HarnessOptions): void {
             completeAnswer("linked", null, null),
         );
       case "providers.linkCancel":
-        return Promise.resolve({});
+        options.onLinkCancel?.();
+        return options.linkCancel ?? Promise.resolve({});
       case "providers.startLogin":
         return Promise.resolve(options.start ?? startAnswer());
       case "providers.awaitLogin":
@@ -322,6 +332,7 @@ function makeIo(options: {
   readonly lines?: readonly string[];
   readonly interruptOnWait?: boolean;
   readonly onWait?: (waitCalls: number) => void;
+  readonly wait?: (waitCalls: number) => Promise<void>;
 }): FakeIo {
   let interruptHandler: (() => void) | null = null;
   let interruptListening = false;
@@ -346,7 +357,7 @@ function makeIo(options: {
         interruptedDuringWait = true;
         if (interruptListening) interruptHandler?.();
       }
-      return Promise.resolve();
+      return options.wait?.(waitCalls) ?? Promise.resolve();
     },
     onInterrupt: (handler) => {
       interruptHandler = handler;
@@ -783,40 +794,61 @@ describe("environment profile sign-in through the CLI", () => {
     });
   });
 
-  it("uses the existing local flow for an existing profile on providers.link@1.1", async () => {
-    const selected = profile(
-      MANAGED_PROFILE_ID,
-      "managed",
-      "Selected profile",
-      ENVIRONMENT_PROFILE_ID,
-    );
-    makeHost({
-      providerId: "claude-code",
-      profiles: [selected],
-      await: awaitAnswer(providerState("claude-code", [selected])),
-      methodVersion: (method) =>
+  it.each([
+    [
+      "old link with new completion",
+      (method: string) =>
         method === "providers.link" ? { major: 1, minor: 1 } : V12,
-    });
-    const fake = makeIo({ terminal: true });
+    ],
+    [
+      "new link with old completion",
+      (method: string) =>
+        method === "providers.linkComplete" ? { major: 1, minor: 1 } : V12,
+    ],
+    [
+      "missing link",
+      (method: string) => (method === "providers.link" ? null : V12),
+    ],
+    [
+      "missing completion",
+      (method: string) => (method === "providers.linkComplete" ? null : V12),
+    ],
+  ] as const)(
+    "uses the existing local flow for an existing profile with %s",
+    async (_case, methodVersion) => {
+      const selected = profile(
+        MANAGED_PROFILE_ID,
+        "managed",
+        "Selected profile",
+        ENVIRONMENT_PROFILE_ID,
+      );
+      makeHost({
+        providerId: "claude-code",
+        profiles: [selected],
+        await: awaitAnswer(providerState("claude-code", [selected])),
+        methodVersion,
+      });
+      const fake = makeIo({ terminal: true });
 
-    const { result } = await runLogin(
-      "claude",
-      { kind: "existing", profile: MANAGED_PROFILE_ID },
-      fake.io,
-    );
+      const { result } = await runLogin(
+        "claude",
+        { kind: "existing", profile: MANAGED_PROFILE_ID },
+        fake.io,
+      );
 
-    expect(onlyCallTo("providers.startLogin")[1]).toMatchObject({
-      providerId: "claude-code",
-      profileId: MANAGED_PROFILE_ID,
-      createProfile: null,
-    });
-    expect(callsTo("providers.link")).toHaveLength(0);
-    expect(result.data).toMatchObject({
-      status: "signed-in",
-      created: false,
-      profile: { profileId: MANAGED_PROFILE_ID },
-    });
-  });
+      expect(onlyCallTo("providers.startLogin")[1]).toMatchObject({
+        providerId: "claude-code",
+        profileId: MANAGED_PROFILE_ID,
+        createProfile: null,
+      });
+      expect(callsTo("providers.link")).toHaveLength(0);
+      expect(result.data).toMatchObject({
+        status: "signed-in",
+        created: false,
+        profile: { profileId: MANAGED_PROFILE_ID },
+      });
+    },
+  );
 
   it("releases a link once when Ctrl+C interrupts pending completion", async () => {
     makeHost({
@@ -943,9 +975,10 @@ describe("environment profile sign-in through the CLI", () => {
 
       expect(result.data).toEqual({
         providerId: "claude-code",
-        status: "cancelled",
+        status: "signed-in-pending",
       });
-      expect(result.exitCode).toBe(130);
+      expect(result.human).toBe(SIGNED_IN_RECEIVING_LINE);
+      expect(result.exitCode).toBe(0);
       expect(callsTo("providers.linkComplete")).toHaveLength(1);
       expect(callsTo("providers.linkCancel")).toEqual([]);
       expect(onlyCallTo("providers.link")[2]).toMatchObject({
@@ -958,4 +991,136 @@ describe("environment profile sign-in through the CLI", () => {
       });
     },
   );
+
+  it("keeps a connected sign-in pending when Ctrl+C interrupts the polling wait", async () => {
+    makeHost({
+      providerId: "codex",
+      profiles: [],
+      link: linkAnswer({ kind: "local_handoff" }),
+      complete: () => completeAnswer("installing", null, null),
+    });
+    const fake = makeIo({ terminal: false, interruptOnWait: true });
+
+    const { result } = await runLogin(
+      "codex",
+      { kind: "create", label: "Work profile" },
+      fake.io,
+    );
+
+    expect(result.data).toEqual({
+      providerId: "codex",
+      status: "signed-in-pending",
+    });
+    expect(result.human).toBe(SIGNED_IN_RECEIVING_LINE);
+    expect(result.exitCode).toBe(0);
+    expect(callsTo("providers.linkComplete")).toHaveLength(1);
+    expect(callsTo("providers.linkCancel")).toEqual([]);
+  });
+
+  it("keeps a connected sign-in pending when Ctrl+C interrupts inventory", async () => {
+    let notifyInventoryStarted: () => void = () => {};
+    const inventoryStarted = new Promise<void>((resolve) => {
+      notifyInventoryStarted = resolve;
+    });
+    let resolveInventory: (
+      profiles: readonly ProviderProfile[],
+    ) => void = () => {};
+    const pendingInventory = new Promise<readonly ProviderProfile[]>(
+      (resolve) => {
+        resolveInventory = resolve;
+      },
+    );
+    makeHost({
+      providerId: "codex",
+      profiles: [],
+      link: linkAnswer({ kind: "local_handoff" }),
+      complete: () => completeAnswer("installing", null, null),
+      laterProfiles: (listCall) => {
+        if (listCall === 2) notifyInventoryStarted();
+        return listCall === 2 ? pendingInventory : [];
+      },
+    });
+    const fake = makeIo({ terminal: false });
+    const run = runLogin(
+      "codex",
+      { kind: "create", label: "Work profile" },
+      fake.io,
+    );
+
+    await Promise.race([
+      inventoryStarted,
+      run.then(() => {
+        throw new Error("CLI sign-in ended before inventory started.");
+      }),
+    ]);
+    expect(callsTo("providers.list")).toHaveLength(2);
+    fake.interrupt();
+    resolveInventory([]);
+    const { result } = await run;
+
+    expect(result.data).toEqual({
+      providerId: "codex",
+      status: "signed-in-pending",
+    });
+    expect(result.human).toBe(SIGNED_IN_RECEIVING_LINE);
+    expect(result.exitCode).toBe(0);
+    expect(callsTo("providers.linkCancel")).toEqual([]);
+  });
+
+  it("does not start a replacement link when Ctrl+C interrupts mismatch release", async () => {
+    const selected = profile(
+      MANAGED_PROFILE_ID,
+      "managed",
+      "Selected profile",
+      ENVIRONMENT_PROFILE_ID,
+    );
+    let notifyCancelStarted: () => void = () => {};
+    const cancelStarted = new Promise<void>((resolve) => {
+      notifyCancelStarted = resolve;
+    });
+    let resolveCancel: () => void = () => {};
+    const linkCancel = new Promise<LinkCancelResponse>((resolve) => {
+      resolveCancel = () => resolve({});
+    });
+    let resolveReleaseWait: () => void = () => {};
+    makeHost({
+      providerId: "claude-code",
+      profiles: [selected],
+      link: linkAnswer(SIGN_IN_URL_PROMPT),
+      complete: () =>
+        completeAnswer("mismatch", null, "harness_account_mismatch"),
+      onLinkCancel: notifyCancelStarted,
+      linkCancel,
+    });
+    const fake = makeIo({
+      terminal: true,
+      lines: [CODE, "y"],
+      wait: () =>
+        new Promise<void>((resolve) => {
+          resolveReleaseWait = resolve;
+        }),
+    });
+    const run = runLogin(
+      "claude",
+      { kind: "existing", profile: MANAGED_PROFILE_ID },
+      fake.io,
+    );
+
+    await Promise.race([
+      cancelStarted,
+      run.then(() => {
+        throw new Error("CLI sign-in ended before link release started.");
+      }),
+    ]);
+    fake.interrupt();
+    resolveCancel();
+    resolveReleaseWait();
+    const { result } = await run;
+
+    expect(result.data).toMatchObject({ status: "cancelled" });
+    expect(result.exitCode).toBe(130);
+    expect(callsTo("providers.link")).toHaveLength(1);
+    expect(callsTo("providers.linkCancel")).toHaveLength(1);
+    expect(callsTo("providers.linkComplete")).toHaveLength(1);
+  });
 });

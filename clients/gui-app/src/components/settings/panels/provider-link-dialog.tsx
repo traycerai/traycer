@@ -24,9 +24,10 @@ import {
 import { Input } from "@/components/ui/input";
 import { useHostClient } from "@/lib/host/runtime";
 import { EnvironmentProfileSignIn } from "@/components/providers/environment-profile-sign-in";
-import { useHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
+import { useEnvironmentProfileSignInSupported } from "@/hooks/providers/use-profile-sign-in-environment";
+import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
+import { CredentialRefusalNote } from "@/components/providers/credential-refusal-note";
 import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
-import { usesEnvironmentSignIn } from "@traycer-clients/shared/providers/environment-profile-sign-in";
 import {
   useConfigurationEnvironmentId,
   useConfigurationIsPersonal,
@@ -112,11 +113,32 @@ function RoutedProviderLinkDialog(props: {
   const { target, environmentId, onClose: close } = props;
   const client = useHostClient();
   const hostId = useRequesterHostId(client);
-  const version = useHostMethodSchemaVersion(hostId, "providers.link");
-  if (
-    environmentId !== null &&
-    usesEnvironmentSignIn(target.providerId, version)
-  ) {
+  const credentialRefusal = useHostCredentialRefusal(hostId);
+  const supported = useEnvironmentProfileSignInSupported(
+    client,
+    target.providerId,
+    true,
+  );
+  if (credentialRefusal !== null)
+    return (
+      <Dialog
+        open
+        onOpenChange={(open) => {
+          if (!open) close();
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Sign in</DialogTitle>
+          </DialogHeader>
+          <CredentialRefusalNote refusal={credentialRefusal} />
+          <Button type="button" variant="ghost" onClick={close}>
+            Back
+          </Button>
+        </DialogContent>
+      </Dialog>
+    );
+  if (environmentId !== null && supported) {
     return (
       <EnvironmentPlanSignInDialog
         key={`${environmentId}:${target.providerId}:${target.profileId}`}
@@ -190,6 +212,7 @@ function EnvironmentPlanSignInDialog(props: {
                   <Input
                     id={labelId}
                     value={label}
+                    maxLength={64}
                     disabled={started}
                     onChange={(event) => setLabel(event.target.value)}
                   />

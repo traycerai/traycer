@@ -110,7 +110,7 @@ export function useTeamPlanLinkCompleteMutation(
     options: {
       mutationKey: environmentMutationKeys.providersLinkComplete(),
       onSuccess: (response) => {
-        if (response.state === "linked") {
+        if (response.state === "linked" || response.state === "installing") {
           rereadLinkedPlan(queryClient, environmentId);
         }
       },
@@ -159,7 +159,8 @@ export function useTeamPlanLinkPollQuery(
       fireOnShow: true,
     });
   }, [pending, refetch, intervalMs]);
-  const linked = poll.data?.state === "linked";
+  const linked =
+    poll.data?.state === "linked" || poll.data?.state === "installing";
   useEffect(() => {
     if (linked) {
       rereadLinkedPlan(queryClient, environmentId);
