@@ -16,7 +16,6 @@ import type {
   EnvironmentReviewEntryV12,
   EnvironmentStatusResponseV12,
 } from "@traycer/protocol/host/environment-schemas";
-import type { EnvironmentMovePlanResponseV12 } from "@traycer/protocol/host/environment/move-contracts";
 import { reviewEntryFixture } from "@/components/settings/host-scope/__tests__/host-access-test-support";
 import type { ThisComputer } from "@/components/settings/move/this-computer";
 import {
@@ -166,7 +165,6 @@ function computerHolding(entries: readonly EnvironmentReviewEntryV12[]): void {
   const { client } = buildEnvironmentClient({
     hostId: "old",
     handlers: {
-      "environment.move.plan": () => movePlanWithRows(1),
       "environment.review": () => ({
         entries: [...entries],
         shownAt: null,
@@ -177,24 +175,15 @@ function computerHolding(entries: readonly EnvironmentReviewEntryV12[]): void {
   });
   recordNegotiatedHostManifest("old", {
     "environment.review": { major: 1, minor: 2 },
-    "environment.move.plan": { major: 1, minor: 2 },
   });
   thisComputer.current = { hostId: "old", hostName: "Old laptop", client };
 }
 
 /** This computer, with a fake host answering `environment.status` with `status`. */
 function computerWithStatus(status: EnvironmentStatusResponseV12): void {
-  computerWithStatusAndMovePlan(status, 1);
-}
-
-function computerWithStatusAndMovePlan(
-  status: EnvironmentStatusResponseV12,
-  moveRows: number,
-): void {
   const { client } = buildEnvironmentClient({
     hostId: "old",
     handlers: {
-      "environment.move.plan": () => movePlanWithRows(moveRows),
       "environment.review": () => ({
         entries: [],
         shownAt: null,
@@ -207,35 +196,8 @@ function computerWithStatusAndMovePlan(
   recordNegotiatedHostManifest("old", {
     "environment.review": { major: 1, minor: 2 },
     "environment.status": { major: 1, minor: 1 },
-    "environment.move.plan": { major: 1, minor: 2 },
   });
   thisComputer.current = { hostId: "old", hostName: "Old laptop", client };
-}
-
-function movePlanWithRows(count: number): EnvironmentMovePlanResponseV12 {
-  return {
-    personalHoldsSecrets: false,
-    itemChoices: false,
-    planHash: "plan-1",
-    planRevision: 1,
-    hostVersion: "1.5.0",
-    disclosureVersion: 1,
-    rows: {
-      looksLikeAKey: [],
-      sameNameInPersonal: [],
-      moves: Array.from({ length: count }, (_, index) => ({
-        kind: "variable" as const,
-        key: `EDITOR_${index}`,
-        os: null,
-        label: `EDITOR_${index}`,
-        detail: "variable",
-      })),
-      staysOnThisComputer: [],
-      alreadyInPersonal: [],
-      differsMasked: [],
-    },
-    guideDiffers: false,
-  };
 }
 
 /**
@@ -249,7 +211,6 @@ function computerWhoseStatusFailsAfterOneRead(
   const { client } = buildEnvironmentClient({
     hostId: "old",
     handlers: {
-      "environment.move.plan": () => movePlanWithRows(1),
       "environment.review": () => ({
         entries: [],
         shownAt: null,
@@ -266,7 +227,6 @@ function computerWhoseStatusFailsAfterOneRead(
   recordNegotiatedHostManifest("old", {
     "environment.review": { major: 1, minor: 2 },
     "environment.status": { major: 1, minor: 1 },
-    "environment.move.plan": { major: 1, minor: 2 },
   });
   thisComputer.current = { hostId: "old", hostName: "Old laptop", client };
   return { statusReads: () => reads };
@@ -305,6 +265,7 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
     useOnboardingStore.setState({
       completedAt: Date.now(),
       setupReminderDismissed: false,
+      moveInvitationAnswered: false,
       setupProgress: { agents: -1, appearance: -1, cookies: -1 },
     });
   });
@@ -348,6 +309,7 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
     expect(options.action?.label).toBe("Open");
     act(() => toastState.invokeDismiss());
     expect(useOnboardingStore.getState().setupReminderDismissed).toBe(true);
+    expect(useOnboardingStore.getState().moveInvitationAnswered).toBe(false);
 
     void act(() =>
       useOnboardingStore.setState({ setupReminderDismissed: false }),
@@ -404,7 +366,7 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
     );
   });
 
-  it("says this computer's settings are not in Personal, and the action opens its move sheet", async () => {
+  it("offers to move this computer to Personal and opens its move sheet", async () => {
     computerWithStatus(
       environmentStatusFixture({
         planes: { records: "local", broker: "local", room: "local" },
@@ -416,7 +378,7 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
 
     await waitFor(() =>
       expect(toastState).toHaveBeenCalledWith(
-        "This computer's settings aren't in Personal.",
+        "Move this computer to Personal",
         expect.anything(),
       ),
     );
@@ -426,9 +388,9 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
     );
     const [, options] = toastState.mock.calls[toastState.mock.calls.length - 1];
     expect(render(options.description).container.textContent).toBe(
-      "Move them to use them everywhere",
+      "So your settings follow you to every computer and sandbox.",
     );
-    expect(options.action?.label).toBe("Show me what moves");
+    expect(options.action?.label).toBe("Move to Personal");
     expect(options.cancel?.label).toBe("Not now");
 
     act(() => toastState.invokeAction());
@@ -436,20 +398,21 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
       hostId: "old",
       hostName: "Old laptop",
     });
+    expect(useOnboardingStore.getState().moveInvitationAnswered).toBe(true);
   });
 
-  it("shows the setup reminder instead of an invitation when the move plan is empty", async () => {
-    computerWithStatusAndMovePlan(NOT_MOVED_STATUS, 0);
+  it("invites an unbound computer even when there is nothing to move", async () => {
+    computerWithStatus(NOT_MOVED_STATUS);
     renderGuide();
 
     await waitFor(() =>
       expect(toastState).toHaveBeenCalledWith(
-        "You're all set",
+        "Move this computer to Personal",
         expect.anything(),
       ),
     );
     expect(toastState).not.toHaveBeenCalledWith(
-      "This computer's settings aren't in Personal.",
+      "You're all set",
       expect.anything(),
     );
   });
@@ -470,7 +433,37 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
       ),
     );
     expect(toastState).not.toHaveBeenCalledWith(
-      "This computer's settings aren't in Personal.",
+      "Move this computer to Personal",
+      expect.anything(),
+    );
+  });
+
+  it("invites an existing user whose setup reminder was already dismissed", async () => {
+    computerWithStatus(NOT_MOVED_STATUS);
+    useOnboardingStore.setState({ setupReminderDismissed: true });
+    renderGuide();
+
+    await waitFor(() =>
+      expect(toastState).toHaveBeenCalledWith(
+        "Move this computer to Personal",
+        expect.anything(),
+      ),
+    );
+  });
+
+  it("does not invite a computer after the invitation has been answered", async () => {
+    computerWithStatus(NOT_MOVED_STATUS);
+    useOnboardingStore.setState({ moveInvitationAnswered: true });
+    renderGuide();
+
+    await waitFor(() =>
+      expect(toastState).toHaveBeenCalledWith(
+        "You're all set",
+        expect.anything(),
+      ),
+    );
+    expect(toastState).not.toHaveBeenCalledWith(
+      "Move this computer to Personal",
       expect.anything(),
     );
   });
@@ -515,7 +508,7 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
 
       await waitFor(() =>
         expect(toastState).toHaveBeenCalledWith(
-          "This computer's settings aren't in Personal.",
+          "Move this computer to Personal",
           expect.objectContaining({ duration: Infinity }),
         ),
       );
@@ -533,7 +526,7 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
 
         await waitFor(() =>
           expect(toastState).toHaveBeenCalledWith(
-            "This computer's settings aren't in Personal.",
+            "Move this computer to Personal",
             expect.objectContaining({ duration }),
           ),
         );
@@ -585,13 +578,13 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
       ),
     );
     expect(toastState).not.toHaveBeenCalledWith(
-      "This computer's settings aren't in Personal.",
+      "Move this computer to Personal",
       expect.anything(),
     );
   });
 
   describe("the move toast", () => {
-    const MOVE_TOAST = "This computer's settings aren't in Personal.";
+    const MOVE_TOAST = "Move this computer to Personal";
     // The two toasts the Start page shows, each under its own id: the
     // invitation is not the setup reminder's other wording.
     const MOVE_INVITATION_TOAST_ID = "traycer-move-invitation";
@@ -614,7 +607,6 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
       const { client } = buildEnvironmentClient({
         hostId: "old",
         handlers: {
-          "environment.move.plan": () => movePlanWithRows(1),
           "environment.review": () => {
             review += 1;
             return {
@@ -633,7 +625,6 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
       recordNegotiatedHostManifest("old", {
         "environment.review": { major: 1, minor: 2 },
         "environment.status": { major: 1, minor: 1 },
-        "environment.move.plan": { major: 1, minor: 2 },
       });
       thisComputer.current = { hostId: "old", hostName: "Old laptop", client };
       return { reads: () => ({ status, review }) };
@@ -692,6 +683,11 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
       act(() => toastState.invokeCancelFor(MOVE_INVITATION_TOAST_ID));
 
       expect(useOnboardingStore.getState().setupReminderDismissed).toBe(true);
+      expect(useOnboardingStore.getState().moveInvitationAnswered).toBe(true);
+      expect(toastState).not.toHaveBeenCalledWith(
+        "You're all set",
+        expect.anything(),
+      );
     });
 
     it("is still the thing being asked when the Start page is left and comes back", async () => {
@@ -801,6 +797,7 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
       act(() => toastState.invokeDismiss());
 
       expect(useOnboardingStore.getState().setupReminderDismissed).toBe(true);
+      expect(useOnboardingStore.getState().moveInvitationAnswered).toBe(true);
     });
 
     it("retires the reminder and invalidates its retained action on sign-out after navigation", async () => {
@@ -821,7 +818,7 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
 
       await waitFor(() =>
         expect(toastState).toHaveBeenCalledWith(
-          "This computer's settings aren't in Personal.",
+          "Move this computer to Personal",
           expect.anything(),
         ),
       );

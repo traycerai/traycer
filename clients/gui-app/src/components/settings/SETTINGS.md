@@ -164,16 +164,18 @@ Application. It uses the first settings leader digit; General uses the second.
 The start page offers the checklist through a persistent, dismissible toast once
 the first-task guide ends. Dismissing it is remembered locally across reloads;
 the checklist remains available in Settings. Completed checklists hide the toast.
-While this computer has settings of its own to move (its
-`environment.move.plan` has a Moves row), the move's own invitation stands
-there instead, under an id of its own (`MOVE_INVITATION_TOAST_ID`): "This
-computer's settings aren't in Personal." · Show me what moves · Not now. Only
-the person takes it down - a status that stops naming a move does not, and the
-reminder never stands in its place. A computer with nothing to move is a new
-computer's first run and is not asked: the checklist's move card ("Move this
-computer to Personal" · Move to Personal) is where the move waits. A computer
-that runs a team's settings shows neither (`useThisComputersMove` answers
-`team`).
+While this computer runs its own settings, the move's own invitation stands
+there instead, once, under an id of its own (`MOVE_INVITATION_TOAST_ID`), in
+the move card's words: "Move this computer to Personal" · "So your settings
+follow you to every computer and sandbox." · Move to Personal · Not now. On a
+fresh install Home is hidden, so this is where a new person first meets the
+move. Only the person takes it down - a status that stops naming a move does
+not, and the reminder never stands in its place. The answer is kept on the
+desktop in its own flag (`moveInvitationAnswered`), not the reminder's, so
+someone who dismissed the reminder long ago is still asked once; it settles
+the reminder too. Afterwards the checklist's move card is the only place the
+move waits. A computer that runs a team's settings, or has moved, is never
+asked (`useThisComputersMove` answers `team` or `moved`).
 
 The Home tab draws the checklist itself, above its task sections
 (`home-focus/home-getting-started-section.tsx`), from the same cards
