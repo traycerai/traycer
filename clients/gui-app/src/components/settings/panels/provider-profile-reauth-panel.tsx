@@ -80,6 +80,10 @@ interface ProviderProfileReauthPanelProps {
 export function ProviderProfileReauthPanel(
   props: ProviderProfileReauthPanelProps,
 ): ReactNode {
+  // Inventory can promote an alias or replace the identity mid-sign-in.
+  // The editor's keyed session owns replacement; this entry owns the target
+  // and the identity comparison for either sign-in route until it leaves.
+  const [entryProfile] = useState(props.profile);
   const client = useOptionalHostClient();
   const hostId = useRequesterHostId(client);
   const supported = useEnvironmentProfileSignInSupported(
@@ -100,8 +104,14 @@ export function ProviderProfileReauthPanel(
   if (supported === null)
     return <ProfileReauthReading onCancel={props.onCancel} />;
   if (supported && client !== null)
-    return <RoutedProviderProfileReauthPanel {...props} client={client} />;
-  return <LocalProviderProfileReauthPanel {...props} />;
+    return (
+      <RoutedProviderProfileReauthPanel
+        {...props}
+        profile={entryProfile}
+        client={client}
+      />
+    );
+  return <LocalProviderProfileReauthPanel {...props} profile={entryProfile} />;
 }
 
 function RoutedProviderProfileReauthPanel(
@@ -176,7 +186,7 @@ function ProfileReauthReading(props: {
 
 function LocalProviderProfileReauthPanel({
   state,
-  profile,
+  profile: entryProfile,
   isLocalHost,
   onSameAccountReconnected,
   onCancel,
@@ -193,18 +203,6 @@ function LocalProviderProfileReauthPanel({
   const submitLoginCode = useProvidersSubmitLoginCode();
   const touchLogin = useProvidersTouchLogin();
   const ensurePack = useProvidersEnsurePack();
-  // The `profile` prop is LIVE, and it turns over mid-flow:
-  // `providers.awaitLogin`'s hook-level `onSuccess` commits the fresh row into
-  // the `providers.list` cache, and query-core awaits that before the flow's
-  // own per-call `onSuccess` settles the step. So by the first render of the
-  // settled step this prop already describes whoever just signed in - it can
-  // be neither the "before" side of the changed-account comparison (which
-  // would then compare the new account against itself and always call it
-  // unchanged) nor the basis for "are we signing this profile in, or switching
-  // its account" (which would flip its own copy the instant it succeeded).
-  // Freeze the row as it was on entry; it is the only record of who this
-  // profile was when the user started, and everything below wants exactly it.
-  const [entryProfile] = useState(profile);
   const supportsLoginOwnership = useProvidersLoginOwnership();
   const hostBlock = providerHostBlock(state, "sign-in");
   const flow = useProviderProfileLoginFlow({

@@ -267,6 +267,12 @@ export async function runEnvironmentProfileLogin(
         } else await io.wait(2_000, abort.signal);
       }
     }
+  } catch (error) {
+    if (abort.signal.aborted)
+      return {
+        status: connectedAt !== null ? "signed-in-pending" : "cancelled",
+      };
+    throw error;
   } finally {
     stopInterrupt();
     await release();

@@ -4,6 +4,8 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
+  within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -13,8 +15,11 @@ import type { EnvironmentStatusResponseV12 } from "@traycer/protocol/host/enviro
 import type {
   ProviderCliState,
   ProviderProfile,
+  ProvidersListResponse,
 } from "@traycer/protocol/host/provider-schemas";
 import type {
+  ProvidersLinkCompleteRequestV11,
+  ProvidersLinkCompleteResponseV12,
   ProvidersLinkRequestV12,
   ProvidersLinkResponseV12,
 } from "@traycer/protocol/host/environment-schemas";
@@ -46,6 +51,10 @@ import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-polic
 import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
 import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-native-schemas";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { PersonalPageContext } from "@/components/settings/personal/personal-page-context";
+import { ProviderProfileScopedSection } from "@/components/settings/panels/provider-profile-scoped-section";
+import { createCallEvents } from "@/components/providers/__tests__/environment-sign-in-call-events";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 /**
@@ -73,7 +82,17 @@ const routingPlan = vi.hoisted((): { current: HostRpcTierPlan | null } => ({
 
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
-  return { ...actual, useOptionalHostClient: () => clientRef.current };
+  return {
+    ...actual,
+    useHostClient: (): HostClient<HostRpcRegistry> => {
+      const client = clientRef.current;
+      if (client === null) {
+        throw new Error("Expected a host client.");
+      }
+      return client;
+    },
+    useOptionalHostClient: () => clientRef.current,
+  };
 });
 vi.mock(
   "@traycer-clients/shared/host-client/host-rpc-routing",
@@ -474,6 +493,7 @@ afterEach(() => {
   clientRef.current = null;
   routingPlan.current = null;
   resetNegotiatedManifests();
+  useSettingsEnvironmentPickStore.setState({ pick: null });
   useAuthStore.setState({
     status: "signed-out",
     profile: null,
@@ -812,6 +832,324 @@ describe("managed profile reauth routing", () => {
         replaceAccount: false,
       },
     ]);
+  });
+});
+
+describe("a local profile promoted to an environment alias during reauth", () => {
+  it("keeps the active attempt on its entry row and captures the alias on a fresh switch", async () => {
+    const environmentProfileId = "environment-profile-reauth-alias";
+    const firstLinkId = "link-reauth-alias-first";
+    const secondLinkId = "link-reauth-alias-second";
+    const firstDeviceCode = "FIRST-DEVICE-CODE";
+    const secondDeviceCode = "SECOND-DEVICE-CODE";
+    const draftLabel = "Draft profile name";
+    const initialProfile = managedProfile();
+    const aliasedProfile: ProviderProfile = {
+      ...initialProfile,
+      environmentProfileId,
+    };
+    const installedProfile: ProviderProfile = {
+      ...aliasedProfile,
+      auth: { ...aliasedProfile.auth, status: "authenticated" },
+    };
+    const linkRequests: ProvidersLinkRequestV12[] = [];
+    const completeRequests: ProvidersLinkCompleteRequestV11[] = [];
+    const cancelledLinkIds: string[] = [];
+    const linkEvents = createCallEvents();
+    const completeEvents = createCallEvents();
+    const cancelEvents = createCallEvents();
+    const inventoryEvents = createCallEvents();
+    const pollIntervals = createCallEvents();
+    const firstLinkResponse = Promise.withResolvers<ProvidersLinkResponseV12>();
+    const firstCompleteResponse =
+      Promise.withResolvers<ProvidersLinkCompleteResponseV12>();
+    const inventoryResponse = Promise.withResolvers<ProvidersListResponse>();
+    const secondLinkResponse =
+      Promise.withResolvers<ProvidersLinkResponseV12>();
+    let inventoryReads = 0;
+    const initialInventory: ProvidersListResponse = {
+      providers: [],
+      native: null,
+      scope: "personal",
+      onHostOnly: [
+        { providerId: "codex", profileId: initialProfile.profileId },
+      ],
+    };
+    const installedInventory: ProvidersListResponse = {
+      providers: [codexState(installedProfile)],
+      native: null,
+      scope: "personal",
+      onHostOnly: [],
+    };
+    const { client } = buildEnvironmentClient({
+      hostId: HOST_ID,
+      handlers: {
+        "environment.status": () => environmentStatusFixture({}),
+        "environment.host.read": () => ({
+          hostId: HOST_ID,
+          environment: {
+            environmentId: ENVIRONMENT_ID,
+            ownerKind: "user",
+            ownerId: "owner-test",
+            roomId: "room-test",
+            label: "Personal",
+          },
+          explicit: true,
+          enrolledByUserId: null,
+          canUnbind: false,
+          sharingGeneration: null,
+        }),
+        "environment.list": () => ({
+          environments: [
+            {
+              environmentId: ENVIRONMENT_ID,
+              ownerKind: "user",
+              ownerId: "owner-test",
+              roomId: "room-test",
+              label: "Personal",
+              effectiveRole: "owner",
+              kind: "personal",
+              hostCount: 1,
+              providerHandle: null,
+            },
+          ],
+        }),
+        "providers.link": (request) => {
+          linkRequests.push(request);
+          linkEvents.emit();
+          if (linkRequests.length === 1) return firstLinkResponse.promise;
+          if (linkRequests.length === 2) return secondLinkResponse.promise;
+          throw new Error("Unexpected extra environment sign-in request.");
+        },
+        "providers.linkComplete": (request) => {
+          completeRequests.push(request);
+          completeEvents.emit();
+          return firstCompleteResponse.promise;
+        },
+        "providers.linkCancel": (request) => {
+          cancelledLinkIds.push(request.linkId);
+          cancelEvents.emit();
+          return {};
+        },
+        "providers.list": () => {
+          inventoryReads += 1;
+          inventoryEvents.emit();
+          if (inventoryReads === 1) return initialInventory;
+          if (inventoryReads === 2) return inventoryResponse.promise;
+          throw new Error("Unexpected extra provider inventory read.");
+        },
+      },
+    });
+    clientRef.current = client;
+    recordNegotiatedHostManifest(HOST_ID, ROUTE_MANIFEST);
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "local", hostId: HOST_ID, hostName: "Studio" },
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const sectionForProfile = (profile: ProviderProfile) => (
+      <PersonalPageContext.Provider
+        value={{
+          section: "providers",
+          pick: { kind: "personal" },
+          state: { kind: "ready", status: environmentStatusFixture({}) },
+          line: null,
+          hostName: "Studio",
+          localOverrides: [],
+          hostId: HOST_ID,
+          client,
+          notices: [],
+          review: [],
+        }}
+      >
+        <QueryClientProvider client={queryClient}>
+          <TooltipProvider>
+            <ProviderProfileScopedSection
+              state={codexState(profile)}
+              hostId={HOST_ID}
+              isSelectedHostLocal
+              canAddProfile
+              credentialRefusal={null}
+              onOpenCliSettings={() => undefined}
+              startInReauth={false}
+              failedAttempt={null}
+              onAddProfile={() => undefined}
+              onDismissFailedAttempt={() => undefined}
+              selectedProfileId={initialProfile.profileId}
+              onSelectedProfileIdChange={() => undefined}
+              profileEnablementAvailable={false}
+              profileEnablementPending={() => false}
+              onSetProfileEnabled={() => undefined}
+            />
+          </TooltipProvider>
+        </QueryClientProvider>
+      </PersonalPageContext.Provider>
+    );
+    const rendered = render(sectionForProfile(initialProfile));
+
+    await screen.findByText("On Studio only.");
+    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    const initialNameInput = screen.getByLabelText("Profile name");
+    if (!(initialNameInput instanceof HTMLInputElement)) {
+      throw new Error("Expected the profile name input.");
+    }
+    fireEvent.change(initialNameInput, { target: { value: draftLabel } });
+    fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
+    expect(
+      await screen.findByText(
+        "This changes the account on this profile everywhere it is used.",
+      ),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
+    await linkEvents.waitFor(1);
+    expect(linkRequests[0]).toEqual({
+      providerId: "codex",
+      profileId: initialProfile.profileId,
+      environmentId: ENVIRONMENT_ID,
+      createProfile: null,
+      replaceAccount: true,
+    });
+
+    rendered.rerender(sectionForProfile(aliasedProfile));
+    expect(screen.getByText("Waiting for sign-in…")).toBeTruthy();
+    const nameInputAfterAlias = screen.getByLabelText("Profile name");
+    if (!(nameInputAfterAlias instanceof HTMLInputElement)) {
+      throw new Error("Expected the profile name input after alias promotion.");
+    }
+    expect(nameInputAfterAlias.value).toBe(draftLabel);
+
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const intervalWindow: Pick<Window, "setInterval"> = window;
+    const realSetInterval = intervalWindow.setInterval.bind(intervalWindow);
+    const intervalSpy = vi
+      .spyOn(intervalWindow, "setInterval")
+      .mockImplementation((handler, timeout) => {
+        const intervalId = realSetInterval(handler, timeout);
+        if (timeout === 2_000) pollIntervals.emit();
+        return intervalId;
+      });
+    try {
+      await act(async () => {
+        firstLinkResponse.resolve({
+          linkId: firstLinkId,
+          environmentProfileId,
+          prompt: {
+            kind: "device_code",
+            verificationUrl: "https://auth.example.test/device",
+            userCode: firstDeviceCode,
+            expiresAt: Date.now() + 60_000,
+          },
+        });
+        await firstLinkResponse.promise;
+      });
+      expect(await screen.findByText(firstDeviceCode)).toBeTruthy();
+      await pollIntervals.waitFor(1);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_000);
+      });
+      await completeEvents.waitFor(1);
+
+      await act(async () => {
+        firstCompleteResponse.resolve({
+          state: "linked",
+          code: null,
+          account: null,
+          expectedAccount: null,
+          environmentProfileId,
+          profileId: initialProfile.profileId,
+        });
+        await firstCompleteResponse.promise;
+      });
+      await inventoryEvents.waitFor(2);
+      await act(async () => {
+        inventoryResponse.resolve(installedInventory);
+        await inventoryResponse.promise;
+      });
+      await waitFor(() => {
+        const returnedNameInput = screen.getByLabelText("Profile name");
+        if (!(returnedNameInput instanceof HTMLInputElement)) {
+          throw new Error("Expected the profile name input after completion.");
+        }
+        expect(returnedNameInput.disabled).toBe(false);
+        expect(returnedNameInput.value).toBe(draftLabel);
+      });
+
+      expect(linkRequests).toEqual([
+        {
+          providerId: "codex",
+          profileId: initialProfile.profileId,
+          environmentId: ENVIRONMENT_ID,
+          createProfile: null,
+          replaceAccount: true,
+        },
+      ]);
+      expect(completeRequests).toEqual([
+        {
+          linkId: firstLinkId,
+          code: null,
+          environmentId: ENVIRONMENT_ID,
+        },
+      ]);
+      expect(cancelledLinkIds).toEqual([]);
+      expect(mocks.startLoginAsync).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
+      expect(
+        await screen.findByText(
+          "This changes the account on this profile everywhere it is used.",
+        ),
+      ).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
+      await linkEvents.waitFor(2);
+      expect(linkRequests).toEqual([
+        {
+          providerId: "codex",
+          profileId: initialProfile.profileId,
+          environmentId: ENVIRONMENT_ID,
+          createProfile: null,
+          replaceAccount: true,
+        },
+        {
+          providerId: "codex",
+          profileId: environmentProfileId,
+          environmentId: ENVIRONMENT_ID,
+          createProfile: null,
+          replaceAccount: true,
+        },
+      ]);
+
+      const pendingSignIn = screen
+        .getByText("Waiting for sign-in…")
+        .closest('[aria-live="polite"]');
+      if (!(pendingSignIn instanceof HTMLElement)) {
+        throw new Error("Expected the active sign-in status region.");
+      }
+      fireEvent.click(
+        within(pendingSignIn).getByRole("button", { name: "Cancel" }),
+      );
+      await act(async () => {
+        secondLinkResponse.resolve({
+          linkId: secondLinkId,
+          environmentProfileId,
+          prompt: {
+            kind: "device_code",
+            verificationUrl: "https://auth.example.test/device",
+            userCode: secondDeviceCode,
+            expiresAt: Date.now() + 60_000,
+          },
+        });
+        await secondLinkResponse.promise;
+      });
+      await cancelEvents.waitFor(1);
+      expect(cancelledLinkIds).toEqual([secondLinkId]);
+    } finally {
+      intervalSpy.mockRestore();
+      vi.useRealTimers();
+    }
   });
 });
 

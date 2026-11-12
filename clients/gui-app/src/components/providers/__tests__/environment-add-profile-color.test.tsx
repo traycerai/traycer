@@ -6,6 +6,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -684,7 +685,27 @@ describe("EnvironmentAddProfileDialog profile color", () => {
         await host.providersListEvents.waitFor(2);
       }
       await host.setEnabledEvents.waitFor(1);
-      await screen.findByRole("button", { name: "Done" });
+      const dialog = screen.getByRole("dialog");
+      const recolorSpinner = await within(dialog).findByText(
+        (_content, element) =>
+          element instanceof HTMLSpanElement &&
+          element.getAttribute("aria-hidden") === "true" &&
+          element.classList.contains("font-mono") &&
+          element.classList.contains("text-code") &&
+          element.textContent.trim() !== "" &&
+          element.closest('[aria-live="polite"]') === null,
+      );
+      if (!(recolorSpinner instanceof HTMLSpanElement)) {
+        throw new Error("Expected the parent recolor spinner glyph.");
+      }
+      expect(recolorSpinner.textContent.trim()).toBeTruthy();
+
+      const done = await within(dialog).findByRole("button", { name: "Done" });
+      if (!(done instanceof HTMLButtonElement)) {
+        throw new Error("Expected Done to be a native button.");
+      }
+      expect(done.textContent).toBe("Done");
+      expect(done.disabled).toBe(true);
       expect(host.providersListCalls).toEqual([1, 2]);
       expect(onProfileCreated).not.toHaveBeenCalled();
 
@@ -696,6 +717,8 @@ describe("EnvironmentAddProfileDialog profile color", () => {
       fireEvent.pointerDown(overlay, { button: 0, pointerType: "mouse" });
       await user.click(screen.getByRole("button", { name: "Done" }));
       expect(onOpenChange).not.toHaveBeenCalled();
+      expect(onProfileCreated).not.toHaveBeenCalled();
+      expect(host.setEnabledRequests).toHaveLength(1);
       expect(screen.getByRole("dialog")).toBeTruthy();
 
       await act(async () => {

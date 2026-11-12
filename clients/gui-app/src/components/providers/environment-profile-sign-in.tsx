@@ -598,7 +598,12 @@ function EnvironmentSignInBody(props: {
   return (
     <div className="flex flex-col gap-3" aria-live="polite">
       {body}
-      <Button type="button" variant="ghost" onClick={props.onCancel}>
+      <Button
+        type="button"
+        variant="ghost"
+        disabled={state.kind === "complete" && props.disabled}
+        onClick={props.onCancel}
+      >
         {state.kind === "complete" || state.kind === "installing"
           ? "Done"
           : "Cancel"}

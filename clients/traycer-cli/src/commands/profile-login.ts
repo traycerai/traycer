@@ -266,8 +266,11 @@ export function buildProfileLoginCommand(
       (await readLocalHostMethodVersion("environment.host.read")) !== null;
     const environmentSignIn =
       supportsEnvironmentSignIn &&
-      (await callHostRpcWithDispatch("environment.status", {}, PLAIN_DISPATCH))
-        .principal !== null;
+      (
+        await toAgentCliError(
+          callHostRpcWithDispatch("environment.status", {}, PLAIN_DISPATCH),
+        )
+      ).principal !== null;
     if (
       environmentSignIn &&
       providerId === "claude-code" &&
@@ -275,7 +278,9 @@ export function buildProfileLoginCommand(
     )
       throw notInteractive();
     const outcome = environmentSignIn
-      ? await runEnvironmentProfileLogin(ctx, io, providerId, target, state)
+      ? await toAgentCliError(
+          runEnvironmentProfileLogin(ctx, io, providerId, target, state),
+        )
       : await runLogin(ctx, io, providerId, target, state);
     return resultOf(providerId, outcome);
   };

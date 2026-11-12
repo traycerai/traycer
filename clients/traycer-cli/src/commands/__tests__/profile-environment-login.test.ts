@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AMBIENT_PROFILE_ID_SENTINEL } from "@traycer/protocol/host/agent/shared";
+import {
+  HostRpcError,
+  HostTransportFailureError,
+} from "@traycer/protocol/host-transport/remote/rpc-types";
 import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-native-schemas";
 import {
   providersListResponseSchema,
@@ -30,6 +34,7 @@ import {
   readLocalHostMethodVersion,
 } from "../../internal/host-rpc";
 import { noopLogger } from "../../logger";
+import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
 import type { CommandContext, CommandResult } from "../../runner/runner";
 import {
   buildProfileLoginCommand,
@@ -1574,19 +1579,30 @@ describe("environment profile sign-in through the CLI", () => {
     makeHost({
       providerId: "claude-code",
       profiles: [],
-      environmentStatus: () => Promise.reject(new Error("Status read failed.")),
+      environmentStatus: () =>
+        Promise.reject(
+          new HostRpcError({
+            code: "UNAUTHORIZED",
+            message: "The status read requires authentication.",
+            requestId: "status-request",
+            method: "environment.status",
+            fatalDetails: null,
+          }),
+        ),
     });
     const context = makeContext();
 
-    await expect(
-      buildProfileLoginCommand(
-        {
-          provider: "claude",
-          target: { kind: "create", label: "Work profile" },
-        },
-        makeIo({ terminal: true }).io,
-      )(context),
-    ).rejects.toThrow("Status read failed.");
+    const attempt = buildProfileLoginCommand(
+      {
+        provider: "claude",
+        target: { kind: "create", label: "Work profile" },
+      },
+      makeIo({ terminal: true }).io,
+    )(context);
+    await expect(attempt).rejects.toBeInstanceOf(CliError);
+    await expect(attempt).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.AUTH_REJECTED,
+    });
 
     expect(callsTo("environment.status")).toHaveLength(1);
     expect(callsTo("environment.host.read")).toEqual([]);
@@ -1598,16 +1614,27 @@ describe("environment profile sign-in through the CLI", () => {
     makeHost({
       providerId: "claude-code",
       profiles: [],
-      environmentHostRead: () => Promise.reject(new Error("Host read failed.")),
+      environmentHostRead: () =>
+        Promise.reject(
+          new HostRpcError({
+            code: "E_HOST_UNSUPPORTED",
+            message: "Environment binding reads are unsupported.",
+            requestId: "binding-request",
+            method: "environment.host.read",
+            fatalDetails: null,
+          }),
+        ),
     });
 
-    await expect(
-      runLogin(
-        "claude",
-        { kind: "create", label: "Work profile" },
-        makeIo({ terminal: true }).io,
-      ),
-    ).rejects.toThrow("Host read failed.");
+    const attempt = runLogin(
+      "claude",
+      { kind: "create", label: "Work profile" },
+      makeIo({ terminal: true }).io,
+    );
+    await expect(attempt).rejects.toBeInstanceOf(CliError);
+    await expect(attempt).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UNSUPPORTED,
+    });
 
     expect(callsTo("environment.status")).toHaveLength(1);
     expect(callsTo("environment.host.read")).toHaveLength(1);
@@ -1782,6 +1809,270 @@ describe("environment profile sign-in through the CLI", () => {
     expect(callsTo("providers.linkComplete")).toHaveLength(1);
     expect(callsTo("providers.linkCancel")).toEqual([]);
     expect(callsTo("providers.setEnabled")).toEqual([]);
+  });
+
+  it("returns cancellation when the deferred link rejects after Ctrl+C", async () => {
+    let notifyLinkStarted: () => void = () => {};
+    const linkStarted = new Promise<void>((resolve) => {
+      notifyLinkStarted = resolve;
+    });
+    let rejectLink: (error: unknown) => void = () => {};
+    const link = new Promise<ProvidersLinkResponseV12>((_resolve, reject) => {
+      rejectLink = reject;
+    });
+    makeHost({
+      providerId: "codex",
+      profiles: [],
+      onLinkRequest: notifyLinkStarted,
+      link,
+    });
+    const fake = makeIo({ terminal: false });
+    const run = runLogin(
+      "codex",
+      { kind: "create", label: "Work profile" },
+      fake.io,
+    );
+
+    await Promise.race([
+      linkStarted,
+      run.then(() => {
+        throw new Error("CLI sign-in ended before providers.link started.");
+      }),
+    ]);
+    fake.interrupt();
+    rejectLink(
+      new HostTransportFailureError({
+        code: "RPC_ERROR",
+        message: "The link transport failed after send.",
+        requestId: "link-request",
+        method: "providers.link",
+        fatalDetails: null,
+      }),
+    );
+    const { result } = await run;
+
+    expect(result.data).toEqual({ providerId: "codex", status: "cancelled" });
+    expect(result.exitCode).toBe(130);
+    expect(callsTo("providers.link")).toHaveLength(1);
+    expect(callsTo("providers.linkComplete")).toEqual([]);
+    expect(callsTo("providers.linkCancel")).toEqual([]);
+  });
+
+  it("reports an ambiguous post-send create without repeating the link", async () => {
+    let notifyLinkStarted: () => void = () => {};
+    const linkStarted = new Promise<void>((resolve) => {
+      notifyLinkStarted = resolve;
+    });
+    let rejectLink: (error: unknown) => void = () => {};
+    const link = new Promise<ProvidersLinkResponseV12>((_resolve, reject) => {
+      rejectLink = reject;
+    });
+    makeHost({
+      providerId: "codex",
+      profiles: [],
+      onLinkRequest: notifyLinkStarted,
+      link,
+    });
+    const attempt = runLogin(
+      "codex",
+      { kind: "create", label: "Work profile" },
+      makeIo({ terminal: false }).io,
+    );
+
+    await Promise.race([
+      linkStarted,
+      attempt.then(() => {
+        throw new Error("CLI sign-in ended before providers.link started.");
+      }),
+    ]);
+    rejectLink(
+      new HostTransportFailureError({
+        code: "RPC_ERROR",
+        message: "The link transport failed after send.",
+        requestId: "link-request",
+        method: "providers.link",
+        fatalDetails: null,
+      }),
+    );
+
+    await expect(attempt).rejects.toBeInstanceOf(CliError);
+    await expect(attempt).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_REQUEST_OUTCOME_UNKNOWN,
+      message: expect.stringContaining("check before sending it again"),
+    });
+    expect(callsTo("providers.link")).toHaveLength(1);
+    expect(onlyCallTo("providers.link")[1]).toMatchObject({
+      createProfile: {
+        label: "Work profile",
+        shareSkillsAndPlugins: false,
+      },
+    });
+    expect(callsTo("providers.startLogin")).toEqual([]);
+    expect(callsTo("providers.linkComplete")).toEqual([]);
+  });
+
+  it("cancels when the first completion rejects after Ctrl+C and releases the link", async () => {
+    let notifyCompletionStarted: () => void = () => {};
+    const completionStarted = new Promise<void>((resolve) => {
+      notifyCompletionStarted = resolve;
+    });
+    let rejectCompletion: (error: unknown) => void = () => {};
+    makeHost({
+      providerId: "codex",
+      profiles: [],
+      link: linkAnswer({ kind: "local_handoff" }),
+      complete: () =>
+        new Promise<ProvidersLinkCompleteResponseV12>((_resolve, reject) => {
+          rejectCompletion = reject;
+          notifyCompletionStarted();
+        }),
+    });
+    const fake = makeIo({ terminal: false });
+    const run = runLogin(
+      "codex",
+      { kind: "create", label: "Work profile" },
+      fake.io,
+    );
+
+    await Promise.race([
+      completionStarted,
+      run.then(() => {
+        throw new Error("CLI sign-in ended before linkComplete started.");
+      }),
+    ]);
+    fake.interrupt();
+    rejectCompletion(
+      new HostTransportFailureError({
+        code: "RPC_ERROR",
+        message: "The completion transport failed after send.",
+        requestId: "completion-request",
+        method: "providers.linkComplete",
+        fatalDetails: null,
+      }),
+    );
+    const { result } = await run;
+
+    expect(result.data).toEqual({ providerId: "codex", status: "cancelled" });
+    expect(result.exitCode).toBe(130);
+    expect(callsTo("providers.link")).toHaveLength(1);
+    expect(callsTo("providers.linkComplete")).toHaveLength(1);
+    expect(callsTo("providers.linkCancel")).toHaveLength(1);
+  });
+
+  it("keeps an established link pending when completion rejects after Ctrl+C", async () => {
+    let notifyCompletionStarted: () => void = () => {};
+    const completionStarted = new Promise<void>((resolve) => {
+      notifyCompletionStarted = resolve;
+    });
+    let rejectCompletion: (error: unknown) => void = () => {};
+    makeHost({
+      providerId: "codex",
+      profiles: [],
+      laterProfiles: () => [],
+      link: linkAnswer({ kind: "local_handoff" }),
+      complete: (callNumber) => {
+        if (callNumber === 1) return completeAnswer("installing", null, null);
+        return new Promise<ProvidersLinkCompleteResponseV12>(
+          (_resolve, reject) => {
+            rejectCompletion = reject;
+            notifyCompletionStarted();
+          },
+        );
+      },
+    });
+    const fake = makeIo({ terminal: false });
+    const run = runLogin(
+      "codex",
+      { kind: "create", label: "Work profile" },
+      fake.io,
+    );
+
+    await Promise.race([
+      completionStarted,
+      run.then(() => {
+        throw new Error("CLI sign-in ended before its retry started.");
+      }),
+    ]);
+    fake.interrupt();
+    rejectCompletion(
+      new HostTransportFailureError({
+        code: "RPC_ERROR",
+        message: "The completion retry transport failed after send.",
+        requestId: "completion-retry",
+        method: "providers.linkComplete",
+        fatalDetails: null,
+      }),
+    );
+    const { result } = await run;
+
+    expect(result.data).toEqual({
+      providerId: "codex",
+      status: "signed-in-pending",
+    });
+    expect(result.human).toBe(SIGNED_IN_RECEIVING_LINE);
+    expect(result.exitCode).toBe(0);
+    expect(callsTo("providers.linkComplete")).toHaveLength(2);
+    expect(callsTo("providers.linkCancel")).toEqual([]);
+  });
+
+  it("preserves a mapped failure after removing its interrupt listener before held release", async () => {
+    let notifyReleaseStarted: () => void = () => {};
+    const releaseStarted = new Promise<void>((resolve) => {
+      notifyReleaseStarted = resolve;
+    });
+    let resolveCancel: () => void = () => {};
+    const linkCancel = new Promise<LinkCancelResponse>((resolve) => {
+      resolveCancel = () => resolve({});
+    });
+    let resolveReleaseWait: () => void = () => {};
+    makeHost({
+      providerId: "codex",
+      profiles: [],
+      link: linkAnswer({ kind: "local_handoff" }),
+      complete: () =>
+        Promise.reject(
+          new HostTransportFailureError({
+            code: "RPC_ERROR",
+            message: "The completion transport failed after send.",
+            requestId: "completion-request",
+            method: "providers.linkComplete",
+            fatalDetails: null,
+          }),
+        ),
+      onLinkCancel: notifyReleaseStarted,
+      linkCancel,
+    });
+    const fake = makeIo({
+      terminal: false,
+      wait: () =>
+        new Promise<void>((resolve) => {
+          resolveReleaseWait = resolve;
+        }),
+    });
+    const attempt = runLogin(
+      "codex",
+      { kind: "create", label: "Work profile" },
+      fake.io,
+    );
+
+    await Promise.race([
+      releaseStarted,
+      attempt.then(() => {
+        throw new Error("CLI sign-in ended before link release started.");
+      }),
+    ]);
+    expect(fake.isInterruptListening()).toBe(false);
+    resolveCancel();
+    resolveReleaseWait();
+
+    await expect(attempt).rejects.toBeInstanceOf(CliError);
+    await expect(attempt).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_REQUEST_OUTCOME_UNKNOWN,
+      message: expect.stringContaining("check before sending it again"),
+    });
+    expect(callsTo("providers.link")).toHaveLength(1);
+    expect(callsTo("providers.linkComplete")).toHaveLength(1);
+    expect(callsTo("providers.linkCancel")).toHaveLength(1);
   });
 
   it("keeps a connected sign-in pending when Ctrl+C interrupts inventory", async () => {

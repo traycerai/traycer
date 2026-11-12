@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/dialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
+import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 
 export function EnvironmentAddProfileDialog(
   props: AddProviderProfileDialogProps & {
@@ -144,6 +145,7 @@ export function EnvironmentAddProfileDialog(
             }}
             onCancel={() => changeOpen(false)}
           />
+          {recolor.isPending ? <MutedAgentSpinner /> : null}
           {recolor.error !== null && completionProfileId !== null ? (
             <>
               <p role="alert" className="text-ui-sm">
