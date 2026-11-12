@@ -1453,9 +1453,11 @@ describe("managed profile routing reads in a pool build", () => {
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await screen.findByLabelText("One-time code");
 
+    // Retry re-reads the status that let the binding be asked, then the binding.
     expect(fixture.readMethods).toEqual([
       "environment.status",
       "environment.binding.read",
+      "environment.status",
       "environment.binding.read",
     ]);
     const bindingCalls = fixture.messenger.calls.filter(
