@@ -653,6 +653,7 @@ export function canvasBootstrap(config: CanvasBootstrapConfig): void {
   // The zoom script's scrollbar thumbs sit in their own root on a page; they
   // stay draggable, and are not part of the page, while the reader comments.
   const zoomControl = (target: EventTarget | null): boolean =>
+    page &&
     target instanceof Element &&
     target.closest("[data-traycer-html-scrollbars]") !== null;
   // Click/submit activation never reaches authored handlers in Edit. A page
