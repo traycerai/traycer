@@ -449,17 +449,28 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
             handle.state.postSwapWarning === null
               ? await completeTeamInstall(args.team, teamSession, ctx.progress)
               : null;
-          const teamInstallReceipt =
+          const waitingForTeamInstall =
             preparedTeamToken !== null &&
             handle !== null &&
             handle.state.postSwapError === null &&
-            handle.state.postSwapWarning === null
-              ? await waitForTeamTokenInstall(
-                  ctx.runtime.environment,
-                  preparedTeamToken,
-                  60_000,
-                )
-              : null;
+            handle.state.postSwapWarning === null;
+          if (waitingForTeamInstall) {
+            ctx.progress({
+              stage: "host-team",
+              message: "Waiting for this computer to join the team…",
+              percent: null,
+              bytes: null,
+              totalBytes: null,
+              workUnits: null,
+            });
+          }
+          const teamInstallReceipt = waitingForTeamInstall
+            ? await waitForTeamTokenInstall(
+                ctx.runtime.environment,
+                preparedTeamToken,
+                60_000,
+              )
+            : null;
           const lifecycleData =
             handle !== null
               ? {
@@ -491,7 +502,7 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
             human = `${human}; ${provisionNote}`;
           }
           if (teamBinding !== null) {
-            human = `${human}; runs ${teamBinding.environment.label}`;
+            human = `${human}; belongs to ${teamBinding.environment.label}`;
           } else if (teamInstallReceipt !== null) {
             human = `${human}; this computer joined the team`;
           } else if (args.team !== null) {

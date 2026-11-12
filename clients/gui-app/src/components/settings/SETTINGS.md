@@ -840,6 +840,25 @@ name, endpoint route and active byte counters inline with wrapping rows.
 
 ## Team configuration sources
 
+The Environment default stays unresolved until the window's own computer is
+listed and its status has answered. The picker shows a spinner, and every
+Environment page waits without mounting its editors. Failed host lists reuse
+`HostScopeGate`; failed status reads show the existing settings read error and
+Retry. An answered host keeps its Local or Personal default, and a window with
+no host keeps Personal. A listed sandbox defaults to Personal without a Local
+status read. The stored default belongs to the window host it was derived for;
+a host change makes readers unresolved immediately, before upkeep runs.
+An explicit choice still takes precedence.
+A pending Settings host entry waits for a reachable computer's failed status
+read before asking for bindings. A completed handshake that explicitly lacks
+`environment.status` keeps the legacy entry path, without a status retry; an
+unnegotiated method still waits. It keeps “Finding your hosts…” with “Try again” after a
+failed attempt; that action retries the target status. An error holds the entry
+through a retry with cached data. An offline target keeps the existing
+binding path and offers no status retry; its observer reads again when the
+route returns. Unresolved picks ignore Personal membership results, including
+cached hosts.
+
 The Environment dropdown uses `useEnvironmentPick()`, and `PersonalPageFrame`
 decides each Environment page's source, one rule per pick. A team reads the
 cloud. A Local row reads that computer's own host pages. Personal reads the

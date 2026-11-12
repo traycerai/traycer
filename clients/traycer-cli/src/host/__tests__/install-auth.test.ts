@@ -151,6 +151,7 @@ import type {
 } from "../install-auth";
 import type { HostCredentialProvisionOutcome } from "../credential-provisioning";
 import type { CommandContext } from "../../runner/runner";
+import { TEAM_TRANSFER_DISCLOSURE } from "@traycer/protocol/host/environment/team-transfer-disclosure";
 import { CLI_ERROR_CODES } from "../../runner/errors";
 
 const credentialsRoot = mkdtempSync(join(tmpdir(), "team-install-auth-test-"));
@@ -381,12 +382,14 @@ describe("install auth helpers", () => {
     });
   });
 
-  it("announces the team restart once before transfer and its recovery wait", async () => {
+  it("discloses transfer once before both binds and reports restart progress during recovery", async () => {
     const order: string[] = [];
-    const progress = vi.fn((info: { readonly stage: string }) => {
-      order.push("progress");
-      expect(info.stage).toBe("host-team");
-    });
+    const progress = vi.fn(
+      (info: { readonly stage: string; readonly message: string | null }) => {
+        order.push(`progress:${info.message ?? ""}`);
+        expect(info.stage).toBe("host-team");
+      },
+    );
     mocks.readHostOwnershipMock
       .mockResolvedValueOnce(
         hostOwnership({ kind: "user", id: "member-1" }, "personal"),
@@ -436,7 +439,6 @@ describe("install auth helpers", () => {
       ),
     ).resolves.toEqual(teamBinding);
 
-    expect(progress).toHaveBeenCalledTimes(1);
     expect(progress).toHaveBeenCalledWith({
       stage: "host-team",
       message: "Restarting Traycer on this computer to run as Acme…",
@@ -445,10 +447,21 @@ describe("install auth helpers", () => {
       totalBytes: null,
       workUnits: null,
     });
-    expect(order[0]).toBe("progress");
+    const disclosureMessages = progress.mock.calls
+      .map(([info]) => info.message)
+      .filter((message) =>
+        TEAM_TRANSFER_DISCLOSURE.some((disclosure) => disclosure === message),
+      );
+    expect(disclosureMessages).toEqual([...TEAM_TRANSFER_DISCLOSURE]);
+    const firstBind = order.indexOf("environment.host.bind");
+    const disclosureProgressIndexes = TEAM_TRANSFER_DISCLOSURE.map((line) =>
+      order.indexOf(`progress:${line}`),
+    );
+    expect(Math.max(...disclosureProgressIndexes)).toBeLessThan(firstBind);
     expect(
       order.filter((entry) => entry === "environment.host.bind"),
     ).toHaveLength(2);
+    expect(progress).toHaveBeenCalledTimes(TEAM_TRANSFER_DISCLOSURE.length + 1);
     expect(mocks.probeHostHealthMock).toHaveBeenCalledTimes(1);
   });
 
@@ -466,7 +479,8 @@ describe("install auth helpers", () => {
   });
 
   it("reports the team transfer through host use progress", async () => {
-    const ctx = fakeCtx();
+    const progress = vi.fn<CommandContext["progress"]>();
+    const ctx: CommandContext = { ...fakeCtx(), progress };
     mocks.readHostOwnershipMock
       .mockResolvedValueOnce(
         hostOwnership({ kind: "user", id: "member-1" }, "personal"),
@@ -480,9 +494,10 @@ describe("install auth helpers", () => {
 
     await expect(buildHostUseCommand("acme")(ctx)).resolves.toMatchObject({
       data: { binding: teamBinding },
+      human: "This computer belongs to Acme.",
     });
 
-    expect(ctx.progress).toHaveBeenCalledExactlyOnceWith({
+    expect(progress).toHaveBeenCalledWith({
       stage: "host-team",
       message: "Restarting Traycer on this computer to run as Acme…",
       percent: null,
@@ -490,6 +505,13 @@ describe("install auth helpers", () => {
       totalBytes: null,
       workUnits: null,
     });
+    expect(progress).toHaveBeenCalledTimes(TEAM_TRANSFER_DISCLOSURE.length + 1);
+    const disclosureMessages = progress.mock.calls
+      .map(([info]) => info.message)
+      .filter((message) =>
+        TEAM_TRANSFER_DISCLOSURE.some((disclosure) => disclosure === message),
+      );
+    expect(disclosureMessages).toEqual([...TEAM_TRANSFER_DISCLOSURE]);
   });
 
   it("prefers an exact team slug when another team's display label collides", async () => {

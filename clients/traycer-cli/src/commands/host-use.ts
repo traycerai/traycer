@@ -6,7 +6,7 @@ export function buildHostUseCommand(team: string): CommandFn {
     const binding = await useInstalledHostTeam(team, ctx.progress);
     return {
       data: { binding },
-      human: `This computer runs ${binding.environment.label}.`,
+      human: `This computer belongs to ${binding.environment.label}.`,
       exitCode: 0,
     };
   };

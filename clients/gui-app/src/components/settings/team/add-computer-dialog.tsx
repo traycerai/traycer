@@ -1,3 +1,5 @@
+import { TEAM_TRANSFER_DISCLOSURE } from "@traycer/protocol/host/environment/team-transfer-disclosure";
+import { CLI_NPM_PACKAGE_NAME } from "@traycer-clients/shared/cli-install/package-manager-upgrade-command";
 import { useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import {
@@ -40,10 +42,22 @@ export function AddComputerDialog(props: {
         <DialogHeader>
           <DialogTitle>Add a computer to {props.teamName}</DialogTitle>
           <DialogDescription>
-            The team can run agents and read or change files on this computer.
+            The team will own this computer.
           </DialogDescription>
         </DialogHeader>
+        <ul className="list-disc space-y-2 pl-5 text-ui-sm">
+          {TEAM_TRANSFER_DISCLOSURE.map((line) => (
+            <li key={line}>{line}</li>
+          ))}
+        </ul>
         <div className="flex min-w-0 flex-col items-start gap-3">
+          <p className="text-ui-xs text-muted-foreground">
+            Install the Traycer CLI first if needed:{" "}
+            <code className="break-all">
+              npm install -g {CLI_NPM_PACKAGE_NAME}
+            </code>
+            .
+          </p>
           <p className="text-ui-sm text-muted-foreground">
             Run this on the computer, then sign in as a team member.
           </p>

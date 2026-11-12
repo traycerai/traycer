@@ -188,16 +188,27 @@ export function buildHostEnsureCommand(args: HostEnsureArgs): CommandFn {
             result.running
               ? await completeTeamInstall(args.team, teamSession, ctx.progress)
               : null;
-          const teamInstallReceipt =
+          const waitingForTeamInstall =
             preparedTeamToken !== null &&
             result.postSwapError === null &&
-            result.running
-              ? await waitForTeamTokenInstall(
-                  ctx.runtime.environment,
-                  preparedTeamToken,
-                  60_000,
-                )
-              : null;
+            result.running;
+          if (waitingForTeamInstall) {
+            ctx.progress({
+              stage: "host-team",
+              message: "Waiting for this computer to join the team…",
+              percent: null,
+              bytes: null,
+              totalBytes: null,
+              workUnits: null,
+            });
+          }
+          const teamInstallReceipt = waitingForTeamInstall
+            ? await waitForTeamTokenInstall(
+                ctx.runtime.environment,
+                preparedTeamToken,
+                60_000,
+              )
+            : null;
           const human = buildHuman(
             result,
             responsiveness,
@@ -225,7 +236,7 @@ export function buildHostEnsureCommand(args: HostEnsureArgs): CommandFn {
             },
             human:
               teamBinding !== null
-                ? `${human}; runs ${teamBinding.environment.label}`
+                ? `${human}; belongs to ${teamBinding.environment.label}`
                 : teamInstallReceipt !== null
                   ? `${human}; this computer joined the team`
                   : args.team !== null
