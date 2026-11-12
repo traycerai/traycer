@@ -109,6 +109,7 @@ const IDLE_DICTATION_CONTROL: ComposerDictationControl = {
 };
 
 const DOWNLOADING_PREPARING_STATUS: DictationPreparingStatus = {
+  errorMessage: null,
   downloadState: "downloading",
   progress: 0.5,
 };

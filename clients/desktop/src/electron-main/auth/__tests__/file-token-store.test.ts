@@ -1,7 +1,7 @@
 /**
  * End-to-end FileTokenStore tests against a real temp-dir credentials file
- * (lock + WAL via `createCredentialsMutationStore`). Fetch is the only faked
- * boundary — the locked rotate spend hits a stubbed authn refresh endpoint.
+ * (lock + WAL via `createCredentialsMutationStore`). Pressure projection also
+ * uses a recording mutation-store boundary to deliver background callbacks.
  *
  * Spec: credentials-file token-store tech plan §2 / §3 / §4.
  */
@@ -157,6 +157,7 @@ describe("FileTokenStore (real fs + lock/WAL)", () => {
   });
 
   afterEach(() => {
+    vi.doUnmock("@traycer/protocol/config/credentials-mutation");
     for (const store of stores) {
       store.dispose();
     }
@@ -183,7 +184,14 @@ describe("FileTokenStore (real fs + lock/WAL)", () => {
 
   it("signIn stamps savedAt, get round-trips the full identity", async () => {
     const store = makeStore();
-    await store.signIn({ token: "tok-1", refreshToken: "rt-1" }, IDENTITY);
+    const firstListener: TokenStoreChange[] = [];
+    const secondListener: TokenStoreChange[] = [];
+    store.subscribe((change) => firstListener.push(change));
+    store.subscribe((change) => secondListener.push(change));
+    expect(store.getSignInStorageLow()).toBe(false);
+    await expect(
+      store.signIn({ token: "tok-1", refreshToken: "rt-1" }, IDENTITY),
+    ).resolves.toBe("saved");
 
     const got = await store.get();
     expect(got).toEqual({
@@ -197,6 +205,114 @@ describe("FileTokenStore (real fs + lock/WAL)", () => {
       readFileSync(credentialsPath(), "utf8"),
     ) as StoredCredentials;
     expect(onDisk.user).toEqual(IDENTITY);
+    await vi.waitFor(() => {
+      expect(firstListener).not.toHaveLength(0);
+      expect(secondListener).not.toHaveLength(0);
+    });
+    expect(firstListener.at(-1)).toEqual({
+      present: true,
+      userId: IDENTITY.id,
+      revision: expect.any(Number),
+    });
+    expect(secondListener.at(-1)).toEqual({
+      present: true,
+      userId: IDENTITY.id,
+      revision: expect.any(Number),
+    });
+    expect(store.getSignInStorageLow()).toBe(false);
+  });
+
+  it("keeps the FileTokenStore pressure snapshot in sync with save results and continuation callbacks", async () => {
+    vi.resetModules();
+    const reporter: { current: ((pressure: "low" | "clear") => void) | null } =
+      { current: null };
+    const outcomes: Array<"disk-full" | "reserve-save" | "clean-save"> = [
+      "disk-full",
+      "reserve-save",
+      "clean-save",
+    ];
+    let failRead = false;
+    const mutationStore = {
+      read: async () => {
+        if (failRead) throw new Error("credential read unavailable");
+        return null;
+      },
+      signIn: async (credentials: StoredCredentials) => {
+        const next = outcomes.shift();
+        if (next === "disk-full") {
+          return {
+            outcome: "disk-full",
+            credentials: null,
+            rejection: null,
+            diskPressure: null,
+          };
+        }
+        if (next === "reserve-save") {
+          reporter.current?.("low");
+          return {
+            outcome: "applied",
+            credentials,
+            rejection: null,
+            diskPressure: "low",
+          };
+        }
+        return {
+          outcome: "applied",
+          credentials,
+          rejection: null,
+          diskPressure: "clear",
+        };
+      },
+      drainQuarantine: async () => true,
+      dispose: () => undefined,
+    };
+    vi.doMock("@traycer/protocol/config/credentials-mutation", () => ({
+      createCredentialsMutationStore: (options: {
+        readonly onDiskPressure: ((pressure: "low" | "clear") => void) | null;
+      }) => {
+        reporter.current = options.onDiskPressure;
+        return mutationStore;
+      },
+    }));
+    const { FileTokenStore: IsolatedFileTokenStore } =
+      await import("../file-token-store");
+    const store = new IsolatedFileTokenStore({
+      environment: ENVIRONMENT,
+      authnBaseUrl: AUTHN_BASE_URL,
+      watchImpl: undefined,
+    });
+    stores.push(store);
+    const firstStatusListener: boolean[] = [];
+    const secondStatusListener: boolean[] = [];
+    store.subscribeSignInStorageLow((low) => firstStatusListener.push(low));
+    store.subscribeSignInStorageLow((low) => secondStatusListener.push(low));
+
+    expect(
+      await store.signIn({ token: "blocked", refreshToken: "rt" }, IDENTITY),
+    ).toBe("disk-full");
+    expect(store.getSignInStorageLow()).toBe(true);
+    expect(firstStatusListener).toEqual([true]);
+    expect(secondStatusListener).toEqual([true]);
+
+    expect(
+      await store.signIn({ token: "reserve", refreshToken: "rt" }, IDENTITY),
+    ).toBe("saved");
+    expect(store.getSignInStorageLow()).toBe(true);
+    expect(
+      await store.signIn({ token: "clean", refreshToken: "rt" }, IDENTITY),
+    ).toBe("saved");
+    expect(store.getSignInStorageLow()).toBe(false);
+    expect(firstStatusListener).toEqual([true, false]);
+    expect(secondStatusListener).toEqual([true, false]);
+
+    failRead = true;
+    await expect(store.get()).rejects.toThrow("credential read unavailable");
+    reporter.current?.("low");
+    expect(store.getSignInStorageLow()).toBe(true);
+    reporter.current?.("clear");
+    expect(store.getSignInStorageLow()).toBe(false);
+    expect(firstStatusListener).toEqual([true, false, true, false]);
+    expect(secondStatusListener).toEqual([true, false, true, false]);
   });
 
   it("startup drains a quarantined credential before any read is served", async () => {

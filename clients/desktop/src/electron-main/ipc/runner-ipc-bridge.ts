@@ -67,6 +67,7 @@ import type {
   StoredCredentialsIdentity,
   TokenRotateResult,
   TokenStoreChange,
+  SignInSaveResult,
 } from "@traycer-clients/shared/platform/runner-host";
 import {
   DesktopAuthSession,
@@ -300,10 +301,12 @@ export interface IpcDesktopAuthSession {
  */
 export interface IpcAuthTokenStore {
   get(): Promise<StoredCredentials | null>;
+  getSignInStorageLow(): boolean;
+  subscribeSignInStorageLow(listener: (low: boolean) => void): () => void;
   signIn(
     tokens: StoredAuthTokens,
     identity: StoredCredentialsIdentity,
-  ): Promise<void>;
+  ): Promise<SignInSaveResult>;
   rotate(expected: {
     readonly userId: string;
     readonly token: string;
@@ -1701,16 +1704,29 @@ class NeverQuittingShellState implements IpcShellQuitState {
 // caller (tests) that omits `authTokenStore`: signed-out, writes no-op. The real
 // desktop startup always injects a `FileTokenStore`.
 class NullAuthTokenStore implements IpcAuthTokenStore {
+  subscribeSignInStorageLow(): () => void {
+    return () => undefined;
+  }
+
+  getSignInStorageLow(): boolean {
+    return false;
+  }
+
   get(): Promise<StoredCredentials | null> {
     return Promise.resolve(null);
   }
 
-  signIn(): Promise<void> {
-    return Promise.resolve();
+  signIn(): Promise<SignInSaveResult> {
+    return Promise.resolve("saved");
   }
 
   rotate(): Promise<TokenRotateResult> {
-    return Promise.resolve({ outcome: "deleted", pair: null, rejection: null });
+    return Promise.resolve({
+      outcome: "deleted",
+      pair: null,
+      rejection: null,
+      diskPressure: null,
+    });
   }
 
   delete(): Promise<void> {

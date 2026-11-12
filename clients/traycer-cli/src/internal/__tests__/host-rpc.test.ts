@@ -335,6 +335,8 @@ describe("callHostRpc", () => {
         savedAt: "2026-01-01T00:00:00.000Z",
         user: { id: "u1", email: "a@b.c", name: "A" },
       },
+      rejection: null,
+      diskPressure: "clear",
     });
 
     const result = await callHostRpc(METHOD, {
@@ -367,6 +369,7 @@ describe("callHostRpc", () => {
       outcome: "refresh-rejected-credential",
       credentials: null,
       rejection: null,
+      diskPressure: null,
     });
 
     await expect(

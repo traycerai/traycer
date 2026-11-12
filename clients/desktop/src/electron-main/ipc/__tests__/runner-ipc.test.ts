@@ -815,6 +815,7 @@ describe("RunnerIpcBridge", () => {
           // atomic conditional delete); §6 adds the one-time legacy→file
           // migration channel.
           RunnerHostInvoke.authTokenStoreGet,
+          RunnerHostInvoke.authTokenStoreGetSignInStorageLow,
           RunnerHostInvoke.authTokenStoreSignIn,
           RunnerHostInvoke.authTokenStoreRotate,
           RunnerHostInvoke.authTokenStoreDelete,
