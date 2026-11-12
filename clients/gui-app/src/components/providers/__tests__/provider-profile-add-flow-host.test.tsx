@@ -1,8 +1,8 @@
 import "../../../../__tests__/test-browser-apis";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConnectionManifest } from "@traycer/protocol/framework/index";
 import {
   providersStartLoginResponseSchemaV13,
@@ -17,6 +17,7 @@ import type {
 } from "@traycer/protocol/host/environment-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import type { RequestOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
@@ -32,6 +33,10 @@ import {
 import type { HostRpcRegistry } from "@/lib/host";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useProviderProfileAddFlowStore } from "@/stores/settings/provider-profile-add-flow-store";
+import {
+  createCallEvents,
+  type CallEvents,
+} from "./environment-sign-in-call-events";
 
 const CAPTURED_HOST_ID = "host-captured-by-picker";
 const DEFAULT_HOST_ID = "host-default-for-renderer";
@@ -44,8 +49,14 @@ const MANIFEST: ConnectionManifest = {
   "providers.linkCancel": { major: 1, minor: 0 },
   "providers.list": { major: 10, minor: 9 },
   "environment.status": { major: 1, minor: 2 },
+  "environment.host.read": { major: 1, minor: 0 },
   "environment.list": { major: 1, minor: 1 },
 };
+
+type StartLoginRequest = RequestOfMethod<
+  HostRpcRegistry,
+  "providers.startLogin"
+>;
 
 const hostMocks = vi.hoisted(() => ({
   clientById: new Map<string, HostClient<HostRpcRegistry>>(),
@@ -91,8 +102,10 @@ interface AddHost {
   readonly client: HostClient<HostRpcRegistry>;
   readonly linkRequests: ProvidersLinkRequestV12[];
   readonly listResponse: ProvidersListResponse;
-  readonly startRequests: unknown[];
+  readonly startRequests: StartLoginRequest[];
   readonly bindingReads: number[];
+  readonly linkEvents: CallEvents;
+  readonly startEvents: CallEvents;
 }
 
 interface AddHostOptions {
@@ -105,8 +118,10 @@ interface AddHostOptions {
 
 function makeAddHost(options: AddHostOptions): AddHost {
   const linkRequests: ProvidersLinkRequestV12[] = [];
-  const startRequests: unknown[] = [];
+  const startRequests: StartLoginRequest[] = [];
   const bindingReads: number[] = [];
+  const linkEvents = createCallEvents();
+  const startEvents = createCallEvents();
   const listResponse = providersListResponseSchema.parse({
     providers: [providerState()],
     native: null,
@@ -153,6 +168,7 @@ function makeAddHost(options: AddHostOptions): AddHost {
       }),
       "providers.link": (request) => {
         linkRequests.push(request);
+        linkEvents.emit();
         const response: ProvidersLinkResponseV12 = {
           linkId: `link-${options.hostId}`,
           environmentProfileId: `environment-profile-${options.hostId}`,
@@ -175,6 +191,7 @@ function makeAddHost(options: AddHostOptions): AddHost {
       "providers.linkCancel": () => ({}),
       "providers.startLogin": (request) => {
         startRequests.push(request);
+        startEvents.emit();
         return providersStartLoginResponseSchemaV13.parse({
           url: null,
           started: false,
@@ -188,8 +205,31 @@ function makeAddHost(options: AddHostOptions): AddHost {
     },
   });
   recordNegotiatedHostManifest(options.hostId, MANIFEST);
-  return { client, linkRequests, listResponse, startRequests, bindingReads };
+  return {
+    client,
+    linkRequests,
+    listResponse,
+    startRequests,
+    bindingReads,
+    linkEvents,
+    startEvents,
+  };
 }
+
+beforeEach(() => {
+  useAuthStore.setState({
+    status: "signed-in",
+    profile: {
+      userId: "test-viewer",
+      userName: "Test Viewer",
+      email: "viewer@example.test",
+    },
+    contextMetadata: { userId: "test-viewer", username: "test-viewer" },
+    signingInAttempt: null,
+    signedOutCause: null,
+    hostRefusedHeldBearer: false,
+  });
+});
 
 afterEach(() => {
   cleanup();
@@ -253,7 +293,8 @@ describe("ProviderProfileAddFlowHost", () => {
       await screen.findByRole("button", { name: "Sign in" }),
     );
 
-    await waitFor(() => expect(captured.linkRequests).toHaveLength(1));
+    await captured.linkEvents.waitFor(1);
+    expect(captured.linkRequests).toHaveLength(1);
     expect(captured.linkRequests[0]).toEqual({
       providerId: "claude-code",
       profileId: null,
@@ -298,7 +339,8 @@ describe("ProviderProfileAddFlowHost", () => {
       await screen.findByRole("button", { name: "Sign in" }),
     );
 
-    await waitFor(() => expect(captured.startRequests).toHaveLength(1));
+    await captured.startEvents.waitFor(1);
+    expect(captured.startRequests).toHaveLength(1);
     expect(captured.linkRequests).toEqual([]);
     expect(captured.bindingReads).toEqual([]);
   });
@@ -316,18 +358,6 @@ describe("ProviderProfileAddFlowHost", () => {
     hostMocks.clientById.set(CAPTURED_HOST_ID, viewerHost.client);
     hostMocks.directory = [hostEntryFixture(CAPTURED_HOST_ID)];
     hostMocks.defaultHostId = CAPTURED_HOST_ID;
-    useAuthStore.setState({
-      status: "signed-in",
-      profile: {
-        userId: "test-viewer",
-        userName: "Test Viewer",
-        email: "viewer@example.test",
-      },
-      contextMetadata: { userId: "test-viewer", username: "test-viewer" },
-      signingInAttempt: null,
-      signedOutCause: null,
-      hostRefusedHeldBearer: false,
-    });
     useProviderProfileAddFlowStore
       .getState()
       .openForHarness("claude", CAPTURED_HOST_ID, () => undefined);
@@ -385,7 +415,8 @@ describe("ProviderProfileAddFlowHost", () => {
       await screen.findByRole("button", { name: "Sign in" }),
     );
 
-    await waitFor(() => expect(editorHost.linkRequests).toHaveLength(1));
+    await editorHost.linkEvents.waitFor(1);
+    expect(editorHost.linkRequests).toHaveLength(1);
     expect(editorHost.linkRequests[0]).toEqual({
       providerId: "claude-code",
       profileId: null,

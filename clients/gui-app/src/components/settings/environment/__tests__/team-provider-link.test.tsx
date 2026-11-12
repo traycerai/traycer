@@ -19,7 +19,6 @@ import { LINK_INTRO } from "@/lib/providers/provider-link-copy";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useProviderLinkDialogStore } from "@/stores/providers/provider-link-dialog-store";
 import {
-  mountTeamPage,
   mountTeamPageNegotiating,
   personalPoolSource,
   poolSource,
@@ -57,6 +56,10 @@ afterEach(() => {
 });
 
 const PASTED_CODE = "ONE-TIME-CODE-4821";
+const TEAM_LEGACY_SIGN_IN_MANIFEST = {
+  "providers.link": { major: 1, minor: 1 },
+  "providers.linkComplete": { major: 1, minor: 1 },
+} as const;
 
 const linkHandlers = {
   "providers.link": () => ({
@@ -123,10 +126,19 @@ describe("ProviderLinkDialog", () => {
         environmentId: "env-a",
       },
     });
-    const team = mountTeamPage(poolSource("admin"), {
-      ...linkHandlers,
-      "environment.list": () => TEAM_LIST,
-    });
+    const teamManifest = {
+      ...TEAM_LEGACY_SIGN_IN_MANIFEST,
+      "environment.list": { major: 1, minor: 1 },
+    } as const;
+    const team = mountTeamPageNegotiating(
+      poolSource("admin"),
+      {
+        ...linkHandlers,
+        "environment.list": () => TEAM_LIST,
+      },
+      teamManifest,
+    );
+    recordNegotiatedHostManifest(mockLocalHostEntry.hostId, teamManifest);
     render(<ProviderLinkDialog />, { wrapper: team.Wrapper });
     expect(
       await screen.findByRole("heading", { name: "Sign in to Acme" }),
@@ -146,7 +158,15 @@ describe("ProviderLinkDialog", () => {
         environmentId: "env-personal",
       },
     });
-    const personal = mountTeamPage(personalPoolSource(), linkHandlers);
+    const personal = mountTeamPageNegotiating(
+      personalPoolSource(),
+      linkHandlers,
+      TEAM_LEGACY_SIGN_IN_MANIFEST,
+    );
+    recordNegotiatedHostManifest(
+      mockLocalHostEntry.hostId,
+      TEAM_LEGACY_SIGN_IN_MANIFEST,
+    );
     render(<ProviderLinkDialog />, { wrapper: personal.Wrapper });
     expect(await screen.findByText(LINK_INTRO)).toBeTruthy();
   });
@@ -159,7 +179,15 @@ describe("ProviderLinkDialog", () => {
         environmentId: "env-a",
       },
     });
-    const harness = mountTeamPage(poolSource("admin"), linkHandlers);
+    const harness = mountTeamPageNegotiating(
+      poolSource("admin"),
+      linkHandlers,
+      TEAM_LEGACY_SIGN_IN_MANIFEST,
+    );
+    recordNegotiatedHostManifest(
+      mockLocalHostEntry.hostId,
+      TEAM_LEGACY_SIGN_IN_MANIFEST,
+    );
     await linkWithCode(harness);
 
     expect(harness.paramsOf("providers.link")).toEqual([
@@ -222,21 +250,29 @@ describe("ProviderLinkDialog", () => {
         profileId: null,
       },
     ];
-    const harness = mountTeamPage(poolSource("admin"), {
-      ...linkHandlers,
-      "providers.link": () => ({
-        linkId: "link-2",
-        environmentProfileId: null,
-        prompt: { kind: "local_handoff" as const },
-      }),
-      "providers.linkComplete": () => {
-        const answer = completeAnswers.shift();
-        if (answer === undefined) {
-          return linkHandlers["providers.linkComplete"]();
-        }
-        return answer;
+    const harness = mountTeamPageNegotiating(
+      poolSource("admin"),
+      {
+        ...linkHandlers,
+        "providers.link": () => ({
+          linkId: "link-2",
+          environmentProfileId: null,
+          prompt: { kind: "local_handoff" as const },
+        }),
+        "providers.linkComplete": () => {
+          const answer = completeAnswers.shift();
+          if (answer === undefined) {
+            return linkHandlers["providers.linkComplete"]();
+          }
+          return answer;
+        },
       },
-    });
+      TEAM_LEGACY_SIGN_IN_MANIFEST,
+    );
+    recordNegotiatedHostManifest(
+      mockLocalHostEntry.hostId,
+      TEAM_LEGACY_SIGN_IN_MANIFEST,
+    );
     const plansKey = [
       ...hostQueryKeys.method(
         mockLocalHostEntry.hostId,
@@ -363,6 +399,12 @@ describe("ProviderLinkDialog", () => {
         environmentId: "env-a",
       },
     });
+    const manifest = {
+      "providers.link": { major: 1, minor: 2 },
+      "providers.linkComplete": { major: 1, minor: 2 },
+      "providers.linkCancel": { major: 1, minor: 0 },
+      "environment.list": { major: 1, minor: 1 },
+    } as const;
     const harness = mountTeamPageNegotiating(
       poolSource("admin"),
       {
@@ -387,17 +429,9 @@ describe("ProviderLinkDialog", () => {
         }),
         "providers.linkCancel": () => ({}),
       },
-      {
-        "providers.link": { major: 1, minor: 2 },
-        "providers.linkComplete": { major: 1, minor: 2 },
-        "providers.linkCancel": { major: 1, minor: 0 },
-      },
+      manifest,
     );
-    recordNegotiatedHostManifest(mockLocalHostEntry.hostId, {
-      "providers.link": { major: 1, minor: 2 },
-      "providers.linkComplete": { major: 1, minor: 2 },
-      "providers.linkCancel": { major: 1, minor: 0 },
-    });
+    recordNegotiatedHostManifest(mockLocalHostEntry.hostId, manifest);
     const plansKey = [
       ...hostQueryKeys.method(
         mockLocalHostEntry.hostId,
@@ -475,14 +509,22 @@ describe("ProviderLinkDialog", () => {
       },
     });
     let answerComplete: (() => void) | null = null;
-    const harness = mountTeamPage(poolSource("admin"), {
-      ...linkHandlers,
-      "providers.linkComplete": () =>
-        new Promise((resolve) => {
-          answerComplete = () =>
-            resolve(linkHandlers["providers.linkComplete"]());
-        }),
-    });
+    const harness = mountTeamPageNegotiating(
+      poolSource("admin"),
+      {
+        ...linkHandlers,
+        "providers.linkComplete": () =>
+          new Promise((resolve) => {
+            answerComplete = () =>
+              resolve(linkHandlers["providers.linkComplete"]());
+          }),
+      },
+      TEAM_LEGACY_SIGN_IN_MANIFEST,
+    );
+    recordNegotiatedHostManifest(
+      mockLocalHostEntry.hostId,
+      TEAM_LEGACY_SIGN_IN_MANIFEST,
+    );
     render(<ProviderLinkDialog />, { wrapper: harness.Wrapper });
     await userEvent.click(await screen.findByTestId("provider-link-continue"));
     await userEvent.type(
@@ -506,11 +548,13 @@ describe("ProviderLinkDialog", () => {
         environmentId: "env-a",
       },
     });
+    const manifest = { "providers.link": { major: 1, minor: 0 } } as const;
     const harness = mountTeamPageNegotiating(
       poolSource("admin"),
       linkHandlers,
-      { "providers.link": { major: 1, minor: 0 } },
+      manifest,
     );
+    recordNegotiatedHostManifest(mockLocalHostEntry.hostId, manifest);
     render(<ProviderLinkDialog />, { wrapper: harness.Wrapper });
     await userEvent.click(await screen.findByTestId("provider-link-continue"));
 
@@ -528,6 +572,9 @@ describe("ProviderLinkDialog", () => {
         environmentId: "env-a",
       },
     });
+    const manifest = {
+      "providers.linkComplete": { major: 1, minor: 0 },
+    } as const;
     const harness = mountTeamPageNegotiating(
       poolSource("admin"),
       {
@@ -538,8 +585,9 @@ describe("ProviderLinkDialog", () => {
           prompt: { kind: "local_handoff" as const },
         }),
       },
-      { "providers.linkComplete": { major: 1, minor: 0 } },
+      manifest,
     );
+    recordNegotiatedHostManifest(mockLocalHostEntry.hostId, manifest);
     render(<ProviderLinkDialog />, { wrapper: harness.Wrapper });
     await userEvent.click(await screen.findByTestId("provider-link-continue"));
 
@@ -563,7 +611,15 @@ describe("ProviderLinkDialog", () => {
         environmentId: null,
       },
     });
-    const harness = mountTeamPage({ kind: "host" }, linkHandlers);
+    const harness = mountTeamPageNegotiating(
+      { kind: "host" },
+      linkHandlers,
+      TEAM_LEGACY_SIGN_IN_MANIFEST,
+    );
+    recordNegotiatedHostManifest(
+      mockLocalHostEntry.hostId,
+      TEAM_LEGACY_SIGN_IN_MANIFEST,
+    );
     await linkWithCode(harness);
 
     expect(harness.paramsOf("providers.link")).toEqual([
@@ -590,7 +646,15 @@ describe("ProviderLinkDialog", () => {
         environmentId: "env-other",
       },
     });
-    const harness = mountTeamPage(poolSource("admin"), linkHandlers);
+    const harness = mountTeamPageNegotiating(
+      poolSource("admin"),
+      linkHandlers,
+      TEAM_LEGACY_SIGN_IN_MANIFEST,
+    );
+    recordNegotiatedHostManifest(
+      mockLocalHostEntry.hostId,
+      TEAM_LEGACY_SIGN_IN_MANIFEST,
+    );
     render(<ProviderLinkDialog />, { wrapper: harness.Wrapper });
 
     expect(screen.queryByTestId("provider-link-dialog")).toBeNull();

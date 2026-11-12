@@ -3,6 +3,7 @@ import { AMBIENT_PROFILE_ID_SENTINEL } from "@traycer/protocol/host/agent/shared
 import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-native-schemas";
 import {
   providersListResponseSchema,
+  providersSetEnabledResponseSchema,
   providersAwaitLoginResponseSchema,
   providersStartLoginResponseSchemaV13,
   type ProviderCliState,
@@ -138,6 +139,19 @@ function profile(
   };
 }
 
+function profileWithIdentityEmail(
+  profileId: string,
+  label: string,
+  email: string | null,
+  environmentProfileId: string | null,
+): ProviderProfile {
+  const row = profile(profileId, "managed", label, environmentProfileId);
+  return {
+    ...row,
+    identity: email === null ? null : { email, tier: null, accountUuid: null },
+  };
+}
+
 function providerState(
   providerId: ProviderCliState["providerId"],
   profiles: readonly ProviderProfile[],
@@ -237,6 +251,7 @@ interface HarnessOptions {
   readonly onLinkCancel?: () => void;
   readonly link?: ProvidersLinkResponseV12 | Promise<ProvidersLinkResponseV12>;
   readonly linkCancel?: Promise<LinkCancelResponse>;
+  readonly setEnabledFailure?: Error;
   readonly complete?: (
     callNumber: number,
   ) =>
@@ -320,6 +335,12 @@ function makeHost(options: HarnessOptions): void {
         return Promise.resolve(options.await ?? awaitAnswer(initialState));
       case "providers.cancelLogin":
         return Promise.resolve({ cancelled: true });
+      case "providers.setEnabled":
+        return options.setEnabledFailure === undefined
+          ? Promise.resolve(
+              providersSetEnabledResponseSchema.parse({ state: initialState }),
+            )
+          : Promise.reject(options.setEnabledFailure);
       default:
         return Promise.reject(new Error(`Unexpected RPC ${method}`));
     }
@@ -331,11 +352,16 @@ interface FakeIo {
   readonly interrupt: () => void;
   readonly isInterruptListening: () => boolean;
   readonly openedUrls: string[];
+  readonly sendLine: (line: string) => void;
+  readonly isLineReaderOpen: () => boolean;
 }
 
 function makeIo(options: {
   readonly terminal: boolean;
   readonly lines?: readonly string[];
+  readonly holdEmptyReader?: boolean;
+  readonly onHeldReaderOpen?: () => void;
+  readonly onOpenUrl?: (url: string) => void;
   readonly interruptOnWait?: boolean;
   readonly onWait?: (waitCalls: number) => void;
   readonly wait?: (waitCalls: number) => Promise<void>;
@@ -345,11 +371,15 @@ function makeIo(options: {
   const lines = [...(options.lines ?? [])];
   let interruptedDuringWait = false;
   let waitCalls = 0;
+  let lineSink: ((line: string) => void) | null = null;
   const openedUrls: string[] = [];
   const io: ProfileLoginIo = {
     newHolderId: () => "holder-environment-login",
     stdinIsTerminal: () => options.terminal,
-    openUrl: (url) => openedUrls.push(url),
+    openUrl: (url) => {
+      openedUrls.push(url);
+      options.onOpenUrl?.(url);
+    },
     wait: (_ms, _signal) => {
       waitCalls += 1;
       if (waitCalls > MAX_FAKE_WAITS) {
@@ -375,14 +405,27 @@ function makeIo(options: {
     },
     readLines: (onLine) => {
       const line = lines.shift();
-      if (line === undefined) return null;
-      onLine(line);
-      return () => undefined;
+      if (line !== undefined) {
+        onLine(line);
+        return () => undefined;
+      }
+      if (options.holdEmptyReader !== true) return null;
+      lineSink = onLine;
+      options.onHeldReaderOpen?.();
+      return () => {
+        if (lineSink === onLine) lineSink = null;
+      };
     },
   };
   return {
     io,
     openedUrls,
+    sendLine: (line) => {
+      if (lineSink === null)
+        throw new Error("No open fake line reader to receive input.");
+      lineSink(line);
+    },
+    isLineReaderOpen: () => lineSink !== null,
     interrupt: () => {
       if (interruptListening) interruptHandler?.();
     },
@@ -444,6 +487,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.clearAllMocks();
 });
 
@@ -478,7 +522,7 @@ describe("environment profile sign-in through the CLI", () => {
     const admitted = profile(
       MANAGED_PROFILE_ID,
       "managed",
-      "Claude local profile",
+      "Work profile",
       ENVIRONMENT_PROFILE_ID,
     );
     makeHost({
@@ -525,8 +569,181 @@ describe("environment profile sign-in through the CLI", () => {
       providerId: "claude-code",
       status: "signed-in",
       created: true,
-      profile: { profileId: MANAGED_PROFILE_ID },
+      profile: { profileId: MANAGED_PROFILE_ID, label: "Work profile" },
     });
+    expect(callsTo("providers.setEnabled")).toEqual([]);
+  });
+
+  it("names a newly admitted environment profile from the email prefix", async () => {
+    const admitted = profileWithIdentityEmail(
+      MANAGED_PROFILE_ID,
+      "New profile",
+      "profile.name@example.test",
+      ENVIRONMENT_PROFILE_ID,
+    );
+    makeHost({
+      providerId: "codex",
+      profiles: [],
+      laterProfiles: () => [admitted],
+      link: linkAnswer({ kind: "local_handoff" }),
+      complete: () => completeAnswer("linked", MANAGED_PROFILE_ID, null),
+    });
+
+    const { result } = await runLogin(
+      "codex",
+      { kind: "create", label: null },
+      makeIo({ terminal: false }).io,
+    );
+
+    expect(onlyCallTo("providers.setEnabled")[1]).toEqual({
+      providerId: "codex",
+      enabled: true,
+      profileAction: {
+        type: "rename",
+        profileId: MANAGED_PROFILE_ID,
+        label: "profile.name",
+      },
+    });
+    expect(
+      onlyCallTo("providers.setEnabled")[2].requiredHostMethodVersion,
+    ).toEqual({
+      method: "providers.setEnabled",
+      version: { major: 2, minor: 1 },
+    });
+    expect(result.data).toMatchObject({
+      providerId: "codex",
+      status: "signed-in",
+      profile: { profileId: MANAGED_PROFILE_ID, label: "profile.name" },
+    });
+  });
+
+  it.each([
+    ["no email", null, "New profile"],
+    [
+      "already uses the email prefix",
+      "profile.name@example.test",
+      "profile.name",
+    ],
+  ] as const)(
+    "does not rename a new environment profile when it has %s",
+    async (_case, email, label) => {
+      const admitted = profileWithIdentityEmail(
+        MANAGED_PROFILE_ID,
+        label,
+        email,
+        ENVIRONMENT_PROFILE_ID,
+      );
+      makeHost({
+        providerId: "codex",
+        profiles: [],
+        laterProfiles: () => [admitted],
+        link: linkAnswer({ kind: "local_handoff" }),
+        complete: () => completeAnswer("linked", MANAGED_PROFILE_ID, null),
+      });
+
+      const { result } = await runLogin(
+        "codex",
+        { kind: "create", label: null },
+        makeIo({ terminal: false }).io,
+      );
+
+      expect(callsTo("providers.setEnabled")).toEqual([]);
+      expect(result.data).toMatchObject({
+        providerId: "codex",
+        status: "signed-in",
+        profile: { profileId: MANAGED_PROFILE_ID, label },
+      });
+    },
+  );
+
+  it.each([
+    "response alias differs",
+    "profile was already present",
+    "start alias is unknown",
+  ] as const)(
+    "does not rename an environment profile without new-profile ownership proof: %s",
+    async (scenario) => {
+      const startAlias =
+        scenario === "start alias is unknown" ? null : ENVIRONMENT_PROFILE_ID;
+      const responseAlias =
+        scenario === "response alias differs"
+          ? "environment-profile-after-link"
+          : ENVIRONMENT_PROFILE_ID;
+      const initialProfiles =
+        scenario === "profile was already present"
+          ? [
+              profileWithIdentityEmail(
+                MANAGED_PROFILE_ID,
+                "Previous label",
+                null,
+                ENVIRONMENT_PROFILE_ID,
+              ),
+            ]
+          : [];
+      const admitted = profileWithIdentityEmail(
+        MANAGED_PROFILE_ID,
+        "New profile",
+        "profile.name@example.test",
+        responseAlias,
+      );
+      makeHost({
+        providerId: "codex",
+        profiles: initialProfiles,
+        laterProfiles: () => [admitted],
+        link: {
+          ...linkAnswer({ kind: "local_handoff" }),
+          environmentProfileId: startAlias,
+        },
+        complete: () => ({
+          ...completeAnswer("linked", MANAGED_PROFILE_ID, null),
+          environmentProfileId: responseAlias,
+        }),
+      });
+
+      const { result } = await runLogin(
+        "codex",
+        { kind: "create", label: null },
+        makeIo({ terminal: false }).io,
+      );
+
+      expect(callsTo("providers.setEnabled")).toEqual([]);
+      expect(result.data).toMatchObject({
+        providerId: "codex",
+        status: "signed-in",
+        profile: { profileId: MANAGED_PROFILE_ID, label: "New profile" },
+      });
+    },
+  );
+
+  it("keeps environment sign-in successful when best-effort naming fails", async () => {
+    const admitted = profileWithIdentityEmail(
+      MANAGED_PROFILE_ID,
+      "New profile",
+      "profile.name@example.test",
+      ENVIRONMENT_PROFILE_ID,
+    );
+    makeHost({
+      providerId: "codex",
+      profiles: [],
+      laterProfiles: () => [admitted],
+      link: linkAnswer({ kind: "local_handoff" }),
+      complete: () => completeAnswer("linked", MANAGED_PROFILE_ID, null),
+      setEnabledFailure: new Error("Profile rename failed."),
+    });
+
+    const { result } = await runLogin(
+      "codex",
+      { kind: "create", label: null },
+      makeIo({ terminal: false }).io,
+    );
+
+    expect(callsTo("providers.setEnabled")).toHaveLength(1);
+    expect(result.data).toMatchObject({
+      providerId: "codex",
+      status: "signed-in",
+      profile: { profileId: MANAGED_PROFILE_ID, label: "New profile" },
+    });
+    expect(result.exitCode).toBe(0);
   });
 
   it.each([
@@ -623,6 +840,206 @@ describe("environment profile sign-in through the CLI", () => {
     expect(result.human).toBe(SIGNED_IN_RECEIVING_LINE);
     expect(result.exitCode).toBe(0);
     expect(callsTo("providers.linkCancel")).toEqual([]);
+    expect(callsTo("providers.setEnabled")).toEqual([]);
+  });
+
+  it("keeps the connected deadline from epoch zero across errors and repeated states", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(0);
+    try {
+      const completionTimes: number[] = [];
+      const waitTimes: number[] = [];
+      const elapsedByWait = [20_000, 20_000, 19_999, 1];
+      makeHost({
+        providerId: "codex",
+        profiles: [],
+        laterProfiles: () => [],
+        link: linkAnswer({ kind: "local_handoff" }),
+        complete: (callNumber) => {
+          completionTimes.push(Date.now());
+          if (callNumber === 1) return completeAnswer("installing", null, null);
+          if (callNumber === 2)
+            return Promise.reject(new Error("Temporary completion failure."));
+          if (callNumber === 3)
+            return completeAnswer("unavailable", null, null);
+          return completeAnswer("installing", null, null);
+        },
+      });
+      const fake = makeIo({
+        terminal: false,
+        onWait: (waitCall) => {
+          const elapsed = elapsedByWait[waitCall - 1];
+          if (elapsed === undefined)
+            throw new Error("Unexpected wait after the receiving deadline.");
+          vi.setSystemTime(Date.now() + elapsed);
+          waitTimes.push(Date.now());
+        },
+      });
+
+      const { result } = await runLogin(
+        "codex",
+        { kind: "create", label: "Work profile" },
+        fake.io,
+      );
+
+      expect(completionTimes).toEqual([0, 20_000, 40_000, 59_999]);
+      expect(waitTimes).toEqual([20_000, 40_000, 59_999, 60_000]);
+      expect(callsTo("providers.linkComplete")).toHaveLength(4);
+      expect(result.data).toEqual({
+        providerId: "codex",
+        status: "signed-in-pending",
+      });
+      expect(result.human).toBe(SIGNED_IN_RECEIVING_LINE);
+      expect(result.exitCode).toBe(0);
+      expect(callsTo("providers.linkCancel")).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("starts the receiving deadline after the browser leg", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(0);
+    try {
+      const completionTimes: number[] = [];
+      makeHost({
+        providerId: "claude-code",
+        profiles: [],
+        laterProfiles: () => [],
+        link: linkAnswer(SIGN_IN_URL_PROMPT),
+        complete: (callNumber) => {
+          completionTimes.push(Date.now());
+          return callNumber === 1
+            ? completeAnswer("installing", null, null)
+            : completeAnswer("linked", MANAGED_PROFILE_ID, null);
+        },
+      });
+      const fake = makeIo({
+        terminal: true,
+        lines: [CODE],
+        onOpenUrl: () => vi.setSystemTime(300_000),
+        onWait: () => vi.setSystemTime(Date.now() + 59_999),
+      });
+
+      const { result } = await runLogin(
+        "claude",
+        { kind: "create", label: "Work profile" },
+        fake.io,
+      );
+
+      expect(completionTimes).toEqual([300_000, 359_999]);
+      expect(callsTo("providers.linkComplete")).toHaveLength(2);
+      expect(result.data).toEqual({
+        providerId: "claude-code",
+        status: "signed-in-pending",
+      });
+      expect(result.human).toBe(SIGNED_IN_RECEIVING_LINE);
+      expect(result.exitCode).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds existing-profile certification waits by the connected deadline", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(0);
+    try {
+      const selected = profile(
+        MANAGED_PROFILE_ID,
+        "managed",
+        "Selected profile",
+        ENVIRONMENT_PROFILE_ID,
+      );
+      const completionTimes: number[] = [];
+      const waitTimes: number[] = [];
+      makeHost({
+        providerId: "claude-code",
+        profiles: [selected],
+        link: linkAnswer({ kind: "local_handoff" }),
+        complete: (callNumber) => {
+          completionTimes.push(Date.now());
+          return callNumber === 1
+            ? completeAnswer("installing", null, null)
+            : completeAnswer("linked", null, null);
+        },
+      });
+      const fake = makeIo({
+        terminal: true,
+        onWait: () => {
+          vi.setSystemTime(Date.now() + 30_000);
+          waitTimes.push(Date.now());
+        },
+      });
+
+      const { result } = await runLogin(
+        "claude",
+        { kind: "existing", profile: MANAGED_PROFILE_ID },
+        fake.io,
+      );
+
+      expect(completionTimes).toEqual([0, 30_000]);
+      expect(waitTimes).toEqual([30_000, 60_000]);
+      expect(callsTo("providers.linkComplete")).toHaveLength(2);
+      expect(callsTo("providers.list")).toHaveLength(1);
+      expect(result.data).toEqual({
+        providerId: "claude-code",
+        status: "signed-in-pending",
+      });
+      expect(result.human).toBe(SIGNED_IN_RECEIVING_LINE);
+      expect(result.exitCode).toBe(0);
+      expect(callsTo("providers.linkCancel")).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("recovers from a transient completion error before the connected deadline", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(0);
+    try {
+      const admitted = profile(
+        MANAGED_PROFILE_ID,
+        "managed",
+        "New profile",
+        ENVIRONMENT_PROFILE_ID,
+      );
+      const completionTimes: number[] = [];
+      makeHost({
+        providerId: "codex",
+        profiles: [],
+        laterProfiles: (listCall) => (listCall === 2 ? [] : [admitted]),
+        link: linkAnswer({ kind: "local_handoff" }),
+        complete: (callNumber) => {
+          completionTimes.push(Date.now());
+          if (callNumber === 1) return completeAnswer("installing", null, null);
+          if (callNumber === 2)
+            return Promise.reject(new Error("Temporary completion failure."));
+          return completeAnswer("linked", MANAGED_PROFILE_ID, null);
+        },
+      });
+      const fake = makeIo({
+        terminal: false,
+        onWait: () => vi.setSystemTime(Date.now() + 20_000),
+      });
+
+      const { result } = await runLogin(
+        "codex",
+        { kind: "create", label: "Work profile" },
+        fake.io,
+      );
+
+      expect(completionTimes).toEqual([0, 20_000, 40_000]);
+      expect(callsTo("providers.linkComplete")).toHaveLength(3);
+      expect(result.data).toMatchObject({
+        providerId: "codex",
+        status: "signed-in",
+        profile: { profileId: MANAGED_PROFILE_ID },
+      });
+      expect(result.exitCode).toBe(0);
+      expect(callsTo("providers.linkCancel")).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps an existing linked profile pending when its admitted row is unauthenticated", async () => {
@@ -888,6 +1305,7 @@ describe("environment profile sign-in through the CLI", () => {
     );
     expect(result.exitCode).toBe(1);
     expect(callsTo("providers.linkCancel")).toHaveLength(1);
+    expect(callsTo("providers.setEnabled")).toEqual([]);
   });
 
   it("refuses a typed existing-profile mismatch without replacing the account", async () => {
@@ -928,6 +1346,128 @@ describe("environment profile sign-in through the CLI", () => {
       message: ACCOUNT_MISMATCH_SIGN_IN_LINE,
     });
     expect(callsTo("providers.link")).toHaveLength(1);
+  });
+
+  it.each(["", " \t "] as const)(
+    "defaults a blank mismatch confirmation to no while its reader stays open",
+    async (confirmation) => {
+      const selected = profile(
+        MANAGED_PROFILE_ID,
+        "managed",
+        "Selected profile",
+        ENVIRONMENT_PROFILE_ID,
+      );
+      let notifyConfirmationReaderOpen: () => void = () => {};
+      let confirmationReaderStarts = 0;
+      const confirmationReaderOpen = new Promise<void>((resolve) => {
+        notifyConfirmationReaderOpen = resolve;
+      });
+      makeHost({
+        providerId: "claude-code",
+        profiles: [selected],
+        link: linkAnswer(SIGN_IN_URL_PROMPT),
+        complete: () =>
+          completeAnswer("mismatch", null, "harness_account_mismatch"),
+      });
+      const fake = makeIo({
+        terminal: true,
+        lines: [CODE],
+        holdEmptyReader: true,
+        onHeldReaderOpen: () => {
+          confirmationReaderStarts += 1;
+          notifyConfirmationReaderOpen();
+        },
+      });
+      const run = runLogin(
+        "claude",
+        { kind: "existing", profile: MANAGED_PROFILE_ID },
+        fake.io,
+      );
+
+      await Promise.race([
+        confirmationReaderOpen,
+        run.then(() => {
+          throw new Error(
+            "CLI sign-in ended before confirmation input opened.",
+          );
+        }),
+      ]);
+      expect(fake.isLineReaderOpen()).toBe(true);
+      expect(confirmationReaderStarts).toBe(1);
+      expect(callsTo("providers.link")).toHaveLength(1);
+      fake.sendLine(confirmation);
+      const { result } = await run;
+
+      expect(fake.isLineReaderOpen()).toBe(false);
+      expect(result.data).toMatchObject({
+        status: "not-started",
+        message: ACCOUNT_MISMATCH_SIGN_IN_LINE,
+      });
+      expect(result.exitCode).toBe(1);
+      expect(callsTo("providers.link")).toHaveLength(1);
+      expect(callsTo("providers.linkCancel")).toHaveLength(1);
+    },
+  );
+
+  it("ignores blank code input and accepts the next line on the same open reader", async () => {
+    const admitted = profile(
+      MANAGED_PROFILE_ID,
+      "managed",
+      "Work profile",
+      ENVIRONMENT_PROFILE_ID,
+    );
+    let notifyCodeReaderOpen: () => void = () => {};
+    let codeReaderStarts = 0;
+    const codeReaderOpen = new Promise<void>((resolve) => {
+      notifyCodeReaderOpen = resolve;
+    });
+    makeHost({
+      providerId: "claude-code",
+      profiles: [],
+      laterProfiles: () => [admitted],
+      link: linkAnswer(SIGN_IN_URL_PROMPT),
+      complete: () => completeAnswer("linked", null, null),
+    });
+    const fake = makeIo({
+      terminal: true,
+      holdEmptyReader: true,
+      onHeldReaderOpen: () => {
+        codeReaderStarts += 1;
+        notifyCodeReaderOpen();
+      },
+    });
+    const run = runLogin(
+      "claude",
+      { kind: "create", label: "Work profile" },
+      fake.io,
+    );
+
+    await Promise.race([
+      codeReaderOpen,
+      run.then(() => {
+        throw new Error("CLI sign-in ended before code input opened.");
+      }),
+    ]);
+    expect(fake.isLineReaderOpen()).toBe(true);
+    expect(codeReaderStarts).toBe(1);
+    fake.sendLine(" \t ");
+    expect(fake.isLineReaderOpen()).toBe(true);
+    expect(codeReaderStarts).toBe(1);
+    fake.sendLine(CODE);
+    const { result } = await run;
+
+    expect(fake.isLineReaderOpen()).toBe(false);
+    expect(codeReaderStarts).toBe(1);
+    expect(onlyCallTo("providers.linkComplete")[1]).toEqual({
+      linkId: "link-attempt",
+      environmentId: ENVIRONMENT_ID,
+      code: CODE,
+    });
+    expect(result.data).toMatchObject({
+      status: "signed-in",
+      profile: { profileId: MANAGED_PROFILE_ID },
+    });
+    expect(result.exitCode).toBe(0);
   });
 
   it("keeps ambient sign-in on the existing local flow", async () => {
@@ -1092,6 +1632,7 @@ describe("environment profile sign-in through the CLI", () => {
 
     expect(result.data).toEqual({ providerId: "codex", status: "cancelled" });
     expect(callsTo("providers.linkCancel")).toHaveLength(1);
+    expect(callsTo("providers.setEnabled")).toEqual([]);
     expect(onlyCallTo("providers.linkCancel")[1]).toEqual({
       linkId: "link-attempt",
       environmentId: ENVIRONMENT_ID,
@@ -1240,6 +1781,7 @@ describe("environment profile sign-in through the CLI", () => {
     expect(result.exitCode).toBe(0);
     expect(callsTo("providers.linkComplete")).toHaveLength(1);
     expect(callsTo("providers.linkCancel")).toEqual([]);
+    expect(callsTo("providers.setEnabled")).toEqual([]);
   });
 
   it("keeps a connected sign-in pending when Ctrl+C interrupts inventory", async () => {

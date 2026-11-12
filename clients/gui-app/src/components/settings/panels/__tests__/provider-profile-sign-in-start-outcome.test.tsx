@@ -13,6 +13,7 @@ import type {
   ProvidersLinkRequestV12,
   ProvidersLinkResponseV12,
 } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentListResponseV11 } from "@traycer/protocol/host/environment/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
@@ -44,6 +45,7 @@ import {
 } from "@/lib/environment/__tests__/environment-test-support";
 import {
   recordNegotiatedHostManifest,
+  recordNegotiatedHostMethods,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 
@@ -121,7 +123,27 @@ const PROFILE_ID = "profile-surya-2";
 const ADD_HOST_ID = "host-profile-add-route";
 const PERSONAL_ENVIRONMENT_ID = "environment-personal-profile-add";
 const SIGN_IN_V12 = { major: 1, minor: 2 } as const;
+const PERSONAL_PROFILE_ENVIRONMENT_LIST: EnvironmentListResponseV11 = {
+  environments: [
+    {
+      environmentId: PERSONAL_ENVIRONMENT_ID,
+      ownerKind: "user",
+      ownerId: "owner-test",
+      roomId: "room-test",
+      label: "Personal",
+      effectiveRole: "owner",
+      kind: "personal",
+      hostCount: 0,
+      providerHandle: null,
+    },
+  ],
+};
 const personalEnvironmentListReads: string[] = [];
+
+interface PersonalAddCallEvents {
+  readonly link: CallEvents | null;
+  readonly start: CallEvents | null;
+}
 
 function setSignedInViewer(): void {
   useAuthStore.setState({
@@ -343,30 +365,24 @@ function EnvironmentProfileEditDialogHarness(props: {
   );
 }
 
-function renderEnvironmentProfileEditDialog(startInReauth: boolean) {
+function renderEnvironmentProfileEditDialog(
+  startInReauth: boolean,
+  environmentList: Promise<EnvironmentListResponseV11>,
+) {
   setSignedInViewer();
+  const environmentListDispatched = Promise.withResolvers<void>();
   const requests: {
     readonly links: ProvidersLinkRequestV12[];
     readonly completes: unknown[];
-  } = { links: [], completes: [] };
+    readonly starts: unknown[];
+  } = { links: [], completes: [], starts: [] };
   const { client } = buildEnvironmentClient({
     hostId: ADD_HOST_ID,
     handlers: {
-      "environment.list": () => ({
-        environments: [
-          {
-            environmentId: PERSONAL_ENVIRONMENT_ID,
-            ownerKind: "user",
-            ownerId: "owner-test",
-            roomId: "room-test",
-            label: "Personal",
-            effectiveRole: "owner",
-            kind: "personal",
-            hostCount: 0,
-            providerHandle: null,
-          },
-        ],
-      }),
+      "environment.list": () => {
+        environmentListDispatched.resolve();
+        return environmentList;
+      },
       "providers.link": (request) => {
         requests.links.push(request);
         return {
@@ -392,6 +408,12 @@ function renderEnvironmentProfileEditDialog(startInReauth: boolean) {
       },
       "providers.linkCancel": () => ({}),
       "providers.list": () => ({ providers: [], native: null }),
+      "providers.startLogin": (request) => {
+        requests.starts.push(request);
+        return Promise.reject(
+          new Error("Unexpected native sign-in in the environment fixture."),
+        );
+      },
     },
   });
   optionalClient.current = client;
@@ -414,7 +436,11 @@ function renderEnvironmentProfileEditDialog(startInReauth: boolean) {
       onOpenChange={onOpenChange}
     />,
   );
-  return { requests, onOpenChange };
+  return {
+    requests,
+    onOpenChange,
+    environmentListDispatched: environmentListDispatched.promise,
+  };
 }
 
 function startLoginCalls(): number {
@@ -425,6 +451,9 @@ function startLoginCalls(): number {
 
 beforeEach(() => {
   personalEnvironmentListReads.length = 0;
+  recordNegotiatedHostManifest("host-local", {
+    "providers.list": { major: 10, minor: 9 },
+  });
   host.request.mockImplementation((method) =>
     method === "providers.startLogin"
       ? Promise.reject(refusal())
@@ -452,11 +481,13 @@ afterEach(() => {
   });
 });
 
-function renderClaudeAddDialog(client: HostClient<HostRpcRegistry>): void {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
-  render(
+function ClaudeAddDialogHarness(props: {
+  readonly client: HostClient<HostRpcRegistry>;
+  readonly queryClient: QueryClient;
+  readonly onOpenChange: (open: boolean) => void;
+}): ReactNode {
+  const [open, setOpen] = useState(true);
+  return (
     <PersonalPageContext.Provider
       value={{
         section: "providers",
@@ -466,25 +497,44 @@ function renderClaudeAddDialog(client: HostClient<HostRpcRegistry>): void {
         hostName: "Studio",
         localOverrides: [],
         hostId: ADD_HOST_ID,
-        client,
+        client: props.client,
         notices: [],
         review: [],
       }}
     >
-      <QueryClientProvider client={queryClient}>
+      <QueryClientProvider client={props.queryClient}>
         <TooltipProvider>
           <AddProviderProfileDialog
             state={claudeState(signedOutProfile())}
-            client={client}
+            client={props.client}
             isLocalHost
-            open
-            onOpenChange={() => undefined}
+            open={open}
+            onOpenChange={(nextOpen) => {
+              props.onOpenChange(nextOpen);
+              setOpen(nextOpen);
+            }}
             onFailedAttempt={() => undefined}
             onProfileCreated={() => undefined}
           />
         </TooltipProvider>
       </QueryClientProvider>
-    </PersonalPageContext.Provider>,
+    </PersonalPageContext.Provider>
+  );
+}
+
+function renderClaudeAddDialog(
+  client: HostClient<HostRpcRegistry>,
+  onOpenChange: (open: boolean) => void,
+): void {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  render(
+    <ClaudeAddDialogHarness
+      client={client}
+      queryClient={queryClient}
+      onOpenChange={onOpenChange}
+    />,
   );
 }
 
@@ -504,6 +554,7 @@ function addRouteManifest(
 function buildPersonalAddClient(
   linkRequests: ProvidersLinkRequestV12[],
   startRequests: unknown[],
+  events: PersonalAddCallEvents,
 ): HostClient<HostRpcRegistry> {
   const { client } = buildEnvironmentClient({
     hostId: ADD_HOST_ID,
@@ -528,6 +579,7 @@ function buildPersonalAddClient(
       },
       "providers.link": (request) => {
         linkRequests.push(request);
+        events.link?.emit();
         const response: ProvidersLinkResponseV12 = {
           linkId: "link-add-route",
           environmentProfileId: "environment-profile-add-route",
@@ -551,6 +603,7 @@ function buildPersonalAddClient(
       "providers.list": () => ({ providers: [], native: null }),
       "providers.startLogin": (request) => {
         startRequests.push(request);
+        events.start?.emit();
         return Promise.reject(refusal());
       },
     },
@@ -559,20 +612,34 @@ function buildPersonalAddClient(
 }
 
 describe("managed profile add entry-point routing", () => {
-  it("uses the Personal environment on @1.2 and creates a Claude profile there", async () => {
+  it("waits for published support before using the Personal environment on @1.2", async () => {
     setSignedInViewer();
     const linkRequests: ProvidersLinkRequestV12[] = [];
     const startRequests: unknown[] = [];
-    const client = buildPersonalAddClient(linkRequests, startRequests);
-    recordNegotiatedHostManifest(
-      ADD_HOST_ID,
-      addRouteManifest(SIGN_IN_V12, SIGN_IN_V12),
-    );
+    const linkEvents = createCallEvents();
+    const events: PersonalAddCallEvents = { link: linkEvents, start: null };
+    const client = buildPersonalAddClient(linkRequests, startRequests, events);
 
-    renderClaudeAddDialog(client);
-    await userEvent.click(
-      await screen.findByRole("button", { name: "Sign in" }),
-    );
+    renderClaudeAddDialog(client, () => undefined);
+    expect(
+      await screen.findByText("Reading where this profile will be available…"),
+    ).toBeTruthy();
+    expect(linkRequests).toHaveLength(0);
+    expect(startRequests).toHaveLength(0);
+
+    act(() => {
+      recordNegotiatedHostManifest(
+        ADD_HOST_ID,
+        addRouteManifest(SIGN_IN_V12, SIGN_IN_V12),
+      );
+    });
+    expect(
+      await screen.findByText(
+        "Use terminal skills and plugins on this computer",
+      ),
+    ).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    await linkEvents.waitFor(1);
 
     await screen.findByLabelText("One-time code");
     expect(linkRequests).toHaveLength(1);
@@ -590,16 +657,34 @@ describe("managed profile add entry-point routing", () => {
     setSignedInViewer();
     const linkRequests: ProvidersLinkRequestV12[] = [];
     const startRequests: unknown[] = [];
-    const client = buildPersonalAddClient(linkRequests, startRequests);
-    recordNegotiatedHostManifest(
-      ADD_HOST_ID,
-      addRouteManifest(SIGN_IN_V12, { major: 1, minor: 1 }),
-    );
+    const startEvents = createCallEvents();
+    const events: PersonalAddCallEvents = { link: null, start: startEvents };
+    const client = buildPersonalAddClient(linkRequests, startRequests, events);
 
-    renderClaudeAddDialog(client);
+    recordNegotiatedHostMethods(ADD_HOST_ID, [
+      "providers.link",
+      "providers.linkComplete",
+      "providers.linkCancel",
+      "providers.list",
+      "environment.list",
+    ]);
+    renderClaudeAddDialog(client, () => undefined);
+    expect(
+      await screen.findByText("Reading where this profile will be available…"),
+    ).toBeTruthy();
+    expect(startRequests).toHaveLength(0);
+    expect(linkRequests).toHaveLength(0);
+
+    act(() => {
+      recordNegotiatedHostManifest(
+        ADD_HOST_ID,
+        addRouteManifest(SIGN_IN_V12, { major: 1, minor: 1 }),
+      );
+    });
     await userEvent.click(
       await screen.findByRole("button", { name: "Sign in" }),
     );
+    await startEvents.waitFor(1);
 
     await screen.findByText(
       "Sign-in did not start. You can retry when the provider is available.",
@@ -612,7 +697,9 @@ describe("managed profile add entry-point routing", () => {
     setSignedInViewer();
     const linkRequests: ProvidersLinkRequestV12[] = [];
     const startRequests: unknown[] = [];
-    const client = buildPersonalAddClient(linkRequests, startRequests);
+    const startEvents = createCallEvents();
+    const events: PersonalAddCallEvents = { link: null, start: startEvents };
+    const client = buildPersonalAddClient(linkRequests, startRequests, events);
     recordNegotiatedHostManifest(ADD_HOST_ID, {
       "providers.link": SIGN_IN_V12,
       "providers.linkComplete": SIGN_IN_V12,
@@ -620,10 +707,11 @@ describe("managed profile add entry-point routing", () => {
       "providers.list": { major: 10, minor: 9 },
     });
 
-    renderClaudeAddDialog(client);
+    renderClaudeAddDialog(client, () => undefined);
     await userEvent.click(
       await screen.findByRole("button", { name: "Sign in" }),
     );
+    await startEvents.waitFor(1);
     await screen.findByText(
       "Sign-in did not start. You can retry when the provider is available.",
     );
@@ -631,6 +719,32 @@ describe("managed profile add entry-point routing", () => {
     expect(startRequests).toHaveLength(1);
     expect(linkRequests).toEqual([]);
     expect(personalEnvironmentListReads).toEqual([]);
+  });
+
+  it("does not dispatch after Add closes while host support is unknown", async () => {
+    setSignedInViewer();
+    const linkRequests: ProvidersLinkRequestV12[] = [];
+    const startRequests: unknown[] = [];
+    const events: PersonalAddCallEvents = { link: null, start: null };
+    const client = buildPersonalAddClient(linkRequests, startRequests, events);
+    const onOpenChange = vi.fn<(open: boolean) => void>();
+
+    renderClaudeAddDialog(client, onOpenChange);
+    expect(
+      await screen.findByText("Reading where this profile will be available…"),
+    ).toBeTruthy();
+    await userEvent.keyboard("{Escape}");
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    act(() => {
+      recordNegotiatedHostManifest(
+        ADD_HOST_ID,
+        addRouteManifest(SIGN_IN_V12, SIGN_IN_V12),
+      );
+    });
+    expect(linkRequests).toHaveLength(0);
+    expect(startRequests).toHaveLength(0);
   });
 });
 
@@ -815,8 +929,71 @@ describe("the Switch account panel through a providers refresh", () => {
 });
 
 describe("environment delivery pending from ProfileEditDialog", () => {
+  it("returns to editing when Back cancels a held Personal environment read", async () => {
+    const heldEnvironmentList =
+      Promise.withResolvers<EnvironmentListResponseV11>();
+    const { requests, onOpenChange, environmentListDispatched } =
+      renderEnvironmentProfileEditDialog(false, heldEnvironmentList.promise);
+    const nextColor = PROVIDER_PROFILE_ACCENT_COLORS[0];
+    const profileName = screen.getByLabelText("Profile name");
+    await userEvent.clear(profileName);
+    await userEvent.type(profileName, "Uncommitted label");
+    await userEvent.click(
+      screen.getByRole("button", { name: `Use color ${nextColor}` }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
+    await environmentListDispatched;
+    fireEvent.click(await screen.findByRole("button", { name: "Back" }));
+    await screen.findByRole("button", { name: "Switch account" });
+
+    const returnedName = screen.getByLabelText("Profile name");
+    if (!(returnedName instanceof HTMLInputElement)) {
+      throw new Error(
+        "Expected the profile name input after returning from Back.",
+      );
+    }
+    expect(returnedName.value).toBe("Uncommitted label");
+    expect(returnedName.disabled).toBe(false);
+    expect(
+      screen
+        .getByRole("button", { name: `Use color ${nextColor}` })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(requests.links).toHaveLength(0);
+    expect(requests.starts).toHaveLength(0);
+
+    await act(async () => {
+      heldEnvironmentList.resolve(PERSONAL_PROFILE_ENVIRONMENT_LIST);
+      await heldEnvironmentList.promise;
+    });
+
+    expect(screen.getByRole("button", { name: "Switch account" })).toBeTruthy();
+    const nameAfterLateRead = screen.getByLabelText("Profile name");
+    if (!(nameAfterLateRead instanceof HTMLInputElement)) {
+      throw new Error(
+        "Expected the profile name input after the held read resolved.",
+      );
+    }
+    expect(nameAfterLateRead.value).toBe("Uncommitted label");
+    expect(nameAfterLateRead.disabled).toBe(false);
+    expect(
+      screen
+        .getByRole("button", { name: `Use color ${nextColor}` })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(requests.links).toHaveLength(0);
+    expect(requests.starts).toHaveLength(0);
+  });
+
   it("returns a cancelled reauth to editing before an explicit account switch", async () => {
-    const { requests, onOpenChange } = renderEnvironmentProfileEditDialog(true);
+    const { requests, onOpenChange } = renderEnvironmentProfileEditDialog(
+      true,
+      Promise.resolve(PERSONAL_PROFILE_ENVIRONMENT_LIST),
+    );
     await screen.findByLabelText("One-time code");
     expect(requests.links).toHaveLength(1);
     expect(requests.links[0]?.replaceAccount).toBe(false);
@@ -869,7 +1046,10 @@ describe("environment delivery pending from ProfileEditDialog", () => {
   });
 
   it("closes a reauth edit when delivery is pending", async () => {
-    const { requests, onOpenChange } = renderEnvironmentProfileEditDialog(true);
+    const { requests, onOpenChange } = renderEnvironmentProfileEditDialog(
+      true,
+      Promise.resolve(PERSONAL_PROFILE_ENVIRONMENT_LIST),
+    );
     await screen.findByLabelText("One-time code");
     fireEvent.change(screen.getByLabelText("One-time code"), {
       target: { value: "delivery-code" },

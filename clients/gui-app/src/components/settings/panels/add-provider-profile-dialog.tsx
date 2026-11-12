@@ -75,6 +75,7 @@ import {
 } from "./use-provider-profile-login-flow";
 import { CredentialRefusalNote } from "@/components/providers/credential-refusal-note";
 import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
+import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
 
 /**
  * Whether a new managed profile for this provider can SHARE the ambient
@@ -163,11 +164,22 @@ export interface AddProviderProfileDialogProps {
 export function AddProviderProfileDialog(
   props: AddProviderProfileDialogProps,
 ): ReactNode {
+  const hostId = useRequesterHostId(props.client);
   const supported = useEnvironmentProfileSignInSupported(
-    props.client,
+    hostId,
     props.state.providerId,
     true,
   );
+  const refusal = useHostCredentialRefusal(hostId);
+  if ((hostId !== null && refusal !== null) || supported === null)
+    return (
+      <AddProfileRoutingDialog
+        open={props.open}
+        onOpenChange={props.onOpenChange}
+        retry={null}
+        refusal={hostId === null ? null : refusal}
+      />
+    );
   if (supported && props.client !== null)
     return <RoutedAddProviderProfileDialog {...props} client={props.client} />;
   return <LocalAddProviderProfileDialog {...props} />;
@@ -210,26 +222,50 @@ function RoutedAddProviderProfileDialog(
   }
   if (route.kind === "reading" || route.kind === "failed") {
     return (
-      <Dialog open={props.open} onOpenChange={props.onOpenChange}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Sign in</DialogTitle>
-            <DialogDescription>
-              {route.kind === "reading"
-                ? "Reading where this profile will be available…"
-                : "Couldn't read where this profile will be available."}
-            </DialogDescription>
-          </DialogHeader>
-          {route.kind === "failed" ? (
-            <Button onClick={route.retry}>Retry</Button>
-          ) : (
-            <MutedAgentSpinner />
-          )}
-        </DialogContent>
-      </Dialog>
+      <AddProfileRoutingDialog
+        open={props.open}
+        onOpenChange={props.onOpenChange}
+        retry={route.kind === "failed" ? route.retry : null}
+        refusal={null}
+      />
     );
   }
   return <LocalAddProviderProfileDialog {...props} />;
+}
+
+function AddProfileRoutingDialog(props: {
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
+  readonly retry: (() => void) | null;
+  readonly refusal: string | null;
+}): ReactNode {
+  let action: ReactNode;
+  if (props.refusal !== null)
+    action = (
+      <Button type="button" onClick={() => props.onOpenChange(false)}>
+        Back
+      </Button>
+    );
+  else if (props.retry === null) action = <MutedAgentSpinner />;
+  else action = <Button onClick={props.retry}>Retry</Button>;
+  return (
+    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Sign in</DialogTitle>
+          {props.refusal === null ? (
+            <DialogDescription>
+              {props.retry === null
+                ? "Reading where this profile will be available…"
+                : "Couldn't read where this profile will be available."}
+            </DialogDescription>
+          ) : null}
+        </DialogHeader>
+        <CredentialRefusalNote refusal={props.refusal} />
+        {action}
+      </DialogContent>
+    </Dialog>
+  );
 }
 
 function LocalAddProviderProfileDialog({

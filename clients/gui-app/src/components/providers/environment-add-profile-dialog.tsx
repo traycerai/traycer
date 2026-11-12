@@ -78,8 +78,7 @@ export function EnvironmentAddProfileDialog(
             Add new {PROVIDER_DISPLAY_NAMES[props.state.providerId]} profile
           </DialogTitle>
           <DialogDescription>
-            Name this profile, choose its color, then sign in once to use it
-            everywhere.
+            Name this profile, choose its color, then sign in.
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-4 px-5 pb-5">

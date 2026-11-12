@@ -32,6 +32,7 @@ import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messen
 import {
   getNegotiatedHostMethodVersion,
   getNegotiatedHostMethods,
+  recordNegotiatedHostMethods,
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
@@ -60,6 +61,9 @@ const mocks = vi.hoisted(() => ({
   /** What `useHostCredentialRefusal` answers; `null` is a host that takes sign-ins. */
   credentialRefusal: null as string | null,
 }));
+const refusalHosts = vi.hoisted((): { ids: Array<string | null> } => ({
+  ids: [],
+}));
 const clientRef = vi.hoisted(() => ({
   current: null as HostClient<HostRpcRegistry> | null,
 }));
@@ -87,7 +91,10 @@ vi.mock(
 );
 
 vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
-  useHostCredentialRefusal: () => mocks.credentialRefusal,
+  useHostCredentialRefusal: (hostId: string | null) => {
+    refusalHosts.ids.push(hostId);
+    return mocks.credentialRefusal;
+  },
 }));
 vi.mock("@/hooks/providers/use-providers-login-ownership", () => ({
   useProvidersLoginOwnership: () => false,
@@ -150,6 +157,10 @@ const REFUSAL = "Sandboxes don't take sign-ins";
 const HOST_ID = "host-reauth-route";
 const ENVIRONMENT_ID = "environment-reauth-route";
 const V12 = { major: 1, minor: 2 } as const;
+const LOCAL_SIGN_IN_MANIFEST: ConnectionManifest = {
+  "providers.link": { major: 1, minor: 1 },
+  "providers.linkComplete": { major: 1, minor: 1 },
+};
 const ROUTE_MANIFEST: ConnectionManifest = {
   "providers.link": V12,
   "providers.linkComplete": V12,
@@ -231,27 +242,10 @@ function codexState(profile: ProviderProfile): ProviderCliState {
   };
 }
 
-function renderPanel(onCancel: () => void) {
-  const profile = managedProfile();
-  return render(
-    <TooltipProvider>
-      <ProviderProfileReauthPanel
-        state={codexState(profile)}
-        profile={profile}
-        replaceAccount={false}
-        isLocalHost
-        onSameAccountReconnected={null}
-        onCancel={onCancel}
-        onDone={() => undefined}
-      />
-    </TooltipProvider>,
-  );
-}
-
 function buildRouteClient(
   linkRequests: ProvidersLinkRequestV12[],
   route: RouteFixture,
-  manifest: ConnectionManifest,
+  manifest: ConnectionManifest | null,
 ): HostClient<HostRpcRegistry> {
   const { client } = buildEnvironmentClient({
     hostId: HOST_ID,
@@ -323,7 +317,7 @@ function buildRouteClient(
       "providers.list": () => ({ providers: [], native: null }),
     },
   });
-  recordNegotiatedHostManifest(HOST_ID, manifest);
+  if (manifest !== null) recordNegotiatedHostManifest(HOST_ID, manifest);
   return client;
 }
 
@@ -457,6 +451,7 @@ function ambientProfile(): ProviderProfile {
 
 beforeEach(() => {
   routeReadMethods.length = 0;
+  refusalHosts.ids.length = 0;
   routingPlan.current = NO_POOL_HOST_RPC_TIER_PLAN;
   useAuthStore.setState({
     status: "signed-in",
@@ -491,7 +486,10 @@ afterEach(() => {
 
 describe("managed profile reauth routing", () => {
   it("routes ordinary sign-in through @1.2 without replacing the account", async () => {
-    const profile = managedProfile();
+    const profile: ProviderProfile = {
+      ...managedProfile(),
+      environmentProfileId: "environment-profile-managed",
+    };
     const linkRequests: ProvidersLinkRequestV12[] = [];
     const client = buildRouteClient(
       linkRequests,
@@ -513,7 +511,7 @@ describe("managed profile reauth routing", () => {
     expect(linkRequests).toEqual([
       {
         providerId: "codex",
-        profileId: profile.profileId,
+        profileId: "environment-profile-managed",
         environmentId: ENVIRONMENT_ID,
         createProfile: null,
         replaceAccount: false,
@@ -600,7 +598,7 @@ describe("managed profile reauth routing", () => {
     },
   );
 
-  it("shows Back for an environment-routed credential refusal and returns to the edit form", async () => {
+  it("shows the selected-host refusal before unknown versions can start sign-in", async () => {
     mocks.credentialRefusal = REFUSAL;
     const onCancel = vi.fn();
     const linkRequests: ProvidersLinkRequestV12[] = [];
@@ -611,14 +609,107 @@ describe("managed profile reauth routing", () => {
         bindingOwnerKind: "user",
         effectiveRole: "owner",
       },
-      ROUTE_MANIFEST,
+      null,
     );
     renderRoutedPanel(managedProfile(), false, client, onCancel);
 
     expect(await screen.findByTestId("credential-refusal")).toBeTruthy();
+    expect(getNegotiatedHostMethods(HOST_ID)).toBeNull();
+    expect(refusalHosts.ids).toContain(HOST_ID);
+    expect(routeReadMethods).toEqual([]);
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
 
     expect(onCancel).toHaveBeenCalledTimes(1);
+    expect(linkRequests).toEqual([]);
+    expect(mocks.startLoginAsync).not.toHaveBeenCalled();
+  });
+
+  it("waits through name-only negotiation, then routes a supported environment", async () => {
+    const profile = managedProfile();
+    const linkRequests: ProvidersLinkRequestV12[] = [];
+    const client = buildRouteClient(
+      linkRequests,
+      {
+        status: environmentStatusFixture({
+          principal: { kind: "team", teamName: "Acme" },
+        }),
+        bindingOwnerKind: "organization",
+        effectiveRole: "editor",
+      },
+      null,
+    );
+    const rendered = renderRoutedPanel(profile, false, client, vi.fn());
+
+    expect(await screen.findByRole("button", { name: "Back" })).toBeTruthy();
+    expect(
+      rendered.container.querySelectorAll('span[aria-hidden="true"]'),
+    ).toHaveLength(1);
+    expect(routeReadMethods).toEqual([]);
+    expect(linkRequests).toEqual([]);
+    expect(mocks.startLoginAsync).not.toHaveBeenCalled();
+
+    act(() => {
+      recordNegotiatedHostMethods(HOST_ID, [
+        "providers.link",
+        "providers.linkComplete",
+        "environment.status",
+        "environment.host.read",
+        "environment.list",
+      ]);
+    });
+    expect(screen.getByRole("button", { name: "Back" })).toBeTruthy();
+    expect(routeReadMethods).toEqual([]);
+    expect(linkRequests).toEqual([]);
+    expect(mocks.startLoginAsync).not.toHaveBeenCalled();
+
+    act(() => recordNegotiatedHostManifest(HOST_ID, ROUTE_MANIFEST));
+    await screen.findByLabelText("One-time code");
+
+    expect(routeReadMethods).toEqual([
+      "environment.status",
+      "environment.host.read",
+      "environment.list",
+    ]);
+    expect(linkRequests).toEqual([
+      {
+        providerId: "codex",
+        profileId: profile.profileId,
+        environmentId: ENVIRONMENT_ID,
+        createProfile: null,
+        replaceAccount: false,
+      },
+    ]);
+    expect(mocks.startLoginAsync).not.toHaveBeenCalled();
+  });
+
+  it("does not start sign-in when Back closes before the first manifest", async () => {
+    const linkRequests: ProvidersLinkRequestV12[] = [];
+    const onCancel = vi.fn();
+    const client = buildRouteClient(
+      linkRequests,
+      {
+        status: environmentStatusFixture({}),
+        bindingOwnerKind: "user",
+        effectiveRole: "owner",
+      },
+      null,
+    );
+    const rendered = renderRoutedPanel(
+      managedProfile(),
+      false,
+      client,
+      onCancel,
+    );
+
+    await screen.findByRole("button", { name: "Back" });
+    expect(routeReadMethods).toEqual([]);
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    rendered.unmount();
+
+    act(() => recordNegotiatedHostManifest(HOST_ID, ROUTE_MANIFEST));
+
+    expect(routeReadMethods).toEqual([]);
     expect(linkRequests).toEqual([]);
     expect(mocks.startLoginAsync).not.toHaveBeenCalled();
   });
@@ -728,7 +819,17 @@ describe("<ProviderProfileReauthPanel /> on a host that takes no credentials", (
   it("starts no sign-in on mount, shows the refusal and a Back button that cancels", () => {
     mocks.credentialRefusal = REFUSAL;
     const onCancel = vi.fn();
-    renderPanel(onCancel);
+    const linkRequests: ProvidersLinkRequestV12[] = [];
+    const client = buildRouteClient(
+      linkRequests,
+      {
+        status: environmentStatusFixture({}),
+        bindingOwnerKind: "user",
+        effectiveRole: "owner",
+      },
+      LOCAL_SIGN_IN_MANIFEST,
+    );
+    renderRoutedPanel(managedProfile(), false, client, onCancel);
 
     expect(mocks.startLoginAsync).not.toHaveBeenCalled();
     expect(screen.getByTestId("credential-refusal").textContent).toBe(REFUSAL);
@@ -737,10 +838,21 @@ describe("<ProviderProfileReauthPanel /> on a host that takes no credentials", (
 
     expect(onCancel).toHaveBeenCalledTimes(1);
     expect(mocks.startLoginAsync).not.toHaveBeenCalled();
+    expect(linkRequests).toEqual([]);
   });
 
   it("control: on a host that takes sign-ins the panel starts the sign-in on mount and shows no refusal", () => {
-    renderPanel(vi.fn());
+    const linkRequests: ProvidersLinkRequestV12[] = [];
+    const client = buildRouteClient(
+      linkRequests,
+      {
+        status: environmentStatusFixture({}),
+        bindingOwnerKind: "user",
+        effectiveRole: "owner",
+      },
+      LOCAL_SIGN_IN_MANIFEST,
+    );
+    renderRoutedPanel(managedProfile(), false, client, vi.fn());
 
     expect(mocks.startLoginAsync).toHaveBeenCalledTimes(1);
     expect(screen.queryByTestId("credential-refusal")).toBeNull();

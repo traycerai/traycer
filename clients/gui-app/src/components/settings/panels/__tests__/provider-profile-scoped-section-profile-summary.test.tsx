@@ -17,7 +17,6 @@ import {
   environmentStatusFixture,
 } from "@/lib/environment/__tests__/environment-test-support";
 import {
-  recordNegotiatedHostMethods,
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
@@ -202,24 +201,15 @@ interface OnHostOnlyEntry {
   readonly profileId: string;
 }
 
+interface HostOnlyRenderOptions {
+  readonly onHostOnly: readonly OnHostOnlyEntry[];
+  readonly hostName: string;
+  readonly manifest: ConnectionManifest | null;
+}
+
 function renderSection(
   overrides: Partial<Parameters<typeof ProviderProfileScopedSection>[0]>,
-  options:
-    | {
-        readonly onHostOnly: readonly OnHostOnlyEntry[];
-        readonly hostName: string;
-        readonly methods: readonly string[];
-        readonly linkVersion: undefined;
-      }
-    | {
-        readonly onHostOnly: readonly OnHostOnlyEntry[];
-        readonly hostName: string;
-        readonly linkVersion: {
-          readonly major: number;
-          readonly minor: number;
-        } | null;
-      }
-    | undefined,
+  options: HostOnlyRenderOptions | undefined,
 ) {
   const hostId = "host-profile-summary";
   const client =
@@ -237,19 +227,8 @@ function renderSection(
           },
         }).client;
   clientMock.current = client;
-  if (options !== undefined) {
-    if (options.linkVersion === undefined) {
-      recordNegotiatedHostMethods(hostId, options.methods);
-    } else {
-      const manifest: ConnectionManifest = {
-        "providers.list": { major: 10, minor: 9 },
-        ...(options.linkVersion === null
-          ? {}
-          : { "providers.link": options.linkVersion }),
-      };
-      recordNegotiatedHostManifest(hostId, manifest);
-    }
-  }
+  if (options !== undefined && options.manifest !== null)
+    recordNegotiatedHostManifest(hostId, options.manifest);
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -451,8 +430,11 @@ describe("<ProviderProfileScopedSection /> profile summary", () => {
         {
           onHostOnly: [{ providerId, profileId: "profile-managed" }],
           hostName: "dev-box",
-          methods: ["providers.list", "providers.link"],
-          linkVersion: undefined,
+          manifest: {
+            "providers.list": { major: 10, minor: 9 },
+            "providers.link": { major: 1, minor: 2 },
+            "providers.linkComplete": { major: 1, minor: 2 },
+          },
         },
       );
 
@@ -463,13 +445,13 @@ describe("<ProviderProfileScopedSection /> profile summary", () => {
   );
 
   it.each([
-    ["claude-code", 0],
-    ["claude-code", 1],
-    ["codex", 0],
-    ["codex", 1],
+    ["claude-code", 0, 2],
+    ["claude-code", 2, 0],
+    ["codex", 0, 2],
+    ["codex", 2, 0],
   ] as const)(
-    "restores Link for an on-host-only selected %s profile at providers.link 1.%s",
-    async (providerId, minor) => {
+    "restores Link for %s with providers.link 1.%s and linkComplete 1.%s",
+    async (providerId, linkMinor, completeMinor) => {
       recordNegotiatedHostManifest("other-host", {
         "providers.link": { major: 1, minor: 3 },
       });
@@ -478,7 +460,11 @@ describe("<ProviderProfileScopedSection /> profile summary", () => {
         {
           onHostOnly: [{ providerId, profileId: "profile-managed" }],
           hostName: "dev-box",
-          linkVersion: { major: 1, minor },
+          manifest: {
+            "providers.list": { major: 10, minor: 9 },
+            "providers.link": { major: 1, minor: linkMinor },
+            "providers.linkComplete": { major: 1, minor: completeMinor },
+          },
         },
       );
 
@@ -497,14 +483,18 @@ describe("<ProviderProfileScopedSection /> profile summary", () => {
     ["codex", 2],
     ["codex", 3],
   ] as const)(
-    "keeps Link hidden for on-host-only %s with providers.link 1.%s",
+    "keeps Link hidden for %s when both environment RPCs negotiate 1.%s",
     async (providerId, minor) => {
       renderSection(
         { state: { ...opencodeState(), providerId } },
         {
           onHostOnly: [{ providerId, profileId: "profile-managed" }],
           hostName: "dev-box",
-          linkVersion: { major: 1, minor },
+          manifest: {
+            "providers.list": { major: 10, minor: 9 },
+            "providers.link": { major: 1, minor },
+            "providers.linkComplete": { major: 1, minor },
+          },
         },
       );
 
@@ -514,7 +504,7 @@ describe("<ProviderProfileScopedSection /> profile summary", () => {
     },
   );
 
-  it("keeps Link hidden when providers.link has not been negotiated", async () => {
+  it("keeps Link hidden when providers.linkComplete is known absent", async () => {
     renderSection(
       { state: { ...opencodeState(), providerId: "claude-code" } },
       {
@@ -522,7 +512,48 @@ describe("<ProviderProfileScopedSection /> profile summary", () => {
           { providerId: "claude-code", profileId: "profile-managed" },
         ],
         hostName: "dev-box",
-        linkVersion: null,
+        manifest: {
+          "providers.list": { major: 10, minor: 9 },
+          "providers.link": { major: 1, minor: 2 },
+        },
+      },
+    );
+
+    expect(await screen.findByText("On dev-box only.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Link" })).toBeNull();
+    expect(useProviderLinkDialogStore.getState().target).toBeNull();
+  });
+
+  it("keeps Link hidden before this host has published a manifest", async () => {
+    renderSection(
+      { state: { ...opencodeState(), providerId: "claude-code" } },
+      {
+        onHostOnly: [
+          { providerId: "claude-code", profileId: "profile-managed" },
+        ],
+        hostName: "dev-box",
+        manifest: null,
+      },
+    );
+
+    expect(await screen.findByText("On dev-box only.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Link" })).toBeNull();
+    expect(useProviderLinkDialogStore.getState().target).toBeNull();
+  });
+
+  it("keeps Link hidden when a required method negotiates a different major", async () => {
+    renderSection(
+      { state: { ...opencodeState(), providerId: "claude-code" } },
+      {
+        onHostOnly: [
+          { providerId: "claude-code", profileId: "profile-managed" },
+        ],
+        hostName: "dev-box",
+        manifest: {
+          "providers.list": { major: 10, minor: 9 },
+          "providers.link": { major: 1, minor: 2 },
+          "providers.linkComplete": { major: 2, minor: 0 },
+        },
       },
     );
 
@@ -555,8 +586,11 @@ describe("<ProviderProfileScopedSection /> profile summary", () => {
         {
           onHostOnly: [{ providerId, profileId: "profile-managed" }],
           hostName: "dev-box",
-          methods: ["providers.list", "providers.link"],
-          linkVersion: undefined,
+          manifest: {
+            "providers.list": { major: 10, minor: 9 },
+            "providers.link": { major: 1, minor: 2 },
+            "providers.linkComplete": { major: 1, minor: 2 },
+          },
         },
       );
 
@@ -589,8 +623,11 @@ describe("<ProviderProfileScopedSection /> profile summary", () => {
       {
         onHostOnly: [{ providerId: "claude-code", profileId: "ambient" }],
         hostName: "dev-box",
-        methods: ["providers.list", "providers.link"],
-        linkVersion: undefined,
+        manifest: {
+          "providers.list": { major: 10, minor: 9 },
+          "providers.link": { major: 1, minor: 1 },
+          "providers.linkComplete": { major: 1, minor: 1 },
+        },
       },
     );
 
@@ -600,14 +637,15 @@ describe("<ProviderProfileScopedSection /> profile summary", () => {
     expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
   });
 
-  it("uses the plain local-only marker without Link for a non-target provider", async () => {
+  it("uses the plain local-only marker when neither environment Link method was negotiated", async () => {
     renderSection(
       {},
       {
         onHostOnly: [{ providerId: "opencode", profileId: "profile-managed" }],
         hostName: "dev-box",
-        methods: ["providers.list", "providers.link"],
-        linkVersion: undefined,
+        manifest: {
+          "providers.list": { major: 10, minor: 9 },
+        },
       },
     );
 

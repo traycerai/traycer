@@ -73,6 +73,7 @@ import { useProviderLinkDialogStore } from "@/stores/providers/provider-link-dia
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import {
   recordNegotiatedHostManifest,
+  recordNegotiatedHostMethods,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 
@@ -90,6 +91,16 @@ const PROFILE_ID = "5f0c9b3e-7a41-4d0e-9c53-0b1f6e2a8d44";
 const LINK_ID = "link-1";
 const SIGN_IN_URL = "https://claude.ai/oauth/authorize?state=abc";
 const SANDBOX_HOST_ID = "sandbox-link-host";
+const LEGACY_SIGN_IN_MANIFEST: ConnectionManifest = {
+  "providers.link": { major: 1, minor: 1 },
+  "providers.linkComplete": { major: 1, minor: 1 },
+  "environment.list": { major: 1, minor: 1 },
+};
+const ENVIRONMENT_SIGN_IN_MANIFEST: ConnectionManifest = {
+  "providers.link": { major: 1, minor: 2 },
+  "providers.linkComplete": { major: 1, minor: 2 },
+  "environment.list": { major: 1, minor: 1 },
+};
 const SIGNED_IN_AUTH_FIXTURE = {
   status: "signed-in" as const,
   profile: {
@@ -265,6 +276,8 @@ function cloudPersonalPage(children: ReactNode): ReactNode {
 }
 
 beforeEach(() => {
+  resetNegotiatedManifests();
+  recordNegotiatedHostManifest(HOST_ID, LEGACY_SIGN_IN_MANIFEST);
   useHostClientMock.mockReset();
   useAuthStore.setState(SIGNED_OUT_AUTH_FIXTURE);
   linkMock.link.mockReset();
@@ -451,6 +464,7 @@ describe("the paired environment sign-in versions", () => {
       manifest: {
         "providers.link": { major: 1, minor: 1 },
         "providers.linkComplete": { major: 1, minor: 2 },
+        "environment.list": { major: 1, minor: 1 },
       },
     },
     {
@@ -458,6 +472,7 @@ describe("the paired environment sign-in versions", () => {
       manifest: {
         "providers.link": { major: 1, minor: 2 },
         "providers.linkComplete": { major: 1, minor: 1 },
+        "environment.list": { major: 1, minor: 1 },
       },
     },
   ];
@@ -493,6 +508,93 @@ describe("the paired environment sign-in versions", () => {
       });
     },
   );
+});
+
+describe("negotiated sign-in routing", () => {
+  it("waits through name-only negotiation before reading and starting an environment link", async () => {
+    resetNegotiatedManifests();
+    useAuthStore.setState(SIGNED_IN_AUTH_FIXTURE);
+    useProviderLinkDialogStore.setState({
+      target: {
+        providerId: "claude-code",
+        profileId: null,
+        environmentId: PERSONAL_ENV_ID,
+      },
+    });
+    const listRequested = Promise.withResolvers<void>();
+    listMock.mockImplementationOnce(() => listRequested.resolve());
+    linkMock.link.mockResolvedValueOnce(SIGN_IN_RESPONSE);
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        {cloudPersonalPage(<ProviderLinkDialog />)}
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByRole("button", { name: "Back" })).toBeTruthy();
+    expect(listMock).not.toHaveBeenCalled();
+    expect(linkMock.link).not.toHaveBeenCalled();
+    expect(providersListMock).not.toHaveBeenCalled();
+
+    act(() => {
+      recordNegotiatedHostMethods(HOST_ID, [
+        "providers.link",
+        "providers.linkComplete",
+      ]);
+    });
+    expect(screen.getByRole("button", { name: "Back" })).toBeTruthy();
+    expect(listMock).not.toHaveBeenCalled();
+    expect(linkMock.link).not.toHaveBeenCalled();
+
+    act(() =>
+      recordNegotiatedHostManifest(HOST_ID, ENVIRONMENT_SIGN_IN_MANIFEST),
+    );
+    await listRequested.promise;
+    await screen.findByLabelText("Profile name");
+    await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    await screen.findByLabelText("Code");
+
+    expect(listMock).toHaveBeenCalledTimes(1);
+    expect(linkMock.link).toHaveBeenCalledWith({
+      providerId: "claude-code",
+      profileId: null,
+      environmentId: PERSONAL_ENV_ID,
+      createProfile: { label: "New profile", shareSkillsAndPlugins: false },
+      replaceAccount: false,
+    });
+    expect(providersListMock).not.toHaveBeenCalled();
+  });
+
+  it("does not dispatch after Back closes the dialog before manifest publication", async () => {
+    resetNegotiatedManifests();
+    useAuthStore.setState(SIGNED_IN_AUTH_FIXTURE);
+    useProviderLinkDialogStore.setState({
+      target: {
+        providerId: "claude-code",
+        profileId: null,
+        environmentId: PERSONAL_ENV_ID,
+      },
+    });
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        {cloudPersonalPage(<ProviderLinkDialog />)}
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByRole("button", { name: "Back" })).toBeTruthy();
+    expect(listMock).not.toHaveBeenCalled();
+    expect(linkMock.link).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+
+    expect(useProviderLinkDialogStore.getState().target).toBeNull();
+    expect(screen.queryByTestId("provider-link-dialog")).toBeNull();
+    act(() =>
+      recordNegotiatedHostManifest(HOST_ID, ENVIRONMENT_SIGN_IN_MANIFEST),
+    );
+
+    expect(listMock).not.toHaveBeenCalled();
+    expect(linkMock.link).not.toHaveBeenCalled();
+    expect(providersListMock).not.toHaveBeenCalled();
+  });
 });
 
 it("shows the real sandbox refusal before either link request can be sent", async () => {
@@ -569,6 +671,7 @@ describe("a sign-in URL with a pasted code", () => {
       "providers.link": { major: 1, minor: 2 },
       "providers.linkComplete": { major: 1, minor: 2 },
       "providers.linkCancel": { major: 1, minor: 0 },
+      "environment.list": { major: 1, minor: 1 },
     });
     await openCloudDialog("claude-code", null);
     const profileName = screen.getByLabelText("Profile name");
@@ -646,6 +749,7 @@ describe("a sign-in URL with a pasted code", () => {
       "providers.link": { major: 1, minor: 2 },
       "providers.linkComplete": { major: 1, minor: 2 },
       "providers.linkCancel": { major: 1, minor: 0 },
+      "environment.list": { major: 1, minor: 1 },
     });
     await openCloudDialog("claude-code", null);
     const profileName = screen.getByLabelText("Profile name");

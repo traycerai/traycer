@@ -206,7 +206,7 @@ describe("<SetUpPersonalGroup />", () => {
     const steps = screen.getAllByTestId("set-up-personal-step");
     expect(steps.map((step) => step.textContent)).toEqual([
       expect.stringContaining(
-        "Sign in or add an API key, so your agents can run on every host.",
+        "Sign in or add an API key so your agents can run.",
       ),
       expect.stringContaining(
         "Add a secret your agents will need, like a deploy key or a login.",

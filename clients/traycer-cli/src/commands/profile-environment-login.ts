@@ -18,6 +18,7 @@ import {
 } from "../internal/host-rpc";
 import { printable, readProviderStates } from "../internal/profile-target";
 import { httpUrlOf } from "../internal/profile-login-url";
+import { nameNewProfile } from "../internal/profile-login-name";
 import type { CommandContext } from "../runner/runner";
 import type {
   ProfileLoginIo,
@@ -25,6 +26,9 @@ import type {
   LoginOutcome,
 } from "./profile-login";
 import { summarizeProfile } from "./profile-list";
+
+/** A connected account may keep arriving after the command stops waiting. */
+const RECEIVING_WAIT_MS = 60_000;
 
 /** A terminal drives the same environment attempt as the app. The one-time
  * code stays in this stack, outside caches, diagnostics and progress. */
@@ -53,7 +57,7 @@ export async function runEnvironmentProfileLogin(
   };
   const stopInterrupt = io.onInterrupt(interrupt);
   let linkId: string | null = null;
-  let connected = false;
+  let connectedAt: number | null = null;
   let cancelSent = false;
   const dispatch = (
     method: "providers.link" | "providers.linkComplete",
@@ -63,7 +67,7 @@ export async function runEnvironmentProfileLogin(
     requiredHostMethodVersion: { method, version: { major: 1, minor: 2 } },
   });
   const release = async (): Promise<void> => {
-    if (linkId === null || connected || cancelSent) return;
+    if (linkId === null || connectedAt !== null || cancelSent) return;
     cancelSent = true;
     try {
       const version = await readLocalHostMethodVersion("providers.linkCancel");
@@ -128,13 +132,20 @@ export async function runEnvironmentProfileLogin(
           ctx.output.humanRequired(
             "Sign in on claude.ai, then paste the code it shows and press Enter.",
           );
-          code = await readLine(io, abort.signal);
+          code = await readLine(io, abort.signal, false);
           if (code === null) return { status: "cancelled" };
         }
       }
       for (;;) {
         if (abort.signal.aborted)
-          return { status: connected ? "signed-in-pending" : "cancelled" };
+          return {
+            status: connectedAt !== null ? "signed-in-pending" : "cancelled",
+          };
+        if (
+          connectedAt !== null &&
+          Date.now() - connectedAt >= RECEIVING_WAIT_MS
+        )
+          return { status: "signed-in-pending" };
         let response: ProvidersLinkCompleteResponseV12;
         try {
           response = await callHostRpcWithDispatch(
@@ -143,17 +154,22 @@ export async function runEnvironmentProfileLogin(
             dispatch("providers.linkComplete"),
           );
         } catch (error) {
-          if (!connected) throw error;
+          if (connectedAt === null) throw error;
           await io.wait(2_000, abort.signal);
           continue;
         }
         code = null;
-        if (response.state === "linked" || response.state === "installing")
-          connected = true;
-        if (abort.signal.aborted)
-          return { status: connected ? "signed-in-pending" : "cancelled" };
         if (
-          connected &&
+          connectedAt === null &&
+          (response.state === "linked" || response.state === "installing")
+        )
+          connectedAt = Date.now();
+        if (abort.signal.aborted)
+          return {
+            status: connectedAt !== null ? "signed-in-pending" : "cancelled",
+          };
+        if (
+          connectedAt !== null &&
           response.state !== "linked" &&
           response.state !== "installing"
         ) {
@@ -184,12 +200,26 @@ export async function runEnvironmentProfileLogin(
           } catch {
             /* The connection is established; its inventory may arrive later. */
           }
-          if (installed !== null && installed.auth.status === "authenticated")
+          if (installed !== null && installed.auth.status === "authenticated") {
+            const profile = summarizeProfile(installed);
             return {
               status: "signed-in",
-              profile: summarizeProfile(installed),
+              profile:
+                target.create !== null &&
+                start.environmentProfileId !== null &&
+                installed.environmentProfileId === start.environmentProfileId &&
+                !state.profiles.some(
+                  (prior) => prior.profileId === installed.profileId,
+                )
+                  ? await nameNewProfile(
+                      providerId,
+                      profile,
+                      target.create.label,
+                    )
+                  : profile,
               created: target.create !== null,
             };
+          }
           if (abort.signal.aborted) return { status: "signed-in-pending" };
           if (response.state === "linked" && response.profileId !== null)
             return { status: "signed-in-pending" };
@@ -212,7 +242,7 @@ export async function runEnvironmentProfileLogin(
           ctx.output.humanRequired(
             `${REPLACE_PROFILE_ACCOUNT_LINE}\nSwitch account? [y/N]`,
           );
-          const answer = await readLine(io, abort.signal);
+          const answer = await readLine(io, abort.signal, true);
           if (answer === null || !/^y(es)?$/i.test(answer))
             return { status: "not-started", message: line };
           await release();
@@ -232,7 +262,7 @@ export async function runEnvironmentProfileLogin(
           prompt.kind === "sign_in_url"
         ) {
           ctx.output.humanRequired("Paste the whole code claude.ai shows.");
-          code = await readLine(io, abort.signal);
+          code = await readLine(io, abort.signal, false);
           if (code === null) return { status: "cancelled" };
         } else await io.wait(2_000, abort.signal);
       }
@@ -246,6 +276,7 @@ export async function runEnvironmentProfileLogin(
 function readLine(
   io: ProfileLoginIo,
   signal: AbortSignal,
+  acceptEmpty: boolean,
 ): Promise<string | null> {
   return new Promise((resolve) => {
     if (signal.aborted) {
@@ -264,7 +295,8 @@ function readLine(
     const cancel = (): void => finish(null);
     signal.addEventListener("abort", cancel, { once: true });
     stopReading = io.readLines((line) => {
-      if (line.trim().length > 0) finish(line.trim());
+      const value = line.trim();
+      if (acceptEmpty || value.length > 0) finish(value);
     }, cancel);
     if (settled) stopReading?.();
     else if (stopReading === null) finish(null);

@@ -47,6 +47,7 @@ import {
 } from "./use-provider-profile-login-flow";
 import { CredentialRefusalNote } from "@/components/providers/credential-refusal-note";
 import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
+import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
 
 function noop(): void {}
 
@@ -80,11 +81,24 @@ export function ProviderProfileReauthPanel(
   props: ProviderProfileReauthPanelProps,
 ): ReactNode {
   const client = useOptionalHostClient();
+  const hostId = useRequesterHostId(client);
   const supported = useEnvironmentProfileSignInSupported(
-    client,
+    hostId,
     props.state.providerId,
     props.profile.kind === "managed",
   );
+  const refusal = useHostCredentialRefusal(hostId);
+  if (hostId !== null && refusal !== null)
+    return (
+      <div className="flex flex-col gap-3">
+        <CredentialRefusalNote refusal={refusal} />
+        <Button type="button" variant="ghost" onClick={props.onCancel}>
+          Back
+        </Button>
+      </div>
+    );
+  if (supported === null)
+    return <ProfileReauthReading onCancel={props.onCancel} />;
   if (supported && client !== null)
     return <RoutedProviderProfileReauthPanel {...props} client={client} />;
   return <LocalProviderProfileReauthPanel {...props} />;
@@ -97,17 +111,7 @@ function RoutedProviderProfileReauthPanel(
 ): ReactNode {
   const { client } = props;
   const route = useProfileSignInEnvironment(client);
-  const refusal = useHostCredentialRefusal(client.getActiveHostId());
   if (route.kind === "environment") {
-    if (refusal !== null)
-      return (
-        <div className="flex flex-col gap-3">
-          <CredentialRefusalNote refusal={refusal} />
-          <Button type="button" variant="ghost" onClick={props.onCancel}>
-            Back
-          </Button>
-        </div>
-      );
     if (!route.canSignIn)
       return (
         <div className="flex flex-col gap-3">
@@ -144,7 +148,8 @@ function RoutedProviderProfileReauthPanel(
       />
     );
   }
-  if (route.kind === "reading") return <MutedAgentSpinner />;
+  if (route.kind === "reading")
+    return <ProfileReauthReading onCancel={props.onCancel} />;
   if (route.kind === "failed")
     return (
       <div>
@@ -154,6 +159,19 @@ function RoutedProviderProfileReauthPanel(
       </div>
     );
   return <LocalProviderProfileReauthPanel {...props} />;
+}
+
+function ProfileReauthReading(props: {
+  readonly onCancel: () => void;
+}): ReactNode {
+  return (
+    <div className="flex flex-col gap-3">
+      <MutedAgentSpinner />
+      <Button type="button" onClick={props.onCancel}>
+        Back
+      </Button>
+    </div>
+  );
 }
 
 function LocalProviderProfileReauthPanel({

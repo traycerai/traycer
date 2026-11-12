@@ -11,7 +11,10 @@ import {
 } from "react";
 import { providerIdSchema } from "@traycer/protocol/host/provider-ids";
 import { usePersonalHostName } from "@/components/settings/personal/personal-page-context";
-import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import {
+  AgentSpinningDots,
+  MutedAgentSpinner,
+} from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -115,11 +118,11 @@ function RoutedProviderLinkDialog(props: {
   const hostId = useRequesterHostId(client);
   const credentialRefusal = useHostCredentialRefusal(hostId);
   const supported = useEnvironmentProfileSignInSupported(
-    client,
+    hostId,
     target.providerId,
     true,
   );
-  if (credentialRefusal !== null)
+  if (credentialRefusal !== null || supported === null)
     return (
       <Dialog
         open
@@ -132,6 +135,7 @@ function RoutedProviderLinkDialog(props: {
             <DialogTitle>Sign in</DialogTitle>
           </DialogHeader>
           <CredentialRefusalNote refusal={credentialRefusal} />
+          {credentialRefusal === null ? <MutedAgentSpinner /> : null}
           <Button type="button" variant="ghost" onClick={close}>
             Back
           </Button>

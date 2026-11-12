@@ -22,6 +22,7 @@ import {
 import { cn } from "@/lib/utils";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { useHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
+import { useEnvironmentProfileSignInSupported } from "@/hooks/providers/use-profile-sign-in-environment";
 import { useProviderLinkDialogStore } from "@/stores/providers/provider-link-dialog-store";
 import { EmbeddedProviderRateLimitForProvider } from "./provider-rate-limit-section";
 import { ProfileSummaryActions } from "./profile-summary-actions";
@@ -61,6 +62,15 @@ function LocalProfileLocation(props: {
     props.hostId,
     "providers.link",
   );
+  const completeVersion = useHostMethodSchemaVersion(
+    props.hostId,
+    "providers.linkComplete",
+  );
+  const environmentSignIn = useEnvironmentProfileSignInSupported(
+    props.hostId,
+    props.providerId,
+    true,
+  );
   const openLink = useProviderLinkDialogStore((state) => state.open);
   const onlyHere = inventory.data?.onHostOnly?.some(
     (entry) =>
@@ -71,7 +81,9 @@ function LocalProfileLocation(props: {
   return (
     <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-ui-xs text-muted-foreground">
       <p>On {props.hostName ?? "this host"} only.</p>
-      {linkVersion?.major === 1 && linkVersion.minor < 2 ? (
+      {linkVersion?.major === 1 &&
+      completeVersion?.major === 1 &&
+      environmentSignIn === false ? (
         <Button
           type="button"
           variant="link"

@@ -4,6 +4,7 @@ import type {
   EnvironmentListResponseV11,
 } from "@traycer/protocol/host/environment/contracts";
 import type { EnvironmentStatusResponseV12 } from "@traycer/protocol/host/environment-schemas";
+import { providersLinkV12 } from "@traycer/protocol/host/environment-contracts";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useContext } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -31,26 +32,48 @@ export type ProfileSignInEnvironment =
       readonly canSignIn: boolean;
     };
 
-/** Settings Personal names Personal. A composer instead names the environment
- * bound to its captured execution host, never the Settings picker. */
+/** Unknown versions cannot authorize a local sign-in before negotiation. */
 export function useEnvironmentProfileSignInSupported(
-  client: HostClient<HostRpcRegistry> | null,
+  hostId: string | null,
   providerId: string,
   managed: boolean,
-): boolean {
-  const hostId = useRequesterHostId(client);
+): boolean | null {
+  const startPresent = useHostMethodSupport(hostId, "providers.link");
+  const completePresent = useHostMethodSupport(
+    hostId,
+    "providers.linkComplete",
+  );
   const startVersion = useHostMethodSchemaVersion(hostId, "providers.link");
   const completeVersion = useHostMethodSchemaVersion(
     hostId,
     "providers.linkComplete",
   );
-  return (
-    managed &&
-    usesEnvironmentSignIn(providerId, startVersion) &&
-    usesEnvironmentSignIn(providerId, completeVersion)
-  );
+  if (
+    !managed ||
+    !usesEnvironmentSignIn(providerId, providersLinkV12.schemaVersion)
+  )
+    return false;
+  const startSupported =
+    startVersion === null
+      ? null
+      : usesEnvironmentSignIn(providerId, startVersion);
+  const completeSupported =
+    completeVersion === null
+      ? null
+      : usesEnvironmentSignIn(providerId, completeVersion);
+  if (
+    startPresent === false ||
+    completePresent === false ||
+    startSupported === false ||
+    completeSupported === false
+  )
+    return false;
+  if (startSupported === null || completeSupported === null) return null;
+  return true;
 }
 
+/** Settings Personal names Personal. A composer instead names the environment
+ * bound to its captured execution host, never the Settings picker. */
 export function useProfileSignInEnvironment(
   client: HostClient<HostRpcRegistry>,
 ): ProfileSignInEnvironment {
