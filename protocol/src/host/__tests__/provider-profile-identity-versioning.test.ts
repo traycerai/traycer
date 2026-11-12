@@ -437,6 +437,13 @@ describe("providers.list@10.9 additive response projection", () => {
     });
     expect(carried.providers[0]).toHaveProperty("usageReporting", true);
 
+    // And on the LIVE line, not only the frozen 10.9 one: every other check
+    // here reads a frozen row, so dropping the field from the live row would
+    // otherwise pass this suite.
+    const live = providersList.versions[10].contract.responseSchema;
+    const onLive = live.parse({ providers: [usageReporting] });
+    expect(onLive.providers[0]).toHaveProperty("usageReporting", true);
+
     const frozen108 = providersList.versions[8].contract.responseSchema;
     const downgraded = frozen108.parse({ providers: [usageReporting] });
     expect(downgraded.providers[0]).not.toHaveProperty("usageReporting");
