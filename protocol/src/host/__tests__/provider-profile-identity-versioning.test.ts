@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import { hostRpcRegistry } from "@traycer/protocol/host/registry";
 
 const providersList = hostRpcRegistry["providers.list"][10];
-const live109 = providersList.versions[9].contract.responseSchema;
-const providersListResponseSchema = live109;
+// The 10.9 line's response row. A frozen line of its own since 10.10 opened
+// above it (`hiddenModelProviders`), so it is no longer the live schema.
+const providersListResponseSchema =
+  providersList.versions[9].contract.responseSchema;
 
 const profile = {
   profileId: "managed-1",
@@ -428,18 +430,27 @@ describe("providers.list@10.9 additive response projection", () => {
   });
 
   it("carries optional usage reporting in 10.9 and strips it for 10.8", () => {
-    expect(providersList.latestMinor).toBe(9);
+    expect(providersList.latestMinor).toBe(10);
     const usageReporting = { ...provider, usageReporting: true };
-    const live = live109.parse({
+    const carried = providersListResponseSchema.parse({
       providers: [usageReporting],
     });
-    expect(live.providers[0]).toHaveProperty("usageReporting", true);
+    expect(carried.providers[0]).toHaveProperty("usageReporting", true);
+
+    // And on the LIVE line, not only the frozen 10.9 one: every other check
+    // here reads a frozen row, so dropping the field from the live row would
+    // otherwise pass this suite.
+    const live = providersList.versions[10].contract.responseSchema;
+    const onLive = live.parse({ providers: [usageReporting] });
+    expect(onLive.providers[0]).toHaveProperty("usageReporting", true);
 
     const frozen108 = providersList.versions[8].contract.responseSchema;
     const downgraded = frozen108.parse({ providers: [usageReporting] });
     expect(downgraded.providers[0]).not.toHaveProperty("usageReporting");
 
-    const olderHost = live109.parse({ providers: [provider] });
+    const olderHost = providersListResponseSchema.parse({
+      providers: [provider],
+    });
     expect(olderHost.providers[0]).not.toHaveProperty("usageReporting");
   });
 });
