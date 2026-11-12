@@ -107,4 +107,18 @@ describe("useEnvironmentHostReadQuery without a pool", () => {
       expect(read.query.data).toEqual({ ...BINDING, sharingGeneration: null });
     });
   });
+
+  it("returns pending while the status method has not been negotiated", () => {
+    const { client } = buildEnvironmentClient({
+      hostId: HOST_ID,
+      handlers: {},
+    });
+
+    const { result } = renderHook(
+      () => useEnvironmentHostReadQuery(client, HOST_ID, true),
+      { wrapper },
+    );
+
+    expect(result.current.kind).toBe("pending");
+  });
 });

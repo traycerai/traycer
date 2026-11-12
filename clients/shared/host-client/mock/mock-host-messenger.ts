@@ -1,9 +1,11 @@
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
+import { markMayHaveReachedHost } from "@traycer/protocol/host-transport/remote/rpc-types";
 import {
   HostRpcError,
   HostRequestAbortedError,
   HostTransportFailureError,
   RetryableTransportError,
+  mayHaveReachedHost,
   type HostRequestAuthority,
   type HostRequestOptions,
   type RequiredHostMethodVersion,
@@ -227,6 +229,7 @@ export class MockHostMessenger<
       }
       if (cause instanceof HostRpcError) {
         const error = restampHostRpcError(cause, requestId, method);
+        if (mayHaveReachedHost(cause)) markMayHaveReachedHost(error);
         this.emit({
           kind: "response",
           method,

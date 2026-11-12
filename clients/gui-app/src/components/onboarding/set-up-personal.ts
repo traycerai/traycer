@@ -33,7 +33,7 @@ export const SET_UP_PERSONAL_STEPS: ReadonlyArray<SetUpPersonalStep> = [
   {
     id: "provider",
     section: "providers",
-    text: "Link a plan or add an API key, so your agents can run on every host.",
+    text: "Sign in or add an API key so your agents can run.",
     action: "Open Providers",
   },
   {

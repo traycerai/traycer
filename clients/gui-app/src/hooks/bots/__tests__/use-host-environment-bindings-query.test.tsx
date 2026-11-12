@@ -7,6 +7,7 @@ import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
 import { useHostEnvironmentBindings } from "@/hooks/bots/use-host-environment-bindings-query";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
@@ -17,11 +18,11 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { HostRpcRegistry } from "@/lib/host";
 
 const HOST_ID = "host-a";
-const BINDING = {
+const BINDING: EnvironmentHostBinding = {
   hostId: HOST_ID,
   environment: {
     environmentId: "env-personal",
-    ownerKind: "user" as const,
+    ownerKind: "user",
     ownerId: "viewer",
     roomId: "room",
     label: "Personal",
@@ -30,9 +31,9 @@ const BINDING = {
   enrolledByUserId: null,
   canUnbind: false,
 };
-const runtime = vi.hoisted(() => ({
-  client: null as HostClient<HostRpcRegistry> | null,
-}));
+const runtime: { client: HostClient<HostRpcRegistry> | null } = vi.hoisted(
+  () => ({ client: null }),
+);
 
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
@@ -98,6 +99,36 @@ describe("useHostEnvironmentBindings retry", () => {
     expect(result.current.byHostId.has(HOST_ID)).toBe(false);
     expect(result.current.failedHostIds).toEqual([]);
     expect(bindingCalls).toBe(0);
+  });
+
+  it("uses the host binding when answered status is not Local", async () => {
+    let bindingCalls = 0;
+    const { spine } = buildEnvironmentClient({
+      hostId: HOST_ID,
+      handlers: {
+        "environment.status": () =>
+          environmentStatusFixture({ principal: { kind: "personal" } }),
+        "environment.host.read": () => {
+          bindingCalls += 1;
+          return { ...BINDING, sharingGeneration: null };
+        },
+      },
+    });
+    runtime.client = spine;
+    const { result } = renderHook(
+      () => useHostEnvironmentBindings([HOST_ID], true),
+      { wrapper },
+    );
+
+    await waitFor(() => {
+      expect(result.current.byHostId.get(HOST_ID)).toEqual({
+        ...BINDING,
+        sharingGeneration: null,
+      });
+    });
+    expect(result.current.ownSettingsHostIds).toEqual([]);
+    expect(result.current.failedHostIds).toEqual([]);
+    expect(bindingCalls).toBe(1);
   });
 
   it("rechecks failed status before retrying a refused binding read", async () => {
