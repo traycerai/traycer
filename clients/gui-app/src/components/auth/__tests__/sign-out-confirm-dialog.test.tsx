@@ -83,6 +83,7 @@ describe("the pending sign-out question", () => {
     cleanup();
     signedOut();
     useSignOutConfirmStore.setState({ open: false });
+    vi.useRealTimers();
   });
 
   it("does not come back for the next account after the session ends elsewhere", () => {
@@ -191,5 +192,59 @@ describe("the pending sign-out question", () => {
     expect(
       screen.getByRole("button", { name: "Sign out" }).hasAttribute("disabled"),
     ).toBe(false);
+  });
+
+  it("queues a new sign-out behind old cleanup without leaking its failure", async () => {
+    signedInAs(crypto.randomUUID());
+    const queryClient = new QueryClient();
+    const oldCleanup = deferred<boolean>();
+    const newCleanup = deferred<boolean>();
+    authHarness.signOut
+      .mockReturnValueOnce(oldCleanup.promise)
+      .mockReturnValueOnce(newCleanup.promise);
+    mountSeatWithQueryClient(queryClient);
+    askToSignOut();
+
+    fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+    await waitFor(() => {
+      expect(authHarness.signOut).toHaveBeenCalledTimes(1);
+    });
+
+    signedOut();
+    signedInAs(crypto.randomUUID());
+    askToSignOut();
+    expect(screen.getByTestId("confirm-destructive-dialog")).not.toBeNull();
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(authHarness.signOut).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("confirm-destructive-dialog")).not.toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Sign out" }).hasAttribute("disabled"),
+    ).toBe(true);
+
+    await act(async () => {
+      oldCleanup.resolve(false);
+      await oldCleanup.promise;
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(authHarness.signOut).toHaveBeenCalledTimes(2);
+
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByTestId("confirm-destructive-dialog")).not.toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Sign out" }).hasAttribute("disabled"),
+    ).toBe(true);
+
+    await act(async () => {
+      newCleanup.resolve(true);
+      await newCleanup.promise;
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+    expect(authHarness.signOut).toHaveBeenCalledTimes(2);
   });
 });
