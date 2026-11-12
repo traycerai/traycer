@@ -39,7 +39,7 @@ export function useSettingsHostEntry(): {
     [queryClient],
   );
   const readStatusState = useCallback((): "ready" | "failed" | "retrying" => {
-    if (targetHostId === null) return "ready";
+    if (targetHostId === null || target?.connectable !== true) return "ready";
     const state = queryClient.getQueryState(
       queryKeys.hostMethod<HostRpcRegistry, "environment.status">(
         targetHostId,
@@ -56,9 +56,9 @@ export function useSettingsHostEntry(): {
       return "retrying";
     if (state?.status !== "error") return "ready";
     return state.fetchStatus === "idle" ? "failed" : "retrying";
-  }, [queryClient, targetHostId]);
+  }, [queryClient, targetHostId, target]);
   // The status map exposes only data: an error can leave its null unchanged.
-  // Keep a failed status pending and retryable before asking for bindings.
+  // A reachable target waits for status; offline targets keep the binding path.
   const statusState = useSyncExternalStore(subscribe, readStatusState);
   const statusFailed = statusState !== "ready";
   const unread = settingsHostEntryUnread(target, status.statuses, statusFailed);

@@ -849,12 +849,13 @@ no host keeps Personal. A listed sandbox defaults to Personal without a Local
 status read. The stored default belongs to the window host it was derived for;
 a host change makes readers unresolved immediately, before upkeep runs.
 An explicit choice still takes precedence.
-A pending Settings host entry also waits for a failed status read before
-asking for bindings. It keeps “Finding your hosts…” with “Try again” after a
+A pending Settings host entry waits for a reachable computer's failed status
+read before asking for bindings. It keeps “Finding your hosts…” with “Try again” after a
 failed attempt; that action retries the target status. An error holds the entry
-even through a retry with cached data or a lost route. Unresolved picks ignore
-Personal membership results, including cached hosts. Only a real host-list
-failure gets the host-list error.
+through a retry with cached data. An offline target keeps the existing
+binding path and offers no status retry; its observer reads again when the
+route returns. Unresolved picks ignore Personal membership results, including
+cached hosts.
 
 The Environment dropdown uses `useEnvironmentPick()`, and `PersonalPageFrame`
 decides each Environment page's source, one rule per pick. A team reads the

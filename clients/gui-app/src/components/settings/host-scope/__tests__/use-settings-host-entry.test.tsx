@@ -39,7 +39,6 @@ const harness = vi.hoisted(() => ({
   personalMembershipHostIds: [] as string[],
   teamMembershipHostIds: [] as string[],
   bindingRequests: [] as string[],
-  bindingsFail: false,
   membershipState: "ready" as "ready" | "loading" | "failed",
 }));
 
@@ -148,7 +147,7 @@ vi.mock("@/hooks/bots/use-host-environment-bindings-query", () => ({
               ] as const,
           ),
       ]),
-      failedHostIds: harness.bindingsFail ? hostIds : [],
+      failedHostIds: [],
       retryFailed: () => undefined,
     };
   },
@@ -168,11 +167,17 @@ vi.mock("@/lib/analytics", () => ({
 let entryClient: HostClient<HostRpcRegistry>;
 
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
-import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
+import {
+  useHostScope,
+  type HostScope,
+} from "@/components/settings/host-scope/use-host-scope";
 import { carryViewedHostIntoSettingsScope } from "@/components/settings/host-scope/carry-viewed-host-into-settings";
 import { HostScopeGate } from "@/components/settings/host-scope/host-scope-gate";
 import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
-import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
+import {
+  PERSONAL_PICK,
+  type EnvironmentPick,
+} from "@/lib/settings-environment-pages";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 
@@ -238,6 +243,45 @@ function requestEntry(host: HostScopeOption) {
   return { rendered, queryClient };
 }
 
+interface EntryOutcome {
+  readonly hostId: string | null;
+  readonly pendingHostId: string | null;
+  readonly pick: EnvironmentPick | null;
+  readonly hostSelection:
+    | { readonly hostId: string; readonly name: string }
+    | undefined;
+  readonly bindingHostIds: readonly string[];
+  readonly retryAvailable: boolean;
+}
+
+function entryOutcome(scope: HostScope): EntryOutcome {
+  const store = useSettingsHostScopeStore.getState();
+  return {
+    hostId: scope.hostId,
+    pendingHostId: store.pendingHostId,
+    pick: useSettingsEnvironmentPickStore.getState().pick,
+    hostSelection: store.hostByEnvironment.personal,
+    bindingHostIds: [...new Set(harness.bindingRequests)],
+    retryAvailable: scope.retryEntryStatus !== null,
+  };
+}
+
+async function neverReadOfflineOutcome(
+  target: HostScopeOption,
+): Promise<EntryOutcome> {
+  harness.resolvedBindingHostIds = [target.hostId];
+  harness.personalMembershipHostIds = [target.hostId];
+  const { rendered } = requestEntry({ ...target, connectable: false });
+  await waitFor(() =>
+    expect(useSettingsHostScopeStore.getState().pendingHostId).toBeNull(),
+  );
+  const outcome = entryOutcome(rendered.result.current);
+  rendered.unmount();
+  useSettingsHostScopeStore.getState().reset();
+  harness.bindingRequests = [];
+  return outcome;
+}
+
 afterEach(() => {
   cleanup();
   useSettingsHostScopeStore.getState().reset();
@@ -258,7 +302,6 @@ afterEach(() => {
   harness.teamMembershipHostIds = [];
   harness.membershipState = "ready";
   harness.bindingRequests = [];
-  harness.bindingsFail = false;
 });
 
 describe("Settings entry host resolution", () => {
@@ -378,24 +421,13 @@ describe("Settings entry host resolution", () => {
   it("places a not-connectable computer under Personal", async () => {
     entryClient = makeClient();
     const target = targetOption("personal-computer", "remote");
-    harness.hosts = [{ ...target, isLocalMachine: false, connectable: false }];
-    harness.resolvedBindingHostIds = [target.hostId];
-    harness.personalMembershipHostIds = [target.hostId];
-
-    const { rendered } = requestEntry(harness.hosts[0]);
-
-    await waitFor(() => {
-      expect(useSettingsHostScopeStore.getState().pendingHostId).toBeNull();
-    });
-    expect(rendered.result.current.hostId).toBe(target.hostId);
-    expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(
-      PERSONAL_PICK,
-    );
-    expect(
-      useSettingsHostScopeStore.getState().hostByEnvironment.personal,
-    ).toEqual({
+    expect(await neverReadOfflineOutcome(target)).toEqual({
       hostId: target.hostId,
-      name: `Name ${target.hostId}`,
+      pendingHostId: null,
+      pick: PERSONAL_PICK,
+      hostSelection: { hostId: target.hostId, name: `Name ${target.hostId}` },
+      bindingHostIds: [target.hostId],
+      retryAvailable: false,
     });
   });
 
@@ -530,9 +562,66 @@ describe("Settings entry host resolution", () => {
     },
   );
 
-  it("keeps a failed status pending when the target loses its route", async () => {
+  it.each([false, true])(
+    "matches the never-read offline entry after route loss (retry active: %s)",
+    async (retryActive) => {
+      entryClient = makeClient();
+      const target = targetOption("offline-computer", "remote");
+      const expected = await neverReadOfflineOutcome(target);
+      const { rendered, queryClient } = requestEntry(target);
+      const retry = Promise.withResolvers<EnvironmentStatusResponseV12>();
+      const queryKey = queryKeys.hostMethod<
+        HostRpcRegistry,
+        "environment.status"
+      >(target.hostId, "environment.status", {});
+      let reads = 0;
+      await act(async () => {
+        await queryClient
+          .fetchQuery(
+            queryOptions({
+              queryKey,
+              queryFn: () => {
+                reads += 1;
+                return reads === 1
+                  ? Promise.reject(new Error("status unavailable"))
+                  : retry.promise;
+              },
+            }),
+          )
+          .catch(() => undefined);
+      });
+      if (retryActive) {
+        act(() => rendered.result.current.retryEntryStatus?.());
+        expect(queryClient.getQueryState(queryKey)?.status).toBe("pending");
+        expect(queryClient.getQueryState(queryKey)?.fetchStatus).toBe(
+          "fetching",
+        );
+      }
+      harness.hosts = [{ ...target, connectable: false }];
+      act(() => rendered.rerender());
+      await waitFor(() =>
+        expect(entryOutcome(rendered.result.current)).toEqual(expected),
+      );
+      render(
+        <HostScopeGate scope={rendered.result.current} skeleton={null}>
+          {null}
+        </HostScopeGate>,
+      );
+      expect(screen.queryByText("Finding your hosts…")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
+      if (retryActive)
+        await act(async () => {
+          retry.resolve(environmentStatusFixture({}));
+          await retry.promise;
+        });
+    },
+  );
+
+  it("drops the dead status retry while an offline entry resolves its binding", async () => {
     entryClient = makeClient();
-    const target = targetOption("route-lost", "local");
+    const target = targetOption("offline-binding", "remote");
+    const expected = await neverReadOfflineOutcome(target);
+    harness.resolvedBindingHostIds = [];
     const { rendered, queryClient } = requestEntry(target);
     await act(async () => {
       await queryClient
@@ -549,89 +638,24 @@ describe("Settings entry host resolution", () => {
     });
     harness.hosts = [{ ...target, connectable: false }];
     act(() => rendered.rerender());
-    expect(useSettingsHostScopeStore.getState().pendingHostId).toBe(
-      target.hostId,
-    );
-    expect(harness.bindingRequests).toEqual([]);
-    expect(rendered.result.current.listsFailed).toBe(false);
-    expect(rendered.result.current.isLoading).toBe(true);
-  });
-
-  it("holds a no-data retry when its route drops before the fresh status answers", async () => {
-    entryClient = makeClient();
-    const target = targetOption("retry-route-lost", "local");
-    const { rendered, queryClient } = requestEntry(target);
-    const retry = Promise.withResolvers<EnvironmentStatusResponseV12>();
-    const queryKey = queryKeys.hostMethod<
-      HostRpcRegistry,
-      "environment.status"
-    >(target.hostId, "environment.status", {});
-    let reads = 0;
-    await act(async () => {
-      await queryClient
-        .fetchQuery(
-          queryOptions({
-            queryKey,
-            queryFn: () => {
-              reads += 1;
-              return reads === 1
-                ? Promise.reject(new Error("status unavailable"))
-                : retry.promise;
-            },
-          }),
-        )
-        .catch(() => undefined);
-    });
-    expect(queryClient.getQueryData(queryKey)).toBeUndefined();
-    act(() => rendered.result.current.retryEntryStatus?.());
-    expect(queryClient.getQueryState(queryKey)?.status).toBe("pending");
-    expect(queryClient.getQueryState(queryKey)?.fetchStatus).toBe("fetching");
-    harness.bindingsFail = true;
-    harness.hosts = [{ ...target, connectable: false }];
-    act(() => rendered.rerender());
     const view = render(
       <HostScopeGate scope={rendered.result.current} skeleton={null}>
         {null}
       </HostScopeGate>,
     );
-    expect(screen.getByText("Finding your hosts…")).toBeTruthy();
-    expect(screen.queryByText("Couldn't load your hosts")).toBeNull();
     expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
-    expect(harness.bindingRequests).toEqual([]);
-    expect(useSettingsHostScopeStore.getState().pendingHostId).toBe(
-      target.hostId,
-    );
-    await act(async () => {
-      harness.answeredStatusHostIds = [target.hostId];
-      harness.localRows = [
-        {
-          kind: "local",
-          hostId: target.hostId,
-          name: target.name,
-          subtitle: "",
-          verb: null,
-          needsUpdate: false,
-          defaultsToLocal: true,
-        },
-      ];
-      retry.resolve(
-        environmentStatusFixture({
-          principal: null,
-          planes: { records: "local", broker: "local", room: "local" },
-        }),
-      );
-      await retry.promise;
-    });
+    expect(harness.bindingRequests).toContain(target.hostId);
+    harness.resolvedBindingHostIds = [target.hostId];
+    act(() => rendered.rerender());
     await waitFor(() =>
-      expect(useSettingsHostScopeStore.getState().pendingHostId).toBeNull(),
+      expect(entryOutcome(rendered.result.current)).toEqual(expected),
     );
-    expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
-      kind: "local",
-      hostId: target.hostId,
-      hostName: target.name,
-    });
-    expect(reads).toBe(2);
-    view.unmount();
+    view.rerender(
+      <HostScopeGate scope={rendered.result.current} skeleton={null}>
+        {null}
+      </HostScopeGate>,
+    );
+    expect(screen.queryByText("Finding your hosts…")).toBeNull();
   });
 
   it("abandons a resolved entry with no target in the ready host lists", async () => {
