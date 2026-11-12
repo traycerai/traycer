@@ -610,6 +610,12 @@ async function transferInstalledHostTeam(
       mapped.code !== CLI_ERROR_CODES.HOST_REQUEST_OUTCOME_UNKNOWN
     )
       throw mapped;
+    if (
+      previous === null ||
+      previous.hostId !== endpoint.hostId ||
+      previous.websocketUrl !== endpoint.websocketUrl
+    )
+      throw mapped;
 
     // The transfer can commit and restart this host before its reply is sent.
     const ownership = await readHostOwnershipViaHttp(
@@ -637,7 +643,7 @@ async function transferInstalledHostTeam(
       checkReadiness: async (metadata, remainingMs) => {
         if (
           metadata.hostId !== endpoint.hostId ||
-          metadata.pid === previous?.pid ||
+          metadata.pid === previous.pid ||
           remainingMs <= 0
         )
           return false;

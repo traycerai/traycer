@@ -274,6 +274,21 @@ function storedAuth(): {
   };
 }
 
+function hostPidMetadata(overrides: Partial<HostPidMetadata>): HostPidMetadata {
+  return {
+    pid: 4100,
+    hostId: "host-local",
+    version: "1.0.0",
+    websocketUrl: "ws://127.0.0.1:1/rpc",
+    startedAt: "2026-11-10T00:00:00.000Z",
+    processStartIdentity: null,
+    processStartIdentityRead: "absent",
+    layer0: null,
+    layer0Slot: null,
+    ...overrides,
+  };
+}
+
 describe("install auth helpers", () => {
   beforeEach(() => {
     vi.resetAllMocks();
@@ -729,6 +744,57 @@ describe("install auth helpers", () => {
     expect(mocks.callHostRpcAtResolvedEndpointMock).toHaveBeenCalledTimes(1);
     expect(mocks.probeHostHealthMock).toHaveBeenCalledTimes(1);
     expect(mocks.readHostOwnershipMock).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    { metadata: null, reason: "initial metadata is absent" },
+    {
+      metadata: hostPidMetadata({ hostId: "different-host" }),
+      reason: "initial metadata names a different host",
+    },
+    {
+      metadata: hostPidMetadata({ websocketUrl: "ws://127.0.0.1:3/rpc" }),
+      reason: "initial metadata names a different endpoint",
+    },
+  ])("keeps a sent bind outcome unknown when $reason", async ({ metadata }) => {
+    mocks.readHostPidMetadataMock.mockResolvedValueOnce(metadata);
+    mocks.callHostRpcAtResolvedEndpointMock.mockRejectedValueOnce(
+      new HostTransportFailureError({
+        code: "RPC_ERROR",
+        message: "WebSocket closed before the response arrived",
+        requestId: "team-bind-lost-response",
+        method: "environment.host.bind",
+        fatalDetails: null,
+      }),
+    );
+    mocks.readHostOwnershipMock
+      .mockResolvedValueOnce(
+        hostOwnership({ kind: "user", id: "member-1" }, "personal"),
+      )
+      .mockResolvedValueOnce(
+        hostOwnership(
+          { kind: "team", id: "organization-acme", name: "Acme" },
+          "personal",
+        ),
+      );
+
+    await expect(
+      completeTeamInstall("acme", {
+        preflight: { state: "signed-in", reason: null },
+        inlineSignInToken: null,
+      }),
+    ).rejects.toMatchObject({
+      code: "E_HOST_REQUEST_OUTCOME_UNKNOWN",
+      exitCode: 1,
+    });
+
+    expect(
+      mocks.callHostRpcAtResolvedEndpointMock.mock.calls.filter(
+        ([method]) => method === "environment.host.bind",
+      ),
+    ).toHaveLength(1);
+    expect(mocks.probeHostHealthMock).not.toHaveBeenCalled();
+    expect(mocks.readHostOwnershipMock).toHaveBeenCalledTimes(1);
   });
 
   it("does not clear a newer sign-in that replaced the inline token during owner confirmation", async () => {
