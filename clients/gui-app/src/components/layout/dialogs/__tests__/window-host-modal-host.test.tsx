@@ -363,12 +363,16 @@ describe("<WindowHostModalHost />", () => {
       </QueryClientProvider>,
     );
 
+    expect(screen.getByText("This computer belongs to a team")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
 
     const alert = await screen.findByRole("alert");
     expect(signOutRound2Harness.signOut).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId("confirm-destructive-dialog")).toBeTruthy();
     expect(alert.textContent).toBe("Couldn't sign out. Please try again.");
+    expect(screen.queryByText("This computer belongs to a team")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByText("This computer belongs to a team")).toBeTruthy();
   });
 
   it("∅ (no-usable-host): settled failure — Retry, Report issue and Open settings(button) present; progress heading absent; attempt panel + log toggle present", async () => {

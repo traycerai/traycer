@@ -1,3 +1,4 @@
+import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
 import { useMemo, type ReactNode } from "react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
@@ -23,6 +24,7 @@ const MIGRATION_PROGRESS_LABEL = "Migrating tasks";
  * migration first, then a failure nobody has acknowledged.
  */
 export function MigrationBlockingModalHost(): ReactNode {
+  const signOutQuestionOpen = useSignOutConfirmStore((state) => state.open);
   const runs = useMigrationRunStore((s) => s.runs);
   const remoteRunning = useMigrationRunStore((s) => s.remoteRunning);
   const reset = useMigrationRunStore((s) => s.reset);
@@ -33,7 +35,7 @@ export function MigrationBlockingModalHost(): ReactNode {
   const isRunning = status === "running" || remoteRunning;
   const open = isRunning || isErrorAck;
 
-  if (!open) {
+  if (!open || signOutQuestionOpen) {
     return null;
   }
 

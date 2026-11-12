@@ -29,6 +29,7 @@ import {
 } from "@traycer-clients/shared/platform/host-service-notices";
 import { MenuCommandListener } from "@/components/layout/bridges/menu-command-listener";
 import { SignOutConfirmDialog } from "@/components/auth/sign-out-confirm-dialog";
+import { MigrationBlockingModalHost } from "@/components/layout/dialogs/migration-blocking-modal-host";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import {
@@ -50,6 +51,7 @@ import {
   type TileFindStateSnapshot,
 } from "@/stores/tile-find";
 import { useTabsStore } from "@/stores/tabs/store";
+import { useMigrationRunStore } from "@/stores/migration/migration-run-store";
 import { tabItemId } from "@/stores/tabs/layout";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import type { DesktopMenuCommandPayload } from "@/lib/windows/types";
@@ -389,6 +391,7 @@ describe("<MenuCommandListener />", () => {
     closeLayoutEditorForCloseTabChordMock.mockReset();
     closeLayoutEditorForCloseTabChordMock.mockReturnValue(false);
     useSignOutConfirmStore.getState().setOpen(false);
+    useMigrationRunStore.setState({ runs: new Map(), remoteRunning: false });
   });
 
   afterEach(() => {
@@ -397,6 +400,7 @@ describe("<MenuCommandListener />", () => {
     useDesktopDialogStore.getState().close();
     useDesktopDialogStore.setState({ reportIssueAvailable: false });
     useSignOutConfirmStore.getState().setOpen(false);
+    useMigrationRunStore.setState({ runs: new Map(), remoteRunning: false });
   });
 
   it("dispatches native menu commands to renderer-owned actions", () => {
@@ -447,18 +451,21 @@ describe("<MenuCommandListener />", () => {
 
   it("opens the shared sign-out question when native sign-out fails", async () => {
     authMock.signOut.mockResolvedValue(false);
+    useMigrationRunStore.setState({ runs: new Map(), remoteRunning: true });
     const menu = createMenu();
     render(
       <QueryClientProvider client={makeQueryClient()}>
         <RunnerHostProvider runnerHost={createRunnerHost(menu)}>
           <>
             <MenuCommandListener />
+            <MigrationBlockingModalHost />
             <SignOutConfirmDialog />
           </>
         </RunnerHostProvider>
       </QueryClientProvider>,
     );
 
+    expect(screen.getByTestId("migration-blocking-modal")).toBeTruthy();
     act(() => menu.emit("app.signOut"));
 
     await waitFor(() => {
@@ -468,6 +475,10 @@ describe("<MenuCommandListener />", () => {
     expect(screen.getByRole("alert").textContent).toBe(
       "Couldn't sign out. Please try again.",
     );
+    expect(screen.queryByTestId("migration-blocking-modal")).toBeNull();
+    expect(screen.queryByTestId("migration-blocking-overlay")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByTestId("migration-blocking-modal")).toBeTruthy();
   });
 
   describe("the Settings command when the shell may refuse admission", () => {

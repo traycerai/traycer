@@ -152,6 +152,7 @@ function NarratingWindowHostModal(props: {
   const { narration } = props;
   const hostBinding = useHostBinding();
   const queryClient = useQueryClient();
+  const signOutQuestionOpen = useSignOutConfirmStore((state) => state.open);
   const progress = useHostProvisioningProgress();
   const controller = useHostReadinessController();
   const shellAdmission = useShellLocalPlaneAdmission();
@@ -220,7 +221,7 @@ function NarratingWindowHostModal(props: {
   // is naming WHICH card won, and re-deriving that from the readiness here
   // would be the second copy this suppression exists to avoid.
   useSuppressionLog(gateDrawn?.kind ?? null, narration);
-  if (gateDrawn !== null) {
+  if (gateDrawn !== null || signOutQuestionOpen) {
     return null;
   }
   const updateHost = resolveUpdateHost(narration.variant, presentation);

@@ -507,6 +507,17 @@ describe("<DevicesSessionsPanel />", () => {
     ).toBeDefined();
   });
 
+  it("keeps the Sessions sign-out question on the default dialog layer", () => {
+    signIn();
+    renderWithSignOutDialog();
+    act(() => {
+      useSignOutConfirmStore.getState().setOpen(true);
+    });
+
+    const dialog = screen.getByTestId("confirm-destructive-dialog");
+    expect(dialog.className.split(/\s+/)).toContain("z-50");
+  });
+
   it.each(["current session", "all sessions"] as const)(
     "keeps a local sign-out retry after a successful %s revoke",
     async (scope) => {
