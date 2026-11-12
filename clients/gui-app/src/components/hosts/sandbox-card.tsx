@@ -226,7 +226,7 @@ function formatHeaderRate(props: SandboxHeaderRateProps): string | null {
       summary.priceMcPerHour === null &&
       (state ?? summary.state) !== "creating"
     )
-      return "Not priced here";
+      return null;
     return "Not billing";
   }
   if (frozen) return "Not billing";
@@ -236,7 +236,7 @@ function formatHeaderRate(props: SandboxHeaderRateProps): string | null {
   const field = sandboxBilledPriceField(currentState);
   if (field === null) return "Not billing";
   const price = summary.priceMcPerHour;
-  if (price === null) return "Not priced here";
+  if (price === null) return null;
   return hourlyRate(price[field]);
 }
 

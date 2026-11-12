@@ -216,7 +216,9 @@ function renderCardOnHost(
         onDestroyed={onDestroyed}
         renderActions={renderSandboxHeaderActions}
       />
-      <SandboxHeaderCost sandbox={sandbox} />
+      <div data-testid="sandbox-header-cost">
+        <SandboxHeaderCost sandbox={sandbox} />
+      </div>
       <SandboxHeaderNotices sandbox={sandbox} teamName={null} />
       <SandboxInstallationGroup sandbox={sandbox} />
       {sandbox.summary === null ? null : (
@@ -723,14 +725,18 @@ describe("rates", () => {
 
   it("does not mistake an unpriced ledger zero for no billing", () => {
     mocks.costs = {
-      sandboxes: [{ ...COST, currentRateMillicreditsPerHour: 0 }],
+      sandboxes: [{ ...costToday(100), currentRateMillicreditsPerHour: 0 }],
       awakeBurnMillicreditsPerHour: 0,
       todayYoursMillicredits: 0,
       todayByEnvironment: [],
     };
     renderCard(sandboxOf("awake", false, { priceMcPerHour: null }));
-    expect(screen.queryByText("Not billing", { exact: true })).toBeNull();
-    expect(screen.getByText("Not priced here", { exact: true })).toBeTruthy();
+    expect(screen.getByTestId("sandbox-header-cost").textContent).toBe(
+      "·$0.10 today",
+    );
+    expect(screen.getByTestId("sandbox-card-cost-today").textContent).toBe(
+      "$0.10 today",
+    );
   });
 
   it("keeps the authoritative personal ledger rate during a transition", () => {
@@ -1317,7 +1323,8 @@ describe("Automations row", () => {
 
     expect(screen.queryAllByText("Free", { exact: true })).toHaveLength(0);
     expect(screen.queryByText("Free today", { exact: true })).toBeNull();
-    expect(screen.getByText("Not priced here", { exact: true })).toBeTruthy();
+    expect(screen.getByTestId("sandbox-header-cost").textContent).toBe("");
+    expect(screen.queryByTestId("sandbox-card-cost-today")).toBeNull();
     expect(screen.queryByTestId("sandbox-card-other-rate")).toBeNull();
   });
 
