@@ -42,7 +42,9 @@ const POOL_ENTRY = poolHostDirectoryEntry("wss://pool.test/rpc");
 let statusAnswer: EnvironmentStatusResponseV12 | Error =
   environmentStatusFixture({});
 let statusAnswers: ReadonlyArray<EnvironmentStatusResponseV12 | Error> = [];
-let otherAdvertisesStatus = true;
+/** What OTHER_HOST's completed handshake says, or that none has completed. */
+let otherManifest: "advertises_status" | "lacks_status" | "no_handshake" =
+  "advertises_status";
 const connectable = vi.hoisted(() => ({
   hostIds: [] as string[],
   resolved: true,
@@ -195,9 +197,14 @@ function mount(initialBinding: EnvironmentHostBinding) {
   recordNegotiatedHostManifest(TARGET_HOST, {
     "environment.status": { major: 1, minor: 1 },
   });
-  if (otherAdvertisesStatus) {
+  if (otherManifest === "advertises_status") {
     recordNegotiatedHostManifest(OTHER_HOST, {
       "environment.status": { major: 1, minor: 1 },
+    });
+  }
+  if (otherManifest === "lacks_status") {
+    recordNegotiatedHostManifest(OTHER_HOST, {
+      "environment.binding.read": { major: 1, minor: 0 },
     });
   }
   bindingRef.current = {
@@ -230,7 +237,7 @@ describe("environment.binding.read in a pool build", () => {
     settleProcessHostRpcTierPlan(POOL_ENTRY);
     statusAnswer = environmentStatusFixture({});
     statusAnswers = [];
-    otherAdvertisesStatus = true;
+    otherManifest = "advertises_status";
     connectable.hostIds = [];
     invalidateLocalTeamAdmissionAfterClaim.mockReset();
     invalidateLocalTeamAdmissionAfterClaim.mockResolvedValue(undefined);
@@ -373,11 +380,11 @@ describe("environment.binding.read in a pool build", () => {
     expect(fixture.statusReads).toHaveLength(1);
   });
 
-  it("uses the pool answer when a host does not advertise environment.status", async () => {
+  it("uses the pool answer when a host's handshake lacks environment.status", async () => {
     signInAs("signed-in");
     connectable.hostIds = [OTHER_HOST];
     statusAnswers = [new Error("status unavailable")];
-    otherAdvertisesStatus = false;
+    otherManifest = "lacks_status";
     const fixture = mount(BINDING);
     const rendered = renderHook(
       () => useHostEnvironmentBindings([OTHER_HOST], true),
@@ -391,6 +398,24 @@ describe("environment.binding.read in a pool build", () => {
     });
     expect(rendered.result.current.failedHostIds).toEqual([]);
     expect(fixture.reads).toEqual([OTHER_HOST]);
+    expect(fixture.statusReads).toHaveLength(1);
+  });
+
+  it("fails a host with no completed handshake whose status read errors", async () => {
+    signInAs("signed-in");
+    connectable.hostIds = [OTHER_HOST];
+    statusAnswers = [new Error("status unavailable")];
+    otherManifest = "no_handshake";
+    const fixture = mount(BINDING);
+    const rendered = renderHook(
+      () => useHostEnvironmentBindings([OTHER_HOST], true),
+      { wrapper: fixture.wrapper },
+    );
+
+    await waitFor(() => {
+      expect(rendered.result.current.failedHostIds).toEqual([OTHER_HOST]);
+    });
+    expect(rendered.result.current.byHostId.has(OTHER_HOST)).toBe(false);
     expect(fixture.statusReads).toHaveLength(1);
   });
 

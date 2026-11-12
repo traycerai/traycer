@@ -22,7 +22,7 @@ import { hostQueryKeys } from "@/lib/query-keys";
 import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
 import { useConnectableHostIds } from "@/hooks/host/use-connectable-host-ids";
-import { useHostsAdvertisingMethod } from "@/hooks/host/use-hosts-advertising-method";
+import { useHostNegotiatedMethodVersions } from "@/hooks/host/use-host-negotiated-method-version";
 import { environmentStatusQueryOptions } from "@/hooks/environment/use-registered-host-environment-statuses";
 import { localRowCohort } from "@/components/settings/environment/local-row-cohort";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
@@ -150,9 +150,11 @@ export function useHostEnvironmentBindings(
       binding !== null && (!connectable.resolved || readsStatus(hostId)),
     [binding, connectable.resolved, readsStatus],
   );
-  // A status read that errors on a host which never advertised the method
-  // is a host too old to answer, not a failure: its binding answers alone.
-  const answeringHostIds = useHostsAdvertisingMethod(
+  // A status read that errors on a host whose completed handshake lacks the
+  // method is a host too old to answer, not a failure: its binding answers
+  // alone. A host with no completed handshake is not known to be old, so
+  // its failed status stays failed.
+  const statusVersions = useHostNegotiatedMethodVersions(
     hostIdList,
     "environment.status",
   );
@@ -164,12 +166,12 @@ export function useHostEnvironmentBindings(
         .map((result, index) => {
           const hostId = hostIdList[index] ?? "";
           const answer = hostStatusAnswer(result, awaitsStatus(hostId));
-          return answer === "failed" && !answeringHostIds.has(hostId)
+          return answer === "failed" && statusVersions.get(hostId) === false
             ? "other"
             : answer;
         })
         .join("\n"),
-    [answeringHostIds, awaitsStatus, hostIdList],
+    [awaitsStatus, hostIdList, statusVersions],
   );
   const statusKey = useQueries({
     queries: hostIdList.map((hostId) =>

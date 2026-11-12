@@ -522,6 +522,47 @@ describe("<CreateBotForm /> when no host qualifies", () => {
     expect(screen.queryByTestId("create-bot-unchecked")).toBeNull();
   });
 
+  it("names no unchecked host when the only connectable computer runs its own settings", () => {
+    mountForm({
+      ...TEAM_WITH_LOCAL,
+      connectableHostIds: [LOCAL],
+      bound: {},
+      failedHostIds: [],
+      ownSettingsHostIds: [LOCAL],
+    });
+
+    expect(screen.queryByTestId("create-bot-unchecked")).toBeNull();
+    expect(
+      screen.queryByText("Finding a host that runs Acme's bots…"),
+    ).toBeNull();
+    expect(screen.getByTestId("create-bot-no-host")).toBeTruthy();
+    expect(mocks.createClients.at(-1)).toBeNull();
+  });
+
+  it("shows one unchecked line for a failed host beside one that runs its own settings, and attributes nothing to it", async () => {
+    const user = userEvent.setup();
+    mountForm({
+      ...TEAM_WITH_LOCAL,
+      connectableHostIds: [LOCAL, OTHER],
+      bound: {},
+      failedHostIds: [OTHER],
+      ownSettingsHostIds: [LOCAL],
+    });
+
+    const uncheckedLines = screen.getAllByTestId("create-bot-unchecked");
+    expect(uncheckedLines).toHaveLength(1);
+    expect(uncheckedLines[0]?.textContent).toContain(
+      "Some of your hosts couldn't be checked.",
+    );
+    expect(uncheckedLines[0]?.textContent).not.toMatch(/host-/);
+    expect(mocks.createClients.at(-1)).not.toEqual({
+      stub: `client-for-${LOCAL}`,
+    });
+
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(retryFailed).toHaveBeenCalledTimes(1);
+  });
+
   it("says it is still looking, not that none was found, while an earlier host is being asked", () => {
     mountForm({
       ...TEAM_WITH_LOCAL,
