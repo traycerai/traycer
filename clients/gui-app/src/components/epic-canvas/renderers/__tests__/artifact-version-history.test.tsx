@@ -81,6 +81,7 @@ const state = vi.hoisted(() => ({
   historyNextCursor: null as string | null,
   historyIsError: false,
   historyDataUpdatedAt: 1,
+  hostLabels: new Map<string, string | null>(),
   historyRefetchCalls: 0,
   olderEntries: [] as ArtifactVersionObservationEntry[],
   settingsEnabled: true,
@@ -103,6 +104,13 @@ const state = vi.hoisted(() => ({
 
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
   useTabHostId: () => "host-a",
+}));
+
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: (hostId: string) => {
+    const label = state.hostLabels.get(hostId);
+    return label === undefined ? null : { hostId, label };
+  },
 }));
 
 // The layout signal, faked per test. Real module spread back in so everything
@@ -312,6 +320,20 @@ function observation(
   };
 }
 
+function userSessionObservation(
+  observationId: string,
+  hostId: string | undefined,
+): ArtifactVersionObservationEntry {
+  return {
+    ...observation(observationId, null),
+    provenance: {
+      kind: "user_session",
+      userId: "private-user-value",
+      ...(hostId === undefined ? {} : { hostId }),
+    },
+  };
+}
+
 let epicHandle: OpenEpicStoreHandle;
 
 function historyTree(handle: OpenEpicStoreHandle | null): ReactNode {
@@ -375,6 +397,7 @@ describe("<ArtifactVersionHistoryEntryPoint />", () => {
     state.historyNextCursor = null;
     state.historyIsError = false;
     state.historyDataUpdatedAt = 1;
+    state.hostLabels.clear();
     state.historyRefetchCalls = 0;
     state.olderEntries = [];
     state.settingsEnabled = true;
@@ -580,45 +603,29 @@ describe("<ArtifactVersionHistoryEntryPoint />", () => {
     ).toBe(true);
   });
 
-  it("links titled agent provenance to its originating chat and leaves missing chats inert", () => {
+  it("links titled agent provenance without showing its turn id", () => {
     state.historyEntries = [
       observation("observation-linked", "Auth hardening"),
-      observation("observation-gone", null),
-      {
-        ...observation("observation-legacy-restore", null),
-        provenance: {
-          kind: "restore",
-          restoredFromObservationId: null,
-          targetHash: HASH_A,
-        },
-      },
-      {
-        ...observation("observation-legacy-revive", null),
-        provenance: {
-          kind: "revive",
-          deletionEventId: null,
-          targetHash: HASH_A,
-        },
-      },
     ];
 
     openHistory();
 
+    const capturedAt = 1_700_000_000_000;
+    const capturedTimestamp = new Intl.DateTimeFormat(undefined, {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      second: "2-digit",
+    }).format(capturedAt);
     const chatLink = screen.getByRole("button", {
-      name: "Open chat Auth hardening",
+      name: `Auth hardening, ${capturedTimestamp}`,
     });
-    expect(chatLink.parentElement?.textContent).toBe(
-      "Agent · Auth hardening · turn 7",
+    expect(chatLink.getAttribute("aria-label")).toBe(
+      `Auth hardening, ${capturedTimestamp}`,
     );
-    expect(
-      screen.getByText(
-        (_content, element) =>
-          element?.tagName === "P" &&
-          element.textContent === "Agent · chat-observation-gone · turn 7",
-      ),
-    ).toBeTruthy();
-    expect(screen.getByText("Restored from an earlier version.")).toBeTruthy();
-    expect(screen.getByText("Restored after deletion.")).toBeTruthy();
+    expect(chatLink.parentElement?.textContent).toBe("Agent · Auth hardening");
 
     fireEvent.click(chatLink);
 
@@ -639,6 +646,318 @@ describe("<ArtifactVersionHistoryEntryPoint />", () => {
         },
       },
     ]);
+  });
+
+  it("uses Untitled chat for an agent observation with no chat title", () => {
+    state.historyEntries = [observation("observation-gone", null)];
+
+    openHistory();
+
+    expect(
+      screen.getByText(
+        (_content, element) =>
+          element?.tagName === "P" &&
+          element.textContent === "Agent · Untitled chat",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("uses Untitled chat for multiple-agent references with no title", () => {
+    state.historyEntries = [
+      {
+        ...observation("observation-multiple-agents", null),
+        provenance: {
+          kind: "multiple_agents",
+          agents: [
+            {
+              chatId: "chat-planning",
+              turnId: "turn-planning",
+              harnessId: "claude",
+              chatTitle: "Planning",
+            },
+            {
+              chatId: "chat-untitled",
+              turnId: "turn-untitled",
+              harnessId: "claude",
+              chatTitle: null,
+            },
+          ],
+        },
+      },
+    ];
+
+    openHistory();
+
+    expect(
+      screen.getByText("Planning, Untitled chat", { selector: "p" }),
+    ).toBeTruthy();
+  });
+
+  it("uses generic detail for a restore with an operation reference", () => {
+    state.historyEntries = [
+      {
+        ...observation("observation-restored", null),
+        provenance: {
+          kind: "restore",
+          restoredFromObservationId: "restore-operation-reference",
+          targetHash: HASH_A,
+        },
+      },
+    ];
+
+    openHistory();
+
+    expect(
+      screen.getByText("Restored from an earlier version.", { selector: "p" }),
+    ).toBeTruthy();
+  });
+
+  it("uses generic detail for a revive with an operation reference", () => {
+    state.historyEntries = [
+      {
+        ...observation("observation-revived", null),
+        provenance: {
+          kind: "revive",
+          deletionEventId: "deletion-event-reference",
+          targetHash: HASH_A,
+        },
+      },
+    ];
+
+    openHistory();
+
+    expect(
+      screen.getByText("Restored after deletion.", { selector: "p" }),
+    ).toBeTruthy();
+  });
+
+  it("shows Deleted when delete actor is absent despite an operation reference", () => {
+    state.historyEntries = [
+      {
+        ...observation("observation-deleted-unknown-actor", null),
+        provenance: {
+          kind: "delete",
+          deleteOpId: "delete-operation-reference",
+          actorKind: null,
+        },
+      },
+    ];
+
+    openHistory();
+
+    expect(screen.getByText("Deleted", { selector: "p" })).toBeTruthy();
+  });
+
+  it.each([
+    { actorKind: "user_session", detail: "Deleted by a person" },
+    { actorKind: "agent", detail: "Deleted by an agent" },
+    { actorKind: "multiple_agents", detail: "Deleted by agents" },
+    { actorKind: "external", detail: "Deleted" },
+    { actorKind: "system", detail: "Deleted" },
+    { actorKind: "remote_merge", detail: "Deleted" },
+    { actorKind: "restore", detail: "Deleted" },
+    { actorKind: "revive", detail: "Deleted" },
+    { actorKind: "delete", detail: "Deleted" },
+    { actorKind: "clobber", detail: "Deleted" },
+  ] as const)(
+    "labels delete actor kind $actorKind as $detail",
+    ({ actorKind, detail }) => {
+      state.historyEntries = [
+        {
+          ...observation("observation-delete-actor", null),
+          provenance: {
+            kind: "delete",
+            deleteOpId: "delete-operation-reference",
+            actorKind,
+          },
+        },
+      ];
+
+      openHistory();
+
+      expect(screen.getByText(detail, { selector: "p" })).toBeTruthy();
+    },
+  );
+
+  it("does not render system actor hints or triggers as detail text", () => {
+    state.historyEntries = [
+      {
+        ...observation("observation-system-hint", null),
+        provenance: {
+          kind: "system",
+          trigger: "private-system-trigger",
+          originalActorHint: "private-system-hint",
+        },
+      },
+      {
+        ...observation("observation-system-trigger", null),
+        provenance: {
+          kind: "system",
+          trigger: "private-system-trigger-only",
+          originalActorHint: null,
+        },
+      },
+    ];
+
+    openHistory();
+
+    const history = screen.getByTestId("artifact-version-history-list");
+    expect(history.querySelectorAll("p")).toHaveLength(1);
+    expect(history.textContent).not.toContain("private-system-hint");
+    expect(history.textContent).not.toContain("private-system-trigger");
+  });
+
+  it("does not render the clobber source as detail text", () => {
+    state.historyEntries = [
+      {
+        ...observation("observation-clobber", null),
+        provenance: {
+          kind: "clobber",
+          source: "private-clobber-source",
+        },
+      },
+    ];
+
+    openHistory();
+
+    const history = screen.getByTestId("artifact-version-history-list");
+    expect(history.querySelectorAll("p")).toHaveLength(1);
+    expect(history.textContent).not.toContain("private-clobber-source");
+  });
+
+  it("keeps accessible names tied to provenance and capture time across page changes", () => {
+    const capturedAt = 1_700_000_000_000;
+    const formatMinute = (value: number): string =>
+      new Intl.DateTimeFormat(undefined, {
+        hour: "numeric",
+        minute: "2-digit",
+      }).format(value);
+    const formatCapturedTimestamp = (value: number): string =>
+      new Intl.DateTimeFormat(undefined, {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+        second: "2-digit",
+      }).format(value);
+    const firstEntry = {
+      ...observation("first-snapshot", "Same chat"),
+      capturedAt,
+      serializerVersion: 2,
+      degraded: true,
+    };
+    const secondEntry = {
+      ...observation("second-snapshot", "Same chat"),
+      capturedAt: capturedAt + 1000,
+    };
+    const initialEntries = [firstEntry, secondEntry];
+    state.historyEntries = initialEntries;
+    state.historyNextCursor = "older-cursor";
+    state.olderEntries = [
+      {
+        ...observation("older-snapshot", "Older chat"),
+        capturedAt: capturedAt - 120_000,
+      },
+    ];
+    const result = openHistory();
+
+    const firstMinute = formatMinute(firstEntry.capturedAt);
+    const secondMinute = formatMinute(secondEntry.capturedAt);
+    const firstTimestamp = formatCapturedTimestamp(firstEntry.capturedAt);
+    const secondTimestamp = formatCapturedTimestamp(secondEntry.capturedAt);
+    expect(firstMinute).toBe(secondMinute);
+    expect(firstTimestamp).not.toBe(secondTimestamp);
+
+    const firstVersionName = [
+      "Agent edit",
+      firstMinute,
+      "re-normalized by editor update",
+      "Body only — images missing",
+      firstTimestamp,
+    ].join(", ");
+    const secondVersionName = [
+      "Agent edit",
+      secondMinute,
+      secondTimestamp,
+    ].join(", ");
+    expect(
+      screen
+        .getByTestId("artifact-version-observation-first-snapshot")
+        .getAttribute("aria-label"),
+    ).toBe(firstVersionName);
+    expect(
+      screen
+        .getByTestId("artifact-version-observation-second-snapshot")
+        .getAttribute("aria-label"),
+    ).toBe(secondVersionName);
+
+    const sameChatAccessibleNames = (): string[] =>
+      screen
+        .getAllByRole("button", { name: /^Same chat,/ })
+        .map((button) => button.getAttribute("aria-label") ?? "");
+    const firstChatName = `Same chat, ${firstTimestamp}`;
+    const secondChatName = `Same chat, ${secondTimestamp}`;
+    const initialChatNames = sameChatAccessibleNames();
+    expect(initialChatNames).toEqual([firstChatName, secondChatName]);
+
+    state.historyEntries = [
+      {
+        ...observation("new-arrival", "New chat"),
+        capturedAt: capturedAt + 60_000,
+      },
+      ...initialEntries,
+    ];
+    result.rerender(historyTree(epicHandle));
+
+    expect(
+      screen
+        .getByTestId("artifact-version-observation-first-snapshot")
+        .getAttribute("aria-label"),
+    ).toBe(firstVersionName);
+    expect(
+      screen
+        .getByTestId("artifact-version-observation-second-snapshot")
+        .getAttribute("aria-label"),
+    ).toBe(secondVersionName);
+    expect(sameChatAccessibleNames()).toEqual(initialChatNames);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Load older versions" }),
+    );
+    expect(screen.getByText("Older chat")).toBeTruthy();
+    expect(
+      screen
+        .getByTestId("artifact-version-observation-first-snapshot")
+        .getAttribute("aria-label"),
+    ).toBe(firstVersionName);
+    expect(
+      screen
+        .getByTestId("artifact-version-observation-second-snapshot")
+        .getAttribute("aria-label"),
+    ).toBe(secondVersionName);
+    expect(sameChatAccessibleNames()).toEqual(initialChatNames);
+  });
+
+  it("labels user edits without showing user or host ids", () => {
+    state.hostLabels.set("named-host", "Studio Mac");
+    state.historyEntries = [
+      userSessionObservation("named-user-edit", "named-host"),
+      userSessionObservation("unnamed-user-edit", "unnamed-host"),
+      userSessionObservation("hostless-user-edit", undefined),
+    ];
+
+    openHistory();
+
+    const historyText = screen.getByTestId(
+      "artifact-version-history-list",
+    ).textContent;
+    expect(historyText).toContain("User edit · Studio Mac");
+    expect(historyText).toContain("User edit · the host");
+    expect(historyText).toContain("User edit");
+    expect(historyText).not.toContain("private-user-value");
+    expect(historyText).not.toContain("named-host");
+    expect(historyText).not.toContain("unnamed-host");
   });
 
   it("keeps frozen versions browsable below the off-state explanation", () => {
@@ -751,6 +1070,43 @@ describe("<ArtifactVersionHistoryEntryPoint />", () => {
     expect(state.queryInvalidationCalls).toEqual([]);
   });
 
+  it("keeps the restore concurrency hash in the request without showing it in the dialog", () => {
+    state.historyEntries = [
+      observation("observation-private-hash", "Target snapshot"),
+    ];
+    state.blobByObservationId.set("observation-private-hash", {
+      contentHash: HASH_A,
+      markdown: "target body",
+    });
+    state.restorePreflight = {
+      kind: "preflight",
+      imagesMissing: [],
+      threadCount: 0,
+      currentHash: HASH_B,
+    };
+    openHistory();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Restore this version" }),
+    );
+
+    expect(screen.queryByText(`Current hash: ${HASH_B}`)).toBeNull();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Restore as new version" }),
+    );
+    expect(state.mutationCalls).toContainEqual({
+      method: "epic.artifactVersions.restore",
+      variables: {
+        epicId: "epic-a",
+        artifactId: "artifact-a",
+        targetObservationId: "observation-private-hash",
+        mode: "execute",
+        expectedCurrentHash: HASH_B,
+        bodyOnly: false,
+      },
+    });
+  });
+
   it("renders the clean restore outcome banner and badge", () => {
     state.historyEntries = [
       observation("observation-original", "Original snapshot"),
@@ -806,9 +1162,7 @@ describe("<ArtifactVersionHistoryEntryPoint />", () => {
     expect(screen.getByText("Restored as a new version.")).toBeTruthy();
 
     fireEvent.click(
-      screen.getByRole("button", {
-        name: "Select version observation-original",
-      }),
+      screen.getByTestId("artifact-version-observation-observation-original"),
     );
 
     expect(screen.queryByText("Restored as a new version.")).toBeNull();
