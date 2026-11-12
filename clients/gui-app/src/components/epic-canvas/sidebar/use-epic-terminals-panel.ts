@@ -225,7 +225,7 @@ export function useEpicTerminalsPanel(args: {
     (row: TerminalSidebarSessionRow): EpicTerminalRef | null => {
       if (row.durable && resolveOwnerClient(row.hostId) === null) {
         toast(
-          `Can't open this terminal right now - ${hostNameFromLabel(directory.findById(row.hostId)?.label ?? null, row.hostId)} is not reachable.`,
+          `Can't open this terminal right now: ${hostNameFromLabel(directory.findById(row.hostId)?.label ?? null, row.hostId)} isn't reachable. Try again when it's back online.`,
         );
         return null;
       }

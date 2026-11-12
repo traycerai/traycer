@@ -65,8 +65,7 @@ const toastHarness = vi.hoisted(() => ({
   toast: vi.fn<(message: string) => void>(),
 }));
 
-// A terminal's task directory is named by its host's directory row; this
-// suite has no host directory and no task terminal in the task's own folder.
+// Task-directory lookup is independent of the directory labels exercised here.
 vi.mock("@/hooks/terminal/use-task-home-directory", () => ({
   useTaskHomeDirectory: () => null,
   useTaskHomeDirectoryFor: () => () => null,
@@ -219,7 +218,7 @@ describe("terminal sidebar durable projection rows", () => {
     fireEvent.click(getByTestId(`epic-terminal-sidebar-item-${TERMINAL_ID}`));
 
     expect(toastHarness.toast).toHaveBeenCalledWith(
-      "Can't open this terminal right now - Studio Mac is not reachable.",
+      "Can't open this terminal right now: Studio Mac isn't reachable. Try again when it's back online.",
     );
   });
 
@@ -236,7 +235,7 @@ describe("terminal sidebar durable projection rows", () => {
     fireEvent.click(getByTestId(`epic-terminal-sidebar-item-${TERMINAL_ID}`));
 
     expect(toastHarness.toast).toHaveBeenCalledWith(
-      "Can't open this terminal right now - the host is not reachable.",
+      "Can't open this terminal right now: the host isn't reachable. Try again when it's back online.",
     );
   });
 });
