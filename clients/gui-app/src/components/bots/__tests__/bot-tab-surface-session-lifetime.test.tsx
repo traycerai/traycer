@@ -1376,9 +1376,11 @@ describe("<BotTabSurface /> channel lifetime", () => {
     mocks.state.listedBotIds = [BOT_ID, OTHER_BOT_ID];
     const view = render(surface());
     useTracySurfaceStore.getState().selectChannel(OTHER_BOT_ID);
-    useBotDraftsStore
-      .getState()
-      .typeThreadBox(OTHER_BOT_ID, "post-1", "unsent", null);
+    useBotDraftsStore.getState().typeThreadBox(OTHER_BOT_ID, "post-1", {
+      text: "unsent",
+      content: null,
+      held: [],
+    });
     view.rerender(surfaceFor(OTHER_BOT_ID));
     expect(useTracySurfaceStore.getState().visitedBotIds).toEqual([
       BOT_ID,

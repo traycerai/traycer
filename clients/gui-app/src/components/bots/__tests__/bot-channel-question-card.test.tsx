@@ -39,7 +39,16 @@ import {
 } from "@traycer-clients/shared/host-client/host-client";
 import { mockRemoteHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
-import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  HostRpcError,
+  type IHostMessenger,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import { createAuthAwareMessenger } from "@traycer-clients/shared/host-transport/auth-aware-messenger";
+import {
+  createRetryingMessenger,
+  type TransportRetryPolicy,
+} from "@traycer-clients/shared/host-transport/retrying-messenger";
+import { markMayHaveReachedHost } from "@traycer/protocol/host-transport/remote/rpc-types";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { botQuestionsText } from "@traycer/protocol/persistence/epic/messages";
@@ -216,6 +225,9 @@ const activityStore = create<{ activity: BotActivity | null }>()(() => ({
 }));
 
 import { BotChannelView } from "@/components/bots/bot-channel-view";
+import { BotDraftsPersistLifecycleBridge } from "@/providers/bot-drafts-persist-lifecycle-bridge";
+import { botBoxDraftsKey } from "@/lib/persist/keys";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   answerDraftKey,
   useBotDraftsStore,
@@ -435,10 +447,74 @@ function settledRefusal(): Error {
   });
 }
 
+/** While set, the host client's messenger is the retrying and auth-aware layers over the mock, whose first send dies in a session fatal. */
+let fatalFirstSend: boolean;
+/** While set, the channel is mounted under the bridge that scopes the drafts to the signed-in account. */
+let identityBridge: boolean;
+/** The sends that reached the transport double under those layers, the fatal one included. */
+let sendAttempts: number;
+
+/**
+ * What `RemoteSession` rejects a request already sent with when the session
+ * goes fatal: an UNAUTHORIZED, marked because the host may have run it.
+ */
+function sessionFatalError(): HostRpcError {
+  const error = new HostRpcError({
+    code: "UNAUTHORIZED",
+    message: "credential revoked",
+    requestId: "session-fatal",
+    method: "",
+    fatalDetails: {
+      code: "UNAUTHORIZED",
+      reason: "credential revoked",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    },
+  });
+  markMayHaveReachedHost(error);
+  return error;
+}
+
+const NO_DELAY_RETRY_POLICY: TransportRetryPolicy = {
+  maxRetries: 2,
+  initialDelayMs: 0,
+  maxDelayMs: 0,
+  sleep: () => Promise.resolve(),
+  random: () => 0,
+};
+
+/**
+ * The transport as the layers above it see it: its first `bot.conversation.send`
+ * rejects with the session fatal, every other call goes to `inner`. It sits
+ * below anything that restamps errors, which would drop the mark the auth
+ * layer reads.
+ */
+function sessionFatalOnFirstSend(
+  inner: IHostMessenger<HostRpcRegistry>,
+): IHostMessenger<HostRpcRegistry> {
+  return {
+    request(method, params, options) {
+      if (method === "bot.conversation.send") {
+        sendAttempts += 1;
+        if (sendAttempts === 1) return Promise.reject(sessionFatalError());
+      }
+      return inner.request(method, params, options);
+    },
+    requestWithResponseTimeout(method, params, responseTimeoutMs, options) {
+      return inner.requestWithResponseTimeout(
+        method,
+        params,
+        responseTimeoutMs,
+        options,
+      );
+    },
+  };
+}
+
 function hostClientRecordingSends(): HostRequester<HostRpcRegistry> {
   const queryClient = new QueryClient();
   let seq = 0;
-  const messenger = new MockHostMessenger<HostRpcRegistry>({
+  const mock = new MockHostMessenger<HostRpcRegistry>({
     registry: hostRpcRegistry,
     requestId: () => `request-${String(++seq)}`,
     handlers: {
@@ -465,6 +541,30 @@ function hostClientRecordingSends(): HostRequester<HostRpcRegistry> {
       },
     },
   });
+  const context = createRequestContextFixture({
+    origin: "renderer",
+    bearerToken: "tok-1",
+  });
+  // The recovery the auth layer waits on rotates this context's lease in
+  // place, as the request context provider does, so the call is sent again.
+  const messenger = fatalFirstSend
+    ? createRetryingMessenger(
+        createAuthAwareMessenger(
+          sessionFatalOnFirstSend(mock),
+          {
+            revalidateExpectedBearer: () => {
+              context.credentials.rotateBearerToken({
+                userId: context.identity.userId,
+                bearerToken: "tok-2",
+              });
+              return Promise.resolve("rotated");
+            },
+          },
+          "always",
+        ),
+        NO_DELAY_RETRY_POLICY,
+      )
+    : mock;
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(queryClient),
@@ -472,9 +572,7 @@ function hostClientRecordingSends(): HostRequester<HostRpcRegistry> {
       hostId === mockRemoteHostEntry.hostId ? mockRemoteHostEntry : null,
     messenger,
   });
-  spine.setRequestContext(
-    createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
-  );
+  spine.setRequestContext(context);
   return spine.createRequester(mockRemoteHostEntry);
 }
 
@@ -513,8 +611,8 @@ function mountChannel(openThread: BotOpenThread | null): {
   readonly unmount: () => void;
 } {
   const queryClient = new QueryClient();
-  const tree = (open: BotOpenThread | null): ReactNode => (
-    <StrictMode>
+  const tree = (open: BotOpenThread | null): ReactNode => {
+    const view = (
       <QueryClientProvider client={queryClient}>
         <BotTestRunnerHost>
           <TooltipProvider>
@@ -550,8 +648,19 @@ function mountChannel(openThread: BotOpenThread | null): {
           </TooltipProvider>
         </BotTestRunnerHost>
       </QueryClientProvider>
-    </StrictMode>
-  );
+    );
+    return (
+      <StrictMode>
+        {identityBridge ? (
+          <BotDraftsPersistLifecycleBridge>
+            {view}
+          </BotDraftsPersistLifecycleBridge>
+        ) : (
+          view
+        )}
+      </StrictMode>
+    );
+  };
   const result = render(tree(openThread));
   return {
     reopen: (next) => result.rerender(tree(next)),
@@ -582,6 +691,9 @@ beforeEach(() => {
   sent = [];
   refuseSends = false;
   refusalKind = "plain";
+  fatalFirstSend = false;
+  identityBridge = false;
+  sendAttempts = 0;
   delivery = "written";
   heldSends = null;
   activityStore.setState({ activity: null });
@@ -608,6 +720,11 @@ afterEach(async () => {
     await vi.advanceTimersByTimeAsync(1);
   });
   resetBotFailedRequestSupport();
+  useAuthStore.setState({
+    status: "signed-out",
+    profile: null,
+    contextMetadata: null,
+  });
   mocks.handles.clear();
   mocks.client = null;
 });
@@ -913,6 +1030,50 @@ describe("<BotChannelView tiles={null} /> a question settled while a member was 
     expect(useBotDraftsStore.getState().answers).toEqual({});
   });
 
+  it("holds the answer, with no couldn't-send line, when the already-settled refusal comes back wrapped by the auth layer after a session fatal and a rotated bearer, and moves it to the channel's box once the teammate's settlement shows", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    refusalKind = "coded";
+    fatalFirstSend = true;
+    mocks.client = hostClientRecordingSends();
+    const write = session(CHANNEL_ID, [questionRow([hold(null)])]);
+    mountChannel(null);
+    await user.type(holdField(), "Hold the migration");
+    refuseSends = true;
+    await user.click(
+      within(cardQuestion(channelCard(), HOLD)).getByRole("button", {
+        name: "Submit",
+      }),
+    );
+
+    await vi.waitFor(() =>
+      expect(
+        useBotDraftsStore.getState().answers[BOT_ID]?.[
+          answerDraftKey(QUESTION_ID, 0)
+        ]?.heldForSettlement,
+      ).not.toBeNull(),
+    );
+    // The fatal send, then the one the auth layer made after the rotation.
+    expect(sendAttempts).toBe(2);
+    expect(sent).toHaveLength(1);
+    expect(
+      within(cardQuestion(channelCard(), HOLD)).getByTestId(
+        "question-card-sending",
+      ),
+    ).toBeTruthy();
+    expect(holdField().disabled).toBe(true);
+    expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
+    expect(textOf(channelBox())).toBe("");
+
+    write([questionRow([hold(byPerson(TEAMMATE_USER_ID, "Nothing"))])]);
+
+    expect(textOf(channelBox())).toBe("Hold the migration");
+    expect(channelMovedLine()).toBe(
+      "Tess Teammate answered first. Your answer is in the box, not sent.",
+    );
+    expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
+    expect(sendAttempts).toBe(2);
+  });
+
   it("keeps the answer held on the card when the already-settled refusal is never followed by a settlement: no failure line, nothing in the box, nothing lost", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     refusalKind = "coded";
@@ -1040,6 +1201,40 @@ describe("<BotChannelView tiles={null} /> a question settled while a member was 
     write([questionRow([hold(byPerson(TEAMMATE_USER_ID, "Nothing"))])]);
 
     expect(textOf(channelBox())).toBe("Before I forget\n\nHold the migration");
+  });
+
+  it("opens the channel's box with its kept draft, a blank line and the moved answer, existing text first, when the answer moved while the box was not mounted", async () => {
+    useBotDraftsStore.getState().typeThreadBox(BOT_ID, CHANNEL_ID, {
+      text: "Before I forget",
+      content: null,
+      held: [],
+    });
+    const key = answerDraftKey(QUESTION_ID, 0);
+    act(() => {
+      const drafts = useBotDraftsStore.getState();
+      drafts.setAnswer(BOT_ID, key, {
+        chosen: [],
+        typed: "Hold the migration",
+        sent: null,
+        unsureSince: null,
+        heldForSettlement: null,
+      });
+      drafts.moveAnswers(BOT_ID, CHANNEL_ID, [key], (taken) => ({
+        block: taken.map(([, draft]) => draft.typed).join("\n"),
+        notice:
+          "Tess Teammate answered first. Your answer is in the box, not sent.",
+      }));
+    });
+    session(CHANNEL_ID, [questionRow([hold(null)])]);
+
+    mountChannel(null);
+
+    expect(textOf(channelBox())).toBe("Before I forget\n\nHold the migration");
+    await vi.waitFor(() =>
+      expect(
+        useBotDraftsStore.getState().boxCarries[BOT_ID]?.[CHANNEL_ID] ?? [],
+      ).toEqual([]),
+    );
   });
 
   it("moves a draft the person typed under a question the asker settled, naming the bot", async () => {
@@ -1462,6 +1657,228 @@ describe("<BotChannelView tiles={null} /> what a member has not sent, across the
 
     expect(textOf(channelBox())).toBe(`${DEPLOY} Now`);
   });
+});
+
+const ACCOUNT_A = "user-account-a";
+const ACCOUNT_B = "user-account-b";
+
+function signInAs(userId: string): void {
+  act(() => {
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: {
+        userId,
+        userName: userId,
+        email: `${userId}@example.com`,
+        avatarUrl: null,
+      },
+      contextMetadata: { userId, username: userId },
+    });
+  });
+}
+
+function signOut(): void {
+  act(() => {
+    useAuthStore.setState({
+      status: "signed-out",
+      profile: null,
+      contextMetadata: null,
+    });
+  });
+}
+
+/** Nothing of anyone's kept in memory, in any slice of the drafts store. */
+function expectNoDraftsInMemory(): void {
+  const { answers, threadBoxes, unsentBoxes, boxCarries, boxNotices } =
+    useBotDraftsStore.getState();
+  expect({ answers, threadBoxes, unsentBoxes, boxCarries, boxNotices }).toEqual(
+    {
+      answers: {},
+      threadBoxes: {},
+      unsentBoxes: {},
+      boxCarries: {},
+      boxNotices: {},
+    },
+  );
+}
+
+describe("<BotChannelView tiles={null} /> a moved answer and the signed-in account (T186)", () => {
+  const MOVED = "Hold the migration";
+
+  beforeEach(() => {
+    localStorage.clear();
+    identityBridge = true;
+    signInAs(ACCOUNT_A);
+  });
+
+  afterEach(() => {
+    localStorage.clear();
+  });
+
+  /** Signed in as A: the member types, a teammate settles, and the answer is in the channel's box. */
+  async function movedIntoTheBoxAsA(): Promise<void> {
+    const write = session(CHANNEL_ID, [questionRow([hold(null)])]);
+    mountChannel(null);
+    await userEvent
+      .setup({ advanceTimers: vi.advanceTimersByTime })
+      .type(holdField(), MOVED);
+    write([questionRow([hold(byPerson(TEAMMATE_USER_ID, "Nothing"))])]);
+    expect(textOf(channelBox())).toBe(MOVED);
+  }
+
+  /** B's box, with nothing of A's anywhere B could read it. */
+  async function expectNothingOfAForB(): Promise<void> {
+    await vi.waitFor(() => expect(textOf(channelBox())).toBe(""));
+    expect(channelMovedLine()).toBeUndefined();
+    expectNoDraftsInMemory();
+    expect(
+      localStorage.getItem(botBoxDraftsKey(ACCOUNT_B)) ?? "",
+    ).not.toContain(MOVED);
+  }
+
+  it("shows account B nothing of account A's moved answer, in the box, the store or B's storage, and gives it back, unsent and with no line, when A signs in again after a switch", async () => {
+    await movedIntoTheBoxAsA();
+
+    signInAs(ACCOUNT_B);
+    await expectNothingOfAForB();
+
+    signInAs(ACCOUNT_A);
+    await vi.waitFor(() => expect(textOf(channelBox())).toBe(MOVED));
+    expect(channelMovedLine()).toBeUndefined();
+    expect(sent).toEqual([]);
+  });
+
+  it("keeps an answer that moved while the box was not mounted, and was still not mounted at the switch, for A alone, folded into A's kept draft", async () => {
+    identityBridge = false;
+    render(
+      <BotDraftsPersistLifecycleBridge>
+        <div />
+      </BotDraftsPersistLifecycleBridge>,
+    );
+    session(CHANNEL_ID, [questionRow([hold(null)])]);
+    const key = answerDraftKey(QUESTION_ID, 0);
+    act(() => {
+      const drafts = useBotDraftsStore.getState();
+      drafts.setAnswer(BOT_ID, key, {
+        chosen: [],
+        typed: MOVED,
+        sent: null,
+        unsureSince: null,
+        heldForSettlement: null,
+      });
+      drafts.moveAnswers(BOT_ID, CHANNEL_ID, [key], (taken) => ({
+        block: taken.map(([, draft]) => draft.typed).join("\n"),
+        notice:
+          "Tess Teammate answered first. Your answer is in the box, not sent.",
+      }));
+    });
+    expect(
+      useBotDraftsStore.getState().boxCarries[BOT_ID]?.[CHANNEL_ID],
+    ).toBeDefined();
+
+    signInAs(ACCOUNT_B);
+    expectNoDraftsInMemory();
+    const asB = mountChannel(null);
+    await expectNothingOfAForB();
+    asB.unmount();
+
+    signInAs(ACCOUNT_A);
+    mountChannel(null);
+    await vi.waitFor(() => expect(textOf(channelBox())).toBe(MOVED));
+    expect(channelMovedLine()).toBeUndefined();
+  });
+
+  it("writes an answer that moved while the box was not mounted into A's own key at the switch, after A's read finished, and gives it back to A", async () => {
+    identityBridge = false;
+    render(
+      <BotDraftsPersistLifecycleBridge>
+        <div />
+      </BotDraftsPersistLifecycleBridge>,
+    );
+    await vi.waitFor(() =>
+      expect(useBotDraftsStore.persist.hasHydrated()).toBe(true),
+    );
+    session(CHANNEL_ID, [questionRow([hold(null)])]);
+    const key = answerDraftKey(QUESTION_ID, 0);
+    act(() => {
+      const drafts = useBotDraftsStore.getState();
+      drafts.setAnswer(BOT_ID, key, {
+        chosen: [],
+        typed: MOVED,
+        sent: null,
+        unsureSince: null,
+        heldForSettlement: null,
+      });
+      drafts.moveAnswers(BOT_ID, CHANNEL_ID, [key], (taken) => ({
+        block: taken.map(([, draft]) => draft.typed).join("\n"),
+        notice:
+          "Tess Teammate answered first. Your answer is in the box, not sent.",
+      }));
+    });
+
+    signInAs(ACCOUNT_B);
+
+    await vi.waitFor(() =>
+      expect(localStorage.getItem(botBoxDraftsKey(ACCOUNT_A)) ?? "").toContain(
+        MOVED,
+      ),
+    );
+    expectNoDraftsInMemory();
+    const asB = mountChannel(null);
+    await expectNothingOfAForB();
+    asB.unmount();
+
+    signInAs(ACCOUNT_A);
+    mountChannel(null);
+    await vi.waitFor(() => expect(textOf(channelBox())).toBe(MOVED));
+    expect(channelMovedLine()).toBeUndefined();
+  });
+
+  it("gives A the moved answer back, unsent and with no line, when A signs out and signs in again, with nothing of it in memory while signed out", async () => {
+    await movedIntoTheBoxAsA();
+
+    signOut();
+    expectNoDraftsInMemory();
+
+    signInAs(ACCOUNT_A);
+    await vi.waitFor(() => expect(textOf(channelBox())).toBe(MOVED));
+    expect(channelMovedLine()).toBeUndefined();
+  });
+
+  it.each([
+    { name: "refused", settle: refuse },
+    { name: "landed", settle: land },
+  ])(
+    "leaves B's draft and B's box alone when a send A started is $name after the switch",
+    async ({ settle }) => {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      heldSends = [];
+      session(CHANNEL_ID, [questionRow([hold(null)])]);
+      mountChannel(null);
+      await user.type(holdField(), MOVED);
+      await user.click(
+        within(cardQuestion(channelCard(), HOLD)).getByRole("button", {
+          name: "Submit",
+        }),
+      );
+      expect(heldSends).toHaveLength(1);
+
+      signInAs(ACCOUNT_B);
+      await vi.waitFor(() => expect(holdField().value).toBe(""));
+      await user.type(holdField(), "B's own answer");
+      const before = useBotDraftsStore.getState().answers;
+
+      await settle();
+
+      expect(useBotDraftsStore.getState().answers).toEqual(before);
+      expect(useBotDraftsStore.getState().boxNotices).toEqual({});
+      expect(holdField().value).toBe("B's own answer");
+      expect(holdField().disabled).toBe(false);
+      expect(
+        screen.queryByTestId("bot-channel-composer-send-failed"),
+      ).toBeNull();
+    },
+  );
 });
 
 describe("<BotChannelView tiles={null} /> a row's text above its question card", () => {
@@ -1905,7 +2322,13 @@ describe("<BotChannelView tiles={null} /> a question a thread's session asks in 
     expect(screen.getByTestId("bot-thread-composer-editing")).toBeTruthy();
   });
 
-  it("keeps the thread's box editing the failed reply when an overtaken answer moves in under its text, and what is sent still replaces the failed reply", async () => {
+  /**
+   * The thread's box editing a failed reply while another person's settlement
+   * moves the member's answer in under the edit.
+   */
+  async function movedUnderTheEditOfAFailedReply(): Promise<{
+    readonly reopen: (next: BotOpenThread | null) => void;
+  }> {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     activityStore.setState({
       activity: { trunk: null, threads: { [THREAD_ID]: FAILED_ON_REPLY } },
@@ -1913,7 +2336,7 @@ describe("<BotChannelView tiles={null} /> a question a thread's session asks in 
     mocks.threads = [postThread()];
     session(CHANNEL_ID, [memberPost()]);
     const write = session(THREAD_ID, [threadQuestion(null), failedReply()]);
-    mountChannel(POST_THREAD);
+    const view = mountChannel(POST_THREAD);
     const replies = screen.getByTestId("bot-thread-replies");
     await user.click(within(replies).getByRole("button", { name: "Now" }));
     await user.click(within(replies).getByTestId("bot-message-edit"));
@@ -1922,15 +2345,24 @@ describe("<BotChannelView tiles={null} /> a question a thread's session asks in 
       threadQuestion(byPerson(TEAMMATE_USER_ID, "After the train")),
       failedReply(),
     ]);
+    return view;
+  }
+
+  function threadBox(): HTMLElement {
+    return boxWithin(
+      screen.getByTestId("bot-thread-panel"),
+      "Reply in the thread",
+    );
+  }
+
+  it("keeps the thread's box editing the failed reply when an overtaken answer moves in under its text, and what is sent still replaces the failed reply", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    await movedUnderTheEditOfAFailedReply();
 
     expect(
       screen.getByTestId("bot-thread-composer-editing").textContent,
     ).toContain("Sending replaces your message that failed.");
-    const box = boxWithin(
-      screen.getByTestId("bot-thread-panel"),
-      "Reply in the thread",
-    );
-    expect(textOf(box)).toBe("Hold for now\n\nNow");
+    expect(textOf(threadBox())).toBe("Hold for now\n\nNow");
     await user.click(screen.getByTestId("bot-thread-composer-send"));
     expect(
       sent.map((request) => [
@@ -1939,5 +2371,25 @@ describe("<BotChannelView tiles={null} /> a question a thread's session asks in 
         request.supersedes,
       ]),
     ).toEqual([["Hold for now\n\nNow", THREAD_ID, REPLY_REQUEST]]);
+  });
+
+  it("gives the moved answer back, once, in the thread's box opened again after the person left it while it edited the failed reply", async () => {
+    const view = await movedUnderTheEditOfAFailedReply();
+
+    view.reopen(null);
+    view.reopen(POST_THREAD);
+
+    expect(textOf(threadBox())).toBe("Now");
+    expect(sent).toEqual([]);
+  });
+
+  it("shows the moved answer, once, in the thread's box when the person cancels the edit of the failed reply", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    await movedUnderTheEditOfAFailedReply();
+
+    await user.click(screen.getByTestId("bot-thread-composer-edit-cancel"));
+
+    expect(screen.queryByTestId("bot-thread-composer-editing")).toBeNull();
+    expect(textOf(threadBox())).toBe("Now");
   });
 });

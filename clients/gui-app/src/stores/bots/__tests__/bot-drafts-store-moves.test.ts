@@ -25,6 +25,12 @@ function compose(taken: ReadonlyArray<readonly [string, BotAnswerDraft]>): {
   };
 }
 
+function carriedBlocks(): ReadonlyArray<string> {
+  return (useBotDraftsStore.getState().boxCarries[BOT]?.[BOX] ?? []).map(
+    (item) => item.block,
+  );
+}
+
 beforeEach(() => {
   useBotDraftsStore.setState({
     answers: {},
@@ -45,26 +51,46 @@ describe("the bot drafts store's moves of card answers into a box", () => {
     after.moveAnswers(BOT, BOX, ["k1"], compose);
 
     const state = useBotDraftsStore.getState();
-    expect(state.boxCarries[BOT]?.[BOX]?.blocks).toEqual([
-      "Hold the migration",
-    ]);
+    expect(carriedBlocks()).toEqual(["Hold the migration"]);
     expect(state.boxCarries).toBe(after.boxCarries);
     expect(state.answers).toEqual({});
   });
 
-  it("leaves a newer carry when the box takes an older id", () => {
+  it("lets go of exactly the moves a box says it holds, and leaves a move that came after", () => {
     const store = useBotDraftsStore.getState();
     store.setAnswer(BOT, "k1", DRAFT);
     store.moveAnswers(BOT, BOX, ["k1"], compose);
-    const first = useBotDraftsStore.getState().boxCarries[BOT]?.[BOX];
+    const first = useBotDraftsStore.getState().boxCarries[BOT]?.[BOX]?.[0];
     store.setAnswer(BOT, "k2", { ...DRAFT, typed: "Nothing" });
     store.moveAnswers(BOT, BOX, ["k2"], compose);
 
-    if (first === undefined) throw new Error("no first carry");
-    store.takeCarry(BOT, BOX, first.id);
+    if (first === undefined) throw new Error("no first move");
+    store.takeCarry(BOT, BOX, [first.id]);
 
-    expect(useBotDraftsStore.getState().boxCarries[BOT]?.[BOX]?.blocks).toEqual(
-      ["Hold the migration", "Nothing"],
+    expect(carriedBlocks()).toEqual(["Nothing"]);
+  });
+
+  it("keeps a box's draft and lets go of the moves it holds in one change, even when the draft did not change", () => {
+    const store = useBotDraftsStore.getState();
+    store.typeThreadBox(BOT, BOX, {
+      text: "Kept text",
+      content: null,
+      held: [],
+    });
+    store.setAnswer(BOT, "k1", DRAFT);
+    store.moveAnswers(BOT, BOX, ["k1"], compose);
+    const move = useBotDraftsStore.getState().boxCarries[BOT]?.[BOX]?.[0];
+    if (move === undefined) throw new Error("no move");
+
+    store.typeThreadBox(BOT, BOX, {
+      text: "Kept text",
+      content: null,
+      held: [move.id],
+    });
+
+    expect(carriedBlocks()).toEqual([]);
+    expect(useBotDraftsStore.getState().threadBoxes[BOT]?.[BOX]?.text).toBe(
+      "Kept text",
     );
   });
 
@@ -74,7 +100,7 @@ describe("the bot drafts store's moves of card answers into a box", () => {
     store.moveAnswers(BOT, BOX, ["k1"], compose);
 
     store.closeBot(BOT);
-    expect(useBotDraftsStore.getState().boxCarries[BOT]?.[BOX]).toBeDefined();
+    expect(carriedBlocks()).toEqual(["Hold the migration"]);
     expect(useBotDraftsStore.getState().boxNotices[BOT]?.[BOX]).toEqual({
       kind: "moved",
       text: "Tess answered first.",

@@ -97,10 +97,10 @@ import type { BotSentPost } from "@/stores/bots/bot-open-thread-store";
 import type { BotTranscriptLanding } from "@/components/bots/bot-chat-transcript";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import {
-  BOT_BOX_DRAFTS_PERSIST_KEY,
   storedBoxDraftsOf,
   type StoredBoxDraft,
 } from "@/lib/bots/bot-box-draft-storage";
+import { botBoxDraftsKey } from "@/lib/persist";
 import { isRecord } from "@/lib/editor/prosemirror-json";
 import { setPhoneLayoutOnly } from "@/lib/mobile-app";
 import {
@@ -803,10 +803,24 @@ describe("<BotThreadPanel /> a direct reply nobody has replied under", () => {
 });
 
 describe("<BotThreadPanel /> what its box holds unsent", () => {
+  const ACCOUNT_ID = "user-drafts-account";
+
+  // The store reads and writes only once an account is signed in: points it at
+  // the account's key, as signing in does.
+  beforeEach(async () => {
+    useBotDraftsStore.persist.setOptions({ name: botBoxDraftsKey(ACCOUNT_ID) });
+    await useBotDraftsStore.persist.rehydrate();
+  });
+
+  afterEach(() => {
+    useBotDraftsStore.persist.setOptions({ name: botBoxDraftsKey(null) });
+    localStorage.removeItem(botBoxDraftsKey(ACCOUNT_ID));
+  });
+
   /** The draft this device holds for the bot's box under `key`. */
   function storedBox(key: string): StoredBoxDraft | undefined {
     const parsed: unknown = JSON.parse(
-      localStorage.getItem(BOT_BOX_DRAFTS_PERSIST_KEY) ?? "null",
+      localStorage.getItem(botBoxDraftsKey(ACCOUNT_ID)) ?? "null",
     );
     const stored =
       isRecord(parsed) && isRecord(parsed.state)
@@ -816,9 +830,11 @@ describe("<BotThreadPanel /> what its box holds unsent", () => {
   }
 
   it("keeps the thread's draft under the thread, apart from the channel's, on the device and in its box when the thread opens again", () => {
-    useBotDraftsStore
-      .getState()
-      .typeThreadBox(BOT_ID, CONVERSATION_ID, "For the channel", null);
+    useBotDraftsStore.getState().typeThreadBox(BOT_ID, CONVERSATION_ID, {
+      text: "For the channel",
+      content: null,
+      held: [],
+    });
     const thread = listed("user-teammate");
     const box = (): HTMLElement =>
       editableIn(screen.getByTestId("bot-thread-composer-input"));

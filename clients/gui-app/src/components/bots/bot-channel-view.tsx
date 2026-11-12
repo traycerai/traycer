@@ -367,6 +367,7 @@ export function BotChannelView(props: {
     keptDraft: channelKeptDraft,
     moved: channelMoved,
     notice: channelNotice,
+    account: channelAccount,
   } = useKeptBoxDraft(botId, channelId);
 
   const {
@@ -879,8 +880,9 @@ export function BotChannelView(props: {
                 sessionChatId={trunkChatId}
               />
               <BotMessageComposer
-                // Its draft is the conversation's, kept by it (`channelKeptDraft`).
-                key={channel.conversationId}
+                // Its draft is the conversation's and the account's, kept by
+                // them (`channelKeptDraft`).
+                key={`${channel.conversationId}:${String(channelAccount)}`}
                 botId={botId}
                 botTitle={botTitle}
                 conversationId={channel.conversationId}

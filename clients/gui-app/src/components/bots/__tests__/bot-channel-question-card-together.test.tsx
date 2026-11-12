@@ -1288,6 +1288,67 @@ describe("<BotChannelView tiles={null} /> a card's set the host refused as alrea
     expect(answerField(cardQuestion(card, HOLD)).value).toBe("");
     expect(answerField(cardQuestion(card, HOLD)).disabled).toBe(false);
   });
+
+  it("falls back, on a host without the already-settled code, to giving the partial set back with a couldn't-send line, then moves the touched answers to the channel's box when a teammate's set settles the card, replacing the line, and sends nothing again", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    outcome = failing(
+      hostRefusal(
+        "RPC_ERROR",
+        "QUESTION_ALREADY_SETTLED: the question is settled",
+      ),
+    );
+    const transcript = session(CHANNEL_ID, [
+      questionRow([deploy(null), hold(null), watch(null)]),
+    ]);
+    mountOnTabHost();
+    const card = channelCard();
+    await user.click(choice(cardQuestion(card, DEPLOY), "After the train"));
+    await user.type(
+      answerField(cardQuestion(card, HOLD)),
+      "Hold the migration",
+    );
+    await user.click(submitButton(card));
+    await settleRequests();
+
+    expect(sent).toHaveLength(1);
+    expect(within(card).queryByTestId("question-card-sending")).toBeNull();
+    expect(within(card).queryAllByText("Skipped")).toEqual([]);
+    expect(
+      choice(cardQuestion(card, DEPLOY), "After the train").getAttribute(
+        "aria-pressed",
+      ),
+    ).toBe("true");
+    expect(answerField(cardQuestion(card, HOLD)).value).toBe(
+      "Hold the migration",
+    );
+    expect(answerField(cardQuestion(card, HOLD)).disabled).toBe(false);
+    expect(answerField(cardQuestion(card, WATCH)).value).toBe("");
+    expect(answerField(cardQuestion(card, WATCH)).disabled).toBe(false);
+    expect(
+      screen.getByTestId("bot-channel-composer-send-failed").textContent,
+    ).toContain("Couldn't send. Try again.");
+
+    const at = Date.now();
+    transcript.write([
+      questionRow([
+        deploy(byPerson(TEAMMATE_USER_ID, "Now", SET_REQUEST, at)),
+        hold(byPerson(TEAMMATE_USER_ID, "Nothing", SET_REQUEST, at)),
+        watch(byPerson(TEAMMATE_USER_ID, "Nothing yet", SET_REQUEST, at)),
+      ]),
+    ]);
+
+    expect(textOf(boxInput("Message Release Bot"))).toBe(
+      `${DEPLOY} After the train\n${HOLD} Hold the migration`,
+    );
+    expect(
+      screen.getByTestId("bot-channel-composer-answers-moved").textContent,
+    ).toBe(
+      "Tess Teammate answered first. Your answers are in the box, not sent.",
+    );
+    expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
+    expect(useBotDraftsStore.getState().answers).toEqual({});
+    expect(sent).toHaveLength(1);
+  });
 });
 
 describe("<BotChannelView tiles={null} /> a card's answers whose send ended without saying whether the host took them", () => {

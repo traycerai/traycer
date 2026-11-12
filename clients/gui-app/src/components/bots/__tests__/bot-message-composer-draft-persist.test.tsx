@@ -229,7 +229,187 @@ describe("<BotMessageComposer /> and its draft on the device", () => {
         .getByTestId("bot-box-mention")
         .getAttribute("data-token"),
     ).toBe("<@user-1>");
-    expect(app.drafts.getState().boxCarries[BOT_ID]?.[CHANNEL]).toBeUndefined();
+    expect(app.drafts.getState().boxCarries[BOT_ID]?.[CHANNEL] ?? []).toEqual(
+      [],
+    );
+  });
+
+  it("adds each of two answers that moved into the box once, when the second moves in before the box acknowledged the first", async () => {
+    vi.useRealTimers();
+    const answer = (typed: string) => ({
+      chosen: [],
+      typed,
+      sent: null,
+      unsureSince: null,
+      heldForSettlement: null,
+    });
+    const compose = (
+      taken: ReadonlyArray<readonly [string, { readonly typed: string }]>,
+    ) => ({
+      block: taken.map(([, draft]) => draft.typed).join("\n"),
+      notice: "Tess answered first.",
+    });
+    ui.rtl.render(
+      <ui.owner.OwnerBoxWithSecondMover
+        initial={CHANNEL}
+        first="First answer"
+        move={() =>
+          app.drafts
+            .getState()
+            .moveAnswers(BOT_ID, CHANNEL, ["second"], compose)
+        }
+      />,
+    );
+    await ui.box.findBoxInput(OWNER_LABEL);
+
+    ui.rtl.act(() => {
+      const drafts = app.drafts.getState();
+      drafts.setAnswer(BOT_ID, "first", answer("First answer"));
+      drafts.setAnswer(BOT_ID, "second", answer("Second answer"));
+      drafts.moveAnswers(BOT_ID, CHANNEL, ["first"], compose);
+    });
+
+    expect(boxText()).toBe("First answer\n\nSecond answer");
+    expect(app.drafts.getState().boxCarries[BOT_ID]?.[CHANNEL] ?? []).toEqual(
+      [],
+    );
+  });
+
+  it("keeps a moved answer in the store's draft, with nothing left waiting, when the box that reported it held is unmounted at once, and shows it once when the box is mounted again", async () => {
+    const view = await mountBox(CHANNEL);
+    ui.rtl.act(() => {
+      const drafts = app.drafts.getState();
+      drafts.setAnswer(BOT_ID, "first", {
+        chosen: [],
+        typed: "Hold the migration",
+        sent: null,
+        unsureSince: null,
+        heldForSettlement: null,
+      });
+      drafts.moveAnswers(BOT_ID, CHANNEL, ["first"], (taken) => ({
+        block: taken.map(([, draft]) => draft.typed).join("\n"),
+        notice: "Tess answered first.",
+      }));
+    });
+    view.unmount();
+
+    expect(app.drafts.getState().threadBoxes[BOT_ID]?.[CHANNEL]?.text).toBe(
+      "Hold the migration",
+    );
+    expect(app.drafts.getState().boxCarries[BOT_ID]?.[CHANNEL] ?? []).toEqual(
+      [],
+    );
+
+    await mountBox(CHANNEL);
+    expect(boxText()).toBe("Hold the migration");
+  });
+
+  it("composes the edit of a failed post and the answer waiting for the box in the box's first render, the edit's text first, still editing, with the answer left in the store", async () => {
+    vi.useRealTimers();
+    ui.rtl.act(() => {
+      const drafts = app.drafts.getState();
+      drafts.setAnswer(BOT_ID, "first", {
+        chosen: [],
+        typed: "Hold the migration",
+        sent: null,
+        unsureSince: null,
+        heldForSettlement: null,
+      });
+      drafts.moveAnswers(BOT_ID, CHANNEL, ["first"], (taken) => ({
+        block: taken.map(([, draft]) => draft.typed).join("\n"),
+        notice: "Tess answered first.",
+      }));
+    });
+
+    ui.rtl.render(
+      <ui.owner.OwnerBoxEditing
+        initial={CHANNEL}
+        edit={{
+          requestId: "request-failed",
+          text: "Failed post",
+          content: null,
+        }}
+      />,
+    );
+    await ui.box.findBoxInput(OWNER_LABEL);
+
+    expect(boxText()).toBe("Failed post\n\nHold the migration");
+    expect(
+      ui.rtl.screen.getByTestId("bot-channel-composer-editing"),
+    ).toBeTruthy();
+    expect(
+      (app.drafts.getState().boxCarries[BOT_ID]?.[CHANNEL] ?? []).map(
+        (item) => item.block,
+      ),
+    ).toEqual(["Hold the migration"]);
+  });
+
+  describe("a send of a box that edits a failed post, with an answer moved in under the edit", () => {
+    const EDIT: { requestId: string; text: string; content: null } = {
+      requestId: "request-failed",
+      text: "Failed post",
+      content: null,
+    };
+
+    /** The box editing the failed post, an answer moved in under it, and Send pressed. */
+    async function sendWithAnAnswerMovedIn(): Promise<void> {
+      vi.useRealTimers();
+      ui.rtl.render(<ui.owner.OwnerBoxEditing initial={CHANNEL} edit={EDIT} />);
+      await ui.box.findBoxInput(OWNER_LABEL);
+      ui.rtl.act(() => {
+        const drafts = app.drafts.getState();
+        drafts.setAnswer(BOT_ID, "first", {
+          chosen: [],
+          typed: "Hold the migration",
+          sent: null,
+          unsureSince: null,
+          heldForSettlement: null,
+        });
+        drafts.moveAnswers(BOT_ID, CHANNEL, ["first"], (taken) => ({
+          block: taken.map(([, draft]) => draft.typed).join("\n"),
+          notice: "Tess answered first.",
+        }));
+      });
+      expect(boxText()).toBe("Failed post\n\nHold the migration");
+      typeBox("{Enter}");
+      expect(mocks.send).toHaveBeenCalledTimes(1);
+    }
+
+    function carriedBlocks(): ReadonlyArray<string> {
+      return (app.drafts.getState().boxCarries[BOT_ID]?.[CHANNEL] ?? []).map(
+        (item) => item.block,
+      );
+    }
+
+    it("empties the box and lets go of the answer when the send lands: the answer does not come back, and nothing is left waiting", async () => {
+      await sendWithAnAnswerMovedIn();
+
+      await settleSend(lastSend(), (callbacks) =>
+        callbacks.onSuccess?.(RESPONSE),
+      );
+
+      expect(boxText()).toBe("");
+      expect(carriedBlocks()).toEqual([]);
+      expect(
+        ui.rtl.screen.queryByTestId("bot-channel-composer-editing"),
+      ).toBeNull();
+    });
+
+    it("gives the sent document back to the box once, answer included, with nothing left waiting, when the send is refused", async () => {
+      await sendWithAnAnswerMovedIn();
+      expect(boxText()).toBe("");
+      expect(carriedBlocks()).toEqual([]);
+
+      await settleSend(lastSend(), (callbacks) =>
+        callbacks.onError?.(new Error("host refused the post")),
+      );
+
+      expect(boxText()).toBe("Failed post\n\nHold the migration");
+      expect(carriedBlocks()).toEqual([]);
+      expect(
+        ui.rtl.screen.getByTestId("bot-channel-composer-editing"),
+      ).toBeTruthy();
+    });
   });
 
   it("clears the stored draft when a send is accepted", async () => {

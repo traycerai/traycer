@@ -6,6 +6,7 @@ import type {
   BotKeptDraft,
 } from "@/components/bots/bot-message-composer";
 import {
+  useBotDraftActions,
   useBotDraftsStore,
   type BotThreadBoxDraft,
 } from "@/stores/bots/bot-drafts-store";
@@ -18,7 +19,9 @@ import {
  * to add them (`moved`), beside what the box says about card answers
  * (`notice`). `key` is the message
  * a thread hangs off, or the channel's own conversation; `null` keeps
- * nothing.
+ * nothing. What the box does once its account has retired changes nothing;
+ * `account` tells one account's drafts from the next's, for a box keyed by it
+ * to start again with the next's.
  */
 export function useKeptBoxDraft(
   botId: string,
@@ -29,6 +32,7 @@ export function useKeptBoxDraft(
   readonly keptDraft: BotKeptDraft | null;
   readonly moved: BotComposerCarry | null;
   readonly notice: BotComposerNotice | null;
+  readonly account: number;
 } {
   const kept = useBotDraftsStore((state) =>
     key === null ? null : (state.threadBoxes[botId]?.[key] ?? null),
@@ -42,20 +46,12 @@ export function useKeptBoxDraft(
   const boxNotice = useBotDraftsStore((state) =>
     key === null ? null : (state.boxNotices[botId]?.[key] ?? null),
   );
-  const typeThreadBox = useBotDraftsStore((state) => state.typeThreadBox);
-  const offerUnsent = useBotDraftsStore((state) => state.offerUnsent);
-  const takeCarry = useBotDraftsStore((state) => state.takeCarry);
-  const noticeBox = useBotDraftsStore((state) => state.noticeBox);
+  const account = useBotDraftsStore((state) => state.generation);
+  const { typeThreadBox, offerUnsent, takeCarry, noticeBox } =
+    useBotDraftActions();
   const moved = useMemo<BotComposerCarry | null>(
-    () =>
-      key === null || carry === null
-        ? null
-        : {
-            id: carry.id,
-            blocks: carry.blocks,
-            taken: () => takeCarry(botId, key, carry.id),
-          },
-    [botId, carry, key, takeCarry],
+    () => (key === null || carry === null ? null : { blocks: carry }),
+    [carry, key],
   );
   const notice = useMemo<BotComposerNotice | null>(
     () =>
@@ -69,14 +65,16 @@ export function useKeptBoxDraft(
       key === null
         ? null
         : {
-            keep: (text, content) => typeThreadBox(botId, key, text, content),
+            keep: (text, content, held) =>
+              typeThreadBox(botId, key, { text, content, held }),
+            carried: (held) => takeCarry(botId, key, held),
             hasDraft: () =>
               useBotDraftsStore.getState().threadBoxes[botId]?.[key] !==
               undefined,
             unsent,
             offer: (message) => offerUnsent(botId, key, message),
           },
-    [botId, key, offerUnsent, typeThreadBox, unsent],
+    [botId, key, offerUnsent, takeCarry, typeThreadBox, unsent],
   );
   return {
     kept,
@@ -87,5 +85,6 @@ export function useKeptBoxDraft(
     keptDraft,
     moved,
     notice,
+    account,
   };
 }

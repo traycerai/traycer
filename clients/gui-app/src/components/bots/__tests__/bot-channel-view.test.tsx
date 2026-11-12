@@ -1707,9 +1707,11 @@ describe("<BotChannelView tiles={null} /> focused notification presence", () => 
     mocks.state.realComposer = true;
     // The other channel already holds a draft of its own, which every typed
     // draft's seed (`seedId` 0) shares with the one typed below.
-    useBotDraftsStore
-      .getState()
-      .typeThreadBox(BOT_ID, "conversation-later", "Draft for B", null);
+    useBotDraftsStore.getState().typeThreadBox(BOT_ID, "conversation-later", {
+      text: "Draft for B",
+      content: null,
+      held: [],
+    });
     const held = Promise.withResolvers<BotConversationSendResponse>();
     mocks.sendAsync.mockImplementationOnce(() => held.promise);
     const user = userEvent.setup();

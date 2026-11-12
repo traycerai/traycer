@@ -6,6 +6,7 @@ import type { StoredBoxDrafts } from "@/lib/bots/bot-box-draft-storage";
 import { isRecord } from "@/lib/editor/prosemirror-json";
 import { BOT_TOKEN_CONTEXT_TYPE } from "@/lib/composer/tiptap-json-content";
 import type { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
+import { botBoxDraftsKey } from "@/lib/persist";
 
 /**
  * What the suites of the bot boxes' kept drafts share (Tracy Bots T158): an
@@ -16,8 +17,12 @@ import type { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
  * its own.
  */
 
-/** Hand-written: the key the boxes' drafts are stored under. */
-export const BOX_DRAFTS_KEY = "traycer-gui-app:bot-box-drafts";
+/** The account these runs sign in as, whose drafts they store and read. */
+export const TEST_USER_ID = "user-test";
+/** Hand-written: the key the boxes' drafts of {@link TEST_USER_ID} are stored under. */
+export const BOX_DRAFTS_KEY = "traycer-gui-app:bot-box-drafts:user-test";
+/** Hand-written: the key the boxes' drafts were stored under before they belonged to an account. */
+export const LEGACY_BOX_DRAFTS_KEY = "traycer-gui-app:bot-box-drafts";
 export const OWNER_LABEL = "Message Tracy";
 export const CHANNEL = "conversation-channel";
 export const THREAD = "post-1";
@@ -39,14 +44,31 @@ let running: App | null = null;
 
 /**
  * The app starts over what is stored, with modules of its own; the previous
- * run, if any, has ended. Returns once the modules are loaded: the stored
- * drafts may still be being read (`hydrated`).
+ * run, if any, has ended, and the account {@link TEST_USER_ID} is signed in.
+ * Returns once the modules are loaded: the stored drafts may still be being
+ * read (`hydrated`).
  */
 export async function startApp(): Promise<App> {
+  const app = await startSignedOutApp();
+  readAsTestAccount(app);
+  return app;
+}
+
+/**
+ * The app starts over what is stored, as {@link startApp} does, with nobody
+ * signed in: the store reads nothing until an account signs in.
+ */
+export async function startSignedOutApp(): Promise<App> {
   running?.close();
   const app = await loadApp();
   running = app;
   return app;
+}
+
+/** What signing in as {@link TEST_USER_ID} does to the store: points it at the account's key and starts reading. */
+function readAsTestAccount(app: App): void {
+  app.drafts.persist.setOptions({ name: botBoxDraftsKey(TEST_USER_ID) });
+  void app.drafts.persist.rehydrate();
 }
 
 /**
@@ -55,7 +77,9 @@ export async function startApp(): Promise<App> {
  * modules are loaded, as {@link startApp} does.
  */
 export async function startWindowBeside(): Promise<App> {
-  return loadApp();
+  const app = await loadApp();
+  readAsTestAccount(app);
+  return app;
 }
 
 async function loadApp(): Promise<App> {

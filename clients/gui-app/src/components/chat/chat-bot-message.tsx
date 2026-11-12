@@ -69,6 +69,7 @@ import { ChatMessageTimestamp } from "./chat-message-timestamp";
 import { useTimestampDrawn } from "./use-timestamp-drawn";
 import {
   answerDraftKey,
+  useBotDraftActions,
   useBotDraftsStore,
 } from "@/stores/bots/bot-drafts-store";
 import { QuestionCard, type QuestionCardQuestion } from "./question-card";
@@ -772,9 +773,8 @@ function BotQuestionCard(props: {
   const { botId, viewerUserId, memberName, answer, answerAll, baseline, box } =
     questions;
   const drafts = useBotDraftsStore((state) => state.answers[botId]);
-  const setAnswer = useBotDraftsStore((state) => state.setAnswer);
-  const moveAnswers = useBotDraftsStore((state) => state.moveAnswers);
-  const noticeBox = useBotDraftsStore((state) => state.noticeBox);
+  // A send or settlement that answers after the account retired changes nothing.
+  const { setAnswer, moveAnswers, noticeBox } = useBotDraftActions();
   const cardQuestions = question.questions.map(
     (item, index): QuestionCardQuestion => ({
       index,
