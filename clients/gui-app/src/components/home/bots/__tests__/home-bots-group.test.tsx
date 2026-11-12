@@ -144,6 +144,7 @@ function mountCard(
         connectableHostIds={[]}
         environmentBindings={{
           byHostId: new Map(),
+          ownSettingsHostIds: [],
           failedHostIds: [],
           retryFailed: () => undefined,
         }}
@@ -279,6 +280,7 @@ describe("<HomeBotsGroupCard /> adding a bot", () => {
         connectableHostIds={[]}
         environmentBindings={{
           byHostId: new Map(),
+          ownSettingsHostIds: [],
           failedHostIds: [],
           retryFailed: () => undefined,
         }}
@@ -319,6 +321,7 @@ describe("<HomeBotsGroupCard /> a team's main bot still to be set up", () => {
         connectableHostIds={[]}
         environmentBindings={{
           byHostId: new Map(),
+          ownSettingsHostIds: [],
           failedHostIds: [],
           retryFailed: () => undefined,
         }}

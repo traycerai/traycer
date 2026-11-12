@@ -147,6 +147,7 @@ vi.mock("@/hooks/bots/use-host-environment-bindings-query", () => ({
               ] as const,
           ),
       ]),
+      ownSettingsHostIds: [],
       failedHostIds: [],
       retryFailed: () => undefined,
     };

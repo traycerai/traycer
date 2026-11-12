@@ -187,6 +187,7 @@ vi.mock("@/hooks/bots/use-bot-list-changed-subscription", () => ({
 vi.mock("@/hooks/bots/use-host-environment-bindings-query", () => ({
   useHostEnvironmentBindings: () => ({
     byHostId: new Map(),
+    ownSettingsHostIds: [],
     failedHostIds: [],
     retryFailed: () => undefined,
   }),

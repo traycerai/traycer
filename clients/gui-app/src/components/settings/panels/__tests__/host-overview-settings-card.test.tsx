@@ -916,6 +916,7 @@ describe("hostSettingsRowModel", () => {
       ),
     ).toEqual({
       kind: "team",
+      environmentId: "team",
       label: "Designers",
       description: "Runs Designers",
     });
