@@ -389,7 +389,7 @@ describe("waitForTeamTokenInstall", () => {
 
     expect(error.code).toBe(CLI_ERROR_CODES.AUTH_REJECTED);
     expect(error.message).toBe(
-      "host install: couldn't confirm that this computer joined the team.",
+      "host install: couldn't confirm that this computer joined the team. Check the team's Computers list in Traycer before retrying. Install tokens work once and expire after one hour; create a new token if needed.",
     );
     expect(
       JSON.stringify({ message: error.message, details: error.details }),
@@ -443,7 +443,7 @@ describe("waitForTeamTokenInstall", () => {
     const error = cliErrorFromSettlement(await waiting);
     expect(error.code).toBe(CLI_ERROR_CODES.AUTH_REJECTED);
     expect(error.message).toBe(
-      "host install: couldn't confirm that this computer joined the team.",
+      "host install: couldn't confirm that this computer joined the team. Check the team's Computers list in Traycer before retrying. Install tokens work once and expire after one hour; create a new token if needed.",
     );
     expect(
       JSON.stringify({ message: error.message, details: error.details }),

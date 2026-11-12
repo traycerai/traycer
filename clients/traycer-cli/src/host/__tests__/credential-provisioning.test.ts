@@ -963,11 +963,10 @@ describe("provisionInstalledHostCredential", () => {
     expectCleanTeardown();
   }, 15_000);
 
-  it("reports the close code when the host fatally closes before any mint", async () => {
-    // Regression: this used to be reported as `unreachable`, which is false
-    // on its face - a fatal `closed` frame PROVES the host answered. With no
-    // rejected sign-in and no mint history to explain it otherwise, the close
-    // code itself is now surfaced as an `error` outcome.
+  it("reports an authorization confirmation error when the host fatally closes before any mint", async () => {
+    // A fatal `closed` frame proves the host answered, but it does not tell
+    // the person whether the failure was temporary or account-specific.
+    // Report the authorization outcome without exposing a wire close code.
     mocks.onSessionCreated = (session): void => {
       setTimeout(() => {
         session.emitStatus(
@@ -983,20 +982,16 @@ describe("provisionInstalledHostCredential", () => {
 
     expect(outcome).toEqual<HostCredentialProvisionOutcome>({
       kind: "error",
-      message: "the host closed the stream (UNAUTHORIZED)",
+      message:
+        "the host closed the connection before authorization was confirmed",
     });
     expect(mocks.mintFlowMock).not.toHaveBeenCalled();
     expectCleanTeardown();
   });
 
-  it("still reports the close code when a reconnect revalidation fired before the fatal close", async () => {
-    // Guards the seam between two fixes. The `hostAnswered` fallback exists
-    // so an unexplained probe stops claiming `unreachable`, but the
-    // fatal-close arm decides whether to surface the close code - and if it
-    // asked "did this settle as unreachable?", the fallback would answer
-    // "no, mint-unavailable" and swallow the code. The close code is the
-    // more diagnostic of the two, so contact via the revalidator must not
-    // displace it.
+  it("keeps the authorization confirmation error when reconnect revalidation fires before the fatal close", async () => {
+    // Contact via the reconnect revalidator must not change the human-facing
+    // uncertainty of a fatal close.
     mocks.revalidateCurrentContextMock.mockResolvedValue("network-error");
     mocks.onSessionCreated = (session, lapIndex): void => {
       if (lapIndex !== 1) {
@@ -1023,7 +1018,8 @@ describe("provisionInstalledHostCredential", () => {
 
     expect(outcome).toEqual<HostCredentialProvisionOutcome>({
       kind: "error",
-      message: "the host closed the stream (INTERNAL)",
+      message:
+        "the host closed the connection before authorization was confirmed",
     });
     expectCleanTeardown();
   });

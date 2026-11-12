@@ -217,6 +217,23 @@ afterEach(() => {
 });
 
 describe("TeamComputersSection", () => {
+  it("shows the translated list error and keeps Refresh available to retry it", async () => {
+    const host = computer({ hostId: "host-after-refresh", hostName: "Ready" });
+    listTeamComputers
+      .mockResolvedValueOnce({ kind: "unauthorized" })
+      .mockResolvedValueOnce({ kind: "ok", hosts: [host] });
+    mountSection(ENVIRONMENT_ID, "editor", `handle-${ENVIRONMENT_ID}`);
+
+    expect(
+      await screen.findByText("Sign in again to manage this team's computers."),
+    ).toBeTruthy();
+    const refresh = screen.getByRole("button", { name: "Refresh" });
+    await userEvent.setup().click(refresh);
+
+    expect(await screen.findByText("Ready")).toBeTruthy();
+    expect(listTeamComputers).toHaveBeenCalledTimes(2);
+  });
+
   it("prints install and use commands with the team's provider handle", async () => {
     mountSection(ENVIRONMENT_ID, "owner", `handle-${ENVIRONMENT_ID}`);
     const user = userEvent.setup();
@@ -249,7 +266,7 @@ describe("TeamComputersSection", () => {
     });
     mountSection(ENVIRONMENT_ID, "editor", `handle-${ENVIRONMENT_ID}`);
 
-    expect(await screen.findByText("No bot host chosen")).toBeTruthy();
+    expect(await screen.findByText("No bot computer chosen")).toBeTruthy();
     expect(listTeamComputers).toHaveBeenCalledWith(ENVIRONMENT_ID);
   });
 
@@ -291,7 +308,7 @@ describe("TeamComputersSection", () => {
     await user.click(picker);
     await user.click(await screen.findByRole("option", { name: hostName }));
     await waitFor(() =>
-      expect(picker.textContent).toBe(`${hostName} · Current bot host`),
+      expect(picker.textContent).toBe(`${hostName} · Current bot computer`),
     );
     expect(setEnvironmentBotHost).toHaveBeenCalledWith(
       ENVIRONMENT_ID,

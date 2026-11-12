@@ -186,7 +186,7 @@ export async function waitForTeamTokenInstall(
         throw cliError({
           code: CLI_ERROR_CODES.AUTH_REJECTED,
           message:
-            "host install: couldn't confirm that this computer joined the team.",
+            "host install: couldn't confirm that this computer joined the team. Check the team's Computers list in Traycer before retrying. Install tokens work once and expire after one hour; create a new token if needed.",
           details: null,
           exitCode: 1,
         });
