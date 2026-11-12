@@ -1404,17 +1404,6 @@ function ProviderEnablementControl(props: {
   );
 }
 
-/**
- * The move note above a provider's tabs. Providers omits it: the enclosing
- * environment already determines reach, and these settings move with the
- * host. MCP and Skills keep the note.
- */
-function LocalRowNoteForView(): ReactNode {
-  const view = useContext(ProvidersPanelViewContext);
-  if (view === "providers") return null;
-  return <LocalRowNote />;
-}
-
 function ProviderDetail({
   state,
   providers,
@@ -1621,13 +1610,12 @@ function ProviderDetail({
         }
       />
       <div className="flex flex-1 flex-col md:min-h-0">
-        {/* Nothing renders between the provider header and the tab rail on
-            Providers. MCP and Skills keep the Local row's move note. The
-            key is the first block of Profiles & Limits when that tab exists,
-            and the whole body of Account when that is the only key home.
-            The rail is PINNED: a block parked here would occupy fixed height
-            at the top of the pane forever, not just until you scrolled. */}
-        <LocalRowNoteForView />
+        {/* Only a computer running its own settings gets anything here: one
+            line saying so and the action that moves it to Personal. Every
+            other pick renders nothing, and the rail is PINNED, so nothing
+            else may park above it: a block here would occupy fixed height at
+            the top of the pane forever, not just until you scrolled. */}
+        <LocalRowNote />
         <Tabs
           value={activeTab}
           onValueChange={(value) => {

@@ -1125,6 +1125,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { toast } from "sonner";
 import { redactEmail } from "@/lib/providers/redact-email";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
+import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 
@@ -1782,9 +1783,9 @@ vi.mock(
   }),
 );
 
-// MCP and Skills still mount LocalRowNote, which has its own suite. Keep its
-// status read independent of the host runtime and real environment queries
-// in this harness. Providers itself no longer mounts the note.
+// Keep LocalRowNote's status read independent of the host runtime and real
+// environment queries in this harness. Providers mounts the note for a Local
+// pick above its tab rail.
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
 }));
@@ -3724,17 +3725,30 @@ describe("<ProvidersSettingsPanel />", () => {
     }
   });
 
-  it("shows no move guidance while the host runs its own settings, on the phone and on the desktop", () => {
+  it("offers to move a Local host to Personal above the provider tabs on desktop and phone", () => {
     const previousWidth = window.innerWidth;
-    const expectNoMoveGuidance = (): void => {
-      expect(screen.queryByTestId("local-row-note")).toBeNull();
+    const expectLocalMoveGuidance = (hostName: string): void => {
+      expect(screen.getAllByTestId("local-row-note")).toHaveLength(1);
+      expect(screen.getByTestId("local-row-note").textContent).toContain(
+        "Settings on " +
+          hostName +
+          " only. Move this computer to Personal to use the same settings on every computer and sandbox.",
+      );
       expect(
-        screen.queryByRole("button", { name: "Move to Personal" }),
-      ).toBeNull();
+        screen.getAllByRole("button", { name: "Move to Personal" }),
+      ).toHaveLength(1);
       expect(screen.queryByText(/not in Personal yet/)).toBeNull();
       expect(screen.queryByText(/Move them to Personal/)).toBeNull();
     };
     try {
+      useSettingsEnvironmentPickStore.setState({
+        pick: {
+          kind: "local",
+          hostId: hostScopeMocks.hostId,
+          hostName: "dev-box",
+        },
+      });
+      useMoveSheetStore.setState({ target: null });
       Object.defineProperty(window, "innerWidth", {
         configurable: true,
         value: 1024,
@@ -3746,7 +3760,12 @@ describe("<ProvidersSettingsPanel />", () => {
       );
       expect(screen.getByRole("heading", { name: "Providers" })).toBeDefined();
       expect(screen.getByRole("tablist")).toBeDefined();
-      expectNoMoveGuidance();
+      expectLocalMoveGuidance("dev-box");
+      fireEvent.click(screen.getByRole("button", { name: "Move to Personal" }));
+      expect(useMoveSheetStore.getState().target).toEqual({
+        hostId: hostScopeMocks.hostId,
+        hostName: "dev-box",
+      });
       desktop.unmount();
 
       Object.defineProperty(window, "innerWidth", {
@@ -3761,8 +3780,21 @@ describe("<ProvidersSettingsPanel />", () => {
       expect(screen.getByRole("heading", { name: "Providers" })).toBeDefined();
       expect(screen.getByRole("combobox", { name: "Section" })).toBeDefined();
       expect(screen.queryByRole("tablist")).toBeNull();
-      expectNoMoveGuidance();
+      expectLocalMoveGuidance("dev-box");
+      cleanup();
+
+      useSettingsEnvironmentPickStore.setState({ pick: { kind: "personal" } });
+      render(
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>,
+      );
+      expect(screen.queryByTestId("local-row-note")).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: "Move to Personal" }),
+      ).toBeNull();
     } finally {
+      useMoveSheetStore.setState({ target: null });
       Object.defineProperty(window, "innerWidth", {
         configurable: true,
         value: previousWidth,
