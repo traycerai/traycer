@@ -15,6 +15,7 @@ import {
 import {
   getImageBytes,
   landingImagePartition,
+  onLandingImagesDeleted,
   putImage,
   sha256Hex,
 } from "@/lib/composer/landing-image-store";
@@ -80,7 +81,9 @@ export const BOT_BOX_DRAFT_WRITE_DEBOUNCE_MS = 300;
  * next write. Only a change to the boxes' drafts is written. Nothing is
  * written until the drafts store says the stored drafts are read and merged
  * ({@link botBoxDraftsRead}), so a change made while they are still being
- * read cannot replace them.
+ * read cannot replace them. A read that storage refuses fails, never reads as
+ * nothing stored, so nothing is written for that account until a read does
+ * succeed; a write that cannot read what is stored waits.
  */
 export function createBotBoxDraftStorage(): PersistStorage<PersistedBotBoxDrafts> {
   return {
@@ -147,7 +150,8 @@ export function isCurrentBotBoxDraftsRead(read: number): boolean {
  * been written, and the boxes whose moves went below their stored draft
  * ({@link storedBotBoxDrafts}), land on them as they are stored, every other
  * box left as stored. `null` once they were read, or when their read failed:
- * unreadable drafts are never written over.
+ * unreadable drafts are never written over, nor are drafts storage cannot
+ * read now (`land`).
  */
 export function retireBotBoxDraftWrites(midRead: PendingWrite | null): void {
   if (midRead !== null && !writer.stopped && !writer.read) {
@@ -173,7 +177,12 @@ export function retireBotBoxDraftWrites(midRead: PendingWrite | null): void {
  * its drafts are still being read puts its moves below.
  */
 export function storedBotBoxDrafts(name: string): StoredBoxDrafts {
-  return readStoredValue(name)?.state.threadBoxes ?? {};
+  try {
+    return readStoredValue(name)?.state.threadBoxes ?? {};
+  } catch {
+    // The write that follows cannot read them either, so it lands nothing.
+    return {};
+  }
 }
 
 /**
@@ -489,9 +498,18 @@ function land(
   }
   writer.hashByInline = hashByInline;
   const partition = landingImagePartition();
-  const threadBoxes = editableDrafts(
-    readStoredValue(write.name)?.state.threadBoxes ?? {},
-  );
+  let threadBoxes: Partial<
+    Record<string, Partial<Record<string, StoredBoxDraft>>>
+  >;
+  try {
+    threadBoxes = editableDrafts(
+      readStoredValue(write.name)?.state.threadBoxes ?? {},
+    );
+  } catch (error) {
+    // The boxes it did not change are unknown, so it cannot keep them.
+    writeFailed(write, error);
+    return;
+  }
   for (const botId of writer.forgotten) delete threadBoxes[botId];
   // Before this write's own boxes, which replace a box it changed anyway.
   takeOutGoneImages(threadBoxes, partition);
@@ -502,13 +520,7 @@ function land(
       JSON.stringify({ ...write.value, state: { threadBoxes } }),
     );
   } catch (error) {
-    // Storage refused it (full, say): it waits again, for the next change to
-    // replace or the page hiding to try once more. The error's name only: a
-    // quota error's message names the key, and the key holds the account's id.
-    appLogger.warn("[bot-box-drafts] draft write failed", {
-      errorName: error instanceof Error ? error.name : "unknown",
-    });
-    writer.pending ??= write;
+    writeFailed(write, error);
     return;
   }
   writer.baseline = next;
@@ -516,6 +528,19 @@ function land(
   writer.cleared.clear();
   writer.gone = new Map();
   writer.incomplete = incomplete;
+}
+
+/**
+ * Storage could not be read for `write`, or refused it (full, say): it waits
+ * again, for the next change to replace or the page hiding to try once more.
+ * The error's name only: a quota error's message names the key, and the key
+ * holds the account's id.
+ */
+function writeFailed(write: PendingWrite, error: unknown): void {
+  appLogger.warn("[bot-box-drafts] draft write failed", {
+    errorName: error instanceof Error ? error.name : "unknown",
+  });
+  writer.pending ??= write;
 }
 
 /**
@@ -1026,13 +1051,19 @@ function storedDraftOf(value: unknown): StoredBoxDraft | null {
   return { text, content, seedId };
 }
 
+/**
+ * The drafts stored under `name`; `null` when nothing is, or what is cannot be
+ * parsed as drafts by any build, so writing over it loses nothing readable.
+ * Throws when storage cannot be read: what it holds is unknown, so a read
+ * fails and a write waits rather than replacing it.
+ */
 function readStoredValue(
   name: string,
 ): StorageValue<PersistedBotBoxDrafts> | null {
+  const raw = localStorage.getItem(name);
+  if (raw === null) return null;
   let parsed: unknown;
   try {
-    const raw = localStorage.getItem(name);
-    if (raw === null) return null;
     parsed = JSON.parse(raw);
   } catch {
     return null;
@@ -1057,7 +1088,13 @@ function botBoxDraftImageRoots(): ReadonlyArray<string> {
     ...writer.inFlightHashByInline.values(),
   ]);
   for (const name of accountDraftKeys()) {
-    const stored = readStoredValue(name);
+    let stored: StorageValue<PersistedBotBoxDrafts> | null;
+    try {
+      stored = readStoredValue(name);
+    } catch {
+      // As for the keys: storage that cannot be read names no image.
+      continue;
+    }
     if (stored === null) continue;
     for (const draft of eachDraft(stored.state.threadBoxes)) {
       if (draft.content === null) continue;
@@ -1083,6 +1120,20 @@ function accountDraftKeys(): ReadonlyArray<string> {
 }
 
 registerExtraImageRootSource({ hashes: botBoxDraftImageRoots });
+
+// Another window's wipe deleted this window's image store: none of the images
+// it stored are there any more, so each write from now on stores its boxes'
+// images again, and a write storing its images there is written again, after
+// any newer one waiting.
+onLandingImagesDeleted(() => {
+  if (writer.stopped) return;
+  writer.hashByInline = new Map();
+  const inFlight = writer.inFlight;
+  writer.inFlight = null;
+  writer.inFlightHashByInline = new Map();
+  writer.generation += 1;
+  if (inFlight !== null && writer.pending === null) schedule(inFlight);
+});
 
 // A window that goes away mid-pause still keeps what its boxes held.
 if (typeof window !== "undefined") {

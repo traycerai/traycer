@@ -6,11 +6,29 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 // landing-image-store.test). Image bytes and their measured sizes live in two
 // databases under the SAME string hash, so a single shared map would let a size
 // overwrite an image - and this suite's whole subject is which bytes survive.
+interface FakeObjectStore {
+  readonly name: string;
+  readonly transaction: { readonly db: object };
+}
+type FakeStore = (
+  mode: IDBTransactionMode,
+  callback: (objectStore: FakeObjectStore) => unknown,
+) => unknown;
+
 const idb = vi.hoisted(() => {
   const byDb = new Map<string, Map<string, unknown>>();
-  const dbNameOf = new Map<unknown, string>();
+  // The module wraps its store handle, so the name is asked THROUGH the handle,
+  // as the wrapper reaches the object store, not looked up by the handle's identity.
+  function isFakeStore(store: unknown): store is FakeStore {
+    return typeof store === "function";
+  }
+  function dbNameOf(store: unknown): string {
+    if (!isFakeStore(store)) return "unregistered";
+    const name = store("readonly", (objectStore) => objectStore.name);
+    return typeof name === "string" ? name : "unregistered";
+  }
   function dataFor(store: unknown): Map<string, unknown> {
-    const dbName = dbNameOf.get(store) ?? "unregistered";
+    const dbName = dbNameOf(store);
     const existing = byDb.get(dbName);
     if (existing !== undefined) return existing;
     const created = new Map<string, unknown>();
@@ -36,9 +54,11 @@ function idbStringKey(key: IDBValidKey): string {
 
 vi.mock("idb-keyval", () => ({
   createStore: vi.fn((dbName: string, _storeName: string) => {
-    const handle = (): Promise<never> =>
-      Promise.reject(new Error("unused in tests"));
-    idb.dbNameOf.set(handle, dbName);
+    const objectStore: FakeObjectStore = {
+      name: dbName,
+      transaction: { db: {} },
+    };
+    const handle: FakeStore = (_mode, callback) => callback(objectStore);
     return handle;
   }),
   get: vi.fn((key: IDBValidKey, store: unknown) =>
@@ -503,7 +523,7 @@ describe("landing-image-gc", () => {
     vi.mocked(m.idb.del).mockImplementation(async (key, store) => {
       // BYTE deletes only: reclaiming also retires the hash's measured size,
       // which is a delete against a different database through this same spy.
-      if (idb.dbNameOf.get(store)?.endsWith(":landing-images") === true) {
+      if (idb.dbNameOf(store).endsWith(":landing-images")) {
         deletes += 1;
       }
       await deleteGate;

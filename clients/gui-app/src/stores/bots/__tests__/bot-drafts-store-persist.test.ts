@@ -17,7 +17,13 @@ import {
   vi,
   type Mock,
 } from "vitest";
+import type { UseStore } from "idb-keyval";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import {
+  deleteDatabaseOutcome,
+  rawGet,
+} from "@/lib/composer/__tests__/fake-idb";
+import { botBoxDraftsKey } from "@/lib/persist";
 import type { ImageBytes } from "@/lib/attachments/image-bytes";
 import type * as ImageBase64 from "@/lib/composer/image-base64";
 import type * as ReportableErrorToast from "@/lib/reportable-error-toast";
@@ -42,6 +48,33 @@ import {
   waitForStore,
   type App,
 } from "@/stores/bots/__tests__/bot-box-draft-persist-support";
+
+const holds = vi.hoisted(() => ({
+  /** While set, a write of image bytes answers only once this settles. */
+  afterByteWrite: null as Promise<void> | null,
+  byteWritten: (): void => undefined,
+}));
+
+// A write of image bytes is held after the database took it: the draft writer is
+// then caught storing its images.
+vi.mock("idb-keyval", async (importOriginal) => {
+  const real = await importOriginal<typeof import("idb-keyval")>();
+  return {
+    ...real,
+    set: async (
+      key: IDBValidKey,
+      value: unknown,
+      store: UseStore | undefined,
+    ): Promise<void> => {
+      await real.set(key, value, store);
+      const gate = holds.afterByteWrite;
+      if (gate !== null && value instanceof Uint8Array) {
+        holds.byteWritten();
+        await gate;
+      }
+    },
+  };
+});
 
 let app: App;
 
@@ -759,6 +792,42 @@ describe("the image hashes the stored drafts keep alive", () => {
     expect(app.imageRoots().has(HASH)).toBe(false);
   });
 
+  it("still name the images of the accounts whose drafts can be read, and throw nothing, when one account's stored drafts cannot be read", () => {
+    const hashOfA = "a".repeat(64);
+    const hashOfB = "b".repeat(64);
+    const keyOfA = botBoxDraftsKey("user-a");
+    const storedWith = (hash: string): string =>
+      JSON.stringify({
+        state: {
+          threadBoxes: {
+            [BOT_ID]: {
+              channel: {
+                text: "",
+                content: boxDoc("", [hashedImage(hash)]),
+                seedId: 1,
+              },
+            },
+          },
+        },
+        version: 1,
+      });
+    localStorage.setItem(keyOfA, storedWith(hashOfA));
+    localStorage.setItem(botBoxDraftsKey("user-b"), storedWith(hashOfB));
+    const read = Storage.prototype.getItem.bind(localStorage);
+    const reads = vi
+      .spyOn(Storage.prototype, "getItem")
+      .mockImplementation((asked: string) => {
+        if (asked === keyOfA) throw new Error("storage cannot be read");
+        return read(asked);
+      });
+    onTestFinished(() => reads.mockRestore());
+
+    const roots = app.imageRoots();
+
+    expect(roots.has(hashOfB)).toBe(true);
+    expect(roots.has(hashOfA)).toBe(false);
+  });
+
   it("include the ones this window's boxes hold, after storage drops them", async () => {
     app.drafts.getState().typeThreadBox(BOT_ID, "channel", {
       text: "pic",
@@ -1090,5 +1159,80 @@ describe("a window that is going away or being wiped", () => {
     window.dispatchEvent(new Event("pagehide"));
 
     expect(storedDrafts(app)).toBeNull();
+  });
+});
+
+describe("a wipe of the image database under a running window", () => {
+  const IMAGES_DB = "traycer-gui-app:default:landing-images";
+
+  afterEach(() => {
+    holds.afterByteWrite = null;
+    holds.byteWritten = (): void => undefined;
+  });
+
+  function storedHash(): string {
+    return (
+      /"hash":"([0-9a-f]{64})"/.exec(
+        localStorage.getItem(BOX_DRAFTS_KEY) ?? "",
+      )?.[1] ?? ""
+    );
+  }
+
+  it("stores a draft's image again when the person types in the box after another window deleted the image database", async () => {
+    app.drafts.getState().typeThreadBox(BOT_ID, "channel", {
+      text: "pic",
+      content: boxDoc("pic", [INLINE_IMAGE]),
+      held: [],
+    });
+    await waitForStore(
+      app,
+      (stored) => stored?.[BOT_ID]?.channel !== undefined,
+    );
+    const hash = storedHash();
+    expect(hash).not.toBe("");
+
+    // Before anything that could wait on the deletion.
+    expect(await deleteDatabaseOutcome(IMAGES_DB)).toBe("deleted");
+
+    app.drafts.getState().typeThreadBox(BOT_ID, "channel", {
+      text: "pic more",
+      content: boxDoc("pic more", [INLINE_IMAGE]),
+      held: [],
+    });
+    await waitForStore(
+      app,
+      (stored) => stored?.[BOT_ID]?.channel?.text === "pic more",
+    );
+    expect(localStorage.getItem(BOX_DRAFTS_KEY) ?? "").toContain(hash);
+    expect(await rawGet(IMAGES_DB, "bytes", hash)).toBeDefined();
+  });
+
+  it("writes a draft again, and stores its image again, when the image database was deleted while the write was storing that image", async () => {
+    let release = (): void => undefined;
+    holds.afterByteWrite = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const byteWritten = new Promise<void>((resolve) => {
+      holds.byteWritten = resolve;
+    });
+    app.drafts.getState().typeThreadBox(BOT_ID, "channel", {
+      text: "pic",
+      content: boxDoc("pic", [INLINE_IMAGE]),
+      held: [],
+    });
+    await vi.advanceTimersByTimeAsync(
+      app.storage.BOT_BOX_DRAFT_WRITE_DEBOUNCE_MS,
+    );
+    await byteWritten;
+
+    expect(await deleteDatabaseOutcome(IMAGES_DB)).toBe("deleted");
+    holds.afterByteWrite = null;
+    release();
+
+    await waitForStore(
+      app,
+      (stored) => stored?.[BOT_ID]?.channel?.text === "pic",
+    );
+    expect(await rawGet(IMAGES_DB, "bytes", storedHash())).toBeDefined();
   });
 });

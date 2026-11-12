@@ -308,6 +308,7 @@ export function BotMessageComposer(props: {
     takenQuoteId,
     held,
     seedsLoaded,
+    noteSelection,
   } = useBotBoxDocument(editorRef, {
     edit,
     seed,
@@ -590,8 +591,9 @@ export function BotMessageComposer(props: {
               preserveMessagePaste
               hasPastedImageBytes={NO_PASTED_IMAGE_BYTES}
               ingestPastedComposerImages={ingestPasted}
-              onDocumentChange={(next) => {
+              onDocumentChange={(next, selection) => {
                 setContent(next);
+                noteSelection(selection);
                 if (lastDelivery !== null) setLastDelivery(null);
                 // A failed message offered back stays offered while they type.
                 if (failure.unsent === null) failure.clear();
@@ -599,7 +601,7 @@ export function BotMessageComposer(props: {
                   notice.clearFailure();
                 }
               }}
-              onSelectionChange={noop}
+              onSelectionChange={noteSelection}
               onSubmit={submit}
               onPaste={takesImages ? paste.onPaste : noop}
               onDragOver={noop}
@@ -755,8 +757,10 @@ function useBoxEmptyRef(
 /**
  * The editor's document as the box holds it. What the person does reaches it
  * through `setContent`; what the box puts there itself goes through `loadBox`,
- * which the editor then shows. A focused box keeps its caret at the end of it,
- * and only a gesture of the person's moves focus to it.
+ * which the editor then shows. A focused box keeps its caret at the end of a
+ * document it loads, and only a gesture of the person's moves focus to it.
+ * Answers someone else's settlement moved here are added below the draft
+ * without moving the person's selection, focus or scroll.
  *
  * Answers moved off question cards (`moved`, T186) are added once each, by
  * move: `held` names the moves whose lines the document holds, for the box to
@@ -786,12 +790,18 @@ function useBotBoxDocument(
   readonly held: ReadonlyArray<number>;
   /** How many seeds put a draft from outside the box in it. */
   readonly seedsLoaded: number;
+  /** Where the person's selection is, as the editor reports it. */
+  readonly noteSelection: (selection: BoxSelection) => void;
 } {
   const { edit, seed, quote, moved, contentOf } = incoming;
   const [content, setContent] = useState(EMPTY_BOT_BOX);
-  const [loaded, setLoaded] = useState<JsonContent | null>(null);
+  const [loaded, setLoaded] = useState<BoxLoad | null>(null);
   const [editContent, setEditContent] = useState<JsonContent | null>(null);
   const [held, setHeld] = useState<ReadonlyArray<number>>(NO_MOVES);
+  const selectionRef = useRef<BoxSelection>(START_OF_BOX);
+  const noteSelection = useCallback((selection: BoxSelection) => {
+    selectionRef.current = selection;
+  }, []);
   const loadBox = (
     next: JsonContent,
     contentHeld: ReadonlyArray<number>,
@@ -801,7 +811,7 @@ function useBotBoxDocument(
     setContent(next);
     // Each load must trigger the editor sync, including repeated clears with
     // EMPTY_BOT_BOX after consecutive sends on one mounted composer.
-    setLoaded({ ...next });
+    setLoaded({ content: next, belowDraft: false });
     setHeld(contentHeld);
   };
   // One document per render, from what this render brings: an edit or seed
@@ -850,14 +860,21 @@ function useBotBoxDocument(
   );
   if (box.content !== content) {
     setContent(box.content);
-    setLoaded(box.content);
+    setLoaded({ content: box.content, belowDraft: next === content });
   }
   if (box.held !== held) setHeld(box.held);
   useEffect(() => {
     const editor = editorRef.current;
     if (loaded === null || editor === null) return;
+    if (loaded.belowDraft) {
+      // Answers someone else's settlement moved here go below the draft, so
+      // the person's selection still points where it did, and neither their
+      // focus nor any scroll moves.
+      editor.syncContent(loaded.content, selectionRef.current);
+      return;
+    }
     const hadFocus = editor.hasFocus();
-    editor.syncContent(loaded, { from: 1, to: 1 });
+    editor.syncContent(loaded.content, START_OF_BOX);
     if (hadFocus) editor.focusAtEnd("reveal-caret");
   }, [editorRef, loaded]);
   const contentRef = useRef(content);
@@ -867,7 +884,7 @@ function useBotBoxDocument(
   // Anything loaded before the editor could take it.
   const onEditorReady = useCallback(() => {
     if (contentRef.current === EMPTY_BOT_BOX) return;
-    editorRef.current?.syncContent(contentRef.current, { from: 1, to: 1 });
+    editorRef.current?.syncContent(contentRef.current, START_OF_BOX);
   }, [editorRef]);
   return {
     content,
@@ -877,7 +894,26 @@ function useBotBoxDocument(
     takenQuoteId,
     held,
     seedsLoaded,
+    noteSelection,
   };
+}
+
+/** A selection in the box's document, as the editor reports it. */
+interface BoxSelection {
+  readonly from: number;
+  readonly to: number;
+}
+
+const START_OF_BOX: BoxSelection = { from: 1, to: 1 };
+
+/**
+ * A document the box puts in its editor, and whether it is only moved answers
+ * added below what the editor holds (`belowDraft`), which leaves the person's
+ * selection, focus and scroll as they are.
+ */
+interface BoxLoad {
+  readonly content: JsonContent;
+  readonly belowDraft: boolean;
 }
 
 /**

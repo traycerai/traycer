@@ -128,7 +128,7 @@ export interface BotBoxTyped {
  * their {@link answerDraftKey}s (`keys`), still on their cards; or both, the
  * failure under the moved line, never in its place. The failure goes once
  * the person types or a card sends again, or once none of its answers is on
- * a card any more; the moved line stays.
+ * a card any more, moved, spent or dropped; the moved line stays.
  */
 export type BotBoxNotice =
   | { readonly kind: "moved"; readonly text: string }
@@ -219,7 +219,7 @@ interface BotDraftsState {
    * so nothing typed in an empty box replaces a draft it never showed.
    */
   readonly ownDraftsRead: boolean;
-  /** Keeps a card's draft; `null` drops it. */
+  /** Keeps a card's draft; `null` drops it, and any failure's word of it. */
   readonly setAnswer: (
     botId: string,
     key: string,
@@ -275,7 +275,10 @@ interface BotDraftsState {
   ) => void;
   /** Drops every draft of the bot: it is gone. */
   readonly forgetBot: (botId: string) => void;
-  /** Drops the bot's card answers: the Tracy surface closed. Its boxes' drafts stay. */
+  /**
+   * Drops the bot's card answers, and any failure's word of them: the Tracy
+   * surface closed. Its boxes' drafts and moved lines stay.
+   */
   readonly closeBot: (botId: string) => void;
   /**
    * The account signed in is retiring - it signed out, or another signed in
@@ -536,15 +539,31 @@ function noticeAfter(
 }
 
 /**
- * What a box says about answers that did not reach the host once the
- * answers `moved` left their cards: the ones still on a card, if any.
+ * The bot's box notices once its card answers are `answers`: each failure
+ * names only the answers still on their cards, and one left naming none
+ * goes, the moved line it was under staying. A failure lives no longer than
+ * its answers on the cards, however they left: moved, spent, or dropped.
+ * The same object where nothing changes.
  */
-function failedStillOnCards(
-  said: BotBoxNotice | undefined,
-  moved: ReadonlyArray<string>,
-): ReadonlyArray<string> {
-  if (said === undefined || said.kind === "moved") return [];
-  return said.keys.filter((key) => !moved.includes(key));
+function failuresStillOnCards(
+  boxNotices: ByBot<BotBoxNotice>,
+  botId: string,
+  answers: ByBot<BotAnswerDraft>,
+): ByBot<BotBoxNotice> {
+  const onCards = answers[botId] ?? {};
+  let next = boxNotices;
+  for (const [key, said] of Object.entries(boxNotices[botId] ?? {})) {
+    if (said === undefined || said.kind === "moved") continue;
+    const keys = said.keys.filter((answer) => onCards[answer] !== undefined);
+    if (keys.length === said.keys.length) continue;
+    next = withEntry(
+      next,
+      botId,
+      key,
+      keys.length === 0 ? withoutAnswerFailure(said) : { ...said, keys },
+    );
+  }
+  return next;
 }
 
 /**
@@ -595,9 +614,14 @@ export const useBotDraftsStore = create<BotDraftsState>()(
       owner: null,
       ownDraftsRead: true,
       setAnswer: (botId, key, draft) =>
-        set((state) => ({
-          answers: withEntry(state.answers, botId, key, draft),
-        })),
+        set((state) => {
+          const answers = withEntry(state.answers, botId, key, draft);
+          if (draft !== null) return { answers };
+          return {
+            answers,
+            boxNotices: failuresStillOnCards(state.boxNotices, botId, answers),
+          };
+        }),
       moveAnswers: (botId, boxKey, keys, compose) =>
         set((state) => {
           const kept = state.answers[botId] ?? {};
@@ -611,16 +635,18 @@ export const useBotDraftsStore = create<BotDraftsState>()(
           for (const [key] of taken) {
             answers = withEntry(answers, botId, key, null);
           }
+          const boxNotices = failuresStillOnCards(
+            state.boxNotices,
+            botId,
+            answers,
+          );
           const move = compose(taken);
-          if (move === null) return { answers };
+          if (move === null) return { answers, boxNotices };
           carryCount += 1;
           const earlier = state.boxCarries[botId]?.[boxKey] ?? [];
           // A failure the box says stays under the new line while an answer
-          // it was about is still on a card; one about these answers goes.
-          const failing = failedStillOnCards(
-            state.boxNotices[botId]?.[boxKey],
-            keys,
-          );
+          // it was about is still on a card.
+          const said = boxNotices[botId]?.[boxKey];
           return {
             answers,
             boxCarries: withEntry(state.boxCarries, botId, boxKey, [
@@ -628,15 +654,15 @@ export const useBotDraftsStore = create<BotDraftsState>()(
               { id: carryCount, block: move.block, sending: false },
             ]),
             boxNotices: withEntry(
-              state.boxNotices,
+              boxNotices,
               botId,
               boxKey,
-              failing.length === 0
+              said === undefined || said.kind === "moved"
                 ? { kind: "moved", text: move.notice }
                 : {
                     kind: "moved-answer-failed",
                     text: move.notice,
-                    keys: failing,
+                    keys: said.keys,
                   },
             ),
           };
@@ -722,7 +748,13 @@ export const useBotDraftsStore = create<BotDraftsState>()(
         }));
       },
       closeBot: (botId) =>
-        set((state) => ({ answers: withoutBot(state.answers, botId) })),
+        set((state) => {
+          const answers = withoutBot(state.answers, botId);
+          return {
+            answers,
+            boxNotices: failuresStillOnCards(state.boxNotices, botId, answers),
+          };
+        }),
       retire: (fold, owner) => {
         const state = get();
         const name =

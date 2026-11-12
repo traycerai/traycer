@@ -98,6 +98,7 @@ import {
   textOf,
   typeInto,
 } from "@/components/bots/__tests__/bot-box-test-support";
+import { BOT_BOX_DRAFT_WRITE_DEBOUNCE_MS } from "@/lib/bots/bot-box-draft-storage";
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 import {
   boxDoc,
@@ -1196,6 +1197,25 @@ describe("<BotTabSurface /> what the tree shows at the commit an identity change
   });
 });
 
+/**
+ * Makes the real `localStorage.getItem` throw for `key` on its first call, as a
+ * browser's does when storage cannot be read; every other read goes through.
+ */
+function failFirstReadOf(key: string): void {
+  const read = Storage.prototype.getItem.bind(localStorage);
+  let failed = false;
+  const reads = vi
+    .spyOn(Storage.prototype, "getItem")
+    .mockImplementation((asked: string) => {
+      if (asked === key && !failed) {
+        failed = true;
+        throw new Error("storage cannot be read");
+      }
+      return read(asked);
+    });
+  onTestFinished(() => reads.mockRestore());
+}
+
 describe("<BotTabSurface /> the account's stored drafts and the bot tab (T186)", () => {
   /** A's stored draft of the channel box. */
   function storedChannelDraft(
@@ -1240,27 +1260,44 @@ describe("<BotTabSurface /> the account's stored drafts and the bot tab (T186)",
     expect(screen.queryByTestId("bot-tab-connecting")).toBeNull();
   });
 
-  it("comes up with an empty box, not stuck connecting, when A's stored read fails, and leaves A's stored entry byte for byte as it was", async () => {
+  it("comes up with an empty box, not stuck connecting, when A's stored read throws, and leaves A's stored draft in place when the person types before it is read again", async () => {
     const keyOfA = botBoxDraftsKey(ACCOUNT_A);
-    localStorage.setItem(keyOfA, storedChannelDraft("A stored draft", null));
-    const before = localStorage.getItem(keyOfA);
+    localStorage.setItem(keyOfA, storedChannelDraft("A's stored draft", null));
     channelHandles.handles.set(
       CHANNEL,
       chatSessionWithThreadRows([postRow("post-1", "An earlier post")]),
     );
-    const storage = useBotDraftsStore.persist.getOptions().storage;
-    if (storage === undefined) throw new Error("the drafts store persists");
-    const reads = vi.spyOn(storage, "getItem");
-    onTestFinished(() => reads.mockRestore());
-    reads.mockRejectedValueOnce(new Error("the read failed"));
+    failFirstReadOf(keyOfA);
 
     mountSurface();
 
     await vi.waitFor(() => expect(textOf(channelBox())).toBe(""));
     expect(screen.queryByTestId("bot-tab-connecting")).toBeNull();
-    typeInto(channelBox(), "typed after the failure");
+    typeInto(channelBox(), "typed while unread");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(BOT_BOX_DRAFT_WRITE_DEBOUNCE_MS);
+    });
     signOut();
-    expect(localStorage.getItem(keyOfA)).toBe(before);
+    expect(localStorage.getItem(keyOfA) ?? "").toContain("A's stored draft");
+  });
+
+  it("comes up, and keeps the person's draft, when A's stored value is not JSON: a value nothing can parse is absent, not unread", async () => {
+    const keyOfA = botBoxDraftsKey(ACCOUNT_A);
+    localStorage.setItem(keyOfA, "{not json");
+    channelHandles.handles.set(
+      CHANNEL,
+      chatSessionWithThreadRows([postRow("post-1", "An earlier post")]),
+    );
+
+    mountSurface();
+
+    await vi.waitFor(() => expect(textOf(channelBox())).toBe(""));
+    expect(screen.queryByTestId("bot-tab-connecting")).toBeNull();
+    typeInto(channelBox(), "typed over junk");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(BOT_BOX_DRAFT_WRITE_DEBOUNCE_MS);
+    });
+    expect(localStorage.getItem(keyOfA) ?? "").toContain("typed over junk");
   });
 
   it("comes up at once, with no read, when the signed-in identity has no account id", async () => {

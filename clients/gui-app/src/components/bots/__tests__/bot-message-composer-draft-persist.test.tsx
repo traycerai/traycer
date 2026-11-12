@@ -624,6 +624,68 @@ describe("<BotMessageComposer /> and its draft on the device", () => {
       expect(document.activeElement).toBe(other);
     });
 
+    /** The box beside another field, with `text` typed into it. */
+    async function mountedWithText(text: string): Promise<HTMLElement> {
+      vi.useRealTimers();
+      ui.rtl.render(
+        <>
+          <input aria-label="Other field" />
+          <ui.owner.OwnerBox initial={CHANNEL} />
+        </>,
+      );
+      const box = await ui.box.findBoxInput(OWNER_LABEL);
+      typeBox(text);
+      return box;
+    }
+
+    it("leaves the focus, the selected range and the scroll of a focused box as they are when an answer moves into it, and adds the answer after a blank line", async () => {
+      const box = await mountedWithText("Hello wide world");
+      const editor = ui.box.editorOf(box);
+      ui.rtl.act(() => {
+        box.focus();
+        editor.commands.setTextSelection({ from: 7, to: 11 });
+      });
+      // What asks the view to scroll is a transaction flagged `scrolledIntoView`.
+      const dispatched = vi.spyOn(editor.view, "dispatch");
+
+      moveIn();
+
+      await vi.waitFor(() =>
+        expect(boxText()).toBe(`Hello wide world\n\n${MOVED}`),
+      );
+      expect(document.activeElement).toBe(box);
+      expect([editor.state.selection.from, editor.state.selection.to]).toEqual([
+        7, 11,
+      ]);
+      expect(dispatched.mock.calls.some(([tr]) => tr.scrolledIntoView)).toBe(
+        false,
+      );
+    });
+
+    it("leaves the focus on the other field, the caret in the box and the scroll as they are when an answer moves into the unfocused box", async () => {
+      const box = await mountedWithText("Hello wide world");
+      const editor = ui.box.editorOf(box);
+      const other = ui.rtl.screen.getByLabelText("Other field");
+      ui.rtl.act(() => {
+        editor.commands.setTextSelection(6);
+        other.focus();
+      });
+      const dispatched = vi.spyOn(editor.view, "dispatch");
+
+      moveIn();
+
+      await vi.waitFor(() =>
+        expect(boxText()).toBe(`Hello wide world\n\n${MOVED}`),
+      );
+      expect(document.activeElement).toBe(other);
+      expect([editor.state.selection.from, editor.state.selection.to]).toEqual([
+        6, 6,
+      ]);
+      expect(dispatched.mock.calls.some(([tr]) => tr.scrolledIntoView)).toBe(
+        false,
+      );
+    });
+
     it("leaves the focus on the other field when an answer moves into a box that already has a kept draft", async () => {
       vi.useRealTimers();
       ui.rtl.render(

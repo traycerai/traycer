@@ -1391,6 +1391,49 @@ describe("<BotChannelView tiles={null} /> a card's set the host refused as alrea
     expect(useBotDraftsStore.getState().answers).toEqual({});
     expect(sent).toHaveLength(1);
   });
+
+  it("shows the moved line alone, with no couldn't-send line, when a set's refusal for another reason is followed by the asker settling only the answered question, the untouched one staying open", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    outcome = failing(
+      hostRefusal(
+        "RPC_ERROR",
+        "QUESTION_ALREADY_SETTLED: the question is settled",
+      ),
+    );
+    const transcript = session(CHANNEL_ID, [
+      questionRow([deploy(null), hold(null)]),
+    ]);
+    mountOnTabHost();
+    const card = channelCard();
+    await user.click(choice(cardQuestion(card, DEPLOY), "After the train"));
+    await user.click(submitButton(card));
+    await settleRequests();
+    expect(
+      screen.getByTestId("bot-channel-composer-send-failed").textContent,
+    ).toContain("Couldn't send. Try again.");
+
+    transcript.write([
+      questionRow([
+        deploy({
+          answer: "Now",
+          skipped: false,
+          by: { kind: "bot" },
+          at: 4_000,
+        }),
+        hold(null),
+      ]),
+    ]);
+
+    expect(textOf(boxInput("Message Release Bot"))).toBe(
+      `${DEPLOY} After the train`,
+    );
+    expect(
+      screen.getByTestId("bot-channel-composer-answers-moved").textContent,
+    ).toBe(
+      "Release Bot settled it first. Your answer is in the box, not sent.",
+    );
+    expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
+  });
 });
 
 describe("<BotChannelView tiles={null} /> a card's answers whose send ended without saying whether the host took them", () => {
@@ -1444,9 +1487,10 @@ describe("<BotChannelView tiles={null} /> a card's answers whose send ended with
     expect(sent).toHaveLength(1);
   });
 
-  it("shows the card settled, and spends the drafts, when the resync shows the viewer's set landed", async () => {
+  it("shows the card settled, and spends the drafts and the couldn't-send line they made, when the resync shows the viewer's set landed", async () => {
     const transcript = await sendTwoThatDrop();
     const at = Date.now();
+    expect(screen.getByTestId("bot-channel-composer-send-failed")).toBeTruthy();
 
     transcript.resync([
       questionRow([
@@ -1466,6 +1510,7 @@ describe("<BotChannelView tiles={null} /> a card's answers whose send ended with
     ).toBe(`Answered by Olive Owner · ${formatMessageTime(at, Date.now())}`);
     expect(within(card).queryAllByRole("button")).toEqual([]);
     expect(useBotDraftsStore.getState().answers).toEqual({});
+    expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
     expect(sent).toHaveLength(1);
   });
 

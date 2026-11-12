@@ -405,6 +405,21 @@ describe("clearAllPersistedStores — renderer IndexedDB drop", () => {
     expect(reloadSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("deletes a partition's landing-image-sizes database with its landing-images database", async () => {
+    const { deleted } = installIndexedDB({
+      databases: () =>
+        Promise.resolve([
+          { name: "traycer-gui-app:default:landing-images" },
+          { name: "traycer-gui-app:default:landing-image-sizes" },
+        ]),
+    });
+
+    await clearAllPersistedStores({ hostClear: null });
+
+    expect(deleted).toContain("traycer-gui-app:default:landing-images");
+    expect(deleted).toContain("traycer-gui-app:default:landing-image-sizes");
+  });
+
   it("clears the appearance cache during the wipe", async () => {
     installIndexedDB({ databases: () => Promise.resolve([]) });
 

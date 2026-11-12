@@ -90,8 +90,7 @@ function imageDbName(partition: string): string {
  * the whole `Uint8Array`, so measuring a cold partition through the byte store
  * would pull every image into memory at startup - the exact cost the budget
  * exists to bound. A separate key-to-number database is enumerable in one cheap
- * read. It keeps the partition prefix, so the desktop per-window wipe (which
- * matches by DB-name prefix) still takes it.
+ * read. The wipe deletes it with the bytes, by its suffix (`wipe.ts`).
  */
 function imageSizeDbName(partition: string): string {
   return `${PERSIST_PREFIX}:${partition}:landing-image-sizes`;
@@ -99,7 +98,8 @@ function imageSizeDbName(partition: string): string {
 
 // Memoize the open store per partition so repeated ops reuse a single DB
 // connection instead of opening one per call. The partition is stable within a
-// runtime; a change (only possible across desktop windows in tests) re-opens.
+// runtime; a change (only possible across desktop windows in tests) re-opens,
+// as does a connection let go for another window (`releasingStore`).
 let cachedStore: {
   readonly partition: string;
   readonly store: UseStore;
@@ -110,14 +110,40 @@ let cachedSizeStore: {
   readonly store: UseStore;
 } | null = null;
 
+/**
+ * `createStore`'s store for `name`, letting go of its connection when another
+ * connection deletes or upgrades that database (`versionchange`): idb-keyval
+ * never closes one, and a connection left open holds the deletion back, and
+ * every later open of that database behind it, in every window, a reloaded
+ * wipe's included (`wipe.ts`). `released` is told whether it was a deletion;
+ * the next operation must open a new connection, so it drops this store.
+ */
+function releasingStore(
+  name: string,
+  storeName: string,
+  released: (deleted: boolean) => void,
+): UseStore {
+  const opened = createStore(name, storeName);
+  return (mode, callback) =>
+    opened(mode, (objectStore) => {
+      const db = objectStore.transaction.db;
+      db.onversionchange = (event) => {
+        db.close();
+        released(event.newVersion === null);
+      };
+      return callback(objectStore);
+    });
+}
+
 /** The idb-keyval store for this runtime's partition (`hash` → bytes). */
 export function imageStore(): UseStore {
   const partition = landingImagePartition();
   if (cachedStore === null || cachedStore.partition !== partition) {
-    cachedStore = {
-      partition,
-      store: createStore(imageDbName(partition), "bytes"),
-    };
+    const store = releasingStore(imageDbName(partition), "bytes", (deleted) => {
+      if (cachedStore?.store === store) cachedStore = null;
+      if (deleted) forgetDeletedImages();
+    });
+    cachedStore = { partition, store };
   }
   return cachedStore.store;
 }
@@ -128,12 +154,39 @@ let measuredSizesHydrated = false;
 function imageSizeStore(): UseStore {
   const partition = landingImagePartition();
   if (cachedSizeStore === null || cachedSizeStore.partition !== partition) {
-    cachedSizeStore = {
-      partition,
-      store: createStore(imageSizeDbName(partition), "sizes"),
-    };
+    const store = releasingStore(imageSizeDbName(partition), "sizes", () => {
+      if (cachedSizeStore?.store === store) cachedSizeStore = null;
+    });
+    cachedSizeStore = { partition, store };
   }
   return cachedSizeStore.store;
+}
+
+const deletedListeners = new Set<() => void>();
+
+/**
+ * Calls `listener` each time this window's image store is deleted under it
+ * (another window's wipe): whatever it stored there is gone.
+ */
+export function onLandingImagesDeleted(listener: () => void): void {
+  deletedListeners.add(listener);
+}
+
+/**
+ * This window's image store was deleted: only the bytes held in memory, the
+ * session's and those a reclaim holds, are still to be had, so presence and
+ * the measured sizes keep those alone.
+ */
+function forgetDeletedImages(): void {
+  const held = (hash: string): boolean =>
+    session.has(hash) || reclaimCustody.has(hash);
+  for (const hash of knownHashes) {
+    if (!held(hash)) knownHashes.delete(hash);
+  }
+  for (const hash of measuredSizes.keys()) {
+    if (!held(hash)) measuredSizes.delete(hash);
+  }
+  for (const listener of deletedListeners) listener();
 }
 
 /**

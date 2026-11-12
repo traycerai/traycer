@@ -124,6 +124,34 @@ function trackStoredReads(run: Run): () => Promise<void> {
   };
 }
 
+/**
+ * Makes the real `localStorage.getItem` throw for `key`, as a browser's does
+ * when storage cannot be read, until `readable` makes it readable again. Every
+ * other key reads through, and `stored` reads `key` itself past the spy, so a
+ * case can check what storage holds while it is unreadable.
+ */
+function makeKeyUnreadable(key: string): {
+  readonly readable: () => void;
+  readonly stored: () => string | null;
+} {
+  const read = Storage.prototype.getItem.bind(localStorage);
+  let unreadable = true;
+  const reads = vi
+    .spyOn(Storage.prototype, "getItem")
+    .mockImplementation((asked: string) => {
+      if (unreadable && asked === key)
+        throw new Error("storage cannot be read");
+      return read(asked);
+    });
+  onTestFinished(() => reads.mockRestore());
+  return {
+    readable: () => {
+      unreadable = false;
+    },
+    stored: () => read(key),
+  };
+}
+
 function storedBox(text: string, content: JsonContent | null): string {
   return JSON.stringify({
     state: {
@@ -516,5 +544,116 @@ describe("<BotDraftsPersistLifecycleBridge /> an account that retires while its 
     const stored = localStorage.getItem(keyOfA) ?? "";
     expect(stored).toContain("Hold the migration");
     expect(stored).not.toContain("A's own draft");
+  });
+});
+
+describe("<BotDraftsPersistLifecycleBridge /> a storage that cannot be read", () => {
+  function storedBoxes(
+    entries: Record<string, { text: string; content: JsonContent | null }>,
+  ): string {
+    return JSON.stringify({
+      state: {
+        threadBoxes: {
+          [BOT_ID]: Object.fromEntries(
+            Object.entries(entries).map(([key, draft]) => [
+              key,
+              { ...draft, seedId: 1 },
+            ]),
+          ),
+        },
+      },
+      version: 1,
+    });
+  }
+
+  it("writes nothing over A's drafts while their storage cannot be read, and merges the person's typing into them once it can", async () => {
+    const run = await startOver();
+    const keyOfA = run.keys.botBoxDraftsKey(ACCOUNT_A);
+    localStorage.setItem(
+      keyOfA,
+      storedBoxes({
+        [CHANNEL]: { text: "one", content: null },
+        other: { text: "two", content: null },
+      }),
+    );
+    mountBridge(run);
+    signInAs(run, ACCOUNT_A);
+    await vi.waitFor(() =>
+      expect(run.app.drafts.persist.hasHydrated()).toBe(true),
+    );
+    const { readable, stored } = makeKeyUnreadable(keyOfA);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+    run.rtl.act(() => {
+      run.app.drafts.getState().typeThreadBox(BOT_ID, CHANNEL, {
+        text: "typed",
+        content: null,
+        held: [],
+      });
+    });
+    await vi.advanceTimersByTimeAsync(
+      run.app.storage.BOT_BOX_DRAFT_WRITE_DEBOUNCE_MS * 3,
+    );
+
+    const unwritten = stored() ?? "";
+    expect(unwritten).toContain('"text":"one"');
+    expect(unwritten).toContain('"text":"two"');
+    expect(unwritten).not.toContain("typed");
+
+    readable();
+    window.dispatchEvent(new Event("pagehide"));
+
+    const merged = localStorage.getItem(keyOfA) ?? "";
+    expect(merged).toContain('"text":"typed"');
+    expect(merged).toContain('"text":"two"');
+    expect(merged).not.toContain('"text":"one"');
+  });
+
+  it("leaves every one of A's stored drafts exactly as they were when A retires during the read and their storage cannot be read", async () => {
+    const release = holdImageReads();
+    const run = await startOver();
+    const readsSettled = trackStoredReads(run);
+    const hash = await storeImageBytes();
+    const keyOfA = run.keys.botBoxDraftsKey(ACCOUNT_A);
+    localStorage.setItem(
+      keyOfA,
+      storedBoxes({
+        [CHANNEL]: {
+          text: "A's own draft",
+          content: boxDoc("A's own draft ", [hashedImage(hash)]),
+        },
+        other: { text: "two", content: null },
+      }),
+    );
+    const before = localStorage.getItem(keyOfA);
+    mountBridge(run);
+    signInAs(run, ACCOUNT_A);
+    // The move goes through the store directly: no UI can make one during the
+    // read, because the bot tab waits for the read before it shows its box.
+    run.rtl.act(() => {
+      const drafts = run.app.drafts.getState();
+      drafts.setAnswer(BOT_ID, "answer-1", {
+        chosen: [],
+        typed: "Hold the migration",
+        sent: null,
+        unsureSince: null,
+        heldForSettlement: null,
+      });
+      drafts.moveAnswers(BOT_ID, CHANNEL, ["answer-1"], (taken) => ({
+        block: taken.map(([, draft]) => draft.typed).join("\n"),
+        notice: "Tess answered first.",
+      }));
+    });
+    const { readable } = makeKeyUnreadable(keyOfA);
+
+    signInAs(run, ACCOUNT_B);
+    await vi.waitFor(() =>
+      expect(run.app.drafts.persist.hasHydrated()).toBe(true),
+    );
+    release();
+    await readsSettled();
+    readable();
+
+    expect(localStorage.getItem(keyOfA)).toBe(before);
   });
 });
