@@ -160,6 +160,8 @@ function composer(
         seed={null}
         keptDraft={null}
         quote={quote}
+        moved={null}
+        notice={null}
         onSent={onSent}
       />
     </BotTestRunnerHost>
@@ -214,6 +216,8 @@ function Harness(props: {
         seed={props.keepDraft ? kept.seed : null}
         keptDraft={props.keepDraft ? kept.keptDraft : null}
         quote={null}
+        moved={null}
+        notice={null}
         onSent={onSent}
       />
     </BotTestRunnerHost>

@@ -321,6 +321,13 @@ export const RPC_ERROR_CODES = [
   // written or queued; each question is answered on its own instead.
   // Additive, as above.
   "E_BOT_ANSWER_SETS_UNSUPPORTED",
+  // `bot.conversation.send` carried a member's answer, or a card's answers,
+  // to a question someone else had already settled. Nothing was written. The
+  // settlement that beat it reaches the client on the chat's stream, which
+  // nothing orders against this reply, so the card waits for it rather than
+  // say the send failed: sending again would be refused again. Additive, as
+  // above: a host that predates it refuses with RPC_ERROR.
+  "E_BOT_QUESTION_ALREADY_SETTLED",
   // ─── Evicted chats ──────────────────────────────────────────────────────
   //
   // A host dropped a chat's records once the cloud held them, and could not

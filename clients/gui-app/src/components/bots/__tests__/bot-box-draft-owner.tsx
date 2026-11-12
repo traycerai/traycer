@@ -42,6 +42,8 @@ function Box(props: { readonly conversation: string }): ReactNode {
         seed={kept.seed}
         keptDraft={kept.keptDraft}
         quote={null}
+        moved={kept.moved}
+        notice={kept.notice}
         onSent={() => false}
       />
     </BotTestRunnerHost>

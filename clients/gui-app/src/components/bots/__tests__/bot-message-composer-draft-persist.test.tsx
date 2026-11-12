@@ -192,6 +192,46 @@ describe("<BotMessageComposer /> and its draft on the device", () => {
     ).toBe("<@user-1>");
   });
 
+  it("keeps a mention the box holds when answers move into it off a question card, and adds them below, after a blank line", async () => {
+    storeDraftsAsLeft({
+      [BOT_ID]: {
+        [CHANNEL]: {
+          text: "Ask @Ada",
+          content: boxDoc("Ask ", [MENTION]),
+          seedId: 1,
+        },
+      },
+    });
+    ui.rtl.cleanup();
+    app = await restart();
+    ui = await loadUi();
+    await mountBox(CHANNEL);
+
+    ui.rtl.act(() => {
+      const drafts = app.drafts.getState();
+      drafts.setAnswer(BOT_ID, "answer-key", {
+        chosen: [],
+        typed: "Hold the migration",
+        sent: null,
+        unsureSince: null,
+        heldForSettlement: null,
+      });
+      drafts.moveAnswers(BOT_ID, CHANNEL, ["answer-key"], (taken) => ({
+        block: taken.map(([, draft]) => draft.typed).join("\n"),
+        notice: "Tess answered first.",
+      }));
+    });
+
+    expect(boxText()).toBe("Ask @Ada\n\nHold the migration");
+    expect(
+      ui.rtl
+        .within(ui.box.boxInput(OWNER_LABEL))
+        .getByTestId("bot-box-mention")
+        .getAttribute("data-token"),
+    ).toBe("<@user-1>");
+    expect(app.drafts.getState().boxCarries[BOT_ID]?.[CHANNEL]).toBeUndefined();
+  });
+
   it("clears the stored draft when a send is accepted", async () => {
     await mountBox(CHANNEL);
     typeBox("Is CI green?");

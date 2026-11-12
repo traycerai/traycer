@@ -22,8 +22,6 @@ import { basePersistOptions } from "@/lib/persist";
 export interface BotAnswerDraft {
   readonly chosen: ReadonlyArray<string>;
   readonly typed: string;
-  /** Whether the person chose to skip it, on a card whose answers go together. */
-  readonly skip: boolean;
   /**
    * The answer sent: held from the send until the question shows settled,
    * whether the host took it at once or queued it for a bot's host that is
@@ -37,6 +35,14 @@ export interface BotAnswerDraft {
    * landed: settled, or still open and given back to edit. `null` otherwise.
    */
   readonly unsureSince: BotTranscriptBaseline | null;
+  /**
+   * For a sent answer the bot's host refused because a question of that send
+   * was settled already (`E_BOT_QUESTION_ALREADY_SETTLED`): the send's
+   * questions, by their keys joined with newlines. The answer stays held as
+   * sent until one of those questions shows settled here, which moves it or
+   * spends it; any of them still open then go back to edit. `null` otherwise.
+   */
+  readonly heldForSettlement: string | null;
 }
 
 /**
@@ -62,11 +68,34 @@ export interface BotThreadBoxDraft {
   readonly text: string;
   /** The box's document, images and chips included; `null` for text put there from outside it. */
   readonly content: JsonContent | null;
-  /**
-   * Bumped each time a draft is put in the box from outside it (Discuss on a
-   * question card), never by typing, so the box loads each one once.
-   */
+  /** Kept as stored, never bumped by typing, so the box loads its draft once. */
   readonly seedId: number;
+}
+
+/**
+ * A member's answers that someone else's settlement overtook (T186), taken
+ * off their question cards and waiting for the box to add them after what
+ * it shows: one block of lines per move, in order.
+ */
+export interface BotBoxCarry {
+  /** Which moves they are: the box adds each id once. */
+  readonly id: number;
+  readonly blocks: ReadonlyArray<string>;
+}
+
+/**
+ * What a box says under it about a question card's answers, until the box
+ * sends or another takes its place: who settled them first, the person's
+ * answers now in the box; or that an answer did not reach the bot's host.
+ */
+export type BotBoxNotice =
+  | { readonly kind: "moved"; readonly text: string }
+  | { readonly kind: "answer-failed" };
+
+/** What one move takes off its cards: its block of lines and the line under the box. */
+export interface BotAnswersMove {
+  readonly block: string;
+  readonly notice: string;
 }
 
 /** A message a box sent that never reached the conversation. */
@@ -101,17 +130,38 @@ interface BotDraftsState {
    * box was gone, offered back beside that draft; keyed as `threadBoxes`.
    */
   readonly unsentBoxes: ByBot<BotUnsentMessage>;
+  /** Answers moved off question cards, waiting for their box; keyed as `threadBoxes`. */
+  readonly boxCarries: ByBot<BotBoxCarry>;
+  /** What each box says under it about question cards' answers; keyed as `threadBoxes`. */
+  readonly boxNotices: ByBot<BotBoxNotice>;
   /** Keeps a card's draft; `null` drops it. */
   readonly setAnswer: (
     botId: string,
     key: string,
     draft: BotAnswerDraft | null,
   ) => void;
-  /** Puts `text` in the box of the thread hanging off `anchorMessageId`, replacing what it held. */
-  readonly seedThreadBox: (
+  /**
+   * Takes the card drafts `keys` that are still kept off their cards, at
+   * once, into the box `boxKey`: `compose` makes the move from them, or
+   * `null` where none holds anything of the person's, and the drafts are
+   * dropped either way. A card drawn twice moves its drafts once: the second
+   * finds them gone and changes nothing.
+   */
+  readonly moveAnswers: (
     botId: string,
-    anchorMessageId: string,
-    text: string,
+    boxKey: string,
+    keys: ReadonlyArray<string>,
+    compose: (
+      drafts: ReadonlyArray<readonly [string, BotAnswerDraft]>,
+    ) => BotAnswersMove | null,
+  ) => void;
+  /** The box added the moves up to `id`. */
+  readonly takeCarry: (botId: string, boxKey: string, id: number) => void;
+  /** Says `notice` under the box; `null` says nothing. */
+  readonly noticeBox: (
+    botId: string,
+    boxKey: string,
+    notice: BotBoxNotice | null,
   ) => void;
   /** Keeps what the person put in that box; an empty box keeps nothing. */
   readonly typeThreadBox: (
@@ -177,12 +227,17 @@ function noteBoxChange(botId: string, key: string | null): void {
 
 const PERSIST_OPTIONS = basePersistOptions(BOT_BOX_DRAFTS_PERSIST_KEY);
 
+/** Numbers each move of card answers into a box, so the box adds each once. */
+let carryCount = 0;
+
 /**
  * What a member has not sent yet: a card's answer, and what a thread's box
- * or the channel's holds, typed or put there by Discuss. Kept above the
- * channel panes, so switching channels or reopening a thread preserves it;
- * a send consumes what it carried. Forgetting a bot drops its drafts; closing
- * the Tracy surface drops its card answers only.
+ * or the channel's holds, typed or moved there off a card someone else
+ * settled first. Kept above the channel panes, so switching channels or
+ * reopening a thread preserves it; a send consumes what it carried.
+ * Forgetting a bot drops its drafts; closing the Tracy surface drops its
+ * card answers only. Moves waiting for their box, and what each box says
+ * under it, are kept in memory only.
  *
  * The boxes' drafts are kept on this device too (Tracy Bots T158), so a box
  * shows what it held after the app restarts: stored as the person types,
@@ -195,21 +250,57 @@ export const useBotDraftsStore = create<BotDraftsState>()(
       answers: {},
       threadBoxes: {},
       unsentBoxes: {},
+      boxCarries: {},
+      boxNotices: {},
       setAnswer: (botId, key, draft) =>
         set((state) => ({
           answers: withEntry(state.answers, botId, key, draft),
         })),
-      seedThreadBox: (botId, anchorMessageId, text) => {
-        noteBoxChange(botId, anchorMessageId);
-        set((state) => ({
-          threadBoxes: withEntry(state.threadBoxes, botId, anchorMessageId, {
-            text,
-            content: null,
-            seedId:
-              (state.threadBoxes[botId]?.[anchorMessageId]?.seedId ?? 0) + 1,
-          }),
-        }));
-      },
+      moveAnswers: (botId, boxKey, keys, compose) =>
+        set((state) => {
+          const kept = state.answers[botId] ?? {};
+          const taken: Array<readonly [string, BotAnswerDraft]> = [];
+          for (const key of keys) {
+            const draft = kept[key];
+            if (draft !== undefined) taken.push([key, draft]);
+          }
+          if (taken.length === 0) return state;
+          let answers = state.answers;
+          for (const [key] of taken) {
+            answers = withEntry(answers, botId, key, null);
+          }
+          const move = compose(taken);
+          if (move === null) return { answers };
+          carryCount += 1;
+          const earlier = state.boxCarries[botId]?.[boxKey]?.blocks ?? [];
+          return {
+            answers,
+            boxCarries: withEntry(state.boxCarries, botId, boxKey, {
+              id: carryCount,
+              blocks: [...earlier, move.block],
+            }),
+            boxNotices: withEntry(state.boxNotices, botId, boxKey, {
+              kind: "moved",
+              text: move.notice,
+            }),
+          };
+        }),
+      takeCarry: (botId, boxKey, id) =>
+        set((state) =>
+          state.boxCarries[botId]?.[boxKey]?.id === id
+            ? {
+                boxCarries: withEntry(state.boxCarries, botId, boxKey, null),
+              }
+            : state,
+        ),
+      noticeBox: (botId, boxKey, notice) =>
+        set((state) =>
+          notice === null && state.boxNotices[botId]?.[boxKey] === undefined
+            ? state
+            : {
+                boxNotices: withEntry(state.boxNotices, botId, boxKey, notice),
+              },
+        ),
       typeThreadBox: (botId, anchorMessageId, text, content) => {
         const current = get().threadBoxes[botId]?.[anchorMessageId];
         if (
@@ -259,6 +350,8 @@ export const useBotDraftsStore = create<BotDraftsState>()(
           answers: withoutBot(state.answers, botId),
           threadBoxes: withoutBot(state.threadBoxes, botId),
           unsentBoxes: withoutBot(state.unsentBoxes, botId),
+          boxCarries: withoutBot(state.boxCarries, botId),
+          boxNotices: withoutBot(state.boxNotices, botId),
         }));
       },
       closeBot: (botId) =>

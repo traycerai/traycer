@@ -64,6 +64,10 @@ import {
   signInViewer,
   VIEWER_USER_ID,
 } from "@/components/bots/__tests__/bot-failed-request-test-support";
+import {
+  boxInput,
+  textOf,
+} from "@/components/bots/__tests__/bot-box-test-support";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import { installLegendListTestClock } from "@/components/chat/__tests__/legend-list-test-environment";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -207,7 +211,10 @@ vi.mock("@/components/chat/chat-messages", async () => {
 });
 
 import { BotChannelView } from "@/components/bots/bot-channel-view";
-import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
+import {
+  answerDraftKey,
+  useBotDraftsStore,
+} from "@/stores/bots/bot-drafts-store";
 import type { BotOpenThread } from "@/stores/bots/bot-open-thread-store";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
 
@@ -458,7 +465,10 @@ const holding: SendOutcome = () => {
 
 /** The host refuses with its own error envelope: the send never ran. */
 function hostRefusal(
-  code: "RPC_ERROR" | "E_BOT_ANSWER_SETS_UNSUPPORTED",
+  code:
+    | "RPC_ERROR"
+    | "E_BOT_ANSWER_SETS_UNSUPPORTED"
+    | "E_BOT_QUESTION_ALREADY_SETTLED",
   message: string,
 ): HostRpcError {
   return new HostRpcError({
@@ -658,7 +668,7 @@ function formOf(card: HTMLElement): {
     submits: within(card).getAllByTestId("question-card-submit").length,
     tally: foot === null ? null : foot.textContent,
     skips: within(card)
-      .getAllByTestId("question-card-skip")
+      .queryAllByTestId("question-card-skip")
       .map((skip) => skip.textContent),
   };
 }
@@ -689,7 +699,13 @@ beforeEach(() => {
   threadListReads = 0;
   mocks.handles.clear();
   rowBlocks.clear();
-  useBotDraftsStore.setState({ answers: {}, threadBoxes: {} });
+  useBotDraftsStore.setState({
+    answers: {},
+    threadBoxes: {},
+    unsentBoxes: {},
+    boxCarries: {},
+    boxNotices: {},
+  });
   connectHost(V15, V15);
   signInViewer(VIEWER_USER_ID);
 });
@@ -745,8 +761,8 @@ describe("<BotChannelView tiles={null} /> where a card's answers go together, an
       together
         ? {
             submits: 1,
-            tally: "0 of 2 answered. Answer or skip each one to submit.",
-            skips: ["Skip this question", "Skip this question"],
+            tally: "0 of 2 answered. Answer at least one to submit.",
+            skips: [],
           }
         : { submits: 2, tally: null, skips: ["Skip", "Skip"] },
     );
@@ -831,7 +847,7 @@ describe("<BotChannelView tiles={null} /> a card of one question, on a host that
 });
 
 describe("<BotChannelView tiles={null} /> a card whose answers go together", () => {
-  it("counts only the questions still open, says the bot's settlement of the others, and holds Submit until every open one is answered or skipped", async () => {
+  it("counts only the questions still open, says the bot's settlement of the others, draws no skip toggle, and holds Submit until one open question is answered", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     session(CHANNEL_ID, [
       questionRow([
@@ -855,9 +871,12 @@ describe("<BotChannelView tiles={null} /> a card whose answers go together", () 
     expect(within(cardQuestion(card, DEPLOY)).queryAllByRole("button")).toEqual(
       [],
     );
-    expect(tally(card)).toBe(
-      "0 of 2 answered. Answer or skip each one to submit.",
-    );
+    expect(within(card).queryAllByTestId("question-card-skip")).toEqual([]);
+    expect(tally(card)).toBe("0 of 2 answered. Answer at least one to submit.");
+    expect(submitButton(card).disabled).toBe(true);
+
+    await user.type(answerField(cardQuestion(card, HOLD)), "   ");
+    expect(tally(card)).toBe("0 of 2 answered. Answer at least one to submit.");
     expect(submitButton(card).disabled).toBe(true);
 
     await user.type(
@@ -865,59 +884,21 @@ describe("<BotChannelView tiles={null} /> a card whose answers go together", () 
       "Hold the migration",
     );
     expect(tally(card)).toBe(
-      "1 of 2 answered. Answer or skip the last one to submit.",
+      "1 of 2 answered. The last one will be sent as skipped.",
     );
-    expect(submitButton(card).disabled).toBe(true);
-
-    await user.click(
-      within(cardQuestion(card, WATCH)).getByRole("button", {
-        name: "Skip this question",
-      }),
-    );
-    expect(tally(card)).toBe("2 of 2 answered.");
     expect(submitButton(card).disabled).toBe(false);
-    // A skipped question takes no answer until it is answered after all.
-    expect(answerField(cardQuestion(card, WATCH)).disabled).toBe(true);
-    expect(choice(cardQuestion(card, WATCH), "Nothing yet").disabled).toBe(
-      true,
-    );
 
-    await user.click(
-      within(cardQuestion(card, WATCH)).getByRole("button", {
-        name: "Skip this question",
-        pressed: true,
-      }),
-    );
-    expect(tally(card)).toBe(
-      "1 of 2 answered. Answer or skip the last one to submit.",
-    );
-    expect(submitButton(card).disabled).toBe(true);
-    expect(answerField(cardQuestion(card, WATCH)).disabled).toBe(false);
+    await user.click(choice(cardQuestion(card, WATCH), "Nothing yet"));
+    expect(tally(card)).toBe("2 of 2 answered.");
   });
 
-  it("sends ONE message with every open question's answer: picks in option order, trimmed words, a skip as skipped, and no answer of its own", async () => {
+  it("sends ONE message with every open question's entry in question order: the answered one with its picks and trimmed words, each question left untouched as skipped", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     session(CHANNEL_ID, [questionRow([deploy(null), hold(null), watch(null)])]);
     mountOnTabHost();
     const card = channelCard();
-    expect(tally(card)).toBe(
-      "0 of 3 answered. Answer or skip each one to submit.",
-    );
+    expect(tally(card)).toBe("0 of 3 answered. Answer at least one to submit.");
 
-    await user.click(choice(cardQuestion(card, DEPLOY), "After the train"));
-    expect(tally(card)).toBe(
-      "1 of 3 answered. Answer or skip the other 2 to submit.",
-    );
-    // Words typed under a question that is then skipped are not sent.
-    await user.type(
-      answerField(cardQuestion(card, HOLD)),
-      "Hold the migration",
-    );
-    await user.click(
-      within(cardQuestion(card, HOLD)).getByRole("button", {
-        name: "Skip this question",
-      }),
-    );
     await user.click(
       choice(cardQuestion(card, WATCH), "Sandboxes and credits"),
     );
@@ -926,14 +907,16 @@ describe("<BotChannelView tiles={null} /> a card whose answers go together", () 
       answerField(cardQuestion(card, WATCH)),
       "  the build farm  ",
     );
-    expect(tally(card)).toBe("3 of 3 answered.");
+    expect(tally(card)).toBe(
+      "1 of 3 answered. The other 2 will be sent as skipped.",
+    );
     await user.click(submitButton(card));
 
     expect(sent).toEqual([
       {
         botId: BOT_ID,
         conversationId: CHANNEL_ID,
-        text: `${DEPLOY}\nAfter the train\n\n${HOLD}\nSkipped\n\n${WATCH}\nAgents waiting on me, Sandboxes and credits, the build farm`,
+        text: `${DEPLOY}\nSkipped\n\n${HOLD}\nSkipped\n\n${WATCH}\nAgents waiting on me, Sandboxes and credits, the build farm`,
         threadId: null,
         announcementId: null,
         redeliver: null,
@@ -942,12 +925,7 @@ describe("<BotChannelView tiles={null} /> a card whose answers go together", () 
         answers: {
           questionMessageId: QUESTION_ID,
           entries: [
-            {
-              questionIndex: 0,
-              skipped: false,
-              selected: ["After the train"],
-              text: null,
-            },
+            { questionIndex: 0, skipped: true, selected: [], text: null },
             { questionIndex: 1, skipped: true, selected: [], text: null },
             {
               questionIndex: 2,
@@ -959,6 +937,25 @@ describe("<BotChannelView tiles={null} /> a card whose answers go together", () 
         },
       },
     ]);
+  });
+
+  it("sends every question answered as a plain set, with no skipped entry", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    session(CHANNEL_ID, [questionRow([deploy(null), hold(null)])]);
+    mountOnTabHost();
+    const card = channelCard();
+
+    await user.click(choice(cardQuestion(card, DEPLOY), "Now"));
+    await user.type(
+      answerField(cardQuestion(card, HOLD)),
+      "Hold the migration",
+    );
+    expect(tally(card)).toBe("2 of 2 answered.");
+    await user.click(submitButton(card));
+
+    expect(
+      sent.map((request) => request.answers?.entries.map((e) => e.skipped)),
+    ).toEqual([[false, false]]);
   });
 
   it("holds the whole card, its inputs and Submit, with the spinner until the room settles the questions, and then shows who answered, once", async () => {
@@ -1122,6 +1119,177 @@ describe("<BotChannelView tiles={null} /> a card's answers the host refused", ()
   });
 });
 
+describe("<BotChannelView tiles={null} /> a card's partial answers the host refused", () => {
+  it("gives the answered question back to edit, opens the untouched one again with nothing marked skipped, enables Submit, and says under the box that it was not sent", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    outcome = failing(
+      hostRefusal(
+        "RPC_ERROR",
+        "QUESTION_ALREADY_SETTLED: the question is settled",
+      ),
+    );
+    session(CHANNEL_ID, [questionRow([deploy(null), hold(null)])]);
+    mountOnTabHost();
+    const card = channelCard();
+    await user.click(choice(cardQuestion(card, DEPLOY), "After the train"));
+    await user.click(submitButton(card));
+    await settleRequests();
+
+    expect(sent).toHaveLength(1);
+    expect(within(card).queryByTestId("question-card-sending")).toBeNull();
+    expect(within(card).queryAllByText("Skipped")).toEqual([]);
+    expect(
+      choice(cardQuestion(card, DEPLOY), "After the train").getAttribute(
+        "aria-pressed",
+      ),
+    ).toBe("true");
+    expect(choice(cardQuestion(card, DEPLOY), "Now").disabled).toBe(false);
+    expect(answerField(cardQuestion(card, HOLD)).value).toBe("");
+    expect(answerField(cardQuestion(card, HOLD)).disabled).toBe(false);
+    expect(submitButton(card).disabled).toBe(false);
+    expect(
+      screen.getByTestId("bot-channel-composer-send-failed").textContent,
+    ).toContain("Couldn't send. Try again.");
+  });
+});
+
+describe("<BotChannelView tiles={null} /> a card's set the host refused as already settled (E_BOT_QUESTION_ALREADY_SETTLED)", () => {
+  const ASKER_SETTLED = (answer: string): BotQuestionSettlement => ({
+    answer,
+    skipped: false,
+    by: { kind: "bot" },
+    at: 4_000,
+  });
+
+  /** The member's set refused with the code; resolves once the card holds it. */
+  async function submitRefusedAsSettled(
+    touch: (card: HTMLElement) => Promise<void>,
+  ): Promise<void> {
+    outcome = failing(
+      hostRefusal(
+        "E_BOT_QUESTION_ALREADY_SETTLED",
+        "This question was already answered.",
+      ),
+    );
+    const card = channelCard();
+    await touch(card);
+    await userEvent
+      .setup({ advanceTimers: vi.advanceTimersByTime })
+      .click(submitButton(card));
+    await vi.waitFor(() =>
+      expect(
+        useBotDraftsStore.getState().answers[BOT_ID]?.[
+          answerDraftKey(QUESTION_ID, 0)
+        ]?.heldForSettlement,
+      ).not.toBeNull(),
+    );
+    expect(sent).toHaveLength(1);
+    expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
+    expect(
+      within(channelCard()).getAllByTestId("question-card-sending"),
+    ).toHaveLength(1);
+  }
+
+  it("moves the touched questions as one block, and the untouched one nothing, when a teammate's set settles the card after the refusal, with no couldn't-send line", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const transcript = session(CHANNEL_ID, [
+      questionRow([deploy(null), hold(null), watch(null)]),
+    ]);
+    mountOnTabHost();
+    await submitRefusedAsSettled(async (card) => {
+      await user.click(choice(cardQuestion(card, DEPLOY), "Now"));
+      await user.type(
+        answerField(cardQuestion(card, HOLD)),
+        "Hold the migration",
+      );
+    });
+    const at = Date.now();
+
+    transcript.write([
+      questionRow([
+        deploy(byPerson(TEAMMATE_USER_ID, "After the train", SET_REQUEST, at)),
+        hold(byPerson(TEAMMATE_USER_ID, "Nothing", SET_REQUEST, at)),
+        watch(byPerson(TEAMMATE_USER_ID, "Nothing yet", SET_REQUEST, at)),
+      ]),
+    ]);
+
+    expect(textOf(boxInput("Message Release Bot"))).toBe(
+      `${DEPLOY} Now\n${HOLD} Hold the migration`,
+    );
+    expect(
+      screen.getByTestId("bot-channel-composer-answers-moved").textContent,
+    ).toBe(
+      "Tess Teammate answered first. Your answers are in the box, not sent.",
+    );
+    expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
+    expect(useBotDraftsStore.getState().answers).toEqual({});
+  });
+
+  it("moves the settled question, gives the other touched one back to edit with its answer, opens the untouched one, and says the send failed, when the asker settles only one", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const transcript = session(CHANNEL_ID, [
+      questionRow([deploy(null), hold(null), watch(null)]),
+    ]);
+    mountOnTabHost();
+    await submitRefusedAsSettled(async (card) => {
+      await user.click(choice(cardQuestion(card, DEPLOY), "Now"));
+      await user.type(
+        answerField(cardQuestion(card, HOLD)),
+        "Hold the migration",
+      );
+    });
+
+    transcript.write([
+      questionRow([
+        deploy(ASKER_SETTLED("After the train")),
+        hold(null),
+        watch(null),
+      ]),
+    ]);
+
+    const card = channelCard();
+    expect(textOf(boxInput("Message Release Bot"))).toBe(`${DEPLOY} Now`);
+    expect(
+      screen.getByTestId("bot-channel-composer-send-failed").textContent,
+    ).toContain("Couldn't send. Try again.");
+    expect(within(card).queryByTestId("question-card-sending")).toBeNull();
+    expect(answerField(cardQuestion(card, HOLD)).value).toBe(
+      "Hold the migration",
+    );
+    expect(answerField(cardQuestion(card, HOLD)).disabled).toBe(false);
+    expect(answerField(cardQuestion(card, WATCH)).value).toBe("");
+    expect(answerField(cardQuestion(card, WATCH)).disabled).toBe(false);
+    expect(submitButton(card).disabled).toBe(false);
+  });
+
+  it("opens the untouched question again with no couldn't-send line, and shows the moved line, when the only question still open after the asker settled one was untouched", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const transcript = session(CHANNEL_ID, [
+      questionRow([deploy(null), hold(null)]),
+    ]);
+    mountOnTabHost();
+    await submitRefusedAsSettled(async (card) => {
+      await user.click(choice(cardQuestion(card, DEPLOY), "Now"));
+    });
+
+    transcript.write([
+      questionRow([deploy(ASKER_SETTLED("After the train")), hold(null)]),
+    ]);
+
+    const card = channelCard();
+    expect(textOf(boxInput("Message Release Bot"))).toBe(`${DEPLOY} Now`);
+    expect(
+      screen.getByTestId("bot-channel-composer-answers-moved").textContent,
+    ).toBe(
+      "Release Bot settled it first. Your answer is in the box, not sent.",
+    );
+    expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
+    expect(within(card).queryByTestId("question-card-sending")).toBeNull();
+    expect(answerField(cardQuestion(card, HOLD)).value).toBe("");
+    expect(answerField(cardQuestion(card, HOLD)).disabled).toBe(false);
+  });
+});
+
 describe("<BotChannelView tiles={null} /> a card's answers whose send ended without saying whether the host took them", () => {
   const OPEN_TWO = (): Message => questionRow([deploy(null), hold(null)]);
 
@@ -1197,13 +1365,72 @@ describe("<BotChannelView tiles={null} /> a card's answers whose send ended with
     expect(useBotDraftsStore.getState().answers).toEqual({});
     expect(sent).toHaveLength(1);
   });
+
+  it("moves the drafts into the channel's box, unsent, when a teammate's settlement shows with no new baseline", async () => {
+    const transcript = await sendTwoThatDrop();
+    const at = Date.now();
+
+    transcript.write([
+      questionRow([
+        deploy(byPerson(TEAMMATE_USER_ID, "Now", SET_REQUEST, at)),
+        hold(byPerson(TEAMMATE_USER_ID, "Nothing", SET_REQUEST, at)),
+      ]),
+    ]);
+
+    expect(textOf(boxInput("Message Release Bot"))).toBe(
+      `${DEPLOY} After the train\n${HOLD} Hold the migration`,
+    );
+    expect(
+      screen.getByTestId("bot-channel-composer-answers-moved").textContent,
+    ).toBe(
+      "Tess Teammate answered first. Your answers are in the box, not sent.",
+    );
+    expect(useBotDraftsStore.getState().answers).toEqual({});
+    expect(sent).toHaveLength(1);
+  });
+});
+
+describe("<BotChannelView tiles={null} /> a card's partial answers whose send ended without saying whether the host took them", () => {
+  it("holds the untouched question with the answered one until a resync, then opens it again untouched", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    outcome = failing(droppedAfterSend());
+    const open = (): Message => questionRow([deploy(null), hold(null)]);
+    const transcript = session(CHANNEL_ID, [open()]);
+    mountOnTabHost();
+    const card = channelCard();
+    await user.click(choice(cardQuestion(card, DEPLOY), "After the train"));
+    await user.click(submitButton(card));
+    await settleRequests();
+
+    expect(within(card).getAllByTestId("question-card-sending")).toHaveLength(
+      1,
+    );
+    expect(enabledControls(card)).toEqual([]);
+
+    transcript.resync([open()]);
+
+    const reopened = channelCard();
+    expect(within(reopened).queryByTestId("question-card-sending")).toBeNull();
+    expect(answerField(cardQuestion(reopened, HOLD)).value).toBe("");
+    expect(answerField(cardQuestion(reopened, HOLD)).disabled).toBe(false);
+    expect(
+      choice(cardQuestion(reopened, DEPLOY), "After the train").getAttribute(
+        "aria-pressed",
+      ),
+    ).toBe("true");
+    expect(tally(reopened)).toBe(
+      "1 of 2 answered. The last one will be sent as skipped.",
+    );
+    expect(submitButton(reopened).disabled).toBe(false);
+    expect(sent).toHaveLength(1);
+  });
 });
 
 describe("<BotChannelView tiles={null} /> a card's answers held while the channel's session store is replaced", () => {
   const OPEN_THREE = (): Message =>
     questionRow([deploy(null), hold(null), watch(null)]);
 
-  /** A pick, words and a skip, then Submit, on a card of three open questions. */
+  /** A pick and words, the third question untouched, then Submit, on a card of three open questions. */
   async function answerThreeAndSubmit(): Promise<void> {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const card = channelCard();
@@ -1211,9 +1438,6 @@ describe("<BotChannelView tiles={null} /> a card's answers held while the channe
     await user.type(
       answerField(cardQuestion(card, HOLD)),
       "Hold the migration",
-    );
-    await user.click(
-      within(cardQuestion(card, WATCH)).getByTestId("question-card-skip"),
     );
     await user.click(submitButton(card));
     if (outcome === holding) {
@@ -1269,12 +1493,12 @@ describe("<BotChannelView tiles={null} /> a card's answers held while the channe
       "Hold the migration",
     );
     expect(answerField(cardQuestion(card, HOLD)).disabled).toBe(false);
-    const skipped = buttonOf(
-      within(cardQuestion(card, WATCH)).getByTestId("question-card-skip"),
+    expect(answerField(cardQuestion(card, WATCH)).value).toBe("");
+    expect(answerField(cardQuestion(card, WATCH)).disabled).toBe(false);
+    expect(within(card).queryAllByText("Skipped")).toEqual([]);
+    expect(tally(card)).toBe(
+      "2 of 3 answered. The last one will be sent as skipped.",
     );
-    expect(skipped.getAttribute("aria-pressed")).toBe("true");
-    expect(skipped.disabled).toBe(false);
-    expect(tally(card)).toBe("3 of 3 answered.");
     expect(submitButton(card).disabled).toBe(false);
     expect(sent).toHaveLength(1);
   });
@@ -1294,6 +1518,220 @@ describe("<BotChannelView tiles={null} /> a card's answers held while the channe
     );
     expect(enabledControls(card)).toEqual([]);
     expect(sent).toHaveLength(1);
+  });
+});
+
+describe("<BotChannelView tiles={null} /> a card whose answers go together, settled by a teammate's set first", () => {
+  it("moves a line per question the person touched, in the card's order, leaves the untouched one out, and says so once", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const transcript = session(CHANNEL_ID, [
+      questionRow([deploy(null), hold(null), watch(null)]),
+    ]);
+    mountOnTabHost();
+    const card = channelCard();
+    // The later question is touched first: the card's order decides the lines.
+    await user.type(
+      answerField(cardQuestion(card, HOLD)),
+      "Hold the migration",
+    );
+    await user.click(choice(cardQuestion(card, DEPLOY), "Now"));
+    await user.type(answerField(cardQuestion(card, WATCH)), "   ");
+    const at = Date.now();
+
+    transcript.write([
+      questionRow([
+        deploy(byPerson(TEAMMATE_USER_ID, "After the train", SET_REQUEST, at)),
+        hold(byPerson(TEAMMATE_USER_ID, "Nothing", SET_REQUEST, at)),
+        watch(byPerson(TEAMMATE_USER_ID, "Nothing yet", SET_REQUEST, at)),
+      ]),
+    ]);
+
+    expect(textOf(boxInput("Message Release Bot"))).toBe(
+      `${DEPLOY} Now\n${HOLD} Hold the migration`,
+    );
+    expect(
+      screen.getAllByTestId("bot-channel-composer-answers-moved"),
+    ).toHaveLength(1);
+    expect(
+      screen.getByTestId("bot-channel-composer-answers-moved").textContent,
+    ).toBe(
+      "Tess Teammate answered first. Your answers are in the box, not sent.",
+    );
+    expect(sent).toEqual([]);
+  });
+
+  it("moves the drafts once, keeps the moved line and shows no couldn't-send line, when the held send is refused after the teammate's set settled the card", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    let refuseHeld = (): void => undefined;
+    outcome = () => {
+      const { promise, reject } =
+        Promise.withResolvers<BotConversationSendResponse>();
+      refuseHeld = () =>
+        reject(
+          hostRefusal(
+            "RPC_ERROR",
+            "QUESTION_ALREADY_SETTLED: the question is settled",
+          ),
+        );
+      return promise;
+    };
+    const transcript = session(CHANNEL_ID, [
+      questionRow([deploy(null), hold(null)]),
+    ]);
+    mountOnTabHost();
+    const card = channelCard();
+    await user.click(choice(cardQuestion(card, DEPLOY), "Now"));
+    await user.type(
+      answerField(cardQuestion(card, HOLD)),
+      "Hold the migration",
+    );
+    await user.click(submitButton(card));
+    expect(sent).toHaveLength(1);
+    const at = Date.now();
+    transcript.write([
+      questionRow([
+        deploy(byPerson(TEAMMATE_USER_ID, "After the train", SET_REQUEST, at)),
+        hold(byPerson(TEAMMATE_USER_ID, "Nothing", SET_REQUEST, at)),
+      ]),
+    ]);
+
+    await act(async () => {
+      refuseHeld();
+      await settleRequests();
+    });
+
+    expect(textOf(boxInput("Message Release Bot"))).toBe(
+      `${DEPLOY} Now\n${HOLD} Hold the migration`,
+    );
+    expect(
+      screen.getByTestId("bot-channel-composer-answers-moved").textContent,
+    ).toBe(
+      "Tess Teammate answered first. Your answers are in the box, not sent.",
+    );
+    expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
+  });
+
+  it("moves only the touched question when a teammate's set settles the card while the member's partial send is held, naming who answered", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    outcome = holding;
+    const transcript = session(CHANNEL_ID, [
+      questionRow([deploy(null), hold(null)]),
+    ]);
+    mountOnTabHost();
+    const card = channelCard();
+    await user.click(choice(cardQuestion(card, DEPLOY), "Now"));
+    await user.click(submitButton(card));
+    expect(sent).toHaveLength(1);
+    const at = Date.now();
+
+    transcript.write([
+      questionRow([
+        deploy(byPerson(TEAMMATE_USER_ID, "After the train", SET_REQUEST, at)),
+        hold(byPerson(TEAMMATE_USER_ID, "Nothing", SET_REQUEST, at)),
+      ]),
+    ]);
+
+    expect(textOf(boxInput("Message Release Bot"))).toBe(`${DEPLOY} Now`);
+    expect(
+      screen.getByTestId("bot-channel-composer-answers-moved").textContent,
+    ).toBe(
+      "Tess Teammate answered first. Your answer is in the box, not sent.",
+    );
+    expect(useBotDraftsStore.getState().answers).toEqual({});
+  });
+
+  it("says the teammate answered the card, never that they skipped, when their set left out the one question the member touched", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const transcript = session(CHANNEL_ID, [
+      questionRow([deploy(null), hold(null)]),
+    ]);
+    mountOnTabHost();
+    await user.type(
+      answerField(cardQuestion(channelCard(), HOLD)),
+      "Hold the migration",
+    );
+    const at = Date.now();
+
+    transcript.write([
+      questionRow([
+        deploy(byPerson(TEAMMATE_USER_ID, "Now", SET_REQUEST, at)),
+        hold(byPerson(TEAMMATE_USER_ID, null, SET_REQUEST, at)),
+      ]),
+    ]);
+
+    const line = screen.getByTestId(
+      "bot-channel-composer-answers-moved",
+    ).textContent;
+    expect(line).toBe(
+      "Tess Teammate answered the card first. Your answer is in the box, not sent.",
+    );
+    expect(line).not.toContain("skipped");
+  });
+
+  it("says the teammate answered first, and moves both, when their set left out one of two questions the member touched and answered the other", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const transcript = session(CHANNEL_ID, [
+      questionRow([deploy(null), hold(null)]),
+    ]);
+    mountOnTabHost();
+    const card = channelCard();
+    await user.click(choice(cardQuestion(card, DEPLOY), "Now"));
+    await user.type(
+      answerField(cardQuestion(card, HOLD)),
+      "Hold the migration",
+    );
+    const at = Date.now();
+
+    transcript.write([
+      questionRow([
+        deploy(byPerson(TEAMMATE_USER_ID, "After the train", SET_REQUEST, at)),
+        hold(byPerson(TEAMMATE_USER_ID, null, SET_REQUEST, at)),
+      ]),
+    ]);
+
+    expect(
+      screen.getByTestId("bot-channel-composer-answers-moved").textContent,
+    ).toBe(
+      "Tess Teammate answered first. Your answers are in the box, not sent.",
+    );
+    expect(textOf(boxInput("Message Release Bot"))).toBe(
+      `${DEPLOY} Now\n${HOLD} Hold the migration`,
+    );
+  });
+
+  it("shows the member's own partial set landing as theirs: the untouched question reads Skipped, the foot says who answered, and nothing moves", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    outcome = holding;
+    const transcript = session(CHANNEL_ID, [
+      questionRow([deploy(null), hold(null)]),
+    ]);
+    mountOnTabHost();
+    const card = channelCard();
+    await user.click(choice(cardQuestion(card, DEPLOY), "Now"));
+    await user.click(submitButton(card));
+    await land();
+    const at = Date.now();
+
+    transcript.write([
+      questionRow([
+        deploy(byPerson(VIEWER_USER_ID, "Now", SET_REQUEST, at)),
+        hold(byPerson(VIEWER_USER_ID, null, SET_REQUEST, at)),
+      ]),
+    ]);
+
+    const settled = channelCard();
+    expect(
+      within(settled)
+        .getAllByTestId("question-card-settlement")
+        .map((line) => line.textContent),
+    ).toEqual(["Now", "Skipped"]);
+    expect(
+      within(settled).getByTestId("question-card-answered-by").textContent,
+    ).toBe(`Answered by Olive Owner · ${formatMessageTime(at, Date.now())}`);
+    expect(textOf(boxInput("Message Release Bot"))).toBe("");
+    expect(
+      screen.queryByTestId("bot-channel-composer-answers-moved"),
+    ).toBeNull();
   });
 });
 
@@ -1511,11 +1949,6 @@ describe("<BotChannelView tiles={null} /> a question a thread's session asks in 
       "question-card",
     );
     await user.click(choice(cardQuestion(card, DEPLOY), "Now"));
-    await user.click(
-      within(cardQuestion(card, HOLD)).getByRole("button", {
-        name: "Skip this question",
-      }),
-    );
     await user.click(submitButton(card));
 
     expect(sent).toEqual([

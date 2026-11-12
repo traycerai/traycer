@@ -201,6 +201,8 @@ function Box(props: {
         seed={props.keepDraft ? kept.seed : null}
         keptDraft={props.keepDraft ? kept.keptDraft : null}
         quote={null}
+        moved={null}
+        notice={null}
         onSent={onSent}
       />
     </RunnerHostContext>

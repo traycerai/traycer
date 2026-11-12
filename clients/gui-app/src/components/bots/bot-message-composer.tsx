@@ -33,8 +33,12 @@ import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
 import type { BotSendFailure } from "@/hooks/bots/use-bot-send-failure";
 import type { BotImageReach } from "@/hooks/bots/use-bot-send-version";
 import { isAttachmentIngestPending } from "@/hooks/composer/use-composer-paste";
-import type { BotUnsentMessage } from "@/stores/bots/bot-drafts-store";
+import type {
+  BotBoxNotice,
+  BotUnsentMessage,
+} from "@/stores/bots/bot-drafts-store";
 import {
+  BotAnswersMovedNotice,
   BotQueuedNotice,
   BotSendFailedNotice,
 } from "@/components/bots/bot-channel-notices";
@@ -58,6 +62,7 @@ import {
   buildQuoteBlockquote,
   type QuoteTextSnapshot,
 } from "@/components/chat/quote/append-quote-to-draft";
+import { appendBelow } from "@/components/chat/quote/append-comment-text-to-draft";
 import {
   botBoxAttachments,
   botBoxText,
@@ -159,8 +164,8 @@ const BOX_ONE_ROW = {
  * Edit on a message the bot failed to answer (`edit`) puts its text in the
  * box; what the person sends then is a new message that replaces the failed
  * one (`supersedes`), which stays where it is. A `seed` puts its text in the
- * box as a draft of a new message, unsent: the answer a member had for a
- * question someone else settled first, taken to its discussion. A box whose
+ * box as a draft of a new message, unsent: the draft kept outside the box,
+ * loaded back into it. A box whose
  * draft is kept outside it (`keptDraft`) reports what it holds, so the draft
  * outlives the box, and so holds nothing once the box sends it. A send that
  * fails after the box is gone keeps it there again; one that fails over a
@@ -174,6 +179,12 @@ const BOX_ONE_ROW = {
  * A quote of a selection in the conversation (`quote`) is added after what
  * the box shows, as markdown quote lines - an edit in progress included,
  * which stays an edit - and the box takes the focus with the caret after it.
+ * A member's answers moved off question cards someone else settled first
+ * (`moved`, T186) are added the same way, below what the box shows with a
+ * blank line between, and leave the focus where it is. What the box says
+ * about card answers (`notice`) shows under it until the box sends or
+ * another notice takes its place; a card answer that did not reach the host
+ * stops saying so once the person types, as a failed send does.
  *
  * `@` completes a member of the team's environment (decision 137), or a bot
  * or a task of the bot's environment (decision 177); the box shows the name
@@ -228,6 +239,10 @@ export function BotMessageComposer(props: {
   readonly keptDraft: BotKeptDraft | null;
   /** A quote to add to what the box shows; `null` for none. */
   readonly quote: BotComposerQuote | null;
+  /** Answers moved off question cards, to add after what the box shows; `null` for none. */
+  readonly moved: BotComposerCarry | null;
+  /** What the box says under it about question cards' answers; `null` for nothing. */
+  readonly notice: BotComposerNotice | null;
   /**
    * The host accepted `text`, what the box sent; not called once the box
    * is gone. Answers whether the owner says the send's delivery itself, where the
@@ -257,6 +272,8 @@ export function BotMessageComposer(props: {
     seed,
     keptDraft,
     quote,
+    moved,
+    notice,
     onSent,
   } = props;
   const client = useTabHostClient();
@@ -275,6 +292,7 @@ export function BotMessageComposer(props: {
       edit,
       seed,
       quote,
+      moved,
       contentOf: mentions.contentOf,
     });
   const text = useMemo(() => botBoxText(content), [content]);
@@ -347,6 +365,7 @@ export function BotMessageComposer(props: {
   const submit = (): void => {
     if (!canSend) return;
     failure.clear();
+    notice?.clear();
     keptDraft?.offer(null);
     const unsent: BotUnsentMessage = {
       text,
@@ -544,6 +563,7 @@ export function BotMessageComposer(props: {
                 if (lastDelivery !== null) setLastDelivery(null);
                 // A failed message offered back stays offered while they type.
                 if (failure.unsent === null) failure.clear();
+                if (notice?.kind === "answer-failed") notice.clear();
               }}
               onSelectionChange={noop}
               onSubmit={submit}
@@ -588,6 +608,7 @@ export function BotMessageComposer(props: {
       <ComposerStatus
         failure={failure}
         keptDraft={keptDraft}
+        notice={notice}
         queued={lastDelivery === "queued"}
         testId={testId}
         onRestore={(unsent) => {
@@ -709,6 +730,7 @@ function useBotBoxDocument(
     readonly edit: BotComposerEdit | null;
     readonly seed: BotComposerSeed | null;
     readonly quote: BotComposerQuote | null;
+    readonly moved: BotComposerCarry | null;
     readonly contentOf: (text: string) => JsonContent;
   },
 ): {
@@ -718,7 +740,7 @@ function useBotBoxDocument(
   readonly onEditorReady: () => void;
   readonly takenQuoteId: number | null;
 } {
-  const { edit, seed, quote, contentOf } = incoming;
+  const { edit, seed, quote, moved, contentOf } = incoming;
   const [content, setContent] = useState(EMPTY_BOT_BOX);
   const [loaded, setLoaded] = useState<JsonContent | null>(null);
   const [editContent, setEditContent] = useState<JsonContent | null>(null);
@@ -730,8 +752,9 @@ function useBotBoxDocument(
     // EMPTY_BOT_BOX after consecutive sends on one mounted composer.
     setLoaded({ ...next });
   };
-  // An edit or seed replaces the box's content once. A quote appends after
-  // whichever document it currently holds, including an edit.
+  // An edit or seed replaces the box's content once. A quote, or answers
+  // moved off a question card, append after whichever document it currently
+  // holds, an edit included, which stays an edit.
   const [loadedEdit, setLoadedEdit] = useState<BotComposerEdit | null>(null);
   if (edit !== loadedEdit) {
     setLoadedEdit(edit);
@@ -781,6 +804,10 @@ function useBotBoxDocument(
     setContent(next);
     setLoaded(next);
   }
+  useMovedAnswers(moved, content, contentOf, (next) => {
+    setContent(next);
+    setLoaded(next);
+  });
   useEffect(() => {
     const editor = editorRef.current;
     if (loaded === null || editor === null) return;
@@ -801,13 +828,40 @@ function useBotBoxDocument(
 }
 
 /**
+ * Answers moved off a question card (T186): appended once below the box's
+ * `content`, as a quote is, and taken from the card's store once the box has
+ * them.
+ */
+function useMovedAnswers(
+  moved: BotComposerCarry | null,
+  content: JsonContent,
+  contentOf: (text: string) => JsonContent,
+  load: (next: JsonContent) => void,
+): void {
+  const [takenCarryId, setTakenCarryId] = useState<number | null>(null);
+  if (moved !== null && moved.id !== takenCarryId) {
+    setTakenCarryId(moved.id);
+    load(
+      moved.blocks.reduce(
+        (doc, block) => appendBelow(doc, contentOf(block).content ?? []),
+        content,
+      ),
+    );
+  }
+  useEffect(() => {
+    if (moved !== null && moved.id === takenCarryId) moved.taken();
+  }, [moved, takenCarryId]);
+}
+
+/**
  * What the box says under it: a failed send offered back (from the draft
  * kept outside the box, else from the failure), a failed send whose text is
- * in the box, or a queued send.
+ * in the box, what it says about question cards' answers, or a queued send.
  */
 function ComposerStatus(props: {
   readonly failure: BotSendFailure;
   readonly keptDraft: BotKeptDraft | null;
+  readonly notice: BotComposerNotice | null;
   readonly queued: boolean;
   readonly testId: string;
   readonly onRestore: (unsent: BotUnsentMessage) => void;
@@ -823,6 +877,22 @@ function ComposerStatus(props: {
             ? null
             : { text: unsent.text, onRestore: () => onRestore(unsent) }
         }
+      />
+    );
+  }
+  if (props.notice?.kind === "answer-failed") {
+    return (
+      <BotSendFailedNotice
+        testId={`${props.testId}-send-failed`}
+        restore={null}
+      />
+    );
+  }
+  if (props.notice?.kind === "moved") {
+    return (
+      <BotAnswersMovedNotice
+        testId={`${props.testId}-answers-moved`}
+        text={props.notice.text}
       />
     );
   }
@@ -860,6 +930,19 @@ export type BotComposerQuote = {
   /** The box added them: the owner stops offering them. */
   readonly taken: () => void;
 };
+
+/** Answers moved off question cards (T186), for the box to add after what it shows. */
+export type BotComposerCarry = {
+  /** Which moves they are: the box adds each id once. */
+  readonly id: number;
+  /** Each move's lines, added in order. */
+  readonly blocks: ReadonlyArray<string>;
+  /** The box added them: the owner stops offering them. */
+  readonly taken: () => void;
+};
+
+/** What the box says under it about question cards' answers, and how it stops. */
+export type BotComposerNotice = BotBoxNotice & { readonly clear: () => void };
 
 /** A failed message loaded into the box to be edited and sent again. */
 export type BotComposerEdit = {

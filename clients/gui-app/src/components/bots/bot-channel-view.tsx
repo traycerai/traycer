@@ -120,7 +120,6 @@ import {
   botMemberName,
   type BotMemberResolver,
 } from "@/lib/bots/bot-member-names";
-import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import { useKeptBoxDraft } from "@/hooks/bots/use-kept-box-draft";
 import {
   useBotOpenThreadStore,
@@ -363,10 +362,12 @@ export function BotChannelView(props: {
   // What the channel's box holds unsent, kept under the bot by the channel's
   // conversation, so it outlives the pane when another channel is shown: the
   // one the box sends to, which a host naming no channel leaves to the list.
-  const { seed: channelSeed, keptDraft: channelKeptDraft } = useKeptBoxDraft(
-    botId,
-    channelId,
-  );
+  const {
+    seed: channelSeed,
+    keptDraft: channelKeptDraft,
+    moved: channelMoved,
+    notice: channelNotice,
+  } = useKeptBoxDraft(botId, channelId);
 
   const {
     supported: threadListSupported,
@@ -424,8 +425,9 @@ export function BotChannelView(props: {
   );
   // A question card's answer or Skip, on a question the bot asked at the
   // channel's top level: the person's message goes to the bot itself and
-  // opens no thread. A send that fails says so where a failed message does,
-  // and the card keeps the person's draft. A host that cannot take the
+  // opens no thread. A send that fails gives the card the person's draft
+  // back, and the channel's box says so under it, unless someone else
+  // settled the question meanwhile (T186). A host that cannot take the
   // answer gets a card without actions; where both hosts take a card's
   // answers together, one Submit sends them as one message.
   const answerReach = useBotAnswerReach({
@@ -437,46 +439,40 @@ export function BotChannelView(props: {
     async (questionMessageId, given) => {
       if (channelId === null) return;
       clearSendFailure();
-      await sendAsync(
-        {
-          botId,
-          conversationId: channelId,
-          text: given.text,
-          threadId: null,
-          announcementId: null,
-          redeliver: null,
-          supersedes: null,
-          answer: {
-            questionMessageId,
-            questionIndex: given.questionIndex,
-            skipped: given.skipped,
-          },
+      await sendAsync({
+        botId,
+        conversationId: channelId,
+        text: given.text,
+        threadId: null,
+        announcementId: null,
+        redeliver: null,
+        supersedes: null,
+        answer: {
+          questionMessageId,
+          questionIndex: given.questionIndex,
+          skipped: given.skipped,
         },
-        { onError: () => failSend(null) },
-      );
+      });
     },
-    [botId, channelId, clearSendFailure, failSend, sendAsync],
+    [botId, channelId, clearSendFailure, sendAsync],
   );
   const answerQuestions = useCallback<QuestionAnswersSend>(
     async (questionMessageId, given) => {
       if (channelId === null) return;
       clearSendFailure();
-      await sendAsync(
-        {
-          botId,
-          conversationId: channelId,
-          text: given.text,
-          threadId: null,
-          announcementId: null,
-          redeliver: null,
-          supersedes: null,
-          answer: null,
-          answers: { questionMessageId, entries: answerEntries(given) },
-        },
-        { onError: () => failSend(null) },
-      );
+      await sendAsync({
+        botId,
+        conversationId: channelId,
+        text: given.text,
+        threadId: null,
+        announcementId: null,
+        redeliver: null,
+        supersedes: null,
+        answer: null,
+        answers: { questionMessageId, entries: answerEntries(given) },
+      });
     },
-    [botId, channelId, clearSendFailure, failSend, sendAsync],
+    [botId, channelId, clearSendFailure, sendAsync],
   );
 
   // A post the bot failed to answer, in a thread or at the top level, is
@@ -519,22 +515,6 @@ export function BotChannelView(props: {
       }),
     [onOpenThread],
   );
-  // A member whose answer someone else's overtook takes it to the question's
-  // thread: the thread opens with their draft in its box, unsent, kept under
-  // the bot until it is sent. A host without the thread list has no thread
-  // to discuss in.
-  const seedThreadBox = useBotDraftsStore((state) => state.seedThreadBox);
-  const discussQuestion = useMemo(
-    () =>
-      threadListSupported
-        ? (questionMessageId: string, draft: string) => {
-            seedThreadBox(botId, questionMessageId, draft);
-            openAnnouncementThread(questionMessageId, null);
-          }
-        : null,
-    [botId, openAnnouncementThread, seedThreadBox, threadListSupported],
-  );
-
   // A post whose answer lands in a thread (reply mode `threaded`) opens that
   // thread as the send is accepted, in place of any thread open now, and the
   // thread's panel says the send's delivery; one the bot answers in the
@@ -632,7 +612,7 @@ export function BotChannelView(props: {
       chooseOption: sending ? null : chooseOption,
       answerQuestion: answerReach === "none" ? null : answerQuestion,
       answerQuestions: answerReach === "together" ? answerQuestions : null,
-      discussQuestion,
+      questionBox: channelId,
       failedRequest,
       openTurn: onOpenTurn,
       sessionChatId: trunkChatId,
@@ -645,9 +625,9 @@ export function BotChannelView(props: {
       answerReach,
       botTitle,
       activity?.threads,
+      channelId,
       chooseOption,
       directive,
-      discussQuestion,
       failedRequest,
       follows,
       isUnread,
@@ -918,6 +898,8 @@ export function BotChannelView(props: {
                 seed={channelSeed}
                 keptDraft={channelKeptDraft}
                 quote={quoteFor(null)}
+                moved={channelMoved}
+                notice={channelNotice}
                 onSent={openPostedThread}
               />
             </section>

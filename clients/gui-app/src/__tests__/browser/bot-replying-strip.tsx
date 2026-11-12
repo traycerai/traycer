@@ -153,6 +153,8 @@ export function Dock(props: {
         seed={null}
         keptDraft={null}
         quote={null}
+        moved={null}
+        notice={null}
         onSent={() => false}
       />
     </div>
