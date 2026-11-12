@@ -5,6 +5,7 @@ import {
   authRetryDelayMs,
 } from "@traycer-clients/shared/auth/auth-validation";
 import type {
+  SignInSaveResult,
   StoredAuthTokens,
   StoredCredentials,
   StoredCredentialsIdentity,
@@ -517,6 +518,7 @@ describe("AuthService", () => {
 
   beforeEach(() => {
     useAuthStore.getState().setSignedOut();
+    useAuthStore.getState().setSignInStorageLow(false);
     // `setSignedOut()` does not touch `cloudVerdictLoss` (E10) - it is a
     // separate latch a real `signed-out` never clears in production either -
     // so a test that latches it (a credential/account rejection) leaks it
@@ -533,6 +535,7 @@ describe("AuthService", () => {
       }
     }
     useAuthStore.getState().setSignedOut();
+    useAuthStore.getState().setSignInStorageLow(false);
     useAuthStore.getState().setCloudVerdictLoss("unreachable");
     vi.useRealTimers();
     restoreFetch();
@@ -560,6 +563,113 @@ describe("AuthService", () => {
     expect(service.getCurrentSessionSnapshot().token).toBe("persisted-token");
     expect(useAuthStore.getState().contextMetadata?.userId).toBe("user-1");
     expect(seenAuthHeaders).toContain("Bearer persisted-token");
+  });
+
+  it("loads the initial sign-in storage flag and does not overwrite a newer event", async () => {
+    const { service, host } = makeService();
+    const initialRead = Promise.withResolvers<boolean>();
+    host.tokenStore.getSignInStorageLow = () => initialRead.promise;
+    const events: { publish: ((low: boolean) => void) | null } = {
+      publish: null,
+    };
+    const subscribe = host.tokenStore.subscribeSignInStorageLow.bind(
+      host.tokenStore,
+    );
+    host.tokenStore.subscribeSignInStorageLow = (listener) => {
+      events.publish = listener;
+      return subscribe(listener);
+    };
+
+    const starting = service.start();
+    expect(events.publish).not.toBeNull();
+    events.publish?.(true);
+    expect(useAuthStore.getState().signInStorageLow).toBe(true);
+    initialRead.resolve(false);
+    await starting;
+
+    expect(useAuthStore.getState().signInStorageLow).toBe(true);
+  });
+
+  it("loads a pre-existing low-storage flag during service startup", async () => {
+    const { service, host } = makeService();
+    host.tokenStore.getSignInStorageLow = () => Promise.resolve(true);
+
+    await service.start();
+
+    expect(useAuthStore.getState().signInStorageLow).toBe(true);
+  });
+
+  it("fans a fake main-process pressure event to independent renderer stores", async () => {
+    const host = new MockRunnerHost({
+      signInUrl:
+        "https://auth.traycer.ai/sign-in?redirect_uri=traycer%3A%2F%2Fauth",
+      authnBaseUrl: "http://localhost:5005",
+      localHost: null,
+      hosts: [],
+      workspaceFolderPickerPaths: undefined,
+      hasLocalHost: undefined,
+      traycerCli: undefined,
+    });
+    const listeners: Array<(low: boolean) => void> = [];
+    host.tokenStore.getSignInStorageLow = () => Promise.resolve(false);
+    host.tokenStore.subscribeSignInStorageLow = (listener) => {
+      listeners.push(listener);
+      return {
+        dispose: () => listeners.splice(listeners.indexOf(listener), 1),
+      };
+    };
+
+    vi.resetModules();
+    const { AuthService: FirstAuthService } =
+      await import("@/lib/auth/auth-service");
+    const { useAuthStore: firstStore } =
+      await import("@/stores/auth/auth-store");
+    const first = new FirstAuthService({ runnerHost: host });
+    await first.start();
+
+    vi.resetModules();
+    const { AuthService: SecondAuthService } =
+      await import("@/lib/auth/auth-service");
+    const { useAuthStore: secondStore } =
+      await import("@/stores/auth/auth-store");
+    const second = new SecondAuthService({ runnerHost: host });
+    await second.start();
+
+    expect(firstStore).not.toBe(secondStore);
+    expect(listeners).toHaveLength(2);
+    for (const listener of listeners) listener(true);
+
+    expect(firstStore.getState().signInStorageLow).toBe(true);
+    expect(secondStore.getState().signInStorageLow).toBe(true);
+    first.dispose();
+    second.dispose();
+  });
+
+  it("applies and clears a reserve-pressure event while keeping the live session", async () => {
+    const { service, host } = makeService();
+    const events: { publish: ((low: boolean) => void) | null } = {
+      publish: null,
+    };
+    const subscribe = host.tokenStore.subscribeSignInStorageLow.bind(
+      host.tokenStore,
+    );
+    host.tokenStore.subscribeSignInStorageLow = (listener) => {
+      events.publish = listener;
+      return subscribe(listener);
+    };
+    await service.start();
+    await deviceSignIn(service, host, "storage-flag-token");
+
+    events.publish?.(true);
+    expect(useAuthStore.getState().signInStorageLow).toBe(true);
+    expect(useAuthStore.getState().status).toBe("signed-in");
+    expect(service.getCurrentSessionSnapshot().token).toBe(
+      "storage-flag-token",
+    );
+
+    events.publish?.(false);
+    expect(useAuthStore.getState().signInStorageLow).toBe(false);
+    expect(useAuthStore.getState().status).toBe("signed-in");
   });
 
   it("refreshes and refetches when a running desktop session predates tracking", async () => {
@@ -2811,9 +2921,9 @@ describe("AuthService", () => {
       host.tokenStore.signIn = async (
         tokens: StoredAuthTokens,
         identity: StoredCredentialsIdentity,
-      ): Promise<void> => {
+      ): Promise<SignInSaveResult> => {
         statusAtWrite.push(useAuthStore.getState().status);
-        await originalSignIn(tokens, identity);
+        return originalSignIn(tokens, identity);
       };
 
       await service.start();
@@ -2971,10 +3081,10 @@ describe("AuthService", () => {
       host.tokenStore.signIn = async (
         tokens: StoredAuthTokens,
         identity: StoredCredentialsIdentity,
-      ): Promise<void> => {
+      ): Promise<SignInSaveResult> => {
         signalSaveStarted();
         await savePending;
-        await originalSignIn(tokens, identity);
+        return originalSignIn(tokens, identity);
       };
 
       host.deviceFlow.emitResult({
@@ -3019,13 +3129,13 @@ describe("AuthService", () => {
       host.tokenStore.signIn = async (
         tokens: StoredAuthTokens,
         identity: StoredCredentialsIdentity,
-      ): Promise<void> => {
+      ): Promise<SignInSaveResult> => {
         if (hangNext) {
           hangNext = false;
           signalSaveStarted();
           await savePending;
         }
-        await originalSignIn(tokens, identity);
+        return originalSignIn(tokens, identity);
       };
 
       await service.signIn();
@@ -3125,7 +3235,7 @@ describe("AuthService", () => {
       await service.start();
 
       const originalSignIn = host.tokenStore.signIn.bind(host.tokenStore);
-      host.tokenStore.signIn = (): Promise<void> =>
+      host.tokenStore.signIn = (): Promise<SignInSaveResult> =>
         Promise.reject(new Error("disk full"));
 
       await service.signIn();
@@ -3239,9 +3349,9 @@ describe("AuthService", () => {
       host.tokenStore.signIn = async (
         tokens: StoredAuthTokens,
         identity: StoredCredentialsIdentity,
-      ): Promise<void> => {
+      ): Promise<SignInSaveResult> => {
         statusAtWrite.push(useAuthStore.getState().status);
-        await originalSignIn(tokens, identity);
+        return originalSignIn(tokens, identity);
       };
 
       await service.signIn();
@@ -3472,20 +3582,38 @@ describe("AuthService", () => {
 
     it("start() keeps the stored session available when rotation reports disk-full", async () => {
       const { service, host } = makeService();
+      const events: { publish: ((low: boolean) => void) | null } = {
+        publish: null,
+      };
+      const subscribe = host.tokenStore.subscribeSignInStorageLow.bind(
+        host.tokenStore,
+      );
+      host.tokenStore.subscribeSignInStorageLow = (listener) => {
+        events.publish = listener;
+        return subscribe(listener);
+      };
       await host.tokenStore.signIn(
         { token: "stale-token", refreshToken: "stale-token-refresh" },
         { id: "user-1", email: "test@example.com", name: "Test User" },
       );
       restoreFetch();
       restoreFetch = installFetch(() => status(401));
-      host.tokenStore.rotate = (): Promise<TokenRotateResult> =>
-        Promise.resolve({ outcome: "disk-full", pair: null, rejection: null });
+      host.tokenStore.rotate = (): Promise<TokenRotateResult> => {
+        events.publish?.(true);
+        return Promise.resolve({
+          outcome: "disk-full",
+          pair: null,
+          rejection: null,
+          diskPressure: null,
+        });
+      };
 
       await expect(service.start()).resolves.toBeUndefined();
 
       expect(useAuthStore.getState().status).toBe("unverified");
       expect(service.getCurrentSessionSnapshot().token).toBe("stale-token");
       expect(service.getLastError()).toBeNull();
+      expect(useAuthStore.getState().signInStorageLow).toBe(true);
       expect(await host.tokenStore.get()).toEqual(
         expectedStored("stale-token", "stale-token-refresh"),
       );
@@ -3518,6 +3646,16 @@ describe("AuthService", () => {
 
     it("reactive disk-full keeps the live session", async () => {
       const { service, host } = makeService();
+      const events: { publish: ((low: boolean) => void) | null } = {
+        publish: null,
+      };
+      const subscribe = host.tokenStore.subscribeSignInStorageLow.bind(
+        host.tokenStore,
+      );
+      host.tokenStore.subscribeSignInStorageLow = (listener) => {
+        events.publish = listener;
+        return subscribe(listener);
+      };
       await service.start();
       await deviceSignIn(service, host, "live-token");
 
@@ -3526,13 +3664,21 @@ describe("AuthService", () => {
         const url = typeof input === "string" ? input : String(input);
         return url === NEGOTIATED_VALIDATION_URL ? status(401) : status(500);
       });
-      host.tokenStore.rotate = (): Promise<TokenRotateResult> =>
-        Promise.resolve({ outcome: "disk-full", pair: null, rejection: null });
+      host.tokenStore.rotate = (): Promise<TokenRotateResult> => {
+        events.publish?.(true);
+        return Promise.resolve({
+          outcome: "disk-full",
+          pair: null,
+          rejection: null,
+          diskPressure: null,
+        });
+      };
 
       const outcome = await service.revalidateCurrentContext();
 
       expect(outcome?.kind).toBe("network-error");
       expect(useAuthStore.getState().status).toBe("signed-in");
+      expect(useAuthStore.getState().signInStorageLow).toBe(true);
       expect(service.getCurrentSessionSnapshot().token).toBe("live-token");
       expect(service.getLastError()).toBeNull();
       expect(await host.tokenStore.get()).toEqual(
@@ -3556,6 +3702,7 @@ describe("AuthService", () => {
       host.tokenStore.rotate = () =>
         Promise.resolve({
           outcome: "commit-failed" as const,
+          diskPressure: null,
           rejection: null,
           pair: {
             token: "foreign-token",

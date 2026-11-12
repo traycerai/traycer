@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type {
   ITokenStore,
+  SignInSaveResult,
   StoredCredentials,
   StoredCredentialsIdentity,
 } from "@traycer-clients/shared/platform/runner-host";
@@ -365,7 +366,7 @@ describe("link-login attempt fence", () => {
       value: async (
         tokens: { readonly token: string; readonly refreshToken: string },
         identity: StoredCredentialsIdentity,
-      ): Promise<void> => {
+      ): Promise<SignInSaveResult> => {
         saveEntered();
         await gate;
         return originalSignIn(tokens, identity);
@@ -580,7 +581,7 @@ describe("link-login attempt fence", () => {
       value: async (
         tokens: { readonly token: string; readonly refreshToken: string },
         identity: StoredCredentialsIdentity,
-      ): Promise<void> => {
+      ): Promise<SignInSaveResult> => {
         const slot = slotFor(tokens.token);
         slot.markEntered();
         await slot.gate;

@@ -188,12 +188,15 @@ export function createFakeRunnerHost(
     },
     fileSave: null,
     tokenStore: {
+      getSignInStorageLow: () => Promise.resolve(false),
+      subscribeSignInStorageLow: () => ({ dispose: () => undefined }),
       get: () => Promise.resolve(null),
-      signIn: () => Promise.resolve(),
+      signIn: () => Promise.resolve("saved" as const),
       rotate: () =>
         Promise.resolve({
           outcome: "deleted" as const,
           pair: null,
+          diskPressure: null,
           rejection: null,
         }),
       delete: () => Promise.resolve(),

@@ -7,6 +7,7 @@ import type {
   StoredCredentialsIdentity,
   TokenRotateResult,
   TokenStoreChange,
+  SignInSaveResult,
 } from "@traycer-clients/shared/platform/runner-host";
 import {
   refreshOnceAbortable,
@@ -17,7 +18,9 @@ import { cliCredentialsPath } from "@traycer/protocol/config/paths";
 import {
   createCredentialsMutationStore,
   type CredentialsMutationStore,
+  type DiskPressure,
 } from "@traycer/protocol/config/credentials-mutation";
+import { isDiskFullSignInError } from "@traycer-clients/shared/auth/sign-in-storage";
 import { runInitGate } from "@traycer/protocol/config/credentials-wal";
 import { runLegacyCredentialsMigration } from "./credentials-migration";
 import { describeLogError, log } from "../app/logger";
@@ -125,6 +128,8 @@ export class FileTokenStore {
   private readonly recoveryGate: Promise<void>;
   // Monotonic emit counter for TokenStoreChange (dedup / WindowsBridge fence).
   private revision = 0;
+  private signInStorageLow = false;
+  private readonly storagePressureListeners = new Set<(low: boolean) => void>();
   private watcher: FSWatcher | null = null;
   private debounceTimer: NodeJS.Timeout | null = null;
   private watcherReinstallTimer: NodeJS.Timeout | null = null;
@@ -151,7 +156,7 @@ export class FileTokenStore {
     const lockPath = `${credentialsPath}.lock`;
     const metaPath = `${credentialsPath}.meta.json`;
     this.store = createCredentialsMutationStore({
-      onDiskPressure: null,
+      onDiskPressure: (pressure) => this.applyDiskPressure(pressure),
       paths: { credentialsPath, metaPath, lockPath },
       refresh: (args) =>
         refreshOnceAbortable({
@@ -421,27 +426,59 @@ export class FileTokenStore {
     return this.recoveryGate.then(() => this.store.read());
   }
 
+  getSignInStorageLow(): boolean {
+    return this.signInStorageLow;
+  }
+
+  subscribeSignInStorageLow(listener: (low: boolean) => void): () => void {
+    this.storagePressureListeners.add(listener);
+    return () => {
+      this.storagePressureListeners.delete(listener);
+    };
+  }
+
+  private applyDiskPressure(pressure: DiskPressure | null): void {
+    if (pressure === null) return;
+    const low = pressure === "low";
+    if (this.signInStorageLow === low) return;
+    this.signInStorageLow = low;
+    for (const listener of this.storagePressureListeners) listener(low);
+  }
+
   /**
    * Interactive create/replace — the device-flow sign-in. The renderer supplies
    * only the freshly-minted pair and the validated identity; this process stamps
-   * `savedAt`. Rejects on a non-`applied` outcome (a persistent local failure)
-   * so the sign-in surfaces as failed rather than a signed-in state the next
-   * launch cannot rehydrate.
+   * `savedAt`. Reports disk-full explicitly across IPC; other persistent local
+   * failures reject so the next launch cannot inherit a sign-in never saved.
    */
   signIn(
     tokens: StoredAuthTokens,
     identity: StoredCredentialsIdentity,
-  ): Promise<void> {
-    return this.enqueue(async () => {
+  ): Promise<SignInSaveResult> {
+    return this.enqueue(async (): Promise<SignInSaveResult> => {
       const credentials: StoredCredentials = {
         token: tokens.token,
         refreshToken: tokens.refreshToken,
         savedAt: new Date().toISOString(),
         user: identity,
       };
-      const result = await this.store.signIn(credentials, false, null);
-      if (result.outcome !== "applied") {
-        throw new Error(`credentials sign-in did not apply: ${result.outcome}`);
+      try {
+        const result = await this.store.signIn(credentials, false, null);
+        this.applyDiskPressure(result.diskPressure);
+        if (result.outcome === "disk-full") {
+          this.applyDiskPressure("low");
+          return "disk-full";
+        }
+        if (result.outcome !== "applied") {
+          throw new Error(
+            `credentials sign-in did not apply: ${result.outcome}`,
+          );
+        }
+        return "saved";
+      } catch (error) {
+        if (!isDiskFullSignInError(error)) throw error;
+        this.applyDiskPressure("low");
+        return "disk-full";
       }
     });
   }
@@ -462,7 +499,11 @@ export class FileTokenStore {
         refreshTokenOverride: null,
         signal: null,
       });
+      this.applyDiskPressure(
+        result.outcome === "disk-full" ? "low" : result.diskPressure,
+      );
       return {
+        diskPressure: result.diskPressure,
         outcome: result.outcome,
         pair: result.credentials,
         rejection: result.rejection,
@@ -479,6 +520,7 @@ export class FileTokenStore {
   delete(): Promise<void> {
     return this.enqueue(async () => {
       const result = await this.store.signOut(null);
+      this.applyDiskPressure(result.diskPressure);
       if (result.outcome !== "deleted") {
         throw new Error(`credentials sign-out did not land: ${result.outcome}`);
       }
@@ -498,6 +540,7 @@ export class FileTokenStore {
   deleteIfToken(expectedToken: string): Promise<"deleted" | "kept"> {
     return this.enqueue(async () => {
       const result = await this.store.signOutIfToken(expectedToken, null);
+      this.applyDiskPressure(result.diskPressure);
       if (result.outcome === "deleted") {
         return "deleted";
       }
@@ -599,5 +642,6 @@ export class FileTokenStore {
     }
     this.store.dispose();
     this.listeners.clear();
+    this.storagePressureListeners.clear();
   }
 }

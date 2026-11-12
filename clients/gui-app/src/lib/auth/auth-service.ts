@@ -1,4 +1,8 @@
 import type { HostOwnershipResult } from "@traycer-clients/shared/host-client/host-ownership";
+import {
+  AUTH_ERROR_DISK_FULL,
+  isDiskFullSignInError,
+} from "@traycer-clients/shared/auth/sign-in-storage";
 import type {
   TeamComputersResult,
   SetEnvironmentBotHostResult,
@@ -420,6 +424,7 @@ export const AUTH_ERROR_DEVICE_EXPIRED = "device-expired";
  * host runtime, and never writes/deletes the file.
  */
 export const AUTH_ERROR_STORE_UNAVAILABLE = "store-unavailable";
+export { AUTH_ERROR_DISK_FULL };
 
 /**
  * Record of the single in-flight sign-in attempt. Device flow is now the only
@@ -688,6 +693,8 @@ export class AuthService {
   private callbackDisposable: Disposable | null = null;
   // Owned-watcher subscription (tokenStore.subscribe); disposed on dispose().
   private tokenStoreChangeDisposable: Disposable | null = null;
+  private signInStorageRevision = 0;
+  private signInStorageChangeDisposable: Disposable | null = null;
   private pendingTimeoutHandle: number | null = null;
   private currentRevalidation: Promise<LiveRevalidationOutcome | null> | null =
     null;
@@ -1086,6 +1093,27 @@ export class AuthService {
     this.applySignedIn(inboundToken, outcome.user, snapshot.profile);
   }
 
+  private async initializeSignInStorageStatus(): Promise<void> {
+    if (this.signInStorageChangeDisposable === null) {
+      this.signInStorageChangeDisposable =
+        this.tokenStore.subscribeSignInStorageLow((low) => {
+          this.signInStorageRevision += 1;
+          useAuthStore.getState().setSignInStorageLow(low);
+        });
+    }
+    const storageRevision = this.signInStorageRevision;
+    try {
+      const low = await this.tokenStore.getSignInStorageLow();
+      if (!this.disposed && storageRevision === this.signInStorageRevision) {
+        useAuthStore.getState().setSignInStorageLow(low);
+      }
+    } catch (error) {
+      appLogger.warn("[auth] sign-in storage status unavailable", {
+        error: describeLogError(error),
+      });
+    }
+  }
+
   async start(): Promise<void> {
     if (this.disposed) {
       return;
@@ -1119,6 +1147,8 @@ export class AuthService {
     }
 
     try {
+      await this.initializeSignInStorageStatus();
+      if (this.shouldStopStartFlow(startGeneration)) return;
       // One-time migration of the legacy per-window localStorage token pair
       // onto the shared file, BEFORE the first file read so the rehydrate below
       // adopts the migrated session. Bounded + single-flighted in main; on any
@@ -4443,7 +4473,11 @@ export class AuthService {
           "[auth] failed to persist accepted sign-in credentials",
           { error: describeLogError(signInError) },
         );
-        this.applyFailure(AUTH_ERROR_SIGN_IN_FAILED);
+        this.applyFailure(
+          isDiskFullSignInError(signInError)
+            ? AUTH_ERROR_DISK_FULL
+            : AUTH_ERROR_SIGN_IN_FAILED,
+        );
         return "failed";
       }
 
@@ -4953,6 +4987,8 @@ export class AuthService {
       this.tokenStoreChangeDisposable.dispose();
       this.tokenStoreChangeDisposable = null;
     }
+    this.signInStorageChangeDisposable?.dispose();
+    this.signInStorageChangeDisposable = null;
     this.reconcileQueued = false;
     this.currentReconcile = null;
     this.authStoreUnsubscribe();

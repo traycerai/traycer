@@ -190,6 +190,7 @@ describe("ComposerMicButton follows Layout ▸ Composer 'Microphone'", () => {
 
 describe("ComposerMicPreparing follows Layout ▸ Composer 'Microphone'", () => {
   const status: DictationPreparingStatus = {
+    errorMessage: null,
     downloadState: "downloading",
     progress: 0.4,
   };

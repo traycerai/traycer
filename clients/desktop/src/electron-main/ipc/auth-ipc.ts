@@ -598,6 +598,13 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
   });
 
   bridge.handleInvoke(
+    RunnerHostInvoke.authTokenStoreGetSignInStorageLow,
+    () => {
+      return bridge.authTokenStore.getSignInStorageLow();
+    },
+  );
+
+  bridge.handleInvoke(
     RunnerHostInvoke.authTokenStoreSignIn,
     (_event, tokens: unknown, identity: unknown) => {
       return bridge.authTokenStore.signIn(
@@ -777,6 +784,11 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
     bridge.fanOut(RunnerHostEvent.authTokenStoreChange, change);
   });
   bridge.disposeFns.push(unsubscribeTokenStore);
+  bridge.disposeFns.push(
+    bridge.authTokenStore.subscribeSignInStorageLow((low) => {
+      bridge.fanOut(RunnerHostEvent.authSignInStorageLowChanged, { low });
+    }),
+  );
   bridge.disposeFns.push(() => bridge.authTokenStore.dispose());
 
   bridge.handleInvoke(

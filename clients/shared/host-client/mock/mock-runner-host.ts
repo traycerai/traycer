@@ -117,6 +117,7 @@ import type {
   StoredCredentialsIdentity,
   TokenRotateResult,
   TokenStoreChange,
+  SignInSaveResult,
   TraycerHostStatusSnapshot,
   TraycerDetectedShell,
   TraycerEnvOverride,
@@ -1165,6 +1166,8 @@ export class MockRunnerHost implements IRunnerHost {
   };
 
   readonly tokenStore: ITokenStore = {
+    getSignInStorageLow: async () => false,
+    subscribeSignInStorageLow: () => ({ dispose: () => undefined }),
     get: async (): Promise<StoredCredentials | null> => {
       const value = this.tokenStoreEntries.get(MOCK_TOKEN_STORE_KEY);
       if (value === undefined) return null;
@@ -1175,7 +1178,7 @@ export class MockRunnerHost implements IRunnerHost {
     signIn: async (
       tokens: StoredAuthTokens,
       identity: StoredCredentialsIdentity,
-    ): Promise<void> => {
+    ): Promise<SignInSaveResult> => {
       this.tokenStoreEntries.set(MOCK_TOKEN_STORE_KEY, {
         token: tokens.token,
         refreshToken: tokens.refreshToken,
@@ -1183,6 +1186,7 @@ export class MockRunnerHost implements IRunnerHost {
         user: identity,
       });
       this.notifyTokenStoreChangedAfterMutation();
+      return "saved";
     },
     rotate: async (expected: {
       readonly userId: string;
@@ -1200,13 +1204,28 @@ export class MockRunnerHost implements IRunnerHost {
           ? null
           : raw;
       if (stored === null) {
-        return { outcome: "deleted", pair: null, rejection: null };
+        return {
+          outcome: "deleted",
+          pair: null,
+          diskPressure: null,
+          rejection: null,
+        };
       }
       if (stored.user.id !== expected.userId) {
-        return { outcome: "user-mismatch", pair: stored, rejection: null };
+        return {
+          outcome: "user-mismatch",
+          pair: stored,
+          diskPressure: null,
+          rejection: null,
+        };
       }
       if (stored.token !== expected.token) {
-        return { outcome: "superseded", pair: stored, rejection: null };
+        return {
+          outcome: "superseded",
+          pair: stored,
+          diskPressure: null,
+          rejection: null,
+        };
       }
       const refreshed = await refreshOnceAbortable({
         authnBaseUrl: this.authnBaseUrl,
@@ -1217,7 +1236,12 @@ export class MockRunnerHost implements IRunnerHost {
         signal: null,
       });
       if (refreshed.kind === "network-error") {
-        return { outcome: "refresh-network", pair: null, rejection: null };
+        return {
+          outcome: "refresh-network",
+          pair: null,
+          diskPressure: null,
+          rejection: null,
+        };
       }
       if (refreshed.kind === "rejected") {
         return {
@@ -1226,6 +1250,7 @@ export class MockRunnerHost implements IRunnerHost {
               ? "refresh-rejected-account"
               : "refresh-rejected-credential",
           pair: null,
+          diskPressure: null,
           rejection: refreshed.rejection,
         };
       }
@@ -1237,7 +1262,12 @@ export class MockRunnerHost implements IRunnerHost {
       };
       this.tokenStoreEntries.set(MOCK_TOKEN_STORE_KEY, next);
       this.notifyTokenStoreChangedAfterMutation();
-      return { outcome: "applied", pair: next, rejection: null };
+      return {
+        outcome: "applied",
+        pair: next,
+        diskPressure: null,
+        rejection: null,
+      };
     },
     delete: async (): Promise<void> => {
       this.tokenStoreEntries.delete(MOCK_TOKEN_STORE_KEY);
