@@ -108,7 +108,10 @@ function sourceFor(
   };
 }
 
-function environment(environmentId: string): EnvironmentDescriptorV11 {
+function environment(
+  environmentId: string,
+  providerHandle: string | null,
+): EnvironmentDescriptorV11 {
   return {
     environmentId,
     ownerKind: "organization",
@@ -118,7 +121,7 @@ function environment(environmentId: string): EnvironmentDescriptorV11 {
     effectiveRole: "editor",
     kind: "team",
     hostCount: 2,
-    providerHandle: `handle-${environmentId}`,
+    providerHandle,
   };
 }
 
@@ -144,12 +147,13 @@ function sectionTree(
 function mountSection(
   environmentId: string,
   effectiveRole: "owner" | "admin" | "editor" | null,
+  providerHandle: string | null,
 ) {
   const harness = mountTeamPage(sourceFor(environmentId, effectiveRole), {
     "environment.list": () => ({
       environments: [
-        environment(ENVIRONMENT_ID),
-        environment(OTHER_ENVIRONMENT_ID),
+        environment(ENVIRONMENT_ID, providerHandle),
+        environment(OTHER_ENVIRONMENT_ID, `handle-${OTHER_ENVIRONMENT_ID}`),
       ],
     }),
   });
@@ -213,12 +217,37 @@ afterEach(() => {
 });
 
 describe("TeamComputersSection", () => {
+  it("prints install and use commands with the team's provider handle", async () => {
+    mountSection(ENVIRONMENT_ID, "owner", `handle-${ENVIRONMENT_ID}`);
+    const user = userEvent.setup();
+
+    await user.click(
+      await screen.findByRole("button", { name: "Add a computer" }),
+    );
+
+    expect(screen.getByTestId("team-computers-add-command").textContent).toBe(
+      "traycer host install --team handle-env-a",
+    );
+    expect(screen.getByText(/Already installed\? Run/).textContent).toContain(
+      "traycer host use handle-env-a",
+    );
+  });
+
+  it("does not offer a command when the team has no provider handle", async () => {
+    mountSection(ENVIRONMENT_ID, "owner", null);
+
+    await waitFor(() =>
+      expect(listTeamComputers).toHaveBeenCalledWith(ENVIRONMENT_ID),
+    );
+    expect(screen.queryByRole("button", { name: "Add a computer" })).toBeNull();
+  });
+
   it("does not choose a bot host when no computer holds the bot slot", async () => {
     listTeamComputers.mockResolvedValue({
       kind: "ok",
       hosts: [computer({ holdsBotSlot: false })],
     });
-    mountSection(ENVIRONMENT_ID, "editor");
+    mountSection(ENVIRONMENT_ID, "editor", `handle-${ENVIRONMENT_ID}`);
 
     expect(await screen.findByText("No bot host chosen")).toBeTruthy();
     expect(listTeamComputers).toHaveBeenCalledWith(ENVIRONMENT_ID);
@@ -241,7 +270,7 @@ describe("TeamComputersSection", () => {
       listTeamComputers.mockResolvedValue({ kind: "ok", hosts: [assigned] });
       return Promise.resolve({ kind: "ok", host: assigned });
     });
-    mountSection(ENVIRONMENT_ID, "editor");
+    mountSection(ENVIRONMENT_ID, "editor", `handle-${ENVIRONMENT_ID}`);
     const user = userEvent.setup();
 
     expect(await screen.findByText("This team has no computers.")).toBeTruthy();
@@ -296,7 +325,7 @@ describe("TeamComputersSection", () => {
     const pick = { kind: "team", environmentId: ENVIRONMENT_ID } as const;
     const viewingHost = { hostId: VIEWER_HOST_ID, name: "Viewing computer" };
     useSettingsHostScopeStore.getState().selectHost(pick, viewingHost);
-    mountSection(ENVIRONMENT_ID, "editor");
+    mountSection(ENVIRONMENT_ID, "editor", `handle-${ENVIRONMENT_ID}`);
     const user = userEvent.setup();
 
     expect(await screen.findByText("Sandbox")).toBeTruthy();
@@ -327,7 +356,11 @@ describe("TeamComputersSection", () => {
     invalidateLocalTeamAdmissionAfterClaim.mockReturnValue(
       admissionInvalidation.promise,
     );
-    const { runnerHost } = mountSection(ENVIRONMENT_ID, "editor");
+    const { runnerHost } = mountSection(
+      ENVIRONMENT_ID,
+      "editor",
+      `handle-${ENVIRONMENT_ID}`,
+    );
     const user = userEvent.setup();
 
     expect(
@@ -380,7 +413,7 @@ describe("TeamComputersSection", () => {
   });
 
   it("keeps claiming available when team configuration editing is not authorized", async () => {
-    mountSection(ENVIRONMENT_ID, null);
+    mountSection(ENVIRONMENT_ID, null, `handle-${ENVIRONMENT_ID}`);
     const user = userEvent.setup();
 
     await screen.findByText("Studio");
@@ -410,7 +443,7 @@ describe("TeamComputersSection", () => {
 
   it("shows a fixed error when claiming a computer fails", async () => {
     releaseTeamComputer.mockResolvedValue({ kind: "network-error" });
-    mountSection(ENVIRONMENT_ID, "editor");
+    mountSection(ENVIRONMENT_ID, "editor", `handle-${ENVIRONMENT_ID}`);
     const user = userEvent.setup();
 
     await screen.findByRole("button", { name: "Claim this computer" });
@@ -431,7 +464,7 @@ describe("TeamComputersSection", () => {
   });
 
   it("clears claim confirmation when the signed-in account changes", async () => {
-    mountSection(ENVIRONMENT_ID, "editor");
+    mountSection(ENVIRONMENT_ID, "editor", `handle-${ENVIRONMENT_ID}`);
     const user = userEvent.setup();
     await screen.findByRole("button", { name: "Claim this computer" });
     await openClaimDialog(user);
@@ -445,6 +478,7 @@ describe("TeamComputersSection", () => {
     const { harness, view, runnerHost } = mountSection(
       ENVIRONMENT_ID,
       "editor",
+      `handle-${ENVIRONMENT_ID}`,
     );
     const user = userEvent.setup();
     await screen.findByRole("button", { name: "Claim this computer" });

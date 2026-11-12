@@ -166,6 +166,14 @@ const teamEnvironment = {
   hostCount: 0,
   providerHandle: "acme",
 } as const;
+const collidingLabelEnvironment = {
+  ...teamEnvironment,
+  environmentId: "environment-label-collision",
+  ownerId: "organization-label-collision",
+  roomId: "room-label-collision",
+  label: "acme",
+  providerHandle: "other-team",
+} as const;
 const personalEnvironment = {
   environmentId: "environment-personal",
   ownerKind: "user",
@@ -384,6 +392,100 @@ describe("install auth helpers", () => {
     expect(legacyHost.requests).toEqual([]);
     expect(mocks.callHostRpcAtResolvedEndpointMock).not.toHaveBeenCalled();
     expect(mocks.readHostOwnershipMock).not.toHaveBeenCalled();
+  });
+
+  it("prefers an exact team slug when another team's display label collides", async () => {
+    const token = "pre-existing-token";
+    await writeStoredCredentials(token);
+    mocks.callHostRpcMock.mockImplementation((method: string) => {
+      if (method === "environment.list") {
+        return Promise.resolve({
+          environments: [teamEnvironment, collidingLabelEnvironment],
+        });
+      }
+      if (method === "environment.host.read")
+        return Promise.resolve(personalBinding);
+      return Promise.resolve(teamBinding);
+    });
+    mocks.readHostOwnershipMock
+      .mockResolvedValueOnce(
+        hostOwnership({ kind: "user", id: "member-1" }, "personal"),
+      )
+      .mockResolvedValueOnce(
+        hostOwnership(
+          { kind: "team", id: "organization-acme", name: "Acme" },
+          "personal",
+        ),
+      );
+
+    await expect(
+      completeTeamInstall("acme", {
+        preflight: { state: "signed-in", reason: null },
+        inlineSignInToken: null,
+      }),
+    ).resolves.toEqual(teamBinding);
+
+    expect(
+      mocks.callHostRpcAtResolvedEndpointMock,
+    ).toHaveBeenCalledExactlyOnceWith(
+      "environment.host.bind",
+      { environmentId: teamEnvironment.environmentId },
+      { hostId: "host-local", websocketUrl: "ws://127.0.0.1:1/rpc" },
+      {
+        token: "stored-bearer",
+        authnBaseUrl: "https://authn.test",
+        userId: "member-1",
+      },
+      expect.objectContaining({
+        requiredHostMethodVersion: {
+          method: "environment.host.bind",
+          version: { major: 1, minor: 1 },
+        },
+      }),
+    );
+    expect((await readCredentialsFile(mocks.credentialsPath))?.token).toBe(
+      token,
+    );
+  });
+
+  it("still accepts a team's canonical environment id as the selector", async () => {
+    await writeStoredCredentials("pre-existing-token");
+    mocks.readHostOwnershipMock
+      .mockResolvedValueOnce(
+        hostOwnership({ kind: "user", id: "member-1" }, "personal"),
+      )
+      .mockResolvedValueOnce(
+        hostOwnership(
+          { kind: "team", id: "organization-acme", name: "Acme" },
+          "personal",
+        ),
+      );
+
+    await expect(
+      completeTeamInstall(teamEnvironment.environmentId, {
+        preflight: { state: "signed-in", reason: null },
+        inlineSignInToken: null,
+      }),
+    ).resolves.toEqual(teamBinding);
+
+    expect(
+      mocks.callHostRpcAtResolvedEndpointMock,
+    ).toHaveBeenCalledExactlyOnceWith(
+      "environment.host.bind",
+      { environmentId: teamEnvironment.environmentId },
+      { hostId: "host-local", websocketUrl: "ws://127.0.0.1:1/rpc" },
+      {
+        token: "stored-bearer",
+        authnBaseUrl: "https://authn.test",
+        userId: "member-1",
+      },
+      expect.objectContaining({
+        requiredHostMethodVersion: {
+          method: "environment.host.bind",
+          version: { major: 1, minor: 1 },
+        },
+      }),
+    );
   });
 
   it("lists the signed-in teams and binds the selected team before clearing an inline-created sign-in", async () => {
