@@ -15,6 +15,7 @@ import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/moc
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
+import type { EnvironmentHostRead } from "@/hooks/bots/use-environment-host-read-query";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { useEnvironmentHostReadQuery } from "@/hooks/bots/use-environment-host-read-query";
@@ -26,6 +27,7 @@ import {
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 import { dashboardRunnerHost } from "@/components/settings/host-scope/__tests__/host-access-test-support";
+import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
 
 const VIEWER = "user-1";
 const TARGET_HOST = "host-9";
@@ -103,6 +105,11 @@ function signInAs(status: "signed-in" | "unverified"): void {
   });
 }
 
+function bindingRead(read: EnvironmentHostRead) {
+  if (read.kind !== "binding") throw new Error("Expected a binding read");
+  return read.query;
+}
+
 function mount(initialBinding: EnvironmentHostBinding) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -130,6 +137,7 @@ function mount(initialBinding: EnvironmentHostBinding) {
           reads.push(params.hostId);
           return poolBinding;
         },
+        "environment.status": () => environmentStatusFixture({}),
       },
     }),
   });
@@ -237,7 +245,7 @@ describe("environment.binding.read in a pool build", () => {
       signInAs("signed-in");
     });
     await waitFor(() => {
-      expect(rendered.result.current.data).toEqual(BINDING);
+      expect(bindingRead(rendered.result.current).data).toEqual(BINDING);
     });
     expect(fixture.reads).toEqual([TARGET_HOST]);
   });
@@ -250,13 +258,15 @@ describe("environment.binding.read in a pool build", () => {
       { wrapper: fixture.wrapper },
     );
     await waitFor(() => {
-      expect(rendered.result.current.data).toEqual(BINDING);
+      expect(bindingRead(rendered.result.current).data).toEqual(BINDING);
     });
 
     act(() => {
       signInAs("unverified");
     });
-    const refetched = await act(() => rendered.result.current.refetch());
+    const refetched = await act(() =>
+      bindingRead(rendered.result.current).refetch(),
+    );
 
     expect(refetched.error?.message).toContain(
       "no longer holds a cloud verdict",
@@ -279,7 +289,7 @@ describe("environment.binding.read in a pool build", () => {
     );
 
     await waitFor(() => {
-      expect(binding.result.current.data).toEqual(TEAM_BINDING);
+      expect(bindingRead(binding.result.current).data).toEqual(TEAM_BINDING);
     });
 
     await act(async () => {
@@ -287,7 +297,7 @@ describe("environment.binding.read in a pool build", () => {
     });
 
     await waitFor(() => {
-      expect(binding.result.current.data).toEqual(BINDING);
+      expect(bindingRead(binding.result.current).data).toEqual(BINDING);
     });
     expect(fixture.releaseTeamComputer).toHaveBeenCalledWith(
       TARGET_HOST,

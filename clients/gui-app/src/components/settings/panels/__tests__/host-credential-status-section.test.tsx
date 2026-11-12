@@ -69,7 +69,10 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostMethodSupport: () => true,
 }));
 vi.mock("@/hooks/bots/use-environment-host-read-query", () => ({
-  useEnvironmentHostReadQuery: () => ({ isError: false, data: undefined }),
+  useEnvironmentHostReadQuery: () => ({
+    kind: "binding",
+    query: { isError: false, data: undefined },
+  }),
 }));
 vi.mock("@/hooks/environment/use-environment-reads", () => ({
   useEnvironmentStatusRead: () => ({ data: null }),

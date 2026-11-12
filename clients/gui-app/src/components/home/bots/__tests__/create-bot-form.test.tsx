@@ -265,6 +265,7 @@ function mountForm(input: Mount): void {
   }
   const environmentBindings: HostEnvironmentBindings = {
     byHostId,
+    ownSettingsHostIds: [],
     failedHostIds: input.failedHostIds,
     retryFailed,
   };

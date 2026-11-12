@@ -1,3 +1,4 @@
+import type { UseQueryResult } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { EnvironmentStatusResponse } from "@traycer/protocol/host/environment-schemas";
 import { configurationRoleOf } from "@/components/settings/environment/configuration-source";
@@ -16,27 +17,28 @@ export function useCanSetRemoteAccess(
   const supported = useHostMethodSupport(hostId, "host.remoteAccess.set");
   const needsTeamRole =
     enabled && supported === true && principal?.kind === "team";
-  const binding = useEnvironmentHostReadQuery(client, hostId, needsTeamRole);
+  const read = useEnvironmentHostReadQuery(client, hostId, needsTeamRole);
   const environments = useEnvironmentListQuery(client, needsTeamRole);
   if (!enabled || supported !== true) return false;
   if (principal?.kind !== "team") return true;
-  if (
-    binding.isPending ||
-    binding.isFetching ||
-    binding.isError ||
-    environments.isPending ||
-    environments.isFetching ||
-    environments.isError
-  )
-    return false;
+  const binding = read.kind === "binding" ? settledData(read.query) : null;
+  const listed = settledData(environments);
+  if (binding === null || listed === null) return false;
   const environmentId =
-    binding.data.environment.ownerKind === "organization"
-      ? binding.data.environment.environmentId
+    binding.environment.ownerKind === "organization"
+      ? binding.environment.environmentId
       : null;
-  const team = environments.data.environments.find(
+  const team = listed.environments.find(
     (environment) =>
       environment.ownerKind === "organization" &&
       environment.environmentId === environmentId,
   );
   return team !== undefined && configurationRoleOf(team) !== null;
+}
+
+/** A read's answer once it has one and is not re-reading, else `null`. */
+function settledData<T>(query: UseQueryResult<T, unknown>): T | null {
+  return query.isPending || query.isFetching || query.isError
+    ? null
+    : query.data;
 }

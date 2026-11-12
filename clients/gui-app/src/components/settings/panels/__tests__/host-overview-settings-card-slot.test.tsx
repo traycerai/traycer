@@ -16,8 +16,11 @@ const reads = vi.hoisted(() => ({
     isError: false,
   },
   binding: {
-    data: null as EnvironmentHostBinding | null,
-    isError: false,
+    kind: "binding" as const,
+    query: {
+      data: null as EnvironmentHostBinding | null,
+      isError: false,
+    },
   },
   bindingSupport: true as boolean | null,
 }));
@@ -69,7 +72,7 @@ function mount(usable: boolean, hostId: string | null): void {
 
 beforeEach(() => {
   reads.status = { data: null, supported: true, isError: false };
-  reads.binding = { data: null, isError: false };
+  reads.binding = { kind: "binding", query: { data: null, isError: false } };
   reads.bindingSupport = true;
 });
 
@@ -98,7 +101,7 @@ describe("<HostOverviewSettingsCardSlot />", () => {
     [
       "a failed binding read",
       () => {
-        reads.binding.isError = true;
+        reads.binding.query.isError = true;
       },
     ],
   ] as const)("hides the row for %s", (_name, configure) => {
@@ -137,7 +140,7 @@ describe("<HostOverviewSettingsCardSlot />", () => {
     mount(true, "host-a");
     expect(screen.getByRole("status", { name: "Reading" })).toBeTruthy();
     cleanup();
-    reads.binding.data = BINDING;
+    reads.binding.query.data = BINDING;
     reads.status.data = null;
     mount(true, "host-a");
     expect(screen.getByRole("status", { name: "Reading" })).toBeTruthy();

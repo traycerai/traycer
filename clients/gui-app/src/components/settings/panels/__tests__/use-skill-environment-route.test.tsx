@@ -49,7 +49,7 @@ vi.mock("@/hooks/bots/use-environment-host-read-query", () => ({
   ) => {
     route.bindingEnabled.push(enabled);
     // A disabled read still answers from a primed cache.
-    return { data: route.binding };
+    return { kind: "binding", query: { data: route.binding } };
   },
 }));
 vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({

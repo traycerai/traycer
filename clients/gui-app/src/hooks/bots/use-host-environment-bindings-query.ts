@@ -9,6 +9,7 @@ import type {
   EnvironmentHostBinding,
   EnvironmentHostReadRequest,
 } from "@traycer/protocol/host/environment/contracts";
+import type { EnvironmentStatusResponseV12 } from "@traycer/protocol/host/environment-schemas";
 import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import { readProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
@@ -19,6 +20,9 @@ import {
 import { hostQueryKeys } from "@/lib/query-keys";
 import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
+import { useConnectableHostIds } from "@/hooks/host/use-connectable-host-ids";
+import { environmentStatusQueryOptions } from "@/hooks/environment/use-registered-host-environment-statuses";
+import { localRowCohort } from "@/components/settings/environment/local-row-cohort";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import {
   authorizesCloudCapability,
@@ -69,6 +73,13 @@ export interface HostEnvironmentBindings {
   /** Each answering host's binding, keyed by the host it was asked of. */
   readonly byHostId: ReadonlyMap<string, EnvironmentHostBinding>;
   /**
+   * Hosts that run their own settings, by their own `environment.status`
+   * (the picker's Local row). They are in no environment, so they are in
+   * neither `byHostId` nor `failedHostIds`: never a binding, never Personal,
+   * and never a failure. Their binding is not read.
+   */
+  readonly ownSettingsHostIds: ReadonlyArray<string>;
+  /**
    * Hosts whose read FAILED (refused, timed out, unreachable mid-read). They
    * are not in `byHostId`, and a surface that lists candidates by binding
    * says so rather than silently leaving them out - a host that could not be
@@ -88,6 +99,16 @@ export interface HostEnvironmentBindings {
  * no connection to the host; without one each host is asked for its own,
  * resolved by name through the binding seam, never by borrowing the
  * subtree's ambient host identity.
+ *
+ * A host's own `environment.status` comes first: one that runs its own
+ * settings is in no environment, which the pool would answer as Personal and
+ * the host itself refuses to answer at all. So its status is read, and its
+ * binding is not used, before either. Without a pool the binding is asked
+ * only once the status has said otherwise, of the same host, so the host is
+ * never asked for a binding it refuses. With a pool the status is read for
+ * the hosts this client can dial, and the pool's answer for one of them
+ * waits for it; a host this client cannot dial, or whose status fails or
+ * predates the method, keeps the binding alone, as before.
  */
 export function useHostEnvironmentBindings(
   hostIds: ReadonlyArray<string>,
@@ -99,16 +120,60 @@ export function useHostEnvironmentBindings(
     authorizesCloudCapability(state.status),
   );
   const fromPool = readsHostBindingsFromPool();
+  const connectable = useConnectableHostIds();
   const idsKey = hostIds.join("\n");
   const hostIdList = useMemo(
     () => idsKey.split("\n").filter((id) => id.length > 0),
     [idsKey],
+  );
+  // Whose status is read: every host without a pool (the binding is asked
+  // of the host anyway), and with one the hosts this client can dial, once
+  // the directory has said which those are.
+  const readsStatus = useCallback(
+    (hostId: string): boolean =>
+      !fromPool ||
+      (connectable.resolved && connectable.hostIds.includes(hostId)),
+    [connectable.hostIds, connectable.resolved, fromPool],
+  );
+  // A host the directory has not placed yet is waited for, not read alone.
+  // With no runtime to ask, nothing is waited for: the binding read reports
+  // that it has no client, as it always did.
+  const awaitsStatus = useCallback(
+    (hostId: string): boolean =>
+      binding !== null && (!connectable.resolved || readsStatus(hostId)),
+    [binding, connectable.resolved, readsStatus],
+  );
+  // Joined into one string so a re-render that changed no answer keeps the
+  // bindings' `combine` below, and what it returns, the same.
+  const combineStatuses = useCallback(
+    (results: Array<UseQueryResult<EnvironmentStatusResponseV12>>): string =>
+      results
+        .map((result, index) =>
+          hostStatusAnswer(result, awaitsStatus(hostIdList[index] ?? "")),
+        )
+        .join("\n"),
+    [awaitsStatus, hostIdList],
+  );
+  const statusKey = useQueries({
+    queries: hostIdList.map((hostId) =>
+      environmentStatusQueryOptions(
+        binding,
+        hostId,
+        enabled && binding !== null && readsStatus(hostId),
+      ),
+    ),
+    combine: combineStatuses,
+  });
+  const statusAnswers = useMemo(
+    () => statusKey.split("\n").map(parseHostStatusAnswer),
+    [statusKey],
   );
   const combine = useCallback(
     (
       results: Array<UseQueryResult<EnvironmentHostBinding>>,
     ): HostEnvironmentBindings => {
       const byHostId = new Map<string, EnvironmentHostBinding>();
+      const ownSettingsHostIds: string[] = [];
       const failedHostIds: string[] = [];
       const failedRefetches: Array<() => Promise<unknown>> = [];
       // Positional, and safe by construction: `useQueries` returns results in
@@ -116,7 +181,12 @@ export function useHostEnvironmentBindings(
       results.forEach((result, index) => {
         if (index >= hostIdList.length) return;
         const hostId = hostIdList[index];
-        if (result.data !== undefined) {
+        const status = statusAnswers[index];
+        if (status === "own_settings") {
+          ownSettingsHostIds.push(hostId);
+        } else if (status === "unsettled") {
+          // Not yet known: neither a binding nor a failure.
+        } else if (result.data !== undefined) {
           byHostId.set(hostId, result.data);
         } else if (result.status === "error") {
           failedHostIds.push(hostId);
@@ -125,16 +195,17 @@ export function useHostEnvironmentBindings(
       });
       return {
         byHostId,
+        ownSettingsHostIds,
         failedHostIds,
         retryFailed: () => {
           for (const refetch of failedRefetches) void refetch();
         },
       };
     },
-    [hostIdList],
+    [hostIdList, statusAnswers],
   );
   return useQueries({
-    queries: hostIdList.map((hostId) =>
+    queries: hostIdList.map((hostId, index) =>
       // `binding` only resolves the client, whose answer the key already
       // names (the pool's for this viewer, or `hostId`'s own); adding it
       // would refetch on binding identity drift alone. `fromPool` is fixed
@@ -170,14 +241,43 @@ export function useHostEnvironmentBindings(
           });
         },
         // The pool's answer is the account's: wait for the viewer it is
-        // filed under, and for a session the cloud has verified.
+        // filed under, and for a session the cloud has verified. The host's
+        // own is asked only once its status has said it is in an
+        // environment.
         enabled:
           enabled &&
-          (!fromPool || (cloudAuthorized && viewerUserId.length > 0)),
+          (fromPool
+            ? cloudAuthorized && viewerUserId.length > 0
+            : statusAnswers[index] === "other"),
         staleTime: BINDING_STALE_MS,
         refetchOnWindowFocus: false,
       }),
     ),
     combine,
   });
+}
+
+/**
+ * What a host's own `environment.status` says for its binding: it runs its
+ * own settings, it is somewhere else (`other`, which includes a status that
+ * failed or predates the method: the binding alone answers then), or it has
+ * not said yet. A host that is not waited for (`awaited` false) is `other`
+ * at once.
+ */
+export type HostStatusAnswer = "own_settings" | "other" | "unsettled";
+
+export function hostStatusAnswer(
+  result: UseQueryResult<EnvironmentStatusResponseV12>,
+  awaited: boolean,
+): HostStatusAnswer {
+  if (!awaited || result.status === "error") return "other";
+  if (result.data === undefined) return "unsettled";
+  return localRowCohort(result.data).kind === "local"
+    ? "own_settings"
+    : "other";
+}
+
+function parseHostStatusAnswer(value: string): HostStatusAnswer {
+  if (value === "own_settings" || value === "unsettled") return value;
+  return "other";
 }
