@@ -652,9 +652,11 @@ function mountChannel(openThread: BotOpenThread | null): {
     return (
       <StrictMode>
         {identityBridge ? (
-          <BotDraftsPersistLifecycleBridge>
-            {view}
-          </BotDraftsPersistLifecycleBridge>
+          <QueryClientProvider client={queryClient}>
+            <BotDraftsPersistLifecycleBridge>
+              {view}
+            </BotDraftsPersistLifecycleBridge>
+          </QueryClientProvider>
         ) : (
           view
         )}
@@ -1751,9 +1753,11 @@ describe("<BotChannelView tiles={null} /> a moved answer and the signed-in accou
   it("keeps an answer that moved while the box was not mounted, and was still not mounted at the switch, for A alone, folded into A's kept draft", async () => {
     identityBridge = false;
     render(
-      <BotDraftsPersistLifecycleBridge>
-        <div />
-      </BotDraftsPersistLifecycleBridge>,
+      <QueryClientProvider client={new QueryClient()}>
+        <BotDraftsPersistLifecycleBridge>
+          <div />
+        </BotDraftsPersistLifecycleBridge>
+      </QueryClientProvider>,
     );
     session(CHANNEL_ID, [questionRow([hold(null)])]);
     const key = answerDraftKey(QUESTION_ID, 0);
@@ -1791,9 +1795,11 @@ describe("<BotChannelView tiles={null} /> a moved answer and the signed-in accou
   it("writes an answer that moved while the box was not mounted into A's own key at the switch, after A's read finished, and gives it back to A", async () => {
     identityBridge = false;
     render(
-      <BotDraftsPersistLifecycleBridge>
-        <div />
-      </BotDraftsPersistLifecycleBridge>,
+      <QueryClientProvider client={new QueryClient()}>
+        <BotDraftsPersistLifecycleBridge>
+          <div />
+        </BotDraftsPersistLifecycleBridge>
+      </QueryClientProvider>,
     );
     await vi.waitFor(() =>
       expect(useBotDraftsStore.persist.hasHydrated()).toBe(true),

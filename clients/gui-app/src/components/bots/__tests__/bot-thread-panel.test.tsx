@@ -1967,6 +1967,7 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
       requestId: POST_REQUEST,
       text: "Ship the release today?",
       content: null,
+      held: [],
     });
     expect(screen.queryByTestId("bot-thread-composer-editing")).toBeNull();
 
@@ -2115,6 +2116,7 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
       requestId: POST_REQUEST,
       text: "Ship it?",
       content: null,
+      held: [],
     });
   });
 

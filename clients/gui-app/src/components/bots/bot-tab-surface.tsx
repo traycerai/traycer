@@ -175,6 +175,8 @@ export function BotTabSurface(props: {
 }): ReactNode {
   const { botId, hostId } = props;
   useClaimBotSurfaceFocus();
+  // Bumped at every change of account (`BotDraftsPersistLifecycleBridge`).
+  const account = useBotDraftsStore((state) => state.generation);
   // A RESTORED surface (the store persists) meets whatever its host
   // advertises now. `bot.open` is the newest method of the `bot.*` block, so
   // its presence stands for every write the surface offers; without it the
@@ -194,7 +196,11 @@ export function BotTabSurface(props: {
   }
   return (
     <TabHostProvider key={hostId} hostId={hostId}>
-      <TracySurfaceShell botId={botId} hostId={hostId} />
+      {/* What the person has not sent, wherever this tree holds it - a box's
+          edit, a send that failed, quotes waiting for their box, a card's
+          answer - is the signed-in account's: the next account gets a new
+          tree (T186). */}
+      <TracySurfaceShell key={account} botId={botId} hostId={hostId} />
     </TabHostProvider>
   );
 }

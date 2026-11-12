@@ -776,6 +776,7 @@ describe("<BotMessageComposer /> a send that fails", () => {
         requestId: "request-failed",
         text: editText,
         content: botBoxContentOf(editText, () => "Ann"),
+        held: [],
       },
     });
     pasteFiles(imageFile("shot.png", "image/png"));

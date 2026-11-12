@@ -738,7 +738,7 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
   // Stable across what the box does to this component's own state, so typing
   // does not hand the replies' list a new header on every key.
   const origin = useMemo(() => <ThreadOrigin {...props} />, [props]);
-  const { seed, keptDraft, moved, notice, account } = useKeptBoxDraft(
+  const { seed, keptDraft, moved, notice } = useKeptBoxDraft(
     botId,
     originMessageId,
   );
@@ -780,8 +780,6 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
         }
       />
       <BotMessageComposer
-        // What it holds is the account's: the next account's box starts again.
-        key={account}
         botId={props.botId}
         botTitle={props.botTitle}
         conversationId={box.conversationId}

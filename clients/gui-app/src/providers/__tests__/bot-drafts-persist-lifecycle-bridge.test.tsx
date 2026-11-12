@@ -39,6 +39,7 @@ interface Run {
   readonly bridge: typeof import("@/providers/bot-drafts-persist-lifecycle-bridge");
   readonly auth: typeof import("@/stores/auth/auth-store");
   readonly keys: typeof import("@/lib/persist/keys");
+  readonly query: typeof import("@tanstack/react-query");
 }
 
 let running: Run | null = null;
@@ -52,6 +53,7 @@ async function startOver(): Promise<Run> {
     bridge: await import("@/providers/bot-drafts-persist-lifecycle-bridge"),
     auth: await import("@/stores/auth/auth-store"),
     keys: await import("@/lib/persist/keys"),
+    query: await import("@tanstack/react-query"),
   };
   running = run;
   return run;
@@ -59,9 +61,11 @@ async function startOver(): Promise<Run> {
 
 function mountBridge(run: Run): void {
   run.rtl.render(
-    <run.bridge.BotDraftsPersistLifecycleBridge>
-      <div />
-    </run.bridge.BotDraftsPersistLifecycleBridge>,
+    <run.query.QueryClientProvider client={new run.query.QueryClient()}>
+      <run.bridge.BotDraftsPersistLifecycleBridge>
+        <div />
+      </run.bridge.BotDraftsPersistLifecycleBridge>
+    </run.query.QueryClientProvider>,
   );
 }
 

@@ -380,6 +380,7 @@ describe("<BotMessageComposer /> reporting a send", () => {
           requestId: "request-failed",
           text: "Is CI green?",
           content: null,
+          held: [],
         },
         null,
       ),
@@ -402,6 +403,7 @@ describe("<BotMessageComposer /> reporting a send", () => {
           requestId: "request-first",
           text: "Is CI green?",
           content: null,
+          held: [],
         },
         null,
       ),
@@ -414,6 +416,7 @@ describe("<BotMessageComposer /> reporting a send", () => {
           requestId: "request-second",
           text: "Is the nightly green?",
           content: null,
+          held: [],
         },
         null,
       ),
@@ -497,6 +500,7 @@ describe("<BotMessageComposer /> clearing at the send", () => {
           requestId: "request-failed",
           text: "Is CI green?",
           content: null,
+          held: [],
         }}
         keepDraft={false}
       />,
@@ -553,6 +557,7 @@ describe("<BotMessageComposer /> clearing at the send", () => {
           requestId: "request-failed",
           text: "Is CI green?",
           content: null,
+          held: [],
         }}
         keepDraft={false}
       />,
@@ -828,6 +833,7 @@ describe("<BotMessageComposer /> @ mentions", () => {
               requestId: "request-failed",
               text: "hi <@u-ann-2>",
               content: null,
+              held: [],
             },
             null,
           )}
@@ -1309,6 +1315,7 @@ describe("<BotMessageComposer /> @ mentions of bots and tasks", () => {
       requestId: "request-failed",
       text: wire,
       content: null,
+      held: [],
     });
 
     expect(boxText(LABEL)).toBe("@Ann Lee asked @Triage about @Release notes");
@@ -1321,7 +1328,7 @@ describe("<BotMessageComposer /> @ mentions of bots and tasks", () => {
     mountWith(
       PERSON,
       { person: () => null, bots: [], tasks: [], tasksAnswered: true },
-      { requestId: "request-failed", text: gone, content: null },
+      { requestId: "request-failed", text: gone, content: null, held: [] },
     );
 
     expect(boxText(LABEL)).toBe(gone);

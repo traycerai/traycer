@@ -37,7 +37,7 @@ function Box(props: {
   return (
     <BotTestRunnerHost>
       <BotMessageComposer
-        key={`${props.conversation}:${String(kept.account)}`}
+        key={props.conversation}
         botId={BOT_ID}
         botTitle="Tracy"
         conversationId={CHANNEL}

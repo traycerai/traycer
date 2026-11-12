@@ -77,14 +77,35 @@ export interface BotThreadBoxDraft {
 /**
  * One move of a member's answers that someone else's settlement overtook
  * (T186), taken off their question cards: its block of lines, waiting for the
- * box. The store keeps it until a box holds it - kept in the box's draft, or
- * carried by its send - so it is never in neither.
+ * box. The store keeps it until a send that carried it went, so it is never
+ * in neither: waiting for a box, then beside the kept draft that holds it
+ * (`draftMoves`), which a send of that draft carries again. A box cleared by
+ * the person drops it.
  */
 export interface BotCarriedBlock {
   /** Which move it is: the box adds each id once, and says by it what it holds. */
   readonly id: number;
   readonly block: string;
+  /** Carried by a send still out: no box adds it until that send failed. */
+  readonly sending: boolean;
 }
+
+/**
+ * Where a send that carries moves is: `out` until the host answers, then
+ * `went`, which lets them go, or `failed`, which gives them back.
+ */
+export type BotCarrySend = "out" | "went" | "failed";
+
+/** What an account's retirement adds below a box's kept draft. */
+export type BotRetiredPart =
+  | { readonly kind: "move"; readonly block: string }
+  | { readonly kind: "unsent"; readonly content: JsonContent };
+
+/** A box's kept draft, `null` for none, with `parts` added below it. */
+export type BotRetireFold = (
+  kept: BotThreadBoxDraft | null,
+  parts: ReadonlyArray<BotRetiredPart>,
+) => BotThreadBoxDraft;
 
 /** What a box holds as the person types, and the moves whose lines it holds (`held`). */
 export interface BotBoxTyped {
@@ -121,6 +142,8 @@ export interface BotUnsentMessage {
   readonly supersedes: string | null;
   /** The box's document as it was sent: its chips, and its images' bytes. */
   readonly content: JsonContent;
+  /** The moves whose lines `content` holds: whatever holds the message holds them. */
+  readonly held: ReadonlyArray<number>;
 }
 
 /** A lookup misses for a bot or key with nothing kept. */
@@ -143,6 +166,12 @@ interface BotDraftsState {
   readonly unsentBoxes: ByBot<BotUnsentMessage>;
   /** Answers moved off question cards, in order, until a box holds them; keyed as `threadBoxes`. */
   readonly boxCarries: ByBot<ReadonlyArray<BotCarriedBlock>>;
+  /**
+   * The moves each box's kept draft holds, let go when the draft took them:
+   * a send of that draft carries them back into `boxCarries` (`sendCarry`),
+   * since the box empties as it sends. Keyed as `threadBoxes`.
+   */
+  readonly draftMoves: ByBot<ReadonlyArray<BotCarriedBlock>>;
   /** What each box says under it about question cards' answers; keyed as `threadBoxes`. */
   readonly boxNotices: ByBot<BotBoxNotice>;
   /**
@@ -171,11 +200,12 @@ interface BotDraftsState {
       drafts: ReadonlyArray<readonly [string, BotAnswerDraft]>,
     ) => BotAnswersMove | null,
   ) => void;
-  /** The box's send carries the moves `held`: the store lets them go. */
-  readonly takeCarry: (
+  /** The box's send carries the moves `held`; `stage` says where it is. */
+  readonly sendCarry: (
     botId: string,
     boxKey: string,
     held: ReadonlyArray<number>,
+    stage: BotCarrySend,
   ) => void;
   /** Says `notice` under the box; `null` says nothing. */
   readonly noticeBox: (
@@ -184,9 +214,10 @@ interface BotDraftsState {
     notice: BotBoxNotice | null,
   ) => void;
   /**
-   * Keeps what the person put in that box, an empty box nothing, and lets go
-   * of the moves `box.held` it now holds, in the one change: from then on the
-   * kept draft is their copy.
+   * Keeps what the person put in that box, an empty box nothing, and the
+   * moves `box.held` it now holds stop waiting, in the one change: from then
+   * on the kept draft is their copy, until a send of it carries them again
+   * (`draftMoves`). An empty box drops them.
    */
   readonly typeThreadBox: (
     botId: string,
@@ -205,17 +236,14 @@ interface BotDraftsState {
   readonly closeBot: (botId: string) => void;
   /**
    * The account signed in is retiring - it signed out, or another signed in
-   * (`BotDraftsPersistLifecycleBridge`). Moves still waiting for a box go
-   * into that box's kept draft (`fold` makes it), what it keeps is written
-   * under the account's own key at once, and then the store holds nothing:
-   * no card answer, draft, move or line of that account's reaches the next.
+   * (`BotDraftsPersistLifecycleBridge`). Each box's failed send offered back,
+   * then the moves still in the store that it does not hold, a send's still
+   * out included, go below that box's kept draft (`fold` makes it); what it
+   * keeps is written under the account's own key at once, and then the store
+   * holds nothing: no card answer, draft, move or line of that account's
+   * reaches the next.
    */
-  readonly retire: (
-    fold: (
-      kept: BotThreadBoxDraft | null,
-      blocks: ReadonlyArray<string>,
-    ) => BotThreadBoxDraft,
-  ) => void;
+  readonly retire: (fold: BotRetireFold) => void;
 }
 
 /** The store's changes a component makes, for {@link useBotDraftActions}. */
@@ -223,7 +251,7 @@ export type BotDraftActions = Pick<
   BotDraftsState,
   | "setAnswer"
   | "moveAnswers"
-  | "takeCarry"
+  | "sendCarry"
   | "noticeBox"
   | "typeThreadBox"
   | "offerUnsent"
@@ -306,15 +334,172 @@ function withoutHeld(
   return left.length === 0 ? null : left;
 }
 
+/** A box, by its bot and its key. */
+interface BoxAt {
+  readonly botId: string;
+  readonly key: string;
+}
+
+/**
+ * What a box's keep changes of the moves: those `held` leave the carries
+ * for its draft's moves, which a cleared draft drops. Empty where neither
+ * changes.
+ */
+function keptMoves(
+  state: BotDraftsState,
+  at: BoxAt,
+  held: ReadonlyArray<number>,
+  cleared: boolean,
+): Partial<Pick<BotDraftsState, "boxCarries" | "draftMoves">> {
+  const blocks = state.boxCarries[at.botId]?.[at.key] ?? [];
+  const taken = blocks.filter((item) => held.includes(item.id));
+  const kept = state.draftMoves[at.botId]?.[at.key];
+  const carried: Partial<Pick<BotDraftsState, "boxCarries">> =
+    taken.length === 0
+      ? {}
+      : {
+          boxCarries: withEntry(
+            state.boxCarries,
+            at.botId,
+            at.key,
+            withoutHeld(blocks, held),
+          ),
+        };
+  if (cleared) {
+    return kept === undefined
+      ? carried
+      : {
+          ...carried,
+          draftMoves: withEntry(state.draftMoves, at.botId, at.key, null),
+        };
+  }
+  if (taken.length === 0) return carried;
+  return {
+    ...carried,
+    draftMoves: withEntry(state.draftMoves, at.botId, at.key, [
+      ...(kept ?? []),
+      ...taken.map((item) => ({ ...item, sending: false })),
+    ]),
+  };
+}
+
+/**
+ * The moves `held` for that box carried by a send now out: back from its
+ * draft's moves where the draft took them, and marked `sending`. `null`
+ * where none changes.
+ */
+function sentMoves(
+  state: BotDraftsState,
+  at: BoxAt,
+  held: ReadonlyArray<number>,
+): Partial<Pick<BotDraftsState, "boxCarries" | "draftMoves">> | null {
+  const fromDraft =
+    state.draftMoves[at.botId]?.[at.key]?.filter((item) =>
+      held.includes(item.id),
+    ) ?? [];
+  const carries =
+    fromDraft.length === 0
+      ? state.boxCarries
+      : withEntry(state.boxCarries, at.botId, at.key, [
+          ...(state.boxCarries[at.botId]?.[at.key] ?? []),
+          ...fromDraft,
+        ]);
+  const boxCarries = carriesMarked(carries, at, held, true) ?? carries;
+  if (fromDraft.length === 0) {
+    return boxCarries === state.boxCarries ? null : { boxCarries };
+  }
+  return {
+    boxCarries,
+    draftMoves: withEntry(
+      state.draftMoves,
+      at.botId,
+      at.key,
+      withoutHeld(state.draftMoves[at.botId]?.[at.key], held),
+    ),
+  };
+}
+
+/** The carries with the moves `held` for that box marked `sending`; `null` where none changes. */
+function carriesMarked(
+  carries: ByBot<ReadonlyArray<BotCarriedBlock>>,
+  at: BoxAt,
+  held: ReadonlyArray<number>,
+  sending: boolean,
+): ByBot<ReadonlyArray<BotCarriedBlock>> | null {
+  const blocks = carries[at.botId]?.[at.key];
+  if (
+    blocks?.some(
+      (item) => held.includes(item.id) && item.sending !== sending,
+    ) !== true
+  ) {
+    return null;
+  }
+  return withEntry(
+    carries,
+    at.botId,
+    at.key,
+    blocks.map((item) =>
+      held.includes(item.id) ? { ...item, sending } : item,
+    ),
+  );
+}
+
+/** The boxes' drafts with what retirement adds below each (`retiredParts`). */
+function retiredThreadBoxes(
+  state: BotDraftsState,
+  fold: BotRetireFold,
+): ByBot<BotThreadBoxDraft> {
+  let threadBoxes = state.threadBoxes;
+  for (const botId of new Set([
+    ...Object.keys(state.boxCarries),
+    ...Object.keys(state.unsentBoxes),
+  ])) {
+    const carries = state.boxCarries[botId] ?? {};
+    const offers = state.unsentBoxes[botId] ?? {};
+    for (const key of new Set([
+      ...Object.keys(carries),
+      ...Object.keys(offers),
+    ])) {
+      const parts = retiredParts(offers[key], carries[key]);
+      if (parts.length === 0) continue;
+      threadBoxes = withEntry(
+        threadBoxes,
+        botId,
+        key,
+        fold(threadBoxes[botId]?.[key] ?? null, parts),
+      );
+    }
+  }
+  return threadBoxes;
+}
+
+/**
+ * What retirement adds below a box's kept draft: the failed send it offers
+ * back, then the moves still waiting that the send does not hold.
+ */
+function retiredParts(
+  offer: BotUnsentMessage | undefined,
+  blocks: ReadonlyArray<BotCarriedBlock> | undefined,
+): ReadonlyArray<BotRetiredPart> {
+  const parts: Array<BotRetiredPart> =
+    offer === undefined ? [] : [{ kind: "unsent", content: offer.content }];
+  for (const item of blocks ?? []) {
+    if (offer?.held.includes(item.id) !== true) {
+      parts.push({ kind: "move", block: item.block });
+    }
+  }
+  return parts;
+}
+
 /**
  * What a member has not sent yet: a card's answer, and what a thread's box
  * or the channel's holds, typed or moved there off a card someone else
  * settled first. Kept above the channel panes, so switching channels or
  * reopening a thread preserves it; a send consumes what it carried.
  * Forgetting a bot drops its drafts; closing the Tracy surface drops its
- * card answers only. Moves waiting for their box, and what each box says
- * under it, are kept in memory only, until the account retires: its moves go
- * into its boxes' drafts then.
+ * card answers only. Moves waiting for their box, failed sends offered back,
+ * and what each box says under it, are kept in memory only, until the
+ * account retires: its offers and moves go into its boxes' drafts then.
  *
  * The boxes' drafts are kept on this device too (Tracy Bots T158), so a box
  * shows what it held after the app restarts: stored under the signed-in
@@ -330,6 +515,7 @@ export const useBotDraftsStore = create<BotDraftsState>()(
       threadBoxes: {},
       unsentBoxes: {},
       boxCarries: {},
+      draftMoves: {},
       boxNotices: {},
       generation: 0,
       setAnswer: (botId, key, draft) =>
@@ -357,7 +543,7 @@ export const useBotDraftsStore = create<BotDraftsState>()(
             answers,
             boxCarries: withEntry(state.boxCarries, botId, boxKey, [
               ...earlier,
-              { id: carryCount, block: move.block },
+              { id: carryCount, block: move.block, sending: false },
             ]),
             boxNotices: withEntry(state.boxNotices, botId, boxKey, {
               kind: "moved",
@@ -365,14 +551,14 @@ export const useBotDraftsStore = create<BotDraftsState>()(
             }),
           };
         }),
-      takeCarry: (botId, boxKey, held) =>
+      sendCarry: (botId, boxKey, held, stage) =>
         set((state) => {
-          const boxCarries = carriesWithout(
-            state.boxCarries,
-            botId,
-            boxKey,
-            held,
-          );
+          const at = { botId, key: boxKey };
+          if (stage === "out") return sentMoves(state, at, held) ?? state;
+          const boxCarries =
+            stage === "went"
+              ? carriesWithout(state.boxCarries, botId, boxKey, held)
+              : carriesMarked(state.boxCarries, at, held, false);
           return boxCarries === null ? state : { boxCarries };
         }),
       noticeBox: (botId, boxKey, notice) =>
@@ -386,23 +572,22 @@ export const useBotDraftsStore = create<BotDraftsState>()(
       typeThreadBox: (botId, anchorMessageId, box) => {
         const { text, content, held } = box;
         const state = get();
-        const boxCarries = carriesWithout(
-          state.boxCarries,
-          botId,
-          anchorMessageId,
+        const cleared = text.length === 0 && content === null;
+        const carried = keptMoves(
+          state,
+          { botId, key: anchorMessageId },
           held,
+          cleared,
         );
-        const carried = boxCarries === null ? {} : { boxCarries };
         const current = state.threadBoxes[botId]?.[anchorMessageId];
         if (
           (current?.text ?? "") === text &&
           (current?.content ?? null) === content
         ) {
-          if (boxCarries !== null) set(carried);
+          if (Object.keys(carried).length > 0) set(carried);
           return;
         }
         noteBoxChange(botId, anchorMessageId);
-        const cleared = text.length === 0 && content === null;
         // Cleared or sent: what it kept that this window could not show goes too.
         if (cleared) botBoxDraftCleared(botId, anchorMessageId);
         set({
@@ -437,6 +622,7 @@ export const useBotDraftsStore = create<BotDraftsState>()(
           threadBoxes: withoutBot(state.threadBoxes, botId),
           unsentBoxes: withoutBot(state.unsentBoxes, botId),
           boxCarries: withoutBot(state.boxCarries, botId),
+          draftMoves: withoutBot(state.draftMoves, botId),
           boxNotices: withoutBot(state.boxNotices, botId),
         }));
       },
@@ -444,21 +630,7 @@ export const useBotDraftsStore = create<BotDraftsState>()(
         set((state) => ({ answers: withoutBot(state.answers, botId) })),
       retire: (fold) => {
         const state = get();
-        let threadBoxes = state.threadBoxes;
-        for (const [botId, byKey] of Object.entries(state.boxCarries)) {
-          for (const [key, blocks] of Object.entries(byKey ?? {})) {
-            if (blocks === undefined || blocks.length === 0) continue;
-            threadBoxes = withEntry(
-              threadBoxes,
-              botId,
-              key,
-              fold(
-                threadBoxes[botId]?.[key] ?? null,
-                blocks.map((item) => item.block),
-              ),
-            );
-          }
-        }
+        const threadBoxes = retiredThreadBoxes(state, fold);
         // Written under the retiring account's key, then nothing more is.
         if (threadBoxes !== state.threadBoxes) set({ threadBoxes });
         retireBotBoxDraftWrites(
@@ -482,6 +654,7 @@ export const useBotDraftsStore = create<BotDraftsState>()(
           threadBoxes: {},
           unsentBoxes: {},
           boxCarries: {},
+          draftMoves: {},
           boxNotices: {},
           generation: state.generation + 1,
         });
@@ -571,8 +744,8 @@ function draftActionsOf(generation: number): BotDraftActions {
     moveAnswers: (botId, boxKey, keys, compose) => {
       live()?.moveAnswers(botId, boxKey, keys, compose);
     },
-    takeCarry: (botId, boxKey, held) => {
-      live()?.takeCarry(botId, boxKey, held);
+    sendCarry: (botId, boxKey, held, stage) => {
+      live()?.sendCarry(botId, boxKey, held, stage);
     },
     noticeBox: (botId, boxKey, notice) => {
       live()?.noticeBox(botId, boxKey, notice);

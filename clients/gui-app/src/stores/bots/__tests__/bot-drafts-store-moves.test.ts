@@ -65,7 +65,7 @@ describe("the bot drafts store's moves of card answers into a box", () => {
     store.moveAnswers(BOT, BOX, ["k2"], compose);
 
     if (first === undefined) throw new Error("no first move");
-    store.takeCarry(BOT, BOX, [first.id]);
+    store.sendCarry(BOT, BOX, [first.id], "went");
 
     expect(carriedBlocks()).toEqual(["Nothing"]);
   });
