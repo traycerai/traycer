@@ -14,11 +14,11 @@ import {
   type UsageHostFilterOption,
 } from "@/lib/usage-analytics/usage-host-split";
 
-const ALL_HOSTS_LABEL = "All hosts";
+const ALL_HOSTS_LABEL = "All computers";
 
 export interface UsageHostFilterProps {
   readonly options: readonly UsageHostFilterOption[];
-  /** `null` = All hosts. */
+  /** `null` = All computers. */
   readonly hostId: string | null;
   readonly onChange: (hostId: string | null) => void;
   /**
@@ -68,7 +68,7 @@ export function UsageHostFilter(props: UsageHostFilterProps): ReactNode {
       >
         <SelectTrigger
           size="sm"
-          aria-label={selected === null ? "Host" : selected.name}
+          aria-label={selected === null ? ALL_HOSTS_LABEL : selected.name}
           className="max-w-48"
           data-testid="usage-host-filter"
         >
