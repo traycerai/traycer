@@ -269,7 +269,7 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
       state: "host_joining",
       arrival: { kind: "machine" },
     };
-    const JOINING_NOTE = "A machine is joining the team.";
+    const JOINING_NOTE = "A computer is joining the team.";
 
     beforeEach(() => {
       scriptTeamControlPlane();

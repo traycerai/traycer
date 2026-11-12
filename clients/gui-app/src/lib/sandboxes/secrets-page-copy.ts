@@ -159,4 +159,4 @@ export function secretAddedClause(createdAt: number, byYou: boolean): string {
 }
 
 export const SECRET_RECOVERY_FALLBACK =
-  "If Traycer can't be reached, stopping the sandbox ends its sessions.";
+  "If Traycer can't be reached, finish or stop running agent turns and shells before stopping the sandbox to end its sessions.";

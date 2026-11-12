@@ -1,18 +1,23 @@
+import { createDeferred } from "@/components/comments/__tests__/comment-submit-test-support";
 import type { ReactNode } from "react";
 import type { UserSessionListItem } from "@traycer/protocol/auth/devices-sessions";
 import {
   act,
   cleanup,
   fireEvent,
-  render,
+  render as renderUi,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StepUpCredential } from "@/lib/auth/step-up-flow";
 import { StepUpRequiredError } from "@/lib/auth/step-up-flow";
 import type { StepUpPromptRequest } from "@/lib/auth/step-up-prompt";
+import { SignOutConfirmDialog } from "@/components/auth/sign-out-confirm-dialog";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
 
 /**
  * Captures the active step-up prompt so tests can cancel/verify without driving
@@ -21,9 +26,13 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 const dialogState = vi.hoisted<{
   request: StepUpPromptRequest | null;
   onCancel: (() => void) | null;
+  onVerified: ((credential: StepUpCredential) => void) | null;
+  onPrompt: (() => void) | null;
 }>(() => ({
   request: null,
   onCancel: null,
+  onVerified: null,
+  onPrompt: null,
 }));
 
 const revokeMutateAsync = vi.hoisted(() =>
@@ -52,7 +61,9 @@ const sessionsState = vi.hoisted<{
   fetchStatus: "idle",
 }));
 
-const signOutMock = vi.hoisted(() => vi.fn(() => Promise.resolve()));
+const signOutMock = vi.hoisted(() =>
+  vi.fn<() => Promise<boolean>>(() => Promise.resolve(true)),
+);
 
 vi.mock("@/hooks/auth/use-user-sessions-query", () => ({
   useAuthFetchUserSessions: () => ({
@@ -78,6 +89,7 @@ vi.mock("@/hooks/auth/use-revoke-all-sessions-mutation", () => ({
 }));
 
 vi.mock("@/lib/host", () => ({
+  useAuthService: () => ({ signOut: signOutMock }),
   useHostBinding: () => ({
     auth: { signOut: signOutMock },
   }),
@@ -90,7 +102,9 @@ vi.mock("@/components/auth/step-up-challenge-dialog", () => ({
     readonly onCancel: () => void;
   }): ReactNode => {
     dialogState.request = props.request;
+    if (props.request !== null) dialogState.onPrompt?.();
     dialogState.onCancel = props.onCancel;
+    dialogState.onVerified = props.onVerified;
     return null;
   },
 }));
@@ -126,6 +140,29 @@ function makeSession(
 /** Per-row sign-out (not "Sign out everywhere"). */
 function sessionSignOutButton(): HTMLElement {
   return screen.getByRole("button", { name: /^Sign out$/ });
+}
+
+function render(children: ReactNode) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  return renderUi(
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
+  );
+}
+
+function renderWithSignOutDialog(): void {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  renderUi(
+    <QueryClientProvider client={queryClient}>
+      <>
+        <DevicesSessionsPanel />
+        <SignOutConfirmDialog />
+      </>
+    </QueryClientProvider>,
+  );
 }
 
 function signIn(): void {
@@ -167,11 +204,15 @@ describe("<DevicesSessionsPanel />", () => {
   beforeEach(() => {
     dialogState.request = null;
     dialogState.onCancel = null;
+    dialogState.onVerified = null;
+    dialogState.onPrompt = null;
     revokeMutateAsync.mockReset();
     revokeMutateAsync.mockRejectedValue(new StepUpRequiredError());
     revokeAllMutateAsync.mockReset();
     revokeAllMutateAsync.mockResolvedValue({ ok: true });
     signOutMock.mockReset();
+    signOutMock.mockResolvedValue(true);
+    useSignOutConfirmStore.getState().setOpen(false);
     sessionsState.sessions = [
       makeSession({ familyId: "family-other", current: false }),
     ];
@@ -184,6 +225,7 @@ describe("<DevicesSessionsPanel />", () => {
   afterEach(() => {
     cleanup();
     vi.useRealTimers();
+    useSignOutConfirmStore.getState().setOpen(false);
     signOut();
   });
 
@@ -469,4 +511,77 @@ describe("<DevicesSessionsPanel />", () => {
       screen.getByText("Couldn't reach Traycer to sign out this session."),
     ).toBeDefined();
   });
+
+  it.each(["current session", "all sessions"] as const)(
+    "keeps a local sign-out retry after a successful %s revoke",
+    async (scope) => {
+      if (scope === "current session") {
+        sessionsState.sessions = [
+          makeSession({ familyId: "local-session", current: true }),
+        ];
+        revokeMutateAsync.mockImplementation(({ familyId }) =>
+          Promise.resolve({
+            familyId,
+            revoked: true,
+          }),
+        );
+      }
+      const firstAttempt = createDeferred<void>();
+      const secondAttempt = createDeferred<void>();
+      const promptReady = createDeferred<void>();
+      dialogState.onPrompt = () => promptReady.resolve();
+      signOutMock
+        .mockImplementationOnce(() => {
+          firstAttempt.resolve();
+          return Promise.resolve(false);
+        })
+        .mockImplementationOnce(() => {
+          secondAttempt.resolve();
+          return Promise.resolve(true);
+        });
+      renderWithSignOutDialog();
+
+      fireEvent.click(
+        scope === "current session"
+          ? sessionSignOutButton()
+          : screen.getByRole("button", { name: "Sign out everywhere" }),
+      );
+      if (scope === "all sessions") {
+        await act(async () => {
+          await promptReady.promise;
+        });
+        act(() => {
+          dialogState.onVerified?.({ expiresAtMs: Date.now() + 10_000 });
+        });
+      }
+
+      await act(async () => {
+        await firstAttempt.promise;
+      });
+      expect(signOutMock).toHaveBeenCalledTimes(1);
+      expect(await screen.findByRole("alert")).toBeDefined();
+      expect(screen.getByRole("alert").textContent).toBe(
+        "Couldn't sign out. Please try again.",
+      );
+
+      const sharedDialog = screen.getByTestId("confirm-destructive-dialog");
+      fireEvent.click(
+        within(sharedDialog).getByRole("button", { name: "Sign out" }),
+      );
+      await act(async () => {
+        await secondAttempt.promise;
+      });
+      expect(signOutMock).toHaveBeenCalledTimes(2);
+      await waitFor(() => {
+        expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+      });
+
+      expect(revokeMutateAsync).toHaveBeenCalledTimes(
+        scope === "current session" ? 1 : 0,
+      );
+      expect(revokeAllMutateAsync).toHaveBeenCalledTimes(
+        scope === "all sessions" ? 1 : 0,
+      );
+    },
+  );
 });
