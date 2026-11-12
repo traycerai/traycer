@@ -31,6 +31,7 @@ import {
 } from "@traycer-clients/shared/platform/host-service-notices";
 import { MenuCommandListener } from "@/components/layout/bridges/menu-command-listener";
 import { SignOutConfirmDialog } from "@/components/auth/sign-out-confirm-dialog";
+import { AnchoredDraftPopover } from "@/components/comments/anchored-draft-popover";
 import { MigrationBlockingModalHost } from "@/components/layout/dialogs/migration-blocking-modal-host";
 import { ThemeEditorHost } from "@/components/settings/themes/theme-editor-host";
 import { ThemeGallery } from "@/components/settings/themes/theme-gallery";
@@ -66,8 +67,26 @@ import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-h
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
+import {
+  useAnchoredDraftStore,
+  type AnchoredCommentDraft,
+} from "@/stores/comments/anchored-draft-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useThemeLibraryStore } from "@/stores/settings/theme-library-store";
+import {
+  BOARD_PATH,
+  quotedSelection,
+} from "../../canvas-artifact/__tests__/canvas-edit-test-support";
+import {
+  composerEditorAt,
+  typeIntoEditor,
+} from "../../comments/__tests__/comment-submit-test-support";
+
+vi.mock("@/components/canvas-artifact/use-artboard-edit", async () =>
+  (
+    await import("@/components/canvas-artifact/__tests__/canvas-edit-test-support")
+  ).artboardEditModule(),
+);
 
 interface CapturedNavigate {
   readonly to: string;
@@ -271,6 +290,7 @@ function resetStores(): void {
   useFindInPageStore.setState(useFindInPageStore.getInitialState(), true);
   useTileFindStore.getState().resetForTests();
   __getOpenEpicRegistryForTests().disposeAll();
+  useAnchoredDraftStore.setState({ byEpicId: {} });
 }
 
 function buildDirtyHandle(epicId: string): OpenEpicStoreHandle {
@@ -378,6 +398,57 @@ function renderMenuCommandListener(menu: FakeDesktopMenu): void {
     <QueryClientProvider client={makeQueryClient()}>
       <RunnerHostProvider runnerHost={createRunnerHost(menu)}>
         <MenuCommandListener />
+      </RunnerHostProvider>
+    </QueryClientProvider>,
+  );
+}
+
+const COMMENT_EPIC_ID = "comment-epic";
+const COMMENT_ARTIFACT_ID = "comment-canvas";
+const COMMENT_TILE_ID = "comment-tile";
+
+function storeAnchoredDraft(overrides: Partial<AnchoredCommentDraft>): void {
+  useAnchoredDraftStore.getState().setDraft(COMMENT_EPIC_ID, {
+    draftId: "comment-draft",
+    tileId: COMMENT_TILE_ID,
+    artifactId: COMMENT_ARTIFACT_ID,
+    artifactType: "canvas",
+    anchor: {
+      kind: "element",
+      artboard: BOARD_PATH,
+      elementId: "element",
+      label: "Paragraph",
+    },
+    quotedText: "",
+    rect: { x: 10, y: 10, width: 100, height: 20 },
+    selection: quotedSelection("Hello big world", 6, 9, {
+      tid: "element",
+      tagName: "p",
+      marker: 0,
+    }),
+    retargeted: false,
+    ...overrides,
+  });
+}
+
+function renderMenuWithAnchoredDraft(menu: FakeDesktopMenu): void {
+  render(
+    <QueryClientProvider client={makeQueryClient()}>
+      <RunnerHostProvider runnerHost={createRunnerHost(menu)}>
+        <>
+          <MenuCommandListener />
+          <SignOutConfirmDialog />
+          <AnchoredDraftPopover
+            epicId={COMMENT_EPIC_ID}
+            artifactId={COMMENT_ARTIFACT_ID}
+            tileId={COMMENT_TILE_ID}
+            hostClient={null}
+            onCreated={() => undefined}
+            onClosed={() => undefined}
+            sendToChat={null}
+          />
+          <button type="button">Outside comment</button>
+        </>
       </RunnerHostProvider>
     </QueryClientProvider>,
   );
@@ -524,6 +595,45 @@ describe("<MenuCommandListener />", () => {
     expect(screen.queryByTestId("migration-blocking-overlay")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(screen.getByTestId("migration-blocking-modal")).toBeTruthy();
+  });
+
+  it("lets the first Cancel close a failed native sign-out question without discarding an anchored draft", async () => {
+    const user = userEvent.setup();
+    authMock.signOut.mockResolvedValue(false);
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const menu = createMenu();
+    storeAnchoredDraft({});
+    renderMenuWithAnchoredDraft(menu);
+    typeIntoEditor(composerEditorAt(0), "Keep this comment draft");
+
+    act(() => menu.emit("app.signOut"));
+    expect(await screen.findByRole("alert")).toBeDefined();
+    expect(authMock.signOut).toHaveBeenCalledOnce();
+
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect({
+      discardPromptCalls: confirm.mock.calls.length,
+      signOutQuestionOpen:
+        screen.queryByTestId("confirm-destructive-dialog") !== null,
+      draftText: composerEditorAt(0).getText(),
+      draftStored:
+        useAnchoredDraftStore.getState().byEpicId[COMMENT_EPIC_ID] !==
+        undefined,
+    }).toEqual({
+      discardPromptCalls: 0,
+      signOutQuestionOpen: false,
+      draftText: "Keep this comment draft",
+      draftStored: true,
+    });
+
+    await user.click(screen.getByRole("button", { name: "Outside comment" }));
+
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(composerEditorAt(0).getText()).toBe("Keep this comment draft");
+    expect(
+      useAnchoredDraftStore.getState().byEpicId[COMMENT_EPIC_ID],
+    ).toBeDefined();
   });
 
   it("conceals the theme editor for native sign-out and restores its state after cancel", async () => {
