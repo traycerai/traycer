@@ -1035,7 +1035,16 @@ describe("a local profile promoted to an environment alias during reauth", () =>
     );
     const rendered = render(sectionForState(codexState(initialProfile)));
 
-    await screen.findByText("On Studio only.");
+    await waitFor(() => {
+      const providersListQuery = queryClient
+        .getQueryCache()
+        .findAll()
+        .find((query) => query.queryKey.includes("providers.list"));
+      expect(providersListQuery?.state.status).toBe("success");
+      expect(providersListQuery?.state.data).toMatchObject(initialInventory);
+    });
+    expect(screen.queryByText("On Studio only.")).toBeNull();
+    expect(screen.queryByText("Not on your other computers yet.")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
     const initialNameInput = screen.getByLabelText("Profile name");
     if (!(initialNameInput instanceof HTMLInputElement)) {
