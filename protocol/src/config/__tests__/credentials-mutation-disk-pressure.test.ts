@@ -490,13 +490,13 @@ describe("credentials store disk pressure", () => {
     const saving = rotate(savingStore);
     await refreshIsHeld;
     const allocationsBeforeRelease = filesystemMock.reserveAllocationAttempts;
-    releaseStat?.();
+    (releaseStat as (() => void) | null)?.();
     await reserveFillContended;
 
     expect(filesystemMock.reserveAllocationAttempts).toBe(
       allocationsBeforeRelease,
     );
-    finishRefresh?.();
+    (finishRefresh as (() => void) | null)?.();
     const result = await saving;
     savingStore.dispose();
     idleStore.dispose();
@@ -814,7 +814,7 @@ describe("credentials store disk pressure", () => {
     expect(
       options.filter(
         (option) =>
-          option !== undefined &&
+          option != null &&
           typeof option === "object" &&
           "flush" in option &&
           option.flush === true,
