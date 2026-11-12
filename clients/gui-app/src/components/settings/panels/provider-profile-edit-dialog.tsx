@@ -414,6 +414,7 @@ function ProfileEditAccountSection(props: {
   readonly onCancelSwitchingAccount: () => void;
   readonly onCloseAfterSignIn: () => void;
   readonly onFinishSignIn: (profile: ProviderProfile) => void;
+  readonly onProfileSignedIn?: (profile: ProviderProfile) => void;
 }): ReactNode {
   if (props.switchingAccount) {
     return (
@@ -428,14 +429,19 @@ function ProfileEditAccountSection(props: {
         profile={props.profile}
         isLocalHost={props.isLocalHost}
         onSameAccountReconnected={
-          props.reauthenticating ? props.onFinishSignIn : null
+          props.reauthenticating
+            ? (profile) => {
+                props.onProfileSignedIn?.(profile);
+                props.onFinishSignIn(profile);
+              }
+            : null
         }
         onCancel={props.onCancelSwitchingAccount}
-        onDone={
-          props.reauthenticating
-            ? props.onCloseAfterSignIn
-            : props.onCancelSwitchingAccount
-        }
+        onDone={(profile) => {
+          props.onProfileSignedIn?.(profile);
+          if (props.reauthenticating) props.onCloseAfterSignIn();
+          else props.onCancelSwitchingAccount();
+        }}
       />
     );
   }
@@ -561,6 +567,8 @@ export function ProfileEditDialog(props: {
   readonly isLocalHost: boolean;
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
+  readonly onProfileSignedIn?: (profile: ProviderProfile) => void;
+  readonly onStartSignIn?: () => void;
   readonly remainingProfilesAfterRemoval: ReadonlyArray<ProviderProfile>;
   readonly onSelectedProfileIdChange: (profileId: string | null) => void;
   readonly profileEnablementAvailable: boolean;
@@ -665,7 +673,10 @@ export function ProfileEditDialog(props: {
     recolorIfNeeded();
   };
 
-  const closeAfterSignIn = (): void => props.onOpenChange(false);
+  const closeAfterSignIn = (): void => {
+    setSwitchingAccount(false);
+    props.onOpenChange(false);
+  };
   const finishSignIn = (signedIn: ProviderProfile): void => {
     closeAfterSignIn();
     toast.success(signedInMessage(signedIn));
@@ -754,10 +765,14 @@ export function ProfileEditDialog(props: {
         oauthUnavailableHint={props.oauthUnavailableHint}
         savePending={savePending}
         invalid={invalid}
-        onStartSwitchingAccount={() => setSwitchingAccount(true)}
+        onStartSwitchingAccount={() => {
+          props.onStartSignIn?.();
+          setSwitchingAccount(true);
+        }}
         onCancelSwitchingAccount={() => setSwitchingAccount(false)}
         onCloseAfterSignIn={closeAfterSignIn}
         onFinishSignIn={finishSignIn}
+        onProfileSignedIn={props.onProfileSignedIn}
       />
 
       <ProfileEditErrors

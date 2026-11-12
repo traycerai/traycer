@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AMBIENT_PROFILE_ID_SENTINEL } from "@traycer/protocol/host/agent/shared";
 import {
+  HostMethodVersionUnsatisfiedError,
   HostRpcError,
   HostTransportFailureError,
+  markMayHaveReachedHost,
+  transportFailureBeforeSend,
 } from "@traycer/protocol/host-transport/remote/rpc-types";
 import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-native-schemas";
 import {
@@ -25,6 +28,7 @@ import type { SchemaVersion } from "@traycer/protocol/framework/index";
 import type { HostRpcRegistry } from "@traycer/protocol/host/registry";
 import type { ResponseOfMethod } from "../../../../shared/host-transport/host-messenger";
 import {
+  ACCOUNT_UNIDENTIFIED_SIGN_IN_LINE,
   ACCOUNT_MISMATCH_SIGN_IN_LINE,
   REPLACE_PROFILE_ACCOUNT_LINE,
   SIGNED_IN_RECEIVING_LINE,
@@ -41,6 +45,7 @@ import {
   type ProfileLoginIo,
   type ProfileLoginTarget,
 } from "../profile-login";
+import { buildProfileListCommand } from "../profile-list";
 
 const mocks = vi.hoisted(() => ({
   callHostRpcWithDispatch: vi.fn(),
@@ -248,6 +253,7 @@ function awaitAnswer(state: ProviderCliState): ProvidersAwaitLoginResponse {
 interface HarnessOptions {
   readonly providerId: ProviderCliState["providerId"];
   readonly profiles: readonly ProviderProfile[];
+  readonly credentialsManagedInAccount?: boolean;
   readonly laterProfiles?: (
     listCall: number,
   ) => readonly ProviderProfile[] | Promise<readonly ProviderProfile[]>;
@@ -310,6 +316,12 @@ function makeHost(options: HarnessOptions): void {
         return Promise.resolve(profiles).then((resolvedProfiles) => ({
           providers: [providerState(options.providerId, resolvedProfiles)],
           native: null,
+          ...(options.credentialsManagedInAccount === undefined
+            ? {}
+            : {
+                credentialsManagedInAccount:
+                  options.credentialsManagedInAccount,
+              }),
         }));
       }
       case "environment.host.read":
@@ -523,6 +535,71 @@ describe("environment profile sign-in through the CLI", () => {
     expect(callsTo("environment.host.read")).toEqual([]);
   });
 
+  it("keeps profile inventory readable when credentials are managed in the account", async () => {
+    const selected = profile(
+      MANAGED_PROFILE_ID,
+      "managed",
+      "Selected profile",
+      ENVIRONMENT_PROFILE_ID,
+    );
+    makeHost({
+      providerId: "codex",
+      profiles: [selected],
+      credentialsManagedInAccount: true,
+    });
+
+    const result = await buildProfileListCommand({ provider: "codex" })(
+      makeContext(),
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.data).toMatchObject({
+      providers: [
+        {
+          providerId: "codex",
+          profiles: [{ label: "Selected profile" }],
+        },
+      ],
+    });
+    expect(callsTo("providers.list")).toHaveLength(1);
+  });
+
+  it.each([
+    ["environment-backed", "claude", "claude-code"],
+    ["native", "cursor", "cursor"],
+  ] as const)(
+    "refuses %s sign-in when credentials are managed in the account before sign-in side effects",
+    async (_route, provider, providerId) => {
+      makeHost({
+        providerId,
+        profiles: [],
+        credentialsManagedInAccount: true,
+      });
+      let lineReaderStarts = 0;
+      const fake = makeIo({
+        terminal: true,
+        holdEmptyReader: true,
+        onHeldReaderOpen: () => {
+          lineReaderStarts += 1;
+        },
+      });
+
+      await expect(
+        runLogin(provider, { kind: "create", label: "Work profile" }, fake.io),
+      ).rejects.toMatchObject({ code: CLI_ERROR_CODES.FORBIDDEN });
+
+      expect(callsTo("providers.list")).toHaveLength(1);
+      expect(methodVersionMock).not.toHaveBeenCalled();
+      expect(callsTo("environment.status")).toEqual([]);
+      expect(callsTo("environment.host.read")).toEqual([]);
+      expect(callsTo("providers.startLogin")).toEqual([]);
+      expect(callsTo("providers.link")).toEqual([]);
+      expect(fake.openedUrls).toEqual([]);
+      expect(lineReaderStarts).toBe(0);
+      expect(fake.isLineReaderOpen()).toBe(false);
+    },
+  );
+
   it("creates a Claude profile with its label, sharing disabled, and the pasted code", async () => {
     const admitted = profile(
       MANAGED_PROFILE_ID,
@@ -533,6 +610,7 @@ describe("environment profile sign-in through the CLI", () => {
     makeHost({
       providerId: "claude-code",
       profiles: [],
+      credentialsManagedInAccount: false,
       laterProfiles: () => [admitted],
       link: linkAnswer(SIGN_IN_URL_PROMPT),
       complete: () => completeAnswer("linked", null, null),
@@ -1414,6 +1492,224 @@ describe("environment profile sign-in through the CLI", () => {
     },
   );
 
+  it("retries an unidentified start only after explicit account-switch confirmation", async () => {
+    const selected = profile(
+      MANAGED_PROFILE_ID,
+      "managed",
+      "Selected profile",
+      ENVIRONMENT_PROFILE_ID,
+    );
+    let linkRequests = 0;
+    makeHost({
+      providerId: "claude-code",
+      profiles: [selected],
+      onLinkRequest: () => {
+        linkRequests += 1;
+        if (linkRequests === 1)
+          throw new HostRpcError({
+            code: "harness_account_unidentified",
+            message: "The account on this profile could not be confirmed.",
+            requestId: "link-request",
+            method: "providers.link",
+            fatalDetails: null,
+          });
+      },
+      link: linkAnswer({ kind: "local_handoff" }),
+      complete: () => completeAnswer("linked", MANAGED_PROFILE_ID, null),
+    });
+
+    const { context, result } = await runLogin(
+      "claude",
+      { kind: "existing", profile: MANAGED_PROFILE_ID },
+      makeIo({ terminal: true, lines: ["yes"] }).io,
+    );
+
+    expect(callsTo("providers.link")).toHaveLength(2);
+    expect(callsTo("providers.link").map((call) => call[1])).toEqual([
+      expect.objectContaining({ replaceAccount: false }),
+      expect.objectContaining({ replaceAccount: true }),
+    ]);
+    expect(context.output.humanRequired).toHaveBeenCalledWith(
+      ACCOUNT_UNIDENTIFIED_SIGN_IN_LINE,
+    );
+    expect(context.output.humanRequired).toHaveBeenCalledWith(
+      `${REPLACE_PROFILE_ACCOUNT_LINE}\nSwitch account? [y/N]`,
+    );
+    expect(result.data).toMatchObject({ status: "signed-in", created: false });
+    expect(callsTo("providers.linkCancel")).toEqual([]);
+  });
+
+  it("refuses a blank unidentified-start confirmation without a replacement or release", async () => {
+    const selected = profile(
+      MANAGED_PROFILE_ID,
+      "managed",
+      "Selected profile",
+      ENVIRONMENT_PROFILE_ID,
+    );
+    let notifyReaderOpen: () => void = () => {};
+    const readerOpen = new Promise<void>((resolve) => {
+      notifyReaderOpen = resolve;
+    });
+    makeHost({
+      providerId: "claude-code",
+      profiles: [selected],
+      onLinkRequest: () => {
+        throw new HostRpcError({
+          code: "harness_account_unidentified",
+          message: "The account on this profile could not be confirmed.",
+          requestId: "link-request",
+          method: "providers.link",
+          fatalDetails: null,
+        });
+      },
+    });
+    const fake = makeIo({
+      terminal: true,
+      holdEmptyReader: true,
+      onHeldReaderOpen: notifyReaderOpen,
+    });
+    const run = runLogin(
+      "claude",
+      { kind: "existing", profile: MANAGED_PROFILE_ID },
+      fake.io,
+    );
+
+    await Promise.race([
+      readerOpen,
+      run.then(() => {
+        throw new Error("CLI sign-in ended before confirmation input opened.");
+      }),
+    ]);
+    expect(fake.isLineReaderOpen()).toBe(true);
+    fake.sendLine(" \t ");
+    const { context, result } = await run;
+
+    expect(result.data).toMatchObject({
+      status: "not-started",
+      message: ACCOUNT_UNIDENTIFIED_SIGN_IN_LINE,
+    });
+    expect(callsTo("providers.link")).toHaveLength(1);
+    expect(callsTo("providers.linkCancel")).toEqual([]);
+    expect(context.output.humanRequired).toHaveBeenCalledWith(
+      `${REPLACE_PROFILE_ACCOUNT_LINE}\nSwitch account? [y/N]`,
+    );
+  });
+
+  it("refuses an unidentified start without a terminal confirmation reader", async () => {
+    const selected = profile(
+      MANAGED_PROFILE_ID,
+      "managed",
+      "Selected profile",
+      ENVIRONMENT_PROFILE_ID,
+    );
+    makeHost({
+      providerId: "codex",
+      profiles: [selected],
+      onLinkRequest: () => {
+        throw new HostRpcError({
+          code: "harness_account_unidentified",
+          message: "The account on this profile could not be confirmed.",
+          requestId: "link-request",
+          method: "providers.link",
+          fatalDetails: null,
+        });
+      },
+    });
+    const fake = makeIo({ terminal: false });
+
+    const { context, result } = await runLogin(
+      "codex",
+      { kind: "existing", profile: MANAGED_PROFILE_ID },
+      fake.io,
+    );
+
+    expect(result.data).toMatchObject({
+      status: "not-started",
+      message: ACCOUNT_UNIDENTIFIED_SIGN_IN_LINE,
+    });
+    expect(callsTo("providers.link")).toHaveLength(1);
+    expect(callsTo("providers.linkCancel")).toEqual([]);
+    expect(context.output.humanRequired).not.toHaveBeenCalledWith(
+      `${REPLACE_PROFILE_ACCOUNT_LINE}\nSwitch account? [y/N]`,
+    );
+  });
+
+  it("does not re-prompt when a replacement start is also unidentified", async () => {
+    const selected = profile(
+      MANAGED_PROFILE_ID,
+      "managed",
+      "Selected profile",
+      ENVIRONMENT_PROFILE_ID,
+    );
+    makeHost({
+      providerId: "claude-code",
+      profiles: [selected],
+      onLinkRequest: () => {
+        throw new HostRpcError({
+          code: "harness_account_unidentified",
+          message: "The account on this profile could not be confirmed.",
+          requestId: "link-request",
+          method: "providers.link",
+          fatalDetails: null,
+        });
+      },
+    });
+    const context = makeContext();
+    const attempt = buildProfileLoginCommand(
+      {
+        provider: "claude",
+        target: { kind: "existing", profile: MANAGED_PROFILE_ID },
+      },
+      makeIo({ terminal: true, lines: ["yes"] }).io,
+    )(context);
+
+    await expect(attempt).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.UNEXPECTED,
+    });
+    expect(callsTo("providers.link")).toHaveLength(2);
+    expect(callsTo("providers.link").map((call) => call[1])).toEqual([
+      expect.objectContaining({ replaceAccount: false }),
+      expect.objectContaining({ replaceAccount: true }),
+    ]);
+    expect(context.output.humanRequired).toHaveBeenCalledTimes(2);
+    expect(callsTo("providers.linkCancel")).toEqual([]);
+  });
+
+  it("does not prompt or replay an unidentified start marked as possibly sent earlier", async () => {
+    makeHost({
+      providerId: "codex",
+      profiles: [],
+      onLinkRequest: () => {
+        const error = new HostRpcError({
+          code: "harness_account_unidentified",
+          message: "The account on this profile could not be confirmed.",
+          requestId: "link-request",
+          method: "providers.link",
+          fatalDetails: null,
+        });
+        markMayHaveReachedHost(error);
+        throw error;
+      },
+    });
+    const context = makeContext();
+    const attempt = buildProfileLoginCommand(
+      {
+        provider: "codex",
+        target: { kind: "create", label: "Work profile" },
+      },
+      makeIo({ terminal: true }).io,
+    )(context);
+
+    await expect(attempt).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_REQUEST_OUTCOME_UNKNOWN,
+    });
+    expect(callsTo("providers.link")).toHaveLength(1);
+    expect(context.output.humanRequired).not.toHaveBeenCalledWith(
+      ACCOUNT_UNIDENTIFIED_SIGN_IN_LINE,
+    );
+    expect(callsTo("providers.linkCancel")).toEqual([]);
+  });
+
   it("ignores blank code input and accepts the next line on the same open reader", async () => {
     const admitted = profile(
       MANAGED_PROFILE_ID,
@@ -1827,11 +2123,14 @@ describe("environment profile sign-in through the CLI", () => {
       link,
     });
     const fake = makeIo({ terminal: false });
-    const run = runLogin(
-      "codex",
-      { kind: "create", label: "Work profile" },
+    const context = makeContext();
+    const run = buildProfileLoginCommand(
+      {
+        provider: "codex",
+        target: { kind: "create", label: "Work profile" },
+      },
       fake.io,
-    );
+    )(context);
 
     await Promise.race([
       linkStarted,
@@ -1841,21 +2140,24 @@ describe("environment profile sign-in through the CLI", () => {
     ]);
     fake.interrupt();
     rejectLink(
-      new HostTransportFailureError({
-        code: "RPC_ERROR",
-        message: "The link transport failed after send.",
+      new HostRpcError({
+        code: "harness_account_unidentified",
+        message: "The account on this profile could not be confirmed.",
         requestId: "link-request",
         method: "providers.link",
         fatalDetails: null,
       }),
     );
-    const { result } = await run;
+    const result = await run;
 
     expect(result.data).toEqual({ providerId: "codex", status: "cancelled" });
     expect(result.exitCode).toBe(130);
     expect(callsTo("providers.link")).toHaveLength(1);
     expect(callsTo("providers.linkComplete")).toEqual([]);
     expect(callsTo("providers.linkCancel")).toEqual([]);
+    expect(context.output.humanRequired).not.toHaveBeenCalledWith(
+      ACCOUNT_UNIDENTIFIED_SIGN_IN_LINE,
+    );
   });
 
   it("reports an ambiguous post-send create without repeating the link", async () => {
@@ -1898,7 +2200,8 @@ describe("environment profile sign-in through the CLI", () => {
     await expect(attempt).rejects.toBeInstanceOf(CliError);
     await expect(attempt).rejects.toMatchObject({
       code: CLI_ERROR_CODES.HOST_REQUEST_OUTCOME_UNKNOWN,
-      message: expect.stringContaining("check before sending it again"),
+      message:
+        "Sign-in may have completed. Check this profile before trying again.",
     });
     expect(callsTo("providers.link")).toHaveLength(1);
     expect(onlyCallTo("providers.link")[1]).toMatchObject({
@@ -1911,7 +2214,7 @@ describe("environment profile sign-in through the CLI", () => {
     expect(callsTo("providers.linkComplete")).toEqual([]);
   });
 
-  it("cancels when the first completion rejects after Ctrl+C and releases the link", async () => {
+  it("keeps a rejected first completion outcome unknown after Ctrl+C", async () => {
     let notifyCompletionStarted: () => void = () => {};
     const completionStarted = new Promise<void>((resolve) => {
       notifyCompletionStarted = resolve;
@@ -1928,11 +2231,14 @@ describe("environment profile sign-in through the CLI", () => {
         }),
     });
     const fake = makeIo({ terminal: false });
-    const run = runLogin(
-      "codex",
-      { kind: "create", label: "Work profile" },
+    const context = makeContext();
+    const run = buildProfileLoginCommand(
+      {
+        provider: "codex",
+        target: { kind: "create", label: "Work profile" },
+      },
       fake.io,
-    );
+    )(context);
 
     await Promise.race([
       completionStarted,
@@ -1950,13 +2256,25 @@ describe("environment profile sign-in through the CLI", () => {
         fatalDetails: null,
       }),
     );
-    const { result } = await run;
-
-    expect(result.data).toEqual({ providerId: "codex", status: "cancelled" });
-    expect(result.exitCode).toBe(130);
+    await expect(run).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_REQUEST_OUTCOME_UNKNOWN,
+      message:
+        "Sign-in may have completed. Check this profile before trying again.",
+    });
     expect(callsTo("providers.link")).toHaveLength(1);
     expect(callsTo("providers.linkComplete")).toHaveLength(1);
+    expect(onlyCallTo("providers.linkComplete")[1]).toMatchObject({
+      code: null,
+    });
+    expect(callsTo("providers.list")).toHaveLength(2);
+    expect(callsTo("providers.startLogin")).toEqual([]);
     expect(callsTo("providers.linkCancel")).toHaveLength(1);
+    expect(context.output.humanRequired).toHaveBeenCalledWith(
+      "No profiles for codex (Codex) on this host.",
+    );
+    expect(context.output.humanRequired).not.toHaveBeenCalledWith(
+      SIGNED_IN_RECEIVING_LINE,
+    );
   });
 
   it("keeps an established link pending when completion rejects after Ctrl+C", async () => {
@@ -1981,11 +2299,14 @@ describe("environment profile sign-in through the CLI", () => {
       },
     });
     const fake = makeIo({ terminal: false });
-    const run = runLogin(
-      "codex",
-      { kind: "create", label: "Work profile" },
+    const context = makeContext();
+    const run = buildProfileLoginCommand(
+      {
+        provider: "codex",
+        target: { kind: "create", label: "Work profile" },
+      },
       fake.io,
-    );
+    )(context);
 
     await Promise.race([
       completionStarted,
@@ -2003,8 +2324,7 @@ describe("environment profile sign-in through the CLI", () => {
         fatalDetails: null,
       }),
     );
-    const { result } = await run;
-
+    const result = await run;
     expect(result.data).toEqual({
       providerId: "codex",
       status: "signed-in-pending",
@@ -2012,7 +2332,292 @@ describe("environment profile sign-in through the CLI", () => {
     expect(result.human).toBe(SIGNED_IN_RECEIVING_LINE);
     expect(result.exitCode).toBe(0);
     expect(callsTo("providers.linkComplete")).toHaveLength(2);
+    expect(callsTo("providers.list")).toHaveLength(2);
+    expect(callsTo("providers.startLogin")).toEqual([]);
     expect(callsTo("providers.linkCancel")).toEqual([]);
+    expect(callsTo("providers.linkComplete").map((call) => call[1])).toEqual([
+      { linkId: "link-attempt", environmentId: ENVIRONMENT_ID, code: null },
+      { linkId: "link-attempt", environmentId: ENVIRONMENT_ID, code: null },
+    ]);
+  });
+
+  it("keeps an unavailable first completion unknown when Ctrl+C arrives before its answer", async () => {
+    let notifyCompletionStarted: () => void = () => {};
+    const completionStarted = new Promise<void>((resolve) => {
+      notifyCompletionStarted = resolve;
+    });
+    let resolveCompletion: (
+      answer: ProvidersLinkCompleteResponseV12,
+    ) => void = () => {};
+    makeHost({
+      providerId: "codex",
+      profiles: [],
+      link: linkAnswer({ kind: "local_handoff" }),
+      complete: () =>
+        new Promise<ProvidersLinkCompleteResponseV12>((resolve) => {
+          resolveCompletion = resolve;
+          notifyCompletionStarted();
+        }),
+    });
+    const fake = makeIo({ terminal: false });
+    const context = makeContext();
+    const run = buildProfileLoginCommand(
+      {
+        provider: "codex",
+        target: { kind: "create", label: "Work profile" },
+      },
+      fake.io,
+    )(context);
+
+    await Promise.race([
+      completionStarted,
+      run.then(() => {
+        throw new Error("CLI sign-in ended before linkComplete started.");
+      }),
+    ]);
+    fake.interrupt();
+    resolveCompletion(completeAnswer("unavailable", null, null));
+
+    await expect(run).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_REQUEST_OUTCOME_UNKNOWN,
+      message:
+        "Sign-in may have completed. Check this profile before trying again.",
+    });
+    expect(callsTo("providers.link")).toHaveLength(1);
+    expect(callsTo("providers.linkComplete")).toHaveLength(1);
+    expect(onlyCallTo("providers.linkComplete")[1]).toMatchObject({
+      code: null,
+    });
+    expect(callsTo("providers.list")).toHaveLength(2);
+    expect(callsTo("providers.startLogin")).toEqual([]);
+    expect(callsTo("providers.linkCancel")).toHaveLength(1);
+    expect(context.output.humanRequired).toHaveBeenCalledWith(
+      "No profiles for codex (Codex) on this host.",
+    );
+    expect(context.output.humanRequired).not.toHaveBeenCalledWith(
+      SIGNED_IN_RECEIVING_LINE,
+    );
+  });
+
+  it.each([
+    "RPC_ERROR",
+    "PROVIDER_LINK_UNAVAILABLE",
+    "E_IDEMPOTENCY_OUTCOME_UNKNOWN",
+    "E_IDEMPOTENCY_REPLAY_TOO_LARGE",
+  ] as const)(
+    "treats an unconnected %s completion refusal as unknown after one inventory summary",
+    async (code) => {
+      const selected = profile(
+        MANAGED_PROFILE_ID,
+        "managed",
+        "Selected profile",
+        ENVIRONMENT_PROFILE_ID,
+      );
+      makeHost({
+        providerId: "codex",
+        profiles: [selected],
+        link: linkAnswer({ kind: "local_handoff" }),
+        complete: () =>
+          Promise.reject(
+            new HostRpcError({
+              code,
+              message: "The completion failed on the host.",
+              requestId: "completion-request",
+              method: "providers.linkComplete",
+              fatalDetails: null,
+            }),
+          ),
+      });
+      const context = makeContext();
+      const attempt = buildProfileLoginCommand(
+        {
+          provider: "codex",
+          target: { kind: "existing", profile: MANAGED_PROFILE_ID },
+        },
+        makeIo({ terminal: false }).io,
+      )(context);
+
+      await expect(attempt).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.HOST_REQUEST_OUTCOME_UNKNOWN,
+        message:
+          "Sign-in may have completed. Check this profile before trying again.",
+      });
+      expect(callsTo("providers.link")).toHaveLength(1);
+      expect(callsTo("providers.linkComplete")).toHaveLength(1);
+      expect(callsTo("providers.list")).toHaveLength(2);
+      expect(callsTo("providers.startLogin")).toEqual([]);
+      expect(callsTo("providers.linkCancel")).toHaveLength(1);
+      expect(context.output.humanRequired).toHaveBeenCalledWith(
+        expect.stringContaining("Selected profile"),
+      );
+      expect(context.output.humanRequired).not.toHaveBeenCalledWith(
+        SIGNED_IN_RECEIVING_LINE,
+      );
+    },
+  );
+
+  it("keeps a marked earlier completion unknown despite a structured refusal", async () => {
+    const refusal = new HostRpcError({
+      code: "UNAUTHORIZED",
+      message: "The completion was refused.",
+      requestId: "completion-request",
+      method: "providers.linkComplete",
+      fatalDetails: null,
+    });
+    markMayHaveReachedHost(refusal);
+    makeHost({
+      providerId: "codex",
+      profiles: [],
+      link: linkAnswer({ kind: "local_handoff" }),
+      complete: () => Promise.reject(refusal),
+    });
+    const context = makeContext();
+    const attempt = buildProfileLoginCommand(
+      {
+        provider: "codex",
+        target: { kind: "create", label: "Work profile" },
+      },
+      makeIo({ terminal: true }).io,
+    )(context);
+
+    await expect(attempt).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_REQUEST_OUTCOME_UNKNOWN,
+      message:
+        "Sign-in may have completed. Check this profile before trying again.",
+    });
+    expect(callsTo("providers.linkComplete")).toHaveLength(1);
+    expect(callsTo("providers.list")).toHaveLength(2);
+    expect(context.output.humanRequired).toHaveBeenCalledWith(
+      "No profiles for codex (Codex) on this host.",
+    );
+    expect(context.output.humanRequired).not.toHaveBeenCalledWith(
+      ACCOUNT_MISMATCH_SIGN_IN_LINE,
+    );
+  });
+
+  it("retries a completion failure the transport proves was before send", async () => {
+    makeHost({
+      providerId: "codex",
+      profiles: [],
+      link: linkAnswer({ kind: "local_handoff" }),
+      complete: (callNumber) => {
+        if (callNumber === 1) return completeAnswer("installing", null, null);
+        if (callNumber === 2)
+          return Promise.reject(
+            transportFailureBeforeSend({
+              message: "The completion was refused before dispatch.",
+              requestId: "completion-request",
+              method: "providers.linkComplete",
+            }),
+          );
+        return completeAnswer("expired", null, null);
+      },
+    });
+
+    const { result } = await runLogin(
+      "codex",
+      { kind: "create", label: "Work profile" },
+      makeIo({ terminal: false }).io,
+    );
+
+    expect(result.data).toEqual({
+      providerId: "codex",
+      status: "signed-in-pending",
+    });
+    expect(result.human).toBe(SIGNED_IN_RECEIVING_LINE);
+    expect(callsTo("providers.linkComplete")).toHaveLength(3);
+    expect(callsTo("providers.list")).toHaveLength(2);
+    expect(callsTo("providers.linkCancel")).toEqual([]);
+  });
+
+  it.each([
+    [
+      "authorization",
+      new HostRpcError({
+        code: "UNAUTHORIZED",
+        message: "The completion requires authentication.",
+        requestId: "completion-request",
+        method: "providers.linkComplete",
+        fatalDetails: null,
+      }),
+      CLI_ERROR_CODES.AUTH_REJECTED,
+    ],
+    [
+      "version",
+      new HostMethodVersionUnsatisfiedError({
+        requirement: { method: "providers.linkComplete", version: V12 },
+        negotiated: { major: 1, minor: 1 },
+        requestId: "completion-request",
+        method: "providers.linkComplete",
+        hostId: HOST_ID,
+      }),
+      CLI_ERROR_CODES.HOST_INCOMPATIBLE,
+    ],
+  ] as const)(
+    "keeps a definitive %s completion refusal ordinary",
+    async (_kind, error, code) => {
+      makeHost({
+        providerId: "codex",
+        profiles: [],
+        link: linkAnswer({ kind: "local_handoff" }),
+        complete: () => Promise.reject(error),
+      });
+      const context = makeContext();
+      const attempt = buildProfileLoginCommand(
+        {
+          provider: "codex",
+          target: { kind: "create", label: "Work profile" },
+        },
+        makeIo({ terminal: false }).io,
+      )(context);
+
+      await expect(attempt).rejects.toMatchObject({ code });
+      expect(callsTo("providers.linkComplete")).toHaveLength(1);
+      expect(callsTo("providers.list")).toHaveLength(1);
+      expect(callsTo("providers.linkCancel")).toHaveLength(1);
+      expect(context.output.humanRequired).not.toHaveBeenCalledWith(
+        "No profiles for Codex on this host.",
+      );
+    },
+  );
+
+  it("preserves the unknown completion outcome when its inventory read fails", async () => {
+    makeHost({
+      providerId: "codex",
+      profiles: [],
+      link: linkAnswer({ kind: "local_handoff" }),
+      complete: () =>
+        Promise.reject(
+          new HostTransportFailureError({
+            code: "RPC_ERROR",
+            message: "The completion transport failed after send.",
+            requestId: "completion-request",
+            method: "providers.linkComplete",
+            fatalDetails: null,
+          }),
+        ),
+      failingProviderListCalls: [2],
+    });
+    const context = makeContext();
+    const attempt = buildProfileLoginCommand(
+      {
+        provider: "codex",
+        target: { kind: "create", label: "Work profile" },
+      },
+      makeIo({ terminal: false }).io,
+    )(context);
+
+    await expect(attempt).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_REQUEST_OUTCOME_UNKNOWN,
+      message:
+        "Sign-in may have completed. Check this profile before trying again.",
+    });
+    expect(callsTo("providers.linkComplete")).toHaveLength(1);
+    expect(callsTo("providers.list")).toHaveLength(2);
+    expect(callsTo("providers.linkCancel")).toHaveLength(1);
+    expect(context.output.humanRequired).not.toHaveBeenCalledWith(
+      SIGNED_IN_RECEIVING_LINE,
+    );
   });
 
   it("preserves a mapped failure after removing its interrupt listener before held release", async () => {
@@ -2068,10 +2673,12 @@ describe("environment profile sign-in through the CLI", () => {
     await expect(attempt).rejects.toBeInstanceOf(CliError);
     await expect(attempt).rejects.toMatchObject({
       code: CLI_ERROR_CODES.HOST_REQUEST_OUTCOME_UNKNOWN,
-      message: expect.stringContaining("check before sending it again"),
+      message:
+        "Sign-in may have completed. Check this profile before trying again.",
     });
     expect(callsTo("providers.link")).toHaveLength(1);
     expect(callsTo("providers.linkComplete")).toHaveLength(1);
+    expect(callsTo("providers.list")).toHaveLength(2);
     expect(callsTo("providers.linkCancel")).toHaveLength(1);
   });
 

@@ -19,7 +19,17 @@ import type {
   ProviderCliState,
   ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
+import { markMayHaveReachedHost } from "@traycer/protocol/host-transport/remote/rpc-types";
 import { EnvironmentProfileSignIn } from "@/components/providers/environment-profile-sign-in";
+import {
+  buildEnvironmentClient,
+  type EnvironmentClientFixture,
+} from "@/lib/environment/__tests__/environment-test-support";
+import { hostRpcRegistry } from "@/lib/host";
+import {
+  LINK_NO_SIGN_IN,
+  LINK_OUTCOME_UNKNOWN,
+} from "@/lib/providers/provider-link-copy";
 import {
   ACCOUNT_MISMATCH_SIGN_IN_LINE,
   ACCOUNT_UNIDENTIFIED_SIGN_IN_LINE,
@@ -27,15 +37,12 @@ import {
   SIGNED_IN_RECEIVING_LINE,
 } from "@traycer-clients/shared/providers/environment-profile-sign-in";
 import {
-  buildEnvironmentClient,
-  type EnvironmentClientFixture,
-} from "@/lib/environment/__tests__/environment-test-support";
-import { hostRpcRegistry } from "@/lib/host";
-import { LINK_NO_SIGN_IN } from "@/lib/providers/provider-link-copy";
-import type {
-  RequestOfMethod,
-  ResponseOfMethod,
+  HostRpcError,
+  HostTransportFailureError,
+  type RequestOfMethod,
+  type ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
+import { providersListQueryKey } from "@/lib/query-keys/providers-query-keys";
 import {
   createCallEvents,
   type CallEvents,
@@ -957,54 +964,266 @@ describe("<EnvironmentProfileSignIn />", () => {
   );
 
   it.each([
-    ["harness_account_mismatch", ACCOUNT_MISMATCH_SIGN_IN_LINE],
-    ["harness_account_unidentified", ACCOUNT_UNIDENTIFIED_SIGN_IN_LINE],
+    ["host RPC_ERROR", "rpc-error"],
+    ["successful unavailable response", "unavailable"],
   ] as const)(
-    "preserves an existing profile after %s and requires confirmation before switching",
-    async (code, refusalLine) => {
+    "keeps an unconfirmed completion unknown after %s despite authenticated inventory",
+    async (_description, outcome) => {
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      const profile = managedProfile(
+        MANAGED_PROFILE_ID,
+        "Claude on this computer",
+        ENVIRONMENT_PROFILE_ID,
+        { kind: "admitted", bindingVersion: 1 },
+      );
+      const inventory = {
+        providers: [providerState("claude-code", [profile])],
+        native: null,
+      };
       const host = makeHost({
-        complete: () => ({
-          state: "mismatch",
-          code,
-          account: null,
-          expectedAccount: null,
-          environmentProfileId: ENVIRONMENT_PROFILE_ID,
-          profileId: null,
-        }),
+        complete:
+          outcome === "rpc-error"
+            ? () =>
+                Promise.reject(
+                  new HostRpcError({
+                    code: "RPC_ERROR",
+                    message: "The host could not confirm sign-in completion.",
+                    requestId: "req-completion-unknown",
+                    method: "providers.linkComplete",
+                    fatalDetails: null,
+                  }),
+                )
+            : () => ({
+                state: "unavailable",
+                code: null,
+                account: null,
+                expectedAccount: null,
+                environmentProfileId: ENVIRONMENT_PROFILE_ID,
+                profileId: null,
+              }),
+        providersList: () => inventory,
       });
       const onComplete = vi.fn();
+      const onDeliveryPending = vi.fn();
       const onCancel = vi.fn();
-      renderSignIn({
+      const view = renderSignIn({
         host,
-        request: EXISTING_PROFILE_REQUEST,
+        request: CREATE_PROFILE_REQUEST,
         autoStart: true,
         waitForLocalProfile: true,
         onComplete,
+        onDeliveryPending,
         onCancel,
       });
+      const listQueryKey = providersListQueryKey(HOST_ID);
+      const listQueryHash = view.queryClient
+        .getQueryCache()
+        .find({ queryKey: listQueryKey })?.queryHash;
+      if (listQueryHash === undefined)
+        throw new Error("Provider inventory query was not registered");
+      const inventoryRead = Promise.withResolvers<void>();
+      const stopObservingInventory = view.queryClient
+        .getQueryCache()
+        .subscribe((event) => {
+          if (
+            event.type === "updated" &&
+            event.action.type === "success" &&
+            event.query.queryHash === listQueryHash
+          )
+            inventoryRead.resolve();
+        });
 
       await screen.findByLabelText("One-time code");
       fireEvent.change(screen.getByLabelText("One-time code"), {
         target: { value: CODE },
       });
       fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+      await host.completeEvents.waitFor(1);
 
-      expect((await screen.findByRole("alert")).textContent).toBe(refusalLine);
+      expect(await screen.findByRole("alert")).toBeTruthy();
+      expect(await screen.findByRole("button", { name: "Close" })).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+      await host.providersListEvents.waitFor(1);
+      await inventoryRead.promise;
+      stopObservingInventory();
+
+      expect(view.queryClient.getQueryData(listQueryKey)).toEqual(inventory);
       expect(host.linkRequests).toEqual([
-        { ...EXISTING_PROFILE_REQUEST, replaceAccount: false },
+        { ...CREATE_PROFILE_REQUEST, replaceAccount: false },
       ]);
+      expect(host.completeRequests).toEqual([
+        {
+          linkId: "link-attempt",
+          code: CODE,
+          environmentId: ENVIRONMENT_ID,
+        },
+      ]);
+      expect(host.providersListCalls).toEqual([1]);
+      expect(host.cancelRequests).toEqual([]);
       expect(onComplete).not.toHaveBeenCalled();
+      expect(onDeliveryPending).not.toHaveBeenCalled();
+      expect(onCancel).not.toHaveBeenCalled();
+      expect(sonnerToast.info).not.toHaveBeenCalledWith(
+        SIGNED_IN_RECEIVING_LINE,
+      );
 
-      fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
-      expect(screen.getByText(REPLACE_PROFILE_ACCOUNT_LINE)).toBeTruthy();
-      fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
-      await screen.findByLabelText("One-time code");
-      expect(host.linkRequests).toEqual([
-        { ...EXISTING_PROFILE_REQUEST, replaceAccount: false },
-        { ...EXISTING_PROFILE_REQUEST, replaceAccount: true },
-      ]);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(20_000);
+      });
+      expect(host.completeRequests).toHaveLength(1);
+      expect(host.providersListCalls).toEqual([1]);
+      expect(host.linkRequests).toHaveLength(1);
+
+      fireEvent.click(screen.getByRole("button", { name: "Close" }));
+      expect(onCancel).toHaveBeenCalledOnce();
+      expect(host.cancelRequests).toEqual([]);
+      expect(onComplete).not.toHaveBeenCalled();
+      expect(onDeliveryPending).not.toHaveBeenCalled();
     },
   );
+
+  it("preserves an existing profile after a completion mismatch and requires confirmation before switching", async () => {
+    const host = makeHost({
+      complete: () => ({
+        state: "mismatch",
+        code: "harness_account_mismatch",
+        account: null,
+        expectedAccount: null,
+        environmentProfileId: ENVIRONMENT_PROFILE_ID,
+        profileId: null,
+      }),
+    });
+    const onComplete = vi.fn();
+    const onCancel = vi.fn();
+    renderSignIn({
+      host,
+      request: EXISTING_PROFILE_REQUEST,
+      autoStart: true,
+      waitForLocalProfile: true,
+      onComplete,
+      onCancel,
+    });
+
+    await screen.findByLabelText("One-time code");
+    fireEvent.change(screen.getByLabelText("One-time code"), {
+      target: { value: CODE },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      ACCOUNT_MISMATCH_SIGN_IN_LINE,
+    );
+    expect(host.linkRequests).toEqual([
+      { ...EXISTING_PROFILE_REQUEST, replaceAccount: false },
+    ]);
+    expect(onComplete).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
+    expect(screen.getByText(REPLACE_PROFILE_ACCOUNT_LINE)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
+    await screen.findByLabelText("One-time code");
+    expect(host.linkRequests).toEqual([
+      { ...EXISTING_PROFILE_REQUEST, replaceAccount: false },
+      { ...EXISTING_PROFILE_REQUEST, replaceAccount: true },
+    ]);
+  });
+
+  it("asks before replacing an existing profile after the host cannot identify the account", async () => {
+    const host = makeHost({
+      link: () =>
+        Promise.reject(
+          new HostRpcError({
+            code: "harness_account_unidentified",
+            message: "The account on this profile could not be confirmed.",
+            requestId: "req-unidentified-start",
+            method: "providers.link",
+            fatalDetails: null,
+          }),
+        ),
+    });
+    const onComplete = vi.fn();
+    const onCancel = vi.fn();
+    renderSignIn({
+      host,
+      request: EXISTING_PROFILE_REQUEST,
+      autoStart: true,
+      waitForLocalProfile: true,
+      onComplete,
+      onCancel,
+    });
+
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      ACCOUNT_UNIDENTIFIED_SIGN_IN_LINE,
+    );
+    expect(host.linkRequests).toEqual([
+      { ...EXISTING_PROFILE_REQUEST, replaceAccount: false },
+    ]);
+    expect(host.completeRequests).toEqual([]);
+    expect(host.providersListCalls).toEqual([]);
+    expect(onComplete).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
+    expect(screen.getByText(REPLACE_PROFILE_ACCOUNT_LINE)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      ACCOUNT_UNIDENTIFIED_SIGN_IN_LINE,
+    );
+    expect(host.linkRequests).toEqual([
+      { ...EXISTING_PROFILE_REQUEST, replaceAccount: false },
+      { ...EXISTING_PROFILE_REQUEST, replaceAccount: true },
+    ]);
+    expect(host.completeRequests).toEqual([]);
+    expect(host.providersListCalls).toEqual([]);
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
+  it("keeps a marked unidentified start outcome unknown without retry or inventory refresh", async () => {
+    const startError = new HostRpcError({
+      code: "harness_account_unidentified",
+      message: "The account on this profile could not be confirmed.",
+      requestId: "req-unidentified-start-outcome",
+      method: "providers.link",
+      fatalDetails: null,
+    });
+    markMayHaveReachedHost(startError);
+    const host = makeHost({
+      link: () => Promise.reject(startError),
+    });
+    const onComplete = vi.fn();
+    const onDeliveryPending = vi.fn();
+    const onCancel = vi.fn();
+    renderSignIn({
+      host,
+      request: EXISTING_PROFILE_REQUEST,
+      autoStart: true,
+      waitForLocalProfile: true,
+      onComplete,
+      onDeliveryPending,
+      onCancel,
+    });
+
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      LINK_OUTCOME_UNKNOWN,
+    );
+    expect(await screen.findByRole("button", { name: "Close" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Switch account" })).toBeNull();
+    expect(screen.queryByLabelText("One-time code")).toBeNull();
+    expect(host.linkRequests).toEqual([
+      { ...EXISTING_PROFILE_REQUEST, replaceAccount: false },
+    ]);
+    expect(host.completeRequests).toEqual([]);
+    expect(host.providersListCalls).toEqual([]);
+    expect(host.cancelRequests).toEqual([]);
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(onDeliveryPending).not.toHaveBeenCalled();
+    expect(onCancel).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(onCancel).toHaveBeenCalledOnce();
+    expect(host.cancelRequests).toEqual([]);
+  });
 
   it("calls linkCancel once when a prompted sign-in is dismissed", async () => {
     const host = makeHost(undefined);
@@ -1020,7 +1239,7 @@ describe("<EnvironmentProfileSignIn />", () => {
     });
 
     await screen.findByLabelText("One-time code");
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
     await host.cancelEvents.waitFor(1);
 
     expect(host.cancelRequests).toEqual([
@@ -1030,14 +1249,18 @@ describe("<EnvironmentProfileSignIn />", () => {
     expect(onComplete).not.toHaveBeenCalled();
   });
 
-  it.each(["linked", "installing", "pending"] as const)(
+  it.each(["linked", "installing", "pending", "transport-failure"] as const)(
     "waits for an in-flight %s completion before deciding whether to withdraw the captured link",
     async (state) => {
-      const { promise: completion, resolve: resolveCompletion } =
-        Promise.withResolvers<ProvidersLinkCompleteResponseV12>();
+      const {
+        promise: completion,
+        resolve: resolveCompletion,
+        reject: rejectCompletion,
+      } = Promise.withResolvers<ProvidersLinkCompleteResponseV12>();
       const host = makeHost({ complete: () => completion });
       const replacementHost = makeHost(undefined);
       const onComplete = vi.fn();
+      const onDeliveryPending = vi.fn();
       const onCancel = vi.fn();
       const view = renderSignIn({
         host,
@@ -1045,6 +1268,7 @@ describe("<EnvironmentProfileSignIn />", () => {
         autoStart: true,
         waitForLocalProfile: true,
         onComplete,
+        onDeliveryPending,
         onCancel,
       });
 
@@ -1055,7 +1279,7 @@ describe("<EnvironmentProfileSignIn />", () => {
       fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
       await host.completeEvents.waitFor(1);
 
-      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      fireEvent.click(screen.getByRole("button", { name: "Close" }));
       expect(onCancel).toHaveBeenCalledOnce();
       expect(host.cancelRequests).toEqual([]);
 
@@ -1071,23 +1295,40 @@ describe("<EnvironmentProfileSignIn />", () => {
             waitForLocalProfile
             disabled={false}
             onComplete={onComplete}
+            onDeliveryPending={onDeliveryPending}
             onCancel={onCancel}
           />
         </QueryClientProvider>,
       );
 
-      const response: ProvidersLinkCompleteResponseV12 = {
-        state,
-        code: null,
-        account: null,
-        expectedAccount: null,
-        environmentProfileId: ENVIRONMENT_PROFILE_ID,
-        profileId: state === "linked" ? MANAGED_PROFILE_ID : null,
-      };
-      await act(async () => {
-        resolveCompletion(response);
-        await completion;
-      });
+      if (state === "transport-failure") {
+        await act(async () => {
+          rejectCompletion(
+            new HostTransportFailureError({
+              code: "RPC_ERROR",
+              message: "The completion outcome is unknown.",
+              requestId: "req-late-completion-failure",
+              method: "providers.linkComplete",
+              fatalDetails: null,
+            }),
+          );
+          await completion.catch(() => undefined);
+        });
+        await host.providersListEvents.waitFor(1);
+      } else {
+        const response: ProvidersLinkCompleteResponseV12 = {
+          state,
+          code: null,
+          account: null,
+          expectedAccount: null,
+          environmentProfileId: ENVIRONMENT_PROFILE_ID,
+          profileId: state === "linked" ? MANAGED_PROFILE_ID : null,
+        };
+        await act(async () => {
+          resolveCompletion(response);
+          await completion;
+        });
+      }
 
       if (state === "pending") {
         await host.cancelEvents.waitFor(1);
@@ -1102,6 +1343,26 @@ describe("<EnvironmentProfileSignIn />", () => {
       }
       expect(replacementHost.cancelRequests).toEqual([]);
       expect(onComplete).not.toHaveBeenCalled();
+      expect(onDeliveryPending).not.toHaveBeenCalled();
+      if (state === "transport-failure") {
+        expect(host.completeRequests).toEqual([
+          {
+            linkId: "link-attempt",
+            code: CODE,
+            environmentId: ENVIRONMENT_ID,
+          },
+        ]);
+        expect(host.linkRequests).toEqual([
+          { ...EXISTING_PROFILE_REQUEST, replaceAccount: false },
+        ]);
+        expect(host.providersListCalls).toEqual([1]);
+        expect(host.cancelRequests).toEqual([]);
+        expect(replacementHost.completeRequests).toEqual([]);
+        expect(onCancel).toHaveBeenCalledOnce();
+        expect(sonnerToast.info).not.toHaveBeenCalledWith(
+          SIGNED_IN_RECEIVING_LINE,
+        );
+      }
     },
   );
 
@@ -1227,7 +1488,7 @@ describe("<EnvironmentProfileSignIn />", () => {
 
     await host.linkEvents.waitFor(1);
     expect(host.linkRequests).toHaveLength(1);
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
     expect(host.cancelRequests).toHaveLength(0);
 
     await act(async () => {

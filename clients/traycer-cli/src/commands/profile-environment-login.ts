@@ -1,4 +1,12 @@
-import type { ProvidersLinkCompleteResponseV12 } from "@traycer/protocol/host/environment-schemas";
+import type {
+  ProvidersLinkCompleteResponseV12,
+  ProvidersLinkResponseV12,
+} from "@traycer/protocol/host/environment-schemas";
+import {
+  HostRpcError,
+  HostTransportFailureError,
+  mayHaveReachedHost,
+} from "../../../shared/host-transport/host-messenger";
 import type {
   ProviderCliState,
   ProviderId,
@@ -16,16 +24,17 @@ import {
   readLocalHostMethodVersion,
   type HostRpcDispatch,
 } from "../internal/host-rpc";
-import { printable, readProviderStates } from "../internal/profile-target";
+import { printable, readProviderInventory } from "../internal/profile-target";
 import { httpUrlOf } from "../internal/profile-login-url";
 import { nameNewProfile } from "../internal/profile-login-name";
+import { CLI_ERROR_CODES, CliError, cliError } from "../runner/errors";
 import type { CommandContext } from "../runner/runner";
 import type {
   ProfileLoginIo,
   ResolvedTarget,
   LoginOutcome,
 } from "./profile-login";
-import { summarizeProfile } from "./profile-list";
+import { buildProfileListCommand, summarizeProfile } from "./profile-list";
 
 /** A connected account may keep arriving after the command stops waiting. */
 const RECEIVING_WAIT_MS = 60_000;
@@ -90,23 +99,50 @@ export async function runEnvironmentProfileLogin(
     let replaceAccount = false;
     for (;;) {
       if (abort.signal.aborted) return { status: "cancelled" };
-      const start = await callHostRpcWithDispatch(
-        "providers.link",
-        {
-          providerId,
-          profileId,
-          environmentId,
-          createProfile:
-            target.create === null
-              ? null
-              : {
-                  label: target.create.label ?? "New profile",
-                  shareSkillsAndPlugins: false,
-                },
-          replaceAccount,
-        },
-        dispatch("providers.link"),
-      );
+      let start: ProvidersLinkResponseV12;
+      try {
+        start = await callHostRpcWithDispatch(
+          "providers.link",
+          {
+            providerId,
+            profileId,
+            environmentId,
+            createProfile:
+              target.create === null
+                ? null
+                : {
+                    label: target.create.label ?? "New profile",
+                    shareSkillsAndPlugins: false,
+                  },
+            replaceAccount,
+          },
+          dispatch("providers.link"),
+        );
+      } catch (error) {
+        if (mayHaveReachedHost(error))
+          await reportUnknownSignIn(ctx, providerId);
+        if (
+          !(error instanceof HostRpcError) ||
+          error.code !== "harness_account_unidentified" ||
+          replaceAccount ||
+          abort.signal.aborted
+        )
+          throw error;
+        if (
+          !(await confirmAccountSwitch(
+            ctx,
+            io,
+            abort.signal,
+            ACCOUNT_UNIDENTIFIED_SIGN_IN_LINE,
+          ))
+        )
+          return {
+            status: "not-started",
+            message: ACCOUNT_UNIDENTIFIED_SIGN_IN_LINE,
+          };
+        replaceAccount = true;
+        continue;
+      }
       linkId = start.linkId;
       if (abort.signal.aborted) return { status: "cancelled" };
       const prompt = start.prompt;
@@ -154,11 +190,24 @@ export async function runEnvironmentProfileLogin(
             dispatch("providers.linkComplete"),
           );
         } catch (error) {
+          if (
+            connectedAt === null &&
+            (mayHaveReachedHost(error) ||
+              (error instanceof HostRpcError &&
+                !(error instanceof HostTransportFailureError) &&
+                (error.code === "RPC_ERROR" ||
+                  error.code === "PROVIDER_LINK_UNAVAILABLE" ||
+                  error.code === "E_IDEMPOTENCY_OUTCOME_UNKNOWN" ||
+                  error.code === "E_IDEMPOTENCY_REPLAY_TOO_LARGE")))
+          )
+            await reportUnknownSignIn(ctx, providerId);
           if (connectedAt === null) throw error;
           await io.wait(2_000, abort.signal);
           continue;
         }
         code = null;
+        if (connectedAt === null && response.state === "unavailable")
+          await reportUnknownSignIn(ctx, providerId);
         if (
           connectedAt === null &&
           (response.state === "linked" || response.state === "installing")
@@ -192,7 +241,7 @@ export async function runEnvironmentProfileLogin(
           let installed: ProviderProfile | null = null;
           try {
             installed = installedEnvironmentProfile(
-              await readProviderStates(),
+              (await readProviderInventory()).providers,
               providerId,
               response.environmentProfileId ?? start.environmentProfileId,
               response.profileId,
@@ -236,14 +285,7 @@ export async function runEnvironmentProfileLogin(
             response.code === "harness_account_unidentified"
               ? ACCOUNT_UNIDENTIFIED_SIGN_IN_LINE
               : ACCOUNT_MISMATCH_SIGN_IN_LINE;
-          ctx.output.humanRequired(line);
-          if (!io.stdinIsTerminal())
-            return { status: "not-started", message: line };
-          ctx.output.humanRequired(
-            `${REPLACE_PROFILE_ACCOUNT_LINE}\nSwitch account? [y/N]`,
-          );
-          const answer = await readLine(io, abort.signal, true);
-          if (answer === null || !/^y(es)?$/i.test(answer))
+          if (!(await confirmAccountSwitch(ctx, io, abort.signal, line)))
             return { status: "not-started", message: line };
           await release();
           linkId = null;
@@ -268,6 +310,11 @@ export async function runEnvironmentProfileLogin(
       }
     }
   } catch (error) {
+    if (
+      error instanceof CliError &&
+      error.code === CLI_ERROR_CODES.HOST_REQUEST_OUTCOME_UNKNOWN
+    )
+      throw error;
     if (abort.signal.aborted)
       return {
         status: connectedAt !== null ? "signed-in-pending" : "cancelled",
@@ -277,6 +324,42 @@ export async function runEnvironmentProfileLogin(
     stopInterrupt();
     await release();
   }
+}
+
+async function reportUnknownSignIn(
+  ctx: CommandContext,
+  providerId: ProviderId,
+): Promise<never> {
+  try {
+    const inventory = await buildProfileListCommand({ provider: providerId })(
+      ctx,
+    );
+    if (inventory.human !== null) ctx.output.humanRequired(inventory.human);
+  } catch {
+    /* An unavailable inventory cannot settle the sent sign-in. */
+  }
+  throw cliError({
+    code: CLI_ERROR_CODES.HOST_REQUEST_OUTCOME_UNKNOWN,
+    message:
+      "Sign-in may have completed. Check this profile before trying again.",
+    details: null,
+    exitCode: 1,
+  });
+}
+
+async function confirmAccountSwitch(
+  ctx: CommandContext,
+  io: ProfileLoginIo,
+  signal: AbortSignal,
+  line: string,
+): Promise<boolean> {
+  ctx.output.humanRequired(line);
+  if (!io.stdinIsTerminal()) return false;
+  ctx.output.humanRequired(
+    `${REPLACE_PROFILE_ACCOUNT_LINE}\nSwitch account? [y/N]`,
+  );
+  const answer = await readLine(io, signal, true);
+  return answer !== null && /^y(es)?$/i.test(answer);
 }
 
 function readLine(

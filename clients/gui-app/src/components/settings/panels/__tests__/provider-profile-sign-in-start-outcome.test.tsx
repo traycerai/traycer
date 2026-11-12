@@ -1004,7 +1004,7 @@ describe("environment delivery pending from ProfileEditDialog", () => {
     if (signInBody === null) {
       throw new Error("Expected the one-time-code sign-in body.");
     }
-    fireEvent.click(within(signInBody).getByRole("button", { name: "Cancel" }));
+    fireEvent.click(within(signInBody).getByRole("button", { name: "Close" }));
     await screen.findByRole("heading", { name: "Edit profile" });
 
     const nextColor = PROVIDER_PROFILE_ACCENT_COLORS[0];

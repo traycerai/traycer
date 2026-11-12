@@ -8,6 +8,7 @@ import {
   LINK_FAILED,
   LINK_INTRO,
   LINK_NO_SIGN_IN,
+  LINK_OUTCOME_UNKNOWN,
   LINK_PASTE_WHOLE_CODE,
   LINK_UNAVAILABLE,
   mismatchLine,
@@ -218,13 +219,13 @@ describe("stateOfLinkComplete", () => {
     });
   });
 
-  it("maps expired and unavailable", () => {
+  it("maps expiry and an unavailable completion to unknown", () => {
     expect(
       stateOfLinkComplete(SIGN_IN, completeResponse({ state: "expired" })),
     ).toStrictEqual({ kind: "expired" });
     expect(
       stateOfLinkComplete(SIGN_IN, completeResponse({ state: "unavailable" })),
-    ).toStrictEqual({ kind: "unavailable" });
+    ).toStrictEqual({ kind: "failed", line: LINK_OUTCOME_UNKNOWN });
   });
 
   it.each(INSTALLING_PROMPTS)(

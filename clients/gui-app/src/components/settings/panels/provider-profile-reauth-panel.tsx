@@ -74,16 +74,12 @@ interface ProviderProfileReauthPanelProps {
     | ((profile: ProviderProfile) => void)
     | null;
   readonly onCancel: () => void;
-  readonly onDone: () => void;
+  readonly onDone: (profile: ProviderProfile) => void;
 }
 
 export function ProviderProfileReauthPanel(
   props: ProviderProfileReauthPanelProps,
 ): ReactNode {
-  // Inventory can promote an alias or replace the identity mid-sign-in.
-  // The editor's keyed session owns replacement; this entry owns the target
-  // and the identity comparison for either sign-in route until it leaves.
-  const [entryProfile] = useState(props.profile);
   const client = useOptionalHostClient();
   const hostId = useRequesterHostId(client);
   const supported = useEnvironmentProfileSignInSupported(
@@ -104,14 +100,8 @@ export function ProviderProfileReauthPanel(
   if (supported === null)
     return <ProfileReauthReading onCancel={props.onCancel} />;
   if (supported && client !== null)
-    return (
-      <RoutedProviderProfileReauthPanel
-        {...props}
-        profile={entryProfile}
-        client={client}
-      />
-    );
-  return <LocalProviderProfileReauthPanel {...props} profile={entryProfile} />;
+    return <RoutedProviderProfileReauthPanel {...props} client={client} />;
+  return <LocalProviderProfileReauthPanel {...props} />;
 }
 
 function RoutedProviderProfileReauthPanel(
@@ -151,7 +141,7 @@ function RoutedProviderProfileReauthPanel(
           if (profile === null) return;
           if (props.onSameAccountReconnected !== null)
             props.onSameAccountReconnected(profile);
-          else props.onDone();
+          else props.onDone(profile);
         }}
         onDeliveryPending={props.onDeliveryPending}
         onCancel={props.onCancel}
@@ -330,7 +320,9 @@ function LocalProviderProfileReauthPanel({
         retryBlocked={hostBlock?.kind === "macos"}
         onRetry={start}
         onSignInAgain={signInAgain}
-        onDone={onDone}
+        onDone={() => {
+          if (flow.state.kind === "identity") onDone(flow.state.profile);
+        }}
       />
     </div>
   );
@@ -357,9 +349,7 @@ function ProviderProfileReauthState({
   readonly flow: ProviderProfileLoginFlow;
   readonly providerId: ProviderCliState["providerId"];
   readonly loginCapability: ProviderCliState["loginCapability"] | null;
-  /** The row as it was when the panel mounted - see the freeze at the call
-   *  site. The live prop describes the account that just signed in, so it
-   *  cannot narrate what this profile "was". */
+  /** The editor's captured entry row, before the account that just signed in. */
   readonly entryProfile: ProviderProfile;
   readonly showWaiting: boolean;
   readonly showIdentity: boolean;

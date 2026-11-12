@@ -51,6 +51,21 @@ function noProfileShortcutHint(): ProfileDropdownShortcutHint | null {
   return null;
 }
 
+function selectedEditorProfile(
+  profiles: readonly ProviderProfile[],
+  liveSelectedProfile: ProviderProfile | undefined,
+  entryProfile: ProviderProfile | null,
+): ProviderProfile | null {
+  return (
+    liveSelectedProfile ??
+    profiles.find(
+      (candidate) => candidate.profileId === entryProfile?.profileId,
+    ) ??
+    profiles.at(0) ??
+    entryProfile
+  );
+}
+
 function LocalProfileLocation(props: {
   readonly hostId: string | null;
   readonly providerId: string;
@@ -324,6 +339,9 @@ export function ProviderProfileScopedSection(
     onSetProfileEnabled,
   } = props;
   const profiles = state.profiles;
+  const liveSelectedProfile = profiles.find(
+    (candidate) => profileCommitId(candidate) === selectedProfileId,
+  );
   const pick = useEnvironmentPick();
   const personalHostName = usePersonalHostName();
   // A Local row reads its own computer; Personal names the window's host.
@@ -333,13 +351,21 @@ export function ProviderProfileScopedSection(
   const [editIntent, setEditIntent] = useState<"manage" | "sign-in">(() =>
     startInReauth ? "sign-in" : "manage",
   );
+  // An editor entry outlives inventory replacement of its local row.
+  // Only an explicit entry or its completed sign-in adopts another target.
+  const [entryProfile, setEntryProfile] = useState<ProviderProfile | null>(
+    liveSelectedProfile ?? profiles.at(0) ?? null,
+  );
 
-  if (profiles.length === 0) return null;
+  if (profiles.length === 0 && !editProfileOpen) return null;
 
-  const selectedProfile =
-    profiles.find(
-      (candidate) => profileCommitId(candidate) === selectedProfileId,
-    ) ?? profiles[0];
+  const selectedProfile = selectedEditorProfile(
+    profiles,
+    liveSelectedProfile,
+    entryProfile,
+  );
+  if (selectedProfile === null) return null;
+  const editorProfile = entryProfile ?? selectedProfile;
   const providerLabel = PROVIDER_DISPLAY_NAMES[state.providerId];
   const addProfileDisabled = !canAddProfile;
   const { signInUnavailableHint, cliSetupNeeded, managementHeldReason } =
@@ -357,12 +383,14 @@ export function ProviderProfileScopedSection(
   );
 
   const openProfileEditor = (): void => {
+    setEntryProfile(selectedProfile);
     setEditIntent("manage");
     setEditSessionId((current) => current + 1);
     setEditProfileOpen(true);
   };
 
   const openProfileSignIn = (): void => {
+    setEntryProfile(selectedProfile);
     setEditIntent("sign-in");
     setEditSessionId((current) => current + 1);
     setEditProfileOpen(true);
@@ -405,7 +433,7 @@ export function ProviderProfileScopedSection(
         <ProfileDropdown
           providerLabel={providerLabel}
           profiles={labelledProfiles}
-          activeProfileId={selectedProfileId}
+          activeProfileId={profileCommitId(selectedProfile)}
           onSelectProfile={onSelectedProfileIdChange}
           onCreateProfile={onAddProfile}
           createProfileDisabled={addProfileDisabled}
@@ -483,9 +511,9 @@ export function ProviderProfileScopedSection(
       </div>
 
       <ProfileEditDialog
-        key={`${hostId}:${state.providerId}:${selectedProfile.profileId}:${editSessionId}`}
+        key={`${hostId}:${state.providerId}:${editSessionId}`}
         state={state}
-        profile={selectedProfile}
+        profile={editorProfile}
         profiles={profiles}
         canOauth={canAddProfile}
         oauthUnavailableHint={signInUnavailableHint}
@@ -493,8 +521,15 @@ export function ProviderProfileScopedSection(
         isLocalHost={isSelectedHostLocal}
         open={editProfileOpen}
         onOpenChange={setEditProfileOpen}
+        onProfileSignedIn={setEntryProfile}
+        onStartSignIn={() => {
+          const current = profiles.find(
+            (candidate) => candidate.profileId === editorProfile.profileId,
+          );
+          if (current !== undefined) setEntryProfile(current);
+        }}
         remainingProfilesAfterRemoval={profiles.filter(
-          (candidate) => candidate.profileId !== selectedProfile.profileId,
+          (candidate) => candidate.profileId !== editorProfile.profileId,
         )}
         onSelectedProfileIdChange={onSelectedProfileIdChange}
         profileEnablementAvailable={profileEnablementAvailable}

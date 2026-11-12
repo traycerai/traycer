@@ -1,4 +1,4 @@
-import { useQueryClient } from "@tanstack/react-query";
+import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { invalidateConfigurationReads } from "@/hooks/environment/environment-host-list-key";
 import { HostMethodVersionUnsatisfiedError } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
@@ -52,9 +52,12 @@ import {
   LINK_LINKING,
   LINK_SIGN_IN_LINE,
   LINK_UNAVAILABLE,
+  LINK_OUTCOME_UNKNOWN,
+  isLinkCompletionOutcomeUnknown,
   mismatchLine,
   onHostOnlyLine,
   stateOfLinkComplete,
+  stateOfLinkCompleteError,
   stateOfLinkError,
   stateOfLinkStart,
   type LinkDialogState,
@@ -63,6 +66,7 @@ import {
   useProviderLinkDialogStore,
   type ProviderLinkTarget,
 } from "@/stores/providers/provider-link-dialog-store";
+import { providersListQueryKey } from "@/lib/query-keys";
 
 /**
  * The environment sign-in dialog, opened from the Providers page through
@@ -87,6 +91,17 @@ const INTRO: LinkDialogState = { kind: "intro" };
 const STARTING: LinkDialogState = { kind: "starting" };
 
 type SignInState = Extract<LinkDialogState, { readonly kind: "sign_in" }>;
+
+function refreshProviderInventory(
+  queryClient: QueryClient,
+  hostId: string | null,
+): void {
+  if (hostId === null) return;
+  void queryClient.refetchQueries({
+    queryKey: providersListQueryKey(hostId),
+    exact: true,
+  });
+}
 
 export function ProviderLinkDialog(): ReactNode {
   const canEdit = useCanEditConfiguration();
@@ -276,6 +291,9 @@ function TeamProviderLinkDialogFor(props: {
   readonly environmentId: string;
   readonly onClose: () => void;
 }): ReactNode {
+  const queryClient = useQueryClient();
+  const client = useHostClient();
+  const hostId = useRequesterHostId(client);
   const [target, setTarget] = useState<ProviderLinkTarget>(props.target);
   const [state, setState] = useState<LinkDialogState>(INTRO);
   const [code, setCode] = useState("");
@@ -312,7 +330,7 @@ function TeamProviderLinkDialogFor(props: {
       { providerId: providerId.data, profileId: linkTarget.profileId },
       {
         onSuccess: (response) => setState(stateOfLinkStart(response)),
-        onError: (error) => setState(teamLinkError(error)),
+        onError: (error) => setState(teamLinkError(error, false)),
       },
     );
   };
@@ -323,7 +341,9 @@ function TeamProviderLinkDialogFor(props: {
         changeCode("");
         setState((latest) => stateOfLinkComplete(latest, response));
       },
-      onError: (error) => setState(teamLinkError(error)),
+      onError: (error) => {
+        setState(teamLinkError(error, true));
+      },
     });
   };
 
@@ -331,9 +351,21 @@ function TeamProviderLinkDialogFor(props: {
   let shown = state;
   if (startLink.isPending) shown = STARTING;
   else if (poll.linkId !== null && pollAnswer.error !== null)
-    shown = teamLinkError(pollAnswer.error);
+    shown = teamLinkError(pollAnswer.error, true);
   else if (poll.linkId !== null && pollAnswer.data !== undefined)
     shown = stateOfLinkComplete(state, pollAnswer.data);
+
+  const uncertainPoll =
+    poll.linkId !== null &&
+    (pollAnswer.data?.state === "unavailable" ||
+      isLinkCompletionOutcomeUnknown(pollAnswer.error));
+  if (uncertainPoll) setState({ kind: "failed", line: LINK_OUTCOME_UNKNOWN });
+  const outcomeUnknown =
+    state.kind === "failed" && state.line === LINK_OUTCOME_UNKNOWN;
+  useEffect(() => {
+    if (!outcomeUnknown) return;
+    refreshProviderInventory(queryClient, hostId);
+  }, [outcomeUnknown, queryClient, hostId]);
 
   return (
     <LinkDialogFrame
@@ -357,6 +389,8 @@ function ProviderLinkDialogFor(props: {
   readonly onClose: () => void;
 }): ReactNode {
   const client = useHostClient();
+  const hostId = useRequesterHostId(client);
+  const queryClient = useQueryClient();
   // Personal by its own id: a host that has not moved its settings has no
   // environment of its own to link into.
   const { environmentId, resolved } = useAddressedEnvironment();
@@ -405,9 +439,13 @@ function ProviderLinkDialogFor(props: {
     try {
       const response = await complete(current.linkId, code.trim());
       setCode("");
+      if (response.state === "unavailable")
+        refreshProviderInventory(queryClient, hostId);
       setState((latest) => stateOfLinkComplete(latest, response));
     } catch (error) {
-      setState(stateOfLinkError(error));
+      if (isLinkCompletionOutcomeUnknown(error))
+        refreshProviderInventory(queryClient, hostId);
+      setState(stateOfLinkCompleteError(error));
     } finally {
       setSubmitting(false);
     }
@@ -420,19 +458,23 @@ function ProviderLinkDialogFor(props: {
     const timer = setTimeout(() => {
       void complete(pollLinkId, null)
         .then((response) => {
+          if (response.state === "unavailable")
+            refreshProviderInventory(queryClient, hostId);
           if (cancelled) return;
           setState((latest) => stateOfLinkComplete(latest, response));
           setPollTick((tick) => tick + 1);
         })
         .catch((error: unknown) => {
-          if (!cancelled) setState(stateOfLinkError(error));
+          if (isLinkCompletionOutcomeUnknown(error))
+            refreshProviderInventory(queryClient, hostId);
+          if (!cancelled) setState(stateOfLinkCompleteError(error));
         });
     }, pollMs);
     return () => {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [complete, pollLinkId, pollMs, pollTick]);
+  }, [complete, pollLinkId, pollMs, pollTick, queryClient, hostId]);
 
   return (
     <LinkDialogFrame
@@ -677,7 +719,7 @@ function LinkActions(props: {
     case "intro":
       return (
         <>
-          {closeButton("Cancel")}
+          {closeButton("Close")}
           <Button
             type="button"
             size="sm"
@@ -692,7 +734,7 @@ function LinkActions(props: {
     case "sign_in":
       return (
         <>
-          {closeButton("Cancel")}
+          {closeButton("Close")}
           <Button
             type="button"
             size="sm"
@@ -714,7 +756,7 @@ function LinkActions(props: {
     case "expired":
       return (
         <>
-          {closeButton("Cancel")}
+          {closeButton("Close")}
           <Button
             type="button"
             size="sm"
@@ -727,6 +769,8 @@ function LinkActions(props: {
       );
     case "failed":
     case "unavailable":
+      if (state.kind === "failed" && state.line === LINK_OUTCOME_UNKNOWN)
+        return closeButton("Close");
       return (
         <>
           {closeButton("Close")}
@@ -743,17 +787,17 @@ function LinkActions(props: {
     case "starting":
     case "device":
     case "linking":
-      return closeButton("Cancel");
+      return closeButton("Close");
     case "not_offered":
       return closeButton("Close");
   }
 }
 
 /** A team's link refused by a host older than `@1.1` says it needs an update. */
-function teamLinkError(error: unknown): LinkDialogState {
+function teamLinkError(error: unknown, completion: boolean): LinkDialogState {
   if (error instanceof HostMethodVersionUnsatisfiedError)
     return { kind: "failed", line: "Signing in needs an updated host." };
-  return stateOfLinkError(error);
+  return completion ? stateOfLinkCompleteError(error) : stateOfLinkError(error);
 }
 
 function LinkMismatchActions(props: {

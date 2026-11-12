@@ -33,7 +33,10 @@ import {
 } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
-import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  HostRpcError,
+  type RequestOfMethod,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   getNegotiatedHostMethodVersion,
   getNegotiatedHostMethods,
@@ -188,6 +191,10 @@ const ROUTE_MANIFEST: ConnectionManifest = {
   "environment.host.read": { major: 1, minor: 0 },
   "environment.status": { major: 1, minor: 2 },
   "environment.list": { major: 1, minor: 1 },
+};
+const ROUTE_WITH_PROFILE_RENAME_MANIFEST: ConnectionManifest = {
+  ...ROUTE_MANIFEST,
+  "providers.setEnabled": { major: 2, minor: 1 },
 };
 const POOL_BINDING_READ_MANIFEST: ConnectionManifest = {
   "environment.binding.read": { major: 1, minor: 0 },
@@ -843,22 +850,53 @@ describe("a local profile promoted to an environment alias during reauth", () =>
     const firstDeviceCode = "FIRST-DEVICE-CODE";
     const secondDeviceCode = "SECOND-DEVICE-CODE";
     const draftLabel = "Draft profile name";
-    const initialProfile = managedProfile();
+    const initialProfile: ProviderProfile = {
+      ...managedProfile(),
+      presence: { kind: "admitted", bindingVersion: 1 },
+    };
     const aliasedProfile: ProviderProfile = {
       ...initialProfile,
       environmentProfileId,
     };
+    const placeholderProfile: ProviderProfile = {
+      ...managedProfile(),
+      profileId: environmentProfileId,
+      environmentProfileId,
+      auth: {
+        status: "unknown",
+        badgeText: null,
+        label: null,
+        detail: null,
+      },
+      presence: { kind: "no-home" },
+    };
+    const admittedProfile: ProviderProfile = {
+      ...managedProfile(),
+      profileId: "profile-admitted-after-reauth",
+      environmentProfileId,
+      presence: { kind: "admitted", bindingVersion: 1 },
+    };
     const installedProfile: ProviderProfile = {
-      ...aliasedProfile,
-      auth: { ...aliasedProfile.auth, status: "authenticated" },
+      ...admittedProfile,
+      auth: { ...admittedProfile.auth, status: "authenticated" },
+    };
+    const unrelatedProfile: ProviderProfile = {
+      ...managedProfile(),
+      profileId: "profile-unrelated",
+      presence: { kind: "admitted", bindingVersion: 1 },
     };
     const linkRequests: ProvidersLinkRequestV12[] = [];
     const completeRequests: ProvidersLinkCompleteRequestV11[] = [];
+    const profileSaveRequests: RequestOfMethod<
+      HostRpcRegistry,
+      "providers.setEnabled"
+    >[] = [];
     const cancelledLinkIds: string[] = [];
     const linkEvents = createCallEvents();
     const completeEvents = createCallEvents();
     const cancelEvents = createCallEvents();
     const inventoryEvents = createCallEvents();
+    const profileSaveEvents = createCallEvents();
     const pollIntervals = createCallEvents();
     const firstLinkResponse = Promise.withResolvers<ProvidersLinkResponseV12>();
     const firstCompleteResponse =
@@ -936,12 +974,18 @@ describe("a local profile promoted to an environment alias during reauth", () =>
           inventoryEvents.emit();
           if (inventoryReads === 1) return initialInventory;
           if (inventoryReads === 2) return inventoryResponse.promise;
+          if (inventoryReads === 3) return installedInventory;
           throw new Error("Unexpected extra provider inventory read.");
+        },
+        "providers.setEnabled": (request) => {
+          profileSaveRequests.push(request);
+          profileSaveEvents.emit();
+          return { state: codexState(installedProfile) };
         },
       },
     });
     clientRef.current = client;
-    recordNegotiatedHostManifest(HOST_ID, ROUTE_MANIFEST);
+    recordNegotiatedHostManifest(HOST_ID, ROUTE_WITH_PROFILE_RENAME_MANIFEST);
     useSettingsEnvironmentPickStore.setState({
       pick: { kind: "local", hostId: HOST_ID, hostName: "Studio" },
     });
@@ -951,7 +995,7 @@ describe("a local profile promoted to an environment alias during reauth", () =>
         mutations: { retry: false },
       },
     });
-    const sectionForProfile = (profile: ProviderProfile) => (
+    const sectionForState = (state: ProviderCliState) => (
       <PersonalPageContext.Provider
         value={{
           section: "providers",
@@ -969,7 +1013,7 @@ describe("a local profile promoted to an environment alias during reauth", () =>
         <QueryClientProvider client={queryClient}>
           <TooltipProvider>
             <ProviderProfileScopedSection
-              state={codexState(profile)}
+              state={state}
               hostId={HOST_ID}
               isSelectedHostLocal
               canAddProfile
@@ -989,7 +1033,7 @@ describe("a local profile promoted to an environment alias during reauth", () =>
         </QueryClientProvider>
       </PersonalPageContext.Provider>
     );
-    const rendered = render(sectionForProfile(initialProfile));
+    const rendered = render(sectionForState(codexState(initialProfile)));
 
     await screen.findByText("On Studio only.");
     fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
@@ -1014,7 +1058,7 @@ describe("a local profile promoted to an environment alias during reauth", () =>
       replaceAccount: true,
     });
 
-    rendered.rerender(sectionForProfile(aliasedProfile));
+    rendered.rerender(sectionForState(codexState(aliasedProfile)));
     expect(screen.getByText("Waiting for sign-in…")).toBeTruthy();
     const nameInputAfterAlias = screen.getByLabelText("Profile name");
     if (!(nameInputAfterAlias instanceof HTMLInputElement)) {
@@ -1053,6 +1097,27 @@ describe("a local profile promoted to an environment alias during reauth", () =>
       });
       await completeEvents.waitFor(1);
 
+      rendered.rerender(sectionForState(codexState(placeholderProfile)));
+      expect(screen.getByText(firstDeviceCode)).toBeTruthy();
+      expect(linkRequests).toEqual([
+        {
+          providerId: "codex",
+          profileId: initialProfile.profileId,
+          environmentId: ENVIRONMENT_ID,
+          createProfile: null,
+          replaceAccount: true,
+        },
+      ]);
+      expect(completeRequests).toEqual([
+        {
+          linkId: firstLinkId,
+          code: null,
+          environmentId: ENVIRONMENT_ID,
+        },
+      ]);
+      expect(cancelledLinkIds).toEqual([]);
+      expect(mocks.startLoginAsync).not.toHaveBeenCalled();
+
       await act(async () => {
         firstCompleteResponse.resolve({
           state: "linked",
@@ -1060,7 +1125,7 @@ describe("a local profile promoted to an environment alias during reauth", () =>
           account: null,
           expectedAccount: null,
           environmentProfileId,
-          profileId: initialProfile.profileId,
+          profileId: admittedProfile.profileId,
         });
         await firstCompleteResponse.promise;
       });
@@ -1069,6 +1134,12 @@ describe("a local profile promoted to an environment alias during reauth", () =>
         inventoryResponse.resolve(installedInventory);
         await inventoryResponse.promise;
       });
+      rendered.rerender(
+        sectionForState({
+          ...codexState(installedProfile),
+          profiles: [unrelatedProfile, installedProfile],
+        }),
+      );
       await waitFor(() => {
         const returnedNameInput = screen.getByLabelText("Profile name");
         if (!(returnedNameInput instanceof HTMLInputElement)) {
@@ -1077,6 +1148,7 @@ describe("a local profile promoted to an environment alias during reauth", () =>
         expect(returnedNameInput.disabled).toBe(false);
         expect(returnedNameInput.value).toBe(draftLabel);
       });
+      expect(inventoryReads).toBe(2);
 
       expect(linkRequests).toEqual([
         {
@@ -1097,6 +1169,24 @@ describe("a local profile promoted to an environment alias during reauth", () =>
       expect(cancelledLinkIds).toEqual([]);
       expect(mocks.startLoginAsync).not.toHaveBeenCalled();
 
+      fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+      await profileSaveEvents.waitFor(1);
+      await screen.findByRole("button", { name: "Manage profile" });
+      expect(profileSaveRequests).toEqual([
+        {
+          providerId: "codex",
+          enabled: true,
+          profileAction: {
+            type: "rename",
+            profileId: admittedProfile.profileId,
+            label: draftLabel,
+          },
+        },
+      ]);
+      await inventoryEvents.waitFor(3);
+
+      fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+      await screen.findByLabelText("Profile name");
       fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
       expect(
         await screen.findByText(
@@ -1129,7 +1219,7 @@ describe("a local profile promoted to an environment alias during reauth", () =>
         throw new Error("Expected the active sign-in status region.");
       }
       fireEvent.click(
-        within(pendingSignIn).getByRole("button", { name: "Cancel" }),
+        within(pendingSignIn).getByRole("button", { name: "Close" }),
       );
       await act(async () => {
         secondLinkResponse.resolve({

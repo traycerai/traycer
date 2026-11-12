@@ -36,6 +36,7 @@ import {
   screen,
   waitFor,
   waitForElementToBeRemoved,
+  within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
@@ -59,6 +60,7 @@ import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { HostRuntimeProvider, useHostBinding } from "@/lib/host/runtime";
 import { sandboxHostEntry } from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
 import type { HostRpcRegistry } from "@/lib/host";
+import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { ProviderLinkDialog } from "@/components/settings/panels/provider-link-dialog";
 import { PersonalPageContext } from "@/components/settings/personal/personal-page-context";
 import { ConfigurationSourceContext } from "@/components/settings/environment/configuration-source";
@@ -71,6 +73,7 @@ import type { OpenLink } from "@/lib/links/open-link";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useProviderLinkDialogStore } from "@/stores/providers/provider-link-dialog-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import { createCallEvents } from "@/components/providers/__tests__/environment-sign-in-call-events";
 import {
   recordNegotiatedHostManifest,
   recordNegotiatedHostMethods,
@@ -134,6 +137,21 @@ function useFixtureHostClient(): HostClient<HostRpcRegistry> {
     throw new Error("The host client fixture was not initialized.");
   }
   return client;
+}
+
+function ProvidersListQueryObserver(): null {
+  useProvidersList({ enabled: true, subscribed: true });
+  return null;
+}
+
+function linkDialogFooter(): HTMLElement {
+  const footer = screen
+    .getByTestId("provider-link-dialog")
+    .querySelector('[data-slot="dialog-footer"]');
+  if (!(footer instanceof HTMLElement)) {
+    throw new Error("Expected the provider link dialog footer.");
+  }
+  return footer;
 }
 
 function useSandboxNamedHostClient(): HostClient<HostRpcRegistry> {
@@ -820,6 +838,92 @@ describe("a sign-in URL with a pasted code", () => {
     expect(linked.textContent).toBe("Signed in.");
   });
 
+  it("closes an unavailable Personal legacy completion after refreshing observed inventory", async () => {
+    useAuthStore.setState(SIGNED_IN_AUTH_FIXTURE);
+    recordNegotiatedHostManifest(HOST_ID, {
+      ...LEGACY_SIGN_IN_MANIFEST,
+      "providers.list": { major: 10, minor: 9 },
+    });
+    const inventoryEvents = createCallEvents();
+    const completeEvents = createCallEvents();
+    const completeRequests: ProvidersLinkCompleteRequestV11[] = [];
+    providersListMock.mockImplementation(() => inventoryEvents.emit());
+    linkMock.link.mockResolvedValueOnce(SIGN_IN_RESPONSE);
+    linkMock.complete.mockImplementationOnce((request) => {
+      completeRequests.push(request);
+      completeEvents.emit();
+      return Promise.resolve(answer({ state: "unavailable" }));
+    });
+    useProviderLinkDialogStore.getState().open({
+      providerId: "claude-code",
+      profileId: PROFILE_ID,
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        {personalPage(
+          <>
+            <ProviderLinkDialog />
+            <ProvidersListQueryObserver />
+          </>,
+        )}
+      </QueryClientProvider>,
+    );
+
+    await inventoryEvents.waitFor(1);
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("provider-link-continue").hasAttribute("disabled"),
+      ).toBe(false);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await screen.findByLabelText("Code");
+    fireEvent.change(screen.getByLabelText("Code"), {
+      target: { value: "abc#def" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    await completeEvents.waitFor(1);
+    const failedLine = await screen.findByTestId("provider-link-failed");
+    expect(failedLine.textContent).toBe(
+      "Couldn't confirm whether sign-in finished. Check Providers before trying again.",
+    );
+    await inventoryEvents.waitFor(2);
+
+    expect(linkMock.link.mock.calls.map(([request]) => request)).toEqual([
+      {
+        providerId: "claude-code",
+        profileId: PROFILE_ID,
+        environmentId: PERSONAL_ENV_ID,
+        createProfile: null,
+        replaceAccount: false,
+      },
+    ]);
+    expect(completeRequests).toEqual([
+      {
+        linkId: LINK_ID,
+        code: "abc#def",
+        environmentId: PERSONAL_ENV_ID,
+      },
+    ]);
+    expect(providersListMock).toHaveBeenCalledTimes(2);
+    expect(
+      within(linkDialogFooter()).getByRole("button", { name: "Close" }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+
+    fireEvent.click(
+      within(linkDialogFooter()).getByRole("button", { name: "Close" }),
+    );
+    expect(useProviderLinkDialogStore.getState().target).toBeNull();
+    expect(screen.queryByTestId("provider-link-dialog")).toBeNull();
+  });
+
   it("closes and clears the target on Done", async () => {
     await reachSignIn(PROFILE_ID);
     linkMock.complete.mockResolvedValueOnce(
@@ -851,6 +955,173 @@ describe("a sign-in URL with a pasted code", () => {
     pasteAndLink("abc#def");
     await waitForElementToBeRemoved(note);
     expect(linkMock.complete).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("a team device poll with an unknown completion outcome", () => {
+  it("refreshes observed inventory, stops polling, and closes without retry", async () => {
+    const teamEnvironmentId = "env-team-link";
+    const teamDeviceCode = "TEAM-DEVICE-CODE";
+    useAuthStore.setState(SIGNED_IN_AUTH_FIXTURE);
+    recordNegotiatedHostManifest(HOST_ID, {
+      ...LEGACY_SIGN_IN_MANIFEST,
+      "providers.list": { major: 10, minor: 9 },
+    });
+    const inventoryEvents = createCallEvents();
+    const linkEvents = createCallEvents();
+    const completeEvents = createCallEvents();
+    const pollIntervals = createCallEvents();
+    const linkRequests: ProvidersLinkRequestV12[] = [];
+    const completeRequests: ProvidersLinkCompleteRequestV11[] = [];
+    const startResponse = Promise.withResolvers<ProvidersLinkResponseV12>();
+    const initialPollResponse =
+      Promise.withResolvers<ProvidersLinkCompleteResponseV12>();
+    const uncertainPollResponse =
+      Promise.withResolvers<ProvidersLinkCompleteResponseV12>();
+    providersListMock.mockImplementation(() => inventoryEvents.emit());
+    linkMock.link.mockImplementationOnce((request) => {
+      linkRequests.push(request);
+      linkEvents.emit();
+      return startResponse.promise;
+    });
+    linkMock.complete.mockImplementationOnce((request) => {
+      completeRequests.push(request);
+      completeEvents.emit();
+      return initialPollResponse.promise;
+    });
+    linkMock.complete.mockImplementationOnce((request) => {
+      completeRequests.push(request);
+      completeEvents.emit();
+      return uncertainPollResponse.promise;
+    });
+    useProviderLinkDialogStore.getState().open({
+      providerId: "codex",
+      profileId: PROFILE_ID,
+      environmentId: teamEnvironmentId,
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const intervalWindow: Pick<Window, "setInterval"> = window;
+    const realSetInterval = intervalWindow.setInterval.bind(intervalWindow);
+    const intervalSpy = vi
+      .spyOn(intervalWindow, "setInterval")
+      .mockImplementation((handler, timeout) => {
+        const intervalId = realSetInterval(handler, timeout);
+        if (timeout === 5_000) pollIntervals.emit();
+        return intervalId;
+      });
+
+    try {
+      render(
+        <QueryClientProvider client={queryClient}>
+          <ConfigurationSourceContext.Provider
+            value={{
+              kind: "pool",
+              configuration: "team",
+              environmentId: teamEnvironmentId,
+              roomId: "room-team-link",
+              providerHandle: "provider-handle-team-link",
+              effectiveRole: "editor",
+            }}
+          >
+            <ProviderLinkDialog />
+            <ProvidersListQueryObserver />
+          </ConfigurationSourceContext.Provider>
+        </QueryClientProvider>,
+      );
+
+      await inventoryEvents.waitFor(1);
+      fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+      await linkEvents.waitFor(1);
+      await act(async () => {
+        startResponse.resolve({
+          linkId: LINK_ID,
+          environmentProfileId: null,
+          prompt: {
+            kind: "device_code",
+            verificationUrl: "https://auth.example.test/team-device",
+            userCode: teamDeviceCode,
+            expiresAt: Date.now() + 60_000,
+          },
+        });
+        await startResponse.promise;
+      });
+      await completeEvents.waitFor(1);
+      expect(screen.getByTestId("provider-link-user-code").textContent).toBe(
+        teamDeviceCode,
+      );
+      await act(async () => {
+        initialPollResponse.resolve(answer({ state: "pending" }));
+        await initialPollResponse.promise;
+      });
+      await pollIntervals.waitFor(1);
+
+      const completionError = new HostRpcError({
+        code: "RPC_ERROR",
+        message: "Unable to confirm completion.",
+        requestId: "req-link-completion-unknown",
+        method: "providers.linkComplete",
+        fatalDetails: null,
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+      await completeEvents.waitFor(2);
+      await act(async () => {
+        uncertainPollResponse.reject(completionError);
+        await uncertainPollResponse.promise.catch(() => undefined);
+      });
+
+      const failedLine = await screen.findByTestId("provider-link-failed");
+      expect(failedLine.textContent).toBe(
+        "Couldn't confirm whether sign-in finished. Check Providers before trying again.",
+      );
+      await inventoryEvents.waitFor(2);
+      expect(linkRequests).toEqual([
+        {
+          providerId: "codex",
+          profileId: PROFILE_ID,
+          environmentId: teamEnvironmentId,
+          createProfile: null,
+          replaceAccount: false,
+        },
+      ]);
+      expect(completeRequests).toEqual([
+        {
+          linkId: LINK_ID,
+          code: null,
+          environmentId: teamEnvironmentId,
+        },
+        {
+          linkId: LINK_ID,
+          code: null,
+          environmentId: teamEnvironmentId,
+        },
+      ]);
+      expect(providersListMock).toHaveBeenCalledTimes(2);
+      expect(
+        within(linkDialogFooter()).getByRole("button", { name: "Close" }),
+      ).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(completeRequests).toHaveLength(2);
+      fireEvent.click(
+        within(linkDialogFooter()).getByRole("button", { name: "Close" }),
+      );
+      expect(useProviderLinkDialogStore.getState().target).toBeNull();
+      expect(screen.queryByTestId("provider-link-dialog")).toBeNull();
+    } finally {
+      intervalSpy.mockRestore();
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -1000,7 +1271,7 @@ describe("a device code", () => {
     expect(linkMock.complete).toHaveBeenCalledTimes(3);
   });
 
-  it("stops polling once the dialog is cancelled", async () => {
+  it("stops polling once the dialog is closed", async () => {
     await reachDevice();
     linkMock.complete.mockResolvedValue(answer({ state: "pending" }));
     await act(async () => {
@@ -1008,7 +1279,9 @@ describe("a device code", () => {
     });
     expect(linkMock.complete).toHaveBeenCalledTimes(1);
 
-    await clickAndSettle(screen.getByRole("button", { name: "Cancel" }));
+    await clickAndSettle(
+      within(linkDialogFooter()).getByRole("button", { name: "Close" }),
+    );
     expect(useProviderLinkDialogStore.getState().target).toBeNull();
 
     await act(async () => {
@@ -1040,16 +1313,28 @@ describe("a device code", () => {
     expect(dialogState()).toBe("device");
   });
 
-  it("falls to the unavailable line when a poll is refused", async () => {
+  it("shows the outcome-unknown line when a completion poll fails", async () => {
     await reachDevice();
     linkMock.complete.mockRejectedValueOnce(
-      rpcError("PROVIDER_LINK_UNAVAILABLE", "offline detail"),
+      new HostRpcError({
+        code: "PROVIDER_LINK_UNAVAILABLE",
+        message: "offline detail",
+        requestId: "req-poll-unavailable",
+        method: "providers.linkComplete",
+        fatalDetails: null,
+      }),
     );
     await act(async () => {
       await vi.advanceTimersByTimeAsync(5_000);
     });
 
-    expect(screen.getByTestId("provider-link-unavailable")).toBeTruthy();
+    expect(screen.getByTestId("provider-link-failed").textContent).toBe(
+      "Couldn't confirm whether sign-in finished. Check Providers before trying again.",
+    );
+    expect(
+      within(linkDialogFooter()).getByRole("button", { name: "Close" }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 });
 
@@ -1207,9 +1492,11 @@ describe("a provider the dialog does not know", () => {
 });
 
 describe("closing", () => {
-  it("clears the store target on Cancel", async () => {
+  it("clears the store target on Close", async () => {
     await openDialog("claude-code", PROFILE_ID);
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(
+      within(linkDialogFooter()).getByRole("button", { name: "Close" }),
+    );
 
     expect(useProviderLinkDialogStore.getState().target).toBeNull();
     expect(screen.queryByTestId("provider-link-dialog")).toBeNull();
@@ -1220,7 +1507,9 @@ describe("closing", () => {
     fireEvent.change(screen.getByTestId("provider-link-code"), {
       target: { value: "half-typed" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(
+      within(linkDialogFooter()).getByRole("button", { name: "Close" }),
+    );
     expect(screen.queryByTestId("provider-link-dialog")).toBeNull();
 
     act(() => {

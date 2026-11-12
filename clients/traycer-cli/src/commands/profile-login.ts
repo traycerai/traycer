@@ -30,7 +30,7 @@ import {
   parseProfileArgument,
   parseProviderArgument,
   printable,
-  readProviderStates,
+  readProviderInventory,
 } from "../internal/profile-target";
 import { httpUrlOf } from "../internal/profile-login-url";
 import { nameNewProfile } from "../internal/profile-login-name";
@@ -349,9 +349,16 @@ function notInteractive(): CliError {
 async function readProviderState(
   providerId: ProviderId,
 ): Promise<ProviderCliState> {
-  const state = (await readProviderStates()).find(
-    (p) => p.providerId === providerId,
-  );
+  const inventory = await readProviderInventory();
+  if (inventory.credentialsManagedInAccount === true)
+    throw cliError({
+      code: CLI_ERROR_CODES.FORBIDDEN,
+      message:
+        "traycer: sandboxes don't take sign-ins. Sign in on a computer first.",
+      details: null,
+      exitCode: 1,
+    });
+  const state = inventory.providers.find((p) => p.providerId === providerId);
   if (state === undefined) {
     throw cliError({
       code: CLI_ERROR_CODES.NOT_FOUND,

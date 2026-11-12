@@ -28,9 +28,16 @@ import {
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
 import { CredentialRefusalNote } from "@/components/providers/credential-refusal-note";
-import { LINK_NO_SIGN_IN } from "@/lib/providers/provider-link-copy";
+import {
+  LINK_NO_SIGN_IN,
+  LINK_OUTCOME_UNKNOWN,
+  isLinkCompletionOutcomeUnknown,
+} from "@/lib/providers/provider-link-copy";
 import { getNegotiatedHostMethods } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  HostRpcError,
+  mayHaveReachedHost,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import { startVisibleInterval } from "@/lib/dom/visible-interval";
 import { useOpenLink } from "@/lib/links/open-link";
 import { toast } from "sonner";
@@ -57,6 +64,28 @@ type SignInState =
   | { readonly kind: "refused"; readonly line: string }
   | { readonly kind: "failed"; readonly line: string };
 
+type SignInStartFailure = Extract<
+  SignInState,
+  { readonly kind: "refused" | "failed" }
+>;
+
+function signInStartFailure(error: unknown): SignInStartFailure {
+  if (mayHaveReachedHost(error))
+    return { kind: "failed", line: LINK_OUTCOME_UNKNOWN };
+  if (
+    error instanceof HostRpcError &&
+    error.code === "harness_account_unidentified"
+  )
+    return { kind: "refused", line: ACCOUNT_UNIDENTIFIED_SIGN_IN_LINE };
+  return {
+    kind: "failed",
+    line:
+      error instanceof HostRpcError && error.code === "FORBIDDEN"
+        ? "Ask a teammate to sign in on Providers."
+        : "Sign-in did not start. Try again.",
+  };
+}
+
 interface SignInAttempt {
   readonly client: HostClient<HostRpcRegistry>;
   readonly environmentId: ProvidersLinkRequestV12["environmentId"];
@@ -66,7 +95,8 @@ interface SignInAttempt {
   environmentProfileId: string | null;
   closed: boolean;
   cancelSent: boolean;
-  connected: boolean;
+  /** Null means a request may have committed without an observed answer. */
+  connected: boolean | null;
 }
 
 // Dismissal and replacement can change liveness while a request is awaiting.
@@ -174,7 +204,7 @@ function EnvironmentProfileSignInForScope(
         current.linkId === null ||
         current.cancelSent ||
         current.completing ||
-        current.connected ||
+        current.connected !== false ||
         !canCancel
       )
         return;
@@ -200,7 +230,7 @@ function EnvironmentProfileSignInForScope(
 
   const finishReceiving = useCallback(
     (certifiedProfileId: string | null): void => {
-      if (delivered.current) return;
+      if (delivered.current || attempt.current?.connected !== true) return;
       delivered.current = true;
       setState({ kind: "complete" });
       toast.info(SIGNED_IN_RECEIVING_LINE);
@@ -211,13 +241,22 @@ function EnvironmentProfileSignInForScope(
     [],
   );
 
+  const markOutcomeUnknown = (current: SignInAttempt): void => {
+    current.connected = null;
+    // Refresh the displayed inventory once; a row cannot certify this attempt.
+    void inventory.refetch({ cancelRefetch: false });
+    if (isLiveSignInAttempt(current, attempt.current) && !delivered.current)
+      setState({ kind: "failed", line: LINK_OUTCOME_UNKNOWN });
+    else toast.info(LINK_OUTCOME_UNKNOWN);
+  };
+
   const accept = (
     current: SignInAttempt,
     response: ProvidersLinkCompleteResponseV12,
   ): void => {
     if (!isLiveSignInAttempt(current, attempt.current) || delivered.current)
       return;
-    if (response.state === "expired" && current.connected) {
+    if (response.state === "expired" && current.connected === true) {
       finishReceiving(null);
       return;
     }
@@ -239,7 +278,7 @@ function EnvironmentProfileSignInForScope(
           certified: response.state === "linked" && response.profileId !== null,
         });
       }
-    } else if (!current.connected) {
+    } else if (current.connected === false) {
       setState((previous) => incompleteSignInState(previous, response));
     }
   };
@@ -249,7 +288,7 @@ function EnvironmentProfileSignInForScope(
   });
 
   const start = async (replaceAccount: boolean): Promise<void> => {
-    if (disabled || starting) return;
+    if (disabled || starting || attempt.current?.connected === null) return;
     if (attempt.current !== null) release(attempt.current);
     const current: SignInAttempt = {
       client: props.client,
@@ -287,13 +326,8 @@ function EnvironmentProfileSignInForScope(
     } catch (error) {
       if (isLiveSignInAttempt(current, attempt.current)) {
         onActiveChange.current?.(false);
-        setState({
-          kind: "failed",
-          line:
-            error instanceof HostRpcError && error.code === "FORBIDDEN"
-              ? "Ask a teammate to sign in on Providers."
-              : "Sign-in did not start. Try again.",
-        });
+        if (mayHaveReachedHost(error)) current.connected = null;
+        setState(signInStartFailure(error));
       }
     }
   };
@@ -328,6 +362,7 @@ function EnvironmentProfileSignInForScope(
       !isLiveSignInAttempt(current, attempt.current) ||
       credentialRefusal !== null ||
       current.completing ||
+      current.connected === null ||
       current.linkId === null
     )
       return;
@@ -344,12 +379,26 @@ function EnvironmentProfileSignInForScope(
         // Dismissal waits for this verdict before deciding whether to withdraw.
         if (response.state === "linked" || response.state === "installing")
           current.connected = true;
+        else if (
+          response.state === "unavailable" &&
+          current.connected !== true
+        ) {
+          markOutcomeUnknown(current);
+          return;
+        }
         acceptRef.current(current, response);
       })
-      .catch(() => {
+      .catch((error: unknown) => {
+        if (
+          current.connected !== true &&
+          isLinkCompletionOutcomeUnknown(error)
+        ) {
+          markOutcomeUnknown(current);
+          return;
+        }
         if (
           isLiveSignInAttempt(current, attempt.current) &&
-          !current.connected &&
+          current.connected === false &&
           !delivered.current
         )
           setState({
@@ -517,6 +566,8 @@ function EnvironmentSignInBody(props: {
 }): ReactNode {
   const openLink = useOpenLink();
   const { state } = props;
+  const closeLabel =
+    state.kind === "complete" || state.kind === "installing" ? "Done" : "Close";
   let body: ReactNode;
   switch (state.kind) {
     case "idle":
@@ -577,18 +628,11 @@ function EnvironmentSignInBody(props: {
       break;
     case "failed":
       body = (
-        <>
-          <p role="alert" className="text-ui-sm">
-            {state.line}
-          </p>
-          <Button
-            type="button"
-            disabled={props.disabled}
-            onClick={props.onStart}
-          >
-            Retry
-          </Button>
-        </>
+        <EnvironmentSignInFailure
+          line={state.line}
+          disabled={props.disabled}
+          onRetry={props.onStart}
+        />
       );
       break;
     case "complete":
@@ -604,11 +648,28 @@ function EnvironmentSignInBody(props: {
         disabled={state.kind === "complete" && props.disabled}
         onClick={props.onCancel}
       >
-        {state.kind === "complete" || state.kind === "installing"
-          ? "Done"
-          : "Cancel"}
+        {closeLabel}
       </Button>
     </div>
+  );
+}
+
+function EnvironmentSignInFailure(props: {
+  readonly line: string;
+  readonly disabled: boolean;
+  readonly onRetry: () => void;
+}): ReactNode {
+  return (
+    <>
+      <p role="alert" className="text-ui-sm">
+        {props.line}
+      </p>
+      {props.line === LINK_OUTCOME_UNKNOWN ? null : (
+        <Button type="button" disabled={props.disabled} onClick={props.onRetry}>
+          Retry
+        </Button>
+      )}
+    </>
   );
 }
 

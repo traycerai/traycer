@@ -1967,6 +1967,7 @@ function ProviderTabBody({
         <div className="flex flex-col gap-3">
           <ProviderUsageCredentialsNote state={state} />
           <ProviderProfileScopedSection
+            key={`${profileTab.hostId}:${state.providerId}:${profileTab.selectedProfileId}`}
             state={state}
             {...profileTab}
             onOpenCliSettings={() => onActiveTabChange("general")}
