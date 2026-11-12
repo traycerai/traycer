@@ -151,7 +151,7 @@ function idleRows(summary: SandboxSummary): SandboxDetailsRow[] {
   return [
     idleRow,
     {
-      label: "Idle for",
+      label: "Suspended or stopped for",
       value:
         summary.destroyAfterRestingMinutes === null ||
         summary.destroyAfterRestingMinutes === 0
@@ -339,7 +339,7 @@ function operationCause(
 /**
  * One History line: `Suspended by you until Oct 25 at 09:55 · under $0.01`,
  * `Resumed by you (Open terminal) · awake until Oct 25 at 10:01 · $0.02`, or
- * on the current operation `· idle from then` / `· awake from then`.
+ * on the current operation `· resting from then` / `· awake from then`.
  */
 function historyEntryEvent(
   entry: SandboxHistoryEntry,
@@ -353,7 +353,7 @@ function historyEntryEvent(
   if (entry.state === "failed" || ended) {
     span = [cause];
   } else if (entry.untilAt === null) {
-    span = [cause, resting ? "idle from then" : "awake from then"];
+    span = [cause, resting ? "resting from then" : "awake from then"];
   } else if (resting) {
     const until = `until ${formatSandboxDate(entry.untilAt, true)}`;
     span = [cause === null ? until : `${cause} ${until}`, cost];
