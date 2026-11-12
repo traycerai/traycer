@@ -1542,6 +1542,7 @@ class MobileTokenStore implements ITokenStore {
       authnBaseUrl: this.authnBaseUrl,
       token: stored.token,
       refreshToken: stored.refreshToken,
+      rotationCode: null,
       clientKind: null,
       signal: null,
     });
@@ -1621,6 +1622,7 @@ class MobileTokenStore implements ITokenStore {
       authnBaseUrl: this.authnBaseUrl,
       token: legacy.token,
       refreshToken: legacy.refreshToken,
+      rotationCode: null,
       clientKind: null,
       signal: null,
     });

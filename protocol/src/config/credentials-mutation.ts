@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { readFile, unlink } from "node:fs/promises";
 import { readCredentialsFile, type StoredCredentials } from "./credentials";
 import {
@@ -86,6 +86,7 @@ export type RefreshResult =
 export type RefreshFn = (args: {
   readonly token: string;
   readonly refreshToken: string;
+  readonly rotationCode: string;
   readonly signal: AbortSignal | null;
 }) => Promise<RefreshResult>;
 
@@ -297,12 +298,12 @@ type PendingContinuation =
  * server-side is unknowable, so siblings stay deferred while the owner (who
  * recognizes its own marker) retries.
  *
- * The record carries ONLY a sha256 digest of the base's access token plus the
- * owner's pid + start-time fingerprint - no secret material, nothing
- * replayable. It lives in its own file (not a new `credentials.meta.json`
- * key) because older builds' strict sidecar parsers would read an unknown key
- * as malformed and fail automatic mutations closed; an extra sibling file is
- * invisible to them.
+ * The record carries a sha256 digest of the base's access token, the owner's
+ * pid + start-time fingerprint, and a random rotation code useful only together
+ * with the spent token. The file stays mode 0600. It lives in its own file
+ * (not a new `credentials.meta.json` key) because older builds' strict sidecar
+ * parsers would read an unknown key as malformed and fail automatic mutations
+ * closed; an extra sibling file is invisible to them.
  *
  * Unblocking mirrors the lock's holder-liveness rules exactly: a marker whose
  * owner is provably dead (pid gone, or start-time fingerprint mismatch) is
@@ -317,15 +318,13 @@ type PendingContinuation =
  * base - strictly better than both the unconditional sibling re-spend it
  * replaces and an unbounded wait on an owner that may never come back.
  *
- * Known residual (client-side bound): after a network-AMBIGUOUS refresh the
- * OWNER's own retry re-presents the base - the only client-side recovery
- * (refusing forever guarantees the forced re-login the retry merely risks).
- * Within authn's replay grace that re-present adopts the already-minted
- * successor; past it, prod replay controls may kill the family. Fully closing
- * this needs a server-side durable per-base successor, not more client state.
+ * A retry of the same base reuses its rotation code, regardless of the marker's
+ * owner or age, so authn can return the stored successor after a lost reply or
+ * failed save. The TTL bounds only a sibling's wait, never the code's lifetime.
  */
 interface SpentBaseMarker {
   readonly spentTokenDigest: string;
+  readonly rotationCode: string | null;
   readonly at: string;
   readonly ownerPid: number;
   readonly ownerFingerprint: string | null;
@@ -439,6 +438,11 @@ async function readSpentBaseMarker(
   }
   return {
     spentTokenDigest: obj.spentTokenDigest,
+    rotationCode:
+      typeof obj.rotationCode === "string" &&
+      /^[A-Za-z0-9_-]{43}$/.test(obj.rotationCode)
+        ? obj.rotationCode
+        : null,
     at: obj.at,
     ownerPid: obj.ownerPid,
     ownerFingerprint:
@@ -498,9 +502,16 @@ function markerOwnerProvablyDead(marker: SpentBaseMarker): Promise<boolean> {
 async function writeSpentBaseMarker(
   credentialsPath: string,
   spentToken: string,
-): Promise<void> {
+  previousMarker: SpentBaseMarker | null,
+): Promise<string> {
+  const spentTokenDigest = digestToken(spentToken);
+  const rotationCode =
+    (previousMarker?.spentTokenDigest === spentTokenDigest
+      ? previousMarker.rotationCode
+      : null) ?? randomBytes(32).toString("base64url");
   const marker: SpentBaseMarker = {
-    spentTokenDigest: digestToken(spentToken),
+    spentTokenDigest,
+    rotationCode,
     at: new Date().toISOString(),
     ownerPid: process.pid,
     ownerFingerprint: await ownPidStartFingerprintAsync(),
@@ -516,6 +527,7 @@ async function writeSpentBaseMarker(
       "spent-base marker could not be armed",
     );
   }
+  return rotationCode;
 }
 
 /** Best-effort, ENOENT-tolerant. */
@@ -902,11 +914,16 @@ export function createCredentialsMutationStore(
         // migration-override case the spend still replaces THIS base pair, so
         // the gate serializes every competitor either way; keying on the
         // override token would make siblings read the marker as an orphan.
-        await writeSpentBaseMarker(paths.credentialsPath, file.token);
+        const rotationCode = await writeSpentBaseMarker(
+          paths.credentialsPath,
+          file.token,
+          marker,
+        );
         const refreshToken = args.refreshTokenOverride ?? file.refreshToken;
         const refreshed = await refresh({
           token: file.token,
           refreshToken,
+          rotationCode,
           signal: args.signal,
         });
         if (refreshed.kind === "network-error") {
@@ -1278,7 +1295,11 @@ export function createCredentialsMutationStore(
           // the base may already be spent - a sibling takes the lock, sees no
           // marker, and spends it again.
         }
-        await writeSpentBaseMarker(paths.credentialsPath, args.candidate.token);
+        const rotationCode = await writeSpentBaseMarker(
+          paths.credentialsPath,
+          args.candidate.token,
+          marker,
+        );
         // The sole remote call of the hold - every guard above has passed. A
         // rejected candidate is the migration's `terminal-dead` signal. A
         // network failure is AMBIGUOUS - a lost response may have consumed the
@@ -1287,6 +1308,7 @@ export function createCredentialsMutationStore(
         const refreshed = await refresh({
           token: args.candidate.token,
           refreshToken: args.candidate.refreshToken,
+          rotationCode,
           signal: args.signal,
         });
         if (refreshed.kind === "network-error") {

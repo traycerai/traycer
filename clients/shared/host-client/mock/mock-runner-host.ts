@@ -1212,6 +1212,7 @@ export class MockRunnerHost implements IRunnerHost {
         authnBaseUrl: this.authnBaseUrl,
         token: stored.token,
         refreshToken: stored.refreshToken,
+        rotationCode: null,
         clientKind: "desktop",
         signal: null,
       });
@@ -1294,6 +1295,7 @@ export class MockRunnerHost implements IRunnerHost {
         authnBaseUrl: this.authnBaseUrl,
         token: legacy.token,
         refreshToken: legacy.refreshToken,
+        rotationCode: null,
         clientKind: "desktop",
         signal: null,
       });

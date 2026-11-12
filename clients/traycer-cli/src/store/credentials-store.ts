@@ -49,7 +49,7 @@ export function createCliCredentialsStore(): CredentialsMutationStore {
       metaPath: `${credentialsPath}.meta.json`,
       lockPath: `${credentialsPath}.lock`,
     },
-    // The store hands over only the pair; the refresh endpoint is THIS build's
+    // The store hands over the pair and rotation code; the endpoint is THIS build's
     // configured authn (baked, with the dev-slot env override applied at module
     // init). The file deliberately carries no URL - see `store/credentials.ts`.
     refresh: (args) =>

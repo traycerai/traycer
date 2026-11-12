@@ -76,6 +76,34 @@ describe("credentials mutation store", () => {
     };
   }
 
+  function singleUseRefreshServer(): {
+    readonly fn: RefreshFn;
+    readonly requests: () => readonly { token: string; rotationCode: string }[];
+  } {
+    const results = new Map<string, { code: string; result: RefreshResult }>();
+    const seen: { token: string; rotationCode: string }[] = [];
+    return {
+      fn: async ({ token, rotationCode }) => {
+        seen.push({ token, rotationCode });
+        const existing = results.get(token);
+        if (existing !== undefined) {
+          if (existing.code !== rotationCode) {
+            throw new Error("single-use refresh code mismatch");
+          }
+          return existing.result;
+        }
+        const result: RefreshResult = {
+          kind: "refreshed",
+          token: `${token}::server-pair`,
+          refreshToken: `rt::${token}::server-pair`,
+        };
+        results.set(token, { code: rotationCode, result });
+        return result;
+      },
+      requests: () => seen,
+    };
+  }
+
   const rotateOk = (token: string): RefreshResult => ({
     kind: "refreshed",
     token: `${token}::r`,
@@ -106,6 +134,34 @@ describe("credentials mutation store", () => {
   }
 
   describe("rotate", () => {
+    it("sends a 43-character code matching the armed marker", async () => {
+      const server = singleUseRefreshServer();
+      let markerCode: string | null = null;
+      const store = makeStore(async (args) => {
+        const marker = JSON.parse(
+          readFileSync(spentBaseMarkerPath(credentialsPath), "utf8"),
+        ) as {
+          rotationCode: string;
+        };
+        markerCode = marker.rotationCode;
+        return server.fn(args);
+      });
+      await seedSignedIn(store);
+
+      const result = await store.rotate({
+        expectedUserId: CREDS.user.id,
+        expectedToken: CREDS.token,
+        refreshTokenOverride: null,
+        signal: null,
+      });
+
+      expect(result.outcome).toBe("applied");
+      expect(markerCode).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(server.requests()).toEqual([
+        { token: CREDS.token, rotationCode: markerCode },
+      ]);
+    });
+
     it("refreshes and commits when the token matches (applied)", async () => {
       const refresh = refreshStub(rotateOk);
       const store = makeStore(refresh.fn);
@@ -633,8 +689,8 @@ describe("credentials mutation store", () => {
     };
 
     it("spends the candidate and first-writes the refreshed pair stamped with the probed identity (applied)", async () => {
-      const stub = refreshStub(rotateOk);
-      const store = makeStore(stub.fn);
+      const server = singleUseRefreshServer();
+      const store = makeStore(server.fn);
       const result = await store.migrateFirstWrite({
         candidate: CANDIDATE,
         identity: MIGRATED_IDENTITY,
@@ -642,11 +698,13 @@ describe("credentials mutation store", () => {
         signal: null,
       });
       expect(result.outcome).toBe("applied");
-      expect(stub.calls()).toBe(1);
+      expect(server.requests()).toHaveLength(1);
+      expect(server.requests()[0].token).toBe(CANDIDATE.token);
+      expect(server.requests()[0].rotationCode).toMatch(/^[A-Za-z0-9_-]{43}$/);
       const onDisk = await readCredentialsFile(credentialsPath);
       expect(onDisk).toEqual({
-        token: "cand-tok::r",
-        refreshToken: "rt::cand-tok",
+        token: "cand-tok::server-pair",
+        refreshToken: "rt::cand-tok::server-pair",
         savedAt: expect.any(String),
         user: MIGRATED_IDENTITY,
       });
@@ -1045,10 +1103,39 @@ describe("credentials mutation store", () => {
     });
 
     it("reclaims a provably-dead owner's marker immediately", async () => {
-      const stub = refreshStub(rotateOk);
-      const store = makeStore(stub.fn);
+      const server = singleUseRefreshServer();
+      const store = makeStore(server.fn);
       await seedSignedIn(store);
+      const deadOwnerCode = "D".repeat(43);
       // A pid that cannot be a live process paired with a real-shaped record.
+      writeFileSync(
+        markerPath(),
+        JSON.stringify({
+          spentTokenDigest: sha256(CREDS.token),
+          rotationCode: deadOwnerCode,
+          at: new Date().toISOString(),
+          ownerPid: 2 ** 22 - 7,
+          ownerFingerprint: "long-gone",
+        }),
+        { mode: 0o600 },
+      );
+
+      const result = await store.rotate({
+        expectedUserId: CREDS.user.id,
+        expectedToken: CREDS.token,
+        refreshTokenOverride: null,
+        signal: null,
+      });
+
+      expect(result.outcome).toBe("applied");
+      expect(server.requests()).toHaveLength(1);
+      expect(server.requests()[0].rotationCode).toBe(deadOwnerCode);
+    });
+
+    it("reads an older marker without a code and generates one", async () => {
+      const server = singleUseRefreshServer();
+      const store = makeStore(server.fn);
+      await seedSignedIn(store);
       writeFileSync(
         markerPath(),
         JSON.stringify({
@@ -1068,8 +1155,122 @@ describe("credentials mutation store", () => {
       });
 
       expect(result.outcome).toBe("applied");
-      expect(stub.calls()).toBe(1);
+      expect(server.requests()).toHaveLength(1);
+      expect(server.requests()[0].rotationCode).toMatch(/^[A-Za-z0-9_-]{43}$/);
     });
+
+    it("replaces a malformed marker code", async () => {
+      const server = singleUseRefreshServer();
+      const store = makeStore(server.fn);
+      await seedSignedIn(store);
+      writeFileSync(
+        markerPath(),
+        JSON.stringify({
+          spentTokenDigest: sha256(CREDS.token),
+          rotationCode: "malformed",
+          at: new Date().toISOString(),
+          ownerPid: 2 ** 22 - 7,
+          ownerFingerprint: "long-gone",
+        }),
+        { mode: 0o600 },
+      );
+
+      const result = await store.rotate({
+        expectedUserId: CREDS.user.id,
+        expectedToken: CREDS.token,
+        refreshTokenOverride: null,
+        signal: null,
+      });
+
+      expect(result.outcome).toBe("applied");
+      expect(server.requests()[0].rotationCode).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    });
+
+    it("reuses an aged same-base marker code", async () => {
+      const server = singleUseRefreshServer();
+      const store = makeStore(server.fn);
+      await seedSignedIn(store);
+      const agedCode = "A".repeat(43);
+      writeFileSync(
+        markerPath(),
+        JSON.stringify({
+          spentTokenDigest: sha256(CREDS.token),
+          rotationCode: agedCode,
+          at: new Date(Date.now() - 61_000).toISOString(),
+          ownerPid: process.ppid,
+          ownerFingerprint: queryPidStartFingerprint(process.ppid),
+        }),
+        { mode: 0o600 },
+      );
+
+      const result = await store.rotate({
+        expectedUserId: CREDS.user.id,
+        expectedToken: CREDS.token,
+        refreshTokenOverride: null,
+        signal: null,
+      });
+
+      expect(result.outcome).toBe("applied");
+      expect(server.requests()).toEqual([
+        { token: CREDS.token, rotationCode: agedCode },
+      ]);
+    });
+
+    it.runIf(canForceCommitFailure)(
+      "restarts after a failed save and adopts the single-use result with the same code",
+      async () => {
+        const server = singleUseRefreshServer();
+        const firstStore = createCredentialsMutationStore({
+          paths: { credentialsPath, metaPath, lockPath },
+          lockWaitMs: 500,
+          lockPollIntervalMs: 25,
+          continuationRetryMs: 60_000,
+          refresh: async (args) => {
+            chmodSync(workDir, 0o500);
+            return server.fn(args);
+          },
+        });
+        stores.push(firstStore);
+        await seedSignedIn(firstStore);
+
+        const failed = await firstStore.rotate({
+          expectedUserId: CREDS.user.id,
+          expectedToken: CREDS.token,
+          refreshTokenOverride: null,
+          signal: null,
+        });
+
+        expect(failed.outcome).toBe("commit-failed");
+        expect(existsSync(markerPath())).toBe(true);
+        const firstCode = server.requests()[0].rotationCode;
+        expect(firstCode).toMatch(/^[A-Za-z0-9_-]{43}$/);
+
+        firstStore.dispose();
+        stores.splice(stores.indexOf(firstStore), 1);
+        expect(await readCredentialsFile(credentialsPath)).toEqual(CREDS);
+        expect(existsSync(markerPath())).toBe(true);
+
+        chmodSync(workDir, 0o700);
+        const relaunched = makeStore(server.fn);
+        const retried = await relaunched.rotate({
+          expectedUserId: CREDS.user.id,
+          expectedToken: CREDS.token,
+          refreshTokenOverride: null,
+          signal: null,
+        });
+
+        expect(retried.outcome).toBe("applied");
+        expect(retried.credentials?.token).toBe(`${CREDS.token}::server-pair`);
+        expect(server.requests()).toEqual([
+          { token: CREDS.token, rotationCode: firstCode },
+          { token: CREDS.token, rotationCode: firstCode },
+        ]);
+        expect(await readCredentialsFile(credentialsPath)).toEqual(
+          retried.credentials,
+        );
+        expect(existsSync(markerPath())).toBe(false);
+      },
+    );
 
     it("ignores an orphaned marker for a superseded base", async () => {
       const stub = refreshStub(rotateOk);
@@ -1090,11 +1291,13 @@ describe("credentials mutation store", () => {
     });
 
     it("keeps its own marker armed across a network-ambiguous refresh, without self-blocking the retry", async () => {
-      let mode: "network" | "ok" = "network";
-      const stub = refreshStub((token) =>
-        mode === "network" ? { kind: "network-error" } : rotateOk(token),
-      );
-      const store = makeStore(stub.fn);
+      const server = singleUseRefreshServer();
+      let attempts = 0;
+      const store = makeStore(async (args) => {
+        attempts += 1;
+        const result = await server.fn(args);
+        return attempts === 1 ? { kind: "network-error" } : result;
+      });
       await seedSignedIn(store);
 
       const first = await store.rotate({
@@ -1108,13 +1311,13 @@ describe("credentials mutation store", () => {
       expect(existsSync(markerPath())).toBe(true);
       const marker = JSON.parse(readFileSync(markerPath(), "utf8")) as {
         spentTokenDigest: string;
+        rotationCode: string;
         ownerPid: number;
       };
       expect(marker.spentTokenDigest).toBe(sha256(CREDS.token));
       expect(marker.ownerPid).toBe(process.pid);
 
       // The owner's own retry is not blocked by its own marker.
-      mode = "ok";
       const second = await store.rotate({
         expectedUserId: CREDS.user.id,
         expectedToken: CREDS.token,
@@ -1122,7 +1325,10 @@ describe("credentials mutation store", () => {
         signal: null,
       });
       expect(second.outcome).toBe("applied");
-      expect(stub.calls()).toBe(2);
+      expect(server.requests()).toEqual([
+        { token: CREDS.token, rotationCode: marker.rotationCode },
+        { token: CREDS.token, rotationCode: marker.rotationCode },
+      ]);
       expect(existsSync(markerPath())).toBe(false);
     });
 
