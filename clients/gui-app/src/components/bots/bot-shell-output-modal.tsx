@@ -1,4 +1,4 @@
-import { useId } from "react";
+import { useId, useLayoutEffect, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -14,6 +14,7 @@ export function BotShellOutputModal(props: {
   readonly botId: string;
   readonly sessionChatId: string;
   readonly hostId: string | null;
+  readonly boundHostId: string | null;
   readonly commandId: string | null;
   readonly onClose: () => void;
   readonly restoreFocus: () => void;
@@ -51,6 +52,7 @@ export function BotShellOutputModal(props: {
             botId={props.botId}
             sessionChatId={props.sessionChatId}
             hostId={props.hostId}
+            boundHostId={props.boundHostId}
             commandId={props.commandId}
             onClose={props.onClose}
           />
@@ -64,6 +66,7 @@ function BotShellOutput(props: {
   readonly botId: string;
   readonly sessionChatId: string;
   readonly hostId: string;
+  readonly boundHostId: string | null;
   readonly commandId: string;
   readonly onClose: () => void;
 }) {
@@ -78,6 +81,14 @@ function BotShellOutput(props: {
     hostId: props.hostId,
     commandId: props.commandId,
   });
+  const [retired, setRetired] = useState(false);
+  const bindingMoved = props.boundHostId !== props.hostId;
+  if (bindingMoved && !retired) setRetired(true);
+  const frozen = retired || bindingMoved;
+  useLayoutEffect(() => {
+    if (!frozen) return;
+    session?.freeze();
+  }, [frozen, session]);
   if (session === null) {
     return (
       <div role="status" className="p-4 text-ui-sm text-muted-foreground">
@@ -92,7 +103,8 @@ function BotShellOutput(props: {
           instanceId={`bot-output:${props.hostId}:${props.botId}:${props.sessionChatId}:${props.commandId}:${viewId}`}
           mode={{
             kind: "bot",
-            hostReachable: reachability.status === "reachable",
+            hostReachable: !frozen && reachability.status === "reachable",
+            frozen,
           }}
           onClose={props.onClose}
           onReopen={reopen}

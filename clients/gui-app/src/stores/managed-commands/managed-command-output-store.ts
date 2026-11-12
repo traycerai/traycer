@@ -121,6 +121,8 @@ export interface ManagedCommandOutputStoreHandle {
   readonly store: UseBoundStore<StoreApi<ManagedCommandOutputState>>;
   /** See `ManagedCommandOutputStreamClientHandle.streamMethodSupport`. */
   readonly streamMethodSupport: StreamMethodSupportSource<HostStreamRpcRegistry> | null;
+  /** Hold the current output while still listening for an access denial. */
+  readonly freeze: () => void;
   readonly dispose: () => void;
 }
 
@@ -147,6 +149,7 @@ export function createManagedCommandOutputStore(
   options: ManagedCommandOutputStoreOptions,
 ): ManagedCommandOutputStoreHandle {
   let disposed = false;
+  let frozen = false;
   let botLiveness = false;
   let streamClient: ManagedCommandOutputStreamClientHandle | null = null;
   // The request the store is waiting on. A window that arrives under any other
@@ -301,7 +304,7 @@ export function createManagedCommandOutputStore(
 
   const callbacks: ManagedCommandOutputStreamCallbacks = {
     onSnapshot: (snapshot) => {
-      if (disposed) return;
+      if (disposed || frozen) return;
       pendingOlderRequestId = null;
       // A replacement snapshot (reconnect or explicit resnapshot) restores
       // live-follow intent. The first snapshot preserves any reading anchor
@@ -324,7 +327,7 @@ export function createManagedCommandOutputStore(
       }));
     },
     onOutput: (frame) => {
-      if (disposed || frame.lines.length === 0) return;
+      if (disposed || frozen || frame.lines.length === 0) return;
       store.setState((state) => {
         if (!following || state.detached || state.resyncPending) {
           if (state.detached && state.newOutputAvailable) return state;
@@ -353,7 +356,7 @@ export function createManagedCommandOutputStore(
       });
     },
     onOlder: (window) => {
-      if (disposed) return;
+      if (disposed || frozen) return;
       if (window.requestId !== pendingOlderRequestId) return;
       pendingOlderRequestId = null;
       store.setState((state) => {
@@ -376,11 +379,11 @@ export function createManagedCommandOutputStore(
       });
     },
     onStatus: (command) => {
-      if (disposed) return;
+      if (disposed || frozen) return;
       store.setState({ command });
     },
     onDeleted: () => {
-      if (disposed) return;
+      if (disposed || frozen) return;
       botLiveness = false;
       // The history went with the shell; a page in flight has nothing to land
       // on. `reachedStart` is left alone - it is the host's word about the
@@ -395,7 +398,7 @@ export function createManagedCommandOutputStore(
       }));
     },
     onLiveness: (state) => {
-      if (disposed) return;
+      if (disposed || frozen) return;
       botLiveness = state === "live";
       if (!botLiveness) pendingOlderRequestId = null;
       store.setState((current) => ({
@@ -428,6 +431,7 @@ export function createManagedCommandOutputStore(
         options.target.kind === "bot" &&
         closedForGood &&
         reason.details.code === "MANAGED_COMMAND_UNAVAILABLE";
+      if (frozen && !denied) return;
       // A page can never land on a stream the host closed for good: drop the
       // wait, or the spinner sits at the top of a dead timeline forever.
       if (status !== "open") {
@@ -473,6 +477,17 @@ export function createManagedCommandOutputStore(
     commandId: options.commandId,
     store,
     streamMethodSupport: streamClient.streamMethodSupport,
+    freeze: () => {
+      if (disposed || frozen) return;
+      frozen = true;
+      botLiveness = false;
+      pendingOlderRequestId = null;
+      store.setState({
+        live: false,
+        loadingOlder: false,
+        resyncPending: false,
+      });
+    },
     dispose: () => {
       store.getState().dispose();
     },

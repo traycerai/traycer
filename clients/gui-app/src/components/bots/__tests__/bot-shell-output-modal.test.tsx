@@ -4,7 +4,7 @@
  * stream. Only the transport, the host reachability read and navigation are
  * replaced.
  */
-import { StrictMode, type ReactElement } from "react";
+import { StrictMode, useEffect, useState, type ReactElement } from "react";
 import {
   act,
   cleanup,
@@ -37,6 +37,7 @@ import type { TokenUsage } from "@traycer/protocol/persistence/epic/foundation";
 const mocks = vi.hoisted(() => ({
   reachable: true,
   unreachableHosts: new Set<string>(),
+  onTransportOpen: null as (() => void) | null,
   sessions: {} as Record<string, ChatSessionStoreHandle>,
   navigateToTabIntent: vi.fn<(...args: unknown[]) => void>(),
 }));
@@ -62,6 +63,7 @@ vi.mock("@/lib/host/use-durable-stream-transport", () => ({
     () =>
     (hostId: string): DurableStreamTransport => {
       transportOpens.push(hostId);
+      mocks.onTransportOpen?.();
       return { wsStreamClient: hostClient, close: () => undefined };
     },
 }));
@@ -253,6 +255,21 @@ function mountSession(input: {
   return render(sessionTree(input));
 }
 
+const bindingControl: { set: (hostId: string | null) => void } = {
+  set: () => undefined,
+};
+
+/** The session view whose binding the test moves from outside, even mid-render. */
+function ControlledSession(props: {
+  readonly initialBoundHostId: string | null;
+}): ReactElement {
+  const [boundHostId, setBoundHostId] = useState(props.initialBoundHostId);
+  useEffect(() => {
+    bindingControl.set = setBoundHostId;
+  }, []);
+  return sessionTree({ chatId: TRUNK_ID, threadId: null, boundHostId });
+}
+
 function view(): HTMLElement {
   return screen.getByTestId("bot-session-view");
 }
@@ -268,6 +285,7 @@ beforeEach(() => {
   transportOpens.length = 0;
   mocks.reachable = true;
   mocks.unreachableHosts.clear();
+  mocks.onTransportOpen = null;
   installLegendListTestClock();
   vi.clearAllMocks();
   installLegendListViewportMetrics();
@@ -740,29 +758,233 @@ describe("the read-only shell output modal over a bot session", () => {
       expect(new Set(transportOpens)).toEqual(new Set([BOUND_HOST]));
     });
 
-    it("stays pinned to the host it opened on when the binding later changes", async () => {
+    const REBINDINGS: ReadonlyArray<readonly [string, string | null]> = [
+      ["another host", "host-rebound"],
+      ["no host", null],
+    ];
+
+    async function openThenRebind(nextHostId: string | null): Promise<{
+      readonly stream: FakeStreamSession;
+      readonly subscribesAtRebind: number;
+    }> {
       const { mounted } = await openShellOutput(ROW, BOUND_HOST);
       const stream = onlyStream();
       emitSnapshot(stream, ["pinned-1"], runningCommand(COMMAND_ID));
       emitLiveness(stream, "live");
-      const subscribesBefore = hostClient.subscribes.length;
-
+      expect(
+        within(dialog()).queryByTestId("bot-shell-output-not-live"),
+      ).toBeNull();
+      const subscribesAtRebind = hostClient.subscribes.length;
       mounted.rerender(
         sessionTree({
           chatId: TRUNK_ID,
           threadId: null,
-          boundHostId: "host-rebound",
+          boundHostId: nextHostId,
         }),
       );
       await act(async () => {
         await vi.advanceTimersByTimeAsync(50);
       });
+      return { stream, subscribesAtRebind };
+    }
 
-      expect(new Set(transportOpens)).toEqual(new Set([BOUND_HOST]));
-      expect(hostClient.subscribes).toHaveLength(subscribesBefore);
-      expect(stream.closed).toBe(false);
+    it.each(REBINDINGS)(
+      "keeps its lines and reads Not live at once, still on the old host, after the binding moves to %s",
+      async (_label, nextHostId) => {
+        const { subscribesAtRebind } = await openThenRebind(nextHostId);
+
+        expect(new Set(transportOpens)).toEqual(new Set([BOUND_HOST]));
+        expect(hostClient.subscribes).toHaveLength(subscribesAtRebind);
+        expect(within(dialog()).getByText(/pinned-1/)).toBeTruthy();
+        expect(
+          within(dialog()).getByTestId("bot-shell-output-not-live"),
+        ).toBeTruthy();
+      },
+    );
+
+    it.each(REBINDINGS)(
+      "accepts no later output, snapshot or liveness frame from the old host after the binding moves to %s",
+      async (_label, nextHostId) => {
+        const { stream } = await openThenRebind(nextHostId);
+
+        emitLateOutput(stream, "pinned-late");
+        emitSnapshot(stream, ["pinned-resnap"], runningCommand(COMMAND_ID));
+        emitLiveness(stream, "live");
+        act(() => {
+          stream.emit(
+            {
+              kind: "status",
+              command: endedCommand(COMMAND_ID),
+              hasBinaryPayload: false,
+            },
+            null,
+          );
+          stream.emit({ kind: "deleted", hasBinaryPayload: false }, null);
+        });
+
+        expect(
+          within(dialog()).queryByText(/pinned-late|pinned-resnap/),
+        ).toBeNull();
+        expect(
+          within(dialog()).queryByTestId("bot-shell-output-unavailable"),
+        ).toBeNull();
+        expect(
+          within(dialog()).queryByText(/exited|ended|finished/i),
+        ).toBeNull();
+        expect(within(dialog()).getByText(/pinned-1/)).toBeTruthy();
+        expect(
+          within(dialog()).getByTestId("bot-shell-output-not-live"),
+        ).toBeTruthy();
+      },
+    );
+
+    it("stays frozen when the binding returns to the host it opened on", async () => {
+      const { mounted } = await openShellOutput(ROW, BOUND_HOST);
+      const stream = onlyStream();
+      emitSnapshot(stream, ["pinned-1"], runningCommand(COMMAND_ID));
+      emitLiveness(stream, "live");
+      for (const boundHostId of ["host-rebound", BOUND_HOST]) {
+        mounted.rerender(
+          sessionTree({ chatId: TRUNK_ID, threadId: null, boundHostId }),
+        );
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(50);
+        });
+      }
+
+      emitLateOutput(stream, "pinned-late");
+      emitLiveness(stream, "live");
+
+      expect(
+        within(dialog()).getByTestId("bot-shell-output-not-live"),
+      ).toBeTruthy();
       expect(within(dialog()).getByText(/pinned-1/)).toBeTruthy();
+      expect(within(dialog()).queryByText(/pinned-late/)).toBeNull();
+      expect(new Set(transportOpens)).toEqual(new Set([BOUND_HOST]));
     });
+
+    it.each(REBINDINGS)(
+      "clears the held lines when the old host then denies access, after the binding moves to %s",
+      async (_label, nextHostId) => {
+        const { stream } = await openThenRebind(nextHostId);
+        expect(within(dialog()).getByText(/pinned-1/)).toBeTruthy();
+
+        act(() =>
+          stream.emitFatalWithCode("MANAGED_COMMAND_UNAVAILABLE", "denied"),
+        );
+
+        expect(within(dialog()).queryByText(/pinned-1/)).toBeNull();
+        expect(
+          within(dialog()).getByTestId("bot-shell-output-unavailable"),
+        ).toBeTruthy();
+      },
+    );
+
+    it.each(REBINDINGS)(
+      "never shows the first snapshot that arrives after the binding moved to %s",
+      async (_label, nextHostId) => {
+        const { mounted } = await openShellOutput(ROW, BOUND_HOST);
+        const stream = onlyStream();
+        expect(within(dialog()).getByText(/Loading output/)).toBeTruthy();
+
+        mounted.rerender(
+          sessionTree({
+            chatId: TRUNK_ID,
+            threadId: null,
+            boundHostId: nextHostId,
+          }),
+        );
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(50);
+        });
+        emitSnapshot(stream, ["stale-first"], runningCommand(COMMAND_ID));
+        emitLiveness(stream, "live");
+
+        expect(within(dialog()).queryByText(/stale-first/)).toBeNull();
+        expect(within(dialog()).queryByText(/Loading output/)).toBeNull();
+        expect(
+          within(dialog()).queryByTestId("bot-shell-output-not-live"),
+        ).not.toBeNull();
+      },
+    );
+
+    it("leaves no dialog and no lines when the bot surface drops the session view", async () => {
+      const { mounted } = await openShellOutput(ROW, BOUND_HOST);
+      const stream = onlyStream();
+      emitSnapshot(stream, ["pinned-1"], runningCommand(COMMAND_ID));
+      emitLiveness(stream, "live");
+
+      mounted.rerender(<StrictMode>{null}</StrictMode>);
+
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(screen.queryByText(/pinned-1/)).toBeNull();
+      expect(stream.closed).toBe(true);
+    });
+
+    it("stays frozen when the binding moves before the output session exists and is back on the opened host before the stream is created", async () => {
+      render(<ControlledSession initialBoundHostId={BOUND_HOST} />);
+      await settleLegendList();
+      openBackground();
+      const trigger = within(within(view()).getByTestId(ROW)).getByRole(
+        "button",
+      );
+      // The stream is created inside the view's effect; the binding returns in
+      // the same batch as the session, never having been seen with a session.
+      mocks.onTransportOpen = () => bindingControl.set(BOUND_HOST);
+
+      act(() => {
+        fireEvent.click(trigger);
+        bindingControl.set("host-rebound");
+      });
+      const stream = onlyStream();
+      emitSnapshot(stream, ["stale-first"], runningCommand(COMMAND_ID));
+      emitLiveness(stream, "live");
+
+      expect(within(dialog()).queryByText(/stale-first/)).toBeNull();
+      expect(within(dialog()).queryByText(/Loading output/)).toBeNull();
+      expect(
+        within(dialog()).getByTestId("bot-shell-output-not-live"),
+      ).toBeTruthy();
+    });
+
+    it.each(REBINDINGS)(
+      "reads the new binding on a fresh reopen after the binding moved to %s",
+      async (_label, nextHostId) => {
+        const { mounted } = await openShellOutput(ROW, BOUND_HOST);
+        const stream = onlyStream();
+        emitSnapshot(stream, ["pinned-1"], runningCommand(COMMAND_ID));
+        emitLiveness(stream, "live");
+        mounted.rerender(
+          sessionTree({
+            chatId: TRUNK_ID,
+            threadId: null,
+            boundHostId: nextHostId,
+          }),
+        );
+        fireEvent.keyDown(dialog(), { key: "Escape", code: "Escape" });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(50);
+        });
+        expect(screen.queryByRole("dialog")).toBeNull();
+        const opensBefore = transportOpens.length;
+
+        fireEvent.click(
+          within(within(view()).getByTestId(ROW)).getByRole("button"),
+        );
+
+        if (nextHostId === null) {
+          expect(
+            within(dialog()).getByTestId("bot-shell-output-unavailable"),
+          ).toBeTruthy();
+          expect(transportOpens).toHaveLength(opensBefore);
+        } else {
+          expect(transportOpens.length).toBeGreaterThan(opensBefore);
+          expect(transportOpens.slice(opensBefore)).toContain(nextHostId);
+          expect(transportOpens.slice(opensBefore)).not.toContain(BOUND_HOST);
+          expect(within(dialog()).queryByText(/pinned-1/)).toBeNull();
+        }
+      },
+    );
 
     it("keeps the lines and says Not live when the bound host is unreachable, though the viewing host is reachable", async () => {
       mocks.unreachableHosts.add(BOUND_HOST);

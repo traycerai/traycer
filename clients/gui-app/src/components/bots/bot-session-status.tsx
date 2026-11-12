@@ -200,6 +200,7 @@ function BotSessionStatusForViewer(
           botId={props.botId}
           sessionChatId={props.chatId}
           hostId={output?.hostId ?? null}
+          boundHostId={data.boundHostId}
           commandId={output?.commandId ?? null}
           onClose={() => setOutput(null)}
           restoreFocus={() => outputTrigger.current?.focus()}

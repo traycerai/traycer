@@ -297,7 +297,11 @@ export function ManagedCommandOutputBody(props: {
         readonly hostId: string;
         readonly viewTabId: string;
       }
-    | { readonly kind: "bot"; readonly hostReachable: boolean };
+    | {
+        readonly kind: "bot";
+        readonly hostReachable: boolean;
+        readonly frozen: boolean;
+      };
   readonly onClose: () => void;
   readonly onReopen: () => void;
   readonly session: ManagedCommandOutputStoreHandle;
@@ -646,6 +650,7 @@ export function ManagedCommandOutputBody(props: {
           unavailable={botUnavailable}
           notLive={botNotLive}
           hasLines={lines.length > 0}
+          frozen={mode.frozen}
         />
       ) : null}
       {mode.kind === "epic" && isShellOutputBanner(availability) ? (
@@ -695,7 +700,11 @@ function ManagedOutputTimeline(props: {
         readonly hostId: string;
         readonly viewTabId: string;
       }
-    | { readonly kind: "bot"; readonly hostReachable: boolean };
+    | {
+        readonly kind: "bot";
+        readonly hostReachable: boolean;
+        readonly frozen: boolean;
+      };
   readonly command: ManagedCommand | null;
   readonly viewRef: RefObject<HTMLDivElement | null>;
   readonly onScroll: () => void;
@@ -896,6 +905,7 @@ function BotOutputNotices(props: {
   readonly unavailable: boolean;
   readonly notLive: boolean;
   readonly hasLines: boolean;
+  readonly frozen: boolean;
 }) {
   return (
     <>
@@ -917,7 +927,8 @@ function BotOutputNotices(props: {
           Output unavailable
         </div>
       ) : null}
-      {props.notLive && (props.command !== null || props.hasLines) ? (
+      {props.notLive &&
+      (props.command !== null || props.hasLines || props.frozen) ? (
         <div
           role="status"
           data-testid="bot-shell-output-not-live"
@@ -926,7 +937,7 @@ function BotOutputNotices(props: {
           Not live
         </div>
       ) : null}
-      {!props.unavailable && props.command === null ? (
+      {!props.unavailable && !props.frozen && props.command === null ? (
         <div
           role="status"
           className="px-3 py-2 text-ui-sm text-muted-foreground"
