@@ -12,12 +12,14 @@ import {
   FolderGit2,
   GitPullRequest,
   Layers,
+  Search,
 } from "lucide-react";
 import type {
   PrLightItem,
   PrSourceStatus,
 } from "@traycer/protocol/host/pr-schemas";
 import { PrPanelActions } from "@/components/epic-canvas/pr/pr-panel-actions";
+import { PrPanelSearch } from "@/components/epic-canvas/pr/pr-panel-search";
 import { useSurfaceHostStreamBinding } from "@/hooks/host/use-surface-host-stream-binding";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
 import type { LeftPanelSlotProps } from "@/components/epic-canvas/sidebar/left-panel-registry";
@@ -44,12 +46,19 @@ import {
   fullyIdentifiedPrBase,
   groupPrItemsByRepo,
   prListRowKey,
+  prMatchesSearch,
+  prSearchTerms,
   type PrRepoBlock,
   type PrRepoGroup,
 } from "@/lib/pr/pr-list-projection";
 import { cn } from "@/lib/utils";
 import { useMainPanelCollapsed } from "@/stores/epics/left-panel-store";
-import { usePrPanelStore } from "@/stores/epics/pr-panel-store";
+import {
+  usePrPanelSearchQuery,
+  usePrPanelStore,
+  type PrStateFilter,
+} from "@/stores/epics/pr-panel-store";
+import { PrSearchTermsContext } from "@/components/epic-canvas/pr/pr-search-context";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
 import {
   clearSidebarNodeRevealRequest,
@@ -105,6 +114,7 @@ function PrPanelBodyLive(
       data-testid="pr-panel-surface"
     >
       <div className="flex shrink-0 flex-wrap items-center justify-end gap-1 border-b border-border/60 px-2 py-1.5">
+        {methodSupported ? <PrPanelSearch tabId={props.tabId} /> : null}
         <PrPanelActions
           key={hostId}
           subscription={subscription}
@@ -149,6 +159,9 @@ export function PrPanelBodyContent(props: {
   const { openTile } = useEpicTileNavigation();
   const stateFilter = usePrPanelStore((state) => state.stateFilter);
   const setStateFilter = usePrPanelStore((state) => state.setStateFilter);
+  const searchQuery = usePrPanelSearchQuery(props.tabId);
+  const searchTerms = useMemo(() => prSearchTerms(searchQuery), [searchQuery]);
+  const searching = searchTerms.length > 0;
   // Grouped on the complete list, then filtered: stack membership is decided
   // with every row present, so hiding a merged dependent cannot turn its
   // siblings into a stack they are not in (see `filterPrRepoGroups`).
@@ -156,16 +169,15 @@ export function PrPanelBodyContent(props: {
     () => groupPrItemsByRepo(props.items),
     [props.items],
   );
-  const groups = useMemo(
-    () =>
-      stateFilter === "all"
-        ? allGroups
-        : filterPrRepoGroups(allGroups, (item) => item.state === stateFilter),
-    [allGroups, stateFilter],
-  );
-  const visibleCount = useMemo(
-    () => groups.reduce((count, group) => count + group.items.length, 0),
-    [groups],
+  const groups = useMemo(() => {
+    const keep = prPanelRowFilter(stateFilter, searchTerms);
+    return keep === null ? allGroups : filterPrRepoGroups(allGroups, keep);
+  }, [allGroups, stateFilter, searchTerms]);
+  const filteredEmpty = resolveFilteredEmpty(
+    groups,
+    props.items.length,
+    searching,
+    stateFilter,
   );
   const [collapsedRepos, setCollapsedRepos] = useState<ReadonlySet<string>>(
     new Set<string>(),
@@ -317,7 +329,16 @@ export function PrPanelBodyContent(props: {
         />
       ) : null}
       {/* Below the banners, so a stale or failed refresh still says so. */}
-      {stateFilter !== "all" && visibleCount === 0 && props.items.length > 0 ? (
+      {filteredEmpty === "search" ? (
+        <PrSearchEmptyState
+          tabId={props.tabId}
+          items={props.items}
+          stateFilter={stateFilter}
+          query={searchQuery}
+          terms={searchTerms}
+        />
+      ) : null}
+      {filteredEmpty === "state" ? (
         <SidebarPanelEmptyState
           icon={GitPullRequest}
           title={`No ${stateFilter} pull requests`}
@@ -339,21 +360,27 @@ export function PrPanelBodyContent(props: {
       ) : null}
       {/* One clock for every row's owners card, across repos. */}
       <HoverCardGroup>
-        {groups.map((group) => (
-          <PrRepoGroupSection
-            key={formatRepoGroupLabel(group.repoIdentifier)}
-            epicId={props.epicId}
-            tabId={props.tabId}
-            hostId={props.hostId}
-            group={group}
-            collapsed={
-              collapsedRepos.has(formatRepoGroupLabel(group.repoIdentifier)) &&
-              revealedRepoLabel !== formatRepoGroupLabel(group.repoIdentifier)
-            }
-            onToggle={toggleRepo}
-            buildEntry={buildEntry}
-          />
-        ))}
+        <PrSearchTermsContext value={searchTerms}>
+          {groups.map((group) => (
+            <PrRepoGroupSection
+              key={formatRepoGroupLabel(group.repoIdentifier)}
+              epicId={props.epicId}
+              tabId={props.tabId}
+              hostId={props.hostId}
+              group={group}
+              // A search opens every group, so no match sits behind a fold.
+              collapsed={
+                !searching &&
+                collapsedRepos.has(
+                  formatRepoGroupLabel(group.repoIdentifier),
+                ) &&
+                revealedRepoLabel !== formatRepoGroupLabel(group.repoIdentifier)
+              }
+              onToggle={toggleRepo}
+              buildEntry={buildEntry}
+            />
+          ))}
+        </PrSearchTermsContext>
       </HoverCardGroup>
     </div>
   );
@@ -565,6 +592,99 @@ function PrStackHeader(props: { readonly block: PrStackBlock }): ReactNode {
       </span>
     </div>
   );
+}
+
+/**
+ * The empty state for a query that hides every row. When the query matches
+ * rows in states the filter hides, it says how many and offers Show all;
+ * otherwise it offers to clear the query.
+ */
+function PrSearchEmptyState(props: {
+  readonly tabId: string;
+  readonly items: readonly PrLightItem[];
+  readonly stateFilter: PrStateFilter;
+  readonly query: string;
+  readonly terms: readonly string[];
+}): ReactNode {
+  const setStateFilter = usePrPanelStore((state) => state.setStateFilter);
+  const setSearchQuery = usePrPanelStore((state) => state.setSearchQuery);
+  const elsewhere =
+    props.stateFilter === "all"
+      ? 0
+      : props.items.filter(
+          (item) =>
+            item.state !== props.stateFilter &&
+            prMatchesSearch(item, props.terms),
+        ).length;
+  const { tabId } = props;
+  return (
+    <SidebarPanelEmptyState
+      icon={Search}
+      title={formatNoSearchMatches(props.stateFilter, props.query.trim())}
+      description={
+        elsewhere === 0 ? null : formatSearchMatchesElsewhere(elsewhere)
+      }
+      action={
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            if (elsewhere > 0) setStateFilter("all");
+            else setSearchQuery(tabId, "");
+          }}
+        >
+          {elsewhere > 0 ? "Show all" : "Clear search"}
+        </Button>
+      }
+      testId="pr-panel-search-empty"
+    />
+  );
+}
+
+/**
+ * The row test the state filter and the search apply together, or `null`
+ * when neither hides anything.
+ */
+function prPanelRowFilter(
+  stateFilter: PrStateFilter,
+  terms: readonly string[],
+): ((item: PrLightItem) => boolean) | null {
+  if (stateFilter === "all" && terms.length === 0) return null;
+  return (item) =>
+    (stateFilter === "all" || item.state === stateFilter) &&
+    prMatchesSearch(item, terms);
+}
+
+/**
+ * Which empty state explains a list the filters emptied: the search's when
+ * a query is typed, the state filter's otherwise, `null` when rows show or
+ * the list itself is empty (the panel's own empty state covers that).
+ */
+function resolveFilteredEmpty(
+  groups: readonly PrRepoGroup[],
+  itemCount: number,
+  searching: boolean,
+  stateFilter: PrStateFilter,
+): "search" | "state" | null {
+  if (itemCount === 0 || groups.length > 0) return null;
+  if (searching) return "search";
+  return stateFilter === "all" ? null : "state";
+}
+
+function formatNoSearchMatches(
+  stateFilter: PrStateFilter,
+  query: string,
+): string {
+  const noun =
+    stateFilter === "all" ? "pull requests" : `${stateFilter} pull requests`;
+  return `No ${noun} match “${query}”`;
+}
+
+function formatSearchMatchesElsewhere(count: number): string {
+  return count === 1
+    ? "1 match in other states"
+    : `${count} matches in other states`;
 }
 
 function formatAbsentLayers(count: number): string {

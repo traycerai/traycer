@@ -6,7 +6,10 @@ import {
   formatPrStackCount,
   groupPrItemsByRepo,
   prChecksSummary,
+  prMatchesSearch,
   prRowTitleText,
+  prSearchSegments,
+  prSearchTerms,
   prStackRailEntries,
   type PrRepoBlock,
 } from "@/lib/pr/pr-list-projection";
@@ -664,5 +667,68 @@ describe("groupPrItemsByRepo stack blocks", () => {
 
       expect(formatPrStackCount(stack)).toBe("2");
     });
+  });
+});
+
+describe("prMatchesSearch", () => {
+  function matches(query: string, overrides: Partial<PrLightItem>): boolean {
+    return prMatchesSearch(item(overrides), prSearchTerms(query));
+  }
+
+  it("matches every row for a blank query", () => {
+    expect(prSearchTerms("   ")).toEqual([]);
+    expect(matches("   ", { title: null, headRefName: null })).toBe(true);
+  });
+
+  it("matches the title regardless of case", () => {
+    expect(matches("REMOTE host", {})).toBe(true);
+    expect(matches("sandbox", {})).toBe(false);
+  });
+
+  it("matches head and base branches and the repo label", () => {
+    expect(matches("traycer/remote", {})).toBe(true);
+    expect(matches("development", {})).toBe(true);
+    expect(matches("traycerai/traycer-internal", {})).toBe(true);
+  });
+
+  it("requires every word to match, each in any field", () => {
+    expect(matches("remote development", {})).toBe(true);
+    expect(matches("remote sandbox", {})).toBe(false);
+  });
+
+  it("matches a PR number by prefix, with or without #", () => {
+    expect(matches("#422", {})).toBe(true);
+    expect(matches("4226", {})).toBe(true);
+    expect(matches("#226", {})).toBe(false);
+  });
+
+  it("matches a bare number in other fields, a #number only against the PR number", () => {
+    const row = { headRefName: "fix/issue-77" };
+    expect(matches("77", row)).toBe(true);
+    expect(matches("#77", row)).toBe(false);
+  });
+
+  it("matches a list-only row with no base on its other fields", () => {
+    const row = { base: null, title: null };
+    expect(matches("#4226", row)).toBe(false);
+    expect(matches("remote-host", row)).toBe(true);
+  });
+});
+
+describe("prSearchSegments", () => {
+  it("returns the whole text unmarked when no word term applies", () => {
+    expect(prSearchSegments("Fix #12", prSearchTerms("#12"))).toEqual([
+      { start: 0, text: "Fix #12", match: false },
+    ]);
+  });
+
+  it("marks every case-insensitive hit and merges overlaps", () => {
+    expect(
+      prSearchSegments("Remote host remote", prSearchTerms("rem mote")),
+    ).toEqual([
+      { start: 0, text: "Remote", match: true },
+      { start: 6, text: " host ", match: false },
+      { start: 12, text: "remote", match: true },
+    ]);
   });
 });

@@ -651,3 +651,93 @@ export function formatPrStateLabel(state: PrLightItem["state"]): string {
 export function formatRepoGroupLabel(repoIdentifier: PrRepoIdentifier): string {
   return `${repoIdentifier.owner}/${repoIdentifier.repo}`;
 }
+
+/**
+ * A panel search query split into lower-cased words. Empty for a blank query,
+ * which {@link prMatchesSearch} treats as matching every row.
+ */
+export function prSearchTerms(query: string): readonly string[] {
+  return query
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((term) => term.length > 0);
+}
+
+const PR_NUMBER_TERM = /^#?(\d+)$/;
+
+/**
+ * Whether a row answers every search term (AND), each in any field: the
+ * title, the head and base branches, and the `owner/repo` label. A numeric
+ * term, bare or `#`-prefixed, also matches
+ * a PR number that starts with it; the `#` form matches the number alone.
+ */
+export function prMatchesSearch(
+  item: PrLightItem,
+  terms: readonly string[],
+): boolean {
+  if (terms.length === 0) return true;
+  const fields = [
+    item.title,
+    item.headRefName,
+    item.baseRefName,
+    formatRepoGroupLabel(item.repoIdentifier),
+  ]
+    .filter((field): field is string => field !== null)
+    .map((field) => field.toLowerCase());
+  const prNumber = item.base === null ? null : String(item.base.prNumber);
+  return terms.every((term) => {
+    const numeric = PR_NUMBER_TERM.exec(term);
+    if (numeric !== null && prNumber?.startsWith(numeric[1]) === true) {
+      return true;
+    }
+    if (term.startsWith("#")) return false;
+    return fields.some((field) => field.includes(term));
+  });
+}
+
+export interface PrSearchSegment {
+  /** Offset of `text` in the whole string; unique, so it serves as a key. */
+  readonly start: number;
+  readonly text: string;
+  readonly match: boolean;
+}
+
+/**
+ * `text` cut into runs that do and do not match a search term, for
+ * highlighting a row's title. Overlapping hits merge into one run. Number
+ * terms are skipped: they matched the PR number, not the title's digits.
+ */
+export function prSearchSegments(
+  text: string,
+  terms: readonly string[],
+): readonly PrSearchSegment[] {
+  const words = terms.filter((term) => !PR_NUMBER_TERM.test(term));
+  if (words.length === 0) return [{ start: 0, text, match: false }];
+  // Lower-cased a character at a time so an offset into `folded` is an
+  // offset into `text` (a character whose lower case is longer stays put).
+  const folded = Array.from(text, (character) => {
+    const lower = character.toLowerCase();
+    return lower.length === character.length ? lower : character;
+  }).join("");
+  const marked = new Array<boolean>(text.length).fill(false);
+  for (const word of words) {
+    let from = folded.indexOf(word);
+    while (from !== -1) {
+      marked.fill(true, from, from + word.length);
+      from = folded.indexOf(word, from + 1);
+    }
+  }
+  const segments: PrSearchSegment[] = [];
+  let start = 0;
+  for (let index = 1; index <= text.length; index += 1) {
+    if (index === text.length || marked[index] !== marked[start]) {
+      segments.push({
+        start,
+        text: text.slice(start, index),
+        match: marked[start],
+      });
+      start = index;
+    }
+  }
+  return segments;
+}
