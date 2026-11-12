@@ -79,6 +79,7 @@ import {
 } from "../../canvas-artifact/__tests__/canvas-edit-test-support";
 import {
   composerEditorAt,
+  createDeferred,
   typeIntoEditor,
 } from "../../comments/__tests__/comment-submit-test-support";
 
@@ -566,7 +567,11 @@ describe("<MenuCommandListener />", () => {
   });
 
   it("opens the shared sign-out question when native sign-out fails", async () => {
-    authMock.signOut.mockResolvedValue(false);
+    const signOutCalled = createDeferred<void>();
+    authMock.signOut.mockImplementation(() => {
+      signOutCalled.resolve();
+      return Promise.resolve(false);
+    });
     useMigrationRunStore.setState({ runs: new Map(), remoteRunning: true });
     const menu = createMenu();
     render(
@@ -584,9 +589,11 @@ describe("<MenuCommandListener />", () => {
     expect(screen.getByTestId("migration-blocking-modal")).toBeTruthy();
     act(() => menu.emit("app.signOut"));
 
-    await waitFor(() => {
-      expect(authMock.signOut).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await signOutCalled.promise;
     });
+    await screen.findByRole("alert");
+    expect(authMock.signOut).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId("confirm-destructive-dialog")).toBeTruthy();
     expect(screen.getByRole("alert").textContent).toBe(
       "Couldn't sign out. Please try again.",

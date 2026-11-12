@@ -12,7 +12,6 @@ interface SignOutService {
 interface SignOutConfirmState {
   readonly open: boolean;
   readonly status: "idle" | "pending" | "failed";
-  readonly retry: (() => void) | null;
   readonly setOpen: (next: boolean) => void;
   readonly signOut: (
     queryClient: QueryClient,
@@ -28,11 +27,10 @@ export const useSignOutConfirmStore = create<SignOutConfirmState>(
   (set, get) => ({
     open: false,
     status: "idle",
-    retry: null,
     setOpen: (next) => {
       if (!next && get().status === "pending") return;
       if (next) set({ open: true });
-      else set({ open: false, status: "idle", retry: null });
+      else set({ open: false, status: "idle" });
     },
     signOut: (queryClient, auth) => {
       const generation = sessionGeneration;
@@ -57,7 +55,7 @@ export const useSignOutConfirmStore = create<SignOutConfirmState>(
       const operation = mutation.execute(undefined).then(
         () => {
           if (generation === sessionGeneration) {
-            set({ open: false, status: "idle", retry: null });
+            set({ open: false, status: "idle" });
           }
           if (
             generation === sessionGeneration ||
@@ -71,9 +69,6 @@ export const useSignOutConfirmStore = create<SignOutConfirmState>(
           set({
             open: true,
             status: "failed",
-            retry: () => {
-              void get().signOut(queryClient, auth);
-            },
           });
         },
       );
@@ -95,7 +90,6 @@ useAuthStore.subscribe((state, previous) => {
     useSignOutConfirmStore.setState({
       open: false,
       status: "idle",
-      retry: null,
     });
   }
 });

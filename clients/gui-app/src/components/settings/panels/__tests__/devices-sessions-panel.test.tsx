@@ -1,3 +1,4 @@
+import { createDeferred } from "@/components/comments/__tests__/comment-submit-test-support";
 import type { ReactNode } from "react";
 import type { UserSessionListItem } from "@traycer/protocol/auth/devices-sessions";
 import {
@@ -26,10 +27,12 @@ const dialogState = vi.hoisted<{
   request: StepUpPromptRequest | null;
   onCancel: (() => void) | null;
   onVerified: ((credential: StepUpCredential) => void) | null;
+  onPrompt: (() => void) | null;
 }>(() => ({
   request: null,
   onCancel: null,
   onVerified: null,
+  onPrompt: null,
 }));
 
 const revokeMutateAsync = vi.hoisted(() =>
@@ -99,6 +102,7 @@ vi.mock("@/components/auth/step-up-challenge-dialog", () => ({
     readonly onCancel: () => void;
   }): ReactNode => {
     dialogState.request = props.request;
+    if (props.request !== null) dialogState.onPrompt?.();
     dialogState.onCancel = props.onCancel;
     dialogState.onVerified = props.onVerified;
     return null;
@@ -201,6 +205,7 @@ describe("<DevicesSessionsPanel />", () => {
     dialogState.request = null;
     dialogState.onCancel = null;
     dialogState.onVerified = null;
+    dialogState.onPrompt = null;
     revokeMutateAsync.mockReset();
     revokeMutateAsync.mockRejectedValue(new StepUpRequiredError());
     revokeAllMutateAsync.mockReset();
@@ -521,7 +526,19 @@ describe("<DevicesSessionsPanel />", () => {
           }),
         );
       }
-      signOutMock.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+      const firstAttempt = createDeferred<void>();
+      const secondAttempt = createDeferred<void>();
+      const promptReady = createDeferred<void>();
+      dialogState.onPrompt = () => promptReady.resolve();
+      signOutMock
+        .mockImplementationOnce(() => {
+          firstAttempt.resolve();
+          return Promise.resolve(false);
+        })
+        .mockImplementationOnce(() => {
+          secondAttempt.resolve();
+          return Promise.resolve(true);
+        });
       renderWithSignOutDialog();
 
       fireEvent.click(
@@ -530,15 +547,18 @@ describe("<DevicesSessionsPanel />", () => {
           : screen.getByRole("button", { name: "Sign out everywhere" }),
       );
       if (scope === "all sessions") {
-        await waitForPrompt();
+        await act(async () => {
+          await promptReady.promise;
+        });
         act(() => {
           dialogState.onVerified?.({ expiresAtMs: Date.now() + 10_000 });
         });
       }
 
-      await waitFor(() => {
-        expect(signOutMock).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        await firstAttempt.promise;
       });
+      expect(signOutMock).toHaveBeenCalledTimes(1);
       expect(await screen.findByRole("alert")).toBeDefined();
       expect(screen.getByRole("alert").textContent).toBe(
         "Couldn't sign out. Please try again.",
@@ -548,9 +568,10 @@ describe("<DevicesSessionsPanel />", () => {
       fireEvent.click(
         within(sharedDialog).getByRole("button", { name: "Sign out" }),
       );
-      await waitFor(() => {
-        expect(signOutMock).toHaveBeenCalledTimes(2);
+      await act(async () => {
+        await secondAttempt.promise;
       });
+      expect(signOutMock).toHaveBeenCalledTimes(2);
       await waitFor(() => {
         expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
       });

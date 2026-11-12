@@ -359,7 +359,7 @@ describe("SystemTabModalHost theme editor integration", () => {
     useAuthStore.setState({ status: "signed-in" });
     renderSystemTabModalHost();
 
-    await waitFor(() => expect(modalProbe.current).not.toBeNull());
+    await screen.findByTestId("underlay");
     modalProbe.current?.openSettings({
       section: "devices",
       resetToGeneral: false,

@@ -23,7 +23,6 @@ export function SignOutConfirmDialog(): ReactNode {
   const setOpen = useSignOutConfirmStore((state) => state.setOpen);
   const queryClient = useQueryClient();
   const status = useSignOutConfirmStore((state) => state.status);
-  const retry = useSignOutConfirmStore((state) => state.retry);
   const signOut = useSignOutConfirmStore((state) => state.signOut);
 
   return (
@@ -40,8 +39,7 @@ export function SignOutConfirmDialog(): ReactNode {
         Analytics.getInstance().track(AnalyticsEvent.SignOutRequested, {
           source: "direct_ui",
         });
-        if (retry !== null) retry();
-        else void signOut(queryClient, auth);
+        void signOut(queryClient, auth);
       }}
     >
       {status === "failed" ? (
