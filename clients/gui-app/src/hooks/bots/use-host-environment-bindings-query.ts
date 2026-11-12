@@ -185,8 +185,14 @@ export function useHostEnvironmentBindings(
       const { queryKey } = environmentStatusQueryOptions(binding, hostId, true);
       if (queryClient.getQueryState(queryKey)?.status === "error") {
         await queryClient.refetchQueries({ queryKey, exact: true });
-        const status = queryClient.getQueryData(queryKey);
-        if (status !== undefined && localRowCohort(status).kind === "local") {
+        // Only a status that answered this time counts: a failed re-read
+        // keeps an older answer as its data, which says nothing now.
+        const state = queryClient.getQueryState(queryKey);
+        if (
+          state?.status === "success" &&
+          state.data !== undefined &&
+          localRowCohort(state.data).kind === "local"
+        ) {
           return;
         }
       }

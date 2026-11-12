@@ -16,6 +16,7 @@ import {
 } from "@/lib/environment/__tests__/environment-test-support";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
+import { queryKeys } from "@/lib/query-keys";
 
 const HOST_ID = "host-a";
 const BINDING: EnvironmentHostBinding = {
@@ -179,5 +180,83 @@ describe("useHostEnvironmentBindings retry", () => {
     });
     expect(statusCalls).toBe(2);
     expect(bindingCalls).toBe(1);
+  });
+
+  it("retries the binding when a status re-read fails with stale Local data", async () => {
+    let statusCalls = 0;
+    let bindingCalls = 0;
+    const { spine } = buildEnvironmentClient({
+      hostId: HOST_ID,
+      handlers: {
+        "environment.status": () => {
+          statusCalls += 1;
+          if (statusCalls === 1) {
+            return environmentStatusFixture({
+              principal: null,
+              planes: { records: "local", broker: "local", room: "local" },
+            });
+          }
+          return Promise.reject(new Error("status unavailable"));
+        },
+        "environment.host.read": () => {
+          bindingCalls += 1;
+          if (bindingCalls === 1) {
+            return Promise.reject(new Error("Local hosts refuse this read"));
+          }
+          return { ...BINDING, sharingGeneration: null };
+        },
+      },
+    });
+    runtime.client = spine;
+    recordNegotiatedHostManifest(HOST_ID, {
+      "environment.status": { major: 1, minor: 1 },
+      "environment.host.read": { major: 1, minor: 1 },
+    });
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "viewer", username: "viewer" },
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const queryWrapper = (props: {
+      readonly children: ReactNode;
+    }): ReactNode => (
+      <QueryClientProvider client={queryClient}>
+        {props.children}
+      </QueryClientProvider>
+    );
+    const statusKey = queryKeys.hostMethod<
+      HostRpcRegistry,
+      "environment.status"
+    >(HOST_ID, "environment.status", {});
+    const { result } = renderHook(
+      () => useHostEnvironmentBindings([HOST_ID], true),
+      { wrapper: queryWrapper },
+    );
+
+    await waitFor(() => {
+      expect(result.current.ownSettingsHostIds).toEqual([HOST_ID]);
+    });
+
+    await queryClient.invalidateQueries({ queryKey: statusKey, exact: true });
+
+    await waitFor(() => {
+      expect(result.current.failedHostIds).toEqual([HOST_ID]);
+    });
+    expect(statusCalls).toBe(2);
+    expect(bindingCalls).toBe(1);
+
+    result.current.retryFailed();
+
+    await waitFor(() => {
+      expect(result.current.byHostId.get(HOST_ID)).toEqual({
+        ...BINDING,
+        sharingGeneration: null,
+      });
+      expect(result.current.failedHostIds).toEqual([]);
+    });
+    expect(statusCalls).toBe(3);
+    expect(bindingCalls).toBe(2);
   });
 });
