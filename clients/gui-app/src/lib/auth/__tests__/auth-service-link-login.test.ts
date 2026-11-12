@@ -561,9 +561,7 @@ describe("link-login attempt fence", () => {
     const realDeleteIfToken = realStore.deleteIfToken.bind(realStore);
     Object.defineProperty(realStore, "deleteIfToken", {
       configurable: true,
-      value: async (
-        expectedToken: string,
-      ): Promise<"deleted" | "kept"> => {
+      value: async (expectedToken: string): Promise<"deleted" | "kept"> => {
         if (expectedToken === "attempt-a-token" && deleteIfTokenBroken) {
           await failedDeleteGate;
           throw new Error("EIO: credentials file unwritable");
@@ -626,13 +624,17 @@ describe("link-login attempt fence", () => {
       expect((await linkB).kind).toBe("signed-in");
       expect(useAuthStore.getState().status).toBe("signed-in");
       expect(service.getCurrentSessionSnapshot().token).toBe("attempt-b-token");
-      expect(service.getCurrentSessionSnapshot().profile?.userId).toBe("user-1");
+      expect(service.getCurrentSessionSnapshot().profile?.userId).toBe(
+        "user-1",
+      );
 
       releaseFailedDelete();
       expect((await linkA).kind).toBe("superseded");
       expect(useAuthStore.getState().status).toBe("signed-in");
       expect(service.getCurrentSessionSnapshot().token).toBe("attempt-b-token");
-      expect(service.getCurrentSessionSnapshot().profile?.userId).toBe("user-1");
+      expect(service.getCurrentSessionSnapshot().profile?.userId).toBe(
+        "user-1",
+      );
       expect(service.getLastError()).toBeNull();
       expect(infoSpy).toHaveBeenCalledWith(
         "[auth] stored-session recovery scheduled",

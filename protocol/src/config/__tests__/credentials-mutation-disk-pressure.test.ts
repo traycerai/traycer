@@ -100,11 +100,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     read: () => Promise<T>,
   ): Promise<T> => {
     const gate = filesystemMock.reserveStatGate;
-    if (
-      gate === null ||
-      path !== gate.path ||
-      operation !== gate.operation
-    ) {
+    if (gate === null || path !== gate.path || operation !== gate.operation) {
       return read();
     }
     if (gate.skip > 0) {
@@ -132,10 +128,9 @@ vi.mock("node:fs/promises", async (importOriginal) => {
       if (isReserve && args[1] === "wx") {
         filesystemMock.reserveExclusiveOpenAttempts += 1;
       }
-      const opening =
-        isReserveRead
-          ? readWithReserveGate(path, "open", () => actual.open(...args))
-          : actual.open(...args);
+      const opening = isReserveRead
+        ? readWithReserveGate(path, "open", () => actual.open(...args))
+        : actual.open(...args);
       return opening.then((handle) => {
         const wrapped = new Proxy(handle, {
           get(target, property) {
@@ -953,8 +948,7 @@ describe("credentials store disk pressure", () => {
       markMutationBegan = resolve;
     });
     filesystemMock.onSpaceCheckWrite = () => {
-      allocationsWhenMutationBegan =
-        filesystemMock.reserveAllocationAttempts;
+      allocationsWhenMutationBegan = filesystemMock.reserveAllocationAttempts;
       filesystemMock.onSpaceCheckWrite = null;
       markMutationBegan();
     };
@@ -971,8 +965,10 @@ describe("credentials store disk pressure", () => {
 
     await fillReserve();
     expect(
-      Array.from({ length: 16 }, (_, index) =>
-        statSync(join(workDir, `credentials.reserve.${index}`)).size,
+      Array.from(
+        { length: 16 },
+        (_, index) =>
+          statSync(join(workDir, `credentials.reserve.${index}`)).size,
       ),
     ).toEqual(Array.from({ length: 16 }, () => 65_536));
     expect(filesystemMock.reserveAllocationAttempts).toBe(16);
