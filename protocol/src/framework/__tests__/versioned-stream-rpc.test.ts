@@ -101,16 +101,13 @@ const MULTI_MAJOR_STREAM_REGISTRY = defineVersionedStreamRpcRegistry({
 
 /**
  * Structural and schema-compatibility tests for the versioned streaming-RPC
- * framework plus a smoke test that `defineVersionedStreamRpcRegistry`
- * accepts the real combined registry shipped from
- * `@traycer/protocol/host/registry`.
+ * framework. The real combined registry shipped from
+ * `@traycer/protocol/host/registry` is validated in
+ * `scripts/compat/__tests__/static-registries.test.ts`.
  */
 
 describe("validateVersionedStreamRpcRegistry", () => {
-  it("accepts the combined hostStreamRpcRegistry", () => {
-    expect(() => {
-      validateVersionedStreamRpcRegistry(hostStreamRpcRegistry);
-    }).not.toThrow();
+  it("pins the latest minor of every line in hostStreamRpcRegistry", () => {
     // This branch's three status minors re-minted ABOVE the mainline's
     // delta-seed minor (@1.3): durability @1.4, promotion @1.5, s5 pass @1.6.
     // Mainline's own `epic.subscribe` work landed as a new MAJOR (@2.0), so it

@@ -24,10 +24,9 @@ import {
   providersStartLoginResponseSchemaV12,
   providersStartLoginResponseSchemaV13,
 } from "@traycer/protocol/host/provider-schemas";
-// Construction is structural-only. The full schema-compatibility pass is
-// the explicit `validateVersionedRpcRegistry(hostRpcRegistry)` below, which
-// is what holds `providers.startLogin@1.1` / `providers.setEnabled@2.1` and
-// their bridges.
+// Construction is structural-only. The full schema-compatibility pass over
+// these lines is the explicit `validateVersionedRpcRegistry` below, which holds
+// `providers.startLogin@1.1` / `providers.setEnabled@2.1` and their bridges.
 import {
   providersAwaitLoginDowngradeV22ToV10,
   providersSetEnabledDowngradeV2ToV1,
@@ -75,9 +74,14 @@ const sessionWorkspaceSnapshot = {
   primaryWorkspace: "/repo",
 };
 
-describe("hostRpcRegistry full validation", () => {
+describe("hostRpcRegistry provider profile lines", () => {
   it("passes schema compatibility for the providers.startLogin@1.1 / providers.setEnabled@2.1 lines", () => {
-    expect(() => validateVersionedRpcRegistry(hostRpcRegistry)).not.toThrow();
+    expect(() =>
+      validateVersionedRpcRegistry({
+        "providers.startLogin": hostRpcRegistry["providers.startLogin"],
+        "providers.setEnabled": hostRpcRegistry["providers.setEnabled"],
+      }),
+    ).not.toThrow();
   });
 });
 
