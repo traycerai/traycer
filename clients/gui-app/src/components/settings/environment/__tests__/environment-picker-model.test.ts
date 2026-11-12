@@ -6,6 +6,7 @@ import {
   isStaleLocalPick,
   localPickerRow,
   personalSubtitle,
+  unresolvedSetupText,
   type EnvironmentPickerModel,
 } from "@/components/settings/environment/environment-picker-model";
 import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
@@ -59,6 +60,24 @@ describe("localPickerRow", () => {
       needsUpdate: false,
       defaultsToLocal: true,
     });
+    expect(unresolvedSetupText(awaiting)).toBeNull();
+  });
+
+  it("does not offer a Local row for a team-owned computer with local planes", () => {
+    const teamStatus = environmentStatusFixture({
+      principal: { kind: "team", teamName: "Designers" },
+      planes: { records: "local", broker: "local", room: "local" },
+    });
+
+    expect(localPickerRow(OLD_LAPTOP, teamStatus, V11)).toBeNull();
+    expect(
+      environmentPickerModel({
+        hosts: [OLD_LAPTOP],
+        statuses: statusMap([["old", teamStatus]]),
+        versions: new Map([["old", V11]]),
+        windowHostId: "old",
+      }).localRows,
+    ).toEqual([]);
   });
 
   it("keeps an unresolved setup computer selectable after its settings moved", () => {

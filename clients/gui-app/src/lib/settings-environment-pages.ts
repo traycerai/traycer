@@ -104,9 +104,11 @@ function isEnvironmentPageId(value: string): value is EnvironmentPageId {
 
 /**
  * Pages a kind of configuration does not offer. Personal and a Local row have
- * no members. A Local row has no MCP servers, Skills, Sandboxes or Storage
- * pages: those are a cloud configuration's, and a computer that has not moved
- * has none.
+ * no members. A Local row keeps MCP servers, Skills, Sandboxes and Storage in
+ * the rail although a computer that has not moved has none of them (they are
+ * a cloud configuration's): each says what moving gives it
+ * (`components/settings/environment/local-move-page.tsx`), so the rail does
+ * not change shape when the computer moves.
  * A team offers every page; the sandboxes plan adds `sandboxes` here for a
  * team if a team without one should not show it.
  */
@@ -114,7 +116,7 @@ const PAGES_HIDDEN_BY_PICK: Readonly<
   Record<EnvironmentPick["kind"], ReadonlySet<EnvironmentPageId>>
 > = {
   personal: new Set(["members"]),
-  local: new Set(["mcp-servers", "skills", "sandboxes", "storage", "members"]),
+  local: new Set(["members"]),
   team: new Set(),
 };
 

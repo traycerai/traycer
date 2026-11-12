@@ -200,6 +200,10 @@ describe("setupView", () => {
     expect(setupView(null)).toBeNull();
   });
 
+  it("does not show an awaiting consent move as unfinished setup", () => {
+    expect(setupView(setup("moving_settings", "awaiting_consent"))).toBeNull();
+  });
+
   it("is nothing once the setup is done, by state or by stage", () => {
     expect(setupView(setup("applying", "done"))).toBeNull();
     expect(setupView(setup("done", "running"))).toBeNull();

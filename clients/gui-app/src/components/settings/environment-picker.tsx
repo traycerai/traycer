@@ -21,7 +21,11 @@ import {
 } from "@/components/settings/environment/team-pick-label";
 import { TeamRows } from "@/components/settings/environment/team-rows";
 import { useEnvironmentStatusModel } from "@/components/settings/environment/use-environment-status-model";
-import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
+import {
+  useHostScopeFor,
+  WINDOW_HOST_SELECTION,
+  type HostScope,
+} from "@/components/settings/host-scope/use-host-scope";
 import { InviteAcceptDialog } from "@/components/settings/members/invite-accept-dialog";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
@@ -79,6 +83,19 @@ function useEnvironmentPickerModel(scope: HostScope): EnvironmentPickerModel {
     if (stale) setPick(null);
   }, [stale, setPick]);
   return model.picker;
+}
+
+/**
+ * The dropdown's pick upkeep for while the dropdown is not on screen: a phone
+ * shows a section's page without the rail, and a running settings search
+ * replaces the rail's list. Without it a Local pick whose computer has since
+ * moved, or turned out to be a team's, would keep its page offering the move.
+ * Mounted with every Settings page (`SettingsPanelForSection`); with the
+ * dropdown on screen too, both write the same answer.
+ */
+export function EnvironmentPickUpkeep(): ReactNode {
+  useEnvironmentPickerModel(useHostScopeFor(WINDOW_HOST_SELECTION));
+  return null;
 }
 
 /**
