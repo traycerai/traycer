@@ -1216,7 +1216,8 @@ with **Replace**, **Remove** and **Details**; Details holds **Verify**
 on a revoked secret sent with `regrant`, Destroy behind a confirmation, refusals
 read by `secretChangeRefusalLine`) and the recovery order for a leaked secret,
 open beside the versions: "If this secret leaked", four steps, and "If Traycer
-can't be reached, stopping the sandbox ends its sessions." Empty, it reads
+can't be reached, finish or stop running agent turns and shells before stopping
+the sandbox to end its sessions." Empty, it reads
 "Values and logins your agents use. On your computers they are set as values; on
 sandboxes agents use them without seeing them." with Add a secret, and the page
 has no subtitle, which would say it twice. A failed read shows only "Couldn't

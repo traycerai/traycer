@@ -226,7 +226,9 @@ describe("sandboxStateLine", () => {
       "failed",
       summaryOf({ failureCode: "create:kube-create-service-account" }),
     );
-    expect(failed).toBe("Failed to start (SBX-0412).");
+    expect(failed).toBe(
+      "Failed to start · The sandbox service couldn't start it. · SBX-0412.",
+    );
     expect(failed).not.toContain("create:");
     expect(
       sandboxStateLine("failed", summaryOf({ failureCode: "OOM_BOOT" })),
@@ -274,7 +276,9 @@ describe("sandboxStateLine", () => {
         "failed",
         summaryOf({ failureCode: "chat-store-newer" }),
       ),
-    ).toBe("Failed to start (SBX-0430).");
+    ).toBe(
+      "Failed to start · The sandbox needs an update to open its saved chats. · SBX-0430.",
+    );
   });
 
   it("says just Sandbox for a state it does not know", () => {
@@ -494,7 +498,7 @@ describe("sandboxGuestConfigFailure", () => {
     ).toBe(generic);
   });
 
-  it("appends the guest's reason when it gave one", () => {
+  it("uses the generic sentence for an unrecognized guest reason", () => {
     expect(
       sandboxGuestConfigFailure(
         summaryOf({
@@ -502,7 +506,7 @@ describe("sandboxGuestConfigFailure", () => {
           guestConfigFailureReason: "broker unreachable",
         }),
       ),
-    ).toBe("Settings did not apply: broker unreachable");
+    ).toBe("Settings did not apply. Agents can't start here until they do.");
   });
 });
 
@@ -655,7 +659,7 @@ describe("sandboxSecretsReadiness", () => {
     },
   );
 
-  it("reads degraded(hop) as degraded and names the hop", () => {
+  it("reads degraded(hop) as degraded without exposing the hop token", () => {
     const readiness = sandboxSecretsReadiness(
       "awake",
       false,
@@ -663,7 +667,10 @@ describe("sandboxSecretsReadiness", () => {
       "online",
     );
     expect(readiness?.tone).toBe("degraded");
-    expect(readiness?.text).toContain("gateway");
+    expect(readiness?.text).toBe(
+      "Degraded: requests to granted destinations are refused until it recovers.",
+    );
+    expect(readiness?.text).not.toContain("gateway");
   });
 
   it("reads degraded() as degraded without an empty hop", () => {

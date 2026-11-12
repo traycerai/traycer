@@ -54,7 +54,7 @@ export function useSandboxOperationFailure(
       : null;
   const message =
     creditFailure === null
-      ? sandboxVerbFailureLine(operation.verb, props.name, operation.reference)
+      ? `${sandboxVerbFailureLine(operation.verb, props.name)}${safeFailureClause(operation.error)}`
       : `Couldn't ${operation.verb} ${props.name} · ${sandboxCreditShortLine(configuration, creditFailure.creditSource ?? null, creditFailure.shortfallMc, { waking: true, context: "clause" })}`;
   return (
     <div
@@ -62,6 +62,9 @@ export function useSandboxOperationFailure(
       className="flex w-full flex-wrap items-baseline gap-2 text-ui-xs"
     >
       <span className="text-destructive">{message}</span>
+      <span className="text-muted-foreground">
+        {`Support reference: ${operation.reference}`}
+      </span>
       {creditFailure === null ? null : (
         <Button
           type="button"
@@ -93,4 +96,9 @@ export function useSandboxOperationFailure(
       </Button>
     </div>
   );
+}
+
+/** Only translated control failures are safe to show inline. */
+function safeFailureClause(error: Error): string {
+  return error instanceof SandboxOperationError ? `. ${error.message}` : "";
 }

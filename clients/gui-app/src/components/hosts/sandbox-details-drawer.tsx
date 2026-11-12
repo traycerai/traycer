@@ -195,11 +195,7 @@ function SandboxDetailsSections(props: {
               data-testid="sandbox-details-operation-failure"
             >
               <p>
-                {sandboxVerbFailureLine(
-                  operation.verb,
-                  summary.displayName,
-                  operation.reference,
-                )}
+                {sandboxVerbFailureLine(operation.verb, summary.displayName)}
               </p>
               <p>{operation.error.message}</p>
               <p>{`Support reference: ${operation.reference}`}</p>

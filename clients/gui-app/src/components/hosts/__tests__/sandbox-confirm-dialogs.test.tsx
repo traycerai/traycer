@@ -168,9 +168,24 @@ describe("sandbox confirm dialogs", () => {
     expect(
       screen.getByTestId("sandbox-confirm-sessions").textContent,
     ).toContain(
-      "Known running agents and Task terminals. Other sessions may also be interrupted.",
+      "Known running agents and Task terminals. Other sessions may also keep this sandbox awake.",
     );
   });
+
+  it.each([
+    ["Suspend", SandboxSuspendDialog, "sandbox-confirm-suspend"],
+    ["Stop", SandboxStopDialog, "sandbox-confirm-stop"],
+  ])(
+    "%s requires running agent turns and shells to finish or be stopped first",
+    (_name, Dialog, testId) => {
+      render(<Dialog sandbox={SANDBOX} open onOpenChange={vi.fn()} />);
+
+      const copy = screen.getByTestId(testId).textContent;
+      expect(copy).toContain("Finish or stop running agent turns and shells");
+      expect(copy).not.toContain("interrupted");
+      expect(copy).not.toContain("ends every process");
+    },
+  );
 
   describe("the named sessions", () => {
     const HOST_ID = SANDBOX.hostId;
@@ -341,7 +356,7 @@ describe("sandbox confirm dialogs", () => {
         );
         expect(
           screen.getByText(
-            "Known running agents and Task terminals. Other sessions may also be interrupted.",
+            "Known running agents and Task terminals. Other sessions may also keep this sandbox awake.",
           ),
         ).toBeDefined();
       });
@@ -450,7 +465,7 @@ describe("sandbox confirm dialogs", () => {
 
         expect(
           screen.getByText(
-            "Known running agents and Task terminals. Other sessions may also be interrupted.",
+            "Known running agents and Task terminals. Other sessions may also keep this sandbox awake.",
           ),
         ).toBeDefined();
         expect(
@@ -787,6 +802,11 @@ describe("sandbox confirm dialogs", () => {
           onOpenChange={vi.fn()}
         />,
       );
+      expect(
+        screen.getByText(
+          "Destroy after suspended or stopped for (empty: never)",
+        ),
+      ).toBeDefined();
       fireEvent.change(
         screen.getByTestId("sandbox-idle-settings-resting-value"),
         { target: { value: "2" } },

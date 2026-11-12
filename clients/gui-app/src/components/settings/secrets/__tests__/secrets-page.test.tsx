@@ -351,7 +351,7 @@ describe("the secrets list", () => {
     ]);
     expect(recovery.textContent).toContain("If this secret leaked");
     expect(recovery.textContent).toContain(
-      "If Traycer can't be reached, stopping the sandbox ends its sessions.",
+      "If Traycer can't be reached, finish or stop running agent turns and shells before stopping the sandbox to end its sessions.",
     );
   });
 

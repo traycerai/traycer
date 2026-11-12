@@ -22,6 +22,7 @@ import {
   sandboxCardShowsCostView,
   sandboxCreatorName,
   sandboxGuestConfigFailure,
+  sandboxGuestConfigFailureReason,
   sandboxHostVouches,
   sandboxIdleLine,
   sandboxOperationalLine,
@@ -1075,9 +1076,7 @@ function SandboxRepairAction(props: {
                   toast.success("Sandbox setup repaired");
                 } else {
                   toast.warning(
-                    result.guestConfigFailureReason === null
-                      ? "Sandbox setup is still failing"
-                      : `Sandbox setup is still failing: ${result.guestConfigFailureReason}`,
+                    `Sandbox setup is still failing. ${sandboxGuestConfigFailureReason(result.guestConfigFailureReason)}`,
                   );
                 }
                 void list.refetch();

@@ -724,7 +724,7 @@ describe("<HostSwitcher /> composer mode search", () => {
       intent: "pin",
     });
 
-    fireEvent.change(screen.getByPlaceholderText("Search hosts"), {
+    fireEvent.change(screen.getByPlaceholderText("Search computers"), {
       target: { value: "zzz" },
     });
 
@@ -745,7 +745,7 @@ describe("<HostSwitcher /> composer mode search", () => {
       screen.queryByTestId("settings-host-switcher-option-sbx-suspended"),
     ).toBeNull();
 
-    fireEvent.change(screen.getByPlaceholderText("Search hosts"), {
+    fireEvent.change(screen.getByPlaceholderText("Search computers"), {
       target: { value: "suspended" },
     });
 
@@ -786,7 +786,7 @@ describe("<HostSwitcher /> composer mode search narrows", () => {
       composer: composerMode({}),
       intent: "pin",
     });
-    fireEvent.change(screen.getByPlaceholderText("Search hosts"), {
+    fireEvent.change(screen.getByPlaceholderText("Search computers"), {
       target: { value: term },
     });
   }
@@ -831,7 +831,7 @@ describe("<HostSwitcher /> composer mode search field", () => {
       intent: "pin",
     });
 
-    const search = screen.getByPlaceholderText("Search hosts");
+    const search = screen.getByPlaceholderText("Search computers");
     expect(document.activeElement).toBe(search);
 
     fireEvent.change(search, { target: { value: "lap" } });
@@ -850,7 +850,7 @@ describe("<HostSwitcher /> composer mode search field", () => {
       intent: "pin",
     });
 
-    fireEvent.change(screen.getByPlaceholderText("Search hosts"), {
+    fireEvent.change(screen.getByPlaceholderText("Search computers"), {
       target: { value: "ci-triage" },
     });
 
@@ -884,7 +884,7 @@ describe("<HostSwitcher /> composer mode search field", () => {
     expect(onAncestorKeyDown).toHaveBeenCalledTimes(1);
     onAncestorKeyDown.mockClear();
 
-    const search = screen.getByPlaceholderText("Search hosts");
+    const search = screen.getByPlaceholderText("Search computers");
     fireEvent.keyDown(search, { key: "c" });
     fireEvent.keyDown(search, { key: "Enter" });
 
@@ -899,7 +899,7 @@ describe("<HostSwitcher /> composer mode search field", () => {
     });
 
     expect(document.activeElement).toBe(
-      screen.getByPlaceholderText("Search hosts"),
+      screen.getByPlaceholderText("Search computers"),
     );
   });
 });
@@ -1157,7 +1157,7 @@ describe("<HostSwitcher /> composer mode computers", () => {
     expect(
       screen.getByRole("option", { name: "Show 2 offline computers" }),
     ).toBeTruthy();
-    fireEvent.change(screen.getByPlaceholderText("Search hosts"), {
+    fireEvent.change(screen.getByPlaceholderText("Search computers"), {
       target: { value: "studio" },
     });
 
@@ -1191,7 +1191,7 @@ describe("<HostSwitcher /> composer mode computers", () => {
       intent: "pin",
     });
 
-    const search = screen.getByPlaceholderText("Search hosts");
+    const search = screen.getByPlaceholderText("Search computers");
     await user.click(search);
     await user.keyboard("{Home}");
     expect(row("online-workstation").getAttribute("aria-selected")).toBe(
@@ -1209,7 +1209,7 @@ describe("<HostSwitcher /> composer mode computers", () => {
     ).toBeTruthy();
     expect(row("studio-offline-a")).toBeDefined();
     expect(row("studio-offline-b")).toBeDefined();
-    expect(screen.getByPlaceholderText("Search hosts")).toBeDefined();
+    expect(screen.getByPlaceholderText("Search computers")).toBeDefined();
     expect(onPickHost).not.toHaveBeenCalled();
     expect(onSelect).not.toHaveBeenCalled();
   });
@@ -1232,7 +1232,7 @@ describe("<HostSwitcher /> composer mode computers", () => {
       intent: "pin",
     });
 
-    const search = screen.getByPlaceholderText("Search hosts");
+    const search = screen.getByPlaceholderText("Search computers");
     await user.click(
       screen.getByRole("option", { name: "Show 2 offline computers" }),
     );
@@ -1241,7 +1241,7 @@ describe("<HostSwitcher /> composer mode computers", () => {
     ).toBeTruthy();
     expect(row("studio-offline-a")).toBeDefined();
     expect(row("studio-offline-b")).toBeDefined();
-    expect(screen.getByPlaceholderText("Search hosts")).toBe(search);
+    expect(screen.getByPlaceholderText("Search computers")).toBe(search);
     expect(onPickHost).not.toHaveBeenCalled();
     expect(onSelect).not.toHaveBeenCalled();
 
@@ -1403,7 +1403,7 @@ describe("<HostSwitcher /> composer facts follow search results", () => {
     expect(
       within(row("detail-computer")).getByText("Windows · Active"),
     ).toBeDefined();
-    fireEvent.change(screen.getByPlaceholderText("Search hosts"), {
+    fireEvent.change(screen.getByPlaceholderText("Search computers"), {
       target: { value: "no matching host" },
     });
 
