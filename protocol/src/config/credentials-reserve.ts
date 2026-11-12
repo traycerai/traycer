@@ -1,9 +1,9 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { constants, type Stats } from "node:fs";
 import {
+  lstat,
   mkdir,
   open,
-  stat,
   unlink,
   writeFile,
   type FileHandle,
@@ -70,7 +70,7 @@ export async function isCredentialsReserveComplete(
 ): Promise<boolean> {
   for (let index = 0; index < PIECE_COUNT; index += 1) {
     try {
-      const piece = await stat(`${credentialsPath}.reserve.${index}`);
+      const piece = await lstat(`${credentialsPath}.reserve.${index}`);
       if (!piece.isFile() || piece.size !== PIECE_BYTES) return false;
     } catch {
       return false;

@@ -27,6 +27,7 @@ import {
   type StoredCredentials,
 } from "../credentials";
 import { writeJsonFileAtomic } from "../credentials-fs";
+import { isCredentialsReserveComplete } from "../credentials-reserve";
 import { digestCredentials, writeSidecarState } from "../credentials-wal";
 
 const CREDS: StoredCredentials = {
@@ -615,6 +616,28 @@ describe("credentials store disk pressure", () => {
       expect(lstatSync(reservePath).isSymbolicLink()).toBe(true);
       expect(filesystemMock.reserveAllocationAttempts).toBe(0);
       expect(filesystemMock.reserveExclusiveOpenAttempts).toBe(1);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "does not count a symlink to a full-size file as a complete reserve piece",
+    async () => {
+      for (let index = 0; index < 16; index += 1) {
+        writeFileSync(
+          join(workDir, `credentials.reserve.${index}`),
+          Buffer.alloc(65_536, 0x5a),
+          { mode: 0o600 },
+        );
+      }
+      expect(await isCredentialsReserveComplete(credentialsPath)).toBe(true);
+
+      const reservePath = join(workDir, "credentials.reserve.15");
+      const targetPath = join(workDir, "symlink-target");
+      writeFileSync(targetPath, Buffer.alloc(65_536, 0x5a), { mode: 0o600 });
+      rmSync(reservePath);
+      symlinkSync(targetPath, reservePath);
+
+      expect(await isCredentialsReserveComplete(credentialsPath)).toBe(false);
     },
   );
 
