@@ -32,7 +32,7 @@ export function useEnvironmentStatusModel(scope: HostScope): {
   );
   // A listed sandbox has no own-settings row; an unlisted host is still unknown.
   const windowHostId =
-    windowHost !== undefined && !isEnvironmentComputer(windowHost)
+    windowHost !== undefined && windowHost.sandbox !== null
       ? null
       : scope.activeHostId;
   const picker = useMemo(

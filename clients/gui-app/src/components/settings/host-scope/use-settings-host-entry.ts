@@ -47,6 +47,13 @@ export function useSettingsHostEntry(): {
         {},
       ),
     );
+    // A no-data retry clears the error, but retains its failed-attempt count.
+    if (
+      state?.status === "pending" &&
+      state.fetchStatus !== "idle" &&
+      state.errorUpdateCount > 0
+    )
+      return "retrying";
     if (state?.status !== "error") return "ready";
     return state.fetchStatus === "idle" ? "failed" : "retrying";
   }, [queryClient, targetHostId]);

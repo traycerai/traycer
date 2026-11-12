@@ -13,7 +13,9 @@ const facts = vi.hoisted(
   (): {
     statuses: Map<string, EnvironmentStatusResponseV12 | null>;
     mounts: string[];
-  } => ({ statuses: new Map(), mounts: [] }),
+    remote: boolean;
+    registered: boolean;
+  } => ({ statuses: new Map(), mounts: [], remote: false, registered: true }),
 );
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   const { hostScopeFixture, hostScopeOptionFixture } =
@@ -25,7 +27,11 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
     useHostScopeFor: () => {
       const hostId = useEffectiveHostId();
       const hosts = [
-        hostScopeOptionFixture({ hostId: "a" }),
+        hostScopeOptionFixture({
+          hostId: "a",
+          isLocalMachine: !facts.remote,
+          registered: facts.registered,
+        }),
         hostScopeOptionFixture({ hostId: "b" }),
       ];
       return hostScopeFixture({
@@ -77,6 +83,8 @@ function Settings(props: {
 afterEach(() => {
   cleanup();
   facts.mounts = [];
+  facts.remote = false;
+  facts.registered = true;
   facts.statuses = new Map();
   useSelectionAuthorityStore.getState().reset();
   useSettingsEnvironmentPickStore.setState({
@@ -121,3 +129,36 @@ it.each<"skills" | "mcp-servers">(["skills", "mcp-servers"])(
     expect(facts.mounts).toEqual(["a", "b"]);
   },
 );
+
+it("waits for a remote computer's registry row and status before mounting editors", () => {
+  facts.remote = true;
+  facts.registered = false;
+  useSelectionAuthorityStore.setState({ effectiveHostId: "a" });
+  const queryClient = new QueryClient();
+  const view = render(
+    <QueryClientProvider client={queryClient}>
+      <Settings section="skills" />
+    </QueryClientProvider>,
+  );
+  expect(useSettingsEnvironmentPickStore.getState().defaultPick).toEqual({
+    kind: "unresolved",
+  });
+  expect(facts.mounts).toEqual([]);
+  facts.registered = true;
+  view.rerender(
+    <QueryClientProvider client={queryClient}>
+      <Settings section="skills" />
+    </QueryClientProvider>,
+  );
+  expect(facts.mounts).toEqual([]);
+  facts.statuses = new Map([["a", environmentStatusFixture({})]]);
+  view.rerender(
+    <QueryClientProvider client={queryClient}>
+      <Settings section="skills" />
+    </QueryClientProvider>,
+  );
+  expect(useSettingsEnvironmentPickStore.getState().defaultPick).toEqual({
+    kind: "personal",
+  });
+  expect(facts.mounts).toEqual(["a"]);
+});
