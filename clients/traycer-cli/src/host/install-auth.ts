@@ -1,9 +1,10 @@
 import { readHostOwnershipViaHttp } from "@traycer-clients/shared/host-client/host-ownership";
 import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
 import {
-  callHostRpc,
+  callHostRpcAtResolvedEndpoint,
   callHostRpcWithDispatch,
   PLAIN_DISPATCH,
+  resolveEndpoint,
   toAgentCliError,
 } from "../internal/host-rpc";
 import {
@@ -478,9 +479,16 @@ export async function warnIfTeamInstallSignInRemains(
 export async function useInstalledHostTeam(
   team: string,
 ): Promise<EnvironmentHostBinding> {
+  const dispatch = {
+    ...PLAIN_DISPATCH,
+    requiredHostMethodVersion: {
+      method: "environment.host.bind",
+      version: { major: 1, minor: 1 },
+    },
+  };
   const selector = team.startsWith("team/") ? team.slice(5) : team;
   const { environments } = await toAgentCliError(
-    callHostRpc("environment.list", {}),
+    callHostRpcWithDispatch("environment.list", {}, dispatch),
   );
   const matches = environments.filter(
     (environment) =>
@@ -499,19 +507,7 @@ export async function useInstalledHostTeam(
     });
   }
   const target = matches[0];
-  const current = await toAgentCliError(
-    callHostRpcWithDispatch(
-      "environment.host.read",
-      {},
-      {
-        ...PLAIN_DISPATCH,
-        requiredHostMethodVersion: {
-          method: "environment.host.bind",
-          version: { major: 1, minor: 1 },
-        },
-      },
-    ),
-  );
+  const endpoint = await resolveEndpoint();
   const auth = await resolveHostAuth();
   if (auth === null) {
     throw cliError({
@@ -524,7 +520,7 @@ export async function useInstalledHostTeam(
   const directory = await readHostOwnershipViaHttp(
     auth.authnBaseUrl,
     auth.token,
-    current.hostId,
+    endpoint.hostId,
   );
   const host = directory.kind === "ok" ? directory.host : undefined;
   if (host === undefined) {
@@ -545,6 +541,15 @@ export async function useInstalledHostTeam(
     });
   }
   if (host.owner.kind === "team") {
+    const current = await toAgentCliError(
+      callHostRpcAtResolvedEndpoint(
+        "environment.host.read",
+        {},
+        endpoint,
+        auth,
+        dispatch,
+      ),
+    );
     if (
       host.owner.id === target.ownerId &&
       current.environment.environmentId === target.environmentId &&
@@ -560,23 +565,20 @@ export async function useInstalledHostTeam(
       exitCode: 1,
     });
   }
+  // A Local computer has no environment binding to read before its transfer.
   const binding = await toAgentCliError(
-    callHostRpcWithDispatch(
+    callHostRpcAtResolvedEndpoint(
       "environment.host.bind",
       { environmentId: target.environmentId },
-      {
-        ...PLAIN_DISPATCH,
-        requiredHostMethodVersion: {
-          method: "environment.host.bind",
-          version: { major: 1, minor: 1 },
-        },
-      },
+      endpoint,
+      auth,
+      dispatch,
     ),
   );
   const confirmed = await readHostOwnershipViaHttp(
     auth.authnBaseUrl,
     auth.token,
-    current.hostId,
+    endpoint.hostId,
   );
   const owner = confirmed.kind === "ok" ? confirmed.host.owner : undefined;
   if (
