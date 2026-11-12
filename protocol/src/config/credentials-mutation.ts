@@ -563,7 +563,7 @@ export function createCredentialsMutationStore(
   options: CredentialsMutationStoreOptions,
 ): CredentialsMutationStore {
   const { paths, refresh } = options;
-  const reserve = new CredentialsReserve(paths.credentialsPath);
+  const reserve = new CredentialsReserve(paths.credentialsPath, paths.lockPath);
   const commitPaths: CommitPaths = {
     credentialsPath: paths.credentialsPath,
     metaPath: paths.metaPath,
@@ -590,6 +590,7 @@ export function createCredentialsMutationStore(
     const context: CredentialsWriteContext = {
       noSpace: false,
       saved: false,
+      commitError: null,
       releaseReserve: () => reserve.release(),
     };
     let diskPressure: DiskPressure | null = null;
@@ -836,7 +837,7 @@ export function createCredentialsMutationStore(
         try {
           if (checkSpace) {
             try {
-              await reserve.probe();
+              await reserve.probe(null);
             } catch (err) {
               if (isDiskFullError(err)) throw err;
               // Existing guards may finish without spending or writing a pair.
@@ -889,7 +890,7 @@ export function createCredentialsMutationStore(
             (pending.kind === "pair" || pending.spentBaseToken !== null);
           if (
             value.outcome === "commit-failed" &&
-            context.noSpace &&
+            isDiskFullError(context.commitError) &&
             !refreshStarted &&
             !pendingSpend
           ) {

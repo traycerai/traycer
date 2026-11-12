@@ -6,6 +6,7 @@ import {
   errorCode,
   withCredentialsWrites,
 } from "./credentials-fs";
+import { withCredentialsLock } from "./credentials-lock";
 
 const PIECE_COUNT = 16;
 const PIECE_BYTES = 64 * 1024;
@@ -17,7 +18,10 @@ export class CredentialsReserve {
   private refillRequested = false;
   private disposed = false;
 
-  constructor(private readonly credentialsPath: string) {
+  constructor(
+    private readonly credentialsPath: string,
+    private readonly lockPath: string,
+  ) {
     this.replenish();
   }
 
@@ -37,10 +41,12 @@ export class CredentialsReserve {
     this.generation += 1;
   }
 
-  async probe(): Promise<void> {
+  async probe(interrupted: (() => boolean) | null): Promise<boolean> {
+    if (interrupted?.()) return false;
     await credentialsWrite(() =>
       mkdir(dirname(this.credentialsPath), { recursive: true, mode: 0o700 }),
     );
+    if (interrupted?.()) return false;
     const path = `${this.credentialsPath}.space-check.${randomUUID()}.tmp`;
     try {
       await credentialsWrite(() =>
@@ -54,6 +60,7 @@ export class CredentialsReserve {
         if (errorCode(err) !== "ENOENT") throw err;
       });
     }
+    return !interrupted?.();
   }
 
   async release(): Promise<boolean> {
@@ -99,6 +106,7 @@ export class CredentialsReserve {
         if (interrupted()) return;
         try {
           const piece = await stat(`${this.credentialsPath}.reserve.${index}`);
+          if (interrupted()) return;
           if (piece.size !== PIECE_BYTES) missing.push(index);
         } catch (err) {
           if (errorCode(err) !== "ENOENT") return;
@@ -106,29 +114,42 @@ export class CredentialsReserve {
         }
       }
       if (missing.length === 0 || interrupted()) return;
-      await this.probe();
-      for (const index of missing) {
-        if (interrupted()) return;
-        const path = `${this.credentialsPath}.reserve.${index}`;
-        try {
-          try {
-            const existing = await stat(path);
-            if (existing.size === PIECE_BYTES) continue;
-            await unlink(path);
-          } catch (err) {
-            if (errorCode(err) !== "ENOENT") return;
+      await withCredentialsLock(
+        {
+          lockPath: this.lockPath,
+          reason: "credentials-reserve",
+          waitMs: 0,
+          pollIntervalMs: 25,
+          signal: null,
+        },
+        async () => {
+          if (interrupted() || !(await this.probe(interrupted))) return;
+          for (const index of missing) {
+            if (interrupted()) return;
+            const path = `${this.credentialsPath}.reserve.${index}`;
+            try {
+              try {
+                const existing = await stat(path);
+                if (interrupted()) return;
+                if (existing.size === PIECE_BYTES) continue;
+                await unlink(path);
+              } catch (err) {
+                if (errorCode(err) !== "ENOENT") return;
+              }
+              if (interrupted()) return;
+              await writeFile(path, randomBytes(PIECE_BYTES), {
+                flag: "wx",
+                mode: 0o600,
+                flush: true,
+              });
+            } catch (err) {
+              if (errorCode(err) === "EEXIST") continue;
+              await unlink(path).catch(() => {});
+              return;
+            }
           }
-          await writeFile(path, randomBytes(PIECE_BYTES), {
-            flag: "wx",
-            mode: 0o600,
-            flush: true,
-          });
-        } catch (err) {
-          if (errorCode(err) === "EEXIST") continue;
-          await unlink(path).catch(() => {});
-          return;
-        }
-      }
+        },
+      );
     } catch {
       // Best effort: allocating the reserve must never fail a store operation.
     }

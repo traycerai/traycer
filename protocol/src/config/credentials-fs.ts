@@ -24,6 +24,7 @@ export function isDiskFullError(error: unknown): boolean {
 export interface CredentialsWriteContext {
   noSpace: boolean;
   saved: boolean;
+  commitError: unknown;
   readonly releaseReserve: () => Promise<boolean>;
 }
 
@@ -55,7 +56,15 @@ export async function credentialsWrite<T>(write: () => Promise<T>): Promise<T> {
 
 export function recordCredentialsSave(): void {
   const context = credentialsWrites.getStore();
-  if (context !== undefined) context.saved = true;
+  if (context !== undefined) {
+    context.saved = true;
+    context.commitError = null;
+  }
+}
+
+export function recordCredentialsCommitFailure(error: unknown): void {
+  const context = credentialsWrites.getStore();
+  if (context !== undefined) context.commitError = error;
 }
 
 // Escalating mtime bumps for the set-and-verify below. A coarse-granularity

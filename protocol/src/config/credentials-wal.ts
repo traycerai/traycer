@@ -6,6 +6,7 @@ import {
   fileMtimeMsOrZero,
   isDiskFullError,
   recordCredentialsSave,
+  recordCredentialsCommitFailure,
   writeJsonFileAtomic,
 } from "./credentials-fs";
 import {
@@ -162,6 +163,7 @@ export async function commitMutation(args: {
     targetDigest =
       target.kind === "write" ? digestCredentials(target.credentials) : null;
   } catch (err) {
+    recordCredentialsCommitFailure(err);
     return { kind: "commit-failed", error: err };
   }
   const nextEpoch = nextEpochFor(op, currentState.epoch);
@@ -206,11 +208,15 @@ export async function commitMutation(args: {
       if (target.kind === "write") recordCredentialsSave();
       return { kind: "committed", state: finalState, mtimeMs };
     } catch (err) {
-      if (isDiskFullError(err)) return { kind: "commit-failed", error: err };
+      if (isDiskFullError(err)) {
+        recordCredentialsCommitFailure(err);
+        return { kind: "commit-failed", error: err };
+      }
       lastError = err;
       await sleep(COMMIT_RETRY_DELAY_MS);
     }
   }
+  recordCredentialsCommitFailure(lastError);
   return { kind: "commit-failed", error: lastError };
 }
 
