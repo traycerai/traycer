@@ -9,6 +9,7 @@ import { useSafeAreaCollisionPadding } from "@/components/ui/safe-area-collision
 import { declineListSearchAutoFocus } from "@/hooks/ui/decline-list-search-autofocus";
 import { useSurfaceOverlayContainerEl } from "@/providers/surface-overlay-container-context";
 import { cn } from "@/lib/utils";
+import { useOverlayDragSuppressionRef } from "@/stores/layout/title-bar-drag-store";
 
 function Popover({
   ...props
@@ -87,13 +88,14 @@ function PopoverContent({
   // A popover opened inside a top-layer surface must portal into it or it
   // paints beneath it (see `surface-overlay-container-context`).
   const surfaceContainer = useSurfaceOverlayContainerEl();
+  const contentRef = useOverlayDragSuppressionRef(ref);
   if (!paneFocused || concealed) return null;
   return (
     <PopoverPrimitive.Portal
       container={container ?? surfaceContainer ?? undefined}
     >
       <PopoverPrimitive.Content
-        ref={ref}
+        ref={contentRef}
         data-slot="popover-content"
         data-appearance={appearance}
         data-layout={layout}

@@ -111,7 +111,6 @@ import {
   type GlobalResourceEpicEntry,
   type GlobalResourceProjection,
 } from "@/stores/resources/resources-registry";
-import { useTitleBarDragSuppression } from "@/stores/layout/title-bar-drag-store";
 import { GlobalResourcesStreamMount } from "@/providers/resources-stream-mount";
 import { useGlobalResourcesUnsupported } from "@/hooks/resources/use-global-resources-unsupported";
 import {
@@ -573,9 +572,6 @@ function ScopedResourceMonitorPopover(props: {
       setOpen(true);
     });
   }, [claimsOpenAction]);
-  // While the panel is open, let the header drop its title-bar drag regions so a
-  // click on the (otherwise event-swallowing) drag area dismisses the popover.
-  useTitleBarDragSuppression("resource-monitor", open);
   const scope = props.scope;
   // The status bar segment's own readings, for the forms that draw them.
   // Every source under it is a store or context read, so the icon button pays

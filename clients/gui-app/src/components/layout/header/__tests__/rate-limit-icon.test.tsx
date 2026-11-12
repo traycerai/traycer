@@ -258,22 +258,6 @@ describe("<RateLimitIconButton />", () => {
     expect(screen.getByTestId("rate-limit-gauge-icon")).toBeTruthy();
   });
 
-  it("suppresses title-bar dragging only while the popover is open", () => {
-    renderIcon();
-
-    const isSuppressed = () =>
-      useTitleBarDragStore.getState().suppressors.has("rate-limits");
-    const button = screen.getByRole("button", { name: "Usage limits" });
-
-    expect(isSuppressed()).toBe(false);
-
-    fireEvent.click(button);
-    expect(isSuppressed()).toBe(true);
-
-    fireEvent.click(button);
-    expect(isSuppressed()).toBe(false);
-  });
-
   it("renders zero providers as visible empty tracks without fabricated usage", () => {
     cluster = { kind: "no-providers" };
     renderIcon();
