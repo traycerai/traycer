@@ -40,9 +40,9 @@ describe("SignInStorageBanner", () => {
     ).toBeNull();
 
     act(() => useAuthStore.getState().setSignInStorageLow(true));
-    expect(
-      screen.getByRole("status", { name: DISK_FULL_SIGN_IN_TITLE }),
-    ).toBe(status);
+    expect(screen.getByRole("status", { name: DISK_FULL_SIGN_IN_TITLE })).toBe(
+      status,
+    );
     expect(status.textContent).toBe(
       `${DISK_FULL_SIGN_IN_TITLE} ${DISK_FULL_SIGN_IN_BODY}`,
     );

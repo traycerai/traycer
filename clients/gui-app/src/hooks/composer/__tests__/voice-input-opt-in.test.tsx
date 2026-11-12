@@ -141,6 +141,7 @@ describe("voice input opt-in", () => {
     expect(host.ensureModel).toHaveBeenCalledWith({ modelId: null });
     expect(result.current.dictationControl).toBeNull();
     expect(result.current.dictationPreparing).toEqual({
+      errorMessage: null,
       downloadState: "absent",
       progress: null,
     });
@@ -152,6 +153,7 @@ describe("voice input opt-in", () => {
     };
     rerender();
     expect(result.current.dictationPreparing).toEqual({
+      errorMessage: null,
       downloadState: "downloading",
       progress: 0.42,
     });
