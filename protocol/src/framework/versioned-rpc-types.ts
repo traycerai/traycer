@@ -299,6 +299,8 @@ export const RPC_ERROR_CODES = [
   // yet), so nothing can be linked now; the dialog says "Connect to Traycer
   // to link this profile." Additive, as above.
   "PROVIDER_LINK_UNAVAILABLE",
+  // providers.link 1.2: the existing account needs an explicit Switch account.
+  "harness_account_unidentified",
   // ─── Same principal ─────────────────────────────────────────────────────
   //
   // The two hosts belong to different owners (a person and a team, or two

@@ -113,8 +113,8 @@ vi.mock("@/lib/host", async (importOriginal) => {
 
 vi.mock("@/hooks/bots/use-environment-host-read-query", () => ({
   useEnvironmentHostReadQuery: () => ({
-    isError: false,
-    data: mocks.state.binding ?? undefined,
+    kind: "binding",
+    query: { isError: false, data: mocks.state.binding ?? undefined },
   }),
 }));
 vi.mock("@/hooks/environment/use-environment-reads", () => ({
@@ -222,6 +222,7 @@ function renderSection(
                       state: "awake",
                       frozen: false,
                       summary: sandboxSummaryFixture({ hostId: "host-a" }),
+                      ownerKind: "unknown",
                       teamOwned: false,
                     }
                   : null,
@@ -366,7 +367,7 @@ describe("HostEnvironmentSection", () => {
     ).toBeTruthy();
     expect(
       within(dialog).getByText(
-        "The team will own this computer. Any member of the team can claim it as their own.",
+        "The team will own this computer. Any member of the team can claim it as their own. Traycer restarts once on this computer.",
       ),
     ).toBeTruthy();
     expect(within(dialog).queryByText("Personal")).toBeNull();

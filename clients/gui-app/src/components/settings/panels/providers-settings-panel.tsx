@@ -68,7 +68,6 @@ import {
   usePersonalHostScope,
   type HostScope,
 } from "@/components/settings/host-scope/use-host-scope";
-import { LocalRowNote } from "@/components/settings/environment/local-row-note";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import { providerRailStateWord } from "./provider-rail-state-word";
 
@@ -1404,17 +1403,6 @@ function ProviderEnablementControl(props: {
   );
 }
 
-/**
- * The move note above a provider's tabs. Providers omits it: the enclosing
- * environment already determines reach, and these settings move with the
- * host. MCP and Skills keep the note.
- */
-function LocalRowNoteForView(): ReactNode {
-  const view = useContext(ProvidersPanelViewContext);
-  if (view === "providers") return null;
-  return <LocalRowNote />;
-}
-
 function ProviderDetail({
   state,
   providers,
@@ -1621,13 +1609,11 @@ function ProviderDetail({
         }
       />
       <div className="flex flex-1 flex-col md:min-h-0">
-        {/* Nothing renders between the provider header and the tab rail on
-            Providers. MCP and Skills keep the Local row's move note. The
+        {/* Nothing renders between the provider header and the tab rail. The
             key is the first block of Profiles & Limits when that tab exists,
             and the whole body of Account when that is the only key home.
             The rail is PINNED: a block parked here would occupy fixed height
             at the top of the pane forever, not just until you scrolled. */}
-        <LocalRowNoteForView />
         <Tabs
           value={activeTab}
           onValueChange={(value) => {
@@ -1967,6 +1953,7 @@ function ProviderTabBody({
         <div className="flex flex-col gap-3">
           <ProviderUsageCredentialsNote state={state} />
           <ProviderProfileScopedSection
+            key={`${profileTab.hostId}:${state.providerId}:${profileTab.selectedProfileId}`}
             state={state}
             {...profileTab}
             onOpenCliSettings={() => onActiveTabChange("general")}

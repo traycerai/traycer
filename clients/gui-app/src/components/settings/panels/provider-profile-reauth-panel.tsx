@@ -1,3 +1,10 @@
+import { EnvironmentProfileSignIn } from "@/components/providers/environment-profile-sign-in";
+import {
+  useEnvironmentProfileSignInSupported,
+  useProfileSignInEnvironment,
+} from "@/hooks/providers/use-profile-sign-in-environment";
+import { useOptionalHostClient, type HostRpcRegistry } from "@/lib/host";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { useProvidersLoginOwnership } from "@/hooks/providers/use-providers-login-ownership";
 import {
   useCallback,
@@ -40,6 +47,7 @@ import {
 } from "./use-provider-profile-login-flow";
 import { CredentialRefusalNote } from "@/components/providers/credential-refusal-note";
 import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
+import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
 
 function noop(): void {}
 
@@ -47,6 +55,8 @@ interface ProviderProfileReauthPanelProps {
   readonly state: ProviderCliState;
   readonly profile: ProviderProfile;
   readonly isLocalHost: boolean;
+  readonly replaceAccount: boolean;
+  readonly onDeliveryPending?: (certifiedProfileId: string | null) => void;
   /** Settles a reconnect of the SAME account without the acknowledgment card.
    *  The profile is already authenticated and persisted by the time the flow
    *  reaches `identity` - the card only asks the user to confirm something
@@ -64,12 +74,109 @@ interface ProviderProfileReauthPanelProps {
     | ((profile: ProviderProfile) => void)
     | null;
   readonly onCancel: () => void;
-  readonly onDone: () => void;
+  readonly onDone: (profile: ProviderProfile) => void;
 }
 
-export function ProviderProfileReauthPanel({
+export function ProviderProfileReauthPanel(
+  props: ProviderProfileReauthPanelProps,
+): ReactNode {
+  const client = useOptionalHostClient();
+  const hostId = useRequesterHostId(client);
+  const supported = useEnvironmentProfileSignInSupported(
+    hostId,
+    props.state.providerId,
+    props.profile.kind === "managed",
+  );
+  const refusal = useHostCredentialRefusal(hostId);
+  if (hostId !== null && refusal !== null)
+    return (
+      <div className="flex flex-col gap-3">
+        <CredentialRefusalNote refusal={refusal} />
+        <Button type="button" variant="ghost" onClick={props.onCancel}>
+          Back
+        </Button>
+      </div>
+    );
+  if (supported === null)
+    return <ProfileReauthReading onCancel={props.onCancel} />;
+  if (supported && client !== null)
+    return <RoutedProviderProfileReauthPanel {...props} client={client} />;
+  return <LocalProviderProfileReauthPanel {...props} />;
+}
+
+function RoutedProviderProfileReauthPanel(
+  props: ProviderProfileReauthPanelProps & {
+    readonly client: HostClient<HostRpcRegistry>;
+  },
+): ReactNode {
+  const { client } = props;
+  const route = useProfileSignInEnvironment(client);
+  if (route.kind === "environment") {
+    if (!route.canSignIn)
+      return (
+        <div className="flex flex-col gap-3">
+          <p role="status" className="text-ui-sm text-muted-foreground">
+            Ask a teammate to sign in on Providers.
+          </p>
+          <Button variant="ghost" onClick={props.onCancel}>
+            Cancel
+          </Button>
+        </div>
+      );
+    return (
+      <EnvironmentProfileSignIn
+        client={client}
+        request={{
+          providerId: props.state.providerId,
+          profileId:
+            props.profile.environmentProfileId ?? props.profile.profileId,
+          environmentId: route.environmentId,
+          createProfile: null,
+          replaceAccount: props.replaceAccount,
+        }}
+        autoStart={!props.replaceAccount}
+        waitForLocalProfile
+        disabled={false}
+        onComplete={({ profile }) => {
+          if (profile === null) return;
+          if (props.onSameAccountReconnected !== null)
+            props.onSameAccountReconnected(profile);
+          else props.onDone(profile);
+        }}
+        onDeliveryPending={props.onDeliveryPending}
+        onCancel={props.onCancel}
+      />
+    );
+  }
+  if (route.kind === "reading")
+    return <ProfileReauthReading onCancel={props.onCancel} />;
+  if (route.kind === "failed")
+    return (
+      <div>
+        <p>Couldn't read where this profile will be available.</p>
+        <Button onClick={route.retry}>Retry</Button>
+        <Button onClick={props.onCancel}>Back</Button>
+      </div>
+    );
+  return <LocalProviderProfileReauthPanel {...props} />;
+}
+
+function ProfileReauthReading(props: {
+  readonly onCancel: () => void;
+}): ReactNode {
+  return (
+    <div className="flex flex-col gap-3">
+      <MutedAgentSpinner />
+      <Button type="button" onClick={props.onCancel}>
+        Back
+      </Button>
+    </div>
+  );
+}
+
+function LocalProviderProfileReauthPanel({
   state,
-  profile,
+  profile: entryProfile,
   isLocalHost,
   onSameAccountReconnected,
   onCancel,
@@ -86,18 +193,6 @@ export function ProviderProfileReauthPanel({
   const submitLoginCode = useProvidersSubmitLoginCode();
   const touchLogin = useProvidersTouchLogin();
   const ensurePack = useProvidersEnsurePack();
-  // The `profile` prop is LIVE, and it turns over mid-flow:
-  // `providers.awaitLogin`'s hook-level `onSuccess` commits the fresh row into
-  // the `providers.list` cache, and query-core awaits that before the flow's
-  // own per-call `onSuccess` settles the step. So by the first render of the
-  // settled step this prop already describes whoever just signed in - it can
-  // be neither the "before" side of the changed-account comparison (which
-  // would then compare the new account against itself and always call it
-  // unchanged) nor the basis for "are we signing this profile in, or switching
-  // its account" (which would flip its own copy the instant it succeeded).
-  // Freeze the row as it was on entry; it is the only record of who this
-  // profile was when the user started, and everything below wants exactly it.
-  const [entryProfile] = useState(profile);
   const supportsLoginOwnership = useProvidersLoginOwnership();
   const hostBlock = providerHostBlock(state, "sign-in");
   const flow = useProviderProfileLoginFlow({
@@ -225,7 +320,9 @@ export function ProviderProfileReauthPanel({
         retryBlocked={hostBlock?.kind === "macos"}
         onRetry={start}
         onSignInAgain={signInAgain}
-        onDone={onDone}
+        onDone={() => {
+          if (flow.state.kind === "identity") onDone(flow.state.profile);
+        }}
       />
     </div>
   );
@@ -252,9 +349,7 @@ function ProviderProfileReauthState({
   readonly flow: ProviderProfileLoginFlow;
   readonly providerId: ProviderCliState["providerId"];
   readonly loginCapability: ProviderCliState["loginCapability"] | null;
-  /** The row as it was when the panel mounted - see the freeze at the call
-   *  site. The live prop describes the account that just signed in, so it
-   *  cannot narrate what this profile "was". */
+  /** The editor's captured entry row, before the account that just signed in. */
   readonly entryProfile: ProviderProfile;
   readonly showWaiting: boolean;
   readonly showIdentity: boolean;

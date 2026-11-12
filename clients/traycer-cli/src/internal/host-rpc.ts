@@ -6,6 +6,8 @@ import { TEAM_TRANSFER_REFUSALS } from "@traycer-clients/shared/host-client/team
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { randomUUID } from "node:crypto";
 import type { ZodType } from "zod";
+import type { SchemaVersion } from "@traycer/protocol/framework/index";
+import { getNegotiatedHostMethodVersion } from "../../../shared/host-transport/negotiated-manifest-registry";
 import {
   hostRpcRegistry,
   type HostRpcRegistry,
@@ -68,6 +70,15 @@ import { CLI_CLIENT_IDENTITY } from "../cli-version";
  * read (`readBotSnapshot`) waits for its first answer exactly as long.
  */
 export const FRAME_TIMEOUT_MS = 15_000;
+
+/** Read after a command's inventory RPC has handshaken with this endpoint.
+ * A dispatch still carries its own floor in case the host changes. */
+export async function readLocalHostMethodVersion(
+  method: string,
+): Promise<SchemaVersion | null> {
+  const endpoint = await resolveEndpoint();
+  return getNegotiatedHostMethodVersion(endpoint.hostId, method);
+}
 
 /**
  * One-shot unary RPC to the host's `/rpc` WebSocket endpoint.
@@ -469,8 +480,7 @@ export async function resolveEndpoint(): Promise<HostTransportEndpoint> {
     });
     throw cliError({
       code: CLI_ERROR_CODES.HOST_NOT_RUNNING,
-      message:
-        "traycer: host not running - pid metadata is absent, malformed, advertises an invalid local WebSocket endpoint, or names a process that is gone (exited, or a recycled pid that now belongs to an unrelated process).",
+      message: "The host is not running. Run `traycer host ensure`.",
       details: null,
       exitCode: 1,
     });
@@ -486,8 +496,7 @@ export async function resolveEndpoint(): Promise<HostTransportEndpoint> {
     );
     throw cliError({
       code: CLI_ERROR_CODES.HOST_NOT_RUNNING,
-      message:
-        "traycer: host not running - pid metadata is absent, malformed, advertises an invalid local WebSocket endpoint, or names a process that is gone (exited, or a recycled pid that now belongs to an unrelated process).",
+      message: "The host is not running. Run `traycer host ensure`.",
       details: null,
       exitCode: 1,
     });
@@ -499,8 +508,7 @@ export async function resolveEndpoint(): Promise<HostTransportEndpoint> {
     });
     throw cliError({
       code: CLI_ERROR_CODES.HOST_NOT_RUNNING,
-      message:
-        "traycer: host not running - pid metadata is absent, malformed, advertises an invalid local WebSocket endpoint, or names a process that is gone (exited, or a recycled pid that now belongs to an unrelated process).",
+      message: "The host is not running. Run `traycer host ensure`.",
       details: null,
       exitCode: 1,
     });

@@ -6,6 +6,7 @@ import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
 import { Button } from "@/components/ui/button";
 import { XIcon } from "lucide-react";
 import { BackdropDimSource } from "@/components/ui/backdrop-dim-source";
+import { useOverlayDragSuppressionRef } from "@/stores/layout/title-bar-drag-store";
 
 function Sheet({ ...props }: React.ComponentProps<typeof SheetPrimitive.Root>) {
   return <SheetPrimitive.Root data-slot="sheet" {...props} />;
@@ -61,12 +62,13 @@ function SheetContent({
   // Concealed region (see `portal-concealment-context`): un-present the
   // portal; the root keeps its open state and it re-presents on return.
   const concealed = usePortalConcealed();
+  const contentRef = useOverlayDragSuppressionRef(ref);
   if (concealed) return null;
   return (
     <SheetPortal>
       <SheetOverlay />
       <SheetPrimitive.Content
-        ref={ref}
+        ref={contentRef}
         data-slot="sheet-content"
         data-side={side}
         data-close-button={showCloseButton}

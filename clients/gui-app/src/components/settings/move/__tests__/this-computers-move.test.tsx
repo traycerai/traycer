@@ -96,6 +96,16 @@ describe("useThisComputersMove", () => {
     );
   });
 
+  it("identifies a team-owned computer even when its planes are local", async () => {
+    await settlesTo(
+      environmentStatusFixture({
+        principal: { kind: "team", teamName: "Designers" },
+        planes: { records: "local", broker: "local", room: "local" },
+      }),
+      "team",
+    );
+  });
+
   it("stays quiet while a move is running, which reports no consent at all", async () => {
     // Past the accept: the Overview is showing the progress, so the card and
     // the toast have nothing to invite. `consent` is null right through the

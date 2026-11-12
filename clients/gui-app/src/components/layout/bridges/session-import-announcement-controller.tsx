@@ -8,6 +8,7 @@ import {
   windowNarratorOwns,
 } from "@/components/layout/host-readiness-controller-context";
 import { SessionImportDialog } from "@/components/session-import/session-import-dialog";
+import { useMoveAskHoldsAnnouncements } from "@/components/settings/move/use-move-ask-holds-announcements";
 import { useSessionImportAvailable } from "@/hooks/session-import/use-session-import-available";
 import {
   useStreamMethodSupport,
@@ -57,7 +58,10 @@ const SESSION_IMPORT_ANNOUNCEMENT_TOAST_ID =
  *   reads. Held, not dropped: the effect re-runs when the narrator releases;
  * - the app-wide stream client is live, so the dialog the action opens has a
  *   host to scan. Held, never a reason to dismiss: a reconnect is transient,
- *   and the claim is permanent.
+ *   and the claim is permanent;
+ * - this computer's move ask is not owed and its sheet is not open
+ *   (`useMoveAskHoldsAnnouncements`): one ask at a time. Held, not a reason
+ *   to dismiss, so it shows once the move is answered.
  *
  * "Later" just dismisses - the announcement is consumed either way. A gate
  * that closes while the toast is up - the host losing the capability,
@@ -80,6 +84,9 @@ export function SessionImportAnnouncementController(): ReactNode {
   const onboardingComplete = useOnboardingStore(
     (state) => state.completedAt !== null,
   );
+  const moveAskHolds = useMoveAskHoldsAnnouncements(
+    signedIn && onboardingComplete,
+  );
   const tourOpen = useOnboardingTourOpenStore((state) => state.open);
   // The first-task guide is the tour's own last act, continued over the real
   // app, and it reads the same way: a permanent toast beside a coachmark is
@@ -101,6 +108,10 @@ export function SessionImportAnnouncementController(): ReactNode {
       signedIn,
       bypassed: false,
     });
+  // The gates that only hold the toast back and never take it down: each is
+  // transient (the narrator, a stream drop, negotiation still answering) or
+  // is settled later (the move ask), and the claim waits for all of them.
+  const held = narrated || !streamLive || !supported || moveAskHolds;
   const [dialogOpen, setDialogOpen] = useState(false);
 
   // Whether THIS controller put the toast up. `consumed` cannot stand in
@@ -126,8 +137,7 @@ export function SessionImportAnnouncementController(): ReactNode {
       return;
     }
     if (consumed || !available || !signedIn || !onboardingComplete) return;
-    if (tourOpen || guideActive || narrated || !streamLive || !supported)
-      return;
+    if (tourOpen || guideActive || held) return;
     // A claim, not a consume: `consumed` above is this window's copy, and a
     // second window restored alongside this one holds its own. The claim
     // re-reads the install's record, so of two windows that both get here
@@ -158,12 +168,10 @@ export function SessionImportAnnouncementController(): ReactNode {
     claim,
     consumed,
     guideActive,
-    narrated,
+    held,
     onboardingComplete,
     signedIn,
-    streamLive,
     tourOpen,
-    supported,
   ]);
 
   if (!dialogOpen) return null;

@@ -68,6 +68,14 @@ function insufficientCreditCopy(
 /** The refusals whose sentence depends on nothing but the code. */
 const REFUSAL_COPY: ReadonlyMap<string, string> = new Map([
   [
+    "create_principal_mismatch",
+    "This sandbox can't be created for the selected owner. Choose another owner and try again.",
+  ],
+  [
+    "pod_add_admin_only",
+    "Only a team admin can add an Automations sandbox for this team.",
+  ],
+  [
     SANDBOX_REFUSAL_CODE_RENAME_UNAVAILABLE,
     "Couldn't rename the sandbox. Try again in a moment.",
   ],
@@ -77,7 +85,7 @@ const REFUSAL_COPY: ReadonlyMap<string, string> = new Map([
   ],
   [
     SANDBOX_REFUSAL_CODE_PROVIDER_FAILED,
-    "The sandbox failed to start. It's listed as failed; destroy it and try again.",
+    "Couldn't complete the sandbox action.",
   ],
   [
     SANDBOX_REFUSAL_CODE_TRANSITION_CONFLICT,

@@ -120,6 +120,7 @@ vi.mock("@/hooks/host/use-host-queries", () => hostQueriesMock);
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostBinding: () => mocks.binding,
+  useHostClient: () => null,
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-defaults", async (importOriginal) => ({
   ...(await importOriginal<
@@ -1442,7 +1443,12 @@ describe("<BotTabSurface /> with no channel selected", () => {
     it("heads the pane with Tracy as the picker, to reach a team still to be set up that the default channel does not see", async () => {
       mocks.state.listedBotIds = [];
       mocks.state.environments = [
-        { environmentId: "env-new", label: "Newco", ownerKind: "organization" },
+        {
+          environmentId: "env-new",
+          label: "Newco",
+          ownerKind: "organization",
+          providerHandle: null,
+        },
       ];
       mocks.reads["env-new"] = { setup: NEEDS_HOST_SETUP };
       const user = userEvent.setup();

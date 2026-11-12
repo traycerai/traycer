@@ -278,7 +278,7 @@ function AddHostDialogBody(): ReactNode {
               </TabsList>
               <TabsContent value="npm" className="grid gap-1.5">
                 <CommandBlock command={CLI_NPM_COMMAND} />
-                <StepNote>Requires Node 20.18 or newer.</StepNote>
+                <StepNote>Requires Node 22.13.0 or newer.</StepNote>
               </TabsContent>
               <TabsContent value="homebrew" className="grid gap-1.5">
                 <CommandBlock command={CLI_HOMEBREW_COMMAND} />

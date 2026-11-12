@@ -16,8 +16,8 @@ import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtu
  * whose create failed at the provider (`failed`), or whose guest has not
  * enrolled yet (`creating`), is in `GET /api/sandboxes` but has no registry
  * row and no directory entry. The host list must still show it, as a
- * management-only sandbox row, or the toast "It's listed as failed; destroy it
- * and try again." points at nothing.
+ * management-only sandbox row, so the person can find the failed sandbox and
+ * use its available management actions.
  */
 
 /**
@@ -114,6 +114,7 @@ describe("buildHostScopeOptions a listed sandbox with no host row", () => {
       state: "failed",
       frozen: false,
       summary,
+      ownerKind: "unknown",
       teamOwned: false,
     });
   });
@@ -147,6 +148,7 @@ describe("buildHostScopeOptions a listed sandbox with no host row", () => {
       state: "creating",
       frozen: false,
       summary,
+      ownerKind: "unknown",
       teamOwned: false,
     });
   });

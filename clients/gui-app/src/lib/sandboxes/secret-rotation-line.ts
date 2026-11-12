@@ -225,7 +225,7 @@ export function secretRotationStatus(
       return {
         headline: {
           tone: "warning",
-          text: "Not confirmed after a minute. Stopping the sandbox ends every old session.",
+          text: "Not confirmed after a minute. Finish or stop running agent turns and shells before stopping the sandbox to end old sessions.",
         },
         producers,
       };

@@ -12,6 +12,7 @@ import {
 } from "@traycer/protocol/host/provider-schemas";
 import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-native-schemas";
 import type { ProviderNativeCapabilities } from "@traycer/protocol/host/provider-native-schemas";
+import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import {
   HostTransportFailureError,
   RetryableTransportError,
@@ -805,7 +806,8 @@ vi.mock("@/lib/host", async (importOriginal) => {
     // this one - so a fixture answering `null` here silently withholds the
     // wrapper and the selected-host refresh lands on the ambient host.
     useHostBinding: () => providerMocks.ambientBinding,
-    useHostClient: () => null,
+    useHostClient: () => hostScopeMocks.client,
+    useOptionalHostClient: () => hostScopeMocks.client,
     // The SPINE, a separate export.
     useHostRuntimeClient: () => null,
   };
@@ -1042,13 +1044,18 @@ vi.mock("@/components/ui/select", async () => {
     },
   };
 });
-/**
- * The only thing the panel calls on a scope client, so the only thing a stub
- * has to be. Named rather than asserted: the real `HostClient` is far wider
- * than this test needs, and casting to it would be claiming a shape nothing
- * here provides.
- */
-type ScopeClientStub = { readonly getActiveHostId: () => string };
+/** Identity is set before rendering, so this requester only needs the
+ * addressed host read and a callable subscription disposer. */
+type ScopeClientStub = Pick<
+  HostRequester<HostRpcRegistry>,
+  "getActiveHostId" | "onChange"
+>;
+
+// Recording only the agent GUI manifest makes the optional environment-link
+// pair known absent for the native sign-in fixtures, rather than still unknown.
+const NATIVE_HOST_MANIFEST = {
+  "agent.gui.listHarnesses": agentGuiListHarnessesV91.schemaVersion,
+};
 
 const hostScopeMocks: {
   status: HostScopeStatus | undefined;
@@ -1782,30 +1789,17 @@ vi.mock(
   }),
 );
 
-// MCP and Skills still mount LocalRowNote, which has its own suite. Keep its
-// status read independent of the host runtime and real environment queries
-// in this harness. Providers itself no longer mounts the note.
+// This file draws the Providers page of a Local row: the computer's own tabs.
+// The cases for Personal's MCP and Skills tabs set their own pick.
+// Skills initializes host-scoped configuration hooks even in render-only
+// cases, which have no host runtime to resolve a client from.
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
 }));
-vi.mock("@/hooks/environment/use-environment-reads", async (importOriginal) => {
-  const actual =
-    await importOriginal<
-      typeof import("@/hooks/environment/use-environment-reads")
-    >();
-  return {
-    ...actual,
-    useEnvironmentStatusRead: () => ({
-      supported: null,
-      data: null,
-      isError: false,
-    }),
-  };
-});
-
-// This file draws the Providers page of a Local row: the computer's own tabs.
-// The cases for Personal's MCP and Skills tabs set their own pick.
 beforeEach(() => {
+  useSettingsEnvironmentPickStore.setState({
+    defaultPick: { kind: "personal" },
+  });
   useSettingsEnvironmentPickStore.setState({
     pick: { kind: "local", hostId: hostScopeMocks.hostId, hostName: "dev-box" },
   });
@@ -1816,14 +1810,6 @@ afterEach(() => {
 
 describe("<ProvidersSettingsPanel />", () => {
   beforeEach(() => {
-    // The Permissions tab reads the NEGOTIATED `agent.gui.listHarnesses` line
-    // (see `permissionsTab`), through the real manifest registry - only the
-    // scope's host id is mocked. `9.1` is the line `auto` became expressible
-    // on, so this is the ordinary auto-capable host; the cases about the gate
-    // record their own manifest over it.
-    recordNegotiatedHostManifest(hostScopeMocks.hostId, {
-      "agent.gui.listHarnesses": agentGuiListHarnessesV91.schemaVersion,
-    });
     guiHarnessesCatalogMock.data = { harnesses: DEFAULT_CATALOG_HARNESSES };
     useProvidersFocusStore.setState({
       focusHarnessId: null,
@@ -1902,14 +1888,17 @@ describe("<ProvidersSettingsPanel />", () => {
     vi.mocked(toast.success).mockClear();
     hostScopeMocks.setHostId.mockClear();
     hostScopeMocks.hostId = "host-a";
+    recordNegotiatedHostManifest(hostScopeMocks.hostId, NATIVE_HOST_MANIFEST);
     hostScopeMocks.host = undefined;
-    // Reset alongside the rest: a test that pins an unusable status would
-    // otherwise leave every later one scoped to a host with no client.
+    // Keep scope health isolated from tests that pin an unusable status.
     hostScopeMocks.status = undefined;
     providerMocks.refreshedHostIds.length = 0;
     providerMocks.ambientBinding = null;
     providerMocks.credentialRefusal = null;
-    hostScopeMocks.client = null;
+    hostScopeMocks.client = {
+      getActiveHostId: () => hostScopeMocks.hostId,
+      onChange: () => () => undefined,
+    };
     useProvidersFocusStore.getState().clearFocusHarnessId();
   });
 
@@ -3229,7 +3218,10 @@ describe("<ProvidersSettingsPanel />", () => {
       hostClient: { getActiveHostId: () => "host-ambient" },
     };
     hostScopeMocks.status = "ready";
-    hostScopeMocks.client = { getActiveHostId: () => "host-selected" };
+    hostScopeMocks.client = {
+      getActiveHostId: () => "host-selected",
+      onChange: () => () => undefined,
+    };
 
     render(
       <TooltipProvider>
@@ -3258,6 +3250,7 @@ describe("<ProvidersSettingsPanel />", () => {
     // implementation. What must hold is that nothing renders, and nothing is
     // requested, while the scope is unresolved.
     hostScopeMocks.status = "unreachable";
+    hostScopeMocks.client = null;
 
     render(
       <TooltipProvider>
@@ -3727,7 +3720,6 @@ describe("<ProvidersSettingsPanel />", () => {
   it("shows no move guidance while the host runs its own settings, on the phone and on the desktop", () => {
     const previousWidth = window.innerWidth;
     const expectNoMoveGuidance = (): void => {
-      expect(screen.queryByTestId("local-row-note")).toBeNull();
       expect(
         screen.queryByRole("button", { name: "Move to Personal" }),
       ).toBeNull();
@@ -5913,7 +5905,7 @@ describe("<ProvidersSettingsPanel />", () => {
     openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add a profile" }));
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     const [startVariables, startOptions] = firstStartLoginCall();
     expect(startVariables).toEqual({
@@ -5943,7 +5935,7 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(typeof awaitOptions.onSuccess).toBe("function");
   });
 
-  it("disables Link account and shows the refusal in the Add profile dialog when the host takes no credentials, and starts no login", () => {
+  it("disables Sign in and shows the refusal in the Add profile dialog when the host takes no credentials, and starts no login", () => {
     providerMocks.listResult.data = {
       providers: [
         {
@@ -5998,9 +5990,7 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(screen.getByRole("button", { name: "Add a profile" }));
     expect(screen.queryByTestId("credential-refusal")).toBeNull();
     expect(
-      screen
-        .getByRole("button", { name: "Link account" })
-        .hasAttribute("disabled"),
+      screen.getByRole("button", { name: "Sign in" }).hasAttribute("disabled"),
     ).toBe(false);
 
     providerMocks.credentialRefusal = "Sandboxes don't take sign-ins";
@@ -6008,7 +5998,7 @@ describe("<ProvidersSettingsPanel />", () => {
       target: { value: "Work" },
     });
 
-    const link = screen.getByRole("button", { name: "Link account" });
+    const link = screen.getByRole("button", { name: "Sign in" });
     expect(link.hasAttribute("disabled")).toBe(true);
     expect(screen.getByTestId("credential-refusal").textContent).toBe(
       "Sandboxes don't take sign-ins",
@@ -6069,7 +6059,7 @@ describe("<ProvidersSettingsPanel />", () => {
     openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add a profile" }));
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     // Still `starting` - `startLogin` hasn't resolved yet, so there is no
     // profileId/child for a paste to reach. The field must not render (a
@@ -6141,7 +6131,7 @@ describe("<ProvidersSettingsPanel />", () => {
     openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add a profile" }));
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
     const [, startOptions] = firstStartLoginCall();
     await act(() => {
       startOptions.onSuccess({
@@ -6231,7 +6221,7 @@ describe("<ProvidersSettingsPanel />", () => {
     openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add a profile" }));
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
     const [, startOptions] = firstStartLoginCall();
     await act(() => {
       startOptions.onSuccess({
@@ -6311,7 +6301,7 @@ describe("<ProvidersSettingsPanel />", () => {
     openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add a profile" }));
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
     const [, startOptions] = firstStartLoginCall();
     await act(() => {
       startOptions.onSuccess({
@@ -6382,7 +6372,7 @@ describe("<ProvidersSettingsPanel />", () => {
     openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add a profile" }));
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
     const [, startOptions] = firstStartLoginCall();
     await act(() => {
       startOptions.onSuccess({
@@ -6570,6 +6560,7 @@ describe("<ProvidersSettingsPanel />", () => {
       startSignIn: true,
     });
     hostScopeMocks.hostId = "local";
+    recordNegotiatedHostManifest(hostScopeMocks.hostId, NATIVE_HOST_MANIFEST);
 
     render(
       <TooltipProvider>
@@ -6671,6 +6662,7 @@ describe("<ProvidersSettingsPanel />", () => {
       startSignIn: true,
     });
     hostScopeMocks.hostId = "local";
+    recordNegotiatedHostManifest(hostScopeMocks.hostId, NATIVE_HOST_MANIFEST);
 
     render(
       <TooltipProvider>
@@ -6743,6 +6735,7 @@ describe("<ProvidersSettingsPanel />", () => {
       startSignIn: true,
     });
     hostScopeMocks.hostId = "local";
+    recordNegotiatedHostManifest(hostScopeMocks.hostId, NATIVE_HOST_MANIFEST);
 
     const view = render(
       <TooltipProvider>
@@ -6805,6 +6798,7 @@ describe("<ProvidersSettingsPanel />", () => {
       startSignIn: true,
     });
     hostScopeMocks.hostId = "local";
+    recordNegotiatedHostManifest(hostScopeMocks.hostId, NATIVE_HOST_MANIFEST);
 
     render(
       <TooltipProvider>
@@ -7074,7 +7068,7 @@ describe("<ProvidersSettingsPanel />", () => {
     openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add a profile" }));
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     const [, startOptions] = firstStartLoginCall();
     await act(() => {
@@ -7154,7 +7148,7 @@ describe("<ProvidersSettingsPanel />", () => {
 
     // First attempt fails after the await phase - the section banner appears.
     fireEvent.click(screen.getByRole("button", { name: "Add a profile" }));
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
     const [, startOptions] = firstStartLoginCall();
     await act(() => {
       startOptions.onSuccess({
@@ -7180,7 +7174,7 @@ describe("<ProvidersSettingsPanel />", () => {
     // clear the banner instead of letting it sit next to a sign-in that
     // then succeeds.
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
     expect(screen.queryByText(/Sign-in did not finish for/)).toBeNull();
 
     const retryStart = providerMocks.startLoginMutate.mock.calls.at(1);
@@ -7312,7 +7306,7 @@ describe("<ProvidersSettingsPanel />", () => {
     openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add a profile" }));
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
     const [, startOptions] = firstStartLoginCall();
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel sign-in" }));
@@ -7505,6 +7499,7 @@ describe("<ProvidersSettingsPanel />", () => {
     // rail consumes a profile intent only when the host on screen IS the
     // intent's target (the foreign-host case is covered separately).
     hostScopeMocks.hostId = "local";
+    recordNegotiatedHostManifest(hostScopeMocks.hostId, NATIVE_HOST_MANIFEST);
 
     render(
       <TooltipProvider>
@@ -7615,6 +7610,7 @@ describe("<ProvidersSettingsPanel />", () => {
       startSignIn: true,
     });
     hostScopeMocks.hostId = "local";
+    recordNegotiatedHostManifest(hostScopeMocks.hostId, NATIVE_HOST_MANIFEST);
 
     render(
       <TooltipProvider>
@@ -8489,7 +8485,7 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(checkbox);
     expect(checkbox.getAttribute("aria-checked")).toBe("false");
 
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     const [startVariables] = firstStartLoginCall();
     expect(startVariables).toEqual({
@@ -8553,7 +8549,7 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Create new profile" }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     const [startVariables] = firstStartLoginCall();
     expect(startVariables).toEqual({
@@ -8617,7 +8613,7 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Create new profile" }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     const [, startOptions] = firstStartLoginCall();
     await act(() => {
@@ -8649,7 +8645,7 @@ describe("<ProvidersSettingsPanel />", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText("Account already linked")).toBeDefined();
+      expect(screen.getByText("Account already signed in")).toBeDefined();
     });
     expect(
       screen.getByText(
@@ -8739,7 +8735,7 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Create new profile" }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     const [, startOptions] = firstStartLoginCall();
     await act(() => {
@@ -8846,7 +8842,7 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Create new profile" }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     const [, startOptions] = firstStartLoginCall();
     await act(() => {
@@ -8944,7 +8940,7 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Create new profile" }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
     const [, startOptions] = firstStartLoginCall();
     await act(() => {
       startOptions.onSuccess({
@@ -9266,7 +9262,7 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(
       screen.getByRole("button", { name: `Use color ${selectedColor}` }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     expect(firstStartLoginCall()[0]).toEqual({
       providerId: "codex",
@@ -9380,7 +9376,7 @@ describe("<ProvidersSettingsPanel />", () => {
     openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add a profile" }));
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     const [, startOptions] = firstStartLoginCall();
     await act(() => {
@@ -9737,13 +9733,14 @@ describe("<ProvidersSettingsPanel /> mobile section picker", () => {
     hostScopeMocks.hostId = "host-a";
     hostScopeMocks.host = undefined;
     hostScopeMocks.status = undefined;
-    hostScopeMocks.client = null;
+    hostScopeMocks.client = {
+      getActiveHostId: () => hostScopeMocks.hostId,
+      onChange: () => () => undefined,
+    };
     // Same auto-capable line the desktop suite records: the Permissions section
     // is drawn from the negotiated `agent.gui.listHarnesses` minor, and this
     // describe asserts the phone picker offers EVERY supported section.
-    recordNegotiatedHostManifest(hostScopeMocks.hostId, {
-      "agent.gui.listHarnesses": agentGuiListHarnessesV91.schemaVersion,
-    });
+    recordNegotiatedHostManifest(hostScopeMocks.hostId, NATIVE_HOST_MANIFEST);
     // Default fixture for the "entering a provider" tests below: a single
     // provider advertising every hub section.
     providerMocks.listResult.data = {

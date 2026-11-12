@@ -357,6 +357,7 @@ export async function provisionInstalledHostCredential(
     };
 
     const activeClient = new WsStreamClient<HostStreamRpcRegistry>({
+      onClientClosed: (message) => options.logger.debug(message, {}),
       localOpenAuth: createCliLocalOpenAuth(options.auth.authnBaseUrl),
       registry: hostStreamRpcRegistry,
       // `null`, and not a stale read of the slot below: `endpoint` is declared
@@ -650,13 +651,13 @@ export async function provisionInstalledHostCredential(
             // Asked directly rather than by testing `settledOutcome()` for
             // `unreachable`: the `hostAnswered` fallback also resolves an
             // otherwise-unexplained probe, so keying off the returned kind
-            // would swallow this close code the moment a reconnect
-            // revalidation had fired. The close code is strictly the more
-            // diagnostic of the two, and both say "reached, not credentialed".
+            // would swallow this close the moment a reconnect revalidation
+            // had fired. Its code stays in the structured diagnostic above.
             if (nothingExplainsTheClose()) {
               return {
                 kind: "error",
-                message: `the host closed the stream (${reason.details.code})`,
+                message:
+                  "the host closed the connection before authorization was confirmed",
               };
             }
             return settledOutcome();

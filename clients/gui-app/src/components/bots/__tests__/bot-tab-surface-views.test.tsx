@@ -126,6 +126,7 @@ vi.mock("@/hooks/agent/use-host-reachability", () => ({
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostBinding: () => mocks.binding,
+  useHostClient: () => null,
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-defaults", async (importOriginal) => ({
   ...(await importOriginal<
@@ -683,6 +684,7 @@ describe("<BotTabSurface /> views", () => {
             environmentId: "env-team",
             label: "Olive Owner",
             ownerKind: "user",
+            providerHandle: null,
           },
         ];
 
@@ -699,6 +701,7 @@ describe("<BotTabSurface /> views", () => {
             environmentId: "env-team",
             label: "Acme",
             ownerKind: "organization",
+            providerHandle: null,
           },
         ];
 
@@ -732,6 +735,7 @@ describe("<BotTabSurface /> views", () => {
             environmentId: "env-team",
             label: "Olive Owner",
             ownerKind: "user",
+            providerHandle: null,
           },
         ];
         useStandaloneBotsStore.setState({

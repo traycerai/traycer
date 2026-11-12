@@ -34,6 +34,11 @@ import {
   SHELL_WIDTH_MENU,
 } from "../../../../__tests__/mobile-level2-form-harness";
 
+vi.mock("@/lib/host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host")>()),
+  useHostClient: () => null,
+}));
+
 // The channel list beside the post reads every bot and team on its own; it
 // is not what this file is about.
 vi.mock("@/components/bots/bot-channel-sidebar", () => ({

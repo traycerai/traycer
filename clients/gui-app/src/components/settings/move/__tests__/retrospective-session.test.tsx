@@ -26,6 +26,7 @@ import {
   environmentStatusFixture,
 } from "@/lib/environment/__tests__/environment-test-support";
 import type { HostRpcRegistry } from "@/lib/host";
+import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
 
 vi.mock("@/lib/settings-navigation", () => ({
   navigateToSettingsSection: vi.fn(),
@@ -34,6 +35,7 @@ vi.mock("@/lib/settings-navigation", () => ({
 afterEach(() => {
   cleanup();
   resetNegotiatedManifests();
+  useMoveSheetStore.setState({ target: null });
 });
 
 const COMMAND_DETAIL_TAIL =
@@ -122,6 +124,42 @@ function renderSessionWith(
 }
 
 describe("<RetrospectiveSession /> Stop using Personal", () => {
+  it("keeps the local settings list but hides Move to Personal for a team-owned computer", async () => {
+    renderSession(
+      environmentStatusFixture({
+        principal: { kind: "team", teamName: "Designers" },
+        planes: { records: "local", broker: "local", room: "local" },
+      }),
+      [],
+      [],
+    );
+
+    expect(await screen.findByTestId("retrospective-still-local")).toBeTruthy();
+    expect(screen.queryByTestId("retrospective-move-to-personal")).toBeNull();
+  });
+
+  it.each([null, { kind: "personal" } as const])(
+    "offers Move to Personal for a non-team principal",
+    async (principal) => {
+      renderSession(
+        environmentStatusFixture({
+          principal,
+          planes: { records: "local", broker: "local", room: "local" },
+        }),
+        [],
+        [],
+      );
+
+      fireEvent.click(
+        await screen.findByTestId("retrospective-move-to-personal"),
+      );
+      expect(useMoveSheetStore.getState().target).toEqual({
+        hostId: "old",
+        hostName: "Old laptop",
+      });
+    },
+  );
+
   it("offers it while a plane is still shared by an earlier version", async () => {
     renderSession(
       environmentStatusFixture({

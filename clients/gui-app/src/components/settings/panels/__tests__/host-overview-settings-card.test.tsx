@@ -246,6 +246,23 @@ describe("<HostOverviewSettingsCard />", () => {
     });
   });
 
+  it("does not label a team-owned computer Local when its planes are local", () => {
+    renderCard(
+      environmentStatusFixture({
+        principal: { kind: "team", teamName: "Designers" },
+        planes: { records: "local", broker: "local", room: "local" },
+      }),
+      {},
+    );
+
+    const trigger = screen.getByRole("combobox", { name: "Environment" });
+    expect(trigger.textContent).toContain("Personal");
+    expect(within(trigger).queryByText("Local")).toBeNull();
+    expect(screen.getByTestId("host-settings-source").textContent).toContain(
+      "Runs Personal",
+    );
+  });
+
   it("offers team use from a computer whose unresolved setup stopped", async () => {
     memberships.environments = [
       {
@@ -877,6 +894,19 @@ describe("hostSettingsRowModel", () => {
     });
   });
 
+  it("shows Personal rather than a Local selection for a team-owned computer with local planes", () => {
+    expect(
+      hostSettingsRowModel(
+        environmentStatusFixture({
+          principal: { kind: "team", teamName: "Designers" },
+          planes: { records: "local", broker: "local", room: "local" },
+        }),
+        PERSONAL_BINDING,
+        "Old laptop",
+      ),
+    ).toMatchObject({ kind: "select", value: "personal" });
+  });
+
   it("uses the team's name as a fixed value", () => {
     expect(
       hostSettingsRowModel(
@@ -886,6 +916,7 @@ describe("hostSettingsRowModel", () => {
       ),
     ).toEqual({
       kind: "team",
+      environmentId: "team",
       label: "Designers",
       description: "Runs Designers",
     });

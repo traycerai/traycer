@@ -39,7 +39,10 @@ import {
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import { useHostsRunningConfiguration } from "@/components/settings/environment/use-hosts-running-configuration";
 import { useSettingsHostEntry } from "@/components/settings/host-scope/use-settings-host-entry";
-import { environmentPickValue } from "@/lib/settings-environment-pages";
+import {
+  environmentPickValue,
+  type EnvironmentPick,
+} from "@/lib/settings-environment-pages";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import {
   findHostOption,
@@ -114,6 +117,8 @@ export interface HostScope {
   readonly listsFailed: boolean;
   /** Re-request both host lists after a failure. */
   readonly retryLists: () => void;
+  /** Retry a failed status read while a Settings host entry stays pending. */
+  readonly retryEntryStatus: (() => void) | null;
   /** Reference "now" for relative timestamps; ticks once a minute. */
   readonly nowMs: number;
 }
@@ -147,11 +152,12 @@ export function useHostScope(): HostScope {
   );
   const selectHost = useSettingsHostScopeStore((s) => s.selectHost);
   const entry = useSettingsHostEntry();
+  const configurationPicked = pick.kind === "personal" || pick.kind === "team";
   const membership = useHostsRunningConfiguration(
-    pick.kind === "local" ? { kind: "personal" } : pick,
-    pick.kind !== "local",
+    configurationPicked ? pick : { kind: "personal" },
+    configurationPicked,
   );
-  const membershipState = pick.kind === "local" ? "ready" : membership.state;
+  const membershipState = settingsMembershipState(pick, membership.state);
   const ready = membershipState === "ready";
   const hosts = useMemo(() => {
     if (!ready || pendingHostId !== null) return [];
@@ -182,7 +188,7 @@ export function useHostScope(): HostScope {
     options.listsFailed || membershipState === "failed" || entry.failed;
   const scope = useHostScopeWithOptions(
     {
-      scopedHostId: selection?.hostId ?? hosts.at(0)?.hostId ?? null,
+      scopedHostId: (selection ?? hosts.at(0))?.hostId ?? null,
       setScopedHostId,
     },
     {
@@ -199,6 +205,7 @@ export function useHostScope(): HostScope {
   );
   return {
     ...scope,
+    retryEntryStatus: entry.retryStatus,
     activeHost: findHostOption(options.hosts, options.activeHostId),
     vanishedSelection:
       scope.vanishedHostId !== null && selection !== null
@@ -375,6 +382,7 @@ function useHostScopeWithOptions(
     isLoading: options.isLoading,
     listsFailed,
     retryLists: options.retryLists,
+    retryEntryStatus: null,
     nowMs,
   };
 }
@@ -630,4 +638,14 @@ function activateRefusalMessage(
   label: string,
 ): string {
   return ACTIVATE_REFUSAL_COPY[reason](label);
+}
+
+/** A Local pick needs no membership; an unresolved pick cannot claim its result. */
+function settingsMembershipState(
+  pick: EnvironmentPick,
+  state: "ready" | "loading" | "failed",
+): "ready" | "loading" | "failed" {
+  if (pick.kind === "local") return "ready";
+  if (pick.kind === "unresolved") return "loading";
+  return state;
 }

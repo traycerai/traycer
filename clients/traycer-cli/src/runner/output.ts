@@ -104,8 +104,8 @@ export interface Output {
   // human mode.
   emitResult(data: unknown): void;
   // Emit the terminal `result` NDJSON event with status=error. In
-  // human mode this writes a single `error: <message> [code=<code>]`
-  // line to stderr.
+  // human mode this writes `error: <message>` to stderr, retaining the
+  // `[code=<code>]` suffix when stderr is not a TTY.
   emitError(
     code: CliErrorCode,
     message: string,
@@ -398,7 +398,9 @@ export function createOutput(runtime: RuntimeContext): Output {
     },
     emitError: (code, message, _details) => {
       closeProgressLine();
-      writeStderrLine(`error: ${message} [code=${code}]`);
+      // The host's domain/update/dispatch-contract.ts classifier consumes
+      // this suffix from captured stderr; preserve the file/pipe format.
+      writeStderrLine(`error: ${message}${isTty ? "" : ` [code=${code}]`}`);
     },
   };
 }

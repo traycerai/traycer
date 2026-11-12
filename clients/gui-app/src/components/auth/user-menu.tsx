@@ -30,7 +30,6 @@ import { useIsTextTruncated } from "@/hooks/ui/use-is-text-truncated";
 import { usePlatformBillingUrl } from "@/hooks/auth/use-platform-billing-url";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
-import { useTitleBarDragSuppression } from "@/stores/layout/title-bar-drag-store";
 import { getSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import {
@@ -88,7 +87,6 @@ export function UserMenu(props: UserMenuProps) {
   const openLink = useOpenLink();
   const [open, setOpen] = useState<boolean>(false);
   const settingsChord = useBindingForAction("app.settings.open");
-  useTitleBarDragSuppression("user-menu", open);
   const manageSubscriptionUrl = usePlatformBillingUrl();
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>

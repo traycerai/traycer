@@ -145,6 +145,7 @@ export function CreateBotForm(props: {
     connectableHostIds,
     bindings: environmentBindings.byHostId,
     failedHostIds: environmentBindings.failedHostIds,
+    ownSettingsHostIds: environmentBindings.ownSettingsHostIds,
     creatingHostIds,
   });
   const hostId = choice.kind === "chosen" ? choice.hostId : null;

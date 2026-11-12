@@ -134,6 +134,7 @@ describe("hostOptionPickerGroup for a sandbox no host row stands for", () => {
           state: "failed",
           failureCode: "PROVIDER_CREATE_FAILED",
         }),
+        ownerKind: "unknown",
         teamOwned: false,
       },
     });

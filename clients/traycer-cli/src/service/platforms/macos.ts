@@ -626,6 +626,7 @@ async function refuseIfPublishedHostAlive(
       environment: label.environment,
       checkProcessAlive: null,
       checkTcpReachable: null,
+      checkReadiness: null,
       totalBudgetMs: 0,
       retryDelayMs: 0,
     });

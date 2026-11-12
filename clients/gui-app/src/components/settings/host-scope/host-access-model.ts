@@ -115,12 +115,17 @@ export type SetupView =
  * What the Setup section shows for the host's `setup`, or `null` once there
  * is nothing to finish. A stage or state newer than this desktop reads as
  * running, with no step named.
+ *
+ * `awaiting_consent` is `null` too: the computer runs its own settings until
+ * the person moves it to Personal, which has no deadline, so nothing is being
+ * set up. The move is offered where it is (the Local row, Getting started).
  */
 export function setupView(
   setup: EnvironmentStatusResponse["setup"],
 ): SetupView | null {
   if (setup === null) return null;
   if (setup.state === "done" || setup.stage === "done") return null;
+  if (setup.state === "awaiting_consent") return null;
   const stepIndex = SETUP_STEPS.findIndex((step) => step.stage === setup.stage);
   const step = stepIndex === -1 ? null : SETUP_STEPS[stepIndex];
   if (setup.state === "failed" && setup.stage === "moving_settings") {
@@ -189,10 +194,8 @@ export function terminalAccountSentence(hostName: string | null): string {
     : `${hostName}'s own sign-in, which stays on ${hostName}. Sign in on Providers to use one everywhere.`;
 }
 
-/** A team host's Terminal account line: only an admin links a team's plan. */
-export function teamTerminalAccountSentence(teamName: string): string {
-  return `This host's own sign-in, which stays on this host. An admin can link a plan on ${teamName}'s Providers to use one everywhere.`;
-}
+export const TEAM_TERMINAL_ACCOUNT_SENTENCE =
+  "This host's own sign-in, which stays on this host. Sign in on Providers to use one everywhere.";
 
 /** A kept value's name: the variable, or `<NAME> (<Provider>)` for an override. */
 export function localOverrideLabel(override: LocalOverride): string {

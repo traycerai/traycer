@@ -346,37 +346,6 @@ describe("<UserMenu />", () => {
     result.cleanupClient();
   });
 
-  it("suppresses title-bar dragging only while the menu is open", async () => {
-    const host = buildHost();
-    const result = mountMenu(
-      host,
-      <UserMenu
-        userName="Ada Lovelace"
-        email="ada@example.com"
-        avatarUrl={null}
-        showAppSettings={false}
-        trigger={null}
-      />,
-    );
-
-    const isSuppressed = () =>
-      useTitleBarDragStore.getState().suppressors.has("user-menu");
-    const trigger = await screen.findByTestId("user-menu-trigger");
-
-    expect(isSuppressed()).toBe(false);
-
-    fireEvent.click(trigger);
-    expect(await screen.findByTestId("user-menu-content")).toBeTruthy();
-    expect(isSuppressed()).toBe(true);
-
-    fireEvent.pointerDown(document.body);
-    await waitFor(() => {
-      expect(isSuppressed()).toBe(false);
-    });
-
-    result.cleanupClient();
-  });
-
   it("calls AuthService.signOut() once the Sign out confirm is accepted", async () => {
     const host = buildHost();
     await host.tokenStore.signIn(

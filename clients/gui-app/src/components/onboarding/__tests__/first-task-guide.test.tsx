@@ -4,8 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
   cleanup,
+  fireEvent,
   render,
   waitFor,
+  within,
   type RenderResult,
 } from "@testing-library/react";
 import {
@@ -43,23 +45,26 @@ interface ToastButton {
 /** The options this app passes `toast()`, as the double reads them back. */
 interface ToastOptions {
   readonly id: string | undefined;
-  readonly description: ReactNode | undefined;
+  readonly description: ReactNode | null | undefined;
+  readonly duration: number;
   readonly action: ToastButton | undefined;
-  readonly cancel: ToastButton | undefined;
+  readonly cancel: ToastButton | null | undefined;
   readonly onDismiss: (() => void) | undefined;
   readonly onAutoClose: (() => void) | undefined;
 }
 
+const MOVE_INVITATION_TOAST_ID = "traycer-move-invitation";
+
 const toastState = vi.hoisted(() => {
-  let onDismiss: (() => void) | undefined;
-  let onAction: (() => void) | undefined;
+  const renderedMessages = new Map<string, HTMLElement>();
   /** The options each toast was last shown under, by the id it carries. */
   const byId = new Map<string, ToastOptions>();
   const toast = Object.assign(
-    vi.fn((_message: string, options: ToastOptions) => {
-      onDismiss = options.onDismiss;
-      onAction = options.action?.onClick;
-      if (options.id !== undefined) byId.set(options.id, options);
+    vi.fn((_message: ReactNode, options: ToastOptions) => {
+      if (options.id !== undefined) {
+        byId.set(options.id, options);
+        renderedMessages.delete(options.id);
+      }
     }),
     {
       // A dismissed toast is GONE, so the id leaves `byId` with it: that is
@@ -67,29 +72,60 @@ const toastState = vi.hoisted(() => {
       // about what was once shown, and it is what lets a case claim an
       // invitation is still standing.
       dismiss: vi.fn((id: string) => {
-        const handler = byId.get(id)?.onDismiss ?? onDismiss;
+        const handler = byId.get(id)?.onDismiss;
         byId.delete(id);
         handler?.();
       }),
-      invokeDismiss: () => onDismiss?.(),
-      invokeAction: (): void => onAction?.(),
+      invokeDismiss: (id: string): void => byId.get(id)?.onDismiss?.(),
+      invokeAction: (): void => {
+        [...byId.values()].at(-1)?.action?.onClick();
+      },
       /** The options of the toast shown under `id`, or `null` for none. */
       optionsFor: (id: string): ToastOptions | null => byId.get(id) ?? null,
       invokeActionFor: (id: string): void => {
-        byId.get(id)?.action?.onClick();
+        const container = toastState.renderMessage(id);
+        fireEvent.click(
+          within(container).getByRole("button", { name: "Move to Personal" }),
+        );
       },
       invokeCancelFor: (id: string): void => {
-        byId.get(id)?.cancel?.onClick();
+        const container = toastState.renderMessage(id);
+        fireEvent.click(
+          within(container).getByRole("button", { name: "Later" }),
+        );
+      },
+      renderMessage: (id: string): HTMLElement => {
+        const rendered = renderedMessages.get(id);
+        if (rendered !== undefined) return rendered;
+        const call = toast.mock.calls.find(([, options]) => options.id === id);
+        const message = call?.[0];
+        const container = render(message ?? null).container;
+        renderedMessages.set(id, container);
+        return container;
       },
       reset: () => {
-        onDismiss = undefined;
-        onAction = undefined;
         byId.clear();
+        renderedMessages.clear();
       },
     },
   );
   return toast;
 });
+
+async function expectMoveInvitation(): Promise<ToastOptions> {
+  await waitFor(() =>
+    expect(toastState.optionsFor(MOVE_INVITATION_TOAST_ID)).not.toBeNull(),
+  );
+  const options = toastState.optionsFor(MOVE_INVITATION_TOAST_ID);
+  if (options === null) throw new Error("Move invitation was not shown");
+  expect(options.description).toBeNull();
+  expect(options.cancel).toBeNull();
+  expect(options.action).toBeUndefined();
+  expect(
+    toastState.renderMessage(MOVE_INVITATION_TOAST_ID).textContent,
+  ).toContain("Move to Personal");
+  return options;
+}
 
 // The host directory is the boundary: which computer this is. Its reads stay
 // real, over a fake host.
@@ -265,6 +301,7 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
     useOnboardingStore.setState({
       completedAt: Date.now(),
       setupReminderDismissed: false,
+      moveInvitationAnswered: false,
       setupProgress: { agents: -1, appearance: -1, cookies: -1 },
     });
   });
@@ -306,8 +343,9 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
       "More setup is in Settings.",
     );
     expect(options.action?.label).toBe("Open");
-    act(() => toastState.invokeDismiss());
+    act(() => toastState.invokeDismiss("traycer-getting-started"));
     expect(useOnboardingStore.getState().setupReminderDismissed).toBe(true);
+    expect(useOnboardingStore.getState().moveInvitationAnswered).toBe(false);
 
     void act(() =>
       useOnboardingStore.setState({ setupReminderDismissed: false }),
@@ -364,7 +402,7 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
     );
   });
 
-  it("says this computer's settings are not in Personal, and the action opens its move sheet", async () => {
+  it("offers to move this computer to Personal and opens its move sheet", async () => {
     computerWithStatus(
       environmentStatusFixture({
         planes: { records: "local", broker: "local", room: "local" },
@@ -374,28 +412,83 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
     );
     renderGuide();
 
-    await waitFor(() =>
-      expect(toastState).toHaveBeenCalledWith(
-        "This computer's settings aren't in Personal.",
-        expect.anything(),
-      ),
-    );
+    const options = await expectMoveInvitation();
     expect(toastState).not.toHaveBeenCalledWith(
       "You're all set",
       expect.anything(),
     );
-    const [, options] = toastState.mock.calls[toastState.mock.calls.length - 1];
-    expect(render(options.description).container.textContent).toBe(
-      "Move them to use them everywhere",
-    );
-    expect(options.action?.label).toBe("Show me what moves");
-    expect(options.cancel?.label).toBe("Not now");
+    expect(
+      toastState.renderMessage(MOVE_INVITATION_TOAST_ID).textContent,
+    ).toContain("So your settings follow you to every computer and sandbox.");
+    expect(options.duration).toBe(Infinity);
 
-    act(() => toastState.invokeAction());
+    act(() => toastState.invokeActionFor(MOVE_INVITATION_TOAST_ID));
     expect(useMoveSheetStore.getState().target).toEqual({
       hostId: "old",
       hostName: "Old laptop",
     });
+    expect(useOnboardingStore.getState().moveInvitationAnswered).toBe(true);
+    expect(useOnboardingStore.getState().setupReminderDismissed).toBe(true);
+    expect(moveInvitationIsOutstanding()).toBe(false);
+  });
+
+  it("invites an unbound computer even when there is nothing to move", async () => {
+    computerWithStatus(NOT_MOVED_STATUS);
+    renderGuide();
+
+    await expectMoveInvitation();
+    expect(toastState).not.toHaveBeenCalledWith(
+      "You're all set",
+      expect.anything(),
+    );
+  });
+
+  it("does not invite a team-owned computer to move its settings", async () => {
+    computerWithStatus(
+      environmentStatusFixture({
+        principal: { kind: "team", teamName: "Designers" },
+        planes: { records: "local", broker: "local", room: "local" },
+      }),
+    );
+    renderGuide();
+
+    await waitFor(() =>
+      expect(toastState).toHaveBeenCalledWith(
+        "You're all set",
+        expect.anything(),
+      ),
+    );
+    expect(toastState).not.toHaveBeenCalledWith(
+      "Move this computer to Personal",
+      expect.anything(),
+    );
+  });
+
+  it("invites an existing user whose setup reminder was already dismissed", async () => {
+    computerWithStatus(NOT_MOVED_STATUS);
+    useOnboardingStore.setState({ setupReminderDismissed: true });
+    renderGuide();
+
+    await waitFor(() =>
+      expect(toastState.optionsFor(MOVE_INVITATION_TOAST_ID)).not.toBeNull(),
+    );
+  });
+
+  it("does not invite a computer after the invitation has been answered", async () => {
+    computerWithStatus(NOT_MOVED_STATUS);
+    useOnboardingStore.setState({ moveInvitationAnswered: true });
+    renderGuide();
+
+    await waitFor(() =>
+      expect(toastState).toHaveBeenCalledWith(
+        "You're all set",
+        expect.anything(),
+      ),
+    );
+    expect(toastState).not.toHaveBeenCalledWith(
+      "Move this computer to Personal",
+      expect.anything(),
+    );
   });
 
   describe("on a phone on its side", () => {
@@ -435,13 +528,8 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
       stubShortLandscape(true);
       computerWithStatus(moveStatus());
       renderGuide();
-
-      await waitFor(() =>
-        expect(toastState).toHaveBeenCalledWith(
-          "This computer's settings aren't in Personal.",
-          expect.objectContaining({ duration: Infinity }),
-        ),
-      );
+      const options = await expectMoveInvitation();
+      expect(options.duration).toBe(Infinity);
     });
 
     it.each([
@@ -453,13 +541,8 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
         stubShortLandscape(shortLandscape);
         computerWithStatus(moveStatus());
         renderGuide();
-
-        await waitFor(() =>
-          expect(toastState).toHaveBeenCalledWith(
-            "This computer's settings aren't in Personal.",
-            expect.objectContaining({ duration }),
-          ),
-        );
+        const options = await expectMoveInvitation();
+        expect(options.duration).toBe(duration);
       },
     );
 
@@ -486,13 +569,15 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
       stubShortLandscape(true);
       computerWithStatus(moveStatus());
       renderGuide();
-      await waitFor(() => expect(moveInvitationIsOutstanding()).toBe(true));
+      await expectMoveInvitation();
+      expect(moveInvitationIsOutstanding()).toBe(true);
       const [, options] =
         toastState.mock.calls[toastState.mock.calls.length - 1];
 
       act(() => options.onAutoClose?.());
 
       expect(moveInvitationIsOutstanding()).toBe(false);
+      expect(useOnboardingStore.getState().moveInvitationAnswered).toBe(false);
       expect(useOnboardingStore.getState().setupReminderDismissed).toBe(false);
     });
   });
@@ -508,16 +593,14 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
       ),
     );
     expect(toastState).not.toHaveBeenCalledWith(
-      "This computer's settings aren't in Personal.",
+      "Move this computer to Personal",
       expect.anything(),
     );
   });
 
   describe("the move toast", () => {
-    const MOVE_TOAST = "This computer's settings aren't in Personal.";
     // The two toasts the Start page shows, each under its own id: the
     // invitation is not the setup reminder's other wording.
-    const MOVE_INVITATION_TOAST_ID = "traycer-move-invitation";
     const SETUP_REMINDER_TOAST_ID = "traycer-getting-started";
 
     /**
@@ -564,9 +647,7 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
       computerWithStatus(NOT_MOVED_STATUS);
       mountGuide();
 
-      await waitFor(() =>
-        expect(toastState).toHaveBeenCalledWith(MOVE_TOAST, expect.anything()),
-      );
+      await expectMoveInvitation();
 
       expect(toastState.optionsFor(MOVE_INVITATION_TOAST_ID)).not.toBeNull();
       expect(toastState.optionsFor(SETUP_REMINDER_TOAST_ID)).toBeNull();
@@ -576,9 +657,7 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
       let answer = NOT_MOVED_STATUS;
       computerWhoseStatusChanges(() => answer);
       const { queryClient } = mountGuide();
-      await waitFor(() =>
-        expect(toastState).toHaveBeenCalledWith(MOVE_TOAST, expect.anything()),
-      );
+      await expectMoveInvitation();
       toastState.dismiss.mockClear();
 
       // The read stops naming a move: an accepted move, a host swap, a
@@ -603,16 +682,19 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
       });
     });
 
-    it("records its dismissal when Not now is pressed", async () => {
+    it("records its dismissal when Later is pressed", async () => {
       computerWithStatus(NOT_MOVED_STATUS);
       mountGuide();
-      await waitFor(() =>
-        expect(toastState).toHaveBeenCalledWith(MOVE_TOAST, expect.anything()),
-      );
+      await expectMoveInvitation();
 
       act(() => toastState.invokeCancelFor(MOVE_INVITATION_TOAST_ID));
 
       expect(useOnboardingStore.getState().setupReminderDismissed).toBe(true);
+      expect(useOnboardingStore.getState().moveInvitationAnswered).toBe(true);
+      expect(toastState).not.toHaveBeenCalledWith(
+        "You're all set",
+        expect.anything(),
+      );
     });
 
     it("is still the thing being asked when the Start page is left and comes back", async () => {
@@ -623,9 +705,7 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
       let answer = NOT_MOVED_STATUS;
       const host = computerWhoseStatusChanges(() => answer);
       const first = mountGuide();
-      await waitFor(() =>
-        expect(toastState).toHaveBeenCalledWith(MOVE_TOAST, expect.anything()),
-      );
+      await expectMoveInvitation();
 
       first.view.unmount();
       answer = environmentStatusFixture({});
@@ -658,14 +738,12 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
 
     it("stops the Start page nudging for good once the person answers it", async () => {
       // One dismissal covers the Start page, as it did when both wordings
-      // shared one toast: Not now is an answer to being nudged here, not only
+      // shared one toast: Later is an answer to being nudged here, not only
       // to the move, so the reminder does not take the invitation's turn.
       let answer = NOT_MOVED_STATUS;
       computerWhoseStatusChanges(() => answer);
       const { queryClient } = mountGuide();
-      await waitFor(() =>
-        expect(toastState).toHaveBeenCalledWith(MOVE_TOAST, expect.anything()),
-      );
+      await expectMoveInvitation();
 
       act(() => toastState.invokeCancelFor(MOVE_INVITATION_TOAST_ID));
       answer = environmentStatusFixture({});
@@ -682,18 +760,14 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
     async function mountedMoveToast(): Promise<RenderResult> {
       computerWithStatus(NOT_MOVED_STATUS);
       const mounted = mountGuide();
-      await waitFor(() =>
-        expect(toastState).toHaveBeenCalledWith(MOVE_TOAST, expect.anything()),
-      );
+      await expectMoveInvitation();
       return mounted.view;
     }
 
     it("stays shown when a later read of the status fails", async () => {
       const host = computerWhoseStatusFailsAfterOneRead(NOT_MOVED_STATUS);
       const { queryClient } = mountGuide();
-      await waitFor(() =>
-        expect(toastState).toHaveBeenCalledWith(MOVE_TOAST, expect.anything()),
-      );
+      await expectMoveInvitation();
 
       await act(async () => {
         await queryClient.refetchQueries();
@@ -719,9 +793,10 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
       const view = await mountedMoveToast();
       view.unmount();
 
-      act(() => toastState.invokeDismiss());
+      act(() => toastState.invokeDismiss(MOVE_INVITATION_TOAST_ID));
 
       expect(useOnboardingStore.getState().setupReminderDismissed).toBe(true);
+      expect(useOnboardingStore.getState().moveInvitationAnswered).toBe(true);
     });
 
     it("retires the reminder and invalidates its retained action on sign-out after navigation", async () => {
@@ -740,12 +815,7 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
       });
       const { view, hideGuide } = mountGuideWithLifecycleBridge();
 
-      await waitFor(() =>
-        expect(toastState).toHaveBeenCalledWith(
-          "This computer's settings aren't in Personal.",
-          expect.anything(),
-        ),
-      );
+      await expectMoveInvitation();
       act(() => hideGuide());
       expect(toastState.dismiss).not.toHaveBeenCalled();
 
@@ -764,9 +834,10 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
       // Both ids go: the retire does not have to know which one was up.
       expect(toastState.dismiss).toHaveBeenCalledWith(SETUP_REMINDER_TOAST_ID);
 
-      act(() => toastState.invokeAction());
+      act(() => toastState.invokeActionFor(MOVE_INVITATION_TOAST_ID));
       expect(useMoveSheetStore.getState().target).toBeNull();
       expect(useOnboardingStore.getState().setupReminderDismissed).toBe(false);
+      expect(useOnboardingStore.getState().moveInvitationAnswered).toBe(false);
       view.unmount();
     });
 
@@ -789,9 +860,7 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
         },
       });
       const { view } = mountGuideWithLifecycleBridge();
-      await waitFor(() =>
-        expect(toastState).toHaveBeenCalledWith(MOVE_TOAST, expect.anything()),
-      );
+      await expectMoveInvitation();
       act(() => {
         useAuthStore.setState({
           status: "signed-out",

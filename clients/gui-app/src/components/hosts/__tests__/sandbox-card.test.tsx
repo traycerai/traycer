@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -46,10 +47,20 @@ import { SANDBOX_VERB_FETCH_TIMEOUT_MS } from "@traycer-clients/shared/host-clie
 const WINDOWS_SANDBOX_LIMITATION =
   "Windows sandboxes have no desktop or Computer Use.";
 
+interface RepairGuestResult {
+  readonly guestConfigured: boolean;
+  readonly guestConfigFailureReason: string | null;
+}
+
+interface RepairGuestOptions {
+  readonly onSuccess: (result: RepairGuestResult) => void;
+}
+
 const mocks = vi.hoisted(() => ({
   binding: null as FakeSandboxBinding | null,
   toastSuccess: vi.fn(),
   toastInfo: vi.fn(),
+  toastWarning: vi.fn(),
   toastFromAuthError: vi.fn<(error: Error, title: string) => void>(),
   catalogue: null as SandboxCatalogue | null,
   costs: null as UserSandboxCost | null,
@@ -63,7 +74,8 @@ const mocks = vi.hoisted(() => ({
   supportsMethod: false,
   useSupportsMethod: vi.fn<(hostId: string | null, method: string) => void>(),
   repairPending: false,
-  repairMutate: vi.fn<(variables: object, options: object) => void>(),
+  repairMutate:
+    vi.fn<(variables: object, options: RepairGuestOptions) => void>(),
   /** What `useSandboxGrants` returns; the hook spy records its argument. */
   grantsData: undefined as SandboxGrantsSummary | null | undefined,
   grantsError: false,
@@ -81,7 +93,11 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("sonner", () => ({
-  toast: { success: mocks.toastSuccess, info: mocks.toastInfo },
+  toast: {
+    success: mocks.toastSuccess,
+    info: mocks.toastInfo,
+    warning: mocks.toastWarning,
+  },
 }));
 vi.mock("@/lib/auth-error-toast", () => ({
   toastFromAuthError: mocks.toastFromAuthError,
@@ -187,6 +203,7 @@ import {
 } from "@/components/settings/host-scope/host-scope-model";
 
 const NAME = "build-box";
+const TEAM_AUTOMATION_PRICE = { awakeMc: 120, suspendedMc: 40, stoppedMc: 20 };
 
 function renderCard(sandbox: HostScopeSandbox): void {
   renderCardOnHost(sandbox, null, "online");
@@ -215,7 +232,9 @@ function renderCardOnHost(
         onDestroyed={onDestroyed}
         renderActions={renderSandboxHeaderActions}
       />
-      <SandboxHeaderCost sandbox={sandbox} />
+      <div data-testid="sandbox-header-cost">
+        <SandboxHeaderCost sandbox={sandbox} />
+      </div>
       <SandboxHeaderNotices sandbox={sandbox} teamName={null} />
       <SandboxInstallationGroup sandbox={sandbox} />
       {sandbox.summary === null ? null : (
@@ -258,6 +277,7 @@ function sandboxOf(
       frozen,
       ...overrides,
     }),
+    ownerKind: "user",
     teamOwned: false,
   };
 }
@@ -339,6 +359,7 @@ beforeEach(() => {
   mocks.repairMutate.mockClear();
   mocks.toastSuccess.mockClear();
   mocks.toastInfo.mockClear();
+  mocks.toastWarning.mockClear();
   mocks.toastFromAuthError.mockClear();
 });
 afterEach(cleanup);
@@ -490,20 +511,31 @@ describe("per state", () => {
     );
   });
 
-  it("renders the guest's configuration failure as plain text, only when the guest reported one", () => {
-    renderCard(
-      sandboxOf("awake", false, {
-        guestConfigured: false,
-        guestConfigFailureReason: "<b>broker</b> unreachable",
-      }),
-    );
-    const failure = screen.getByTestId("sandbox-card-guest-config-failure");
-    expect(failure.textContent).toBe(
-      "Settings did not apply: <b>broker</b> unreachable",
-    );
-    expect(failure.querySelector("b")).toBeNull();
-    cleanup();
+  it.each([
+    ["guest-config", "Sandbox settings couldn't be applied."],
+    ["canary", "The sandbox couldn't connect to Traycer."],
+    ["guest-runtime-unavailable", "Sandbox setup isn't available right now."],
+    [
+      "<b>broker</b> unreachable",
+      "Settings did not apply. Agents can't start here until they do.",
+    ],
+    [null, "Settings did not apply. Agents can't start here until they do."],
+  ] as const)(
+    "renders safe guest setup copy for %s",
+    (guestConfigFailureReason, expected) => {
+      renderCard(
+        sandboxOf("awake", false, {
+          guestConfigured: false,
+          guestConfigFailureReason,
+        }),
+      );
+      const failure = screen.getByTestId("sandbox-card-guest-config-failure");
+      expect(failure.textContent).toBe(expected);
+      expect(failure.querySelector("b")).toBeNull();
+    },
+  );
 
+  it("does not show the guest's configuration failure after it applied", () => {
     renderCard(sandboxOf("awake", false, { guestConfigured: true }));
     expect(
       screen.queryByTestId("sandbox-card-guest-config-failure"),
@@ -719,19 +751,41 @@ describe("rates", () => {
     },
   );
 
-  it("uses the personal ledger rate when it differs from the nominal rate", () => {
+  it("does not mistake an unpriced ledger zero for no billing", () => {
     mocks.costs = {
-      sandboxes: [{ ...COST, currentRateMillicreditsPerHour: 250 }],
+      sandboxes: [{ ...costToday(100), currentRateMillicreditsPerHour: 0 }],
+      awakeBurnMillicreditsPerHour: 0,
+      todayYoursMillicredits: 0,
+      todayByEnvironment: [],
+    };
+    renderCard(sandboxOf("awake", false, { priceMcPerHour: null }));
+    expect(screen.getByTestId("sandbox-header-cost").textContent).toBe(
+      "·$0.10 today",
+    );
+    expect(screen.getByTestId("sandbox-card-cost-today").textContent).toBe(
+      "$0.10 today",
+    );
+  });
+
+  it("keeps the authoritative personal ledger rate during a transition", () => {
+    mocks.costs = {
+      sandboxes: [
+        {
+          ...COST,
+          state: "resuming",
+          currentRateMillicreditsPerHour: 250,
+        },
+      ],
       awakeBurnMillicreditsPerHour: 250,
       todayYoursMillicredits: 0,
       todayByEnvironment: [],
     };
 
-    renderCard(sandboxOf("awake", false, {}));
+    renderCard(sandboxOf("resuming", false, {}));
 
     expect(screen.getAllByText("$0.25 an hour")).toHaveLength(1);
     expect(screen.queryByText("$0.12 an hour")).toBeNull();
-    expect(screen.getByText("Storage rate")).toBeTruthy();
+    expect(screen.queryByTestId("sandbox-card-other-rate")).toBeNull();
   });
 
   it("says Not billing for a frozen personal sandbox and shows its awake rate once", () => {
@@ -1034,7 +1088,13 @@ describe("without a summary", () => {
   });
 
   function renderWithoutSummary(state: HostScopeSandbox["state"]): void {
-    renderCard({ state, frozen: false, summary: null, teamOwned: false });
+    renderCard({
+      state,
+      frozen: false,
+      summary: null,
+      ownerKind: "unknown",
+      teamOwned: false,
+    });
   }
 
   it("says it is loading while the list has not answered", async () => {
@@ -1230,7 +1290,7 @@ describe("verbs", () => {
 });
 
 describe("Automations row", () => {
-  it("offers an awake row no action, and says it is free", () => {
+  it("keeps a personal awake row free", () => {
     mocks.costs = {
       sandboxes: [costToday(3)],
       awakeBurnMillicreditsPerHour: 120,
@@ -1249,6 +1309,57 @@ describe("Automations row", () => {
     expect(screen.getByTestId("sandbox-card-idle").textContent).toBe(
       "Stops after 30 min idle · files kept · the next shell starts it",
     );
+    expect(screen.queryByTestId("sandbox-card-other-rate")).toBeNull();
+  });
+
+  it("shows the listed rate for a team-owned awake Automations row", () => {
+    mocks.costs = {
+      sandboxes: [costToday(3)],
+      awakeBurnMillicreditsPerHour: 120,
+      todayYoursMillicredits: 0,
+      todayByEnvironment: [],
+    };
+    const sandbox = {
+      ...sandboxOf("awake", false, {
+        kind: "automation",
+        priceMcPerHour: TEAM_AUTOMATION_PRICE,
+      }),
+      teamOwned: true,
+    };
+
+    renderCard(sandbox);
+
+    expect(screen.queryAllByText("Free", { exact: true })).toHaveLength(0);
+    expect(screen.queryByText("Free today", { exact: true })).toBeNull();
+    expect(screen.getByText("$0.12 an hour", { exact: true })).toBeTruthy();
+    expect(screen.getByText("Storage rate", { exact: true })).toBeTruthy();
+    expect(screen.getByTestId("sandbox-card-other-rate").textContent).toBe(
+      "$0.04 an hour",
+    );
+  });
+
+  it("does not call an unpriced team Automations row free", () => {
+    const sandbox = {
+      ...sandboxOf("awake", false, {
+        kind: "automation",
+        priceMcPerHour: null,
+      }),
+      teamOwned: true,
+    };
+
+    renderCard(sandbox);
+
+    expect(screen.queryAllByText("Free", { exact: true })).toHaveLength(0);
+    expect(screen.queryByText("Free today", { exact: true })).toBeNull();
+    expect(screen.getByTestId("sandbox-header-cost").textContent).toBe("");
+    expect(screen.queryByTestId("sandbox-card-cost-today")).toBeNull();
+    expect(screen.queryByTestId("sandbox-card-other-rate")).toBeNull();
+  });
+
+  it("guard: keeps a personal Automations row free during a transition", () => {
+    renderCard(sandboxOf("resuming", false, { kind: "automation" }));
+
+    expect(screen.getByText("Free", { exact: true })).toBeTruthy();
   });
 
   it("offers a released row no action", () => {
@@ -1672,6 +1783,44 @@ describe("secrets section", () => {
       expect(mocks.repairMutate.mock.lastCall?.[0]).toEqual({});
     });
 
+    it.each([
+      ["guest-config", "Sandbox settings couldn't be applied."],
+      ["canary", "The sandbox couldn't connect to Traycer."],
+      ["guest-runtime-unavailable", "Sandbox setup isn't available right now."],
+      [null, "Settings did not apply. Agents can't start here until they do."],
+      [
+        "unknown-step",
+        "Settings did not apply. Agents can't start here until they do.",
+      ],
+    ] as const)(
+      "toasts safe repair copy for %s",
+      (guestConfigFailureReason, reason) => {
+        mocks.supportsMethod = true;
+        renderCard(
+          sandboxOf("awake", false, {
+            phase: "ready",
+            guestConfigured: false,
+          }),
+        );
+        fireEvent.click(screen.getByTestId("sandbox-card-repair"));
+
+        const options = mocks.repairMutate.mock.lastCall?.[1];
+        if (options === undefined) {
+          throw new Error("expected repair success options");
+        }
+        act(() => {
+          options.onSuccess({
+            guestConfigured: false,
+            guestConfigFailureReason,
+          });
+        });
+
+        expect(mocks.toastWarning).toHaveBeenCalledWith(
+          `Sandbox setup is still failing. ${reason}`,
+        );
+      },
+    );
+
     it("keeps the lifecycle primary when guest setup failed but the phase is unknown", () => {
       mocks.supportsMethod = true;
       renderCard(
@@ -1947,8 +2096,11 @@ describe("inline secrets and network", () => {
     expect(
       screen.getByTestId("sandbox-card-secrets-readiness").textContent,
     ).toBe(
-      "Degraded at gateway: requests to granted destinations are refused until it recovers.",
+      "Degraded: requests to granted destinations are refused until it recovers.",
     );
+    expect(
+      screen.getByTestId("sandbox-card-secrets-readiness").textContent,
+    ).not.toContain("gateway");
     cleanup();
 
     mocks.grantsData = grantsOf([grant("PROD_DB", "route-1", "db.internal")]);
@@ -1956,7 +2108,9 @@ describe("inline secrets and network", () => {
     const details = screen.getByTestId("sandbox-card-grants");
     expect(
       screen.getByTestId("sandbox-card-secrets-readiness").textContent,
-    ).toContain("Degraded at gateway");
+    ).toBe(
+      "Degraded: requests to granted destinations are refused until it recovers.",
+    );
     expect(
       within(details).getByTestId("sandbox-card-grant").textContent,
     ).toContain("PROD_DB");
@@ -2067,6 +2221,44 @@ describe("Overview Costs and Secrets tabs", () => {
     );
   }
 
+  it("does not call a summary-only Automations pod free before ownership arrives", () => {
+    const summary = sandboxSummaryFixture({
+      kind: "automation",
+      state: "awake",
+      createdBy: null,
+      priceMcPerHour: TEAM_AUTOMATION_PRICE,
+    });
+    const options = buildHostScopeOptions({
+      directory: [],
+      registry: [],
+      sandboxes: [summary],
+      leases: [],
+      authorityAttached: false,
+      localHostId: null,
+      activeHostId: null,
+      localService: undefined,
+      localPlatform: null,
+      hasLiveSession: () => false,
+      localHostSettingUp: false,
+      localHostTerminalRunNote: null,
+      nowMs: 0,
+    });
+    const sandbox = options[0]?.sandbox;
+    if (sandbox === null) throw new Error("Missing sandbox");
+    mocks.costs = {
+      sandboxes: [COST],
+      awakeBurnMillicreditsPerHour: 120,
+      todayYoursMillicredits: 0,
+      todayByEnvironment: [],
+    };
+    renderCard(sandbox);
+    renderCosts(sandbox);
+    expect(screen.queryAllByText("Free", { exact: true })).toHaveLength(0);
+    expect(screen.queryByText("Free today", { exact: true })).toBeNull();
+    expect(screen.getByText("$0.12 an hour", { exact: true })).toBeTruthy();
+    expect(screen.getByText("$0.12 an hour while awake")).toBeTruthy();
+  });
+
   it("splits the personal ledger into rate, today, charged, compute, storage, pending, and balance", () => {
     mocks.costs = {
       sandboxes: [{ ...COST, pendingMillicredits: 0 }],
@@ -2098,11 +2290,45 @@ describe("Overview Costs and Secrets tabs", () => {
     );
   });
 
-  it("says an automation is free and draws no storage rate", () => {
+  it("guard: keeps a personal Automations row free with no storage rate", () => {
     renderCosts(sandboxOf("awake", false, { kind: "automation" }));
     expect(screen.getByText("Free")).toBeTruthy();
     expect(screen.queryByText("Storage rate")).toBeNull();
     expect(screen.queryByText(/while suspended or stopped/)).toBeNull();
+  });
+
+  it("shows a team Automations row's awake and storage rates", () => {
+    const sandbox = {
+      ...sandboxOf("awake", false, {
+        kind: "automation",
+        priceMcPerHour: TEAM_AUTOMATION_PRICE,
+      }),
+      teamOwned: true,
+    };
+
+    renderCosts(sandbox);
+
+    const cost = screen.getByTestId("sandbox-card-cost").textContent;
+    expect(cost).not.toContain("Free");
+    expect(cost).toContain("$0.12 an hour while awake");
+    expect(cost).toContain("$0.04 an hour while suspended or stopped");
+  });
+
+  it("guard: leaves unpriced team Automations rates unknown", () => {
+    const sandbox = {
+      ...sandboxOf("awake", false, {
+        kind: "automation",
+        priceMcPerHour: null,
+      }),
+      teamOwned: true,
+    };
+
+    renderCosts(sandbox);
+
+    const cost = screen.getByTestId("sandbox-card-cost");
+    expect(cost.textContent).not.toContain("Free");
+    expect(within(cost).queryByText("Rate")).toBeNull();
+    expect(within(cost).queryByText("Storage rate")).toBeNull();
   });
 
   it("draws no rate rows when the price is unknown", () => {

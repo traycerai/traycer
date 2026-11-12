@@ -7,6 +7,7 @@ import { useDialogOverlayBoundaryEl } from "@/providers/dialog-overlay-boundary-
 import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
 import { useSafeAreaCollisionPadding } from "@/components/ui/safe-area-collision-padding";
 import { MenuOpenMarker } from "@/components/ui/open-menus";
+import { useOverlayDragSuppressionRef } from "@/stores/layout/title-bar-drag-store";
 
 function ContextMenu({
   ...props
@@ -45,13 +46,14 @@ function ContextMenuContent({
   // cap; both are displaceable by a caller (see
   // `safe-area-collision-padding.ts` and `dropdown-menu.tsx`).
   const safeAreaInsets = useSafeAreaCollisionPadding();
+  const contentRef = useOverlayDragSuppressionRef(ref);
   if (!paneFocused || concealed) return null;
   // During the exit animation, hover must not let a closed menu item steal
   // focus from the control its action just opened (for example, inline rename).
   return (
     <ContextMenuPrimitive.Portal>
       <ContextMenuPrimitive.Content
-        ref={ref}
+        ref={contentRef}
         data-slot="context-menu-content"
         collisionPadding={collisionPadding ?? safeAreaInsets}
         className={cn(

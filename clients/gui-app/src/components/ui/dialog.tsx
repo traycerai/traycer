@@ -8,6 +8,7 @@ import { XIcon } from "lucide-react";
 import { usePaneAwareContentGuard } from "@/components/epic-tabs/pane-visibility-context";
 import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
 import { BackdropDimSource } from "@/components/ui/backdrop-dim-source";
+import { useOverlayDragSuppressionRef } from "@/stores/layout/title-bar-drag-store";
 
 function Dialog({
   ...props
@@ -88,12 +89,13 @@ function DialogContent({
   // keeps its open state and the owner keeps any staged form state, ready to
   // re-present when the region returns.
   const concealed = usePortalConcealed();
+  const contentRef = useOverlayDragSuppressionRef(ref);
   if (!paneFocused || concealed) return null;
   return (
     <DialogPortal>
       <DialogOverlay />
       <DialogPrimitive.Content
-        ref={ref}
+        ref={contentRef}
         data-slot="dialog-content"
         data-layout={layout}
         data-close-button={showCloseButton ? "true" : "false"}
