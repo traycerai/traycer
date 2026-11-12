@@ -49,7 +49,7 @@ describe("PlansCard", () => {
   it("says no plan is linked when the team has none", () => {
     renderPlans({ canEdit: true, plans: [] });
 
-    expect(screen.getByText("No plans yet.")).toBeTruthy();
+    expect(screen.getByText("No plans linked.")).toBeTruthy();
     const signIn = screen.getByRole("button", { name: "Sign in" });
     expect(signIn.getAttribute("data-size")).toBe("xs");
     expect(signIn.getAttribute("data-variant")).toBe("outline");
@@ -82,7 +82,7 @@ describe("PlansCard", () => {
       />,
     );
 
-    expect(screen.getByRole("combobox", { name: "Plan" })).toBeTruthy();
+    expect(screen.getByRole("combobox", { name: "Linked plan" })).toBeTruthy();
     expect(screen.getByText("Ada’s Claude Code plan")).toBeTruthy();
     expect(screen.getByText("Signed in")).toBeTruthy();
     expect(

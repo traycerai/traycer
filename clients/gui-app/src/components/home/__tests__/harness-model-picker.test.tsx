@@ -3139,6 +3139,82 @@ describe("<HarnessModelPicker />", () => {
     ).toBe(true);
   });
 
+  it("says a committed profile no row lists is unavailable, checks no row, and commits the row then chosen", async () => {
+    const workColor = PROVIDER_PROFILE_ACCENT_COLORS[0];
+    const ambientProfile = {
+      profileId: "ambient",
+      enabled: true,
+      kind: "ambient" as const,
+      authType: "oauth" as const,
+      label: "Terminal account",
+      auth: {
+        status: "authenticated" as const,
+        badgeText: null,
+        label: null,
+        detail: null,
+      },
+      identity: null,
+      usageUpdatedAt: null,
+      rateLimitStatus: "unknown" as const,
+      rateLimitLimitedScopes: null,
+      duplicateOfProfileId: null,
+      accentColor: null,
+      ambientDriftNotice: null,
+    };
+    queryMock.providerStates = [
+      providerCliStateWithProfiles({
+        providerId: "codex",
+        profiles: [
+          ambientProfile,
+          {
+            ...ambientProfile,
+            profileId: "work-profile",
+            kind: "managed" as const,
+            label: "Work",
+            accentColor: workColor,
+          },
+        ],
+      }),
+    ];
+    const { store } = renderPicker({
+      selection: {
+        harnessId: "codex",
+        modelSlug: "gpt-5.5",
+        profileId: "removed-profile",
+      },
+    });
+
+    fireEvent.focus(screen.getByRole("button", { name: /^GPT-5\.5/ }));
+    const tooltipText = (await screen.findByRole("tooltip")).textContent;
+    expect(tooltipText).not.toContain("Terminal account");
+    expect(tooltipText).not.toContain("Profile");
+
+    await openPicker();
+    expect(
+      screen.getByRole("button", {
+        name: "Codex profile: Selected profile isn't available on this host",
+      }),
+    ).toBeDefined();
+    const terminalRow = screen.getByRole("menuitem", {
+      name: "Terminal account, Terminal",
+    });
+    const workRow = screen.getByRole("menuitem", { name: "Work" });
+    for (const row of [terminalRow, workRow]) {
+      expect(row.getAttribute("aria-current")).toBeNull();
+    }
+    const codexTab = screen.getByRole("tab", { name: /^Codex\b/ });
+    expect(codexTab.querySelector('span[style*="--swatch"]')).toBeNull();
+    expect(store.getState().selection.profileId).toBe("removed-profile");
+
+    fireEvent.click(workRow);
+
+    expect(store.getState().selection).toEqual({
+      harnessId: "codex",
+      modelSlug: "gpt-5.5",
+      profileId: "work-profile",
+    });
+  });
+
   it("closes the picker and opens the global add-profile flow from the dropdown's create-new-profile row", async () => {
     queryMock.providerStates = [
       providerCliStateWithProfiles({

@@ -65,11 +65,15 @@ function selectedEditorProfile(
   );
 }
 
+/**
+ * Where a managed profile lives, on a host that does not move profiles itself
+ * (`providers.link` below 1.2): "On <host> only." with Link where the host can
+ * finish one. A host that moves profiles shows no location line at all.
+ */
 function LocalProfileLocation(props: {
   readonly hostId: string | null;
   readonly providerId: string;
   readonly profileId: string;
-  readonly authStatus: ProviderProfile["auth"]["status"];
   readonly hostName: string | null;
 }): ReactNode {
   const inventory = useProvidersList({ enabled: true, subscribed: true });
@@ -87,22 +91,12 @@ function LocalProfileLocation(props: {
       entry.providerId === props.providerId &&
       entry.profileId === props.profileId,
   );
-  const automaticLink = linkVersion?.major === 1 && linkVersion.minor >= 2;
-  if (
-    onlyHere !== true ||
-    (automaticLink && props.authStatus !== "authenticated")
-  )
-    return null;
+  const movesProfiles = linkVersion?.major === 1 && linkVersion.minor >= 2;
+  if (onlyHere !== true || movesProfiles) return null;
   return (
     <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-ui-xs text-muted-foreground">
-      <p>
-        {automaticLink
-          ? "Not on your other computers yet."
-          : `On ${props.hostName ?? "this host"} only.`}
-      </p>
-      {linkVersion?.major === 1 &&
-      linkVersion.minor < 2 &&
-      completeVersion?.major === 1 ? (
+      <p>On {props.hostName ?? "this host"} only.</p>
+      {linkVersion?.major === 1 && completeVersion?.major === 1 ? (
         <Button
           type="button"
           variant="link"
@@ -438,6 +432,7 @@ export function ProviderProfileScopedSection(
           providerLabel={providerLabel}
           profiles={labelledProfiles}
           activeProfileId={profileCommitId(selectedProfile)}
+          missingProfileLabel={null}
           onSelectProfile={onSelectedProfileIdChange}
           onCreateProfile={onAddProfile}
           createProfileDisabled={addProfileDisabled}
@@ -471,7 +466,6 @@ export function ProviderProfileScopedSection(
             hostId={hostId}
             providerId={state.providerId}
             profileId={selectedProfile.profileId}
-            authStatus={selectedProfile.auth.status}
             hostName={hostName}
           />
         ) : null}

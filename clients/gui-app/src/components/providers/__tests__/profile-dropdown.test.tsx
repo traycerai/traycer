@@ -148,6 +148,7 @@ function noShortcutHint(): ProfileDropdownShortcutHint | null {
 interface RenderDropdownInput {
   readonly profiles: ReadonlyArray<ProviderProfile>;
   readonly activeProfileId: string | null;
+  readonly missingProfileLabel: string | null;
   readonly onSelectProfile: (profileId: string | null) => void;
   readonly onCreateProfile: () => void;
   readonly createProfileDisabled: boolean;
@@ -180,6 +181,7 @@ function renderDropdown(
       providerLabel="Codex"
       profiles={input.profiles}
       activeProfileId={input.activeProfileId}
+      missingProfileLabel={input.missingProfileLabel}
       onSelectProfile={input.onSelectProfile}
       onCreateProfile={input.onCreateProfile}
       createProfileDisabled={input.createProfileDisabled}
@@ -217,6 +219,10 @@ function baseDropdownInput(
       overrides.activeProfileId === undefined
         ? "work-profile"
         : overrides.activeProfileId,
+    missingProfileLabel:
+      overrides.missingProfileLabel === undefined
+        ? null
+        : overrides.missingProfileLabel,
     onSelectProfile: overrides.onSelectProfile ?? vi.fn(),
     onCreateProfile: overrides.onCreateProfile ?? vi.fn(),
     createProfileDisabled: overrides.createProfileDisabled ?? false,
@@ -270,31 +276,44 @@ describe("<ProfileDropdown />", () => {
     ).toBeNull();
   });
 
-  it("marks the trigger's visible fallback profile when the pinned id is hidden", () => {
-    const onSelectProfile = vi.fn();
-    renderDropdown(
-      baseDropdownInput({
-        activeProfileId: "removed-profile",
-        onSelectProfile,
-      }),
-      true,
-    );
+  it.each([
+    ["Old work", "Old work isn't available on this host"],
+    [null, "Selected profile isn't available on this host"],
+  ] as const)(
+    "checks no row and names the hidden pin %s on the trigger",
+    (missingProfileLabel, sentence) => {
+      const onSelectProfile = vi.fn();
+      renderDropdown(
+        baseDropdownInput({
+          activeProfileId: "removed-profile",
+          missingProfileLabel,
+          onSelectProfile,
+        }),
+        true,
+      );
 
-    expect(
-      screen.getByRole("button", {
-        name: "Codex profile: Terminal account, Terminal",
-      }),
-    ).not.toBeNull();
-    const fallbackRow = screen.getByRole("menuitem", {
-      name: "Terminal account, Terminal",
-    });
-    const workRow = screen.getByRole("menuitem", { name: "Work" });
-    expect(fallbackRow.getAttribute("aria-current")).toBe("true");
-    expect(fallbackRow.querySelector("svg.lucide-check")).not.toBeNull();
-    expect(workRow.getAttribute("aria-current")).toBeNull();
-    expect(workRow.querySelector("svg.lucide-check")).toBeNull();
-    expect(onSelectProfile).not.toHaveBeenCalled();
-  });
+      const trigger = screen.getByRole("button", {
+        name: `Codex profile: ${sentence}`,
+      });
+      expect(trigger.textContent).toContain(sentence);
+      expect(trigger.textContent).not.toContain("Terminal account");
+      const terminalRow = screen.getByRole("menuitem", {
+        name: "Terminal account, Terminal",
+      });
+      const workRow = screen.getByRole("menuitem", { name: "Work" });
+      for (const row of [terminalRow, workRow]) {
+        expect(row.getAttribute("aria-current")).toBeNull();
+        expect(row.querySelector("svg.lucide-check")).toBeNull();
+      }
+      const triggerFrame = trigger.parentElement;
+      if (triggerFrame === null) throw new Error("Expected a trigger frame.");
+      expect(within(triggerFrame).queryByRole("switch")).toBeNull();
+      expect(onSelectProfile).not.toHaveBeenCalled();
+
+      fireEvent.click(workRow);
+      expect(onSelectProfile).toHaveBeenCalledWith("work-profile");
+    },
+  );
 
   it("shows the active profile switch before the chevron without nesting it in the menu trigger", () => {
     const onSetProfileEnabled = vi.fn();

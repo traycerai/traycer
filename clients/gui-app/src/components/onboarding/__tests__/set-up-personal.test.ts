@@ -94,7 +94,7 @@ describe("the steps", () => {
       [
         "provider",
         "providers",
-        "Sign in or add an API key so your agents can run.",
+        "Sign in or add an API key, so your agents can run on every host.",
         "Open Providers",
       ],
       [

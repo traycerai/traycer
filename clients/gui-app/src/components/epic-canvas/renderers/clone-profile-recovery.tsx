@@ -85,6 +85,7 @@ export function CloneProfileRecovery(props: {
             providerLabel={providerDisplayName(props.resolution.providerId)}
             profiles={profiles}
             activeProfileId={activeProfileId}
+            missingProfileLabel={null}
             onSelectProfile={props.onChooseProfile}
             onCreateProfile={null}
             createProfileDisabled

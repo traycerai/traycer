@@ -191,6 +191,7 @@ describe("TeamPlans", () => {
     await screen.findByText(/Ada.s .* plan/);
     expect(screen.queryByRole("button", { name: /sign in/i })).toBeNull();
     expect(screen.queryByRole("button", { name: "Unlink" })).toBeNull();
+    expect(screen.queryByText(/add a profile/i)).toBeNull();
     expect(
       screen.getByText("Ask a teammate to sign in on Providers."),
     ).toBeTruthy();

@@ -194,8 +194,9 @@ export function terminalAccountSentence(hostName: string | null): string {
     : `${hostName}'s own sign-in, which stays on ${hostName}. Sign in on Providers to use one everywhere.`;
 }
 
+/** No call to sign in: a team host's viewer cannot sign in on Providers. */
 export const TEAM_TERMINAL_ACCOUNT_SENTENCE =
-  "This host's own sign-in, which stays on this host. Sign in on Providers to use one everywhere.";
+  "This host's own sign-in, which stays on this host.";
 
 /** A kept value's name: the variable, or `<NAME> (<Provider>)` for an override. */
 export function localOverrideLabel(override: LocalOverride): string {

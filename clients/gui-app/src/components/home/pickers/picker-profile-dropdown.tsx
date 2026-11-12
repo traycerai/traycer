@@ -187,6 +187,7 @@ function PickerProfileDropdownView({
       providerLabel={props.providerLabel}
       profiles={props.profiles}
       activeProfileId={props.activeProfileId}
+      missingProfileLabel={null}
       onSelectProfile={props.onSelectProfile}
       onCreateProfile={props.onCreateProfile}
       createProfileDisabled={props.createProfileDisabled}

@@ -575,14 +575,33 @@ describe("resolveActiveProfileForHarness", () => {
 
   it("falls back to the ambient profile (commit id null) when neither matches", () => {
     expect(
-      resolveActiveProfileForHarness(profilesWithAmbient, "nope", "nope-2"),
+      resolveActiveProfileForHarness(profilesWithAmbient, "nope", null),
     ).toBeNull();
   });
 
   it("falls back to the first selectable profile for an all-managed harness", () => {
     expect(
-      resolveActiveProfileForHarness(managedOnlyProfiles, "nope", "nope-2"),
+      resolveActiveProfileForHarness(managedOnlyProfiles, "nope", null),
     ).toBe("a-uuid");
+  });
+
+  it.each([
+    ["with an ambient row", profilesWithAmbient],
+    ["on an all-managed harness", managedOnlyProfiles],
+  ] as const)("keeps a committed pin no row lists %s", (_case, profiles) => {
+    expect(
+      resolveActiveProfileForHarness(profiles, "nope", "removed-uuid"),
+    ).toBe("removed-uuid");
+  });
+
+  it("prefers a browsed listed row over a committed pin no row lists", () => {
+    expect(
+      resolveActiveProfileForHarness(
+        profilesWithAmbient,
+        "work-uuid",
+        "removed-uuid",
+      ),
+    ).toBe("work-uuid");
   });
 });
 

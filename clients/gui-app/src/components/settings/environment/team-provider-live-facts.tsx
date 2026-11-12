@@ -138,7 +138,7 @@ function TeamPlanLimits(props: {
     return (
       <p role="status" className="text-ui-sm text-muted-foreground">
         {canEdit
-          ? `Sign in to ${props.teamName} to see its rate limits.`
+          ? `Sign in on Providers to see ${props.teamName}'s rate limits.`
           : "Ask a teammate to sign in on Providers."}
       </p>
     );

@@ -213,7 +213,7 @@ describe("TeamProviderLiveFacts", () => {
 
     expect(reads.cards).toEqual([]);
     expect(screen.getByRole("status").textContent).toBe(
-      "Sign in to Acme to see its rate limits.",
+      "Sign in on Providers to see Acme's rate limits.",
     );
   });
 
@@ -226,9 +226,9 @@ describe("TeamProviderLiveFacts", () => {
     expect(screen.getByRole("status").textContent).toBe(
       "Ask a teammate to sign in on Providers.",
     );
-    expect(screen.queryByText("Sign in to Acme to see its rate limits.")).toBe(
-      null,
-    );
+    expect(
+      screen.queryByText("Sign in on Providers to see Acme's rate limits."),
+    ).toBe(null);
   });
 
   it("draws nothing for a linked plan with no profile of the same id on the host", () => {

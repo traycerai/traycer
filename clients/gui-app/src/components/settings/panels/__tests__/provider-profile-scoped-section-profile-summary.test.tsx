@@ -289,6 +289,24 @@ function renderSection(
   return { ...rendered, queryClient };
 }
 
+// An absent location line proves nothing until the list naming the profile
+// local-only has landed.
+async function waitForOnHostOnly(
+  queryClient: QueryClient,
+  providerId: string,
+): Promise<void> {
+  await waitFor(() => {
+    const providersListQuery = queryClient
+      .getQueryCache()
+      .findAll()
+      .find((query) => query.queryKey.includes("providers.list"));
+    expect(providersListQuery?.state.status).toBe("success");
+    expect(providersListQuery?.state.data).toMatchObject({
+      onHostOnly: [{ providerId, profileId: "profile-managed" }],
+    });
+  });
+}
+
 describe("<ProviderProfileScopedSection /> profile summary", () => {
   afterEach(() => {
     cleanup();
@@ -430,9 +448,9 @@ describe("<ProviderProfileScopedSection /> profile summary", () => {
   });
 
   it.each(["claude-code", "codex"] as const)(
-    "shows a local-only marker without a new sign-in action for a healthy %s profile",
+    "shows no location line or Link for a signed-in local-only %s profile on a host that moves profiles",
     async (providerId) => {
-      renderSection(
+      const { queryClient } = renderSection(
         {
           state: { ...opencodeState(), providerId },
         },
@@ -447,21 +465,25 @@ describe("<ProviderProfileScopedSection /> profile summary", () => {
         },
       );
 
-      expect(
-        await screen.findByText("Not on your other computers yet."),
-      ).toBeTruthy();
+      await waitForOnHostOnly(queryClient, providerId);
+      expect(screen.queryByText("Not on your other computers yet.")).toBeNull();
+      expect(screen.queryByText("On dev-box only.")).toBeNull();
       expect(screen.queryByRole("button", { name: "Link" })).toBeNull();
+      expect(screen.getByText("Signed in")).toBeTruthy();
       expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
     },
   );
 
   it.each([
-    ["claude-code", 1],
-    ["codex", 1],
-    ["grok", 1],
+    ["claude-code", 0, 0],
+    ["claude-code", 1, 1],
+    ["codex", 0, 2],
+    ["codex", 1, 0],
+    ["grok", 1, 2],
+    ["grok", 0, 1],
   ] as const)(
-    "restores Link for %s when providers.link negotiates 1.%s",
-    async (providerId, linkMinor) => {
+    "restores Link for %s with providers.link 1.%s and linkComplete 1.%s",
+    async (providerId, linkMinor, completeMinor) => {
       recordNegotiatedHostManifest("other-host", {
         "providers.link": { major: 1, minor: 3 },
       });
@@ -473,7 +495,7 @@ describe("<ProviderProfileScopedSection /> profile summary", () => {
           manifest: {
             "providers.list": { major: 10, minor: 9 },
             "providers.link": { major: 1, minor: linkMinor },
-            "providers.linkComplete": { major: 1, minor: 2 },
+            "providers.linkComplete": { major: 1, minor: completeMinor },
           },
         },
       );
@@ -496,9 +518,9 @@ describe("<ProviderProfileScopedSection /> profile summary", () => {
     ["grok", 3, 3],
     ["grok", 2, 1],
   ] as const)(
-    "keeps Link hidden for %s with providers.link 1.%s and linkComplete 1.%s",
+    "shows no location line or Link for %s with providers.link 1.%s and linkComplete 1.%s",
     async (providerId, linkMinor, completeMinor) => {
-      renderSection(
+      const { queryClient } = renderSection(
         { state: { ...opencodeState(), providerId } },
         {
           onHostOnly: [{ providerId, profileId: "profile-managed" }],
@@ -511,15 +533,15 @@ describe("<ProviderProfileScopedSection /> profile summary", () => {
         },
       );
 
-      expect(
-        await screen.findByText("Not on your other computers yet."),
-      ).toBeTruthy();
+      await waitForOnHostOnly(queryClient, providerId);
+      expect(screen.queryByText("Not on your other computers yet.")).toBeNull();
+      expect(screen.queryByText("On dev-box only.")).toBeNull();
       expect(screen.queryByRole("button", { name: "Link" })).toBeNull();
       expect(useProviderLinkDialogStore.getState().target).toBeNull();
     },
   );
 
-  it("keeps Link hidden when providers.linkComplete is known absent", async () => {
+  it("keeps the local-only marker without Link when providers.linkComplete is known absent", async () => {
     renderSection(
       { state: { ...opencodeState(), providerId: "claude-code" } },
       {
@@ -529,14 +551,12 @@ describe("<ProviderProfileScopedSection /> profile summary", () => {
         hostName: "dev-box",
         manifest: {
           "providers.list": { major: 10, minor: 9 },
-          "providers.link": { major: 1, minor: 2 },
+          "providers.link": { major: 1, minor: 1 },
         },
       },
     );
 
-    expect(
-      await screen.findByText("Not on your other computers yet."),
-    ).toBeTruthy();
+    expect(await screen.findByText("On dev-box only.")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Link" })).toBeNull();
     expect(useProviderLinkDialogStore.getState().target).toBeNull();
   });
@@ -568,15 +588,13 @@ describe("<ProviderProfileScopedSection /> profile summary", () => {
         hostName: "dev-box",
         manifest: {
           "providers.list": { major: 10, minor: 9 },
-          "providers.link": { major: 1, minor: 2 },
+          "providers.link": { major: 1, minor: 1 },
           "providers.linkComplete": { major: 2, minor: 0 },
         },
       },
     );
 
-    expect(
-      await screen.findByText("Not on your other computers yet."),
-    ).toBeTruthy();
+    expect(await screen.findByText("On dev-box only.")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Link" })).toBeNull();
     expect(useProviderLinkDialogStore.getState().target).toBeNull();
   });
@@ -613,19 +631,11 @@ describe("<ProviderProfileScopedSection /> profile summary", () => {
         },
       );
 
-      await waitFor(() => {
-        const providersListQuery = queryClient
-          .getQueryCache()
-          .findAll()
-          .find((query) => query.queryKey.includes("providers.list"));
-        expect(providersListQuery?.state.status).toBe("success");
-        expect(providersListQuery?.state.data).toMatchObject({
-          onHostOnly: [{ providerId, profileId: "profile-managed" }],
-        });
-      });
+      await waitForOnHostOnly(queryClient, providerId);
       expect(screen.queryByText("On dev-box only.")).toBeNull();
       expect(screen.queryByText("Not on your other computers yet.")).toBeNull();
       expect(screen.queryByRole("button", { name: "Link" })).toBeNull();
+      expect(screen.getByText("Signed out")).toBeTruthy();
       await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
       expect(
         screen.getByRole("dialog", { name: "Sign in editor" }),

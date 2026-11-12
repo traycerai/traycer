@@ -509,7 +509,7 @@ describe("<HostOverviewAccessTab /> terminal accounts", () => {
     ).toBeTruthy();
   });
 
-  it("tells a team host's reader that sign-in on Providers is available everywhere", async () => {
+  it("tells a team host's reader the sign-in stays on the host, with no call to sign in", async () => {
     const host = hostWith(
       { principal: { kind: "team", teamName: "Acme" } },
       { providers: [claudeAmbient(true)] },
@@ -518,10 +518,9 @@ describe("<HostOverviewAccessTab /> terminal accounts", () => {
 
     await screen.findByTestId("terminal-account-row");
     expect(
-      screen.getByText(
-        "This host's own sign-in, which stays on this host. Sign in on Providers to use one everywhere.",
-      ),
+      screen.getByText("This host's own sign-in, which stays on this host."),
     ).toBeTruthy();
+    expect(screen.queryByText(/Sign in on Providers/)).toBeNull();
     expect(screen.queryByText(/This computer's own sign-in/)).toBeNull();
   });
 

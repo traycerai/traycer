@@ -1,5 +1,22 @@
 import type { SchemaVersion } from "@traycer/protocol/framework/index";
+import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
+
+/**
+ * A computer that runs its own settings: not a team's, and some plane is still
+ * its own or stopped sharing. It has a principal but no environment to sign a
+ * profile into, so its sign-in stays on the host. A team-owned computer that
+ * never moved reports its planes local and is still the team's.
+ */
+export function hostRunsOwnSettings(
+  status: Pick<EnvironmentStatusResponseV11, "principal" | "planes">,
+): boolean {
+  if (status.principal?.kind === "team") return false;
+  const { records, broker, room } = status.planes;
+  return [records, broker, room].some(
+    (plane) => plane === "local" || plane === "stopped",
+  );
+}
 
 /** These two providers offer the environment's interactive sign-in. Other
  * profiles still use their native entry flow; delivery is host-owned. */
