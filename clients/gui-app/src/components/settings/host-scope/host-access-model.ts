@@ -115,12 +115,17 @@ export type SetupView =
  * What the Setup section shows for the host's `setup`, or `null` once there
  * is nothing to finish. A stage or state newer than this desktop reads as
  * running, with no step named.
+ *
+ * `awaiting_consent` is `null` too: the computer runs its own settings until
+ * the person moves it to Personal, which has no deadline, so nothing is being
+ * set up. The move is offered where it is (the Local row, Getting started).
  */
 export function setupView(
   setup: EnvironmentStatusResponse["setup"],
 ): SetupView | null {
   if (setup === null) return null;
   if (setup.state === "done" || setup.stage === "done") return null;
+  if (setup.state === "awaiting_consent") return null;
   const stepIndex = SETUP_STEPS.findIndex((step) => step.stage === setup.stage);
   const step = stepIndex === -1 ? null : SETUP_STEPS[stepIndex];
   if (setup.state === "failed" && setup.stage === "moving_settings") {

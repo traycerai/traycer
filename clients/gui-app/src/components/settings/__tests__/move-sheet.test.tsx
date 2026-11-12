@@ -226,8 +226,12 @@ describe("<MoveSheet />", () => {
 
     expect(screen.getByText("Move Old laptop to Personal?")).toBeTruthy();
     expect(screen.getByTestId("move-sheet-description").textContent).toBe(
-      "Your Personal settings start reaching it. The settings already on it stay there — nothing is deleted. You can move it back any time.",
+      "It then uses your Personal settings, the same ones every computer and sandbox running Personal uses. You can move it back any time.",
     );
+    expect(screen.getByTestId("move-sheet-nothing-deleted").textContent).toBe(
+      "Everything also stays on Old laptop; nothing is deleted.",
+    );
+    expect(screen.queryByTestId("move-sheet-nothing-to-move")).toBeNull();
     const moves = screen.getByTestId("move-sheet-moves");
     expect(moves.textContent).toContain("Moves");
     expect(screen.getByTestId("move-sheet-moves-summary").textContent).toBe(
@@ -367,8 +371,8 @@ describe("<MoveSheet />", () => {
     expect(retry).toHaveBeenCalledOnce();
   });
 
-  it("says there is nothing to move, with Done alone, when no row moves", async () => {
-    mount({
+  it("offers Move to Personal when no row moves, and closes after the empty accept", async () => {
+    const harness = mount({
       plans: [
         plan("hash-n", {
           alreadyInPersonal: [row("HOME", "HOME", null)],
@@ -379,14 +383,41 @@ describe("<MoveSheet />", () => {
     });
     await settle();
 
-    expect(screen.queryByTestId("move-sheet-not-now")).toBeNull();
-    expect(screen.queryByTestId("move-sheet-accept")).toBeNull();
+    expect(screen.getByTestId("move-sheet-not-now")).toBeTruthy();
+    expect(screen.getByTestId("move-sheet-accept")).toBeTruthy();
     expect(screen.queryByTestId("move-sheet-disclosure")).toBeNull();
+    expect(screen.getByTestId("move-sheet-nothing-to-move").textContent).toBe(
+      "Nothing on Old laptop needs moving.",
+    );
+    expect(screen.queryByTestId("move-sheet-nothing-deleted")).toBeNull();
     expect(screen.queryByTestId("move-sheet-moves")).toBeNull();
     expect(screen.queryByTestId("move-sheet-staysOnThisComputer")).toBeNull();
     expect(screen.getByTestId("move-sheet-alreadyInPersonal")).toBeTruthy();
-    fireEvent.click(screen.getByTestId("move-sheet-done"));
+    fireEvent.click(screen.getByTestId("move-sheet-accept"));
+    await settle();
+    expect(harness.accepts).toEqual([{ planHash: "hash-n", keyChoices: [] }]);
     expect(useMoveSheetStore.getState().target).toBeNull();
+  });
+
+  it("shows Personal's existing secrets when an empty move reaches them", async () => {
+    mount({
+      plans: [
+        planWith(
+          "hash-empty-secrets",
+          {},
+          {
+            personalHoldsSecrets: true,
+            itemChoices: false,
+          },
+        ),
+      ],
+      acceptAnswers: [ACCEPTED],
+    });
+    await settle();
+
+    expect(screen.getByTestId("move-sheet-disclosure").textContent).toBe(
+      "Nothing new is stored as a secret. Once Old laptop runs Personal, it receives Personal's existing keys and secrets as values its tools and agents can read.",
+    );
   });
 
   it("names a one-of-a-kind row by its page, and leaves other rows their label", async () => {

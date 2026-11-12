@@ -51,7 +51,7 @@ const CARDS = [
     id: "move",
     icon: MonitorUp,
     row: GETTING_STARTED.definitions.move,
-    action: "Show me what moves",
+    action: "Move to Personal",
   },
   {
     id: "install",
@@ -118,7 +118,8 @@ function stepIsDone(
  * whether the step EXISTS for this person rather than whether it is done:
  * credits while a sandbox is staged in this window, and the move while this
  * computer can say where its settings stand - a card nobody can finish would
- * hold the checklist open for ever.
+ * hold the checklist open for ever. A computer that runs a team's settings
+ * (`team`) has no move to offer, so it shows no move card.
  */
 function cardApplies(
   card: GettingStartedCard,
