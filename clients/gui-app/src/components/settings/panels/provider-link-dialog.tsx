@@ -163,7 +163,7 @@ function EnvironmentPlanSignInDialog(props: {
     >
       <DialogContent
         layout="banded"
-        className="flex max-h-[85dvh] w-full max-w-lg flex-col overflow-y-auto sm:max-w-lg"
+        className="flex max-h-[min(85dvh,calc(var(--spacing-safe-dvh)-var(--spacing-safe-bottom)))] w-full flex-col overflow-y-auto sm:max-w-lg"
       >
         <DialogHeader>
           <DialogTitle>
