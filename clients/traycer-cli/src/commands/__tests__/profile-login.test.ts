@@ -55,6 +55,7 @@ vi.mock("../../internal/host-rpc", async () => {
     ...actual,
     callHostRpc: vi.fn(),
     callHostRpcWithDispatch: vi.fn(),
+    readLocalHostMethodVersion: vi.fn(async () => null),
   };
 });
 
@@ -355,6 +356,7 @@ function expectStartDispatch(dispatch: HostRpcDispatch): void {
   expect(dispatch.requiredHostMethodVersion).toEqual(START_DISPATCH_FLOOR);
   expect(dispatch.responseTimeoutMs).toBe(START_RESPONSE_TIMEOUT_MS);
   expect(dispatch.signal).toBeInstanceOf(AbortSignal);
+  expect(dispatch.reauthenticate).toBe("before-request");
 }
 
 function ensurePackCalls(): DispatchCall[] {
