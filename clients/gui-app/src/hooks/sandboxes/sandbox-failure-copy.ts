@@ -77,7 +77,7 @@ const REFUSAL_COPY: ReadonlyMap<string, string> = new Map([
   ],
   [
     SANDBOX_REFUSAL_CODE_PROVIDER_FAILED,
-    "Couldn't complete the sandbox action. Try again.",
+    "Couldn't complete the sandbox action.",
   ],
   [
     SANDBOX_REFUSAL_CODE_TRANSITION_CONFLICT,

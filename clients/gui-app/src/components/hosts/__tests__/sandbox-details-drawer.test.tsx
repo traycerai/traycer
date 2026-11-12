@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import {
   act,
   cleanup,
@@ -22,10 +22,16 @@ import {
   openSandboxDetails,
 } from "@/stores/sandboxes/sandbox-details-store";
 
-const list = vi.hoisted(() => ({
-  data: undefined as SandboxListResponse | undefined,
+interface ListFixture {
+  data: SandboxListResponse | undefined;
+  refetch: Mock<() => Promise<void>>;
+  operation: SandboxRowOperation | null;
+}
+
+const list = vi.hoisted((): ListFixture => ({
+  data: undefined,
   refetch: vi.fn(() => Promise.resolve()),
-  operation: null as SandboxRowOperation | null,
+  operation: null,
 }));
 
 // The list read failed: no data, and the query says so.
@@ -79,15 +85,19 @@ describe("<SandboxDetailsDrawerHost />", () => {
     expect(list.refetch).toHaveBeenCalledTimes(1);
   });
 
-  it.each([
+  it.each<{
+    verb: "resume" | "start" | "stop";
+    state: SandboxSummary["state"];
+  }>([
     { verb: "resume", state: "suspended" },
     { verb: "start", state: "stopped" },
-  ] as const)(
-    "shows retry-safe copy for a failed $verb on a resting sandbox",
+    { verb: "stop", state: "destroyed" },
+  ])(
+    "reports a failed $verb in $state without promising recovery",
     ({ verb, state }) => {
       const summary = sandboxSummaryFixture({
-        id: "sbx-resting-operation-failure",
-        displayName: "Retained sandbox",
+        id: "sbx-operation-failure",
+        displayName: "Sandbox action fixture",
         state,
       });
       list.data = { sandboxes: [summary] };
@@ -107,11 +117,9 @@ describe("<SandboxDetailsDrawerHost />", () => {
 
       const failure = screen.getByTestId("sandbox-details-operation-failure");
       expect(
-        within(failure).getByText(
-          "Couldn't complete the sandbox action. Try again.",
-        ),
+        within(failure).getByText("Couldn't complete the sandbox action."),
       ).toBeDefined();
-      expect(failure.textContent).not.toContain("destroy");
+      expect(failure.textContent).not.toMatch(/destroy|try again/i);
     },
   );
 

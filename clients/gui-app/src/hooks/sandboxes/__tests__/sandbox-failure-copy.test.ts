@@ -55,9 +55,9 @@ describe("sandboxFailureMessage", () => {
     ).toBe("Couldn't rename the sandbox. Try again in a moment.");
   });
 
-  it("advises retrying a failed sandbox action", () => {
+  it("reports a failed sandbox action without promising recovery", () => {
     expect(sandboxFailureMessage(refused("provider_failed", NO_DETAIL))).toBe(
-      "Couldn't complete the sandbox action. Try again.",
+      "Couldn't complete the sandbox action.",
     );
   });
 
