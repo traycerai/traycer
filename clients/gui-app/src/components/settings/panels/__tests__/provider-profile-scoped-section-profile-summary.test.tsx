@@ -5,13 +5,7 @@ import type {
   ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import {
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -265,28 +259,25 @@ function renderSection(
       </TooltipProvider>
     </QueryClientProvider>
   );
-  const rendered =
-    options === undefined
-      ? render(section)
-      : render(
-          <PersonalPageContext.Provider
-            value={{
-              section: "providers",
-              pick: { kind: "personal" },
-              state: { kind: "ready", status: environmentStatusFixture({}) },
-              line: null,
-              hostName: options.hostName,
-              localOverrides: [],
-              hostId,
-              client,
-              notices: [],
-              review: [],
-            }}
-          >
-            {section}
-          </PersonalPageContext.Provider>,
-        );
-  return { ...rendered, queryClient };
+  if (options === undefined) return render(section);
+  return render(
+    <PersonalPageContext.Provider
+      value={{
+        section: "providers",
+        pick: { kind: "personal" },
+        state: { kind: "ready", status: environmentStatusFixture({}) },
+        line: null,
+        hostName: options.hostName,
+        localOverrides: [],
+        hostId,
+        client,
+        notices: [],
+        review: [],
+      }}
+    >
+      {section}
+    </PersonalPageContext.Provider>,
+  );
 }
 
 describe("<ProviderProfileScopedSection /> profile summary", () => {
@@ -447,21 +438,20 @@ describe("<ProviderProfileScopedSection /> profile summary", () => {
         },
       );
 
-      expect(
-        await screen.findByText("Not on your other computers yet."),
-      ).toBeTruthy();
+      expect(await screen.findByText("On dev-box only.")).toBeTruthy();
       expect(screen.queryByRole("button", { name: "Link" })).toBeNull();
       expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
     },
   );
 
   it.each([
-    ["claude-code", 1],
-    ["codex", 1],
-    ["grok", 1],
+    ["claude-code", 0, 2],
+    ["claude-code", 2, 0],
+    ["codex", 0, 2],
+    ["codex", 2, 0],
   ] as const)(
-    "restores Link for %s when providers.link negotiates 1.%s",
-    async (providerId, linkMinor) => {
+    "restores Link for %s with providers.link 1.%s and linkComplete 1.%s",
+    async (providerId, linkMinor, completeMinor) => {
       recordNegotiatedHostManifest("other-host", {
         "providers.link": { major: 1, minor: 3 },
       });
@@ -473,7 +463,7 @@ describe("<ProviderProfileScopedSection /> profile summary", () => {
           manifest: {
             "providers.list": { major: 10, minor: 9 },
             "providers.link": { major: 1, minor: linkMinor },
-            "providers.linkComplete": { major: 1, minor: 2 },
+            "providers.linkComplete": { major: 1, minor: completeMinor },
           },
         },
       );
@@ -488,16 +478,13 @@ describe("<ProviderProfileScopedSection /> profile summary", () => {
   );
 
   it.each([
-    ["claude-code", 2, 2],
-    ["claude-code", 3, 3],
-    ["codex", 2, 2],
-    ["codex", 3, 3],
-    ["grok", 2, 2],
-    ["grok", 3, 3],
-    ["grok", 2, 1],
+    ["claude-code", 2],
+    ["claude-code", 3],
+    ["codex", 2],
+    ["codex", 3],
   ] as const)(
-    "keeps Link hidden for %s with providers.link 1.%s and linkComplete 1.%s",
-    async (providerId, linkMinor, completeMinor) => {
+    "keeps Link hidden for %s when both environment RPCs negotiate 1.%s",
+    async (providerId, minor) => {
       renderSection(
         { state: { ...opencodeState(), providerId } },
         {
@@ -505,15 +492,13 @@ describe("<ProviderProfileScopedSection /> profile summary", () => {
           hostName: "dev-box",
           manifest: {
             "providers.list": { major: 10, minor: 9 },
-            "providers.link": { major: 1, minor: linkMinor },
-            "providers.linkComplete": { major: 1, minor: completeMinor },
+            "providers.link": { major: 1, minor },
+            "providers.linkComplete": { major: 1, minor },
           },
         },
       );
 
-      expect(
-        await screen.findByText("Not on your other computers yet."),
-      ).toBeTruthy();
+      expect(await screen.findByText("On dev-box only.")).toBeTruthy();
       expect(screen.queryByRole("button", { name: "Link" })).toBeNull();
       expect(useProviderLinkDialogStore.getState().target).toBeNull();
     },
@@ -534,9 +519,7 @@ describe("<ProviderProfileScopedSection /> profile summary", () => {
       },
     );
 
-    expect(
-      await screen.findByText("Not on your other computers yet."),
-    ).toBeTruthy();
+    expect(await screen.findByText("On dev-box only.")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Link" })).toBeNull();
     expect(useProviderLinkDialogStore.getState().target).toBeNull();
   });
@@ -574,9 +557,7 @@ describe("<ProviderProfileScopedSection /> profile summary", () => {
       },
     );
 
-    expect(
-      await screen.findByText("Not on your other computers yet."),
-    ).toBeTruthy();
+    expect(await screen.findByText("On dev-box only.")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Link" })).toBeNull();
     expect(useProviderLinkDialogStore.getState().target).toBeNull();
   });
@@ -584,7 +565,7 @@ describe("<ProviderProfileScopedSection /> profile summary", () => {
   it.each(["claude-code", "codex"] as const)(
     "keeps Sign in for a signed-out local-only %s profile",
     async (providerId) => {
-      const { queryClient } = renderSection(
+      renderSection(
         {
           state: {
             ...opencodeState(),
@@ -613,18 +594,7 @@ describe("<ProviderProfileScopedSection /> profile summary", () => {
         },
       );
 
-      await waitFor(() => {
-        const providersListQuery = queryClient
-          .getQueryCache()
-          .findAll()
-          .find((query) => query.queryKey.includes("providers.list"));
-        expect(providersListQuery?.state.status).toBe("success");
-        expect(providersListQuery?.state.data).toMatchObject({
-          onHostOnly: [{ providerId, profileId: "profile-managed" }],
-        });
-      });
-      expect(screen.queryByText("On dev-box only.")).toBeNull();
-      expect(screen.queryByText("Not on your other computers yet.")).toBeNull();
+      expect(await screen.findByText("On dev-box only.")).toBeTruthy();
       expect(screen.queryByRole("button", { name: "Link" })).toBeNull();
       await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
       expect(

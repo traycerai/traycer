@@ -179,7 +179,7 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
     setPreviewAnchor(anchor);
   };
   const rowContext: ProfileDropdownRowContext = {
-    activeProfileId: activeCommitId,
+    activeProfileId,
     rowIdPrefix,
     previewProfileId,
     onPreview: preview,
