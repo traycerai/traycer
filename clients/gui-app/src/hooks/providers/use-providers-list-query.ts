@@ -10,7 +10,7 @@ import type { QueryActivityOptions } from "@/hooks/harnesses/use-gui-harness-cat
 
 const PROVIDERS_LIST_REFRESH_MS = 15 * 60 * 1_000;
 
-type ProvidersListQueryResult = UseQueryResult<
+export type ProvidersListQueryResult = UseQueryResult<
   ResponseOfMethod<HostRpcRegistry, "providers.list">,
   HostRpcError
 >;

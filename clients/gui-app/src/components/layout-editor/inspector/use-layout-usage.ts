@@ -23,7 +23,12 @@ export const EMPTY_USAGE: LayoutUsage = {
   profilesByProvider: {},
   hostId: null,
   profileSelection: { shownProfiles: {}, lastProfileByHarness: {} },
-  cluster: { kind: "no-providers" },
+  // No read behind it, so it is no answer: never the host saying "none".
+  cluster: {
+    kind: "unanswered",
+    read: "unreachable",
+    hostLabel: "the watched host",
+  },
   hostName: "the watched host",
 };
 export const LayoutUsageContext = createContext<LayoutUsage | null>(null);

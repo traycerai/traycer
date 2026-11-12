@@ -101,6 +101,8 @@ type MockState = {
     fetchEligibility?: RateLimitFetchEligibility;
   }>;
   results: Record<string, QueryResult>;
+  /** Whether the watched host has answered its provider list. */
+  providersRead: RateLimitProviderRead;
   providersList: { data: { providers: ProviderCliState[] } | undefined };
   selectedProviders: { data: { providers: ProviderCliState[] } | undefined };
   traycerUsageFetching: boolean;
@@ -151,6 +153,7 @@ function coldAuthUser(): MockAuthUser {
 const mocks = vi.hoisted<MockState>(() => ({
   configured: [],
   results: {},
+  providersRead: { kind: "answered" },
   providersList: { data: undefined },
   selectedProviders: { data: undefined },
   traycerUsageFetching: false,
@@ -212,8 +215,9 @@ vi.mock("@/hooks/rate-limits/use-configured-rate-limit-providers", () => ({
       },
       profiles: provider.profiles ?? [],
     })),
-  useVisibleRateLimitProviders: () =>
-    mocks.configured.map((provider) => ({
+  useVisibleRateLimitProviders: () => ({
+    read: mocks.providersRead,
+    providers: mocks.configured.map((provider) => ({
       ...provider,
       authStatus: provider.authStatus ?? "authenticated",
       usageReportingConfirmed: provider.usageReportingConfirmed ?? true,
@@ -223,6 +227,7 @@ vi.mock("@/hooks/rate-limits/use-configured-rate-limit-providers", () => ({
       },
       profiles: provider.profiles ?? [],
     })),
+  }),
 }));
 vi.mock("@/hooks/host/use-host-provider-rate-limits-query", () => ({
   useHostProviderRateLimitsQuery: (
@@ -386,7 +391,10 @@ import { useRateLimitPopoverStore } from "@/stores/rate-limits/rate-limit-popove
 import { useLayoutStore } from "@/stores/layout/layout-store";
 import type { StatusBarShownProfiles } from "@/lib/layout/layout-arrangement";
 import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
-import type { VisibleRateLimitProvider } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
+import type {
+  RateLimitProviderRead,
+  VisibleRateLimitProvider,
+} from "@/hooks/rate-limits/use-configured-rate-limit-providers";
 
 const NOW = Date.now();
 
@@ -1099,6 +1107,7 @@ beforeEach(() => {
   segmentsState.cluster = { kind: "hidden" };
   mocks.configured = [];
   mocks.results = {};
+  mocks.providersRead = { kind: "answered" };
   mocks.providersList = { data: { providers: [traycerProviderFixture(true)] } };
   mocks.selectedProviders = { data: undefined };
   mocks.traycerUsageFetching = false;
@@ -1203,6 +1212,63 @@ describe("<RateLimitPopover /> zero-provider state", () => {
       hostId: null,
     });
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("<RateLimitPopover /> on a computer that has not answered its provider list", () => {
+  // The owner's case: the panel scoped to another computer, whose
+  // `providers.list` is still on its way, failed, or answered with nothing.
+  // Only the last is the host saying it has no providers.
+  const ZERO_STATE_COPY = "Connect a supported provider to see usage here.";
+
+  function renderRemotePick(): void {
+    const pro = hostScopeOptionFixture({ hostId: "host-a", name: "Pro" });
+    const air = hostScopeOptionFixture({ hostId: "host-b", name: "Air" });
+    renderPopoverWithScope(
+      hostScopeFixture({
+        host: air,
+        hosts: [pro, air],
+        hostId: air.hostId,
+        hostLabel: air.name,
+        activeHostId: pro.hostId,
+        activeHost: pro,
+        isViewingActive: false,
+      }),
+      true,
+    );
+  }
+
+  it("shows the skeleton naming the computer while the read is on its way, never the zero state", () => {
+    mocks.providersRead = { kind: "reading" };
+    renderRemotePick();
+    expect(screen.getByText("Reading providers on Air…")).toBeTruthy();
+    expect(screen.getByTestId("rate-limit-detail-skeleton")).toBeTruthy();
+    expect(screen.queryByText(ZERO_STATE_COPY)).toBeNull();
+    expect(screen.queryByRole("tablist")).toBeNull();
+  });
+
+  it("names the computer and offers Try again when the read failed, never the zero state", () => {
+    const retry = vi.fn();
+    mocks.providersRead = { kind: "failed", retry };
+    renderRemotePick();
+    expect(screen.getByText("Couldn't read providers on Air.")).toBeTruthy();
+    expect(screen.queryByText(ZERO_STATE_COPY)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+
+  it("says the computer can't be reached when no read can be sent, never the zero state", () => {
+    mocks.providersRead = { kind: "unreachable" };
+    renderRemotePick();
+    expect(screen.getByText("Can't reach Air")).toBeTruthy();
+    expect(screen.queryByText(ZERO_STATE_COPY)).toBeNull();
+  });
+
+  it("shows the zero state once the computer answers with no providers", () => {
+    mocks.providersRead = { kind: "answered" };
+    renderRemotePick();
+    expect(screen.getByText(ZERO_STATE_COPY)).toBeTruthy();
+    expect(screen.queryByText("Reading providers on Air…")).toBeNull();
   });
 });
 

@@ -81,7 +81,10 @@ vi.mock(
     return {
       ...actual,
       useConfiguredRateLimitProviders: () => configuredProviders,
-      useVisibleRateLimitProviders: () => configuredProviders,
+      useVisibleRateLimitProviders: () => ({
+        read: { kind: "answered" },
+        providers: configuredProviders,
+      }),
     };
   },
 );

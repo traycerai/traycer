@@ -6,7 +6,10 @@ import type {
   ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
 import { type ProviderRateLimitTanstackOptions } from "@/hooks/host/provider-rate-limit-query-options";
-import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
+import {
+  useProvidersList,
+  type ProvidersListQueryResult,
+} from "@/hooks/providers/use-providers-list-query";
 import {
   isRateLimitCapableProvider,
   isRateLimitProfileFetchEligible,
@@ -174,18 +177,73 @@ export function useRateLimitAccountInventory(): RateLimitAccountInventory {
 }
 
 /**
+ * Whether the host has answered its provider list, which is what decides what
+ * an empty list means. Only `answered` makes it the host's own word that it
+ * has no providers; the others are no word at all, and a surface that says
+ * "connect a provider" over one of them is wrong about the host.
+ *
+ * - `answered`: the host said. A list it answered stays answered through a
+ *   later refetch that fails, so one blip never replaces readings with a
+ *   failure.
+ * - `reading`: a read is on its way, or waiting for its connection.
+ * - `unreachable`: no read can be sent: no client, or the host cannot be
+ *   addressed yet.
+ * - `failed`: the read failed with nothing to show; `retry` asks again.
+ */
+export type RateLimitProviderRead =
+  | { readonly kind: "answered" }
+  | { readonly kind: "reading" }
+  | { readonly kind: "unreachable" }
+  | { readonly kind: "failed"; readonly retry: () => void };
+
+export type RateLimitProviderReadKind = RateLimitProviderRead["kind"];
+
+/** A host's usage-reporting providers, and whether that list is its answer. */
+export interface VisibleRateLimitInventory {
+  readonly read: RateLimitProviderRead;
+  readonly providers: ReadonlyArray<VisibleRateLimitProvider>;
+}
+
+const ANSWERED: RateLimitProviderRead = { kind: "answered" };
+const READING: RateLimitProviderRead = { kind: "reading" };
+const UNREACHABLE: RateLimitProviderRead = { kind: "unreachable" };
+
+/**
+ * Read from the ENABLED observer's result: its first render already reports
+ * the fetch it is about to start, where a passive observer of the same key
+ * would read "not fetching" for that frame.
+ */
+function providerListRead(
+  query: ProvidersListQueryResult,
+): RateLimitProviderRead {
+  if (query.data !== undefined) return ANSWERED;
+  if (query.isError) {
+    return {
+      kind: "failed",
+      retry: () => {
+        void query.refetch();
+      },
+    };
+  }
+  return query.fetchStatus === "idle" ? UNREACHABLE : READING;
+}
+
+/**
  * One providers.list inventory, filtered only by enablement and the adapter's
  * usage capability. Older hosts omit it, so their fetch-arm enum is the
  * compatibility fallback and the row is marked unconfirmed. Reachability,
  * auth and usage observations belong to rows;
  * they never decide whether a provider or its sibling accounts exist.
  */
-export function useVisibleRateLimitProviders(): ReadonlyArray<VisibleRateLimitProvider> {
+export function useVisibleRateLimitProviders(): VisibleRateLimitInventory {
   const providersQuery = useProvidersList({ enabled: true, subscribed: true });
-  const providers = providersQuery.data?.providers;
-  return useMemo(
+  const providerStates = providersQuery.data?.providers;
+  const providers = useMemo(
     () =>
-      providers === undefined ? [] : rateLimitProviderCandidates(providers),
-    [providers],
+      providerStates === undefined
+        ? []
+        : rateLimitProviderCandidates(providerStates),
+    [providerStates],
   );
+  return { read: providerListRead(providersQuery), providers };
 }

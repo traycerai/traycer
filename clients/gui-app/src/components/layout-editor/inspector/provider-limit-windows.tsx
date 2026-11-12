@@ -13,6 +13,7 @@ import { useRateLimitProfileSelection } from "@/hooks/rate-limits/use-rate-limit
 import {
   useStatusBarRateLimitSegments,
   useStatusBarWindowedProviders,
+  type StatusBarRateLimitCluster,
   type StatusBarRateLimitWindow,
 } from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
@@ -36,7 +37,17 @@ export function LayoutUsageProvider(props: {
   return (
     <HostRuntimeContext.Provider value={scopedBinding ?? ambientBinding}>
       {hasExplicitPick && !isHostScopeUsable(scope.status) ? (
-        <LayoutUsageContext value={{ ...EMPTY_USAGE, hostName }}>
+        <LayoutUsageContext
+          value={{
+            ...EMPTY_USAGE,
+            hostName,
+            cluster: {
+              kind: "unanswered",
+              read: "unreachable",
+              hostLabel: hostName,
+            },
+          }}
+        >
           {props.children}
         </LayoutUsageContext>
       ) : (
@@ -53,10 +64,12 @@ function ReadLayoutUsage(props: {
   readonly hostName: string;
   readonly children: ReactNode;
 }): ReactNode {
-  const providers = useStatusBarWindowedProviders();
+  const { read, providers } = useStatusBarWindowedProviders();
   const profileSelection = useRateLimitProfileSelection(props.hostId);
   const { cluster } = useStatusBarRateLimitSegments({
     providers,
+    providersRead: read.kind,
+    hostLabel: props.hostName,
     profileSelection,
     mode: "passive",
     editing: true,
@@ -123,10 +136,30 @@ export function ProviderLimitWindowsReader(
 }
 
 export function NoLayoutUsageProviders(): ReactNode {
-  const { hostName } = useLayoutUsage();
+  const { hostName, cluster } = useLayoutUsage();
   return (
     <p className="text-ui-xs text-muted-foreground">
-      No providers on {hostName} report usage limits.
+      {cluster.kind === "unanswered"
+        ? unansweredProvidersLine(cluster.read, hostName)
+        : `No providers on ${hostName} report usage limits.`}
     </p>
   );
+}
+
+/** "No providers" is the host's answer; before it, say what is happening. */
+function unansweredProvidersLine(
+  read: Extract<
+    StatusBarRateLimitCluster,
+    { readonly kind: "unanswered" }
+  >["read"],
+  hostName: string,
+): string {
+  switch (read) {
+    case "reading":
+      return `Reading providers on ${hostName}…`;
+    case "unreachable":
+      return `Can't reach ${hostName}.`;
+    case "failed":
+      return `Couldn't read providers on ${hostName}.`;
+  }
 }

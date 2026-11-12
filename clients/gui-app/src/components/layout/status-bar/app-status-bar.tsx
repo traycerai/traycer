@@ -18,7 +18,10 @@ import {
 } from "@/components/layout/status-bar/status-bar-visibility-menu";
 import { useWatchHostScope } from "@/hooks/host-scope/use-watch-host-scope";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
-import type { ConfiguredRateLimitProvider } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
+import type {
+  ConfiguredRateLimitProvider,
+  RateLimitProviderReadKind,
+} from "@/hooks/rate-limits/use-configured-rate-limit-providers";
 import {
   useRateLimitProfileSelection,
   type RateLimitProfileSelection,
@@ -134,7 +137,8 @@ function ScopedAppStatusBar(props: {
   // the app-shell poll already keeps subscribed. Everything that CAN pull -
   // the usage batches, the mount refresh - lives inside the gate, where the
   // binding is provably the watched host's.
-  const windowedProviders = useStatusBarWindowedProviders();
+  const windowed = useStatusBarWindowedProviders();
+  const windowedProviders = windowed.providers;
   const [usageOpen, setUsageOpen] = useState(false);
   // One subscription bridge for the segments and the panel alike, resolved
   // where both can reach it - the same shape the header trigger uses - and
@@ -244,6 +248,7 @@ function ScopedAppStatusBar(props: {
           scopedToOwnHost={scopedToOwnHost}
           rateLimitsEnabled={rateLimitsEnabled}
           providers={windowedProviders}
+          providersRead={windowed.read.kind}
           profileSelection={profileSelection}
           scope={scope}
           editing={editing}
@@ -357,6 +362,7 @@ function StatusBarUsageSlot(props: {
   readonly scopedToOwnHost: boolean;
   readonly rateLimitsEnabled: boolean;
   readonly providers: ReadonlyArray<ConfiguredRateLimitProvider>;
+  readonly providersRead: RateLimitProviderReadKind;
   readonly profileSelection: RateLimitProfileSelection;
   readonly scope: HostScope;
   readonly editing: boolean;
@@ -369,7 +375,9 @@ function StatusBarUsageSlot(props: {
       {props.scopedToOwnHost && props.rateLimitsEnabled ? (
         <StatusBarRateLimitCluster
           hostId={props.scope.hostId}
+          hostLabel={props.scope.hostLabel}
           providers={props.providers}
+          providersRead={props.providersRead}
           profileSelection={props.profileSelection}
           editing={props.editing}
         />

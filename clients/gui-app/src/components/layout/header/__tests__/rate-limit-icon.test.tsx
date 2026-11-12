@@ -94,7 +94,10 @@ let lastMode: StatusBarRateLimitMode | null = null;
 let lastSample: boolean | null = null;
 
 vi.mock("@/hooks/rate-limits/use-status-bar-rate-limit-segments", () => ({
-  useStatusBarWindowedProviders: () => [],
+  useStatusBarWindowedProviders: () => ({
+    read: { kind: "answered" },
+    providers: [],
+  }),
   useStatusBarRateLimitSegments: (input: {
     readonly mode: StatusBarRateLimitMode;
     readonly sample: boolean;

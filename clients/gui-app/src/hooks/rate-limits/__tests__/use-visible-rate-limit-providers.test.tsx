@@ -24,17 +24,27 @@ interface MockState {
   results: Map<RateLimitProviderId, MockQueryResult>;
   /** Whether the host has answered with a list at all. */
   answered: boolean;
+  /** The list query's own state, beside its data. */
+  isError: boolean;
+  fetchStatus: "fetching" | "idle";
+  refetch: () => Promise<unknown>;
 }
 
 const mocks = vi.hoisted<MockState>(() => ({
   providers: [],
   results: new Map(),
   answered: true,
+  isError: false,
+  fetchStatus: "idle",
+  refetch: () => Promise.resolve(),
 }));
 
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersList: () => ({
     data: mocks.answered ? { providers: mocks.providers } : undefined,
+    isError: mocks.isError,
+    fetchStatus: mocks.fetchStatus,
+    refetch: mocks.refetch,
   }),
 }));
 vi.mock("@/lib/host", () => ({
@@ -146,6 +156,9 @@ beforeEach(() => {
   mocks.providers = [];
   mocks.results = new Map();
   mocks.answered = true;
+  mocks.isError = false;
+  mocks.fetchStatus = "idle";
+  mocks.refetch = () => Promise.resolve();
 });
 
 afterEach(() => {
@@ -191,7 +204,9 @@ describe("useVisibleRateLimitProviders", () => {
       isError: false,
     });
 
-    const { result } = renderHook(() => useVisibleRateLimitProviders());
+    const { result } = renderHook(
+      () => useVisibleRateLimitProviders().providers,
+    );
 
     expect(result.current).toEqual([
       {
@@ -217,7 +232,9 @@ describe("useVisibleRateLimitProviders", () => {
       }),
     ];
 
-    const { result } = renderHook(() => useVisibleRateLimitProviders());
+    const { result } = renderHook(
+      () => useVisibleRateLimitProviders().providers,
+    );
 
     expect(result.current).toEqual([
       {
@@ -244,7 +261,9 @@ describe("useVisibleRateLimitProviders", () => {
     ];
     mocks.results.set("codex", { data: undefined, isError: true });
 
-    const { result } = renderHook(() => useVisibleRateLimitProviders());
+    const { result } = renderHook(
+      () => useVisibleRateLimitProviders().providers,
+    );
 
     expect(result.current).toEqual([
       {
@@ -270,7 +289,9 @@ describe("useVisibleRateLimitProviders", () => {
       }),
     ];
 
-    const { result } = renderHook(() => useVisibleRateLimitProviders());
+    const { result } = renderHook(
+      () => useVisibleRateLimitProviders().providers,
+    );
 
     expect(result.current.map((provider) => provider.providerId)).toEqual([
       "codex",
@@ -293,7 +314,7 @@ describe("useVisibleRateLimitProviders", () => {
       },
     ];
 
-    const visible = renderHook(() => useVisibleRateLimitProviders());
+    const visible = renderHook(() => useVisibleRateLimitProviders().providers);
     const configured = renderHook(() => useConfiguredRateLimitProviders());
 
     expect(visible.result.current).toEqual([
@@ -325,7 +346,7 @@ describe("useVisibleRateLimitProviders", () => {
       isError: false,
     });
 
-    const visible = renderHook(() => useVisibleRateLimitProviders());
+    const visible = renderHook(() => useVisibleRateLimitProviders().providers);
     const configured = renderHook(() => useConfiguredRateLimitProviders());
 
     expect(visible.result.current).toEqual([
@@ -378,7 +399,7 @@ describe("useVisibleRateLimitProviders", () => {
       },
     ];
 
-    const visible = renderHook(() => useVisibleRateLimitProviders());
+    const visible = renderHook(() => useVisibleRateLimitProviders().providers);
     const configured = renderHook(() => useConfiguredRateLimitProviders());
 
     expect(visible.result.current).toEqual([
@@ -463,7 +484,9 @@ describe("useVisibleRateLimitProviders", () => {
       isError: false,
     });
 
-    const { result } = renderHook(() => useVisibleRateLimitProviders());
+    const { result } = renderHook(
+      () => useVisibleRateLimitProviders().providers,
+    );
 
     expect(result.current).toEqual([
       {
@@ -499,7 +522,9 @@ describe("useVisibleRateLimitProviders", () => {
       },
     ];
 
-    const { result } = renderHook(() => useVisibleRateLimitProviders());
+    const { result } = renderHook(
+      () => useVisibleRateLimitProviders().providers,
+    );
 
     expect(result.current).toEqual([]);
   });
@@ -524,7 +549,7 @@ describe("useVisibleRateLimitProviders", () => {
       }),
     ];
 
-    const visible = renderHook(() => useVisibleRateLimitProviders());
+    const visible = renderHook(() => useVisibleRateLimitProviders().providers);
     const configured = renderHook(() => useConfiguredRateLimitProviders());
 
     expect(visible.result.current).toEqual([
@@ -574,7 +599,9 @@ describe("useVisibleRateLimitProviders", () => {
       isError: false,
     });
 
-    const { result } = renderHook(() => useVisibleRateLimitProviders());
+    const { result } = renderHook(
+      () => useVisibleRateLimitProviders().providers,
+    );
 
     expect(result.current).toEqual([
       {
@@ -641,7 +668,7 @@ describe("useRateLimitAccountInventory", () => {
     setCapability(true);
 
     const { result, rerender } = renderHook(() => ({
-      visible: useVisibleRateLimitProviders(),
+      visible: useVisibleRateLimitProviders().providers,
       inventory: useRateLimitAccountInventory(),
     }));
     const expectedInventoryProvider = {
@@ -740,7 +767,7 @@ describe("useRateLimitAccountInventory", () => {
       isError: false,
     });
 
-    const visible = renderHook(() => useVisibleRateLimitProviders());
+    const visible = renderHook(() => useVisibleRateLimitProviders().providers);
     const inventory = renderHook(() => useRateLimitAccountInventory());
 
     expect(
@@ -750,5 +777,66 @@ describe("useRateLimitAccountInventory", () => {
     expect(
       inventory.result.current.providers.map((provider) => provider.providerId),
     ).toEqual(["opencode"]);
+  });
+});
+
+describe("useVisibleRateLimitProviders' read", () => {
+  it("is answered when the host answered with no providers: the one empty list that is the host's word", () => {
+    mocks.answered = true;
+    const { result } = renderHook(() => useVisibleRateLimitProviders());
+    expect(result.current).toEqual({
+      read: { kind: "answered" },
+      providers: [],
+    });
+  });
+
+  it("is reading while the list is on its way", () => {
+    mocks.answered = false;
+    mocks.fetchStatus = "fetching";
+    const { result } = renderHook(() => useVisibleRateLimitProviders());
+    expect(result.current).toEqual({
+      read: { kind: "reading" },
+      providers: [],
+    });
+  });
+
+  it("is unreachable when no read can be sent", () => {
+    mocks.answered = false;
+    mocks.fetchStatus = "idle";
+    const { result } = renderHook(() => useVisibleRateLimitProviders());
+    expect(result.current.read).toEqual({ kind: "unreachable" });
+  });
+
+  it("is failed, with a retry that reads again, when the read failed with nothing to show", () => {
+    mocks.answered = false;
+    mocks.isError = true;
+    const refetch = vi.fn(() => Promise.resolve());
+    mocks.refetch = refetch;
+    const { result } = renderHook(() => useVisibleRateLimitProviders());
+    const read = result.current.read;
+    expect(read.kind).toBe("failed");
+    if (read.kind !== "failed") return;
+    read.retry();
+    expect(refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays answered when a refetch fails over a list it already has", () => {
+    mocks.answered = true;
+    mocks.isError = true;
+    mocks.providers = [
+      providerState({
+        providerId: "codex",
+        status: "authenticated",
+        enabled: true,
+        authPending: false,
+        availabilityPending: false,
+        usageReporting: true,
+      }),
+    ];
+    const { result } = renderHook(() => useVisibleRateLimitProviders());
+    expect(result.current.read).toEqual({ kind: "answered" });
+    expect(result.current.providers.map((p) => p.providerId)).toEqual([
+      "codex",
+    ]);
   });
 });

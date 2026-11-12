@@ -153,7 +153,10 @@ vi.mock("@/lib/host", async (importOriginal) => {
 });
 vi.mock("@/hooks/rate-limits/use-configured-rate-limit-providers", () => ({
   useConfiguredRateLimitProviders: () => [],
-  useVisibleRateLimitProviders: () => [],
+  useVisibleRateLimitProviders: () => ({
+    read: { kind: "answered" },
+    providers: [],
+  }),
 }));
 vi.mock("@/hooks/rate-limits/use-status-bar-rate-limit-segments", () => ({
   useStatusBarRateLimitSegments: () => ({

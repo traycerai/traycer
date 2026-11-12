@@ -265,6 +265,8 @@ function treeFor(
       <TooltipProvider>
         <Popover>
           <StatusBarRateLimitCluster
+            hostLabel="dev-box"
+            providersRead="answered"
             hostId={HOST_ID}
             providers={providers}
             profileSelection={profileSelection}
