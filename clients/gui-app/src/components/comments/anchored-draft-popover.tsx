@@ -1,4 +1,5 @@
 import { FrameCommentPortalContext } from "./frame-comment-surface-context";
+import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
 import { readNegotiatedMethodVersion } from "@/lib/host/read-negotiated-method-version";
 import { useCanvasSelectionStore } from "@/components/canvas-artifact/canvas-selection-store";
 import { cn } from "@/lib/utils";
@@ -91,6 +92,7 @@ export function AnchoredDraftPopover(props: {
   const paneContainer = usePanePortalContainer();
   const commentContainer = useContext(FrameCommentPortalContext);
   const focused = usePaneFocused();
+  const signOutQuestionOpen = useSignOutConfirmStore((state) => state.open);
   const pending = createThread.isPending || edit.isPending;
   const dismiss = useCallback((): boolean => {
     if (draft === null || pending) return false;
@@ -147,14 +149,14 @@ export function AnchoredDraftPopover(props: {
   });
   const hasDraft = draft !== null;
   useEffect(() => {
-    if (!hasDraft || !focused) return;
+    if (!hasDraft || !focused || signOutQuestionOpen) return;
     window.addEventListener("keydown", keyDown);
     window.addEventListener("pointerdown", outside, true);
     return () => {
       window.removeEventListener("keydown", keyDown);
       window.removeEventListener("pointerdown", outside, true);
     };
-  }, [hasDraft, focused]);
+  }, [hasDraft, focused, signOutQuestionOpen]);
   useLayoutEffect(() => {
     const floating = floatingRef.current;
     if (floating === null || draft === null) return;

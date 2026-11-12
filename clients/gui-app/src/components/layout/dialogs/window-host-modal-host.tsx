@@ -1,3 +1,5 @@
+import { useQueryClient } from "@tanstack/react-query";
+import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
 import { useHostBinding } from "@/lib/host/runtime";
 import { useEffect, type ReactNode } from "react";
 import {
@@ -149,6 +151,8 @@ function NarratingWindowHostModal(props: {
 }): ReactNode {
   const { narration } = props;
   const hostBinding = useHostBinding();
+  const queryClient = useQueryClient();
+  const signOutQuestionOpen = useSignOutConfirmStore((state) => state.open);
   const progress = useHostProvisioningProgress();
   const controller = useHostReadinessController();
   const shellAdmission = useShellLocalPlaneAdmission();
@@ -217,7 +221,7 @@ function NarratingWindowHostModal(props: {
   // is naming WHICH card won, and re-deriving that from the readiness here
   // would be the second copy this suppression exists to avoid.
   useSuppressionLog(gateDrawn?.kind ?? null, narration);
-  if (gateDrawn !== null) {
+  if (gateDrawn !== null || signOutQuestionOpen) {
     return null;
   }
   const updateHost = resolveUpdateHost(narration.variant, presentation);
@@ -244,7 +248,9 @@ function NarratingWindowHostModal(props: {
       hostBinding === null
         ? undefined
         : () => {
-            void hostBinding.auth.signOut();
+            void useSignOutConfirmStore
+              .getState()
+              .signOut(queryClient, hostBinding.auth);
           },
     cause: narration.cause,
     variant: narration.variant,
