@@ -2270,6 +2270,13 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Hiding one OpenCode model provider: a per-provider write whose order
+  // matters, scoped by `providerModelProviderVisibilityWriteScope` on the hook.
+  "providers.setModelProviderHidden": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Whether the provider settings document is unusable as a whole: a plain
   // read, latest wins.
   "providers.settingsFile.status": { ...LATEST_SCHEDULING, poll: null },

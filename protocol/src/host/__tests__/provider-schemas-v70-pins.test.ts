@@ -849,6 +849,7 @@ describe("downgradeProviderCliStateToV10 strips every later-than-v1.0 field", ()
       chatsFollow: true,
       nativeMemory: false,
       nativeMemorySupported: true,
+      hiddenModelProviders: ["openrouter"],
     });
 
   it("has a non-empty obligation set, so nothing below can pass vacuously", () => {

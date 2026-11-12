@@ -96,6 +96,12 @@ const TRAYCER_HOST_MODELS = {
 };
 
 // The cloud's Traycer catalog, read only for a Traycer pick sent to a sandbox.
+// The store reads the provider rows for the model providers a person hid
+// from the pickers. Nothing here turns that on, so the rows stay absent and
+// the catalog these cases assert on is the whole one.
+vi.mock("@/hooks/providers/use-providers-list-query", () => ({
+  useProvidersListForClient: () => ({ data: undefined, isError: false }),
+}));
 vi.mock("@/hooks/sandboxes/use-sandbox-traycer-models-query", () => ({
   // The query's own shape: a read that has not answered is pending, whether
   // it is in flight or paused offline; one that failed is an error.

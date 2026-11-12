@@ -6,7 +6,7 @@ inputs:
     default: bun
   bun-version:
     description: Bun version asserted against the checked-in lock
-    default: "1.3.14"
+    default: "1.4.4"
   cold:
     description: Skip the archive cache for the cold acceptance run
     default: "false"

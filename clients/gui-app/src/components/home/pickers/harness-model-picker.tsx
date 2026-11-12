@@ -149,6 +149,7 @@ import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store"
 import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
 import { useOnTeamSandbox } from "@/hooks/sandboxes/use-on-team-sandbox";
 import { teamSandboxHarnessBlocked } from "@/lib/sandboxes/team-sandbox-harness";
+import { withoutHiddenModelProviderRows } from "@/lib/providers/provider-hidden-model-providers";
 
 export type { ReasoningFooterConfig, ServiceTierFooterConfig };
 
@@ -1076,9 +1077,29 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       ),
     [activeProvider, catalogHarnesses],
   );
-  const providerRows = useMemo(
+  const selectedRowId = useMemo(
+    () => markedModelRowId(embedding, selection, rows),
+    [embedding, rows, selection],
+  );
+  // The OpenCode model providers the person hid in Settings. Their models
+  // leave the list and search, except the row already selected, so a chat on
+  // one still shows what it runs on.
+  const hiddenModelProviders = useMemo(
+    () => new Set(activeProviderState?.hiddenModelProviders ?? []),
+    [activeProviderState],
+  );
+  const allProviderRows = useMemo(
     () => rows.filter((row) => row.harnessId === resolvedActiveProviderId),
     [resolvedActiveProviderId, rows],
+  );
+  const providerRows = useMemo(
+    () =>
+      withoutHiddenModelProviderRows(
+        allProviderRows,
+        hiddenModelProviders,
+        selectedRowId,
+      ),
+    [allProviderRows, hiddenModelProviders, selectedRowId],
   );
   const providerSearchIndex = useMemo(
     () => createModelRowSearchIndex(providerRows),
@@ -1095,10 +1116,6 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   const visibleRowsById = useMemo(
     () => new Map(visibleRows.map((row) => [row.id, row])),
     [visibleRows],
-  );
-  const selectedRowId = useMemo(
-    () => markedModelRowId(embedding, selection, rows),
-    [embedding, rows, selection],
   );
   const { effectiveActiveRowId, initialTopMostItemIndex } = resolveRowAnchors({
     visibleRows,
@@ -1455,6 +1472,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         listRef={listRef}
         listKey={listKey}
         visibleRows={visibleRows}
+        hiddenModelProviders={hiddenModelProviders}
         selectedRowId={selectedRowId}
         effectiveActiveRowId={effectiveActiveRowId}
         hoveredRowId={hoveredRowId}

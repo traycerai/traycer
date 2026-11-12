@@ -69,7 +69,7 @@ export function handleHarnessModelPickerKeyDown(
   }
 
   if (event.key === "Enter") {
-    if (activeRow === null) return;
+    if (activeRow === null || isOtherControl(event.target)) return;
     event.preventDefault();
     onSelectRow(activeRow);
     return;
@@ -83,6 +83,21 @@ export function handleHarnessModelPickerKeyDown(
     event.preventDefault();
     onQueryChange("");
   }
+}
+
+/**
+ * A control that answers Enter itself: a button, a link or a menu item other
+ * than a model row. Enter there presses that control rather than choosing the
+ * active row. Portalled menus count too, since React bubbles their key events
+ * through the picker. A model row is a `button` with `role="option"`, and Enter
+ * on it still chooses.
+ */
+function isOtherControl(target: EventTarget): boolean {
+  if (!(target instanceof Element)) return false;
+  const control = target.closest(
+    "button, a[href], [role='menuitem'], [role='menuitemradio'], [role='menuitemcheckbox']",
+  );
+  return control !== null && control.getAttribute("role") !== "option";
 }
 
 interface RowNavigationInput {

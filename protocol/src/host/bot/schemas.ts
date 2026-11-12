@@ -137,53 +137,94 @@ export type BotRecord = z.infer<typeof botRecordSchema>;
 // ---- a bot's appearance ------------------------------------------------ //
 
 /**
- * How many swatches a bot's icon and its channel's background choose
+ * How many colours a bot's icon and its channel's background choose
  * among: the GUI's twelve profile hues in two tones each.
  */
-export const BOT_SWATCH_COUNT = 24;
-const botSwatchIndexSchema = lazySchema(() =>
+export const BOT_COLOR_COUNT = 24;
+const botColorIndexSchema = lazySchema(() =>
   z
     .number()
     .int()
     .min(0)
-    .max(BOT_SWATCH_COUNT - 1),
+    .max(BOT_COLOR_COUNT - 1),
 );
 
-/** A creature's silhouette: the cells it carries outside its 5×5 body. */
-export const botCreatureFamilySchema = lazySchema(() =>
-  z.enum(["none", "ears", "feet", "crest"]),
-);
-export type BotCreatureFamily = z.infer<typeof botCreatureFamilySchema>;
-
-/** The largest creature seed a bot's settings may store. */
-export const BOT_CREATURE_SEED_MAX = 65_535;
+/** The pixel mascots a bot's icon is drawn as, by name. */
+export const BOT_MASCOT_SHAPES = [
+  "blob",
+  "block",
+  "flame",
+  "ghost",
+  "capsule",
+  "cat",
+  "shield",
+  "sun",
+  "diamond",
+  "doc",
+] as const;
+export const botMascotShapeSchema = lazySchema(() => z.enum(BOT_MASCOT_SHAPES));
+export type BotMascotShape = z.infer<typeof botMascotShapeSchema>;
 
 /**
- * The bot's chosen icon: a creature the GUI grows again from its family and
- * seed (seed 0 is the bot's own body), never stored as pixels.
+ * The bot's chosen icon: a mascot the GUI draws from its shape's name, never
+ * stored as pixels.
  */
 export const botAppearanceMarkSchema = lazySchema(() =>
   z.object({
-    kind: z.literal("creature"),
-    family: botCreatureFamilySchema,
-    seed: z.number().int().min(0).max(BOT_CREATURE_SEED_MAX),
+    kind: z.literal("mascot"),
+    shape: botMascotShapeSchema,
   }),
 );
 export type BotAppearanceMark = z.infer<typeof botAppearanceMarkSchema>;
 
 /**
- * What a person chose for a bot's look. Each choice is `null` for the
- * default the GUI derives from the bot's id: its own creature, its own
- * swatch, and no background of the channel's own. Clearing a choice brings
- * back exactly the derived look.
+ * What a person chose for a bot's look, as it is written: every value one
+ * this protocol knows. Each choice is `null` for the default the GUI derives
+ * from the bot's id: its own mascot, its own colour, and no background of the
+ * channel's own. Clearing a choice brings back exactly the derived look.
+ */
+export const botAppearanceChoiceSchema = lazySchema(() =>
+  z.object({
+    mark: botAppearanceMarkSchema.nullable(),
+    /** The colour the mascot is drawn in, by index. */
+    color: botColorIndexSchema.nullable(),
+    /** The colour the channel's background is tinted with, by index. */
+    background: botColorIndexSchema.nullable(),
+  }),
+);
+export type BotAppearanceChoice = z.infer<typeof botAppearanceChoiceSchema>;
+
+/**
+ * What a reader takes a choice it cannot read as: one a newer writer made,
+ * a mark kind, mascot shape or colour past this protocol's own.
+ */
+export const BOT_APPEARANCE_UNRECOGNISED = "unrecognised";
+export const BOT_UNRECOGNISED_MARK = {
+  kind: BOT_APPEARANCE_UNRECOGNISED,
+} as const;
+
+/**
+ * A bot's look as it is read. A choice this protocol cannot read becomes
+ * {@link BOT_APPEARANCE_UNRECOGNISED} rather than failing the row, so a
+ * value a newer writer adds never blanks a list it rides in.
  */
 export const botAppearanceSchema = lazySchema(() =>
   z.object({
-    mark: botAppearanceMarkSchema.nullable(),
-    /** The swatch the icon draws on, by index. */
-    swatch: botSwatchIndexSchema.nullable(),
-    /** The swatch the channel's background is tinted with, by index. */
-    background: botSwatchIndexSchema.nullable(),
+    mark: z
+      .union([
+        botAppearanceMarkSchema,
+        z.object({ kind: z.literal(BOT_APPEARANCE_UNRECOGNISED) }),
+      ])
+      .nullable()
+      .catch(BOT_UNRECOGNISED_MARK),
+    color: z
+      .union([botColorIndexSchema, z.literal(BOT_APPEARANCE_UNRECOGNISED)])
+      .nullable()
+      .catch(BOT_APPEARANCE_UNRECOGNISED),
+    background: z
+      .union([botColorIndexSchema, z.literal(BOT_APPEARANCE_UNRECOGNISED)])
+      .nullable()
+      .catch(BOT_APPEARANCE_UNRECOGNISED),
   }),
 );
 export type BotAppearance = z.infer<typeof botAppearanceSchema>;
@@ -364,8 +405,8 @@ export const botUpdateAppearanceRequestSchema = lazySchema(() =>
   z.object({
     botId: botIdSchema,
     mark: botAppearanceMarkSchema.nullable().optional(),
-    swatch: botSwatchIndexSchema.nullable().optional(),
-    background: botSwatchIndexSchema.nullable().optional(),
+    color: botColorIndexSchema.nullable().optional(),
+    background: botColorIndexSchema.nullable().optional(),
   }),
 );
 export type BotUpdateAppearanceRequest = z.infer<

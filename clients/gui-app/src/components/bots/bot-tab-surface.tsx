@@ -1803,7 +1803,7 @@ function BotChannelHeader(props: {
       ref={setHeader}
       hidden={threadHasFocus}
       data-testid="bot-channel-header"
-      data-channel-background={background.swatch}
+      data-channel-background={background.index}
       style={{ "--channel-tint": background.color } as CSSProperties}
       className={cn(
         "flex shrink-0 flex-col gap-1 px-4",

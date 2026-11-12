@@ -15,6 +15,7 @@ import {
   providersListResponseSchemaV105Preimage,
   providersListResponseSchemaV106Preimage,
   providersListResponseSchemaV107Preimage,
+  providersListResponseSchemaV109Preimage,
   providersUsePackVersionResponseSchema,
 } from "@traycer/protocol/host/provider-schemas";
 
@@ -69,9 +70,10 @@ describe("providers.list@10.2 carries macosRequirement", () => {
   it("keeps list@10.2 registered after the next minor opens", () => {
     const entry = hostRpcRegistry["providers.list"][10];
     // 10.3 (MCP origin), 10.4 (open-chat plugins), 10.5 (the envelope keys),
-    // 10.6 (OpenCode's managed lines), 10.7 (`chatsFollow`) and
-    // 10.8 (native memory) and 10.9 (credential facts) opened above it.
-    expect(entry.latestMinor).toBe(9);
+    // 10.6 (OpenCode's managed lines), 10.7 (`chatsFollow`),
+    // 10.8 (native memory), 10.9 (credential facts) and
+    // 10.10 (hidden model providers) opened above it.
+    expect(entry.latestMinor).toBe(10);
     expect(entry.versions[2].contract.schemaVersion).toEqual({
       major: 10,
       minor: 2,
@@ -197,8 +199,16 @@ describe("providers.list@10.2 carries macosRequirement", () => {
     ).toMatchObject({
       responseSchema: providersListResponseSchemaV107Preimage,
     });
+    // 10.9 is a frozen line of its own since 10.10 opened above it: its row
+    // is the preimage without `hiddenModelProviders`, so a key added to the
+    // live row cannot widen it.
     expect(
       hostRpcRegistry["providers.list"][10].versions[9].contract,
+    ).toMatchObject({
+      responseSchema: providersListResponseSchemaV109Preimage,
+    });
+    expect(
+      hostRpcRegistry["providers.list"][10].versions[10].contract,
     ).toMatchObject({ responseSchema: providersListResponseSchema });
   });
 
