@@ -7,7 +7,7 @@ import {
   parseProfileArgument,
   parseProviderArgument,
   printable,
-  readProviderInventory,
+  readProviderStates,
 } from "../profile-target";
 
 vi.mock("../host-rpc", async () => {
@@ -113,8 +113,8 @@ describe("isAmbientProfileId", () => {
   });
 });
 
-describe("readProviderInventory", () => {
-  it("reads providers.list with no version floor and returns its envelope", async () => {
+describe("readProviderStates", () => {
+  it("reads providers.list with no version floor and returns the providers", async () => {
     const state = providerCliStateSchema.parse({
       providerId: "claude-code",
       enabled: true,
@@ -132,16 +132,11 @@ describe("readProviderInventory", () => {
       },
       profiles: [],
     });
-    const inventory = {
-      providers: [state],
-      native: null,
-      credentialsManagedInAccount: true,
-    };
-    dispatchMock.mockResolvedValue(inventory);
+    dispatchMock.mockResolvedValue({ providers: [state], native: null });
 
-    const result = await readProviderInventory();
+    const states = await readProviderStates();
 
-    expect(result).toEqual(inventory);
+    expect(states).toEqual([state]);
     expect(dispatchMock).toHaveBeenCalledTimes(1);
     expect(dispatchMock).toHaveBeenCalledWith(
       "providers.list",

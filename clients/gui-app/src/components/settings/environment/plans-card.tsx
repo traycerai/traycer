@@ -14,7 +14,8 @@ export interface ConfigurationPlan {
 export function PlansCard(props: {
   readonly teamName: string;
   readonly plans: readonly ConfigurationPlan[];
-  readonly canEdit: boolean;
+  readonly canAdminister: boolean;
+  readonly adminNames: readonly string[];
   readonly isPending: boolean;
   readonly onLink: () => void;
   readonly onPreviewUnlink: (plan: ConfigurationPlan) => void;
@@ -30,7 +31,7 @@ export function PlansCard(props: {
     <section className="flex flex-col gap-3" aria-label="Plans">
       <h2 className="text-ui-sm font-medium">Plans</h2>
       {selected === null ? (
-        <p className="text-ui-sm text-muted-foreground">No plans yet.</p>
+        <p className="text-ui-sm text-muted-foreground">No plans linked.</p>
       ) : (
         <LinkedPlanPicker
           plans={props.plans}
@@ -39,7 +40,7 @@ export function PlansCard(props: {
         />
       )}
       <PlanActionRow
-        canEdit={props.canEdit}
+        canAdminister={props.canAdminister}
         isPending={props.isPending}
         selected={selected}
         onLink={props.onLink}
@@ -48,9 +49,9 @@ export function PlansCard(props: {
       {quota === null ? null : (
         <p className="text-ui-xs text-muted-foreground">{quota}</p>
       )}
-      {!props.canEdit ? (
+      {!props.canAdminister ? (
         <p className="text-ui-xs text-muted-foreground">
-          Ask a teammate to sign in on Providers.
+          {askAnAdminLine(props.adminNames)}
         </p>
       ) : null}
     </section>
@@ -65,7 +66,7 @@ function LinkedPlanPicker(props: {
   return (
     <>
       <SettingsMasterSelect
-        label="Plan"
+        label="Linked plan"
         value={props.selected.id}
         options={props.plans.map((plan) => ({
           value: plan.id,
@@ -83,13 +84,13 @@ function LinkedPlanPicker(props: {
 }
 
 function PlanActionRow(props: {
-  readonly canEdit: boolean;
+  readonly canAdminister: boolean;
   readonly isPending: boolean;
   readonly selected: ConfigurationPlan | null;
   readonly onLink: () => void;
   readonly onPreviewUnlink: (plan: ConfigurationPlan) => void;
 }): ReactNode {
-  if (!props.canEdit) return null;
+  if (!props.canAdminister) return null;
   const selected = props.selected;
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -100,7 +101,7 @@ function PlanActionRow(props: {
         disabled={props.isPending}
         onClick={props.onLink}
       >
-        Sign in
+        Link a plan
       </Button>
       {selected === null ? null : (
         <Button
@@ -134,4 +135,18 @@ function planQuotaSentence(
 ): string | null {
   if (plan.status === "pending" || plan.status === "expired") return null;
   return `Shared ${plan.providerLabel} quota. Sandbox charges use ${teamName} credits.`;
+}
+
+/**
+ * What a reader who cannot link a plan is told: who to ask, two admins by
+ * name and the rest by count, so a long list stays one line.
+ */
+function askAnAdminLine(adminNames: readonly string[]): string {
+  const opening = "Only an admin can link a plan";
+  const [first, second] = adminNames;
+  if (adminNames.length === 0) return `${opening}.`;
+  if (adminNames.length === 1) return `${opening}: ask ${first}.`;
+  if (adminNames.length === 2) return `${opening}: ask ${first} or ${second}.`;
+  const others = adminNames.length - 2;
+  return `${opening}: ask ${first}, ${second} or ${others === 1 ? "1 other" : `${others} others`}.`;
 }

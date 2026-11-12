@@ -363,11 +363,7 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
       // queries intentionally disable TanStack retry, so the refresh loop must
       // complete in the transport layer.
       const messenger: IHostMessenger<Registry> = createRetryingMessenger(
-        createAuthAwareMessenger(rawMessenger, auth, (method) =>
-          method === "providers.link" || method === "providers.startLogin"
-            ? "before-request"
-            : "always",
-        ),
+        createAuthAwareMessenger(rawMessenger, auth, "always"),
         DEFAULT_TRANSPORT_RETRY_POLICY,
       );
 

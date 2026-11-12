@@ -82,7 +82,7 @@ vi.mock("@/components/settings/panels/provider-rate-limit-section", () => ({
   },
 }));
 
-const POOL: Extract<ConfigurationSource, { readonly kind: "pool" }> = {
+const POOL: ConfigurationSource = {
   kind: "pool",
   configuration: "team",
   environmentId: "env-a",
@@ -152,11 +152,9 @@ const linkedPlan: EnvironmentPlan = {
   linkedBy: { name: "Ada", you: false },
 };
 
-function renderFacts(canEdit: boolean): void {
+function renderFacts(): void {
   render(
-    <ConfigurationSourceContext.Provider
-      value={{ ...POOL, effectiveRole: canEdit ? "admin" : null }}
-    >
+    <ConfigurationSourceContext.Provider value={POOL}>
       <TeamProviderLiveFacts providerId="claude-code" />
     </ConfigurationSourceContext.Provider>,
   );
@@ -194,7 +192,7 @@ describe("TeamProviderLiveFacts", () => {
         "unauthenticated",
       ),
     ];
-    renderFacts(true);
+    renderFacts();
 
     expect(screen.getByTestId("limits-team-plan")).not.toBeNull();
     expect(reads.cards.at(-1)).toEqual({
@@ -209,25 +207,11 @@ describe("TeamProviderLiveFacts", () => {
     reads.providers = [
       claude([profile("ambient", "ambient", "authenticated")], "authenticated"),
     ];
-    renderFacts(true);
+    renderFacts();
 
     expect(reads.cards).toEqual([]);
     expect(screen.getByRole("status").textContent).toBe(
-      "Sign in to Acme to see its rate limits.",
-    );
-  });
-
-  it("asks a teammate to sign in when a non-editor has no linked team plan", () => {
-    reads.providers = [
-      claude([profile("ambient", "ambient", "authenticated")], "authenticated"),
-    ];
-    renderFacts(false);
-
-    expect(screen.getByRole("status").textContent).toBe(
-      "Ask a teammate to sign in on Providers.",
-    );
-    expect(screen.queryByText("Sign in to Acme to see its rate limits.")).toBe(
-      null,
+      "Link a plan to Acme to see its rate limits.",
     );
   });
 
@@ -245,7 +229,7 @@ describe("TeamProviderLiveFacts", () => {
         "authenticated",
       ),
     ];
-    renderFacts(true);
+    renderFacts();
 
     expect(reads.cards).toEqual([]);
     expect(screen.queryByRole("status")).toBeNull();
@@ -268,7 +252,7 @@ describe("TeamProviderLiveFacts", () => {
         },
       },
     ];
-    renderFacts(true);
+    renderFacts();
 
     expect(
       within(rateCard()).getByText(
@@ -285,7 +269,7 @@ describe("TeamProviderLiveFacts", () => {
         nextRunBinary: { kind: "bundled", path: null, version: null },
       },
     ];
-    renderFacts(true);
+    renderFacts();
 
     expect(
       within(rateCard()).getByText("Studio uses: Included agent."),
@@ -300,7 +284,7 @@ describe("TeamProviderLiveFacts", () => {
         nextRunBinary: null,
       },
     ];
-    renderFacts(true);
+    renderFacts();
 
     expect(screen.getByRole("heading", { name: "Rate limits" })).toBeTruthy();
     expect(screen.queryByText("Details")).toBeNull();
@@ -318,7 +302,7 @@ describe("TeamProviderLiveFacts", () => {
         },
       },
     ];
-    renderFacts(true);
+    renderFacts();
 
     expect(screen.getByRole("heading", { name: "Rate limits" })).toBeTruthy();
     expect(screen.queryByText("Details")).toBeNull();

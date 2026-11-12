@@ -86,21 +86,17 @@ export function hostRejectedBeforeRequest(error: unknown): boolean {
  * transport failure, and the retry's failure carries the earlier send the way
  * a retry episode's does. A first attempt that never left ends every exit as
  * the paragraph above says.
- *
- * A method-based scope is resolved once when each request starts, so its
- * recovery keeps the policy that admitted the first attempt.
  */
 export function createAuthAwareMessenger<Registry extends VersionedRpcRegistry>(
   inner: IHostMessenger<Registry>,
   auth: AuthorityBoundAuthRevalidator,
-  scope: AuthRecoveryScope | ((method: string) => AuthRecoveryScope),
+  scope: AuthRecoveryScope,
 ): IHostMessenger<Registry> {
   const runWithAuthRecovery = async <Response>(
     authority: HostRequestAuthority,
     method: string,
     call: () => Promise<Response>,
   ): Promise<Response> => {
-    const requestScope = typeof scope === "function" ? scope(method) : scope;
     try {
       return await call();
     } catch (cause) {
@@ -114,10 +110,7 @@ export function createAuthAwareMessenger<Registry extends VersionedRpcRegistry>(
       if (cause.fatalDetails?.retryable === true) {
         throw cause;
       }
-      if (
-        requestScope === "before-request" &&
-        !hostRejectedBeforeRequest(cause)
-      ) {
+      if (scope === "before-request" && !hostRejectedBeforeRequest(cause)) {
         throw cause;
       }
       // Every exit below that rethrows `cause` hands on this same object, so

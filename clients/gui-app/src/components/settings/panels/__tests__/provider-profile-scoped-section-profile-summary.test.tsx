@@ -1,5 +1,4 @@
 import type { CredentialStanding } from "@traycer/protocol/host/provider-credential-home-schemas";
-import type { ConnectionManifest } from "@traycer/protocol/framework/index";
 import type {
   ProviderCliState,
   ProviderProfile,
@@ -11,24 +10,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { tooltipTextFor } from "@/components/ui/__tests__/tooltip-probe";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
-import { PersonalPageContext } from "@/components/settings/personal/personal-page-context";
-import {
-  buildEnvironmentClient,
-  environmentStatusFixture,
-} from "@/lib/environment/__tests__/environment-test-support";
-import {
-  recordNegotiatedHostManifest,
-  resetNegotiatedManifests,
-} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import { useProviderLinkDialogStore } from "@/stores/providers/provider-link-dialog-store";
 
-// `ProfileEditDialog` and the refresh button pull in host hooks
-// unconditionally; mutations are mocked, while provider-list behavior uses a
-// fake HostClient when a case needs the real onHostOnly consumer.
-const clientMock = vi.hoisted((): { current: unknown } => ({ current: null }));
+// Same rationale as the sibling report-issue test: `ProfileEditDialog` and the
+// refresh button pull in mutation/host hooks unconditionally, so those are
+// mocked to keep this test scoped to a QueryClient, no bound host.
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
-  return { ...actual, useHostClient: () => clientMock.current };
+  return { ...actual, useHostClient: () => null };
 });
 // The stub above is not sufficient on its own: it replaces `@/lib/host`, but
 // the pinned-client chain also reads `useHostClient` from `@/lib/host/runtime`,
@@ -185,10 +173,7 @@ function profileWithStanding(
 }
 
 function renderProfile(profile: ProviderProfile) {
-  renderSection(
-    { state: { ...opencodeState(), profiles: [profile] } },
-    undefined,
-  );
+  renderSection({ state: { ...opencodeState(), profiles: [profile] } });
 }
 
 // The status badge's row and the cause line below it share one summary column.
@@ -196,51 +181,21 @@ function summaryColumn(badge: HTMLElement): HTMLElement | null {
   return badge.parentElement?.parentElement ?? null;
 }
 
-interface OnHostOnlyEntry {
-  readonly providerId: string;
-  readonly profileId: string;
-}
-
-interface HostOnlyRenderOptions {
-  readonly onHostOnly: readonly OnHostOnlyEntry[];
-  readonly hostName: string;
-  readonly manifest: ConnectionManifest | null;
-}
-
 function renderSection(
   overrides: Partial<Parameters<typeof ProviderProfileScopedSection>[0]>,
-  options: HostOnlyRenderOptions | undefined,
 ) {
-  const hostId = "host-profile-summary";
-  const client =
-    options === undefined
-      ? null
-      : buildEnvironmentClient({
-          hostId,
-          handlers: {
-            "providers.list": () => ({
-              providers: [],
-              native: null,
-              scope: "personal",
-              onHostOnly: [...options.onHostOnly],
-            }),
-          },
-        }).client;
-  clientMock.current = client;
-  if (options !== undefined && options.manifest !== null)
-    recordNegotiatedHostManifest(hostId, options.manifest);
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
       mutations: { retry: false },
     },
   });
-  const section = (
+  return render(
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <ProviderProfileScopedSection
           state={opencodeState()}
-          hostId={hostId}
+          hostId="host-1"
           isSelectedHostLocal
           canAddProfile
           credentialRefusal={null}
@@ -257,40 +212,18 @@ function renderSection(
           {...overrides}
         />
       </TooltipProvider>
-    </QueryClientProvider>
-  );
-  if (options === undefined) return render(section);
-  return render(
-    <PersonalPageContext.Provider
-      value={{
-        section: "providers",
-        pick: { kind: "personal" },
-        state: { kind: "ready", status: environmentStatusFixture({}) },
-        line: null,
-        hostName: options.hostName,
-        localOverrides: [],
-        hostId,
-        client,
-        notices: [],
-        review: [],
-      }}
-    >
-      {section}
-    </PersonalPageContext.Provider>,
+    </QueryClientProvider>,
   );
 }
 
-describe("<ProviderProfileScopedSection /> profile summary", () => {
+describe("<ProviderProfileScopedSection /> profile summary email reveal", () => {
   afterEach(() => {
     cleanup();
-    clientMock.current = null;
-    resetNegotiatedManifests();
-    useProviderLinkDialogStore.setState({ target: null });
     useSettingsEnvironmentPickStore.setState({ pick: null });
   });
 
   it("does not leak the raw email through the tooltip while redacted", () => {
-    renderSection({}, undefined);
+    renderSection({});
 
     // The visible text is redacted...
     expect(screen.queryByText(RAW_EMAIL)).toBeNull();
@@ -301,7 +234,7 @@ describe("<ProviderProfileScopedSection /> profile summary", () => {
   });
 
   it("reveals the raw email in the truncated address and its tooltip", () => {
-    renderSection({}, undefined);
+    renderSection({});
 
     const reveal = screen.getByRole("button", { name: /^Reveal email for / });
     expect(reveal.hasAttribute("aria-pressed")).toBe(false);
@@ -329,20 +262,17 @@ describe("<ProviderProfileScopedSection /> profile summary", () => {
 
   it("truncates the address and the plan chip, and badges a usable row Signed in", () => {
     const profile = managedProfile();
-    renderSection(
-      {
-        state: {
-          ...opencodeState(),
-          profiles: [
-            {
-              ...profile,
-              identity: { email: RAW_EMAIL, tier: "Team", accountUuid: null },
-            },
-          ],
-        },
+    renderSection({
+      state: {
+        ...opencodeState(),
+        profiles: [
+          {
+            ...profile,
+            identity: { email: RAW_EMAIL, tier: "Team", accountUuid: null },
+          },
+        ],
       },
-      undefined,
-    );
+    });
 
     const actions = document.querySelector(
       '[data-slot="profile-summary-actions"]',
@@ -372,26 +302,23 @@ describe("<ProviderProfileScopedSection /> profile summary", () => {
   it("badges Signed out and offers Sign in only when the profile is unauthenticated", async () => {
     const profile = managedProfile();
     const onAddProfile = vi.fn();
-    renderSection(
-      {
-        onAddProfile,
-        state: {
-          ...opencodeState(),
-          profiles: [
-            {
-              ...profile,
-              auth: {
-                status: "unauthenticated",
-                badgeText: null,
-                label: null,
-                detail: null,
-              },
+    renderSection({
+      onAddProfile,
+      state: {
+        ...opencodeState(),
+        profiles: [
+          {
+            ...profile,
+            auth: {
+              status: "unauthenticated",
+              badgeText: null,
+              label: null,
+              detail: null,
             },
-          ],
-        },
+          },
+        ],
       },
-      undefined,
-    );
+    });
 
     const standing = screen.getByText("Signed out");
     expect(standing.getAttribute("data-slot")).toBe("badge");
@@ -416,241 +343,8 @@ describe("<ProviderProfileScopedSection /> profile summary", () => {
   });
 
   it("does not put Details on the selected profile row", () => {
-    renderSection({}, undefined);
+    renderSection({});
     expect(screen.queryByRole("button", { name: "Details" })).toBeNull();
-  });
-
-  it.each(["claude-code", "codex"] as const)(
-    "shows a local-only marker without a new sign-in action for a healthy %s profile",
-    async (providerId) => {
-      renderSection(
-        {
-          state: { ...opencodeState(), providerId },
-        },
-        {
-          onHostOnly: [{ providerId, profileId: "profile-managed" }],
-          hostName: "dev-box",
-          manifest: {
-            "providers.list": { major: 10, minor: 9 },
-            "providers.link": { major: 1, minor: 2 },
-            "providers.linkComplete": { major: 1, minor: 2 },
-          },
-        },
-      );
-
-      expect(await screen.findByText("On dev-box only.")).toBeTruthy();
-      expect(screen.queryByRole("button", { name: "Link" })).toBeNull();
-      expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
-    },
-  );
-
-  it.each([
-    ["claude-code", 0, 2],
-    ["claude-code", 2, 0],
-    ["codex", 0, 2],
-    ["codex", 2, 0],
-  ] as const)(
-    "restores Link for %s with providers.link 1.%s and linkComplete 1.%s",
-    async (providerId, linkMinor, completeMinor) => {
-      recordNegotiatedHostManifest("other-host", {
-        "providers.link": { major: 1, minor: 3 },
-      });
-      renderSection(
-        { state: { ...opencodeState(), providerId } },
-        {
-          onHostOnly: [{ providerId, profileId: "profile-managed" }],
-          hostName: "dev-box",
-          manifest: {
-            "providers.list": { major: 10, minor: 9 },
-            "providers.link": { major: 1, minor: linkMinor },
-            "providers.linkComplete": { major: 1, minor: completeMinor },
-          },
-        },
-      );
-
-      expect(await screen.findByText("On dev-box only.")).toBeTruthy();
-      await userEvent.click(screen.getByRole("button", { name: "Link" }));
-      expect(useProviderLinkDialogStore.getState().target).toEqual({
-        providerId,
-        profileId: "profile-managed",
-      });
-    },
-  );
-
-  it.each([
-    ["claude-code", 2],
-    ["claude-code", 3],
-    ["codex", 2],
-    ["codex", 3],
-  ] as const)(
-    "keeps Link hidden for %s when both environment RPCs negotiate 1.%s",
-    async (providerId, minor) => {
-      renderSection(
-        { state: { ...opencodeState(), providerId } },
-        {
-          onHostOnly: [{ providerId, profileId: "profile-managed" }],
-          hostName: "dev-box",
-          manifest: {
-            "providers.list": { major: 10, minor: 9 },
-            "providers.link": { major: 1, minor },
-            "providers.linkComplete": { major: 1, minor },
-          },
-        },
-      );
-
-      expect(await screen.findByText("On dev-box only.")).toBeTruthy();
-      expect(screen.queryByRole("button", { name: "Link" })).toBeNull();
-      expect(useProviderLinkDialogStore.getState().target).toBeNull();
-    },
-  );
-
-  it("keeps Link hidden when providers.linkComplete is known absent", async () => {
-    renderSection(
-      { state: { ...opencodeState(), providerId: "claude-code" } },
-      {
-        onHostOnly: [
-          { providerId: "claude-code", profileId: "profile-managed" },
-        ],
-        hostName: "dev-box",
-        manifest: {
-          "providers.list": { major: 10, minor: 9 },
-          "providers.link": { major: 1, minor: 2 },
-        },
-      },
-    );
-
-    expect(await screen.findByText("On dev-box only.")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Link" })).toBeNull();
-    expect(useProviderLinkDialogStore.getState().target).toBeNull();
-  });
-
-  it("keeps Link hidden before this host has published a manifest", async () => {
-    renderSection(
-      { state: { ...opencodeState(), providerId: "claude-code" } },
-      {
-        onHostOnly: [
-          { providerId: "claude-code", profileId: "profile-managed" },
-        ],
-        hostName: "dev-box",
-        manifest: null,
-      },
-    );
-
-    expect(await screen.findByText("On dev-box only.")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Link" })).toBeNull();
-    expect(useProviderLinkDialogStore.getState().target).toBeNull();
-  });
-
-  it("keeps Link hidden when a required method negotiates a different major", async () => {
-    renderSection(
-      { state: { ...opencodeState(), providerId: "claude-code" } },
-      {
-        onHostOnly: [
-          { providerId: "claude-code", profileId: "profile-managed" },
-        ],
-        hostName: "dev-box",
-        manifest: {
-          "providers.list": { major: 10, minor: 9 },
-          "providers.link": { major: 1, minor: 2 },
-          "providers.linkComplete": { major: 2, minor: 0 },
-        },
-      },
-    );
-
-    expect(await screen.findByText("On dev-box only.")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Link" })).toBeNull();
-    expect(useProviderLinkDialogStore.getState().target).toBeNull();
-  });
-
-  it.each(["claude-code", "codex"] as const)(
-    "keeps Sign in for a signed-out local-only %s profile",
-    async (providerId) => {
-      renderSection(
-        {
-          state: {
-            ...opencodeState(),
-            providerId,
-            profiles: [
-              {
-                ...managedProfile(),
-                auth: {
-                  status: "unauthenticated",
-                  badgeText: null,
-                  label: null,
-                  detail: null,
-                },
-              },
-            ],
-          },
-        },
-        {
-          onHostOnly: [{ providerId, profileId: "profile-managed" }],
-          hostName: "dev-box",
-          manifest: {
-            "providers.list": { major: 10, minor: 9 },
-            "providers.link": { major: 1, minor: 2 },
-            "providers.linkComplete": { major: 1, minor: 2 },
-          },
-        },
-      );
-
-      expect(await screen.findByText("On dev-box only.")).toBeTruthy();
-      expect(screen.queryByRole("button", { name: "Link" })).toBeNull();
-      await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
-      expect(
-        screen.getByRole("dialog", { name: "Sign in editor" }),
-      ).toBeTruthy();
-    },
-  );
-
-  it("does not show the local-only marker or Link for an ambient Claude profile named by a stale host list", async () => {
-    renderSection(
-      {
-        state: {
-          ...opencodeState(),
-          providerId: "claude-code",
-          profiles: [
-            {
-              ...managedProfile(),
-              profileId: "ambient",
-              kind: "ambient",
-              label: "Terminal account",
-            },
-          ],
-        },
-        selectedProfileId: null,
-      },
-      {
-        onHostOnly: [{ providerId: "claude-code", profileId: "ambient" }],
-        hostName: "dev-box",
-        manifest: {
-          "providers.list": { major: 10, minor: 9 },
-          "providers.link": { major: 1, minor: 1 },
-          "providers.linkComplete": { major: 1, minor: 1 },
-        },
-      },
-    );
-
-    await screen.findByText("Signed in");
-    expect(screen.queryByTestId("profile-on-host-only")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Link" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
-  });
-
-  it("uses the plain local-only marker when neither environment Link method was negotiated", async () => {
-    renderSection(
-      {},
-      {
-        onHostOnly: [{ providerId: "opencode", profileId: "profile-managed" }],
-        hostName: "dev-box",
-        manifest: {
-          "providers.list": { major: 10, minor: 9 },
-        },
-      },
-    );
-
-    expect(await screen.findByText("On dev-box only.")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Link" })).toBeNull();
   });
 
   it("badges an ambient row Signed out when the provider is unauthenticated", async () => {
@@ -660,30 +354,27 @@ describe("<ProviderProfileScopedSection /> profile summary", () => {
       label: null,
       detail: null,
     };
-    renderSection(
-      {
-        selectedProfileId: null,
-        state: {
-          ...opencodeState(),
-          auth: unauthenticated,
-          profiles: [
-            {
-              ...managedProfile(),
-              profileId: "ambient",
-              kind: "ambient",
-              label: "Terminal account",
-              auth: {
-                status: "authenticated",
-                badgeText: null,
-                label: null,
-                detail: null,
-              },
+    renderSection({
+      selectedProfileId: null,
+      state: {
+        ...opencodeState(),
+        auth: unauthenticated,
+        profiles: [
+          {
+            ...managedProfile(),
+            profileId: "ambient",
+            kind: "ambient",
+            label: "Terminal account",
+            auth: {
+              status: "authenticated",
+              badgeText: null,
+              label: null,
+              detail: null,
             },
-          ],
-        },
+          },
+        ],
       },
-      undefined,
-    );
+    });
 
     const badge = screen.getByText("Signed out");
     expect(badge.getAttribute("data-slot")).toBe("badge");
@@ -703,15 +394,12 @@ describe("<ProviderProfileScopedSection /> profile summary", () => {
       label: null,
       detail: null,
     };
-    renderSection(
-      {
-        state: {
-          ...opencodeState(),
-          auth: unauthenticated,
-        },
+    renderSection({
+      state: {
+        ...opencodeState(),
+        auth: unauthenticated,
       },
-      undefined,
-    );
+    });
 
     const badge = screen.getByText("Signed in");
     expect(badge.getAttribute("data-slot")).toBe("badge");

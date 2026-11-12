@@ -8,9 +8,9 @@ import {
   LINK_FAILED,
   LINK_INTRO,
   LINK_NO_SIGN_IN,
-  LINK_OUTCOME_UNKNOWN,
   LINK_PASTE_WHOLE_CODE,
   LINK_UNAVAILABLE,
+  linkedLine,
   mismatchLine,
   onHostOnlyLine,
   stateOfLinkComplete,
@@ -51,27 +51,22 @@ const SIGN_IN: LinkDialogState = {
   codePrompt: "Code",
   note: null,
 };
-const INSTALLING_PROMPTS: LinkDialogState[] = [
-  SIGN_IN,
-  {
-    kind: "device",
-    linkId: "link-2",
-    verificationUrl: "https://auth.example.test/device",
-    userCode: "ABCD-1234",
-  },
-  { kind: "linking", linkId: "link-3" },
-];
 
 describe("the exact copy", () => {
   it("states the intro, the unavailable line and the per-host lines word for word", () => {
     expect(LINK_INTRO).toBe(
       "This signs Traycer in to your plan once. It will be offered on every host and sandbox you use; it counts as a device on your plan.",
     );
-    expect(LINK_UNAVAILABLE).toBe("Connect to Traycer to sign in.");
+    expect(LINK_UNAVAILABLE).toBe("Connect to Traycer to link this profile.");
     expect(onHostOnlyLine("Studio")).toBe("On Studio only.");
     expect(mismatchLine("a@x.test", "b@x.test")).toBe(
       "You signed in as a@x.test, not b@x.test.",
     );
+  });
+
+  it("names the account on a linked line only when it is known", () => {
+    expect(linkedLine("a@x.test")).toBe("Linked as a@x.test.");
+    expect(linkedLine(null)).toBe("Linked.");
   });
 
   it("falls back to a generic mismatch line when either account is unknown", () => {
@@ -219,34 +214,13 @@ describe("stateOfLinkComplete", () => {
     });
   });
 
-  it("maps expiry and an unavailable completion to unknown", () => {
+  it("maps expired and unavailable", () => {
     expect(
       stateOfLinkComplete(SIGN_IN, completeResponse({ state: "expired" })),
     ).toStrictEqual({ kind: "expired" });
     expect(
       stateOfLinkComplete(SIGN_IN, completeResponse({ state: "unavailable" })),
-    ).toStrictEqual({ kind: "failed", line: LINK_OUTCOME_UNKNOWN });
-  });
-
-  it.each(INSTALLING_PROMPTS)(
-    "treats installation as linked from a $kind prompt",
-    (current) => {
-      expect(
-        stateOfLinkComplete(current, completeResponse({ state: "installing" })),
-      ).toStrictEqual({ kind: "linked", account: null });
-    },
-  );
-
-  it("keeps pending prompts and an already linked result unchanged", () => {
-    const linking: LinkDialogState = { kind: "linking", linkId: "link-3" };
-    const linked: LinkDialogState = { kind: "linked", account: null };
-
-    expect(
-      stateOfLinkComplete(linking, completeResponse({ state: "pending" })),
-    ).toBe(linking);
-    expect(
-      stateOfLinkComplete(linked, completeResponse({ state: "installing" })),
-    ).toBe(linked);
+    ).toStrictEqual({ kind: "unavailable" });
   });
 
   it("explains no_sign_in on a failed link", () => {
