@@ -941,6 +941,11 @@ export function sandboxFailedToStart(failureCode: string | null): string {
 
 const CREATE_FAILURE_REASONS: ReadonlyMap<string, string> = new Map([
   ["boot-timeout", "The sandbox took too long to start."],
+  ["wake-timeout", "The sandbox took too long to start."],
+  ["wake-window-spent", "The sandbox took too long to start."],
+  ["wake-prepare", "The sandbox couldn't finish setting up."],
+  ["envelope-delivery", "The sandbox couldn't receive its settings."],
+  ["chat-store-newer", "The sandbox needs an update to open its saved chats."],
   ["boot-token-mint", "The sandbox couldn't sign in to Traycer."],
   ["boot-token-delivery", "The sandbox couldn't sign in to Traycer."],
   ["grant_set_failed", "The sandbox couldn't get access to its settings."],

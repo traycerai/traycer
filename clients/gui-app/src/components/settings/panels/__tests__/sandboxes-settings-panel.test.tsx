@@ -42,6 +42,7 @@ import {
   type FakeSandboxBinding,
 } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
 import { sandboxHostEntry } from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
+import { SANDBOX_FIRST_BOOT_FAILURE_COPIES } from "@/lib/sandboxes/__tests__/sandbox-first-boot-failure-copies";
 import {
   authQueryKeys,
   sandboxMutationKeys,
@@ -704,7 +705,7 @@ describe("<SandboxesSettingsPanel />", () => {
         "Idle · 30 minutes",
       );
       expect(screen.getByTestId("sandboxes-defaults-resting").textContent).toBe(
-        "Destruction · removed after 7 days idle",
+        "Destruction · removed after 7 days suspended or stopped",
       );
     });
 
@@ -719,6 +720,11 @@ describe("<SandboxesSettingsPanel />", () => {
       expect(await screen.findByTestId("sandboxes-defaults-form")).toBeTruthy();
       expect(
         screen.getByRole("button", { name: "Save defaults" }),
+      ).toBeTruthy();
+      expect(
+        screen.getByText(
+          "Destroy after suspended or stopped for (empty: never)",
+        ),
       ).toBeTruthy();
       expect(
         screen.getByTestId("sandboxes-defaults-idle-input"),
@@ -905,6 +911,20 @@ describe("<SandboxesSettingsPanel />", () => {
       expect(
         screen.getByRole("button", { name: "Save defaults" }),
       ).toHaveProperty("disabled", true);
+    });
+
+    it("names the suspended or stopped clock in a validation problem", async () => {
+      viewTeamAs("editor", { cpus: 8, memoryMb: 16_384, idleMinutes: 90 });
+      renderPanel([]);
+
+      const resting = await screen.findByTestId(
+        "sandboxes-defaults-resting-input",
+      );
+      fireEvent.change(resting, { target: { value: "1.5" } });
+
+      expect(screen.getByTestId("sandboxes-defaults-problem").textContent).toBe(
+        '"Destroy after suspended or stopped for" must be a whole number, or empty.',
+      );
     });
 
     it("says another member changed the defaults when the save conflicts, after the reread", async () => {
@@ -1195,6 +1215,22 @@ describe("<SandboxesSettingsPanel />", () => {
       failed.queryByRole("button", { name: "More actions for build-box" }),
     ).toBeNull();
   });
+
+  it.each(SANDBOX_FIRST_BOOT_FAILURE_COPIES)(
+    "shows the %s failure reason on the failed row",
+    (stage, explanation) => {
+      const failed = row("first-boot", {
+        state: "failed",
+        failureCode: `${stage}:failure-detail`,
+        lastTransitionAt: new Date(2026, 9, 25, 11, 1).getTime(),
+      });
+      renderPanel([failed]);
+
+      const clock = within(rowOf(failed.id)).getByTestId("sandboxes-row-clock");
+      expect(clock.textContent).toContain(explanation);
+      expect(clock.textContent).not.toContain(stage);
+    },
+  );
 
   it("offers an awake agent sandbox Keep instead of Suspend", () => {
     renderPanel([row("agent-1", { state: "awake", burst: true })]);

@@ -273,7 +273,9 @@ describe("sandboxStateLine", () => {
         "failed",
         summaryOf({ failureCode: "chat-store-newer" }),
       ),
-    ).toBe("Failed to start · SBX-0430.");
+    ).toBe(
+      "Failed to start · The sandbox needs an update to open its saved chats. · SBX-0430.",
+    );
   });
 
   it("says just Sandbox for a state it does not know", () => {

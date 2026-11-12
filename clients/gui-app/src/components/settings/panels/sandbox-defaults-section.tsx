@@ -313,7 +313,7 @@ function defaultsFacts(
     destruction:
       resting === null || resting === 0
         ? KEPT_UNTIL_YOU_DESTROY_IT
-        : `removed after ${sandboxPeriodLabel(resting)} idle`,
+        : `removed after ${sandboxPeriodLabel(resting)} suspended or stopped`,
   };
 }
 
@@ -382,7 +382,8 @@ function defaultsOfForm(
   const restingMinutes = periodMinutes(resting);
   if (restingMinutes !== null && Number.isNaN(restingMinutes)) {
     return {
-      problem: '"Destroy after idle for" must be a whole number, or empty.',
+      problem:
+        '"Destroy after suspended or stopped for" must be a whole number, or empty.',
     };
   }
   const defaults = stageShapeDefaults(catalogue, {
@@ -462,7 +463,7 @@ function SandboxDefaultsForm(props: {
         />
         <PeriodInput
           id={`${ids}-resting`}
-          label="Destroy after idle for (empty: never)"
+          label="Destroy after suspended or stopped for (empty: never)"
           placeholder="Never"
           field={resting}
           testId="sandboxes-defaults-resting-input"
