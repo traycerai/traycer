@@ -142,6 +142,20 @@ describe("sandboxFailureMessage", () => {
     ).toBe("That size is outside what's offered.");
   });
 
+  it("gives the two recognized 403 refusals their permission and owner remedies", () => {
+    expect(
+      sandboxFailureMessage(refused("pod_add_admin_only", NO_DETAIL)),
+    ).toBe("Only a team admin can add an Automations sandbox for this team.");
+    expect(
+      sandboxCreateFailureMessage(
+        refused("create_principal_mismatch", NO_DETAIL),
+        null,
+      ),
+    ).toBe(
+      "This sandbox can't be created for the selected owner. Choose another owner and try again.",
+    );
+  });
+
   it("words a plan too small to run a sandbox", () => {
     expect(
       sandboxFailureMessage(

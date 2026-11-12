@@ -1181,7 +1181,7 @@ describe("<SandboxesSettingsPanel />", () => {
 
     const failed = within(rowOf("build-box"));
     expect(failed.getByTestId("sandboxes-row-clock").textContent).toBe(
-      "Couldn't start at 11:01 · SBX-0412",
+      "Couldn't start at 11:01 · The sandbox service couldn't start it. · SBX-0412",
     );
     expect(
       failed.getByRole("button", { name: "Retry" }).hasAttribute("disabled"),
@@ -1746,8 +1746,9 @@ describe("<SandboxesSettingsPanel />", () => {
         hidden: true,
       });
       expect(failed.textContent).toContain(
-        "Couldn't destroy idle-b · SBX-0413",
+        "Couldn't destroy idle-b. Traycer refused that request.",
       );
+      expect(failed.textContent).toContain("Support reference: SBX-0413");
       expect(
         within(failed).getByRole("button", { name: "Retry", hidden: true }),
       ).toBeTruthy();

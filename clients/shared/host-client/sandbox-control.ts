@@ -291,10 +291,18 @@ function neverCompleted(error: unknown): RawCall {
 
 /** Classifies a non-2xx answer. */
 function failureOf(status: number, body: unknown): SandboxControlFailure {
-  if (status === 401 || status === 403) {
+  if (status === 401) {
     return { kind: "unauthorized" };
   }
   const refusal = sandboxRefusalBodySchema.safeParse(body);
+  if (
+    status === 403 &&
+    (!refusal.success ||
+      (refusal.data.code !== "pod_add_admin_only" &&
+        refusal.data.code !== "create_principal_mismatch"))
+  ) {
+    return { kind: "unauthorized" };
+  }
   if (refusal.success) {
     return {
       kind: "refused",

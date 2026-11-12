@@ -720,8 +720,7 @@ export function sandboxRetentionIsWithdrawn(summary: SandboxSummary): boolean {
 /**
  * What this row does when it goes idle, and what decides how long it is then
  * kept: `destroys itself after 30 idle minutes · files on it are lost then`
- * for a burst row, `Suspends after 30 idle min · destroyed after 7 resting
- * days` for an ordinary one, and the idle clause alone for a withdrawn row,
+ * for a burst row, `Suspends after 30 idle min · destroyed after 7 days suspended or stopped` for an ordinary one, and the idle clause alone for a withdrawn row,
  * where that is decided by its own `destroyAt` if it has one and by the
  * announced date otherwise, never by its resting policy.
  *
@@ -802,6 +801,7 @@ export function sandboxClockLine(input: SandboxClockInput): string {
     case "failed":
       return joinParts(
         `Couldn't start at ${formatSandboxTime(summary.lastTransitionAt)}`,
+        sandboxCreateFailureReason(summary.failureCode),
         sandboxSupportReference(summary.failureCode),
       );
     case "creating":
@@ -925,21 +925,39 @@ function stoppedLead(
 export function sandboxFailedChatLine(summary: SandboxSummary): string {
   return joinParts(
     `Couldn't start ${summary.displayName} at ${formatSandboxTime(summary.lastTransitionAt)}`,
+    sandboxCreateFailureReason(summary.failureCode),
     sandboxSupportReference(summary.failureCode),
   );
 }
 
-/**
- * `Failed to start (SBX-0412)`, by the failure's support reference; with no
- * reference, `Failed to start` alone. Never the raw code.
- */
+/** The known create failure category, with its support reference secondary. */
 export function sandboxFailedToStart(failureCode: string | null): string {
-  return `Failed to start${referenceSuffix(failureCode)}`;
+  return joinParts(
+    "Failed to start",
+    sandboxCreateFailureReason(failureCode),
+    sandboxSupportReference(failureCode),
+  );
 }
 
-function referenceSuffix(failureCode: string | null): string {
-  const reference = sandboxSupportReference(failureCode);
-  return reference === null ? "" : ` (${reference})`;
+const CREATE_FAILURE_REASONS: ReadonlyMap<string, string> = new Map([
+  ["boot-timeout", "The sandbox took too long to start."],
+  ["boot-token-mint", "The sandbox couldn't sign in to Traycer."],
+  ["boot-token-delivery", "The sandbox couldn't sign in to Traycer."],
+  ["grant_set_failed", "The sandbox couldn't get access to its settings."],
+  [
+    "environment_placement_failed",
+    "The sandbox couldn't join the selected environment.",
+  ],
+  ["provider-unavailable", "Sandboxes aren't available right now."],
+  ["provider-pending", "The sandbox service hasn't finished starting it."],
+  ["create", "The sandbox service couldn't start it."],
+  ["provider-error", "The sandbox service couldn't start it."],
+]);
+
+function sandboxCreateFailureReason(failureCode: string | null): string | null {
+  if (failureCode === null) return null;
+  const stage = failureCode.split(":", 1)[0];
+  return CREATE_FAILURE_REASONS.get(stage) ?? null;
 }
 
 /**

@@ -497,7 +497,9 @@ describe("sandboxClockLine", () => {
         reachability: { unreachable: false, lastContactAt: null },
         now: NOW,
       }),
-    ).toBe("Couldn't start at 11:01 · SBX-0412");
+    ).toBe(
+      "Couldn't start at 11:01 · The sandbox service couldn't start it. · SBX-0412",
+    );
   });
 
   it("copies the support reference with the sandbox id, or the id alone with none", () => {
@@ -732,7 +734,7 @@ describe("sandboxIdlePolicyLine", () => {
         }),
       ),
     ).toBe(
-      `Suspends after ${SANDBOX_DEFAULT_IDLE_MINUTES} idle min · destroyed after 7 idle days`,
+      `Suspends after ${SANDBOX_DEFAULT_IDLE_MINUTES} idle min · destroyed after 7 days suspended or stopped`,
     );
   });
 });

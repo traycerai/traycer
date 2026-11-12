@@ -142,13 +142,14 @@ function storageCredits(
 
 /**
  * The sessions count line with its pills, the named sessions (the host's
- * own list while live, else the ones this window knows of), and the caption, inside every confirmation that interrupts
- * something. Destroy says the count in its sentence (`countLine: false`). A
+ * own list while live, else the ones this window knows of), and the action's
+ * caption. Destroy says the count in its sentence (`countLine: false`). A
  * named session's link closes the dialog it opens from.
  */
 export function SandboxSessionsBlock(props: {
   readonly report: SandboxSessionReport;
   readonly countLine: boolean;
+  readonly caption: string;
   readonly hostId: string;
   readonly onNavigate: () => void;
 }): ReactNode {
@@ -186,9 +187,7 @@ export function SandboxSessionsBlock(props: {
           onNavigate={props.onNavigate}
         />
       )}
-      <p className="text-ui-xs text-muted-foreground">
-        {SANDBOX_SESSIONS_CAPTION}
-      </p>
+      <p className="text-ui-xs text-muted-foreground">{props.caption}</p>
     </div>
   );
 }
@@ -227,6 +226,7 @@ function VerbConfirmDialog(
         </DialogHeader>
         <SandboxSessionsBlock
           report={report}
+          caption="Known running agents and Task terminals. Other sessions may also keep this sandbox awake."
           countLine
           hostId={props.sandbox.hostId}
           onNavigate={() => props.onOpenChange(false)}
@@ -284,7 +284,7 @@ export function SandboxSuspendDialog(props: SandboxDialogProps): ReactNode {
     : `Storage uses ${storageCredits(props.sandbox, configuration, viewerUserId)}.`;
   const outcome = [
     wake === null ? null : `${wake}.`,
-    "Agent turns in progress are interrupted and continue from the transcript on resume; a coding CLI signed in on its own is signed out before the pause.",
+    "Finish or stop running agent turns and shells before suspending.",
     storage,
   ]
     .filter((part): part is string => part !== null)
@@ -317,7 +317,7 @@ export function SandboxStopDialog(props: SandboxDialogProps): ReactNode {
       verb="stop"
       title={`Stop ${props.sandbox.displayName}?`}
       outcome={[
-        "Stop ends every process; Start is a cold boot and only shells marked relaunch come back.",
+        "Finish or stop running agent turns and shells before stopping. Start boots the sandbox again.",
         `The disk is kept at the lower storage rate on ${storageCredits(props.sandbox, configuration, viewerUserId)}.`,
         destroyed,
       ]
@@ -381,6 +381,7 @@ export function SandboxDestroyDialog(
       {runsNothing ? null : (
         <SandboxSessionsBlock
           report={report}
+          caption={SANDBOX_SESSIONS_CAPTION}
           countLine={false}
           hostId={props.sandbox.hostId}
           onNavigate={() => props.onOpenChange(false)}
@@ -823,12 +824,10 @@ function IdleSettingsForm(props: {
       />
       <p className="text-ui-xs text-muted-foreground">
         Idle means no agent turn in progress, no running shell and no browser
-        tab on screen. Agent turns in progress are interrupted and continue from
-        the transcript on resume; a coding CLI signed in on its own is signed
-        out before the pause.
+        tab on screen.
       </p>
       <SandboxPeriodField
-        label="Destroy after idle for (empty: never)"
+        label="Destroy after suspended or stopped for (empty: never)"
         draft={resting}
         placeholder="never"
         disabled={props.pending}
@@ -1036,6 +1035,7 @@ function SandboxBatchDestroyConfirmationTarget(props: {
       <p className="px-5 pb-2 text-ui-sm font-medium">{sandbox.displayName}</p>
       <SandboxSessionsBlock
         report={report}
+        caption={SANDBOX_SESSIONS_CAPTION}
         countLine
         hostId={sandbox.hostId}
         onNavigate={props.onNavigate}
