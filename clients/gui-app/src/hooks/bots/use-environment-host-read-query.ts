@@ -23,6 +23,13 @@ import {
 } from "@/hooks/bots/use-host-environment-bindings-query";
 
 const EMPTY_PARAMS = {};
+/**
+ * The host's status gates the binding read, and this read turns on only
+ * after a caller has read that status itself (the Overview, the sign-in
+ * dialogs). So it takes the entry that read just filled instead of asking
+ * the host again; a move invalidates the entry either way.
+ */
+const STATUS_STALE_MS = 5 * 60_000;
 
 /**
  * Where a host is placed, as the binding read answers it:
@@ -134,6 +141,7 @@ function useHostStatusAnswer(
     options: {
       enabled: enabled && supported === true,
       refetchOnWindowFocus: false,
+      staleTime: STATUS_STALE_MS,
     },
   });
   return hostStatusAnswer(status, client !== null && supported !== false);
