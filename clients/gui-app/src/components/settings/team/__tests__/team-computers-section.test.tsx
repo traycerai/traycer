@@ -108,7 +108,10 @@ function sourceFor(
   };
 }
 
-function environment(environmentId: string): EnvironmentDescriptorV11 {
+function environment(
+  environmentId: string,
+  providerHandle: string | null = `handle-${environmentId}`,
+): EnvironmentDescriptorV11 {
   return {
     environmentId,
     ownerKind: "organization",
@@ -118,7 +121,7 @@ function environment(environmentId: string): EnvironmentDescriptorV11 {
     effectiveRole: "editor",
     kind: "team",
     hostCount: 2,
-    providerHandle: `handle-${environmentId}`,
+    providerHandle,
   };
 }
 
@@ -144,11 +147,12 @@ function sectionTree(
 function mountSection(
   environmentId: string,
   effectiveRole: "owner" | "admin" | "editor" | null,
+  providerHandle: string | null = `handle-${environmentId}`,
 ) {
   const harness = mountTeamPage(sourceFor(environmentId, effectiveRole), {
     "environment.list": () => ({
       environments: [
-        environment(ENVIRONMENT_ID),
+        environment(ENVIRONMENT_ID, providerHandle),
         environment(OTHER_ENVIRONMENT_ID),
       ],
     }),
@@ -213,6 +217,31 @@ afterEach(() => {
 });
 
 describe("TeamComputersSection", () => {
+  it("prints install and use commands with the team's provider handle", async () => {
+    mountSection(ENVIRONMENT_ID, "owner");
+    const user = userEvent.setup();
+
+    await user.click(
+      await screen.findByRole("button", { name: "Add a computer" }),
+    );
+
+    expect(screen.getByTestId("team-computers-add-command").textContent).toBe(
+      "traycer host install --team handle-env-a",
+    );
+    expect(screen.getByText(/Already installed\? Run/).textContent).toContain(
+      "traycer host use handle-env-a",
+    );
+  });
+
+  it("does not offer a command when the team has no provider handle", async () => {
+    mountSection(ENVIRONMENT_ID, "owner", null);
+
+    await waitFor(() =>
+      expect(listTeamComputers).toHaveBeenCalledWith(ENVIRONMENT_ID),
+    );
+    expect(screen.queryByRole("button", { name: "Add a computer" })).toBeNull();
+  });
+
   it("does not choose a bot host when no computer holds the bot slot", async () => {
     listTeamComputers.mockResolvedValue({
       kind: "ok",

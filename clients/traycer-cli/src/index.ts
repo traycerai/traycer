@@ -1495,8 +1495,8 @@ function registerHostCommands(program: Command): void {
     host
       .command("install")
       .option(
-        "--team <team>",
-        "Add this computer to the team after installing.",
+        "--team <slug>",
+        "Add this computer to the team identified by its slug after installing.",
       )
       .description(
         "Install a host version from the registry (defaults to latest), or a local archive with --from, then register the OS service and start the host. Prompts for browser sign-in first when you are signed out and the terminal can ask, and provisions the started host's credential (best effort). Use --no-service-register for bytes only.",
@@ -1612,8 +1612,8 @@ function registerHostCommands(program: Command): void {
     host
       .command("ensure")
       .option(
-        "--team <team>",
-        "Add this computer to the team, or keep it there.",
+        "--team <slug>",
+        "Add this computer to the team identified by its slug, or keep it there.",
       )
       .description(
         "Make sure the host is installed, registered as a service, and running - installing or starting it if needed. Safe to run repeatedly.",
@@ -1706,7 +1706,7 @@ function registerHostCommands(program: Command): void {
   withRunner(
     host
       .command("use")
-      .argument("<team>", "Team name, handle, or environment id")
+      .argument("<slug>", "Team slug from its dashboard address")
       .description("Give this computer to a team you belong to."),
     (_opts, [team]) => buildHostUseCommand(team ?? ""),
   );

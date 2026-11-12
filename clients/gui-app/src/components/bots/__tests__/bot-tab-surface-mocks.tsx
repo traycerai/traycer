@@ -173,6 +173,7 @@ export const mocks = {
       environmentId: string;
       label: string;
       ownerKind: "organization" | "user";
+      providerHandle: string | null;
     }>,
   },
 };

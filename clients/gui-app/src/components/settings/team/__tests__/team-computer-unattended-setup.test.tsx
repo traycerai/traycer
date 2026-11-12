@@ -43,6 +43,21 @@ const hostBindingMock = vi.hoisted(() => ({
 
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => hostBindingMock.current,
+  useHostClient: () => null,
+}));
+
+vi.mock("@/hooks/bots/use-environment-list-query", () => ({
+  useEnvironmentListQuery: () => ({
+    data: {
+      environments: [
+        {
+          environmentId: "environment-1",
+          ownerKind: "organization",
+          providerHandle: "team-slug",
+        },
+      ],
+    },
+  }),
 }));
 
 const ENVIRONMENT_ID = "environment-1";
@@ -168,6 +183,28 @@ describe("TeamComputerUnattendedSetup", () => {
         .getByRole("button", { name: "Create a new token" })
         .hasAttribute("disabled"),
     ).toBe(false);
+  });
+
+  it("prints the unattended install command with the team's provider handle", async () => {
+    signIn(ACCOUNT_A);
+    hostBindingMock.current = {
+      auth: {
+        mintTeamComputerInstallToken: vi.fn(() =>
+          Promise.resolve(tokenResult()),
+        ),
+      },
+    };
+    mountSetup();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Create install token" }),
+    );
+
+    expect(
+      await screen.findByText(
+        "traycer host install --team 'team-slug' < install-token.txt",
+      ),
+    ).not.toBeNull();
   });
 
   it("does not automatically retry a refused mint when global mutation retries are enabled", async () => {

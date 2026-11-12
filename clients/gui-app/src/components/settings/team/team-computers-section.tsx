@@ -4,7 +4,10 @@ import { useState, type ReactNode } from "react";
 import type { TeamComputer } from "@traycer-clients/shared/host-client/team-computers";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useCanEditConfiguration } from "@/components/settings/environment/configuration-source";
-import { usePickedTeamLabel } from "@/components/settings/environment/team-pick-label";
+import {
+  usePickedTeamHandle,
+  usePickedTeamLabel,
+} from "@/components/settings/environment/team-pick-label";
 import { useTeamComputers } from "@/hooks/auth/use-team-computers";
 import { AddComputerDialog } from "./add-computer-dialog";
 import { Button } from "@/components/ui/button";
@@ -39,6 +42,7 @@ function TeamComputers(props: { readonly environmentId: string }): ReactNode {
   const { read, setBotHost, claim } = useTeamComputers(props.environmentId);
   const canEdit = useCanEditConfiguration();
   const teamName = usePickedTeamLabel(props.environmentId) ?? "this team";
+  const teamHandle = usePickedTeamHandle(props.environmentId);
   const [claiming, setClaiming] = useState<TeamComputer | null>(null);
   const computers = (read.data ?? []).filter(
     (host) => host.hostKind === "personal",
@@ -123,10 +127,10 @@ function TeamComputers(props: { readonly environmentId: string }): ReactNode {
             ) : null}
             Refresh
           </Button>
-          {canEdit ? (
+          {canEdit && teamHandle !== null ? (
             <AddComputerDialog
               teamName={teamName}
-              teamSelector={props.environmentId}
+              teamSelector={teamHandle}
               unattended={
                 <TeamComputerUnattendedSetup
                   environmentId={props.environmentId}
