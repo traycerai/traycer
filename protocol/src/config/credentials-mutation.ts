@@ -2,10 +2,15 @@ import { createHash, randomBytes } from "node:crypto";
 import { readFile, unlink } from "node:fs/promises";
 import { readCredentialsFile, type StoredCredentials } from "./credentials";
 import {
+  credentialsWrite,
   errorCode,
+  isDiskFullError,
+  withCredentialsWrites,
+  type CredentialsWriteContext,
   fileMtimeMsOrZero,
   writeJsonFileAtomic,
 } from "./credentials-fs";
+import { CredentialsReserve } from "./credentials-reserve";
 import {
   holderProvablyDead,
   ownPidStartFingerprintAsync,
@@ -97,6 +102,7 @@ export type MutationOutcome =
   | "user-mismatch"
   | "tombstoned"
   | "lock-busy"
+  | "disk-full"
   | "spend-pending"
   // Two members rather than one `refresh-rejected`, so every consumer's
   // exhaustive switch is FORCED to decide which side of the
@@ -108,13 +114,15 @@ export type MutationOutcome =
   | "refresh-network"
   | "commit-failed";
 
+export type DiskPressure = "low" | "clear";
+
 /**
  * The typed result of a mutation. `credentials` carries:
  *   - `applied`       -> the newly-committed pair;
  *   - `superseded`    -> the file pair the caller should adopt instead;
  *   - `user-mismatch` -> the foreign file pair (for the reconcile worker);
  *   - `commit-failed` -> the minted pair the caller keeps active in memory;
- * and is `null` for `deleted`/`tombstoned`/`lock-busy`/`spend-pending`/
+ * and is `null` for `deleted`/`tombstoned`/`lock-busy`/`disk-full`/`spend-pending`/
  * `refresh-rejected-credential`/`refresh-rejected-account`/`refresh-network`.
  *
  * `spend-pending` is transient, exactly like `lock-busy`: a SIBLING process
@@ -125,7 +133,12 @@ export type MutationOutcome =
  * family - so the intent defers instead. The caller retries later; by then the
  * sibling has landed (adopt via `superseded`) or its marker has aged out.
  */
-export interface MutationResult {
+export interface MutationResult extends MutationBodyResult {
+  /** Null leaves the last pressure state unchanged; only a completed save clears it. */
+  readonly diskPressure: DiskPressure | null;
+}
+
+interface MutationBodyResult {
   readonly outcome: MutationOutcome;
   readonly credentials: StoredCredentials | null;
   /**
@@ -149,6 +162,8 @@ export interface MutationResult {
 const QUARANTINE_RETRY_MAX_MS = 30_000;
 
 export interface CredentialsMutationStoreOptions {
+  /** Also reports saves landed by the background continuation. */
+  readonly onDiskPressure: ((pressure: DiskPressure) => void) | null;
   readonly paths: CredentialsMutationPaths;
   readonly refresh: RefreshFn;
   readonly lockWaitMs: number;
@@ -251,8 +266,11 @@ export interface CredentialsMutationStore {
 
 /** Thrown when the store cannot be trusted (malformed sidecar on an automatic mutation, or an I/O fault). Callers map it to store-unavailable. */
 export class CredentialsStoreUnavailableError extends Error {
-  constructor(message: string) {
-    super(message);
+  readonly code: string | null;
+
+  constructor(message: string, cause: unknown) {
+    super(message, { cause });
+    this.code = errorCode(cause);
     this.name = "CredentialsStoreUnavailableError";
   }
 }
@@ -392,7 +410,7 @@ async function writeQuarantinedDigests(
 ): Promise<void> {
   if (digests.size === 0) {
     try {
-      await unlink(qPath);
+      await credentialsWrite(() => unlink(qPath));
     } catch (err) {
       if (errorCode(err) !== "ENOENT") throw err;
     }
@@ -418,6 +436,7 @@ async function readSpentBaseMarker(
     if (errorCode(err) === "ENOENT") return null;
     throw new CredentialsStoreUnavailableError(
       "spent-base marker is unreadable",
+      err,
     );
   }
   let parsed: unknown;
@@ -522,9 +541,10 @@ async function writeSpentBaseMarker(
       marker,
       0o600,
     );
-  } catch {
+  } catch (err) {
     throw new CredentialsStoreUnavailableError(
       "spent-base marker could not be armed",
+      err,
     );
   }
   return rotationCode;
@@ -533,7 +553,7 @@ async function writeSpentBaseMarker(
 /** Best-effort, ENOENT-tolerant. */
 async function clearSpentBaseMarker(credentialsPath: string): Promise<void> {
   try {
-    await unlink(spentBaseMarkerPath(credentialsPath));
+    await credentialsWrite(() => unlink(spentBaseMarkerPath(credentialsPath)));
   } catch {
     // absent or unremovable - either way liveness + TTL bound the damage
   }
@@ -543,6 +563,7 @@ export function createCredentialsMutationStore(
   options: CredentialsMutationStoreOptions,
 ): CredentialsMutationStore {
   const { paths, refresh } = options;
+  const reserve = new CredentialsReserve(paths.credentialsPath);
   const commitPaths: CommitPaths = {
     credentialsPath: paths.credentialsPath,
     metaPath: paths.metaPath,
@@ -561,6 +582,34 @@ export function createCredentialsMutationStore(
   let quarantineRetryAttempts = 0;
   let disposed = false;
   const qPath = quarantinePath(paths.credentialsPath);
+
+  async function withStoreWrites<T>(
+    work: (context: CredentialsWriteContext) => Promise<T>,
+  ): Promise<{ value: T; diskPressure: DiskPressure | null }> {
+    reserve.begin();
+    const context: CredentialsWriteContext = {
+      noSpace: false,
+      saved: false,
+      releaseReserve: () => reserve.release(),
+    };
+    let diskPressure: DiskPressure | null = null;
+    let value: T;
+    try {
+      value = await withCredentialsWrites(context, () => work(context));
+    } finally {
+      if (context.noSpace) diskPressure = "low";
+      else if (context.saved) diskPressure = "clear";
+      reserve.end(diskPressure === "clear");
+      if (diskPressure !== null) {
+        try {
+          options.onDiskPressure?.(diskPressure);
+        } catch {
+          // A listener cannot undo a completed save or stop continuation retries.
+        }
+      }
+    }
+    return { value, diskPressure };
+  }
 
   function quarantineRetryDelayMs(): number {
     // Doubling from the base, capped: the cap is what keeps a long-running
@@ -626,6 +675,7 @@ export function createCredentialsMutationStore(
       }
       throw new CredentialsStoreUnavailableError(
         "credentials sidecar is malformed",
+        null,
       );
     }
     if (read.state.pending !== null) {
@@ -721,18 +771,20 @@ export function createCredentialsMutationStore(
     try {
       // The preamble (loadState + resolveContinuationLocked) is all this needs;
       // there is no intent body to run.
-      await withCredentialsLock(
-        {
-          lockPath: paths.lockPath,
-          reason: "credentials-continuation",
-          waitMs: options.lockWaitMs,
-          pollIntervalMs: options.lockPollIntervalMs,
-          signal: null,
-        },
-        async () => {
-          const state = await loadState(false);
-          await resolveContinuationLocked(state);
-        },
+      await withStoreWrites(async () =>
+        withCredentialsLock(
+          {
+            lockPath: paths.lockPath,
+            reason: "credentials-continuation",
+            waitMs: options.lockWaitMs,
+            pollIntervalMs: options.lockPollIntervalMs,
+            signal: null,
+          },
+          async () => {
+            const state = await loadState(false);
+            await resolveContinuationLocked(state);
+          },
+        ),
       );
     } catch {
       // Best-effort background retry: a transient fault (or a disposed store /
@@ -769,42 +821,107 @@ export function createCredentialsMutationStore(
     // rotate could hand the quarantined pair out as `superseded`, or
     // refresh it into a successor the quarantine no longer names.
     servesQuarantined: boolean,
+    checkSpace: boolean,
     body: (ctx: {
       state: SidecarState;
       file: StoredCredentials | null;
-    }) => Promise<MutationResult>,
+      assertPreflight: () => void;
+      markRefreshStarted: () => void;
+    }) => Promise<MutationBodyResult>,
   ): Promise<MutationResult> {
-    const result = await withCredentialsLock(
-      {
-        lockPath: paths.lockPath,
-        reason: "credentials-mutate",
-        waitMs: options.lockWaitMs,
-        pollIntervalMs: options.lockPollIntervalMs,
-        signal,
-      },
-      async (): Promise<MutationResult> => {
-        let state = await loadState(interactive);
-        state = await resolveContinuationLocked(state);
-        if (pending !== null) {
-          return {
-            outcome: "commit-failed",
-            credentials: pendingCredentials(pending),
-            rejection: null,
-          };
-        }
-        let file = await readCredentialsFile(paths.credentialsPath);
-        if (!servesQuarantined && file !== null) {
-          const quarantined = await readQuarantinedDigests(qPath);
-          if (quarantined.has(digestToken(file.token))) {
-            file = null;
+    const operation = await withStoreWrites(
+      async (context): Promise<MutationBodyResult> => {
+        let refreshStarted = false;
+        let preflightError: unknown = null;
+        try {
+          if (checkSpace) {
+            try {
+              await reserve.probe();
+            } catch (err) {
+              if (isDiskFullError(err)) throw err;
+              // Existing guards may finish without spending or writing a pair.
+              // Preserve those outcomes before surfacing a new probe fault.
+              preflightError = err;
+            }
           }
+          const result = await withCredentialsLock(
+            {
+              lockPath: paths.lockPath,
+              reason: "credentials-mutate",
+              waitMs: options.lockWaitMs,
+              pollIntervalMs: options.lockPollIntervalMs,
+              signal,
+            },
+            async (): Promise<MutationBodyResult> => {
+              let state = await loadState(interactive);
+              state = await resolveContinuationLocked(state);
+              if (pending !== null) {
+                return {
+                  outcome: "commit-failed",
+                  credentials: pendingCredentials(pending),
+                  rejection: null,
+                };
+              }
+              let file = await readCredentialsFile(paths.credentialsPath);
+              if (!servesQuarantined && file !== null) {
+                const quarantined = await readQuarantinedDigests(qPath);
+                if (quarantined.has(digestToken(file.token))) {
+                  file = null;
+                }
+              }
+              return body({
+                state,
+                file,
+                assertPreflight: () => {
+                  if (preflightError !== null) throw preflightError;
+                },
+                markRefreshStarted: () => {
+                  refreshStarted = true;
+                },
+              });
+            },
+          );
+          const value: MutationBodyResult = result.acquired
+            ? result.value
+            : { outcome: "lock-busy", credentials: null, rejection: null };
+          const pendingSpend =
+            pending !== null &&
+            (pending.kind === "pair" || pending.spentBaseToken !== null);
+          if (
+            value.outcome === "commit-failed" &&
+            context.noSpace &&
+            !refreshStarted &&
+            !pendingSpend
+          ) {
+            return { outcome: "disk-full", credentials: null, rejection: null };
+          }
+          return value;
+        } catch (err) {
+          if (!isDiskFullError(err) || refreshStarted) {
+            if (
+              err instanceof Error &&
+              !(err instanceof CredentialsStoreUnavailableError)
+            ) {
+              throw new CredentialsStoreUnavailableError(err.message, err);
+            }
+            throw err;
+          }
+          context.noSpace = true;
+          if (
+            pending !== null &&
+            (pending.kind === "pair" || pending.spentBaseToken !== null)
+          ) {
+            return {
+              outcome: "commit-failed",
+              credentials: pendingCredentials(pending),
+              rejection: null,
+            };
+          }
+          return { outcome: "disk-full", credentials: null, rejection: null };
         }
-        return body({ state, file });
       },
     );
-    return result.acquired
-      ? result.value
-      : { outcome: "lock-busy", credentials: null, rejection: null };
+    return { ...operation.value, diskPressure: operation.diskPressure };
   }
 
   async function read(): Promise<StoredCredentials | null> {
@@ -856,7 +973,13 @@ export function createCredentialsMutationStore(
       args.signal,
       false,
       false,
-      async ({ state, file }): Promise<MutationResult> => {
+      true,
+      async ({
+        state,
+        file,
+        assertPreflight,
+        markRefreshStarted,
+      }): Promise<MutationBodyResult> => {
         // Guards before any spend (R7-C2).
         if (file === null)
           return { outcome: "deleted", credentials: null, rejection: null };
@@ -914,12 +1037,14 @@ export function createCredentialsMutationStore(
         // migration-override case the spend still replaces THIS base pair, so
         // the gate serializes every competitor either way; keying on the
         // override token would make siblings read the marker as an orphan.
+        assertPreflight();
         const rotationCode = await writeSpentBaseMarker(
           paths.credentialsPath,
           file.token,
           marker,
         );
         const refreshToken = args.refreshTokenOverride ?? file.refreshToken;
+        markRefreshStarted();
         const refreshed = await refresh({
           token: file.token,
           refreshToken,
@@ -987,7 +1112,8 @@ export function createCredentialsMutationStore(
       signal,
       true,
       false,
-      async ({ state, file }): Promise<MutationResult> => {
+      false,
+      async ({ state, file }): Promise<MutationBodyResult> => {
         // Resolved under the same lock that performs the write: a caller that
         // built `credentials` from a pre-lock read (or omits the refresh token
         // entirely) never races a concurrent rotate for this decision. Only
@@ -1030,7 +1156,8 @@ export function createCredentialsMutationStore(
       signal,
       true,
       false,
-      async ({ state }): Promise<MutationResult> => {
+      false,
+      async ({ state }): Promise<MutationBodyResult> => {
         const commit = await commitMutation({
           paths: commitPaths,
           op: "signOut",
@@ -1059,7 +1186,8 @@ export function createCredentialsMutationStore(
       // The quarantine blocks SERVING and SPENDING, never the delete that
       // heals it — this op must see the quarantined pair to remove it.
       true,
-      async ({ state, file }): Promise<MutationResult> => {
+      false,
+      async ({ state, file }): Promise<MutationBodyResult> => {
         // QUARANTINE FIRST, inside this same lock, before any attempt: from
         // this write on, no read anywhere serves the pair, a crash leaves
         // the intent durable for the next launch's drain, and a failed
@@ -1109,7 +1237,8 @@ export function createCredentialsMutationStore(
       signal,
       true,
       true,
-      async ({ state, file }): Promise<MutationResult> => {
+      false,
+      async ({ state, file }): Promise<MutationBodyResult> => {
         const quarantined = await readQuarantinedDigests(qPath);
         if (quarantined.size === 0) {
           return { outcome: "deleted", credentials: null, rejection: null };
@@ -1148,7 +1277,8 @@ export function createCredentialsMutationStore(
       args.signal,
       false,
       false,
-      async ({ state, file }): Promise<MutationResult> => {
+      false,
+      async ({ state, file }): Promise<MutationBodyResult> => {
         if (file === null)
           return { outcome: "deleted", credentials: null, rejection: null };
         // A committed/pending sign-out stands: the advisory profile merge must
@@ -1187,7 +1317,8 @@ export function createCredentialsMutationStore(
       args.signal,
       false,
       false,
-      async ({ state, file }): Promise<MutationResult> => {
+      false,
+      async ({ state, file }): Promise<MutationBodyResult> => {
         // Never resurrect a signed-out session, and never overwrite a newer
         // state. The snapshot guard is a full-file digest, so a same-token
         // content change (e.g. a sibling profile merge) still supersedes.
@@ -1249,7 +1380,13 @@ export function createCredentialsMutationStore(
       args.signal,
       false,
       false,
-      async ({ state, file }): Promise<MutationResult> => {
+      true,
+      async ({
+        state,
+        file,
+        assertPreflight,
+        markRefreshStarted,
+      }): Promise<MutationBodyResult> => {
         // Guards before the spend (R7-C2), identical to guardedSignIn: never
         // resurrect a signed-out session, never overwrite a newer state.
         if (hasTombstone(state)) {
@@ -1295,6 +1432,7 @@ export function createCredentialsMutationStore(
           // the base may already be spent - a sibling takes the lock, sees no
           // marker, and spends it again.
         }
+        assertPreflight();
         const rotationCode = await writeSpentBaseMarker(
           paths.credentialsPath,
           args.candidate.token,
@@ -1305,6 +1443,7 @@ export function createCredentialsMutationStore(
         // network failure is AMBIGUOUS - a lost response may have consumed the
         // candidate server-side - so the marker stays armed while the caller
         // re-enters, keeping sibling migrators deferred.
+        markRefreshStarted();
         const refreshed = await refresh({
           token: args.candidate.token,
           refreshToken: args.candidate.refreshToken,
@@ -1382,6 +1521,7 @@ export function createCredentialsMutationStore(
     hasPendingContinuation: () => pending !== null,
     dispose: () => {
       disposed = true;
+      reserve.dispose();
       if (retryTimer !== null) {
         clearTimeout(retryTimer);
         retryTimer = null;

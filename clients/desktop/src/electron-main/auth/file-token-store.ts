@@ -151,6 +151,7 @@ export class FileTokenStore {
     const lockPath = `${credentialsPath}.lock`;
     const metaPath = `${credentialsPath}.meta.json`;
     this.store = createCredentialsMutationStore({
+      onDiskPressure: null,
       paths: { credentialsPath, metaPath, lockPath },
       refresh: (args) =>
         refreshOnceAbortable({

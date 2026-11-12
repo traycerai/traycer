@@ -3470,6 +3470,27 @@ describe("AuthService", () => {
       );
     });
 
+    it("start() keeps the stored session available when rotation reports disk-full", async () => {
+      const { service, host } = makeService();
+      await host.tokenStore.signIn(
+        { token: "stale-token", refreshToken: "stale-token-refresh" },
+        { id: "user-1", email: "test@example.com", name: "Test User" },
+      );
+      restoreFetch();
+      restoreFetch = installFetch(() => status(401));
+      host.tokenStore.rotate = (): Promise<TokenRotateResult> =>
+        Promise.resolve({ outcome: "disk-full", pair: null, rejection: null });
+
+      await expect(service.start()).resolves.toBeUndefined();
+
+      expect(useAuthStore.getState().status).toBe("unverified");
+      expect(service.getCurrentSessionSnapshot().token).toBe("stale-token");
+      expect(service.getLastError()).toBeNull();
+      expect(await host.tokenStore.get()).toEqual(
+        expectedStored("stale-token", "stale-token-refresh"),
+      );
+    });
+
     it("reactive rotate() faults map to store-unavailable (file kept)", async () => {
       const { service, host } = makeService();
       await service.start();
@@ -3490,6 +3511,30 @@ describe("AuthService", () => {
       expect(outcome?.kind).toBe("rejected");
       expect(useAuthStore.getState().status).toBe("signed-out");
       expect(service.getLastError()).toBe(AUTH_ERROR_STORE_UNAVAILABLE);
+      expect(await host.tokenStore.get()).toEqual(
+        expectedStored("live-token", "live-token-refresh"),
+      );
+    });
+
+    it("reactive disk-full keeps the live session", async () => {
+      const { service, host } = makeService();
+      await service.start();
+      await deviceSignIn(service, host, "live-token");
+
+      restoreFetch();
+      restoreFetch = installFetch((input) => {
+        const url = typeof input === "string" ? input : String(input);
+        return url === NEGOTIATED_VALIDATION_URL ? status(401) : status(500);
+      });
+      host.tokenStore.rotate = (): Promise<TokenRotateResult> =>
+        Promise.resolve({ outcome: "disk-full", pair: null, rejection: null });
+
+      const outcome = await service.revalidateCurrentContext();
+
+      expect(outcome?.kind).toBe("network-error");
+      expect(useAuthStore.getState().status).toBe("signed-in");
+      expect(service.getCurrentSessionSnapshot().token).toBe("live-token");
+      expect(service.getLastError()).toBeNull();
       expect(await host.tokenStore.get()).toEqual(
         expectedStored("live-token", "live-token-refresh"),
       );

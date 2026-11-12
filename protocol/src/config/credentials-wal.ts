@@ -4,6 +4,8 @@ import {
   bumpMtimeAbove,
   errorCode,
   fileMtimeMsOrZero,
+  isDiskFullError,
+  recordCredentialsSave,
   writeJsonFileAtomic,
 } from "./credentials-fs";
 import {
@@ -201,8 +203,10 @@ export async function commitMutation(args: {
         pending: null,
       };
       await writeSidecarState(paths.metaPath, finalState);
+      if (target.kind === "write") recordCredentialsSave();
       return { kind: "committed", state: finalState, mtimeMs };
     } catch (err) {
+      if (isDiskFullError(err)) return { kind: "commit-failed", error: err };
       lastError = err;
       await sleep(COMMIT_RETRY_DELAY_MS);
     }
@@ -250,12 +254,14 @@ export async function recoverPending(args: {
       paths.credentialsPath,
       pending.floorCandidate,
     );
-    return finalize(paths.metaPath, {
+    const recovered = await finalize(paths.metaPath, {
       epoch: pending.nextEpoch,
       lastMutation: pending.op,
       mtimeFloorMs: Math.max(pending.floorCandidate, mtimeMs),
       pending: null,
     });
+    recordCredentialsSave();
+    return recovered;
   }
 
   // Apply never landed -> roll back to the committed base, dropping the intent.

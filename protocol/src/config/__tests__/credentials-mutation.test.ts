@@ -52,6 +52,7 @@ describe("credentials mutation store", () => {
   function makeStore(refresh: RefreshFn): CredentialsMutationStore {
     const store = createCredentialsMutationStore({
       paths: { credentialsPath, metaPath, lockPath },
+      onDiskPressure: null,
       refresh,
       lockWaitMs: 500,
       lockPollIntervalMs: 25,
@@ -1222,6 +1223,7 @@ describe("credentials mutation store", () => {
         const server = singleUseRefreshServer();
         const firstStore = createCredentialsMutationStore({
           paths: { credentialsPath, metaPath, lockPath },
+          onDiskPressure: null,
           lockWaitMs: 500,
           lockPollIntervalMs: 25,
           continuationRetryMs: 60_000,
@@ -1578,6 +1580,7 @@ describe("credentials mutation store", () => {
         // parked continuation explicitly after the sibling observe.
         const storeA = createCredentialsMutationStore({
           paths: { credentialsPath, metaPath, lockPath },
+          onDiskPressure: null,
           refresh: stubA.fn,
           lockWaitMs: 500,
           lockPollIntervalMs: 25,

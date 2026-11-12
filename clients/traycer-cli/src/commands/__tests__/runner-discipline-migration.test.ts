@@ -246,6 +246,7 @@ const DELETED: MutationResult = {
   outcome: "deleted",
   credentials: null,
   rejection: null,
+  diskPressure: null,
 };
 
 describe("logoutCommand runner contract", () => {
@@ -399,7 +400,12 @@ describe("logoutCommand runner contract", () => {
   it("keeps the chat-part cache when the sign-out delete fails", async () => {
     mockLogoutStore({
       hadSession: true,
-      signOut: { outcome: "commit-failed", credentials: null, rejection: null },
+      signOut: {
+        outcome: "commit-failed",
+        credentials: null,
+        rejection: null,
+        diskPressure: null,
+      },
     });
     const { cliChatPartCacheDir } = await import("../../store/paths");
     const digest = "de".padEnd(64, "f");
@@ -420,7 +426,12 @@ describe("logoutCommand runner contract", () => {
   it("JSON mode: emits a single error envelope (UNEXPECTED) when the sign-out delete fails", async () => {
     mockLogoutStore({
       hadSession: true,
-      signOut: { outcome: "commit-failed", credentials: null, rejection: null },
+      signOut: {
+        outcome: "commit-failed",
+        credentials: null,
+        rejection: null,
+        diskPressure: null,
+      },
     });
     const { logoutCommand } = await import("../logout");
     const out = await runJsonCommand(logoutCommand);

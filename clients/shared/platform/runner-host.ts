@@ -2041,6 +2041,7 @@ export type TokenRotateOutcome =
   | "user-mismatch"
   | "tombstoned"
   | "lock-busy"
+  | "disk-full"
   | "spend-pending"
   | "refresh-rejected-credential"
   | "refresh-rejected-account"
@@ -2051,7 +2052,7 @@ export interface TokenRotateResult {
   readonly outcome: TokenRotateOutcome;
   // The credentials the caller should act on: the committed/adopted/minted pair
   // for `applied`/`superseded`/`user-mismatch`/`commit-failed`; `null` for the
-  // outcomes that carry no pair (`deleted`/`tombstoned`/`lock-busy`/
+  // outcomes that carry no pair (`deleted`/`tombstoned`/`lock-busy`/`disk-full`/
   // `spend-pending`/`refresh-rejected-credential`/`refresh-rejected-account`/
   // `refresh-network`).
   readonly pair: StoredCredentials | null;

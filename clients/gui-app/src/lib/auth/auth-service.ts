@@ -1661,6 +1661,7 @@ export class AuthService {
         return;
       case "lock-busy":
       case "spend-pending":
+      case "disk-full":
       case "refresh-network":
       case "applied":
       case "superseded":
@@ -3891,6 +3892,7 @@ export class AuthService {
         );
       case "lock-busy":
       case "spend-pending":
+      case "disk-full":
       case "refresh-network":
         // Transient; the access token in hand stays valid for its TTL.
         return { status: "transient" };
