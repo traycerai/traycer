@@ -1,6 +1,5 @@
 import "../../../../../__tests__/test-browser-apis";
 import { useRef } from "react";
-import { createDeferred } from "@/components/comments/__tests__/comment-submit-test-support";
 
 import type { HistoryItem } from "@/components/home/data/home-page.data";
 import type { EpicActivityStatus } from "@/hooks/epic/use-epic-activity-status";
@@ -1166,20 +1165,12 @@ describe("MobileNavDrawer", () => {
       expect(signedOut).toBe(0);
       expect(useMobileNavStore.getState().open).toBe(true);
 
-      const drawerClosed = createDeferred<void>();
-      const unsubscribe = useMobileNavStore.subscribe((state) => {
-        if (!state.open) drawerClosed.resolve();
-      });
-      try {
-        fireEvent.click(await screen.findByTestId("confirm-action"));
-        await act(async () => {
-          await drawerClosed.promise;
-        });
-        expect(useMobileNavStore.getState().open).toBe(false);
-        expect(signedOut).toBe(1);
-      } finally {
-        unsubscribe();
-      }
+      fireEvent.click(await screen.findByTestId("confirm-action"));
+      await waitFor(() =>
+        expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull(),
+      );
+      expect(useMobileNavStore.getState().open).toBe(false);
+      expect(signedOut).toBe(1);
     });
 
     it("clears its open flag when a form change unmounts it", async () => {

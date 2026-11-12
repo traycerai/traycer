@@ -8,7 +8,15 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { HeaderIdentity } from "@/components/layout/header/header-actions";
 import { AuthService } from "@/lib/auth/auth-service";
@@ -281,31 +289,28 @@ describe("the pending sign-out question", () => {
     expect(await screen.findByRole("alert")).toBeDefined();
 
     const authB = createReplacementAuthService();
-    try {
-      expect(authB).not.toBe(authA);
-      const signOutB = vi.spyOn(authB, "signOut").mockImplementation(() => {
-        retryOnB.resolve(undefined);
-        return Promise.resolve(true);
-      });
-      seat.replaceAuth(authB);
-      expect(screen.getByRole("alert")).toBeDefined();
-      expect(useAuthStore.getState().status).toBe("signed-in");
+    onTestFinished(() => authB.dispose());
+    expect(authB).not.toBe(authA);
+    const signOutB = vi.spyOn(authB, "signOut").mockImplementation(() => {
+      retryOnB.resolve(undefined);
+      return Promise.resolve(true);
+    });
+    seat.replaceAuth(authB);
+    expect(screen.getByRole("alert")).toBeDefined();
+    expect(useAuthStore.getState().status).toBe("signed-in");
 
-      fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
-      const retryTarget = await Promise.race([
-        retryOnA.promise.then(() => "original" as const),
-        retryOnB.promise.then(() => "replacement" as const),
-      ]);
+    fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+    const retryTarget = await Promise.race([
+      retryOnA.promise.then(() => "original" as const),
+      retryOnB.promise.then(() => "replacement" as const),
+    ]);
 
-      expect(retryTarget).toBe("replacement");
-      expect(signOutA).toHaveBeenCalledTimes(1);
-      expect(signOutB).toHaveBeenCalledOnce();
-      await waitFor(() =>
-        expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull(),
-      );
-    } finally {
-      authB.dispose();
-    }
+    expect(retryTarget).toBe("replacement");
+    expect(signOutA).toHaveBeenCalledTimes(1);
+    expect(signOutB).toHaveBeenCalledOnce();
+    await waitFor(() =>
+      expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull(),
+    );
   });
 
   it("queues a new sign-out behind old cleanup without leaking its failure", async () => {
