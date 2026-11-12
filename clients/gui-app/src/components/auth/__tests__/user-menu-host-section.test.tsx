@@ -124,6 +124,7 @@ function sandboxOption(hostId: string, teamId: string | null): HostScopeOption {
       state: "awake",
       frozen: false,
       summary: sandboxSummaryFixture({ id: `sbx-${hostId}` }),
+      ownerKind: "unknown",
       teamOwned: teamId !== null,
     },
   });

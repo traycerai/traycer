@@ -1768,6 +1768,7 @@ describe("the chat chip is the composer's picker", () => {
       sandbox: {
         state: "awake",
         frozen: false,
+        ownerKind: "unknown",
         teamOwned: false,
         summary: sandboxSummaryFixture({
           id: `sbx-${hostId}`,

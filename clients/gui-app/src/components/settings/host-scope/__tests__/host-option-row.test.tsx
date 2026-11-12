@@ -347,6 +347,7 @@ describe("HostOptionRow — frozen sandbox state", () => {
         state: "suspended",
         frozen: true,
         summary: null,
+        ownerKind: "unknown",
         teamOwned: false,
       },
     });

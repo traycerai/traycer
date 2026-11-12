@@ -209,10 +209,13 @@ describe("sandboxStateLine", () => {
     );
   });
 
-  it("says an awake Automations row is not billed, and only that row", () => {
+  it("says only Running. for an awake Automations row", () => {
     expect(sandboxStateLine("awake", summaryOf({ kind: "automation" }))).toBe(
-      "Running. Automations aren't billed.",
+      "Running.",
     );
+  });
+
+  it("keeps the awake rate for an agent row", () => {
     expect(sandboxStateLine("awake", summaryOf({ kind: "agent" }))).toContain(
       "awake rate",
     );
@@ -684,12 +687,12 @@ describe("sandboxBilledPriceField", () => {
   const BILLED: Record<HostSandboxState, SandboxPriceField | null> = {
     creating: null,
     awake: "awakeMc",
-    suspending: "suspendedMc",
+    suspending: null,
     suspended: "suspendedMc",
-    resuming: "awakeMc",
-    stopping: "stoppedMc",
+    resuming: null,
+    stopping: null,
     stopped: "stoppedMc",
-    starting: "awakeMc",
+    starting: null,
     destroying: null,
     destroyed: null,
     failed: null,

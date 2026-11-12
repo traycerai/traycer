@@ -494,6 +494,7 @@ export async function warnIfTeamInstallSignInRemains(
 /** The one team transfer used by host use, install --team and ensure --team. */
 export async function useInstalledHostTeam(
   team: string,
+  progress: CommandContext["progress"],
 ): Promise<EnvironmentHostBinding> {
   const dispatch = {
     ...PLAIN_DISPATCH,
@@ -587,6 +588,14 @@ export async function useInstalledHostTeam(
     });
   }
   // A Local computer has no environment binding to read before its transfer.
+  progress({
+    stage: "host-team",
+    message: `Restarting Traycer on this computer to run as ${target.label}…`,
+    percent: null,
+    bytes: null,
+    totalBytes: null,
+    workUnits: null,
+  });
   return transferInstalledHostTeam(endpoint, auth, target, dispatch, true);
 }
 
@@ -754,8 +763,9 @@ async function transferInstalledHostTeam(
 export async function completeTeamInstall(
   team: string,
   session: TeamInstallAuthSession,
+  progress: CommandContext["progress"],
 ): Promise<EnvironmentHostBinding> {
-  const binding = await useInstalledHostTeam(team);
+  const binding = await useInstalledHostTeam(team, progress);
   if (session.inlineSignInToken !== null) {
     const token = session.inlineSignInToken;
     const outcome = await runWithCliStore((store) =>

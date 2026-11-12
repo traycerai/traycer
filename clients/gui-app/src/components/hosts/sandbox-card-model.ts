@@ -331,9 +331,8 @@ export function sandboxStateLine(
   if (state === "stopped" && summary !== null && summary.failureCode !== null) {
     return stoppedFailureLine(summary.failureCode);
   }
-  // The Automations row is never metered.
   if (state === "awake" && summary?.kind === "automation") {
-    return "Running. Automations aren't billed.";
+    return "Running.";
   }
   return STATE_LINE[state];
 }
@@ -368,31 +367,27 @@ export function sandboxOperationalLine(
   }
 }
 
-/** The list price a state accrues: the awake rate, or one of the two storage rates. */
+/** A stable state's list price: compute or one of the two storage rates. */
 export type SandboxPriceField = "awakeMc" | "suspendedMc" | "stoppedMc";
 
 /**
- * The list price a sandbox in `state` accrues, or `null` when it accrues
- * nothing. The meter bills only awake (compute) and suspended or stopped
- * (storage); a move in flight is billed as where it is going, the way the
- * rows read it. A sandbox that has not started, has failed to start or has
- * been or is being destroyed accrues nothing. Only the Automations row rests
- * `released`, and it is never metered.
+ * A stable state's price field. A transition's billed entry state is absent
+ * from the summary, so its rate must come from the ledger instead.
  */
 export function sandboxBilledPriceField(
   state: HostSandboxState,
 ): SandboxPriceField | null {
   switch (state) {
     case "awake":
-    case "resuming":
-    case "starting":
       return "awakeMc";
-    case "suspending":
     case "suspended":
       return "suspendedMc";
-    case "stopping":
     case "stopped":
       return "stoppedMc";
+    case "resuming":
+    case "starting":
+    case "suspending":
+    case "stopping":
     case "creating":
     case "released":
     case "destroying":

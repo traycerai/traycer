@@ -111,6 +111,8 @@ export interface HostScopeSandbox {
    * for yet. Decides the card's team lines and whether a wake asks first.
    */
   readonly teamOwned: boolean;
+  /** Unknown until the registry or directory identifies the owner. */
+  readonly ownerKind: "user" | "team" | "unknown";
 }
 
 export interface BuildHostScopeOptionsInput {
@@ -271,6 +273,7 @@ function unenrolledSandboxOption(
       // carries no team, so a team's sandbox lists in the top-level group
       // until its registry row names the team.
       teamOwned: summary.createdBy !== null,
+      ownerKind: summary.createdBy === null ? "unknown" : "team",
     },
   };
 }
@@ -314,6 +317,7 @@ function sandboxFactsOf(
       ),
       summary,
       teamOwned: isTeamOwned(item, entryFacts),
+      ownerKind: sandboxOwnerKind(item, entry, summary),
     },
   };
 }
@@ -362,6 +366,21 @@ function transitDestinationOf(
     default:
       return null;
   }
+}
+
+function sandboxOwnerKind(
+  item: HostListItem | null,
+  entry: HostDirectoryEntry | null,
+  summary: SandboxSummary | null,
+): HostScopeSandbox["ownerKind"] {
+  if (item?.owner !== undefined) return item.owner.kind;
+  if (
+    entry !== null &&
+    isRemoteHostDirectoryEntry(entry) &&
+    entry.owner !== null
+  )
+    return entry.owner.kind;
+  return summary !== null && summary.createdBy !== null ? "team" : "unknown";
 }
 
 /**

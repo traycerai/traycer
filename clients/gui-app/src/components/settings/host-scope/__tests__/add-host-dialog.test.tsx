@@ -332,6 +332,13 @@ describe("<AddHostDialog /> setup instructions", () => {
     expect(steps[2].textContent).toContain("traycer host ensure");
   });
 
+  it("states the CLI package's minimum Node version", () => {
+    render(<AddHostDialog />);
+
+    const prerequisite = screen.getByText(/Requires Node/).textContent;
+    expect(prerequisite).toBe("Requires Node 22.13.0 or newer.");
+  });
+
   it("shows one installer command and switches it in place", async () => {
     const user = userEvent.setup();
     render(<AddHostDialog />);

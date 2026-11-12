@@ -186,7 +186,7 @@ export function buildHostEnsureCommand(args: HostEnsureArgs): CommandFn {
             teamSession !== null &&
             result.postSwapError === null &&
             result.running
-              ? await completeTeamInstall(args.team, teamSession)
+              ? await completeTeamInstall(args.team, teamSession, ctx.progress)
               : null;
           const teamInstallReceipt =
             preparedTeamToken !== null &&

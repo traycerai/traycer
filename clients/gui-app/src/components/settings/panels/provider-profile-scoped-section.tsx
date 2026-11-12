@@ -22,7 +22,6 @@ import {
 import { cn } from "@/lib/utils";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { useHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
-import { useEnvironmentProfileSignInSupported } from "@/hooks/providers/use-profile-sign-in-environment";
 import { useProviderLinkDialogStore } from "@/stores/providers/provider-link-dialog-store";
 import { EmbeddedProviderRateLimitForProvider } from "./provider-rate-limit-section";
 import { ProfileSummaryActions } from "./profile-summary-actions";
@@ -70,6 +69,7 @@ function LocalProfileLocation(props: {
   readonly hostId: string | null;
   readonly providerId: string;
   readonly profileId: string;
+  readonly authStatus: ProviderProfile["auth"]["status"];
   readonly hostName: string | null;
 }): ReactNode {
   const inventory = useProvidersList({ enabled: true, subscribed: true });
@@ -81,24 +81,28 @@ function LocalProfileLocation(props: {
     props.hostId,
     "providers.linkComplete",
   );
-  const environmentSignIn = useEnvironmentProfileSignInSupported(
-    props.hostId,
-    props.providerId,
-    true,
-  );
   const openLink = useProviderLinkDialogStore((state) => state.open);
   const onlyHere = inventory.data?.onHostOnly?.some(
     (entry) =>
       entry.providerId === props.providerId &&
       entry.profileId === props.profileId,
   );
-  if (onlyHere !== true) return null;
+  const automaticLink = linkVersion?.major === 1 && linkVersion.minor >= 2;
+  if (
+    onlyHere !== true ||
+    (automaticLink && props.authStatus !== "authenticated")
+  )
+    return null;
   return (
     <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-ui-xs text-muted-foreground">
-      <p>On {props.hostName ?? "this host"} only.</p>
+      <p>
+        {automaticLink
+          ? "Not on your other computers yet."
+          : `On ${props.hostName ?? "this host"} only.`}
+      </p>
       {linkVersion?.major === 1 &&
-      completeVersion?.major === 1 &&
-      environmentSignIn === false ? (
+      linkVersion.minor < 2 &&
+      completeVersion?.major === 1 ? (
         <Button
           type="button"
           variant="link"
@@ -467,6 +471,7 @@ export function ProviderProfileScopedSection(
             hostId={hostId}
             providerId={state.providerId}
             profileId={selectedProfile.profileId}
+            authStatus={selectedProfile.auth.status}
             hostName={hostName}
           />
         ) : null}
