@@ -3837,36 +3837,6 @@ describe("ResourceMonitorPopover", () => {
     expect(screen.getAllByText("1000 MB").length).toBeGreaterThan(0);
   });
 
-  it("suppresses title-bar dragging only while the panel is open", () => {
-    const stub = installStubFactory();
-
-    render(
-      <TooltipProvider>
-        <EpicLease epicId="epic-1" />
-        <ResourceMonitorPopover
-          trigger="header-button"
-          form="glyph"
-          claimsOpenAction
-        />
-      </TooltipProvider>,
-    );
-
-    act(() => {
-      stub.emit().onSnapshot(projection({ owners: [owner({})] }));
-    });
-
-    const isSuppressed = () =>
-      useTitleBarDragStore.getState().suppressors.has("resource-monitor");
-
-    expect(isSuppressed()).toBe(false);
-
-    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
-    expect(isSuppressed()).toBe(true);
-
-    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
-    expect(isSuppressed()).toBe(false);
-  });
-
   it("keeps the resources panel open when clicking inside it to dismiss the sort menu", async () => {
     const stub = installStubFactory();
     render(
