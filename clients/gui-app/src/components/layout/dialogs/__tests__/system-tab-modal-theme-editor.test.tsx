@@ -17,7 +17,9 @@ import {
   createRouter,
 } from "@tanstack/react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { UserSessionListItem } from "@traycer/protocol/auth/devices-sessions";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { SignOutConfirmDialog } from "@/components/auth/sign-out-confirm-dialog";
 import { HostRuntimeTestProvider } from "@/lib/host/__tests__/host-runtime-test-provider";
 import { SystemTabModalHost } from "@/components/layout/dialogs/system-tab-modal-host";
 import { ThemeEditorHost } from "@/components/settings/themes/theme-editor-host";
@@ -33,6 +35,52 @@ import { useSettingsSectionStore } from "@/stores/tabs/settings-section-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useThemeLibraryStore } from "@/stores/settings/theme-library-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
+
+const sessionState = vi.hoisted<{
+  sessions: readonly UserSessionListItem[];
+}>(() => ({ sessions: [] }));
+const revokeSessionMock = vi.hoisted(() =>
+  vi.fn(
+    (input: {
+      readonly familyId: string;
+      readonly useStepUpCredential: boolean;
+    }) => Promise.resolve({ familyId: input.familyId, revoked: true }),
+  ),
+);
+const signOutMock = vi.hoisted(() =>
+  vi.fn<() => Promise<boolean>>(() => Promise.resolve(false)),
+);
+
+vi.mock("@/hooks/auth/use-user-sessions-query", () => ({
+  useAuthFetchUserSessions: () => ({
+    data: { sessions: sessionState.sessions },
+    isPending: false,
+    isError: false,
+    fetchStatus: "idle",
+  }),
+}));
+
+vi.mock("@/hooks/auth/use-revoke-user-session-mutation", () => ({
+  useAuthRevokeUserSession: () => ({
+    isPending: false,
+    mutateAsync: revokeSessionMock,
+  }),
+}));
+
+vi.mock("@/hooks/auth/use-revoke-all-sessions-mutation", () => ({
+  useAuthRevokeAllSessions: () => ({
+    isPending: false,
+    mutateAsync: () => Promise.resolve({ ok: true }),
+  }),
+}));
+
+vi.mock("@/lib/host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host")>()),
+  useAuthService: () => ({ signOut: signOutMock }),
+  useHostBinding: () => ({ auth: { signOut: signOutMock } }),
+}));
 
 vi.mock("@/hooks/runner/use-desktop-zoom-bridge", () => ({
   useDesktopZoomBridge: () => null,
@@ -81,6 +129,13 @@ vi.mock("@/components/epics/history-modal-content", () => ({
 
 const modalProbe: { current: SystemTabModalApi | null } = { current: null };
 
+function modalLayerRank(element: HTMLElement): number {
+  return Array.from(element.classList).reduce((rank, className) => {
+    const match = /^z-\[?(\d+)\]?$/.exec(className);
+    return match ? Number(match[1]) : rank;
+  }, 0);
+}
+
 function ModalProbe() {
   const api = useSystemTabModalController();
   useEffect(() => {
@@ -114,6 +169,15 @@ function buildRouter() {
 function resetStores(): void {
   window.localStorage.clear();
   modalProbe.current = null;
+  useAuthStore.setState({ status: "signed-out" });
+  useSignOutConfirmStore.getState().setOpen(false);
+  sessionState.sessions = [];
+  revokeSessionMock.mockReset();
+  revokeSessionMock.mockImplementation((input) =>
+    Promise.resolve({ familyId: input.familyId, revoked: true }),
+  );
+  signOutMock.mockReset();
+  signOutMock.mockResolvedValue(false);
   useSettingsSectionStore.setState({ section: null });
   useTabsStore.setState({
     version: 2,
@@ -130,6 +194,29 @@ function resetStores(): void {
     draft: null,
     error: null,
   });
+}
+
+function renderSystemTabModalHost(): void {
+  const router = buildRouter();
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
+  render(
+    <QueryClientProvider client={queryClient}>
+      <TooltipProvider>
+        <ThemeProvider>
+          <HostRuntimeTestProvider>
+            <RouterProvider router={router} />
+          </HostRuntimeTestProvider>
+          <ThemeEditorHost />
+          <SignOutConfirmDialog />
+        </ThemeProvider>
+      </TooltipProvider>
+    </QueryClientProvider>,
+  );
 }
 
 describe("SystemTabModalHost theme editor integration", () => {
@@ -149,25 +236,7 @@ describe("SystemTabModalHost theme editor integration", () => {
 
   it("releases and restores the Settings modal lock around theme editing", async () => {
     const user = userEvent.setup();
-    const router = buildRouter();
-    const queryClient = new QueryClient({
-      defaultOptions: {
-        queries: { retry: false },
-        mutations: { retry: false },
-      },
-    });
-    render(
-      <QueryClientProvider client={queryClient}>
-        <TooltipProvider>
-          <ThemeProvider>
-            <HostRuntimeTestProvider>
-              <RouterProvider router={router} />
-            </HostRuntimeTestProvider>
-            <ThemeEditorHost />
-          </ThemeProvider>
-        </TooltipProvider>
-      </QueryClientProvider>,
-    );
+    renderSystemTabModalHost();
 
     await waitFor(() => expect(modalProbe.current).not.toBeNull());
     modalProbe.current?.openSettings({
@@ -268,5 +337,73 @@ describe("SystemTabModalHost theme editor integration", () => {
       expect(document.body.style.pointerEvents).toBe("none");
     });
     expect(screen.getByRole("dialog", { name: "History" })).toBeTruthy();
+  });
+
+  it("keeps real Settings sessions available after canceling a failed local sign-out", async () => {
+    const user = userEvent.setup();
+    const currentSession: UserSessionListItem = {
+      familyId: "active-session",
+      clientKind: "desktop",
+      displayLabel: "This computer",
+      platform: "macOS",
+      appVersion: "1.2.3",
+      location: null,
+      createdAt: "2026-07-01T00:00:00.000Z",
+      lastSeenAt: "2026-07-08T12:00:00.000Z",
+      revoked: false,
+      revokedAt: null,
+      revokedBy: null,
+      current: true,
+    };
+    sessionState.sessions = [currentSession];
+    useAuthStore.setState({ status: "signed-in" });
+    renderSystemTabModalHost();
+
+    await waitFor(() => expect(modalProbe.current).not.toBeNull());
+    modalProbe.current?.openSettings({
+      section: "devices",
+      resetToGeneral: false,
+      tab: null,
+      draft: null,
+      hostId: null,
+    });
+    const settings = await screen.findByRole("dialog", { name: "Settings" });
+    expect(
+      within(settings).getByRole("heading", { name: "Signed-in sessions" }),
+    ).toBeTruthy();
+    await user.click(
+      within(settings).getByRole("button", { name: "Sign out" }),
+    );
+
+    expect(await screen.findByRole("alert")).toBeDefined();
+    expect(revokeSessionMock).toHaveBeenCalledTimes(1);
+    expect(signOutMock).toHaveBeenCalledTimes(1);
+    const question = screen.getByTestId("confirm-destructive-dialog");
+    const settingsFrame = settings.closest<HTMLElement>(
+      '[data-slot="dialog-content"]',
+    );
+    if (!settingsFrame) throw new Error("expected the Settings modal frame");
+    expect(modalLayerRank(question)).toBeGreaterThanOrEqual(
+      modalLayerRank(settingsFrame),
+    );
+    if (modalLayerRank(question) === modalLayerRank(settingsFrame)) {
+      expect(
+        settingsFrame.compareDocumentPosition(question) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).not.toBe(0);
+    }
+
+    await user.click(within(question).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => {
+      expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+    });
+    expect(screen.getByRole("dialog", { name: "Settings" })).toBe(settings);
+    expect(
+      within(settings).getByRole("heading", { name: "Signed-in sessions" }),
+    ).toBeTruthy();
+    expect(within(settings).getByText("This session")).toBeTruthy();
+    expect(useAuthStore.getState().status).toBe("signed-in");
+    expect(revokeSessionMock).toHaveBeenCalledTimes(1);
+    expect(signOutMock).toHaveBeenCalledTimes(1);
   });
 });

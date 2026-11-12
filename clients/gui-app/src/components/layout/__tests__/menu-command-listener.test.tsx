@@ -16,7 +16,9 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type {
   HostControllerStatus,
@@ -30,6 +32,10 @@ import {
 import { MenuCommandListener } from "@/components/layout/bridges/menu-command-listener";
 import { SignOutConfirmDialog } from "@/components/auth/sign-out-confirm-dialog";
 import { MigrationBlockingModalHost } from "@/components/layout/dialogs/migration-blocking-modal-host";
+import { ThemeEditorHost } from "@/components/settings/themes/theme-editor-host";
+import { ThemeGallery } from "@/components/settings/themes/theme-gallery";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { ThemeProvider } from "@/providers/theme-provider";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import {
@@ -60,6 +66,8 @@ import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-h
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
+import { useThemeLibraryStore } from "@/stores/settings/theme-library-store";
 
 interface CapturedNavigate {
   readonly to: string;
@@ -375,6 +383,41 @@ function renderMenuCommandListener(menu: FakeDesktopMenu): void {
   );
 }
 
+function resetThemeStores(): void {
+  window.localStorage.clear();
+  useThemeLibraryStore.setState({
+    version: 2,
+    themes: [],
+    selected: { light: null, dark: null },
+    draft: null,
+    error: null,
+  });
+  useSettingsStore.setState({ theme: "light", themePreset: "neutral" });
+}
+
+function renderMenuWithThemeEditor(
+  menu: FakeDesktopMenu,
+  onOutsideClick: () => void,
+): void {
+  render(
+    <QueryClientProvider client={makeQueryClient()}>
+      <RunnerHostProvider runnerHost={createRunnerHost(menu)}>
+        <TooltipProvider>
+          <ThemeProvider>
+            <MenuCommandListener />
+            <ThemeGallery />
+            <ThemeEditorHost />
+            <SignOutConfirmDialog />
+            <button type="button" onClick={onOutsideClick}>
+              Inspector target
+            </button>
+          </ThemeProvider>
+        </TooltipProvider>
+      </RunnerHostProvider>
+    </QueryClientProvider>,
+  );
+}
+
 describe("<MenuCommandListener />", () => {
   beforeEach(() => {
     navigateMock.mockClear();
@@ -392,6 +435,7 @@ describe("<MenuCommandListener />", () => {
     closeLayoutEditorForCloseTabChordMock.mockReturnValue(false);
     useSignOutConfirmStore.getState().setOpen(false);
     useMigrationRunStore.setState({ runs: new Map(), remoteRunning: false });
+    resetThemeStores();
   });
 
   afterEach(() => {
@@ -401,6 +445,7 @@ describe("<MenuCommandListener />", () => {
     useDesktopDialogStore.setState({ reportIssueAvailable: false });
     useSignOutConfirmStore.getState().setOpen(false);
     useMigrationRunStore.setState({ runs: new Map(), remoteRunning: false });
+    resetThemeStores();
   });
 
   it("dispatches native menu commands to renderer-owned actions", () => {
@@ -479,6 +524,120 @@ describe("<MenuCommandListener />", () => {
     expect(screen.queryByTestId("migration-blocking-overlay")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(screen.getByTestId("migration-blocking-modal")).toBeTruthy();
+  });
+
+  it("conceals the theme editor for native sign-out and restores its state after cancel", async () => {
+    const user = userEvent.setup();
+    authMock.signOut.mockResolvedValue(false);
+    const menu = createMenu();
+    renderMenuWithThemeEditor(menu, vi.fn());
+
+    fireEvent.click(screen.getByRole("button", { name: "Create theme" }));
+    const editor = await screen.findByRole("dialog", { name: "Theme editor" });
+    fireEvent.change(within(editor).getByLabelText("Theme name"), {
+      target: { value: "Draft preserved" },
+    });
+    fireEvent.click(within(editor).getByRole("button", { name: "All colors" }));
+    const search = within(editor).getByRole("textbox", {
+      name: "Filter theme colors",
+    });
+    const accent = within(editor).getByRole("button", { name: "Accent color" });
+    await user.click(accent);
+    fireEvent.change(search, { target: { value: "primary" } });
+
+    const header = editor.querySelector("header");
+    if (!header) throw new Error("expected the theme editor header");
+    Object.defineProperty(header, "setPointerCapture", {
+      configurable: true,
+      value: vi.fn(),
+    });
+    fireEvent.pointerDown(header, {
+      button: 0,
+      pointerId: 1,
+      clientX: 100,
+      clientY: 100,
+    });
+    fireEvent.pointerMove(header, { pointerId: 1, clientX: 130, clientY: 125 });
+    fireEvent.pointerUp(header, { pointerId: 1 });
+
+    const draft = structuredClone(useThemeLibraryStore.getState().draft);
+    const geometry = {
+      left: editor.style.left,
+      top: editor.style.top,
+      width: editor.style.width,
+      height: editor.style.height,
+    };
+    expect(geometry.left).not.toBe("");
+
+    act(() => menu.emit("app.signOut"));
+    expect(await screen.findByRole("alert")).toBeDefined();
+    expect(editor.hasAttribute("inert")).toBe(true);
+    expect(editor.classList.contains("invisible")).toBe(true);
+
+    const question = screen.getByTestId("confirm-destructive-dialog");
+    fireEvent.click(within(question).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => {
+      expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+    });
+
+    expect(screen.getByRole("dialog", { name: "Theme editor" })).toBe(editor);
+    expect(editor.hasAttribute("inert")).toBe(false);
+    expect(editor.classList.contains("invisible")).toBe(false);
+    expect(useThemeLibraryStore.getState().draft).toEqual(draft);
+    expect(
+      within(editor).getByLabelText("Theme name").getAttribute("value"),
+    ).toBe("Draft preserved");
+    expect(
+      within(editor)
+        .getByRole("textbox", { name: "Filter theme colors" })
+        .getAttribute("value"),
+    ).toBe("primary");
+    expect(
+      within(editor)
+        .getByRole("button", { name: "Accent color" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect({
+      left: editor.style.left,
+      top: editor.style.top,
+      width: editor.style.width,
+      height: editor.style.height,
+    }).toEqual(geometry);
+  });
+
+  it("lets the shared sign-out question receive clicks while theme inspection is active", async () => {
+    authMock.signOut.mockResolvedValue(false);
+    const menu = createMenu();
+    const onOutsideClick = vi.fn();
+    renderMenuWithThemeEditor(menu, onOutsideClick);
+
+    fireEvent.click(screen.getByRole("button", { name: "Create theme" }));
+    const editor = await screen.findByRole("dialog", { name: "Theme editor" });
+    fireEvent.click(
+      within(editor).getByRole("button", { name: "Pick from interface" }),
+    );
+    expect(
+      screen.getByText("Select an area to edit its color. Escape cancels."),
+    ).toBeDefined();
+
+    act(() => menu.emit("app.signOut"));
+    expect(await screen.findByRole("alert")).toBeDefined();
+    const inspectorStatusWhileQuestionOpen = screen.queryByText(
+      "Select an area to edit its color. Escape cancels.",
+    );
+
+    const question = screen.getByTestId("confirm-destructive-dialog");
+    fireEvent.click(within(question).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => {
+      expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+    });
+    expect(inspectorStatusWhileQuestionOpen).toBeNull();
+    expect(
+      screen.getByText("Select an area to edit its color. Escape cancels."),
+    ).toBeDefined();
+
+    fireEvent.click(screen.getByRole("button", { name: "Inspector target" }));
+    expect(onOutsideClick).not.toHaveBeenCalled();
   });
 
   describe("the Settings command when the shell may refuse admission", () => {
