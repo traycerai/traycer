@@ -3246,6 +3246,64 @@ describe("WsStreamClient", () => {
     expect(info).not.toHaveBeenCalled();
   });
 
+  it("closes sessions and notifies listeners when the close diagnostic throws", () => {
+    const { factory, sockets } = makeFactory();
+    const diagnosticError = new Error("close diagnostic failed");
+    const onClientClosed = vi.fn(() => {
+      throw diagnosticError;
+    });
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const client = new WsStreamClient({
+      clientIdentity: TEST_CLIENT_IDENTITY,
+      registry: hostStreamRpcRegistry,
+      endpoint: () => mockLocalHostEntry,
+      hostId: mockLocalHostEntry.hostId,
+      bearer: () => makeRequestContext("t")?.credentials ?? null,
+      userId: AUTHENTICATED_USER_FIXTURE_ID,
+      auth: null,
+      clock: null,
+      hostCredentialMint: null,
+      onHostCredentialState: null,
+      onClientClosed,
+      evidence: NO_TRANSPORT_EVIDENCE,
+      webSocketFactory: factory,
+      dialTimeoutMs: 10_000,
+      openAckTimeoutMs: 10_000,
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 120_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+
+    client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    client.subscribe("chat.subscribe", { epicId: "epic-1", chatId: "chat-1" });
+    completeHandshake(sockets[0].socket);
+    completeHandshake(sockets[1].socket);
+
+    let closedListenerCalls = 0;
+    client.onClosed(() => {
+      closedListenerCalls += 1;
+    });
+
+    expect(() => client.close("diagnostic-throws")).not.toThrow();
+    client.close("second-close");
+
+    expect(sockets[0].socket.closed).toEqual({
+      code: 1000,
+      reason: "closed-by-caller",
+    });
+    expect(sockets[1].socket.closed).toEqual({
+      code: 1000,
+      reason: "closed-by-caller",
+    });
+    expect(closedListenerCalls).toBe(1);
+    expect(onClientClosed).toHaveBeenCalledTimes(1);
+    expect(error).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("close callback(s) threw during close"),
+      [diagnosticError],
+    );
+  });
+
   it("rewrites a directory entry's '/rpc' suffix to '/stream' on first dial", async () => {
     const { factory, sockets } = makeFactory();
     const entry: HostDirectoryEntry = {

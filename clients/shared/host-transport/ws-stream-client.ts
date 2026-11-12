@@ -687,11 +687,16 @@ export class WsStreamClient<
     // socket left to deliver it on, and the next client mints its own.
     this.discardAllPendingProvisions();
     this.clearAllProvisionRetries();
+    const closeErrors: unknown[] = [];
     const closeMessage = `[stream] WsStreamClient closed (client=${this.instanceId}, reason=${reason}, sessions=${this.ownedSessions.size})`;
     if (this.options.onClientClosed === undefined) {
       console.info(closeMessage);
     } else {
-      this.options.onClientClosed(closeMessage);
+      try {
+        this.options.onClientClosed(closeMessage);
+      } catch (error) {
+        closeErrors.push(error);
+      }
     }
     for (const session of Array.from(this.ownedSessions)) {
       session.close();
@@ -705,18 +710,17 @@ export class WsStreamClient<
     this.methodSupportListeners.clear();
     const listeners = Array.from(this.closedListeners);
     this.closedListeners.clear();
-    const listenerErrors: unknown[] = [];
     listeners.forEach((listener) => {
       try {
         listener();
       } catch (error) {
-        listenerErrors.push(error);
+        closeErrors.push(error);
       }
     });
-    if (listenerErrors.length > 0) {
+    if (closeErrors.length > 0) {
       console.error(
-        `[stream] ${listenerErrors.length} closed-listener(s) threw during close (client=${this.instanceId}, reason=${reason})`,
-        listenerErrors,
+        `[stream] ${closeErrors.length} close callback(s) threw during close (client=${this.instanceId}, reason=${reason})`,
+        closeErrors,
       );
     }
   }
