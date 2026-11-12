@@ -601,39 +601,43 @@ describe("<MenuCommandListener />", () => {
     const user = userEvent.setup();
     authMock.signOut.mockResolvedValue(false);
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
-    const menu = createMenu();
-    storeAnchoredDraft({});
-    renderMenuWithAnchoredDraft(menu);
-    typeIntoEditor(composerEditorAt(0), "Keep this comment draft");
+    try {
+      const menu = createMenu();
+      storeAnchoredDraft({});
+      renderMenuWithAnchoredDraft(menu);
+      typeIntoEditor(composerEditorAt(0), "Keep this comment draft");
 
-    act(() => menu.emit("app.signOut"));
-    expect(await screen.findByRole("alert")).toBeDefined();
-    expect(authMock.signOut).toHaveBeenCalledOnce();
+      act(() => menu.emit("app.signOut"));
+      expect(await screen.findByRole("alert")).toBeDefined();
+      expect(authMock.signOut).toHaveBeenCalledOnce();
 
-    await user.click(screen.getByRole("button", { name: "Cancel" }));
+      await user.click(screen.getByRole("button", { name: "Cancel" }));
 
-    expect({
-      discardPromptCalls: confirm.mock.calls.length,
-      signOutQuestionOpen:
-        screen.queryByTestId("confirm-destructive-dialog") !== null,
-      draftText: composerEditorAt(0).getText(),
-      draftStored:
-        useAnchoredDraftStore.getState().byEpicId[COMMENT_EPIC_ID] !==
-        undefined,
-    }).toEqual({
-      discardPromptCalls: 0,
-      signOutQuestionOpen: false,
-      draftText: "Keep this comment draft",
-      draftStored: true,
-    });
+      expect({
+        discardPromptCalls: confirm.mock.calls.length,
+        signOutQuestionOpen:
+          screen.queryByTestId("confirm-destructive-dialog") !== null,
+        draftText: composerEditorAt(0).getText(),
+        draftStored:
+          useAnchoredDraftStore.getState().byEpicId[COMMENT_EPIC_ID] !==
+          undefined,
+      }).toEqual({
+        discardPromptCalls: 0,
+        signOutQuestionOpen: false,
+        draftText: "Keep this comment draft",
+        draftStored: true,
+      });
 
-    await user.click(screen.getByRole("button", { name: "Outside comment" }));
+      await user.click(screen.getByRole("button", { name: "Outside comment" }));
 
-    expect(confirm).toHaveBeenCalledOnce();
-    expect(composerEditorAt(0).getText()).toBe("Keep this comment draft");
-    expect(
-      useAnchoredDraftStore.getState().byEpicId[COMMENT_EPIC_ID],
-    ).toBeDefined();
+      expect(confirm).toHaveBeenCalledOnce();
+      expect(composerEditorAt(0).getText()).toBe("Keep this comment draft");
+      expect(
+        useAnchoredDraftStore.getState().byEpicId[COMMENT_EPIC_ID],
+      ).toBeDefined();
+    } finally {
+      confirm.mockRestore();
+    }
   });
 
   it("conceals the theme editor for native sign-out and restores its state after cancel", async () => {
