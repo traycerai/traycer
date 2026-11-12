@@ -102,12 +102,12 @@ describe("UsageHostFilter", () => {
     ).toBeTruthy();
   });
 
-  it("leaves All hosts unredacted", () => {
+  it("names the unfiltered choice All computers", () => {
     renderFilter(null, null);
 
     const trigger = screen.getByTestId("usage-host-filter");
-    expect(trigger.textContent).toContain("All hosts");
-    expect(trigger.getAttribute("aria-label")).toBe("Host");
+    expect(trigger.textContent).toContain("All computers");
+    expect(trigger.getAttribute("aria-label")).toContain("All computers");
     expect(screen.queryByTestId("usage-host-filter-selected-name")).toBeNull();
     expect(trigger.hasAttribute(USAGE_EXPORT_REDACT_ATTRIBUTE)).toBe(false);
     expect(screen.queryByTestId("usage-served-by-local-note")).toBeNull();

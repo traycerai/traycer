@@ -159,7 +159,7 @@ describe("buildUsageHostFilterOptions", () => {
 });
 
 describe("usage host filter value mapping", () => {
-  it("round-trips All hosts through a sentinel Radix will accept", () => {
+  it("round-trips All computers through a sentinel Radix will accept", () => {
     // Radix `Select` refuses an empty-string item value and has no concept of
     // `null`, so "no filter" needs a value of its own - and that value must
     // never be mistaken for a host id on the way back.

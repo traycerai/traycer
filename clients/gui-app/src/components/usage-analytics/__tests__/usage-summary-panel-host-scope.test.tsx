@@ -285,7 +285,7 @@ describe("<UsageSummaryPanel /> activity section", () => {
 });
 
 describe("<UsageSummaryPanel /> host scope", () => {
-  it("defaults to All hosts - the request carries no host filter at all", async () => {
+  it("defaults to All computers - the request carries no host filter at all", async () => {
     const { requests } = renderPanel({
       response: response({
         servedBy: "cloud",
@@ -298,7 +298,9 @@ describe("<UsageSummaryPanel /> host scope", () => {
     // ONE dashboard with a filter, not a per-host surface: the unfiltered
     // read is the default, so an account's total is what a reader sees first.
     expect(requests[0].hostId).toBeUndefined();
-    expect(screen.getByTestId("usage-host-filter")).toBeTruthy();
+    const hostFilter = screen.getByTestId("usage-host-filter");
+    expect(hostFilter.textContent).toContain("All computers");
+    expect(hostFilter.getAttribute("aria-label")).toContain("All computers");
     expect(screen.queryByTestId("usage-host-filter-pinned")).toBeNull();
   });
 
@@ -428,7 +430,7 @@ describe("<UsageSummaryPanel /> host scope", () => {
 
     await waitFor(() => {
       expect(screen.getByTestId("usage-host-filter").textContent).not.toContain(
-        "All hosts",
+        "All computers",
       );
       // The picker updating locally is not enough - the follow-up request
       // must actually carry the narrowed host filter.

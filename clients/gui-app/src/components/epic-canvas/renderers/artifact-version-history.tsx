@@ -122,6 +122,14 @@ const CAPTURED_AT_FORMATTER = new Intl.DateTimeFormat(undefined, {
   minute: "2-digit",
 });
 
+const ACCESSIBLE_CAPTURED_AT_FORMATTER = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+  second: "2-digit",
+});
+
 const DAY_FORMATTER = new Intl.DateTimeFormat(undefined, {
   weekday: "long",
   month: "long",
@@ -224,7 +232,7 @@ type AgentProvenance = Extract<
 
 function AgentProvenanceDetail(props: {
   readonly provenance: AgentProvenance;
-  readonly versionOrdinal: number;
+  readonly chatAccessibleName: string | undefined;
   readonly onOpenChat: (chatId: string) => void;
 }): ReactNode {
   const title = props.provenance.chatTitle?.trim() || "Untitled chat";
@@ -234,7 +242,7 @@ function AgentProvenanceDetail(props: {
       <button
         type="button"
         className="font-medium underline underline-offset-2 hover:text-foreground"
-        aria-label={`Open chat ${title} from version ${props.versionOrdinal}`}
+        aria-label={props.chatAccessibleName}
         onClick={() => props.onOpenChat(props.provenance.chatId)}
       >
         {title}
@@ -245,13 +253,13 @@ function AgentProvenanceDetail(props: {
 
 function ObservationProvenanceDetail(props: {
   readonly provenance: Provenance;
-  readonly versionOrdinal: number;
+  readonly chatAccessibleName: string | undefined;
   readonly onOpenChat: (chatId: string) => void;
 }): ReactNode {
   if (props.provenance.kind === "agent") {
     return (
       <AgentProvenanceDetail
-        versionOrdinal={props.versionOrdinal}
+        chatAccessibleName={props.chatAccessibleName}
         provenance={props.provenance}
         onOpenChat={props.onOpenChat}
       />
@@ -935,16 +943,78 @@ function VersionObservationList(props: {
   readonly onSelect: (observationId: string) => void;
   readonly onOpenChat: (chatId: string) => void;
 }): ReactNode {
+  const versionCounts = new Map<string, number>();
+  const chatCounts = new Map<string, number>();
+  const rows = props.entries.map((entry, index) => {
+    const olderEntry = props.entries.at(index + 1);
+    const badges: {
+      text: string;
+      variant: "info" | "destructive" | "success";
+    }[] = [];
+    if (
+      olderEntry !== undefined &&
+      entry.serializerVersion !== olderEntry.serializerVersion
+    ) {
+      badges.push({ text: "re-normalized by editor update", variant: "info" });
+    }
+    if (entry.degraded) {
+      badges.push({
+        text: "Body only — images missing",
+        variant: "destructive",
+      });
+    }
+    if (props.outcome?.observationId === entry.observationId) {
+      switch (props.outcome.status) {
+        case "clean":
+          badges.push({ text: "Restored", variant: "success" });
+          break;
+        case "renormalized":
+          badges.push({
+            text: "re-normalized by a newer editor version — review",
+            variant: "info",
+          });
+          break;
+        case "degraded":
+          badges.push({
+            text: "Restored with missing image content",
+            variant: "destructive",
+          });
+          break;
+      }
+    }
+    const capturedAt = ACCESSIBLE_CAPTURED_AT_FORMATTER.format(
+      entry.capturedAt,
+    );
+    return {
+      entry,
+      badges,
+      versionName: [
+        PROVENANCE_LABELS[entry.provenance.kind],
+        capturedAt,
+        ...badges.map((badge) => badge.text),
+      ].join(", "),
+      chatName:
+        entry.provenance.kind === "agent"
+          ? `Open chat ${entry.provenance.chatTitle?.trim() || "Untitled chat"}, ${capturedAt}`
+          : undefined,
+    };
+  });
+  // Give an arriving newest row the next collision suffix, retaining existing names.
+  for (const row of rows.slice().reverse()) {
+    const versionCount = (versionCounts.get(row.versionName) ?? 0) + 1;
+    versionCounts.set(row.versionName, versionCount);
+    if (versionCount > 1) row.versionName += ` (${versionCount})`;
+    if (row.chatName !== undefined) {
+      const chatCount = (chatCounts.get(row.chatName) ?? 0) + 1;
+      chatCounts.set(row.chatName, chatCount);
+      if (chatCount > 1) row.chatName += ` (${chatCount})`;
+    }
+  }
   let previousDay: string | null = null;
-  return props.entries.map((entry, index) => {
+  return rows.map(({ entry, badges, versionName, chatName }) => {
     const day = dayLabel(entry.capturedAt);
     const showDay = day !== previousDay;
     previousDay = day;
-    const olderEntry = props.entries.at(index + 1);
-    const renormalizedByEditorUpdate =
-      olderEntry !== undefined &&
-      entry.serializerVersion !== olderEntry.serializerVersion;
-    const isNewOutcome = props.outcome?.observationId === entry.observationId;
     return (
       <div key={entry.observationId}>
         {showDay ? (
@@ -961,7 +1031,7 @@ function VersionObservationList(props: {
         >
           <button
             type="button"
-            aria-label={`Select version ${index + 1} from ${formatCapturedAt(entry.capturedAt)}`}
+            aria-label={versionName}
             data-testid={`artifact-version-observation-${entry.observationId}`}
             onClick={() => props.onSelect(entry.observationId)}
             className="w-full px-3 py-2.5 text-left"
@@ -975,29 +1045,15 @@ function VersionObservationList(props: {
               </span>
             </span>
             <span className="mt-1.5 flex flex-wrap gap-1 empty:hidden">
-              {renormalizedByEditorUpdate ? (
-                <Badge variant="info">re-normalized by editor update</Badge>
-              ) : null}
-              {entry.degraded ? (
-                <Badge variant="destructive">Body only — images missing</Badge>
-              ) : null}
-              {isNewOutcome && props.outcome.status === "clean" ? (
-                <Badge variant="success">Restored</Badge>
-              ) : null}
-              {isNewOutcome && props.outcome.status === "renormalized" ? (
-                <Badge variant="info">
-                  re-normalized by a newer editor version — review
+              {badges.map((badge) => (
+                <Badge key={badge.text} variant={badge.variant}>
+                  {badge.text}
                 </Badge>
-              ) : null}
-              {isNewOutcome && props.outcome.status === "degraded" ? (
-                <Badge variant="destructive">
-                  Restored with missing image content
-                </Badge>
-              ) : null}
+              ))}
             </span>
           </button>
           <ObservationProvenanceDetail
-            versionOrdinal={index + 1}
+            chatAccessibleName={chatName}
             provenance={entry.provenance}
             onOpenChat={props.onOpenChat}
           />
