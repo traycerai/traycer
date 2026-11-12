@@ -61,3 +61,36 @@
 [data-sonner-toaster] {
   pointer-events: auto;
 }
+
+/*
+ * A toast with two buttons puts them under its text.
+ *
+ * Sonner lays a toast out as one row: icon, text, then the cancel and action
+ * buttons, which never shrink. Two buttons with real labels leave the text a
+ * column a few words wide that wraps to six or seven lines. With both buttons
+ * the text takes the whole first row and the buttons sit beneath it at the
+ * end, in sonner's order (cancel, then action), like a dialog's footer. A toast
+ * with one button keeps sonner's row, which leaves its text room.
+ *
+ * The button margins are zeroed because sonner gives every button an `auto`
+ * start margin; on a row of their own two auto margins split the free space
+ * and pull the cancel button away from the action. Every toast that passes
+ * both `cancel` and `action` is a plain `toast()` with no type icon, so the
+ * text's row is the toast's full width.
+ */
+[data-sonner-toaster]
+  [data-sonner-toast][data-styled="true"]:has([data-cancel]):has(
+    [data-action]
+  ) {
+  --toast-button-margin-start: 0;
+  --toast-button-margin-end: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  row-gap: 0.75rem;
+}
+
+[data-sonner-toaster]
+  [data-sonner-toast][data-styled="true"]:has([data-cancel]):has([data-action])
+  [data-content] {
+  flex-basis: 100%;
+}
