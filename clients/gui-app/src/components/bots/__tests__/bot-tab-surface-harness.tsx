@@ -279,7 +279,12 @@ export function resetBotTabSurfaceMocks(): void {
   mocks.environmentsRefetch.mockReset();
   mocks.state.openResult = answer({ kind: "serve-here", claimed: null });
   mocks.state.environments = [
-    { environmentId: "env-team", label: "Acme", ownerKind: "organization" },
+    {
+      environmentId: "env-team",
+      label: "Acme",
+      ownerKind: "organization",
+      providerHandle: "acme",
+    },
   ];
   mocks.state.threads = [];
   mocks.state.threadsHeld = true;
