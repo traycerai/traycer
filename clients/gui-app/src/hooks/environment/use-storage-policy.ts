@@ -97,6 +97,7 @@ function environmentOfPick(
   environments: ReadonlyMap<string, SandboxDefaultsEnvironment>,
   pick: Exclude<EnvironmentPick, { readonly kind: "local" }>,
 ): SandboxDefaultsEnvironment | null {
+  if (pick.kind === "unresolved") return null;
   if (pick.kind === "personal") return environments.get("personal") ?? null;
   for (const environment of environments.values()) {
     if (environment.environmentId === pick.environmentId) return environment;

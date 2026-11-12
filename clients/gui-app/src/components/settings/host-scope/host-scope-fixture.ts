@@ -110,6 +110,7 @@ export function hostScopeFixture(overrides: Partial<HostScope>): HostScope {
     isLoading: false,
     listsFailed: false,
     retryLists: () => undefined,
+    retryEntryStatus: null,
     nowMs: 0,
     ...overrides,
   };

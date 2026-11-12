@@ -23,7 +23,16 @@ function PhoneScopeLine(props: { readonly hostSection: boolean }): ReactNode {
     pick.kind === "team" ? pick.environmentId : "",
   );
   let environment: ReactNode = "Personal";
-  if (pick.kind === "local") {
+  if (pick.kind === "unresolved") {
+    environment = (
+      <AgentSpinningDots
+        className={undefined}
+        testId={undefined}
+        variant={undefined}
+        tone="muted"
+      />
+    );
+  } else if (pick.kind === "local") {
     environment = pick.hostName;
   } else if (pick.kind === "team") {
     environment = teamLabel ?? (

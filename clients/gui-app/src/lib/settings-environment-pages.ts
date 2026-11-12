@@ -44,6 +44,7 @@ export interface EnvironmentPageAddress {
  * own settings have not moved into Personal: its pages are read from it.
  */
 export type EnvironmentPick =
+  | { readonly kind: "unresolved" }
   | { readonly kind: "personal" }
   | {
       readonly kind: "local";
@@ -53,10 +54,13 @@ export type EnvironmentPick =
     }
   | { readonly kind: "team"; readonly environmentId: string };
 
+export const UNRESOLVED_PICK: EnvironmentPick = { kind: "unresolved" };
+
 export const PERSONAL_PICK: EnvironmentPick = { kind: "personal" };
 
 /** A pick as one string, the Environment dropdown's radio value. */
 export function environmentPickValue(pick: EnvironmentPick): string {
+  if (pick.kind === "unresolved") return "";
   if (pick.kind === "local") return `local:${pick.hostId}`;
   if (pick.kind === "team") return `team:${pick.environmentId}`;
   return "personal";
@@ -115,6 +119,7 @@ function isEnvironmentPageId(value: string): value is EnvironmentPageId {
 const PAGES_HIDDEN_BY_PICK: Readonly<
   Record<EnvironmentPick["kind"], ReadonlySet<EnvironmentPageId>>
 > = {
+  unresolved: new Set(["members"]),
   personal: new Set(["members"]),
   local: new Set(["members"]),
   team: new Set(),
