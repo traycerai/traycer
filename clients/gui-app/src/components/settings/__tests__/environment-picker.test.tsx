@@ -273,6 +273,7 @@ describe("<EnvironmentPicker />", () => {
         frozen: false,
         summary: null,
         teamOwned: false,
+        ownerKind: "unknown",
       },
     });
     render(
