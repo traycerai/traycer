@@ -482,13 +482,18 @@ export async function useInstalledHostTeam(
   const { environments } = await toAgentCliError(
     callHostRpc("environment.list", {}),
   );
-  const matches = environments.filter(
-    (environment) =>
-      environment.ownerKind === "organization" &&
-      (environment.environmentId === selector ||
-        environment.providerHandle === selector ||
-        environment.label === selector),
+  const teams = environments.filter(
+    (environment) => environment.ownerKind === "organization",
   );
+  const exactMatches = teams.filter(
+    (environment) =>
+      environment.environmentId === selector ||
+      environment.providerHandle === selector,
+  );
+  const matches =
+    exactMatches.length > 0
+      ? exactMatches
+      : teams.filter((environment) => environment.label === selector);
   if (matches.length !== 1) {
     throw cliError({
       code: CLI_ERROR_CODES.INVALID_ARGUMENT,
