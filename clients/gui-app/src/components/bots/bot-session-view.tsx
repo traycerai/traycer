@@ -131,12 +131,11 @@ export function BotSessionView(props: {
       <BotSessionStatus
         handle={handle}
         botId={botId}
-        hostId={hostId}
         chatId={session.chatId}
         threadId={session.threadId}
       />
     ),
-    [botId, hostId, session.chatId, session.threadId],
+    [botId, session.chatId, session.threadId],
   );
   const instanceId = `bot-session:${session.chatId}`;
   const title = `${botTitle} · ${session.threadId === null ? "trunk session" : "thread session"}`;

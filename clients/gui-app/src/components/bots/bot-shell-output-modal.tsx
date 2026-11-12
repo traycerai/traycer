@@ -13,7 +13,7 @@ import { TileFindContext } from "@/components/epic-canvas/tile-find/tile-find-ad
 export function BotShellOutputModal(props: {
   readonly botId: string;
   readonly sessionChatId: string;
-  readonly hostId: string;
+  readonly hostId: string | null;
   readonly commandId: string | null;
   readonly onClose: () => void;
   readonly restoreFocus: () => void;
@@ -37,7 +37,16 @@ export function BotShellOutputModal(props: {
         <DialogHeader>
           <DialogTitle>Shell output</DialogTitle>
         </DialogHeader>
-        {props.commandId === null ? null : (
+        {props.commandId !== null && props.hostId === null ? (
+          <div
+            role="status"
+            data-testid="bot-shell-output-unavailable"
+            className="px-3 py-2 text-ui-sm text-muted-foreground"
+          >
+            Output unavailable
+          </div>
+        ) : null}
+        {props.commandId !== null && props.hostId !== null ? (
           <BotShellOutput
             botId={props.botId}
             sessionChatId={props.sessionChatId}
@@ -45,7 +54,7 @@ export function BotShellOutputModal(props: {
             commandId={props.commandId}
             onClose={props.onClose}
           />
-        )}
+        ) : null}
       </DialogContent>
     </Dialog>
   );

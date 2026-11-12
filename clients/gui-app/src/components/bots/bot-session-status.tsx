@@ -20,20 +20,42 @@ import { formatAbsoluteDateTime } from "@/lib/relative-time";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
 import { openEpicFromListIntent } from "@/lib/tab-navigation/intents";
 import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
+import { admitsLocalPlane, useAuthStore } from "@/stores/auth/auth-store";
 
 const NO_STOPS: ReadonlySet<string> = new Set();
 const noStop = (): null => null;
 const noItem = (): void => {};
 
-export function BotSessionStatus(props: {
+interface BotSessionStatusProps {
   readonly handle: ChatSessionStoreHandle;
   readonly botId: string;
-  readonly hostId: string;
   readonly chatId: string;
   readonly threadId: string | null;
-}): ReactNode {
+}
+
+export function BotSessionStatus(props: BotSessionStatusProps): ReactNode {
+  const viewerId = useAuthStore((state) =>
+    admitsLocalPlane(state.status)
+      ? (state.contextMetadata?.userId ?? null)
+      : null,
+  );
+  return (
+    <BotSessionStatusForViewer
+      key={viewerId === null ? "none" : `viewer:${viewerId}`}
+      {...props}
+      viewerId={viewerId}
+    />
+  );
+}
+
+function BotSessionStatusForViewer(
+  props: BotSessionStatusProps & { readonly viewerId: string | null },
+): ReactNode {
   const data = useContext(BotSessionStatusDataContext);
-  const [outputCommandId, setOutputCommandId] = useState<string | null>(null);
+  const [output, setOutput] = useState<{
+    readonly commandId: string;
+    readonly hostId: string | null;
+  } | null>(null);
   const outputTrigger = useRef<HTMLElement | null>(null);
   const navigate = useNavigate();
   const readingWidth = useReadingWidthStyle();
@@ -144,8 +166,9 @@ export function BotSessionStatus(props: {
             <div className="@container mx-3 overflow-hidden rounded-t-lg border border-border bg-foreground/3">
               <BotShellOutputContext
                 value={(commandId, trigger) => {
+                  if (props.viewerId === null) return;
                   outputTrigger.current = trigger;
-                  setOutputCommandId(commandId);
+                  setOutput({ commandId, hostId: data.boundHostId });
                 }}
               >
                 <BackgroundItemsPanel
@@ -176,9 +199,9 @@ export function BotSessionStatus(props: {
         <BotShellOutputModal
           botId={props.botId}
           sessionChatId={props.chatId}
-          hostId={props.hostId}
-          commandId={outputCommandId}
-          onClose={() => setOutputCommandId(null)}
+          hostId={output?.hostId ?? null}
+          commandId={output?.commandId ?? null}
+          onClose={() => setOutput(null)}
           restoreFocus={() => outputTrigger.current?.focus()}
         />
       </ChatStatusExtraRowsContext>

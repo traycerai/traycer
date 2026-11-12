@@ -1558,6 +1558,7 @@ function BotTabContent(props: {
                   value={{
                     tasks: snapshot.tasks,
                     subscriptions: snapshot.notificationSubscriptions,
+                    boundHostId: snapshot.boundHost.hostId,
                   }}
                 >
                   <BotSessionView

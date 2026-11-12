@@ -4,12 +4,13 @@
  * stream. Only the transport, the host reachability read and navigation are
  * replaced.
  */
-import { StrictMode } from "react";
+import { StrictMode, type ReactElement } from "react";
 import {
   act,
   cleanup,
   fireEvent,
   render,
+  type RenderResult,
   screen,
   within,
 } from "@testing-library/react";
@@ -30,10 +31,12 @@ import {
   type ManagedCommandChatSessionStub,
 } from "@/stores/managed-commands/test-support/managed-command-chat-session";
 import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import type { TokenUsage } from "@traycer/protocol/persistence/epic/foundation";
 
 const mocks = vi.hoisted(() => ({
   reachable: true,
+  unreachableHosts: new Set<string>(),
   sessions: {} as Record<string, ChatSessionStoreHandle>,
   navigateToTabIntent: vi.fn<(...args: unknown[]) => void>(),
 }));
@@ -47,8 +50,11 @@ vi.mock("@/lib/tab-navigation", async (importOriginal) => ({
   navigateToTabIntent: mocks.navigateToTabIntent,
 }));
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
-  useHostReachability: () => ({
-    status: mocks.reachable ? "reachable" : "unreachable",
+  useHostReachability: (hostId: string) => ({
+    status:
+      mocks.reachable && !mocks.unreachableHosts.has(hostId)
+        ? "reachable"
+        : "unreachable",
   }),
 }));
 vi.mock("@/lib/host/use-durable-stream-transport", () => ({
@@ -138,6 +144,9 @@ import { UNRESOLVED_BOT_MEMBERS } from "@/lib/bots/bot-member-names";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const HOST_ID = "host-tab";
+const BOUND_HOST = "host-bound";
+const USER_A = { userId: "user-a", username: "ada" };
+const USER_B = { userId: "user-b", username: "bea" };
 const TRUNK_ID = "trunk-chat";
 
 const IDENTITY: BotIdentity = {
@@ -189,17 +198,29 @@ function freshSession(
   return handle;
 }
 
-function mountSession(input: {
+let queryClient = new QueryClient();
+
+/**
+ * The session view as the bot tab mounts it: `HOST_ID` is the host serving the
+ * tab, `boundHostId` the host the bot is bound to (`snapshot.boundHost.hostId`,
+ * nullable), which the tab hands the status surface beside the tasks.
+ */
+function sessionTree(input: {
   readonly chatId: string;
   readonly threadId: string | null;
-}): void {
-  render(
+  readonly boundHostId: string | null;
+}): ReactElement {
+  return (
     <StrictMode>
-      <QueryClientProvider client={new QueryClient()}>
+      <QueryClientProvider client={queryClient}>
         <TooltipProvider>
           <BotIdentityContext value={IDENTITY}>
             <BotSessionStatusDataContext
-              value={{ tasks: [], subscriptions: null }}
+              value={{
+                tasks: [],
+                subscriptions: null,
+                boundHostId: input.boundHostId,
+              }}
             >
               <BotSessionView
                 botId={BOT_ID}
@@ -220,8 +241,16 @@ function mountSession(input: {
           </BotIdentityContext>
         </TooltipProvider>
       </QueryClientProvider>
-    </StrictMode>,
+    </StrictMode>
   );
+}
+
+function mountSession(input: {
+  readonly chatId: string;
+  readonly threadId: string | null;
+  readonly boundHostId: string | null;
+}): RenderResult {
+  return render(sessionTree(input));
 }
 
 function view(): HTMLElement {
@@ -235,8 +264,10 @@ function openBackground(): void {
 
 beforeEach(() => {
   hostClient = new SupportScriptedClient(true);
+  queryClient = new QueryClient();
   transportOpens.length = 0;
   mocks.reachable = true;
+  mocks.unreachableHosts.clear();
   installLegendListTestClock();
   vi.clearAllMocks();
   installLegendListViewportMetrics();
@@ -309,10 +340,16 @@ function emitLiveness(
 
 async function openShellOutput(
   rowTestId: string,
-): Promise<{ readonly row: HTMLElement; readonly trigger: HTMLElement }> {
-  mountSession({
+  boundHostId: string | null,
+): Promise<{
+  readonly row: HTMLElement;
+  readonly trigger: HTMLElement;
+  readonly mounted: RenderResult;
+}> {
+  const mounted = mountSession({
     chatId: TRUNK_ID,
     threadId: null,
+    boundHostId,
   });
   await settleLegendList();
   openBackground();
@@ -320,7 +357,7 @@ async function openShellOutput(
   const trigger = within(row).getByRole("button");
   trigger.focus();
   fireEvent.click(trigger);
-  return { row, trigger };
+  return { row, trigger, mounted };
 }
 
 /** StrictMode opens the window's stream twice and closes the first. */
@@ -344,10 +381,52 @@ function dialog(): HTMLElement {
   return screen.getByRole("dialog");
 }
 
+const AUTH_AT_START = useAuthStore.getState();
+
+function signInAs(
+  identity: { readonly userId: string; readonly username: string },
+  status: "signed-in" | "unverified",
+): void {
+  act(() => {
+    useAuthStore.setState({ status, contextMetadata: identity });
+  });
+}
+
+function signOut(): void {
+  act(() => {
+    useAuthStore.setState({
+      status: "signed-out",
+      contextMetadata: null,
+      profile: null,
+    });
+  });
+}
+
+const ROW = `managed-command-background-row-${COMMAND_ID}`;
+
+function emitLateOutput(stream: FakeStreamSession, text: string): void {
+  act(() => {
+    stream.emit(
+      {
+        kind: "output",
+        lines: [streamLine(text)],
+        start: { segmentId: "seg-1", byteOffset: 100 },
+        hasBinaryPayload: false,
+      },
+      null,
+    );
+  });
+}
+
 describe("the read-only shell output modal over a bot session", () => {
   let session: ManagedCommandChatSessionStub;
 
   beforeEach(() => {
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: USER_A,
+      profile: AUTH_AT_START.profile,
+    });
     mocks.sessions[TRUNK_ID] = freshSession(TRUNK_ID, USAGE);
     session = installManagedCommandChatSession({
       epicId: BOT_ID,
@@ -361,20 +440,31 @@ describe("the read-only shell output modal over a bot session", () => {
   afterEach(() => {
     cleanup();
     session.dispose();
+    useAuthStore.setState({
+      profile: AUTH_AT_START.profile,
+      status: AUTH_AT_START.status,
+      contextMetadata: AUTH_AT_START.contextMetadata,
+    });
   });
 
   it("opens from a running shell row on the bound host with the bot, the viewed session and the command, and reads Loading until the first snapshot", async () => {
-    await openShellOutput(`managed-command-background-row-${COMMAND_ID}`);
+    await openShellOutput(
+      `managed-command-background-row-${COMMAND_ID}`,
+      BOUND_HOST,
+    );
 
     expect(transportOpens.length).toBeGreaterThan(0);
-    expect(transportOpens.every((id) => id === HOST_ID)).toBe(true);
+    expect(transportOpens.every((id) => id === BOUND_HOST)).toBe(true);
     expectEverySubscribeIs(COMMAND_ID);
     expect(within(dialog()).getByText("Shell output")).toBeTruthy();
     expect(within(dialog()).getByText(/Loading output/)).toBeTruthy();
   });
 
   it("shows the lines live once the snapshot and the live word have both arrived, with no lifecycle or input control", async () => {
-    await openShellOutput(`managed-command-background-row-${COMMAND_ID}`);
+    await openShellOutput(
+      `managed-command-background-row-${COMMAND_ID}`,
+      BOUND_HOST,
+    );
     const stream = onlyStream();
 
     emitSnapshot(
@@ -403,7 +493,10 @@ describe("the read-only shell output modal over a bot session", () => {
   });
 
   it("shows the ended status once the shell ends while the window is open", async () => {
-    await openShellOutput(`managed-command-background-row-${COMMAND_ID}`);
+    await openShellOutput(
+      `managed-command-background-row-${COMMAND_ID}`,
+      BOUND_HOST,
+    );
     const stream = onlyStream();
     emitSnapshot(stream, ["building"], runningCommand(COMMAND_ID));
     emitLiveness(stream, "live");
@@ -424,7 +517,10 @@ describe("the read-only shell output modal over a bot session", () => {
   });
 
   it("keeps the lines and says Not live while the host holds, and again when it resumes", async () => {
-    await openShellOutput(`managed-command-background-row-${COMMAND_ID}`);
+    await openShellOutput(
+      `managed-command-background-row-${COMMAND_ID}`,
+      BOUND_HOST,
+    );
     const stream = onlyStream();
     emitSnapshot(stream, ["tail-1"], runningCommand(COMMAND_ID));
     emitLiveness(stream, "live");
@@ -442,7 +538,10 @@ describe("the read-only shell output modal over a bot session", () => {
   });
 
   it("keeps the lines and says Not live when the connection drops", async () => {
-    await openShellOutput(`managed-command-background-row-${COMMAND_ID}`);
+    await openShellOutput(
+      `managed-command-background-row-${COMMAND_ID}`,
+      BOUND_HOST,
+    );
     const stream = onlyStream();
     emitSnapshot(stream, ["tail-1"], runningCommand(COMMAND_ID));
     emitLiveness(stream, "live");
@@ -457,7 +556,10 @@ describe("the read-only shell output modal over a bot session", () => {
 
   it("keeps the lines and says Not live while the bound host is unreachable, though the stream says live", async () => {
     mocks.reachable = false;
-    await openShellOutput(`managed-command-background-row-${COMMAND_ID}`);
+    await openShellOutput(
+      `managed-command-background-row-${COMMAND_ID}`,
+      BOUND_HOST,
+    );
     const stream = onlyStream();
 
     emitSnapshot(stream, ["tail-1"], runningCommand(COMMAND_ID));
@@ -470,7 +572,10 @@ describe("the read-only shell output modal over a bot session", () => {
   });
 
   it("clears the lines and reads Output unavailable when the host denies access", async () => {
-    await openShellOutput(`managed-command-background-row-${COMMAND_ID}`);
+    await openShellOutput(
+      `managed-command-background-row-${COMMAND_ID}`,
+      BOUND_HOST,
+    );
     const stream = onlyStream();
     emitSnapshot(stream, ["secret-1"], runningCommand(COMMAND_ID));
     emitLiveness(stream, "live");
@@ -486,7 +591,10 @@ describe("the read-only shell output modal over a bot session", () => {
   });
 
   it("keeps the lines but reads Output unavailable when the command is deleted after open", async () => {
-    await openShellOutput(`managed-command-background-row-${COMMAND_ID}`);
+    await openShellOutput(
+      `managed-command-background-row-${COMMAND_ID}`,
+      BOUND_HOST,
+    );
     const stream = onlyStream();
     emitSnapshot(stream, ["tail-1"], runningCommand(COMMAND_ID));
     emitLiveness(stream, "live");
@@ -502,7 +610,10 @@ describe("the read-only shell output modal over a bot session", () => {
   it("reads Output unavailable on a host that lacks the bot stream, with no epic subscription", async () => {
     hostClient.support = "unsupported";
 
-    await openShellOutput(`managed-command-background-row-${COMMAND_ID}`);
+    await openShellOutput(
+      `managed-command-background-row-${COMMAND_ID}`,
+      BOUND_HOST,
+    );
 
     expect(
       within(dialog()).getByTestId("bot-shell-output-unavailable"),
@@ -517,6 +628,7 @@ describe("the read-only shell output modal over a bot session", () => {
   it("returns focus to the row that opened it when the modal closes", async () => {
     const { trigger } = await openShellOutput(
       `managed-command-background-row-${COMMAND_ID}`,
+      BOUND_HOST,
     );
     expect(document.activeElement).not.toBe(trigger);
 
@@ -537,6 +649,7 @@ describe("the read-only shell output modal over a bot session", () => {
     mountSession({
       chatId: TRUNK_ID,
       threadId: null,
+      boundHostId: BOUND_HOST,
     });
     await settleLegendList();
     openBackground();
@@ -546,5 +659,148 @@ describe("the read-only shell output modal over a bot session", () => {
     fireEvent.click(heldRow);
 
     expectEverySubscribeIs("shell-held");
+  });
+  describe("when the signed-in account changes under an open window", () => {
+    async function openWithLines(): Promise<FakeStreamSession> {
+      await openShellOutput(ROW, BOUND_HOST);
+      const stream = onlyStream();
+      emitSnapshot(stream, ["alpha-secret"], runningCommand(COMMAND_ID));
+      emitLiveness(stream, "live");
+      expect(within(dialog()).getByText(/alpha-secret/)).toBeTruthy();
+      return stream;
+    }
+
+    it("closes the modal and drops the lines at once for a different account, and a late frame from the old stream cannot bring them back", async () => {
+      const stream = await openWithLines();
+      const subscribesBefore = hostClient.subscribes.length;
+
+      signInAs(USER_B, "signed-in");
+
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(screen.queryByText(/alpha-secret/)).toBeNull();
+      expect(stream.closed).toBe(true);
+
+      emitLateOutput(stream, "alpha-late");
+      emitSnapshot(stream, ["alpha-resnap"], runningCommand(COMMAND_ID));
+      emitLiveness(stream, "live");
+
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(
+        screen.queryByText(/alpha-late|alpha-resnap|alpha-secret/),
+      ).toBeNull();
+      expect(hostClient.subscribes).toHaveLength(subscribesBefore);
+    });
+
+    it("clears when the account signs out", async () => {
+      const stream = await openWithLines();
+
+      signOut();
+
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(screen.queryByText(/alpha-secret/)).toBeNull();
+      expect(stream.closed).toBe(true);
+    });
+
+    it("opens nothing from a shell row while no account is admitted", async () => {
+      signOut();
+      mountSession({
+        chatId: TRUNK_ID,
+        threadId: null,
+        boundHostId: BOUND_HOST,
+      });
+      await settleLegendList();
+      openBackground();
+
+      fireEvent.click(
+        within(within(view()).getByTestId(ROW)).getByRole("button"),
+      );
+
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(transportOpens).toEqual([]);
+    });
+
+    it("keeps the held lines when the same account goes unverified, as the same identity", async () => {
+      const stream = await openWithLines();
+      const subscribesBefore = hostClient.subscribes.length;
+
+      signInAs(USER_A, "unverified");
+
+      expect(within(dialog()).getByText(/alpha-secret/)).toBeTruthy();
+      expect(stream.closed).toBe(false);
+      expect(hostClient.subscribes).toHaveLength(subscribesBefore);
+    });
+  });
+
+  describe("when the viewing host is not the bot's bound host", () => {
+    it("subscribes on the bound host only, never on the viewing host", async () => {
+      await openShellOutput(ROW, BOUND_HOST);
+
+      expect(transportOpens.length).toBeGreaterThan(0);
+      expect(transportOpens).not.toContain(HOST_ID);
+      expect(new Set(transportOpens)).toEqual(new Set([BOUND_HOST]));
+    });
+
+    it("stays pinned to the host it opened on when the binding later changes", async () => {
+      const { mounted } = await openShellOutput(ROW, BOUND_HOST);
+      const stream = onlyStream();
+      emitSnapshot(stream, ["pinned-1"], runningCommand(COMMAND_ID));
+      emitLiveness(stream, "live");
+      const subscribesBefore = hostClient.subscribes.length;
+
+      mounted.rerender(
+        sessionTree({
+          chatId: TRUNK_ID,
+          threadId: null,
+          boundHostId: "host-rebound",
+        }),
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(50);
+      });
+
+      expect(new Set(transportOpens)).toEqual(new Set([BOUND_HOST]));
+      expect(hostClient.subscribes).toHaveLength(subscribesBefore);
+      expect(stream.closed).toBe(false);
+      expect(within(dialog()).getByText(/pinned-1/)).toBeTruthy();
+    });
+
+    it("keeps the lines and says Not live when the bound host is unreachable, though the viewing host is reachable", async () => {
+      mocks.unreachableHosts.add(BOUND_HOST);
+      await openShellOutput(ROW, BOUND_HOST);
+      const stream = onlyStream();
+
+      emitSnapshot(stream, ["bound-1"], runningCommand(COMMAND_ID));
+      emitLiveness(stream, "live");
+
+      expect(
+        within(dialog()).getByTestId("bot-shell-output-not-live"),
+      ).toBeTruthy();
+      expect(within(dialog()).getByText(/bound-1/)).toBeTruthy();
+      expect(transportOpens).not.toContain(HOST_ID);
+    });
+
+    it("reads live when the bound host is reachable even though the viewing host is not", async () => {
+      mocks.unreachableHosts.add(HOST_ID);
+      await openShellOutput(ROW, BOUND_HOST);
+      const stream = onlyStream();
+
+      emitSnapshot(stream, ["bound-1"], runningCommand(COMMAND_ID));
+      emitLiveness(stream, "live");
+
+      expect(
+        within(dialog()).queryByTestId("bot-shell-output-not-live"),
+      ).toBeNull();
+      expect(within(dialog()).getByText(/bound-1/)).toBeTruthy();
+    });
+
+    it("reads Output unavailable and dials no host when the bot has no bound host", async () => {
+      await openShellOutput(ROW, null);
+
+      expect(
+        within(dialog()).getByTestId("bot-shell-output-unavailable"),
+      ).toBeTruthy();
+      expect(transportOpens).toEqual([]);
+      expect(hostClient.subscribes).toEqual([]);
+    });
   });
 });
