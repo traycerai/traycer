@@ -601,6 +601,34 @@ describe("the canvas bootstrap in a running page", () => {
     expect(clicks).toBe(1);
   });
 
+  it("blocks a board control inside the html scrollbar marker while editing", () => {
+    const page = runCanvasPage(
+      "<div data-traycer-html-scrollbars><button>authored control</button></div>",
+    );
+    loaded(page);
+    let clicks = 0;
+    const button = page.window.document.querySelector("button");
+    button?.addEventListener("click", () => {
+      clicks += 1;
+    });
+    const click = () =>
+      button?.dispatchEvent(
+        new page.window.MouseEvent("click", {
+          bubbles: true,
+          cancelable: true,
+          button: 0,
+          detail: 1,
+        }),
+      );
+
+    expect(click()).toBe(false);
+    expect(clicks).toBe(0);
+
+    page.deliver(request(10, "set-mode", { mode: "play" }));
+    expect(click()).toBe(true);
+    expect(clicks).toBe(1);
+  });
+
   describe("Escape", () => {
     const shortcutPosts = (page: Page) =>
       page.posted.filter(
