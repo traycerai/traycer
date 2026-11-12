@@ -20,7 +20,9 @@ import {
 import type { UseStore } from "idb-keyval";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import {
+  deleteAndAwaitInvalidation,
   deleteDatabaseOutcome,
+  openHoldingConnection,
   rawGet,
 } from "@/lib/composer/__tests__/fake-idb";
 import { botBoxDraftsKey } from "@/lib/persist";
@@ -1234,5 +1236,57 @@ describe("a wipe of the image database under a running window", () => {
       (stored) => stored?.[BOT_ID]?.channel?.text === "pic",
     );
     expect(await rawGet(IMAGES_DB, "bytes", storedHash())).toBeDefined();
+  });
+
+  it("stores a draft's image again, and keeps it on reload, when the image database was deleted while the stored draft's image was being read back", async () => {
+    const hash = await storeImageBytes();
+    storeDraftsAsLeft({
+      [BOT_ID]: {
+        channel: {
+          text: "pic",
+          content: boxDoc("pic", [hashedImage(hash)]),
+          seedId: 1,
+        },
+      },
+    });
+    const connection = await openHoldingConnection(IMAGES_DB, "bytes");
+    const held = connection.hold(hash);
+    onTestFinished(() => held.release());
+    await held.started;
+    // The start reads the image back from the disk-only bytes, queued behind the held transaction.
+    app = await startApp();
+    const images = await import("@/lib/composer/landing-image-store");
+
+    const deletion = deleteAndAwaitInvalidation(
+      IMAGES_DB,
+      images.onLandingImagesDeleted,
+    );
+    await deletion.invalidated;
+    expect(images.hasLandingImageBytes(hash)).toBe(false);
+    held.release();
+    await hydrated(app);
+    await deletion.removed;
+
+    expect(images.hasLandingImageBytes(hash)).toBe(false);
+    expect(
+      JSON.stringify(app.drafts.getState().threadBoxes[BOT_ID]?.channel),
+    ).toContain(IMAGE_B64);
+    app.drafts.getState().typeThreadBox(BOT_ID, "channel", {
+      text: "pic more",
+      content: boxDoc("pic more", [INLINE_IMAGE]),
+      held: [],
+    });
+    await waitForStore(
+      app,
+      (stored) => stored?.[BOT_ID]?.channel?.text === "pic more",
+    );
+    expect(storedHash()).toBe(hash);
+    expect(await rawGet(IMAGES_DB, "bytes", hash)).toBeDefined();
+
+    app = await restart();
+
+    expect(
+      JSON.stringify(app.drafts.getState().threadBoxes[BOT_ID]?.channel),
+    ).toContain(IMAGE_B64);
   });
 });

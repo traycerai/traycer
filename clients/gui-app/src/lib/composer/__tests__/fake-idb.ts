@@ -112,3 +112,96 @@ export function deleteDatabaseOutcome(
     request.onerror = () => reject(failure(request.error));
   });
 }
+
+/**
+ * Deletes `dbName` and answers once the deletion has gone through. A connection
+ * that was told to close but still has transactions running keeps it waiting,
+ * which is what the callers hold open on purpose; `deleteDatabaseOutcome`
+ * answers `blocked` instead.
+ */
+export function deleteDatabaseWhenClosed(dbName: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.deleteDatabase(dbName);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(failure(request.error));
+  });
+}
+
+/**
+ * Starts the deletion of `dbName`. `invalidated` settles once the window's
+ * store has let go of its connection to it and told its listeners
+ * (`onLandingImagesDeleted`), which is before the deletion itself can finish
+ * when a transaction is still running; `removed` settles when it has.
+ */
+export function deleteAndAwaitInvalidation(
+  dbName: string,
+  onDeleted: (listener: () => void) => void,
+): { readonly invalidated: Promise<void>; readonly removed: Promise<void> } {
+  const invalidated = new Promise<void>((resolve) => onDeleted(resolve));
+  return { invalidated, removed: deleteDatabaseWhenClosed(dbName) };
+}
+
+/** A readwrite transaction kept running on a connection of its own, by {@link HoldingConnection.hold}. */
+export interface HeldTransaction {
+  /** Settles once the transaction has answered its first read: it is running, and what is queued after it waits. */
+  readonly started: Promise<void>;
+  /** Lets the transaction finish. */
+  release(): void;
+}
+
+export interface HoldingConnection {
+  /**
+   * Starts, in this call, a readwrite transaction that keeps reading `key`
+   * until it is released. Every transaction another connection starts on the
+   * store afterwards queues behind it.
+   */
+  hold(key: string): HeldTransaction;
+}
+
+/**
+ * Opens a connection to `dbName` (creating `storeName` if the database is new)
+ * that lets go when the database is deleted, as a store's own does, though
+ * the transaction it holds keeps running until released.
+ */
+export function openHoldingConnection(
+  dbName: string,
+  storeName: string,
+): Promise<HoldingConnection> {
+  return new Promise((resolve, reject) => {
+    const open = indexedDB.open(dbName);
+    open.onupgradeneeded = () => {
+      open.result.createObjectStore(storeName);
+    };
+    open.onerror = () => reject(failure(open.error));
+    open.onsuccess = () => {
+      const db = open.result;
+      db.onversionchange = () => db.close();
+      resolve({
+        hold(key) {
+          let released = false;
+          let began = (): void => undefined;
+          const started = new Promise<void>((resolveStarted) => {
+            began = resolveStarted;
+          });
+          const objectStore = db
+            .transaction(storeName, "readwrite")
+            .objectStore(storeName);
+          const poll = (): void => {
+            const request = objectStore.get(key);
+            request.onsuccess = () => {
+              began();
+              if (!released) poll();
+            };
+          };
+          poll();
+          return {
+            started,
+            release: () => {
+              released = true;
+            },
+          };
+        },
+      });
+    };
+  });
+}

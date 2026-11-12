@@ -14,6 +14,7 @@ import {
 } from "@/lib/composer/landing-image-budget";
 import {
   getImageBytes,
+  landingImageDeletions,
   landingImagePartition,
   onLandingImagesDeleted,
   putImage,
@@ -869,12 +870,14 @@ async function readBack(hash: string): Promise<ReadBack> {
  * no longer holds is dropped. Any other image it cannot read back is left
  * out of the box and kept for its writes (`writer.unresolved`). Each image
  * read back is remembered under its hash, so a write that cannot wait keeps
- * it.
+ * it, unless the image store was deleted while they were read: the box still
+ * gets them back, and its next write stores them again.
  */
 async function inlineStoredImages(
   state: PersistedBotBoxDrafts,
   read: number,
 ): Promise<PersistedBotBoxDrafts> {
+  const deletions = landingImageDeletions();
   const hashes = new Set<string>();
   for (const draft of eachDraft(state.threadBoxes)) {
     if (draft.content === null) continue;
@@ -914,11 +917,13 @@ async function inlineStoredImages(
   });
   // A read overtaken meanwhile leaves the writer to the read that overtook it.
   if (!wiped() && read === writer.readGeneration) {
-    const restored = new Map<string, string>();
-    for (const [hash, outcome] of found) {
-      if (outcome.kind === "bytes") restored.set(outcome.b64content, hash);
+    if (deletions === landingImageDeletions()) {
+      const restored = new Map<string, string>();
+      for (const [hash, outcome] of found) {
+        if (outcome.kind === "bytes") restored.set(outcome.b64content, hash);
+      }
+      writer.hashByInline = new Map([...writer.hashByInline, ...restored]);
     }
-    writer.hashByInline = new Map([...writer.hashByInline, ...restored]);
     const { keys, bots } = writer.droppedDuringRead;
     writer.unresolved = new Map(
       [...unresolved].filter(

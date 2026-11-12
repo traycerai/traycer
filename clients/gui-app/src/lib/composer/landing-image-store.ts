@@ -173,11 +173,37 @@ export function onLandingImagesDeleted(listener: () => void): void {
 }
 
 /**
+ * How many times this window's image store has been deleted under it. Closing
+ * the connection lets the transactions already running on it finish, so an
+ * operation queued before a deletion can end after it, holding what the
+ * deleted database had. Whatever publishes what an operation found (presence,
+ * a measured size, a caller's map of what the store holds) takes this count
+ * when the operation starts and publishes only while it is unchanged; what the
+ * operation read is still returned to its caller.
+ */
+let deletions = 0;
+
+/** {@link deletions}, for a caller that keeps its own map of what the store holds. */
+export function landingImageDeletions(): number {
+  return deletions;
+}
+
+/**
+ * Whether an operation that started at deletion count `since` may publish
+ * presence or a size for `hash`: nothing was deleted since, or this window
+ * holds the bytes in memory, which a deletion keeps (`forgetDeletedImages`).
+ */
+function publishable(hash: string, since: number): boolean {
+  return since === deletions || session.has(hash) || reclaimCustody.has(hash);
+}
+
+/**
  * This window's image store was deleted: only the bytes held in memory, the
  * session's and those a reclaim holds, are still to be had, so presence and
  * the measured sizes keep those alone.
  */
 function forgetDeletedImages(): void {
+  deletions += 1;
   const held = (hash: string): boolean =>
     session.has(hash) || reclaimCustody.has(hash);
   for (const hash of knownHashes) {
@@ -289,6 +315,7 @@ async function writeImageUnderHash(
   }
   const seededKnown = !knownHashes.has(hash);
   knownHashes.add(hash);
+  const since = deletions;
   const store = imageStore();
   try {
     if ((await get(hash, store)) === undefined) {
@@ -296,7 +323,7 @@ async function writeImageUnderHash(
     }
     // After the write, and on the dedupe path too: a hash whose bytes were
     // already there may still be unmeasured (an older build wrote them).
-    rememberMeasuredSize(hash, bytes.byteLength);
+    if (publishable(hash, since)) rememberMeasuredSize(hash, bytes.byteLength);
   } catch (error) {
     // The durable write failed: roll back the optimistic seeding THIS call added
     // (a dedupe hit that found the hash already cached is left intact). Without
@@ -332,8 +359,9 @@ export async function getImageBytes(
     knownHashes.add(hash);
     return retained;
   }
+  const since = deletions;
   const stored = await get<ImageBytes>(hash, imageStore());
-  if (stored !== undefined) {
+  if (stored !== undefined && publishable(hash, since)) {
     knownHashes.add(hash);
     rememberMeasuredSize(hash, stored.byteLength);
   }
@@ -422,6 +450,7 @@ async function runImageReclaim(
   hash: string,
   isRooted: ImageRootProbe,
 ): Promise<ImageReclaimOutcome> {
+  const since = deletions;
   const store = imageStore();
   if (stillRooted(hash, isRooted)) return "kept";
   const retained = await get<ImageBytes>(hash, store);
@@ -462,7 +491,10 @@ async function runImageReclaim(
     await set(hash, retained, store);
     knownHashes.add(hash);
     rememberMeasuredSize(hash, retained.byteLength);
-    reclaimCustody.delete(hash);
+    // A deletion since may have taken the write back with the database: then
+    // custody keeps the bytes, and the next sweep writes them again
+    // (`flushReclaimCustody`).
+    if (since === deletions) reclaimCustody.delete(hash);
     return "kept";
   } catch (error: unknown) {
     // Custody is deliberately NOT released. The delete may have committed, so
@@ -496,11 +528,13 @@ export async function flushReclaimCustody(): Promise<number> {
     // the very commit it is about to make. Its `finally` leaves custody in
     // whatever state is true, and the next sweep picks up what is left.
     if (reclaimFlights.has(hash)) continue;
+    const since = deletions;
     try {
       await set(hash, bytes, imageStore());
       knownHashes.add(hash);
       rememberMeasuredSize(hash, bytes.byteLength);
-      reclaimCustody.delete(hash);
+      // As at a reclaim's restore: a deletion since may have taken the write.
+      if (since === deletions) reclaimCustody.delete(hash);
     } catch {
       // Still refused. Keep holding: dropping the entry here would destroy the
       // only copy of bytes something references.
@@ -544,13 +578,16 @@ function stillRooted(hash: string, isRooted: ImageRootProbe): boolean {
 
 /** Every hash with bytes persisted in this runtime's partition. */
 export async function imageHashKeys(): Promise<string[]> {
+  const since = deletions;
   const keysList = await keys<string>(imageStore());
   // Enumerating durable keys is the source of truth for presence, so fold them
   // into `knownHashes`. This keeps `hasLandingImageBytes` honest even when a
   // restored image rendered from the app-wide blob cache (a cache hit never
   // calls the per-surface fetcher / `getImageBytes`, so that path wouldn't seed
   // it). Cheap and idempotent; the module also runs this once at init below.
-  for (const hash of keysList) knownHashes.add(hash);
+  for (const hash of keysList) {
+    if (publishable(hash, since)) knownHashes.add(hash);
+  }
   return keysList;
 }
 
@@ -616,6 +653,7 @@ export function releaseSession(hash: string): void {
  * `getImageBytes` records the size it reads, so the measurement is the read.
  */
 async function hydrateMeasuredImageSizes(): Promise<void> {
+  const since = deletions;
   // The ENUMERATION first, because it is the one that decides what "this
   // partition does not hold that hash" is allowed to mean. Until it has run,
   // the presence set is empty for a reason that has nothing to do with the
@@ -643,6 +681,11 @@ async function hydrateMeasuredImageSizes(): Promise<void> {
   for (const hash of resident) {
     if (measuredSizes.has(hash)) continue;
     await getImageBytes(hash);
+  }
+  // A deletion during the pass leaves it having measured a partition that is
+  // gone: not hydrated, so the next attempt enumerates what is there now.
+  if (since !== deletions) {
+    throw new Error("landing image store deleted during hydration");
   }
 }
 
