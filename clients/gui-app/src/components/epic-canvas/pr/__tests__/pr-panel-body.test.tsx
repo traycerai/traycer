@@ -683,7 +683,7 @@ describe("PrPanelBody card list", () => {
       );
     });
 
-    it("opens a collapsed repo group while a query is typed", async () => {
+    it("holds a collapsed repo group open while a query is typed, keeping its fold", async () => {
       const epicId = "epic-s2";
       renderPanel({ epicId, tabId: "tab-s2" });
       await emitSnapshot(epicId, searchRows());
@@ -692,6 +692,9 @@ describe("PrPanelBody card list", () => {
 
       typeQuery("export");
       expect(screen.getByTestId("mock-pr-card-feat/export")).toBeTruthy();
+      const header = screen.getByTestId("pr-repo-group-header");
+      expect(header.hasAttribute("disabled")).toBe(true);
+      fireEvent.click(header);
 
       fireEvent.keyDown(screen.getByTestId("pr-panel-search-input"), {
         key: "Escape",

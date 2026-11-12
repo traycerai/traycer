@@ -368,9 +368,10 @@ export function PrPanelBodyContent(props: {
               tabId={props.tabId}
               hostId={props.hostId}
               group={group}
-              // A search opens every group, so no match sits behind a fold.
+              // A search opens every group, so no match sits behind a fold,
+              // and holds them open: the saved folds return when it clears.
+              forcedOpen={searching}
               collapsed={
-                !searching &&
                 collapsedRepos.has(
                   formatRepoGroupLabel(group.repoIdentifier),
                 ) &&
@@ -397,6 +398,8 @@ function PrRepoGroupSection(props: {
   readonly tabId: string;
   readonly group: PrRepoGroup;
   readonly collapsed: boolean;
+  /** Open whatever `collapsed` says, with the toggle disabled. */
+  readonly forcedOpen: boolean;
   readonly onToggle: (repoLabel: string) => void;
   readonly buildEntry: (item: PrLightItem) => PrRowEntry;
 }): ReactNode {
@@ -405,23 +408,25 @@ function PrRepoGroupSection(props: {
   const handleToggle = useCallback((): void => {
     onToggle(label);
   }, [onToggle, label]);
+  const collapsed = props.collapsed && !props.forcedOpen;
   return (
     <div className="flex min-w-0 flex-col gap-0.5" data-testid="pr-repo-group">
       <button
         type="button"
-        aria-expanded={!props.collapsed}
-        aria-label={`${props.collapsed ? "Expand" : "Collapse"} ${label}`}
+        aria-expanded={!collapsed}
+        aria-label={`${collapsed ? "Expand" : "Collapse"} ${label}`}
+        disabled={props.forcedOpen}
         onClick={handleToggle}
         // Reads as a section label rather than a row: uppercase + tracking put
         // it in a different register from the PR titles below it, so the two
         // are never scanned as the same kind of thing.
-        className="flex w-full min-w-0 items-center gap-1.5 px-3 py-1 text-left text-ui-xs font-medium tracking-wide text-muted-foreground uppercase transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50 focus-visible:outline-none"
+        className="flex w-full min-w-0 items-center gap-1.5 px-3 py-1 text-left text-ui-xs font-medium tracking-wide text-muted-foreground uppercase transition-colors enabled:hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50 focus-visible:outline-none"
         data-testid="pr-repo-group-header"
       >
         <ChevronRight
           className={cn(
             "size-3.5 shrink-0 transition-transform",
-            !props.collapsed && "rotate-90",
+            !collapsed && "rotate-90",
           )}
           aria-hidden
         />
@@ -431,7 +436,7 @@ function PrRepoGroupSection(props: {
           {props.group.items.length}
         </span>
       </button>
-      {props.collapsed ? null : (
+      {collapsed ? null : (
         <div className="flex min-w-0 flex-col divide-y divide-border/25 border-y border-border/25">
           {props.group.blocks.map((block) => {
             if (block.kind === "single") {

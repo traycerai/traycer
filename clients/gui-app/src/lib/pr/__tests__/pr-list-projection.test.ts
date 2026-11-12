@@ -708,6 +708,21 @@ describe("prMatchesSearch", () => {
     expect(matches("#77", row)).toBe(false);
   });
 
+  it("matches a #word term against text fields", () => {
+    expect(matches("#login", { title: "Fix #login redirect" })).toBe(true);
+  });
+
+  it("folds the title the way it folds the query, so a match has a highlight", () => {
+    const title = "ΟΣ İstanbul";
+    const terms = prSearchTerms("οσ");
+    expect(prMatchesSearch(item({ title }), terms)).toBe(true);
+    expect(prSearchSegments(title, terms)[0]).toEqual({
+      start: 0,
+      text: "ΟΣ",
+      match: true,
+    });
+  });
+
   it("matches a list-only row with no base on its other fields", () => {
     const row = { base: null, title: null };
     expect(matches("#4226", row)).toBe(false);
@@ -719,6 +734,13 @@ describe("prSearchSegments", () => {
   it("returns the whole text unmarked when no word term applies", () => {
     expect(prSearchSegments("Fix #12", prSearchTerms("#12"))).toEqual([
       { start: 0, text: "Fix #12", match: false },
+    ]);
+  });
+
+  it("highlights a bare number in the title", () => {
+    expect(prSearchSegments("Fix issue 77", prSearchTerms("77"))).toEqual([
+      { start: 0, text: "Fix issue ", match: false },
+      { start: 10, text: "77", match: true },
     ]);
   });
 
