@@ -146,7 +146,7 @@ export function TeamSetupChannel(props: {
         <BotMessageComposerUnavailable
           placeholder={`Message ${setup.title}`}
           label={`Message ${setup.title}`}
-          reason={`${setup.title} can reply once the team has a host.`}
+          reason={`${setup.title} can reply once the team has a computer.`}
           testId="team-setup-composer"
         />
       </section>
@@ -167,7 +167,7 @@ interface TeamSetupLive {
 }
 
 /** The line under a host button while the team's own computer is joining. */
-const MACHINE_JOINING_NOTE = "A machine is joining the team.";
+const MACHINE_JOINING_NOTE = "A computer is joining the team.";
 
 /**
  * The setup post: what the team's main bot is, that the team needs a host,
@@ -184,10 +184,7 @@ function TeamSetupPostBody(props: {
         set up bots for each area: a channel per bot, with the work and its
         reports in it.
       </p>
-      <p>
-        Before I can run, the team needs a host: a machine where its bots
-        execute.
-      </p>
+      <p>Before I can run, the team needs a computer for its bots.</p>
       <TeamHostOptionsCard live={props.live} />
     </div>
   );
@@ -209,7 +206,7 @@ function TeamHostOptionsCard(props: {
       data-testid="team-host-options"
     >
       <h2 className="text-ui-sm font-semibold text-foreground">
-        Give the team a host
+        Give the team a computer
       </h2>
       <TeamHostOption
         title="Enable cloud for the team"
@@ -535,5 +532,5 @@ const TEAM_SETUP_ARRIVAL_LINES: Readonly<
   Record<BotOnboardingArrival["kind"], (teamName: string) => string>
 > = {
   cloud: (teamName) => `Cloud enabled for ${teamName} · bots run on sandboxes`,
-  machine: (teamName) => `${teamName}'s machine joined · bots run on it`,
+  machine: (teamName) => `${teamName}'s computer joined · bots run on it`,
 };
