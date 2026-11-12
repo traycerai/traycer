@@ -120,6 +120,7 @@ vi.mock("@/hooks/host/use-host-queries", () => hostQueriesMock);
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostBinding: () => mocks.binding,
+  useHostClient: () => null,
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-defaults", async (importOriginal) => ({
   ...(await importOriginal<
