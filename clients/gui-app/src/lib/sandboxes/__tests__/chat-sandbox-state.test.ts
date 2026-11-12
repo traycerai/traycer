@@ -66,7 +66,7 @@ describe("resolveChatSandbox", () => {
 
     expect(view.line).toMatchObject({
       place: "slot",
-      text: "Couldn't start build-box at 11:01 · SBX-0414",
+      text: "Couldn't start build-box at 11:01 · The sandbox took too long to start. · SBX-0414",
     });
     expect(view.composer).toEqual({ kind: "line" });
   });
