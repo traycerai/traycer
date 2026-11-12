@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, fireEvent, render } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/plain-schemas";
@@ -58,6 +58,12 @@ function freshPlainCollection(
 const durableCollection = vi.hoisted(() => ({
   value: null as PlainTerminalCollection | null,
 }));
+const hostDirectory = vi.hoisted(() => ({
+  entry: null as { hostId: string; label: string | null } | null,
+}));
+const toastHarness = vi.hoisted(() => ({
+  toast: vi.fn<(message: string) => void>(),
+}));
 
 // A terminal's task directory is named by its host's directory row; this
 // suite has no host directory and no task terminal in the task's own folder.
@@ -66,6 +72,10 @@ vi.mock("@/hooks/terminal/use-task-home-directory", () => ({
   useTaskHomeDirectoryFor: () => () => null,
 }));
 vi.mock("@/lib/host", () => ({
+  useHostDirectory: () => ({
+    findById: (hostId: string) =>
+      hostDirectory.entry?.hostId === hostId ? hostDirectory.entry : null,
+  }),
   useHostClient: () => null,
   useHostRuntimeClient: () => ({
     resolveHostById: () => null,
@@ -76,10 +86,10 @@ vi.mock("@/lib/host", () => ({
 }));
 
 vi.mock("@/lib/terminals/resolve-plain-terminal-owner-client", () => ({
-  useResolvePlainTerminalOwnerHostClient: () => () => ({
-    request: vi.fn(),
-  }),
+  useResolvePlainTerminalOwnerHostClient: () => () => null,
 }));
+
+vi.mock("sonner", () => ({ toast: toastHarness.toast }));
 
 // The sidebar reads the Epic SESSION's host (it sits outside every tile's
 // `<TabHostProvider>`); no `EpicSessionContext` is mounted here, so pin it to
@@ -181,6 +191,8 @@ describe("terminal sidebar durable projection rows", () => {
     durableCollection.value = freshPlainCollection([
       epicRunningPlainTerminal(TERMINAL_ID),
     ]);
+    hostDirectory.entry = { hostId: HOST_ID, label: "Studio Mac" };
+    toastHarness.toast.mockClear();
   });
 
   afterEach(() => {
@@ -197,5 +209,34 @@ describe("terminal sidebar durable projection rows", () => {
     expect(
       getByTestId(`epic-terminal-sidebar-item-${TERMINAL_ID}`),
     ).not.toBeNull();
+  });
+
+  it("names the unavailable computer in the terminal toast", () => {
+    const { getByTestId } = render(
+      wrapper(<TerminalsPanelBody epicId={EPIC_ID} tabId={TAB_ID} />),
+    );
+
+    fireEvent.click(getByTestId(`epic-terminal-sidebar-item-${TERMINAL_ID}`));
+
+    expect(toastHarness.toast).toHaveBeenCalledWith(
+      "Can't open this terminal right now - Studio Mac is not reachable.",
+    );
+  });
+
+  it.each([
+    ["a missing entry", null],
+    ["a blank label", { hostId: HOST_ID, label: "   " }],
+    ["a label equal to the host id", { hostId: HOST_ID, label: HOST_ID }],
+  ])("uses the plain host fallback for %s", (_description, entry) => {
+    hostDirectory.entry = entry;
+    const { getByTestId } = render(
+      wrapper(<TerminalsPanelBody epicId={EPIC_ID} tabId={TAB_ID} />),
+    );
+
+    fireEvent.click(getByTestId(`epic-terminal-sidebar-item-${TERMINAL_ID}`));
+
+    expect(toastHarness.toast).toHaveBeenCalledWith(
+      "Can't open this terminal right now - the host is not reachable.",
+    );
   });
 });

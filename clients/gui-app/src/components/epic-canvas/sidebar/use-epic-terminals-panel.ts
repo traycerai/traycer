@@ -13,6 +13,8 @@
 import { useCallback, useEffect, useMemo } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { toast } from "sonner";
+import { useHostDirectory } from "@/lib/host";
+import { hostNameFromLabel } from "@/lib/host/host-name";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useTerminalKillFor } from "@/hooks/terminal/use-terminal-kill-for-mutation";
 import { useTerminalList } from "@/hooks/terminal/use-terminal-list-query";
@@ -180,6 +182,7 @@ export function useEpicTerminalsPanel(args: {
   });
   const durableMutations = useHostPlainTerminalMutations(durableAuthority);
   const resolveOwnerClient = useResolvePlainTerminalOwnerHostClient();
+  const directory = useHostDirectory();
 
   const closeCapability = durableAuthority.capability.status;
   const closeCanMutate = durableAuthority.canMutate;
@@ -222,7 +225,7 @@ export function useEpicTerminalsPanel(args: {
     (row: TerminalSidebarSessionRow): EpicTerminalRef | null => {
       if (row.durable && resolveOwnerClient(row.hostId) === null) {
         toast(
-          `Can't open this terminal right now - host ${row.hostId} is not reachable.`,
+          `Can't open this terminal right now - ${hostNameFromLabel(directory.findById(row.hostId)?.label ?? null, row.hostId)} is not reachable.`,
         );
         return null;
       }
@@ -234,7 +237,7 @@ export function useEpicTerminalsPanel(args: {
         taskHome: taskHomeFor(row.hostId),
       });
     },
-    [resolveOwnerClient, taskHomeFor],
+    [directory, resolveOwnerClient, taskHomeFor],
   );
 
   // Host keeps exited sessions for a 60s grace window; filter so a
