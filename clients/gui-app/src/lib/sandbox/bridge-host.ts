@@ -671,10 +671,12 @@ export class SandboxBridgeHost {
   }
 
   /**
-   * A page's pointer and layout reports are hints, not proof that the reader
-   * did anything: they count only from a commentable html page the app has
-   * put in Edit, and reach listeners at most once a frame per kind, so a page
-   * can neither open a comment on its own nor flood the overlay.
+   * These hints come from a nonce-proven page, not proven human input. Once
+   * the app enables Edit, page scripts can forge picks or hover reports that
+   * change selection or outlines, or open a draft. They cannot enable Edit,
+   * post a comment or invoke privileged host operations through this channel.
+   * Delivery keeps the latest report per kind per animation frame; incoming
+   * parsing is not rate-limited.
    */
   private receivePageActivity(activity: CanvasPageActivity): void {
     if (this.isCanvasBoard() || this.requestedMode !== "edit") return;
