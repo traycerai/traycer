@@ -660,6 +660,43 @@ describe("the read-only shell output modal over a bot session", () => {
     expect(document.activeElement).toBe(trigger);
   });
 
+  describe("when the row that opened the modal is gone by the time it closes", () => {
+    const OTHER = "shell-other";
+
+    async function closeWithTriggerRowGone(
+      remaining: ManagedCommand[],
+    ): Promise<void> {
+      await openShellOutput(ROW, BOUND_HOST);
+      act(() => {
+        session.setCommands(remaining);
+      });
+      fireEvent.keyDown(dialog(), { key: "Escape", code: "Escape" });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(50);
+      });
+      expect(screen.queryByRole("dialog")).toBeNull();
+    }
+
+    function focusIsInsideTheSessionView(): boolean {
+      const active = document.activeElement;
+      return (
+        active !== null && active !== document.body && view().contains(active)
+      );
+    }
+
+    it("lands focus inside the session view when other rows remain", async () => {
+      await closeWithTriggerRowGone([runningCommand(OTHER)]);
+
+      expect(focusIsInsideTheSessionView()).toBe(true);
+    });
+
+    it("lands focus inside the session view when it was the last row", async () => {
+      await closeWithTriggerRowGone([]);
+
+      expect(focusIsInsideTheSessionView()).toBe(true);
+    });
+  });
+
   it("opens from a held shell row too", async () => {
     session.setHeldUpdates([
       { commandId: "shell-held", description: "held watcher", heldAtMs: 4_000 },
@@ -719,7 +756,7 @@ describe("the read-only shell output modal over a bot session", () => {
       expect(stream.closed).toBe(true);
     });
 
-    it("opens nothing from a shell row while no account is admitted", async () => {
+    it("offers no shell opener while no account is admitted, and opens nothing from the row", async () => {
       signOut();
       mountSession({
         chatId: TRUNK_ID,
@@ -729,9 +766,9 @@ describe("the read-only shell output modal over a bot session", () => {
       await settleLegendList();
       openBackground();
 
-      fireEvent.click(
-        within(within(view()).getByTestId(ROW)).getByRole("button"),
-      );
+      const row = within(view()).getByTestId(ROW);
+      expect(within(row).queryByRole("button")).toBeNull();
+      fireEvent.click(row);
 
       expect(screen.queryByRole("dialog")).toBeNull();
       expect(transportOpens).toEqual([]);

@@ -20,6 +20,7 @@ import {
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { managedCommandSchema } from "@traycer/protocol/host/managed-command/unary-schemas";
 import type {
   BotNotificationSubscription,
@@ -523,6 +524,12 @@ describe("the trunk session's status surfaces", () => {
       chatId: TRUNK_ID,
       hostId: HOST_ID,
     });
+    // A shell row opens its output only for an admitted account.
+    const authAtStart = useAuthStore.getState();
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "user-a", username: "ada" },
+    });
     try {
       session.setCommands([command]);
       session.setConnectionStatus("open");
@@ -551,6 +558,10 @@ describe("the trunk session's status surfaces", () => {
     } finally {
       cleanup();
       session.dispose();
+      useAuthStore.setState({
+        status: authAtStart.status,
+        contextMetadata: authAtStart.contextMetadata,
+      });
     }
   });
 
