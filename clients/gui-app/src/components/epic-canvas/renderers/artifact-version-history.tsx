@@ -180,8 +180,16 @@ function externalDetail(
 function deleteDetail(
   provenance: Extract<Provenance, { readonly kind: "delete" }>,
 ): string {
-  const actor = provenance.actorKind?.replaceAll("_", " ") ?? null;
-  return actor === null ? "Deleted" : `Deleted by ${actor}`;
+  switch (provenance.actorKind) {
+    case "user_session":
+      return "Deleted by a person";
+    case "agent":
+      return "Deleted by an agent";
+    case "multiple_agents":
+      return "Deleted by agents";
+    default:
+      return "Deleted";
+  }
 }
 
 function provenanceDetailText(provenance: Provenance): string | null {
@@ -195,7 +203,7 @@ function provenanceDetailText(provenance: Provenance): string | null {
     case "external":
       return externalDetail(provenance);
     case "system":
-      return provenance.originalActorHint ?? provenance.trigger;
+      return null;
     case "remote_merge":
       return null;
     case "restore":
@@ -205,7 +213,7 @@ function provenanceDetailText(provenance: Provenance): string | null {
     case "delete":
       return deleteDetail(provenance);
     case "clobber":
-      return provenance.source;
+      return null;
   }
 }
 
@@ -1222,9 +1230,6 @@ function RestoreVersionDialog(props: {
         ) : null}
         {props.preflight === null || props.refreshing ? null : (
           <div className="space-y-3">
-            <p className="rounded-md bg-foreground/5 p-3 font-mono text-ui-xs break-all">
-              Current hash: {props.preflight.currentHash}
-            </p>
             {props.preflight.threadCount > 0 ? (
               <div className="flex gap-2 rounded-lg border p-3">
                 <InfoIcon className="mt-0.5 size-4 shrink-0 text-info-foreground" />

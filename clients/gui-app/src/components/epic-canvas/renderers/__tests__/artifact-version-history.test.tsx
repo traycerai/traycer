@@ -736,23 +736,81 @@ describe("<ArtifactVersionHistoryEntryPoint />", () => {
     expect(screen.getByText("Deleted", { selector: "p" })).toBeTruthy();
   });
 
-  it("names the delete actor without showing its operation reference", () => {
+  it.each([
+    { actorKind: "user_session", detail: "Deleted by a person" },
+    { actorKind: "agent", detail: "Deleted by an agent" },
+    { actorKind: "multiple_agents", detail: "Deleted by agents" },
+    { actorKind: "external", detail: "Deleted" },
+    { actorKind: "system", detail: "Deleted" },
+    { actorKind: "remote_merge", detail: "Deleted" },
+    { actorKind: "restore", detail: "Deleted" },
+    { actorKind: "revive", detail: "Deleted" },
+    { actorKind: "delete", detail: "Deleted" },
+    { actorKind: "clobber", detail: "Deleted" },
+  ] as const)(
+    "labels delete actor kind $actorKind as $detail",
+    ({ actorKind, detail }) => {
+      state.historyEntries = [
+        {
+          ...observation("observation-delete-actor", null),
+          provenance: {
+            kind: "delete",
+            deleteOpId: "delete-operation-reference",
+            actorKind,
+          },
+        },
+      ];
+
+      openHistory();
+
+      expect(screen.getByText(detail, { selector: "p" })).toBeTruthy();
+    },
+  );
+
+  it("does not render system actor hints or triggers as detail text", () => {
     state.historyEntries = [
       {
-        ...observation("observation-deleted-by-agent", null),
+        ...observation("observation-system-hint", null),
         provenance: {
-          kind: "delete",
-          deleteOpId: "delete-operation-reference-with-actor",
-          actorKind: "agent",
+          kind: "system",
+          trigger: "private-system-trigger",
+          originalActorHint: "private-system-hint",
+        },
+      },
+      {
+        ...observation("observation-system-trigger", null),
+        provenance: {
+          kind: "system",
+          trigger: "private-system-trigger-only",
+          originalActorHint: null,
         },
       },
     ];
 
     openHistory();
 
-    expect(
-      screen.getByText("Deleted by agent", { selector: "p" }),
-    ).toBeTruthy();
+    const history = screen.getByTestId("artifact-version-history-list");
+    expect(history.querySelectorAll("p")).toHaveLength(1);
+    expect(history.textContent).not.toContain("private-system-hint");
+    expect(history.textContent).not.toContain("private-system-trigger");
+  });
+
+  it("does not render the clobber source as detail text", () => {
+    state.historyEntries = [
+      {
+        ...observation("observation-clobber", null),
+        provenance: {
+          kind: "clobber",
+          source: "private-clobber-source",
+        },
+      },
+    ];
+
+    openHistory();
+
+    const history = screen.getByTestId("artifact-version-history-list");
+    expect(history.querySelectorAll("p")).toHaveLength(1);
+    expect(history.textContent).not.toContain("private-clobber-source");
   });
 
   it("names each version with its captured date and time", () => {
@@ -906,6 +964,43 @@ describe("<ArtifactVersionHistoryEntryPoint />", () => {
       },
     });
     expect(state.queryInvalidationCalls).toEqual([]);
+  });
+
+  it("keeps the restore concurrency hash in the request without showing it in the dialog", () => {
+    state.historyEntries = [
+      observation("observation-private-hash", "Target snapshot"),
+    ];
+    state.blobByObservationId.set("observation-private-hash", {
+      contentHash: HASH_A,
+      markdown: "target body",
+    });
+    state.restorePreflight = {
+      kind: "preflight",
+      imagesMissing: [],
+      threadCount: 0,
+      currentHash: HASH_B,
+    };
+    openHistory();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Restore this version" }),
+    );
+
+    expect(screen.queryByText(`Current hash: ${HASH_B}`)).toBeNull();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Restore as new version" }),
+    );
+    expect(state.mutationCalls).toContainEqual({
+      method: "epic.artifactVersions.restore",
+      variables: {
+        epicId: "epic-a",
+        artifactId: "artifact-a",
+        targetObservationId: "observation-private-hash",
+        mode: "execute",
+        expectedCurrentHash: HASH_B,
+        bodyOnly: false,
+      },
+    });
   });
 
   it("renders the clean restore outcome banner and badge", () => {
