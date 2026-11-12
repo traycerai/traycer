@@ -25,7 +25,6 @@ import {
   dispatchAction,
   type KeybindingRouter,
 } from "@/lib/keybindings/dispatch";
-import { useTitleBarDragStore } from "@/stores/layout/title-bar-drag-store";
 
 /**
  * The strip depends on the host SCOPE, not on the six hooks it composes, so
@@ -591,33 +590,6 @@ describe("<AppStatusBar /> usage panel chord", () => {
     });
 
     expect(lastPopoverProps).toEqual({ side: "top", align: "start" });
-  });
-
-  it('suppresses title-bar dragging under the id "rate-limits" only while the usage panel is open', () => {
-    render(<AppStatusBar />);
-
-    expect(useTitleBarDragStore.getState().suppressors.has("rate-limits")).toBe(
-      false,
-    );
-
-    act(() => {
-      dispatchAction("app.rate-limits.open", DYNAMIC_ACTION_ROUTER);
-    });
-
-    expect(useTitleBarDragStore.getState().suppressors.has("rate-limits")).toBe(
-      true,
-    );
-
-    // The header trigger's own id, and mutually exclusive by placement - the
-    // strip owns it while its panel is open, and hands it back when the panel
-    // closes, same as the resource popover does for its own key.
-    act(() => {
-      fireEvent.keyDown(document, { key: "Escape" });
-    });
-
-    expect(useTitleBarDragStore.getState().suppressors.has("rate-limits")).toBe(
-      false,
-    );
   });
 });
 

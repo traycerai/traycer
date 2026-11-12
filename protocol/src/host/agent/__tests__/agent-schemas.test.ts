@@ -493,12 +493,14 @@ describe("agent host schemas", () => {
         models: [
           {
             id: "opus-4.7",
+            resolvedModel: null,
             reasoningEfforts: ["low", "medium", "high"],
             fastModeAvailable: false,
             serviceTiers: [],
           },
           {
             id: "gpt-5.5",
+            resolvedModel: null,
             reasoningEfforts: ["low", "medium", "high"],
             fastModeAvailable: true,
             serviceTiers: ["priority"],

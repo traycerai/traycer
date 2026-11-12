@@ -28,6 +28,7 @@ import {
   listHarnessModelsRequestSchemaV20,
   listHarnessModelsRequestSchema,
   listHarnessModelsResponseSchemaV20,
+  listHarnessModelsResponseSchemaV21,
   listHarnessModelsResponseSchema,
   listAgentsRequestSchema,
   listAgentsResponseSchema,
@@ -327,7 +328,27 @@ export const agentListHarnessModelsV21 = defineRpcContract({
   method: "agent.listHarnessModels",
   schemaVersion: { major: 2, minor: 1 } as const,
   requestSchema: listHarnessModelsRequestSchema,
+  responseSchema: listHarnessModelsResponseSchemaV21,
+});
+
+export const agentListHarnessModelsV22 = defineRpcContract({
+  method: "agent.listHarnessModels",
+  schemaVersion: { major: 2, minor: 2 } as const,
+  requestSchema: listHarnessModelsRequestSchema,
   responseSchema: listHarnessModelsResponseSchema,
+});
+
+export const agentListHarnessModelsUpgradeV21ToV22 = defineUpgradePath<
+  typeof agentListHarnessModelsV21,
+  typeof agentListHarnessModelsV22
+>({
+  from: agentListHarnessModelsV21.schemaVersion,
+  to: agentListHarnessModelsV22.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    ...response,
+    models: response.models.map((model) => ({ ...model, resolvedModel: null })),
+  }),
 });
 
 export const agentListHarnessModelsUpgradeV20ToV21 = defineUpgradePath<
@@ -355,10 +376,10 @@ export const agentListHarnessModelsUpgradeV1ToV2 = defineUpgradePath<
 });
 
 export const agentListHarnessModelsDowngradeV2ToV1 = defineDowngradePath<
-  typeof agentListHarnessModelsV21,
+  typeof agentListHarnessModelsV22,
   typeof agentListHarnessModelsV10
 >({
-  from: { major: 2, minor: 1 },
+  from: { major: 2, minor: 2 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) => {
     if (

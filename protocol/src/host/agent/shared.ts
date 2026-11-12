@@ -924,9 +924,16 @@ export const harnessModelSummarySchemaV20 = lazySchema(() =>
     fastModeAvailable: z.boolean(),
   }),
 );
-export const harnessModelSummarySchema = lazySchema(() =>
+export const harnessModelSummarySchemaV21 = lazySchema(() =>
   harnessModelSummarySchemaV20.extend({
     serviceTiers: z.array(z.string()),
+  }),
+);
+export const harnessModelSummarySchema = lazySchema(() =>
+  harnessModelSummarySchemaV21.extend({
+    // Provider-reported targets can float or be duplicated; display only,
+    // never a replacement for the caller's stored model selection.
+    resolvedModel: z.string().nullable(),
   }),
 );
 export type HarnessModelSummary = z.infer<typeof harnessModelSummarySchema>;
@@ -939,10 +946,15 @@ export const listHarnessModelsResponseSchemaV20 = lazySchema(() =>
   }),
 );
 
-export const listHarnessModelsResponseSchema = lazySchema(() =>
+export const listHarnessModelsResponseSchemaV21 = lazySchema(() =>
   z.object({
     harnessId: agentFacingHarnessIdSchema,
     profileId: z.string().nullable(),
+    models: z.array(harnessModelSummarySchemaV21),
+  }),
+);
+export const listHarnessModelsResponseSchema = lazySchema(() =>
+  listHarnessModelsResponseSchemaV21.extend({
     models: z.array(harnessModelSummarySchema),
   }),
 );
