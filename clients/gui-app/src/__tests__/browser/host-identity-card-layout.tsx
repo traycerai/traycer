@@ -23,7 +23,13 @@ export function HostCard(props: { readonly failed: boolean }): ReactElement {
     isLocalMachine: false,
     platform: "win32-x64",
     kind: "sandbox",
-    sandbox: { state: "awake", frozen: false, summary: null, teamOwned: false },
+    sandbox: {
+      state: "awake",
+      frozen: false,
+      summary: null,
+      ownerKind: "unknown",
+      teamOwned: false,
+    },
   });
   return (
     <div data-testid={host.hostId}>

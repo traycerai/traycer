@@ -232,6 +232,7 @@ function sandboxOf(
       frozen,
       ...overrides,
     }),
+    ownerKind: "unknown",
     teamOwned: false,
   };
 }
@@ -336,7 +337,13 @@ describe("team creator and wake payer", () => {
 
   it("uses neutral payer wording when team sandbox details are unavailable", () => {
     renderCard(
-      { state: "suspended", frozen: true, summary: null, teamOwned: true },
+      {
+        state: "suspended",
+        frozen: true,
+        summary: null,
+        ownerKind: "team",
+        teamOwned: true,
+      },
       true,
     );
     expect(text("sandbox-card-state-line")).toBe(

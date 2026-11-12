@@ -650,6 +650,7 @@ describe("Overview ▸ Installation — account facts", () => {
       state: "awake" as const,
       frozen: false,
       summary,
+      ownerKind: "unknown",
       teamOwned: false,
     };
     // The header's destroy confirmation reads the runtime binding. A routeless

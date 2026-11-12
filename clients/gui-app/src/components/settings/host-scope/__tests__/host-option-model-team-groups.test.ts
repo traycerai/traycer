@@ -81,6 +81,7 @@ function sandboxRow(
       frozen: false,
       summary:
         summary === null ? null : sandboxSummaryFixture({ hostId, ...summary }),
+      ownerKind: "unknown",
       teamOwned: owner?.kind === "team",
     },
   });
@@ -295,6 +296,7 @@ describe("groupHostOptions teams", () => {
         state: "awake",
         frozen: false,
         summary: sandboxSummaryFixture({ hostId: "no-item" }),
+        ownerKind: "unknown",
         teamOwned: false,
       },
     });
@@ -309,6 +311,7 @@ describe("groupHostOptions teams", () => {
           hostId: "no-item-burst",
           burst: true,
         }),
+        ownerKind: "unknown",
         teamOwned: false,
       },
     });

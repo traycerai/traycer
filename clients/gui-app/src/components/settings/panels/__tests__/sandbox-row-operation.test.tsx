@@ -1,3 +1,4 @@
+import type { HostScopeSandbox } from "@/components/settings/host-scope/host-scope-model";
 import { StoppedSandboxSendReceiptStrip } from "@/components/sandboxes/stopped-sandbox-send-receipts";
 import {
   stoppedReceiptPicks,
@@ -488,10 +489,11 @@ describe("sandbox row operations", () => {
 
   it("shows the Settings dialog's pending operation and its failure on the card too", async () => {
     const { answer, client, main } = setup(SUSPEND_CASE, null);
-    const sandbox = {
+    const sandbox: HostScopeSandbox = {
       state: main.state,
       frozen: false,
       summary: main,
+      ownerKind: "unknown",
       teamOwned: false,
     };
     render(
@@ -589,10 +591,11 @@ describe("sandbox row operations", () => {
     async ({ testCase, frozen, pending }) => {
       const { answer, client, main } = setup(testCase, { frozen });
       const row = await press(testCase);
-      const sandbox = {
+      const sandbox: HostScopeSandbox = {
         state: testCase.initial,
         frozen,
         summary: main,
+        ownerKind: "unknown",
         teamOwned: false,
       };
       render(
@@ -782,10 +785,11 @@ describe("sandbox row operations", () => {
   it("drops a Stop refused as a conflict, on the row and the card, once neither offers Stop", async () => {
     const { answer, binding, client, main, other } = setup(STOP_CASE, null);
     const card = (state: HostSandboxState) => {
-      const sandbox = {
+      const sandbox: HostScopeSandbox = {
         state,
         frozen: false,
         summary: { ...main, state },
+        ownerKind: "unknown",
         teamOwned: false,
       };
       return (

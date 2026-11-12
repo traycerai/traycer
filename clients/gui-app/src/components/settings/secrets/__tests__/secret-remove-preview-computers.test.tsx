@@ -297,6 +297,7 @@ describe("Remove's preview on Personal names the computers that hold a copy", ()
             state: null,
             frozen: false,
             summary: null,
+            ownerKind: "unknown",
             teamOwned: false,
           },
         }),

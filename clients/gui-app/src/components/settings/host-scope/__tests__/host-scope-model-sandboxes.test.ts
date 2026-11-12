@@ -102,6 +102,7 @@ describe("buildHostScopeOptions sandbox facts", () => {
       state: "suspended",
       frozen: true,
       summary,
+      ownerKind: "unknown",
       teamOwned: false,
     });
     // The join is by host id: another sandbox does not inherit this summary.
@@ -203,6 +204,7 @@ describe("buildHostScopeOptions sandbox facts", () => {
       state: "awake",
       frozen: false,
       summary: null,
+      ownerKind: "unknown",
       teamOwned: false,
     });
   });
@@ -233,6 +235,7 @@ describe("sandbox grouping predicates", () => {
       state: "awake",
       frozen: false,
       summary: sandboxSummaryFixture({ hostId: "n", burst: false }),
+      ownerKind: "unknown",
       teamOwned: false,
     },
   });
@@ -243,13 +246,20 @@ describe("sandbox grouping predicates", () => {
       state: "awake",
       frozen: false,
       summary: sandboxSummaryFixture({ hostId: "b", burst: true }),
+      ownerKind: "unknown",
       teamOwned: false,
     },
   });
   const unanswered = hostScopeOptionFixture({
     hostId: "u",
     kind: "sandbox",
-    sandbox: { state: "awake", frozen: false, summary: null, teamOwned: false },
+    sandbox: {
+      state: "awake",
+      frozen: false,
+      summary: null,
+      ownerKind: "unknown",
+      teamOwned: false,
+    },
   });
 
   it("puts each row in the group the host list and the pickers agree on", () => {
@@ -269,6 +279,7 @@ describe("sandbox grouping predicates", () => {
         state: "awake",
         frozen: false,
         summary: sandboxSummaryFixture({ hostId: "a", kind: "automation" }),
+        ownerKind: "unknown",
         teamOwned: false,
       },
     });
@@ -320,6 +331,7 @@ describe("sleeping sandbox picks", () => {
           frozen: input.frozen,
           kind: input.kind,
         }),
+        ownerKind: "unknown",
         teamOwned: false,
       },
     });
@@ -398,6 +410,7 @@ describe("sleeping sandbox picks", () => {
         state: "awake",
         frozen: false,
         summary: sandboxSummaryFixture({ hostId: "b", burst: true }),
+        ownerKind: "unknown",
         teamOwned: false,
       },
     });
@@ -408,6 +421,7 @@ describe("sleeping sandbox picks", () => {
         state: "awake",
         frozen: false,
         summary: null,
+        ownerKind: "unknown",
         teamOwned: false,
       },
     });
@@ -452,6 +466,7 @@ describe("credentialTargetHostOptions", () => {
         state,
         frozen,
         summary: sandboxSummaryFixture({ hostId, state, frozen, burst }),
+        ownerKind: "unknown",
         teamOwned: false,
       },
     });
@@ -479,6 +494,7 @@ describe("credentialTargetHostOptions", () => {
         state: "awake",
         frozen: false,
         summary: null,
+        ownerKind: "unknown",
         teamOwned: false,
       },
     });
@@ -494,6 +510,7 @@ describe("sandbox row words", () => {
         state: "suspended",
         frozen: true,
         summary: null,
+        ownerKind: "unknown",
         teamOwned: false,
       }),
     ).toBe("Suspended");
@@ -502,6 +519,7 @@ describe("sandbox row words", () => {
         state: "stopped",
         frozen: false,
         summary: null,
+        ownerKind: "unknown",
         teamOwned: false,
       }),
     ).toBe("Stopped");
@@ -510,6 +528,7 @@ describe("sandbox row words", () => {
         state: null,
         frozen: false,
         summary: null,
+        ownerKind: "unknown",
         teamOwned: false,
       }),
     ).toBe("Status unknown");
@@ -526,6 +545,7 @@ describe("sandbox row words", () => {
             state: "awake",
             frozen: false,
             summary: null,
+            ownerKind: "unknown",
             teamOwned: false,
           },
         }),
@@ -561,7 +581,13 @@ describe("hostTakesCredentials", () => {
           hostScopeOptionFixture({
             hostId: "s",
             kind: "sandbox",
-            sandbox: { state, frozen, summary, teamOwned: false },
+            sandbox: {
+              state,
+              frozen,
+              summary,
+              ownerKind: "unknown",
+              teamOwned: false,
+            },
           }),
         ),
       ).toBe(false);
@@ -589,6 +615,7 @@ describe("hostTakesCredentials", () => {
           state: "awake",
           frozen: false,
           summary: null,
+          ownerKind: "unknown",
           teamOwned: false,
         },
       }),

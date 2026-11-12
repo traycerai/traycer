@@ -259,6 +259,7 @@ function sandboxOf(
       frozen,
       ...overrides,
     }),
+    ownerKind: "user",
     teamOwned: false,
   };
 }
@@ -720,6 +721,18 @@ describe("rates", () => {
     },
   );
 
+  it("does not mistake an unpriced ledger zero for no billing", () => {
+    mocks.costs = {
+      sandboxes: [{ ...COST, currentRateMillicreditsPerHour: 0 }],
+      awakeBurnMillicreditsPerHour: 0,
+      todayYoursMillicredits: 0,
+      todayByEnvironment: [],
+    };
+    renderCard(sandboxOf("awake", false, { priceMcPerHour: null }));
+    expect(screen.queryByText("Not billing", { exact: true })).toBeNull();
+    expect(screen.getByText("Not priced here", { exact: true })).toBeTruthy();
+  });
+
   it("keeps the authoritative personal ledger rate during a transition", () => {
     mocks.costs = {
       sandboxes: [
@@ -1041,7 +1054,13 @@ describe("without a summary", () => {
   });
 
   function renderWithoutSummary(state: HostScopeSandbox["state"]): void {
-    renderCard({ state, frozen: false, summary: null, teamOwned: false });
+    renderCard({
+      state,
+      frozen: false,
+      summary: null,
+      ownerKind: "unknown",
+      teamOwned: false,
+    });
   }
 
   it("says it is loading while the list has not answered", async () => {
@@ -1276,7 +1295,7 @@ describe("Automations row", () => {
 
     renderCard(sandbox);
 
-    expect(screen.queryByText("Free", { exact: true })).toBeNull();
+    expect(screen.queryAllByText("Free", { exact: true })).toHaveLength(0);
     expect(screen.queryByText("Free today", { exact: true })).toBeNull();
     expect(screen.getByText("$0.12 an hour", { exact: true })).toBeTruthy();
     expect(screen.getByText("Storage rate", { exact: true })).toBeTruthy();
@@ -1296,7 +1315,7 @@ describe("Automations row", () => {
 
     renderCard(sandbox);
 
-    expect(screen.queryByText("Free", { exact: true })).toBeNull();
+    expect(screen.queryAllByText("Free", { exact: true })).toHaveLength(0);
     expect(screen.queryByText("Free today", { exact: true })).toBeNull();
     expect(screen.getByText("Not priced here", { exact: true })).toBeTruthy();
     expect(screen.queryByTestId("sandbox-card-other-rate")).toBeNull();
@@ -2123,6 +2142,44 @@ describe("Overview Costs and Secrets tabs", () => {
       </QueryClientProvider>,
     );
   }
+
+  it("does not call a summary-only Automations pod free before ownership arrives", () => {
+    const summary = sandboxSummaryFixture({
+      kind: "automation",
+      state: "awake",
+      createdBy: null,
+      priceMcPerHour: TEAM_AUTOMATION_PRICE,
+    });
+    const options = buildHostScopeOptions({
+      directory: [],
+      registry: [],
+      sandboxes: [summary],
+      leases: [],
+      authorityAttached: false,
+      localHostId: null,
+      activeHostId: null,
+      localService: undefined,
+      localPlatform: null,
+      hasLiveSession: () => false,
+      localHostSettingUp: false,
+      localHostTerminalRunNote: null,
+      nowMs: 0,
+    });
+    const sandbox = options[0]?.sandbox;
+    if (sandbox === null) throw new Error("Missing sandbox");
+    mocks.costs = {
+      sandboxes: [COST],
+      awakeBurnMillicreditsPerHour: 120,
+      todayYoursMillicredits: 0,
+      todayByEnvironment: [],
+    };
+    renderCard(sandbox);
+    renderCosts(sandbox);
+    expect(screen.queryAllByText("Free", { exact: true })).toHaveLength(0);
+    expect(screen.queryByText("Free today", { exact: true })).toBeNull();
+    expect(screen.getByText("$0.12 an hour", { exact: true })).toBeTruthy();
+    expect(screen.getByText("$0.12 an hour while awake")).toBeTruthy();
+  });
 
   it("splits the personal ledger into rate, today, charged, compute, storage, pending, and balance", () => {
     mocks.costs = {
