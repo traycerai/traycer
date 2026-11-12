@@ -611,7 +611,7 @@ describe("<ArtifactVersionHistoryEntryPoint />", () => {
     openHistory();
 
     const chatLink = screen.getByRole("button", {
-      name: "Open chat Auth hardening",
+      name: "Open chat Auth hardening from version 1",
     });
     expect(chatLink.parentElement?.textContent).toBe("Agent · Auth hardening");
 
@@ -813,8 +813,7 @@ describe("<ArtifactVersionHistoryEntryPoint />", () => {
     expect(history.textContent).not.toContain("private-clobber-source");
   });
 
-  it("names each version with its captured date and time", () => {
-    const observationId = "observation-readable-version";
+  it("distinguishes versions and untitled chat links captured within one minute", () => {
     const capturedAt = 1_700_000_000_000;
     const formattedCapturedAt = new Intl.DateTimeFormat(undefined, {
       month: "short",
@@ -823,16 +822,25 @@ describe("<ArtifactVersionHistoryEntryPoint />", () => {
       minute: "2-digit",
     }).format(capturedAt);
     state.historyEntries = [
-      { ...observation(observationId, "Readable snapshot"), capturedAt },
+      { ...observation("first-snapshot", null), capturedAt },
+      {
+        ...observation("second-snapshot", null),
+        capturedAt: capturedAt + 1000,
+      },
     ];
-
     openHistory();
-
-    expect(
-      screen.getByRole("button", {
-        name: `Select version from ${formattedCapturedAt}`,
-      }),
-    ).toBeTruthy();
+    for (const ordinal of [1, 2]) {
+      expect(
+        screen.getByRole("button", {
+          name: `Select version ${ordinal} from ${formattedCapturedAt}`,
+        }),
+      ).toBeTruthy();
+      expect(
+        screen.getByRole("button", {
+          name: `Open chat Untitled chat from version ${ordinal}`,
+        }),
+      ).toBeTruthy();
+    }
   });
 
   it("labels user edits without showing user or host ids", () => {

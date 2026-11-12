@@ -38,9 +38,7 @@ describe("usage host split labels", () => {
       const label = screen.getByText(name);
       expect(label.textContent).toBe(name);
       expect(tooltipTextNear(label)).toBe(name);
-      expect(
-        screen.getByTestId(`usage-host-split-row-${HOST_ID}`).textContent,
-      ).not.toContain(HOST_ID);
+      expect(screen.getByRole("listitem").textContent).not.toContain(HOST_ID);
     },
   );
 });

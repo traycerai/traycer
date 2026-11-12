@@ -99,6 +99,25 @@ describe("buildUsageHostSplitRows", () => {
 });
 
 describe("buildUsageHostFilterOptions", () => {
+  it("gives unnamed and duplicate named options distinct labels without changing values", () => {
+    const options = buildUsageHostFilterOptions({
+      hostNames: new Map([
+        ["named-a", "Studio Mac"],
+        ["named-b", "Studio Mac"],
+        ["named-suffix", "Studio Mac 2"],
+      ]),
+      hostIdsWithUsage: ["unnamed-a", "unnamed-b"],
+      selectedHostId: "unnamed-b",
+    });
+    expect(options.map(({ hostId, name }) => ({ hostId, name }))).toEqual([
+      { hostId: "named-a", name: "Studio Mac" },
+      { hostId: "named-b", name: "Studio Mac 3" },
+      { hostId: "named-suffix", name: "Studio Mac 2" },
+      { hostId: "unnamed-a", name: "Unnamed computer" },
+      { hostId: "unnamed-b", name: "Unnamed computer 2" },
+    ]);
+  });
+
   it("offers directory hosts and hosts with usage alike, named ones first then by name", () => {
     const options = buildUsageHostFilterOptions({
       hostNames: new Map([

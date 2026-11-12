@@ -224,6 +224,7 @@ type AgentProvenance = Extract<
 
 function AgentProvenanceDetail(props: {
   readonly provenance: AgentProvenance;
+  readonly versionOrdinal: number;
   readonly onOpenChat: (chatId: string) => void;
 }): ReactNode {
   const title = props.provenance.chatTitle?.trim() || "Untitled chat";
@@ -233,7 +234,7 @@ function AgentProvenanceDetail(props: {
       <button
         type="button"
         className="font-medium underline underline-offset-2 hover:text-foreground"
-        aria-label={`Open chat ${title}`}
+        aria-label={`Open chat ${title} from version ${props.versionOrdinal}`}
         onClick={() => props.onOpenChat(props.provenance.chatId)}
       >
         {title}
@@ -244,11 +245,13 @@ function AgentProvenanceDetail(props: {
 
 function ObservationProvenanceDetail(props: {
   readonly provenance: Provenance;
+  readonly versionOrdinal: number;
   readonly onOpenChat: (chatId: string) => void;
 }): ReactNode {
   if (props.provenance.kind === "agent") {
     return (
       <AgentProvenanceDetail
+        versionOrdinal={props.versionOrdinal}
         provenance={props.provenance}
         onOpenChat={props.onOpenChat}
       />
@@ -958,7 +961,7 @@ function VersionObservationList(props: {
         >
           <button
             type="button"
-            aria-label={`Select version from ${formatCapturedAt(entry.capturedAt)}`}
+            aria-label={`Select version ${index + 1} from ${formatCapturedAt(entry.capturedAt)}`}
             data-testid={`artifact-version-observation-${entry.observationId}`}
             onClick={() => props.onSelect(entry.observationId)}
             className="w-full px-3 py-2.5 text-left"
@@ -994,6 +997,7 @@ function VersionObservationList(props: {
             </span>
           </button>
           <ObservationProvenanceDetail
+            versionOrdinal={index + 1}
             provenance={entry.provenance}
             onOpenChat={props.onOpenChat}
           />

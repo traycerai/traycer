@@ -1,3 +1,4 @@
+import { buildUsageHostFilterOptions } from "@/lib/usage-analytics/usage-host-split";
 /**
  * The trigger stays a standard select and may truncate. The selected host's
  * full name is the row under it, and it wraps. The sentence under the amount
@@ -80,6 +81,27 @@ function renderFilter(
 }
 
 describe("UsageHostFilter", () => {
+  it("names the selected unnamed computer distinctly from another unnamed option", () => {
+    const options = buildUsageHostFilterOptions({
+      hostNames: new Map(),
+      hostIdsWithUsage: ["unnamed-a", "unnamed-b"],
+      selectedHostId: "unnamed-b",
+    });
+    render(
+      <TooltipProvider>
+        <UsageHostFilter
+          options={options}
+          hostId="unnamed-b"
+          onChange={() => undefined}
+          pinnedToHostName={null}
+        />
+      </TooltipProvider>,
+    );
+    expect(
+      screen.getByRole("combobox", { name: "Unnamed computer 2" }),
+    ).toBeTruthy();
+  });
+
   it("leaves All hosts unredacted", () => {
     renderFilter(null, null);
 

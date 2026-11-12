@@ -115,7 +115,7 @@ export function buildUsageHostFilterOptions(input: {
     ...input.hostIdsWithUsage,
   ]);
   if (input.selectedHostId !== null) ids.add(input.selectedHostId);
-  return [...ids]
+  const options = [...ids]
     .map((hostId) => {
       const name = input.hostNames.get(hostId);
       return {
@@ -134,4 +134,19 @@ export function buildUsageHostFilterOptions(input: {
         a.name.localeCompare(b.name) ||
         a.hostId.localeCompare(b.hostId),
     );
+  const reservedNames = new Set(options.map((option) => option.name));
+  const usedNames = new Set<string>();
+  return options.map((option) => {
+    let name = option.name;
+    let ordinal = 2;
+    while (
+      usedNames.has(name) ||
+      (name !== option.name && reservedNames.has(name))
+    ) {
+      name = `${option.name} ${ordinal}`;
+      ordinal += 1;
+    }
+    usedNames.add(name);
+    return { ...option, name };
+  });
 }
