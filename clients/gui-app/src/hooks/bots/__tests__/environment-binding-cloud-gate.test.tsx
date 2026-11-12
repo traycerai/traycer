@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { useEffect } from "react";
 import type { ReactNode } from "react";
 import {
   HostClient,
@@ -39,9 +40,16 @@ const VIEWER = "user-1";
 const TARGET_HOST = "host-9";
 const OTHER_HOST = "host-10";
 const POOL_ENTRY = poolHostDirectoryEntry("wss://pool.test/rpc");
+interface DeferredStatusAnswer {
+  readonly kind: "deferred_status";
+  readonly promise: Promise<EnvironmentStatusResponseV12>;
+  readonly resolve: (answer: EnvironmentStatusResponseV12) => void;
+}
+type StatusAnswer = EnvironmentStatusResponseV12 | Error | DeferredStatusAnswer;
 let statusAnswer: EnvironmentStatusResponseV12 | Error =
   environmentStatusFixture({});
-let statusAnswers: ReadonlyArray<EnvironmentStatusResponseV12 | Error> = [];
+let statusAnswers: ReadonlyArray<StatusAnswer> = [];
+let bindingAnswers: ReadonlyArray<EnvironmentHostBinding | Error> = [];
 /** What OTHER_HOST's completed handshake says, or that none has completed. */
 let otherManifest: "advertises_status" | "lacks_status" | "no_handshake" =
   "advertises_status";
@@ -127,6 +135,25 @@ const OTHER_BINDING: EnvironmentHostBinding = {
   hostId: OTHER_HOST,
 };
 
+function deferredStatusAnswer(): DeferredStatusAnswer {
+  let resolveAnswer: (answer: EnvironmentStatusResponseV12) => void = () =>
+    undefined;
+  const promise = new Promise<EnvironmentStatusResponseV12>((resolve) => {
+    resolveAnswer = resolve;
+  });
+  return {
+    kind: "deferred_status",
+    promise,
+    resolve: resolveAnswer,
+  };
+}
+
+function isDeferredStatusAnswer(
+  answer: StatusAnswer,
+): answer is DeferredStatusAnswer {
+  return "kind" in answer;
+}
+
 function signInAs(status: "signed-in" | "unverified"): void {
   useAuthStore.setState({
     status,
@@ -145,7 +172,7 @@ function mount(initialBinding: EnvironmentHostBinding) {
   });
   const reads: string[] = [];
   const hostReads: string[] = [];
-  const statusReads: Array<EnvironmentStatusResponseV12 | Error> = [];
+  const statusReads: StatusAnswer[] = [];
   let poolBinding = initialBinding;
   const targetEntry = { ...mockLocalHostEntry, hostId: TARGET_HOST };
   const otherEntry = { ...mockLocalHostEntry, hostId: OTHER_HOST };
@@ -173,13 +200,17 @@ function mount(initialBinding: EnvironmentHostBinding) {
       requestId: () => "req",
       handlers: {
         "environment.binding.read": (params) => {
+          const answer =
+            bindingAnswers[reads.length] ??
+            (params.hostId === OTHER_HOST ? OTHER_BINDING : poolBinding);
           reads.push(params.hostId);
-          return params.hostId === OTHER_HOST ? OTHER_BINDING : poolBinding;
+          return answer instanceof Error ? Promise.reject(answer) : answer;
         },
         "environment.status": () => {
           const answer = statusAnswers[statusReads.length] ?? statusAnswer;
           statusReads.push(answer);
-          return answer instanceof Error ? Promise.reject(answer) : answer;
+          if (answer instanceof Error) return Promise.reject(answer);
+          return isDeferredStatusAnswer(answer) ? answer.promise : answer;
         },
         "environment.host.read": () => {
           hostReads.push(TARGET_HOST);
@@ -237,6 +268,7 @@ describe("environment.binding.read in a pool build", () => {
     settleProcessHostRpcTierPlan(POOL_ENTRY);
     statusAnswer = environmentStatusFixture({});
     statusAnswers = [];
+    bindingAnswers = [];
     otherManifest = "advertises_status";
     connectable.hostIds = [];
     invalidateLocalTeamAdmissionAfterClaim.mockReset();
@@ -378,6 +410,57 @@ describe("environment.binding.read in a pool build", () => {
     expect(rendered.result.current.byHostId.has(TARGET_HOST)).toBe(false);
     expect(fixture.reads).toEqual([TARGET_HOST]);
     expect(fixture.statusReads).toHaveLength(1);
+  });
+
+  it("asks a failed binding again only after the re-read status answers", async () => {
+    signInAs("signed-in");
+    connectable.hostIds = [TARGET_HOST];
+    const localStatus = environmentStatusFixture({
+      principal: null,
+      planes: { records: "local", broker: "local", room: "local" },
+    });
+    const deferredStatus = deferredStatusAnswer();
+    statusAnswers = [
+      environmentStatusFixture({ principal: { kind: "personal" } }),
+      deferredStatus,
+    ];
+    bindingAnswers = [new Error("binding unavailable"), BINDING];
+    const fixture = mount(BINDING);
+    const byHostIdHistory: boolean[] = [];
+    const rendered = renderHook(
+      () => {
+        const bindings = useHostEnvironmentBindings([TARGET_HOST], true);
+        useEffect(() => {
+          byHostIdHistory.push(bindings.byHostId.has(TARGET_HOST));
+        }, [bindings]);
+        return bindings;
+      },
+      { wrapper: fixture.wrapper },
+    );
+
+    await waitFor(() => {
+      expect(rendered.result.current.failedHostIds).toEqual([TARGET_HOST]);
+    });
+    expect(fixture.reads).toEqual([TARGET_HOST]);
+
+    act(() => rendered.result.current.retryFailed());
+    await waitFor(() => expect(fixture.statusReads).toHaveLength(2));
+
+    expect(fixture.reads).toEqual([TARGET_HOST]);
+    expect(rendered.result.current.byHostId.has(TARGET_HOST)).toBe(false);
+    expect(byHostIdHistory).not.toContain(true);
+
+    act(() => {
+      deferredStatus.resolve(localStatus);
+    });
+
+    await waitFor(() => {
+      expect(rendered.result.current.ownSettingsHostIds).toEqual([TARGET_HOST]);
+    });
+    expect(rendered.result.current.byHostId.has(TARGET_HOST)).toBe(false);
+    expect(rendered.result.current.failedHostIds).toEqual([]);
+    expect(fixture.reads).toEqual([TARGET_HOST, TARGET_HOST]);
+    expect(byHostIdHistory).not.toContain(true);
   });
 
   it("uses the pool answer when a host's handshake lacks environment.status", async () => {

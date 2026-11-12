@@ -159,10 +159,10 @@ function boundSignInEnvironment(
     return { kind: "failed", retry: binding.retry };
   const query = binding.query;
   if (query.isError) {
-    // Re-read the status too: a host moved to its own settings signs in locally.
+    // Re-read the status first: a host moved to its own settings signs in
+    // locally, and no binding answers before the fresh status does.
     const retry = (): void => {
-      void status.refetch();
-      void query.refetch();
+      void status.refetch().then(() => query.refetch());
     };
     return { kind: "failed", retry };
   }
