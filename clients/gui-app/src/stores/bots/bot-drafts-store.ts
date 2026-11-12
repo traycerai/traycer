@@ -96,6 +96,11 @@ export interface BotCarriedBlock {
  */
 export type BotCarrySend = "out" | "went" | "failed";
 
+/** A signed-in identity, by its account id: `null` for one without. */
+export interface BotDraftsOwner {
+  readonly userId: string | null;
+}
+
 /** What an account's retirement adds below a box's kept draft. */
 export type BotRetiredPart =
   | { readonly kind: "move"; readonly block: string }
@@ -179,6 +184,13 @@ interface BotDraftsState {
    * for an earlier one does nothing ({@link useBotDraftActions}).
    */
   readonly generation: number;
+  /**
+   * The identity whose drafts the store holds, named at each retirement
+   * (`retire`); `null` while none is signed in, and before the first is. The
+   * bot tab shows none of the store while another is signed in
+   * (`useBotDraftsAdmitted`).
+   */
+  readonly owner: BotDraftsOwner | null;
   /** Keeps a card's draft; `null` drops it. */
   readonly setAnswer: (
     botId: string,
@@ -241,9 +253,10 @@ interface BotDraftsState {
    * out included, go below that box's kept draft (`fold` makes it); what it
    * keeps is written under the account's own key at once, and then the store
    * holds nothing: no card answer, draft, move or line of that account's
-   * reaches the next.
+   * reaches the next. `owner`, the identity signed in next (`null` for none),
+   * owns it from then.
    */
-  readonly retire: (fold: BotRetireFold) => void;
+  readonly retire: (fold: BotRetireFold, owner: BotDraftsOwner | null) => void;
 }
 
 /** The store's changes a component makes, for {@link useBotDraftActions}. */
@@ -518,6 +531,7 @@ export const useBotDraftsStore = create<BotDraftsState>()(
       draftMoves: {},
       boxNotices: {},
       generation: 0,
+      owner: null,
       setAnswer: (botId, key, draft) =>
         set((state) => ({
           answers: withEntry(state.answers, botId, key, draft),
@@ -628,7 +642,7 @@ export const useBotDraftsStore = create<BotDraftsState>()(
       },
       closeBot: (botId) =>
         set((state) => ({ answers: withoutBot(state.answers, botId) })),
-      retire: (fold) => {
+      retire: (fold, owner) => {
         const state = get();
         const threadBoxes = retiredThreadBoxes(state, fold);
         // Written under the retiring account's key, then nothing more is.
@@ -657,6 +671,7 @@ export const useBotDraftsStore = create<BotDraftsState>()(
           draftMoves: {},
           boxNotices: {},
           generation: state.generation + 1,
+          owner,
         });
       },
     }),

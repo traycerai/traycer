@@ -28,7 +28,7 @@ import {
   tabNavigationMock,
 } from "./bot-tab-surface-mocks";
 import { emptyBotMentionHostListsMock } from "@/components/bots/__tests__/bot-mention-host-test-support";
-import { StrictMode, type ReactNode } from "react";
+import { StrictMode, type ComponentProps, type ReactNode } from "react";
 import {
   QueryClient,
   QueryClientProvider,
@@ -111,6 +111,12 @@ import {
 const channelHandles = vi.hoisted(() => ({
   handles: new Map<string, unknown>(),
   client: null as HostRequester<HostRpcRegistry> | null,
+  /** Every (viewer, A's markers) pair the probe under the surface's composer saw. */
+  observed: [] as Array<{
+    readonly at: "render" | "layout";
+    readonly viewer: string | null;
+    readonly markers: ReadonlyArray<string>;
+  }>,
 }));
 
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
@@ -224,6 +230,63 @@ vi.mock("@/components/bots/bot-threads-view", () => ({
 vi.mock("@/components/bots/bot-settings-panel", () => ({
   BotChannelSettingsPanel: () => null,
 }));
+// The composer, with a probe beside it that records what the tree shows at
+// every render and layout effect: the viewer the auth store names, and which of
+// A's contents (the parent's edit, A's draft and moved answer, a card answer)
+// are on screen at that moment.
+vi.mock("@/components/bots/bot-message-composer", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/components/bots/bot-message-composer")
+    >();
+  const { useLayoutEffect } = await import("react");
+  const { useAuthStore: auth } = await import("@/stores/auth/auth-store");
+  const { useBotDraftsStore: drafts } =
+    await import("@/stores/bots/bot-drafts-store");
+  const { useBotSurfaceActionsStore: cards } =
+    await import("@/stores/bots/bot-surface-actions-store");
+  const markersOf = (editText: string | null): ReadonlyArray<string> => {
+    const found: string[] = [];
+    if (editText !== null && editText.includes("Failed text")) {
+      found.push("edit");
+    }
+    const state = drafts.getState();
+    const kept = JSON.stringify([state.threadBoxes, state.boxCarries]);
+    if (kept.includes("Hold the migration") || kept.includes("A's draft")) {
+      found.push("draft");
+    }
+    if (Object.keys(cards.getState().entries).length > 0) found.push("card");
+    return found;
+  };
+  function Probe(props: { readonly edit: { readonly text: string } | null }) {
+    const viewer = auth((state) => state.profile?.userId ?? null);
+    const editText = props.edit === null ? null : props.edit.text;
+    channelHandles.observed.push({
+      at: "render",
+      viewer,
+      markers: markersOf(editText),
+    });
+    useLayoutEffect(() => {
+      channelHandles.observed.push({
+        at: "layout",
+        viewer,
+        markers: markersOf(editText),
+      });
+    });
+    return null;
+  }
+  return {
+    ...actual,
+    BotMessageComposer: (
+      props: ComponentProps<typeof actual.BotMessageComposer>,
+    ) => (
+      <>
+        <Probe edit={props.edit} />
+        <actual.BotMessageComposer {...props} />
+      </>
+    ),
+  };
+});
 vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/lib/registries/chat-session-registry")
@@ -434,6 +497,8 @@ function signInAs(userId: string): void {
   act(() => {
     useAuthStore.setState({
       status: "signed-in",
+      signedOutCause: null,
+      signingInAttempt: null,
       profile: {
         userId,
         userName: userId,
@@ -449,6 +514,8 @@ function signOut(): void {
   act(() => {
     useAuthStore.setState({
       status: "signed-out",
+      signedOutCause: "retired",
+      signingInAttempt: null,
       profile: null,
       contextMetadata: null,
     });
@@ -987,5 +1054,96 @@ describe("<BotTabSurface /> a thread box's answer and quote, through the real th
     await vi.waitFor(() =>
       expect(textOf(boxWithin(panel, "Reply in the thread"))).toBe(""),
     );
+  });
+});
+
+describe("<BotTabSurface /> what the tree shows at the commit an identity change lands in", () => {
+  /** The viewer's failed post, Edit pressed: A's box is editing it, with a draft typed after. */
+  async function editingAFailedPost(): Promise<HTMLElement> {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    activityStore.setState({
+      activity: { trunk: FAILED_ON_POST, threads: {} },
+    });
+    channelHandles.handles.set(
+      CHANNEL,
+      chatSessionWithThreadRows(channelRows(false)),
+    );
+    mountSurface();
+    await user.click(await screen.findByTestId("bot-message-edit"));
+    typeInto(channelBox(), " more");
+    expect(textOf(channelBox())).toBe("Failed text more");
+    return channelBox();
+  }
+
+  function expectKept(box: HTMLElement, generation: number): void {
+    expect(screen.queryByTestId("bot-tab-connecting")).toBeNull();
+    expect(channelBox()).toBe(box);
+    expect(textOf(channelBox())).toBe("Failed text more");
+    expect(screen.getByTestId("bot-channel-composer-editing")).toBeTruthy();
+    expect(useBotDraftsStore.getState().generation).toBe(generation);
+  }
+
+  it("never shows viewer B any of A's content, at any render or layout effect, on a direct switch from A to B", async () => {
+    await refusedEditWithMovedAnswer();
+    channelHandles.observed.length = 0;
+
+    signInAs(ACCOUNT_B);
+
+    await vi.waitFor(() => expect(textOf(channelBox())).toBe(""));
+    expect(
+      channelHandles.observed.filter(
+        (seen) => seen.viewer === ACCOUNT_B && seen.markers.length > 0,
+      ),
+    ).toEqual([]);
+  });
+
+  it("never shows a signed-out viewer any of A's content, at any render or layout effect, when A signs out", async () => {
+    await refusedEditWithMovedAnswer();
+    channelHandles.observed.length = 0;
+
+    signOut();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5);
+    });
+
+    expect(
+      channelHandles.observed.filter(
+        (seen) => seen.viewer === null && seen.markers.length > 0,
+      ),
+    ).toEqual([]);
+    // Once the sign-out has settled the tab shows its tree, not the connecting state.
+    expect(screen.queryByTestId("bot-tab-connecting")).toBeNull();
+    expect(textOf(channelBox())).toBe("");
+  });
+
+  it("keeps A's tree, box, edit and draft through a sign-in attempt in flight, a failed attempt and A admitted again, with no connecting state and no retirement", async () => {
+    const box = await editingAFailedPost();
+    const generation = useBotDraftsStore.getState().generation;
+
+    act(() => useAuthStore.getState().setSigningIn("device"));
+    expectKept(box, generation);
+
+    act(() =>
+      useAuthStore.setState({
+        status: "signed-out",
+        signedOutCause: "attempt-failed",
+        signingInAttempt: null,
+        profile: null,
+        contextMetadata: null,
+      }),
+    );
+    expectKept(box, generation);
+
+    signInAs(ACCOUNT_A);
+    expectKept(box, generation);
+  });
+
+  it("keeps A's tree, box, edit and draft when the same account's session turns unverified, with no connecting state and no retirement", async () => {
+    const box = await editingAFailedPost();
+    const generation = useBotDraftsStore.getState().generation;
+
+    act(() => useAuthStore.setState({ status: "unverified" }));
+
+    expectKept(box, generation);
   });
 });

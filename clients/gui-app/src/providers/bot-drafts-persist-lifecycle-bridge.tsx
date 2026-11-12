@@ -34,10 +34,10 @@ export interface BotDraftsPersistLifecycleBridgeProps {
  * and the store is emptied, so nothing of it reaches the next account. Its
  * answers to surface cards and its settled sends go from the stores that kept
  * them. A card, send or box of it that answers late changes nothing
- * (`useBotDraftActions`), and the bot tab's tree starts again for the next
- * account (`BotTabSurface`). Its stored drafts stay, for when it signs in
- * again. Then a signed-in account's own drafts are read. Signed out, none are
- * read and nothing is written.
+ * (`useBotDraftActions`), and the bot tab shows none of the store until it
+ * is the next account's (`useBotDraftsAdmitted`). Its stored drafts stay, for
+ * when it signs in again. Then a signed-in account's own drafts are read.
+ * Signed out, none are read and nothing is written.
  */
 export function BotDraftsPersistLifecycleBridge(
   props: BotDraftsPersistLifecycleBridgeProps,
@@ -48,11 +48,19 @@ export function BotDraftsPersistLifecycleBridge(
 
   const onTransition = useCallback(
     (transition: AuthIdentityTransition) => {
-      useBotDraftsStore.getState().retire(withRetiredParts);
-      useBotSurfaceActionsStore.setState({ entries: {} });
-      forgetSettledSends(queryClient);
       const account =
         transition.kind === "signedOut" ? null : transition.userId;
+      useBotSurfaceActionsStore.setState({ entries: {} });
+      forgetSettledSends(queryClient);
+      // Last: the bot tab shows its tree again once the store is the next
+      // identity's (`useBotDraftsAdmitted`), so what the two above clear is
+      // gone by then.
+      useBotDraftsStore
+        .getState()
+        .retire(
+          withRetiredParts,
+          transition.kind === "signedOut" ? null : { userId: account },
+        );
       useBotDraftsStore.persist.setOptions({ name: botBoxDraftsKey(account) });
       // An identity without an account id has no drafts of its own to read.
       if (account === null) return;
