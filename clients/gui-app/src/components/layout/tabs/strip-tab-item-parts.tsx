@@ -1,6 +1,5 @@
 import { isPreservedOrphanEpic } from "./preserved-orphan-epic";
-import { useId, useState, type ReactElement, type ReactNode } from "react";
-import { useTitleBarDragSuppression } from "@/stores/layout/title-bar-drag-store";
+import { type ReactElement, type ReactNode } from "react";
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { TabContextMenuContent } from "@/components/layout/tabs/tab-strip-context-menu";
 import type { HeaderTab } from "@/stores/tabs/types";
@@ -21,11 +20,6 @@ export function StripTabContextMenu(props: {
   readonly children: ReactElement;
 }): ReactNode {
   const { item, input } = props;
-  // Open over a title-bar drag region (the vertical strip's spacer, the
-  // header row), the menu's items must receive their clicks and a click
-  // outside must dismiss it, so the drag regions stand down while it is open.
-  const [open, setOpen] = useState(false);
-  useTitleBarDragSuppression(`tab-menu:${useId()}`, open);
   return (
     // `modal={false}` is load-bearing for Edit Title. A modal menu keeps a
     // TRAPPED focus scope while it closes: the rename input mounts and focuses
@@ -35,7 +29,6 @@ export function StripTabContextMenu(props: {
     <ContextMenu
       modal={false}
       onOpenChange={(nextOpen) => {
-        setOpen(nextOpen);
         if (
           !nextOpen ||
           input.tab.kind !== "epic" ||

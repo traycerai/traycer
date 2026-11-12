@@ -29,7 +29,6 @@ import { readingShowsLocalDesktop } from "@/lib/resources/headline-resource-summ
 import { StreamRuntimeContext } from "@/lib/host/stream-runtime-context";
 import { registerDynamicActionHandler } from "@/lib/keybindings/dispatch";
 import { providerDisplayName } from "@/lib/provider-ordering";
-import { useTitleBarDragSuppression } from "@/stores/layout/title-bar-drag-store";
 import { useBarPlacements, useRegionShown } from "@/lib/layout-overrides";
 import {
   barClusterRegionsAt,
@@ -162,19 +161,13 @@ function ScopedAppStatusBar(props: {
   // a phone because the header gives its glyph up while the footer is on.
   // With the monitor hidden nothing below mounts, so nobody registers, which
   // is correct: there is no panel to open.
-  // While the panel is open, let the header drop its title-bar drag regions so
-  // a click on the (otherwise event-swallowing) drag area dismisses it. The id
-  // is the header trigger's own: the two are mutually exclusive by placement
-  // wherever a title bar exists at all, so they can never both be claiming it.
-  //
   // The panel's open state reconciled with the cluster's placement, in the
   // render AND in the state.
   //
   // The anchor and the content both unmount with the cluster, so Radix never
   // fires `onOpenChange` on the way out: without this, `usageOpen` stays true
-  // for the life of the strip, `useTitleBarDragSuppression` below holds the
-  // header's own slot under a value nothing can clear, and a reading that
-  // comes back down reopens a panel nobody asked for. The derived value is
+  // for the life of the strip, and a reading that comes back down reopens a
+  // panel nobody asked for. The derived value is
   // what the render reads, so there is never a frame with an open panel and
   // no anchor; the reset below is what forgets the request, because a request
   // for a panel in this bar does not survive the cluster leaving it. Adjusted
@@ -182,7 +175,6 @@ function ScopedAppStatusBar(props: {
   // by the time this render commits, so there is no cascading second pass.
   const usagePanelOpen = usageOpen && usageInStrip;
   if (usageOpen && !usageInStrip) setUsageOpen(false);
-  useTitleBarDragSuppression("rate-limits", usagePanelOpen);
   const scope = props.scope;
   // A PICK that has not resolved to its own client leaves this subtree on the
   // AMBIENT binding, so mounting the live segments would draw one host's

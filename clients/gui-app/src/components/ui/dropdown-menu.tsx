@@ -9,6 +9,7 @@ import { useSurfaceOverlayContainerEl } from "@/providers/surface-overlay-contai
 import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
 import { useSafeAreaCollisionPadding } from "@/components/ui/safe-area-collision-padding";
 import { MenuOpenMarker } from "@/components/ui/open-menus";
+import { useOverlayDragSuppressionRef } from "@/stores/layout/title-bar-drag-store";
 
 function DropdownMenu({
   ...props
@@ -68,13 +69,14 @@ function DropdownMenuContent({
   const surfaceContainer = useSurfaceOverlayContainerEl();
   // Read above the early returns so hook order does not depend on presentation.
   const safeAreaInsets = useSafeAreaCollisionPadding();
+  const contentRef = useOverlayDragSuppressionRef(ref);
   if (!paneFocused || concealed) return null;
   return (
     <DropdownMenuPrimitive.Portal
       container={container ?? surfaceContainer ?? undefined}
     >
       <DropdownMenuPrimitive.Content
-        ref={ref}
+        ref={contentRef}
         data-slot="dropdown-menu-content"
         sideOffset={sideOffset}
         align={align}

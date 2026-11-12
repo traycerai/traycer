@@ -15,7 +15,6 @@ import {
   type NotificationBellState,
 } from "@/stores/notifications/merged-notifications";
 import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
-import { useTitleBarDragSuppression } from "@/stores/layout/title-bar-drag-store";
 import { registerDynamicActionHandler } from "@/lib/keybindings/dispatch";
 import { chordMatchesEvent, type ChordString } from "@/lib/keybindings/chord";
 import { useBindingForAction } from "@/stores/settings/keybinding-store";
@@ -73,7 +72,6 @@ export function useNotificationCenter(): NotificationCenter {
   const bellState = useNotificationBellState();
   const hostState = useNotificationCenterHostState();
   const unreadCount = useMergedNotificationUnreadCount();
-  useTitleBarDragSuppression("notifications", open);
 
   const geometry = useNotificationCenterGeometry({
     open,
