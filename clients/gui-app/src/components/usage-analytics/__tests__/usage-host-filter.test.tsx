@@ -1,3 +1,4 @@
+import { buildUsageHostFilterOptions } from "@/lib/usage-analytics/usage-host-split";
 /**
  * The trigger stays a standard select and may truncate. The selected host's
  * full name is the row under it, and it wraps. The sentence under the amount
@@ -80,12 +81,33 @@ function renderFilter(
 }
 
 describe("UsageHostFilter", () => {
-  it("leaves All hosts unredacted", () => {
+  it("names the selected unnamed computer distinctly from another unnamed option", () => {
+    const options = buildUsageHostFilterOptions({
+      hostNames: new Map(),
+      hostIdsWithUsage: ["unnamed-a", "unnamed-b"],
+      selectedHostId: "unnamed-b",
+    });
+    render(
+      <TooltipProvider>
+        <UsageHostFilter
+          options={options}
+          hostId="unnamed-b"
+          onChange={() => undefined}
+          pinnedToHostName={null}
+        />
+      </TooltipProvider>,
+    );
+    expect(
+      screen.getByRole("combobox", { name: "Unnamed computer 2" }),
+    ).toBeTruthy();
+  });
+
+  it("names the unfiltered choice All computers", () => {
     renderFilter(null, null);
 
     const trigger = screen.getByTestId("usage-host-filter");
-    expect(trigger.textContent).toContain("All hosts");
-    expect(trigger.getAttribute("aria-label")).toBe("Host");
+    expect(trigger.textContent).toContain("All computers");
+    expect(trigger.getAttribute("aria-label")).toContain("All computers");
     expect(screen.queryByTestId("usage-host-filter-selected-name")).toBeNull();
     expect(trigger.hasAttribute(USAGE_EXPORT_REDACT_ATTRIBUTE)).toBe(false);
     expect(screen.queryByTestId("usage-served-by-local-note")).toBeNull();
