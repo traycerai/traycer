@@ -39,6 +39,7 @@ import {
   type SandboxDefaultsRead,
 } from "@/hooks/sandboxes/use-sandbox-defaults";
 import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
+import { usePickedTeamHandle } from "@/components/settings/environment/team-pick-label";
 import { AddComputerDialog } from "@/components/settings/team/add-computer-dialog";
 import { useSandboxTraycerModels } from "@/hooks/sandboxes/use-sandbox-traycer-models-query";
 import {
@@ -200,6 +201,7 @@ function TeamSetupPostBody(props: {
 function TeamHostOptionsCard(props: {
   readonly live: TeamSetupLive | null;
 }): ReactNode {
+  const teamHandle = usePickedTeamHandle(props.live?.environmentId ?? "");
   const { live } = props;
   return (
     <div
@@ -228,10 +230,10 @@ function TeamHostOptionsCard(props: {
         title="Add a computer"
         description="A computer the team can open and run agents on."
         action={
-          live === null ? null : (
+          live === null || teamHandle === null ? null : (
             <AddComputerDialog
               teamName={live.teamName}
-              teamSelector={live.environmentId}
+              teamSelector={teamHandle}
               unattended={
                 <TeamComputerUnattendedSetup
                   environmentId={live.environmentId}

@@ -173,8 +173,18 @@ function openSurfaceOn(botId: string): void {
  */
 export function setUpNewTeam(): void {
   mocks.state.environments = [
-    { environmentId: "env-team", label: "Acme", ownerKind: "organization" },
-    { environmentId: "env-new", label: "Newco", ownerKind: "organization" },
+    {
+      environmentId: "env-team",
+      label: "Acme",
+      ownerKind: "organization",
+      providerHandle: "acme",
+    },
+    {
+      environmentId: "env-new",
+      label: "Newco",
+      ownerKind: "organization",
+      providerHandle: "newco",
+    },
   ];
   mocks.state.listedBotIds = [BOT_ID];
   openSurfaceOn(SETUP_BOT_ID);

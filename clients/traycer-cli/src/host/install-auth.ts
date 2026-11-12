@@ -493,7 +493,7 @@ export async function useInstalledHostTeam(
     throw cliError({
       code: CLI_ERROR_CODES.INVALID_ARGUMENT,
       message:
-        "Choose a team you belong to. If names match, use its team handle or environment id.",
+        "Enter the slug of a team you belong to, as shown in its dashboard address.",
       details: null,
       exitCode: 1,
     });

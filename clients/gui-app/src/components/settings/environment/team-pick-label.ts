@@ -53,3 +53,15 @@ export function useConfigurationName(): string {
     return "Personal";
   return teamLabel ?? "this team";
 }
+
+/** The account's team route key; never substitute its environment id in a command. */
+export function usePickedTeamHandle(environmentId: string): string | null {
+  const client = useHostClient();
+  const query = useEnvironmentListQuery(client, true);
+  return (
+    query.data?.environments.find(
+      (row) =>
+        row.environmentId === environmentId && row.ownerKind === "organization",
+    )?.providerHandle ?? null
+  );
+}
