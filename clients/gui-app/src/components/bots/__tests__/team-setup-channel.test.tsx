@@ -193,7 +193,9 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
 
     it("does not offer team commands when the environment has no provider handle", () => {
       mocks.state.environments = mocks.state.environments.map((row) =>
-        row.environmentId === "env-new" ? { ...row, providerHandle: null } : row,
+        row.environmentId === "env-new"
+          ? { ...row, providerHandle: null }
+          : row,
       );
       render(surfaceFor(SETUP_BOT_ID));
 

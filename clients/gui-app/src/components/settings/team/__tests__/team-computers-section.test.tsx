@@ -239,9 +239,7 @@ describe("TeamComputersSection", () => {
     await waitFor(() =>
       expect(listTeamComputers).toHaveBeenCalledWith(ENVIRONMENT_ID),
     );
-    expect(
-      screen.queryByRole("button", { name: "Add a computer" }),
-    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add a computer" })).toBeNull();
   });
 
   it("does not choose a bot host when no computer holds the bot slot", async () => {

@@ -196,7 +196,9 @@ describe("TeamComputerUnattendedSetup", () => {
     };
     mountSetup();
 
-    fireEvent.click(screen.getByRole("button", { name: "Create install token" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Create install token" }),
+    );
 
     expect(
       await screen.findByText(
