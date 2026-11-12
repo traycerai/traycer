@@ -165,6 +165,10 @@ vi.mock("@/hooks/providers/use-resolved-seeded-profile-id", () => ({
   useResolvedSeededProfileId: (_harnessId: string, profileId: string | null) =>
     profileId,
 }));
+// No model provider is hidden on this host.
+vi.mock("@/hooks/providers/use-providers-list-query", () => ({
+  useProvidersListForClient: () => ({ data: undefined, isError: false }),
+}));
 
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";

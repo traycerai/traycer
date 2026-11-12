@@ -48,6 +48,10 @@ vi.mock("@/hooks/providers/use-resolved-seeded-profile-id", () => ({
   useResolvedSeededProfileId: (_harnessId: string, profileId: string | null) =>
     profileId,
 }));
+// No model provider is hidden on this host.
+vi.mock("@/hooks/providers/use-providers-list-query", () => ({
+  useProvidersListForClient: () => ({ data: undefined, isError: false }),
+}));
 
 function modelOption(harnessId: string, slug: string) {
   return {

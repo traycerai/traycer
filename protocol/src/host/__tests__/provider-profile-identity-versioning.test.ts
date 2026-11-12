@@ -428,7 +428,7 @@ describe("providers.list@10.9 additive response projection", () => {
   });
 
   it("carries optional usage reporting in 10.9 and strips it for 10.8", () => {
-    expect(providersList.latestMinor).toBe(9);
+    expect(providersList.latestMinor).toBe(10);
     const usageReporting = { ...provider, usageReporting: true };
     const live = live109.parse({
       providers: [usageReporting],

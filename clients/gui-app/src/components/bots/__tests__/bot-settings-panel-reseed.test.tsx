@@ -107,6 +107,8 @@ vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
 }));
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostMethodSupport: () => true,
+  // No negotiated `providers.list` line, so no model provider is hidden.
+  useHostMethodSchemaVersion: () => null,
 }));
 vi.mock("@/hooks/usage-analytics/use-usage-summary-support", () => ({
   useUsageSummarySupported: () => false,
