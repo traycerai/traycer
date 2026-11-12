@@ -20,6 +20,11 @@ import {
   installedEnvironmentProfile,
 } from "@traycer-clients/shared/providers/environment-profile-sign-in";
 import type { HostRpcRegistry } from "@/lib/host";
+import {
+  useProvidersLink,
+  useProvidersLinkComplete,
+  useProvidersLinkCancel,
+} from "@/hooks/providers/use-providers-link-mutations";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import { getNegotiatedHostMethods } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -50,11 +55,23 @@ type SignInState =
   | { readonly kind: "failed"; readonly line: string };
 
 interface SignInAttempt {
+  readonly client: HostClient<HostRpcRegistry>;
+  readonly environmentId: ProvidersLinkRequestV12["environmentId"];
+  readonly hostId: string | null;
+  completing: boolean;
   linkId: string | null;
   environmentProfileId: string | null;
   closed: boolean;
   cancelSent: boolean;
   connected: boolean;
+}
+
+// Dismissal and replacement can change liveness while a request is awaiting.
+function isLiveSignInAttempt(
+  current: SignInAttempt,
+  active: SignInAttempt | null,
+): boolean {
+  return !current.closed && active === current;
 }
 
 export interface EnvironmentSignInCompletion {
@@ -77,7 +94,13 @@ export function EnvironmentProfileSignIn(props: {
 }): ReactNode {
   const [state, setState] = useState<SignInState>({ kind: "idle" });
   const [code, setCode] = useState("");
-  const [submitting, setSubmitting] = useState(false);
+  const { mutateAsync: startLink, isPending: starting } = useProvidersLink();
+  const {
+    mutateAsync: completeLink,
+    isPending: submitting,
+    reset: resetComplete,
+  } = useProvidersLinkComplete();
+  const { mutateAsync: cancelLink } = useProvidersLinkCancel();
   const [replaceConfirmed, setReplaceConfirmed] = useState(false);
   const attempt = useRef<SignInAttempt | null>(null);
   const autoStarted = useRef(false);
@@ -94,51 +117,65 @@ export function EnvironmentProfileSignIn(props: {
   const release = useCallback(
     (current: SignInAttempt): void => {
       current.closed = true;
-      const hostId = props.client.getActiveHostId();
       const canCancel =
-        hostId !== null &&
-        getNegotiatedHostMethods(hostId)?.has("providers.linkCancel") === true;
+        current.hostId !== null &&
+        getNegotiatedHostMethods(current.hostId)?.has(
+          "providers.linkCancel",
+        ) === true;
       if (
         current.linkId === null ||
         current.cancelSent ||
+        current.completing ||
         current.connected ||
         !canCancel
       )
         return;
       current.cancelSent = true;
-      void props.client
-        .request("providers.linkCancel", {
+      void cancelLink({
+        client: current.client,
+        request: {
           linkId: current.linkId,
-          environmentId: props.request.environmentId,
-        })
-        .catch(() => undefined);
+          environmentId: current.environmentId,
+        },
+      }).catch(() => undefined);
     },
-    [props.client, props.request.environmentId],
+    [cancelLink],
   );
 
   useEffect(
     () => () => {
       if (attempt.current !== null) release(attempt.current);
     },
-    [release],
+    [
+      release,
+      props.client,
+      props.request.environmentId,
+      props.request.providerId,
+      props.request.profileId,
+    ],
   );
+
+  const { onDeliveryPending, onCancel } = props;
+  const finishReceiving = useCallback((): void => {
+    if (delivered.current) return;
+    delivered.current = true;
+    setState({ kind: "complete" });
+    toast.info(SIGNED_IN_RECEIVING_LINE);
+    if (onDeliveryPending !== undefined) onDeliveryPending();
+    else onCancel();
+  }, [onDeliveryPending, onCancel]);
 
   const accept = (
     current: SignInAttempt,
     response: ProvidersLinkCompleteResponseV12,
   ): void => {
-    if (current.closed || attempt.current !== current || delivered.current)
+    if (!isLiveSignInAttempt(current, attempt.current) || delivered.current)
       return;
     if (response.state === "expired" && current.connected) {
-      delivered.current = true;
-      setState({ kind: "complete" });
-      toast.info(SIGNED_IN_RECEIVING_LINE);
-      if (props.onDeliveryPending !== undefined) props.onDeliveryPending();
-      else props.onCancel();
+      finishReceiving();
       return;
     }
     if (response.state === "linked" || response.state === "installing") {
-      current.connected = true;
       if (!props.waitForLocalProfile) {
         setState({ kind: "complete" });
         delivered.current = true;
@@ -166,9 +203,13 @@ export function EnvironmentProfileSignIn(props: {
   });
 
   const start = async (replaceAccount: boolean): Promise<void> => {
-    if (props.disabled) return;
+    if (props.disabled || starting) return;
     if (attempt.current !== null) release(attempt.current);
     const current: SignInAttempt = {
+      client: props.client,
+      environmentId: props.request.environmentId,
+      hostId: props.client.getActiveHostId(),
+      completing: false,
       linkId: null,
       environmentProfileId: null,
       closed: false,
@@ -181,13 +222,10 @@ export function EnvironmentProfileSignIn(props: {
     setCode("");
     setState({ kind: "starting" });
     try {
-      const answer =
-        await props.client.requestWithSignalRequiringHostMethodVersion(
-          "providers.link",
-          { ...props.request, replaceAccount },
-          undefined,
-          { method: "providers.link", version: { major: 1, minor: 2 } },
-        );
+      const answer = await startLink({
+        client: current.client,
+        request: { ...props.request, replaceAccount },
+      });
       current.linkId = answer.linkId;
       current.environmentProfileId = answer.environmentProfileId;
       if (current.closed) {
@@ -201,7 +239,7 @@ export function EnvironmentProfileSignIn(props: {
           : { kind: "prompt", prompt: answer.prompt, note: null },
       );
     } catch (error) {
-      if (!current.closed && attempt.current === current)
+      if (isLiveSignInAttempt(current, attempt.current))
         setState({
           kind: "failed",
           line:
@@ -234,47 +272,68 @@ export function EnvironmentProfileSignIn(props: {
     };
   }, [props.autoStart, props.disabled, props.request.replaceAccount]);
 
+  const complete = async (
+    current: SignInAttempt,
+    pastedCode: string | null,
+  ): Promise<void> => {
+    if (
+      !isLiveSignInAttempt(current, attempt.current) ||
+      current.completing ||
+      current.linkId === null
+    )
+      return;
+    current.completing = true;
+    await completeLink({
+      client: current.client,
+      request: {
+        linkId: current.linkId,
+        code: pastedCode,
+        environmentId: current.environmentId,
+      },
+    })
+      .then((response) => {
+        // Dismissal waits for this verdict before deciding whether to withdraw.
+        if (response.state === "linked" || response.state === "installing")
+          current.connected = true;
+        acceptRef.current(current, response);
+      })
+      .catch(() => {
+        if (
+          isLiveSignInAttempt(current, attempt.current) &&
+          !current.connected &&
+          !delivered.current
+        )
+          setState({
+            kind: "failed",
+            line:
+              pastedCode === null
+                ? "Couldn't check this sign-in. Try again."
+                : "Sign-in did not finish. Try again.",
+          });
+      })
+      .finally(() => {
+        current.completing = false;
+        if (!isLiveSignInAttempt(current, attempt.current)) release(current);
+        if (attempt.current === current) resetComplete();
+      });
+  };
+  const completeRef = useRef(complete);
+  useEffect(() => {
+    completeRef.current = complete;
+  });
+
   const polling =
-    (state.kind === "installing" &&
-      props.request.profileId !== null &&
-      !state.certified) ||
+    (state.kind === "installing" && !state.certified) ||
     state.kind === "waiting" ||
     (state.kind === "prompt" && state.prompt.kind === "device_code");
   useEffect(() => {
     const current = attempt.current;
     if (!polling || current === null || current.linkId === null) return;
-    let inFlight = false;
     return startVisibleInterval({
       intervalMs: 2_000,
       fireOnShow: true,
       tick: () => {
-        if (inFlight || current.closed || current.linkId === null) return;
-        inFlight = true;
-        void props.client
-          .requestWithSignalRequiringHostMethodVersion(
-            "providers.linkComplete",
-            {
-              linkId: current.linkId,
-              code: null,
-              environmentId: props.request.environmentId,
-            },
-            undefined,
-            {
-              method: "providers.linkComplete",
-              version: { major: 1, minor: 2 },
-            },
-          )
-          .then((response) => acceptRef.current(current, response))
-          .catch(() => {
-            if (!current.closed && !current.connected)
-              setState({
-                kind: "failed",
-                line: "Couldn't check this sign-in. Try again.",
-              });
-          })
-          .finally(() => {
-            inFlight = false;
-          });
+        void completeRef.current(current, null);
       },
     });
   }, [polling, props.client, props.request.environmentId]);
@@ -297,19 +356,24 @@ export function EnvironmentProfileSignIn(props: {
           current === null ||
           current.closed ||
           attempt.current !== current ||
-          delivered.current ||
-          result.data === undefined ||
-          result.isError ||
-          (props.request.profileId !== null && !certified)
+          delivered.current
         )
           return;
+        if (result.data === undefined || result.isError) {
+          if (certified) finishReceiving();
+          return;
+        }
+        if (props.request.profileId !== null && !certified) return;
         const profile = installedEnvironmentProfile(
           result.data.providers,
           props.request.providerId,
           installingEnvironmentId,
           installingProfileId,
         );
-        if (profile === null) return;
+        if (profile === null) {
+          if (certified) finishReceiving();
+          return;
+        }
         delivered.current = true;
         setState({ kind: "complete" });
         onComplete.current({
@@ -319,6 +383,10 @@ export function EnvironmentProfileSignIn(props: {
       });
     };
     readInventory();
+    if (certified)
+      return () => {
+        disposed = true;
+      };
     const stop = startVisibleInterval({
       intervalMs: 2_000,
       fireOnShow: false,
@@ -337,9 +405,10 @@ export function EnvironmentProfileSignIn(props: {
     props.request.profileId,
     props.request.providerId,
     refetch,
+    finishReceiving,
   ]);
 
-  const submit = async (): Promise<void> => {
+  const submit = (): void => {
     const current = attempt.current;
     if (
       current === null ||
@@ -348,31 +417,9 @@ export function EnvironmentProfileSignIn(props: {
       submitting
     )
       return;
-    setSubmitting(true);
     const pasted = code.trim();
     setCode("");
-    try {
-      acceptRef.current(
-        current,
-        await props.client.requestWithSignalRequiringHostMethodVersion(
-          "providers.linkComplete",
-          {
-            linkId: current.linkId,
-            code: pasted,
-            environmentId: props.request.environmentId,
-          },
-          undefined,
-          { method: "providers.linkComplete", version: { major: 1, minor: 2 } },
-        ),
-      );
-    } catch {
-      if (!current.closed && !current.connected)
-        setState({
-          kind: "failed",
-          line: "Sign-in did not finish. Try again.",
-        });
-    }
-    setSubmitting(false);
+    void complete(current, pasted);
   };
   const cancel = (): void => {
     if (attempt.current !== null) release(attempt.current);
@@ -533,6 +580,7 @@ function EnvironmentSignInPrompt(props: {
           disabled={props.submitting || props.code.trim().length === 0}
           onClick={props.onSubmit}
         >
+          {props.submitting ? <MutedAgentSpinner /> : null}
           Sign in
         </Button>
       </>
@@ -578,7 +626,9 @@ function incompleteSignInState(
       return previous.kind === "prompt"
         ? { ...previous, note: "Paste the whole code claude.ai shows." }
         : previous;
-    return { kind: "waiting" };
+    return previous.kind === "prompt" && previous.prompt.kind === "device_code"
+      ? previous
+      : { kind: "waiting" };
   }
   return {
     kind: "failed",

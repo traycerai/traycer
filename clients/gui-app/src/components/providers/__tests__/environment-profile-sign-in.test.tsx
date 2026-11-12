@@ -43,6 +43,10 @@ import {
 
 const toast = vi.hoisted(() => ({ info: vi.fn() }));
 vi.mock("sonner", () => ({ toast }));
+const openLinkMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/links/open-link", () => ({
+  useOpenLink: () => openLinkMock,
+}));
 
 const HOST_ID = "host-environment-sign-in";
 const ENVIRONMENT_ID = "environment-sign-in";
@@ -268,19 +272,22 @@ function renderSignIn(input: {
       mutations: { retry: false },
     },
   });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <EnvironmentProfileSignIn
-        client={input.host.client}
-        request={input.request}
-        autoStart={input.autoStart}
-        waitForLocalProfile={input.waitForLocalProfile}
-        disabled={false}
-        onComplete={input.onComplete}
-        onCancel={input.onCancel}
-      />
-    </QueryClientProvider>,
-  );
+  return {
+    ...render(
+      <QueryClientProvider client={queryClient}>
+        <EnvironmentProfileSignIn
+          client={input.host.client}
+          request={input.request}
+          autoStart={input.autoStart}
+          waitForLocalProfile={input.waitForLocalProfile}
+          disabled={false}
+          onComplete={input.onComplete}
+          onCancel={input.onCancel}
+        />
+      </QueryClientProvider>,
+    ),
+    queryClient,
+  };
 }
 
 async function flushRequests(): Promise<void> {
@@ -293,6 +300,7 @@ async function flushRequests(): Promise<void> {
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
+  openLinkMock.mockReset();
   resetNegotiatedManifests();
 });
 
@@ -437,6 +445,16 @@ describe("<EnvironmentProfileSignIn />", () => {
       code: null,
       environmentId: ENVIRONMENT_ID,
     });
+    expect(screen.getByText("DEVICE-CODE")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Open sign-in page" }));
+    expect(openLinkMock).toHaveBeenCalledWith(
+      "https://auth.example.test/device",
+      "auth",
+      null,
+    );
+    expect(
+      screen.getByRole("button", { name: "Open sign-in page" }),
+    ).toBeTruthy();
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2_000);
@@ -653,28 +671,85 @@ describe("<EnvironmentProfileSignIn />", () => {
     expect(onCancel).not.toHaveBeenCalled();
   });
 
-  it("treats expiry after connection as still receiving on this computer", async () => {
+  it.each([
+    ["a new profile", CREATE_PROFILE_REQUEST],
+    ["an existing profile", EXISTING_PROFILE_REQUEST],
+  ] as const)(
+    "treats expiry after connection for %s as still receiving on this computer",
+    async (_description, request) => {
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      const host = makeHost({
+        complete: (_request, callNumber) =>
+          callNumber === 1
+            ? {
+                state: "installing",
+                code: null,
+                account: null,
+                expectedAccount: null,
+                environmentProfileId: ENVIRONMENT_PROFILE_ID,
+                profileId: null,
+              }
+            : {
+                state: "expired",
+                code: null,
+                account: null,
+                expectedAccount: null,
+                environmentProfileId: ENVIRONMENT_PROFILE_ID,
+                profileId: null,
+              },
+        providersList: () => ({ providers: [], native: null }),
+      });
+      const onComplete = vi.fn();
+      const onCancel = vi.fn();
+      renderSignIn({
+        host,
+        request,
+        autoStart: true,
+        waitForLocalProfile: true,
+        onComplete,
+        onCancel,
+      });
+
+      await screen.findByLabelText("One-time code");
+      fireEvent.change(screen.getByLabelText("One-time code"), {
+        target: { value: CODE },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+      await screen.findByText("Waiting for this profile on this computer…");
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_000);
+      });
+      await flushRequests();
+
+      expect(host.completeRequests).toHaveLength(2);
+      const inventoryReadsAtExpiry = host.providersListCalls.length;
+      expect(sonnerToast.info).toHaveBeenCalledWith(SIGNED_IN_RECEIVING_LINE);
+      expect(onComplete).not.toHaveBeenCalled();
+      expect(onCancel).toHaveBeenCalledOnce();
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+      expect(screen.getByRole("button", { name: "Done" })).toBeTruthy();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(20_000);
+      });
+      await flushRequests();
+      expect(host.completeRequests).toHaveLength(2);
+      expect(host.providersListCalls).toHaveLength(inventoryReadsAtExpiry);
+    },
+  );
+
+  it("ends a certified link when its fresh local inventory is unavailable", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const host = makeHost({
-      complete: (_request, callNumber) =>
-        callNumber === 1
-          ? {
-              state: "installing",
-              code: null,
-              account: null,
-              expectedAccount: null,
-              environmentProfileId: ENVIRONMENT_PROFILE_ID,
-              profileId: null,
-            }
-          : {
-              state: "expired",
-              code: null,
-              account: null,
-              expectedAccount: null,
-              environmentProfileId: ENVIRONMENT_PROFILE_ID,
-              profileId: null,
-            },
-      providersList: () => ({ providers: [], native: null }),
+      complete: () => ({
+        state: "linked",
+        code: null,
+        account: null,
+        expectedAccount: null,
+        environmentProfileId: ENVIRONMENT_PROFILE_ID,
+        profileId: MANAGED_PROFILE_ID,
+      }),
+      providersList: () => Promise.reject(new Error("Inventory unavailable.")),
     });
     const onComplete = vi.fn();
     const onCancel = vi.fn();
@@ -692,19 +767,17 @@ describe("<EnvironmentProfileSignIn />", () => {
       target: { value: CODE },
     });
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
-    await screen.findByText("Waiting for this profile on this computer…");
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(2_000);
-    });
-    await flushRequests();
-
-    expect(host.completeRequests).toHaveLength(2);
+    expect(await screen.findByRole("button", { name: "Done" })).toBeTruthy();
+    expect(host.providersListCalls).toEqual([1]);
     expect(sonnerToast.info).toHaveBeenCalledWith(SIGNED_IN_RECEIVING_LINE);
     expect(onComplete).not.toHaveBeenCalled();
     expect(onCancel).toHaveBeenCalledOnce();
-    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Done" })).toBeTruthy();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20_000);
+    });
+    await flushRequests();
+    expect(host.completeRequests).toHaveLength(1);
+    expect(host.providersListCalls).toEqual([1]);
   });
 
   it.each([
@@ -780,6 +853,82 @@ describe("<EnvironmentProfileSignIn />", () => {
     expect(onCancel).toHaveBeenCalledOnce();
     expect(onComplete).not.toHaveBeenCalled();
   });
+
+  it.each(["linked", "installing", "pending"] as const)(
+    "waits for an in-flight %s completion before deciding whether to withdraw the captured link",
+    async (state) => {
+      const { promise: completion, resolve: resolveCompletion } =
+        Promise.withResolvers<ProvidersLinkCompleteResponseV12>();
+      const host = makeHost({ complete: () => completion });
+      const replacementHost = makeHost(undefined);
+      const onComplete = vi.fn();
+      const onCancel = vi.fn();
+      const view = renderSignIn({
+        host,
+        request: EXISTING_PROFILE_REQUEST,
+        autoStart: true,
+        waitForLocalProfile: true,
+        onComplete,
+        onCancel,
+      });
+
+      await screen.findByLabelText("One-time code");
+      fireEvent.change(screen.getByLabelText("One-time code"), {
+        target: { value: CODE },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+      await vi.waitFor(() => expect(host.completeRequests).toHaveLength(1));
+
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      expect(onCancel).toHaveBeenCalledOnce();
+      expect(host.cancelRequests).toEqual([]);
+
+      view.rerender(
+        <QueryClientProvider client={view.queryClient}>
+          <EnvironmentProfileSignIn
+            client={replacementHost.client}
+            request={{
+              ...EXISTING_PROFILE_REQUEST,
+              environmentId: "environment-sign-in-replacement",
+            }}
+            autoStart
+            waitForLocalProfile
+            disabled={false}
+            onComplete={onComplete}
+            onCancel={onCancel}
+          />
+        </QueryClientProvider>,
+      );
+
+      const response: ProvidersLinkCompleteResponseV12 = {
+        state,
+        code: null,
+        account: null,
+        expectedAccount: null,
+        environmentProfileId: ENVIRONMENT_PROFILE_ID,
+        profileId: state === "linked" ? MANAGED_PROFILE_ID : null,
+      };
+      await act(async () => {
+        resolveCompletion(response);
+        await completion;
+      });
+
+      if (state === "pending") {
+        await vi.waitFor(() =>
+          expect(host.cancelRequests).toEqual([
+            {
+              linkId: "link-attempt",
+              environmentId: ENVIRONMENT_ID,
+            },
+          ]),
+        );
+      } else {
+        expect(host.cancelRequests).toEqual([]);
+      }
+      expect(replacementHost.cancelRequests).toEqual([]);
+      expect(onComplete).not.toHaveBeenCalled();
+    },
+  );
 
   it("cancels once when dismissed before start answers, releasing the late link id", async () => {
     let resolveStart: (response: ProvidersLinkResponseV12) => void = () =>

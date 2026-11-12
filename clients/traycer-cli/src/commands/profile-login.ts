@@ -176,7 +176,7 @@ const START_LOGIN_DISPATCH: HostRpcDispatch = {
   },
   signal: null,
   failFast: false,
-  reauthenticate: "always",
+  reauthenticate: "before-request",
   idempotencyKey: null,
 };
 const CANCEL_LOGIN_DISPATCH: HostRpcDispatch = {

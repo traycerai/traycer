@@ -1,4 +1,4 @@
-import { useId, useState, type ReactNode } from "react";
+import { useId, useRef, useState, type ReactNode } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import {
   PROVIDER_DISPLAY_NAMES,
@@ -42,12 +42,13 @@ export function EnvironmentAddProfileDialog(
     useState<EnvironmentSignInCompletion | null>(null);
   const recolor = useRecolorProviderProfileForClient(props.client);
   const refusal = useHostCredentialRefusal(props.client.getActiveHostId());
+  const profileIdsBeforeSignIn = useRef<ReadonlySet<string>>(new Set());
   const finish = (result: EnvironmentSignInCompletion): void => {
     const profile = result.profile;
     if (profile === null) return;
     props.onFailedAttempt(null);
-    const alreadyExisted = props.state.profiles.some(
-      (row) => row.profileId === profile.profileId,
+    const alreadyExisted = profileIdsBeforeSignIn.current.has(
+      profile.profileId,
     );
     if (alreadyExisted || profile.accentColor === color) {
       props.onProfileCreated(profile.profileId);
@@ -124,7 +125,12 @@ export function EnvironmentAddProfileDialog(
               replaceAccount: false,
             }}
             autoStart={false}
-            onStarted={() => setStarted(true)}
+            onStarted={() => {
+              profileIdsBeforeSignIn.current = new Set(
+                props.state.profiles.map((profile) => profile.profileId),
+              );
+              setStarted(true);
+            }}
             waitForLocalProfile
             disabled={refusal !== null || label.trim().length === 0}
             onComplete={finish}

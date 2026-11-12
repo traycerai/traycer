@@ -1,4 +1,5 @@
 import type { CredentialStanding } from "@traycer/protocol/host/provider-credential-home-schemas";
+import type { ConnectionManifest } from "@traycer/protocol/framework/index";
 import type {
   ProviderCliState,
   ProviderProfile,
@@ -17,8 +18,10 @@ import {
 } from "@/lib/environment/__tests__/environment-test-support";
 import {
   recordNegotiatedHostMethods,
+  recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { useProviderLinkDialogStore } from "@/stores/providers/provider-link-dialog-store";
 
 // `ProfileEditDialog` and the refresh button pull in host hooks
 // unconditionally; mutations are mocked, while provider-list behavior uses a
@@ -206,6 +209,15 @@ function renderSection(
         readonly onHostOnly: readonly OnHostOnlyEntry[];
         readonly hostName: string;
         readonly methods: readonly string[];
+        readonly linkVersion: undefined;
+      }
+    | {
+        readonly onHostOnly: readonly OnHostOnlyEntry[];
+        readonly hostName: string;
+        readonly linkVersion: {
+          readonly major: number;
+          readonly minor: number;
+        } | null;
       }
     | undefined,
 ) {
@@ -226,7 +238,17 @@ function renderSection(
         }).client;
   clientMock.current = client;
   if (options !== undefined) {
-    recordNegotiatedHostMethods(hostId, options.methods);
+    if (options.linkVersion === undefined) {
+      recordNegotiatedHostMethods(hostId, options.methods);
+    } else {
+      const manifest: ConnectionManifest = {
+        "providers.list": { major: 10, minor: 9 },
+        ...(options.linkVersion === null
+          ? {}
+          : { "providers.link": options.linkVersion }),
+      };
+      recordNegotiatedHostManifest(hostId, manifest);
+    }
   }
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -284,6 +306,7 @@ describe("<ProviderProfileScopedSection /> profile summary", () => {
     cleanup();
     clientMock.current = null;
     resetNegotiatedManifests();
+    useProviderLinkDialogStore.setState({ target: null });
     useSettingsEnvironmentPickStore.setState({ pick: null });
   });
 
@@ -429,6 +452,7 @@ describe("<ProviderProfileScopedSection /> profile summary", () => {
           onHostOnly: [{ providerId, profileId: "profile-managed" }],
           hostName: "dev-box",
           methods: ["providers.list", "providers.link"],
+          linkVersion: undefined,
         },
       );
 
@@ -437,6 +461,75 @@ describe("<ProviderProfileScopedSection /> profile summary", () => {
       expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
     },
   );
+
+  it.each([
+    ["claude-code", 0],
+    ["claude-code", 1],
+    ["codex", 0],
+    ["codex", 1],
+  ] as const)(
+    "restores Link for an on-host-only selected %s profile at providers.link 1.%s",
+    async (providerId, minor) => {
+      recordNegotiatedHostManifest("other-host", {
+        "providers.link": { major: 1, minor: 3 },
+      });
+      renderSection(
+        { state: { ...opencodeState(), providerId } },
+        {
+          onHostOnly: [{ providerId, profileId: "profile-managed" }],
+          hostName: "dev-box",
+          linkVersion: { major: 1, minor },
+        },
+      );
+
+      expect(await screen.findByText("On dev-box only.")).toBeTruthy();
+      await userEvent.click(screen.getByRole("button", { name: "Link" }));
+      expect(useProviderLinkDialogStore.getState().target).toEqual({
+        providerId,
+        profileId: "profile-managed",
+      });
+    },
+  );
+
+  it.each([
+    ["claude-code", 2],
+    ["claude-code", 3],
+    ["codex", 2],
+    ["codex", 3],
+  ] as const)(
+    "keeps Link hidden for on-host-only %s with providers.link 1.%s",
+    async (providerId, minor) => {
+      renderSection(
+        { state: { ...opencodeState(), providerId } },
+        {
+          onHostOnly: [{ providerId, profileId: "profile-managed" }],
+          hostName: "dev-box",
+          linkVersion: { major: 1, minor },
+        },
+      );
+
+      expect(await screen.findByText("On dev-box only.")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Link" })).toBeNull();
+      expect(useProviderLinkDialogStore.getState().target).toBeNull();
+    },
+  );
+
+  it("keeps Link hidden when providers.link has not been negotiated", async () => {
+    renderSection(
+      { state: { ...opencodeState(), providerId: "claude-code" } },
+      {
+        onHostOnly: [
+          { providerId: "claude-code", profileId: "profile-managed" },
+        ],
+        hostName: "dev-box",
+        linkVersion: null,
+      },
+    );
+
+    expect(await screen.findByText("On dev-box only.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Link" })).toBeNull();
+    expect(useProviderLinkDialogStore.getState().target).toBeNull();
+  });
 
   it.each(["claude-code", "codex"] as const)(
     "keeps Sign in for a signed-out local-only %s profile",
@@ -463,6 +556,7 @@ describe("<ProviderProfileScopedSection /> profile summary", () => {
           onHostOnly: [{ providerId, profileId: "profile-managed" }],
           hostName: "dev-box",
           methods: ["providers.list", "providers.link"],
+          linkVersion: undefined,
         },
       );
 
@@ -496,6 +590,7 @@ describe("<ProviderProfileScopedSection /> profile summary", () => {
         onHostOnly: [{ providerId: "claude-code", profileId: "ambient" }],
         hostName: "dev-box",
         methods: ["providers.list", "providers.link"],
+        linkVersion: undefined,
       },
     );
 
@@ -512,6 +607,7 @@ describe("<ProviderProfileScopedSection /> profile summary", () => {
         onHostOnly: [{ providerId: "opencode", profileId: "profile-managed" }],
         hostName: "dev-box",
         methods: ["providers.list", "providers.link"],
+        linkVersion: undefined,
       },
     );
 

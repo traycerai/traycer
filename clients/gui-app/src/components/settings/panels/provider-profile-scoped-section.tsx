@@ -21,6 +21,8 @@ import {
 } from "@/components/providers/provider-signin-availability";
 import { cn } from "@/lib/utils";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
+import { useHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
+import { useProviderLinkDialogStore } from "@/stores/providers/provider-link-dialog-store";
 import { EmbeddedProviderRateLimitForProvider } from "./provider-rate-limit-section";
 import { ProfileSummaryActions } from "./profile-summary-actions";
 import { ProfileEditDialog } from "./provider-profile-edit-dialog";
@@ -49,21 +51,43 @@ function noProfileShortcutHint(): ProfileDropdownShortcutHint | null {
 }
 
 function LocalProfileLocation(props: {
+  readonly hostId: string | null;
   readonly providerId: string;
   readonly profileId: string;
   readonly hostName: string | null;
 }): ReactNode {
   const inventory = useProvidersList({ enabled: true, subscribed: true });
+  const linkVersion = useHostMethodSchemaVersion(
+    props.hostId,
+    "providers.link",
+  );
+  const openLink = useProviderLinkDialogStore((state) => state.open);
   const onlyHere = inventory.data?.onHostOnly?.some(
     (entry) =>
       entry.providerId === props.providerId &&
       entry.profileId === props.profileId,
   );
-  return onlyHere === true ? (
-    <p className="text-ui-xs text-muted-foreground">
-      On {props.hostName ?? "this host"} only.
-    </p>
-  ) : null;
+  if (onlyHere !== true) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-ui-xs text-muted-foreground">
+      <p>On {props.hostName ?? "this host"} only.</p>
+      {linkVersion?.major === 1 && linkVersion.minor < 2 ? (
+        <Button
+          type="button"
+          variant="link"
+          size="inline-xs"
+          onClick={() =>
+            openLink({
+              providerId: props.providerId,
+              profileId: props.profileId,
+            })
+          }
+        >
+          Link
+        </Button>
+      ) : null}
+    </div>
+  );
 }
 
 function profileRateLimitFetchEligible(
@@ -400,6 +424,7 @@ export function ProviderProfileScopedSection(
         />
         {selectedProfile.kind === "managed" ? (
           <LocalProfileLocation
+            hostId={hostId}
             providerId={state.providerId}
             profileId={selectedProfile.profileId}
             hostName={hostName}

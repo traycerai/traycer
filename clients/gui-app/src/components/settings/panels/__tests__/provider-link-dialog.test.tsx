@@ -42,6 +42,7 @@ import type {
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { ProviderLinkDialog } from "@/components/settings/panels/provider-link-dialog";
 import { PersonalPageContext } from "@/components/settings/personal/personal-page-context";
+import { ConfigurationSourceContext } from "@/components/settings/environment/configuration-source";
 import {
   buildEnvironmentClient,
   environmentStatusFixture,
@@ -49,8 +50,13 @@ import {
 import type { OpenLink } from "@/lib/links/open-link";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { useProviderLinkDialogStore } from "@/stores/providers/provider-link-dialog-store";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 
 const listMock = vi.hoisted(() => vi.fn<() => void>());
+const providersListMock = vi.hoisted(() => vi.fn<() => void>());
 // While set, `environment.list` does not answer until it resolves.
 const listGate = vi.hoisted((): { current: Promise<void> | null } => ({
   current: null,
@@ -144,9 +150,27 @@ function personalPage(children: ReactNode): ReactNode {
   );
 }
 
+function cloudPersonalPage(children: ReactNode): ReactNode {
+  return (
+    <ConfigurationSourceContext.Provider
+      value={{
+        kind: "pool",
+        configuration: "personal",
+        environmentId: PERSONAL_ENV_ID,
+        roomId: "room-personal",
+        providerHandle: null,
+        effectiveRole: "owner",
+      }}
+    >
+      {personalPage(children)}
+    </ConfigurationSourceContext.Provider>
+  );
+}
+
 beforeEach(() => {
   linkMock.link.mockReset();
   listMock.mockReset();
+  providersListMock.mockReset();
   listGate.current = null;
   linkMock.complete.mockReset();
   openLinkMock.mockReset();
@@ -175,6 +199,10 @@ beforeEach(() => {
       },
       "providers.link": linkMock.link,
       "providers.linkComplete": linkMock.complete,
+      "providers.list": () => {
+        providersListMock();
+        return { providers: [], native: null };
+      },
     },
   });
   clientMock.current = client;
@@ -183,6 +211,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
+  resetNegotiatedManifests();
   clientMock.current = null;
   useProviderLinkDialogStore.setState({ target: null });
   useSettingsEnvironmentPickStore.setState({ pick: null });
@@ -212,12 +241,33 @@ async function renderDialog(children: ReactNode): Promise<void> {
   });
 }
 
+async function renderCloudDialog(): Promise<void> {
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      {cloudPersonalPage(<ProviderLinkDialog />)}
+    </QueryClientProvider>,
+  );
+  await screen.findByLabelText("Profile name");
+}
+
 async function openDialog(
   providerId: string,
   profileId: string | null,
 ): Promise<void> {
   useProviderLinkDialogStore.getState().open({ providerId, profileId });
   await renderDialog(personalPage(<ProviderLinkDialog />));
+}
+
+async function openCloudDialog(
+  providerId: string,
+  profileId: string | null,
+): Promise<void> {
+  useProviderLinkDialogStore.getState().open({
+    providerId,
+    profileId,
+    environmentId: PERSONAL_ENV_ID,
+  });
+  await renderCloudDialog();
 }
 
 function dialogState(): string | null {
@@ -289,6 +339,44 @@ describe("the intro", () => {
 });
 
 describe("a sign-in URL with a pasted code", () => {
+  it("finishes a new cloud profile at link completion without polling local providers", async () => {
+    recordNegotiatedHostManifest(HOST_ID, {
+      "providers.link": { major: 1, minor: 2 },
+      "providers.linkComplete": { major: 1, minor: 2 },
+      "providers.linkCancel": { major: 1, minor: 0 },
+    });
+    await openCloudDialog("claude-code", null);
+    fireEvent.change(screen.getByLabelText("Profile name"), {
+      target: { value: "Cloud profile" },
+    });
+    linkMock.link.mockResolvedValueOnce(SIGN_IN_RESPONSE);
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    await screen.findByLabelText("Code");
+
+    expect(linkMock.link).toHaveBeenCalledWith({
+      providerId: "claude-code",
+      profileId: null,
+      environmentId: PERSONAL_ENV_ID,
+      createProfile: {
+        label: "Cloud profile",
+        shareSkillsAndPlugins: false,
+      },
+      replaceAccount: false,
+    });
+    linkMock.complete.mockResolvedValueOnce(
+      answer({ state: "installing", account: "synthetic-account" }),
+    );
+    fireEvent.change(screen.getByLabelText("Code"), {
+      target: { value: "abc#def" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    expect((await screen.findByRole("status")).textContent).toBe("Signed in.");
+    expect(screen.getByRole("button", { name: "Done" })).toBeTruthy();
+    expect(linkMock.complete).toHaveBeenCalledTimes(1);
+    expect(providersListMock).not.toHaveBeenCalled();
+  });
+
   it("opens the sign-in page, sends the trimmed code and ends on Signed in", async () => {
     await reachSignIn(PROFILE_ID);
     expect(

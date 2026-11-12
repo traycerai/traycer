@@ -226,7 +226,8 @@ interface HarnessOptions {
   readonly profiles: readonly ProviderProfile[];
   readonly laterProfiles?: (listCall: number) => readonly ProviderProfile[];
   readonly methodVersion?: (method: string) => SchemaVersion | null;
-  readonly link?: ProvidersLinkResponseV12;
+  readonly onLinkRequest?: () => void;
+  readonly link?: ProvidersLinkResponseV12 | Promise<ProvidersLinkResponseV12>;
   readonly complete?: (
     callNumber: number,
   ) =>
@@ -288,6 +289,7 @@ function makeHost(options: HarnessOptions): void {
         );
       }
       case "providers.link":
+        options.onLinkRequest?.();
         return Promise.resolve(options.link ?? linkAnswer(SIGN_IN_URL_PROMPT));
       case "providers.linkComplete":
         completeCalls += 1;
@@ -312,6 +314,7 @@ function makeHost(options: HarnessOptions): void {
 interface FakeIo {
   readonly io: ProfileLoginIo;
   readonly interrupt: () => void;
+  readonly isInterruptListening: () => boolean;
 }
 
 function makeIo(options: {
@@ -320,7 +323,8 @@ function makeIo(options: {
   readonly interruptOnWait?: boolean;
   readonly onWait?: (waitCalls: number) => void;
 }): FakeIo {
-  const interruptHandlers: (() => void)[] = [];
+  let interruptHandler: (() => void) | null = null;
+  let interruptListening = false;
   const lines = [...(options.lines ?? [])];
   let interruptedDuringWait = false;
   let waitCalls = 0;
@@ -340,13 +344,16 @@ function makeIo(options: {
       options.onWait?.(waitCalls);
       if (options.interruptOnWait === true && !interruptedDuringWait) {
         interruptedDuringWait = true;
-        interruptHandlers[0]?.();
+        if (interruptListening) interruptHandler?.();
       }
       return Promise.resolve();
     },
     onInterrupt: (handler) => {
-      interruptHandlers.push(handler);
-      return () => undefined;
+      interruptHandler = handler;
+      interruptListening = true;
+      return () => {
+        if (interruptHandler === handler) interruptListening = false;
+      };
     },
     readLines: (onLine) => {
       const line = lines.shift();
@@ -357,7 +364,10 @@ function makeIo(options: {
   };
   return {
     io,
-    interrupt: () => interruptHandlers[0]?.(),
+    interrupt: () => {
+      if (interruptListening) interruptHandler?.();
+    },
+    isInterruptListening: () => interruptListening,
   };
 }
 
@@ -607,7 +617,7 @@ describe("environment profile sign-in through the CLI", () => {
     });
   });
 
-  it("keeps a connected existing profile pending through poll and inventory failures", async () => {
+  it("keeps a connected existing profile pending after poll and certified inventory failures", async () => {
     const selected = profile(
       MANAGED_PROFILE_ID,
       "managed",
@@ -631,7 +641,6 @@ describe("environment profile sign-in through the CLI", () => {
     const context = makeContext();
     const humanRequired = vi.spyOn(context.output, "humanRequired");
     const completionWaitsAfterErrors: number[] = [];
-    let inventoryFailureObserved = false;
     const fake = makeIo({
       terminal: true,
       lines: [CODE],
@@ -643,13 +652,6 @@ describe("environment profile sign-in through the CLI", () => {
             expect.stringContaining("Retry"),
           );
           completionWaitsAfterErrors.push(completedPolls);
-        }
-        if (callsTo("providers.list").length === 2) {
-          expect(callsTo("providers.link")).toHaveLength(1);
-          expect(humanRequired).not.toHaveBeenCalledWith(
-            expect.stringContaining("Retry"),
-          );
-          inventoryFailureObserved = true;
         }
       },
     });
@@ -669,26 +671,42 @@ describe("environment profile sign-in through the CLI", () => {
       { linkId: "link-attempt", environmentId: ENVIRONMENT_ID, code: null },
       { linkId: "link-attempt", environmentId: ENVIRONMENT_ID, code: null },
     ]);
-    expect(callsTo("providers.list")).toHaveLength(3);
+    expect(callsTo("providers.list")).toHaveLength(2);
     expect(completionWaitsAfterErrors).toEqual([2, 3]);
-    expect(inventoryFailureObserved).toBe(true);
     expect(result.data).toEqual({
       providerId: "claude-code",
-      status: "signed-in",
-      profile: {
-        profileId: MANAGED_PROFILE_ID,
-        label: "Selected profile",
-        kind: "managed",
-        email: null,
-        enabled: true,
-        authStatus: "authenticated",
-        rateLimitStatus: "unknown",
-      },
-      created: false,
+      status: "signed-in-pending",
     });
     expect(humanRequired).not.toHaveBeenCalledWith(
       expect.stringContaining("Retry"),
     );
+  });
+
+  it("returns a new profile as pending when installing expires before inventory confirms it", async () => {
+    makeHost({
+      providerId: "claude-code",
+      profiles: [],
+      laterProfiles: () => [],
+      link: linkAnswer({ kind: "local_handoff" }),
+      complete: (callNumber) =>
+        callNumber === 1
+          ? completeAnswer("installing", null, null)
+          : completeAnswer("expired", null, null),
+    });
+    const fake = makeIo({ terminal: true });
+
+    const { result } = await runLogin(
+      "claude",
+      { kind: "create", label: "Work profile" },
+      fake.io,
+    );
+
+    expect(callsTo("providers.linkComplete")).toHaveLength(2);
+    expect(callsTo("providers.list")).toHaveLength(2);
+    expect(result.data).toEqual({
+      providerId: "claude-code",
+      status: "signed-in-pending",
+    });
   });
 
   it("refuses a typed existing-profile mismatch without replacing the account", async () => {
@@ -823,6 +841,53 @@ describe("environment profile sign-in through the CLI", () => {
     });
   });
 
+  it("removes its interrupt listener immediately while providers.link is unresolved", async () => {
+    let notifyLinkStarted: () => void = () => {};
+    const linkStarted = new Promise<void>((resolve) => {
+      notifyLinkStarted = () => resolve();
+    });
+    let resolveLink: (answer: ProvidersLinkResponseV12) => void = () => {};
+    makeHost({
+      providerId: "claude-code",
+      profiles: [],
+      onLinkRequest: notifyLinkStarted,
+      link: new Promise<ProvidersLinkResponseV12>((resolve) => {
+        resolveLink = resolve;
+      }),
+    });
+    const fake = makeIo({ terminal: true });
+    const run = runLogin(
+      "claude",
+      { kind: "create", label: "Work profile" },
+      fake.io,
+    );
+
+    await Promise.race([
+      linkStarted,
+      run.then(() => {
+        throw new Error("CLI sign-in ended before providers.link started.");
+      }),
+    ]);
+    expect(fake.isInterruptListening()).toBe(true);
+
+    fake.interrupt();
+
+    expect(fake.isInterruptListening()).toBe(false);
+    resolveLink(linkAnswer({ kind: "local_handoff" }));
+    const { result } = await run;
+
+    expect(result.data).toEqual({
+      providerId: "claude-code",
+      status: "cancelled",
+    });
+    expect(callsTo("providers.linkCancel")).toHaveLength(1);
+    expect(onlyCallTo("providers.link")[2]).toMatchObject({
+      reauthenticate: "before-request",
+      signal: null,
+    });
+    expect(callsTo("providers.linkComplete")).toEqual([]);
+  });
+
   it.each([
     ["linked", completeAnswer("linked", MANAGED_PROFILE_ID, null)],
     ["installing", completeAnswer("installing", null, null)],
@@ -872,6 +937,7 @@ describe("environment profile sign-in through the CLI", () => {
         }),
       ]);
       fake.interrupt();
+      expect(fake.isInterruptListening()).toBe(false);
       resolveComplete(response);
       const result = await run;
 
@@ -882,6 +948,14 @@ describe("environment profile sign-in through the CLI", () => {
       expect(result.exitCode).toBe(130);
       expect(callsTo("providers.linkComplete")).toHaveLength(1);
       expect(callsTo("providers.linkCancel")).toEqual([]);
+      expect(onlyCallTo("providers.link")[2]).toMatchObject({
+        reauthenticate: "before-request",
+        signal: null,
+      });
+      expect(onlyCallTo("providers.linkComplete")[2]).toMatchObject({
+        reauthenticate: "always",
+        signal: null,
+      });
     },
   );
 });

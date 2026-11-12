@@ -45,7 +45,12 @@ export async function runEnvironmentProfileLogin(
   );
   const profileId = local?.environmentProfileId ?? target.profileId;
   const abort = new AbortController();
-  const stopInterrupt = io.onInterrupt(() => abort.abort());
+  // A second Ctrl+C can exit while a late response or release is pending.
+  const interrupt = (): void => {
+    abort.abort();
+    stopInterrupt();
+  };
+  const stopInterrupt = io.onInterrupt(interrupt);
   let linkId: string | null = null;
   let connected = false;
   let cancelSent = false;
@@ -53,6 +58,7 @@ export async function runEnvironmentProfileLogin(
     method: "providers.link" | "providers.linkComplete",
   ): HostRpcDispatch => ({
     ...PLAIN_DISPATCH,
+    reauthenticate: method === "providers.link" ? "before-request" : "always",
     requiredHostMethodVersion: { method, version: { major: 1, minor: 2 } },
   });
   const release = async (): Promise<void> => {
@@ -163,30 +169,28 @@ export async function runEnvironmentProfileLogin(
           ctx.output.humanRequired(
             "Waiting for this profile on this computer…",
           );
-          for (;;) {
-            let providers: readonly ProviderCliState[];
-            try {
-              providers = await readProviderStates();
-            } catch {
-              await io.wait(2_000, abort.signal);
-              if (abort.signal.aborted) return { status: "cancelled" };
-              continue;
-            }
-            const installed = installedEnvironmentProfile(
-              providers,
+          let installed: ProviderProfile | null = null;
+          try {
+            installed = installedEnvironmentProfile(
+              await readProviderStates(),
               providerId,
               response.environmentProfileId ?? start.environmentProfileId,
               response.profileId,
             );
-            if (installed !== null)
-              return {
-                status: "signed-in",
-                profile: summarizeProfile(installed),
-                created: target.create !== null,
-              };
-            if (abort.signal.aborted) return { status: "cancelled" };
-            await io.wait(2_000, abort.signal);
+          } catch {
+            /* The connection is established; its inventory may arrive later. */
           }
+          if (installed !== null)
+            return {
+              status: "signed-in",
+              profile: summarizeProfile(installed),
+              created: target.create !== null,
+            };
+          if (abort.signal.aborted) return { status: "cancelled" };
+          if (response.state === "linked" && response.profileId !== null)
+            return { status: "signed-in-pending" };
+          await io.wait(2_000, abort.signal);
+          continue;
         }
 
         if (
