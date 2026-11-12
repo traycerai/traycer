@@ -22,6 +22,7 @@ import {
 } from "@traycer/protocol/config/credentials-mutation";
 import { isDiskFullSignInError } from "@traycer-clients/shared/auth/sign-in-storage";
 import { runInitGate } from "@traycer/protocol/config/credentials-wal";
+import { isCredentialsReserveComplete } from "@traycer/protocol/config/credentials-reserve";
 import { runLegacyCredentialsMigration } from "./credentials-migration";
 import { describeLogError, log } from "../app/logger";
 
@@ -129,9 +130,11 @@ export class FileTokenStore {
   // Monotonic emit counter for TokenStoreChange (dedup / WindowsBridge fence).
   private revision = 0;
   private signInStorageLow = false;
+  private diskPressureRevision = 0;
   private readonly storagePressureListeners = new Set<(low: boolean) => void>();
   private watcher: FSWatcher | null = null;
   private debounceTimer: NodeJS.Timeout | null = null;
+  private credentialsChangePending = false;
   private watcherReinstallTimer: NodeJS.Timeout | null = null;
   private watcherReinstallDelayMs: number = WATCHER_REINSTALL_INITIAL_MS;
   private watcherWasInterrupted = false;
@@ -263,14 +266,20 @@ export class FileTokenStore {
         this.credentialsDir,
         (_event, filename) => {
           if (filename === null) {
-            this.scheduleEmitChange();
+            this.scheduleWatchUpdate(true);
             return;
           }
           if (
             typeof filename === "string" &&
             filename === this.credentialsBasename
           ) {
-            this.scheduleEmitChange();
+            this.scheduleWatchUpdate(true);
+          } else if (
+            this.signInStorageLow &&
+            typeof filename === "string" &&
+            filename.startsWith(`${this.credentialsBasename}.reserve.`)
+          ) {
+            this.scheduleWatchUpdate(false);
           }
         },
       );
@@ -310,7 +319,7 @@ export class FileTokenStore {
         // it.
         this.catchUpPending = true;
         this.catchUpRetryDelayMs = CATCH_UP_RETRY_INITIAL_MS;
-        this.scheduleEmitChange();
+        this.scheduleWatchUpdate(true);
       }
     } catch (error) {
       log.warn("[file-token-store] unable to install credentials watcher", {
@@ -345,28 +354,43 @@ export class FileTokenStore {
     this.catchUpRetryTimer = setTimeout(() => {
       this.catchUpRetryTimer = null;
       if (this.catchUpPending) {
-        this.scheduleEmitChange();
+        this.scheduleWatchUpdate(true);
       }
     }, delayMs);
   }
 
-  private scheduleEmitChange(): void {
+  private scheduleWatchUpdate(credentialsChanged: boolean): void {
     if (this.disposed) {
       return;
     }
     if (this.debounceTimer !== null) {
       clearTimeout(this.debounceTimer);
     }
+    this.credentialsChangePending ||= credentialsChanged;
     this.debounceTimer = setTimeout(() => {
       this.debounceTimer = null;
-      void this.emitChange();
+      const emitCredentials = this.credentialsChangePending;
+      this.credentialsChangePending = false;
+      void this.emitWatchUpdate(emitCredentials);
     }, WATCHER_DEBOUNCE_MS);
   }
 
-  private async emitChange(): Promise<void> {
+  private async emitWatchUpdate(emitCredentials: boolean): Promise<void> {
     if (this.disposed) {
       return;
     }
+    if (this.signInStorageLow) {
+      const pressureRevision = this.diskPressureRevision;
+      const complete = await isCredentialsReserveComplete(this.credentialsPath);
+      if (
+        !this.disposed &&
+        pressureRevision === this.diskPressureRevision &&
+        complete
+      ) {
+        this.applyDiskPressure("clear");
+      }
+    }
+    if (!emitCredentials || this.disposed) return;
     let file: StoredCredentials | null;
     try {
       // Through the store, not a raw file read: the change fan-out must be
@@ -439,6 +463,7 @@ export class FileTokenStore {
 
   private applyDiskPressure(pressure: DiskPressure | null): void {
     if (pressure === null) return;
+    this.diskPressureRevision += 1;
     const low = pressure === "low";
     if (this.signInStorageLow === low) return;
     this.signInStorageLow = low;
