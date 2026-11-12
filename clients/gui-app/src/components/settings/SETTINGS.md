@@ -6594,9 +6594,13 @@ set-state-in-effect` forbids the effect form, and an effect would also
   trailing "working" dropped, otherwise Idle or Busy); a health detail when
   the host is not live, or when it needs an update; this computer's lifecycle
   line; and the cost. A team sandbox's header cost is the rate only. A
-  personal sandbox adds "{amount} today", or **Free today** for an automation,
-  when a ledger row exists. The rate itself reads Free, Not billing, the
-  hourly rate, or Not priced here.
+  personal sandbox adds "{amount} today", or **Free today** for a personal
+  Automations host, when a ledger row exists. The rate itself reads Free for
+  personal Automations hosts, or Not billing, the hourly rate, or Not priced
+  here. Team Automations hosts show the same rates as team sandboxes. During
+  a transition, the header omits the current rate until the ledger supplies
+  it; personal Automations remain Free and frozen sandboxes show Not billing.
+  Installation omits the other rate during transitions.
 
   The header offers one primary action and one More menu. A sandbox's existing
   lifecycle verbs move here from the former sandbox card: Suspend while awake,
