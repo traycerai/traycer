@@ -610,16 +610,21 @@ describe("<ArtifactVersionHistoryEntryPoint />", () => {
 
     openHistory();
 
-    const capturedTime = new Intl.DateTimeFormat(undefined, {
+    const capturedAt = 1_700_000_000_000;
+    const capturedTimestamp = new Intl.DateTimeFormat(undefined, {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
       hour: "numeric",
       minute: "2-digit",
       second: "2-digit",
-    }).format(1_700_000_000_000);
+    }).format(capturedAt);
     const chatLink = screen.getByRole("button", {
-      name: /^Open chat Auth hardening/,
+      name: `Auth hardening, ${capturedTimestamp}`,
     });
-    expect(chatLink.getAttribute("aria-label")).toContain(capturedTime);
-    expect(chatLink.getAttribute("aria-label")).not.toContain("from version ");
+    expect(chatLink.getAttribute("aria-label")).toBe(
+      `Auth hardening, ${capturedTimestamp}`,
+    );
     expect(chatLink.parentElement?.textContent).toBe("Agent · Auth hardening");
 
     fireEvent.click(chatLink);
@@ -820,10 +825,18 @@ describe("<ArtifactVersionHistoryEntryPoint />", () => {
     expect(history.textContent).not.toContain("private-clobber-source");
   });
 
-  it("names versions and agent chats by provenance and capture time across arrivals", () => {
+  it("keeps accessible names tied to provenance and capture time across page changes", () => {
     const capturedAt = 1_700_000_000_000;
-    const formatCapturedTimeWithSeconds = (value: number): string =>
+    const formatMinute = (value: number): string =>
       new Intl.DateTimeFormat(undefined, {
+        hour: "numeric",
+        minute: "2-digit",
+      }).format(value);
+    const formatCapturedTimestamp = (value: number): string =>
+      new Intl.DateTimeFormat(undefined, {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
         hour: "numeric",
         minute: "2-digit",
         second: "2-digit",
@@ -840,43 +853,53 @@ describe("<ArtifactVersionHistoryEntryPoint />", () => {
     };
     const initialEntries = [firstEntry, secondEntry];
     state.historyEntries = initialEntries;
+    state.historyNextCursor = "older-cursor";
+    state.olderEntries = [
+      {
+        ...observation("older-snapshot", "Older chat"),
+        capturedAt: capturedAt - 120_000,
+      },
+    ];
     const result = openHistory();
 
-    const firstTime = formatCapturedTimeWithSeconds(firstEntry.capturedAt);
-    const secondTime = formatCapturedTimeWithSeconds(secondEntry.capturedAt);
-    expect(firstTime).not.toBe(secondTime);
+    const firstMinute = formatMinute(firstEntry.capturedAt);
+    const secondMinute = formatMinute(secondEntry.capturedAt);
+    const firstTimestamp = formatCapturedTimestamp(firstEntry.capturedAt);
+    const secondTimestamp = formatCapturedTimestamp(secondEntry.capturedAt);
+    expect(firstMinute).toBe(secondMinute);
+    expect(firstTimestamp).not.toBe(secondTimestamp);
 
-    const firstVersion = screen.getByTestId(
-      "artifact-version-observation-first-snapshot",
-    );
-    const firstVersionName = firstVersion.getAttribute("aria-label") ?? "";
-    expect(firstVersionName).toContain("Agent");
-    expect(firstVersionName).toContain("Body only — images missing");
-    expect(firstVersionName).toContain("re-normalized by editor update");
-    expect(firstVersionName).toContain(firstTime);
-    expect(firstVersionName).not.toMatch(/\bversion\s+\d+\b/i);
-
-    const secondVersion = screen.getByTestId(
-      "artifact-version-observation-second-snapshot",
-    );
-    const secondVersionName = secondVersion.getAttribute("aria-label") ?? "";
-    expect(secondVersionName).toContain("Agent");
-    expect(secondVersionName).toContain(secondTime);
-    expect(secondVersionName).not.toMatch(/\bversion\s+\d+\b/i);
-
-    const sameChatNames = (): string[] =>
-      screen
-        .getAllByRole("button", { name: /^Open chat Same chat/ })
-        .map((button) => button.getAttribute("aria-label") ?? "");
-    const initialChatNames = sameChatNames();
-    expect(initialChatNames).toHaveLength(2);
-    expect(initialChatNames[0]).toContain("Same chat");
-    expect(initialChatNames[0]).toContain(firstTime);
-    expect(initialChatNames[1]).toContain("Same chat");
-    expect(initialChatNames[1]).toContain(secondTime);
+    const firstVersionName = [
+      "Agent edit",
+      firstMinute,
+      "re-normalized by editor update",
+      "Body only — images missing",
+      firstTimestamp,
+    ].join(", ");
+    const secondVersionName = [
+      "Agent edit",
+      secondMinute,
+      secondTimestamp,
+    ].join(", ");
     expect(
-      initialChatNames.every((name) => !name.includes("from version ")),
-    ).toBe(true);
+      screen
+        .getByTestId("artifact-version-observation-first-snapshot")
+        .getAttribute("aria-label"),
+    ).toBe(firstVersionName);
+    expect(
+      screen
+        .getByTestId("artifact-version-observation-second-snapshot")
+        .getAttribute("aria-label"),
+    ).toBe(secondVersionName);
+
+    const sameChatAccessibleNames = (): string[] =>
+      screen
+        .getAllByRole("button", { name: /^Same chat,/ })
+        .map((button) => button.getAttribute("aria-label") ?? "");
+    const firstChatName = `Same chat, ${firstTimestamp}`;
+    const secondChatName = `Same chat, ${secondTimestamp}`;
+    const initialChatNames = sameChatAccessibleNames();
+    expect(initialChatNames).toEqual([firstChatName, secondChatName]);
 
     state.historyEntries = [
       {
@@ -897,95 +920,23 @@ describe("<ArtifactVersionHistoryEntryPoint />", () => {
         .getByTestId("artifact-version-observation-second-snapshot")
         .getAttribute("aria-label"),
     ).toBe(secondVersionName);
-    expect(sameChatNames()).toEqual(initialChatNames);
-  });
+    expect(sameChatAccessibleNames()).toEqual(initialChatNames);
 
-  it("adds suffixes only when loaded provenance names collide", () => {
-    const capturedAt = 1_700_000_000_000;
-    const capturedTime = new Intl.DateTimeFormat(undefined, {
-      hour: "numeric",
-      minute: "2-digit",
-      second: "2-digit",
-    }).format(capturedAt);
-    const firstEntry = {
-      ...observation("collision-first", "Same chat"),
-      capturedAt,
-      localSeq: 1,
-    };
-    const secondEntry = {
-      ...observation("collision-second", "Same chat"),
-      capturedAt,
-      localSeq: 2,
-    };
-    const differentTitleEntry = {
-      ...observation("different-title", "Other chat"),
-      capturedAt,
-      localSeq: 3,
-    };
-    const initialEntries = [firstEntry, secondEntry, differentTitleEntry];
-    state.historyEntries = initialEntries;
-    const result = openHistory();
-
-    const collisionVersionNames = initialEntries.map(
-      (entry) =>
-        screen
-          .getByTestId(`artifact-version-observation-${entry.observationId}`)
-          .getAttribute("aria-label") ?? "",
+    fireEvent.click(
+      screen.getByRole("button", { name: "Load older versions" }),
     );
-    expect(new Set(collisionVersionNames).size).toBe(3);
-    const baseVersionName = collisionVersionNames.find(
-      (name) => !/ \(\d+\)$/.test(name),
-    );
-    expect(baseVersionName).toContain("Agent");
-    expect(baseVersionName).toContain(capturedTime);
-    expect(collisionVersionNames).toContain(`${baseVersionName} (2)`);
-    expect(collisionVersionNames).toContain(`${baseVersionName} (3)`);
-
-    const chatNames = (): string[] =>
-      screen
-        .getAllByRole("button", { name: /^Open chat Same chat/ })
-        .map((button) => button.getAttribute("aria-label") ?? "");
-    const initialChatNames = chatNames();
-    expect(new Set(initialChatNames).size).toBe(2);
-    const baseChatName = initialChatNames.find(
-      (name) => !name.endsWith(" (2)"),
-    );
-    expect(baseChatName).toContain("Same chat");
-    expect(baseChatName).toContain(capturedTime);
-    expect(initialChatNames).toContain(`${baseChatName} (2)`);
-    const otherChat = screen.getByRole("button", {
-      name: /^Open chat Other chat/,
-    });
-    expect(otherChat.getAttribute("aria-label")).toContain(capturedTime);
-    expect(otherChat.getAttribute("aria-label")).not.toMatch(/ \(\d+\)$/);
-
-    const newEntry = {
-      ...observation("collision-arrival", "Same chat"),
-      capturedAt,
-      localSeq: 4,
-    };
-    state.historyEntries = [newEntry, ...initialEntries];
-    result.rerender(historyTree(epicHandle));
-
-    expect(
-      initialEntries.map(
-        (entry) =>
-          screen
-            .getByTestId(`artifact-version-observation-${entry.observationId}`)
-            .getAttribute("aria-label") ?? "",
-      ),
-    ).toEqual(collisionVersionNames);
-    expect(chatNames().slice(1)).toEqual(initialChatNames);
+    expect(screen.getByText("Older chat")).toBeTruthy();
     expect(
       screen
-        .getByTestId("artifact-version-observation-collision-arrival")
+        .getByTestId("artifact-version-observation-first-snapshot")
         .getAttribute("aria-label"),
-    ).toBe(`${baseVersionName} (4)`);
+    ).toBe(firstVersionName);
     expect(
       screen
-        .getAllByRole("button", { name: /^Open chat Same chat/ })[0]
+        .getByTestId("artifact-version-observation-second-snapshot")
         .getAttribute("aria-label"),
-    ).toBe(`${baseChatName} (3)`);
+    ).toBe(secondVersionName);
+    expect(sameChatAccessibleNames()).toEqual(initialChatNames);
   });
 
   it("labels user edits without showing user or host ids", () => {

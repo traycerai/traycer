@@ -123,6 +123,7 @@ const CAPTURED_AT_FORMATTER = new Intl.DateTimeFormat(undefined, {
 });
 
 const ACCESSIBLE_CAPTURED_AT_FORMATTER = new Intl.DateTimeFormat(undefined, {
+  year: "numeric",
   month: "short",
   day: "numeric",
   hour: "numeric",
@@ -943,9 +944,8 @@ function VersionObservationList(props: {
   readonly onSelect: (observationId: string) => void;
   readonly onOpenChat: (chatId: string) => void;
 }): ReactNode {
-  const versionCounts = new Map<string, number>();
-  const chatCounts = new Map<string, number>();
-  const rows = props.entries.map((entry, index) => {
+  let previousDay: string | null = null;
+  return props.entries.map((entry, index) => {
     const olderEntry = props.entries.at(index + 1);
     const badges: {
       text: string;
@@ -985,33 +985,16 @@ function VersionObservationList(props: {
     const capturedAt = ACCESSIBLE_CAPTURED_AT_FORMATTER.format(
       entry.capturedAt,
     );
-    return {
-      entry,
-      badges,
-      versionName: [
-        PROVENANCE_LABELS[entry.provenance.kind],
-        capturedAt,
-        ...badges.map((badge) => badge.text),
-      ].join(", "),
-      chatName:
-        entry.provenance.kind === "agent"
-          ? `Open chat ${entry.provenance.chatTitle?.trim() || "Untitled chat"}, ${capturedAt}`
-          : undefined,
-    };
-  });
-  // Give an arriving newest row the next collision suffix, retaining existing names.
-  for (const row of rows.slice().reverse()) {
-    const versionCount = (versionCounts.get(row.versionName) ?? 0) + 1;
-    versionCounts.set(row.versionName, versionCount);
-    if (versionCount > 1) row.versionName += ` (${versionCount})`;
-    if (row.chatName !== undefined) {
-      const chatCount = (chatCounts.get(row.chatName) ?? 0) + 1;
-      chatCounts.set(row.chatName, chatCount);
-      if (chatCount > 1) row.chatName += ` (${chatCount})`;
-    }
-  }
-  let previousDay: string | null = null;
-  return rows.map(({ entry, badges, versionName, chatName }) => {
+    const versionName = [
+      PROVENANCE_LABELS[entry.provenance.kind],
+      formatCapturedTime(entry.capturedAt),
+      ...badges.map((badge) => badge.text),
+      capturedAt,
+    ].join(", ");
+    const chatName =
+      entry.provenance.kind === "agent"
+        ? `${entry.provenance.chatTitle?.trim() || "Untitled chat"}, ${capturedAt}`
+        : undefined;
     const day = dayLabel(entry.capturedAt);
     const showDay = day !== previousDay;
     previousDay = day;
