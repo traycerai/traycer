@@ -29,16 +29,31 @@ describe("SignInStorageBanner", () => {
     );
   });
 
-  it("self-clears when the store flag clears", () => {
-    act(() => useAuthStore.getState().setSignInStorageLow(true));
+  it("keeps one empty status region as the store flag toggles", () => {
     render(<SignInStorageBanner />);
-    expect(
-      screen.getByRole("status", { name: DISK_FULL_SIGN_IN_TITLE }),
-    ).not.toBeNull();
 
-    act(() => useAuthStore.getState().setSignInStorageLow(false));
+    const status = screen.getByRole("status");
+    expect(status.textContent).toBe("");
+    expect(status.getAttribute("aria-label")).toBeNull();
     expect(
       screen.queryByRole("status", { name: DISK_FULL_SIGN_IN_TITLE }),
     ).toBeNull();
+
+    act(() => useAuthStore.getState().setSignInStorageLow(true));
+    expect(
+      screen.getByRole("status", { name: DISK_FULL_SIGN_IN_TITLE }),
+    ).toBe(status);
+    expect(status.textContent).toBe(
+      `${DISK_FULL_SIGN_IN_TITLE} ${DISK_FULL_SIGN_IN_BODY}`,
+    );
+
+    act(() => useAuthStore.getState().setSignInStorageLow(false));
+    expect(screen.getByRole("status")).toBe(status);
+    expect(status.textContent).toBe("");
+    expect(status.getAttribute("aria-label")).toBeNull();
+    expect(status.classList.contains("sr-only")).toBe(true);
+    expect(status.classList.contains("border-warning/30")).toBe(false);
+    expect(status.classList.contains("bg-warning/10")).toBe(false);
+    expect(status.classList.contains("text-warning-foreground")).toBe(false);
   });
 });

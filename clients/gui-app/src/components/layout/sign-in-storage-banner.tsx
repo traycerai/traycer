@@ -9,18 +9,23 @@ import {
 
 export function SignInStorageBanner(): ReactNode {
   const low = useAuthStore((state) => state.signInStorageLow);
-  if (!low) return null;
   return (
     <output
-      aria-label={DISK_FULL_SIGN_IN_TITLE}
+      aria-label={low ? DISK_FULL_SIGN_IN_TITLE : undefined}
       className={cn(
-        "flex w-full items-center gap-2 border-b border-warning/30 bg-warning/10 px-3 py-1.5 text-ui-xs text-warning-foreground",
+        low
+          ? "flex w-full items-center gap-2 border-b border-warning/30 bg-warning/10 px-3 py-1.5 text-ui-xs text-warning-foreground"
+          : "sr-only",
       )}
     >
-      <HardDrive className="size-3.5 shrink-0" aria-hidden />
-      <span className="min-w-0 flex-1">
-        <strong>{DISK_FULL_SIGN_IN_TITLE}</strong> {DISK_FULL_SIGN_IN_BODY}
-      </span>
+      {low ? (
+        <>
+          <HardDrive className="size-3.5 shrink-0" aria-hidden />
+          <span className="min-w-0 flex-1">
+            <strong>{DISK_FULL_SIGN_IN_TITLE}</strong> {DISK_FULL_SIGN_IN_BODY}
+          </span>
+        </>
+      ) : null}
     </output>
   );
 }
