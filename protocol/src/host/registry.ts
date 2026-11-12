@@ -85,6 +85,8 @@ import {
   agentListHarnessModelsV10,
   agentListHarnessModelsV20,
   agentListHarnessModelsV21,
+  agentListHarnessModelsV22,
+  agentListHarnessModelsUpgradeV21ToV22,
   agentListHarnessModelsUpgradeV20ToV21,
   agentListHarnessModelsUpgradeV1ToV2,
   agentListDowngradeV2ToV1,
@@ -8519,7 +8521,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
     2: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: agentListHarnessModelsV20,
@@ -8528,6 +8530,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         1: {
           contract: agentListHarnessModelsV21,
           upgradeFromPreviousVersion: agentListHarnessModelsUpgradeV20ToV21,
+        },
+        2: {
+          contract: agentListHarnessModelsV22,
+          upgradeFromPreviousVersion: agentListHarnessModelsUpgradeV21ToV22,
         },
       },
       downgradePathsFromLatest: {
