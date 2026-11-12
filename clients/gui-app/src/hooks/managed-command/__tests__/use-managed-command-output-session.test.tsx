@@ -40,7 +40,7 @@ describe("useManagedCommandOutputSession", () => {
 
     const view = renderHook(() =>
       useManagedCommandOutputSession({
-        epicId: "epic-1",
+        target: { kind: "epic", epicId: "epic-1" },
         commandId: "command-1",
         hostId: "sbx-host",
       }),

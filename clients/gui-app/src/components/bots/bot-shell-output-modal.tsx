@@ -1,0 +1,95 @@
+import { useId } from "react";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { ManagedCommandOutputBody } from "@/components/epic-canvas/renderers/managed-command-output-tile";
+import { useManagedCommandOutputSession } from "@/hooks/managed-command/use-managed-command-output-session";
+import { useHostReachability } from "@/hooks/agent/use-host-reachability";
+import { TileFindContext } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
+
+export function BotShellOutputModal(props: {
+  readonly botId: string;
+  readonly sessionChatId: string;
+  readonly hostId: string;
+  readonly commandId: string | null;
+  readonly onClose: () => void;
+  readonly restoreFocus: () => void;
+}) {
+  return (
+    <Dialog
+      open={props.commandId !== null}
+      onOpenChange={(open) => {
+        if (!open) props.onClose();
+      }}
+    >
+      <DialogContent
+        layout="banded"
+        className="flex h-[min(70dvh,40rem)] flex-col sm:max-w-3xl"
+        aria-describedby={undefined}
+        onCloseAutoFocus={(event) => {
+          event.preventDefault();
+          props.restoreFocus();
+        }}
+      >
+        <DialogHeader>
+          <DialogTitle>Shell output</DialogTitle>
+        </DialogHeader>
+        {props.commandId === null ? null : (
+          <BotShellOutput
+            botId={props.botId}
+            sessionChatId={props.sessionChatId}
+            hostId={props.hostId}
+            commandId={props.commandId}
+            onClose={props.onClose}
+          />
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function BotShellOutput(props: {
+  readonly botId: string;
+  readonly sessionChatId: string;
+  readonly hostId: string;
+  readonly commandId: string;
+  readonly onClose: () => void;
+}) {
+  const viewId = useId();
+  const reachability = useHostReachability(props.hostId);
+  const { session, reopen } = useManagedCommandOutputSession({
+    target: {
+      kind: "bot",
+      botId: props.botId,
+      sessionChatId: props.sessionChatId,
+    },
+    hostId: props.hostId,
+    commandId: props.commandId,
+  });
+  if (session === null) {
+    return (
+      <div role="status" className="p-4 text-ui-sm text-muted-foreground">
+        Loading output…
+      </div>
+    );
+  }
+  return (
+    <div className="min-h-0 min-w-0 flex-1">
+      <TileFindContext value={null}>
+        <ManagedCommandOutputBody
+          instanceId={`bot-output:${props.hostId}:${props.botId}:${props.sessionChatId}:${props.commandId}:${viewId}`}
+          mode={{
+            kind: "bot",
+            hostReachable: reachability.status === "reachable",
+          }}
+          onClose={props.onClose}
+          onReopen={reopen}
+          session={session}
+        />
+      </TileFindContext>
+    </div>
+  );
+}

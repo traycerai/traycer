@@ -1,5 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { ManagedCommandOutputStreamClient } from "@traycer-clients/shared/host-transport/managed-command-output-stream-client";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  ManagedCommandOutputStreamClient,
+  type ManagedCommandOutputTarget,
+} from "@traycer-clients/shared/host-transport/managed-command-output-stream-client";
 import { openOwnedDurableStreamClient } from "@/lib/host/owned-durable-stream-client";
 import { useDurableStreamTransportFactory } from "@/lib/host/use-durable-stream-transport";
 import { getManagedCommandOutputStreamClientFactoryOverride } from "@/providers/managed-command-output-stream-factory-override";
@@ -29,11 +32,21 @@ export interface ManagedCommandOutputSession {
  * (see `openOwnedDurableStreamClient`) and bound to the tab's host for life.
  */
 export function useManagedCommandOutputSession(args: {
-  readonly epicId: string;
+  readonly target: ManagedCommandOutputTarget;
   readonly commandId: string;
   readonly hostId: string;
 }): ManagedCommandOutputSession {
-  const { commandId, epicId, hostId } = args;
+  const { commandId, target, hostId } = args;
+  const targetId = target.kind === "epic" ? target.epicId : target.botId;
+  const targetKind = target.kind;
+  const sessionChatId = target.kind === "bot" ? target.sessionChatId : "";
+  const streamTarget = useMemo<ManagedCommandOutputTarget>(
+    () =>
+      targetKind === "epic"
+        ? { kind: "epic", epicId: targetId }
+        : { kind: "bot", botId: targetId, sessionChatId },
+    [targetKind, targetId, sessionChatId],
+  );
   const openTransport = useDurableStreamTransportFactory();
   // Read live rather than as an effect dependency: reopening the stream costs
   // the viewer their scroll position and re-reads the tail, so only the command
@@ -59,14 +72,14 @@ export function useManagedCommandOutputSession(args: {
     const override = getManagedCommandOutputStreamClientFactoryOverride();
     const streamClientFactory: ManagedCommandOutputStreamClientFactory =
       override ??
-      ((streamEpicId, streamCommandId, callbacks) => {
+      ((_scopeId, streamCommandId, callbacks) => {
         const owned = openOwnedDurableStreamClient(
           openTransportRef.current,
           hostId,
           (ws) => {
             const stream = new ManagedCommandOutputStreamClient({
               wsStreamClient: ws,
-              epicId: streamEpicId,
+              target: streamTarget,
               commandId: streamCommandId,
               callbacks,
             });
@@ -88,7 +101,7 @@ export function useManagedCommandOutputSession(args: {
         };
       });
     const next = createManagedCommandOutputStore({
-      epicId,
+      target: streamTarget,
       commandId,
       streamClientFactory,
     });
@@ -97,7 +110,7 @@ export function useManagedCommandOutputSession(args: {
       setHandle(null);
       next.dispose();
     };
-  }, [commandId, epicId, hostId, generation]);
+  }, [commandId, streamTarget, hostId, generation]);
 
   return { session: handle, reopen };
 }

@@ -7,6 +7,7 @@ import type {
 import type {
   ManagedCommandOutputStreamCallbacks,
   ManagedCommandOutputStreamClient,
+  ManagedCommandOutputTarget,
 } from "@traycer-clients/shared/host-transport/managed-command-output-stream-client";
 import type {
   ManagedCommandLogLine,
@@ -72,6 +73,7 @@ export interface ManagedCommandTimelineLine extends ManagedCommandLogLine {
 
 export interface ManagedCommandOutputState {
   readonly connectionStatus: StreamConnectionStatus;
+  readonly live: boolean;
   /** `null` until the opening snapshot lands. */
   readonly command: ManagedCommand | null;
   /** Oldest line first - output and lifecycle records in one timeline. */
@@ -109,7 +111,7 @@ export interface ManagedCommandOutputState {
 }
 
 export interface ManagedCommandOutputStoreOptions {
-  readonly epicId: string;
+  readonly target: ManagedCommandOutputTarget;
   readonly commandId: string;
   readonly streamClientFactory: ManagedCommandOutputStreamClientFactory;
 }
@@ -145,6 +147,7 @@ export function createManagedCommandOutputStore(
   options: ManagedCommandOutputStoreOptions,
 ): ManagedCommandOutputStoreHandle {
   let disposed = false;
+  let botLiveness = false;
   let streamClient: ManagedCommandOutputStreamClientHandle | null = null;
   // The request the store is waiting on. A window that arrives under any other
   // id belongs to a request this one outran, and is dropped.
@@ -237,6 +240,7 @@ export function createManagedCommandOutputStore(
 
   const store = create<ManagedCommandOutputState>()((set, get) => ({
     connectionStatus: "connecting",
+    live: false,
     command: null,
     lines: EMPTY_LINES,
     start: null,
@@ -253,6 +257,7 @@ export function createManagedCommandOutputStore(
       if (!following) return;
       const state = store.getState();
       if (state.detached) {
+        if (options.target.kind === "bot" && !state.live) return;
         if (state.resyncPending) return;
         pendingOlderRequestId = null;
         store.setState({ resyncPending: true, loadingOlder: false });
@@ -270,6 +275,7 @@ export function createManagedCommandOutputStore(
       // stream it has closed for good; asking would send a frame into a dead
       // session and leave the spinner waiting on a reply that never comes.
       if (state.deleted || state.fatalClose !== null) return;
+      if (options.target.kind === "bot" && !state.live) return;
       const before = state.start;
       if (before === null || streamClient === null) return;
       const requestId = uuidv4();
@@ -304,6 +310,9 @@ export function createManagedCommandOutputStore(
       receivedSnapshot = true;
       store.setState((state) => ({
         command: snapshot.command,
+        live:
+          state.connectionStatus === "open" &&
+          (options.target.kind === "epic" || botLiveness),
         lines: numberForward(snapshot.lines, snapshot.start),
         start: snapshot.start,
         reachedStart: snapshot.reachedStart,
@@ -372,11 +381,41 @@ export function createManagedCommandOutputStore(
     },
     onDeleted: () => {
       if (disposed) return;
+      botLiveness = false;
       // The history went with the shell; a page in flight has nothing to land
       // on. `reachedStart` is left alone - it is the host's word about the
       // retained log, and a deletion is not that word.
       pendingOlderRequestId = null;
-      store.setState({ deleted: true, loadingOlder: false });
+      store.setState((state) => ({
+        deleted: true,
+        loadingOlder: false,
+        live: false,
+        resyncPending:
+          options.target.kind === "bot" ? false : state.resyncPending,
+      }));
+    },
+    onLiveness: (state) => {
+      if (disposed) return;
+      botLiveness = state === "live";
+      if (!botLiveness) pendingOlderRequestId = null;
+      store.setState((current) => ({
+        live:
+          botLiveness &&
+          receivedSnapshot &&
+          current.connectionStatus === "open",
+        loadingOlder: botLiveness ? current.loadingOlder : false,
+        resyncPending: botLiveness ? current.resyncPending : false,
+      }));
+      const current = store.getState();
+      if (
+        current.live &&
+        following &&
+        current.detached &&
+        !current.resyncPending
+      ) {
+        store.setState({ resyncPending: true });
+        streamClient?.resnapshot();
+      }
     },
     onConnectionStatus: (
       status: StreamConnectionStatus,
@@ -385,13 +424,37 @@ export function createManagedCommandOutputStore(
       if (disposed) return;
       const closedForGood =
         status === "closed" && reason?.kind === "fatalError";
+      const denied =
+        options.target.kind === "bot" &&
+        closedForGood &&
+        reason.details.code === "MANAGED_COMMAND_UNAVAILABLE";
       // A page can never land on a stream the host closed for good: drop the
       // wait, or the spinner sits at the top of a dead timeline forever.
-      if (closedForGood) pendingOlderRequestId = null;
+      if (status !== "open") {
+        pendingOlderRequestId = null;
+        botLiveness = false;
+      }
       store.setState((state) => ({
         connectionStatus: status,
+        live:
+          status === "open" &&
+          receivedSnapshot &&
+          (options.target.kind === "epic" || botLiveness),
         fatalClose: nextFatalClose(state.fatalClose, status, reason),
-        loadingOlder: closedForGood ? false : state.loadingOlder,
+        loadingOlder: status !== "open" ? false : state.loadingOlder,
+        resyncPending:
+          status !== "open" && options.target.kind === "bot"
+            ? false
+            : state.resyncPending,
+        ...(denied
+          ? {
+              lines: EMPTY_LINES,
+              command: null,
+              start: null,
+              reachedStart: false,
+              deleted: false,
+            }
+          : {}),
       }));
     },
   };
@@ -399,7 +462,9 @@ export function createManagedCommandOutputStore(
   // Opened after the store exists, so a stream that speaks synchronously on
   // construction lands on a live store rather than a half-built one.
   streamClient = options.streamClientFactory(
-    options.epicId,
+    options.target.kind === "epic"
+      ? options.target.epicId
+      : options.target.botId,
     options.commandId,
     callbacks,
   );
