@@ -81,6 +81,7 @@ const state = vi.hoisted(() => ({
   historyNextCursor: null as string | null,
   historyIsError: false,
   historyDataUpdatedAt: 1,
+  hostLabels: new Map<string, string | null>(),
   historyRefetchCalls: 0,
   olderEntries: [] as ArtifactVersionObservationEntry[],
   settingsEnabled: true,
@@ -103,6 +104,13 @@ const state = vi.hoisted(() => ({
 
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
   useTabHostId: () => "host-a",
+}));
+
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: (hostId: string) => {
+    const label = state.hostLabels.get(hostId);
+    return label === undefined ? null : { hostId, label };
+  },
 }));
 
 // The layout signal, faked per test. Real module spread back in so everything
@@ -312,6 +320,20 @@ function observation(
   };
 }
 
+function userSessionObservation(
+  observationId: string,
+  hostId: string | undefined,
+): ArtifactVersionObservationEntry {
+  return {
+    ...observation(observationId, null),
+    provenance: {
+      kind: "user_session",
+      userId: "private-user-value",
+      ...(hostId === undefined ? {} : { hostId }),
+    },
+  };
+}
+
 let epicHandle: OpenEpicStoreHandle;
 
 function historyTree(handle: OpenEpicStoreHandle | null): ReactNode {
@@ -375,6 +397,7 @@ describe("<ArtifactVersionHistoryEntryPoint />", () => {
     state.historyNextCursor = null;
     state.historyIsError = false;
     state.historyDataUpdatedAt = 1;
+    state.hostLabels.clear();
     state.historyRefetchCalls = 0;
     state.olderEntries = [];
     state.settingsEnabled = true;
@@ -639,6 +662,27 @@ describe("<ArtifactVersionHistoryEntryPoint />", () => {
         },
       },
     ]);
+  });
+
+  it("labels user edits without showing user or host ids", () => {
+    state.hostLabels.set("named-host", "Studio Mac");
+    state.historyEntries = [
+      userSessionObservation("named-user-edit", "named-host"),
+      userSessionObservation("unnamed-user-edit", "unnamed-host"),
+      userSessionObservation("hostless-user-edit", undefined),
+    ];
+
+    openHistory();
+
+    const historyText = screen.getByTestId(
+      "artifact-version-history-list",
+    ).textContent;
+    expect(historyText).toContain("User edit · Studio Mac");
+    expect(historyText).toContain("User edit · the host");
+    expect(historyText).toContain("User edit");
+    expect(historyText).not.toContain("private-user-value");
+    expect(historyText).not.toContain("named-host");
+    expect(historyText).not.toContain("unnamed-host");
   });
 
   it("keeps frozen versions browsable below the off-state explanation", () => {

@@ -1,3 +1,5 @@
+import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
+import { hostNameFromLabel } from "@/lib/host/host-name";
 import { useRef, useState, type ReactNode } from "react";
 import {
   AlertTriangleIcon,
@@ -145,12 +147,16 @@ function dayLabel(value: number): string {
 
 type Provenance = ArtifactVersionObservationEntry["provenance"];
 
-function userSessionDetail(
-  provenance: Extract<Provenance, { readonly kind: "user_session" }>,
-): string {
-  return provenance.hostId === undefined
-    ? `User ${provenance.userId}`
-    : `User ${provenance.userId} · host ${provenance.hostId}`;
+function UserSessionDetail(props: {
+  readonly provenance: Extract<Provenance, { readonly kind: "user_session" }>;
+}): ReactNode {
+  const hostId = props.provenance.hostId;
+  const entry = useHostDirectoryEntry(hostId ?? null);
+  const detail =
+    hostId === undefined
+      ? "User edit"
+      : `User edit · ${hostNameFromLabel(entry?.label ?? null, hostId)}`;
+  return <p className="px-3 pb-3 text-ui-xs text-muted-foreground">{detail}</p>;
 }
 
 function multipleAgentsDetail(
@@ -206,7 +212,7 @@ function provenanceDetailText(provenance: Provenance): string | null {
     case "agent":
       return null;
     case "user_session":
-      return userSessionDetail(provenance);
+      return null;
     case "multiple_agents":
       return multipleAgentsDetail(provenance);
     case "external":
@@ -266,6 +272,9 @@ function ObservationProvenanceDetail(props: {
         onOpenChat={props.onOpenChat}
       />
     );
+  }
+  if (props.provenance.kind === "user_session") {
+    return <UserSessionDetail provenance={props.provenance} />;
   }
   const detail = provenanceDetailText(props.provenance);
   if (detail === null) return null;

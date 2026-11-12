@@ -4,7 +4,6 @@ import {
   buildUsageHostFilterOptions,
   buildUsageHostSplitRows,
   resolveUsageHostName,
-  usageHostFallbackName,
   usageHostFilterHostId,
   usageHostFilterValue,
 } from "@/lib/usage-analytics/usage-host-split";
@@ -30,18 +29,6 @@ function hostBucket(
   };
 }
 
-describe("usageHostFallbackName", () => {
-  it("truncates a long id rather than rendering a blank", () => {
-    expect(usageHostFallbackName("01JX7Q2M9K4B8Z6T5N3P1V0WYD")).toBe(
-      "01JX7Q2M…",
-    );
-  });
-
-  it("leaves a short id whole - nothing to hide", () => {
-    expect(usageHostFallbackName("host-1")).toBe("host-1");
-  });
-});
-
 describe("resolveUsageHostName", () => {
   it("prefers the directory name", () => {
     expect(
@@ -49,19 +36,22 @@ describe("resolveUsageHostName", () => {
     ).toBe("Studio Mac");
   });
 
-  it("falls back to a truncated id for a host the directory doesn't list", () => {
-    // The cloud plane summarizes every host on the ACCOUNT, including one
-    // this client cannot dial or that has since been removed. That gap is
-    // ordinary, and a blank there would read as a rendering fault.
-    expect(resolveUsageHostName("01JX7Q2M9K4B8Z6T5N3P1V0WYD", new Map())).toBe(
-      "01JX7Q2M…",
+  it("uses the plain label for a host the directory does not list", () => {
+    expect(resolveUsageHostName("host-unavailable", new Map())).toBe(
+      "Unnamed computer",
     );
   });
 
   it("treats a blank directory label as no name at all", () => {
     expect(resolveUsageHostName("host-a", new Map([["host-a", "   "]]))).toBe(
-      "host-a",
+      "Unnamed computer",
     );
+  });
+
+  it("treats a directory label equal to the host id as no name", () => {
+    expect(
+      resolveUsageHostName("host-a", new Map([["host-a", "host-a"]])),
+    ).toBe("Unnamed computer");
   });
 });
 
@@ -78,7 +68,7 @@ describe("buildUsageHostSplitRows", () => {
     expect(rows.map((row) => row.hostId)).toEqual(["host-b", "host-a"]);
     expect(rows[0].name).toBe("Studio Mac");
     expect(rows[0].nameIsFallback).toBe(false);
-    expect(rows[1].name).toBe("host-a");
+    expect(rows[1].name).toBe("Unnamed computer");
     expect(rows[1].nameIsFallback).toBe(true);
     expect(rows[0].shareOfCost).toBeCloseTo(0.75);
     expect(rows[1].shareOfCost).toBeCloseTo(0.25);
@@ -119,13 +109,11 @@ describe("buildUsageHostFilterOptions", () => {
       hostIdsWithUsage: ["host-a", "host-c"],
       selectedHostId: null,
     });
-    // Named hosts as a block, so the machine the reader recognizes is not
-    // scattered among truncated ids by locale collation ("host-c" otherwise
-    // sorts between "Air" and "Studio Mac").
+    // Named hosts as a block, before the plain fallback row.
     expect(options.map((option) => option.name)).toEqual([
       "Air",
       "Studio Mac",
-      "host-c",
+      "Unnamed computer",
     ]);
   });
 

@@ -1,50 +1,22 @@
+import { hostNameFromLabel, UNNAMED_HOST_LABEL } from "@/lib/host/host-name";
 import type { UsageSummaryResponse } from "@/hooks/usage-analytics/use-usage-summary-query";
 import { sumTokenTotals } from "@/lib/usage-analytics/usage-chart-data";
 import type { UsageCostProvenance } from "@/lib/usage-analytics/usage-breakdown";
 
 type UsageHostBucket = UsageSummaryResponse["summary"]["hostBuckets"][number];
 
-/**
- * Characters of a host id kept when nothing can name it. Long enough to tell
- * two of an account's hosts apart at a glance, short enough not to look like
- * a name.
- */
-const FALLBACK_ID_CHARS = 8;
-
-/**
- * A host id with no entry in the client's host directory renders as a
- * truncated id, NEVER as a blank cell.
- *
- * The two lists disagree by design and both disagreements are ordinary: the
- * cloud plane summarizes every host on the ACCOUNT, including one that has
- * since been removed or that this client cannot dial, while the directory
- * only holds what this client knows about right now. A blank in that gap
- * reads as a rendering fault; a short id reads as "a host, not one of the
- * ones you have here" - and is still enough to match against the same prefix
- * elsewhere in the app.
- */
-export function usageHostFallbackName(hostId: string): string {
-  return hostId.length <= FALLBACK_ID_CHARS
-    ? hostId
-    : `${hostId.slice(0, FALLBACK_ID_CHARS)}…`;
-}
-
 export function resolveUsageHostName(
   hostId: string,
   hostNames: ReadonlyMap<string, string>,
 ): string {
-  const name = hostNames.get(hostId);
-  // A directory entry with an empty/whitespace label is treated as no name at
-  // all rather than rendered as the blank this function exists to prevent.
-  return name === undefined || name.trim() === ""
-    ? usageHostFallbackName(hostId)
-    : name;
+  const name = hostNameFromLabel(hostNames.get(hostId) ?? null, hostId);
+  return name === UNNAMED_HOST_LABEL ? "Unnamed computer" : name;
 }
 
 export interface UsageHostSplitRow {
   readonly hostId: string;
   readonly name: string;
-  /** No directory entry named this host - `name` is a truncated id. */
+  /** No directory entry supplied a recognizable name for this computer. */
   readonly nameIsFallback: boolean;
   readonly costUsd: number;
   readonly tokens: number;
@@ -78,7 +50,8 @@ export function buildUsageHostSplitRows(
       return {
         hostId: bucket.hostId,
         name: resolveUsageHostName(bucket.hostId, hostNames),
-        nameIsFallback: name === undefined || name.trim() === "",
+        nameIsFallback:
+          hostNameFromLabel(name ?? null, bucket.hostId) === UNNAMED_HOST_LABEL,
         costUsd: bucket.knownCostUsd,
         tokens: sumTokenTotals(bucket.tokens),
         factCount: bucket.factCount,
@@ -113,7 +86,7 @@ export function usageHostFilterHostId(value: string): string | null {
 export interface UsageHostFilterOption {
   readonly hostId: string;
   readonly name: string;
-  /** No directory entry named this host - `name` is a truncated id. */
+  /** No directory entry supplied a recognizable name for this computer. */
   readonly nameIsFallback: boolean;
 }
 
@@ -148,13 +121,14 @@ export function buildUsageHostFilterOptions(input: {
       return {
         hostId,
         name: resolveUsageHostName(hostId, input.hostNames),
-        nameIsFallback: name === undefined || name.trim() === "",
+        nameIsFallback:
+          hostNameFromLabel(name ?? null, hostId) === UNNAMED_HOST_LABEL,
       };
     })
     .sort(
       (a, b) =>
         // Named hosts first, as a block. Interleaving them by locale order
-        // scatters the unnameable ids through the list, so the reader has to
+        // scatters unnamed computers through the list, so the reader has to
         // scan every row to find the machine they actually recognize.
         Number(a.nameIsFallback) - Number(b.nameIsFallback) ||
         a.name.localeCompare(b.name) ||
