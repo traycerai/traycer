@@ -2504,3 +2504,147 @@ describe("<BotChannelView tiles={null} /> a question a thread's session asks in 
     expect(textOf(threadBox())).toBe("Now");
   });
 });
+
+describe("<BotChannelView tiles={null} /> under the box: a moved answer, a failed box send and a failed card answer", () => {
+  const BOX_MESSAGE = "Box message";
+  const NEWER = "Newer draft";
+
+  function failureLines(): HTMLElement[] {
+    return screen.queryAllByTestId("bot-channel-composer-send-failed");
+  }
+
+  function restoreButton(): HTMLElement | null {
+    return screen.queryByTestId("bot-channel-composer-send-failed-restore");
+  }
+
+  /** Whether `first` comes before `second` in the document. */
+  function inOrder(first: HTMLElement, second: HTMLElement): boolean {
+    return Boolean(
+      first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+  }
+
+  /** The box sends a message the host refuses, and a newer draft was typed meanwhile: the message is offered back. */
+  async function boxSendFailsWithAnOffer(): Promise<void> {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    heldSends = [];
+    typeInto(channelBox(), BOX_MESSAGE);
+    await user.click(screen.getByTestId("bot-channel-composer-send"));
+    typeInto(channelBox(), NEWER);
+    await refuse();
+    await screen.findByTestId("bot-channel-composer-send-failed-restore");
+  }
+
+  /** A card of two questions whose first one's answer is typed and second one's is picked. */
+  async function answeredBothQuestions(): Promise<
+    (settledSecond: boolean) => void
+  > {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const rows = (settledSecond: boolean): ReadonlyArray<Message> => [
+      questionRow([
+        hold(null),
+        watch(
+          settledSecond
+            ? byPerson(TEAMMATE_USER_ID, "Agents waiting on me")
+            : null,
+        ),
+      ]),
+    ];
+    const write = session(CHANNEL_ID, rows(false));
+    mountChannel(null);
+    await user.type(holdField(), "Hold the migration");
+    await user.click(
+      within(cardQuestion(channelCard(), WATCH)).getByRole("button", {
+        name: "Nothing yet",
+      }),
+    );
+    return (settledSecond) => write(rows(settledSecond));
+  }
+
+  /**
+   * The box's send failed with an offer, the first question's send failed too,
+   * and then the second question's answer moved into the box.
+   */
+  async function threeThingsUnderTheBox(): Promise<void> {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const settleSecond = await answeredBothQuestions();
+    heldSends = [];
+    typeInto(channelBox(), BOX_MESSAGE);
+    await user.click(screen.getByTestId("bot-channel-composer-send"));
+    typeInto(channelBox(), NEWER);
+    await user.click(
+      within(cardQuestion(channelCard(), HOLD)).getByRole("button", {
+        name: "Submit",
+      }),
+    );
+    await refuse();
+    await refuse();
+    settleSecond(true);
+    await vi.waitFor(() => expect(channelMovedLine()).toBeDefined());
+  }
+
+  it("shows the moved line, then the box's couldn't-send line with Restore, when an answer moves into the box after its send failed, and Restore puts the message back", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const write = session(CHANNEL_ID, [questionRow([hold(null)])]);
+    mountChannel(null);
+    await user.type(holdField(), "Hold the migration");
+    await boxSendFailsWithAnOffer();
+
+    write([questionRow([hold(byPerson(TEAMMATE_USER_ID, "Nothing"))])]);
+
+    await vi.waitFor(() => expect(channelMovedLine()).toBeDefined());
+    expect(failureLines()).toHaveLength(1);
+    expect(restoreButton()).not.toBeNull();
+    expect(
+      inOrder(
+        screen.getByTestId("bot-channel-composer-answers-moved"),
+        failureLines()[0],
+      ),
+    ).toBe(true);
+
+    await user.click(
+      screen.getByTestId("bot-channel-composer-send-failed-restore"),
+    );
+
+    expect(textOf(channelBox())).toContain(BOX_MESSAGE);
+  });
+
+  it("shows the moved line and exactly one couldn't-send line, the box's, with Restore, when a box send and a card answer both failed and an answer moved, and the card's line comes back without Restore after Restore", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    await threeThingsUnderTheBox();
+
+    expect(failureLines()).toHaveLength(1);
+    expect(restoreButton()).not.toBeNull();
+    expect(
+      inOrder(
+        screen.getByTestId("bot-channel-composer-answers-moved"),
+        failureLines()[0],
+      ),
+    ).toBe(true);
+
+    await user.click(
+      screen.getByTestId("bot-channel-composer-send-failed-restore"),
+    );
+
+    expect(channelMovedLine()).toBeDefined();
+    expect(failureLines()).toHaveLength(1);
+    expect(restoreButton()).toBeNull();
+  });
+
+  it("shows only the moved line after Restore when the transcript spent the card's answer while the box's couldn't-send line stood", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    await threeThingsUnderTheBox();
+    act(() =>
+      useBotDraftsStore
+        .getState()
+        .setAnswer(BOT_ID, answerDraftKey(QUESTION_ID, 0), null),
+    );
+
+    await user.click(
+      screen.getByTestId("bot-channel-composer-send-failed-restore"),
+    );
+
+    expect(channelMovedLine()).toBeDefined();
+    expect(failureLines()).toEqual([]);
+  });
+});

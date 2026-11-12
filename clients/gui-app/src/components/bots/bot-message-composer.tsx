@@ -998,9 +998,13 @@ function withWaitingMoves(
 }
 
 /**
- * What the box says under it: a failed send offered back (from the draft
- * kept outside the box, else from the failure), a failed send whose text is
- * in the box, what it says about question cards' answers, or a queued send.
+ * What the box says under it: the line about answers moved into it, then one
+ * failure line, or else a queued send. The failure line is the box's own
+ * failed send, offered back from the draft kept outside the box, else from
+ * the failure, or else a card answer's failed send. While the box's own
+ * failure stands for both, the card failure stays on the notice and goes on
+ * being cut to its answers still on their cards, so its line is back when the
+ * box's goes only if one of them still is.
  */
 function ComposerStatus(props: {
   readonly failure: BotSendFailure;
@@ -1010,52 +1014,45 @@ function ComposerStatus(props: {
   readonly testId: string;
   readonly onRestore: (unsent: BotUnsentMessage) => void;
 }): ReactNode {
-  const { failure, onRestore } = props;
+  const { failure, notice, onRestore } = props;
   const unsent = props.keptDraft?.unsent ?? failure.unsent;
-  if (unsent !== null || failure.failed) {
-    return (
-      <BotSendFailedNotice
-        testId={`${props.testId}-send-failed`}
-        restore={
-          unsent === null
-            ? null
-            : { text: unsent.text, onRestore: () => onRestore(unsent) }
-        }
-      />
-    );
+  const moved = movedLineOf(notice);
+  const failed = unsent !== null || failure.failed || cardAnswerFailed(notice);
+  if (moved === null && !failed) {
+    if (!props.queued) return null;
+    return <BotQueuedNotice testId={`${props.testId}-queued`} />;
   }
-  if (props.notice?.kind === "answer-failed") {
-    return (
-      <BotSendFailedNotice
-        testId={`${props.testId}-send-failed`}
-        restore={null}
-      />
-    );
-  }
-  if (props.notice?.kind === "moved") {
-    return (
-      <BotAnswersMovedNotice
-        testId={`${props.testId}-answers-moved`}
-        text={props.notice.text}
-      />
-    );
-  }
-  if (props.notice?.kind === "moved-answer-failed") {
-    return (
-      <>
+  return (
+    <>
+      {moved === null ? null : (
         <BotAnswersMovedNotice
           testId={`${props.testId}-answers-moved`}
-          text={props.notice.text}
+          text={moved}
         />
+      )}
+      {failed ? (
         <BotSendFailedNotice
           testId={`${props.testId}-send-failed`}
-          restore={null}
+          restore={
+            unsent === null
+              ? null
+              : { text: unsent.text, onRestore: () => onRestore(unsent) }
+          }
         />
-      </>
-    );
-  }
-  if (!props.queued) return null;
-  return <BotQueuedNotice testId={`${props.testId}-queued`} />;
+      ) : null}
+    </>
+  );
+}
+
+/** The line about answers moved into the box; `null` where the notice has none. */
+function movedLineOf(notice: BotComposerNotice | null): string | null {
+  if (notice === null || notice.kind === "answer-failed") return null;
+  return notice.text;
+}
+
+/** Whether the notice says a card answer's send failed. */
+function cardAnswerFailed(notice: BotComposerNotice | null): boolean {
+  return notice !== null && notice.kind !== "moved";
 }
 
 /** A draft put in the box to be sent as a new message, once the person sends it. */
