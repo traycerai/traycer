@@ -18,11 +18,16 @@ import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import type { EnvironmentStatusResponseV12 } from "@traycer/protocol/host/environment-schemas";
 import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
+import { localPickerRow } from "@/components/settings/environment/environment-picker-model";
 import type { LocalPickerRow } from "@/components/settings/environment/environment-picker-model";
 import { queryKeys } from "@/lib/query-keys";
 
@@ -285,6 +290,7 @@ async function neverReadOfflineOutcome(
 
 afterEach(() => {
   cleanup();
+  resetNegotiatedManifests();
   useSettingsHostScopeStore.getState().reset();
   useSettingsEnvironmentPickStore.setState({
     pick: null,
@@ -430,6 +436,110 @@ describe("Settings entry host resolution", () => {
       bindingHostIds: [target.hostId],
       retryAvailable: false,
     });
+  });
+
+  it.each([false, true])(
+    "resolves a known-absent status method through the legacy entry path (read errored: %s)",
+    async (errored) => {
+      entryClient = makeClient();
+      const target = targetOption("legacy-computer", "remote");
+      const expected = await neverReadOfflineOutcome(target);
+      harness.resolvedBindingHostIds = [];
+      recordNegotiatedHostManifest(target.hostId, {
+        "host.status": { major: 1, minor: 0 },
+      });
+      const { rendered, queryClient } = requestEntry(target);
+      if (errored)
+        await act(async () => {
+          await queryClient
+            .fetchQuery(
+              queryOptions({
+                queryKey: queryKeys.hostMethod<
+                  HostRpcRegistry,
+                  "environment.status"
+                >(target.hostId, "environment.status", {}),
+                queryFn: () => Promise.reject(new Error("method unavailable")),
+              }),
+            )
+            .catch(() => undefined);
+        });
+      expect(rendered.result.current.retryEntryStatus).toBeNull();
+      harness.resolvedBindingHostIds = [target.hostId];
+      act(() => rendered.rerender());
+      await waitFor(() =>
+        expect(entryOutcome(rendered.result.current)).toEqual(expected),
+      );
+      render(
+        <HostScopeGate scope={rendered.result.current} skeleton={null}>
+          {null}
+        </HostScopeGate>,
+      );
+      expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
+      expect(screen.queryByText("Finding your hosts…")).toBeNull();
+    },
+  );
+
+  it("releases an older computer to its needs-update row when its manifest answers", async () => {
+    entryClient = makeClient();
+    const target = targetOption("old-computer", "remote");
+    const row = localPickerRow(target, null, false);
+    if (row === null) throw new Error("missing legacy row");
+    harness.localRows = [row];
+    const expected = await neverReadOfflineOutcome(target);
+    harness.localRows = [];
+    const { rendered, queryClient } = requestEntry(target);
+    await act(async () => {
+      await queryClient
+        .fetchQuery(
+          queryOptions({
+            queryKey: queryKeys.hostMethod<
+              HostRpcRegistry,
+              "environment.status"
+            >(target.hostId, "environment.status", {}),
+            queryFn: () => Promise.reject(new Error("method unavailable")),
+          }),
+        )
+        .catch(() => undefined);
+    });
+    expect(useSettingsHostScopeStore.getState().pendingHostId).toBe(
+      target.hostId,
+    );
+    act(() => {
+      harness.localRows = [row];
+      recordNegotiatedHostManifest(target.hostId, {
+        "host.status": { major: 1, minor: 0 },
+      });
+    });
+    await waitFor(() =>
+      expect(entryOutcome(rendered.result.current)).toEqual(expected),
+    );
+  });
+
+  it("keeps an advertised status method pending after a failed read", async () => {
+    entryClient = makeClient();
+    const target = targetOption("advertised-status", "remote");
+    recordNegotiatedHostManifest(target.hostId, {
+      "environment.status": { major: 1, minor: 2 },
+    });
+    const { rendered, queryClient } = requestEntry(target);
+    await act(async () => {
+      await queryClient
+        .fetchQuery(
+          queryOptions({
+            queryKey: queryKeys.hostMethod<
+              HostRpcRegistry,
+              "environment.status"
+            >(target.hostId, "environment.status", {}),
+            queryFn: () => Promise.reject(new Error("status unavailable")),
+          }),
+        )
+        .catch(() => undefined);
+    });
+    expect(useSettingsHostScopeStore.getState().pendingHostId).toBe(
+      target.hostId,
+    );
+    expect(harness.bindingRequests).toEqual([]);
+    expect(rendered.result.current.retryEntryStatus).not.toBeNull();
   });
 
   it("holds a failed status entry in loading, retries its status, then completes Local", async () => {

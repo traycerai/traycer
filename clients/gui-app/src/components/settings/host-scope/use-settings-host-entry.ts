@@ -17,6 +17,7 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { queryKeys } from "@/lib/query-keys";
 import type { EnvironmentPick } from "@/lib/settings-environment-pages";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import { useHostNegotiatedMethodVersions } from "@/hooks/host/use-host-negotiated-method-version";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 
 /** Resolves a named entry before letting any Settings host panel read. */
@@ -26,6 +27,7 @@ export function useSettingsHostEntry(): {
   readonly retry: () => void;
 } {
   const targetHostId = useSettingsHostScopeStore((s) => s.pendingHostId);
+  const statusAbsent = useTargetStatusAbsent(targetHostId);
   const options = useHostOptions();
   const scope = useHostScopeFor(WINDOW_HOST_SELECTION);
   const status = useEnvironmentStatusModel(scope);
@@ -39,7 +41,8 @@ export function useSettingsHostEntry(): {
     [queryClient],
   );
   const readStatusState = useCallback((): "ready" | "failed" | "retrying" => {
-    if (targetHostId === null || target?.connectable !== true) return "ready";
+    if (targetHostId === null || target?.connectable !== true || statusAbsent)
+      return "ready";
     const state = queryClient.getQueryState(
       queryKeys.hostMethod<HostRpcRegistry, "environment.status">(
         targetHostId,
@@ -56,12 +59,18 @@ export function useSettingsHostEntry(): {
       return "retrying";
     if (state?.status !== "error") return "ready";
     return state.fetchStatus === "idle" ? "failed" : "retrying";
-  }, [queryClient, targetHostId, target]);
+  }, [queryClient, targetHostId, target, statusAbsent]);
   // The status map exposes only data: an error can leave its null unchanged.
-  // A reachable target waits for status; offline targets keep the binding path.
+  // Advertised or unnegotiated status methods hold a reachable target.
+  // Offline and known-legacy targets keep their existing entry paths.
   const statusState = useSyncExternalStore(subscribe, readStatusState);
   const statusFailed = statusState !== "ready";
-  const unread = settingsHostEntryUnread(target, status.statuses, statusFailed);
+  const unread = settingsHostEntryUnread(
+    target,
+    status.statuses,
+    statusFailed,
+    statusAbsent,
+  );
   const bindings = useHostEnvironmentBindings(
     targetHostId === null || local !== undefined || unread
       ? []
@@ -128,17 +137,28 @@ export function useSettingsHostEntry(): {
   };
 }
 
+/** Only a completed handshake can release the legacy host from a status wait. */
+function useTargetStatusAbsent(hostId: string | null): boolean {
+  const versions = useHostNegotiatedMethodVersions(
+    hostId === null ? [] : [hostId],
+    "environment.status",
+  );
+  return hostId !== null && versions.get(hostId) === false;
+}
+
 /** Wait for a target row, and for its status only while the computer can answer. */
 function settingsHostEntryUnread(
   target: HostScopeOption | undefined,
   statuses: ReadonlyMap<string, EnvironmentStatusResponseV11 | null>,
   statusFailed: boolean,
+  statusAbsent: boolean,
 ): boolean {
   return (
     statusFailed ||
     target === undefined ||
     (isEnvironmentComputer(target) &&
       target.connectable &&
+      !statusAbsent &&
       (statuses.get(target.hostId) ?? null) === null)
   );
 }

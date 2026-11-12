@@ -850,7 +850,9 @@ status read. The stored default belongs to the window host it was derived for;
 a host change makes readers unresolved immediately, before upkeep runs.
 An explicit choice still takes precedence.
 A pending Settings host entry waits for a reachable computer's failed status
-read before asking for bindings. It keeps “Finding your hosts…” with “Try again” after a
+read before asking for bindings. A completed handshake that explicitly lacks
+`environment.status` keeps the legacy entry path, without a status retry; an
+unnegotiated method still waits. It keeps “Finding your hosts…” with “Try again” after a
 failed attempt; that action retries the target status. An error holds the entry
 through a retry with cached data. An offline target keeps the existing
 binding path and offers no status retry; its observer reads again when the
