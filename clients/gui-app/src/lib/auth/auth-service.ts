@@ -2252,9 +2252,9 @@ export class AuthService {
     });
   }
 
-  async signOut(): Promise<void> {
+  async signOut(): Promise<boolean> {
     if (this.isDisposed()) {
-      return;
+      return false;
     }
     // Invalidate any sign-in finalization that already passed its epoch fence
     // and is now awaiting its token save - the sign-out wins.
@@ -2279,7 +2279,7 @@ export class AuthService {
     );
     // dispose() may have landed during the delete await — re-read fresh.
     if (this.isDisposed()) {
-      return;
+      return false;
     }
     if (deleteError !== null) {
       appLogger.warn(
@@ -2297,11 +2297,11 @@ export class AuthService {
         if (!this.sessionRecoveryTerminallyRejected) {
           this.scheduleSessionRecovery("sign-out-delete-failed");
         }
-        return;
+        return false;
       }
       // The session is still live - re-arm the proactive refresh we paused.
       this.refreshScheduler.start();
-      return;
+      return false;
     }
     this.setLastError(null);
     this.applySignedOut("retired");
@@ -2328,6 +2328,7 @@ export class AuthService {
     // finalization's signIn may have re-written the file and notified before
     // delete landed; its adopt must not resurrect signed-in after we cleared).
     this.reconcileGeneration += 1;
+    return true;
   }
 
   /**
