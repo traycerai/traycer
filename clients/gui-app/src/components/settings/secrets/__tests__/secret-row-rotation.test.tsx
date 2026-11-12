@@ -174,6 +174,14 @@ function enforcingRotation(): LiveRotation {
   };
 }
 
+function stalledRotation(): LiveRotation {
+  return {
+    ...enforcingRotation(),
+    state: "stalled",
+    producers: [],
+  };
+}
+
 function enforcedRotation(): LiveRotation {
   return {
     rotationId: "rot-1",
@@ -407,6 +415,22 @@ describe("Remove", () => {
 });
 
 describe("Replace", () => {
+  it("requires running turns and shells to finish or be stopped before stopping the sandbox", async () => {
+    const host = buildRotationHost({ rotation: enforcingRotation() });
+    const queryClient = renderPage(host);
+    await typeAndReplace();
+    await screen.findByTestId("secret-rotation-headline");
+
+    host.state.rotation = stalledRotation();
+    await queryClient.invalidateQueries();
+
+    expect(
+      (await screen.findByTestId("secret-rotation-headline")).textContent,
+    ).toBe(
+      "Not confirmed after a minute. Finish or stop running agent turns and shells before stopping the sandbox to end old sessions.",
+    );
+  });
+
   it("sends the typed value against the version the list showed, then shows the rotation and the restart line", async () => {
     const host = buildRotationHost({ rotation: enforcingRotation() });
     renderPage(host);
@@ -624,7 +648,7 @@ describe("a secret's versions", () => {
     ]);
     expect(recovery.textContent).toContain("If this secret leaked");
     expect(recovery.textContent).toContain(
-      "If Traycer can't be reached, stopping the sandbox ends its sessions.",
+      "If Traycer can't be reached, finish or stop running agent turns and shells before stopping the sandbox to end its sessions.",
     );
   });
 

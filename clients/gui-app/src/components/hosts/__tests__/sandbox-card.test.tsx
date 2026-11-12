@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -46,10 +47,20 @@ import { SANDBOX_VERB_FETCH_TIMEOUT_MS } from "@traycer-clients/shared/host-clie
 const WINDOWS_SANDBOX_LIMITATION =
   "Windows sandboxes have no desktop or Computer Use.";
 
+interface RepairGuestResult {
+  readonly guestConfigured: boolean;
+  readonly guestConfigFailureReason: string | null;
+}
+
+interface RepairGuestOptions {
+  readonly onSuccess: (result: RepairGuestResult) => void;
+}
+
 const mocks = vi.hoisted(() => ({
   binding: null as FakeSandboxBinding | null,
   toastSuccess: vi.fn(),
   toastInfo: vi.fn(),
+  toastWarning: vi.fn(),
   toastFromAuthError: vi.fn<(error: Error, title: string) => void>(),
   catalogue: null as SandboxCatalogue | null,
   costs: null as UserSandboxCost | null,
@@ -63,7 +74,8 @@ const mocks = vi.hoisted(() => ({
   supportsMethod: false,
   useSupportsMethod: vi.fn<(hostId: string | null, method: string) => void>(),
   repairPending: false,
-  repairMutate: vi.fn<(variables: object, options: object) => void>(),
+  repairMutate:
+    vi.fn<(variables: object, options: RepairGuestOptions) => void>(),
   /** What `useSandboxGrants` returns; the hook spy records its argument. */
   grantsData: undefined as SandboxGrantsSummary | null | undefined,
   grantsError: false,
@@ -81,7 +93,11 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("sonner", () => ({
-  toast: { success: mocks.toastSuccess, info: mocks.toastInfo },
+  toast: {
+    success: mocks.toastSuccess,
+    info: mocks.toastInfo,
+    warning: mocks.toastWarning,
+  },
 }));
 vi.mock("@/lib/auth-error-toast", () => ({
   toastFromAuthError: mocks.toastFromAuthError,
@@ -343,6 +359,7 @@ beforeEach(() => {
   mocks.repairMutate.mockClear();
   mocks.toastSuccess.mockClear();
   mocks.toastInfo.mockClear();
+  mocks.toastWarning.mockClear();
   mocks.toastFromAuthError.mockClear();
 });
 afterEach(cleanup);
@@ -494,20 +511,31 @@ describe("per state", () => {
     );
   });
 
-  it("renders the guest's configuration failure as plain text, only when the guest reported one", () => {
-    renderCard(
-      sandboxOf("awake", false, {
-        guestConfigured: false,
-        guestConfigFailureReason: "<b>broker</b> unreachable",
-      }),
-    );
-    const failure = screen.getByTestId("sandbox-card-guest-config-failure");
-    expect(failure.textContent).toBe(
-      "Settings did not apply: <b>broker</b> unreachable",
-    );
-    expect(failure.querySelector("b")).toBeNull();
-    cleanup();
+  it.each([
+    ["guest-config", "Sandbox settings couldn't be applied."],
+    ["canary", "The sandbox couldn't connect to Traycer."],
+    ["guest-runtime-unavailable", "Sandbox setup isn't available right now."],
+    [
+      "<b>broker</b> unreachable",
+      "Settings did not apply. Agents can't start here until they do.",
+    ],
+    [null, "Settings did not apply. Agents can't start here until they do."],
+  ] as const)(
+    "renders safe guest setup copy for %s",
+    (guestConfigFailureReason, expected) => {
+      renderCard(
+        sandboxOf("awake", false, {
+          guestConfigured: false,
+          guestConfigFailureReason,
+        }),
+      );
+      const failure = screen.getByTestId("sandbox-card-guest-config-failure");
+      expect(failure.textContent).toBe(expected);
+      expect(failure.querySelector("b")).toBeNull();
+    },
+  );
 
+  it("does not show the guest's configuration failure after it applied", () => {
     renderCard(sandboxOf("awake", false, { guestConfigured: true }));
     expect(
       screen.queryByTestId("sandbox-card-guest-config-failure"),
@@ -1755,6 +1783,44 @@ describe("secrets section", () => {
       expect(mocks.repairMutate.mock.lastCall?.[0]).toEqual({});
     });
 
+    it.each([
+      ["guest-config", "Sandbox settings couldn't be applied."],
+      ["canary", "The sandbox couldn't connect to Traycer."],
+      ["guest-runtime-unavailable", "Sandbox setup isn't available right now."],
+      [null, "Settings did not apply. Agents can't start here until they do."],
+      [
+        "unknown-step",
+        "Settings did not apply. Agents can't start here until they do.",
+      ],
+    ] as const)(
+      "toasts safe repair copy for %s",
+      (guestConfigFailureReason, reason) => {
+        mocks.supportsMethod = true;
+        renderCard(
+          sandboxOf("awake", false, {
+            phase: "ready",
+            guestConfigured: false,
+          }),
+        );
+        fireEvent.click(screen.getByTestId("sandbox-card-repair"));
+
+        const options = mocks.repairMutate.mock.lastCall?.[1];
+        if (options === undefined) {
+          throw new Error("expected repair success options");
+        }
+        act(() => {
+          options.onSuccess({
+            guestConfigured: false,
+            guestConfigFailureReason,
+          });
+        });
+
+        expect(mocks.toastWarning).toHaveBeenCalledWith(
+          `Sandbox setup is still failing. ${reason}`,
+        );
+      },
+    );
+
     it("keeps the lifecycle primary when guest setup failed but the phase is unknown", () => {
       mocks.supportsMethod = true;
       renderCard(
@@ -2030,8 +2096,11 @@ describe("inline secrets and network", () => {
     expect(
       screen.getByTestId("sandbox-card-secrets-readiness").textContent,
     ).toBe(
-      "Degraded at gateway: requests to granted destinations are refused until it recovers.",
+      "Degraded: requests to granted destinations are refused until it recovers.",
     );
+    expect(
+      screen.getByTestId("sandbox-card-secrets-readiness").textContent,
+    ).not.toContain("gateway");
     cleanup();
 
     mocks.grantsData = grantsOf([grant("PROD_DB", "route-1", "db.internal")]);
@@ -2039,7 +2108,9 @@ describe("inline secrets and network", () => {
     const details = screen.getByTestId("sandbox-card-grants");
     expect(
       screen.getByTestId("sandbox-card-secrets-readiness").textContent,
-    ).toContain("Degraded at gateway");
+    ).toBe(
+      "Degraded: requests to granted destinations are refused until it recovers.",
+    );
     expect(
       within(details).getByTestId("sandbox-card-grant").textContent,
     ).toContain("PROD_DB");

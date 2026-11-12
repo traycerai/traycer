@@ -334,12 +334,12 @@ describe("secretRotationStatus", () => {
     ]);
   });
 
-  it("says a stalled rotation was not confirmed after a minute, and how to end every old session", () => {
+  it("says a stalled rotation was not confirmed after a minute, and running work must finish first", () => {
     expect(
       secretRotationStatus(rotationOf("stalled", []), hostName)?.headline,
     ).toEqual({
       tone: "warning",
-      text: "Not confirmed after a minute. Stopping the sandbox ends every old session.",
+      text: "Not confirmed after a minute. Finish or stop running agent turns and shells before stopping the sandbox to end old sessions.",
     });
   });
 

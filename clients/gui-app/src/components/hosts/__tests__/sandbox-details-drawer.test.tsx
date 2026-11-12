@@ -16,6 +16,7 @@ import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtu
 import type { SandboxRowOperation } from "@/hooks/sandboxes/use-sandbox-operation";
 import { SandboxOperationError } from "@/hooks/sandboxes/sandbox-failure-copy";
 import { refusal } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
+import { SANDBOX_FIRST_BOOT_FAILURE_COPIES } from "@/lib/sandboxes/__tests__/sandbox-first-boot-failure-copies";
 import { SANDBOX_LIST_FAILED } from "@/lib/sandboxes/sandbox-strings";
 import {
   closeSandboxDetails,
@@ -177,4 +178,45 @@ describe("<SandboxDetailsDrawerHost />", () => {
     expect(within(kept).queryByText("For task")).toBeNull();
     expect(within(kept).queryByText("Created by")).toBeNull();
   });
+
+  it.each(SANDBOX_FIRST_BOOT_FAILURE_COPIES)(
+    "shows the %s failure reason in Details",
+    (stage, explanation) => {
+      const summary = sandboxSummaryFixture({
+        state: "failed",
+        failureCode: stage,
+      });
+      list.data = { sandboxes: [summary] };
+      render(<SandboxDetailsDrawerHost />);
+      act(() => {
+        openSandboxDetails(summary.id);
+      });
+
+      const status = screen.getByTestId("sandbox-details-status");
+      expect(status.textContent).toContain(explanation);
+      expect(status.textContent).not.toContain(stage);
+    },
+  );
+
+  it.each([null, "future-stage:failure-detail"] as const)(
+    "keeps the generic failed-start sentence for an unknown category (%s)",
+    (failureCode) => {
+      const summary = sandboxSummaryFixture({ state: "failed", failureCode });
+      list.data = { sandboxes: [summary] };
+      render(<SandboxDetailsDrawerHost />);
+      act(() => {
+        openSandboxDetails(summary.id);
+      });
+
+      const failed = within(
+        screen.getByTestId("sandbox-details-status"),
+      ).getByText("Failed to start");
+      expect(failed).toBeTruthy();
+      if (failureCode !== null) {
+        expect(
+          screen.getByTestId("sandbox-details-status").textContent,
+        ).not.toContain(failureCode);
+      }
+    },
+  );
 });

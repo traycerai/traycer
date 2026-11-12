@@ -353,7 +353,8 @@ function shapeOfForm(
     const amount = Number(form.restingAmount);
     if (!Number.isInteger(amount) || amount <= 0) {
       return {
-        problem: '"Destroyed after idle for" must be a whole number, or empty.',
+        problem:
+          '"Destroyed after suspended or stopped for" must be a whole number, or empty.',
       };
     }
     destroyAfterRestingMinutes = amount * UNIT_MINUTES[form.restingUnit];
@@ -588,7 +589,9 @@ function ShapeSheetForm(props: {
               onCommit={null}
             />
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor={`${ids}-resting`}>Destroyed after idle for</Label>
+              <Label htmlFor={`${ids}-resting`}>
+                Destroyed after suspended or stopped for
+              </Label>
               <div className="flex gap-2">
                 <Input
                   id={`${ids}-resting`}

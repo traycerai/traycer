@@ -549,8 +549,9 @@ describe("sandbox row operations", () => {
     });
     const failure = await within(headerActions).findByRole("alert");
     expect(failure.textContent).toContain(
-      "Couldn't suspend build-box · SBX-0601",
+      "Couldn't suspend build-box. It's in use (an agent turn or a running shell), so it stays awake.",
     );
+    expect(failure.textContent).toContain("Support reference: SBX-0601");
     await userEvent.click(
       within(failure).getByRole("button", { name: "Details" }),
     );
@@ -813,12 +814,15 @@ describe("sandbox row operations", () => {
     });
     // While the list still reads awake, Stop is offered and so is its Retry.
     const failure = await within(row).findByRole("alert");
-    expect(failure.textContent).toContain("Couldn't stop build-box · SBX-0701");
+    expect(failure.textContent).toContain(
+      "Couldn't stop build-box. This sandbox is changing state. Try again in a moment.",
+    );
+    expect(failure.textContent).toContain("Support reference: SBX-0701");
     expect(within(failure).getByRole("button", { name: "Retry" })).toBeTruthy();
     expect(
       within(screen.getByTestId("sandbox-header-actions")).getByRole("alert")
         .textContent,
-    ).toContain("Couldn't stop build-box · SBX-0701");
+    ).toContain("Couldn't stop build-box. This sandbox is changing state.");
 
     binding.auth.listSandboxes.mockResolvedValue({
       kind: "ok",
@@ -839,9 +843,11 @@ describe("sandbox row operations", () => {
       answer.resolve(refusal(503, "provider-error"));
       await answer.promise;
     });
-    expect((await within(row).findByRole("alert")).textContent).toContain(
-      "Couldn't suspend build-box · SBX-0413",
+    const failure = await within(row).findByRole("alert");
+    expect(failure.textContent).toContain(
+      "Couldn't suspend build-box. Traycer refused that request.",
     );
+    expect(failure.textContent).toContain("Support reference: SBX-0413");
   });
 
   it("keeps a pending operation and its later refusal with the account that started it", async () => {
@@ -947,8 +953,13 @@ describe("sandbox row operations", () => {
         await answer.promise;
       });
       const line = await within(row).findByRole("alert");
-      const sentence = `Couldn't ${testCase.verb} build-box · ${testCase.reference}`;
+      const reason =
+        "It's in use (an agent turn or a running shell), so it stays awake.";
+      const sentence = `Couldn't ${testCase.verb} build-box. ${reason}`;
       expect(line.textContent).toContain(sentence);
+      expect(line.textContent).toContain(
+        `Support reference: ${testCase.reference}`,
+      );
       // An identical list refresh must not erase the local outcome.
       await act(async () => {
         await client.invalidateQueries();
@@ -964,10 +975,10 @@ describe("sandbox row operations", () => {
         within(line).getByRole("button", { name: "Details" }),
       );
       const history = await screen.findByRole("region", { name: "History" });
-      expect(history.textContent).toContain(sentence);
       expect(history.textContent).toContain(
-        "It's in use (an agent turn or a running shell), so it stays awake.",
+        `Couldn't ${testCase.verb} build-box`,
       );
+      expect(history.textContent).toContain(reason);
       // Details shows the SBX code; the raw code goes only in the export.
       expect(history.textContent).not.toContain("Failure code");
       expect(history.textContent).not.toContain("sandbox_busy");
