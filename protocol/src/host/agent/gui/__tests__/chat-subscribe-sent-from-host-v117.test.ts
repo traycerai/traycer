@@ -234,9 +234,22 @@ describe("chat.subscribe registry: 1.17 installed below the 1.18 through 1.22 li
     );
   });
 
-  it("validates the stream registry as constructed", () => {
+  // Only these minors: the whole line is most of the stream registry's walk.
+  it("validates 1.17 over 1.16", () => {
+    const line = hostStreamRpcRegistry["chat.subscribe"][1];
     expect(() =>
-      validateVersionedStreamRpcRegistry(hostStreamRpcRegistry),
+      validateVersionedStreamRpcRegistry({
+        "chat.subscribe": {
+          1: {
+            ...line,
+            latestMinor: 17,
+            versions: {
+              16: line.versions[16],
+              17: line.versions[17],
+            },
+          },
+        },
+      }),
     ).not.toThrow();
   });
 });

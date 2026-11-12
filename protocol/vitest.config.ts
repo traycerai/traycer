@@ -38,5 +38,13 @@ export default defineConfig({
     include: ["**/__tests__/**/*.test.ts"],
     globals: false,
     maxWorkers: MAX_TEST_WORKERS,
+    // What the host suite gives its tests. The 5 s default failed
+    // auto-mode-contracts.test.ts on a loaded 2 vCPU runner on 2 Nov 2026 (the
+    // internal merge run's pre-commit check, run 41490217671), over a synchronous
+    // walk that takes about a second alone.
+    testTimeout: 20_000,
+    // Isolation stays on. `isolate: false` failed 112 tests in 15 files: the
+    // config suites share the once-per-process data root, and the import-cost
+    // suites need a fresh module graph.
   },
 });

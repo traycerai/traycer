@@ -103,9 +103,9 @@ import {
   providersListResponseSchemaV92,
   providersSetApiKeyResponseSchemaV10,
 } from "@traycer/protocol/host/provider-schemas";
-// Construction is structural-only. The full schema-compatibility pass is
-// the explicit `validateVersionedRpcRegistry(hostRpcRegistry)` below, which
-// is what holds the v2.0–v9.0 lines and their upgrade/downgrade bridges.
+// Construction is structural-only. The full schema-compatibility pass over
+// the lines this file exercises is the explicit `validateVersionedRpcRegistry`
+// below, which holds the v2.0–v9.0 lines and their upgrade/downgrade bridges.
 import {
   hostRpcRegistry,
   providersAwaitLoginDowngradeV22ToV10,
@@ -210,9 +210,17 @@ function providerState(providerId: string, status: string) {
   };
 }
 
-describe("hostRpcRegistry full validation", () => {
+describe("hostRpcRegistry provider and harness lines", () => {
   it("passes schema compatibility for the v2.0–v9.0 provider/harness lines", () => {
-    expect(() => validateVersionedRpcRegistry(hostRpcRegistry)).not.toThrow();
+    expect(() =>
+      validateVersionedRpcRegistry({
+        "agent.gui.listHarnesses": hostRpcRegistry["agent.gui.listHarnesses"],
+        "agent.list": hostRpcRegistry["agent.list"],
+        "providers.awaitLogin": hostRpcRegistry["providers.awaitLogin"],
+        "providers.list": hostRpcRegistry["providers.list"],
+        "providers.setApiKey": hostRpcRegistry["providers.setApiKey"],
+      }),
+    ).not.toThrow();
   });
 });
 

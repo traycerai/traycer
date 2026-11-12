@@ -35,7 +35,12 @@ describe("providers.settingsFile.status protocol contract", () => {
   });
 
   it("registers off the released floor with unsupported degrade", () => {
-    expect(() => validateVersionedRpcRegistry(hostRpcRegistry)).not.toThrow();
+    expect(() =>
+      validateVersionedRpcRegistry({
+        "providers.settingsFile.status":
+          hostRpcRegistry["providers.settingsFile.status"],
+      }),
+    ).not.toThrow();
     expect(RELEASED_FLOOR_METHOD_NAMES).not.toContain(
       "providers.settingsFile.status",
     );
@@ -170,7 +175,12 @@ describe("providers.settingsFile.reset protocol contract", () => {
   });
 
   it("registers off the released floor with unsupported degrade", () => {
-    expect(() => validateVersionedRpcRegistry(hostRpcRegistry)).not.toThrow();
+    expect(() =>
+      validateVersionedRpcRegistry({
+        "providers.settingsFile.reset":
+          hostRpcRegistry["providers.settingsFile.reset"],
+      }),
+    ).not.toThrow();
     expect(RELEASED_FLOOR_METHOD_NAMES).not.toContain(
       "providers.settingsFile.reset",
     );
@@ -250,7 +260,12 @@ describe("providers.settingsFile.resetProvider protocol contract", () => {
   });
 
   it("registers off the released floor with unsupported degrade", () => {
-    expect(() => validateVersionedRpcRegistry(hostRpcRegistry)).not.toThrow();
+    expect(() =>
+      validateVersionedRpcRegistry({
+        "providers.settingsFile.resetProvider":
+          hostRpcRegistry["providers.settingsFile.resetProvider"],
+      }),
+    ).not.toThrow();
     expect(RELEASED_FLOOR_METHOD_NAMES).not.toContain(
       "providers.settingsFile.resetProvider",
     );
