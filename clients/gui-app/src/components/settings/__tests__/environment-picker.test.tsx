@@ -298,7 +298,7 @@ describe("<EnvironmentPicker />", () => {
     answer("mac", null, V11);
     const view = renderPicker("mac");
     const trigger = screen.getByTestId("environment-picker-trigger");
-    expect(screen.getByRole("button", { name: "Environment" })).toBe(trigger);
+    expect(screen.getByRole("button", { name: "Loading" })).toBe(trigger);
     expect(trigger.textContent).not.toContain("Personal");
     expect(trigger.querySelector("[aria-hidden=true]")).not.toBeNull();
     answer("mac", awaiting, V11);
