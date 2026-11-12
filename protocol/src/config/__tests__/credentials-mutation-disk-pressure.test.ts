@@ -1,11 +1,14 @@
 import * as fsPromises from "node:fs/promises";
+import type { FileHandle } from "node:fs/promises";
 import {
   existsSync,
+  lstatSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -34,7 +37,7 @@ const CREDS: StoredCredentials = {
 };
 
 type Fault = {
-  operation: "writeFile" | "link" | "rename" | "readFile";
+  operation: "writeFile" | "sync" | "link" | "rename" | "readFile";
   fragment: string;
   code: string;
   remaining: number;
@@ -57,6 +60,10 @@ const filesystemMock = vi.hoisted(() => {
       wait: Promise<void>;
     } | null,
     reserveAllocationAttempts: 0,
+    reserveExclusiveOpenAttempts: 0,
+    reserveHandleStats: 0,
+    reserveSyncs: 0,
+    reserveCloses: 0,
     reserveWritesInFlight: 0,
     syncReserveStat: false,
     takeFault(operation: Fault["operation"], path: string): Fault | null {
@@ -80,29 +87,95 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   const syncFs = await import("node:fs");
   const rejectFault = (code: string): Promise<never> =>
     Promise.reject(Object.assign(new Error(`simulated ${code}`), { code }));
+  const readWithStatGate = <T>(
+    path: string,
+    read: () => Promise<T>,
+  ): Promise<T> => {
+    const gate = filesystemMock.reserveStatGate;
+    if (gate === null || path !== gate.path) return read();
+    if (gate.skip > 0) {
+      gate.skip -= 1;
+      return read();
+    }
+    filesystemMock.reserveStatGate = null;
+    return read().then(
+      (value) => {
+        gate.entered();
+        return gate.wait.then(() => value);
+      },
+      (error: unknown) => {
+        gate.entered();
+        return gate.wait.then(() => Promise.reject(error));
+      },
+    );
+  };
   return {
     ...actual,
+    open: vi.fn((...args: Parameters<typeof actual.open>) => {
+      const path = String(args[0]);
+      const isReserve = path.includes(".reserve.");
+      if (isReserve && args[1] === "wx") {
+        filesystemMock.reserveExclusiveOpenAttempts += 1;
+      }
+      return actual.open(...args).then((handle) => {
+        const wrapped = new Proxy(handle, {
+          get(target, property) {
+            if (property === "stat") {
+              return (...statArgs: Parameters<FileHandle["stat"]>) => {
+                if (isReserve) filesystemMock.reserveHandleStats += 1;
+                return readWithStatGate(path, () => target.stat(...statArgs));
+              };
+            }
+            if (property === "writeFile") {
+              return (...writeArgs: Parameters<FileHandle["writeFile"]>) => {
+                if (!isReserve) return target.writeFile(...writeArgs);
+                filesystemMock.reserveAllocationAttempts += 1;
+                filesystemMock.reserveWritesInFlight += 1;
+                const fault = filesystemMock.takeFault("writeFile", path);
+                const writing =
+                  fault === null
+                    ? target.writeFile(...writeArgs)
+                    : rejectFault(fault.code);
+                return writing.then(
+                  (value) => {
+                    filesystemMock.reserveWritesInFlight -= 1;
+                    filesystemMock.onReserveWrite?.();
+                    return value;
+                  },
+                  (error: unknown) => {
+                    filesystemMock.reserveWritesInFlight -= 1;
+                    throw error;
+                  },
+                );
+              };
+            }
+            if (property === "sync") {
+              return () => {
+                if (isReserve) filesystemMock.reserveSyncs += 1;
+                const fault = isReserve
+                  ? filesystemMock.takeFault("sync", path)
+                  : null;
+                return fault === null ? target.sync() : rejectFault(fault.code);
+              };
+            }
+            if (property === "close") {
+              return () => {
+                if (isReserve) filesystemMock.reserveCloses += 1;
+                return target.close();
+              };
+            }
+            const value: unknown = Reflect.get(target, property, target);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+        return wrapped;
+      });
+    }),
     writeFile: vi.fn((...args: Parameters<typeof actual.writeFile>) => {
       const path = String(args[0]);
       const fault = filesystemMock.takeFault("writeFile", path);
       if (fault !== null) return rejectFault(fault.code);
-      const isReserve = path.includes(".reserve.");
-      if (isReserve) {
-        filesystemMock.reserveWritesInFlight += 1;
-        filesystemMock.reserveAllocationAttempts += 1;
-      }
-      return actual.writeFile(...args).then(
-        () => {
-          if (isReserve) {
-            filesystemMock.reserveWritesInFlight -= 1;
-            filesystemMock.onReserveWrite?.();
-          }
-        },
-        (error: unknown) => {
-          if (isReserve) filesystemMock.reserveWritesInFlight -= 1;
-          throw error;
-        },
-      );
+      return actual.writeFile(...args);
     }),
     link: vi.fn((...args: Parameters<typeof actual.link>) => {
       const destination = String(args[1]);
@@ -174,24 +247,16 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     }),
     stat: vi.fn((...args: Parameters<typeof actual.stat>) => {
       const path = String(args[0]);
-      const gate = filesystemMock.reserveStatGate;
-      if (gate !== null && path === gate.path) {
-        if (gate.skip > 0) {
-          gate.skip -= 1;
-          return actual.stat(...args);
+      return readWithStatGate(path, () => {
+        if (filesystemMock.syncReserveStat && path.includes(".reserve.")) {
+          try {
+            return Promise.resolve(syncFs.statSync(path));
+          } catch (error) {
+            return Promise.reject(error);
+          }
         }
-        filesystemMock.reserveStatGate = null;
-        gate.entered();
-        return gate.wait.then(() => actual.stat(...args));
-      }
-      if (filesystemMock.syncReserveStat && path.includes(".reserve.")) {
-        try {
-          return Promise.resolve(syncFs.statSync(path));
-        } catch (error) {
-          return Promise.reject(error);
-        }
-      }
-      return actual.stat(...args);
+        return actual.stat(...args);
+      });
     }),
   };
 });
@@ -304,6 +369,10 @@ describe("credentials store disk pressure", () => {
     filesystemMock.reserveLocksInFlight = 0;
     filesystemMock.reserveWritesInFlight = 0;
     filesystemMock.reserveAllocationAttempts = 0;
+    filesystemMock.reserveExclusiveOpenAttempts = 0;
+    filesystemMock.reserveHandleStats = 0;
+    filesystemMock.reserveSyncs = 0;
+    filesystemMock.reserveCloses = 0;
   });
 
   afterEach(() => {
@@ -332,6 +401,11 @@ describe("credentials store disk pressure", () => {
 
     const firstPiece = statSync(join(workDir, "credentials.reserve.0"));
     expect(firstPiece.size).toBe(65_536);
+    expect(filesystemMock.reserveAllocationAttempts).toBe(16);
+    expect(filesystemMock.reserveExclusiveOpenAttempts).toBe(16);
+    expect(filesystemMock.reserveHandleStats).toBe(0);
+    expect(filesystemMock.reserveSyncs).toBe(16);
+    expect(filesystemMock.reserveCloses).toBe(16);
     if (process.platform !== "win32") {
       expect(firstPiece.mode & 0o777).toBe(0o600);
     }
@@ -355,6 +429,8 @@ describe("credentials store disk pressure", () => {
     await vi.runAllTimersAsync();
 
     expect(writeSpy).not.toHaveBeenCalled();
+    expect(filesystemMock.reserveAllocationAttempts).toBe(0);
+    expect(filesystemMock.reserveExclusiveOpenAttempts).toBe(0);
   });
 
   it("probes and replaces a short reserve piece while leaving full pieces intact", async () => {
@@ -379,6 +455,7 @@ describe("credentials store disk pressure", () => {
     makeStore(refreshOk);
     await vi.runAllTimersAsync();
     await reserveWrite;
+    await fillReserve();
 
     expect(statSync(join(workDir, "credentials.reserve.7")).size).toBe(65_536);
     expect(
@@ -386,12 +463,118 @@ describe("credentials store disk pressure", () => {
         String(call[0]).includes(".space-check."),
       ).length,
     ).toBe(1);
-    expect(
-      writeSpy.mock.calls.filter((call) =>
-        String(call[0]).includes(".reserve."),
-      ).length,
-    ).toBe(1);
+    expect(filesystemMock.reserveAllocationAttempts).toBe(1);
+    expect(filesystemMock.reserveExclusiveOpenAttempts).toBe(2);
+    expect(filesystemMock.reserveHandleStats).toBe(1);
   });
+
+  it("cleans up a partial reserve piece when sync fails without failing sign-in", async () => {
+    fail("sync", `=${join(workDir, "credentials.reserve.0")}`, "EIO", 1);
+    const reserveFillReleased = new Promise<void>((resolve) => {
+      filesystemMock.onReserveLockRelease = resolve;
+    });
+    const store = makeStore(refreshOk);
+
+    await reserveFillReleased;
+
+    expect(existsSync(join(workDir, "credentials.reserve.0"))).toBe(false);
+    expect(filesystemMock.reserveAllocationAttempts).toBe(1);
+    expect(filesystemMock.reserveSyncs).toBe(1);
+    expect(filesystemMock.reserveCloses).toBe(1);
+    expect(filesystemMock.reserveWritesInFlight).toBe(0);
+    expect((await store.signIn(CREDS, false, null)).outcome).toBe("applied");
+    await fillReserve();
+  });
+
+  it("does not replace a full file installed after the reserve scan", async () => {
+    for (let index = 0; index < 16; index += 1) {
+      writeFileSync(
+        join(workDir, `credentials.reserve.${index}`),
+        Buffer.alloc(index === 15 ? 1 : 65_536, 0x5a),
+        { mode: 0o600 },
+      );
+    }
+    const reservePath = join(workDir, "credentials.reserve.15");
+    const statGateControls = { release: () => {} };
+    let statEntered: () => void = () => {};
+    const statIsHeld = new Promise<void>((resolve) => {
+      statEntered = resolve;
+    });
+    const statGate = new Promise<void>((resolve) => {
+      statGateControls.release = resolve;
+    });
+    filesystemMock.reserveStatGate = {
+      path: reservePath,
+      entered: statEntered,
+      skip: 0,
+      wait: statGate,
+    };
+    const reserveLockReleased = new Promise<void>((resolve) => {
+      filesystemMock.onReserveLockRelease = resolve;
+    });
+    vi.useFakeTimers({ toFake: ["setImmediate", "clearImmediate"] });
+
+    makeStore(refreshOk);
+    await vi.runAllTimersAsync();
+    await statIsHeld;
+    writeFileSync(reservePath, Buffer.alloc(65_536, 0x71), { mode: 0o600 });
+    statGateControls.release();
+    await reserveLockReleased;
+
+    expect(readFileSync(reservePath)).toEqual(Buffer.alloc(65_536, 0x71));
+    expect(filesystemMock.reserveAllocationAttempts).toBe(0);
+    expect(filesystemMock.reserveExclusiveOpenAttempts).toBe(1);
+    expect(filesystemMock.reserveHandleStats).toBe(1);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "does not follow a symlink installed after the reserve scan",
+    async () => {
+      for (let index = 0; index < 16; index += 1) {
+        writeFileSync(
+          join(workDir, `credentials.reserve.${index}`),
+          Buffer.alloc(index === 15 ? 1 : 65_536, 0x5a),
+          { mode: 0o600 },
+        );
+      }
+      const reservePath = join(workDir, "credentials.reserve.15");
+      const targetPath = join(workDir, "symlink-target");
+      writeFileSync(targetPath, Buffer.from("keep this target"), {
+        mode: 0o600,
+      });
+      const statGateControls = { release: () => {} };
+      let statEntered: () => void = () => {};
+      const statIsHeld = new Promise<void>((resolve) => {
+        statEntered = resolve;
+      });
+      const statGate = new Promise<void>((resolve) => {
+        statGateControls.release = resolve;
+      });
+      filesystemMock.reserveStatGate = {
+        path: reservePath,
+        entered: statEntered,
+        skip: 0,
+        wait: statGate,
+      };
+      const reserveLockReleased = new Promise<void>((resolve) => {
+        filesystemMock.onReserveLockRelease = resolve;
+      });
+      vi.useFakeTimers({ toFake: ["setImmediate", "clearImmediate"] });
+
+      makeStore(refreshOk);
+      await vi.runAllTimersAsync();
+      await statIsHeld;
+      rmSync(reservePath);
+      symlinkSync(targetPath, reservePath);
+      statGateControls.release();
+      await reserveLockReleased;
+
+      expect(readFileSync(targetPath, "utf8")).toBe("keep this target");
+      expect(lstatSync(reservePath).isSymbolicLink()).toBe(true);
+      expect(filesystemMock.reserveAllocationAttempts).toBe(0);
+      expect(filesystemMock.reserveExclusiveOpenAttempts).toBe(1);
+    },
+  );
 
   it.each(["ENOSPC", "EDQUOT"] as const)(
     "releases one reserve piece and retries a lock write on %s",
@@ -722,11 +905,7 @@ describe("credentials store disk pressure", () => {
         String(call[0]).includes(".space-check."),
       ).length,
     ).toBe(1);
-    expect(
-      writeSpy.mock.calls.filter((call) =>
-        String(call[0]).includes(".reserve."),
-      ).length,
-    ).toBe(0);
+    expect(filesystemMock.reserveAllocationAttempts).toBe(0);
   });
 
   it("lets concurrent stores release reserve pieces without failing either operation", async () => {
@@ -737,7 +916,10 @@ describe("credentials store disk pressure", () => {
 
     const results = await Promise.all([rotate(storeA), rotate(storeB)]);
 
-    expect(results.map((result) => result.outcome)).toContain("applied");
+    expect(results.map((result) => result.outcome).sort()).toEqual([
+      "applied",
+      "superseded",
+    ]);
     expect(results.some((result) => result.diskPressure === "low")).toBe(true);
     expect(refreshCalls).toHaveLength(1);
   });

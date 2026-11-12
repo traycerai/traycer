@@ -1,5 +1,13 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { mkdir, stat, unlink, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import {
+  mkdir,
+  open,
+  stat,
+  unlink,
+  writeFile,
+  type FileHandle,
+} from "node:fs/promises";
 import { dirname } from "node:path";
 import {
   credentialsWrite,
@@ -10,6 +18,49 @@ import { withCredentialsLock } from "./credentials-lock";
 
 const PIECE_COUNT = 16;
 const PIECE_BYTES = 64 * 1024;
+
+async function createReservePiece(
+  path: string,
+  interrupted: () => boolean,
+): Promise<FileHandle | null> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    if (interrupted()) return null;
+    try {
+      return await open(path, "wx", 0o600);
+    } catch (err) {
+      if (errorCode(err) !== "EEXIST") throw err;
+      if (attempt !== 0 || interrupted()) return null;
+    }
+    let existing: FileHandle;
+    try {
+      existing = await open(
+        path,
+        constants.O_RDONLY |
+          (constants.O_NOFOLLOW ?? 0) |
+          (constants.O_NONBLOCK ?? 0),
+      );
+    } catch (err) {
+      if (errorCode(err) === "ENOENT") continue;
+      throw err;
+    }
+    let short = false;
+    try {
+      if (interrupted()) return null;
+      const piece = await existing.stat();
+      if (interrupted()) return null;
+      short = piece.isFile() && piece.size < PIECE_BYTES;
+    } finally {
+      await existing.close();
+    }
+    if (interrupted() || !short) return null;
+    try {
+      await unlink(path);
+    } catch (err) {
+      if (errorCode(err) !== "ENOENT") throw err;
+    }
+  }
+  return null;
+}
 
 export async function isCredentialsReserveComplete(
   credentialsPath: string,
@@ -141,26 +192,24 @@ export class CredentialsReserve {
           for (const index of missing) {
             if (interrupted()) return;
             const path = `${this.credentialsPath}.reserve.${index}`;
+            const piece = await createReservePiece(path, interrupted);
+            if (piece === null) continue;
+            let complete = false;
             try {
-              try {
-                const existing = await stat(path);
-                if (interrupted()) return;
-                if (existing.size === PIECE_BYTES) continue;
-                await unlink(path);
-              } catch (err) {
-                if (errorCode(err) !== "ENOENT") return;
-              }
               if (interrupted()) return;
-              await writeFile(path, randomBytes(PIECE_BYTES), {
-                flag: "wx",
-                mode: 0o600,
-                flush: true,
-              });
-            } catch (err) {
-              if (errorCode(err) === "EEXIST") continue;
-              await unlink(path).catch(() => {});
-              return;
+              await piece.writeFile(randomBytes(PIECE_BYTES));
+              if (interrupted()) return;
+              await piece.sync();
+              if (interrupted()) return;
+              complete = true;
+            } finally {
+              try {
+                await piece.close();
+              } finally {
+                if (!complete) await unlink(path).catch(() => {});
+              }
             }
+            if (interrupted()) return;
           }
         },
       );
