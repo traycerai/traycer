@@ -50,7 +50,8 @@ function formatSignedIn(
   user: StoredCredentials["user"],
   credentialProvision: HostCredentialProvisionOutcome | null,
 ): string {
-  const signedIn = `Signed in as ${user.email || user.name || user.id}.`;
+  const identity = user.email || user.name;
+  const signedIn = identity ? `Signed in as ${identity}.` : "Signed in.";
   const note = formatCredentialProvisionNote(credentialProvision);
   if (note === null) return signedIn;
   // The notes are written as clauses for the host commands' `;`-joined

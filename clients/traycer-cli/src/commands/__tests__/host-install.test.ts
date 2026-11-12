@@ -714,6 +714,41 @@ describe("buildHostInstallCommand", () => {
     expect(JSON.stringify(result.data)).not.toContain('"token"');
   });
 
+  it("reports that a token install is still being confirmed before waiting for its receipt", async () => {
+    const prepared = {
+      environmentId: "environment-acme",
+      tokenHash: "c".repeat(64),
+    } satisfies PreparedTeamTokenInstall;
+    const receipt = {
+      hostId: "host-local",
+      environmentId: "environment-acme",
+    };
+    const ctx = fakeCtx();
+    mocks.teamTokenPreparationMock.mockResolvedValue(prepared);
+    mocks.stageHostInstallSourceMock.mockResolvedValue(sampleStaged());
+    mocks.createServiceInstallLifecycleMock.mockReturnValue(
+      sampleLifecycleHandle(),
+    );
+    mocks.commitHostInstallSourceMock.mockResolvedValue({
+      record: sampleRecord("2.0.0"),
+      previous: null,
+      installGeneration: "id:install-2.0.0",
+    });
+    mocks.waitForTeamTokenInstallMock.mockImplementation(async () => {
+      expect(ctx.progress).toHaveBeenCalledWith(
+        expect.objectContaining({
+          stage: "host-team",
+          message: "Waiting for this computer to join the team…",
+        }),
+      );
+      return receipt;
+    });
+
+    await buildHostInstallCommand(baseArgs({ team: "environment-acme" }))(ctx);
+
+    expect(mocks.waitForTeamTokenInstallMock).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps a failing install inside the team-token operation before any receipt wait", async () => {
     const prepared = {
       environmentId: "environment-acme",

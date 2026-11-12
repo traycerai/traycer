@@ -284,6 +284,17 @@ afterEach(async () => {
 });
 
 describe("traycer login credentials a host already running", () => {
+  it("does not expose the account id when the identity has no email or name", async () => {
+    identityMock.mockResolvedValue({
+      kind: "valid",
+      user: userWith("opaque-user-id", "", ""),
+    });
+
+    const { result } = await runDeviceLogin();
+
+    expect(result.human).toBe("Signed in.");
+  });
+
   it("provisions a credential when the running host reports missing", async () => {
     await writeHostPid(process.pid);
 

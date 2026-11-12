@@ -1,3 +1,4 @@
+import { CLI_NPM_PACKAGE_NAME } from "@traycer-clients/shared/cli-install/package-manager-upgrade-command";
 import { useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -41,6 +42,11 @@ export function TeamComputerUnattended(
       <h3 className="text-ui-sm font-medium">Set up without signing in</h3>
       <p className="text-ui-xs text-muted-foreground">
         Use a one-time token on a computer nobody will sign in to.
+      </p>
+      <p className="text-ui-xs text-muted-foreground">
+        Install the Traycer CLI first if needed:{" "}
+        <code className="break-all">npm install -g {CLI_NPM_PACKAGE_NAME}</code>
+        .
       </p>
       {token === null ? (
         <p className="text-ui-xs text-muted-foreground">
