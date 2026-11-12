@@ -110,6 +110,7 @@ type ProviderListHandler = (
   | Promise<ResponseOfMethod<typeof hostRpcRegistry, "providers.list">>;
 
 interface EnvironmentSignInHostOptions {
+  readonly hostId?: string;
   readonly link?: LinkHandler;
   readonly complete?: CompleteHandler;
   readonly providersList?: ProviderListHandler;
@@ -138,12 +139,13 @@ function negotiatedManifest(): ConnectionManifest {
 function makeHost(
   options: EnvironmentSignInHostOptions | undefined,
 ): EnvironmentSignInHost {
+  const hostId = options?.hostId ?? HOST_ID;
   const linkRequests: ProvidersLinkRequestV12[] = [];
   const completeRequests: LinkCompleteRequest[] = [];
   const cancelRequests: EnvironmentSignInHost["cancelRequests"] = [];
   const providersListCalls: number[] = [];
   const fixture = buildEnvironmentClient({
-    hostId: HOST_ID,
+    hostId,
     handlers: {
       "providers.link": (request) => {
         linkRequests.push(request);
@@ -178,7 +180,7 @@ function makeHost(
       },
     },
   });
-  recordNegotiatedHostManifest(HOST_ID, negotiatedManifest());
+  recordNegotiatedHostManifest(hostId, negotiatedManifest());
   return {
     client: fixture.client,
     linkRequests,
@@ -265,6 +267,7 @@ function renderSignIn(input: {
     readonly profile: ProviderProfile | null;
   }) => void;
   readonly onCancel: () => void;
+  readonly onActiveChange?: (active: boolean) => void;
 }) {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -279,6 +282,7 @@ function renderSignIn(input: {
           client={input.host.client}
           request={input.request}
           autoStart={input.autoStart}
+          onActiveChange={input.onActiveChange}
           waitForLocalProfile={input.waitForLocalProfile}
           disabled={false}
           onComplete={input.onComplete}
@@ -927,6 +931,111 @@ describe("<EnvironmentProfileSignIn />", () => {
       }
       expect(replacementHost.cancelRequests).toEqual([]);
       expect(onComplete).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["auto-start", true],
+    ["manual", false],
+  ] as const)(
+    "starts the new host scope in %s mode and ignores the old startup failure",
+    async (_mode, nextAutoStart) => {
+      const { promise: oldStart, reject: rejectOldStart } =
+        Promise.withResolvers<ProvidersLinkResponseV12>();
+      const oldHost = makeHost({
+        hostId: "host-sign-in-old-scope",
+        link: () => oldStart,
+      });
+      const nextEnvironmentId = "environment-sign-in-next-scope";
+      const nextHost = makeHost({
+        hostId: "host-sign-in-next-scope",
+        link: () => ({
+          linkId: "link-next-scope",
+          environmentProfileId: "environment-profile-next-scope",
+          prompt: {
+            kind: "sign_in_url",
+            url: "https://auth.example.test/new-scope",
+            codePrompt: "New code",
+          },
+        }),
+        complete: () => ({
+          state: "linked",
+          code: null,
+          account: null,
+          expectedAccount: null,
+          environmentProfileId: "environment-profile-next-scope",
+          profileId: MANAGED_PROFILE_ID,
+        }),
+      });
+      const oldOnActiveChange = vi.fn();
+      const nextOnActiveChange = vi.fn();
+      const oldOnComplete = vi.fn();
+      const nextOnComplete = vi.fn();
+      const view = renderSignIn({
+        host: oldHost,
+        request: EXISTING_PROFILE_REQUEST,
+        autoStart: true,
+        waitForLocalProfile: false,
+        onActiveChange: oldOnActiveChange,
+        onComplete: oldOnComplete,
+        onCancel: vi.fn(),
+      });
+
+      await vi.waitFor(() => expect(oldHost.linkRequests).toHaveLength(1));
+      const nextRequest = {
+        ...EXISTING_PROFILE_REQUEST,
+        environmentId: nextEnvironmentId,
+      };
+      view.rerender(
+        <QueryClientProvider client={view.queryClient}>
+          <EnvironmentProfileSignIn
+            client={nextHost.client}
+            request={nextRequest}
+            autoStart={nextAutoStart}
+            waitForLocalProfile={false}
+            disabled={false}
+            onActiveChange={nextOnActiveChange}
+            onComplete={nextOnComplete}
+            onCancel={vi.fn()}
+          />
+        </QueryClientProvider>,
+      );
+
+      if (!nextAutoStart)
+        fireEvent.click(await screen.findByRole("button", { name: "Sign in" }));
+      expect(await screen.findByLabelText("New code")).toBeTruthy();
+      expect(nextHost.linkRequests).toEqual([
+        { ...nextRequest, replaceAccount: false },
+      ]);
+      expect(nextOnActiveChange).toHaveBeenCalledExactlyOnceWith(true);
+
+      await act(async () => {
+        rejectOldStart(new Error("Old host startup failed."));
+        await oldStart.catch(() => undefined);
+      });
+      expect(screen.getByLabelText("New code")).toBeTruthy();
+      expect(nextOnActiveChange).toHaveBeenCalledExactlyOnceWith(true);
+      expect(oldOnComplete).not.toHaveBeenCalled();
+      expect(nextOnComplete).not.toHaveBeenCalled();
+
+      fireEvent.change(screen.getByLabelText("New code"), {
+        target: { value: "CODE-NEXT" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+      await vi.waitFor(() => expect(nextHost.completeRequests).toHaveLength(1));
+      expect(nextHost.completeRequests[0]).toEqual({
+        linkId: "link-next-scope",
+        code: "CODE-NEXT",
+        environmentId: nextEnvironmentId,
+      });
+      await vi.waitFor(() =>
+        expect(nextOnComplete).toHaveBeenCalledExactlyOnceWith({
+          environmentProfileId: "environment-profile-next-scope",
+          profile: null,
+        }),
+      );
+      expect(oldHost.completeRequests).toEqual([]);
+      expect(oldHost.cancelRequests).toEqual([]);
     },
   );
 

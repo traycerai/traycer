@@ -339,6 +339,83 @@ describe("the intro", () => {
 });
 
 describe("a sign-in URL with a pasted code", () => {
+  it("unlocks a cloud profile after start fails and retries with the edited label", async () => {
+    recordNegotiatedHostManifest(HOST_ID, {
+      "providers.link": { major: 1, minor: 2 },
+      "providers.linkComplete": { major: 1, minor: 2 },
+      "providers.linkCancel": { major: 1, minor: 0 },
+    });
+    await openCloudDialog("claude-code", null);
+    const profileName = screen.getByLabelText("Profile name");
+    fireEvent.change(profileName, { target: { value: "Original profile" } });
+
+    const start = Promise.withResolvers<ProvidersLinkResponseV12>();
+    linkMock.link.mockReturnValueOnce(start.promise);
+    linkMock.link.mockResolvedValueOnce({
+      linkId: "retry-link",
+      environmentProfileId: "retry-environment-profile",
+      prompt: {
+        kind: "sign_in_url",
+        url: "https://auth.example.test/retry",
+        codePrompt: "Retry code",
+      },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    expect(profileName.hasAttribute("disabled")).toBe(true);
+
+    await act(async () => {
+      start.reject(rpcError("RPC_ERROR", "Synthetic sign-in startup failure"));
+      await start.promise.catch(() => undefined);
+    });
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "Sign-in did not start. Try again.",
+    );
+    expect(profileName.hasAttribute("disabled")).toBe(false);
+
+    fireEvent.change(profileName, { target: { value: "" } });
+    const retry = screen.getByRole("button", { name: "Retry" });
+    expect(retry.hasAttribute("disabled")).toBe(true);
+    fireEvent.change(profileName, { target: { value: "Updated profile" } });
+    expect(retry.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(retry);
+    await screen.findByLabelText("Retry code");
+
+    expect(profileName.hasAttribute("disabled")).toBe(true);
+    expect(linkMock.link).toHaveBeenCalledTimes(2);
+    expect(linkMock.link.mock.calls.map(([request]) => request)).toEqual([
+      {
+        providerId: "claude-code",
+        profileId: null,
+        environmentId: PERSONAL_ENV_ID,
+        createProfile: {
+          label: "Original profile",
+          shareSkillsAndPlugins: false,
+        },
+        replaceAccount: false,
+      },
+      {
+        providerId: "claude-code",
+        profileId: null,
+        environmentId: PERSONAL_ENV_ID,
+        createProfile: {
+          label: "Updated profile",
+          shareSkillsAndPlugins: false,
+        },
+        replaceAccount: false,
+      },
+    ]);
+
+    linkMock.complete.mockResolvedValueOnce(
+      answer({ state: "installing", account: "synthetic-account" }),
+    );
+    fireEvent.change(screen.getByLabelText("Retry code"), {
+      target: { value: "RETRY-CODE" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    expect((await screen.findByRole("status")).textContent).toBe("Signed in.");
+    expect(providersListMock).not.toHaveBeenCalled();
+  });
+
   it("finishes a new cloud profile at link completion without polling local providers", async () => {
     recordNegotiatedHostManifest(HOST_ID, {
       "providers.link": { major: 1, minor: 2 },

@@ -208,7 +208,7 @@ function EnvironmentPlanSignInDialog(props: {
                   replaceAccount: false,
                 }}
                 autoStart={false}
-                onStarted={() => setStarted(true)}
+                onActiveChange={setStarted}
                 waitForLocalProfile={false}
                 disabled={label.trim().length === 0}
                 onComplete={() => {

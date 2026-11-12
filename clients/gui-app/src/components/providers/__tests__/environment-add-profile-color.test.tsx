@@ -20,6 +20,7 @@ import {
 import type { ConnectionManifest } from "@traycer/protocol/framework/index";
 import type {
   ProvidersLinkCompleteResponseV12,
+  ProvidersLinkRequestV12,
   ProvidersLinkResponseV12,
 } from "@traycer/protocol/host/environment-schemas";
 import {
@@ -124,6 +125,7 @@ function existingProfile(): ProviderProfile {
 }
 
 interface ColorHost extends EnvironmentClientFixture {
+  readonly linkRequests: ProvidersLinkRequestV12[];
   readonly setEnabledRequests: RequestOfMethod<
     HostRpcRegistry,
     "providers.setEnabled"
@@ -131,10 +133,17 @@ interface ColorHost extends EnvironmentClientFixture {
   readonly providersListCalls: number[];
 }
 
+type StartLinkHandler = (
+  request: ProvidersLinkRequestV12,
+  callNumber: number,
+) => ProvidersLinkResponseV12 | Promise<ProvidersLinkResponseV12>;
+
 function makeHost(
   onInventoryProfileAdded: () => void,
   events: string[],
+  startLinkHandler: StartLinkHandler | undefined,
 ): ColorHost {
+  const linkRequests: ColorHost["linkRequests"] = [];
   const setEnabledRequests: ColorHost["setEnabledRequests"] = [];
   const providersListCalls: number[] = [];
   const linkResponse: ProvidersLinkResponseV12 = {
@@ -157,7 +166,12 @@ function makeHost(
   const fixture = buildEnvironmentClient({
     hostId: HOST_ID,
     handlers: {
-      "providers.link": () => linkResponse,
+      "providers.link": (request) => {
+        linkRequests.push(request);
+        return startLinkHandler === undefined
+          ? linkResponse
+          : startLinkHandler(request, linkRequests.length);
+      },
       "providers.linkComplete": (_request: LinkCompleteRequest) =>
         linkCompleteResponse,
       "providers.linkCancel": () => ({}),
@@ -184,6 +198,7 @@ function makeHost(
   recordNegotiatedHostManifest(HOST_ID, MANIFEST);
   return {
     ...fixture,
+    linkRequests,
     setEnabledRequests,
     providersListCalls,
   };
@@ -221,7 +236,7 @@ function AddProfileFromProviderInventory(props: {
       onFailedAttempt={() => undefined}
       onProfileCreated={props.onProfileCreated}
       initialAccentColor={INITIAL_COLOR}
-      sharesSkillsAndPlugins={false}
+      sharesSkillsAndPlugins
     />
   );
 }
@@ -242,13 +257,17 @@ describe("EnvironmentAddProfileDialog profile color", () => {
     ): void => {
       parentStateWriter.current = writer;
     };
-    const host = makeHost(() => {
-      act(() => {
-        parentStateWriter.current?.(
-          providerState([existingProfile(), createdProfile()]),
-        );
-      });
-    }, events);
+    const host = makeHost(
+      () => {
+        act(() => {
+          parentStateWriter.current?.(
+            providerState([existingProfile(), createdProfile()]),
+          );
+        });
+      },
+      events,
+      undefined,
+    );
     const onOpenChange = vi.fn();
     const onProfileCreated = vi.fn();
     const queryClient = new QueryClient({
@@ -304,6 +323,187 @@ describe("EnvironmentAddProfileDialog profile color", () => {
     expect(events.indexOf("parent-inventory-rerender")).toBeGreaterThanOrEqual(
       0,
     );
+    expect(events.indexOf("parent-inventory-rerender")).toBeLessThan(
+      events.indexOf("recolor"),
+    );
+  });
+
+  it("unlocks after startup fails, then retries edited values and recolors the new profile", async () => {
+    const events: string[] = [];
+    const parentStateWriter: {
+      current: Dispatch<SetStateAction<ProviderCliState>> | null;
+    } = { current: null };
+    const onParentStateWriter = (
+      writer: Dispatch<SetStateAction<ProviderCliState>> | null,
+    ): void => {
+      parentStateWriter.current = writer;
+    };
+    let rejectFirstStart: (error: Error) => void = () => {
+      throw new Error("First sign-in did not start.");
+    };
+    let resolveSecondStart: (
+      response: ProvidersLinkResponseV12,
+    ) => void = () => {
+      throw new Error("Retry sign-in did not start.");
+    };
+    const host = makeHost(
+      () => {
+        act(() => {
+          parentStateWriter.current?.(
+            providerState([existingProfile(), createdProfile()]),
+          );
+        });
+      },
+      events,
+      (_request, callNumber) => {
+        if (callNumber === 1) {
+          return new Promise<ProvidersLinkResponseV12>((_resolve, reject) => {
+            rejectFirstStart = reject;
+          });
+        }
+        return new Promise<ProvidersLinkResponseV12>((resolve) => {
+          resolveSecondStart = resolve;
+        });
+      },
+    );
+    const onOpenChange = vi.fn();
+    const onProfileCreated = vi.fn();
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, gcTime: 0 },
+        mutations: { retry: false },
+      },
+    });
+    const user = userEvent.setup();
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <AddProfileFromProviderInventory
+          client={host.client}
+          onOpenChange={onOpenChange}
+          onProfileCreated={onProfileCreated}
+          onParentStateWriter={onParentStateWriter}
+          events={events}
+        />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() =>
+      expect(host.providersListCalls.length).toBeGreaterThan(0),
+    );
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    await waitFor(() => expect(host.linkRequests).toHaveLength(1));
+    expect(screen.getByLabelText("Profile name").hasAttribute("disabled")).toBe(
+      true,
+    );
+    expect(
+      screen
+        .getByRole("button", { name: `Use color ${CHOSEN_COLOR}` })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+    const shareTools = screen.getByRole("checkbox", {
+      name: "Use terminal skills and plugins on this computer",
+    });
+    expect(shareTools.hasAttribute("disabled")).toBe(true);
+
+    await act(async () => {
+      rejectFirstStart(new Error("Simulated startup failure."));
+      await Promise.resolve();
+    });
+    const failedAlert = await screen.findByRole("alert");
+    expect(failedAlert.textContent).toBe("Sign-in did not start. Try again.");
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(screen.getByLabelText("Profile name").hasAttribute("disabled")).toBe(
+      false,
+    );
+    expect(
+      screen
+        .getByRole("button", { name: `Use color ${CHOSEN_COLOR}` })
+        .hasAttribute("disabled"),
+    ).toBe(false);
+    expect(shareTools.hasAttribute("disabled")).toBe(false);
+
+    const profileName = screen.getByLabelText("Profile name");
+    await user.clear(profileName);
+    expect(
+      screen.getByRole("button", { name: "Retry" }).hasAttribute("disabled"),
+    ).toBe(true);
+    await user.type(screen.getByLabelText("Profile name"), "Retry profile");
+    expect(
+      screen.getByRole("button", { name: "Retry" }).hasAttribute("disabled"),
+    ).toBe(false);
+    await user.click(
+      screen.getByRole("button", {
+        name: `Use color ${PROVIDER_PROFILE_ACCENT_COLORS[3]}`,
+      }),
+    );
+    await user.click(shareTools);
+    expect(screen.getByRole("alert").textContent).toBe(
+      "Sign-in did not start. Try again.",
+    );
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(host.linkRequests).toHaveLength(2));
+    expect(host.linkRequests[0]).toEqual({
+      providerId: "claude-code",
+      profileId: null,
+      environmentId: ENVIRONMENT_ID,
+      createProfile: {
+        label: "New profile",
+        shareSkillsAndPlugins: true,
+      },
+      replaceAccount: false,
+    });
+    expect(host.linkRequests[1]).toEqual({
+      providerId: "claude-code",
+      profileId: null,
+      environmentId: ENVIRONMENT_ID,
+      createProfile: {
+        label: "Retry profile",
+        shareSkillsAndPlugins: false,
+      },
+      replaceAccount: false,
+    });
+    expect(screen.getByLabelText("Profile name").hasAttribute("disabled")).toBe(
+      true,
+    );
+    expect(shareTools.hasAttribute("disabled")).toBe(true);
+
+    await act(async () => {
+      resolveSecondStart({
+        linkId: "link-created-profile",
+        environmentProfileId: ENVIRONMENT_PROFILE_ID,
+        prompt: {
+          kind: "sign_in_url",
+          url: "https://auth.example.test/sign-in",
+          codePrompt: "One-time code",
+        },
+      });
+      await Promise.resolve();
+    });
+    await screen.findByLabelText("One-time code");
+    expect(screen.getByLabelText("Profile name").hasAttribute("disabled")).toBe(
+      true,
+    );
+    fireEvent.change(screen.getByLabelText("One-time code"), {
+      target: { value: SIGN_IN_CODE },
+    });
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+
+    await waitFor(() => expect(host.setEnabledRequests).toHaveLength(1));
+    await waitFor(() =>
+      expect(onProfileCreated).toHaveBeenCalledWith(PROFILE_ID),
+    );
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(host.setEnabledRequests[0]).toMatchObject({
+      providerId: "claude-code",
+      enabled: true,
+      profileAction: {
+        type: "recolor",
+        profileId: PROFILE_ID,
+        accentColor: PROVIDER_PROFILE_ACCENT_COLORS[3],
+      },
+    });
     expect(events.indexOf("parent-inventory-rerender")).toBeLessThan(
       events.indexOf("recolor"),
     );

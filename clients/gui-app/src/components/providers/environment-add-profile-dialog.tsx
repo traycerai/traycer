@@ -43,6 +43,7 @@ export function EnvironmentAddProfileDialog(
   const recolor = useRecolorProviderProfileForClient(props.client);
   const refusal = useHostCredentialRefusal(props.client.getActiveHostId());
   const profileIdsBeforeSignIn = useRef<ReadonlySet<string>>(new Set());
+  const signInColor = useRef(color);
   const finish = (result: EnvironmentSignInCompletion): void => {
     const profile = result.profile;
     if (profile === null) return;
@@ -50,7 +51,7 @@ export function EnvironmentAddProfileDialog(
     const alreadyExisted = profileIdsBeforeSignIn.current.has(
       profile.profileId,
     );
-    if (alreadyExisted || profile.accentColor === color) {
+    if (alreadyExisted || profile.accentColor === signInColor.current) {
       props.onProfileCreated(profile.profileId);
       props.onOpenChange(false);
       return;
@@ -60,7 +61,7 @@ export function EnvironmentAddProfileDialog(
       {
         providerId: props.state.providerId,
         profileId: profile.profileId,
-        accentColor: color,
+        accentColor: signInColor.current,
       },
       {
         onSuccess: () => {
@@ -125,11 +126,14 @@ export function EnvironmentAddProfileDialog(
               replaceAccount: false,
             }}
             autoStart={false}
-            onStarted={() => {
-              profileIdsBeforeSignIn.current = new Set(
-                props.state.profiles.map((profile) => profile.profileId),
-              );
-              setStarted(true);
+            onActiveChange={(active) => {
+              if (active) {
+                profileIdsBeforeSignIn.current = new Set(
+                  props.state.profiles.map((profile) => profile.profileId),
+                );
+                signInColor.current = color;
+              }
+              setStarted(active);
             }}
             waitForLocalProfile
             disabled={refusal !== null || label.trim().length === 0}

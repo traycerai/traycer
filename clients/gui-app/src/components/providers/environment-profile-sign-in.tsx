@@ -79,19 +79,53 @@ export interface EnvironmentSignInCompletion {
   readonly profile: ProviderProfile | null;
 }
 
-/** One visible sign-in owns one attempt. A late start still releases its item
- * after dismissal; a completed connection is never withdrawn. */
-export function EnvironmentProfileSignIn(props: {
+interface EnvironmentProfileSignInProps {
   readonly client: HostClient<HostRpcRegistry>;
   readonly request: ProvidersLinkRequestV12;
   readonly autoStart: boolean;
-  readonly onStarted?: () => void;
+  readonly onActiveChange?: (active: boolean) => void;
   readonly waitForLocalProfile: boolean;
   readonly disabled: boolean;
   readonly onComplete: (completion: EnvironmentSignInCompletion) => void;
   readonly onDeliveryPending?: () => void;
   readonly onCancel: () => void;
-}): ReactNode {
+}
+
+/** A different target owns a fresh attempt and its auto-start policy.
+ * Editable new-profile settings are captured at start, outside that identity. */
+export function EnvironmentProfileSignIn(
+  props: EnvironmentProfileSignInProps,
+): ReactNode {
+  const [scope, setScope] = useState(() => ({
+    client: props.client,
+    request: props.request,
+    waitForLocalProfile: props.waitForLocalProfile,
+    generation: 0,
+  }));
+  if (
+    scope.client !== props.client ||
+    scope.request.environmentId !== props.request.environmentId ||
+    scope.request.providerId !== props.request.providerId ||
+    scope.request.profileId !== props.request.profileId ||
+    scope.request.replaceAccount !== props.request.replaceAccount ||
+    (scope.request.createProfile === null) !==
+      (props.request.createProfile === null) ||
+    scope.waitForLocalProfile !== props.waitForLocalProfile
+  )
+    setScope({
+      client: props.client,
+      request: props.request,
+      waitForLocalProfile: props.waitForLocalProfile,
+      generation: scope.generation + 1,
+    });
+  return <EnvironmentProfileSignInForScope key={scope.generation} {...props} />;
+}
+
+/** One visible sign-in owns one attempt. A late start still releases its item
+ * after dismissal; a completed connection is never withdrawn. */
+function EnvironmentProfileSignInForScope(
+  props: EnvironmentProfileSignInProps,
+): ReactNode {
   const [state, setState] = useState<SignInState>({ kind: "idle" });
   const [code, setCode] = useState("");
   const { mutateAsync: startLink, isPending: starting } = useProvidersLink();
@@ -106,8 +140,10 @@ export function EnvironmentProfileSignIn(props: {
   const autoStarted = useRef(false);
   const delivered = useRef(false);
   const onComplete = useRef(props.onComplete);
+  const onActiveChange = useRef(props.onActiveChange);
   useEffect(() => {
     onComplete.current = props.onComplete;
+    onActiveChange.current = props.onActiveChange;
   });
   const inventory = useProvidersListForClient(props.client, {
     enabled: state.kind === "installing" && props.waitForLocalProfile,
@@ -145,14 +181,9 @@ export function EnvironmentProfileSignIn(props: {
   useEffect(
     () => () => {
       if (attempt.current !== null) release(attempt.current);
+      onActiveChange.current?.(false);
     },
-    [
-      release,
-      props.client,
-      props.request.environmentId,
-      props.request.providerId,
-      props.request.profileId,
-    ],
+    [release],
   );
 
   const { onDeliveryPending, onCancel } = props;
@@ -218,7 +249,7 @@ export function EnvironmentProfileSignIn(props: {
     };
     attempt.current = current;
     delivered.current = false;
-    props.onStarted?.();
+    onActiveChange.current?.(true);
     setCode("");
     setState({ kind: "starting" });
     try {
@@ -239,7 +270,8 @@ export function EnvironmentProfileSignIn(props: {
           : { kind: "prompt", prompt: answer.prompt, note: null },
       );
     } catch (error) {
-      if (isLiveSignInAttempt(current, attempt.current))
+      if (isLiveSignInAttempt(current, attempt.current)) {
+        onActiveChange.current?.(false);
         setState({
           kind: "failed",
           line:
@@ -247,6 +279,7 @@ export function EnvironmentProfileSignIn(props: {
               ? "Ask a teammate to sign in on Providers."
               : "Sign-in did not start. Try again.",
         });
+      }
     }
   };
   const startRef = useRef(start);
@@ -523,7 +556,11 @@ function EnvironmentSignInBody(props: {
           <p role="alert" className="text-ui-sm">
             {state.line}
           </p>
-          <Button type="button" onClick={props.onStart}>
+          <Button
+            type="button"
+            disabled={props.disabled}
+            onClick={props.onStart}
+          >
             Retry
           </Button>
         </>
