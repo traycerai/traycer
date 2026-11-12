@@ -36,6 +36,8 @@ export const RunnerHostInvoke = {
   // which owns the single machine-local credentials file + its lock/WAL. `rotate`
   // performs the refresh HTTP spend in main, inside the file lock.
   authTokenStoreGet: "runnerHost:auth:tokenStore:get",
+  authTokenStoreGetSignInStorageLow:
+    "runnerHost:auth:tokenStore:getSignInStorageLow",
   authTokenStoreSignIn: "runnerHost:auth:tokenStore:signIn",
   authTokenStoreRotate: "runnerHost:auth:tokenStore:rotate",
   authTokenStoreDelete: "runnerHost:auth:tokenStore:delete",
@@ -502,6 +504,8 @@ export const RunnerHostEvent = {
   // AND self-writes) so each renderer's reconcile worker re-reads the file. The
   // watcher itself lands in §4; the channel + preload subscription ship now.
   authTokenStoreChange: "runnerHost:event:auth:tokenStore:change",
+  authSignInStorageLowChanged:
+    "runnerHost:event:auth:sign-in-storage-low-changed",
   // Terminal outcome of a device-flow attempt, keyed by `attemptId` so a
   // superseded attempt's late result can't be mistaken for the live one.
   deviceFlowResult: "runnerHost:event:deviceFlowResult",

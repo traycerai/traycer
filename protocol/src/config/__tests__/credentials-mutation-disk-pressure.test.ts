@@ -1,0 +1,1106 @@
+import * as fsPromises from "node:fs/promises";
+import type { FileHandle } from "node:fs/promises";
+import {
+  existsSync,
+  lstatSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createCredentialsMutationStore,
+  CredentialsStoreUnavailableError,
+  spentBaseMarkerPath,
+  type CredentialsMutationStore,
+  type RefreshFn,
+} from "../credentials-mutation";
+import {
+  readCredentialsFile,
+  writeCredentialsFile,
+  type StoredCredentials,
+} from "../credentials";
+import { writeJsonFileAtomic } from "../credentials-fs";
+import { isCredentialsReserveComplete } from "../credentials-reserve";
+import { digestCredentials, writeSidecarState } from "../credentials-wal";
+
+const CREDS: StoredCredentials = {
+  token: "disk-pressure-token",
+  refreshToken: "disk-pressure-refresh",
+  savedAt: "2026-01-01T00:00:00.000Z",
+  user: { id: "u1", email: "ada@traycer.ai", name: "Ada" },
+};
+
+type Fault = {
+  operation: "writeFile" | "sync" | "link" | "rename" | "readFile";
+  fragment: string;
+  code: string;
+  remaining: number;
+};
+
+type ReserveGateOperation = "open" | "stat";
+
+const filesystemMock = vi.hoisted(() => {
+  const faults: Fault[] = [];
+  return {
+    faults,
+    onReserveWrite: null as (() => void) | null,
+    onReserveReadClose: null as (() => void) | null,
+    onSpaceCheckWrite: null as (() => void) | null,
+    onReserveLockRelease: null as (() => void) | null,
+    onReserveLockBusy: null as (() => void) | null,
+    onMutationLockBusy: null as (() => void) | null,
+    reserveLocksInFlight: 0,
+    lockPath: "",
+    reserveStatGate: null as {
+      path: string;
+      operation: ReserveGateOperation;
+      entered: () => void;
+      skip: number;
+      wait: Promise<void>;
+    } | null,
+    reserveAllocationAttempts: 0,
+    reserveExclusiveOpenAttempts: 0,
+    reserveHandleStats: 0,
+    reserveSyncs: 0,
+    reserveCloses: 0,
+    reserveReadCloses: 0,
+    reserveWritesInFlight: 0,
+    mkdirCalls: 0,
+    takeFault(operation: Fault["operation"], path: string): Fault | null {
+      const fault = faults.find(
+        (candidate) =>
+          candidate.operation === operation &&
+          candidate.remaining > 0 &&
+          (candidate.fragment.startsWith("=")
+            ? path === candidate.fragment.slice(1)
+            : path.includes(candidate.fragment)),
+      );
+      if (fault === undefined) return null;
+      fault.remaining -= 1;
+      return fault;
+    },
+  };
+});
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  const syncFs = await import("node:fs");
+  const rejectFault = (code: string): Promise<never> =>
+    Promise.reject(Object.assign(new Error(`simulated ${code}`), { code }));
+  const readWithReserveGate = <T>(
+    path: string,
+    operation: ReserveGateOperation,
+    read: () => Promise<T>,
+  ): Promise<T> => {
+    const gate = filesystemMock.reserveStatGate;
+    if (
+      gate === null ||
+      path !== gate.path ||
+      operation !== gate.operation
+    ) {
+      return read();
+    }
+    if (gate.skip > 0) {
+      gate.skip -= 1;
+      return read();
+    }
+    filesystemMock.reserveStatGate = null;
+    return read().then(
+      (value) => {
+        gate.entered();
+        return gate.wait.then(() => value);
+      },
+      (error: unknown) => {
+        gate.entered();
+        return gate.wait.then(() => Promise.reject(error));
+      },
+    );
+  };
+  return {
+    ...actual,
+    open: vi.fn((...args: Parameters<typeof actual.open>) => {
+      const path = String(args[0]);
+      const isReserve = path.includes(".reserve.");
+      const isReserveRead = isReserve && args[1] !== "wx";
+      if (isReserve && args[1] === "wx") {
+        filesystemMock.reserveExclusiveOpenAttempts += 1;
+      }
+      const opening =
+        isReserveRead
+          ? readWithReserveGate(path, "open", () => actual.open(...args))
+          : actual.open(...args);
+      return opening.then((handle) => {
+        const wrapped = new Proxy(handle, {
+          get(target, property) {
+            if (property === "stat") {
+              return (...statArgs: Parameters<FileHandle["stat"]>) => {
+                if (isReserve) filesystemMock.reserveHandleStats += 1;
+                return readWithReserveGate(path, "stat", () =>
+                  target.stat(...statArgs),
+                );
+              };
+            }
+            if (property === "writeFile") {
+              return (...writeArgs: Parameters<FileHandle["writeFile"]>) => {
+                if (!isReserve) return target.writeFile(...writeArgs);
+                filesystemMock.reserveAllocationAttempts += 1;
+                filesystemMock.reserveWritesInFlight += 1;
+                const fault = filesystemMock.takeFault("writeFile", path);
+                const writing =
+                  fault === null
+                    ? target.writeFile(...writeArgs)
+                    : rejectFault(fault.code);
+                return writing.then(
+                  (value) => {
+                    filesystemMock.reserveWritesInFlight -= 1;
+                    filesystemMock.onReserveWrite?.();
+                    return value;
+                  },
+                  (error: unknown) => {
+                    filesystemMock.reserveWritesInFlight -= 1;
+                    throw error;
+                  },
+                );
+              };
+            }
+            if (property === "sync") {
+              return () => {
+                if (isReserve) filesystemMock.reserveSyncs += 1;
+                const fault = isReserve
+                  ? filesystemMock.takeFault("sync", path)
+                  : null;
+                return fault === null ? target.sync() : rejectFault(fault.code);
+              };
+            }
+            if (property === "close") {
+              return () => {
+                if (isReserve) filesystemMock.reserveCloses += 1;
+                const closing = target.close();
+                if (!isReserveRead) return closing;
+                return closing.then((value) => {
+                  filesystemMock.reserveReadCloses += 1;
+                  filesystemMock.onReserveReadClose?.();
+                  return value;
+                });
+              };
+            }
+            const value: unknown = Reflect.get(target, property, target);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+        return wrapped;
+      });
+    }),
+    mkdir: vi.fn((...args: Parameters<typeof actual.mkdir>) => {
+      filesystemMock.mkdirCalls += 1;
+      return actual.mkdir(...args);
+    }),
+    writeFile: vi.fn((...args: Parameters<typeof actual.writeFile>) => {
+      const path = String(args[0]);
+      if (path.includes(".space-check.")) {
+        filesystemMock.onSpaceCheckWrite?.();
+      }
+      const fault = filesystemMock.takeFault("writeFile", path);
+      if (fault !== null) return rejectFault(fault.code);
+      return actual.writeFile(...args);
+    }),
+    link: vi.fn((...args: Parameters<typeof actual.link>) => {
+      const destination = String(args[1]);
+      const fault = filesystemMock.takeFault("link", destination);
+      if (fault !== null) return rejectFault(fault.code);
+      const source = String(args[0]);
+      let isReserveLock = false;
+      let isMutationLock = false;
+      if (destination === filesystemMock.lockPath) {
+        try {
+          const content = JSON.parse(syncFs.readFileSync(source, "utf8")) as {
+            reason?: unknown;
+          };
+          isReserveLock = content.reason === "credentials-reserve";
+          isMutationLock = content.reason === "credentials-mutate";
+        } catch {
+          isReserveLock = false;
+        }
+      }
+      return actual
+        .link(...args)
+        .then((value) => {
+          if (isReserveLock) filesystemMock.reserveLocksInFlight += 1;
+          return value;
+        })
+        .catch((error: unknown) => {
+          if (
+            typeof error === "object" &&
+            error !== null &&
+            "code" in error &&
+            error.code === "EEXIST"
+          ) {
+            if (isReserveLock) filesystemMock.onReserveLockBusy?.();
+            if (isMutationLock) filesystemMock.onMutationLockBusy?.();
+          }
+          throw error;
+        });
+    }),
+    unlink: vi.fn((...args: Parameters<typeof actual.unlink>) => {
+      const path = String(args[0]);
+      let isReserveLock = false;
+      if (path === filesystemMock.lockPath) {
+        try {
+          const content = JSON.parse(syncFs.readFileSync(path, "utf8")) as {
+            reason?: unknown;
+          };
+          isReserveLock = content.reason === "credentials-reserve";
+        } catch {
+          isReserveLock = false;
+        }
+      }
+      return actual.unlink(...args).then((value) => {
+        if (isReserveLock) {
+          filesystemMock.reserveLocksInFlight -= 1;
+          filesystemMock.onReserveLockRelease?.();
+        }
+        return value;
+      });
+    }),
+    rename: vi.fn((...args: Parameters<typeof actual.rename>) => {
+      const fault = filesystemMock.takeFault("rename", String(args[1]));
+      return fault === null ? actual.rename(...args) : rejectFault(fault.code);
+    }),
+    readFile: vi.fn((...args: Parameters<typeof actual.readFile>) => {
+      const fault = filesystemMock.takeFault("readFile", String(args[0]));
+      return fault === null
+        ? actual.readFile(...args)
+        : rejectFault(fault.code);
+    }),
+  };
+});
+
+function fail(
+  operation: Fault["operation"],
+  fragment: string,
+  code: string,
+  count: number,
+): void {
+  filesystemMock.faults.push({ operation, fragment, code, remaining: count });
+}
+
+describe("credentials store disk pressure", () => {
+  let workDir: string;
+  let credentialsPath: string;
+  let metaPath: string;
+  let lockPath: string;
+  const stores: CredentialsMutationStore[] = [];
+  const refreshCalls: string[] = [];
+  const pressures: string[] = [];
+  let onClearPressure: (() => void) | null = null;
+
+  function makeStore(refresh: RefreshFn): CredentialsMutationStore {
+    const store = createCredentialsMutationStore({
+      paths: { credentialsPath, metaPath, lockPath },
+      onDiskPressure: (pressure) => {
+        pressures.push(pressure);
+        if (pressure === "clear") onClearPressure?.();
+      },
+      refresh,
+      lockWaitMs: 500,
+      lockPollIntervalMs: 10,
+      continuationRetryMs: 60_000,
+    });
+    stores.push(store);
+    return store;
+  }
+
+  async function fillReserve(): Promise<void> {
+    const ready = (): boolean =>
+      filesystemMock.reserveLocksInFlight === 0 &&
+      filesystemMock.reserveWritesInFlight === 0 &&
+      Array.from({ length: 16 }, (_, index) => {
+        try {
+          return (
+            statSync(join(workDir, `credentials.reserve.${index}`)).size ===
+            65_536
+          );
+        } catch {
+          return false;
+        }
+      }).every(Boolean);
+    if (ready()) return;
+    await new Promise<void>((resolve) => {
+      filesystemMock.onReserveLockRelease = () => {
+        if (ready()) {
+          filesystemMock.onReserveLockRelease = null;
+          resolve();
+        }
+      };
+      filesystemMock.onReserveWrite = () => {
+        if (ready()) {
+          filesystemMock.onReserveWrite = null;
+          filesystemMock.onReserveLockRelease = null;
+          resolve();
+        }
+      };
+    });
+  }
+
+  function waitForReserveReadCloses(expected: number): Promise<void> {
+    if (filesystemMock.reserveReadCloses >= expected) {
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) => {
+      filesystemMock.onReserveReadClose = () => {
+        if (filesystemMock.reserveReadCloses >= expected) {
+          filesystemMock.onReserveReadClose = null;
+          resolve();
+        }
+      };
+    });
+  }
+
+  // The fill decides after its last scan read with no I/O of its own, so one
+  // event-loop turn is enough for any lock or probe it starts to reach mkdir.
+  async function settleReserveScan(expectedReadCloses: number): Promise<void> {
+    await waitForReserveReadCloses(expectedReadCloses);
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+  }
+
+  const refreshOk: RefreshFn = async ({ token }) => {
+    refreshCalls.push(token);
+    return {
+      kind: "refreshed",
+      token: `${token}-new`,
+      refreshToken: `${token}-refresh-new`,
+    };
+  };
+
+  async function seed(store: CredentialsMutationStore): Promise<void> {
+    expect((await store.signIn(CREDS, false, null)).outcome).toBe("applied");
+    await fillReserve();
+    refreshCalls.length = 0;
+    pressures.length = 0;
+  }
+
+  async function rotate(store: CredentialsMutationStore) {
+    return store.rotate({
+      expectedUserId: CREDS.user.id,
+      expectedToken: CREDS.token,
+      refreshTokenOverride: null,
+      signal: null,
+    });
+  }
+
+  beforeEach(() => {
+    workDir = mkdtempSync(join(tmpdir(), "traycer-cred-pressure-"));
+    credentialsPath = join(workDir, "credentials");
+    metaPath = join(workDir, "credentials.meta.json");
+    lockPath = join(workDir, "credentials.lock");
+    filesystemMock.lockPath = lockPath;
+    filesystemMock.faults.length = 0;
+    filesystemMock.onReserveWrite = null;
+    filesystemMock.onReserveReadClose = null;
+    filesystemMock.onSpaceCheckWrite = null;
+    filesystemMock.onReserveLockRelease = null;
+    filesystemMock.onReserveLockBusy = null;
+    filesystemMock.onMutationLockBusy = null;
+    filesystemMock.reserveStatGate = null;
+    filesystemMock.reserveLocksInFlight = 0;
+    filesystemMock.reserveWritesInFlight = 0;
+    filesystemMock.reserveAllocationAttempts = 0;
+    filesystemMock.reserveExclusiveOpenAttempts = 0;
+    filesystemMock.reserveHandleStats = 0;
+    filesystemMock.reserveSyncs = 0;
+    filesystemMock.reserveCloses = 0;
+    filesystemMock.reserveReadCloses = 0;
+    filesystemMock.mkdirCalls = 0;
+  });
+
+  afterEach(() => {
+    for (const store of stores) store.dispose();
+    stores.length = 0;
+    filesystemMock.faults.length = 0;
+    refreshCalls.length = 0;
+    pressures.length = 0;
+    onClearPressure = null;
+    filesystemMock.onReserveWrite = null;
+    filesystemMock.onReserveReadClose = null;
+    filesystemMock.onSpaceCheckWrite = null;
+    filesystemMock.onReserveLockRelease = null;
+    filesystemMock.onReserveLockBusy = null;
+    filesystemMock.onMutationLockBusy = null;
+    filesystemMock.reserveStatGate = null;
+    filesystemMock.reserveLocksInFlight = 0;
+    filesystemMock.reserveWritesInFlight = 0;
+    vi.useRealTimers();
+    vi.clearAllMocks();
+    rmSync(workDir, { recursive: true, force: true });
+  });
+
+  it("creates private reserve files when the store starts", async () => {
+    makeStore(refreshOk);
+    await fillReserve();
+
+    const firstPiece = statSync(join(workDir, "credentials.reserve.0"));
+    expect(firstPiece.size).toBe(65_536);
+    expect(filesystemMock.reserveAllocationAttempts).toBe(16);
+    expect(filesystemMock.reserveExclusiveOpenAttempts).toBe(16);
+    expect(filesystemMock.reserveHandleStats).toBe(0);
+    expect(filesystemMock.reserveSyncs).toBe(16);
+    expect(filesystemMock.reserveCloses).toBe(16);
+    if (process.platform !== "win32") {
+      expect(firstPiece.mode & 0o777).toBe(0o600);
+    }
+    expect(pressures).toEqual([]);
+  });
+
+  it("does not write or probe when every reserve piece already exists at full size", async () => {
+    for (let index = 0; index < 16; index += 1) {
+      writeFileSync(
+        join(workDir, `credentials.reserve.${index}`),
+        Buffer.alloc(65_536, 0x5a),
+        { mode: 0o600 },
+      );
+    }
+    const scanFinished = settleReserveScan(16);
+    const writeSpy = vi.mocked(fsPromises.writeFile);
+    writeSpy.mockClear();
+
+    makeStore(refreshOk);
+    await scanFinished;
+
+    expect(filesystemMock.mkdirCalls).toBe(0);
+    expect(writeSpy).not.toHaveBeenCalled();
+    expect(filesystemMock.reserveAllocationAttempts).toBe(0);
+    expect(filesystemMock.reserveExclusiveOpenAttempts).toBe(0);
+  });
+
+  it("probes and replaces a short reserve piece while leaving full pieces intact", async () => {
+    for (let index = 0; index < 16; index += 1) {
+      writeFileSync(
+        join(workDir, `credentials.reserve.${index}`),
+        Buffer.alloc(65_536, 0x5a),
+        { mode: 0o600 },
+      );
+    }
+    writeFileSync(join(workDir, "credentials.reserve.7"), Buffer.alloc(1), {
+      mode: 0o600,
+    });
+    const reserveWrite = new Promise<void>((resolve) => {
+      filesystemMock.onReserveWrite = resolve;
+    });
+    const writeSpy = vi.mocked(fsPromises.writeFile);
+    writeSpy.mockClear();
+
+    makeStore(refreshOk);
+    await reserveWrite;
+    await fillReserve();
+
+    expect(statSync(join(workDir, "credentials.reserve.7")).size).toBe(65_536);
+    expect(
+      writeSpy.mock.calls.filter((call) =>
+        String(call[0]).includes(".space-check."),
+      ).length,
+    ).toBe(1);
+    expect(filesystemMock.reserveAllocationAttempts).toBe(1);
+    expect(filesystemMock.reserveExclusiveOpenAttempts).toBe(2);
+    expect(filesystemMock.reserveHandleStats).toBe(17);
+  });
+
+  it("cleans up a partial reserve piece when sync fails without failing sign-in", async () => {
+    fail("sync", `=${join(workDir, "credentials.reserve.0")}`, "EIO", 1);
+    const reserveFillReleased = new Promise<void>((resolve) => {
+      filesystemMock.onReserveLockRelease = resolve;
+    });
+    const store = makeStore(refreshOk);
+
+    await reserveFillReleased;
+
+    expect(existsSync(join(workDir, "credentials.reserve.0"))).toBe(false);
+    expect(filesystemMock.reserveAllocationAttempts).toBe(1);
+    expect(filesystemMock.reserveSyncs).toBe(1);
+    expect(filesystemMock.reserveCloses).toBe(1);
+    expect(filesystemMock.reserveWritesInFlight).toBe(0);
+    expect((await store.signIn(CREDS, false, null)).outcome).toBe("applied");
+    await fillReserve();
+  });
+
+  it("does not replace a full file installed after the reserve scan", async () => {
+    for (let index = 0; index < 16; index += 1) {
+      writeFileSync(
+        join(workDir, `credentials.reserve.${index}`),
+        Buffer.alloc(index === 15 ? 1 : 65_536, 0x5a),
+        { mode: 0o600 },
+      );
+    }
+    const reservePath = join(workDir, "credentials.reserve.15");
+    const statGateControls = { release: () => {} };
+    let statEntered: () => void = () => {};
+    const statIsHeld = new Promise<void>((resolve) => {
+      statEntered = resolve;
+    });
+    const statGate = new Promise<void>((resolve) => {
+      statGateControls.release = resolve;
+    });
+    filesystemMock.reserveStatGate = {
+      path: reservePath,
+      operation: "stat",
+      entered: statEntered,
+      skip: 0,
+      wait: statGate,
+    };
+    const reserveLockReleased = new Promise<void>((resolve) => {
+      filesystemMock.onReserveLockRelease = resolve;
+    });
+
+    makeStore(refreshOk);
+    await statIsHeld;
+    writeFileSync(reservePath, Buffer.alloc(65_536, 0x71), { mode: 0o600 });
+    statGateControls.release();
+    await reserveLockReleased;
+
+    expect(readFileSync(reservePath)).toEqual(Buffer.alloc(65_536, 0x71));
+    expect(filesystemMock.reserveAllocationAttempts).toBe(0);
+    expect(filesystemMock.reserveExclusiveOpenAttempts).toBe(1);
+    expect(filesystemMock.reserveHandleStats).toBe(17);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "does not follow a symlink installed after the reserve scan",
+    async () => {
+      for (let index = 0; index < 16; index += 1) {
+        writeFileSync(
+          join(workDir, `credentials.reserve.${index}`),
+          Buffer.alloc(index === 15 ? 1 : 65_536, 0x5a),
+          { mode: 0o600 },
+        );
+      }
+      const reservePath = join(workDir, "credentials.reserve.15");
+      const targetPath = join(workDir, "symlink-target");
+      writeFileSync(targetPath, Buffer.from("keep this target"), {
+        mode: 0o600,
+      });
+      const statGateControls = { release: () => {} };
+      let statEntered: () => void = () => {};
+      const statIsHeld = new Promise<void>((resolve) => {
+        statEntered = resolve;
+      });
+      const statGate = new Promise<void>((resolve) => {
+        statGateControls.release = resolve;
+      });
+      filesystemMock.reserveStatGate = {
+        path: reservePath,
+        operation: "stat",
+        entered: statEntered,
+        skip: 0,
+        wait: statGate,
+      };
+      const reserveLockReleased = new Promise<void>((resolve) => {
+        filesystemMock.onReserveLockRelease = resolve;
+      });
+
+      makeStore(refreshOk);
+      await statIsHeld;
+      rmSync(reservePath);
+      symlinkSync(targetPath, reservePath);
+      statGateControls.release();
+      await reserveLockReleased;
+
+      expect(readFileSync(targetPath, "utf8")).toBe("keep this target");
+      expect(lstatSync(reservePath).isSymbolicLink()).toBe(true);
+      expect(filesystemMock.reserveAllocationAttempts).toBe(0);
+      expect(filesystemMock.reserveExclusiveOpenAttempts).toBe(1);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "does not count a symlink to a full-size file as a complete reserve piece",
+    async () => {
+      for (let index = 0; index < 16; index += 1) {
+        writeFileSync(
+          join(workDir, `credentials.reserve.${index}`),
+          Buffer.alloc(65_536, 0x5a),
+          { mode: 0o600 },
+        );
+      }
+      expect(await isCredentialsReserveComplete(credentialsPath)).toBe(true);
+
+      const reservePath = join(workDir, "credentials.reserve.15");
+      const targetPath = join(workDir, "symlink-target");
+      writeFileSync(targetPath, Buffer.alloc(65_536, 0x5a), { mode: 0o600 });
+      rmSync(reservePath);
+      symlinkSync(targetPath, reservePath);
+
+      expect(await isCredentialsReserveComplete(credentialsPath)).toBe(false);
+    },
+  );
+
+  it.each(["ENOSPC", "EDQUOT"] as const)(
+    "releases one reserve piece and retries a lock write on %s",
+    async (code) => {
+      const store = makeStore(refreshOk);
+      await seed(store);
+      fail("writeFile", ".lock.", code, 1);
+
+      const result = await rotate(store);
+
+      expect(result.outcome).toBe("applied");
+      expect(result.diskPressure).toBe("low");
+      expect(refreshCalls).toEqual([CREDS.token]);
+      expect(pressures).toEqual(["low"]);
+      expect((await readCredentialsFile(credentialsPath))?.token).toBe(
+        `${CREDS.token}-new`,
+      );
+      expect(
+        readdirSync(workDir).filter((name) =>
+          name.startsWith("credentials.reserve."),
+        ),
+      ).toHaveLength(15);
+    },
+  );
+
+  it("does not retry a permission failure on the lock write", async () => {
+    const store = makeStore(refreshOk);
+    await seed(store);
+    fail("writeFile", ".lock.", "EACCES", 1);
+
+    await expect(rotate(store)).rejects.toMatchObject({ code: "EACCES" });
+
+    expect(filesystemMock.faults[0].remaining).toBe(0);
+    expect(refreshCalls).toEqual([]);
+  });
+
+  it("saves after releasing a reserve piece for a commit write", async () => {
+    const store = makeStore(refreshOk);
+    await seed(store);
+    fail("writeFile", "credentials.meta.json", "ENOSPC", 1);
+
+    const result = await rotate(store);
+
+    expect(result.outcome).toBe("applied");
+    expect(result.diskPressure).toBe("low");
+    expect((await readCredentialsFile(credentialsPath))?.token).toBe(
+      `${CREDS.token}-new`,
+    );
+    expect(pressures).toEqual(["low"]);
+  });
+
+  it("keeps an idle store refill out of a save that releases a reserve piece", async () => {
+    let refreshStarted: () => void = () => {};
+    let finishRefresh: (() => void) | null = null;
+    const refreshIsHeld = new Promise<void>((resolve) => {
+      refreshStarted = resolve;
+    });
+    const savingStore = makeStore(async ({ token }) => {
+      refreshCalls.push(token);
+      refreshStarted();
+      await new Promise<void>((resolve) => {
+        finishRefresh = resolve;
+      });
+      return {
+        kind: "refreshed",
+        token: `${token}-new`,
+        refreshToken: `${token}-refresh-new`,
+      };
+    });
+    await seed(savingStore);
+    rmSync(join(workDir, "credentials.reserve.15"));
+
+    let releaseScanRead: (() => void) | null = null;
+    let scanReadEntered: () => void = () => {};
+    const scanReadIsHeld = new Promise<void>((resolve) => {
+      scanReadEntered = resolve;
+    });
+    const scanReadGate = new Promise<void>((resolve) => {
+      releaseScanRead = resolve;
+    });
+    filesystemMock.reserveStatGate = {
+      path: join(workDir, "credentials.reserve.15"),
+      operation: "open",
+      entered: scanReadEntered,
+      skip: 0,
+      wait: scanReadGate,
+    };
+    let reserveLockBusy: () => void = () => {};
+    const reserveFillContended = new Promise<void>((resolve) => {
+      reserveLockBusy = resolve;
+    });
+    filesystemMock.onReserveLockBusy = reserveLockBusy;
+    const idleStore = makeStore(refreshOk);
+    await scanReadIsHeld;
+
+    fail("writeFile", "credentials.meta.json", "ENOSPC", 1);
+    const saving = rotate(savingStore);
+    await refreshIsHeld;
+    const allocationsBeforeRelease = filesystemMock.reserveAllocationAttempts;
+    (releaseScanRead as (() => void) | null)?.();
+    await reserveFillContended;
+
+    expect(filesystemMock.reserveAllocationAttempts).toBe(
+      allocationsBeforeRelease,
+    );
+    (finishRefresh as (() => void) | null)?.();
+    const result = await saving;
+    savingStore.dispose();
+    idleStore.dispose();
+
+    expect(result.outcome).toBe("applied");
+    expect(result.diskPressure).toBe("low");
+    expect(refreshCalls).toEqual([CREDS.token]);
+    expect(
+      readdirSync(workDir).filter((name) =>
+        name.startsWith("credentials.reserve."),
+      ),
+    ).toHaveLength(14);
+    expect((await readCredentialsFile(credentialsPath))?.token).toBe(
+      `${CREDS.token}-new`,
+    );
+  });
+
+  it("stops a same-store fill after an allocation stat held across sign-in", async () => {
+    for (let index = 0; index < 16; index += 1) {
+      writeFileSync(
+        join(workDir, `credentials.reserve.${index}`),
+        Buffer.alloc(index === 15 ? 1 : 65_536, 0x5a),
+        { mode: 0o600 },
+      );
+    }
+    let releaseStat: () => void = () => {};
+    let statEntered: () => void = () => {};
+    const statIsHeld = new Promise<void>((resolve) => {
+      statEntered = resolve;
+    });
+    const statGate = new Promise<void>((resolve) => {
+      releaseStat = resolve;
+    });
+    filesystemMock.reserveStatGate = {
+      path: join(workDir, "credentials.reserve.15"),
+      operation: "stat",
+      entered: statEntered,
+      skip: 1,
+      wait: statGate,
+    };
+    const mutationIsWaiting = new Promise<void>((resolve) => {
+      filesystemMock.onMutationLockBusy = resolve;
+    });
+    const store = makeStore(refreshOk);
+    await statIsHeld;
+    const signingIn = store.signIn(CREDS, false, null);
+    await mutationIsWaiting;
+    releaseStat();
+    const result = await signingIn;
+    store.dispose();
+    expect(result.outcome).toBe("applied");
+    expect(filesystemMock.reserveAllocationAttempts).toBe(0);
+  });
+
+  it("retries a no-space rename after renewal and commits the pair", async () => {
+    const store = makeStore(refreshOk);
+    await seed(store);
+    fail("rename", `=${credentialsPath}`, "ENOSPC", 1);
+
+    const result = await rotate(store);
+
+    expect(result.outcome).toBe("applied");
+    expect(result.diskPressure).toBe("low");
+    expect((await readCredentialsFile(credentialsPath))?.token).toBe(
+      `${CREDS.token}-new`,
+    );
+  });
+
+  it("returns disk-full without requesting renewal when the probe exhausts the reserve", async () => {
+    const store = makeStore(refreshOk);
+    await seed(store);
+    fail("writeFile", ".space-check.", "ENOSPC", 17);
+
+    const result = await rotate(store);
+
+    expect(result).toMatchObject({
+      outcome: "disk-full",
+      credentials: null,
+      rejection: null,
+      diskPressure: "low",
+    });
+    expect(refreshCalls).toEqual([]);
+    expect(pressures).toEqual(["low"]);
+  });
+
+  it("returns disk-full when lock linking exhausts the reserve before renewal", async () => {
+    const store = makeStore(refreshOk);
+    await seed(store);
+    fail("link", lockPath, "ENOSPC", 17);
+
+    const result = await rotate(store);
+
+    expect(result.outcome).toBe("disk-full");
+    expect(refreshCalls).toEqual([]);
+    expect(result.diskPressure).toBe("low");
+  });
+
+  it("returns disk-full when the lock temporary write exhausts the reserve before renewal", async () => {
+    const store = makeStore(refreshOk);
+    await seed(store);
+    fail("writeFile", ".lock.", "ENOSPC", 17);
+
+    const result = await rotate(store);
+
+    expect(result.outcome).toBe("disk-full");
+    expect(refreshCalls).toEqual([]);
+    expect(result.diskPressure).toBe("low");
+  });
+
+  it.each(["EACCES", "EIO"] as const)(
+    "keeps a persistent %s sign-in commit failure distinct from recovered ENOSPC",
+    async (code) => {
+      const store = makeStore(refreshOk);
+      await seed(store);
+      fail("writeFile", ".lock.", "ENOSPC", 1);
+      fail("writeFile", "credentials.meta.json", code, 20);
+
+      const suppliedPair: StoredCredentials = {
+        ...CREDS,
+        token: "supplied-token",
+        refreshToken: "supplied-refresh-token",
+      };
+      const result = await store.signIn(suppliedPair, false, null);
+
+      expect(result.outcome).toBe("commit-failed");
+      expect(result.credentials).toEqual(suppliedPair);
+      expect(result.diskPressure).toBe("low");
+      expect(refreshCalls).toEqual([]);
+      expect(pressures).toEqual(["low"]);
+      expect(filesystemMock.faults.map((fault) => fault.remaining)).toEqual([
+        0, 17,
+      ]);
+    },
+  );
+
+  it("returns disk-full with no refresh when the spent-base marker exhausts the reserve", async () => {
+    const store = makeStore(refreshOk);
+    await seed(store);
+    fail("writeFile", "pending-spend.json", "ENOSPC", 17);
+
+    const result = await rotate(store);
+
+    expect(result.outcome).toBe("disk-full");
+    expect(refreshCalls).toEqual([]);
+    expect(result.diskPressure).toBe("low");
+    expect(existsSync(spentBaseMarkerPath(credentialsPath))).toBe(false);
+  });
+
+  it("returns disk-full when recovering an earlier pending save exhausts the reserve", async () => {
+    const store = makeStore(refreshOk);
+    await writeCredentialsFile(credentialsPath, CREDS, 0);
+    await writeSidecarState(metaPath, {
+      epoch: 0,
+      lastMutation: null,
+      mtimeFloorMs: 0,
+      pending: {
+        op: "rotate",
+        nextEpoch: 0,
+        targetDigest: digestCredentials(CREDS),
+        floorCandidate: 0,
+      },
+    });
+    await fillReserve();
+    fail("writeFile", "credentials.meta.json", "ENOSPC", 17);
+
+    const result = await rotate(store);
+
+    expect(result.outcome).toBe("disk-full");
+    expect(refreshCalls).toEqual([]);
+    expect(result.diskPressure).toBe("low");
+  });
+
+  it("keeps the OS error code on an unavailable marker read", async () => {
+    const store = makeStore(refreshOk);
+    await seed(store);
+    fail("readFile", `=${spentBaseMarkerPath(credentialsPath)}`, "EACCES", 1);
+
+    await expect(rotate(store)).rejects.toMatchObject({
+      code: "EACCES",
+      cause: expect.objectContaining({ code: "EACCES" }),
+    } satisfies Partial<CredentialsStoreUnavailableError>);
+    expect(refreshCalls).toEqual([]);
+    expect(filesystemMock.faults[0].remaining).toBe(0);
+  });
+
+  it("reports clear only after a clean credential save", async () => {
+    const store = makeStore(refreshOk);
+
+    const result = await store.signIn(CREDS, false, null);
+
+    expect(result.diskPressure).toBe("clear");
+    expect(pressures).toEqual(["clear"]);
+    await fillReserve();
+
+    pressures.length = 0;
+    const deleted = await store.signOut(null);
+    expect(deleted.diskPressure).toBeNull();
+    expect(pressures).toEqual([]);
+  });
+
+  it("refills a startup reserve after a mutation that saves nothing", async () => {
+    let allocationsWhenMutationBegan = -1;
+    let markMutationBegan: () => void = () => undefined;
+    const mutationBegan = new Promise<void>((resolve) => {
+      markMutationBegan = resolve;
+    });
+    filesystemMock.onSpaceCheckWrite = () => {
+      allocationsWhenMutationBegan =
+        filesystemMock.reserveAllocationAttempts;
+      filesystemMock.onSpaceCheckWrite = null;
+      markMutationBegan();
+    };
+    const store = makeStore(refreshOk);
+
+    const rotating = rotate(store);
+    await mutationBegan;
+    expect(allocationsWhenMutationBegan).toBe(0);
+
+    const result = await rotating;
+    expect(result.outcome).toBe("deleted");
+    expect(result.diskPressure).toBeNull();
+    expect(filesystemMock.reserveAllocationAttempts).toBe(0);
+
+    await fillReserve();
+    expect(
+      Array.from({ length: 16 }, (_, index) =>
+        statSync(join(workDir, `credentials.reserve.${index}`)).size,
+      ),
+    ).toEqual(Array.from({ length: 16 }, () => 65_536));
+    expect(filesystemMock.reserveAllocationAttempts).toBe(16);
+  });
+
+  it("keeps rotate preflight probing while a full-reserve refill does no extra probe or write", async () => {
+    for (let index = 0; index < 16; index += 1) {
+      writeFileSync(
+        join(workDir, `credentials.reserve.${index}`),
+        Buffer.alloc(65_536, 0x5a),
+        { mode: 0o600 },
+      );
+    }
+    const startupScan = waitForReserveReadCloses(16);
+    const store = makeStore(refreshOk);
+    await startupScan;
+    expect((await store.signIn(CREDS, false, null)).outcome).toBe("applied");
+    await waitForReserveReadCloses(32);
+    const writeSpy = vi.mocked(fsPromises.writeFile);
+    writeSpy.mockClear();
+
+    const result = await rotate(store);
+    filesystemMock.mkdirCalls = 0;
+    await settleReserveScan(48);
+
+    expect(filesystemMock.mkdirCalls).toBe(0);
+    expect(result.outcome).toBe("applied");
+    expect(
+      writeSpy.mock.calls.filter((call) =>
+        String(call[0]).includes(".space-check."),
+      ).length,
+    ).toBe(1);
+    expect(filesystemMock.reserveAllocationAttempts).toBe(0);
+  });
+
+  it("lets concurrent stores release reserve pieces without failing either operation", async () => {
+    const storeA = makeStore(refreshOk);
+    await seed(storeA);
+    const storeB = makeStore(refreshOk);
+    fail("writeFile", ".space-check.", "ENOSPC", 2);
+
+    const results = await Promise.all([rotate(storeA), rotate(storeB)]);
+
+    expect(results.map((result) => result.outcome).sort()).toEqual([
+      "applied",
+      "superseded",
+    ]);
+    expect(results.some((result) => result.diskPressure === "low")).toBe(true);
+    expect(refreshCalls).toHaveLength(1);
+  });
+
+  it("does not refill after a no-space commit failure and preserves the pending pair", async () => {
+    const store = makeStore(refreshOk);
+    await seed(store);
+    fail("writeFile", "credentials.meta.json", "ENOSPC", 17);
+
+    const result = await rotate(store);
+
+    expect(result.outcome).toBe("commit-failed");
+    expect(result.diskPressure).toBe("low");
+    expect(result.credentials?.token).toBe(`${CREDS.token}-new`);
+    expect(store.hasPendingContinuation()).toBe(true);
+    expect(existsSync(spentBaseMarkerPath(credentialsPath))).toBe(true);
+    expect(pressures).toEqual(["low"]);
+    expect(
+      readdirSync(workDir).filter((name) =>
+        name.startsWith("credentials.reserve."),
+      ),
+    ).toHaveLength(0);
+  });
+
+  it.each([".space-check.", ".lock."])(
+    "preserves a spent continuation when a later pre-request write fails at %s",
+    async (fragment) => {
+      const store = makeStore(refreshOk);
+      await seed(store);
+      fail("writeFile", "credentials.meta.json", "ENOSPC", 17);
+      const first = await rotate(store);
+      expect(first.outcome).toBe("commit-failed");
+      const markerPath = spentBaseMarkerPath(credentialsPath);
+      const markerBefore = readFileSync(markerPath, "utf8");
+      pressures.length = 0;
+      fail("writeFile", fragment, "ENOSPC", 1);
+
+      const second = await rotate(store);
+
+      expect(second.outcome).toBe("commit-failed");
+      expect(second.credentials?.token).toBe(first.credentials?.token);
+      expect(second.diskPressure).toBe("low");
+      expect(readFileSync(markerPath, "utf8")).toBe(markerBefore);
+      expect(pressures).toEqual(["low"]);
+      expect(refreshCalls).toEqual([CREDS.token]);
+    },
+  );
+
+  it("reports clear from the background continuation after the full save lands", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const store = makeStore(refreshOk);
+    await seed(store);
+    const clearEvent = new Promise<void>((resolve) => {
+      onClearPressure = resolve;
+    });
+    fail("writeFile", "credentials.meta.json", "ENOSPC", 17);
+    const first = await rotate(store);
+    expect(first.outcome).toBe("commit-failed");
+    expect(pressures).toEqual(["low"]);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    await clearEvent;
+
+    expect(store.hasPendingContinuation()).toBe(false);
+    expect(pressures).toEqual(["low", "clear"]);
+  });
+
+  it("passes flush:true through both atomic writer seams", async () => {
+    const writeSpy = vi.mocked(fsPromises.writeFile);
+    await writeCredentialsFile(join(workDir, "credentials"), CREDS, 0);
+    await writeJsonFileAtomic(join(workDir, "state.json"), { ok: true }, 0o600);
+
+    const options = writeSpy.mock.calls.map((call) => call[2]);
+    expect(
+      options.filter(
+        (option) =>
+          option != null &&
+          typeof option === "object" &&
+          "flush" in option &&
+          option.flush === true,
+      ),
+    ).toHaveLength(2);
+  });
+});

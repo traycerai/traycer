@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 
 /**
@@ -13,6 +14,57 @@ export function errorCode(error: unknown): string | null {
   if (error === null || typeof error !== "object") return null;
   const code = Reflect.get(error, "code");
   return typeof code === "string" ? code : null;
+}
+
+export function isDiskFullError(error: unknown): boolean {
+  const code = errorCode(error);
+  return code === "ENOSPC" || code === "EDQUOT";
+}
+
+export interface CredentialsWriteContext {
+  noSpace: boolean;
+  saved: boolean;
+  commitError: unknown;
+  readonly releaseReserve: () => Promise<boolean>;
+}
+
+// Async-local so concurrent stores and lock waiters cannot release each other's
+// reserves or attribute another operation's save to their pressure signal.
+const credentialsWrites = new AsyncLocalStorage<
+  CredentialsWriteContext | undefined
+>();
+
+export function withCredentialsWrites<T>(
+  context: CredentialsWriteContext | undefined,
+  work: () => Promise<T>,
+): Promise<T> {
+  return credentialsWrites.run(context, work);
+}
+
+export async function credentialsWrite<T>(write: () => Promise<T>): Promise<T> {
+  const context = credentialsWrites.getStore();
+  while (true) {
+    try {
+      return await write();
+    } catch (err) {
+      if (context === undefined || !isDiskFullError(err)) throw err;
+      context.noSpace = true;
+      if (!(await context.releaseReserve())) throw err;
+    }
+  }
+}
+
+export function recordCredentialsSave(): void {
+  const context = credentialsWrites.getStore();
+  if (context !== undefined) {
+    context.saved = true;
+    context.commitError = null;
+  }
+}
+
+export function recordCredentialsCommitFailure(error: unknown): void {
+  const context = credentialsWrites.getStore();
+  if (context !== undefined) context.commitError = error;
 }
 
 // Escalating mtime bumps for the set-and-verify below. A coarse-granularity
@@ -46,7 +98,7 @@ export async function bumpMtimeAbove(
     const observed = (await stat(path)).mtimeMs;
     if (observed > floorMs) return observed;
     const bumped = new Date(floorMs + step);
-    await utimes(path, bumped, bumped);
+    await credentialsWrite(() => utimes(path, bumped, bumped));
   }
   return (await stat(path)).mtimeMs;
 }
@@ -88,7 +140,7 @@ export async function renameWithWindowsRetry(
   retryIndex: number,
 ): Promise<void> {
   try {
-    await rename(source, target);
+    await credentialsWrite(() => rename(source, target));
   } catch (err) {
     const retryDelay = windowsRenameRetryDelayMs(err, retryIndex);
     if (retryDelay === null) throw err;
@@ -112,13 +164,16 @@ export async function writeJsonFileAtomic(
 ): Promise<void> {
   const tmp = `${path}.${randomUUID()}.tmp`;
   try {
-    await writeFile(tmp, JSON.stringify(value, null, 2) + "\n", {
-      encoding: "utf8",
-      mode,
-    });
+    await credentialsWrite(() =>
+      writeFile(tmp, JSON.stringify(value, null, 2) + "\n", {
+        encoding: "utf8",
+        mode,
+        flush: true,
+      }),
+    );
     await renameWithWindowsRetry(tmp, path, 0);
   } catch (err) {
-    await rm(tmp, { force: true });
+    await credentialsWrite(() => rm(tmp, { force: true }));
     throw err;
   }
 }

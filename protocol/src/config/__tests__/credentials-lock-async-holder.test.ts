@@ -219,6 +219,7 @@ describe.skipIf(isWindows)("credentials-lock async holder (row 5)", () => {
       const stub = refreshStub();
       const store = createCredentialsMutationStore({
         paths: { credentialsPath, metaPath, lockPath },
+        onDiskPressure: null,
         refresh: stub.fn,
         lockWaitMs: 500,
         lockPollIntervalMs: 25,

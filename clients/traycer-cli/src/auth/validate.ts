@@ -279,6 +279,7 @@ async function rotateStaleCredentials(
       return { kind: "network-error", effect: "token-rotation-unconfirmed" };
     case "lock-busy":
     case "spend-pending":
+    case "disk-full":
       logger.warn("Stored credential validation rotate hit transient failure", {
         environment: config.environment,
         outcome: result.outcome,
