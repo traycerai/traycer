@@ -13,6 +13,9 @@ import type {
   SandboxListResponse,
 } from "@traycer/protocol/host/sandbox-control";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import type { SandboxRowOperation } from "@/hooks/sandboxes/use-sandbox-operation";
+import { SandboxOperationError } from "@/hooks/sandboxes/sandbox-failure-copy";
+import { refusal } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
 import { SANDBOX_LIST_FAILED } from "@/lib/sandboxes/sandbox-strings";
 import {
   closeSandboxDetails,
@@ -22,6 +25,7 @@ import {
 const list = vi.hoisted(() => ({
   data: undefined as SandboxListResponse | undefined,
   refetch: vi.fn(() => Promise.resolve()),
+  operation: null as SandboxRowOperation | null,
 }));
 
 // The list read failed: no data, and the query says so.
@@ -47,7 +51,7 @@ vi.mock("@/hooks/sandboxes/use-sandbox-configurations", () => ({
   useSandboxWakeString: () => null,
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-operation", () => ({
-  useSandboxOperation: () => null,
+  useSandboxOperation: () => list.operation,
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-settings-status", () => ({
   useSandboxSettingsStatus: () => ({ data: undefined }),
@@ -58,6 +62,7 @@ afterEach(() => {
   });
   cleanup();
   list.data = undefined;
+  list.operation = null;
 });
 
 describe("<SandboxDetailsDrawerHost />", () => {
@@ -73,6 +78,42 @@ describe("<SandboxDetailsDrawerHost />", () => {
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(list.refetch).toHaveBeenCalledTimes(1);
   });
+
+  it.each([
+    { verb: "resume", state: "suspended" },
+    { verb: "start", state: "stopped" },
+  ] as const)(
+    "shows retry-safe copy for a failed $verb on a resting sandbox",
+    ({ verb, state }) => {
+      const summary = sandboxSummaryFixture({
+        id: "sbx-resting-operation-failure",
+        displayName: "Retained sandbox",
+        state,
+      });
+      list.data = { sandboxes: [summary] };
+      list.operation = {
+        kind: "failed",
+        verb,
+        error: new SandboxOperationError(refusal(502, "provider_failed")),
+        code: "provider_failed",
+        reference: verb === "resume" ? "SBX-0507" : "SBX-0508",
+        destroyRequest: undefined,
+      };
+
+      render(<SandboxDetailsDrawerHost />);
+      act(() => {
+        openSandboxDetails(summary.id);
+      });
+
+      const failure = screen.getByTestId("sandbox-details-operation-failure");
+      expect(
+        within(failure).getByText(
+          "Couldn't complete the sandbox action. Try again.",
+        ),
+      ).toBeDefined();
+      expect(failure.textContent).not.toContain("destroy");
+    },
+  );
 
   it("keeps lifecycle details and setup diagnostics available in the drawer", () => {
     const summary: SandboxSummary = sandboxSummaryFixture({
