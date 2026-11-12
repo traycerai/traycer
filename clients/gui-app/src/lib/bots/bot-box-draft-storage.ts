@@ -144,9 +144,10 @@ export function isCurrentBotBoxDraftsRead(read: number): boolean {
  *
  * `midRead` is what the store holds when that account's own stored drafts
  * were still being read: what this window changed meanwhile, which has not
- * been written, lands on them as they are stored, every box it did not
- * change left as stored. `null` once they were read, or when their read
- * failed: unreadable drafts are never written over.
+ * been written, and the boxes whose moves went below their stored draft
+ * ({@link storedBotBoxDrafts}), land on them as they are stored, every other
+ * box left as stored. `null` once they were read, or when their read failed:
+ * unreadable drafts are never written over.
  */
 export function retireBotBoxDraftWrites(midRead: PendingWrite | null): void {
   if (midRead !== null && !writer.stopped && !writer.read) {
@@ -164,6 +165,15 @@ export function retireBotBoxDraftWrites(midRead: PendingWrite | null): void {
   writer.lastThreadBoxes = null;
   writer.baseline = {};
   writer.hashByInline = new Map();
+}
+
+/**
+ * The drafts stored under `name` as storage holds them now, each image named
+ * by its hash, which a write keeps as it is: what an account retiring while
+ * its drafts are still being read puts its moves below.
+ */
+export function storedBotBoxDrafts(name: string): StoredBoxDrafts {
+  return readStoredValue(name)?.state.threadBoxes ?? {};
 }
 
 /**

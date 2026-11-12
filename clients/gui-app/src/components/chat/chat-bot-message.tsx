@@ -71,6 +71,7 @@ import {
   answerDraftKey,
   useBotDraftActions,
   useBotDraftsStore,
+  withoutAnswerFailure,
 } from "@/stores/bots/bot-drafts-store";
 import { QuestionCard, type QuestionCardQuestion } from "./question-card";
 import { ChatReplyBadgeSlot } from "./chat-reply-badge";
@@ -915,7 +916,8 @@ function BotQuestionCard(props: {
   // one of its questions shows settled here; those move or are spent as
   // above. Any of its questions still open go back to edit, and where one
   // held an answer of the person's the box says the send failed: sent again,
-  // it is not refused.
+  // it is not refused. Said where the box already says who answered first,
+  // the failure goes under that line (`noticeBox`).
   const released =
     messageId === null
       ? ""
@@ -949,28 +951,33 @@ function BotQuestionCard(props: {
         item.multiSelect === true,
       ]),
     );
-    let given = false;
+    const given: string[] = [];
     for (const key of released.split("\n")) {
       const latest = useBotDraftsStore.getState().answers[botId]?.[key];
       if (latest === undefined || latest.heldForSettlement === null) continue;
       setAnswer(botId, key, { ...latest, sent: null, heldForSettlement: null });
-      if (draftText(latest, severalOf.get(key) === true) !== null) given = true;
+      if (draftText(latest, severalOf.get(key) === true) !== null) {
+        given.push(key);
+      }
     }
-    if (given && box !== null) {
-      noticeBox(botId, box, { kind: "answer-failed" });
+    if (given.length > 0 && box !== null) {
+      noticeBox(botId, box, { kind: "answer-failed", keys: given });
     }
   }, [botId, box, messageId, noticeBox, question, released, setAnswer]);
   const keyOf = (index: number): string | null =>
     messageId === null ? null : answerDraftKey(messageId, index);
-  // A new send takes back what the box said of an earlier one that failed;
-  // one that fails while an answer of it is still on the card says so there.
+  // A new send takes back what the box said of an earlier one that failed,
+  // and only that; one that fails while an answer of it is still on the card
+  // says so there.
   const sending = (): void => {
     if (box === null) return;
     const said = useBotDraftsStore.getState().boxNotices[botId]?.[box];
-    if (said?.kind === "answer-failed") noticeBox(botId, box, null);
+    if (said !== undefined && said.kind !== "moved") {
+      noticeBox(botId, box, withoutAnswerFailure(said));
+    }
   };
-  const failed = (): void => {
-    if (box !== null) noticeBox(botId, box, { kind: "answer-failed" });
+  const failed = (keys: ReadonlyArray<string>): void => {
+    if (box !== null) noticeBox(botId, box, { kind: "answer-failed", keys });
   };
   return (
     <QuestionCard
@@ -1002,7 +1009,7 @@ function BotQuestionCard(props: {
             return;
           }
           setAnswer(botId, key, { ...latest, sent: null });
-          failed();
+          failed([key]);
         });
       }}
       onAnswerAll={
@@ -1052,11 +1059,15 @@ function BotQuestionCard(props: {
                     return;
                   }
                   const unsure = mayHaveReachedHost(error);
-                  let kept = false;
-                  for (const key of keys) {
+                  // The person's own answers, which the failure names: an
+                  // untouched question went as skipped, and nothing of theirs
+                  // is on its card to send again.
+                  const kept: string[] = [];
+                  for (const entry of entries) {
+                    const key = answerDraftKey(messageId, entry.questionIndex);
                     const latest = current[key];
                     if (latest === undefined) continue;
-                    kept = true;
+                    if (!entry.skipped) kept.push(key);
                     setAnswer(
                       botId,
                       key,
@@ -1065,7 +1076,7 @@ function BotQuestionCard(props: {
                         : { ...latest, sent: null },
                     );
                   }
-                  if (kept) failed();
+                  if (kept.length > 0) failed(kept);
                 },
               );
             }

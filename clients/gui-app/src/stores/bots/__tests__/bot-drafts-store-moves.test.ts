@@ -70,27 +70,20 @@ describe("the bot drafts store's moves of card answers into a box", () => {
     expect(carriedBlocks()).toEqual(["Nothing"]);
   });
 
-  it("keeps a box's draft and lets go of the moves it holds in one change, even when the draft did not change", () => {
+  it("lets go of the moves a box holds, with the draft that already holds the answer left as it is, when the draft did not change", () => {
     const store = useBotDraftsStore.getState();
-    store.typeThreadBox(BOT, BOX, {
-      text: "Kept text",
-      content: null,
-      held: [],
-    });
+    const text = "Kept text\n\nHold the migration";
+    store.typeThreadBox(BOT, BOX, { text, content: null, held: [] });
     store.setAnswer(BOT, "k1", DRAFT);
     store.moveAnswers(BOT, BOX, ["k1"], compose);
     const move = useBotDraftsStore.getState().boxCarries[BOT]?.[BOX]?.[0];
     if (move === undefined) throw new Error("no move");
 
-    store.typeThreadBox(BOT, BOX, {
-      text: "Kept text",
-      content: null,
-      held: [move.id],
-    });
+    store.typeThreadBox(BOT, BOX, { text, content: null, held: [move.id] });
 
     expect(carriedBlocks()).toEqual([]);
     expect(useBotDraftsStore.getState().threadBoxes[BOT]?.[BOX]?.text).toBe(
-      "Kept text",
+      text,
     );
   });
 
@@ -109,5 +102,30 @@ describe("the bot drafts store's moves of card answers into a box", () => {
     store.forgetBot(BOT);
     expect(useBotDraftsStore.getState().boxCarries[BOT]).toBeUndefined();
     expect(useBotDraftsStore.getState().boxNotices[BOT]).toBeUndefined();
+  });
+});
+
+describe("what a box says under it of card answers that moved and card answers that failed", () => {
+  it("takes a move's own answers out of the failure, shows both lines while another failed answer is left, and the moved line alone once none is", () => {
+    const store = useBotDraftsStore.getState();
+    store.noticeBox(BOT, BOX, { kind: "answer-failed", keys: ["k1"] });
+    store.noticeBox(BOT, BOX, { kind: "answer-failed", keys: ["k2"] });
+    store.setAnswer(BOT, "k2", { ...DRAFT, typed: "Nothing" });
+
+    store.moveAnswers(BOT, BOX, ["k2"], compose);
+
+    expect(useBotDraftsStore.getState().boxNotices[BOT]?.[BOX]).toEqual({
+      kind: "moved-answer-failed",
+      text: "Tess answered first.",
+      keys: ["k1"],
+    });
+
+    store.setAnswer(BOT, "k1", DRAFT);
+    store.moveAnswers(BOT, BOX, ["k1"], compose);
+
+    expect(useBotDraftsStore.getState().boxNotices[BOT]?.[BOX]).toEqual({
+      kind: "moved",
+      text: "Tess answered first.",
+    });
   });
 });

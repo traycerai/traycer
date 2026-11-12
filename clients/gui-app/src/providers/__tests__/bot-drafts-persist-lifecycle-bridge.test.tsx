@@ -22,6 +22,7 @@ import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 import {
   BOT_ID,
   CHANNEL,
+  IMAGE_B64,
   LEGACY_BOX_DRAFTS_KEY,
   boxDoc,
   hashedImage,
@@ -82,6 +83,45 @@ function signInAs(run: Run, userId: string): void {
       contextMetadata: { userId, username: userId },
     });
   });
+}
+
+const IMAGE_STORE = "@/lib/composer/landing-image-store";
+
+/** Holds every stored image's read until the returned function releases them. */
+function holdImageReads(): () => void {
+  let release = (): void => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  vi.doMock(IMAGE_STORE, async (importOriginal) => {
+    const real = await importOriginal<typeof LandingImageStore>();
+    return {
+      ...real,
+      getImageBytes: async (hash: string) => {
+        await gate;
+        return real.getImageBytes(hash);
+      },
+    };
+  });
+  onTestFinished(() => {
+    vi.doUnmock(IMAGE_STORE);
+  });
+  return release;
+}
+
+/** The storage's reads, as they are asked: each result is the read's own answer. */
+function trackStoredReads(run: Run): () => Promise<void> {
+  const storage = run.app.drafts.persist.getOptions().storage;
+  if (storage === undefined) throw new Error("the drafts store persists");
+  const reads = vi.spyOn(storage, "getItem");
+  // Resolves once every read asked so far has answered, then lets the
+  // hydration those answers feed finish: a stale one fires no event of its own.
+  return async () => {
+    await Promise.allSettled(
+      reads.mock.results.map((result) => Promise.resolve(result.value)),
+    );
+    await run.rtl.act(async () => {});
+  };
 }
 
 function storedBox(text: string, content: JsonContent | null): string {
@@ -187,25 +227,9 @@ describe("<BotDraftsPersistLifecycleBridge /> the images an account's stored dra
 
 describe("<BotDraftsPersistLifecycleBridge /> a read an account switch overtook", () => {
   it("shows account B nothing of account A's stored draft whose image read was still waiting at the switch, in the store or under B's key, when it answers after", async () => {
-    const IMAGE_STORE = "@/lib/composer/landing-image-store";
-    let release = (): void => {};
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    vi.doMock(IMAGE_STORE, async (importOriginal) => {
-      const real = await importOriginal<typeof LandingImageStore>();
-      return {
-        ...real,
-        getImageBytes: async (hash: string) => {
-          await gate;
-          return real.getImageBytes(hash);
-        },
-      };
-    });
-    onTestFinished(() => {
-      vi.doUnmock(IMAGE_STORE);
-    });
+    const release = holdImageReads();
     const run = await startOver();
+    const readsSettled = trackStoredReads(run);
     const hash = await storeImageBytes();
     localStorage.setItem(
       run.keys.botBoxDraftsKey(ACCOUNT_A),
@@ -219,11 +243,7 @@ describe("<BotDraftsPersistLifecycleBridge /> a read an account switch overtook"
       expect(run.app.drafts.persist.hasHydrated()).toBe(true),
     );
     release();
-    await run.rtl.act(async () => {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 20);
-      });
-    });
+    await readsSettled();
 
     expect(run.app.drafts.getState().threadBoxes).toEqual({});
     expect(JSON.stringify(run.app.drafts.getState())).not.toContain(
@@ -237,25 +257,9 @@ describe("<BotDraftsPersistLifecycleBridge /> a read an account switch overtook"
 
 describe("<BotDraftsPersistLifecycleBridge /> a read the account signing out overtook", () => {
   it("holds nothing of account A's stored draft while signed out, or for B who signs in after, when A's own image read answers after A signed out", async () => {
-    const IMAGE_STORE = "@/lib/composer/landing-image-store";
-    let release = (): void => {};
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    vi.doMock(IMAGE_STORE, async (importOriginal) => {
-      const real = await importOriginal<typeof LandingImageStore>();
-      return {
-        ...real,
-        getImageBytes: async (hash: string) => {
-          await gate;
-          return real.getImageBytes(hash);
-        },
-      };
-    });
-    onTestFinished(() => {
-      vi.doUnmock(IMAGE_STORE);
-    });
+    const release = holdImageReads();
     const run = await startOver();
+    const readsSettled = trackStoredReads(run);
     const hash = await storeImageBytes();
     localStorage.setItem(
       run.keys.botBoxDraftsKey(ACCOUNT_A),
@@ -272,11 +276,7 @@ describe("<BotDraftsPersistLifecycleBridge /> a read the account signing out ove
     });
 
     release();
-    await run.rtl.act(async () => {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 20);
-      });
-    });
+    await readsSettled();
 
     expect(run.app.drafts.getState().threadBoxes).toEqual({});
     expect(JSON.stringify(run.app.drafts.getState())).not.toContain(
@@ -333,6 +333,9 @@ describe("<BotDraftsPersistLifecycleBridge /> signed out", () => {
       expect(run.app.drafts.persist.hasHydrated()).toBe(true),
     );
 
+    const storage = run.app.drafts.persist.getOptions().storage;
+    if (storage === undefined) throw new Error("the drafts store persists");
+    const reads = vi.spyOn(storage, "getItem");
     run.rtl.act(() => {
       run.auth.useAuthStore.setState({
         status: "signed-out",
@@ -340,15 +343,178 @@ describe("<BotDraftsPersistLifecycleBridge /> signed out", () => {
         contextMetadata: null,
       });
     });
-    await run.rtl.act(async () => {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 20);
-      });
-    });
 
+    // A read starts at once or not at all: the storage is asked synchronously.
+    expect(reads).not.toHaveBeenCalled();
     expect(run.app.drafts.getState().threadBoxes).toEqual({});
     expect(localStorage.getItem(anonKey)).toBe(
       storedBox("Left under anon", null),
     );
+  });
+});
+
+describe("<BotDraftsPersistLifecycleBridge /> an account that retires while its stored drafts are still being read", () => {
+  it("keeps A's stored text and image under A's key, with the answer moved meanwhile below them, and gives all three back when A signs in again", async () => {
+    const release = holdImageReads();
+    const run = await startOver();
+    const readsSettled = trackStoredReads(run);
+    const hash = await storeImageBytes();
+    const keyOfA = run.keys.botBoxDraftsKey(ACCOUNT_A);
+    localStorage.setItem(
+      keyOfA,
+      storedBox("A's own draft", boxDoc("A's own draft ", [hashedImage(hash)])),
+    );
+    mountBridge(run);
+    signInAs(run, ACCOUNT_A);
+    // The move is put in the store directly: no UI can make one while the read
+    // is held, because the bot tab waits for the read before it shows its box.
+    run.rtl.act(() => {
+      const drafts = run.app.drafts.getState();
+      drafts.setAnswer(BOT_ID, "answer-1", {
+        chosen: [],
+        typed: "Hold the migration",
+        sent: null,
+        unsureSince: null,
+        heldForSettlement: null,
+      });
+      drafts.moveAnswers(BOT_ID, CHANNEL, ["answer-1"], (taken) => ({
+        block: taken.map(([, draft]) => draft.typed).join("\n"),
+        notice: "Tess answered first.",
+      }));
+    });
+
+    signInAs(run, ACCOUNT_B);
+    await vi.waitFor(() =>
+      expect(run.app.drafts.persist.hasHydrated()).toBe(true),
+    );
+    release();
+    await readsSettled();
+
+    const stored = localStorage.getItem(keyOfA) ?? "";
+    expect(stored).toContain("A's own draft");
+    expect(stored).toContain(hash);
+    expect(stored).toContain("Hold the migration");
+    expect(stored.indexOf("A's own draft")).toBeLessThan(
+      stored.indexOf("Hold the migration"),
+    );
+
+    let finished = false;
+    const stop = run.app.drafts.persist.onFinishHydration(() => {
+      finished = true;
+    });
+    signInAs(run, ACCOUNT_A);
+    await vi.waitFor(() => expect(finished).toBe(true));
+    stop();
+
+    const kept = JSON.stringify(
+      run.app.drafts.getState().threadBoxes[BOT_ID]?.[CHANNEL],
+    );
+    expect(kept).toContain("A's own draft");
+    expect(kept).toContain("imageAttachment");
+    // In memory the image is inline, as the box holds it.
+    expect(kept).toContain(IMAGE_B64);
+    expect(kept).toContain("Hold the migration");
+  });
+
+  it("keeps what the person typed during the read, not A's stored draft, under A's key beside the moved answer when A retires before the read answers", async () => {
+    const release = holdImageReads();
+    const run = await startOver();
+    const readsSettled = trackStoredReads(run);
+    const hash = await storeImageBytes();
+    const keyOfA = run.keys.botBoxDraftsKey(ACCOUNT_A);
+    localStorage.setItem(
+      keyOfA,
+      storedBox("A's own draft", boxDoc("A's own draft ", [hashedImage(hash)])),
+    );
+    mountBridge(run);
+    signInAs(run, ACCOUNT_A);
+    // The typing and the move go through the store directly: no UI can change a
+    // box during the read, because the bot tab waits for the read before it
+    // shows its box. (A clear is no change here: the box holds nothing yet, so
+    // the store records none.)
+    run.rtl.act(() => {
+      const drafts = run.app.drafts.getState();
+      drafts.typeThreadBox(BOT_ID, CHANNEL, {
+        text: "Typed meanwhile",
+        content: null,
+        held: [],
+      });
+      drafts.setAnswer(BOT_ID, "answer-1", {
+        chosen: [],
+        typed: "Hold the migration",
+        sent: null,
+        unsureSince: null,
+        heldForSettlement: null,
+      });
+      drafts.moveAnswers(BOT_ID, CHANNEL, ["answer-1"], (taken) => ({
+        block: taken.map(([, draft]) => draft.typed).join("\n"),
+        notice: "Tess answered first.",
+      }));
+    });
+
+    signInAs(run, ACCOUNT_B);
+    await vi.waitFor(() =>
+      expect(run.app.drafts.persist.hasHydrated()).toBe(true),
+    );
+    release();
+    await readsSettled();
+
+    const stored = localStorage.getItem(keyOfA) ?? "";
+    expect(stored).toContain("Typed meanwhile");
+    expect(stored).toContain("Hold the migration");
+    expect(stored).not.toContain("A's own draft");
+  });
+
+  it("keeps the person's clear, not A's stored draft, under A's key beside the moved answer when the box was typed into and cleared during the read and A retires before the read answers", async () => {
+    const release = holdImageReads();
+    const run = await startOver();
+    const readsSettled = trackStoredReads(run);
+    const hash = await storeImageBytes();
+    const keyOfA = run.keys.botBoxDraftsKey(ACCOUNT_A);
+    localStorage.setItem(
+      keyOfA,
+      storedBox("A's own draft", boxDoc("A's own draft ", [hashedImage(hash)])),
+    );
+    mountBridge(run);
+    signInAs(run, ACCOUNT_A);
+    // The typing, the clear and the move go through the store directly: no UI
+    // can change a box during the read, because the bot tab waits for the read
+    // before it shows its box. The box ends changed and with no entry, which is
+    // the one case where the store's "changed during the read" record decides.
+    run.rtl.act(() => {
+      const drafts = run.app.drafts.getState();
+      drafts.typeThreadBox(BOT_ID, CHANNEL, {
+        text: "x",
+        content: null,
+        held: [],
+      });
+      drafts.typeThreadBox(BOT_ID, CHANNEL, {
+        text: "",
+        content: null,
+        held: [],
+      });
+      drafts.setAnswer(BOT_ID, "answer-1", {
+        chosen: [],
+        typed: "Hold the migration",
+        sent: null,
+        unsureSince: null,
+        heldForSettlement: null,
+      });
+      drafts.moveAnswers(BOT_ID, CHANNEL, ["answer-1"], (taken) => ({
+        block: taken.map(([, draft]) => draft.typed).join("\n"),
+        notice: "Tess answered first.",
+      }));
+    });
+
+    signInAs(run, ACCOUNT_B);
+    await vi.waitFor(() =>
+      expect(run.app.drafts.persist.hasHydrated()).toBe(true),
+    );
+    release();
+    await readsSettled();
+
+    const stored = localStorage.getItem(keyOfA) ?? "";
+    expect(stored).toContain("Hold the migration");
+    expect(stored).not.toContain("A's own draft");
   });
 });

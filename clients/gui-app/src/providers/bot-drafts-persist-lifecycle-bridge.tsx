@@ -35,9 +35,9 @@ export interface BotDraftsPersistLifecycleBridgeProps {
  * answers to surface cards and its settled sends go from the stores that kept
  * them. A card, send or box of it that answers late changes nothing
  * (`useBotDraftActions`), and the bot tab shows none of the store until it
- * is the next account's (`useBotDraftsAdmitted`). Its stored drafts stay, for
- * when it signs in again. Then a signed-in account's own drafts are read.
- * Signed out, none are read and nothing is written.
+ * is the next account's, its own drafts read (`useBotDraftsAdmitted`). Its
+ * stored drafts stay, for when it signs in again. Then a signed-in account's
+ * own drafts are read. Signed out, none are read and nothing is written.
  */
 export function BotDraftsPersistLifecycleBridge(
   props: BotDraftsPersistLifecycleBridgeProps,

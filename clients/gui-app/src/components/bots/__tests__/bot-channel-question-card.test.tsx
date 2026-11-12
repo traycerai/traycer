@@ -985,6 +985,7 @@ describe("<BotChannelView tiles={null} /> a question settled while a member was 
       "Answered by Tess Teammate: Nothing",
     );
     expect(textOf(channelBox())).toBe("Hold the migration");
+    // The failed answer is the one that moved: nothing is left to retry.
     expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
     expect(channelMovedLine()).toBe(
       "Tess Teammate answered first. Your answer is in the box, not sent.",
@@ -1294,6 +1295,110 @@ describe("<BotChannelView tiles={null} /> a question settled while a member was 
     expect(sent.map((request) => request.text)).toEqual([
       "Hold the migration today",
     ]);
+  });
+
+  it("shows the moved line and the couldn't-send line together when a card's other question's send fails for another reason after one answer moved", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const write = session(CHANNEL_ID, [
+      questionRow([deploy(null), hold(null)]),
+    ]);
+    mountChannel(null);
+    await user.click(
+      within(cardQuestion(channelCard(), DEPLOY)).getByRole("button", {
+        name: "Now",
+      }),
+    );
+    await user.type(holdField(), "Hold the migration");
+    write([
+      questionRow([
+        deploy(byPerson(TEAMMATE_USER_ID, "After the train")),
+        hold(null),
+      ]),
+    ]);
+    await vi.waitFor(() => expect(channelMovedLine()).toBeDefined());
+    refuseSends = true;
+
+    await user.click(
+      within(cardQuestion(channelCard(), HOLD)).getByRole("button", {
+        name: "Submit",
+      }),
+    );
+
+    await screen.findByTestId("bot-channel-composer-send-failed");
+    expect(channelMovedLine()).toBe(
+      "Tess Teammate answered first. Your answer is in the box, not sent.",
+    );
+  });
+
+  /** One card of two questions, each sent on its own: the second settled by a teammate, or open. */
+  function twoQuestions(settledSecond: boolean): ReadonlyArray<Message> {
+    return [
+      questionRow([
+        hold(null),
+        watch(
+          settledSecond
+            ? byPerson(TEAMMATE_USER_ID, "Agents waiting on me")
+            : null,
+        ),
+      ]),
+    ];
+  }
+
+  /**
+   * The first question's send refused for another reason, so its failure line
+   * shows, and the second question's answer then moves into the same box. The
+   * harness draws one card per row, so the second answer is another question of
+   * the card.
+   */
+  async function failureShowingThenAnAnswerMoves(): Promise<void> {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const write = session(CHANNEL_ID, twoQuestions(false));
+    mountChannel(null);
+    await user.type(holdField(), "Hold the migration");
+    await user.click(
+      within(cardQuestion(channelCard(), WATCH)).getByRole("button", {
+        name: "Nothing yet",
+      }),
+    );
+    refuseSends = true;
+    await user.click(
+      within(cardQuestion(channelCard(), HOLD)).getByRole("button", {
+        name: "Submit",
+      }),
+    );
+    await screen.findByTestId("bot-channel-composer-send-failed");
+
+    write(twoQuestions(true));
+
+    await vi.waitFor(() => expect(channelMovedLine()).toBeDefined());
+  }
+
+  it("shows the moved line and keeps the couldn't-send line when another question's answer moves into the box after a question's send failed", async () => {
+    await failureShowingThenAnAnswerMoves();
+
+    expect(channelMovedLine()).toBe(
+      "Tess Teammate answered first. Your answer is in the box, not sent.",
+    );
+    expect(
+      screen.getByTestId("bot-channel-composer-send-failed").textContent,
+    ).toContain("Couldn't send. Try again.");
+  });
+
+  it("takes back the couldn't-send line, and keeps the moved line, when the person sends a question's answer again", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    await failureShowingThenAnAnswerMoves();
+    refuseSends = false;
+
+    await user.click(
+      within(cardQuestion(channelCard(), HOLD)).getByRole("button", {
+        name: "Submit",
+      }),
+    );
+
+    expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
+    expect(channelMovedLine()).toBe(
+      "Tess Teammate answered first. Your answer is in the box, not sent.",
+    );
   });
 
   it("takes back the box's couldn't-send line once the person types in the box", async () => {

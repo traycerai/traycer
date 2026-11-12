@@ -37,7 +37,15 @@ import {
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { create } from "zustand";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import {
   HostClient,
   type HostRequester,
@@ -50,6 +58,7 @@ import type {
   BotConversationSendResponse,
   BotThreadSummary,
 } from "@traycer/protocol/host/bot/conversation-schemas";
+import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   BotInputNeeded,
   BotTaskEntry,
@@ -89,6 +98,12 @@ import {
   textOf,
   typeInto,
 } from "@/components/bots/__tests__/bot-box-test-support";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
+import {
+  boxDoc,
+  hashedImage,
+  storeImageBytes,
+} from "@/stores/bots/__tests__/bot-box-draft-persist-support";
 import { botMutationKeys } from "@/lib/query-keys/bot-mutation-keys";
 import {
   chatSessionWithThreadRows,
@@ -111,6 +126,8 @@ import {
 const channelHandles = vi.hoisted(() => ({
   handles: new Map<string, unknown>(),
   client: null as HostRequester<HostRpcRegistry> | null,
+  /** While set, every stored image's read waits for it. */
+  imageGate: null as Promise<void> | null,
   /** Every (viewer, A's markers) pair the probe under the surface's composer saw. */
   observed: [] as Array<{
     readonly at: "render" | "layout";
@@ -250,10 +267,18 @@ vi.mock("@/components/bots/bot-message-composer", async (importOriginal) => {
     if (editText !== null && editText.includes("Failed text")) {
       found.push("edit");
     }
+    // Anything at all in the drafts store is a marker: it holds A's content.
     const state = drafts.getState();
-    const kept = JSON.stringify([state.threadBoxes, state.boxCarries]);
-    if (kept.includes("Hold the migration") || kept.includes("A's draft")) {
-      found.push("draft");
+    const slices = [
+      ["answers", state.answers],
+      ["unsentBoxes", state.unsentBoxes],
+      ["draftMoves", state.draftMoves],
+      ["boxNotices", state.boxNotices],
+      ["threadBoxes", state.threadBoxes],
+      ["boxCarries", state.boxCarries],
+    ] as const;
+    for (const [name, slice] of slices) {
+      if (JSON.stringify(slice) !== "{}") found.push(name);
     }
     if (Object.keys(cards.getState().entries).length > 0) found.push("card");
     return found;
@@ -285,6 +310,19 @@ vi.mock("@/components/bots/bot-message-composer", async (importOriginal) => {
         <actual.BotMessageComposer {...props} />
       </>
     ),
+  };
+});
+// A stored draft's image is read back before its box shows: a case holds the read here.
+vi.mock("@/lib/composer/landing-image-store", async (importOriginal) => {
+  const real =
+    await importOriginal<typeof import("@/lib/composer/landing-image-store")>();
+  return {
+    ...real,
+    getImageBytes: async (hash: string) => {
+      const gate = channelHandles.imageGate;
+      if (gate !== null) await gate;
+      return real.getImageBytes(hash);
+    },
   };
 });
 vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
@@ -578,7 +616,16 @@ beforeEach(() => {
     unsentBoxes: {},
     boxCarries: {},
     boxNotices: {},
+    // Whose drafts the store holds, and whether their read finished: a case that
+    // retires an identity leaves the next case's tab waiting on the last one's.
+    owner: null,
+    ownDraftsRead: true,
   });
+  // The reset above reads to the writer as boxes cleared, which an earlier
+  // case's loaded drafts make a pending write: the page hiding lands it now,
+  // before the case stores its own entries.
+  window.dispatchEvent(new Event("pagehide"));
+  localStorage.clear();
   channelHandles.client = hostClient();
   negotiateBotSend(TAB_HOST, { major: 1, minor: 2 });
   signInAs(ACCOUNT_A);
@@ -591,6 +638,7 @@ afterEach(async () => {
   });
   resetBotFailedRequestSupport();
   channelHandles.handles.clear();
+  channelHandles.imageGate = null;
   localStorage.clear();
 });
 
@@ -1145,5 +1193,145 @@ describe("<BotTabSurface /> what the tree shows at the commit an identity change
     act(() => useAuthStore.setState({ status: "unverified" }));
 
     expectKept(box, generation);
+  });
+});
+
+describe("<BotTabSurface /> the account's stored drafts and the bot tab (T186)", () => {
+  /** A's stored draft of the channel box. */
+  function storedChannelDraft(
+    text: string,
+    content: JsonContent | null,
+  ): string {
+    return JSON.stringify({
+      state: {
+        threadBoxes: { [BOT_ID]: { [CHANNEL]: { text, content, seedId: 1 } } },
+      },
+      version: 1,
+    });
+  }
+
+  it("shows the connecting state, and no box, while A's stored draft with an image is still being read, then shows the box with A's stored text", async () => {
+    installFreshIndexedDb();
+    const hash = await storeImageBytes();
+    let release = (): void => {};
+    channelHandles.imageGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    localStorage.setItem(
+      botBoxDraftsKey(ACCOUNT_A),
+      storedChannelDraft(
+        "A stored draft",
+        boxDoc("A stored draft ", [hashedImage(hash)]),
+      ),
+    );
+    channelHandles.handles.set(
+      CHANNEL,
+      chatSessionWithThreadRows([postRow("post-1", "An earlier post")]),
+    );
+
+    mountSurface();
+
+    await screen.findByTestId("bot-tab-connecting");
+    expect(screen.queryByTestId("bot-channel-composer-input")).toBeNull();
+    release();
+    await vi.waitFor(() =>
+      expect(textOf(channelBox())).toContain("A stored draft"),
+    );
+    expect(screen.queryByTestId("bot-tab-connecting")).toBeNull();
+  });
+
+  it("comes up with an empty box, not stuck connecting, when A's stored read fails, and leaves A's stored entry byte for byte as it was", async () => {
+    const keyOfA = botBoxDraftsKey(ACCOUNT_A);
+    localStorage.setItem(keyOfA, storedChannelDraft("A stored draft", null));
+    const before = localStorage.getItem(keyOfA);
+    channelHandles.handles.set(
+      CHANNEL,
+      chatSessionWithThreadRows([postRow("post-1", "An earlier post")]),
+    );
+    const storage = useBotDraftsStore.persist.getOptions().storage;
+    if (storage === undefined) throw new Error("the drafts store persists");
+    const reads = vi.spyOn(storage, "getItem");
+    onTestFinished(() => reads.mockRestore());
+    reads.mockRejectedValueOnce(new Error("the read failed"));
+
+    mountSurface();
+
+    await vi.waitFor(() => expect(textOf(channelBox())).toBe(""));
+    expect(screen.queryByTestId("bot-tab-connecting")).toBeNull();
+    typeInto(channelBox(), "typed after the failure");
+    signOut();
+    expect(localStorage.getItem(keyOfA)).toBe(before);
+  });
+
+  it("comes up at once, with no read, when the signed-in identity has no account id", async () => {
+    channelHandles.handles.set(
+      CHANNEL,
+      chatSessionWithThreadRows([postRow("post-1", "An earlier post")]),
+    );
+    act(() =>
+      useAuthStore.setState({
+        status: "signed-in",
+        signedOutCause: null,
+        signingInAttempt: null,
+        profile: null,
+        contextMetadata: null,
+      }),
+    );
+    const storage = useBotDraftsStore.persist.getOptions().storage;
+    if (storage === undefined) throw new Error("the drafts store persists");
+    const reads = vi.spyOn(storage, "getItem");
+    onTestFinished(() => reads.mockRestore());
+
+    mountSurface();
+
+    await screen.findByTestId("bot-channel-composer-input");
+    expect(screen.queryByTestId("bot-tab-connecting")).toBeNull();
+    expect(reads).not.toHaveBeenCalled();
+  });
+
+  it("comes up at once, with no read, when nobody is signed in", async () => {
+    channelHandles.handles.set(
+      CHANNEL,
+      chatSessionWithThreadRows([postRow("post-1", "An earlier post")]),
+    );
+    signOut();
+    const storage = useBotDraftsStore.persist.getOptions().storage;
+    if (storage === undefined) throw new Error("the drafts store persists");
+    const reads = vi.spyOn(storage, "getItem");
+    onTestFinished(() => reads.mockRestore());
+
+    mountSurface();
+
+    await vi.waitFor(() => expect(textOf(channelBox())).toBe(""));
+    expect(screen.queryByTestId("bot-tab-connecting")).toBeNull();
+    expect(reads).not.toHaveBeenCalled();
+  });
+
+  it("never shows viewer B any of the drafts store's content, at any render or layout effect, on a direct switch from A while A's card answer is still unsent", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    channelHandles.handles.set(
+      CHANNEL,
+      chatSessionWithThreadRows([question(false)]),
+    );
+    mountSurface();
+    await user.type(
+      within(await screen.findByTestId("question-card")).getByRole("textbox", {
+        name: "Your answer",
+      }),
+      "Hold the migration",
+    );
+    expect(JSON.stringify(useBotDraftsStore.getState().answers)).toContain(
+      "Hold the migration",
+    );
+    channelHandles.observed.length = 0;
+
+    signInAs(ACCOUNT_B);
+
+    await vi.waitFor(() => expect(textOf(channelBox())).toBe(""));
+    expect(
+      channelHandles.observed.filter(
+        (seen) => seen.viewer === ACCOUNT_B && seen.markers.length > 0,
+      ),
+    ).toEqual([]);
   });
 });

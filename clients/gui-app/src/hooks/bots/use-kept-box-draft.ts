@@ -8,6 +8,7 @@ import type {
 import {
   useBotDraftActions,
   useBotDraftsStore,
+  withoutAnswerFailure,
   type BotThreadBoxDraft,
 } from "@/stores/bots/bot-drafts-store";
 
@@ -66,7 +67,12 @@ export function useKeptBoxDraft(
     () =>
       key === null || boxNotice === null
         ? null
-        : { ...boxNotice, clear: () => noticeBox(botId, key, null) },
+        : {
+            ...boxNotice,
+            clear: () => noticeBox(botId, key, null),
+            clearFailure: () =>
+              noticeBox(botId, key, withoutAnswerFailure(boxNotice)),
+          },
     [botId, boxNotice, key, noticeBox],
   );
   const keptDraft = useMemo<BotKeptDraft | null>(

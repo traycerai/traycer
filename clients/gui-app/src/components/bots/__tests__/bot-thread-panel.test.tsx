@@ -738,6 +738,8 @@ describe("<BotThreadPanel /> a direct reply nobody has replied under", () => {
     const taking = listed("user-teammate");
     const panel = mountPanel(taking, []);
     const box = editableIn(screen.getByTestId("bot-thread-composer-input"));
+    // The person puts the focus in the box, then types.
+    await user.click(box);
     typeInto(box, "Which job?");
 
     // Claimed: the room drops the earlier host's threads, and the new host
@@ -1227,6 +1229,8 @@ describe("<BotThreadPanel /> a thread its post opened as it was sent", () => {
     channelMessages = [announcement("anchor-1", "Ship the release today?")];
     const view = mountPanel(POSTED, []);
     const box = replyBox();
+    // The person puts the focus in the box, then types.
+    act(() => box.focus());
     typeInto(box, "And the nightly?");
     expect(document.activeElement).toBe(box);
 

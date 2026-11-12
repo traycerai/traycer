@@ -392,6 +392,10 @@ describe("<BotMessageComposer /> and its draft on the device", () => {
       expect(boxText()).toBe("Failed post\n\nHold the migration");
       typeBox("{Enter}");
       expect(mocks.send).toHaveBeenCalledTimes(1);
+      // The send carries the edit's text and the answer moved in under it.
+      const sentText = mocks.send.mock.calls[0][0].text;
+      expect(sentText).toContain("Failed post");
+      expect(sentText).toContain("Hold the migration");
     }
 
     function carriedBlocks(): ReadonlyArray<string> {
@@ -573,6 +577,74 @@ describe("<BotMessageComposer /> and its draft on the device", () => {
     });
   });
 
+  describe("where the focus is when an answer moves into the box (T186)", () => {
+    const MOVED = "Hold the migration";
+
+    /** The box beside another field that holds the focus. */
+    async function mountedBesideAFocusedField(): Promise<HTMLElement> {
+      vi.useRealTimers();
+      ui.rtl.render(
+        <>
+          <input aria-label="Other field" />
+          <ui.owner.OwnerBox initial={CHANNEL} />
+        </>,
+      );
+      await ui.box.findBoxInput(OWNER_LABEL);
+      const other = ui.rtl.screen.getByLabelText("Other field");
+      other.focus();
+      expect(document.activeElement).toBe(other);
+      return other;
+    }
+
+    /** Another person's settlement moves the member's answer into the box. */
+    function moveIn(): void {
+      ui.rtl.act(() => {
+        const drafts = app.drafts.getState();
+        drafts.setAnswer(BOT_ID, "answer-1", {
+          chosen: [],
+          typed: MOVED,
+          sent: null,
+          unsureSince: null,
+          heldForSettlement: null,
+        });
+        drafts.moveAnswers(BOT_ID, CHANNEL, ["answer-1"], (taken) => ({
+          block: taken.map(([, draft]) => draft.typed).join("\n"),
+          notice: "Tess answered first.",
+        }));
+      });
+    }
+
+    it("leaves the focus on the other field when an answer moves into an empty box that has no kept draft", async () => {
+      const other = await mountedBesideAFocusedField();
+
+      moveIn();
+
+      await vi.waitFor(() => expect(boxText()).toBe(MOVED));
+      await ui.rtl.act(async () => {});
+      expect(document.activeElement).toBe(other);
+    });
+
+    it("leaves the focus on the other field when an answer moves into a box that already has a kept draft", async () => {
+      vi.useRealTimers();
+      ui.rtl.render(
+        <>
+          <input aria-label="Other field" />
+          <ui.owner.OwnerBox initial={CHANNEL} />
+        </>,
+      );
+      await ui.box.findBoxInput(OWNER_LABEL);
+      typeBox("Existing");
+      const other = ui.rtl.screen.getByLabelText("Other field");
+      other.focus();
+
+      moveIn();
+
+      await vi.waitFor(() => expect(boxText()).toBe(`Existing\n\n${MOVED}`));
+      await ui.rtl.act(async () => {});
+      expect(document.activeElement).toBe(other);
+    });
+  });
+
   describe("what a retiring account's box keeps of a send's refusal and its moved answers (T186)", () => {
     const MOVED = "Hold the migration";
     const ACCOUNT_A = "user-account-a";
@@ -647,7 +719,7 @@ describe("<BotMessageComposer /> and its draft on the device", () => {
     /** The moved answer sent, a newer draft typed while it is out, and the send refused: the old message is the Restore offer. */
     async function offeredBackBesideANewerDraft(): Promise<void> {
       await signedInAsA();
-      await mountBox(CHANNEL);
+      boxView = await mountBox(CHANNEL);
       moveIn(MOVED);
       typeBox("{Enter}");
       typeBox("Newer draft");
@@ -659,17 +731,27 @@ describe("<BotMessageComposer /> and its draft on the device", () => {
       ).toBeTruthy();
     }
 
-    /** The box opened again, as the account's own kept draft shows it. */
-    async function reopenedBox(): Promise<string> {
+    /** The box this describe's case has open; the bridge stays mounted when it is opened again. */
+    let boxView: { readonly unmount: () => void } | null = null;
+
+    /** Runs `action` and resolves once the next read of an account's drafts has finished. */
+    function hydrationAfter(action: () => void): Promise<void> {
+      return new Promise<void>((resolve) => {
+        const stop = app.drafts.persist.onFinishHydration(() => {
+          stop();
+          resolve();
+        });
+        action();
+      });
+    }
+
+    /** The box closed while `action` changes the account, then opened again once the new read finished: what it shows. */
+    async function reopenedBoxAfter(action: () => void): Promise<string> {
       vi.useRealTimers();
-      ui.rtl.cleanup();
-      ui.rtl.render(
-        withQueryClient(
-          <ui.bridge.BotDraftsPersistLifecycleBridge>
-            <ui.owner.OwnerBox initial={CHANNEL} />
-          </ui.bridge.BotDraftsPersistLifecycleBridge>,
-        ),
-      );
+      const hydrated = hydrationAfter(action);
+      boxView?.unmount();
+      await hydrated;
+      boxView = ui.rtl.render(<ui.owner.OwnerBox initial={CHANNEL} />);
       await ui.box.findBoxInput(OWNER_LABEL);
       return boxText();
     }
@@ -677,46 +759,43 @@ describe("<BotMessageComposer /> and its draft on the device", () => {
     it("gives A the newer draft followed by the failed message, with the moved answer once, when A signs out and signs in again", async () => {
       await offeredBackBesideANewerDraft();
 
-      vi.useRealTimers();
-      signOut();
-      signInAs(ACCOUNT_A);
-
-      await vi.waitFor(async () => {
-        expect(await reopenedBox()).toBe(`Newer draft\n\n${MOVED}`);
+      const shown = await reopenedBoxAfter(() => {
+        signOut();
+        signInAs(ACCOUNT_A);
       });
+
+      expect(shown).toBe(`Newer draft\n\n${MOVED}`);
     });
 
     it("gives A the same when another account signed in between", async () => {
       await offeredBackBesideANewerDraft();
-
       vi.useRealTimers();
-      signInAs(ACCOUNT_B);
-      signInAs(ACCOUNT_A);
+      boxView?.unmount();
+      await hydrationAfter(() => signInAs(ACCOUNT_B));
 
-      await vi.waitFor(async () => {
-        expect(await reopenedBox()).toBe(`Newer draft\n\n${MOVED}`);
-      });
+      const shown = await reopenedBoxAfter(() => signInAs(ACCOUNT_A));
+
+      expect(shown).toBe(`Newer draft\n\n${MOVED}`);
     });
 
     it("keeps the moved answer in A's draft when A signs out while the send that carried it is still out", async () => {
       await signedInAsA();
-      await mountBox(CHANNEL);
+      boxView = await mountBox(CHANNEL);
       moveIn(MOVED);
       typeBox("{Enter}");
       expect(mocks.send).toHaveBeenCalledTimes(1);
 
-      vi.useRealTimers();
-      signOut();
-      signInAs(ACCOUNT_A);
-
-      await vi.waitFor(async () => {
-        expect(await reopenedBox()).toBe(MOVED);
+      const shown = await reopenedBoxAfter(() => {
+        signOut();
+        signInAs(ACCOUNT_A);
       });
+
+      expect(shown).toBe(MOVED);
     });
 
     it("gives A an empty box, not the answer, when the person cleared the box that held the moved answer, sent something else, and A signs out and signs in again while that send is out", async () => {
       await signedInAsA();
-      await mountBox(CHANNEL);
+      boxView = await mountBox(CHANNEL);
       moveIn(MOVED);
       expect(boxText()).toBe(MOVED);
       ui.box.clearBox(OWNER_LABEL);
@@ -725,14 +804,12 @@ describe("<BotMessageComposer /> and its draft on the device", () => {
       expect(mocks.send).toHaveBeenCalledTimes(1);
       expect(mocks.send.mock.calls[0][0].text).toBe("Other");
 
-      vi.useRealTimers();
-      signOut();
-      signInAs(ACCOUNT_A);
-      await vi.waitFor(() =>
-        expect(app.drafts.persist.hasHydrated()).toBe(true),
-      );
+      const shown = await reopenedBoxAfter(() => {
+        signOut();
+        signInAs(ACCOUNT_A);
+      });
 
-      expect(await reopenedBox()).toBe("");
+      expect(shown).toBe("");
     });
 
     it("returns an edit's refusal offered while its box was gone to A's kept draft, as a new message, when A signs out and signs in again", async () => {
@@ -755,12 +832,12 @@ describe("<BotMessageComposer /> and its draft on the device", () => {
         callbacks.onError?.(new Error("host refused the post")),
       );
 
-      signOut();
-      signInAs(ACCOUNT_A);
-
-      await vi.waitFor(async () => {
-        expect(await reopenedBox()).toBe("Failed post");
+      const shown = await reopenedBoxAfter(() => {
+        signOut();
+        signInAs(ACCOUNT_A);
       });
+
+      expect(shown).toBe("Failed post");
       expect(
         ui.rtl.screen.queryByTestId("bot-channel-composer-editing"),
       ).toBeNull();

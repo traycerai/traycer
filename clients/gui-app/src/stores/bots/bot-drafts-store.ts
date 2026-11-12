@@ -10,6 +10,7 @@ import {
   createBotBoxDraftStorage,
   isCurrentBotBoxDraftsRead,
   retireBotBoxDraftWrites,
+  storedBotBoxDrafts,
   storedBoxDraftsOf,
   type PersistedBotBoxDrafts,
 } from "@/lib/bots/bot-box-draft-storage";
@@ -123,11 +124,31 @@ export interface BotBoxTyped {
 /**
  * What a box says under it about a question card's answers, until the box
  * sends or another takes its place: who settled them first, the person's
- * answers now in the box; or that an answer did not reach the bot's host.
+ * answers now in the box; that answers did not reach the bot's host, by
+ * their {@link answerDraftKey}s (`keys`), still on their cards; or both, the
+ * failure under the moved line, never in its place. The failure goes once
+ * the person types or a card sends again, or once none of its answers is on
+ * a card any more; the moved line stays.
  */
 export type BotBoxNotice =
   | { readonly kind: "moved"; readonly text: string }
-  | { readonly kind: "answer-failed" };
+  | { readonly kind: "answer-failed"; readonly keys: ReadonlyArray<string> }
+  | {
+      readonly kind: "moved-answer-failed";
+      readonly text: string;
+      readonly keys: ReadonlyArray<string>;
+    };
+
+/** `notice` without the failure it says, `null` where that was all it said. */
+export function withoutAnswerFailure(
+  notice: BotBoxNotice,
+): BotBoxNotice | null {
+  if (notice.kind === "answer-failed") return null;
+  if (notice.kind === "moved-answer-failed") {
+    return { kind: "moved", text: notice.text };
+  }
+  return notice;
+}
 
 /** What one move takes off its cards: its block of lines and the line under the box. */
 export interface BotAnswersMove {
@@ -191,6 +212,13 @@ interface BotDraftsState {
    * (`useBotDraftsAdmitted`).
    */
   readonly owner: BotDraftsOwner | null;
+  /**
+   * Whether `owner`'s own stored drafts are read: `false` from the retirement
+   * that names an account until that account's read ends, read or failed.
+   * The bot tab shows none of the store until then (`useBotDraftsAdmitted`),
+   * so nothing typed in an empty box replaces a draft it never showed.
+   */
+  readonly ownDraftsRead: boolean;
   /** Keeps a card's draft; `null` drops it. */
   readonly setAnswer: (
     botId: string,
@@ -219,7 +247,10 @@ interface BotDraftsState {
     held: ReadonlyArray<number>,
     stage: BotCarrySend,
   ) => void;
-  /** Says `notice` under the box; `null` says nothing. */
+  /**
+   * Says `notice` under the box; `null` says nothing. A failure said where
+   * the box says who answered first goes under that line.
+   */
   readonly noticeBox: (
     botId: string,
     boxKey: string,
@@ -250,11 +281,12 @@ interface BotDraftsState {
    * The account signed in is retiring - it signed out, or another signed in
    * (`BotDraftsPersistLifecycleBridge`). Each box's failed send offered back,
    * then the moves still in the store that it does not hold, a send's still
-   * out included, go below that box's kept draft (`fold` makes it); what it
-   * keeps is written under the account's own key at once, and then the store
-   * holds nothing: no card answer, draft, move or line of that account's
-   * reaches the next. `owner`, the identity signed in next (`null` for none),
-   * owns it from then.
+   * out included, go below that box's kept draft (`fold` makes it), or below
+   * the one stored for it where the account's drafts are still being read and
+   * the box did not change meanwhile; what it keeps is written under the
+   * account's own key at once, and then the store holds nothing: no card
+   * answer, draft, move or line of that account's reaches the next. `owner`,
+   * the identity signed in next (`null` for none), owns it from then.
    */
   readonly retire: (fold: BotRetireFold, owner: BotDraftsOwner | null) => void;
 }
@@ -457,10 +489,15 @@ function carriesMarked(
   );
 }
 
-/** The boxes' drafts with what retirement adds below each (`retiredParts`). */
+/**
+ * The boxes' drafts with what retirement adds below each (`retiredParts`):
+ * below the draft the store keeps for that box, else below `unread`'s, the
+ * one stored for it that the store has not read yet.
+ */
 function retiredThreadBoxes(
   state: BotDraftsState,
   fold: BotRetireFold,
+  unread: (botId: string, key: string) => BotThreadBoxDraft | null,
 ): ByBot<BotThreadBoxDraft> {
   let threadBoxes = state.threadBoxes;
   for (const botId of new Set([
@@ -479,11 +516,35 @@ function retiredThreadBoxes(
         threadBoxes,
         botId,
         key,
-        fold(threadBoxes[botId]?.[key] ?? null, parts),
+        fold(threadBoxes[botId]?.[key] ?? unread(botId, key), parts),
       );
     }
   }
   return threadBoxes;
+}
+
+/** What a box says once `notice` comes: a failure goes under a moved line, never in its place. */
+function noticeAfter(
+  said: BotBoxNotice | undefined,
+  notice: BotBoxNotice | null,
+): BotBoxNotice | null {
+  if (notice?.kind !== "answer-failed" || said === undefined) return notice;
+  if (said.kind === "moved") {
+    return { kind: "moved-answer-failed", text: said.text, keys: notice.keys };
+  }
+  return { ...said, keys: [...new Set([...said.keys, ...notice.keys])] };
+}
+
+/**
+ * What a box says about answers that did not reach the host once the
+ * answers `moved` left their cards: the ones still on a card, if any.
+ */
+function failedStillOnCards(
+  said: BotBoxNotice | undefined,
+  moved: ReadonlyArray<string>,
+): ReadonlyArray<string> {
+  if (said === undefined || said.kind === "moved") return [];
+  return said.keys.filter((key) => !moved.includes(key));
 }
 
 /**
@@ -532,6 +593,7 @@ export const useBotDraftsStore = create<BotDraftsState>()(
       boxNotices: {},
       generation: 0,
       owner: null,
+      ownDraftsRead: true,
       setAnswer: (botId, key, draft) =>
         set((state) => ({
           answers: withEntry(state.answers, botId, key, draft),
@@ -553,16 +615,30 @@ export const useBotDraftsStore = create<BotDraftsState>()(
           if (move === null) return { answers };
           carryCount += 1;
           const earlier = state.boxCarries[botId]?.[boxKey] ?? [];
+          // A failure the box says stays under the new line while an answer
+          // it was about is still on a card; one about these answers goes.
+          const failing = failedStillOnCards(
+            state.boxNotices[botId]?.[boxKey],
+            keys,
+          );
           return {
             answers,
             boxCarries: withEntry(state.boxCarries, botId, boxKey, [
               ...earlier,
               { id: carryCount, block: move.block, sending: false },
             ]),
-            boxNotices: withEntry(state.boxNotices, botId, boxKey, {
-              kind: "moved",
-              text: move.notice,
-            }),
+            boxNotices: withEntry(
+              state.boxNotices,
+              botId,
+              boxKey,
+              failing.length === 0
+                ? { kind: "moved", text: move.notice }
+                : {
+                    kind: "moved-answer-failed",
+                    text: move.notice,
+                    keys: failing,
+                  },
+            ),
           };
         }),
       sendCarry: (botId, boxKey, held, stage) =>
@@ -576,13 +652,18 @@ export const useBotDraftsStore = create<BotDraftsState>()(
           return boxCarries === null ? state : { boxCarries };
         }),
       noticeBox: (botId, boxKey, notice) =>
-        set((state) =>
-          notice === null && state.boxNotices[botId]?.[boxKey] === undefined
-            ? state
-            : {
-                boxNotices: withEntry(state.boxNotices, botId, boxKey, notice),
-              },
-        ),
+        set((state) => {
+          const said = state.boxNotices[botId]?.[boxKey];
+          if (notice === null && said === undefined) return state;
+          return {
+            boxNotices: withEntry(
+              state.boxNotices,
+              botId,
+              boxKey,
+              noticeAfter(said, notice),
+            ),
+          };
+        }),
       typeThreadBox: (botId, anchorMessageId, box) => {
         const { text, content, held } = box;
         const state = get();
@@ -644,15 +725,23 @@ export const useBotDraftsStore = create<BotDraftsState>()(
         set((state) => ({ answers: withoutBot(state.answers, botId) })),
       retire: (fold, owner) => {
         const state = get();
-        const threadBoxes = retiredThreadBoxes(state, fold);
+        const name =
+          useBotDraftsStore.persist.getOptions().name ?? PERSIST_OPTIONS.name;
+        // Still being read: a box this window did not change holds what is
+        // stored for it, images by their hash, which the write keeps.
+        const stored = readingStoredDrafts ? storedBotBoxDrafts(name) : {};
+        const threadBoxes = retiredThreadBoxes(state, fold, (botId, key) =>
+          changedDuringRead.bots.has(botId) ||
+          changedDuringRead.keys.has(boxKey(botId, key))
+            ? null
+            : (stored[botId]?.[key] ?? null),
+        );
         // Written under the retiring account's key, then nothing more is.
         if (threadBoxes !== state.threadBoxes) set({ threadBoxes });
         retireBotBoxDraftWrites(
           readingStoredDrafts
             ? {
-                name:
-                  useBotDraftsStore.persist.getOptions().name ??
-                  PERSIST_OPTIONS.name,
+                name,
                 value: {
                   state: { threadBoxes },
                   version: PERSIST_OPTIONS.version,
@@ -672,6 +761,8 @@ export const useBotDraftsStore = create<BotDraftsState>()(
           boxNotices: {},
           generation: state.generation + 1,
           owner,
+          // One without an account id has no drafts of its own to read.
+          ownDraftsRead: owner === null || owner.userId === null,
         });
       },
     }),
@@ -720,6 +811,9 @@ export const useBotDraftsStore = create<BotDraftsState>()(
             changedDuringRead.keys.size > 0 || changedDuringRead.bots.size > 0;
           changedDuringRead.keys.clear();
           changedDuringRead.bots.clear();
+          // Read or failed, the bot tab shows the store now: after a failed
+          // read its boxes are empty, and nothing is written over the stored.
+          useBotDraftsStore.setState({ ownDraftsRead: true });
           if (state === undefined || error !== undefined) return;
           botBoxDraftsRead({
             // The account's own key, which the bridge set before this read.

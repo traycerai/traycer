@@ -67,6 +67,7 @@ import {
 import {
   boxInput,
   textOf,
+  typeInto,
 } from "@/components/bots/__tests__/bot-box-test-support";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import { installLegendListTestClock } from "@/components/chat/__tests__/legend-list-test-environment";
@@ -1260,6 +1261,47 @@ describe("<BotChannelView tiles={null} /> a card's set the host refused as alrea
     expect(answerField(cardQuestion(card, WATCH)).value).toBe("");
     expect(answerField(cardQuestion(card, WATCH)).disabled).toBe(false);
     expect(submitButton(card).disabled).toBe(false);
+  });
+
+  it("shows the moved line and the couldn't-send line together when one of two answers moves and the other goes back to the card, and a keystroke takes back only the failure line", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const transcript = session(CHANNEL_ID, [
+      questionRow([deploy(null), hold(null)]),
+    ]);
+    mountOnTabHost();
+    await submitRefusedAsSettled(async (card) => {
+      await user.click(choice(cardQuestion(card, DEPLOY), "Now"));
+      await user.type(
+        answerField(cardQuestion(card, HOLD)),
+        "Hold the migration",
+      );
+    });
+
+    transcript.write([
+      questionRow([
+        deploy(byPerson(TEAMMATE_USER_ID, "After the train", null, Date.now())),
+        hold(null),
+      ]),
+    ]);
+
+    expect(textOf(boxInput("Message Release Bot"))).toBe(`${DEPLOY} Now`);
+    expect(
+      screen.getByTestId("bot-channel-composer-answers-moved").textContent,
+    ).toBe(
+      "Tess Teammate answered first. Your answer is in the box, not sent.",
+    );
+    expect(
+      screen.getByTestId("bot-channel-composer-send-failed").textContent,
+    ).toContain("Couldn't send. Try again.");
+
+    typeInto(boxInput("Message Release Bot"), "x");
+
+    expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
+    expect(
+      screen.getByTestId("bot-channel-composer-answers-moved").textContent,
+    ).toBe(
+      "Tess Teammate answered first. Your answer is in the box, not sent.",
+    );
   });
 
   it("opens the untouched question again with no couldn't-send line, and shows the moved line, when the only question still open after the asker settled one was untouched", async () => {
