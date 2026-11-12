@@ -917,9 +917,9 @@ Providers, on cloud-backed Personal or a team, lists every provider in the
 rail from `lg` up. Below `lg` that rail is one full-width `SettingsMasterSelect`
 labelled **Provider**. The header does not link to Secrets, and the pane has
 no keys list. Tabs are **Plans & limits**, **Env**, **MCP**, **Skills**, and
-**Pack version** when the provider has pack ids. Plans is one **Plan**
+**Pack version** when the provider has pack ids. Plans is one **Linked plan**
 picker, plus **Sign in** and **Unlink** when the viewer can edit, and
-**No plans yet.** when none are. Profiles is one **Profile** picker under
+**No plans linked.** when none are. Profiles is one **Profile** picker under
 **Profiles**; the selected profile's account name stays under it, and Use is a
 switch when the person can edit, otherwise On or Off as text. The executable
 path and version stay inside the rate-limit card. A rail subtitle reads **key**
@@ -6753,7 +6753,8 @@ set-state-in-effect` forbids the effect form, and an effect would also
        "<Provider> terminal account" for screen readers,
        under "This computer's own sign-in, which stays on this computer. Sign
        in on Providers to use one everywhere." (a team host: "This host's own
-       sign-in, which stays on this host. Sign in on Providers to use one everywhere."), with a switch over
+       sign-in, which stays on this host.", with no call to sign in, since a
+       viewer cannot), with a switch over
        `providers.setProfileEnabled` (`profileId: "ambient"`). No rename: no
        wire method renames a profile.
     5. **This host's own values** (`environment.localOverrides`): each value

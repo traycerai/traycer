@@ -85,6 +85,9 @@ interface ProfileDropdownProps {
    *  the caller's gate, not this component's. */
   readonly profiles: ReadonlyArray<ProviderProfile>;
   readonly activeProfileId: string | null;
+  /** The name of the pinned profile when `activeProfileId` matches no row,
+   *  where the caller remembers it; null names it generically. */
+  readonly missingProfileLabel: string | null;
   readonly onSelectProfile: (profileId: string | null) => void;
   readonly onCreateProfile: (() => void) | null;
   readonly createProfileDisabled: boolean;
@@ -140,6 +143,7 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
     providerLabel,
     profiles,
     activeProfileId,
+    missingProfileLabel,
     onSelectProfile,
     onCreateProfile,
     createProfileDisabled,
@@ -155,13 +159,14 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
   } = props;
   const rowIdPrefix = useId();
   const triggerId = `${rowIdPrefix}-trigger`;
+  // A pin no row matches (hidden, removed, not admitted here) checks no row
+  // and says so on the trigger: a turn still runs on the pinned profile.
   const activeProfile =
     profiles.find((profile) => profileCommitId(profile) === activeProfileId) ??
-    profiles[0];
-  const activeCommitId = profileCommitId(activeProfile);
+    null;
   const [open, setOpen] = useState(false);
   const [previewProfileId, setPreviewProfileId] = useState<string | null>(
-    activeCommitId,
+    activeProfileId,
   );
   const [previewAnchor, setPreviewAnchor] = useState<HTMLElement | null>(null);
   const previewProfile = profiles.find(
@@ -179,7 +184,7 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
     setPreviewAnchor(anchor);
   };
   const rowContext: ProfileDropdownRowContext = {
-    activeProfileId: activeCommitId,
+    activeProfileId,
     rowIdPrefix,
     previewProfileId,
     onPreview: preview,
@@ -203,7 +208,7 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
           setPreviewAnchor(null);
           return;
         }
-        setPreviewProfileId(activeCommitId);
+        setPreviewProfileId(activeProfileId);
       }}
     >
       <div className="relative w-full">
@@ -211,52 +216,44 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
           <button
             id={triggerId}
             type="button"
-            aria-label={`${providerLabel} profile: ${profileDisplayLabel(activeProfile)}${terminalBadgeSuffix(activeProfile, showTerminalBadge)}${activeProfile.enabled ? "" : ", Disabled"}`}
+            aria-label={`${providerLabel} profile: ${
+              activeProfile === null
+                ? missingProfileSentence(missingProfileLabel)
+                : `${profileDisplayLabel(activeProfile)}${terminalBadgeSuffix(activeProfile, showTerminalBadge)}${activeProfile.enabled ? "" : ", Disabled"}`
+            }`}
             className="flex h-8 w-full min-w-0 items-center justify-between gap-2 rounded-md border border-input bg-transparent px-2.5 text-ui-sm text-foreground outline-none transition-colors hover:bg-input/30 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 data-open:bg-input/30 dark:bg-input/30 dark:hover:bg-input/50"
           >
-            <AccentDot
-              profileId={activeProfile.profileId}
-              accentColor={activeProfile.accentColor}
-              label={null}
-              variant="inline"
-              size="default"
-              className={undefined}
-            />
-            <span
-              className={cn(
-                "flex min-w-0 flex-1 items-center gap-2",
-                eligibilityControls !== null && "pe-12",
-              )}
-            >
-              <span className="min-w-0 flex-1 truncate text-left font-medium">
-                {profileDisplayLabel(activeProfile)}
+            {activeProfile === null ? (
+              <span className="min-w-0 flex-1 truncate text-left text-muted-foreground">
+                {missingProfileSentence(missingProfileLabel)}
               </span>
-              <TerminalProfileBadge
+            ) : (
+              <ActiveProfileFace
                 profile={activeProfile}
-                show={showTerminalBadge}
+                showTerminalBadge={showTerminalBadge}
+                reserveSwitch={eligibilityControls !== null}
               />
-              {!activeProfile.enabled ? (
-                <span className="shrink-0 text-muted-foreground">Disabled</span>
-              ) : null}
-            </span>
+            )}
             <ChevronDown
               data-slot="profile-dropdown-chevron"
               className="size-4 shrink-0 text-muted-foreground"
             />
           </button>
         </DropdownMenuTrigger>
-        <ProfileEnablementSwitch
-          controls={eligibilityControls}
-          profile={activeProfile}
-          commitId={activeCommitId}
-          label={profileDisplayLabel(activeProfile)}
-          selectionId={triggerId}
-          pending={eligibilityControls?.pending(activeCommitId) ?? false}
-          disabledReason={
-            eligibilityControls?.disabledReason(activeProfile) ?? null
-          }
-          className="absolute end-10 top-1/2 z-10 -translate-y-1/2"
-        />
+        {activeProfile === null ? null : (
+          <ProfileEnablementSwitch
+            controls={eligibilityControls}
+            profile={activeProfile}
+            commitId={activeProfileId}
+            label={profileDisplayLabel(activeProfile)}
+            selectionId={triggerId}
+            pending={eligibilityControls?.pending(activeProfileId) ?? false}
+            disabledReason={
+              eligibilityControls?.disabledReason(activeProfile) ?? null
+            }
+            className="absolute end-10 top-1/2 z-10 -translate-y-1/2"
+          />
+        )}
       </div>
       <DropdownMenuContent
         align="start"
@@ -765,6 +762,49 @@ function admissionTooltipRow(
     >
       <span className="flex w-full">{row}</span>
     </TooltipWrapper>
+  );
+}
+
+function missingProfileSentence(label: string | null): string {
+  return `${label ?? "Selected profile"} isn't available on this host`;
+}
+
+/** The closed trigger's dot, name, Terminal badge and Disabled marker. */
+function ActiveProfileFace(props: {
+  readonly profile: ProviderProfile;
+  readonly showTerminalBadge: boolean;
+  /** Room for the enablement switch laid over the trigger's end. */
+  readonly reserveSwitch: boolean;
+}): ReactNode {
+  const { profile } = props;
+  return (
+    <>
+      <AccentDot
+        profileId={profile.profileId}
+        accentColor={profile.accentColor}
+        label={null}
+        variant="inline"
+        size="default"
+        className={undefined}
+      />
+      <span
+        className={cn(
+          "flex min-w-0 flex-1 items-center gap-2",
+          props.reserveSwitch && "pe-12",
+        )}
+      >
+        <span className="min-w-0 flex-1 truncate text-left font-medium">
+          {profileDisplayLabel(profile)}
+        </span>
+        <TerminalProfileBadge
+          profile={profile}
+          show={props.showTerminalBadge}
+        />
+        {!profile.enabled ? (
+          <span className="shrink-0 text-muted-foreground">Disabled</span>
+        ) : null}
+      </span>
+    </>
   );
 }
 

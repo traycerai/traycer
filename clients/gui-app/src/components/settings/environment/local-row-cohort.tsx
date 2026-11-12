@@ -1,4 +1,5 @@
 import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
+import { hostRunsOwnSettings } from "@traycer-clients/shared/providers/environment-profile-sign-in";
 import { cohortFromPlanes } from "@/components/settings/move/cohort-rows";
 
 /**
@@ -35,14 +36,12 @@ export type LocalRowCohort =
 export function localRowCohort(
   status: EnvironmentStatusResponseV11,
 ): LocalRowCohort {
-  if (status.principal?.kind === "team") return { kind: "none" };
+  if (!hostRunsOwnSettings(status)) return { kind: "none" };
   const cohort = cohortFromPlanes(
     status.planes,
     status.pendingUploads.length > 0,
   );
-  if (!cohort.hasLocalRow || cohort.subtitle === null) {
-    return { kind: "none" };
-  }
+  if (cohort.subtitle === null) return { kind: "none" };
   return {
     kind: "local",
     subtitle: cohort.subtitle,

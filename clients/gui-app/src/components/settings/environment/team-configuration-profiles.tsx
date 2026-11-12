@@ -93,6 +93,7 @@ export function ConfigurationProfiles(props: {
         providerLabel={props.providerLabel}
         profiles={profiles}
         activeProfileId={selected.key}
+        missingProfileLabel={null}
         onSelectProfile={setPickedKey}
         onCreateProfile={null}
         createProfileDisabled={false}

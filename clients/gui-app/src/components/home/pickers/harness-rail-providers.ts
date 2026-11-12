@@ -55,9 +55,13 @@ export function railEntryKey(harnessId: GuiHarnessId): string {
  * Resolves which profile is "active" for a harness with 2+ selectable
  * profiles: the reducer's browsed `activeProfileId` if it belongs to this
  * harness, else the composer's already-committed `selectedProfileId` if it
- * belongs to this harness, else the harness's first selectable profile
- * (typically its ambient row). Returns `null` outright under 2 profiles -
- * profile identity has no meaning there (progressive disclosure).
+ * belongs to this harness. A committed managed pin no row lists (hidden,
+ * removed, not admitted on this host) stays the answer, so the dropdown says
+ * it is unavailable instead of showing another profile the turn will not run
+ * on. Otherwise the harness's first selectable profile (typically its ambient
+ * row), which is also where a `null` pin with no ambient row lands. Returns
+ * `null` outright under 2 profiles - profile identity has no meaning there
+ * (progressive disclosure).
  */
 export function resolveActiveProfileForHarness(
   profiles: ReadonlyArray<ProviderProfile>,
@@ -73,10 +77,12 @@ export function resolveActiveProfileForHarness(
     (profile) => profileCommitId(profile) === selectedProfileId,
   );
   if (matchSelected !== undefined) return profileCommitId(matchSelected);
+  if (selectedProfileId !== null) return selectedProfileId;
   const first = profiles.at(0);
   return first === undefined ? null : profileCommitId(first);
 }
 
+/** No dot for a managed pin no row lists: it would colour another profile. */
 function resolveAccentDot(
   profiles: ReadonlyArray<ProviderProfile>,
   activeProfileId: string | null,
@@ -84,7 +90,7 @@ function resolveAccentDot(
   if (profiles.length < 2) return null;
   const dotProfile =
     profiles.find((profile) => profileCommitId(profile) === activeProfileId) ??
-    profiles.at(0);
+    (activeProfileId === null ? profiles.at(0) : undefined);
   if (dotProfile === undefined) return null;
   return profileAccentDotInput(dotProfile);
 }

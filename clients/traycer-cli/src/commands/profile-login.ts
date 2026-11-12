@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
+  hostRunsOwnSettings,
   SIGNED_IN_RECEIVING_LINE,
   usesEnvironmentSignIn,
 } from "../../../shared/providers/environment-profile-sign-in";
@@ -264,13 +265,17 @@ export function buildProfileLoginCommand(
       ) &&
       (await readLocalHostMethodVersion("environment.status")) !== null &&
       (await readLocalHostMethodVersion("environment.host.read")) !== null;
-    const environmentSignIn =
-      supportsEnvironmentSignIn &&
-      (
-        await toAgentCliError(
+    const status = supportsEnvironmentSignIn
+      ? await toAgentCliError(
           callHostRpcWithDispatch("environment.status", {}, PLAIN_DISPATCH),
         )
-      ).principal !== null;
+      : null;
+    // A computer that runs its own settings has a principal but no
+    // environment: a profile signed in there would never reach it.
+    const environmentSignIn =
+      status !== null &&
+      status.principal !== null &&
+      !hostRunsOwnSettings(status);
     if (
       environmentSignIn &&
       providerId === "claude-code" &&

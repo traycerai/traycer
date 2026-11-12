@@ -116,6 +116,22 @@ const ENVIRONMENT_STATUS = environmentStatusResponseSchemaV12.parse({
   remoteAccess: "off",
 });
 const NO_ENVIRONMENT_STATUS = { ...ENVIRONMENT_STATUS, principal: null };
+const ALL_LOCAL_PLANES = {
+  records: "local",
+  broker: "local",
+  room: "local",
+} as const;
+
+function statusWith(
+  principal: (typeof ENVIRONMENT_STATUS)["principal"],
+  planes: (typeof ENVIRONMENT_STATUS)["planes"],
+): typeof ENVIRONMENT_STATUS {
+  return environmentStatusResponseSchemaV12.parse({
+    ...ENVIRONMENT_STATUS,
+    principal,
+    planes,
+  });
+}
 
 function profile(
   profileId: string,
@@ -534,6 +550,124 @@ describe("environment profile sign-in through the CLI", () => {
     expect(callsTo("providers.link")).toEqual([]);
     expect(callsTo("environment.host.read")).toEqual([]);
   });
+
+  const OWN_SETTINGS_PLANES = [
+    ["every plane its own", ALL_LOCAL_PLANES],
+    [
+      "a plane that stopped sharing",
+      { records: "moved", broker: "stopped", room: "moved" },
+    ],
+  ] as const;
+
+  it.each(OWN_SETTINGS_PLANES)(
+    "adds a profile on a computer that runs its own settings, with %s",
+    async (_case, planes) => {
+      makeHost({
+        providerId: "claude-code",
+        profiles: [],
+        environmentStatus: () => statusWith({ kind: "personal" }, planes),
+      });
+
+      const { result } = await runLogin(
+        "claude",
+        { kind: "create", label: "Work profile" },
+        makeIo({ terminal: true }).io,
+      );
+
+      expect(onlyCallTo("providers.startLogin")[1]).toMatchObject({
+        providerId: "claude-code",
+        profileId: null,
+        createProfile: {
+          label: "Work profile",
+          shareSkillsAndPlugins: false,
+        },
+      });
+      expect(callsTo("providers.link")).toEqual([]);
+      expect(callsTo("environment.host.read")).toEqual([]);
+      expect(result.human).not.toBe(SIGNED_IN_RECEIVING_LINE);
+    },
+  );
+
+  it.each(OWN_SETTINGS_PLANES)(
+    "signs an existing profile in on a computer that runs its own settings, with %s",
+    async (_case, planes) => {
+      const selected = profile(
+        MANAGED_PROFILE_ID,
+        "managed",
+        "Selected profile",
+        ENVIRONMENT_PROFILE_ID,
+      );
+      makeHost({
+        providerId: "claude-code",
+        profiles: [selected],
+        await: awaitAnswer(providerState("claude-code", [selected])),
+        environmentStatus: () => statusWith({ kind: "personal" }, planes),
+      });
+
+      const { result } = await runLogin(
+        "claude",
+        { kind: "existing", profile: MANAGED_PROFILE_ID },
+        makeIo({ terminal: true }).io,
+      );
+
+      expect(onlyCallTo("providers.startLogin")[1]).toMatchObject({
+        providerId: "claude-code",
+        profileId: MANAGED_PROFILE_ID,
+        createProfile: null,
+      });
+      expect(callsTo("providers.link")).toEqual([]);
+      expect(callsTo("environment.host.read")).toEqual([]);
+      expect(result.data).toMatchObject({
+        status: "signed-in",
+        created: false,
+        profile: { profileId: MANAGED_PROFILE_ID },
+      });
+      expect(result.human).not.toBe(SIGNED_IN_RECEIVING_LINE);
+    },
+  );
+
+  it.each([
+    [
+      "a team-owned computer whose planes never moved",
+      { kind: "team", teamName: "Acme" },
+      ALL_LOCAL_PLANES,
+    ],
+    [
+      "a bound Personal computer with no plane of its own",
+      { kind: "personal" },
+      { records: "moved", broker: "shared_unrecorded", room: "moved" },
+    ],
+  ] as const)(
+    "signs in through the environment on %s",
+    async (_case, principal, planes) => {
+      const admitted = profile(
+        MANAGED_PROFILE_ID,
+        "managed",
+        "Work profile",
+        ENVIRONMENT_PROFILE_ID,
+      );
+      makeHost({
+        providerId: "claude-code",
+        profiles: [],
+        laterProfiles: () => [admitted],
+        environmentStatus: () => statusWith(principal, planes),
+      });
+
+      const { result } = await runLogin(
+        "claude",
+        { kind: "create", label: "Work profile" },
+        makeIo({ terminal: true, lines: [CODE] }).io,
+      );
+
+      expect(onlyCallTo("providers.link")[1]).toMatchObject({
+        providerId: "claude-code",
+        profileId: null,
+        environmentId: ENVIRONMENT_ID,
+      });
+      expect(callsTo("providers.startLogin")).toEqual([]);
+      expect(result.data).toMatchObject({ status: "signed-in", created: true });
+    },
+  );
 
   it("keeps profile inventory readable when credentials are managed in the account", async () => {
     const selected = profile(

@@ -1839,10 +1839,11 @@ function profileTooltipLabel(
   selectedProfileId: string | null,
 ): string | null {
   if (profiles.length < 2) return null;
+  // A managed pin no row lists has no name to show; never another profile's.
   const activeProfile =
     profiles.find(
       (profile) => profileCommitId(profile) === selectedProfileId,
-    ) ?? profiles.at(0);
+    ) ?? (selectedProfileId === null ? profiles.at(0) : undefined);
   if (activeProfile === undefined) return null;
   return profileDisplayLabel(activeProfile);
 }

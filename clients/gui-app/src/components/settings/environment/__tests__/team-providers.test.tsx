@@ -110,7 +110,7 @@ describe("TeamProviders items", () => {
     await waitFor(() => {
       expect(railButton("Codex").getAttribute("aria-current")).toBe("true");
     });
-    expect(screen.getByRole("combobox", { name: "Plan" })).toBeTruthy();
+    expect(screen.getByRole("combobox", { name: "Linked plan" })).toBeTruthy();
     expect(railPieces("Codex")).toEqual({ title: "Codex", subtitle: null });
     expect(railPieces("Cursor")).toEqual({ title: "Cursor", subtitle: "key" });
     expect(

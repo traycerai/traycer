@@ -221,6 +221,7 @@ function renderDropdown(
       providerLabel="Codex"
       profiles={[AMBIENT, WORK]}
       activeProfileId="work"
+      missingProfileLabel={null}
       onSelectProfile={onSelectProfile}
       onCreateProfile={vi.fn()}
       createProfileDisabled={false}

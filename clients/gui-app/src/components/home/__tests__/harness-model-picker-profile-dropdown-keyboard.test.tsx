@@ -106,6 +106,7 @@ function NestedPickerSurface() {
               providerLabel="Claude"
               profiles={PROFILES}
               activeProfileId={null}
+              missingProfileLabel={null}
               onSelectProfile={vi.fn()}
               onCreateProfile={vi.fn()}
               createProfileDisabled={false}
@@ -257,6 +258,7 @@ function OpenProfileDropdownSurface() {
               providerLabel="Claude"
               profiles={PROFILES_WITH_MIDDLE_DISABLED}
               activeProfileId={null}
+              missingProfileLabel={null}
               onSelectProfile={vi.fn()}
               onCreateProfile={vi.fn()}
               createProfileDisabled={false}
